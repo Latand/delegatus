@@ -13,7 +13,8 @@ export const RESUME_WINDOW_MS = 30 * 60_000;
 export { STALE_BROWSER_MS } from "./contract";
 /** Ends that cut a call off. A hang-up, a spoken goodbye, the cap and the plan limit end it. */
 export const DROP_REASONS: ReadonlySet<string> = new Set(["transport", "error"]);
-const CHAIN_LIMIT = 16;
+/** The most parts one call is read across. */
+export const CHAIN_LIMIT = 16;
 const LINE_LIMIT = 300;
 
 export interface CallSegment { id: string; createdAt: number; entries: readonly TranscriptEntry[] }

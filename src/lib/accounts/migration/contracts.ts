@@ -77,8 +77,10 @@ export interface LaunchProfile {
       clean role or review gate (src/lib/memory/eligibility.ts) and kept on
       every resume. Absent means memory is allowed. */
   cleanMemory?: boolean;
-  /** Text-free selector, replayed from SQLite at every engine process start. */
-  learnedRules?: { project: string; roleId: string | null };
+  /** Text-free selector, replayed from SQLite at every engine process start.
+      reader "operator" marks the operator's own root conversation in Delegatus
+      mode: it reads the project and machine rules under its own notice. */
+  learnedRules?: { project: string; roleId: string | null; reader?: "operator" };
   mcpServers: string[];
   /** Codex plugins granted to this session (issue #687). Decided once, at
       spawn, from the session's origin; a resume replays it and can never

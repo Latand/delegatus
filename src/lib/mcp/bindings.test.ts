@@ -27,6 +27,7 @@ import { CORPUS_BODY_MARKERS, pipelineCorpus } from "@/lib/pipelines/fixtures/co
 import type { Pipeline } from "@/lib/pipelines/types";
 import { registerPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { statePath } from "@/lib/configDir";
+import { assertStateChildSuccess } from "@/lib/state/stateChildResult.fixture";
 import { initialAuto, writeAuto } from "@/lib/selfUpdate/auto";
 import { drainFile, releaseDrain, writeDrain } from "@/lib/selfUpdate/drain";
 import { listRoles } from "@/lib/roles/registry";
@@ -3264,6 +3265,38 @@ test("seat_tick_settings turns its own project's tick off indefinitely, with the
   expect(read).toMatchObject({ changed: false, effective: { enabled: false } });
 });
 
+test.each([{ change: { enabled: false }, active: false }, { change: { credits: false }, active: true }])("Turbo revocation through the seat ignores unreadable account bindings: %j", async ({ change, active }) => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-turbo-revocation-"));
+  sandboxes.push(sandbox);
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(sandbox, "state");
+  setSystemTime(new Date("2026-10-21T12:00:00.000Z"));
+  try {
+    const { applySeatTickSettingsChange, defaultSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+    const { seedAccountSource } = await import("@/lib/accounts/accountsStoreFixture");
+    const { BINDINGS_SOURCE } = await import("@/lib/accounts/accountsStore");
+    const { allowedAccountIdsForProject } = await import("@/lib/accounts/projectBindings");
+    beginOrchestratorSeatIntent({ project: "viewer", mandate: "Own the board", clientRequestId: "turbo_revoke_seed", mode: "spawn" });
+    completeOrchestratorSeatIntent({ project: "viewer", clientRequestId: "turbo_revoke_seed", conversationId: TICK_SEAT, path: null });
+    const { bindings, store } = tickSettingsBindings({ callerProject: "viewer" });
+    const seeded = applySeatTickSettingsChange(defaultSeatTickSettings("viewer"), { turbo: { enabled: true, hours: 2, credits: true, creditAccounts: ["acct-a"] } }, {
+      at: new Date().toISOString(), actor: { kind: "gateway", project: null, conversationId: null, seatEpoch: null },
+      turbo: { allowedAccounts: ["acct-a"], plan: [{ accountId: "acct-a", label: "Account A", plan: "pro", tiers: { "gpt-6.1-sol": "priority" }, hadCredits: true }] },
+    });
+    if (!seeded.ok) throw new Error(seeded.error);
+    store.set("viewer", seeded.settings);
+    seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "codex" }] });
+    expect(() => allowedAccountIdsForProject("viewer", "codex")).toThrow("unreadable");
+    await bindings.seat_tick_settings({ clientRequestId: "turbo_revoke", turbo: { ...change, why: "withdraw the acceleration approval" } });
+    const setting = (store.get("viewer") as import("@/lib/monitor/seatTickSettings").SeatTickSettings).turbo;
+    expect(setting?.enabled).toBe(active);
+    expect(setting?.credits.approved).toBe(false);
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+    setSystemTime();
+  }
+});
+
 /* Why the tick is mute, in the answer the seat reads when it asks (#1746). The
    seat in #1672 was enabled, on its cadence, and receiving nothing for hours;
    the fence lived in the accounting row and no surface carried it. */
@@ -4535,14 +4568,8 @@ test("MCP task writes normalize holds, preserve step operator reasons and server
   `], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
   const output = await new Response(child.stdout).text();
   const error = await new Response(child.stderr).text();
-  expect(await child.exited).toBe(0);
-  // Cold SQLite setup can emit a structured async lock-wait diagnostic; it is not child failure.
-  const stderrLines = error.split(/\r?\n/).filter(Boolean);
-  const waitLines = stderrLines.filter(line => line.startsWith("[blocking-wait] "));
-  expect(stderrLines.filter(line => !line.startsWith("[blocking-wait] "))).toEqual([]);
-  for (const line of waitLines) {
-    expect(JSON.parse(line.slice("[blocking-wait] ".length))).toMatchObject({ site: "state-write-lock", synchronous: false });
-  }
+  // Cold schema admission can finish successfully after the telemetry threshold.
+  assertStateChildSuccess(await child.exited, error);
   const result = JSON.parse(output) as { createdTask: BoardTask; updatedTask: BoardTask; readTask: BoardTask; normalizedCreate: BoardTask; unknownUpdate: BoardTask; normalizedUpdate: BoardTask; operatorUpdate: BoardTask; operatorRead: BoardTask; statuses: string[] };
   expect(result.createdTask.hold).toMatchObject({ by: "agent", conversationId: "conversation_create_bound", note: "Waiting for capacity" });
   expect(result.updatedTask.hold).toMatchObject({ by: "agent", conversationId: "conversation_update_bound", note: "Capacity is still full" });

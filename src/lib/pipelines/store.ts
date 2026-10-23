@@ -223,6 +223,12 @@ function isRuntimeSwitches(value: unknown): boolean {
     && (!index || item.seq > value[index - 1].seq)
     && typeof item.requestedAt === "string" && Number.isFinite(Date.parse(item.requestedAt)) && isActor(item.actor)
     && ["fork", "handoff"].includes(item.mode)
+    && (item.inPlace === undefined || item.inPlace === true && item.mode === "fork")
+    && (item.cut === undefined || ["boundary", "none"].includes(item.cut))
+    && (item.tierCut === undefined || ["cut", "armed", "none", "turn-ended", "cancelled", "host-gone", "unknown"].includes(item.tierCut))
+    && (item.appliedServiceTier === undefined || item.appliedServiceTier === null || typeof item.appliedServiceTier === "string")
+    && (item.cutTurnId === undefined || typeof item.cutTurnId === "string")
+    && (item.turbo === undefined || typeof item.turbo === "string" && item.turbo.length <= 80)
     && ["requested", "cutting", "switching", "continuing", "committed", "rolled-back", "failed", "superseded"].includes(item.phase)
     && (!["requested", "cutting", "switching", "continuing"].includes(item.phase) || ++open <= 1)
     && seat(item.from) && seat(item.to)
@@ -374,8 +380,19 @@ function isAttempt(value: unknown, index: number): boolean {
     (attempt.fencedMessageRetries === undefined || typeof attempt.fencedMessageRetries === "number"
       && Number.isSafeInteger(attempt.fencedMessageRetries) && attempt.fencedMessageRetries >= 0) &&
     isUnresolvedTermination(attempt.unresolvedTermination) &&
+    isPriorWriterStop(attempt.priorWriterStop) &&
     isPermissionDenials(attempt.permissionDenials)
   );
+}
+
+function isPriorWriterStop(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const stop = value as Record<string, unknown>;
+  return typeof stop.conversationId === "string" && stop.conversationId.length > 0
+    && Number.isSafeInteger(stop.tries) && (stop.tries as number) >= 0
+    && typeof stop.lastAt === "string" && Number.isFinite(Date.parse(stop.lastAt))
+    && isNullableString(stop.error);
 }
 
 /** The automatic permission denials an attempt recorded (#2215). */
@@ -1131,6 +1148,11 @@ export async function selectControllerPipelines(kind: import("@/lib/state/pipeli
   return pipelineStore().pipelineControllerSelection(kind, throughOrder, controllerPipelineKeys());
 }
 
+/** Indexed row + scheduling generation, including writers that bypass the
+ * collection revision. This read never decodes history or waits on a lease. */
+export function controllerPipelineVersionNow(id: string): string {
+  return pipelineStore().pipelineControllerVersion(id);
+}
 export async function controllerPipelineVersion(id: string): Promise<string> {
   return withViewerOperation("pipelines.controller-read", () => waitForStateLock("pipelines.controller-version", () => stateLockAttempt("pipelines.controller-version", () => performanceSpans.sync("controller.ownership", () => pipelineStore().pipelineControllerVersion(id)))));
 }
@@ -1560,7 +1582,7 @@ function lazyControllerArray<T>(source: T[]): T[] {
   });
 }
 
-function cloneControllerPipeline(pipeline: Pipeline): Pipeline {
+export function cloneControllerPipeline(pipeline: Pipeline): Pipeline {
   if (!controllerReferences(pipeline.id)) return cloneLoadedPipeline(pipeline);
   return performanceSpans.sync("pipeline.copy", () => {
     const copy: Pipeline = structuredClone({ ...pipeline, runs: [],

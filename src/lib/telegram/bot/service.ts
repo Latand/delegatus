@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { BotSelector, botRows, publicRefusals, type PostingBot } from "./multiBot";
+import { productionClonePosting, type ClonePostingPort } from "./clone";
 import { TelegramBotError, sendFailure } from "./errors";
 export { TelegramBotError } from "./errors";
 import path from "node:path";
@@ -79,6 +80,7 @@ export interface TelegramRichMessage {
 }
 
 export interface TelegramBotDependencies {
+  clones?: ClonePostingPort;
   transportFor(token: string): BotTransport;
   openStore(): TelegramBotStore;
   removeStoreFiles(): void;
@@ -369,7 +371,7 @@ export class TelegramBotService {
       throw new TelegramBotError("send_uncertain", "Telegram confirmed the send but its local receipt could not be committed; keep the same send key to avoid a duplicate");
     }
     if (metadata.target) this.ensurePublication().wake();
-    else {
+    else if (!botId.startsWith("clone:")) {
       // Injected observers also see unrouted sends. Production refuses them.
       try { void Promise.resolve(this.deps.publishMessage?.(receipt)).catch(() => {
         console.warn("Telegram relay publication unconfirmed");
@@ -423,7 +425,7 @@ export class TelegramBotService {
       })];
   }
   private selector(): BotSelector {
-    return this.selectorCache ??= new BotSelector(this.store(), () => this.deps.now(), () => this.postingBots());
+    return this.selectorCache ??= new BotSelector(this.store(), () => this.deps.now(), () => this.postingBots(), this.deps.clones);
   }
   private postingView(chat: ChatRow, bots = this.postingBots()) {
     return this.store().postingState(db => this.selector().view(db, chat, bots));
@@ -526,21 +528,23 @@ export class TelegramBotService {
   /* ---- the operator surface -------------------------------------------- */
 
   status(): TelegramBotStatusPayload {
-    if (this.storedBotId() === null) return { ...DISCONNECTED_BOT_STATUS };
+    const connected = this.storedBotId() !== null;
     const store = this.store();
-    const bot = store.bot();
-    const bots = this.postingBots();
+    const bot = connected ? store.bot() : null;
+    const bots = connected ? this.postingBots() : [];
+    const receiving = connected ? this.receiving(bot) : "stopped";
     return {
-      connected: true,
-      bots: bots.map(({ name, username, receiving, tokenState }) => ({ name, username, receiving, tokenState })),
+      connected,
+      ...(connected ? { bots: bots.map(({ name, username, receiving, tokenState }) => ({ name, username, receiving, tokenState })) } : {}),
       bot: bot ? { name: bot.name, username: bot.username, canReadAllGroupMessages: bot.canReadAllGroupMessages, canJoinGroups: bot.canJoinGroups } : null,
-      receiving: this.receiving(bot),
+      receiving,
       lastUpdateAt: bot?.lastUpdateAt ?? null,
       lastCheckedAt: bot?.lastCheckedAt ?? null,
-      chats: store.chats().map((chat) => {
+      chats: store.chats().flatMap((chat) => {
         const visibility = chatVisibility(chat, bot);
         const posting = this.postingView(chat, bots);
-        return {
+        if (!connected && !posting.bots.some(candidate => candidate.member !== false)) return [];
+        return [{
           ...posting,
           chatId: chat.chatId,
           title: chat.title,
@@ -557,13 +561,25 @@ export class TelegramBotService {
           lastPostAt: chat.lastPostAt,
           lastPostBy: this.lastPostBy(chat),
           storedMessages: chat.storedMessages,
-        };
+        }];
       }),
-      documents: this.documentRoots(store),
-      reportReplies: !this.deps.reportReplies?.operatorId() ? "operator_unlinked"
-        : this.receiving(bot) !== "polling" ? "receiving_unavailable" : "ready",
+      ...(connected ? { documents: this.documentRoots(store),
+        reportReplies: !this.deps.reportReplies?.operatorId() ? "operator_unlinked" as const
+          : receiving !== "polling" ? "receiving_unavailable" as const : "ready" as const } : {}),
       limits: TELEGRAM_BOT_LIMITS,
     };
+  }
+
+  /** Refresh paired-clone discovery and register verified groups as off by default. */
+  async discoverCloneChats(): Promise<void> {
+    const discovered = await this.deps.clones?.discoverChats?.() ?? [];
+    const store = this.store();
+    const now = this.deps.now();
+    for (const chat of discovered) {
+      const id = validTelegramChatId(chat.chatId);
+      if (id === null || !id.startsWith("-")) continue;
+      store.recordLookedUpChat({ id: Number(id), type: "supergroup", title: chat.title }, null, now);
+    }
   }
 
   /** The operator's document roots, or the default while none are set. */
@@ -700,7 +716,7 @@ export class TelegramBotService {
   }
 
   setChat(chatId: unknown, alias: unknown, postAllowed: unknown): TelegramBotStatusPayload {
-    const store = this.connectedStore();
+    const store = this.store();
     const id = validTelegramChatId(chatId);
     if (id === null) throw new TelegramBotError("chat_unknown", "no such chat");
     const outcome = store.setChatSettings(id, {
@@ -996,34 +1012,23 @@ export class TelegramBotService {
   }
 
   listChats(options: { includeInactive?: boolean } = {}): TelegramBotChatsAnswer {
-    if (this.storedBotId() === null) {
-      return {
-        bot: { connected: false, name: null, username: null, receiving: "stopped", receivingNote: RECEIVING_NOTES.stopped, lastUpdateAt: null },
-        chats: [],
-        note: "No Telegram bot is connected. The operator connects one in Delegatus: footer → Telegram → Bot.",
-        limits: TELEGRAM_BOT_LIMITS,
-      };
-    }
+    const connected = this.storedBotId() !== null;
     const status = this.status();
     const store = this.store();
-    const bot = store.bot();
+    const bot = connected ? store.bot() : null;
     const all = store.chats().filter((chat) => options.includeInactive || this.postingView(chat).bots.some(b => b.member !== false));
     const chats = all.slice(0, BOT_CHATS_CAP).map((chat) => this.agentChat(chat, bot));
     return {
-      bot: {
-        connected: true,
-        name: bot?.name ?? null,
-        username: bot?.username ?? null,
-        receiving: status.receiving,
-        receivingNote: RECEIVING_NOTES[status.receiving],
-        lastUpdateAt: bot?.lastUpdateAt ?? null,
-      },
+      bot: connected ? {
+        connected: true, name: bot?.name ?? null, username: bot?.username ?? null,
+        receiving: status.receiving, receivingNote: RECEIVING_NOTES[status.receiving], lastUpdateAt: bot?.lastUpdateAt ?? null,
+      } : { connected: false, name: null, username: null, receiving: "stopped", receivingNote: RECEIVING_NOTES.stopped, lastUpdateAt: null },
       chats,
-      bots: status.bots,
+      ...(connected && status.bots ? { bots: status.bots } : {}),
       ...(all.length > chats.length ? { truncated: all.length - chats.length } : {}),
-      ...(chats.length === 0
-        ? { note: "The bot has not seen any chat yet. A chat appears once the bot is added to it or receives a message there; in a group with privacy mode on, mention the bot once (for example /start@botname)." }
-        : {}),
+      ...(chats.length === 0 ? { note: connected
+        ? "The bot has not seen any chat yet. A chat appears once the bot is added to it or receives a message there; in a group with privacy mode on, mention the bot once (for example /start@botname)."
+        : "No Telegram bot is connected. Paired clone chats appear here after discovery." } : {}),
       limits: TELEGRAM_BOT_LIMITS,
     };
   }
@@ -1078,10 +1083,17 @@ export class TelegramBotService {
     topicId?: unknown;
     silent?: unknown;
   }): Promise<TelegramBotSendAnswer> {
-    const store = this.connectedStore();
+    const connected = this.storedBotId() !== null;
+    const store = this.store();
+    if (!connected && (typeof input.chat !== "string" || !store.resolveChat(input.chat))) {
+      throw new TelegramBotError("bot_not_connected", "no Telegram bot is connected");
+    }
     const chat = this.resolveChat(store, input.chat);
     const refusal = postRefusal(chat);
     if (refusal) throw new TelegramBotError(refusal.code, refusal.reason);
+    if (!connected && !await this.deps.clones?.route(chat.chatId)) {
+      throw new TelegramBotError("bot_not_connected", "no Telegram bot is connected");
+    }
     if (typeof input.clientRequestId !== "string" || input.clientRequestId.trim() === "") {
       throw new TelegramBotError("bad_request", "clientRequestId is required");
     }
@@ -1134,13 +1146,13 @@ export class TelegramBotService {
         ...(topicId !== null ? { message_thread_id: topicId } : {}),
         ...(input.silent === true ? { disable_notification: true } : {}),
       };
-      let result = await transport.call<TgSent>("sendMessage", params);
+      let result = await transport.call<TgSent>("sendMessage", params, { partIndex: index });
       if (!result.ok && result.migrateToChatId && !migrated) {
         migrated = true;
         store.migrateChat(chatId, result.migrateToChatId);
         chatId = result.migrateToChatId;
         selection.migrate(chatId);
-        result = await transport.call<TgSent>("sendMessage", { ...params, chat_id: Number(chatId) });
+        result = await transport.call<TgSent>("sendMessage", { ...params, chat_id: Number(chatId) }, { partIndex: index });
       }
       if (!result.ok) {
         const error = sendFailure(result, chat);
@@ -1517,6 +1529,7 @@ const STORE_FILE = "bot.sqlite";
     the sleep, and keep the rest. */
 export function productionTelegramBotDependencies(): TelegramBotDependencies {
   return {
+    clones: productionClonePosting,
     publicationTarget: telegramPublicationTarget,
     publishMessage: (receipt, authorize) => authorize ? publishDurableTelegramMessage(receipt, authorize) : "skipped",
     transportFor: (token) => createBotApiTransport(token),

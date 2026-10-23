@@ -52,7 +52,7 @@ export function MobileSeatTickSheet({ project, projectName, onClose }: {
         name="tick"
         title={t("seatTick.sheetTitle", { project: projectName })}
         onClose={onClose}
-        footer={state.dirty || read.error ? <SeatTickActions read={read} state={state} surface="mobile" /> : null}
+        footer={state.dirty || (read.error && read.errorScope !== "turbo") ? <SeatTickActions read={read} state={state} surface="mobile" /> : null}
       >
         <div data-testid="mobile-seat-tick-sheet">
           <SeatTickBody

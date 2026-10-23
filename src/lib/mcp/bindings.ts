@@ -18,6 +18,8 @@ import { decidePrototype } from "@/lib/prototypeReview/decision";
 import { deliverPrototypeDecision } from "@/lib/prototypeReview/deliveryWorker";
 import { findPrototypeRound } from "@/lib/prototypeReview/store";
 import { autonomyActive, proactiveActive, autonomyMandate, autonomyReportKey, pendingAutonomyReports } from "@/lib/monitor/autonomy";
+import { endedTurbo, turboActive, turboMandate, turboNeedsPlan, turboProgress } from "@/lib/monitor/turbo";
+import { turboChangeContext } from "@/lib/monitor/turboRuntime";
 import { changeSeatTickSettings, markAutonomyReported, markAutonomyDecisionReview } from "@/lib/monitor/seatTickSettings";
 import { pipelinePublishesRemoteBranch } from "@/lib/pipelines/publication";
 import { recordSeatProjectSuccessions, seatLaunchCwd } from "@/lib/orchestrator/seatProjectIdentity";
@@ -110,7 +112,7 @@ import type { AttentionRequestV1, FocusIntent, FocusTarget, ZoomIntent } from "@
 import { applyBoardCommand } from "@/lib/board/command";
 import { boardFor } from "@/lib/board/store";
 import { conversationDeliverabilityFromRecord } from "@/lib/conversation/deliverability";
-import { backoffDelayMs, DeadlineExceededError, deadlineSignal } from "@/lib/deadline";
+import { backoffDelayMs, DeadlineExceededError, deadlineSignal, systemScheduler, type DeadlineScheduler } from "@/lib/deadline";
 import { cancelRound, closeFlow, patchFlow } from "@/lib/flows/commands";
 import { flowSelectionSource } from "@/lib/flows/store";
 import { getFlowsWithPresets } from "@/lib/flows/engine";
@@ -163,6 +165,7 @@ import {
   readSeatTickSettings,
   writeSeatTickSettings,
   type SeatTickNoteLineEdits,
+  type SeatTickSettings,
   type SeatTickSettingsActor,
   type SeatTickSettingsChange,
 } from "@/lib/monitor/seatTickSettings";
@@ -184,7 +187,8 @@ import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/o
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
 import { splitRelayMessageText } from "@/lib/orchestrator/relayText";
-import { leaveLessonForSeat, leaveLessonForConversation, lessonRequestForReport } from "@/lib/memory/roleStage";
+import { leaveLessonForOperator, leaveLessonForSeat, leaveLessonForConversation, lessonRequestForReport } from "@/lib/memory/roleStage";
+import { operatorMemoryEnabled, storedOperatorRoot } from "@/lib/memory/operatorMemory";
 import { readMemoryProblem } from "@/lib/memory/roleProblems";
 import { RoleMemoryRefusal } from "@/lib/memory/roleStore";
 import { withoutStoredLessonsAsync, renderReportAsync, scrubIssueReportAsync } from "@/lib/memory/privacy";
@@ -381,13 +385,13 @@ function controlRetryDelay(attempt: number): number {
   return backoffDelayMs(attempt, { baseMs: CONTROL_RETRY_BASE_MS, maxMs: CONTROL_RETRY_MAX_MS });
 }
 
-async function waitForControlRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
+async function waitForControlRetry(delayMs: number, signal?: AbortSignal, scheduler = systemScheduler): Promise<void> {
   if (signal?.aborted) throw signal.reason;
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(finish, delayMs);
+    const timer = scheduler.setTimeout(finish, delayMs);
     const onAbort = () => finish(signal?.reason);
     function finish(error?: unknown) {
-      clearTimeout(timer);
+      scheduler.clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
       if (error !== undefined) reject(error);
       else resolve();
@@ -653,6 +657,7 @@ async function dispatchViewerControl(
   headers: Record<string, string> = {},
   context: McpToolCallContext = {},
   pinConfiguredEndpoint = false,
+  scheduler: DeadlineScheduler = systemScheduler,
 ): Promise<Record<string, unknown>> {
   const baseUrl = viewerControlOrigin(process.env, pinConfiguredEndpoint);
   const token = viewerControlToken(process.env, baseUrl);
@@ -684,6 +689,7 @@ async function dispatchViewerControl(
   while (true) {
     context.assertCaller?.();
     attempt = deadlineSignal(Math.min(CONTROL_ATTEMPT_TIMEOUT_MS, Math.max(1, expiresAt - Date.now())), {
+      scheduler,
       signal: context.signal,
       reason: "Viewer control dispatch timed out",
     });
@@ -714,7 +720,7 @@ async function dispatchViewerControl(
           // Every preceding attempt was affirmatively refused before sending.
           // Keep the same durable binding, body and downstream key.
           try {
-            await waitForControlRetry(delayMs, context.signal);
+            await waitForControlRetry(delayMs, context.signal, scheduler);
           } catch {
             // Cancellation here cannot turn a refused connection into a send.
             throw refusedSend();
@@ -784,6 +790,7 @@ async function dispatchViewerControl(
 
 export function productionViewerControlDependencies(
   pinConfiguredEndpoint = false,
+  scheduler: DeadlineScheduler = systemScheduler,
 ): ViewerControlDependencies {
   return {
     get: (pathname, context) => getViewerControl(pathname, context, pinConfiguredEndpoint),
@@ -800,6 +807,7 @@ export function productionViewerControlDependencies(
       headers,
       context,
       pinConfiguredEndpoint,
+      scheduler,
     ),
   };
 }
@@ -960,6 +968,10 @@ export interface ViewerMcpDomainDependencies {
       Null means the invariant "a registered session has a canonical project"
       is violated, and unscoped directive routing fails closed diagnostically. */
   callerProject?(): string | null;
+  /** The operator's own root conversation (no role, no parent, depth zero, no
+      membership) with its canonical project, or null. Production reads the
+      registry; leave_lesson admits it only while Delegatus memory is on. */
+  operatorConversation?(conversationId: string): { project: string | null } | null;
   /** The canonical projects of the repository this Viewer deploys (#1321) —
       the only projects whose designated seat may execute a deploy. Production
       derives them from the canonical Viewer remote, never from the caller's
@@ -1047,6 +1059,18 @@ function viewerOwnProjects(): string[] {
   const configured = process.env.LLV_VIEWER_CANONICAL_REMOTE?.trim();
   const remote = configured || viewerPackageManifest.repository.url.trim();
   return [...new Set(viewerRepositoryProjects(remote, process.cwd()).map(canonicalOrchestratorProject))];
+}
+
+/** The registry's proof that a caller is the operator's own root conversation:
+    the conversation's durable operator-origin stamp plus the root shape. */
+export function operatorConversationFromSnapshot(snapshot: RegistrySnapshot, conversationId: string): { project: string | null } | null {
+  const conversation = readOnlyConversationLookupFromSnapshot(snapshot).conversation(conversationId as `conversation_${string}`);
+  if (!conversation || !storedOperatorRoot(conversation, snapshot.memberships[conversation.id])) return null;
+  return { project: callerProjectFromSnapshot(snapshot, conversation.id) };
+}
+
+function productionOperatorConversation(conversationId: string): { project: string | null } | null {
+  return operatorConversationFromSnapshot(agentRegistry().readOnlySnapshot(), conversationId);
 }
 
 /**
@@ -2682,13 +2706,29 @@ async function leaveLesson(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
     const seat = caller.conversationId && (caller.kind === "manager" || caller.kind === "gateway")
       ? (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources())).find(row => row.conversationId === caller.conversationId)
       : null;
-    if (caller.kind === "manager" && !seat) throw new RoleMemoryRefusal("LESSON_NOT_A_SEAT", "this caller has no active project designation");
-    if (caller.kind === "gateway" && !seat) throw new RoleMemoryRefusal("LESSON_NOT_A_SEAT", "this gateway conversation has no active project designation");
     const answer = { lesson: args.lesson, rewrite: args.rewrite, none: args.none, problem: args.problem, applied: args.applied, misled: args.misled };
-    const result = seat ? leaveLessonForSeat(seat, answer) : leaveLessonForConversation(
-      dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [], caller.conversationId, answer,
-    );
-    return { ...result };
+    /* The operator's own root conversation, in Delegatus mode only: proven by
+       the registry, never by an argument (memory-source-switch.md §3.3). */
+    const operator = () => {
+      if (!caller.conversationId || caller.role || !operatorMemoryEnabled()) return null;
+      const found = (dependencies.operatorConversation ?? productionOperatorConversation)(caller.conversationId);
+      return found ? { project: found.project, conversationId: caller.conversationId } : null;
+    };
+    if (caller.kind === "manager" && !seat) throw new RoleMemoryRefusal("LESSON_NOT_A_SEAT", "this caller has no active project designation");
+    if (caller.kind === "gateway" && !seat) {
+      const own = operator();
+      if (own) return { ...leaveLessonForOperator(own, answer) };
+      throw new RoleMemoryRefusal("LESSON_NOT_A_SEAT", "this gateway conversation has no active project designation");
+    }
+    if (seat) return { ...leaveLessonForSeat(seat, answer) };
+    try {
+      return { ...leaveLessonForConversation(dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [], caller.conversationId, answer) };
+    } catch (error) {
+      // Only a conversation that holds no stage attempt at all may be the operator's.
+      const own = error instanceof RoleMemoryRefusal && error.code === "LESSON_NOT_AN_ATTEMPT" && caller.kind === "agent" ? operator() : null;
+      if (!own) throw error;
+      return { ...leaveLessonForOperator(own, answer) };
+    }
   } catch (error) {
     if (error instanceof RoleMemoryRefusal) {
       throw new McpToolRefusal(error.message, { code: error.code, status: error.code === "LESSON_INVALID" ? 400 : 409 });
@@ -4719,6 +4759,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
 
   const change: SeatTickSettingsChange = {};
   if (args.autonomy !== undefined) change.autonomy = args.autonomy as SeatTickSettingsChange["autonomy"];
+  if (args.turbo !== undefined) change.turbo = args.turbo as SeatTickSettingsChange["turbo"];
   if (args.autonomyDecision !== undefined) change.autonomyDecision = structuredClone(args.autonomyDecision) as SeatTickSettingsChange["autonomyDecision"];
   if (args.release !== undefined) change.release = args.release as SeatTickSettingsChange["release"];
   if (args.autoRotate !== undefined) change.autoRotate = args.autoRotate as SeatTickSettingsChange["autoRotate"];
@@ -4788,13 +4829,17 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
         instructionActor = { ...actor, kind: "manager", project: authorizedProject, seatEpoch: null };
       }
     }
-    const context = { at: new Date().toISOString(), actor, instructionActor };
+    /* Paid credits spend money: the tool never approves them; the operator ticks them in the panel. */
+    if ((change.turbo as { credits?: unknown } | undefined)?.credits === true) throw new Error("paid credits are approved only in the operator's Turbo dialog");
+    const context = { at: new Date().toISOString(), actor, instructionActor, ...(turboNeedsPlan(change.turbo) ? { turbo: turboChangeContext(project) } : {}) };
     const applied = dependencies.writeTickSettings || dependencies.readTickSettings
       ? applySeatTickSettingsChange(current, change, context)
       : changeSeatTickSettings(project, change, context);
     if (!applied.ok) throw new Error(applied.error);
     if (change.release) releaseControlChange(project, change.release, actor, applied.settings.updatedAt!);
     if (dependencies.writeTickSettings || dependencies.readTickSettings) writeSettings(project, applied.settings);
+    /* The Viewer owns Codex hosts and runs the sweep from its seat-tick pass.
+       MCP writes only the durable setting; its process cannot dispatch host RPCs. */
     if (review) {
       const taskId = change.autonomyDecision?.taskId ?? null;
       const authorize = () => {
@@ -4832,6 +4877,8 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   delete settingsWithoutPrompt.release;
   delete settingsWithoutPrompt.autonomy;
   delete settingsWithoutPrompt.autonomyHistory;
+  delete settingsWithoutPrompt.turbo;
+  delete settingsWithoutPrompt.turboHistory;
   /* #2030: a write is acknowledged, never read back. The caller holds what it
      sent; the revision and the stored length are what it needs to know the row
      took it. A change to another project's tick still says so out loud. */
@@ -4896,6 +4943,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
       proactive: { enabled: effective.enabled && proactiveActive(effective.autonomy, now) },
       decisionCount: settings.autonomy?.decisions.length ?? 0, pendingReports: pendingAutonomyReports(settings, now).map(autonomyReportKey),
       ...(verbose ? { mandate: autonomyMandate(settings.autonomy, now).join("\n").trim(), episode: effective.autonomy, history: settings.autonomyHistory ?? [] } : {}) } : { active: false },
+    ...(settings.turbo || settings.turboHistory?.length || verbose ? { turbo: turboToolAnswer(settings, now, verbose) } : {}),
     release: { ...RELEASE_DEFAULTS, ...settings.release, effectiveAskBeforePublish: (settings.release?.askBeforePublish ?? true) && !autonomyActive(settings.autonomy, now), status: releaseStatus(project) },
     autoRotate: { enabled: settings.autoRotate?.enabled ?? false, thresholdPercent: settings.autoRotate?.thresholdPercent ?? 50,
       ...(verbose ? { setBy: settings.autoRotate?.setBy ?? null, updatedAt: settings.autoRotate?.updatedAt ?? null, why: settings.autoRotate?.why ?? null } : {}),
@@ -4912,6 +4960,16 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     ...fenceAnswer,
     ...reportAsk,
   });
+}
+
+/** Turbo for the seat: whether it is on, the credit approval and the switch progress. */
+function turboToolAnswer(settings: SeatTickSettings, now: number, verbose: boolean) {
+  const episode = endedTurbo(settings.turbo, now);
+  if (!episode && (!verbose || !settings.turboHistory?.length)) return { active: false };
+  return { active: turboActive(episode, now), until: episode?.until ?? null, startedAt: episode?.startedAt ?? null,
+    credits: episode ? { approved: episode.credits.approved, accounts: episode.credits.accounts } : null,
+    progress: episode ? turboProgress(episode.switches) : null,
+    ...(verbose ? { overlay: turboMandate(episode, now).join("\n").trim(), episode, history: settings.turboHistory ?? [] } : {}) };
 }
 
 /** What the tick owes the report log for a project, and the report to file

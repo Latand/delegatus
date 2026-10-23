@@ -18,15 +18,26 @@ const roots: string[] = [];
 const previousState = process.env.LLV_STATE_DIR;
 let ancestorTimes: Record<string, { mtimeMs: number; ctimeMs: number }> = {};
 const ancestorMocks: Array<{ mockRestore: () => void }> = [];
+// Functional cases own both parts of the retrieval clock. A frozen monotonic
+// clock alone leaves the real 100 ms read timer racing filesystem completion.
+function functionalIndex(scheduler?: ConstructorParameters<typeof MemoryIndex>[0]) {
+  ancestorMocks.push(spyOn(performance, "now").mockReturnValue(0));
+  const timers = new Set<unknown>();
+  const index = new MemoryIndex(scheduler ?? {
+    setTimeout(handler) { timers.add(handler); return handler; },
+    clearTimeout(handle) { timers.delete(handle); },
+  });
+  timerChecks.push(() => expect(timers.size).toBe(0));
+  return index;
+}
+const timerChecks: Array<() => void> = [];
+const busyTimeouts: number[] = [];
 test("one thousand worktree hook lookups retain bounded root scope and readable search", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-many-worktrees-")); roots.push(root);
   fs.mkdirSync(path.join(root, ".git")); fs.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
   fs.writeFileSync(path.join(root, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/fixture/widgets.git\n');
   const project = projectInfoFromCwd(root)!.project;
-  // This case checks scope cardinality and ownership. Deadline cases below
-  // exercise the optional retrieval budget with real timers.
-  const clock = spyOn(performance, "now").mockReturnValue(0);
   try {
     await index.refresh([{ path: fixture("topic.md", "---\nname: Widget rule\ndescription: Widget delimiter rule.\ntype: project\n---\nWidget delimiter rule.\n"), engine: "claude", sourceKind: "claude_memory", project: directoryProjectId(root) }]);
     for (let i = 0; i < 1000; i++) {
@@ -38,10 +49,10 @@ test("one thousand worktree hook lookups retain bounded root scope and readable 
     const db = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite"));
     try { expect(db.query<{ count: number }, []>("SELECT count(*) AS count FROM memory_project_scopes").get()!.count).toBeLessThanOrEqual(3); }
     finally { db.close(); }
-  } finally { clock.mockRestore(); index.close(); }
+  } finally { index.close(); }
 }, 30_000);
 test("a full scope table refuses new historical ownership and still selects canonical entries", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-scope-capacity-")); roots.push(root);
   fs.mkdirSync(path.join(root, ".git")); fs.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
   fs.writeFileSync(path.join(root, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/fixture/widgets.git\n');
@@ -61,7 +72,7 @@ test("a full scope table refuses new historical ownership and still selects cano
   } finally { db.close(); index.close(); }
 });
 test("a resolved shared-store project wins over an earlier unresolved account slug", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-shared-scope-")); roots.push(root);
   const shared = path.join(root, "shared"); fs.mkdirSync(shared);
   fs.writeFileSync(path.join(shared, "MEMORY.md"), "- [Widget](topic.md) — Widget delimiter rule.\n");
@@ -88,7 +99,7 @@ test("a resolved shared-store project wins over an earlier unresolved account sl
 });
 
 test("one linked-root scan verifies physical predecessor identity before the first recall", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-linked-first-")); roots.push(root);
   const physical = path.join(root, "physical"), linked = path.join(root, "linked");
   fs.mkdirSync(path.join(physical, ".git"), { recursive: true }); fs.writeFileSync(path.join(physical, ".git", "HEAD"), "ref: refs/heads/main\n");
@@ -102,7 +113,7 @@ test("one linked-root scan verifies physical predecessor identity before the fir
 });
 
 test("verified unbound folder identities advance to their first origin and reject a later unrelated origin", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-first-origin-")); roots.push(root);
   const cwd = path.join(root, "project"); fs.mkdirSync(cwd);
   const source = { path: fixture("topic.md", "---\nname: Widget prior rule\ndescription: Widget prior delimiter rule.\ntype: project\n---\nWidget prior delimiter rule.\n"), engine: "claude" as const, sourceKind: "claude_memory" as const, project: directoryProjectId(cwd) };
@@ -125,7 +136,7 @@ test("verified unbound folder identities advance to their first origin and rejec
 });
 
 test("retargeting a cached cwd symlink cannot confer foreign predecessor ownership", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-cwd-retarget-")); roots.push(root);
   const firstRoot = path.join(root, "first"), secondRoot = path.join(root, "second"), linked = path.join(root, "linked");
   for (const [folder, name] of [[firstRoot, "first"], [secondRoot, "unrelated"]]) {
@@ -149,8 +160,8 @@ test("retargeting a cached cwd symlink cannot confer foreign predecessor ownersh
   } finally { index.close(); }
 });
 
-test("overlapping candidate calls keep a contended writer inside the retrieval budget", async () => {
-  const index = new MemoryIndex();
+test("overlapping candidate calls retain recorded scope while the writer is contended", async () => {
+  const index = functionalIndex();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-overlap-")); roots.push(root);
   fs.mkdirSync(path.join(root, ".git")); fs.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
   fs.writeFileSync(path.join(root, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/fixture/widgets.git\n');
@@ -176,7 +187,7 @@ test("overlapping candidate calls keep a contended writer inside the retrieval b
 }, 10_000);
 
 test("a trusted absent root recovers all ninety-nine native history paths on unchanged refresh", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-root-history-")); roots.push(root);
   const current = path.join(root, "current"), old = path.join(root, "previous");
   fs.mkdirSync(path.join(current, ".git"), { recursive: true }); fs.writeFileSync(path.join(current, ".git", "HEAD"), "ref: refs/heads/main\n");
@@ -202,7 +213,7 @@ test("a trusted absent root recovers all ninety-nine native history paths on unc
 });
 
 test("specific short factual copies deduplicate across descriptions and previous offers", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-short-fact-")); roots.push(root);
   const project = projectInfoFromCwd(root)!.project;
   try {
@@ -218,7 +229,7 @@ test("specific short factual copies deduplicate across descriptions and previous
 });
 
 test("a predecessor identity retains its first verified repository across origin replacement", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-origin-replace-")); roots.push(root);
   fs.mkdirSync(path.join(root, ".git")); fs.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
   const remote = (name: string) => fs.writeFileSync(path.join(root, ".git", "config"), `[remote "origin"]\nurl = https://example.invalid/fixture/${name}.git\n`);
@@ -237,7 +248,7 @@ test("a predecessor identity retains its first verified repository across origin
 });
 
 for (const shape of ["directory", "local", "slug"]) test(`${shape} predecessor scope survives a fresh Viewer process`, async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-scope-restart-")); roots.push(root);
   fs.mkdirSync(path.join(root, ".git")); fs.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
   fs.writeFileSync(path.join(root, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/fixture/widgets.git\n');
@@ -270,7 +281,7 @@ for (const shape of ["directory", "local", "slug"]) test(`${shape} predecessor s
 });
 
 test("slow git metadata cannot block recall's cached identity evidence", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-metadata-")); roots.push(root);
   fs.mkdirSync(path.join(root, ".git")); fs.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
   fs.writeFileSync(path.join(root, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/fixture/widgets.git\n');
@@ -278,7 +289,7 @@ test("slow git metadata cannot block recall's cached identity evidence", async (
   await index.refresh([{ path: fixture("topic.md", "---\nname: Widget rule\ndescription: Widget delimiter rule.\ntype: project\n---\nWidget delimiter rule.\n"), engine: "claude", sourceKind: "claude_memory", project: directoryProjectId(root) }]);
   const original = fs.readFileSync; let metadataReads = 0;
   const spy = spyOn(fs, "readFileSync").mockImplementation(((...args: Parameters<typeof fs.readFileSync>) => {
-    if (args[0] === path.join(root, ".git", "config")) { metadataReads++; const until = performance.now() + 1700; while (performance.now() < until) { /* model stalled metadata */ } }
+    if (args[0] === path.join(root, ".git", "config")) { metadataReads++; throw Error("recall must use cached git metadata"); }
     return original(...args);
   }) as typeof fs.readFileSync);
   try {
@@ -291,7 +302,7 @@ test("slow git metadata cannot block recall's cached identity evidence", async (
 });
 
 for (const shape of ["directory", "local", "slug"]) test(`${shape} predecessor recall stays searchable and opens through the project-scoped route`, async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-scoped-open-")); roots.push(root);
   fs.mkdirSync(path.join(root, ".git")); fs.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
   fs.writeFileSync(path.join(root, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/fixture/widgets.git\n');
@@ -320,7 +331,7 @@ for (const shape of ["directory", "local", "slug"]) test(`${shape} predecessor r
 });
 
 test("a fresh scoped access rejects a formerly unique slug after a foreign folder collides", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-scope-collision-")); roots.push(root);
   const folder = path.join(root, "team-repo"), foreign = path.join(root, "team", "repo");
   fs.mkdirSync(path.join(folder, ".git"), { recursive: true });
@@ -339,7 +350,7 @@ test("a fresh scoped access rejects a formerly unique slug after a foreign folde
 });
 
 test("a previously offered pointer excludes its resolved topic and cross-engine copies", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-pointer-offer-")); roots.push(root);
   const project = projectInfoFromCwd(root)!.project;
   const pointer = { path: fixture("MEMORY.md", "- [Widget routing](topic.md) — Widget routing reference.\n", root), engine: "claude" as const, sourceKind: "claude_index" as const, project };
@@ -356,7 +367,7 @@ test("a previously offered pointer excludes its resolved topic and cross-engine 
 });
 
 test("a root index stays loaded when discovered first through nested file or directory symlinks", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-root-link-")); roots.push(root);
   const home = path.join(root, "claude"), directory = path.join(home, "projects", "fixture", "memory");
   fs.mkdirSync(path.join(directory, "archive"), { recursive: true });
@@ -375,7 +386,7 @@ test("a root index stays loaded when discovered first through nested file or dir
 });
 
 test("a loaded store root is registered even when its directory was already visited through a nested link", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-directory-root-")); roots.push(root);
   const home = path.join(root, "claude"), projects = path.join(home, "projects");
   const shared = path.join(projects, "first", "memory", "shared");
@@ -391,7 +402,7 @@ test("a loaded store root is registered even when its directory was already visi
 });
 
 test("a symlinked cwd retains verified physical-folder historical keys", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-physical-")); roots.push(root);
   const physical = path.join(root, "physical"), linked = path.join(root, "linked");
   fs.mkdirSync(path.join(physical, ".git"), { recursive: true });
@@ -407,7 +418,11 @@ test("a symlinked cwd retains verified physical-folder historical keys", async (
 });
 
 test("identity proof avoids synchronous directory walks and bounds stalled asynchronous reads", async () => {
-  const index = new MemoryIndex();
+  const timers = new Map<unknown, () => void>();
+  const index = functionalIndex({
+    setTimeout(handler) { timers.set(handler, handler); return handler; },
+    clearTimeout(handle) { timers.delete(handle); },
+  });
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-proof-budget-")); roots.push(root);
   const folder = path.join(root, "widgets"); fs.mkdirSync(folder);
   const project = projectInfoFromCwd(folder)!.project;
@@ -415,16 +430,17 @@ test("identity proof avoids synchronous directory walks and bounds stalled async
   const originalSync = fs.readdirSync, originalAsync = fs.promises.readdir;
   let blockingReads = 0;
   const sync = spyOn(fs, "readdirSync").mockImplementation(((...args: Parameters<typeof fs.readdirSync>) => {
-    if (args[0] === root) { blockingReads++; const until = performance.now() + 250; while (performance.now() < until) { /* simulate slow synchronous storage */ } }
+    if (args[0] === root) { blockingReads++; throw Error("slug proof must use asynchronous directory reads"); }
     return originalSync(...args);
   }) as typeof fs.readdirSync);
   try {
     expect(await index.injectionCandidates("widget", project, "claude", "nonblocking-proof", Infinity, { cwd: folder })).toHaveLength(1);
     expect(blockingReads).toBe(0);
     let stalledReads = 0;
+    let entered = Promise.withResolvers<void>();
     const asynchronous = spyOn(fs.promises, "readdir").mockImplementation(((...args: Parameters<typeof fs.promises.readdir>) => {
       if (args[0] !== root) return originalAsync(...args);
-      stalledReads++; return new Promise(() => {});
+      stalledReads++; entered.resolve(); return new Promise(() => {});
     }) as typeof fs.promises.readdir);
     try {
       // An unchanged directory signature replays the proof without a walk.
@@ -434,7 +450,13 @@ test("identity proof avoids synchronous directory walks and bounds stalled async
       try { db.query("DELETE FROM memory_project_scopes").run(); } finally { db.close(); }
       for (const remaining of [50, 1500]) {
         let reason = ""; const began = performance.now();
-        expect(await index.injectionCandidates("widget", project, "claude", `stalled-${remaining}`, began + remaining, { cwd: folder, reason: value => { reason = value; } })).toEqual([]);
+        const pending = index.injectionCandidates("widget", project, "claude", `stalled-${remaining}`, began + remaining, { cwd: folder, reason: value => { reason = value; } });
+        await entered.promise;
+        expect(timers.size).toBe(1);
+        for (const fire of timers.values()) fire();
+        expect(await pending).toEqual([]);
+        expect(timers.size).toBe(0);
+        entered = Promise.withResolvers<void>();
         expect(reason).toBe("candidateTimeout");
       }
     } finally { asynchronous.mockRestore(); }
@@ -442,7 +464,7 @@ test("identity proof avoids synchronous directory walks and bounds stalled async
 });
 
 test("an ambiguous worktree-shaped Claude slug cannot inherit its parent's identity", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-worktree-collision-")); roots.push(root);
   const parent = path.join(root, "widgets");
   const folders = [parent, path.join(parent, ".worktrees", "lane"), path.join(root, "widgets..worktrees-lane")];
@@ -470,7 +492,7 @@ test("an ambiguous worktree-shaped Claude slug cannot inherit its parent's ident
 });
 
 test("a trusted parent alias restores recognized deleted Claude worktree memory", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-history-")); roots.push(root);
   const previous = path.join(root, "deleted-parent").replace(/[^a-zA-Z0-9]/g, "-");
   const home = path.join(root, "claude");
@@ -490,7 +512,7 @@ test("a trusted parent alias restores recognized deleted Claude worktree memory"
 });
 
 test("symlinked topic pointers resolve to canonical indexed identities for both engines", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-linked-topic-")); roots.push(root);
   const home = path.join(root, "claude"), directory = path.join(home, "projects", "fixture", "memory");
   fs.mkdirSync(directory, { recursive: true });
@@ -515,7 +537,7 @@ test("symlinked topic pointers resolve to canonical indexed identities for both 
 });
 
 test("a colliding unresolved Claude slug cannot admit another repository's memory", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-collision-")); roots.push(root);
   const folders = [path.join(root, "team-repo"), path.join(root, "team", "repo")];
   for (const [i, folder] of folders.entries()) {
@@ -535,7 +557,7 @@ test("a colliding unresolved Claude slug cannot admit another repository's memor
 });
 
 for (const engine of ["claude", "codex"]) test(`${engine} registry keywords retain retrieval without duplicating a short rollout fact`, async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   const store = fs.mkdtempSync(path.join(os.tmpdir(), "memory-store-")); roots.push(store);
   try {
     await index.refresh([
@@ -553,8 +575,8 @@ for (const engine of ["claude", "codex"]) test(`${engine} registry keywords reta
   } finally { index.close(); }
 });
 
-test("one FTS match in a two-hundred-thousand-topic inventory stays inside the candidate budget", async () => {
-  const index = new MemoryIndex(); (await index.search({ query: "widget" }));
+test("one FTS match remains retrievable in a two-hundred-thousand-topic inventory", async () => {
+  const index = functionalIndex(); (await index.search({ query: "widget" }));
   const db = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite"));
   try {
     db.transaction(() => {
@@ -565,12 +587,32 @@ test("one FTS match in a two-hundred-thousand-topic inventory stays inside the c
       db.query("INSERT INTO memory_fts VALUES ('match', 'Widget', 'Widget uses Bun.', 'Widget uses Bun.')").run();
     })();
 
-    expect((await index.injectionCandidates("widget", "project-a", "codex", "large-inventory-turn"))).toHaveLength(1);
+    // The frozen clock cannot expose a scan, so record the statements recall
+    // prepares and require each plan to avoid scanning or materializing the
+    // whole inventory table.
+    const prepared = new Set<string>();
+    const originalQuery = Database.prototype.query;
+    const recorder = spyOn(Database.prototype, "query").mockImplementation(function (this: Database, sql: string) {
+      if (this !== db) prepared.add(sql);
+      return originalQuery.call(this, sql);
+    } as typeof Database.prototype.query);
+    try {
+      expect((await index.injectionCandidates("widget", "project-a", "codex", "large-inventory-turn"))).toHaveLength(1);
+    } finally { recorder.mockRestore(); }
+    const selects = [...prepared].filter(sql => /^\s*(SELECT|WITH)\b/i.test(sql) && /\bmemory_entries\b/.test(sql));
+    expect(selects.length).toBeGreaterThanOrEqual(3);
+    for (const sql of selects) {
+      const plan = db.query<{ detail: string }, []>(`EXPLAIN QUERY PLAN ${sql}`).all().map(row => row.detail);
+      for (const detail of plan) {
+        expect(detail, sql).not.toMatch(/^(SCAN|MATERIALIZE)\b.*\b(memory_entries|inventory)\b/);
+        expect(detail, sql).not.toMatch(/^SCAN (e|memory_entries)(\s|$)/);
+      }
+    }
   } finally { db.close(); index.close(); }
 }, 20000);
 
 test("short exact cross-engine copies occupy one recall place and are offered once per conversation", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   const store = fs.mkdtempSync(path.join(os.tmpdir(), "memory-store-")); roots.push(store);
   try {
     await index.refresh([
@@ -588,7 +630,7 @@ test("short exact cross-engine copies occupy one recall place and are offered on
 });
 
 test("recall excludes the recipient's loaded index and summary and prefers an indexed topic over its pointer", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   const store = fs.mkdtempSync(path.join(os.tmpdir(), "memory-store-")); roots.push(store);
   try {
     await index.refresh([
@@ -617,7 +659,7 @@ test("recall excludes the recipient's loaded index and summary and prefers an in
 });
 
 test("Claude recall excludes the loaded root index and retains unloaded nested index references", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "memory-home-")); roots.push(home);
   const memory = path.join(home, "projects", "fixture-project", "memory");
   fs.mkdirSync(path.join(memory, "archive"), { recursive: true });
@@ -631,7 +673,7 @@ test("Claude recall excludes the loaded root index and retains unloaded nested i
 });
 
 test("a store with 199 pointers and 198 indexed topics has no pointer/topic pairs in thirty-place pools", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   const store = fs.mkdtempSync(path.join(os.tmpdir(), "memory-store-")); roots.push(store);
   try {
     const sources = Array.from({ length: 198 }, (_, i) => ({
@@ -654,7 +696,7 @@ test("a store with 199 pointers and 198 indexed topics has no pointer/topic pair
 });
 
 test("a contended derivative never holds hook claims or ledger writes behind SQLite's default wait", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   await index.refresh([{ path: fixture("locked.md", "v1\n## User preferences\n- Widget parser requires escaped delimiter pairs.\n"), engine: "codex", sourceKind: "codex_summary" }]);
   const candidates = (await index.injectionCandidates("widget", "project-a", "claude", "locked-conversation")).map(c => ({ ...c, score: .8 }));
   index.recordInjection(candidates, "original-turn", "locked-conversation");
@@ -666,14 +708,14 @@ test("a contended derivative never holds hook claims or ledger writes behind SQL
       () => index.recordInjection(candidates, "new-turn", "locked-conversation"),
       () => index.recordCitations("locked-conversation", "<oai-mem-citation>\nlocked.md:3-3|note=[widget rule]\n</oai-mem-citation>"),
     ]) {
-      const start = performance.now();
+      busyTimeouts.length = 0;
       expect(run).toThrow();
-      expect(performance.now() - start).toBeLessThan(500);
+      expect(busyTimeouts).toEqual([0, 5000]);
     }
   } finally { db.exec("ROLLBACK"); db.close(); index.close(); }
 }, 20000);
-test("large mirrored stores return bounded unique candidates within the candidate budget", async () => {
-  const index = new MemoryIndex();
+test("large mirrored stores return thirty unique candidates and reuse their statements", async () => {
+  const index = functionalIndex();
   (await index.search({ query: "widget" }));
   const db = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite"));
   try {
@@ -689,15 +731,17 @@ test("large mirrored stores return bounded unique candidates within the candidat
         }
       }
     })();
-    const start = performance.now();
+    const checks = spyOn(performance, "now").mockReturnValue(0);
+    checks.mockClear();
     expect((await index.injectionCandidates("Widget rules", "fixture-project", "codex", "fixture-conversation"))).toHaveLength(30);
-    expect(performance.now() - start).toBeLessThan(500);
-    // An aborted scan must leave its prepared statements reusable.
+    // The thirty-result cap stops the scan before the other 5,970 rows.
+    expect(checks.mock.calls.length).toBeLessThanOrEqual(30 * 32);
+    // The same prepared statements remain reusable for the next scan.
     expect((await index.injectionCandidates("Widget rules", "fixture-project", "codex", "fixture-conversation"))).toHaveLength(30);
   } finally { db.close(); index.close(); }
 }, 20000);
 test("injection candidates deduplicate both engines and exclude foreign projects; opening updates the injection ledger", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   const note = (name: string, description: string) => `---\nname: ${name}\ndescription: ${description}\nmetadata:\n  type: project\n---\n${description}\n`;
   try {
     await index.refresh([
@@ -722,7 +766,7 @@ test("injection candidates deduplicate both engines and exclude foreign projects
   } finally { index.close(); }
 });
 test("another project's native Claude note cannot suppress a global cross-engine offer", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   const summary = "Widget parser records require escaped delimiter pairs.";
   try {
     await index.refresh([
@@ -734,7 +778,7 @@ test("another project's native Claude note cannot suppress a global cross-engine
   } finally { index.close(); }
 });
 test("both engines compete for thirty bounded candidate places", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   try {
     const native = Array.from({ length: 30 }, (_, i) => ({
       path: fixture(`native-${i}.md`, `---\nname: Widget\ndescription: Widget native clause number ${i}.\nmetadata:\n  type: project\n---\nNative widget clause ${i}.\n`),
@@ -744,8 +788,8 @@ test("both engines compete for thirty bounded candidate places", async () => {
     expect((await index.injectionCandidates("widget", "project-a", "claude", "candidate-fixture"))).toHaveLength(30);
   } finally { index.close(); }
 });
-test("citation accounting stays inside the hook budget for a large source and long offer ledger", async () => {
-  const index = new MemoryIndex();
+test("citation accounting reads a large source once for a long offer ledger", async () => {
+  const index = functionalIndex();
   const source = fixture("bulk.md", "v1\n## User preferences\n" + Array.from({ length: 1000 }, (_, i) => `- Widget key${i} value${i} guard${i}.\n  ${(`filler${i} `).repeat(320)}\n`).join(""));
   try {
     await index.refresh([{ path: source, engine: "codex", sourceKind: "codex_summary" }]);
@@ -758,15 +802,17 @@ test("citation accounting stays inside the hook budget for a large source and lo
       index.recordInjection(entries.slice(offset, offset + 15).map(c => ({ ...c, score: .8 })), `turn-${offset}`, "bulk-conversation");
     expect(index.turnOffers("bulk-conversation")).toHaveLength(1000);
     const block = "<oai-mem-citation>\n<citation_entries>\nbulk.md:3-3|note=[widget rule]\n</citation_entries>\n</oai-mem-citation>";
-    const started = performance.now();
-    index.recordCitations("bulk-conversation", block);
-    expect(performance.now() - started).toBeLessThan(500);
+    const read = spyOn(fs, "readFileSync");
+    try {
+      index.recordCitations("bulk-conversation", block);
+      expect(read.mock.calls.filter(([filename]) => filename === source)).toHaveLength(1);
+    } finally { read.mockRestore(); }
     const first = (await index.search({ query: "key0", limit: 1 })).items[0];
     expect(index.offers(first.id)[0].outcome).toBe("cited");
   } finally { index.close(); }
 }, 20000);
 test("turn provenance retains the latest offers after the bounded ledger window fills", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   try {
     await index.refresh([{ path: fixture("offers.md", "v1\n## User preferences\n" + Array.from({ length: 1001 }, (_, i) => `- Widget offer key${i} requires delimiter verification.\n`).join("")), engine: "codex", sourceKind: "codex_summary" }]);
     const db = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite"));
@@ -785,6 +831,17 @@ test("turn provenance retains the latest offers after the bounded ledger window 
   } finally { index.close(); }
 });
 beforeEach(() => {
+  busyTimeouts.length = 0;
+  // The minimum-SQLite preload substitutes the builtin used by MemoryIndex.
+  const runtime = process.getBuiltinModule("bun:sqlite") as typeof import("bun:sqlite");
+  const exec = runtime.Database.prototype.exec;
+  ancestorMocks.push(spyOn(runtime.Database.prototype, "exec").mockImplementation(function (this: Database, ...args: Parameters<typeof exec>) {
+    const result = exec.apply(this, args);
+    if (/^PRAGMA busy_timeout = \d+$/.test(args[0])) {
+      busyTimeouts.push(this.query<{ timeout: number }, []>("PRAGMA busy_timeout").get()!.timeout);
+    }
+    return result;
+  }));
   const state = fs.mkdtempSync(path.join(os.tmpdir(), "memory-state-"));
   roots.push(state);
   process.env.LLV_STATE_DIR = state;
@@ -808,7 +865,7 @@ beforeEach(() => {
 
 test("unchanged Codex memory follows a canonical project successor in search and open", async () => {
   const source = { path: fixture("MEMORY.md", "# Task Group: Widget cache\n### rollout_summary_files\n- example.md (cwd=/workspace/synthetic-widget)\n### Reusable knowledge\n- Widget cache holds eight entries.\n"), sourceKind: "codex_memory" as const, engine: "codex" as const };
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   try {
     await index.refresh([source]);
     const original = (await index.search({ query: "widget" })).items[0];
@@ -828,7 +885,7 @@ test("inserting and reordering bullet entries preserves IDs and their opened led
     { sourceKind: "rollout_summary" as const, engine: "codex" as const, before: "cwd: /workspace/widget\n# Rehearsal\n- Widget rehearsal passed.\n", after: "cwd: /workspace/widget\n# Rehearsal\n- Database rehearsal passed.\n- Widget rehearsal passed.\n" },
     { sourceKind: "claude_index" as const, engine: "claude" as const, project: "project-a", before: "- [Widget](widget.md)\n", after: "- [Database](database.md)\n- [Widget](widget.md)\n" },
   ];
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   try {
     for (const [n, item] of cases.entries()) {
       const source = { path: fixture(`source-${n}.md`, item.before), sourceKind: item.sourceKind, engine: item.engine, project: item.project };
@@ -843,6 +900,7 @@ test("inserting and reordering bullet entries preserves IDs and their opened led
   } finally { index.close(); }
 });
 afterEach(() => {
+  for (const check of timerChecks.splice(0)) check();
   for (const mock of ancestorMocks.splice(0)) mock.mockRestore();
   if (previousState === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousState;
@@ -864,7 +922,7 @@ test("a Codex caller can find a Claude topic with its kind, project and source",
   fs.mkdirSync(path.dirname(sourcePath));
   fs.writeFileSync(sourcePath, "---\nname: Widget cache\ndescription: Cache rules for widgets\nmetadata:\n  type: project\nmodified: 2026-10-01\n---\nUse a bounded widget cache.\n");
   const before = fs.statSync(sourcePath);
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   try {
     expect(await index.refresh([{ path: sourcePath, sourceKind: "claude_memory", engine: "claude", project: "project-a" }])).toMatchObject({ filesRead: 1, entriesIndexed: 1 });
     expect((await index.search({ query: "widget", project: "project-a" })).items).toMatchObject([
@@ -880,7 +938,7 @@ test("a Codex caller can find a Claude topic with its kind, project and source",
 test("a Claude caller finds Codex bullets scoped by task source cwd and global summary preferences", async () => {
   const registry = fixture("MEMORY.md", "# Task Group: Widget maintenance\n\n## Task 1: Cache sizing\n### rollout_summary_files\n- rollout_summaries/example.md (cwd=/workspace/widget, updated_at=2026-10-01T10:00:00Z)\n### keywords\n- widget, cache\n### User preferences\n- Prefer small widget caches.\n### Reusable knowledge\n- Widget cache holds at most eight entries.\n### Failures and how to do differently\n- Unbounded widget caches exhaust memory.\n");
   const summary = fixture("memory_summary.md", "v1\n\n## User preferences\n- Keep widget reports concise.\n\n## What's in Memory\n### /workspace/other\n- Widget work belongs to the other project.\n");
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   try {
     await index.refresh([
       { path: registry, engine: "codex", sourceKind: "codex_memory" },
@@ -904,7 +962,7 @@ test("all source kinds refresh incrementally, unknown formats fail closed and so
   ];
   const bytes = sources.map(source => fs.readFileSync(source.path));
   const times = sources.map(source => fs.statSync(source.path).mtimeMs);
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   try {
     expect(await index.refresh(sources)).toMatchObject({ filesRead: 5, filesSkipped: 1, entriesIndexed: 4, filesFailed: 0 });
     expect(await index.refresh(sources)).toMatchObject({ filesRead: 0, filesSkipped: 5, entriesIndexed: 0 });
@@ -928,7 +986,7 @@ test("search is ranked and byte bounded; ingest redacts secrets and opening a hi
     path: fixture(`skill-${n}.md`, `---\nname: ${n === 0 ? "widget" : "other"}\ndescription: Widget rule ${n}\n---\nwidget ${secret} ${"界".repeat(3000)}\n`),
     sourceKind: "skill" as const, engine: "shared" as const,
   }));
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   try {
     await index.refresh(sources);
     const page = (await index.search({ query: "widget", limit: 9999 }));
@@ -950,7 +1008,7 @@ test("search is ranked and byte bounded; ingest redacts secrets and opening a hi
 
 test("a complete refresh removes only absent sources and retains the ledger; incomplete scans retain entries", async () => {
   const source = { path: fixture("AGENTS.md", "Synthetic widget instructions."), engine: "codex" as const, sourceKind: "instruction" as const };
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   try {
     await index.refresh([source]);
     const id = (await index.search({ query: "widget" })).items[0].id;
@@ -974,7 +1032,7 @@ test("malformed and polluted Codex memory never becomes global memory", async ()
     { path: fixture("MEMORY.md", "# Task Group: Widget\n## Task 1: Widget\n### User preferences\n- Prefer widget caches.\n"), sourceKind: "codex_memory" as const, engine: "codex" as const },
     { path: fixture("rollout.md", "cwd: /workspace/widget\npolluted: true\n# Widget\n- Widget poisoned advice.\n"), sourceKind: "rollout_summary" as const, engine: "codex" as const },
   ];
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   try {
     expect(await index.refresh(sources)).toMatchObject({ filesSkipped: 2, entriesIndexed: 0 });
     expect((await index.search({ query: "widget" })).items).toEqual([]);
@@ -983,7 +1041,7 @@ test("malformed and polluted Codex memory never becomes global memory", async ()
 
 test("a previously indexed source that becomes oversized stops returning stale content", async () => {
   const source = { path: fixture("AGENTS.md", "Synthetic widget instructions."), engine: "codex" as const, sourceKind: "instruction" as const };
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   try {
     await index.refresh([source]);
     expect((await index.search({ query: "widget" })).items).toHaveLength(1);
@@ -997,7 +1055,7 @@ test("native text remains unknown until independent operator ownership is establ
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-native-cursor-"));
   const previousState = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = path.join(root, "state");
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   try {
     const transcript = path.join(root, "synthetic.jsonl");
     fs.writeFileSync(transcript, "");
@@ -1018,7 +1076,7 @@ test("native text remains unknown until independent operator ownership is establ
 
 
 test("injected names remain the offered names after source edits, removal and reload", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   const source = { path: fixture("historical.md", "---\nname: Widget parser\ndescription: Widget parser requires escaped delimiters.\nmetadata:\n  type: project\n---\nUse escaped delimiters.\n"), engine: "claude" as const, sourceKind: "claude_memory" as const, project: "project-a" };
   try {
     await index.refresh([source]);
@@ -1042,7 +1100,7 @@ test("injected names remain the offered names after source edits, removal and re
 
 
 test("confirmed emissions survive contention and reload with exactly one original scored name", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   await index.refresh([{ path: fixture("confirmed.md", "v1\n## User preferences\n- Widget parser requires escaped delimiter pairs.\n"), engine: "codex", sourceKind: "codex_summary" }]);
   const entries = (await index.injectionCandidates("widget", "project-a", "claude", "confirmed-conversation")).map(entry => ({ ...entry, score: .8 }));
   expect(entries).toHaveLength(1);
@@ -1066,7 +1124,7 @@ test("confirmed emissions survive contention and reload with exactly one origina
 });
 
 test("a confirmed backlog drains in bounded batches after contention and reload", async () => {
-  const index = new MemoryIndex(), conversation = "backlog-conversation";
+  const index = functionalIndex(), conversation = "backlog-conversation";
   await index.refresh([{ path: fixture("backlog.md", "v1\n## User preferences\n- Widget parser requires escaped delimiter pairs.\n"), engine: "codex", sourceKind: "codex_summary" }]);
   expect((await index.injectionCandidates("widget", "project-a", "claude", conversation))).toHaveLength(1);
   const writer = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite"));
@@ -1084,12 +1142,14 @@ test("a confirmed backlog drains in bounded batches after contention and reload"
     // Retrieval drains one batch and abstains until every confirmation is
     // accounted for, so an unprocessed offer cannot be injected again.
     expect((await index.injectionCandidates("widget", "project-a", "claude", conversation))).toHaveLength(0);
-    expect(fs.readdirSync(pending).length).toBeGreaterThan(0);
-    expect(fs.readdirSync(pending).length).toBeLessThan(257);
+    expect(fs.readdirSync(pending)).toHaveLength(1);
     for (let i = 0; fs.readdirSync(pending).length && i < 257; i++) {
-      const started = performance.now();
+      const before = fs.readdirSync(pending).length;
+      index.close();
       expect(() => index.turnOffers(conversation)).not.toThrow();
-      expect(performance.now() - started).toBeLessThan(500);
+      const drained = before - fs.readdirSync(pending).length;
+      expect(drained).toBeGreaterThan(0);
+      expect(drained).toBeLessThanOrEqual(256);
     }
     expect(fs.readdirSync(pending)).toHaveLength(0);
     const offers = index.turnOffers(conversation);
@@ -1104,22 +1164,22 @@ test("a confirmed backlog drains in bounded batches after contention and reload"
 }, 30000);
 
 test("cold hook bookkeeping fails open on contention and retries initialization after unlock", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   (await index.search({ query: "widget" }));
   index.close();
   const db = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite"));
   db.exec("DROP TABLE memory_injection_names; BEGIN IMMEDIATE");
   try {
-    const started = performance.now();
+    busyTimeouts.length = 0;
     expect(() => index.claimHook("cold-conversation", "cold-turn")).toThrow();
-    expect(performance.now() - started).toBeLessThan(500);
+    expect(busyTimeouts).toEqual([0]);
   } finally { db.exec("ROLLBACK"); db.close(); }
   try { expect(index.claimHook("cold-conversation", "cold-turn")).toBeTrue(); }
   finally { index.close(); }
 });
 
 for (const engine of ["claude", "codex"] as const) test(`${engine} ambiguous identical journal rows cannot establish operator authorship`, () => {
-  const transcript = fixture("ambiguous.jsonl", ""), index = new MemoryIndex(), prompt = "Repeat widget input";
+  const transcript = fixture("ambiguous.jsonl", ""), index = functionalIndex(), prompt = "Repeat widget input";
   const line = (id: string) => JSON.stringify(engine === "claude"
     ? { type: "user", uuid: id, message: { role: "user", content: prompt } }
     : { type: "response_item", payload: { type: "message", turn_id: id, role: "user", content: [{ type: "input_text", text: prompt }] } }) + "\n";
@@ -1140,7 +1200,7 @@ for (const engine of ["claude", "codex"] as const) test(`${engine} ambiguous ide
 });
 
 for (const engine of ["claude", "codex"] as const) test(`${engine} two queued identical machine receipts cannot prove native operator authorship`, () => {
-  const transcript = fixture("queued.jsonl", ""), index = new MemoryIndex(), prompt = "Repeat widget input";
+  const transcript = fixture("queued.jsonl", ""), index = functionalIndex(), prompt = "Repeat widget input";
   try {
     index.recordTerminalDelivery("queued-first", "queued-conversation", prompt, "agent", transcript);
     index.recordTerminalDelivery("queued-second", "queued-conversation", prompt, "agent", transcript);
@@ -1154,7 +1214,7 @@ for (const engine of ["claude", "codex"] as const) test(`${engine} two queued id
 });
 
 test("candidate scope reads an alias chain during writer contention without rewriting old rows", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   await index.refresh([{ path: fixture("old-project.md", "---\nname: Widget parser\ndescription: Widget delimiters require paired escaping.\ntype: project\n---\nWidget delimiters require paired escaping.\n"),
     engine: "claude", sourceKind: "claude_memory", project: "fixture-older-key" }]);
   persistProjectAliases([{ source: "fixture-older-key", target: "fixture-intermediate", displayName: "Widgets" },
@@ -1167,7 +1227,7 @@ test("candidate scope reads an alias chain during writer contention without rewr
 });
 
 test("candidate deadline reports retrieval timeout separately from an empty index", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   let reason = "";
   try {
     expect((await index.injectionCandidates("widget", "fixture-project", "claude", "fixture-conversation", performance.now() - 1,
@@ -1175,8 +1235,41 @@ test("candidate deadline reports retrieval timeout separately from an empty inde
     expect(reason).toBe("candidateTimeout");
   } finally { index.close(); }
 });
+
+test("the candidate read timer expires a stalled filesystem read at its scheduled boundary", async () => {
+  const clock = spyOn(performance, "now").mockReturnValue(0);
+  const timers = new Map<unknown, { handler: () => void; ms: number }>();
+  const index = new MemoryIndex({
+    setTimeout(handler, ms) { timers.set(handler, { handler, ms }); return handler; },
+    clearTimeout(handle) { timers.delete(handle); },
+  });
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-read-clock-")); roots.push(root);
+  const project = projectInfoFromCwd(root)!.project;
+  await index.refresh([]);
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<string>();
+  const realpath = fs.promises.realpath;
+  const read = spyOn(fs.promises, "realpath").mockImplementation(((...args: Parameters<typeof realpath>) => {
+    if (args[0] === root) { entered.resolve(); return release.promise; }
+    return realpath(...args);
+  }) as typeof realpath);
+  let settled = false, reason = "";
+  try {
+    const pending = index.injectionCandidates("widget", project, "claude", "read-clock", Infinity,
+      { cwd: root, reason: value => { reason = value; } }).finally(() => { settled = true; });
+    await entered.promise;
+    expect([...timers.values()].map(timer => timer.ms)).toEqual([100]);
+    clock.mockReturnValue(99);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    clock.mockReturnValue(100);
+    for (const timer of timers.values()) timer.handler();
+    expect(await pending).toEqual([]);
+    expect(reason).toBe("candidateTimeout");
+    expect(timers.size).toBe(0);
+  } finally { release.resolve(root); read.mockRestore(); clock.mockRestore(); index.close(); }
+});
 test("a contended scope update keeps keys an earlier turn recorded and drops only the new claim", async () => {
-  const index = new MemoryIndex();
+  const index = functionalIndex();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-scope-contended-")); roots.push(root);
   fs.mkdirSync(path.join(root, ".git")); fs.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
   fs.writeFileSync(path.join(root, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/fixture/widgets.git\n');
