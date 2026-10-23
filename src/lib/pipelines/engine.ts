@@ -7545,7 +7545,10 @@ function recordAccountHold(attempt: PipelineStageAttempt, blocked: string | null
 
 /** Every hold in this stage's attempts that still stands. A replacement
     inherits its predecessors' holds, so it never returns to an account an
-    earlier attempt left at its confirmed limit before that account's reset. */
+    earlier attempt left at its confirmed limit before that account's reset.
+    A hold seen ended is removed from the attempt that carries it, so the
+    reading that ended it can age without bringing it back; only a new
+    exhaustion establishes another hold. Callers persist the pipeline. */
 function standingAccountHolds(pipeline: Pipeline, stage: PipelineStage, ports: PipelinePorts): PipelineAccountHold[] {
   const holds = new Map<string, PipelineAccountHold>();
   for (const attempt of runFor(pipeline, stage.id)?.attempts ?? []) {
@@ -7553,7 +7556,14 @@ function standingAccountHolds(pipeline: Pipeline, stage: PipelineStage, ports: P
     for (const hold of [...attempt.accountHolds ?? [], ...own ? [own] : []]) {
       try {
         if (ports.accountQuota && accountHoldEnded(hold, ports.accountQuota(attempt.effectiveRole.engine, hold.accountId,
-          attempt.effectiveRole.model), ports)) continue;
+          attempt.effectiveRole.model), ports)) {
+          if (hold === own) delete attempt.suspension!.hold;
+          else {
+            const kept = attempt.accountHolds!.filter(item => item !== hold);
+            if (kept.length) attempt.accountHolds = kept; else delete attempt.accountHolds;
+          }
+          continue;
+        }
       } catch { /* An unreadable reading neither confirms nor ends a hold. */ }
       holds.set(hold.accountId, hold); // A later attempt's hold rests on a newer reading.
     }
