@@ -111,7 +111,7 @@ import type { AttentionRequestV1, FocusIntent, FocusTarget, ZoomIntent } from "@
 import { applyBoardCommand } from "@/lib/board/command";
 import { boardFor } from "@/lib/board/store";
 import { conversationDeliverabilityFromRecord } from "@/lib/conversation/deliverability";
-import { backoffDelayMs, DeadlineExceededError, deadlineSignal } from "@/lib/deadline";
+import { backoffDelayMs, DeadlineExceededError, deadlineSignal, systemScheduler, type DeadlineScheduler } from "@/lib/deadline";
 import { cancelRound, closeFlow, patchFlow } from "@/lib/flows/commands";
 import { flowSelectionSource } from "@/lib/flows/store";
 import { getFlowsWithPresets } from "@/lib/flows/engine";
@@ -384,13 +384,13 @@ function controlRetryDelay(attempt: number): number {
   return backoffDelayMs(attempt, { baseMs: CONTROL_RETRY_BASE_MS, maxMs: CONTROL_RETRY_MAX_MS });
 }
 
-async function waitForControlRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
+async function waitForControlRetry(delayMs: number, signal?: AbortSignal, scheduler = systemScheduler): Promise<void> {
   if (signal?.aborted) throw signal.reason;
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(finish, delayMs);
+    const timer = scheduler.setTimeout(finish, delayMs);
     const onAbort = () => finish(signal?.reason);
     function finish(error?: unknown) {
-      clearTimeout(timer);
+      scheduler.clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
       if (error !== undefined) reject(error);
       else resolve();
@@ -656,6 +656,7 @@ async function dispatchViewerControl(
   headers: Record<string, string> = {},
   context: McpToolCallContext = {},
   pinConfiguredEndpoint = false,
+  scheduler: DeadlineScheduler = systemScheduler,
 ): Promise<Record<string, unknown>> {
   const baseUrl = viewerControlOrigin(process.env, pinConfiguredEndpoint);
   const token = viewerControlToken(process.env, baseUrl);
@@ -687,6 +688,7 @@ async function dispatchViewerControl(
   while (true) {
     context.assertCaller?.();
     attempt = deadlineSignal(Math.min(CONTROL_ATTEMPT_TIMEOUT_MS, Math.max(1, expiresAt - Date.now())), {
+      scheduler,
       signal: context.signal,
       reason: "Viewer control dispatch timed out",
     });
@@ -717,7 +719,7 @@ async function dispatchViewerControl(
           // Every preceding attempt was affirmatively refused before sending.
           // Keep the same durable binding, body and downstream key.
           try {
-            await waitForControlRetry(delayMs, context.signal);
+            await waitForControlRetry(delayMs, context.signal, scheduler);
           } catch {
             // Cancellation here cannot turn a refused connection into a send.
             throw refusedSend();
@@ -787,6 +789,7 @@ async function dispatchViewerControl(
 
 export function productionViewerControlDependencies(
   pinConfiguredEndpoint = false,
+  scheduler: DeadlineScheduler = systemScheduler,
 ): ViewerControlDependencies {
   return {
     get: (pathname, context) => getViewerControl(pathname, context, pinConfiguredEndpoint),
@@ -803,6 +806,7 @@ export function productionViewerControlDependencies(
       headers,
       context,
       pinConfiguredEndpoint,
+      scheduler,
     ),
   };
 }
