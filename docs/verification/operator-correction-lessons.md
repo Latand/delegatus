@@ -48,6 +48,10 @@ and ordinary lessons remain unmarked. Curation priority is computed from the
 existing view and history; no new timer, tool, classifier or poll is added. Stage delivery upgrades retained
 scaffolds and the two shipped write fences that predate correction lessons;
 current scaffolds carry the instruction once. Capped overrides preserve it.
+Budget retention never archives a correction changed since its last curation,
+so a correction that repeats a curated rule stays active and leads the agenda
+until a curator pass reviews it; an unreviewed correction that left by budget
+under an earlier build still counts in the agenda.
 
 ## Verification procedure
 
