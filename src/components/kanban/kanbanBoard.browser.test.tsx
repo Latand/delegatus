@@ -36828,6 +36828,8 @@ describe("retired review history", () => {
       const element = page.locator(selector).filter({ visible: true }).first();
       await element.waitFor();
       await element.scrollIntoViewIfNeeded();
+      // Scrolling admits content-visibility:auto descendants on the next paint.
+      await element.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
       const measurement = await element.evaluate(el => {
         const box = el.getBoundingClientRect();
         const clipped: string[] = [];
