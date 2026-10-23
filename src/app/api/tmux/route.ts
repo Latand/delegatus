@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { conversationHostGET, conversationHostPOST } from "@/app/api/conversation-host/handlers";
 
 export const runtime = "nodejs";
@@ -14,5 +15,9 @@ export const dynamic = "force-dynamic";
  * Prefer `/api/conversation-host` for new callers. The handlers are shared, so
  * the two paths cannot drift apart.
  */
-export const GET = conversationHostGET;
-export const POST = conversationHostPOST;
+const workspaceGET = conversationHostGET;
+const workspacePOST = conversationHostPOST;
+
+export const GET = workspaceRoute("/api/tmux", workspaceGET);
+
+export const POST = workspaceRoute("/api/tmux", workspacePOST);

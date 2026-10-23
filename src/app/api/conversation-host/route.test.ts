@@ -33,7 +33,7 @@ afterAll(() => {
 
 const alias = await import("./route");
 const legacy = await import("../tmux/route");
-const handlers = await import("./handlers");
+
 
 /*
  * Issue #1301: `/api/tmux` runs no tmux. The endpoint resumes or respawns a
@@ -44,11 +44,16 @@ const handlers = await import("./handlers");
  * working so nothing in flight breaks.
  */
 
-test("both paths mount the same handlers, so the alias cannot drift from the legacy path", () => {
-  expect(alias.GET).toBe(handlers.conversationHostGET);
-  expect(alias.POST).toBe(handlers.conversationHostPOST);
-  expect(legacy.GET).toBe(alias.GET);
-  expect(legacy.POST).toBe(alias.POST);
+test("both paths put a workspace gate around the same shared handlers", () => {
+  for (const file of [path.join(import.meta.dir, "route.ts"), path.join(import.meta.dir, "../tmux/route.ts")]) {
+    const source = fs.readFileSync(file, "utf8");
+    expect(source).toContain("const workspaceGET = conversationHostGET;");
+    expect(source).toContain("const workspacePOST = conversationHostPOST;");
+    expect(source).toContain("workspaceGET);");
+    expect(source).toContain("workspacePOST);");
+  }
+  expect(typeof alias.GET).toBe("function");
+  expect(typeof legacy.POST).toBe("function");
 });
 
 test("both paths declare the same segment config", () => {
@@ -61,9 +66,13 @@ test("both paths declare the same segment config", () => {
 test("the batch target lookup is mounted under both names too", async () => {
   const aliasTargets = await import("./targets/route");
   const legacyTargets = await import("../tmux/targets/route");
-  const targetHandlers = await import("./targets/handlers");
-  expect(aliasTargets.POST).toBe(targetHandlers.conversationHostTargetsPOST);
-  expect(legacyTargets.POST).toBe(aliasTargets.POST);
+  for (const file of [path.join(import.meta.dir, "targets/route.ts"), path.join(import.meta.dir, "../tmux/targets/route.ts")]) {
+    const source = fs.readFileSync(file, "utf8");
+    expect(source).toContain("const workspacePOST = conversationHostTargetsPOST;");
+    expect(source).toContain("workspacePOST);");
+  }
+  expect(typeof aliasTargets.POST).toBe("function");
+  expect(typeof legacyTargets.POST).toBe("function");
 });
 
 test("the legacy path's description says plainly that no tmux is involved", () => {

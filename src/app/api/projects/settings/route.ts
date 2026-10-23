@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
 import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
@@ -81,7 +82,7 @@ function projectParam(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-export async function GET(request: NextRequest): Promise<NextResponse> {
+async function workspaceGET(request: NextRequest): Promise<NextResponse> {
   const project = projectParam(request.nextUrl.searchParams.get("project"));
   if (!project || project.length > 256) {
     return NextResponse.json({ error: "INVALID_REQUEST", message: "project is required" }, { status: 400, headers });
@@ -92,7 +93,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 /** The operator's switches, either or both in one write, and the Telegram
     report destination. Agents read the
     settings (get_orchestrator, list_pipelines) and have no write path (§9). */
-export async function PUT(request: NextRequest): Promise<NextResponse> {
+async function workspacePUT(request: NextRequest): Promise<NextResponse> {
   const rejection = rejectCrossOrigin(request);
   if (rejection) { rejection.headers.set("Cache-Control", "no-store"); return rejection; }
   let payload: unknown = null;
@@ -178,3 +179,7 @@ export async function PUT(request: NextRequest): Promise<NextResponse> {
   if (typeof merge === "boolean") requestPipelineTick();
   return NextResponse.json(answer(project), { headers });
 }
+
+export const GET = workspaceRoute("/api/projects/settings", workspaceGET);
+
+export const PUT = workspaceRoute("/api/projects/settings", workspacePUT);

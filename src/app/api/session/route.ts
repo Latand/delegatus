@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
 import { readSession } from "@/lib/session/reader";
@@ -14,7 +15,7 @@ function engineForPath(pathname: string): "claude" | "codex" | null {
   return null;
 }
 
-export async function GET(req: NextRequest): Promise<NextResponse<ReturnType<typeof readSession> | ApiError>> {
+async function workspaceGET(req: NextRequest): Promise<NextResponse<ReturnType<typeof readSession> | ApiError>> {
   const conversationId = req.nextUrl.searchParams.get("conversationId");
   const target = await readAgentSessionTarget(conversationId, req.nextUrl.searchParams.get("path") ?? "", req.signal);
   const pathname = target.path;
@@ -29,3 +30,5 @@ export async function GET(req: NextRequest): Promise<NextResponse<ReturnType<typ
   if (!engine) return NextResponse.json({ error: "unsupported session path" }, { status: 400 });
   return NextResponse.json(readSession(pathname, engine));
 }
+
+export const GET = workspaceRoute("/api/session", workspaceGET);

@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
 import { handleRuntimeCommand } from "@/lib/runtime/http";
@@ -5,6 +6,8 @@ import { handleRuntimeCommand } from "@/lib/runtime/http";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export function POST(request: NextRequest): Promise<NextResponse> {
+function workspacePOST(request: NextRequest): Promise<NextResponse> {
   return handleRuntimeCommand(request, "interrupt");
 }
+
+export const POST = workspaceRoute("/api/runtime/interrupt", workspacePOST);

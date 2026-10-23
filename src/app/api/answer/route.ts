@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import fs from "node:fs";
 
 import { NextRequest, NextResponse } from "next/server";
@@ -190,7 +191,9 @@ async function postAnswer(
   }
 }
 
-export const POST = Object.assign(
+const workspacePOST = Object.assign(
   async (req: NextRequest): Promise<NextResponse<RouteResponse>> => postAnswer(req),
   { withDependencies: postAnswer },
 );
+
+export const POST = workspaceRoute("/api/answer", workspacePOST);

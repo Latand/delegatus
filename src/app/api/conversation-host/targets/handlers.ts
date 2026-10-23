@@ -34,10 +34,11 @@ async function targetForRequest(
   pid: number | null,
   pathname: string,
 ): Promise<string | null> {
-  if (pathname && pathAllowed(pathname)) {
-    /* Paths carry the conversation identity. A supplied pid may already name
-       another process, so it is used only when the request has no path. */
-    return snapshot.canonicalFor(pathname)?.display ?? null;
+  if (pathname) {
+    /* Paths carry the conversation identity, and the workspace gate
+       authorized the path. A supplied pid may already name another process,
+       so it is used only when the request has no path. */
+    return pathAllowed(pathname) ? snapshot.canonicalFor(pathname)?.display ?? null : null;
   }
   return pid === null ? null : resolveRequestedTmuxTarget(pid, files);
 }
