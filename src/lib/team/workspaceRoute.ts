@@ -87,12 +87,31 @@ async function directoryProjects(value: string): Promise<(string | null)[]> {
   return [...new Set([lexical, real ?? lexical])].map(directory => projectForCwd(directory));
 }
 
+/** A client pid is a process identity like any other: it answers to the
+ * project of the transcript the scanner attributes it to. A pid the scanner
+ * attributes to nothing is refused, so a handler's fresher observation can
+ * never turn it into a process the gate did not see. One index per request
+ * serves a whole target batch. */
+async function pidProjectIndex(): Promise<(value: string | number) => (string | null)[]> {
+  const [{ completedFileScan }, resolve] = await Promise.all([import("@/lib/scanner/scanCache"), workspaceConversationResolver()]);
+  const paths = new Map<number, string[]>();
+  for (const entry of (await completedFileScan({ revalidate: false })).snapshot.files) {
+    if (entry.pid !== null) paths.set(entry.pid, [...paths.get(entry.pid) ?? [], entry.path]);
+  }
+  return value => {
+    const pid = Number(value);
+    if (!Number.isInteger(pid) || pid <= 0) return [];
+    return paths.get(pid)?.map(resolve) ?? [null];
+  };
+}
+
 /** Every supplied resource is checked, including copied parents and nested targets. */
 async function targetProjects(route: string, request: Request, ctx?: Context): Promise<(string | null)[]> {
   const url = new URL(request.url);
   if (route === "/api/files" && url.searchParams.get("view") === "storage-health") return [null];
   const projects: (string | null)[] = [];
   let input: Record<string, unknown> = {};
+  let pidProjects: ReturnType<typeof pidProjectIndex> | null = null;
   const check = async (key: string, value: unknown): Promise<void> => {
     // Resource-panel panes belong to the owner's installation-wide snapshot.
     // A conversation supplied beside one does not grant access to that pane.
@@ -110,6 +129,11 @@ async function targetProjects(route: string, request: Request, ctx?: Context): P
       // Report acknowledgement addresses the installation's bridge queue.
       if (object.kind === "report") projects.push(null);
       for (const [nested, item] of Object.entries(value)) await check(nested, item);
+      return;
+    }
+    // On every route, beside any other identity: handlers read it as a number or a string.
+    if (key === "pid" && (typeof value === "number" || typeof value === "string")) {
+      projects.push(...(await (pidProjects ??= pidProjectIndex()))(value));
       return;
     }
     if (typeof value !== "string" || !value) return;

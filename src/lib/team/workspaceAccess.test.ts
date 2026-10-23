@@ -56,6 +56,8 @@ import { POST as preflightPOST } from "@/app/api/pipelines/preflight/route";
 import * as scanCache from "@/lib/scanner/scanCache";
 import * as transcriptHost from "@/lib/agent/transcriptHost";
 import * as tmux from "@/lib/tmux";
+import { GET as conversationsGET } from "@/app/api/conversations/route";
+import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 
 const W1 = `w_${"a".repeat(32)}`;
 const W2 = `w_${"b".repeat(32)}`;
@@ -309,52 +311,121 @@ describe("workspace authority", () => {
     }
   });
 
-  test("a pid beside an authorized conversation or launch never resolves another workspace's process", async () => {
+  test("a pid beside an authorized conversation, launch or path never looks up or sends to another workspace's process", async () => {
     const registry = agentRegistry();
+    const ownTranscript = path.join(root, "own.jsonl");
+    const foreignTranscript = path.join(root, "foreign.jsonl");
     const receipt = registry.beginSpawn("codex", root, { project: "repo-alpha", title: "Own conversation" });
-    registry.completeSpawn(receipt.launchId, { key: { engine: "codex", sessionId: fixtureSessionId(4) }, artifactPath: path.join(root, "own.jsonl"), cwd: root, accountId: null, status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: "spawn" });
+    registry.completeSpawn(receipt.launchId, { key: { engine: "codex", sessionId: fixtureSessionId(4) }, artifactPath: ownTranscript, cwd: root, accountId: null, status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: "spawn" });
+    const catalogRow = (transcript: string, project: string) => ({ path: transcript, root: "codex-sessions" as const, name: path.basename(transcript), project, title: project, firstPrompt: "", engine: "codex" as const, kind: "session" as const, fmt: "codex" as const, mtime: now / 1000, size: 0 });
+    replaceConversationCatalog([catalogRow(ownTranscript, "repo-alpha"), catalogRow(foreignTranscript, "repo-beta")]);
+    const ownPid = 4242;
     const foreignPid = 4343;
+    const unknownPid = 4444;
+    const files = [
+      { ...catalogEntryToFileEntry(catalogRow(ownTranscript, "repo-alpha"), now), pid: ownPid, proc: "running" as const },
+      { ...catalogEntryToFileEntry(catalogRow(foreignTranscript, "repo-beta"), now), pid: foreignPid, proc: "running" as const },
+    ];
     const pidLookups: number[] = [];
-    const resolvePid = async (pid: number) => { pidLookups.push(pid); return pid === foreignPid ? "beta-agent:1.0" : null; };
-    const emptyScan = async () => ({ snapshot: { files: [] } }) as never;
+    const sends: unknown[] = [];
+    const resolvePid = async (pid: number) => { pidLookups.push(pid); return pid === foreignPid ? "beta-agent:1.0" : pid === ownPid ? "alpha-agent:1.0" : null; };
+    const scanned = async () => ({ snapshot: { files } }) as never;
     const emptyHosts = async () => ({ hosts: [], observation: "available", canonicalFor: () => null }) as never;
-    setConversationHostDependenciesForTests({ completedFileScan: emptyScan, readTranscriptHosts: emptyHosts, resolveRequestedTmuxTarget: resolvePid as never });
-    const scan = spyOn(scanCache, "completedFileScan").mockImplementation(emptyScan);
+    const deliver = async (message: unknown) => { sends.push(message); return { ok: true, target: "probe:0.0", operationId: "op-probe" } as never; };
+    setConversationHostDependenciesForTests({
+      completedFileScan: scanned, readTranscriptHosts: emptyHosts, resolveRequestedTmuxTarget: resolvePid as never,
+      deliverConversationMessage: deliver as never,
+      // Structured admission declines, so a send that passes the gate reaches the legacy pid ladder.
+      enqueueStructuredMessage: (async (message: unknown) => { sends.push(message); return null; }) as never,
+    });
+    const scan = spyOn(scanCache, "completedFileScan").mockImplementation(scanned);
     const hosts = spyOn(transcriptHost, "readTranscriptHosts").mockImplementation(emptyHosts);
     const tmuxLookup = spyOn(tmux, "resolveRequestedTmuxTarget").mockImplementation(resolvePid as never);
+    const previousHosts = process.env.LLV_STRUCTURED_HOSTS;
+    const send = (route: string, actor: Member, body: Record<string, unknown>) => request(`/api/${route}`, actor, "POST", { text: "probe", ...body });
     try {
       for (const route of ["conversation-host", "tmux"]) {
-        const { GET } = await import(`../../app/api/${route}/route.ts`);
+        const { GET, POST: sendPOST } = await import(`../../app/api/${route}/route.ts`);
         const { POST } = await import(`../../app/api/${route}/targets/route.ts`);
+        const identities = [receipt.conversationId, `spawn:${receipt.launchId}`, ownTranscript];
         for (const actor of [member, manager]) {
-          for (const identity of [receipt.conversationId, `spawn:${receipt.launchId}`]) {
-            const response = await GET(request(`/api/${route}?path=${encodeURIComponent(identity)}&pid=${foreignPid}`, actor));
-            expect(response.status).toBe(200);
-            expect(await response.json()).toEqual({ target: null });
+          for (const pid of [foreignPid, unknownPid]) {
+            for (const identity of identities) {
+              for (const key of ["path", "conversationId"]) {
+                const lookup = await GET(request(`/api/${route}?${key}=${encodeURIComponent(identity)}&pid=${pid}`, actor));
+                expect(lookup.status, `${route} GET ${key}=${identity} pid=${pid}`).toBe(403);
+              }
+              for (const structured of ["1", "0"]) {
+                process.env.LLV_STRUCTURED_HOSTS = structured;
+                for (const body of [{ conversationId: identity, pid }, { path: identity, pid }, { conversationId: identity, pid: String(pid) }]) {
+                  const delivered = await sendPOST(send(route, actor, body));
+                  expect(delivered.status, `${route} POST ${JSON.stringify(body)} structured=${structured}`).toBe(403);
+                }
+              }
+            }
+            const batch = await POST(request(`/api/${route}/targets`, actor, "POST", { reqs: [
+              { id: "conversation", path: receipt.conversationId, pid },
+              { id: "launch", path: `spawn:${receipt.launchId}`, pid },
+            ] }));
+            expect(batch.status).toBe(403);
+            expect((await GET(request(`/api/${route}?pid=${pid}`, actor))).status).toBe(403);
+            expect((await POST(request(`/api/${route}/targets`, actor, "POST", { reqs: [{ id: "pid", pid }] }))).status).toBe(403);
           }
-          const batch = await POST(request(`/api/${route}/targets`, actor, "POST", { reqs: [
-            { id: "conversation", path: receipt.conversationId, pid: foreignPid },
-            { id: "launch", path: `spawn:${receipt.launchId}`, pid: foreignPid },
-          ] }));
-          expect(batch.status).toBe(200);
-          expect(await batch.json()).toEqual({ targets: { conversation: null, launch: null } });
-          const pidOnly = await GET(request(`/api/${route}?pid=${foreignPid}`, actor));
-          expect(pidOnly.status).toBe(403);
-          const batchPidOnly = await POST(request(`/api/${route}/targets`, actor, "POST", { reqs: [{ id: "pid", pid: foreignPid }] }));
-          expect(batchPidOnly.status).toBe(403);
+          expect(pidLookups).toEqual([]);
+          expect(sends).toEqual([]);
+          // The member's own agent pid, beside its own conversation, still reaches the handlers.
+          expect(await (await GET(request(`/api/${route}?conversationId=${receipt.conversationId}&pid=${ownPid}`, actor))).json()).toEqual({ target: "alpha-agent:1.0" });
+          expect(pidLookups).toEqual([ownPid]);
+          process.env.LLV_STRUCTURED_HOSTS = "0";
+          expect((await sendPOST(send(route, actor, { conversationId: `spawn:${receipt.launchId}`, pid: ownPid }))).status).toBe(200);
+          expect(sends).toEqual([expect.objectContaining({ pid: ownPid, path: "", text: "probe" })]);
+          pidLookups.length = 0;
+          sends.length = 0;
         }
-        expect(pidLookups).toEqual([]);
-        // The owner's pid lookups are unchanged.
+        // The owner's pid lookups and pid-addressed sends are unchanged.
         expect(await (await GET(request(`/api/${route}?pid=${foreignPid}`, owner))).json()).toEqual({ target: "beta-agent:1.0" });
+        expect(await (await GET(request(`/api/${route}?conversationId=${receipt.conversationId}&pid=${foreignPid}`, owner))).json()).toEqual({ target: "beta-agent:1.0" });
         expect(await (await POST(request(`/api/${route}/targets`, owner, "POST", { reqs: [{ id: "pid", pid: foreignPid }] }))).json()).toEqual({ targets: { pid: "beta-agent:1.0" } });
-        expect(pidLookups).toEqual([foreignPid, foreignPid]);
+        expect(pidLookups).toEqual([foreignPid, foreignPid, foreignPid]);
+        expect((await sendPOST(send(route, owner, { conversationId: `spawn:${receipt.launchId}`, pid: foreignPid }))).status).toBe(200);
+        expect(sends).toEqual([expect.objectContaining({ pid: foreignPid, path: "" })]);
         pidLookups.length = 0;
+        sends.length = 0;
       }
     } finally {
+      if (previousHosts === undefined) delete process.env.LLV_STRUCTURED_HOSTS;
+      else process.env.LLV_STRUCTURED_HOSTS = previousHosts;
       setConversationHostDependenciesForTests(null);
       scan.mockRestore();
       hosts.mockRestore();
       tmuxLookup.mockRestore();
+    }
+  });
+
+  test("a conversation page counts only rows the caller's workspaces own after registry ownership", async () => {
+    const own = path.join(root, "own-row.jsonl");
+    const moved = path.join(root, "moved-row.jsonl");
+    for (const transcript of [own, moved]) fs.writeFileSync(transcript, JSON.stringify({ type: "user", message: { content: "row" } }) + "\n");
+    const elsewhere = path.join(root, "elsewhere");
+    fs.mkdirSync(elsewhere);
+    // Both rows are catalogued in the member's project; the registry owns the older one elsewhere.
+    replaceConversationCatalog([own, moved].map((transcript, index) => ({ path: transcript, root: "claude-projects" as const, name: path.basename(transcript), project: "repo-alpha", title: "row", firstPrompt: "", engine: "claude" as const, kind: "session" as const, fmt: "claude" as const, mtime: now / 1000 - index, size: fs.statSync(transcript).size })));
+    agentRegistry().reconcileConversations([{ engine: "claude", path: moved, accountId: null, launchProfile: emptyLaunchProfile({ cwd: elsewhere, title: "moved", project: "repo-beta" }), turn: { state: "idle", source: "empty", terminalAt: null }, observedAt: new Date(now).toISOString() }]);
+    scanCache.setFileCatalogMembershipProbeForTests(async () => null);
+    try {
+      for (const query of ["", "&q=row"]) {
+        for (const actor of [member, manager]) {
+          const response = await conversationsGET(request(`/api/conversations?limit=1${query}`, actor));
+          expect(response.status).toBe(200);
+          const page = await response.json() as { items: { path: string }[]; total: number };
+          expect(page.items.map(item => item.path), query).toEqual([own]);
+          expect(page.total, query).toBe(1);
+        }
+        const ownerPage = await (await conversationsGET(request(`/api/conversations?limit=1${query}`, owner))).json() as { total: number };
+        expect(ownerPage.total, query).toBe(2);
+      }
+    } finally {
+      scanCache.setFileCatalogMembershipProbeForTests(null);
     }
   });
 

@@ -58,7 +58,9 @@ async function workspaceGET(request: Request): Promise<Response> {
       page = await loadConversationCatalogPage([], options, undefined, query ? undefined : hydrateSearchText);
       overlaySessionTitles(page.items);
     } else if (query) {
-      const scoped = scopeConversationCatalog(source, sessionProjectProjection().projectByPath, options.project);
+      // Registry ownership can move a row out of the caller's workspaces; the
+      // page total is counted after that, so it never counts rows owned elsewhere.
+      const scoped = filterWorkspaceRows(scope, scopeConversationCatalog(source, sessionProjectProjection().projectByPath, options.project));
       const projected = await conversationSearchProjection().search(scoped, query, {
         signal: request.signal,
         projectTitle: searchSessionTitleProjector(),
@@ -74,7 +76,7 @@ async function workspaceGET(request: Request): Promise<Response> {
       const projectEntries = source.map(catalogEntryToFileEntry);
       overlaySessionProjects(projectEntries);
       const projectByPath = new Map(projectEntries.map((entry) => [entry.path, entry.project]));
-      const projected = source.map((entry) => ({ ...entry, project: projectByPath.get(entry.path) ?? entry.project }));
+      const projected = filterWorkspaceRows(scope, source.map((entry) => ({ ...entry, project: projectByPath.get(entry.path) ?? entry.project })));
       page = await loadConversationCatalogPage(projected, options, undefined, hydrateSearchText);
       overlaySessionTitles(page.items);
     }
