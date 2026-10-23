@@ -1056,6 +1056,103 @@ describe("subscription API consent", () => {
   }, 120_000);
 });
 
+describe("swarm release rules", () => {
+  browserTest("consent, refused save and read-only scope fit both languages, themes and viewports", async () => {
+    const out = path.resolve(".artifacts/swarm-rules"); fs.mkdirSync(out, { recursive: true });
+    let receiving = false, refuse = false;
+    const rules = sampleMemory();
+    const publicRule = { ...rules.scopes[0].active[0], id: "r_0000000000000088", rule: "Read the project instruction files before changing code.", why: "" };
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/telemetry": async (request: Request) => {
+        if (request.method === "PUT") {
+          if (refuse) return Response.json({ error: "Could not save telemetry setting" }, { status: 500 });
+          const body = await request.json();
+          if (typeof body.swarmRules === "boolean") receiving = body.swarmRules;
+        }
+        return Response.json({ enabled: false, locked: false, noticeDismissed: true, swarmRules: receiving });
+      },
+      "/api/subscription-api-consent": { version: 1, enabled: false, source: "operator" },
+      "/api/role-memory": () => Response.json({ ...rules, scopes: [...rules.scopes, ...(receiving ? [{ scope: "swarm:builder", kind: "swarm", roleId: "builder", revision: 0, chars: 80, bound: 4000, addedToday: 0, active: [publicRule], left: [] }] : [])] }),
+      "/api/role-memory/profile": { project: "garden", enabled: true, model: "haiku", ruleCount: 6, stale: false, changes: { added: 0, rewritten: 0, removed: 0 }, overall: null, slices: [], run: null },
+    });
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 390]) {
+        receiving = false; refuse = false;
+        const phone = width === 390, viewport = { width, height: phone ? 844 : 900 };
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-settings&header=1`, viewport, theme, lang, "reduce", phone);
+        try {
+          await page.locator(phone ? '[data-mobile2-open="menu"]' : "[data-rail-menu]").first().waitFor();
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
+          const setting = page.locator("[data-swarm-setting]");
+          const toggle = setting.getByRole("switch", { name: translate(lang, "telemetry.swarm.label"), exact: true });
+          await toggle.waitFor();
+          expect(await toggle.isEnabled()).toBe(true);
+          expect(await toggle.isChecked()).toBe(false);
+          await setting.scrollIntoViewIfNeeded();
+          expect(await setting.innerText()).toContain(translate(lang, "telemetry.swarm.description"));
+          const geometry = await setting.evaluate(element => {
+            const box = element.getBoundingClientRect(), dialog = element.closest("[role=dialog]")!.getBoundingClientRect();
+            const lines = [...element.querySelectorAll("label,p")].flatMap(text => {
+              const range = document.createRange(); range.selectNodeContents(text);
+              return [...range.getClientRects()].map(rect => ({ left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }));
+            });
+            return { visible: box.top >= dialog.top && box.bottom <= dialog.bottom,
+              textVisible: lines.every(rect => rect.left >= dialog.left && rect.right <= dialog.right && rect.top >= dialog.top && rect.bottom <= dialog.bottom),
+              overflow: element.scrollWidth > element.clientWidth, focused: document.activeElement?.tagName };
+          });
+          expect(geometry.visible).toBe(true); expect(geometry.textVisible).toBe(true); expect(geometry.overflow).toBe(false);
+          const tag = `${lang}-${theme}-${width}`;
+          await page.screenshot({ path: path.join(out, `off-${tag}.png`) });
+          refuse = true;
+          await toggle.click();
+          await setting.getByRole("alert").waitFor();
+          await setting.scrollIntoViewIfNeeded();
+          const refusedVisible = await setting.evaluate(element => {
+            const dialog = element.closest("[role=dialog]")!.getBoundingClientRect();
+            const range = document.createRange(); range.selectNodeContents(element);
+            return [...range.getClientRects()].every(rect => rect.top >= dialog.top && rect.bottom <= dialog.bottom && rect.left >= dialog.left && rect.right <= dialog.right);
+          });
+          expect(refusedVisible).toBe(true);
+          expect(await toggle.isChecked()).toBe(false);
+          await page.screenshot({ path: path.join(out, `refused-${tag}.png`) });
+          refuse = false;
+          const saved = page.waitForResponse(response => new URL(response.url()).pathname === "/api/telemetry" && response.request().method() === "PUT");
+          await toggle.click();
+          expect((await saved).status()).toBe(200);
+          await page.waitForFunction(() => document.querySelector<HTMLInputElement>("[data-swarm-setting] input")?.checked === true && !document.querySelector("[data-telemetry-settings] [role=alert]"));
+          expect(receiving).toBe(true);
+          await page.reload();
+          await page.locator(phone ? '[data-mobile2-open="menu"]' : "[data-rail-menu]").first().waitFor();
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
+          await toggle.waitFor(); expect(await toggle.isChecked()).toBe(true);
+          await page.goto(`${server.base}?scenario=memory-profile&rolememory=1`);
+          await page.getByRole("button", { name: translate(lang, "memoryProfile.allRules"), exact: true }).click();
+          const swarm = page.locator('[data-rules-swarm="swarm:builder"]');
+          await swarm.waitFor(); await swarm.scrollIntoViewIfNeeded();
+          expect(await swarm.innerText()).toContain(publicRule.rule);
+          expect(await swarm.locator("[data-learned-rule-delete]").count()).toBe(0);
+          const order = await page.locator('[data-rules-section="role"]').evaluate(element => {
+            const local = element.querySelector("[data-rules-every-project]")!, shared = element.querySelector("[data-rules-swarm]")!;
+            return !!(local.compareDocumentPosition(shared) & Node.DOCUMENT_POSITION_FOLLOWING);
+          });
+          expect(order).toBe(true);
+          await page.screenshot({ path: path.join(out, `rules-${tag}.png`) });
+          expect(pageErrors).toEqual([]);
+          readings.push({ lang, theme, width, ...geometry, refusedVisible, order, readOnly: true, openingScroll: "dialog starts at top; swarm setting scrolled into view", rulesScroll: "All rules; swarm section scrolled into view" });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/swarm-rules", { recursive: true });
+      const sources = ["src/components/telemetry/TelemetrySettings.tsx", "src/components/roleMemory/LearnedRules.tsx", "src/components/roleMemory/MemoryProfile.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts", "src/components/kanban/kanbanBoard.browser.test.tsx"];
+      fs.writeFileSync("evidence/swarm-rules/rendered.json", JSON.stringify({
+        command: "LLV_KANBAN_BROWSER_TEST=1 bun test --timeout=60000 src/components/kanban/kanbanBoard.browser.test.tsx -t 'swarm release rules' (gate-remote, isolated roots)",
+        recordedAt: new Date().toISOString(), sources: Object.fromEntries(sources.map(source => [source, createHash("sha256").update(fs.readFileSync(source)).digest("hex")])), readings,
+      }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});
+
 describe("memory profile", () => {
   browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1" && !!process.env.MEMORY_PROFILE_BENCHMARK)("CLI timings reach the visible page", async () => {
     // Explicit private input is supplied only for an opt-in local timing run. No source text is captured.
