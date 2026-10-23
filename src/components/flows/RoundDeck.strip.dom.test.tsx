@@ -49,6 +49,7 @@ mock.module("@/hooks/useLogTail", () => ({
   }),
 }));
 
+const realFetch = globalThis.fetch;
 const { RoundDeck } = await import("./RoundDeck");
 
 const roots = new Set<Root>();
@@ -59,6 +60,7 @@ afterAll(() => {
 afterEach(() => {
   for (const root of roots) flushSync(() => root.unmount());
   roots.clear();
+  globalThis.fetch = realFetch;
   dom.document.body.replaceChildren();
   dom.sessionStorage.clear();
 });
@@ -120,4 +122,22 @@ test("a headless archive never mounts controls for an unfinished round", () => {
   expect(host.querySelector("[data-review-deck-collapse]")).not.toBeNull();
   expect(surface(host)).toBeNull();
   expect(hasComposer(host)).toBe(false);
+});
+
+
+test.each([false, true])("expanded archive has no transcript or host mutation controls (running: %s)", running => {
+  const writes: string[] = [];
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    if (init?.method && init.method !== "GET") writes.push(init.method + " " + url);
+    return Response.json({});
+  }) as unknown as typeof fetch;
+  const file = { ...subagent, activity: running ? "live" : "idle", proc: running ? "running" : null,
+    pid: running ? 123 : null, renamable: true, waitingInput: { target: "pane", since: 1, screenTail: "Retained prompt", menu: null } } as FileEntry;
+  const host = render([{ key: "r1", round: round(), file }]);
+  expect(host.querySelector("[data-link-path]")).not.toBeNull();
+  const controls = [...host.querySelectorAll("button, input, textarea")];
+  const labels = controls.map(el => [el.textContent, el.getAttribute("aria-label"), el.getAttribute("title")].join(" ")).join("\n");
+  expect(labels).not.toMatch(/Delete the conversation|Stop|Resume|Restart|Switch account|Rename|Send|Press Enter/i);
+  expect(host.querySelector("[data-agent-control-strip], textarea, [data-session-title-edit]")).toBeNull();
+  expect(writes).toEqual([]);
 });

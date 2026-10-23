@@ -64,3 +64,23 @@ test("bulk selection offers one pipeline draft instead of a per-conversation flo
   expect(host.textContent!.toLowerCase()).toContain("pipeline");
   expect(host.textContent).not.toContain("Start flows");
 });
+
+
+test("bulk picker portals its modal outside the transformed toolbar", async () => {
+  globalThis.fetch = (async () => Response.json({ ok: true, repoDir: "/repo" })) as unknown as typeof fetch;
+  let backgroundInputs = 0;
+  const host = mount(<div onClick={() => backgroundInputs++} onPointerDown={() => backgroundInputs++}>
+    <BulkActionBar project="demo" nodes={[{ file } as SchemeNode]} flowsByImpl={new Map()} onRemove={() => {}} onFit={() => {}} onExit={() => {}} />
+  </div>);
+  const entry = [...host.querySelectorAll("button")].find(button => button.textContent?.trim().endsWith("Pipeline"))!;
+  flushSync(() => entry.click());
+  await until(() => Boolean(document.querySelector('[data-pipeline-picker-state="ready"]')));
+  const picker = document.querySelector("[data-pipeline-picker-state]")!;
+  expect(picker.parentElement).toBe(document.body);
+  expect(host.contains(picker)).toBe(false);
+  expect(picker.querySelector("dialog")?.hasAttribute("open")).toBe(true);
+  backgroundInputs = 0;
+  picker.querySelector("input")!.dispatchEvent(new dom.PointerEvent("pointerdown", { bubbles: true }) as unknown as Event);
+  (picker.querySelector("input") as HTMLInputElement).click();
+  expect(backgroundInputs).toBe(0);
+});

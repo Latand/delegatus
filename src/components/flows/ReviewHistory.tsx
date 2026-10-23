@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Flow } from "@/lib/reviewHistory/types";
 import type { ArchiveArtifact } from "@/lib/reviewHistory/archiveArtifacts";
@@ -46,12 +46,21 @@ export function ReviewHistoryHost({ files = [] }: { files?: readonly FileEntry[]
 
 export function ReviewHistoryDialog({ target, onClose, files = [] }: { target: Target; onClose: () => void; files?: readonly FileEntry[] }) {
   const { t } = useLocale();
-  const panel = useRef<HTMLDivElement>(null);
-  useModalLayer({ containerRef: panel, onClose });
+  const panel = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = panel.current!;
+    // showModal moves focus itself; retain the opener before it does.
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialog.showModal();
+    return () => { dialog.close(); if (opener?.isConnected) opener.focus(); };
+  }, []);
+  useModalLayer({ containerRef: panel, onClose, manageFocus: false });
   const [detail, setDetail] = useState<Detail | null>(null);
   const [page, setPage] = useState<Page | null>(null);
   const [selected, setSelected] = useState(target.id ?? null);
   const [round, setRound] = useState(target.round ?? null);
+  const content = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => { if (content.current) content.current.scrollTop = 0; }, [selected, round]);
   const [error, setError] = useState(false);
   const [missing, setMissing] = useState(false);
   const [retry, setRetry] = useState(0);
@@ -104,20 +113,24 @@ export function ReviewHistoryDialog({ target, onClose, files = [] }: { target: T
   }, [selected, target.project, cursor, retry]);
   /* eslint-enable react-hooks/set-state-in-effect */
   const recorded = detail?.row;
-  const current = recorded?.rounds.find(item => item.n === round) ?? recorded?.rounds.at(-1);
+  const current = round == null ? recorded?.rounds.at(-1) : recorded?.rounds.find(item => item.n === round);
   const artifact = detail?.artifacts.find(item => item.round === current?.n)?.artifacts.findings;
   const unresolved = recorded?.state === "paused" || recorded?.rounds.some(item => item.relayPendingSettlement || item.relayRetryRequiresIdempotency);
   return createPortal(
-    <div data-review-history className={`fixed inset-0 ${Z.overlay} flex items-center justify-center bg-black/50 p-2 sm:p-6`}>
-      <div ref={panel} tabIndex={-1} role="dialog" aria-modal="true" aria-label={t("reviewHistory.title")}
-        className="flex max-h-[calc(100dvh-16px)] w-full max-w-3xl min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-card text-primary shadow-2">
+    <dialog data-review-history ref={panel} onPointerDown={event => event.stopPropagation()} onClick={event => event.stopPropagation()} onCancel={event => event.preventDefault()}
+        onKeyDown={event => {
+          if (event.key === "Tab") return;
+          event.stopPropagation();
+          if (event.key === "Escape") { event.preventDefault(); onClose(); }
+        }} tabIndex={-1} role="dialog" aria-modal="true" aria-label={t("reviewHistory.title")}
+        className={`fixed inset-0 m-auto flex max-h-[calc(100dvh-16px)] w-[calc(100%-16px)] max-w-3xl min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-card p-0 text-primary shadow-2 backdrop:bg-black/50 ${Z.overlay}`}>
         <header className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border p-3">
           <h2 className="min-w-0 flex-1 text-sm font-bold">{t("reviewHistory.title")}</h2>
           {selected && target.project ? <button type="button" className="min-h-11 px-2 text-sm" onClick={() => { setSelected(null); setRound(null); }}>{t("reviewHistory.back")}</button> : null}
           {selected ? <a download className="min-h-11 px-2 py-3 text-sm text-accent" href={"/api/review-history/" + encodeURIComponent(selected) + "/export"}>{t("reviewHistory.export")}</a> : null}
           <button type="button" className="min-h-11 min-w-11 rounded-lg border border-border px-2 text-sm" onClick={onClose}>{t("common.close")}</button>
         </header>
-        <div className="min-h-0 overflow-y-auto overscroll-contain p-3">
+        <div ref={content} className="min-h-0 overflow-y-auto overscroll-contain p-3">
           <p className="mb-3 text-sm text-muted">{t("reviewHistory.readOnly")}</p>
           {error ? <div role="alert" className="text-sm text-danger">{t("reviewHistory.failed")} <button className="min-h-11 underline" onClick={() => setRetry(value => value + 1)}>{t("kanban.retry")}</button></div> : null}
           {selected && missing ? <p role="status">{t("reviewHistory.missing")}</p> : null}
@@ -144,10 +157,9 @@ export function ReviewHistoryDialog({ target, onClose, files = [] }: { target: T
               {current.error ? <p className="whitespace-pre-wrap break-words text-danger">{current.error}</p> : null}
               {reviewerBindingTargetsForRound(recorded, { ...current, reviewerConversationId: detail?.conversations?.reviewers.find(item => item.round === current.n)?.conversationId ?? current.reviewerConversationId }, files).map((binding, index) => <a key={binding.path} className="min-h-11 py-3 text-accent underline" href={"#f=" + encodeURIComponent(binding.path)} onClick={onClose}>{t("reviewHistory.transcript")} {index + 1}</a>)}
               {artifact?.status === "available" ? <pre className="whitespace-pre-wrap break-words font-sans">{artifact.text}</pre> : <p>{t("reviewHistory.artifactMissing")}</p>}
-            </section> : <p>{t("reviewHistory.empty")}</p>}
+            </section> : <p role="status">{t(round == null ? "reviewHistory.empty" : "reviewHistory.missing")}</p>}
           </> : null}
         </div>
-      </div>
-    </div>, document.body,
+    </dialog>, document.body,
   );
 }

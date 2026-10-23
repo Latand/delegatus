@@ -546,7 +546,7 @@ export function SchemeBoard({
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       const el = event.target as HTMLElement | null;
-      if (el && (["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) || el.isContentEditable)) return;
+      if (el && (el.closest("dialog[open]") || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) || el.isContentEditable)) return;
       event.preventDefault();
       event.stopPropagation();
       setExpanded(null);
@@ -563,7 +563,7 @@ export function SchemeBoard({
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "F2") return;
       const el = event.target as HTMLElement | null;
-      if (el && (["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) || el.isContentEditable)) return;
+      if (el && (el.closest("dialog[open]") || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) || el.isContentEditable)) return;
       const path = selectedRef.current;
       if (!path) return;
       const node = layout.nodes.find((candidate) => candidate.file.path === path);

@@ -40,7 +40,7 @@ function mount(node: React.ReactNode): HTMLElement {
   const root = createRoot(host);
   roots.add(root);
   flushSync(() => root.render(node));
-  return host;
+  return document.body;
 }
 
 async function settle(): Promise<void> {

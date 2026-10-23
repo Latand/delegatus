@@ -1419,7 +1419,7 @@ function EscapeToClose({ onClose }: { onClose: () => void }) {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       const el = event.target as HTMLElement | null;
-      if (el && (["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) || el.isContentEditable)) return;
+      if (el && (el.closest("dialog[open]") || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) || el.isContentEditable)) return;
       event.preventDefault();
       event.stopPropagation();
       onClose();

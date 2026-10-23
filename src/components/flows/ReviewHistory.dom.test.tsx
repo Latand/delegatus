@@ -138,3 +138,34 @@ test("returning from a missing detail restores the project list", async () => {
   await until(() => document.body.textContent!.includes("Missing archive entry"));
   expect(document.body.textContent).not.toContain("This review is unavailable");
 });
+
+
+test("archive reserves global keys and restores the opener", async () => {
+  globalThis.fetch = (async () => Response.json(detail())) as unknown as typeof fetch;
+  const opener = document.createElement("button");
+  document.body.append(opener); opener.focus();
+  const { root } = mount(<ReviewHistoryHost />);
+  flushSync(() => openReviewHistory("archive-one", 1));
+  await until(() => document.body.textContent!.includes("Recorded finding"));
+  const dialog = document.querySelector<HTMLElement>("[data-review-history]")!;
+  expect(dialog.hasAttribute("open")).toBe(true);
+  let backgroundKeys = 0;
+  const shortcut = () => { backgroundKeys++; };
+  window.addEventListener("keydown", shortcut);
+  try {
+    for (const key of ["/", "n", "f", "b", "ArrowRight", "F2", "j"]) {
+      dialog.dispatchEvent(new dom.KeyboardEvent("keydown", { key, bubbles: true }) as unknown as Event);
+    }
+    expect(backgroundKeys).toBe(0);
+  } finally { window.removeEventListener("keydown", shortcut); }
+  flushSync(() => root.unmount());
+  roots.splice(roots.indexOf(root), 1);
+  expect(document.activeElement).toBe(opener);
+});
+
+test("a requested absent round is explicit and never substitutes the latest verdict", async () => {
+  globalThis.fetch = (async () => Response.json(detail())) as unknown as typeof fetch;
+  mount(<ReviewHistoryDialog target={{ id: "archive-one", round: 42 }} onClose={() => {}} />);
+  await until(() => document.body.textContent!.includes("This review is unavailable"));
+  expect(document.querySelector("section")).toBeNull();
+});

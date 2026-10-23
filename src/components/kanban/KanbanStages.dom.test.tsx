@@ -418,6 +418,16 @@ test("Stages opens the sheet on the live stage: graph or navigator, loop, and a 
   expect(implement.querySelector(".pane-sub")?.textContent).toBe("started by Verify · fail");
   expect([...implement.querySelectorAll(".attempts button")].map((button) => [button.textContent, button.getAttribute("aria-pressed")])).toEqual([["attempt 1 · passed", "false"], ["attempt 2 · passed", "true"]]);
   expect([...pane(host, "review")!.querySelectorAll(".rounds .rchip")].map((chip) => chip.textContent)).toEqual(["Round 1 · changes requested", "Round 2 · approved"]);
+  const opened: unknown[] = [];
+  const readHistory = (event: Event) => opened.push((event as CustomEvent).detail);
+  window.addEventListener("llv:review-history", readHistory);
+  try {
+    const chips = pane(host, "review")!.querySelectorAll<HTMLButtonElement>(".rounds button");
+    expect(chips).toHaveLength(2);
+    for (const chip of chips) flushSync(() => chip.click());
+    expect(opened).toEqual([{ id: "flow-review", round: 1 }, { id: "flow-review", round: 2 }]);
+  } finally { window.removeEventListener("llv:review-history", readHistory); }
+
   expect(pane(host, "verify")!.querySelector(".pane-sub")?.textContent).toBe("started by Review · pass · on fail → Implement · 1/2");
   /* Each started pane holds its shown attempt's conversation as a reader. */
   expect(readerIn(pane(host, "verify"))).toBe(idOf(verify2));
