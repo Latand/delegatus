@@ -2246,13 +2246,27 @@ describe("ClaudeStreamBrokerHost", () => {
       subtype: "can_use_tool", tool_name: "Bash", input: { command: "rm -rf $R/*.json" },
       decision_reason: "Dangerous rm operation on possibly-empty variable path: $R/*.json", decision_reason_type: "safetyCheck",
     } });
-    child.emitJson({ type: "control_request", request_id: "question", request: { subtype: "can_use_tool", tool_name: "AskUserQuestion", input: { questions: [] }, tool_use_id: "toolu_question" } });
+    child.emitJson({ type: "control_request", request_id: "question", request: { subtype: "can_use_tool", tool_name: "AskUserQuestion", input: { questions: [{ question: "Continue?" }] }, tool_use_id: "toolu_question" } });
     await Bun.sleep(0);
     const pending = await host.health();
     expect(pending.providerRetry).toBeNull();
     expect(pending.pendingAttention).toEqual(["permission-safety", "question"]);
     /* The question is bound to the transcript tool use it answers; a permission is not. */
     expect(pending.pendingToolUses).toEqual([{ id: "question", toolUseId: "toolu_question" }]);
+    expect(pending.pendingQuestions).toEqual([{
+      id: "question", toolUseId: "toolu_question", tool: "AskUserQuestion", questions: [{ prompt: "Continue?", options: [] }], since: expect.any(String),
+    }]);
+    // Exercise the production serializer and the reader used after a restart.
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-question-registry-"));
+    const filename = path.join(directory, "registry.json");
+    const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+    const key = { engine: "claude" as const, sessionId: host.identity.sessionId };
+    registry.upsert({ key, artifactPath: path.join(directory, "worker.jsonl"), cwd: directory,
+      accountId: null, status: "live", host: null, structuredHost: claudeHostColumns(pending, 1),
+      claimEpoch: 1, claimOwner: null, pendingAction: null });
+    const reopened = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+    expect(reopened.readOnlySnapshot().entries[`claude:${key.sessionId}`]?.structuredHost?.pendingQuestions)
+      .toEqual(pending.pendingQuestions);
     /* The question is the transcript's to surface; only the permission is listed. */
     expect(pending.pendingPermissions).toEqual([{
       id: "permission-safety",
@@ -2269,6 +2283,7 @@ describe("ClaudeStreamBrokerHost", () => {
     child.emitJson({ type: "control_cancel_request", request_id: "question" });
     await Bun.sleep(0);
     expect((await host.health()).pendingToolUses).toBeUndefined();
+    expect((await host.health()).pendingQuestions).toEqual([]);
     await host.release();
   });
 
