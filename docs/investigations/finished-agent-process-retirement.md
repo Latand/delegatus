@@ -48,7 +48,10 @@ stamp, or one still in a working state (pending, spawning, running, reviewing,
 committing) whatever stamps a restart or resume left on it, needs positive
 runtime idle evidence. Releasing it with its lane or a later attempt ends its
 ownership and proves nothing about its turn, so the reap defers it, sends no
-process signal and retires it on the first positive idle observation.
+process signal and retires it on the first positive idle observation. Rounds
+that share a conversation, transcript path or pane are probed once, through
+one of them; the host needs idle evidence when any round sharing it reads as
+working, including rounds outside the controller's attempt window.
 
 The fenced schema upgrade rebuilds ownership references and scheduler triggers
 and re-enrols outstanding terminal hosts, including a lane with an earlier

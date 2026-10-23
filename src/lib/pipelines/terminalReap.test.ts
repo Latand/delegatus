@@ -478,6 +478,113 @@ test.each(["completed", "closed", "superseded"] as const)("a stamped attempt sti
   if (release === "superseded") expect(h.resident.get(`conversation_current_${release}`)).toBe(true);
 });
 
+test.each(["completed", "closed", "superseded"] as const)("a finished round sharing an orphaned host with a stamped working round in a %s release sends no signal", async release => {
+  const h = harness();
+  const conversationId = `conversation_shared_${release}`;
+  // Two rounds of one stage re-read the same conversation. The reap probes the
+  // host once, through the earliest round, which ended with a failing verdict.
+  const finished = { ...attempt(1, conversationId, true), state: "failed" as const, verdict: { status: "fail" as const } };
+  const working = { ...attempt(2, conversationId, true), state: "running" as const };
+  const current = `conversation_current_shared_${release}`;
+  const attempts = release === "superseded" ? [finished, working, attempt(3, current, false)] : [finished, working];
+  savePipelines([pipelineRecord({ id: `reap-shared-working-${release}`,
+    state: release === "superseded" ? "paused" : release, attempts })]);
+  h.resident.set(conversationId, true);
+  if (release === "superseded") {
+    h.resident.set(current, true);
+    h.active.set(current, true);
+  }
+  const identitySignals: string[] = [];
+  let idleObserved = false;
+  const stop = h.ports.stopStageAgent;
+  h.ports.stopStageAgent = async (target, options) => {
+    if (target.conversationId !== conversationId || idleObserved) return stop(target, options);
+    if (options?.requireIdleEvidence) return { outcome: "deferred" };
+    identitySignals.push(`${target.stageId}:${target.attempt}`);
+    h.resident.set(conversationId, false);
+    return { outcome: "stopped" };
+  };
+
+  // Both the scoped controller pass and the unscoped tick see the shared fence.
+  for (let observation = 0; observation < 7; observation++) {
+    await (observation % 2 ? tickPipelines([], h.ports) : tickPipelinesController([], h.ports));
+  }
+  expect(identitySignals).toEqual([]);
+  expect(h.stops).toEqual([]);
+  expect(h.resident.get(conversationId)).toBe(true);
+  const waiting = loadPipelines()[0]!;
+  expect(waiting.terminalReap?.settledAt ?? null).toBeNull();
+  expect(waiting.terminalReap?.settledAttempts ?? []).not.toContain("implement:1");
+  expect(waiting.unconfirmedHosts).toBeUndefined();
+
+  // The first positive idle observation retires the shared host once.
+  idleObserved = true;
+  h.active.set(conversationId, false);
+  await tickPipelinesController([], h.ports);
+  expect(identitySignals).toEqual([]);
+  expect(h.stops).toEqual([`implement:1:${conversationId}`]);
+  expect(h.idleEvidenceRequired).toEqual([true]);
+  expect(loadPipelines()[0]!.terminalReap?.settledAttempts).toContain("implement:1");
+  if (release === "superseded") expect(h.resident.get(current)).toBe(true);
+});
+
+test("a working round outside the controller's attempt window still fences the shared host", async () => {
+  const h = harness();
+  const conversationId = "conversation_shared_off_window";
+  // Twenty rounds put the working one beyond the first sixteen-attempt window
+  // that selects the earliest round as the host's probe.
+  const attempts = Array.from({ length: 20 }, (_, index) => ({
+    ...attempt(index + 1, index === 0 || index === 19 ? conversationId : `conversation_round_${index + 1}`, true),
+    state: index === 19 ? "running" as const : "failed" as const,
+  }));
+  savePipelines([pipelineRecord({ id: "reap-shared-off-window", state: "completed", attempts })]);
+  h.resident.set(conversationId, true);
+  const identitySignals: string[] = [];
+  let idleObserved = false;
+  const stop = h.ports.stopStageAgent;
+  h.ports.stopStageAgent = async (target, options) => {
+    if (target.conversationId !== conversationId || idleObserved) return stop(target, options);
+    if (options?.requireIdleEvidence) return { outcome: "deferred" };
+    identitySignals.push(`${target.stageId}:${target.attempt}`);
+    h.resident.set(conversationId, false);
+    return { outcome: "stopped" };
+  };
+  for (let observation = 0; observation < 7; observation++) await tickPipelinesController([], h.ports);
+  expect(identitySignals).toEqual([]);
+  expect(h.stops).toEqual([]);
+  expect(h.resident.get(conversationId)).toBe(true);
+  expect(loadPipelines()[0]!.terminalReap?.settledAt ?? null).toBeNull();
+  expect(loadPipelines()[0]!.unconfirmedHosts).toBeUndefined();
+
+  idleObserved = true;
+  h.active.set(conversationId, false);
+  for (let observation = 0; observation < 2; observation++) await tickPipelinesController([], h.ports);
+  expect(identitySignals).toEqual([]);
+  expect(h.stops).toEqual([`implement:1:${conversationId}`]);
+  expect(h.idleEvidenceRequired).toEqual([true]);
+});
+
+test.each(["completed", "superseded"] as const)("finished rounds sharing a host in a %s release retire without idle proof", async release => {
+  const h = harness();
+  const conversationId = `conversation_shared_idle_${release}`;
+  const finished = { ...attempt(1, conversationId, true), state: "failed" as const, verdict: { status: "fail" as const } };
+  const current = `conversation_current_shared_idle_${release}`;
+  const attempts = release === "superseded"
+    ? [finished, attempt(2, conversationId, true), attempt(3, current, false)]
+    : [finished, attempt(2, conversationId, true)];
+  savePipelines([pipelineRecord({ id: `reap-shared-idle-${release}`,
+    state: release === "superseded" ? "paused" : release, attempts })]);
+  h.resident.set(conversationId, true);
+  if (release === "superseded") {
+    h.resident.set(current, true);
+    h.active.set(current, true);
+  }
+  await tickPipelinesController([], h.ports);
+  expect(h.stops).toEqual([`implement:1:${conversationId}`]);
+  expect(h.idleEvidenceRequired).toEqual([false]);
+  if (release === "superseded") expect(h.resident.get(current)).toBe(true);
+});
+
 test("retryable idle evidence persists across process restart", async () => {
   const childPhase = process.env.LLV_TERMINAL_REAP_RESTART_PHASE;
   if (childPhase) {
