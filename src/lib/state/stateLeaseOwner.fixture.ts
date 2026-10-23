@@ -13,6 +13,7 @@ injectStateWriteFaultForTests({ site: "release", collection: "probe",
   error: Object.assign(new Error("database or disk is full"), { code: "SQLITE_FULL", errno: 13 }) });
 c.boundedPatch(1, (tx) => tx.put({ key: "child", value: 1 }));
 fs.writeFileSync(path.join(dir, "ready"), "");
+process.send?.("ready");
 while (!fs.existsSync(path.join(dir, "stop"))) {
   if (fs.existsSync(path.join(dir, "lift"))) injectStateWriteFaultForTests(null);
   await Bun.sleep(20);
