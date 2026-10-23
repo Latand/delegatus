@@ -143,6 +143,12 @@ export const LEGACY_COLLECTIONS: readonly LegacyCollectionEntry[] = [
     importAtActivation: async () => (await import("@/lib/session/titleStore")).sessionTitleStore.importLegacy(statePath("session-titles.json"), { reconcile: true }),
     checkpointMirrorForDemotion: async () => (await import("@/lib/session/titleStore")).sessionTitleStore.checkpointRollbackMirror(statePath("session-titles.json")),
   },
+  // Slice 8a; inventory: docs/design/state-sqlite-journals.md.
+  {
+    collection: "lifecycle_digests",
+    importAtActivation: async () => (await import("@/lib/lifecycle/digest")).lifecycleDigestStore.importLegacy(statePath("lifecycle-digests.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/lifecycle/digest")).lifecycleDigestStore.checkpointRollbackMirror(statePath("lifecycle-digests.json")),
+  },
   /* The conversation-migration journal roots: a directory of per-operation
      files rather than one file, so the entry names the root and the store keys
      its collection off the root's basename. */
