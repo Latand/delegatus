@@ -1883,6 +1883,13 @@ function* pipelineStartupMembershipSteps(registry: AgentRegistry, host?: AgentRe
   return { memberships, resolve, byPipeline, selectedIds: new Set(canonicalIds.keys()), snapshot: sourceSnapshot };
 }
 
+/** A host, conversation, pending launch, alias or membership changed after
+    the startup selection read it. The bulk evidence reads only the selection
+    again; the rest of the pass keeps its work. */
+export class StartupMembershipChangedError extends Error {
+  constructor() { super("startup membership revision changed"); }
+}
+
 /** Fresh keyed checks never enumerate the other hosts or pending launches. */
 export function pipelineStartupMemberships(registry: AgentRegistry, host?: AgentRegistryEntry) {
   const steps = pipelineStartupMembershipSteps(registry, host);
@@ -1899,7 +1906,7 @@ export async function pipelineStartupMembershipsAsync(registry: AgentRegistry, b
     const check = () => {
       budget.signal?.throwIfAborted();
       if (budget.deadline !== undefined && performance.now() >= budget.deadline) throw new Error("startup membership deadline exceeded");
-      if (!(registryStartupSelectionUnchanged(snapshot) ?? registry.readOnlySnapshot() === snapshot)) throw new Error("startup membership revision changed");
+      if (!(registryStartupSelectionUnchanged(snapshot) ?? registry.readOnlySnapshot() === snapshot)) throw new StartupMembershipChangedError();
     };
     try {
       await yieldToRuntime();
@@ -1927,7 +1934,7 @@ function startupMembershipIdentity(selection: ReturnType<typeof pipelineStartupM
 
 async function deferredPipelineStartupEvidence(registry: AgentRegistry, host?: AgentRegistryEntry, prepared?: ReturnType<typeof pipelineStartupMemberships>): Promise<PipelineStartupEvidence> {
   const deferred = new Set<string>();
-  if (prepared && !(registryStartupSelectionUnchanged(prepared.snapshot) ?? registry.readOnlySnapshot() === prepared.snapshot)) throw new Error("startup membership revision changed");
+  if (prepared && !(registryStartupSelectionUnchanged(prepared.snapshot) ?? registry.readOnlySnapshot() === prepared.snapshot)) throw new StartupMembershipChangedError();
   const selection = prepared ?? (host ? pipelineStartupMemberships(registry, host) : await pipelineStartupMembershipsAsync(registry));
   const { memberships, resolve } = selection;
   for (const [id, entries] of Object.entries(memberships)) {
@@ -1947,7 +1954,7 @@ function reportPipelineStartupRefusal(error: unknown): void {
     A failed read retains pipeline members without launch or demotion; a
     captured survivor blocks even pending work until its identity is dead. */
 async function pipelineStartupEvidence(registry: AgentRegistry, available = true, host?: AgentRegistryEntry, selection?: ReturnType<typeof pipelineStartupMemberships>): Promise<PipelineStartupEvidence> {
-  if (selection && !(registryStartupSelectionUnchanged(selection.snapshot) ?? registry.readOnlySnapshot() === selection.snapshot)) throw new Error("startup membership revision changed");
+  if (selection && !(registryStartupSelectionUnchanged(selection.snapshot) ?? registry.readOnlySnapshot() === selection.snapshot)) throw new StartupMembershipChangedError();
   if (!available) return deferredPipelineStartupEvidence(registry, host, selection);
   const settled = new Set<string>();
   const deferred = new Set<string>();
@@ -1966,7 +1973,7 @@ async function pipelineStartupEvidence(registry: AgentRegistry, available = true
     if (startupMembershipIdentity(current) !== startupMembershipIdentity({ memberships, resolve, byPipeline, selectedIds, snapshot })) {
       return { ...await deferredPipelineStartupEvidence(registry, host), changed: true };
     }
-  } else if (!(registryStartupSelectionUnchanged(snapshot) ?? registry.readOnlySnapshot() === snapshot)) throw new Error("startup membership revision changed");
+  } else if (!(registryStartupSelectionUnchanged(snapshot) ?? registry.readOnlySnapshot() === snapshot)) throw new StartupMembershipChangedError();
   for (const [id, entries] of Object.entries(memberships)) {
     if (entries.some((entry) => entry.kind === "pipeline" && preservedIds.has(entry.containerId))) {
       deferred.add(resolve(id));
@@ -2329,23 +2336,34 @@ async function adoptStructuredHostsPass(
   const readEvidence = async (entry?: AgentRegistryEntry) => {
     if (dependencies.pipelineEvidence) return dependencies.pipelineEvidence(registry);
     if (entry) return pipelineStartupEvidence(registry, true, entry);
-    if (!selectionCurrent()) throw new Error("startup membership revision changed");
+    if (!selectionCurrent()) throw new StartupMembershipChangedError();
     return pipelineStartupEvidence(registry, true, undefined, membershipSelection!.value);
   };
   let bulkSnapshot: RegistryFile | undefined;
   const readBulkEvidence = async (phase?: string) => {
     bulkSnapshot = await preparedStartupSnapshot(registry);
-    // Registry I/O and census yields precede pipeline admission. Only the
-    // revision proof and current pipeline ownership belong to that lease.
-    if (!dependencies.pipelineEvidence && !selectionCurrent()) {
-      await registry.prepareReadOnlySnapshot(dependencies.signal);
-      assertActive();
-      const value = await pipelineStartupMembershipsAsync(registry, { signal: dependencies.signal, deadline: membershipDeadline });
-      assertActive();
-      membershipSelection = { snapshot: value.snapshot, value };
+    for (;;) {
+      try {
+        // Registry I/O and census yields precede pipeline admission. Only the
+        // revision proof and current pipeline ownership belong to that lease.
+        if (!dependencies.pipelineEvidence && !selectionCurrent()) {
+          await registry.prepareReadOnlySnapshot(dependencies.signal);
+          assertActive();
+          const value = await pipelineStartupMembershipsAsync(registry, { signal: dependencies.signal, deadline: membershipDeadline });
+          assertActive();
+          membershipSelection = { snapshot: value.snapshot, value };
+        }
+        return await admitState(async available => available ? readEvidence()
+          : pipelineStartupEvidence(registry, false, undefined, membershipSelection?.value), phase);
+      } catch (error) {
+        /* A recovery or launch reserved while startup runs changes the
+           selection. Read it again under the pass deadline; failing the pass
+           repeated every phase before it. */
+        if (!(error instanceof StartupMembershipChangedError)) throw error;
+        await yieldToRuntime();
+        assertActive();
+      }
     }
-    return admitState(async available => available ? readEvidence()
-      : pipelineStartupEvidence(registry, false, undefined, membershipSelection?.value), phase);
   };
   let pipelineEvidence = await readBulkEvidence();
   {

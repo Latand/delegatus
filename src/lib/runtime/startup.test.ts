@@ -6362,6 +6362,43 @@ test("a refused pass logs its process once, preserves pipeline members and adopt
 });
 
 
+/* A pipeline recovery reserving its successor while startup reads the
+   membership selection used to fail the whole pass, which then repeated every
+   phase before it. Only the selection is read again now. */
+test("a membership written while startup reads its selection is read again without failing the pass", async () => {
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),"startup-membership-reselect-"));
+  const previous=process.env.LLV_STATE_DIR;process.env.LLV_STATE_DIR=directory;
+  const {registry}=structuredRestartFixture(directory,"codex","unhosted");
+  const journal=new RuntimeJournal(path.join(directory,"runtime.sqlite"),{structuredHosts:true});
+  const prepare=registry.prepareReadOnlySnapshot.bind(registry);
+  let refreshed=false,writes=0,adopted=false;
+  // Each write lands at the first yield after a preparation the selection reads.
+  registry.prepareReadOnlySnapshot=(async (...args:Parameters<typeof prepare>)=>{
+    const prepared=await prepare(...args);
+    if(refreshed&&writes<3){
+      const index=++writes;
+      setImmediate(()=>{
+        const recovered=registry.ensureConversation("codex",path.join(directory,`recovered-${index}.jsonl`),null);
+        registry.rememberMembership(recovered.id,{kind:"pipeline",containerId:`recovering-${index}`,role:"builder",slot:"build",stageId:"build",stageOrder:0,round:1,parentConversationId:null});
+      });
+    }
+    return prepared;
+  }) as typeof registry.prepareReadOnlySnapshot;
+  try {
+    await adoptStructuredHostsAtStartup({registry,client:runtimeJournalClient(journal),orchestratorSeats:()=>[],
+      refreshTranscriptState:async()=>{refreshed=true;},
+      adopt:async()=>{adopted=true;return [];},adoptClaude:async()=>[],schedule:()=>({unref(){}})});
+    expect(writes).toBe(3);expect(adopted).toBe(true);
+    expect(Object.values(registry.readOnlySnapshot().memberships).flat().map(item=>item.containerId).sort())
+      .toEqual(["recovering-1","recovering-2","recovering-3"]);
+  } finally {
+    registry.prepareReadOnlySnapshot=prepare;
+    await bindStructuredDeliveryQueue([],{registry,client:null});journal.close();registry.close();
+    if(previous===undefined)delete process.env.LLV_STATE_DIR;else process.env.LLV_STATE_DIR=previous;
+    fs.rmSync(directory,{recursive:true,force:true});
+  }
+});
+
 test("a membership moved while waiting for the registry writer refuses the startup claim", async () => {
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),"startup-membership-write-race-"));
   const previous=process.env.LLV_STATE_DIR;process.env.LLV_STATE_DIR=directory;
