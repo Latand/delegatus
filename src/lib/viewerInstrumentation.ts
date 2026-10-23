@@ -132,6 +132,7 @@ interface ViewerRuntimeActivationSteps {
   publishHotStateActivation: () => void;
   publishViewerReleaseReady: () => void;
   prepareBoard?: () => Promise<void>;
+  refineBoard?: () => Promise<unknown>;
 }
 
 export { viewerReleaseOwnsTraffic };
@@ -855,6 +856,11 @@ export async function completeViewerRuntimeActivation(
   await steps.prepareBoard?.();
   await steps.startControllers();
   steps.publishViewerReleaseReady();
+  // A saved summary already makes the board readable. Fresh attention facts
+  // refine it afterwards; their scan must not delay the first document.
+  void steps.refineBoard?.().catch(error => {
+    console.error("[attention reconcile] startup refinement failed", error instanceof Error ? error.name : "unknown");
+  });
 }
 
 /** Check every state database before a store opens one (#1870 slice 10):
@@ -1053,11 +1059,14 @@ export async function registerViewerRuntime(): Promise<void> {
       prepareBoard: async () => {
         assertStartupActive();
         await startupBarrier.run(() => prepareBoardSummary(true));
-        const { reconcileAttentionOnce } = await import("@/lib/attention/reconcileController");
-        assertStartupActive();
-        await startupBarrier.run(() => reconcileAttentionOnce(undefined, assertStartupActive));
         assertStartupActive();
       },
+      refineBoard: () => startupBarrier.run(() => viewerLoopMonitor.run("attention.reconcile", async () => {
+        const { reconcileAttentionOnce } = await import("@/lib/attention/reconcileController");
+        assertStartupActive();
+        await reconcileAttentionOnce(undefined, assertStartupActive);
+        assertStartupActive();
+      })),
       startControllers: startCurrentReleaseControllers,
       publishHotStateActivation: () => {
         if (authority) activatedAuthority = markHotStateActivationReady(hotStateDirectory, authority);
