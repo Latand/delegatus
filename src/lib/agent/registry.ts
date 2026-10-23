@@ -6106,6 +6106,25 @@ export class AgentRegistry {
     return this.readKeyed(file => clone(file.receipts[launchId] ?? null));
   }
 
+  /** What structured recovery reads for one host: its row, optionally one
+      launch receipt and one lineage edge, and the small quota table its park
+      check asks. Recovery asks inside writer admission, where a whole snapshot
+      rebuilt retained history on the serving loop. */
+  structuredRecoveryFacts(key: SessionKey, options: { launchId?: string; conversationId?: string } = {}): Pick<RegistryFile, "entries" | "receipts" | "lineageEdges" | "quotaObservations"> {
+    return this.readKeyed(file => {
+      const entryKey = sessionKeyId(key);
+      const entry = file.entries[entryKey];
+      const receipt = options.launchId ? file.receipts[options.launchId] : undefined;
+      const edge = options.conversationId ? file.lineageEdges[options.conversationId] : undefined;
+      return {
+        entries: entry ? { [entryKey]: clone(entry) } : {},
+        receipts: receipt ? { [options.launchId!]: clone(receipt) } : {},
+        lineageEdges: edge ? { [options.conversationId!]: clone(edge) } : {},
+        quotaObservations: clone(file.quotaObservations),
+      };
+    });
+  }
+
   /** Fresh, keyed evidence for one launch across asynchronous controller reads.
       Returns its latest generation and original native entry only. */
   spawnEvidence(launchId: string): {
