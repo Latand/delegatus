@@ -66,6 +66,106 @@ import { prepareProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profile
 const browserTest = browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1");
 const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) };
 
+describe("retained worktree drilldown", () => {
+  browserTest("resource entry, paging and read failures fit desktop and 390 px in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/worktree-drilldown");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser,
+          `${server.base}?disk-density=${width === 390 ? "full" : "detail"}&disk-role=all&worktree-state=ready`,
+          { width, height: 844 }, theme, lang, "reduce", width === 390);
+        const text = (key: Parameters<typeof translate>[1]) => translate(lang, key);
+        const dialog = page.locator("[data-worktree-drilldown]");
+        const footerButton = page.getByRole("button", { name: text("resources.openAria"), exact: true });
+        const state = async (value: string) => page.evaluate(value => {
+          const url = new URL(location.href); url.searchParams.set("worktree-state", value); history.replaceState(null, "", url);
+        }, value);
+        const open = async (value: string) => {
+          await state(value);
+          await footerButton.click();
+          await page.locator("[data-open-worktrees]").click();
+          await dialog.waitFor();
+        };
+        const frame = async (name: string) => {
+          // Text ranges test the actual wrapped lines, including native dialog
+          // and scroll clipping; hit tests ensure the top layer owns controls.
+          const geometry = await dialog.evaluate(element => {
+            const failures: string[] = [];
+            const bounds = element.getBoundingClientRect();
+            const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+            while (walker.nextNode()) {
+              const node = walker.currentNode;
+              if (!node.textContent?.trim()) continue;
+              const range = document.createRange(); range.selectNodeContents(node);
+              for (const rect of range.getClientRects()) {
+                if (rect.width === 0 || rect.height === 0) continue;
+                if (rect.left < 0 || rect.right > innerWidth || rect.top < 0 || rect.bottom > innerHeight) failures.push(node.textContent);
+                for (let parent = node.parentElement; parent && parent !== element; parent = parent.parentElement) {
+                  const style = getComputedStyle(parent);
+                  if (!/(auto|scroll|hidden|clip)/.test(style.overflow + style.overflowX + style.overflowY)) continue;
+                  const box = parent.getBoundingClientRect();
+                  if (rect.top < box.top - 1 || rect.bottom > box.bottom + 1 || rect.left < box.left - 1 || rect.right > box.right + 1) failures.push(node.textContent);
+                }
+              }
+            }
+            for (const button of element.querySelectorAll("button")) {
+              const box = button.getBoundingClientRect();
+              if (!button.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2))) failures.push("covered control");
+            }
+            return { failures, left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom,
+              scrollTop: element.querySelector("[data-worktree-body]")!.scrollTop,
+              focused: element.contains(document.activeElement), background: getComputedStyle(element).backgroundColor };
+          });
+          expect(geometry.failures).toEqual([]);
+          expect(geometry.focused).toBe(true);
+          expect(geometry.scrollTop).toBe(0);
+          expect(geometry.background).not.toBe("rgba(0, 0, 0, 0)");
+          await page.screenshot({ path: path.join(out, `${width}-${lang}-${theme}-${name}.png`) });
+          readings.push({ width, lang, theme, name, ...geometry });
+        };
+        try {
+          await open("ready");
+          await page.waitForFunction(() => document.querySelectorAll("[data-retained-worktree]").length === 4);
+          expect(await dialog.innerText()).toContain(text("worktrees.reason.not-created-by-delegatus"));
+          expect(await dialog.innerText()).not.toContain("local-only-commits");
+          expect(await dialog.innerText()).toContain("../checkouts/retain-the-unpublished-export-and-its-source-evidence");
+          await frame("first");
+          const next = dialog.getByRole("button", { name: text("worktrees.next"), exact: true });
+          const previous = dialog.getByRole("button", { name: text("worktrees.previous"), exact: true });
+          await next.click(); await page.waitForFunction(() => document.querySelector("[data-worktree-range]")?.textContent?.startsWith("5–8"));
+          await next.click(); await page.waitForFunction(() => document.querySelector("[data-worktree-range]")?.textContent?.startsWith("9–10"));
+          expect(await next.isEnabled()).toBe(false);
+          await frame("last");
+          await previous.click(); await page.waitForFunction(() => document.querySelector("[data-worktree-range]")?.textContent?.startsWith("5–8"));
+          await state("changed"); await previous.click();
+          await dialog.getByRole("alert").waitFor(); await frame("changed");
+          await state("ready"); await dialog.getByRole("button", { name: text("worktrees.reload") }).click();
+          await page.waitForFunction(() => document.querySelectorAll("[data-retained-worktree]").length === 4);
+          await page.keyboard.press("Escape"); await dialog.waitFor({ state: "detached" });
+          await footerButton.waitFor();
+          for (const value of ["loading", "unavailable", "empty", "denied", "offline"]) {
+            await open(value);
+            await dialog.getByText(text(value === "offline" ? "worktrees.unavailable" : `worktrees.${value}` as Parameters<typeof translate>[1]), { exact: true }).waitFor();
+            await frame(value);
+            if (value === "unavailable" || value === "offline") {
+              await state("ready"); await dialog.getByRole("button", { name: text("worktrees.reload") }).click();
+              await page.waitForFunction(() => document.querySelectorAll("[data-retained-worktree]").length === 4);
+            }
+            await dialog.getByRole("button", { name: text("resources.close"), exact: true }).click();
+            await dialog.waitFor({ state: "detached" });
+          }
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});
+
 describe("legacy review follow-up navigation", () => {
   browserTest("retained follow-up tasks open from desktop and phone in both languages and themes", async () => {
     const out = path.resolve(".artifacts/legacy-review-follow-up");

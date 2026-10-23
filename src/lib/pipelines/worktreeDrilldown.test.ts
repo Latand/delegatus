@@ -1,0 +1,117 @@
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { recordWorktreeSweep, type SweptPipeline, type WorktreeSweepReport } from "./worktreeSweep";
+import { readWorktreePage, relativeCheckout, WorktreePageError } from "./worktreeDrilldown";
+
+const at = "2026-10-23T10:00:00.000Z";
+const observedAt = "2026-10-22T09:00:00.000Z";
+const originalState = process.env.LLV_STATE_DIR;
+let root: string;
+beforeEach(() => {
+  root = fs.mkdtempSync(path.join(os.tmpdir(), "worktree-drilldown-"));
+  process.env.LLV_STATE_DIR = root;
+});
+afterEach(() => {
+  if (originalState === undefined) delete process.env.LLV_STATE_DIR;
+  else process.env.LLV_STATE_DIR = originalState;
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+export function report(count = 10): WorktreeSweepReport {
+  return { at, mode: "on", repositories: [path.join(root, "repository")],
+    kept: Array.from({ length: count }, (_, index) => ({ path: path.join(root, "repository", "worktrees", `checkout-${index}`),
+      repository: path.join(root, "repository"), pipelineId: `lane-${index}`, reason: "local-only-commits", bytes: index * 1024,
+      observedAt: index ? observedAt : at })),
+    keptCounts: { "local-only-commits": count }, keptBytes: {}, removed: [], removedBytes: 0, trimmed: [], trimmedBytes: 0, errors: [] };
+}
+const owners = (): SweptPipeline[] => [{ id: "lane-0", task: "Preserve the export", repoDir: path.join(root, "repository"),
+  worktreeDir: path.join(root, "repository", "worktrees", "checkout-0"), branch: "lane-0", state: "completed" }];
+function rejects(cursor: string | null, status: number, code: string) {
+  let caught;
+  try { readWorktreePage(cursor); } catch (error) { caught = error; }
+  expect(caught).toBeInstanceOf(WorktreePageError);
+  expect(caught).toMatchObject({ status, code });
+}
+
+test("the sweep producer persists all rows, task and original observation time; primary-key pages survive restart without the full report", () => {
+  recordWorktreeSweep(report(), owners());
+  fs.unlinkSync(path.join(root, "worktree-sweep-report.json"));
+  const first = readWorktreePage(null);
+  expect(first).toMatchObject({ at, total: 10, start: 0 });
+  expect(first.rows).toHaveLength(4);
+  expect(first.rows[0]).toEqual({ task: "Preserve the export", pipelineId: "lane-0", repository: "repository", checkout: "worktrees/checkout-0", reason: "local-only-commits", bytes: 0, observedAt: at });
+  expect(first.rows[1]!.observedAt).toBe(observedAt);
+  const child = spawnSync(process.execPath, ["--eval", `import { readWorktreePage } from ${JSON.stringify(path.join(import.meta.dir, "worktreeDrilldown.ts"))}; console.log(JSON.stringify(readWorktreePage(process.argv[1])));`, first.nextCursor!], { env: process.env, encoding: "utf8", timeout: 30_000 });
+  expect(child.status).toBe(0);
+  const second = JSON.parse(child.stdout);
+  expect(second.start).toBe(4);
+  expect(second.rows[0].checkout).toBe("worktrees/checkout-4");
+  const last = readWorktreePage(second.nextCursor);
+  expect(last.rows.map(row => row.checkout)).toEqual(["worktrees/checkout-8", "worktrees/checkout-9"]);
+  expect(last.nextCursor).toBeNull();
+  expect(readWorktreePage(last.previousCursor).start).toBe(4);
+  const db = new Database(path.join(root, "worktree-drilldown.sqlite"), { readonly: true });
+  try {
+    const plan = db.query("EXPLAIN QUERY PLAN SELECT body FROM retained WHERE id > ? ORDER BY id LIMIT ?").all(4, 4);
+    expect(JSON.stringify(plan)).toContain("SEARCH retained USING INTEGER PRIMARY KEY");
+  } finally { db.close(); }
+});
+
+test("new snapshots invalidate cursors even at the same report time; malformed and out-of-range cursors are refused", () => {
+  recordWorktreeSweep(report());
+  const cursor = readWorktreePage(null).nextCursor!;
+  for (const invalid of ["", "../report", "x".repeat(1000), cursor.replace(/:4$/, ":6"), cursor.replace(/:4$/, ":9999999999")]) rejects(invalid, 400, "invalid_cursor");
+  recordWorktreeSweep(report(1));
+  rejects(cursor, 409, "snapshot_changed");
+  expect(readWorktreePage(null).rows).toHaveLength(1);
+});
+
+test("an empty report is distinct from absent, corrupt or locked data; a refused write preserves the old projection", () => {
+  rejects(null, 503, "unavailable");
+  recordWorktreeSweep(report(0));
+  expect(readWorktreePage(null)).toMatchObject({ total: 0, rows: [], nextCursor: null });
+  const filename = path.join(root, "worktree-drilldown.sqlite");
+  const db = new Database(filename);
+  try {
+    db.exec("BEGIN EXCLUSIVE");
+    rejects(null, 503, "unavailable");
+    expect(() => recordWorktreeSweep(report(2))).toThrow();
+    db.exec("ROLLBACK");
+    expect(readWorktreePage(null).total).toBe(0);
+  } finally { db.close(); }
+  fs.writeFileSync(filename, "unreadable snapshot");
+  rejects(null, 503, "unavailable");
+});
+
+test("unrecorded values stay unknown and all checkouts are relative to repository or home", () => {
+  const snapshot = report(1);
+  delete snapshot.kept[0]!.observedAt;
+  delete snapshot.kept[0]!.bytes;
+  recordWorktreeSweep(snapshot);
+  expect(readWorktreePage(null).rows[0]).toMatchObject({ task: null, observedAt: null, bytes: null });
+  expect(relativeCheckout(path.join(root, "sibling"), path.join(root, "repository"))).toBe("../sibling");
+  expect(relativeCheckout(path.join(os.homedir(), "checkouts", "tree"))).toBe("~/checkouts/tree");
+  expect(relativeCheckout(root).startsWith("~/")).toBe(true);
+});
+
+test("an oversized row refuses the whole projection without losing its preceding snapshot", () => {
+  recordWorktreeSweep(report(1));
+  const large = owners(); large[0]!.task = "я".repeat(65536);
+  expect(() => recordWorktreeSweep(report(2), large)).toThrow();
+  expect(readWorktreePage(null).total).toBe(1);
+});
+
+test.each(["missing-row", "invalid-row", "invalid-meta"])("a damaged %s projection fails closed", damage => {
+  recordWorktreeSweep(report(1));
+  const db = new Database(path.join(root, "worktree-drilldown.sqlite"));
+  try {
+    if (damage === "missing-row") db.exec("DELETE FROM retained");
+    if (damage === "invalid-row") db.exec("UPDATE retained SET body = '{}'");
+    if (damage === "invalid-meta") db.exec("UPDATE snapshot SET total = -1");
+  } finally { db.close(); }
+  rejects(null, 503, "unavailable");
+});

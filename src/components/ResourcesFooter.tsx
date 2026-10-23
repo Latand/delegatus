@@ -10,6 +10,7 @@ import type { ResourceSession, ResourcesPayload, ResourcesViewer } from "@/lib/t
 import { X } from "./icons";
 import { LINE_EDGE, MeterLine, type RailFooterDensity } from "./railFooterDensity";
 import { AttachControls } from "./resources/AttachControls";
+import { WorktreeDrilldown } from "./resources/WorktreeDrilldown";
 import { bulkKillTargets, idleKillTargets, isStructuredHost, resourceCounts } from "./resources/hostSelection";
 import { activityDot, engineTintOf, fmtAge } from "./utils";
 import { Z } from "@/components/layers";
@@ -122,7 +123,12 @@ export function ResourcesFooter({ density = "full" }: { density?: RailFooterDens
   const { t } = useLocale();
   const [snap, setSnap] = useState<ResourcesSnap | null>(null);
   const [open, setOpen] = useState(false);
+  const [worktreesOpen, setWorktreesOpen] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  const closeWorktrees = () => {
+    setWorktreesOpen(false);
+    requestAnimationFrame(() => panelRef.current?.querySelector<HTMLButtonElement>("button[aria-expanded]")?.focus());
+  };
 
   /* The poll lives inside the effect (same shape as LimitsFooter); the ref
      hands the panel a way to force a fresh snapshot right after a kill. */
@@ -218,6 +224,8 @@ export function ResourcesFooter({ density = "full" }: { density?: RailFooterDens
       viewer={viewer}
       onRefresh={() => loadRef.current(true)}
       onClose={() => setOpen(false)}
+      onWorktrees={() => { setOpen(false); setWorktreesOpen(true); }}
+      worktreeSweep={snap.data.worktreeSweep}
     />
   ) : null;
   if (density !== "full") {
@@ -247,6 +255,7 @@ export function ResourcesFooter({ density = "full" }: { density?: RailFooterDens
         </button>
         {snap.data.diskPressure ? <DiskPressureNotice pressure={snap.data.diskPressure} density={density} /> : null}
         {cleanup}
+        {worktreesOpen ? <WorktreeDrilldown onClose={closeWorktrees} /> : null}
       </div>
     );
   }
@@ -315,8 +324,11 @@ export function ResourcesFooter({ density = "full" }: { density?: RailFooterDens
           viewer={viewer}
           onRefresh={() => loadRef.current(true)}
           onClose={() => setOpen(false)}
+          onWorktrees={() => { setOpen(false); setWorktreesOpen(true); }}
+          worktreeSweep={snap.data.worktreeSweep}
         />
       ) : null}
+      {worktreesOpen ? <WorktreeDrilldown onClose={closeWorktrees} /> : null}
     </div>
   );
 }
@@ -444,6 +456,8 @@ export function CleanupPanel({
   viewer = null,
   onRefresh,
   onClose,
+  onWorktrees,
+  worktreeSweep,
 }: {
   sessions: ResourceSession[];
   /** Unix seconds of the snapshot poll — the render-stable "now" for idle-age math. */
@@ -455,6 +469,8 @@ export function CleanupPanel({
   viewer?: ResourcesViewer | null;
   onRefresh: () => Promise<void>;
   onClose: () => void;
+  onWorktrees?: () => void;
+  worktreeSweep?: ResourcesPayload["worktreeSweep"];
 }) {
   const { t } = useLocale();
   const [busy, setBusy] = useState<Set<string>>(new Set());
@@ -594,6 +610,14 @@ export function CleanupPanel({
         ) : null}
       </header>
       <div className="max-h-[min(420px,60vh)] overflow-y-auto py-1">
+        {onWorktrees ? <button type="button" data-open-worktrees="" onClick={onWorktrees}
+          className="block w-full border-b border-border px-3 py-3 text-left text-xs hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+          <span className="font-semibold">{t("worktrees.title")} →</span>
+          {worktreeSweep ? <span className="mt-1 block text-muted">{t("worktrees.aggregate", {
+            n: Object.values(worktreeSweep.keptCounts).reduce((sum, count) => sum + (count ?? 0), 0),
+            size: fmtBytes(Object.values(worktreeSweep.keptBytes).reduce((sum, bytes) => sum + (bytes ?? 0), 0)),
+          })}</span> : null}
+        </button> : null}
         {sessions.length === 0 ? (
           sessionsStale ? null : <div className="px-3 py-4 text-center text-[12px] text-muted">{t("resources.empty")}</div>
         ) : (

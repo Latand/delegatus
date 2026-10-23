@@ -543,6 +543,32 @@ test's.
    the worktree sweep with `LLV_WORKTREE_SWEEP=dry-run`; their reports are
    on the resources surface.
 
+### Retained worktree drilldown
+
+Open the resources panel from the existing memory/disk footer, then choose
+**Retained worktrees**. The list shows the saved task label (or pipeline id,
+or no linked task), repository name, repository-relative checkout, recorded
+bytes, translated retention reason and the decision's observation time.
+Checkouts without repository metadata are relative to home. An unvisited row
+keeps its earlier observation time; a row never observed shows that explicitly.
+Sizes follow the sweep's bounded accounting and may be partial or carried
+forward. The report time and dry-run mode are shown separately.
+
+The sweep worker writes `worktree-drilldown.sqlite` beside its JSON report.
+This derived artifact is replaced transactionally, with a fresh generation
+even when report times coincide. `GET /api/resources/worktrees` uses the existing
+same-origin and operator-authority checks and returns four rows per primary-key
+seek. Each encoded row is bounded to 64 KiB. Reads use a zero SQLite busy
+timeout, validate metadata and the selected rows, and never scan checkouts,
+parse the full report or load pipeline/task stores. Paging state has constant
+size in the browser. No performance improvement is claimed.
+
+A changed generation returns 409 and asks the operator to reload. Missing,
+locked or damaged artifacts return 503; the UI offers reload, and a subsequent
+sweep prepares a missing artifact. Agents and cross-origin callers receive 403.
+Closing aborts a pending read and returns focus to the resources control. The
+surface exposes no deletion action or retention-setting change.
+
 ## 11. Deferred — not currently justified
 
 - Seeding a new release's build cache from the previous one (§9).

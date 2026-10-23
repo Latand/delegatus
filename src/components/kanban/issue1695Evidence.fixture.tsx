@@ -4862,7 +4862,28 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   /* The rail's footer, so the frames that fold it away (#1802) have something
      to fold: invented machine figures and one invented limit window. */
-  if (url.pathname.startsWith("/api/resources")) {
+  if (url.pathname === "/api/resources/worktrees") {
+    const state = new URLSearchParams(location.search).get("worktree-state");
+    if (state === "loading") return new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+    });
+    if (state === "offline") throw new TypeError("Fixture connection unavailable");
+    if (state === "unavailable" || state === "denied" || state === "changed")
+      return Response.json({ error: state }, { status: state === "denied" ? 403 : state === "changed" ? 409 : 503 });
+    const start = Number(url.searchParams.get("cursor") ?? 0);
+    const rows = state === "empty" ? [] : Array.from({ length: 10 }, (_, index) => ({
+      task: index === 1 ? null : L(`Preserve checkout ${index + 1}`, `Зберегти робоче дерево ${index + 1}`),
+      pipelineId: index === 1 ? null : `lane-${index + 1}`,
+      repository: "atlas",
+      checkout: index === 2 ? "../checkouts/retain-the-unpublished-export-and-its-source-evidence" : `worktrees/export-${index + 1}`,
+      reason: (["open-pipeline", "not-created-by-delegatus", "local-only-commits", "ignored-files", "retention"] as const)[index % 5],
+      bytes: index === 4 ? null : (index + 1) * 1048576,
+      observedAt: index === 4 ? null : index === 2 ? "2026-10-22T09:00:00.000Z" : "2026-10-23T10:00:00.000Z",
+    }));
+    return json({ at: "2026-10-23T10:00:00.000Z", mode: "on", total: rows.length, start, rows: rows.slice(start, start + 4),
+      previousCursor: start ? String(Math.max(0, start - 4)) : null, nextCursor: start + 4 < rows.length ? String(start + 4) : null });
+  }
+  if (url.pathname === "/api/resources") {
     const diskRole = new URLSearchParams(location.search).get("disk-role");
     const diskWarning = new URLSearchParams(location.search).get("disk-level") === "warning";
     const host = (target: string, title: string, over: Record<string, unknown>) => ({
@@ -4870,6 +4891,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       rssBytes: 600 * 1024 ** 2, swapBytes: 0, procCount: 3, model: "opus", role: "builder", conversationId: null, stage: "implement", ownership: "owned", seat: false, turnBusy: false, ...over,
     });
     return json({
+      ...(new URLSearchParams(location.search).has("worktree-state") ? { worktreeSweep: {
+        at: "2026-10-23T10:00:00.000Z", mode: "on", summary: "", removed: 0, removedBytes: 0, trimmedBytes: 0,
+        keptCounts: { "local-only-commits": 10 }, keptBytes: { "local-only-commits": 78 * 1048576 }, waitsForDecision: 10, waitsForDecisionBytes: 78 * 1048576,
+      } } : {}),
       ...(diskRole ? { diskPressure: {
         at: iso(0), episode: iso(MIN), warningBytes: 10 * 1024 ** 3, criticalBytes: 2 * 1024 ** 3,
         /* `all`: one 256 GiB volume under state, worktrees and temp, with every consumer measured; `disk-level=warning` leaves it above the admission threshold. */
