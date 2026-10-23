@@ -270,8 +270,11 @@ export interface ScopeView {
 
 export interface RoleMemoryProjectView {
   project: string;
-  /** False only while the installation's kill switch (`LLV_ROLE_MEMORY=off`) is set. */
+  /** False while the installation's kill switch (`LLV_ROLE_MEMORY=off`) is set, or while the
+      installation chose the engines' own memory (memory-source-switch.md §3.1). */
   enabled: boolean;
+  /** Present when the Settings row's engines position stops the rules while the kill switch is unset. */
+  pausedBy?: "memorySource";
   scopes: ScopeView[];
   curation?: { lastAt: string | null; nextAt: string | null; newLessons: number; passes: CuratorPassView[] };
 }

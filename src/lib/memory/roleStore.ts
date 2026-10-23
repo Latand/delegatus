@@ -13,7 +13,7 @@ import { effectiveCurationSetting, readSeatTickSettings, seatTickSettingsPath } 
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized, stateDatabaseSignature, StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 
 import { appendRule, archivedRule, lessonPatternSource, retainRules, sameRule, scopeChars } from "./roleConsolidate";
-import { roleMemoryEnabled } from "./settings";
+import { roleMemoryEnabled, roleMemorySelectorEnabled } from "./settings";
 import { engineMemoryOff } from "./source";
 import { curationRevision, curationView } from "./curation/store";
 import { projectViewRows, projectViewRowsCooperatively, roleScopeKeys, roleViewVersion } from "./roleViewSource";
@@ -592,7 +592,9 @@ function projectViewContext(project: string, now: number): {
     return { canonical, file, memoKey, guard, enabled: roleMemoryEnabled(), stamp: () => "", hit: timedProjectView(memo.value, now) };
   }
   const enabled = roleMemoryEnabled();
-  const stamp = () => `${databaseFileIdentity(file)}:${roleMemoryCollection()?.revision()}:${curationRevision()}:${enabled}:${JSON.stringify(projectAliasSnapshot().aliases)}:${JSON.stringify(effectiveCurationSetting(readSeatTickSettings(canonical)))}`;
+  // The selector tells the kill switch from the engines position, which the view names apart.
+  const selector = roleMemorySelectorEnabled();
+  const stamp = () => `${databaseFileIdentity(file)}:${roleMemoryCollection()?.revision()}:${curationRevision()}:${enabled}:${selector}:${JSON.stringify(projectAliasSnapshot().aliases)}:${JSON.stringify(effectiveCurationSetting(readSeatTickSettings(canonical)))}`;
   const revision = stamp();
   if (memo?.stamp === revision && now >= memo.from && now < memo.until) {
     memo.guard = guard;
@@ -653,7 +655,7 @@ function buildProjectView(context: ReturnType<typeof projectViewContext>, now: n
       active: active.map((row) => view(row, now, rulesById, held?.history ?? [], ruleTasks(row.id))), left: left.map((row) => view(row, now, rulesById, held?.history ?? [], ruleTasks(row.id))),
     };
   });
-  const value = { project: canonical, enabled, scopes, curation: curationView(canonical, now, all.flatMap(row => row.kind === "scope" ? [row] : []), false) };
+  const value = { project: canonical, enabled, ...(!enabled && roleMemorySelectorEnabled() ? { pausedBy: "memorySource" as const } : {}), scopes, curation: curationView(canonical, now, all.flatMap(row => row.kind === "scope" ? [row] : []), false) };
   if (stamp() !== buildRevision) throw new StateSnapshotChangedError();
   const bytes = Buffer.byteLength(JSON.stringify(value));
   projectViews.delete(memoKey);

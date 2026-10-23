@@ -92,3 +92,22 @@ test("GET carries the sync schedule in the engines position with a ready import,
   expect((await PUT(request({ source: "engines", syncIntervalHours: 0 }))).status).toBe(200);
   expect((await (await GET()).json()).sync).toMatchObject({ intervalHours: 0, nextAt: null });
 });
+
+test("an import that failed after the current choice is named on the read; a newer choice or Delegatus hides it", async () => {
+  const { writeImportRows } = await import("@/lib/memory/importStore");
+  const record = (id: string, at: string, state: "failed" | "ready", reason?: "integrity" | "interrupted") => ({ kind: "import" as const, id, state, at, previous: null,
+    backup: path.join(root, "backups", "engine-memory", id), files: 0, candidates: 0, parts: 0, ...(reason ? { reason } : {}) });
+  const read = async () => (await GET()).json();
+  /* No import store yet: the unchosen read is unchanged. */
+  expect(await read()).toEqual({ choice: null, phase: null });
+  await writeImportRows([record("fixture-old", "2026-10-17T10:00:00.000Z", "failed", "interrupted"), record("fixture-new", "2026-10-17T12:00:00.000Z", "failed", "integrity"), record("fixture-ok", "2026-10-17T13:00:00.000Z", "ready")]);
+  expect(await read()).toEqual({ choice: null, phase: null, lastFailure: { reason: "integrity", at: "2026-10-17T12:00:00.000Z" } });
+  /* The engines position restored by the failed import keeps its earlier changedAt. */
+  fs.writeFileSync(path.join(root, "memory-source.json"), JSON.stringify({ schemaVersion: 1, source: "engines", changedAt: "2026-10-17T11:00:00.000Z" }));
+  expect((await read()).lastFailure).toEqual({ reason: "integrity", at: "2026-10-17T12:00:00.000Z" });
+  /* A later choice: the successful import's engines position, which keeps its import id. */
+  fs.writeFileSync(path.join(root, "memory-source.json"), JSON.stringify({ schemaVersion: 1, source: "engines", changedAt: "2026-10-17T13:30:00.000Z", importId: "fixture-ok", phase: "active" }));
+  expect((await read()).lastFailure).toBeUndefined();
+  chooseSource("active");
+  expect((await read()).lastFailure).toBeUndefined();
+});
