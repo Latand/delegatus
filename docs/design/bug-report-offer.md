@@ -6,7 +6,7 @@ Design for #2518. Status: proposed completion and verification of the existing f
 
 The requirement, paraphrased: when Delegatus itself goes wrong, explain what happened and offer to report it. A dedicated reporter prepares a useful public report while protecting private conversations and installation details. Show the exact candidate, file it after explicit approval, and confirm the outcome.
 
-The original issue text is not reproduced in the inspected repository. Its intent is recorded in `src/lib/roles/defaults.ts:189` and `src/lib/issueReports/store.ts:13`; this design uses those comments and the supplied issue summary. Most of the requested feature has already shipped. The remaining work is to make the offer predictable, resolve ambiguous cancellation wording, and verify the whole operator journey.
+The originating requirement (#2518, 2026-10-05) is also recorded in `src/lib/roles/defaults.ts:189` and `src/lib/issueReports/store.ts:13`. This design follows that requirement and the later decisions below. Most of the requested feature has already shipped. The remaining work is to make the offer predictable, resolve ambiguous cancellation wording, and verify the whole operator journey.
 
 Two later decisions govern the design: [issue-report approval](issue-report-approval.md) makes privacy detectors advisory, and `src/lib/orchestrator/prompt.ts:297` records the move to decision forms. Neither decision should be reversed to reconstruct an older interpretation of #2518.
 
@@ -83,6 +83,6 @@ Acceptance: the defect receives a concise offer; the expected refusal alone does
 1. **Keep two decisions, or prepare automatically?** Recommended: keep preparation consent and exact-text publication approval, as currently shipped.
 2. **Who files the report?** Recommended: retain the dedicated reporter as author/privacy reviewer and the seat as the only tool caller allowed to request publication. Moving write authority into the reporter would weaken the existing role boundary.
 3. **Does a plain decline mean revise or stop?** Recommended: stop. Revise only when the operator requests an edit or reopens reporting.
-4. **Must only the operator personally approve?** Recommended: retain current explicit operator-or-team-member approval. Operator-only approval would be a separate authorization change, not an implication of scrubbing.
+4. **Must only the operator personally approve?** Recommended: retain current explicit operator-or-team-member approval. Requiring approval from the operator alone would need a separate authorization decision.
 5. **Should repeat suppression survive rotation as a new persistent guarantee?** Recommended: defer variant 2; reuse conversation and existing preview/form records, and collect evidence of repeat offers first.
 6. **Must every issue be authored by the Delegatus App?** Recommended: retain the current destination-dependent forge policy for this scope. If account-free forge authorship is required as well as identity-free report text, make App-only publication an explicit follow-up; the current fallback does not guarantee it.
