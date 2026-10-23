@@ -125,8 +125,8 @@ test("spawn_agent advertises an optional account pin with project binding semant
     const tool = (await client.listTools()).tools.find((candidate) => candidate.name === "spawn_agent")!;
     expect(tool.inputSchema.properties).toHaveProperty("account");
     expect(tool.inputSchema.required ?? []).not.toContain("account");
-    const account = tool.inputSchema.properties!.account as { anyOf: { type: string }[]; description: string };
-    expect(account.anyOf.map((choice) => choice.type)).toEqual(["string", "null"]);
+    const account = tool.inputSchema.properties!.account as { type: string[]; description: string };
+    expect(account.type).toEqual(["string", "null"]);
     expect(account.description).toContain("allowed");
     expect(account.description).toContain("null");
     expect(account.description).toContain("role");
@@ -1199,7 +1199,7 @@ test("the published update_task schema advertises replaceable notes without auth
   await withProtocolClient(inertBindings(), async client => {
     const tool = (await client.listTools()).tools.find(tool => tool.name === "update_task")!;
     const properties = tool.inputSchema.properties!;
-    expect(properties.note).toMatchObject({ anyOf: [{ type: "string" }, { type: "null" }] });
+    expect(properties.note).toMatchObject({ type: ["string", "null"] });
     expect(properties.author).toBeUndefined();
     expect(properties.noteAuthor).toBeUndefined();
     expect(tool.description).toContain("Orchestrators and stage agents: set note whenever the situation changes");
