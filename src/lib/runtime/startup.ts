@@ -2546,9 +2546,8 @@ async function adoptStructuredHostsPass(
         const memoryRole = conversation?.agentRole === "orchestrator" || conversation?.agentRole === "maintainer"
           ? conversation.agentRole
           : null;
-        const seatMembership = conversation
-          ? startupHostSnapshot(registry, entry.key, true).memberships[conversation.id]?.find(row => row.kind === "orchestrator" && row.role === memoryRole)
-          : null;
+        const memberships = conversation ? startupHostSnapshot(registry, entry.key, true).memberships[conversation.id] : undefined;
+        const seatMembership = memberships?.find(row => row.kind === "orchestrator" && row.role === memoryRole) ?? null;
         const seatProject = seatMembership?.containerId ?? null;
         const memoryProject = seatProject ?? conversation?.projectOwnership?.project ?? entry.launchProfile?.project;
         const launchProfile = roleMemoryProfileForIdentity(
@@ -2556,7 +2555,7 @@ async function adoptStructuredHostsPass(
           memoryRole,
           memoryProject,
           Boolean(seatMembership && seatMembership.containerId === memoryProject),
-          storedOperatorRoot(conversation, conversation ? startupSnapshot(registry).memberships[conversation.id] : undefined),
+          storedOperatorRoot(conversation, memberships),
         ) ?? undefined;
         const owner = resolveCodexOwner(entry);
         // The surviving process retains its original MCP capability and launch
@@ -2620,9 +2619,8 @@ async function adoptStructuredHostsPass(
         const memoryRole = conversation?.agentRole === "orchestrator" || conversation?.agentRole === "maintainer"
           ? conversation.agentRole
           : null;
-        const seatMembership = conversation
-          ? startupHostSnapshot(registry, entry.key, true).memberships[conversation.id]?.find(row => row.kind === "orchestrator" && row.role === memoryRole)
-          : null;
+        const memberships = conversation ? startupHostSnapshot(registry, entry.key, true).memberships[conversation.id] : undefined;
+        const seatMembership = memberships?.find(row => row.kind === "orchestrator" && row.role === memoryRole) ?? null;
         const seatProject = seatMembership?.containerId ?? null;
         const memoryProject = seatProject ?? conversation?.projectOwnership?.project ?? entry.launchProfile?.project;
         const launchProfile = roleMemoryProfileForIdentity(
@@ -2630,7 +2628,7 @@ async function adoptStructuredHostsPass(
           memoryRole,
           memoryProject,
           Boolean(seatMembership && seatMembership.containerId === memoryProject),
-          storedOperatorRoot(conversation, conversation ? startupSnapshot(registry).memberships[conversation.id] : undefined),
+          storedOperatorRoot(conversation, memberships),
         ) ?? undefined;
         const options = {
           ...await claudeStartupHostOptions(
