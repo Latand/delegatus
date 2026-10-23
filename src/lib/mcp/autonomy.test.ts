@@ -1,4 +1,4 @@
-import { afterEach, expect, setSystemTime, test } from "bun:test";
+import { afterAll, afterEach, expect, setSystemTime, test } from "bun:test";
 import { NextRequest } from "next/server";
 import { PUT } from "@/app/api/monitor/seat-tick/settings/route";
 import { applySeatTickSettingsChange, defaultSeatTickSettings, readSeatTickSettings, writeSeatTickSettings } from "@/lib/monitor/seatTickSettings";
@@ -11,10 +11,12 @@ import { publishPrototype, findPrototypeRound, mutatePrototypeRound } from "@/li
 import { decidePrototype } from "@/lib/prototypeReview/decision";
 import { doneCandidates } from "@/lib/done/candidates";
 import { prototypeWorld } from "@/lib/prototypeReview/world";
+import { shutdownTaskPageWorker } from "@/lib/links/taskPageWorker";
 
 const at = "2026-10-15T00:00:00.000Z";
 const now = Date.parse(at);
 afterEach(() => setSystemTime());
+afterAll(() => shutdownTaskPageWorker());
 const operator = { kind: "gateway" as const, project: null, conversationId: null, seatEpoch: null };
 function seed(project: string) {
   const changed = applySeatTickSettingsChange(defaultSeatTickSettings(project), { autonomy: { enabled: true }, release: { enabled: true } }, { at, actor: operator });
