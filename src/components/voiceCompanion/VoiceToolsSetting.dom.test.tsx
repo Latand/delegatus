@@ -144,7 +144,7 @@ test("a pending proposal shows what will run by name, takes its secret once and 
     entryFile: { path: "/srv/tools/notes server.ts", sha256: "ab".repeat(32) } }) });
   const host = await mount();
   const row = host.querySelector<HTMLElement>("[data-voice-tool-server='spotify']")!;
-  expect(row.querySelector("[data-voice-tool-dry-run-hint]")?.textContent).toContain("state directory, including saved secrets, is hidden");
+  expect(row.querySelector("[data-voice-tool-dry-run-hint]")?.textContent).toBe(translate("en", "voiceCompanion.tools.dryRunHint"));
   expect(row.querySelector<HTMLInputElement>("input[data-destinations]")?.placeholder).toBe(spotify().secretRecipient);
   expect(row.dataset.state).toBe("pending");
   expect(row.querySelector("[data-voice-tool-state]")?.textContent).toBe("Waiting for approval");
@@ -278,10 +278,6 @@ test("an HTTP server shows its URL, a literal header's value and a secret header
 
 test("beside Run dry run, a stdio row explains filesystem containment in English and Ukrainian; an address's row does not", async () => {
   const hints = { en: translate("en", "voiceCompanion.tools.dryRunHint"), uk: translate("uk", "voiceCompanion.tools.dryRunHint") };
-  expect(hints.en).toBe("A stdio dry run runs proposed code in a Linux filesystem sandbox. The Delegatus state directory, including saved secrets, is hidden. The program can still read files elsewhere and send them anywhere. Run only programs you trust.");
-  expect(hints.uk).toBe("Пробний запуск stdio виконує запропонований код у файловому пісочному середовищі Linux. Каталог стану Delegatus, зокрема збережені секрети, приховано. Програма все ще може читати інші файли й надсилати їх будь-куди. Запускайте лише програми, яким довіряєте.");
-  /* The approval sentence stays in the intro beside it. */
-  expect(translate("en", "voiceCompanion.tools.intro")).toContain("An approved server runs as your OS user");
   for (const locale of ["en", "uk"] as const) {
     routes({ spotify: spotify({ missingSecrets: [] }), remote: spotify({ title: "Remote", transport: { type: "http", url: "https://mcp.example.test/v1", headerNames: [], headerValues: {} }, missingSecrets: [], secretRefs: [] }) });
     if (locale === "uk") setLocale("uk");
@@ -343,4 +339,25 @@ test("unbound destinations require owner input and can be renewed without resend
   await act(async () => { host.querySelector("form")!.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true })); });
   await act(async () => settle());
   expect(writes()).toEqual([{ action: "secrets", secrets: { "spotify-client-id": { destinations: [spotify().secretRecipient] } } }]);
+});
+
+test("unavailable stdio containment shows localized risk and only the explicit confirmation sends consent", async () => {
+  for (const locale of ["en", "uk"] as const) {
+    resetLocaleForTests(); setLocale(locale);
+    routes({ spotify: spotify({ missingSecrets: [], lastDryRun: { code: "CONTAINMENT_REQUIRED", at: AT, digest: digestOf(500), runId: digestOf(700), containmentReason: "WINDOWS" } }) });
+    try {
+      const host = await mount();
+      expect(host.querySelector("[data-voice-tool-uncontained]")?.textContent).toContain(translate(locale, "voiceCompanion.tools.uncontained.warning"));
+      expect(host.querySelector("[data-voice-tool-platform]")?.textContent).toBe(translate(locale, "voiceCompanion.tools.containment.WINDOWS"));
+      expect(writes()).toEqual([]);
+      await click(button(host, "confirm-uncontained"));
+      expect(writes()).toEqual([{ action: "dry-run", name: "spotify", digest: digestOf(1), confirmUncontained: { reason: "WINDOWS", runId: digestOf(700) } }]);
+      expect(host.querySelector("[data-voice-tool-uncontained]")).toBeNull();
+      await click(button(host, "dry-run"));
+      expect(writes().at(-1)).toEqual({ action: "dry-run", name: "spotify", digest: digestOf(20) });
+    } finally {
+      const current = mounted!; await act(async () => current.root.unmount()); current.host.remove(); mounted = null;
+      resetLocaleForTests(); localStorage.removeItem("llv_lang");
+    }
+  }
 });

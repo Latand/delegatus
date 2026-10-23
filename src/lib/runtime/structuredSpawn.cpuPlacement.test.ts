@@ -28,10 +28,10 @@ afterAll(() => {
 
 /** Every structured engine host spawns through its memory cell's wrapper; this
     captures the cell the real launch path builds for a fresh Codex host. */
-async function launchedPlacement(member: "pipeline" | "flow" | "orchestrator" | null) {
+async function launchedPlacement(member: "pipeline" | "flow" | "orchestrator" | null, agentMemoryMaxBytes?: number) {
   const cwd = fs.mkdtempSync(path.join(sandbox, "host-"));
   const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
-  const launchProfile = emptyLaunchProfile({ cwd });
+  const launchProfile = emptyLaunchProfile({ cwd, ...(agentMemoryMaxBytes !== undefined ? { agentMemoryMaxBytes } : {}) });
   const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd, transport: "structured", launchProfile });
   if (begun.kind !== "created") throw new Error("fixture receipt missing");
   if (member) registry.rememberMembership(begun.receipt.conversationId, { kind: member, containerId: `${member}_1`, role: "builder", slot: "build",
@@ -43,7 +43,9 @@ async function launchedPlacement(member: "pipeline" | "flow" | "orchestrator" | 
       account: { engine: "codex", accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }, prompt: "", client: {} as RuntimeHostClient }, "fixture-capability"))
       .rejects.toThrow("captured host options");
   } finally { start.mockRestore(); }
-  return seen[0]!.memoryCell!.plan;
+  const plan = seen[0]!.memoryCell!.plan;
+  if (plan.cap) expect(registry.spawnReceipt(begun.receipt.launchId)?.memoryCap).toEqual(plan.cap);
+  return plan;
 }
 
 test("a pipeline or flow host launches into the work slice; an operator host keeps the agents slice", async () => {
@@ -135,4 +137,15 @@ test("boot adoption refuses work it cannot contain and leaves the row dead with 
     expect(registry.readOnlySnapshot().entries["codex:refused-work"]?.status).toBe("dead");
     expect(logged.mock.calls.map((call) => String(call[0]))).toContain(`[structured hosts] boot adoption of codex:refused-work failed: CPU containment for agent work is unavailable: ${reason}. Set DELEGATUS_AGENT_CPU=off to run work without CPU placement.`);
   } finally { warn.mockRestore(); logged.mockRestore(); }
+});
+
+
+test("the real host launch uses the stage cap and retains its budget-clamped receipt", async () => {
+  process.env.LLV_AGENT_CPU = "off";
+  process.env.LLV_AGENT_MEMORY = "watchdog";
+  setAgentMemoryPortsForTests({ totalBytes: 16 * GIB, probe: () => null, runner: () => "" });
+  const plan = await launchedPlacement("pipeline", 40 * GIB);
+  expect(plan.cap).toMatchObject({ requestedBytes: 40 * GIB, limitBytes: 12 * GIB, source: "stage", clamped: true, enforced: true });
+  expect(plan.budgetBytes).toBe(12 * GIB);
+  expect(plan.reserveBytes).toBe(4 * GIB);
 });
