@@ -431,11 +431,14 @@ export async function runMemoryImportWork(request: ImportRequest, ports: ImportW
       record.hostProject ??= ports.hostProject ?? projects.find(project => orchestratorSeatFor(project).active) ?? projects[0];
       if (!record.hostProject) throw new MemoryImportError("backup_refused");
       record.roots ??= roots;
-      const { inheritImportDispositions } = await import("./importHistory");
+      const { importHistoryKeys, inheritImportDispositions } = await import("./importHistory");
       for (const candidate of candidates) {
         const project = candidate.occurrences[0].project;
         candidate.curationProject = project && orchestratorSeatFor(project).active ? project : record.hostProject;
       }
+      // A sync offers only new content: equal content and applicability inherit (§4.9).
+      const history = !rescan ? {} : sync ? { byContent: true, sameImport: true } : null;
+      const historyKeys = history ? importHistoryKeys(candidates, history) : new Map<string, string[]>();
       assertOwned();
       commitImportManifest(record.backup, manifest);
       for (let offset = 0, batchIndex = 0; offset < candidates.length; offset += 40, batchIndex++) {
@@ -449,12 +452,12 @@ export async function runMemoryImportWork(request: ImportRequest, ports: ImportW
             const fresh = candidate.occurrences.filter(o => !prior?.occurrences.some(p => p.id === o.id));
             const row: ImportCandidate = !prior ? { ...candidate, dispositions: [...candidate.dispositions] }
               : { ...prior, linked: [...new Set([...prior.linked, ...candidate.linked])], dispositions: [...prior.dispositions], occurrences: [...prior.occurrences, ...fresh] };
-            // Inside the write's transaction, so a curator disposition committed
-            // after the scan began covers the equivalent new occurrence (§4.9).
-            const added = new Set(fresh.map(o => o.id));
-            if (!rescan) inheritImportDispositions(row, { occurrences: added });
-            // A sync offers only new content: equal content and applicability inherit (§4.9).
-            else if (sync) inheritImportDispositions(row, { byContent: true, sameImport: true, occurrences: added });
+            // The rows of equal content are reread inside the write's transaction, so a
+            // curator outcome committed after the lookup covers the new occurrence (§4.9).
+            if (history) inheritImportDispositions(row, (historyKeys.get(candidate.id) ?? []).flatMap(key => {
+              const held = importCollection()!.get(key);
+              return held?.kind === "candidate" ? [held] : [];
+            }), { ...history, occurrences: new Set(fresh.map(o => o.id)) });
             return row;
           })) };
         });
