@@ -34,7 +34,7 @@ export async function repositoryCommitIdentity(cwd: string, exec: ExecPort = rea
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return { env: controllerCommitIdentityEnv() };
     throw new Error("Repository directory could not be read (values withheld)");
   }
-  const readEnv: NodeJS.ProcessEnv = { ...source, LC_ALL: "C", GIT_CONFIG_COUNT: undefined, GIT_CONFIG_PARAMETERS: undefined };
+  const readEnv: Partial<NodeJS.ProcessEnv> = { ...source, LC_ALL: "C", GIT_CONFIG_COUNT: undefined, GIT_CONFIG_PARAMETERS: undefined };
   for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_CONFIG"]) readEnv[key] = undefined;
   const root = await exec("git", ["rev-parse", "--show-toplevel"], cwd, readEnv, { timeoutMs: 5_000 });
   if (root.code === 128 && /^fatal: not a git repository(?:[ (]|$)/.test(root.stderr)) return { env: controllerCommitIdentityEnv() };
