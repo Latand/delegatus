@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { decodeXML } from "entities";
 import { MERGE_BATCH_BRANCH_PREFIX, mergeBatchTitle } from "../src/lib/forge/mergeBatchTitle";
+import { recordWorktreeProvenance } from "../src/lib/pipelines/worktreeProvenance";
 import type { GithubRunner } from "../src/lib/monitor/githubEvidence";
 import { parseReport, testNameFilter, type TestRun, type TestSite } from "./local-gate-tests";
 import { isolatedEnvironment } from "./local-gate";
@@ -508,6 +509,8 @@ export class MergeBatch {
     const branch = `${MERGE_BATCH_BRANCH_PREFIX}${randomUUID()}`;
     const work = join(root, "checkout");
     git(this.repo, ["worktree", "add", "-b", branch, work, base]);
+    // The worktree sweep removes only checkouts with a record of who made them.
+    recordWorktreeProvenance(work, { creator: "merge-batch", id: branch });
     const state: RunState = { version: 3, repo: realpathSync(this.repo), work, branch, base, tip: base,
       rows: [], gated: null, batch: null, published: null, refreshes: 0, landed: false, gates: [], attributionLog: [] };
     // Save ownership before any batch mutation, so failures remain inspectable.
@@ -770,6 +773,7 @@ export class MergeBatch {
     focus: { sites: TestSite[]; only?: boolean } = { sites: [] }): Promise<BatchTestRun> {
     const work = join(dirname(this.stateFile), `test-subject-${randomUUID()}`);
     git(state.work, ["worktree", "add", "--detach", work, state.base]);
+    recordWorktreeProvenance(work, { creator: "merge-batch", id: state.branch });
     try {
       if (removed) for (const row of state.rows) {
         if (row.status !== "clean" || removed.includes(row.number)) continue;
@@ -1004,6 +1008,7 @@ export class MergeBatch {
     try {
       git(state.work, ["worktree", "add", "--detach", trustedWork, base]);
       worktreeAdded = true;
+      recordWorktreeProvenance(trustedWork, { creator: "merge-batch", id: state.branch });
       const modules = join(this.repo, "node_modules");
       if (existsSync(modules)) symlinkSync(modules, join(trustedWork, "node_modules"), "dir");
       const catalog = join(trustedWork, "scripts/privacy-known-value-fingerprints.json");
@@ -1205,6 +1210,7 @@ export class MergeBatch {
       const root = mkdtempSync(join(dirname(this.stateFile), "merge-resolution-"));
       const work = join(root, "checkout");
       git(this.repo, ["worktree", "add", "--detach", work, row.head]);
+      recordWorktreeProvenance(work, { creator: "merge-batch", id: state.branch });
       state.resolving = { number, work, main };
       this.save(state);
       try { git(work, ["merge", "--no-commit", "--no-ff", main]); }
