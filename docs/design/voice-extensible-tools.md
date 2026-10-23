@@ -13,6 +13,7 @@ new tool is there. Ideally none of this needs a rebuild of the whole app.
 
 Sections 0–15 preserve the original design. Section 16 records the implemented
 operator-session, approval-authenticity and credential-destination contract.
+Section 17 records slice 2, the voice integration.
 
 This note is **deliverable B** of that lane: the design for extensible voice
 tools. It builds on deliverable A, `docs/design/voice-mode-explained.md`, which
@@ -1169,3 +1170,110 @@ failures, EN/UK, light/dark, widths 1440, 1000, 820 and 390, including a
 1000×700 desktop window. The unchanged base reproduced all 264 previously
 committed measurements exactly. The record includes the command and hashes
 of its six rendered sources; screenshots remain in the capture scratch.
+
+
+## 17. Slice 2: voice integration (implemented 2026-10-23)
+
+### What a call gets
+
+- **Snapshot at start.** `CompanionLiveSessions.start` asks
+  `src/lib/voiceTools/sessions.ts#VoiceToolSessions.snapshot` for the approved
+  servers and their selected tools. The answer is built from the store's memory
+  (`src/lib/voiceTools/store.ts#snapshot`): no file is read and no server is
+  contacted. A server serves while its approval stands, in state `enabled` or
+  `changed` (`src/lib/voiceTools/snapshot.ts#servingServer`). The call records
+  the server names, catalog digests and tool names on its `session_start`
+  entry, and the referenced secret values join the call's masking list only.
+- **Visibility.** v1 servers belong to the owner (question 5): the solo
+  operator's call and the active team owner's call take them; a member's call
+  takes none.
+- **API backend.** `backendRequest` appends one `strict: false` function per
+  selected tool, named `<server>__<tool>`, and adds one paragraph of rules for
+  added tools (`ADDED_TOOL_RULES`). With no added tools the request is byte for
+  byte the request before this slice.
+- **Codex backend.** `codexVoiceThread` adds one `namespace` per server at
+  `thread/start`; a call names its namespace and function, and the provider
+  maps it back to the snapshot. Anything outside the snapshot gets "Tool is
+  unavailable."
+- **Prompt lines.** `liveInstructions` adds `- <title>: <capability>` under
+  "Backend tools:" and one "Delegate to the backend when" line, both only when
+  the call took added tools.
+
+### Call-time rules (§3.5, §3.6)
+
+| Rule | Where |
+| --- | --- |
+| A name outside the snapshot is refused (`TOOL_NOT_ALLOWED`) | `sessions.ts#call`, Codex provider |
+| A server or tool no longer approved is refused (`TOOL_REVOKED`), and a committed revocation stops its child | `sessions.ts#call`, `#reconcile` through `store.onCommit` |
+| Arguments are validated against the approved input schema with Ajv, inside the worker | `probe.worker.ts#serve` |
+| One deadline per call (`callTimeoutMs`), plus up to 20 s for a cold start; expiry sends MCP `notifications/cancelled` | `sessions.ts#dispatch`, `#deadline` |
+| Text joined and cut to 16 KB with a marker; `structuredContent` when there is no text; up to three images; other content named as omitted; `isError` maps to `failed` | `probe.worker.ts#mapResult` |
+| Results skip the board-read cache and pass the credential and local-path scrub | `liveSession.ts#addedTool`, `#tool` |
+| A tool that acts counts as egress after a private read (`private_data_boundary`); the backend reads the refusal and answers | `liveSession.ts#tool` |
+| A private server's successful answer marks the call like a Telegram group read; its arguments and text stay out of the record | `liveSession.ts#tool` |
+| An ask-first server's acting tool returns `awaiting_confirmation` and runs only in a later operator turn | `liveSession.ts#tool` |
+
+**Server-side send gate.** Instructions alone do not keep a tool result from
+causing a send. Once an added tool's result is in the backend's context (this
+delegation on the API backend, the rest of the call on Codex),
+`request_orchestrator_delegation` is refused with `added_tool_result` unless the
+operator's own words in that turn ask for a send (the same explicit-request and
+delivery-language readings the delivery claim check uses). The tests drive a
+fake model that obeys a hostile result; with the gate removed in a scratch copy
+both the API and the Codex case send.
+
+### Hub lifecycle (§4.2)
+
+- Each approved server runs in one leased session worker, shared by the open
+  calls that took it. The worker is `probe.worker.ts` in session mode, so a
+  stdio server starts through the same launcher resolution and filesystem
+  sandbox as its dry run (§16), and HTTP servers keep the destination checks.
+- One call at a time per server, so each call's incoming bytes have their own
+  bound (8 MB); a worker line is at most 6 MB.
+- Stdio servers warm at call start without delaying it; a tool call that
+  arrives first waits for the start under its own deadline.
+- A server stops after 5 minutes without calls, or 60 s after the last open
+  call that took it ends. Idle time never runs out under a call in flight.
+- Two failed starts within a call make the server unavailable for the rest of
+  that call; another call counts its own. A crash fails the pending call, and
+  the next call starts the server again.
+- At most eight children, shared by dry runs and sessions.
+- Live `tools/list` is compared with the approved catalog at each start: a
+  changed or missing tool marks the server `changed` and the approved tools keep
+  serving; a missing one fails with `TOOL_REMOVED`; added tools stay hidden. A
+  changed entry file removes the approval. A `changed` server counts toward the
+  per-call bounds when another server is approved.
+
+### Measurements
+
+`bun scripts/benchmark-voice-tools-start.ts --runs 150 --warmup 20` on
+`origin/main` at `871d541e` and on this branch's merge of it, `bef48146`, with the same
+synthetic registry (N approved HTTP servers, 32 selected tools in total), the
+documented fake Live provider and a private state directory. Start latency is
+`CompanionLiveSessions.start`, which the start route awaits; no network time is
+included. Two rounds, head first, 2026-10-23 06:40–06:42 UTC, Bun 1.4.0, 24
+CPUs, load average 13.7–14.2.
+
+| Servers | Before: start median / p90 (ms) | After: start median / p90 (ms) | Before: backend request bytes | After: backend request bytes | After: Live session bytes |
+| ---: | --- | --- | ---: | ---: | ---: |
+| 0 | 17.7 / 23.4, 17.1 / 21.5 | 17.8 / 24.3, 18.5 / 23.4 | 32,554 | 32,554 | 7,968 |
+| 8 | 18.4 / 23.5, 17.3 / 23.1 | 20.0 / 25.0, 21.0 / 26.2 | 32,554 | 46,519 | 8,661 |
+| 16 | 18.1 / 24.2, 18.0 / 24.2 | 20.0 / 25.1, 21.2 / 26.8 | 32,554 | 46,555 | 9,305 |
+
+Before, approved servers never reach a call, so the bytes do not change with N.
+With added tools a start costs about 2–3 ms more, mostly the second write of
+the `session_start` record that names the snapshot; with none, the difference
+is within run-to-run noise. 32 selected tools add about 14 KB to every backend
+request. This slice claims no performance gain.
+
+### Deferred and residual
+
+- **Deferred:** the run in the Docker deployment that confirms a `uv` or `bun`
+  child started through a host shim is reaped when its call ends (§4.8, §14).
+  Slices 3 and 4 are unchanged.
+- **Residual:** no server-side check stops an acting added tool that another
+  tool's hostile result asks for in the same turn. The prompt rule covers it,
+  and after a private read the egress rule does. The ask-first switch adds a
+  server-side stop for a server that acts for the operator.
+- **Residual:** a worker answer with images is parsed on the Viewer loop as one
+  JSON line of at most 6 MB.
