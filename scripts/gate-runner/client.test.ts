@@ -116,6 +116,19 @@ test("only classified variables travel; credentials and local paths never do", (
   expect(remoteEnvironment({ LLV_HISTORY_BASE: "/abs/outside" }, REPO, REPO)).toHaveProperty("reason");
 });
 
+// The conversation-open motion case: its label travels and its frames come back.
+test("a remote conversation-open run keeps its label and returns its frame directory", () => {
+  const root = scratch(), frames = scratch();
+  const result = remoteEnvironment({ LLV_KANBAN_BROWSER_TEST: "1", LLV_OPEN_MOTION_LABEL: "after", LLV_OPEN_MOTION_FRAMES: frames }, root, root);
+  expect(result).toEqual({ env: { LLV_KANBAN_BROWSER_TEST: "1", LLV_OPEN_MOTION_LABEL: "after" }, outputs: { LLV_OPEN_MOTION_FRAMES: frames } });
+  if (!("outputs" in result)) throw new Error("refused");
+  const entry = (name: string) => ustarEntry(name, Buffer.from(name));
+  const archive = Buffer.concat([entry("out/LLV_OPEN_MOTION_FRAMES/390-no-preference-en-light-short/000.png"), entry("tree/evidence/conversation-open/open-motion.json"), Buffer.alloc(1024)]);
+  applyReturn(returnPlan(readUstar(archive), root, result.outputs));
+  expect(fs.readFileSync(path.join(frames, "390-no-preference-en-light-short/000.png"), "utf8")).toBe("out/LLV_OPEN_MOTION_FRAMES/390-no-preference-en-light-short/000.png");
+  expect(fs.existsSync(path.join(root, "evidence/conversation-open/open-motion.json"))).toBe(true);
+});
+
 // T13: every variable the drivers and the local gate read has a class.
 test("every environment variable the four drivers and scripts/local-gate*.ts read is classified", () => {
   const sources = [

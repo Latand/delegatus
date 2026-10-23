@@ -37277,3 +37277,203 @@ describe("sound captions", () => {
     }, null, 2) + "\n");
   }
 });
+
+/*
+ * Opening a conversation (board task d5e2680a, operator 2026-09-30: the open
+ * «is glitchy and jumps»). From the press, every animation frame records
+ * whether the conversation is drawn, the drawn window's opacity, and the
+ * drawn feed's geometry: its scroll position and the place of its last row.
+ * Once drawn, nothing in the feed may move by itself: the first drawn frame
+ * shows the conversation where it comes to rest. Opened from a card's stage
+ * at 1440×900 (the agent window) and at 390×844 (the phone's chat screen),
+ * with and without reduced motion, a short and a long conversation each, in
+ * en and uk, light and dark.
+ *
+ *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chrome> \
+ *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "conversation open motion"
+ *
+ * `LLV_OPEN_MOTION_FRAMES=<dir>` writes each open's screencast frames as PNGs
+ * with an ffmpeg concat list (`frames.txt`) that plays them back as recorded;
+ * the readings go to
+ * `evidence/conversation-open/open-motion.json`.
+ */
+describe("conversation open motion", () => {
+  const OUT = path.resolve(".artifacts/conversation-open");
+  const FRAMES = process.env.LLV_OPEN_MOTION_FRAMES;
+  /* `opacity` is what the read brought (the last drawn row, or the feed content without rows), times every ancestor's;
+     `skeleton` the drawn skeleton's, or null; `question` the reply card's, or null. */
+  interface Sample { t: number; drawn: boolean; opacity: number; skeleton: number | null; question: number | null; state: string | null; top: number | null; scroll: number | null; client: number | null; last: number | null; rows: number; held: string | null }
+  const installSampler = (page: Page, phone: boolean) => page.evaluate((onPhone) => {
+    const state = { samples: [] as unknown[], stopped: false, started: performance.now() };
+    const shown = (element: Element | null) => {
+      let opacity = 1;
+      for (let node = element; node; node = node.parentElement) opacity *= Number(getComputedStyle(node).opacity);
+      return Math.round(opacity * 100) / 100;
+    };
+    const tick = () => {
+      if (state.stopped) return;
+      /* What is on screen: the agent window once it is no longer held, or the phone's chat screen. */
+      const surface = onPhone
+        ? document.querySelector<HTMLElement>('[data-mobile2-screen="chat"]')
+        : document.querySelector<HTMLElement>("[data-agent-window] .agent-window");
+      const reader = onPhone ? surface : surface?.querySelector<HTMLElement>(".reader-slot:not([data-incoming]) [data-kanban-reader]") ?? null;
+      const feed = reader?.querySelector<HTMLElement>("[data-log-feed-scroller]") ?? null;
+      const content = reader?.querySelector<HTMLElement>("[data-feed-state]") ?? null;
+      const skeleton = content?.querySelector<HTMLElement>('[data-skeleton="feed"]') ?? null;
+      const rows = feed ? [...feed.querySelectorAll<HTMLElement>("[data-feed-key]")].filter((row) => row.getBoundingClientRect().height > 0) : [];
+      const top = feed?.getBoundingClientRect().top ?? 0;
+      state.samples.push({
+        t: Math.round(performance.now() - state.started),
+        drawn: surface !== null && getComputedStyle(surface).visibility === "visible",
+        opacity: rows.length ? shown(rows.at(-1)!) : content ? shown(content) : 0,
+        skeleton: skeleton ? shown(skeleton) : null,
+        question: (() => {
+          const card = content?.querySelector<HTMLElement>("#question") ?? null;
+          return card && card.getBoundingClientRect().height > 0 ? shown(card) : null;
+        })(),
+        state: content?.dataset.feedState ?? null,
+        top: feed ? Math.round(feed.scrollTop) : null,
+        scroll: feed ? feed.scrollHeight : null,
+        client: feed ? feed.clientHeight : null,
+        last: rows.length ? Math.round(rows.at(-1)!.getBoundingClientRect().bottom - top) : null,
+        rows: rows.length,
+        /* The desktop's reader while the window is held, laid out and not drawn: its state and its feed's box. */
+        held: (() => {
+          const waiting = onPhone ? null : document.querySelector<HTMLElement>("[data-agent-window-pending] [data-kanban-reader]");
+          const box = waiting?.querySelector<HTMLElement>("[data-log-feed-scroller]");
+          return waiting ? `${waiting.querySelector<HTMLElement>("[data-feed-state]")?.dataset.feedState ?? "-"} ${box ? `${box.clientWidth}:${box.clientHeight}:${box.scrollHeight}:${Math.round(box.scrollTop)}` : "-"}` : null;
+        })(),
+      });
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+    Object.assign(window, { openMotion: state });
+  }, phone);
+  const stopSampler = (page: Page) => page.evaluate(() => {
+    const state = (window as unknown as { openMotion: { samples: unknown[]; stopped: boolean } }).openMotion;
+    state.stopped = true;
+    return state.samples as Sample[];
+  });
+  const settled = (sample: Sample) => sample.state === "items" || sample.state === "empty" || sample.state === "error";
+  /* The drawn frames: where the settled feed moved from one frame to the next, how its content came in, and how long a skeleton showed. */
+  const motionOf = (samples: Sample[]) => {
+    const drawn = samples.filter((sample) => sample.drawn && sample.state !== null);
+    const rested = drawn.filter(settled);
+    const place = (sample: Sample) => `${sample.top}:${sample.scroll}:${sample.client}:${sample.last}:${sample.rows}`;
+    const moves = rested.filter((sample, index) => index > 0 && place(sample) !== place(rested[index - 1]!));
+    const firstDrawnAt = drawn[0]?.t ?? null;
+    const at = (sample: Sample | undefined) => sample && { t: sample.t, state: sample.state, opacity: sample.opacity, skeleton: sample.skeleton, top: sample.top, scroll: sample.scroll, client: sample.client, last: sample.last, rows: sample.rows };
+    /* A content frame drawn whole straight after a frame that showed the skeleton: the swap the eye reads as a jump. */
+    const swaps = drawn.filter((sample, index) => index > 0 && settled(sample) && sample.opacity >= 0.99 && !settled(drawn[index - 1]!) && (drawn[index - 1]!.skeleton ?? 0) > 0.05);
+    return {
+      firstDrawnAt,
+      first: at(drawn[0]),
+      firstSettled: at(rested[0]),
+      rest: at(rested.at(-1)),
+      moves: moves.map(at),
+      swaps: swaps.map(at),
+      fade: rested.filter((sample) => sample.opacity < 0.99).map((sample) => sample.opacity),
+      skeletonShown: drawn.filter((sample) => (sample.skeleton ?? 0) > 0.05).map((sample) => ({ t: sample.t - firstDrawnAt!, opacity: sample.skeleton })),
+      /* The reply card once it showed whole: every later drawn frame that hid it or dimmed it, loading and arrival alike. */
+      question: (() => {
+        const from = drawn.findIndex((sample) => (sample.question ?? 0) >= 0.99);
+        return {
+          shownAt: from < 0 ? null : drawn[from]!.t - firstDrawnAt!,
+          shownWhileLoading: drawn.some((sample) => !settled(sample) && (sample.question ?? 0) >= 0.99),
+          blinks: from < 0 ? [] : drawn.slice(from).filter((sample) => (sample.question ?? 0) < 0.99).map((sample) => ({ t: sample.t - firstDrawnAt!, state: sample.state, question: sample.question })),
+        };
+      })(),
+      loadingFrames: drawn.filter((sample) => !settled(sample)).length,
+      /* Each box the held reader stood in, with the time it first stood so. */
+      held: samples.filter((sample, index) => sample.held !== null && sample.held !== samples[index - 1]?.held).map((sample) => `${sample.t} ${sample.held}`),
+    };
+  };
+
+  browserTest("conversation open motion: the first drawn frame is where the conversation rests, at 1440 and 390, with and without reduced motion", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const opens = [
+      { name: "long", stage: "verify", task: "t-search" },
+      { name: "short", stage: "implement", task: "t-links" },
+    ] as const;
+    try {
+      for (const width of [1440, 390] as const) {
+        const phone = width === 390;
+        for (const motion of ["no-preference", "reduce"] as const) {
+          for (const [lang, scheme] of [["en", "light"], ["uk", "dark"]] as const) {
+            const label = `${width}-${motion}-${lang}-${scheme}`;
+            const { context, page, pageErrors } = await openFixture(browser, server.base, { width, height: phone ? 844 : 900 }, scheme, lang, motion, phone, phone ? 2 : 1);
+            try {
+              const cardOf = (task: string) => phone ? `[data-phone-card="task:${task}"]` : `${card(task)}`;
+              await page.waitForSelector(`${cardOf("t-search")} >> visible=true`, { timeout: 30_000 });
+              await page.waitForTimeout(600);
+              for (const open of opens) {
+                const name = `${label}-${open.name}`;
+                const pill = page.locator(`${cardOf(open.task)} [${phone ? "data-stage-open" : "data-stage"}="${open.stage}"]`).first();
+                await pill.scrollIntoViewIfNeeded();
+                await page.waitForTimeout(300);
+                const cdp = await context.newCDPSession(page);
+                const frames: Array<{ data: string; time: number }> = [];
+                cdp.on("Page.screencastFrame", (event) => {
+                  frames.push({ data: event.data, time: (event.metadata.timestamp ?? Date.now() / 1000) * 1000 });
+                  void cdp.send("Page.screencastFrameAck", { sessionId: event.sessionId }).catch(() => { /* A last frame may land after the context closes. */ });
+                });
+                if (FRAMES) await cdp.send("Page.startScreencast", { format: "png", maxWidth: width, maxHeight: phone ? 844 : 900, everyNthFrame: 1 });
+                await installSampler(page, phone);
+                if (phone) {
+                  const box = (await pill.boundingBox())!;
+                  await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+                } else await pill.click();
+                await page.waitForTimeout(1_800);
+                const samples = await stopSampler(page);
+                if (FRAMES) {
+                  await cdp.send("Page.stopScreencast");
+                  const dir = path.join(FRAMES, name);
+                  fs.rmSync(dir, { recursive: true, force: true });
+                  fs.mkdirSync(dir, { recursive: true });
+                  frames.forEach((frame, index) => fs.writeFileSync(path.join(dir, `${String(index).padStart(3, "0")}.png`), Buffer.from(frame.data, "base64")));
+                  const manifest = frames.map((frame, index) => `file '${String(index).padStart(3, "0")}.png'\nduration ${Math.max(0.001, ((frames[index + 1]?.time ?? frame.time + 40) - frame.time) / 1000)}`).join("\n");
+                  /* An ffmpeg concat list: each frame for as long as it stood. */
+                  fs.writeFileSync(path.join(dir, "frames.txt"), `${manifest}\n`);
+                }
+                await cdp.detach().catch(() => {});
+                const reading = motionOf(samples);
+                readings[name] = { ...reading, frames: samples.length };
+                const fail = (message: string) => failures.push(`${name}: ${message}`);
+                if (reading.firstDrawnAt === null || !reading.firstSettled) fail("the conversation was never drawn at rest");
+                if (reading.moves.length) fail(`${reading.moves.length} drawn frames moved the feed by itself: first ${JSON.stringify(reading.firstSettled)}, then ${JSON.stringify(reading.moves.slice(0, 4))}`);
+                /* Within the first 200 ms a skeleton waits out of sight, so a quick read never flashes it. */
+                const early = reading.skeletonShown.filter((shown) => shown.t < 200);
+                if (early.length) fail(`the skeleton showed ${early.length} frames within 200 ms of the screen: ${JSON.stringify(early.slice(0, 3))}`);
+                /* A reply card already on screen stays there while the transcript arrives around it. */
+                if (reading.question.blinks.length) fail(`the reply card blinked ${reading.question.blinks.length} frames after it showed: ${JSON.stringify(reading.question.blinks.slice(0, 3))}`);
+                if (motion === "no-preference") {
+                  if (reading.swaps.length) fail(`the transcript swapped in whole for a drawn skeleton: ${JSON.stringify(reading.swaps[0])}`);
+                  /* Desktop: the window fades in. The phone: a transcript read for the first time fades in. */
+                  if ((!phone || reading.loadingFrames > 0) && !reading.fade.length) fail(`the conversation came in at full opacity: ${JSON.stringify(reading.firstSettled)}`);
+                } else if (reading.fade.length || reading.skeletonShown.some((shown) => (shown.opacity ?? 1) < 0.99)) fail(`reduced motion still fades: ${JSON.stringify({ fade: reading.fade, skeleton: reading.skeletonShown.slice(0, 3) })}`);
+                /* Back to the board. */
+                if (phone) await page.locator("[data-mobile2-back]").first().click();
+                else await page.keyboard.press("Escape");
+                await page.waitForTimeout(600);
+              }
+              if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+            } finally {
+              await context.close();
+            }
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/conversation-open", { recursive: true });
+    fs.writeFileSync("evidence/conversation-open/open-motion.json", `${JSON.stringify({ fixture: "issue1695Evidence.fixture.tsx", label: process.env.LLV_OPEN_MOTION_LABEL ?? null, readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 600_000);
+});
