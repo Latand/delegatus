@@ -6,7 +6,7 @@ import { admitProactiveTask, decideProactiveTask as decide, proactiveCandidateDe
 import { candidate, context, NOW, authority } from "./proactive.fixture";
 import { assertProactiveTaskExecution, proactiveConversationTaskIds, proactiveExecutionError } from "./proactiveExecution";
 import { loadTasks, mutateTasks } from "./store";
-import { patchTask } from "./commands";
+import { deleteTask, patchTask } from "./commands";
 import { SqliteStateCollection } from "@/lib/state/sqliteStateStore";
 import { legacyDatabasePath } from "@/lib/state/legacyImport";
 
@@ -52,6 +52,27 @@ test("only operator adoption transfers authority; ordinary status, reopen and ed
   expect(proactiveExecutionError(loadTasks(file), file)).toBeNull();
   expect(loadTasks(file)).toEqual(before);
   expect(readProactiveAllowance(task.project, context().startedAt, NOW, file)).toEqual({ episodeUsed: 1, rollingUsed: 1 });
+});
+
+test("deletion cannot replace invented provenance with an ordinary placeholder", async () => {
+  const { file, task } = await prepared();
+  mutateTasks(tasks => ({ tasks: tasks.map(row => ({ ...row, assignments: [{ conversationId: "invented-worker",
+    path: null, panePid: null, state: "linked", error: null, at: new Date(NOW).toISOString() }] })), result: null }), file);
+  let replacements = 0;
+  for (const state of ["prepared", "adopted", "rejected"] as const) {
+    if (state !== "prepared") await decideProactiveTask(task.id, state === "adopted" ? "adopt" : "reject", "operator", file);
+    const before = loadTasks(file);
+    const token = proactiveDecisionToken(before[0]!, file);
+    const result = mutateTasks(tasks => {
+      const outcome = deleteTask(tasks, task.id, { now: () => new Date(NOW).toISOString(), id: () => `replacement-${++replacements}` });
+      return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };
+    }, file);
+    expect(result).toMatchObject({ ok: false, status: 403 });
+    expect(replacements).toBe(0);
+    expect(loadTasks(file)).toEqual(before);
+    expect(proactiveDecisionToken(loadTasks(file)[0]!, file)).toEqual(token);
+    expect(readProactiveAllowance(task.project, context().startedAt, NOW, file)).toEqual({ episodeUsed: 1, rollingUsed: 1 });
+  }
 });
 
 test("rejection revokes an earlier adoption; adopting retained work preserves suppression and allowance", async () => {

@@ -48,8 +48,11 @@ test("operator decisions require same-origin authority; a body cannot impersonat
   const before = loadTasks();
   const initial = proactiveDecisionToken(task);
   const send = (decision: unknown, headers = browser, expected = proactiveDecisionToken(task)) => POST(request(decision, headers, expected), ctx);
+  const { DELETE } = await import("../route");
+  const remove = (headers = browser) => DELETE(new NextRequest(new URL("api/tasks/task", base), { method: "DELETE", headers }), ctx);
   setCallerConversationResolverForTests(() => "conversation_agent");
   const agentHeaders = { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: "c".repeat(43) };
+  expect((await remove(agentHeaders)).status).toBe(403);
   for (const decision of ["adopt", "reject"]) expect((await send(decision, agentHeaders)).status).toBe(403);
   expect((await GET(new NextRequest(new URL("api/tasks/task/proactive", base), { headers: agentHeaders }), ctx)).status).toBe(403);
   expect((await send("adopt", { ...browser, "sec-fetch-site": "cross-site" })).status).toBe(403);
@@ -71,9 +74,12 @@ test("operator decisions require same-origin authority; a body cannot impersonat
     expect((await send("adopt", browser, expected)).status).toBe(409);
   }
   expect(proactiveDecisionToken(task)).toEqual(initial);
+  expect((await remove()).status).toBe(403);
   expect((await send("adopt")).status).toBe(200);
   expect(launchAdmission(loadTasks())).toBeNull();
+  expect((await remove()).status).toBe(403);
   expect((await send("reject")).status).toBe(200);
+  expect((await remove()).status).toBe(403);
   expect((await send("adopt", browser, initial)).status).toBe(409);
   expect(launchAdmission(loadTasks())).toMatchObject({ code: "PROACTIVE_EXECUTION_FENCED", status: 403 });
   expect(loadTasks()).toEqual(before);

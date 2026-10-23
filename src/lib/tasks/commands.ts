@@ -830,6 +830,7 @@ function replaceLostMemberships(
 export function deleteTask(existing: BoardTask[], id: string, deps: MembershipDeps = {}): { ok: true; tasks: BoardTask[]; replacements: string[] } | TaskRefusal {
   const task = existing.find((candidate) => candidate.id === id);
   if (!task) return { ok: false, error: "task not found", status: 404 };
+  if (task.proactive) return { ok: false, error: "invented work retains its provenance; hide or reject it instead", status: 403 };
   const tasks = existing.filter((candidate) => candidate.id !== id);
   return replaceLostMemberships(tasks, task.project, task.assignments, null, deps);
 }
