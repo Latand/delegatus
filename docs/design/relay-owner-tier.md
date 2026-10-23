@@ -586,6 +586,50 @@ conversation later with no lease to answer; the prompt asks for
   settings status reports `owner_stop_pending`, the ordinary conversation
   remains on the board, and the orphan sweep retries after a Viewer restart.
 
+  A failed owner turn retains its first exception, launch refusal, observation
+  error or deadline reason as a scrubbed `diagnostic` in the answer record and
+  run custody. The journal includes that diagnostic and the request and
+  conversation ids. Admission failures also retain the raw deadline string,
+  resolved deadline and cutoff timestamps, source and fallback reason.
+  Redaction precedes the 1024-code-point message bound.
+  While stop confirmation is unavailable, the owner execution promise stays
+  pending and retries; writing a cutoff alone never completes execution. The
+  live callback owns completion while it is pending, so the orphan sweep
+  cannot send a competing restart completion. After confirmed termination,
+  the runner can send a plain failure reply with the scrubbed reason and a
+  retry instruction. That reply contains no staged agent answer parts. Its
+  delivery guard still requires the bound request, enabled target and current
+  owner-tier permission. Agent tools and queued sends remain revoked.
+
+  A runner exception waits for that stop only until the request deadline.
+  At the deadline the requester receives the fixed status notice; the
+  execution promise and its custody keep retrying and send nothing more.
+
+  A pending stop never holds its target slot without bound. When admission
+  completed, nothing exists to stop if all of these hold: the spawn receipt
+  failed before any session, pane or verified host was bound; its launch
+  owner released admission or is proven dead; every receipt and delivery for
+  its conversation is equally settled; and the registry has no conversation,
+  entry or generation for its id. The stop then counts as confirmed without
+  host control. Otherwise, ten minutes after the cutoff was first written
+  (`cancelledAt`; an older row is stamped when a stop first sees it), an
+  unconfirmed stop stops counting against the target slot. It does not
+  become confirmed: execution stays pending, files and the conversation pin
+  stay held, settings still report `owner_stop_pending`, and every sweep
+  keeps retrying control until termination is proven. Both releases mark
+  `ownerTurn.released` with the time and reason (`no_execution` or
+  `stop_unconfirmed`). The journal names the request, conversation, reason
+  and diagnostic. After the stop is confirmed and the completion is settled,
+  the custody record, its cutoff and its diagnostic stay in the run ledger
+  for 24 hours.
+
+  Run custody keeps the scrubbed failure reply beside the diagnostic, with
+  the request deadline. If the Viewer restarts before the requester was
+  answered, the sweep sends that reply once the stop is confirmed, but only
+  before the deadline and while the owner failure reply is still authorized.
+  A revoked request receives the generic `install_restarted` failure, and a
+  request whose completion was already accepted receives nothing.
+
   Target capacity counts execution separately from retained cleanup custody.
   An accepted completion durably marks `capacityReleased` before waiting for
   claim settlement or chain/file cleanup. If the marker write is refused,

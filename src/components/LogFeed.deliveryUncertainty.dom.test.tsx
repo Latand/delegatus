@@ -198,6 +198,14 @@ const settle = async (fn: () => void) => {
   });
 };
 
+async function settleUntil(predicate: () => boolean, timeoutMs = 5_000): Promise<boolean> {
+  const deadline = performance.now() + timeoutMs;
+  while (!predicate() && performance.now() < deadline) {
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 10)));
+  }
+  return predicate();
+}
+
 /** Type into the composer through its React props (happy-dom input events do
     not reach React's synthetic onChange) and submit the form. */
 function composerControls(host: HTMLElement) {
@@ -1553,6 +1561,7 @@ for (const laterDraft of ["pending immutable request", "pending immutable reques
           }
           await settle(() => composerControls(mounted.host).submit());
           expect(sends).toHaveLength(1);
+          expect(await settleUntil(() => readOutbox(file.conversationId!)[0]?.operationId === "operation-pending")).toBe(true);
           expect(readOutbox(file.conversationId!)[0]?.operationId).toBe("operation-pending");
           const original = structuredClone(sends[0]!);
           expect(original.images?.length ?? 0).toBe(attachment === "image" ? 1 : 0);

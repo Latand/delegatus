@@ -435,12 +435,12 @@ export function MobileReportsScreen({ project, host, renderSheet }: { project: s
   );
 }
 
-export function MobileAccountsScreen({ host, renderSheet }: { host?: MobileShellHost | null; renderSheet?: SheetRenderer }) {
+export function MobileAccountsScreen({ host, renderSheet, project }: { host?: MobileShellHost | null; renderSheet?: SheetRenderer; project?: string | null }) {
   const { t } = useLocale();
   return (
     <MobileShell screen="accounts" back title={<MobileBarTitle>{t("mobile2.accounts.title")}</MobileBarTitle>} host={host} renderSheet={renderSheet}>
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain" data-mobile2-accounts>
-        <MobileAccountsPanel />
+        <MobileAccountsPanel project={project} />
         {/* The Telegram accounts, personal and bot: on desktop the row sits in
             the rail's footer, which the phone does not draw. */}
         <div className="border-t border-border" data-mobile2-telegram>
