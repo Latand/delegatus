@@ -36821,7 +36821,7 @@ describe("retired review history", () => {
     const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
     const readings: unknown[] = [];
     const failures: string[] = [];
-    const sources = ["src/components/flows/ReviewHistory.tsx", "src/components/flows/RoundDeck.tsx", "src/components/flows/directReviewGroups.ts", "src/components/mobile/MobilePipelineScreen.tsx", "src/components/scheme/SchemeBoard.tsx", "src/components/scheme/nodes.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts", "src/components/BranchPane.tsx", "src/components/LogFeed.tsx",
+    const sources = ["src/components/flows/ReviewHistory.tsx", "src/components/flows/RoundDeck.tsx", "src/components/flows/directReviewGroups.ts", "src/components/mobile/MobilePipelineScreen.tsx", "src/components/scheme/SchemeBoard.tsx", "src/components/scheme/nodes.tsx", "src/components/scheme/taskBands.ts", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts", "src/components/BranchPane.tsx", "src/components/LogFeed.tsx",
       "src/components/conversation/DeputyBlock.tsx", "src/components/conversation/OutboxBubbles.tsx", "src/components/kanban/StagesSheet.tsx",
       "src/components/pipelines/PipelineTemplatePicker.tsx", "src/components/pipelines/PipelineStrip.tsx", "src/components/pipelines/VerdictPopover.tsx", "src/components/tasks/TaskWorkflowPanel.tsx", "src/components/kanban/issue1695Evidence.fixture.tsx", "src/components/kanban/kanbanBoard.browser.test.tsx"];
     async function capture(page: Page, name: string, selector: string) {
@@ -37008,10 +37008,11 @@ describe("retired review history", () => {
               await board.waitFor();
               await board.locator(".card[data-id]").first().scrollIntoViewIfNeeded();
               expect(await board.locator('.card[data-id*="direct-review-1"], .card[data-id*="direct-review-2"], .card[data-id*="old-direct-review-2"]').count()).toBe(0);
-              await capture(page, tag + "-direct-viewer", "[data-kanban-board]");
+              await capture(page, tag + "-direct-viewer", "[data-kanban-board] .card[data-id]");
               // The shared layout still hosts the deck used by retained
               // board and phone map navigation; the desktop leaf is kanban.
               await page.goto(`${server.base}?scenario=retired-review&surface=direct-layout`);
+              await page.getByTitle(translate(lang, "scheme.zoom100"), { exact: true }).click();
               const deck = page.locator('[data-scheme-node^="deck::direct-review::"]');
               await deck.waitFor();
               expect(await page.locator('[data-scheme-node="/direct-review-1.jsonl"], [data-scheme-node="/direct-review-2.jsonl"], [data-scheme-node="/old-direct-review-2.jsonl"]').count()).toBe(0);
