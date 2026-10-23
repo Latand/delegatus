@@ -192,3 +192,9 @@ test("Haiku 5.5 and the previous Haiku launch with pinned ids and keep their dis
   expect(modelDisplayName("claude", "haiku-5-5[1m]")).toBe("Haiku 5.5 (1M)");
   expect(claudeCatalogModelId("claude-haiku-4-5-20251001")).toBe("claude-haiku-4-5");
 });
+
+test("Haiku choices distinguish the moving CLI alias from the pinned release", () => {
+  const options = ENGINE_MODELS.claude.filter((option) => ["haiku", "claude-haiku-5-5"].includes(option.id));
+  expect(options.map((option) => option.label)).toEqual(["Haiku 5.5 (CLI alias)", "Haiku 5.5"]);
+  expect(modelDisplayName("claude", "haiku")).toBe("Haiku 5.5");
+});

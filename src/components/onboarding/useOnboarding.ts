@@ -84,12 +84,14 @@ export function useOnboarding(): {
   marker: OnboardingMarker | null;
   /** The seat tick's check interval, which the orchestrator step names. */
   checkMinutes: number | null;
+  legacyState: boolean;
   close: (outcome: "dismissed" | "completed", steps?: OnboardingPatch["steps"]) => void;
 } {
   const [mode, setMode] = useState<OnboardingMode | null>(null);
   const [step, setStep] = useState<OnboardingStepId | null>(null);
   const [opening, setOpening] = useState(0);
   const [marker, setMarker] = useState<OnboardingMarker | null>(null);
+  const [legacyState, setLegacyState] = useState(false);
   const [checkMinutes, setCheckMinutes] = useState<number | null>(null);
 
   useEffect(() => publishOnboarding({ guideOpen: mode !== null }), [mode]);
@@ -110,10 +112,11 @@ export function useOnboarding(): {
     const stopKeys = onOpenKeys(() => setMode(null));
     let cancelled = false;
     void fetch("/api/onboarding")
-      .then(async (response) => response.ok ? (await response.json()) as { marker: OnboardingMarker | null; seatTickCheckMinutes?: unknown } : null)
+      .then(async (response) => response.ok ? (await response.json()) as { marker: OnboardingMarker | null; seatTickCheckMinutes?: unknown; legacyState?: boolean } : null)
       .catch(() => null)
       .then((body) => {
         if (cancelled || !body) return;
+        setLegacyState(body.legacyState === true);
         setMarker(body.marker);
         publishOnboarding({ loaded: true, marker: body.marker });
         if (typeof body.seatTickCheckMinutes === "number" && body.seatTickCheckMinutes > 0) setCheckMinutes(body.seatTickCheckMinutes);
@@ -141,5 +144,5 @@ export function useOnboarding(): {
       .then((written) => { if (written) setMarker(written); });
   }, []);
 
-  return { mode, step, opening, marker, checkMinutes, close };
+  return { mode, step, opening, marker, legacyState, checkMinutes, close };
 }

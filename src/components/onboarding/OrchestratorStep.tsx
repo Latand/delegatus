@@ -8,7 +8,8 @@ import { EngineMark } from "@/components/EngineMark";
 import type { OrchestratorDraftLaunch } from "@/components/orchestrator/draftPrefill";
 import { runsOnValue } from "@/components/orchestrator/RunsOnRow";
 import { useOrchestratorSeat } from "@/components/orchestrator/useOrchestratorSeat";
-import { defaultModelFor } from "@/lib/agent/models";
+import { tokenRate } from "@/lib/activity/tokenPrices";
+import { CODEX_GPT61_SOL_MODEL, defaultModelFor, ENGINE_MODELS, modelDisplayName } from "@/lib/agent/models";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import type { RoleConfig } from "@/lib/roles/types";
 
@@ -77,6 +78,9 @@ export function OrchestratorStep(props: {
   onCreate: (launch: OrchestratorDraftLaunch) => void;
   onReadFirst: (launch: OrchestratorDraftLaunch) => void;
   onOpenSeat: () => void;
+  /** A first run: the cost estimate and the cheaper choice are offered only
+      here, so an existing installation's guide reads as before. */
+  newcomer?: boolean;
 }) {
   const role = useOrchestratorRole();
   const runtime = orchestratorRuntime(role.config, props.connected);
@@ -86,7 +90,7 @@ export function OrchestratorStep(props: {
   return <StepBody key={`${runtime.engine}:${runtime.model}:${runtime.effort}`} {...props} launchKey="ready" runtime={runtime} />;
 }
 
-function StepBody({ project, connected, checkMinutes, onGoEngines, onGoProject, onCreate, onReadFirst, onOpenSeat, launchKey, runtime }: Parameters<typeof OrchestratorStep>[0] & {
+function StepBody({ project, connected, checkMinutes, onGoEngines, onGoProject, onCreate, onReadFirst, onOpenSeat, newcomer = false, launchKey, runtime }: Parameters<typeof OrchestratorStep>[0] & {
   launchKey: "ready" | null;
   runtime: { engine: Engine; model: string; effort: string };
 }) {
@@ -117,6 +121,17 @@ function StepBody({ project, connected, checkMinutes, onGoEngines, onGoProject, 
     ...(launch.launchAccountId ? { account: launch.launchAccountId } : {}),
   });
   const signedOut = readiness.kind === "signed-out" ? readiness : null;
+  // Compare a stated workload at the existing standard API rates, not a
+  // subscription bill. This draft never writes the installation's role defaults.
+  const aliases: Record<string, string> = { opus: "claude-opus-5-5", sonnet: "claude-sonnet-5-5", haiku: "claude-haiku-5-5", fable: "claude-fable-5-1" };
+  const estimate = (model: string, priceEngine = engine) => {
+    const rate = tokenRate(priceEngine === "claude" ? aliases[model] ?? model : model, "standard");
+    return rate ? rate.input * 0.1 + rate.output * 0.01 : null;
+  };
+  const cost = estimate(launch.model);
+  /* One cheaper step from the Claude default; once on Codex nothing further is offered. */
+  const cheaperModel = CODEX_GPT61_SOL_MODEL;
+  const cheaperCost = engine === "claude" ? estimate(cheaperModel, "codex") : null;
 
   const fact = (label: string, value: React.ReactNode, onChange: () => void, testId: string, expanded?: boolean) => (
     <div className="flex min-w-0 items-baseline gap-3 py-2 max-sm:flex-wrap max-sm:gap-x-2 max-sm:gap-y-0.5">
@@ -241,6 +256,13 @@ function StepBody({ project, connected, checkMinutes, onGoEngines, onGoProject, 
         </div>
       </div>
       <p className="text-caption leading-[1.5] text-muted">{t("onboarding.orchestrator.costNote", { engine: launchEngineLabel(launch.engine), check: checkMinutes })}</p>
+      <p data-onboarding-permissions="" className="text-ui text-secondary">{t("onboarding.orchestrator.permissions")}</p>
+      {newcomer ? <p data-onboarding-cost="" className="text-ui text-secondary">{cost === null ? t("onboarding.orchestrator.unpriced") : t("onboarding.orchestrator.estimate", { cost: cost.toFixed(2) })}</p> : null}
+      {newcomer && !held && launchKey !== null && connected.codex && cost !== null && cheaperCost !== null && cheaperCost < cost ? (
+        <button type="button" data-onboarding-cheaper="" className={secondary} onClick={() => { launch.setEngine("codex"); launch.setModel(cheaperModel); }}>
+          {t("onboarding.orchestrator.cheaper", { model: `${launchEngineLabel("codex")} · ${ENGINE_MODELS.codex.find((option) => option.id === cheaperModel)?.label ?? modelDisplayName("codex", cheaperModel)}` })}
+        </button>
+      ) : null}
       {action}
     </div>
   );

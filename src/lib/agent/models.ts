@@ -54,7 +54,7 @@ export const ENGINE_MODELS: Record<"claude" | "codex" | "copilot", readonly Agen
     { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", shortLabel: "Sonnet 5.5", use: "implement" },
     // Claude Code 2.1.296 resolves `haiku` to claude-haiku-5-5 on
     // first-party auth. Pinned rows keep both generations selectable.
-    { id: "haiku", label: "Haiku 5.5", shortLabel: "Haiku 5.5", use: "general" },
+    { id: "haiku", label: "Haiku 5.5 (CLI alias)", shortLabel: "Haiku 5.5", use: "general" },
     { id: "claude-haiku-5-5", label: "Haiku 5.5", shortLabel: "Haiku 5.5", use: "general" },
     { id: "claude-haiku-4-5", label: "Haiku 4.5", shortLabel: "Haiku 4.5", use: "general" },
   ],
@@ -149,6 +149,7 @@ export function modelDisplayName(engine: string, model: string): string {
     /* A launch alias (`haiku`, `opus`) is what a live conversation records
        until its transcript names the resolved id; it reads as its catalogue
        row, the way the resolved id would. */
+    if (model.trim().toLowerCase() === "haiku") return "Haiku 5.5";
     return ENGINE_MODELS.claude.find((option) => option.id === model.trim().toLowerCase())?.label ?? model;
   }
   const [, family, major, minor, tagged1m] = match;
