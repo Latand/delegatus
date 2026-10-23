@@ -2163,11 +2163,14 @@ async function adoptStructuredHostsPass(
   retryDependencies = dependencies,
 ): Promise<AdoptedStructuredHost[]> {
   const passDeadline = startupReadBudget.getStore()?.deadline ?? performance.now() + STRUCTURED_STARTUP_PASS_DEADLINE_MS;
-  const assertActive = () => {
+  /* Row retry timers outlive this pass and its deadline: they check only the
+     release's lifetime, and each run carries a deadline of its own. */
+  const activeUntil = (deadline: number) => () => {
     dependencies.signal?.throwIfAborted();
     dependencies.assertActive?.();
-    if (performance.now() >= passDeadline) throw new Error("structured startup pass deadline exceeded");
+    if (performance.now() >= deadline) throw new Error("structured startup pass deadline exceeded");
   };
+  const assertActive = activeUntil(passDeadline);
   let authorityUnavailable = false;
   const admitState = <T>(admit: (available: boolean) => Promise<T>, phase = "startup evidence") => {
     const checked = (available: boolean, refusal?: unknown) => {
@@ -2920,7 +2923,7 @@ async function adoptStructuredHostsPass(
       return entry?.key.engine === "codex" && !codexBootAdoptionRetired(entry);
     });
     const blockedRows = new Set([...contestedHostKeys, ...failedRows, ...(rowRetry ? [...deferredHostKeys, ...held.keys(), ...waitingContinuationHostKeys] : [])]);
-    const schedule = dependencies.schedule ?? ((callback, delayMs) => setTimeout(callback, delayMs));
+    const schedule = scheduleOutsidePass(dependencies);
     for (const entry of retryEntries) {
       const key = sessionKeyId(entry.key);
       const retired = codexBootAdoptionRetired(heldEntries[key] ?? entry);
@@ -2945,29 +2948,31 @@ async function adoptStructuredHostsPass(
         } catch { console.error("[structured hosts] quarantine card publication deferred", { key }); }
       }
       const retry = async (): Promise<void> => {
-        try { assertActive(); } catch { return; }
+        const retryActive = activeUntil(performance.now() + STRUCTURED_STARTUP_PASS_DEADLINE_MS);
+        const releaseActive = activeUntil(Number.POSITIVE_INFINITY);
+        try { releaseActive(); } catch { return; }
         try {
           const current = startupHostSnapshot(registry, entry.key).entries[key];
           if (!current?.structuredHost || rowRetries.get(key)?.resolved) {
-            await startupRowNotice(entry, null, assertActive);
-            await rowRetries.clear(key, assertActive);
+            await startupRowNotice(entry, null, retryActive);
+            await rowRetries.clear(key, retryActive);
             return;
           }
           await startStructuredHostPass(retryDependencies, new Set([key]), false, true);
         } catch (error) {
           try {
-            assertActive();
-            const failed = await rowRetries.failed(key, startupRowReason(error), Date.now(), assertActive);
+            releaseActive();
+            const failed = await rowRetries.failed(key, startupRowReason(error), Date.now(), releaseActive);
             if (failed.quarantined && !failed.resolved && failed.noticePending !== false) {
               try {
-                await startupRowNotice(entry, failed, assertActive);
-                await rowRetries.notified(failed, assertActive);
+                await startupRowNotice(entry, failed, retryActive);
+                await rowRetries.notified(failed, releaseActive);
               } catch {
                 console.error("[structured hosts] quarantine card publication deferred", { key });
               }
             }
           } catch { console.error("[structured hosts] row retry could not be recorded", { key }); }
-          try { assertActive(); } catch { return; }
+          try { releaseActive(); } catch { return; }
           rowRetries.schedule(key, schedule, retry);
         }
       };
@@ -3087,6 +3092,14 @@ function rememberDeferredStructuredStartup(
   if (!mergePrevious || !state.probeScheduled) scheduleDeferredStartupReprobe(dependencies, registry, state);
 }
 
+/** Timers armed inside a pass outlive it. A real timer inherits the pass's
+    read budget through async context, so each callback starts outside it and
+    the work it starts carries its own deadline. */
+function scheduleOutsidePass(dependencies: StructuredStartupDependencies): NonNullable<StructuredStartupDependencies["schedule"]> {
+  const schedule = dependencies.schedule ?? ((callback, delayMs) => setTimeout(callback, delayMs));
+  return (callback, delayMs) => schedule(() => startupReadBudget.exit(callback), delayMs);
+}
+
 function scheduleDeferredStartupReprobe(
   dependencies: StructuredStartupDependencies,
   registry: AgentRegistry,
@@ -3094,7 +3107,7 @@ function scheduleDeferredStartupReprobe(
 ): void {
   if (state.probeScheduled) return;
   state.probeScheduled = true;
-  const schedule = dependencies.schedule ?? ((callback, delayMs) => setTimeout(callback, delayMs));
+  const schedule = scheduleOutsidePass(dependencies);
   schedule(() => {
     /* A later pass replaced this deferral; its own timer carries it. */
     if (deferredStartup !== state) return;

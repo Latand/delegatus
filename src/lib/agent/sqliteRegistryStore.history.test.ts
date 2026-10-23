@@ -439,8 +439,10 @@ test("recent endings among archived operation owners are named without reading t
   const archived = db.query<{ id: number; row_key: string; settled: string }, []>(`SELECT a.id, c.row_key, json_extract(a.value_json, '$.settledAt') AS settled
     FROM registry_cold c JOIN registry_archive a ON a.id = c.archive_id WHERE c.collection = 'deliveryOperationOwners' ORDER BY settled`).all();
   expect(archived.length).toBeGreaterThan(100);
-  /* One owner stored without its instant: it takes its delivery's, as normalization does. */
-  const [legacy, silent] = archived;
+  /* One owner stored without its instant: it takes its delivery's, as normalization does.
+     Another's delivery also predates command.operationId, which normalization
+     derives from the delivery's id. */
+  const [legacy, silent, unkeyed] = archived;
   const deliveredAt = archived.at(-1)!.settled;
   /* A version is immutable: each row below is archived again as a new one. */
   const rearchive = (collection: string, key: string, edit: string, ...values: string[]) => {
@@ -450,9 +452,21 @@ test("recent endings among archived operation owners are named without reading t
     db.run("UPDATE registry_cold SET archive_id = ? WHERE collection = ? AND row_key = ?", [version.id, collection, key]);
   };
   try {
-    for (const owner of [legacy!, silent!]) rearchive("deliveryOperationOwners", owner.row_key, "json_remove(a.value_json, '$.settledAt')");
-    const delivery = db.query<{ id: string }, [number]>("SELECT json_extract(value_json, '$.deliveryId') AS id FROM registry_archive WHERE id = ?").get(legacy!.id)!;
-    rearchive("heldDeliveries", delivery.id, "json_set(a.value_json, '$.deliveredAt', ?)", deliveredAt);
+    for (const owner of [legacy!, silent!, unkeyed!]) rearchive("deliveryOperationOwners", owner.row_key, "json_remove(a.value_json, '$.settledAt')");
+    const deliveryOf = (owner: { id: number }) => db.query<{ id: string }, [number]>("SELECT json_extract(value_json, '$.deliveryId') AS id FROM registry_archive WHERE id = ?").get(owner.id)!;
+    rearchive("heldDeliveries", deliveryOf(legacy!).id, "json_set(a.value_json, '$.deliveredAt', ?)", deliveredAt);
+    /* A send stored before command.operationId existed: its delivery, keyed
+       and identified by the operation's own id, names no operation. */
+    const operation = unkeyed!.row_key;
+    const previous = deliveryOf(unkeyed!).id;
+    const moved = db.query<{ id: number }, string[]>(`INSERT INTO registry_archive(collection, row_key, value_json, row_order)
+      SELECT a.collection, ?1, json_set(json_remove(a.value_json, '$.command.operationId'), '$.id', ?1, '$.deliveredAt', ?2), a.row_order
+      FROM registry_cold c JOIN registry_archive a ON a.id = c.archive_id WHERE c.collection = 'heldDeliveries' AND c.row_key = ?3 RETURNING id`)
+      .get(operation, deliveredAt, previous)!;
+    db.run("DELETE FROM registry_rows WHERE collection = 'heldDeliveries' AND row_key = ?", [previous]);
+    db.run("DELETE FROM registry_cold WHERE collection = 'heldDeliveries' AND row_key = ?", [previous]);
+    db.run("INSERT INTO registry_cold(collection, row_key, archive_id) VALUES ('heldDeliveries', ?, ?)", [operation, moved.id]);
+    rearchive("deliveryOperationOwners", operation, "json_set(a.value_json, '$.deliveryId', ?)", operation);
   } finally {
     db.close();
   }
@@ -473,7 +487,22 @@ test("recent endings among archived operation owners are named without reading t
     expect({ since, named: [...named].sort() }).toEqual({ since, named: ended(since).filter((key) => !hot.has(key)) });
   }
   expect(archivedOwnersEndedSince(view, deliveredAt)).toContain(legacy!.row_key);
+  expect(whole.deliveryOperationOwners[unkeyed!.row_key]!.deliveryId).toBe(unkeyed!.row_key);
+  expect(whole.deliveryOperationOwners[unkeyed!.row_key]!.settledAt).toBe(deliveredAt);
+  expect(archivedOwnersEndedSince(view, deliveredAt)).toContain(unkeyed!.row_key);
   expect(archivedOwnersEndedSince(view, "1970-01-01T00:00:00.000Z")).not.toContain(silent!.row_key);
+  /* Reopened over the prepared projection, and rebuilt from nothing. */
+  const reopened = open();
+  await reopened.prepareReadOnlySnapshot();
+  expect(archivedOwnersEndedSince(reopened.readOnlySnapshot().file, deliveredAt)).toContain(unkeyed!.row_key);
+  const rebuild = new Database(dataset.filename);
+  try {
+    rebuild.run("DELETE FROM registry_owner_endings");
+    rebuild.run("DELETE FROM registry_meta WHERE key='owner_endings_cursor'");
+  } finally { rebuild.close(); }
+  const rebuilt = open();
+  await rebuilt.prepareReadOnlySnapshot();
+  expect(archivedOwnersEndedSince(rebuilt.readOnlySnapshot().file, deliveredAt)).toContain(unkeyed!.row_key);
   /* A plain file has no archive to ask: its caller reads the rows. */
   expect(archivedOwnersEndedSince(whole, deliveredAt)).toBeUndefined();
 });

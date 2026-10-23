@@ -719,3 +719,66 @@ test("asynchronous restoration prepares both its selection and freshness check w
     expect(await restoreMissingRecordsAsync(reader, store, 1000)).toBe(false);
   } finally { store.close(); registry.close(); }
 });
+
+
+/* A send stored before its delivery carried command.operationId: owner and
+   delivery share one id, and normalization derives the operation from it.
+   Archived, the owner's ending is found through the indexed projection, which
+   must apply the same default or restoration completes past the record. */
+test("an archived legacy send whose delivery names no operation is restored before completeness advances", async () => {
+  const { restoreMissingRecordsAsync } = await import("./recordWait");
+  const directory = fs.mkdtempSync(path.join(root, "legacy-archived-ending-"));
+  const options = { sqliteMode: "sqlite" as const, sqliteFilename: path.join(directory, "agent-registry.sqlite") };
+  const open = () => new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, options);
+  const writer = open();
+  const conversation = writer.ensureConversation("codex", path.join(directory, "thread.jsonl"), "default");
+  const held = writer.holdDelivery(conversation.id, "legacy ending", "legacy-key");
+  writer.recordDeliveryOutcome(held.id, "delivered", null, "delivered");
+  writer.close();
+  const legacy = "legacy-send";
+  let deliveredAt = "";
+  const db = new Database(options.sqliteFilename);
+  try {
+    const row = (collection: string, key: string) => db.query<{ value_json: string; row_order: number }, [string, string]>(
+      "SELECT value_json,row_order FROM registry_rows WHERE collection=? AND row_key=?").get(collection, key)!;
+    const ownerRow = row("deliveryOperationOwners", held.command.operationId);
+    const deliveryRow = row("heldDeliveries", held.id);
+    const owner = JSON.parse(ownerRow.value_json);
+    const delivery = JSON.parse(deliveryRow.value_json);
+    deliveredAt = delivery.deliveredAt;
+    delete owner.settledAt;
+    delete delivery.command.operationId;
+    db.transaction(() => {
+      db.run("DELETE FROM registry_rows WHERE (collection='deliveryOperationOwners' AND row_key=?) OR (collection='heldDeliveries' AND row_key=?)",
+        [held.command.operationId, held.id]);
+      db.run("INSERT INTO registry_rows(collection,row_key,value_json,row_order) VALUES ('heldDeliveries',?,?,?)",
+        [legacy, JSON.stringify({ ...delivery, id: legacy }), deliveryRow.row_order]);
+      db.run("INSERT INTO registry_rows(collection,row_key,value_json,row_order) VALUES ('deliveryOperationOwners',?,?,?)",
+        [legacy, JSON.stringify({ ...owner, deliveryId: legacy, command: { ...owner.command, operationId: legacy } }), ownerRow.row_order]);
+    })();
+  } finally { db.close(); }
+  const archiver = open();
+  try {
+    archiver.archiveInactiveRows();
+    expect(archiver.readOnlySnapshot().deliveryOperationOwners[legacy]?.settledAt).toBe(deliveredAt);
+  } finally { archiver.close(); }
+  const cold = new Database(options.sqliteFilename);
+  try {
+    expect(cold.query("SELECT collection FROM registry_cold WHERE row_key=? ORDER BY collection").all(legacy))
+      .toEqual([{ collection: "deliveryOperationOwners" }, { collection: "heldDeliveries" }]);
+  } finally { cold.close(); }
+  const settledAt = Date.parse(deliveredAt);
+  expect(Number.isFinite(settledAt)).toBe(true);
+  /* Once on the projection this boot prepares, and again from an empty
+     progress store over the reopened, already prepared projection. */
+  for (const pass of ["prepared", "reopened"]) {
+    const registry = open();
+    const store = new DeliveryProgressStore(path.join(directory, `delivery-progress-${pass}.sqlite`), () => settledAt, noTimer);
+    try {
+      expect(store.get(legacy)).toBeNull();
+      expect(await restoreMissingRecordsAsync(registry, store, settledAt)).toBe(true);
+      expect({ pass, record: store.get(legacy)?.terminal?.state ?? null }).toEqual({ pass, record: "delivered" });
+      expect(store.flush()).toBe(true);
+    } finally { store.close(); registry.close(); }
+  }
+});

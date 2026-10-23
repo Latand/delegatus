@@ -2,13 +2,28 @@ import type { Database } from "bun:sqlite";
 
 /* One current ending per operation. Compatibility writers and archive mapping
    changes update it in their own transaction. Payloads remain authoritative. */
+const field = (path: string) => `json_extract(d.value_json,'$.${path}')`;
+const kind = (path: string) => `json_type(d.value_json,'$.${path}')`;
+/* The operation a delivery names after normalization: a falsy or absent
+   command.operationId takes the delivery's own id (canonicalHeldDeliveryCommand). */
+const deliveryOperation = `CASE WHEN ${kind("command.operationId")} IS NULL OR ${kind("command.operationId")} IN ('null','false')
+    OR (${kind("command.operationId")} IN ('integer','real') AND ${field("command.operationId")}=0)
+    OR (${kind("command.operationId")}='text' AND ${field("command.operationId")}='')
+  THEN ${field("id")} WHEN ${kind("command.operationId")}='text' THEN ${field("command.operationId")} END`;
+const settledDeliveryAt = "json_extract(o.value_json,'$.settledDelivery.deliveredAt')";
+/* A delivery stored without its digest gets one computed from its text on
+   normalization, which SQL cannot reproduce. Such a delivery may or may not be
+   the owner's, so the later of both candidate instants stands; the caller
+   judges each named owner by its normalized ending. */
 const endingText = `CASE WHEN json_type(o.value_json,'$.settledAt')='text'
   THEN json_extract(o.value_json,'$.settledAt') ELSE COALESCE(
-    (SELECT json_extract(d.value_json,'$.deliveredAt') FROM registry_records d
+    (SELECT CASE WHEN ${kind("requestDigest")}='text' THEN ${field("deliveredAt")}
+        ELSE max(COALESCE(${field("deliveredAt")},${settledDeliveryAt}),COALESCE(${settledDeliveryAt},${field("deliveredAt")})) END
+      FROM registry_records d
       WHERE d.collection='heldDeliveries' AND d.row_key=json_extract(o.value_json,'$.deliveryId')
-        AND json_extract(d.value_json,'$.command.operationId')=o.row_key
-        AND json_extract(d.value_json,'$.requestDigest')=json_extract(o.value_json,'$.requestDigest')),
-    json_extract(o.value_json,'$.settledDelivery.deliveredAt')) END`;
+        AND (${deliveryOperation})=o.row_key
+        AND (${kind("requestDigest")} IS NOT 'text' OR ${field("requestDigest")}=json_extract(o.value_json,'$.requestDigest'))),
+    ${settledDeliveryAt}) END`;
 const endingSelect = `SELECT o.row_key, json_extract(o.value_json,'$.deliveryId'),
   CASE WHEN (${endingText}) GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*'
     THEN CAST(round((julianday(${endingText})-2440587.5)*86400000) AS INTEGER) END, ${endingText}

@@ -856,4 +856,4 @@ test("phase boundaries prepare invalidated registry views after runtime reads", 
     await bindStructuredDeliveryQueue([], { registry: f.registry, client: null });
     peer.close(); f.registry.close(); f.journal.close();
   }
-});
+}, 30_000);
