@@ -1436,6 +1436,20 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   if (feedState === "loading" && loadedFile !== feedPath) setLoadedFile(feedPath);
   else if (loadedFile !== null && loadedFile !== feedPath) setLoadedFile(null);
   const feedArrived = loadedFile !== null && loadedFile === feedPath && feedState !== "loading";
+  /* Only what arrives fades in: a child the feed already drew beside its
+     skeleton (a question card, the reveal control) stays as it was, and rows
+     that come later are not part of the arrival. Marked before the arrival
+     paints; the stylesheet's fade clears the mark when it ends. */
+  const drawnWhileLoading = useRef<WeakSet<Element>>(new WeakSet());
+  const arrivalMarked = useRef(false);
+  useLayoutEffect(() => {
+    const el = content.current;
+    if (el && feedState === "loading") drawnWhileLoading.current = new WeakSet([...el.children].filter((child) => !child.matches('[data-skeleton="feed"]')));
+    if (el && feedArrived && !arrivalMarked.current) {
+      for (const child of el.children) if (!drawnWhileLoading.current.has(child)) child.setAttribute("data-feed-enter", "");
+    }
+    arrivalMarked.current = feedArrived;
+  });
 
   /* Session-stable, like the transcript's own row keys: once a canonical row
      has answered for a submission it keeps that key for as long as this feed
@@ -2048,6 +2062,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
            neither: it says `error`, and nothing arrives on it. */
         data-feed-state={feedState}
         data-feed-arrived={feedArrived ? "" : undefined}
+        onAnimationEnd={(event) => {
+          if (event.animationName === "feed-enter") (event.target as Element).removeAttribute("data-feed-enter");
+        }}
         className={compact ? `px-3 ${liveTailPill ? "pb-8" : "pb-3"} text-body` : `mx-auto w-full max-w-[1060px] px-6 ${liveTailPill ? "pb-8" : "pb-4"}`}
       >
         {!file ? (

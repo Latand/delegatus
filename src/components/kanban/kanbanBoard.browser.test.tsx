@@ -36828,8 +36828,9 @@ describe("sound captions", () => {
 describe("conversation open motion", () => {
   const OUT = path.resolve(".artifacts/conversation-open");
   const FRAMES = process.env.LLV_OPEN_MOTION_FRAMES;
-  /* `opacity` is the feed content's own, times every ancestor's; `skeleton` the drawn skeleton's, or null. */
-  interface Sample { t: number; drawn: boolean; opacity: number; skeleton: number | null; state: string | null; top: number | null; scroll: number | null; client: number | null; last: number | null; rows: number; held: string | null }
+  /* `opacity` is what the read brought (the last drawn row, or the feed content without rows), times every ancestor's;
+     `skeleton` the drawn skeleton's, or null; `question` the reply card's, or null. */
+  interface Sample { t: number; drawn: boolean; opacity: number; skeleton: number | null; question: number | null; state: string | null; top: number | null; scroll: number | null; client: number | null; last: number | null; rows: number; held: string | null }
   const installSampler = (page: Page, phone: boolean) => page.evaluate((onPhone) => {
     const state = { samples: [] as unknown[], stopped: false, started: performance.now() };
     const shown = (element: Element | null) => {
@@ -36852,8 +36853,12 @@ describe("conversation open motion", () => {
       state.samples.push({
         t: Math.round(performance.now() - state.started),
         drawn: surface !== null && getComputedStyle(surface).visibility === "visible",
-        opacity: content ? shown(content) : 0,
+        opacity: rows.length ? shown(rows.at(-1)!) : content ? shown(content) : 0,
         skeleton: skeleton ? shown(skeleton) : null,
+        question: (() => {
+          const card = content?.querySelector<HTMLElement>("#question") ?? null;
+          return card && card.getBoundingClientRect().height > 0 ? shown(card) : null;
+        })(),
         state: content?.dataset.feedState ?? null,
         top: feed ? Math.round(feed.scrollTop) : null,
         scroll: feed ? feed.scrollHeight : null,
@@ -36897,6 +36902,15 @@ describe("conversation open motion", () => {
       swaps: swaps.map(at),
       fade: rested.filter((sample) => sample.opacity < 0.99).map((sample) => sample.opacity),
       skeletonShown: drawn.filter((sample) => (sample.skeleton ?? 0) > 0.05).map((sample) => ({ t: sample.t - firstDrawnAt!, opacity: sample.skeleton })),
+      /* The reply card once it showed whole: every later drawn frame that hid it or dimmed it, loading and arrival alike. */
+      question: (() => {
+        const from = drawn.findIndex((sample) => (sample.question ?? 0) >= 0.99);
+        return {
+          shownAt: from < 0 ? null : drawn[from]!.t - firstDrawnAt!,
+          shownWhileLoading: drawn.some((sample) => !settled(sample) && (sample.question ?? 0) >= 0.99),
+          blinks: from < 0 ? [] : drawn.slice(from).filter((sample) => (sample.question ?? 0) < 0.99).map((sample) => ({ t: sample.t - firstDrawnAt!, state: sample.state, question: sample.question })),
+        };
+      })(),
       loadingFrames: drawn.filter((sample) => !settled(sample)).length,
       /* Each box the held reader stood in, with the time it first stood so. */
       held: samples.filter((sample, index) => sample.held !== null && sample.held !== samples[index - 1]?.held).map((sample) => `${sample.t} ${sample.held}`),
@@ -36962,6 +36976,8 @@ describe("conversation open motion", () => {
                 /* Within the first 200 ms a skeleton waits out of sight, so a quick read never flashes it. */
                 const early = reading.skeletonShown.filter((shown) => shown.t < 200);
                 if (early.length) fail(`the skeleton showed ${early.length} frames within 200 ms of the screen: ${JSON.stringify(early.slice(0, 3))}`);
+                /* A reply card already on screen stays there while the transcript arrives around it. */
+                if (reading.question.blinks.length) fail(`the reply card blinked ${reading.question.blinks.length} frames after it showed: ${JSON.stringify(reading.question.blinks.slice(0, 3))}`);
                 if (motion === "no-preference") {
                   if (reading.swaps.length) fail(`the transcript swapped in whole for a drawn skeleton: ${JSON.stringify(reading.swaps[0])}`);
                   /* Desktop: the window fades in. The phone: a transcript read for the first time fades in. */

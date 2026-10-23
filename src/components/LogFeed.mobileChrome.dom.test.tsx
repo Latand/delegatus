@@ -334,6 +334,30 @@ describe("a first read's arrival", () => {
     expect(content().hasAttribute("data-feed-arrived")).toBe(true);
   });
 
+  test("only what arrives fades: a question card drawn beside the skeleton stays, and later rows are not marked", () => {
+    const { show, content } = mount();
+    const waiting = { ...file, waitingInput: { since: Date.parse(AT(0)), screenTail: "Proceed? (y/n)", target: "lane5:0.0", menu: null } } as FileEntry;
+    tail = { lines: [], loading: true, error: null };
+    show(waiting);
+    const card = content().querySelector("#question");
+    expect(card).toBeTruthy();
+    expect(card!.hasAttribute("data-feed-enter")).toBe(false);
+    tail = { lines: TRANSCRIPT, loading: false, error: null };
+    show(waiting);
+    expect(content().hasAttribute("data-feed-arrived")).toBe(true);
+    expect(content().querySelector("#question")).toBe(card);
+    expect(card!.hasAttribute("data-feed-enter")).toBe(false);
+    const rows = [...content().querySelectorAll(":scope > [data-feed-key]")];
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((row) => row.hasAttribute("data-feed-enter"))).toBe(true);
+    const later = JSON.stringify({ type: "assistant", uuid: "uuid-later", timestamp: AT(3), message: { role: "assistant", content: [{ type: "text", text: "A later reply after the arrival." }] } });
+    tail = { lines: [...TRANSCRIPT, later], loading: false, error: null };
+    show(waiting);
+    const added = [...content().querySelectorAll(":scope > [data-feed-key]")].filter((row) => !rows.includes(row));
+    expect(added.length).toBe(1);
+    expect(added[0]!.hasAttribute("data-feed-enter")).toBe(false);
+  });
+
   test("a tail read before paints at once, unmarked", () => {
     const { show, content } = mount();
     show(file);
