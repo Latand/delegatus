@@ -481,6 +481,30 @@ test("a predecessor hold that newer headroom ended stays ended after that readin
   expect(f.attempts()[3]).toMatchObject({ suspension: { hold: { accountId: "account-a", resetsAt: f.resetsAt } } });
 });
 
+test("headroom observed while a healthy replacement runs ends its predecessor hold during that tick", async () => {
+  const f = await guardedAccountClock(["account-a", "account-b"]);
+  const standing = () => loadPipelines()[0]!.runs[0]!.attempts.flatMap(attempt =>
+    [...attempt.accountHolds ?? [], ...attempt.suspension?.hold ? [attempt.suspension.hold] : []]).map(hold => hold.accountId);
+  await tickPipelines([], f.h.ports);
+  await tickPipelines([], f.h.ports);
+  expect(f.attempts().map(attempt => attempt.accountId)).toEqual(["account-a", "account-b"]);
+  expect(standing()).toEqual(["account-a"]);
+
+  // B runs with no guard and no suspension while A's fresh reading shows headroom.
+  f.advance(60_000);
+  f.read("account-a", 40); f.read("account-b", 20);
+  await tickPipelines([], f.h.ports);
+  expect(f.attempts()[1]!.suspension).toBeUndefined();
+  expect(standing()).toEqual([]);
+
+  // A's reading ages into "unknown", then B runs out: A takes the stage once.
+  f.advance(6 * 60_000);
+  f.read("account-b", 100);
+  for (let tick = 0; tick < 20; tick++) { await tickPipelines([], f.h.ports); f.advance(120_000); }
+  expect(f.attempts().map(attempt => attempt.accountId)).toEqual(["account-a", "account-b", "account-a"]);
+  expect(f.attempts()[2]).toMatchObject({ state: "running", launchId: expect.any(String), restartContext: { previousAttempt: 2 } });
+});
+
 test("a never-launched attempt that launches again on another account keeps its own hold", async () => {
   const f = await guardedAccountClock(["account-a", "account-b"]);
   const laterReset = f.resetsAt + 2 * 3_600;

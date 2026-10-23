@@ -7543,6 +7543,11 @@ function recordAccountHold(attempt: PipelineStageAttempt, blocked: string | null
   if (suspension.hold && accountHoldEnded(suspension.hold, quota, ports)) delete suspension.hold;
 }
 
+function recordedAccountHoldCount(pipeline: Pipeline, stage: PipelineStage): number {
+  return (runFor(pipeline, stage.id)?.attempts ?? []).reduce((count, attempt) => count + (attempt.accountHolds?.length ?? 0)
+    + (attempt.suspension?.reason === "account" && attempt.suspension.hold ? 1 : 0), 0);
+}
+
 /** Every hold in this stage's attempts that still stands. A replacement
     inherits its predecessors' holds, so it never returns to an account an
     earlier attempt left at its confirmed limit before that account's reset.
@@ -7640,7 +7645,16 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   let blocked: string | null;
   try { blocked = stageAccountBlocked(pipeline, attempt, ports); }
   catch { return !!attempt.suspension; } // An unreadable binding cannot authorize a successor.
-  if (!attempt.suspension && !blocked) return false;
+  if (!attempt.suspension && !blocked) {
+    // Headroom seen while a healthy replacement runs ends its predecessors'
+    // holds now; a later tick may see only that reading aged (issue #3158).
+    const recorded = recordedAccountHoldCount(pipeline, stage);
+    if (recorded) {
+      standingAccountHolds(pipeline, stage, ports);
+      if (recordedAccountHoldCount(pipeline, stage) < recorded) await persist();
+    }
+    return false;
+  }
   attempt.suspension ??= { reason: "account", detail: blocked!, requestedAt: ports.now() };
   recordAccountHold(attempt, blocked, ports);
   if (!await stopSuspendedStage(pipeline, stage, attempt, ports, persist)) return true;
