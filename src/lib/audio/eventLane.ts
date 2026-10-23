@@ -1,3 +1,4 @@
+import type { CueCaption } from "./captions";
 import { eventRank } from "./cues";
 import { SOUNDS, type EventSoundId } from "./synth";
 
@@ -28,8 +29,12 @@ export interface LaneVoice {
 
 export interface EventLaneOptions {
   timers: LaneTimers;
-  /** Start one sound now for `batch` coalesced events; null when it cannot play. */
-  start(sound: EventSoundId, batch: number): LaneVoice | null;
+  /**
+   * Start one sound now for `batch` coalesced events; null when it cannot play.
+   * `captions` are the joined requests' own, in arrival order (empty when none
+   * carried one); null for a cut sound's replay, which already showed its toast.
+   */
+  start(sound: EventSoundId, batch: number, captions: CueCaption[] | null): LaneVoice | null;
   /** How long a sound holds the lane, ms. */
   lengthMs?: (sound: EventSoundId) => number;
 }
@@ -67,6 +72,8 @@ export interface LaneRequest {
   sound: EventSoundId;
   obligation?: string;
   pipeline?: string;
+  /** What the sound announces, for its caption; it never changes how the sound plays. */
+  caption?: CueCaption;
 }
 
 export type LaneOutcome = "accepted" | "obligation-heard";
@@ -81,14 +88,16 @@ export interface EventLane {
   reset(): void;
 }
 
-interface Batch { n: number; pipelines: string[] }
+/** One element per joined request, so every place that changes `n` changes this the same way. */
+interface Joined { pipeline: string | null; caption: CueCaption | null }
+interface Batch { n: number; pipelines: string[]; captions: Joined[] }
 interface ClassState {
   open: Batch | null;
   waiting: Batch | null;
   lastPlay: number;
   minute: number[];
 }
-interface Queued { sound: EventSoundId; n: number; since: number; replay: boolean }
+interface Queued { sound: EventSoundId; n: number; since: number; replay: boolean; captions: CueCaption[] | null }
 
 export function createEventLane(options: EventLaneOptions): EventLane {
   const { timers } = options;
@@ -136,6 +145,7 @@ export function createEventLane(options: EventLaneOptions): EventLane {
       const kept = batch.pipelines.filter((pipeline) => !landedRecently(pipeline, now));
       batch.n -= batch.pipelines.length - kept.length;
       batch.pipelines = kept;
+      batch.captions = batch.captions.filter((joined) => joined.pipeline === null || kept.includes(joined.pipeline));
       if (batch.n <= 0) return;
     }
 
@@ -146,6 +156,7 @@ export function createEventLane(options: EventLaneOptions): EventLane {
         if (state.waiting) {
           state.waiting.n += batch.n;
           state.waiting.pipelines.push(...batch.pipelines);
+          state.waiting.captions.push(...batch.captions);
         } else {
           state.waiting = batch;
           later(state.minute[0]! + 60_000 - now, () => release(sound, "waiting"));
@@ -156,7 +167,14 @@ export function createEventLane(options: EventLaneOptions): EventLane {
     }
     state.lastPlay = now;
     if (sound === "landed") for (const pipeline of batch.pipelines) landings.set(pipeline, now);
-    arrive({ sound, n: batch.n, since: now, replay: false });
+    arrive({ sound, n: batch.n, since: now, replay: false, captions: captionsOf(batch.captions) });
+  }
+
+  /** The captions a released batch carries, in arrival order. */
+  function captionsOf(joined: Joined[]): CueCaption[] {
+    const captions: CueCaption[] = [];
+    for (const entry of joined) if (entry.caption) captions.push(entry.caption);
+    return captions;
   }
 
   /** A landing that left the gate within 10 s, or is waiting in it now. */
@@ -174,6 +192,7 @@ export function createEventLane(options: EventLaneOptions): EventLane {
       if (!batch) continue;
       const before = batch.pipelines.length;
       batch.pipelines = batch.pipelines.filter((id) => id !== pipeline);
+      batch.captions = batch.captions.filter((joined) => joined.pipeline !== pipeline);
       batch.n -= before - batch.pipelines.length;
     }
   }
@@ -185,7 +204,7 @@ export function createEventLane(options: EventLaneOptions): EventLane {
   let resumeTimer: unknown = null;
 
   function begin(item: Queued): void {
-    const voice = options.start(item.sound, item.n);
+    const voice = options.start(item.sound, item.n, item.captions);
     if (!voice) return;
     const end = timers.schedule(() => {
       pending.delete(end);
@@ -198,8 +217,11 @@ export function createEventLane(options: EventLaneOptions): EventLane {
 
   function enqueue(item: Queued): void {
     const queued = queue.get(item.sound);
-    if (queued) queued.n += item.n;
-    else queue.set(item.sound, { ...item });
+    if (queued) {
+      queued.n += item.n;
+      /* A replay carries null; it only stays null while nothing with a caption joins it. */
+      if (item.captions || queued.captions) queued.captions = [...(queued.captions ?? []), ...(item.captions ?? [])];
+    } else queue.set(item.sound, { ...item });
   }
 
   function arrive(item: Queued): void {
@@ -211,7 +233,7 @@ export function createEventLane(options: EventLaneOptions): EventLane {
       timers.cancel(cut.end);
       pending.delete(cut.end);
       /* A cut sound replays once in full afterwards; a cut step is gone. */
-      if (cut.sound !== "step" && !cut.replay) enqueue({ sound: cut.sound, n: cut.n, since: timers.now(), replay: true });
+      if (cut.sound !== "step" && !cut.replay) enqueue({ sound: cut.sound, n: cut.n, since: timers.now(), replay: true, captions: null });
       begin(item);
       if (!playing) scheduleResume();
       return;
@@ -245,7 +267,7 @@ export function createEventLane(options: EventLaneOptions): EventLane {
   }
 
   return {
-    request({ sound, obligation, pipeline }) {
+    request({ sound, obligation, pipeline, caption }) {
       const now = timers.now();
       if (obligation) {
         const heard = obligationHeard.get(obligation);
@@ -264,8 +286,9 @@ export function createEventLane(options: EventLaneOptions): EventLane {
       const join = (batch: Batch) => {
         batch.n += 1;
         if (pipeline) batch.pipelines.push(pipeline);
+        batch.captions.push({ pipeline: pipeline ?? null, caption: caption ?? null });
       };
-      const fresh = (): Batch => ({ n: 1, pipelines: pipeline ? [pipeline] : [] });
+      const fresh = (): Batch => ({ n: 1, pipelines: pipeline ? [pipeline] : [], captions: [{ pipeline: pipeline ?? null, caption: caption ?? null }] });
       if (state.open) {
         join(state.open);
       } else if (state.waiting) {
