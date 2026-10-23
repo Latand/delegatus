@@ -25,6 +25,7 @@ Object.assign(globalThis, {
   localStorage: dom.localStorage,
   Node: dom.Node,
   HTMLElement: dom.HTMLElement,
+  MutationObserver: dom.MutationObserver,
   Event: dom.Event,
   CustomEvent: dom.CustomEvent,
 });
@@ -152,7 +153,7 @@ async function mountWithDeferredReports(): Promise<HTMLElement> {
   expect(requests).toHaveLength(1);
   expect(host.querySelectorAll("[data-report-entry]")).toHaveLength(0);
   const committed = new Promise<void>((resolve, reject) => {
-    const observer = new dom.MutationObserver(() => {
+    const observer = new MutationObserver(() => {
       if (host.querySelectorAll("[data-report-entry]").length !== expectedRows) return;
       clearTimeout(timeout);
       observer.disconnect();
