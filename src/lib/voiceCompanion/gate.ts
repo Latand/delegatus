@@ -151,6 +151,18 @@ export function explicitDelegationRequest(utterance: string): GateVerdict {
   return { admit: true };
 }
 
+/* A spoken yes to a confirmation that waits: "yes", "go ahead", "send it", "так", "давай", "відправляй". */
+const AGREEMENT = /(?<![\p{L}'])(?:yes|yeah|yep|yup|sure|ok|okay|agreed|confirm(?:ed)?|go ahead|do it|send it|please do|так|ага|авжеж|звісно|звичайно|гаразд|добре|давай|згоден|згодна|підтверджую|відправляй|надсилай|надішли|відправ|да|конечно|хорошо|согласен|подтверждаю|отправляй|отправь)(?![\p{L}'])/u;
+
+/** Whether the operator's own words agree to send a request that waits for them: a yes, with nothing in the
+ * same input that declines, takes it back or makes it conditional. Read where text the operator did not speak
+ * may have asked the backend to answer for them (design docs/design/voice-extensible-tools.md §3.6). */
+export function spokenAgreement(utterance: string): boolean {
+  const all = gateSentences(utterance);
+  return all.some((sentence) => AGREEMENT.test(sentence))
+    && !all.some((sentence) => NEGATION.test(sentence) || RETRACTION.test(sentence) || CONDITION.test(sentence));
+}
+
 /**
  * Whether a delegation may be raised, and whether a confirmation that waits
  * may still stand. Raised: its source is the operator's last input in this

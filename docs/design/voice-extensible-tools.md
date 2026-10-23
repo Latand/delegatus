@@ -1212,15 +1212,24 @@ of its six rendered sources; screenshots remain in the capture scratch.
 | A tool that acts counts as egress after a private read (`private_data_boundary`); the backend reads the refusal and answers | `liveSession.ts#tool` |
 | A private server's successful answer marks the call like a Telegram group read; its arguments and text stay out of the record | `liveSession.ts#tool` |
 | An ask-first server's acting tool returns `awaiting_confirmation` and runs only in a later operator turn; once an added result is in context, every acting added tool does | `liveSession.ts#tool` |
+| Once an added result is in context, a send needs the operator's own words: `request_orchestrator_delegation` needs an ask for a send, and `resolve_orchestrator_confirmation` with `send` needs a spoken yes; either is refused with `added_tool_result` and the waiting request stays waiting | `liveSession.ts#tool`, `gate.ts#spokenAgreement` |
 
 **Server-side send gate.** Instructions alone do not keep a tool result from
 causing a send. Once an added tool's result is in the backend's context (this
 delegation on the API backend, the rest of the call on Codex),
 `request_orchestrator_delegation` is refused with `added_tool_result` unless the
 operator's own words in that turn ask for a send (the same explicit-request and
-delivery-language readings the delivery claim check uses). The tests drive a
-fake model that obeys a hostile result; with the gate removed in a scratch copy
-both the API and the Codex case send.
+delivery-language readings the delivery claim check uses). A spoken answer to
+a waiting confirmation is a send too: `resolve_orchestrator_confirmation` with
+the decision `send` is refused with `added_tool_result` unless the operator's
+own words in that turn say yes ("yes", "go ahead", "send it", "так",
+"відправляй", "да") with no decline, retraction or condition beside it
+(`gate.ts#spokenAgreement`). The admission check alone would not do: it asks
+only that the answer come in a later operator turn, and never reads the words.
+The refusal sends nothing and leaves the request waiting; a spoken cancel and
+the card's buttons still answer it. The tests drive a fake model that obeys a
+hostile result; with either gate removed in a scratch copy both the API and the
+Codex case send.
 
 **Server-side acting gate.** In the same context, an acting added tool goes
 through the ask-first path whatever the server's switch: it returns
