@@ -169,3 +169,11 @@ access requires subscription authentication in its isolated test home. Those
 opt-in cases kept their normal skips, as did already-retired flow cases.
 Real Git commit/push probes and the non-authenticated identity/policy suites
 passed.
+
+Main advanced during verification to `800a26eb`, adding memory-cap and
+producer-repair changes in two touched files. The prospective merge was clean
+and retained both activation callbacks. In a disposable export of combined tree
+`db7ee535fe1851bac1b1fcf8ebc31ad38872d94f`, the same TypeScript command exited 0
+and the complete `src/lib/pipelines/publicationRecovery.test.ts` passed all 113
+tests with 2,238 assertions. Both commands used `gate-remote` with canonical
+isolated roots. The assigned branch was left unmerged.
