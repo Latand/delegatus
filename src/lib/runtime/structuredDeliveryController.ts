@@ -1591,7 +1591,10 @@ export async function bindStructuredDeliveryQueue(
   let settleSweep = 0;
   const settleHostlessSessions = async (): Promise<number> => {
     if (superseded() || !client.appendSessionFenced) return 0;
-    const registrySnapshot = registry.readOnlySnapshot();
+    /* Selection only: every row is read again by key below. A whole snapshot
+       here was one 0.3 s slice per sweep on retained history. */
+    const registrySnapshot = await registry.prepareReadOnlySnapshot(AbortSignal.timeout(30_000), { recoveryIndexes: false });
+    if (superseded()) return 0;
     const hostless = hostlessConversations(registrySnapshot);
     for (const id of settledRows.keys()) if (!hostless.has(id)) settledRows.delete(id);
     const candidates = [...hostless].filter(([, row]) => !registrations.has(row.key));
