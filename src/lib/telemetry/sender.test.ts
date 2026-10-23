@@ -315,7 +315,7 @@ test("notice acknowledgement in another process preserves a confirmed opt-out", 
   expect(disable?.exitCode, disable?.stderr.toString()).toBe(0);
   expect(childExit, childError).toBe(0);
   expect(await (await GET()).json()).toMatchObject({ enabled: false, noticeDismissed: true });
-  expect(preferences()).toEqual({ enabled: false, noticeDismissed: true });
+  expect(preferences()).toEqual({ enabled: false, noticeDismissed: true, swarmRules: false });
   expect(telemetryStatus()).toMatchObject({ enabled: false, noticeDismissed: true });
   const fixture = harness(); await sendInstallPing(fixture.ports);
   expect(fixture.requests).toHaveLength(0);

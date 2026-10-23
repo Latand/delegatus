@@ -6,7 +6,7 @@ import { useLocale } from "@/lib/i18n";
 import { telemetryNotice } from "../../../bin/telemetry-notice.mjs";
 import { SubscriptionApiSetting } from "./SubscriptionApiSetting";
 export const openTelemetrySettings = () => window.dispatchEvent(new Event("delegatus:open-settings"));
-type Status = { enabled: boolean; locked: boolean; noticeDismissed: boolean };
+type Status = { enabled: boolean; locked: boolean; noticeDismissed: boolean; swarmRules: boolean };
 /* The disclosure dialog behind «Install ping» on the header's Settings page
    contains the ping and direct subscription API consent. Shared memory and
    provider keys have their own settings rows. */
@@ -14,11 +14,12 @@ export function TelemetrySettingsHost() {
   const { t, locale } = useLocale();
   const [status, setStatus] = useState<Status | null>(null);
   const [open, setOpen] = useState(false);
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<false | "general" | "swarm">(false);
+  const swarmSetting = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const show = () => setOpen(true);
     window.addEventListener("delegatus:open-settings", show);
-    fetch("/api/telemetry").then(r => { if (!r.ok) throw new Error(); return r.json(); }).then(setStatus).catch(() => setError(true));
+    fetch("/api/telemetry").then(r => { if (!r.ok) throw new Error(); return r.json(); }).then(setStatus).catch(() => setError("general"));
     return () => window.removeEventListener("delegatus:open-settings", show);
   }, []);
   useEffect(() => {
@@ -27,6 +28,9 @@ export function TelemetrySettingsHost() {
     window.addEventListener("keydown", escape);
     return () => window.removeEventListener("keydown", escape);
   }, [open]);
+  useEffect(() => {
+    if (error === "swarm") swarmSetting.current?.scrollIntoView({ block: "nearest" });
+  }, [error]);
   /* The switch and the notice's dismissal show at once (audit B25); a refusal
      puts the stored status back with the error. One write at a time. */
   const saving = useRef(false);
@@ -40,7 +44,7 @@ export function TelemetrySettingsHost() {
       const r = await fetch("/api/telemetry", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(update) });
       if (!r.ok) throw new Error();
       setStatus(await r.json());
-    } catch { setStatus(before); setError(true); }
+    } catch { setStatus(before); setError(update.swarmRules === undefined ? "general" : "swarm"); }
     finally { saving.current = false; }
   };
   if (typeof document === "undefined") return null;
@@ -61,8 +65,15 @@ export function TelemetrySettingsHost() {
           {t("telemetry.label")}<input type="checkbox" role="switch" aria-label={t("telemetry.label")} checked={status.enabled} disabled={status.locked} onChange={e => void save({ enabled: e.target.checked })} className="h-6 w-10 shrink-0 accent-[var(--accent)]" />
         </label>}
         {status?.locked && <p className="mt-3 text-[13px] text-muted">{t("telemetry.locked")}</p>}
-        {error && <p role="alert" className="mt-3 text-sm">{t("telemetry.error")}</p>}
+        {error === "general" && <p role="alert" className="mt-3 text-sm">{t("telemetry.error")}</p>}
         <SubscriptionApiSetting />
+        <div ref={swarmSetting} data-swarm-setting="" className="mt-4 border-t border-border pt-4">
+          {status && <label className="flex min-h-11 items-center justify-between gap-4 text-sm font-semibold">
+            {t("telemetry.swarm.label")}<input type="checkbox" role="switch" aria-label={t("telemetry.swarm.label")} checked={status.swarmRules ?? false} onChange={e => void save({ swarmRules: e.target.checked })} className="h-6 w-10 shrink-0 accent-[var(--accent)]" />
+          </label>}
+          {error === "swarm" && <p role="alert" className="mt-2 text-sm">{t("telemetry.error")}</p>}
+          <p className="mt-2 text-[13px] leading-relaxed text-secondary">{t("telemetry.swarm.description")}</p>
+        </div>
       </section>
     </div>}
   </>, document.body);

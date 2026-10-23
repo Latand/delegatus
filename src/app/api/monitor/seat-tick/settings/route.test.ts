@@ -201,7 +201,7 @@ test("HTTP and seat_tick_settings report maintenance paused while wakes are off"
   const http = await written.json() as SeatTickSettingsAnswer;
   expect(http.maintenance).toMatchObject({ enabled: true, waitingOn: "wakes-off", pauseReason: "paused while wakes are off", nextRunAt: null, nextEligibleAt: null });
   const tool = await viewerMcpBindings(undefined, undefined, {
-    callerAttribution: () => ({ kind: "gateway", conversationId: null }), callerProject: () => PROJECT, authorizedSeats: () => [],
+    callerAttribution: () => ({ kind: "gateway", conversationId: null }), callerProject: () => PROJECT, authorizedSeats: () => [{ project: PROJECT, conversationId: SEAT_CONVERSATION, path: null }],
   } as never).seat_tick_settings({ clientRequestId: "fixture-paused-maintenance-read", project: PROJECT });
   expect(tool.maintenance).toMatchObject(http.maintenance);
 });
@@ -480,7 +480,7 @@ test("the answer agrees with the seat_tick_settings tool over the same record", 
   const body = await (await get(`?project=${PROJECT}`)).json() as SeatTickSettingsAnswer;
   const bindings = viewerMcpBindings(undefined, undefined, {
     callerAttribution: () => ({ kind: "gateway", conversationId: null }),
-    authorizedSeats: () => [],
+    authorizedSeats: () => [{ project: PROJECT, conversationId: SEAT_CONVERSATION, path: null }],
     callerProject: () => PROJECT,
     readTickSettings: (project: string) => readSeatTickSettings(project, settingsFile),
   } as never);
@@ -522,7 +522,7 @@ test("maintenance-only write needs no reason and exposes the same run records th
   const http = await (await get(`?project=${project}`)).json();
   expect(http.maintenance.lastRun).toMatchObject({ taskId: "fixture-card", state: "failed", failure: { kind: "no-account" } });
   const tool = await viewerMcpBindings(undefined, undefined, {
-    callerAttribution: () => ({ kind: "gateway", conversationId: null }), callerProject: () => project, authorizedSeats: () => [],
+    callerAttribution: () => ({ kind: "gateway", conversationId: null }), callerProject: () => project, authorizedSeats: () => [{ project: project, conversationId: SEAT_CONVERSATION, path: null }],
   } as never).seat_tick_settings({ clientRequestId: "fixture-maintenance-read", project, verbose: true });
   const same = { ...http.maintenance };
   delete same.nextRunAt;

@@ -30,7 +30,8 @@ export function companionOperator(req: NextRequest): NextResponse | null {
   if (req.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER)) return refused();
   // A team install answers a missing, revoked or expired member session with
   // the sign-in refusal before the page check, as its identity gate does.
-  try { companionStarter(req); } catch (error) { return companionFailure(error); }
+  try { companionStarter(req); }
+  catch (error) { return error instanceof Error && error.message === "OPERATOR_REQUIRED" ? refused() : companionFailure(error); }
   return operatorBrowserRequest(req) ? null : refused();
 }
 export async function companionBody(req: NextRequest, limit = 96_000): Promise<Record<string, unknown>> {
