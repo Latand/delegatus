@@ -1,10 +1,12 @@
 import { expect, test } from "bun:test";
 import { ensureStagePullRequest } from "./stagePullRequest";
+import { engineForgeWriteEnv } from "@/lib/git/agentForgeCredentials";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 import type { ExecPort } from "@/lib/workflows/provision";
 import { fs, os, path, realExec, engineModule, tickPipelines, loadPipelines, savePipelines, finishReported, realWorktreeLane } from "./engine.fixture";
 
 const REMOTE = "https://github.com/example/widgets.git";
+const isBodyPatch = (args: string[]) => args[0] === "api" && args[1] === "-X" && args[2] === "PATCH";
 test.each(["publisher", "conflicting"])("native stage fixtures choose their own Git identity in the %s environment", async (mode) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "stage-git-environment-"));
   try {
@@ -60,8 +62,8 @@ async function fixture(task?: string, reviewBudget = false) {
       return { code: 0, stdout: `${f.origin}\n`, stderr: "" };
     if (command === "gh") {
       // Provenance observations are independent of the delivery guarantee.
-      // Only count the controller's exact PR lookup/create awaits here.
-      if (args[1] !== "create" && args[1] !== "edit" && !args.some(arg => arg.includes("isCrossRepository")))
+      // Only count the controller's exact PR lookup/create/patch awaits here.
+      if (args[1] !== "create" && args[1] !== "edit" && !isBodyPatch(args) && !args.some(arg => arg.includes("isCrossRepository")))
         return { code: 1, stdout: "", stderr: "fixture has no observed pull request" };
       calls.push(args);
       if (race?.call === calls.length) {
@@ -85,9 +87,15 @@ async function fixture(task?: string, reviewBudget = false) {
         exists = true;
         return loseResponse ? { code: null, stdout: "", stderr: "response lost" } : { code: 0, stdout: "https://github.com/example/widgets/pull/17\n", stderr: "" };
       }
-      if (args[0] === "pr" && args[1] === "edit") {
+      if (args[0] === "pr" && args[1] === "edit")
+        return { code: 1, stdout: "", stderr: "GraphQL: Projects (classic) is being deprecated (repository.pullRequest.projectCards)" };
+      if (isBodyPatch(args)) {
+        expect(args[3]).toBe("repos/example/widgets/pulls/17");
+        expect(env).toEqual(engineForgeWriteEnv());
+        const field = args[args.indexOf("-F") + 1]!;
+        expect(field.startsWith("body=@")).toBe(true);
         if (refuse) return { code: 1, stdout: "", stderr: "forge refused" };
-        body = fs.readFileSync(args[args.indexOf("--body-file") + 1]!, "utf8");
+        body = fs.readFileSync(field.slice("body=@".length), "utf8");
         return { code: loseResponse ? null : 0, stdout: "", stderr: "" };
       }
       throw new Error(`unexpected forge call: ${args.join(" ")}`);
@@ -105,7 +113,7 @@ async function fixture(task?: string, reviewBudget = false) {
   const commit = async () => {
     await f.git(f.worktree, "commit", "--allow-empty", "-m", "stage output");
   };
-  return { ...f, calls, finish, commit, body: () => body, setExpectedBody: (body: string) => { expectedBody = body; }, setPrShape: (shape: typeof prShape) => { exists = true; prShape = shape; }, setRace: (call: number, kind: "pause" | "release") => { race = { call, kind }; }, setMissing: () => { exists = false; }, setExisting: () => { exists = true; }, setRefused: (value = true) => { refuse = value; }, setLost: () => { loseResponse = true; },
+  return { ...f, calls, finish, commit, body: () => body, setBody: (value: string) => { body = value; }, setExpectedBody: (body: string) => { expectedBody = body; }, setPrShape: (shape: typeof prShape) => { exists = true; prShape = shape; }, setRace: (call: number, kind: "pause" | "release") => { race = { call, kind }; }, setMissing: () => { exists = false; }, setExisting: () => { exists = true; }, setRefused: (value = true) => { refuse = value; }, setLost: () => { loseResponse = true; },
     link: (successor = true) => {
       const current = loadPipelines().find(lane => lane.id === f.id)!;
       current.delivery!.target.pr = 17;
@@ -145,7 +153,7 @@ for (const lost of [false, true]) test(`the final budget fix refreshes the PR he
     expect(f.body()).toContain("Last fix was not re-reviewed");
     expect(f.body().endsWith(originalBudgetBody)).toBe(true);
     expect(f.body()).toContain("supersedes earlier head, checks and review-status statements");
-    expect(f.calls.filter(args => args[1] === "edit")).toHaveLength(1);
+    expect(f.calls.filter(isBodyPatch)).toHaveLength(1);
     // Restart from the durable lane and the forge's observed body. Replaying
     // settlement must keep exactly one update and must not edit again.
     const observed = { number: 17, headRefName: p.branch, baseRefName: "main", state: "OPEN",
@@ -167,12 +175,29 @@ for (const lost of [false, true]) test(`the final budget fix refreshes the PR he
   } finally { f.close(); }
 });
 
+test("the final budget PR refresh uses REST when GraphQL Projects classic is unavailable", async () => {
+  const f = await finalBudgetFixFixture();
+  try {
+    const summary = 'Перевірено résumé: "quoted", \\backslash, $value, `code`, {owner}, {repo}, {branch}.';
+    const original = "Перевірено résumé & details.\n".repeat(1_000) + originalBudgetBody;
+    f.setBody(original);
+    const head = await f.git(f.worktree, "rev-parse", "HEAD");
+    const p = await f.finish(summary, 3);
+    expect(p.state, p.stateDetail ?? undefined).toBe("completed");
+    expect(f.body()).toBe(`## Latest pipeline result\n\nHead: \`${head}\`\n\n**Last fix was not re-reviewed: review budget spent.**\n\n`
+      + `Fix stage report (supersedes earlier head, checks and review-status statements):\n\n${summary}\n\n---\n\n${original}`);
+    expect(f.calls.filter(isBodyPatch)).toHaveLength(1);
+    expect(f.calls.some(args => args[0] === "pr" && args[1] === "edit")).toBe(false);
+    expect(f.calls.flat().some(arg => arg.includes(summary))).toBe(false);
+  } finally { f.close(); }
+});
+
 test.each(["exit", "throw", "unconfirmed"] as const)("a final budget PR body refresh failure is reported on the lane (%s)", async failure => {
   const f = await finalBudgetFixFixture();
   try {
     const exec = f.h.ports.exec;
     f.h.ports.exec = async (...input) => {
-      if (input[0] === "gh" && input[1][1] === "edit") {
+      if (input[0] === "gh" && isBodyPatch(input[1])) {
         if (failure === "throw") throw new Error("forge unavailable");
         return { code: failure === "exit" ? 1 : 0, stdout: "", stderr: "forge refused" };
       }
@@ -180,8 +205,9 @@ test.each(["exit", "throw", "unconfirmed"] as const)("a final budget PR body ref
     };
     const p = await f.finish(fixSummary, 3);
     expect(p.state).toBe("needs_decision");
-    expect(p.stateDetail).toContain("pull request body refresh");
-    expect(p.runs.find(run => run.stageId === "build")!.attempts.at(-1)!.error).toContain("pull request body refresh");
+    const error = "the delivery pull request body refresh could not be verified; the stage cannot pass without it";
+    expect(p.stateDetail).toContain(error);
+    expect(p.runs.find(run => run.stageId === "build")!.attempts.at(-1)!.error).toContain(error);
     expect(p.runs.find(run => run.stageId === "review")!.attempts).toHaveLength(1);
     expect(f.body()).toBe(originalBudgetBody);
   } finally { f.close(); }
@@ -198,7 +224,7 @@ for (const text of [
     expect(p.state).toBe("needs_decision");
     expect(p.stateDetail).toContain("privacy");
     expect(p.stateDetail).not.toContain(text.value);
-    expect(f.calls.filter(args => args[1] === "edit")).toHaveLength(0);
+    expect(f.calls.filter(isBodyPatch)).toHaveLength(0);
     expect(f.body()).toBe(originalBudgetBody);
   } finally { f.close(); }
 });
@@ -213,7 +239,7 @@ test("the final budget PR refresh keeps the repository's publication gate", asyn
     const p = await f.finish(fixSummary, 3);
     expect(p.state).toBe("needs_decision");
     expect(p.stateDetail).toContain("repository publication privacy gate");
-    expect(f.calls.filter(args => args[1] === "edit")).toHaveLength(0);
+    expect(f.calls.filter(isBodyPatch)).toHaveLength(0);
     expect(f.body()).toBe(originalBudgetBody);
   } finally { f.close(); }
 });
@@ -233,7 +259,7 @@ test.each(["body", "title"] as const)("the final budget refresh refuses an unrea
     const p = await f.finish(fixSummary, 3);
     expect(p.state).toBe("needs_decision");
     expect(p.stateDetail).toContain("body refresh could not read its existing text");
-    expect(f.calls.filter(args => args[1] === "edit")).toHaveLength(0);
+    expect(f.calls.filter(isBodyPatch)).toHaveLength(0);
     expect(f.body()).toBe(originalBudgetBody);
   } finally { f.close(); }
 });
@@ -249,7 +275,7 @@ for (const kind of ["pause", "release"] as const) for (const at of ["read", "edi
         if (input[0] === "gh") {
           const operation = input[1][1];
           if (operation === "view") reads++;
-          if ((at === "read" && reads === 1) || (at === "edit" && operation === "edit") || (at === "verify" && reads === 2)) {
+          if ((at === "read" && reads === 1) || (at === "edit" && isBodyPatch(input[1])) || (at === "verify" && reads === 2)) {
             const p = loadPipelines().find(lane => lane.id === f.id)!;
             if (kind === "pause") { p.state = "paused"; p.pausedState = "running"; }
             else p.delivery!.active = false;
