@@ -1,15 +1,16 @@
 "use client";
 import { Fragment, useCallback, useEffect, useId, useRef, useState } from "react";
 import { useLocale, type MessageKey } from "@/lib/i18n";
-import type { VoiceToolsView } from "@/lib/voiceTools/contracts";
+import type { UncontainedConsent, VoiceToolsView } from "@/lib/voiceTools/contracts";
 
 type Server = VoiceToolsView["servers"][string];
-type Body = { action: "dry-run" | "approve" | "reject" | "disable" | "remove"; name: string; digest: string }
+type Body = { action: "dry-run"; name: string; digest: string; confirmUncontained?: UncontainedConsent }
+  | { action: "approve" | "reject" | "disable" | "remove"; name: string; digest: string }
   | { action: "configure"; name: string; digest: string; tools?: Server["tools"]; askBeforeActing?: boolean; reapprove?: true }
   | { action: "secrets"; secrets: Record<string, { value?: string; destinations: string[] }> };
 type Control = "secrets" | "dry-run" | "approve" | "reject" | "disable" | "remove" | "ask" | "tools";
 
-const DRY_RUN_CODES = ["START_FAILED", "PROTOCOL_ERROR", "TIMEOUT", "CATALOG_BOUNDS", "SECRET_ECHO", "SECRET_DESTINATION", "MISSING_SECRET", "ENTRY_CHANGED", "BUSY", "CANCELLED"];
+const DRY_RUN_CODES = ["CONTAINMENT_REQUIRED", "START_FAILED", "PROTOCOL_ERROR", "TIMEOUT", "CATALOG_BOUNDS", "SECRET_ECHO", "SECRET_DESTINATION", "MISSING_SECRET", "ENTRY_CHANGED", "BUSY", "CANCELLED"];
 const REFUSALS = ["SECRET_DESTINATION", "STALE_APPROVAL", "DRY_RUN_REQUIRED", "MISSING_SECRET", "ENTRY_CHANGED", "SELECTION_BOUNDS", "CATALOG_BOUNDS", "OPERATOR_REQUIRED", "SERVER_NOT_FOUND", "TIMEOUT", "BUSY"];
 /* Waiting servers first: they are what the operator opened this section for. */
 const ORDER: Server["state"][] = ["pending", "changed", "enabled", "disabled", "rejected"];
@@ -121,13 +122,14 @@ function ServerRow({ name, server, when, busy, writing, refusal, write }: {
   write(control: Control, body: Body, optimistic?: (server: Server) => Server): Promise<boolean>;
 }) {
   const { t } = useLocale();
-  const ids = { ask: useId(), askHint: useId(), dryRunHint: useId(), tools: useId() };
+  const ids = { ask: useId(), askHint: useId(), dryRunHint: useId(), uncontained: useId(), tools: useId() };
   /* Which references hold typed text. The values stay in the fields, as «Keys» keeps them, and are read once on Save. */
   const [typed, setTyped] = useState<ReadonlySet<string>>(new Set());
   const digest = server.digest;
   const reason = (control: Control) => refusal?.control === control
     ? <p role="alert" data-voice-tools-refused={refusal.code} className="mt-1.5 text-[13px] text-danger">{t(refusalKey(refusal.code, refusal.control))}</p> : null;
   const dryRun = server.lastDryRun;
+  const needsConfirmation = dryRun?.code === "CONTAINMENT_REQUIRED" && dryRun.runId && dryRun.containmentReason;
   const passed = dryRun?.code === "OK" && server.catalog !== null;
   const blockedBySecrets = server.missingSecrets.length > 0;
   const transport = server.transport;
@@ -257,6 +259,14 @@ function ServerRow({ name, server, when, busy, writing, refusal, write }: {
         ? <button type="button" data-voice-tool-action="reject" disabled={busy} className={BUTTON} onClick={() => void write("reject", { action: "reject", name, digest })}>{t("voiceCompanion.tools.action.reject")}</button>
         : <button type="button" data-voice-tool-action="remove" disabled={busy} className={BUTTON} onClick={() => void write("remove", { action: "remove", name, digest })}>{t("voiceCompanion.tools.action.remove")}</button>}
     </div>
+    {state !== "enabled" && transport.type === "stdio" && needsConfirmation ? <div role="alert" data-voice-tool-uncontained="" className="mt-2 rounded-lg border border-warning p-3 text-[13px] leading-snug text-primary">
+      <p data-voice-tool-platform="">{t(`voiceCompanion.tools.containment.${needsConfirmation}` as MessageKey)}</p>
+      <p id={ids.uncontained} className="mt-1.5 font-semibold">{t("voiceCompanion.tools.uncontained.warning")}</p>
+      <p className="mt-1.5 text-muted">{t("voiceCompanion.tools.uncontained.once")}</p>
+      <button type="button" data-voice-tool-action="confirm-uncontained" disabled={busy || blockedBySecrets} aria-describedby={ids.uncontained} className={`${PRIMARY} mt-2`}
+        onClick={() => void write("dry-run", { action: "dry-run", name, digest, confirmUncontained: { reason: needsConfirmation, runId: dryRun!.runId! } })}>{t("voiceCompanion.tools.uncontained.confirm")}</button>
+    </div> : null}
+    {dryRun?.confirmation ? <p data-voice-tool-confirmation="" className="mt-1.5 text-[12px] leading-snug text-muted">{t("voiceCompanion.tools.uncontained.record", { time: when(dryRun.confirmation.at), tool: dryRun.confirmation.tool })}</p> : null}
     {state !== "enabled" && transport.type === "stdio" ? <p id={ids.dryRunHint} data-voice-tool-dry-run-hint="" className="mt-1.5 text-[12px] leading-snug text-muted">{t("voiceCompanion.tools.dryRunHint")}</p> : null}
     {reason("dry-run")}{reason("approve")}{reason("reject")}{reason("disable")}{reason("remove")}
   </li>;

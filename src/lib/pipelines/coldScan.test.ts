@@ -90,14 +90,13 @@ test("incomplete derivation is deferred and a later complete generation resumes 
   expect(scans).toBe(2);
 });
 
-test("a failed scan unrelated to incomplete derivation remains a controller failure", async () => {
+test("a failed cold generation defers the controller while retaining its diagnostic", async () => {
   resetFilesRouteCacheForTests();
   setFileCatalogMembershipProbeForTests(async () => null);
   setFileScanRunnerForTests(async () => { throw new Error("fixture scanner unavailable"); });
-  await controllerFileScan();
-  await new Promise<void>((resolve) => setTimeout(resolve, 20));
-  await expect(controllerFileScan()).rejects.toThrow("fixture scanner unavailable");
-  await new Promise<void>((resolve) => setTimeout(resolve, 20));
+  await expect(completedFileScan()).rejects.toThrow("fixture scanner unavailable");
+  expect(await controllerFileScan()).toEqual({ files: [], complete: false });
+  await expect(completedFileScan({ wait: false })).rejects.toThrow("fixture scanner unavailable");
 });
 
 test("a cancelled cold-scan reader does not poison ticks or retryable MCP admission during replacement", async () => {

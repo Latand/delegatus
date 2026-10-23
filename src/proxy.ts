@@ -6,6 +6,7 @@ import { isTeamAuthPage, teamGate, teamPerimeter } from "@/lib/team/gate";
 import { statePath } from "@/lib/configDir";
 import { activeRestartGate } from "@/lib/selfUpdate/restartGate";
 import { rejectForeignHost } from "@/lib/sameOrigin";
+import { admitsMcpHttpAccess } from "@/lib/mcp/httpAccess";
 
 const AUTH_COOKIE = "llv_auth";
 const FRAME_PREFIX = "/api/artifact/frame/";
@@ -124,6 +125,10 @@ function perimeterCheck(request: NextRequest): PerimeterResult {
   if (tokenMatches(cookieToken, token) || bearerMatches) {
     return { response: null, bearer: bearerMatches };
   }
+
+  // Local MCP access confers no operator identity. Team and tool policy still
+  // verify the launch capability independently.
+  if (admitsMcpHttpAccess(request)) return PASS;
 
   const queryToken = request.nextUrl.searchParams.get("k");
   if (queryToken !== null && tokensMatch(queryToken, token)) {
