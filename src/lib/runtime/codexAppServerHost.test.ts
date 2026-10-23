@@ -5222,6 +5222,11 @@ describe("CodexAppServerHost", () => {
       null,
       ["initialize"],
     );
+    // Inject the exit after the host has attached its listeners and begun
+    // initialization. Repository identity lookup may yield before spawning.
+    const initializing = new Promise<void>((resolve) => {
+      server.stdin.once("data", () => resolve());
+    });
     const started = CodexAppServerHost.start({
       cwd: "/repo",
       requestTimeoutMs: 100,
@@ -5229,7 +5234,7 @@ describe("CodexAppServerHost", () => {
       eventStore: new MemoryEventStore(),
       spawnProcess: fakeSpawn(server),
     });
-    await Bun.sleep(0);
+    await initializing;
     server.stderr.write(`${"x".repeat(20 * 1024)}\nYour authentication token has been invalidated oauth_token=must-stay-private\n`);
     server.emit("close", 1, null);
 
