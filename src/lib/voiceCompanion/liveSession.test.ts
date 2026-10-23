@@ -2232,9 +2232,18 @@ test("barge-in during a backend await keeps reports held when the older request 
     await f.service.drain(s.sessionId);
     expect(spoken(f)).toMatchObject([{ delegation_id: "earlier" }]);
     expect(f.admission.reportSpeech(s.sessionId)).toMatchObject([{ handed: 0 }]);
-    f.provider.replay(s.providerId, delegationCreated("newer", 2600));
+    // The voice speaking the earlier answer is not an answer to the newer input.
+    f.provider.replay(s.providerId, said("Earlier answer.", 3000, "output"));
+    await f.service.drain(s.sessionId);
+    await f.service.events(s.sessionId, 0);
+    expect(spoken(f)).toMatchObject([{ delegation_id: "earlier" }]);
+    expect(f.admission.reportSpeech(s.sessionId)).toMatchObject([{ handed: 0 }]);
+    f.provider.replay(s.providerId, delegationCreated("newer", 3600));
     await f.service.drain(s.sessionId);
     expect(spoken(f)).toMatchObject([{ delegation_id: "earlier" }, { delegation_id: "newer" }, { delegation_id: null, content: expect.stringContaining("HELD_REPORT") }]);
+    expect(spoken(f)).toHaveLength(3);
+    await f.service.events(s.sessionId, 0);
+    expect(spoken(f)).toHaveLength(3);
   } finally { release(); await f.service.drain(s.sessionId); await f.service.close(s.sessionId); }
 });
 

@@ -72,6 +72,8 @@ interface ActiveSession {
    * a direct voice answer from output that preceded the operator's words. */
   inputGeneration: number;
   inputPending?: { generation: number; endMs: number; at: number };
+  /** An answer to an earlier request, appended after newer operator input: its spoken transcript is not an answer to that input. */
+  supersededAnswer?: { itemId?: string };
   /** Timeline end of input already handed to a delegation or answered: a later fragment ending by it repairs those words. */
   inputHandledMs: number;
   abort: AbortController;
@@ -436,14 +438,16 @@ export class CompanionLiveSessions {
       if (event.turnId === active.runningCodexTurnId) active.runningCodexTurnId = undefined;
     } else if (event.type === "session.input_transcript.delta" || event.type === "session.output_transcript.delta") {
       if (typeof event.delta === "string" && typeof event.start_ms === "number" && typeof event.end_ms === "number") {
-        if (event.delta.trim() && Number.isFinite(event.start_ms) && Number.isFinite(event.end_ms) && event.start_ms >= 0 && event.end_ms >= event.start_ms) {
-          if (event.type === "session.input_transcript.delta") {
-            if (event.end_ms > active.inputHandledMs)
-              active.inputPending = { generation: ++active.inputGeneration, endMs: Math.max(event.end_ms, active.inputPending?.endMs ?? 0), at: this.now() };
-          } else if (!active.backend.size && active.inputPending && event.start_ms >= active.inputPending.endMs) this.inputHandled(active);
-        }
-        if (event.type === "session.output_transcript.delta" && event.delta.trim() && active.lastHandoff) active.lastHandoff.replied = true;
-        this.transcript(active, active.transcript.fragment(event.type === "session.input_transcript.delta" ? "operator" : "companion", event.delta, event.start_ms, event.end_ms));
+        const timed = !!event.delta.trim() && Number.isFinite(event.start_ms) && Number.isFinite(event.end_ms) && event.start_ms >= 0 && event.end_ms >= event.start_ms;
+        const input = event.type === "session.input_transcript.delta";
+        if (timed && input && event.end_ms > active.inputHandledMs)
+          active.inputPending = { generation: ++active.inputGeneration, endMs: Math.max(event.end_ms, active.inputPending?.endMs ?? 0), at: this.now() };
+        if (!input && event.delta.trim() && active.lastHandoff) active.lastHandoff.replied = true;
+        const snapshots = active.transcript.fragment(input ? "operator" : "companion", event.delta, event.start_ms, event.end_ms);
+        // The voice's own words answer pending input only when no backend work is in flight and they are not a superseded answer's speech.
+        const answers = timed && !input && this.answersInput(active, snapshots.findLast(row => row.speaker === "companion" && !row.final)?.itemId);
+        if (answers && !active.backend.size && active.inputPending && event.start_ms >= active.inputPending.endMs) this.inputHandled(active);
+        this.transcript(active, snapshots);
       }
     } else if (active.codex && (event.type === "session.input_transcript.done" || event.type === "session.output_transcript.done")) {
       if (typeof event.offset_ms === "number") this.transcript(active, active.transcript.seal(event.type === "session.input_transcript.done" ? "operator" : "companion", event.offset_ms));
@@ -781,10 +785,23 @@ export class CompanionLiveSessions {
 
   /** Speakable context for Live, tied to its delegation. */
   private say(active: ActiveSession, delegationId: string | null, text: string, inputGeneration?: number): void {
-    if (this.append(active, delegationId, speakable(withoutLocalPaths(withoutCredentials(text, active.secrets))))
-      && inputGeneration !== undefined && inputGeneration === active.inputPending?.generation) this.inputHandled(active);
+    if (!this.append(active, delegationId, speakable(withoutLocalPaths(withoutCredentials(text, active.secrets)))) || inputGeneration === undefined || !active.inputPending) return;
+    if (inputGeneration === active.inputPending.generation) this.inputHandled(active);
+    else active.supersededAnswer = {};
+  }
+  /** Whether the voice item being spoken can answer the operator's pending input. The first item after a superseded
+   * answer was appended is that answer's own speech and releases nothing. */
+  private answersInput(active: ActiveSession, itemId: string | undefined): boolean {
+    const superseded = active.supersededAnswer;
+    if (!superseded) return true;
+    if (itemId === undefined) return false;
+    superseded.itemId ??= itemId;
+    if (superseded.itemId === itemId) return false;
+    active.supersededAnswer = undefined;
+    return true;
   }
   private inputHandled(active: ActiveSession): void {
+    active.supersededAnswer = undefined;
     active.inputHandledMs = Math.max(active.inputHandledMs, active.inputPending?.endMs ?? 0);
     active.inputPending = undefined;
   }

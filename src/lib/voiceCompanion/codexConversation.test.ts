@@ -27,14 +27,14 @@ const handoff = (id: string, text: string) => note("thread/realtime/itemAdded", 
 const turn = (id: string) => note("turn/started", { turn: { id, rootTurnId: id, items: [], itemsView: "notLoaded", status: "inProgress", error: null, startedAt: 1, completedAt: null, durationMs: null } });
 const tool = (id: string, turnId: string, name: string, args: Record<string, unknown>) => ({ id, ...note("item/tool/call", { turnId, callId: id, namespace: null, tool: name, arguments: args }) });
 
-async function fixture(credentials: string[] = [], prototype?: import("@/lib/tasks/types").BoardTask) {
+async function fixture(credentials: string[] = [], prototype?: import("@/lib/tasks/types").BoardTask, now?: () => number) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-conversation-")); roots.push(root);
   process.env.LLV_STATE_DIR = path.join(root, "state");
   const binary = path.join(root, "codex");
   fs.writeFileSync(binary, `#!/bin/sh\nexec '${process.execPath}' '${path.join(import.meta.dir, "codexProvider.fixture.mjs")}' "$@"\n`, { mode: 0o700 });
   fs.writeFileSync(path.join(root, "sdp"), "ready");
   const provider = new CodexLiveProvider({ accounts: () => [{ id: "account-a", kind: "managed", authPresent: true, home: root }], observations: () => [], bindings: () => [], recordObservation: () => {},
-    environment: { ...process.env, LLV_CODEX_BINARY: binary, VOICE_STUB_ROOT: root, VOICE_STUB_MODE: "replay" } });
+    environment: { ...process.env, LLV_CODEX_BINARY: binary, VOICE_STUB_ROOT: root, VOICE_STUB_MODE: "replay" }, ...(now ? { now } : {}) });
   const storage = new CompanionStorage(); storage.updateSettings({ enabled: true, monthlyCapUsd: 0 });
   storage.providerKey = () => { throw new Error("subscription read an API credential"); };
   storage.credentials = () => credentials;
@@ -43,7 +43,7 @@ async function fixture(credentials: string[] = [], prototype?: import("@/lib/tas
   const admission = new CompanionAdmission(storage, { recipient: project => ({ project, conversationId: `conversation_${project}`, seatEpoch: 1, engine: "codex" }),
     send: async binding => { deliveries.push(binding); return { status: "queued", operationId: "fixture-operation" }; }, reports: project => reports.filter(row => row.project === project) });
   const reads = fixtureBoardReads({ tasks: () => [prototype ?? { id: "task_fixture", project: "fixture", text: "Review plan", status: "inbox" }], pipelines: () => [], activity: async () => [], messages: async () => [] });
-  const service = new CompanionLiveSessions(storage, admission, reads, provider, { timers: false, closeTimeoutMs: 100 });
+  const service = new CompanionLiveSessions(storage, admission, reads, provider, { timers: false, closeTimeoutMs: 100, ...(now ? { now } : {}) });
   const session = await service.start({ project: "fixture", locale: "en", sdp: "v=0" });
   const wire = () => fs.readFileSync(path.join(root, "wire"), "utf8").trim().split("\n").map(row => JSON.parse(row));
   const replay = (...rows: unknown[]) => fs.appendFileSync(path.join(root, "replay"), rows.map(row => JSON.stringify(row)).join("\n") + "\n");
@@ -173,29 +173,36 @@ test("reports wait through a backing turn and its later voice answer, and close 
 });
 
 test("a report filed while the operator dictates waits for the voice's answer, then is voiced once", async () => {
-  const f = await fixture();
+  // Provider offsets come from this clock, so each phase sits at a stated point on the call's timeline.
+  let at = Date.parse("2026-10-11T00:00:00Z");
+  const f = await fixture([], undefined, () => at);
+  const appended = () => f.wire().filter(row => row.method === "thread/realtime/appendSpeech");
+  const owed = () => f.admission.reportSpeech(f.session.sessionId);
   try {
+    at += 100;
     f.replay(delta("user", "What tasks are"));
     await until(() => f.admission.session(f.session.sessionId).inputs.length > 0);
     await f.service.drain(f.session.sessionId);
     f.reports.push({ id: "during-dictation", seq: 1, project: "fixture", at: "2026-10-11T00:00:00Z", class: "completed", body: "Held report.",
       origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
     await f.service.events(f.session.sessionId, 0);
-    await Bun.sleep(50);
-    expect(f.wire().filter(row => row.method === "thread/realtime/appendSpeech")).toHaveLength(0);
-    expect(f.admission.reportSpeech(f.session.sessionId)).toMatchObject([{ reportId: "during-dictation", handed: 0 }]);
+    // The receipt is written in the same turn as the hand-over, so handed 0 proves the session held it back.
+    expect(owed()).toMatchObject([{ reportId: "during-dictation", handed: 0 }]);
+    at += 100;
     f.replay(delta("user", " open?"), done("user", "What tasks are open?"));
     await until(() => f.admission.session(f.session.sessionId).inputs.some(row => row.final));
     await f.service.events(f.session.sessionId, 0);
-    await Bun.sleep(50);
-    expect(f.wire().filter(row => row.method === "thread/realtime/appendSpeech")).toHaveLength(0);
-    await Bun.sleep(5);
+    expect(owed()).toMatchObject([{ reportId: "during-dictation", handed: 0 }]);
+    at += 100;
     f.replay(delta("assistant", "Nothing is open."), done("assistant", "Nothing is open."));
-    await until(() => f.wire().filter(row => row.method === "thread/realtime/appendSpeech").length === 1);
-    expect(f.wire().find(row => row.method === "thread/realtime/appendSpeech").params.text).toContain("Held report.");
+    await until(() => appended().length === 1);
+    expect(appended()[0]!.params.text).toContain("Held report.");
     await f.service.events(f.session.sessionId, 0);
-    await Bun.sleep(50);
-    expect(f.wire().filter(row => row.method === "thread/realtime/appendSpeech")).toHaveLength(1);
+    expect(owed()).toEqual([]);
+    // A context write goes through the provider's ordered writer: once it is on the wire, every earlier write is.
+    await f.service.context(f.session.sessionId, "second");
+    await until(() => f.wire().some(row => row.method === "thread/realtime/appendText"));
+    expect(appended()).toHaveLength(1);
   } finally { await f.close(); }
 }, 15_000);
 
