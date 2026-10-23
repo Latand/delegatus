@@ -4,7 +4,8 @@
  * Evidence is retained on failure. Restore uses the recorded commit, never a moving branch.
  * Recovery after interruption: fetch checkout.bundle HEAD into the repository, then
  * git worktree add --detach <checkout> <manifest-commit>, then copy checkout-files
- * over the restored tree. Artifact copies stay in evidence.
+ * over the restored tree, then reapply manifest modes (including the "." root)
+ * after copying, children before parents. Artifact copies stay in evidence.
  * The caller's stopped declaration is a precondition, not process-liveness detection.
  */
 import { execFileSync } from "node:child_process";
@@ -23,7 +24,9 @@ function inside(parent: string, child: string): boolean {
   return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
 }
 function inventory(root: string, checkout = false): Entry[] {
-  const entries: Entry[] = [];
+  // Include the root in every preservation and verification comparison.
+  const entries: Entry[] = [{ name: ".", kind: "directory", mode: fs.lstatSync(root).mode & 0o7777,
+    digest: createHash("sha256").update(Buffer.alloc(0)).digest("hex") }];
   function walk(relative: string) {
     for (const name of fs.readdirSync(path.join(root, relative)).sort()) {
       if (checkout && relative === "" && name === ".git") continue;
@@ -33,7 +36,7 @@ function inventory(root: string, checkout = false): Entry[] {
       const kind = stat.isSymbolicLink() ? "symlink" : stat.isDirectory() ? "directory" : stat.isFile() ? "file" : null;
       if (!kind) throw new Error("Unsupported filesystem entry");
       const bytes = kind === "symlink" ? Buffer.from(fs.readlinkSync(filename)) : kind === "file" ? fs.readFileSync(filename) : Buffer.alloc(0);
-      entries.push({ name: entry, kind, mode: stat.mode & 0o777, digest: createHash("sha256").update(bytes).digest("hex") });
+      entries.push({ name: entry, kind, mode: stat.mode & 0o7777, digest: createHash("sha256").update(bytes).digest("hex") });
       if (kind === "directory") walk(entry);
     }
   }
@@ -46,6 +49,7 @@ function clean(checkout: string): void {
   const tracked = new Set(git(checkout, "ls-files", "-z").split("\0").filter(Boolean));
   const entries = inventory(checkout, true);
   for (const entry of entries) {
+    if (entry.name === ".") continue;
     if (entry.kind === "directory") {
       if (![...tracked].some(name => name.startsWith(`${entry.name}/`))) throw new Error("Unaccounted checkout directory");
     } else if (!tracked.has(entry.name)) throw new Error("Unaccounted checkout file");
@@ -95,6 +99,8 @@ export function proveParkRestore(options: { checkout: string; evidence: string; 
   if (fs.existsSync(checkout)) throw new Error("Worktree removal was incomplete");
   // Import from the preserved bundle even if the original branch later moves.
   git(common, "fetch", "--no-write-fetch-head", bundle, "HEAD");
+  // Keep restored bytes private until all recorded permissions are reapplied.
+  fs.mkdirSync(checkout, { mode: 0o700 });
   git(common, "worktree", "add", "--detach", checkout, commit);
   if (branch !== "HEAD") {
     if (git(common, "rev-parse", branch) !== commit) throw new Error("Branch moved; restored checkout remains detached");
@@ -102,7 +108,9 @@ export function proveParkRestore(options: { checkout: string; evidence: string; 
   }
   // Preserve working bytes even when Git has line-ending or content filters.
   fs.cpSync(preservedCheckout, checkout, { recursive: true, verbatimSymlinks: true });
-  for (const entry of before) {
+  // Copying can clear special file bits; restore modes after all writes,
+  // with each directory after its children so restrictive parents cannot block them.
+  for (const entry of [...before].reverse()) {
     if (entry.kind !== "symlink") fs.chmodSync(path.join(checkout, entry.name), entry.mode);
   }
   clean(checkout);

@@ -1,4 +1,4 @@
-import { test, expect } from "bun:test";
+import { test, expect, spyOn } from "bun:test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -20,6 +20,8 @@ function fixture(detached = false) {
   fs.writeFileSync(path.join(repo, "source"), Buffer.from([0, 255, 10, 13]));
   fs.writeFileSync(path.join(repo, ".gitignore"), "ignored\n");
   fs.writeFileSync(path.join(repo, "run"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  fs.mkdirSync(path.join(repo, "nested"));
+  fs.writeFileSync(path.join(repo, "nested", "source"), "nested bytes\n");
   fs.symlinkSync("source", path.join(repo, "link"));
   git("add", ".");
   git("-c", "user.name=Fixture", "-c", "user.email=noreply", "commit", "-m", "fixture");
@@ -49,6 +51,69 @@ for (const detached of [false, true]) test(`preserves commit, binary bytes, link
     expect(JSON.parse(fs.readFileSync(path.join(f.evidence, "manifest.json"), "utf8"))).toEqual(record);
   } finally { f.cleanup(); }
 });
+
+for (const [name, mode] of [[".", 0o700], [".", 0o2750], [".", 0o1770], ["run", 0o4755], ["run", 0o2755], ["run", 0o1755], ["nested", 0o3750]] as const) {
+  test.skipIf(process.platform === "win32")(`preserves full permissions for ${name} mode ${mode.toString(8)}`, () => {
+    const f = fixture();
+    try {
+      fs.chmodSync(path.join(f.checkout, name), mode);
+      expect(fs.statSync(path.join(f.checkout, name)).mode & 0o7777).toBe(mode);
+      const record = f.run();
+      expect(fs.statSync(path.join(f.checkout, name)).mode & 0o7777).toBe(mode);
+      expect(fs.statSync(path.join(f.evidence, "checkout-files", name)).mode & 0o7777).toBe(mode);
+      expect(record.entries.find(entry => entry.name === name)?.mode).toBe(mode);
+      expect(fs.existsSync(path.join(f.evidence, "verified.json"))).toBe(true);
+    } finally { f.cleanup(); }
+  });
+}
+
+test.skipIf(process.platform === "win32")("preserves artifact root permissions", () => {
+  const f = fixture();
+  try {
+    fs.chmodSync(f.artifact, 0o1770);
+    const record = f.run();
+    expect(fs.statSync(f.artifact).mode & 0o7777).toBe(0o1770);
+    expect(fs.statSync(path.join(f.evidence, "artifact-0")).mode & 0o7777).toBe(0o1770);
+    expect(record.artifacts[0].entries.find(entry => entry.name === ".")?.mode).toBe(0o1770);
+  } finally { f.cleanup(); }
+});
+
+for (const [name, mode] of [[".", 0o700], ["run", 0o4755]] as const) {
+  test.skipIf(process.platform === "win32")(`refuses a preserved permission mismatch for ${name} before removal`, () => {
+    const f = fixture();
+    const copy = fs.cpSync;
+    const preservation = path.join(f.evidence, "checkout-files");
+    const copySpy = spyOn(fs, "cpSync").mockImplementation((source, destination, options) => {
+      copy(source, destination, options);
+      if (destination === preservation) fs.chmodSync(path.join(preservation, name), 0o755);
+    });
+    try {
+      fs.chmodSync(path.join(f.checkout, name), mode);
+      const bytes = fs.readFileSync(path.join(f.checkout, "source"));
+      expect(() => f.run()).toThrow("Checkout preservation mismatch");
+      expect(fs.existsSync(path.join(f.checkout, ".git"))).toBe(true);
+      expect(fs.statSync(path.join(f.checkout, name)).mode & 0o7777).toBe(mode);
+      expect(fs.readFileSync(path.join(f.checkout, "source"))).toEqual(bytes);
+      expect(fs.existsSync(path.join(f.evidence, "verified.json"))).toBe(false);
+    } finally { copySpy.mockRestore(); f.cleanup(); }
+  });
+
+  test.skipIf(process.platform === "win32")(`refuses to verify a restored permission mismatch for ${name}`, () => {
+    const f = fixture();
+    const chmod = fs.chmodSync;
+    chmod(path.join(f.checkout, name), mode);
+    const chmodSpy = spyOn(fs, "chmodSync").mockImplementation((filename, requestedMode) => {
+      chmod(filename, filename === path.join(f.checkout, name) ? 0o755 : requestedMode);
+    });
+    try {
+      expect(() => f.run()).toThrow("Restored state differs from preserved state");
+      expect(fs.statSync(path.join(f.evidence, "checkout-files", name)).mode & 0o7777).toBe(mode);
+      expect(fs.existsSync(path.join(f.evidence, "checkout.bundle"))).toBe(true);
+      expect(fs.existsSync(path.join(f.evidence, "manifest.json"))).toBe(true);
+      expect(fs.existsSync(path.join(f.evidence, "verified.json"))).toBe(false);
+    } finally { chmodSpy.mockRestore(); f.cleanup(); }
+  });
+}
 
 for (const change of ["modified", "deleted", "staged", "untracked", "ignored", "empty-directory", "skip-worktree", "assume-unchanged"]) test(`refuses ${change} without removing checkout`, () => {
   const f = fixture();
@@ -83,11 +148,19 @@ test("refuses running, overlapping, primary and already preserved locations", ()
 test("removal refusal retains checkout and recovery evidence without claiming success", () => {
   const f = fixture();
   try {
+    if (process.platform !== "win32") {
+      fs.chmodSync(f.checkout, 0o700);
+      fs.chmodSync(path.join(f.checkout, "run"), 0o4755);
+    }
     f.git("worktree", "lock", f.checkout);
     expect(() => f.run()).toThrow("Git operation");
     expect(fs.existsSync(path.join(f.checkout, "source"))).toBe(true);
     expect(fs.existsSync(path.join(f.evidence, "checkout.bundle"))).toBe(true);
     expect(fs.existsSync(path.join(f.evidence, "manifest.json"))).toBe(true);
     expect(fs.existsSync(path.join(f.evidence, "verified.json"))).toBe(false);
+    if (process.platform !== "win32") {
+      expect(fs.statSync(f.checkout).mode & 0o7777).toBe(0o700);
+      expect(fs.statSync(path.join(f.checkout, "run")).mode & 0o7777).toBe(0o4755);
+    }
   } finally { f.cleanup(); }
 });
