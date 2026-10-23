@@ -1354,6 +1354,7 @@ describe("MCP tool service", () => {
     const handoffReleasePath = path.join(directory, "handoff-release");
     const reuseReadyPath = path.join(directory, "reuse-ready");
     const reuseWaitingPath = `${reuseReadyPath}-waiting`;
+    const reuseProceedPath = `${reuseReadyPath}-proceed`;
     const reuseReleasePath = path.join(directory, "reuse-release");
     const countPath = path.join(directory, "binding-count");
     const reaperResultPath = path.join(directory, "reaper-result.json");
@@ -1415,6 +1416,11 @@ describe("MCP tool service", () => {
     expect(await waitForAnyFile([reuseWaitingPath, reuseReadyPath], first)).toBe(reuseWaitingPath);
     expect(fs.existsSync(reuseReadyPath)).toBeFalse();
     fs.writeFileSync(handoffReleasePath, "release");
+    // The retiring generation finishes its own namespace cleanup before it
+    // claims, so its result proves the retired inode is free. Letting the
+    // successor retry before that leaves two generations racing one inode name.
+    expect(await waitForFile(reaperResultPath, undefined, reaper)).toBeTrue();
+    fs.writeFileSync(reuseProceedPath, "proceed");
     expect(await waitForFile(reuseReadyPath, undefined, first)).toBeTrue();
     expect(Number(fs.readFileSync(reuseReadyPath, "utf8"))).toBe(staleInode);
     fs.writeFileSync(reuseReleasePath, "release");

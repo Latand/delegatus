@@ -593,12 +593,17 @@ if (mode === "hold") {
   // An acquisition retry while the lock is free and the retired inode is still
   // pinned is a wait on the paused namespace: lock contention leaves the lock
   // present, and pauses inside namespace cleanup are not acquisition retries.
+  // The parent releases the first such wait only once the retiring generation
+  // has finished with the inode, so reuse never races that generation's own
+  // namespace cleanup; later retries are ordinary lock contention.
   const lockPath = `${process.argv[3]!}.lock`;
+  let signalled = false;
   await excludeFixturePauses(() => {
-    if (new Error().stack?.includes("waitForLockRetry")
-      && !fs.existsSync(lockPath) && fs.existsSync(process.argv[6]!) && !fs.existsSync(process.argv[7]!)) {
-      fs.writeFileSync(`${process.argv[7]!}-waiting`, "waiting");
-    }
+    if (signalled || !new Error().stack?.includes("waitForLockRetry")) return;
+    if (fs.existsSync(lockPath) || !fs.existsSync(process.argv[6]!) || fs.existsSync(process.argv[7]!)) return;
+    signalled = true;
+    fs.writeFileSync(`${process.argv[7]!}-waiting`, "waiting");
+    waitFor(`${process.argv[7]!}-proceed`);
   });
   try {
     await claimReceipt(process.argv[3]!, process.argv[4]!, process.argv[5]!);

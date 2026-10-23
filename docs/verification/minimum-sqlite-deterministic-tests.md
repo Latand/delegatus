@@ -117,6 +117,48 @@ The remaining short bounds in the selection are polling watchdogs of five
 seconds or more, bounded counts and byte limits, the excluded transcript-search
 case and the 4-second HTTP abandonment check.
 
+### Successor ordering after the namespace release
+
+The publication gate's touched-test sampler reported the namespace-handoff case
+flaky on this branch. Stressed with 16 owned CPU workers on the 16-core gate
+server, the head version failed twice in about 38 runs, in two shapes: the
+reuse-ready file missing after the successor had exited (then-current line
+1418, 933 ms), and a leftover
+`receipts.json.lock.<dev>-<inode>.recovering` artifact at the end (then-current
+line 1450, 1,080 and 1,033 ms). The base version of the case and its fixture
+failed 0 of 40 runs under the same load, so this flake was introduced here.
+
+Releasing the handoff only after the successor had taken an acquisition retry
+left three claimants racing: the retiring generation still had to finish its own
+namespace cleanup, while the successor was already retrying and could reuse the
+very inode whose artifact name that cleanup was removing.
+
+The successor now blocks once, at the first retry it takes while the lock is
+free and the retired inode is pinned, until the parent releases it
+(`src/lib/mcp/server.lockChild.ts:606`). The parent releases the handoff, waits
+for the retiring generation's own claim result — which it writes after its
+cleanup — and only then lets the successor reuse the inode
+(`src/lib/mcp/server.test.ts:1418`, `:1422`, `:1423`). Later retries stay ordinary lock
+contention, and time spent at the barrier is still excluded from the child's
+lock budget.
+
+Under the same 16 workers (one-minute load average 21.2) the case passed 40 of
+40 runs. The whole file passed 101 tests twice on the minimum SQLite library
+(28.7 s, 31.3 s) and twice on the pinned runtime, and `tsc --noEmit` passed.
+The documented red control still holds: treating the paused namespace as clear
+(`src/lib/mcp/server.ts:1547`) fails the case in both of two runs, with the
+ready file in place of the waiting file.
+
+The same gate run also reported `src/lib/agent/sqliteRegistryStore.readOnlyView.test.ts`
+flaky, once with a `Database has closed` error between tests. That did not
+reproduce in 34 loaded runs of the file on this branch (10 sequential and 24 as
+eight concurrent copies, one-minute load average 12 to 16), and the base version
+of the file was equally clean over 34 runs. The named failing case in that
+sample precedes the case this branch changed in file order, and the same file
+failed once on the unchanged base during an earlier sequence, so it is read as
+the pre-existing garbage-collection timing recorded above. The gate's verdict
+was 0 new failures.
+
 ## Verification procedure
 
 All test processes use private home, config, state and temporary roots, with Viewer control directed at a closed port. Heavy commands run through `gate-remote` and `scripts/gate-slot.sh`. SQLite 3.39.4 is built by `minimumSqliteLibrary` and selected with the workflow's preload. Scratch fault injections are restored before the next case; no scratch commit is imported.
