@@ -14,11 +14,13 @@ export function companionStarter(req: NextRequest): SessionStarter {
 }
 /** A session id or mint request id is never authority for another member's call. */
 export function companionSessionOwner(req: NextRequest, session: StoredSession): void {
-  const starter = companionStarter(req);
-  if (teamMode() === "team" || (session.startedBy && "memberId" in session.startedBy)) {
-    if (!("memberId" in starter) || !session.startedBy || !("memberId" in session.startedBy)
-      || session.startedBy.memberId !== starter.memberId) throw new Error("MEMBER_REQUIRED");
-  }
+  if (!ownsCompanionSession(companionStarter(req), session)) throw new Error("MEMBER_REQUIRED");
+}
+/** The same rule for a starter already admitted, as a list applies it to every row. */
+export function ownsCompanionSession(starter: SessionStarter, session: StoredSession): boolean {
+  if (teamMode() === "team" || (session.startedBy && "memberId" in session.startedBy))
+    return "memberId" in starter && !!session.startedBy && "memberId" in session.startedBy && session.startedBy.memberId === starter.memberId;
+  return true;
 }
 
 export function companionOperator(req: NextRequest): NextResponse | null {

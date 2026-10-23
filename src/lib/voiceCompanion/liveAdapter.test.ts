@@ -470,6 +470,10 @@ test("live and ended usage updates arrive even when no new persisted events were
     f.usage({ ...usage, callUsd: 0.41, callFinal: true, monthUsd: 0.73 });
     await f.adapter.transcript();
     expect(state.usage).toMatchObject({ callUsd: 0.41, callFinal: true, monthUsd: 0.73 });
+    /* Another retained call opened from the history keeps its usage in its own record. */
+    f.usage({ ...usage, callUsd: 3.5, callFinal: true, monthUsd: 0.73 });
+    expect(await f.adapter.transcript("earlier-call")).toMatchObject({ usage: { callUsd: 3.5 } });
+    expect(state.usage).toMatchObject({ callUsd: 0.41 });
   } finally { await f.adapter.dispose(); }
 });
 

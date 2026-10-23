@@ -1561,7 +1561,7 @@ test("Russian send-it requests reach the orchestrator once and return the actual
       if (!output) return backendResponse(`resp_${index}`, [functionCall("send-call", "request_orchestrator_delegation", { instruction: "Пока ничего не делайте с проблемами. Оператор хочет сам продолжить." })]);
       const result = JSON.parse(String(output.output));
       if (mode === "sent") expect(result).toMatchObject({ status: "sent", delivery: "queued" });
-      else expect(result.reason).toContain(mode === "no_seat" ? "no designated orchestrator" : "conversation closed");
+      else expect(result.reason).toContain(mode === "no_seat" ? "no designated orchestrator" : "conversation is closed");
       return backendResponse(`resp_${index}`, [message(result.speech)]);
     };
     const session = await service.start({ project: "fixture", locale: "uk", sdp: "v=0" });
@@ -1571,7 +1571,7 @@ test("Russian send-it requests reach the orchestrator once and return the actual
     await service.drain(session.sessionId);
     for (let poll = 0; poll < 3; poll++) await service.events(session.sessionId, 0);
     expect(sent).toBe(mode === "no_seat" ? 0 : 1);
-    expect(spoken(f).at(-1)?.content).toContain(mode === "sent" ? "Sent" : mode === "no_seat" ? "no designated orchestrator" : "conversation closed");
+    expect(spoken(f).at(-1)?.content).toContain(mode === "sent" ? "Sent" : mode === "no_seat" ? "no designated orchestrator" : "conversation is closed");
     if (mode === "refused") expect(Object.values(admission.session(session.sessionId).proposals)[0]).toMatchObject({ status: "failed", failureCode: "CONVERSATION_CLOSED" });
     await service.close(session.sessionId);
   }
