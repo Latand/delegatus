@@ -330,14 +330,16 @@ test("a failed call whose result is missing keeps its reason, so the refusal is 
   expect(host.querySelector("[data-transcript-detail]")!.textContent!.match(/project refused/g)).toHaveLength(1);
 });
 
-test("the request row's human label is set in the UI sans font, not the tool-name monospace, and does not wrap", async () => {
+test("the request row's human label is set in the UI sans font, not the tool-name monospace, and wraps whole instead of being cut", async () => {
   const { view } = await open();
   const label = view.querySelector<HTMLElement>("[data-transcript-request] .vc-call-name")!;
   expect(label.hasAttribute("data-human-label")).toBe(true);
   const real = view.querySelector<HTMLElement>('[data-tool="get_task"] .vc-call-name')!;
   expect(real.hasAttribute("data-human-label")).toBe(false);
   expect(TRANSCRIPT_CSS).toMatch(/\.vc-call-name\[data-human-label\]\s*\{[^}]*font-family:\s*inherit/);
-  expect(TRANSCRIPT_CSS).toMatch(/\.vc-call-name\[data-human-label\]\s*\{[^}]*white-space:\s*nowrap/);
+  const rule = TRANSCRIPT_CSS.match(/\.vc-call-name\[data-human-label\]\s*\{([^}]*)\}/)![1]!;
+  expect(rule).toMatch(/white-space:\s*normal/);
+  expect(rule).not.toMatch(/text-overflow|overflow:\s*hidden|nowrap/);
 });
 
 
@@ -488,4 +490,127 @@ test("a Codex call's footer shows its length and the account's plan window, with
       expect(meter().getAttribute("aria-valuenow")).toBe("0");
     }
   } finally { await act(async () => setLocale("en")); }
+});
+
+test("after a call the owner picks any retained call, and an opened request says in their language why it was not sent or delivered and links its orchestrator", async () => {
+  const { setLocale } = await import("@/lib/i18n");
+  const { translate } = await import("@/lib/i18n/core");
+  const { delegationReason } = await import("@/lib/voiceCompanion/delegationOutcome");
+  const { sampleCallHistory } = await import("./transcriptSample.fixture");
+  for (const locale of ["en", "uk"] as const) {
+    await act(async () => setLocale(locale));
+    const { calls, records } = sampleCallHistory(locale);
+    const chosen: string[] = [];
+    let closed = 0;
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    mounted = { root, host };
+    const show = async (sessionId: string) => act(async () => root.render(<CompanionTranscript record={records[sessionId]!} calls={calls} current={sessionId}
+      onChoose={(id) => chosen.push(id)} left={0} top={0} width={360} height={560} onClose={() => { closed += 1; }} />));
+    await show(calls[0]!.sessionId);
+    const picker = host.querySelector<HTMLSelectElement>("select[data-transcript-calls]")!;
+    expect(picker.getAttribute("aria-label")).toBe(locale === "uk" ? "Розмова" : "Call");
+    expect([...picker.options].map((option) => option.value)).toEqual(calls.map((call) => call.sessionId));
+    expect(picker.value).toBe(calls[0]!.sessionId);
+    /* Each option names when, where and how much the call did. */
+    const labels = [...picker.options].map((option) => option.textContent!);
+    expect(labels[0]).toContain("Atlas");
+    expect(labels[0]).toContain(translate(locale, "voiceCompanion.history.actions", { count: 3 }));
+    expect(labels[2]).toContain(locale === "uk" ? "Сад" : "Garden");
+    expect(labels[2]).toContain(translate(locale, "voiceCompanion.history.actions", { count: 1 }));
+    expect(new Set(labels).size).toBe(3);
+    await act(async () => { picker.value = calls[2]!.sessionId; picker.dispatchEvent(new Event("change", { bubbles: true })); });
+    expect(chosen).toEqual([calls[2]!.sessionId]);
+
+    /* The delivered request links the conversation it went to, by the project the list names. */
+    const opened = async () => {
+      const request = host.querySelector<HTMLElement>('[data-transcript-call="request_orchestrator_delegation"]')!;
+      await click(request.querySelector("[data-transcript-toggle]"));
+      return request;
+    };
+    let request = await opened();
+    let link = request.querySelector<HTMLAnchorElement>("a[data-transcript-orchestrator]")!;
+    expect(link.getAttribute("href")).toBe("#c=conversation_orchestrator");
+    expect(link.textContent).toBe("Atlas");
+    expect(request.querySelector("[data-transcript-reason]")).toBeNull();
+
+    await show(calls[1]!.sessionId);
+    request = host.querySelector<HTMLElement>('[data-transcript-call="request_orchestrator_delegation"]')!;
+    expect(request.querySelector("[data-transcript-request]")?.getAttribute("data-stage")).toBe("failed");
+    expect(request.textContent).toContain(translate(locale, "voiceCompanion.stage.failed"));
+    if (!request.querySelector("[data-transcript-detail]")) await click(request.querySelector("[data-transcript-toggle]"));
+    expect(request.querySelector("[data-transcript-reason]")?.textContent).toBe(delegationReason("conversation_busy", "failed", locale)!);
+    link = request.querySelector<HTMLAnchorElement>("a[data-transcript-orchestrator]")!;
+    expect(link.textContent).toBe("Atlas");
+    await click(link);
+    expect(closed).toBe(1);
+
+    await show(calls[2]!.sessionId);
+    request = host.querySelector<HTMLElement>('[data-transcript-call="request_orchestrator_delegation"]')!;
+    expect(request.textContent).toContain(translate(locale, "voiceCompanion.stage.refused"));
+    if (!request.querySelector("[data-transcript-detail]")) await click(request.querySelector("[data-transcript-toggle]"));
+    expect(request.querySelector("[data-transcript-reason]")?.textContent).toBe(delegationReason("no_orchestrator", "refused", locale)!);
+    /* Refused before any orchestrator was found: nothing to link. */
+    expect(request.querySelector("a[data-transcript-orchestrator]")).toBeNull();
+
+    /* One retained call, or a list that does not hold the shown one: no picker. */
+    await act(async () => root.render(<CompanionTranscript record={records[calls[0]!.sessionId]!} calls={calls.slice(0, 1)} current={calls[0]!.sessionId} onChoose={() => {}} left={0} top={0} width={360} height={560} onClose={() => {}} />));
+    expect(host.querySelector("select[data-transcript-calls]")).toBeNull();
+    await act(async () => root.render(<CompanionTranscript record={records[calls[0]!.sessionId]!} calls={calls} current="call_unlisted" onChoose={() => {}} left={0} top={0} width={360} height={560} onClose={() => {}} />));
+    expect(host.querySelector("select[data-transcript-calls]")).toBeNull();
+    await act(async () => root.unmount()); host.remove(); mounted = null;
+  }
+  await act(async () => setLocale("en"));
+});
+
+test("a panel that rises to the viewport's top stops below the page's top-bar controls, and keeps its box where none is under it", async () => {
+  const { transcriptRect } = await import("./CompanionTranscript");
+  const viewport = { width: 1000, height: 800 };
+  const block = { x: 700, y: 520, width: 200, height: 48 };
+  const bare = transcriptRect(viewport, block);
+  expect(bare.y).toBe(8);
+  const search = { x: 600, y: 8, width: 300, height: 32 };
+  const covered = transcriptRect(viewport, block, [search, { x: 20, y: 8, width: 100, height: 32 }]);
+  expect(covered).toEqual({ ...bare, y: 48, height: bare.height - 40 });
+  expect(covered.y + covered.height).toBe(bare.y + bare.height);
+  /* A control beside the panel, or lower than the bar, leaves the box as it was; a squeezed box is not taken. */
+  expect(transcriptRect(viewport, block, [{ x: 20, y: 8, width: 100, height: 32 }, { x: 600, y: 300, width: 300, height: 32 }])).toEqual(bare);
+  expect(transcriptRect({ width: 1000, height: 400 }, { x: 700, y: 260, width: 200, height: 48 }, [search])).toEqual(transcriptRect({ width: 1000, height: 400 }, { x: 700, y: 260, width: 200, height: 48 }));
+});
+
+test("an ended call, and each call picked, opens at its start; a live call opens at its newest line and keeps following", async () => {
+  const { sampleCallHistory } = await import("./transcriptSample.fixture");
+  const { calls, records } = sampleCallHistory("en");
+  /* jsdom has no layout: give the body a scroll height so the position it was set to can be read back. */
+  const heightOf = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollHeight");
+  Object.defineProperty(HTMLElement.prototype, "scrollHeight", { configurable: true, get() { return 1000; } });
+  try {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    mounted = { root, host };
+    const show = async (record: (typeof records)[string], current: string) => act(async () => root.render(<CompanionTranscript record={record} calls={calls} current={current}
+      onChoose={() => {}} left={0} top={0} width={360} height={560} onClose={() => {}} />));
+    const body = () => host.querySelector<HTMLElement>("[data-transcript-body]")!;
+    await show(records[calls[0]!.sessionId]!, calls[0]!.sessionId);
+    expect(body().scrollTop).toBe(0);
+    /* Picking another call lands on that call's start too, even when the reader had scrolled the first to its end. */
+    body().scrollTop = 900;
+    await act(async () => { body().dispatchEvent(new Event("scroll")); });
+    await show(records[calls[1]!.sessionId]!, calls[1]!.sessionId);
+    expect(body().scrollTop).toBe(0);
+
+    /* A live call (no session_end) opens at its end and follows a new line. */
+    const live = { ...records[calls[0]!.sessionId]!, sessionId: "call_live", entries: records[calls[0]!.sessionId]!.entries.filter((entry) => entry.kind !== "session_end") };
+    await show(live, "call_live");
+    expect(body().scrollTop).toBe(1000);
+    body().scrollTop = 0;
+    await act(async () => { body().dispatchEvent(new Event("scroll")); });
+    const entries = [...live.entries, { ...live.entries[0]!, id: "late", order: live.entries.length, atMs: 999_000, data: { ...live.entries[0]!.data } }];
+    await show({ ...live, entries }, "call_live");
+    expect(body().scrollTop).toBe(0);
+  } finally {
+    if (heightOf) Object.defineProperty(HTMLElement.prototype, "scrollHeight", heightOf); else delete (HTMLElement.prototype as { scrollHeight?: number }).scrollHeight;
+  }
 });
