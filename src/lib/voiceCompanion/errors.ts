@@ -29,6 +29,8 @@ export const COMPANION_MESSAGES = {
   NO_PROJECT: ["Open a project to talk about its work.", "Відкрийте проєкт, щоб говорити про його роботу."],
   COMPANION_UNAVAILABLE: ["Voice Delegatus is unavailable. Try again.", "Голосовий Delegatus недоступний. Спробуйте ще раз."],
   CONTEXT_UNCONFIRMED: ["The selected project is not confirmed yet. Your microphone is paused while Delegatus retries.", "Вибраний проєкт ще не підтверджено. Мікрофон призупинено, поки Delegatus повторює запит."],
+  MICROPHONE_FALLBACK: ["The chosen microphone is not connected. Using the system default.", "Вибраний мікрофон не під’єднано. Працює системний за замовчуванням."],
+  SPEAKERS_FALLBACK: ["The chosen speakers are not connected. Sound plays through the system default.", "Вибрані динаміки не під’єднано. Звук іде через системні за замовчуванням."],
 } as const;
 /** When a plan window resets: the time within a day, in the board's 24-hour form in both languages, the date after
  * that. Ukrainian names the month in full, as its short form ends in a dot a sentence would double. */

@@ -19,6 +19,7 @@ export type RoleId = typeof ROLE_IDS[number];
 export type RoleEngine = "claude" | "codex";
 
 export type RoleConfig = {
+  agentMemoryMaxBytes?: number | null;
   engine: RoleEngine;
   model: string;
   effort: string;
@@ -121,8 +122,8 @@ export type RoleOverridesFile = {
       a newer variant (builder trivial/docs, reviewer trivial) is stored, and 4
       once a fix row (builder frontend-fixes/docs-fixes) is, so an older build
       refuses unsupported rows instead of misreading them. Schema 5 carries a
-      Codex service tier on a row or variant. */
-  schemaVersion: 1 | 2 | 3 | 4 | 5;
+      Codex service tier on a row or variant. Schema 6 carries scoped memory caps. */
+  schemaVersion: 1 | 2 | 3 | 4 | 5 | 6;
   overrides: Partial<Record<RoleId, RoleOverride>>;
   retirements?: Record<string, RoleMappingRetirementRecord>;
 };

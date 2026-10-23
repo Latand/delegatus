@@ -1,3 +1,5 @@
+import type { OverdueTaskCursor } from "@/lib/state/sqliteStateStore";
+import { overdueSweepCursor, shownOverdueDates } from "./seatTickReminders";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
 import { deepFreeze } from "@/lib/deepFreeze";
@@ -80,7 +82,7 @@ import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { scanRootEntries } from "@/lib/scanner/roots";
 import { resolveProjectAttribution } from "@/lib/session/projectResolution";
 import type { StructuredHostRetirementReport } from "@/lib/runtime/structuredHostRetirement";
-import { loadTasks, loadTasksForList, loadTasksForListAsync } from "@/lib/tasks/store";
+import { loadTasks, loadTasksForList, loadTasksForListAsync, overdueTasks, type OverdueBoardTask } from "@/lib/tasks/store";
 import { telegramPostSignals } from "@/lib/prototypeReview/telegramPostSignals";
 import { loadSeatRounds } from "@/lib/prototypeReview/seatRounds";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -461,6 +463,17 @@ export async function wakeStateFromRecord(wake: SeatTickOutstandingWake, ports: 
  */
 export { withdrawRuntimeWake } from "@/lib/orchestrator/seatChannel";
 
+function overdueTaskInputs(sources: SeatTickSources, project: string, now: number, openTasks: ReadonlySet<string>, shown: readonly string[]): SeatTickTaskInput[] {
+  return performanceSpans.sync("seat-tick.project", () => {
+    return (sources.overdueTasks?.(project, now, shownOverdueDates(shown, now), overdueSweepCursor(shown, now), shownOverdueDates(shown, now, true)) ?? []).slice(0, 51).map(task => ({
+      id: task.id, title: task.text.split(/\r?\n/, 1)[0]!, status: task.status,
+      owned: task.chosen === true ? openTasks.has(task.id) : taskEvidenceFor(task).owner !== null,
+      updatedAt: task.updatedAt, createdAt: task.createdAt, dueAt: task.dueAt,
+      dueHistory: task.dueHistory, priority: task.priority, hold: task.hold, overdueSweep: task.overdueSweep,
+    }));
+  });
+}
+
 export interface SeatTickSources {
   prepareRead?: () => Promise<void>;
   memoryProblems?: (project: string, shown: readonly string[], recipient: { conversationId: string; seatEpoch: number } | null) => SeatTickSignalInput[];
@@ -488,6 +501,7 @@ export interface SeatTickSources {
   archivedPipelines: () => readonly Pipeline[];
   archivedPipelinesAsync?: () => Promise<readonly Pipeline[]>;
   tasks: () => readonly BoardTask[];
+  overdueTasks?: (project: string, now: number, shown: readonly string[], cursor: OverdueTaskCursor | null, known: readonly string[]) => readonly OverdueBoardTask[];
   registry: () => ReturnType<typeof agentRegistry>;
   /** The registry's own activity verdict — `agent_activity`'s answer, which is
       the only thing this module is allowed to call a stall. */
@@ -705,6 +719,7 @@ export function defaultSeatTickSources(): SeatTickSources {
     archivedPipelines: () => loadArchivedPipelinesForList(),
     archivedPipelinesAsync: () => withViewerOperation("seat-tick.prepare", loadArchivedPipelinesForListAsync),
     tasks: () => loadTasksForList(),
+    overdueTasks: (project, now, shown, cursor, known) => overdueTasks(project, now, undefined, shown, cursor, known),
     lifecycleJournal: readLifecycleJournal,
     seatDeployments: (conversationId) => seatDeploymentsFor(conversationId),
     deploymentByKey: findSeatDeploymentByKey,
@@ -2527,7 +2542,7 @@ export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTic
   const linked = board.some((task) => task.machine) ? linkedContext() : null;
   const tasks: SeatTickTaskInput[] = board.map((task, index) => ({
     id: task.id, title: taskEvidence[index]!.title, status: task.status, owned: task.chosen === true ? openTasks.has(task.id) : taskEvidence[index]!.owner !== null,
-    updatedAt: task.updatedAt ?? null,
+    updatedAt: task.updatedAt ?? null, dueAt: task.dueAt,
     accepted: task.chosen === true, hold: task.hold, waitingSince: task.statusBy?.at ?? task.createdAt ?? task.updatedAt,
     ...(linked && !runsHere(task, linked) ? { runsOn: machineLabel(task.machine!, linked).label } : {}),
   }));
@@ -2536,6 +2551,7 @@ export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTic
   const openIds = new Set(hotLanes.filter(isOpen).map((lane) => lane.id));
   const refreshed: SeatTickCheckInput = {
     ...input, now, pipelines, tasks, ownLanes,
+    overdueTasks: overdueTaskInputs(sources, input.project, now, openTasks, input.state.itemsShown ?? []),
     ...(sources.memoryProblems ? { signals: [...input.signals.filter(signal => !signal.id.startsWith("memory-problem:")), ...sources.memoryProblems(input.project, input.state.itemsShown ?? [], input.seat?.conversationId ? input.seat : null)] } : {}),
     events: input.events.map((event) => ({ ...event, pipelineTerminal: event.pipelineId !== null && !openIds.has(event.pipelineId) })),
     settings,
@@ -2549,7 +2565,7 @@ export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTic
       seatKey: seatInputKey(input.seat), announcedKey,
       aliasesKey: JSON.stringify(projectAliasSnapshot().aliases), pipelines, tasks, ownLanes,
       linkedKey: linked ? JSON.stringify(linked) : null,
-      openIds, pausedLanes: hotLanes.filter(lane => lane.state === "paused" && canonicalProject(lane.project) === input.project),
+      openIds, openTasks, pausedLanes: hotLanes.filter(lane => lane.state === "paused" && canonicalProject(lane.project) === input.project),
       pipelineById: new Map(pipelines.map(pipeline => [pipeline.id, pipeline])),
       children: refreshed.children, pullRequests: refreshed.pullRequests,
       pullRequestsUnavailable: refreshed.pullRequestsUnavailable, settledDeploys: refreshed.settledDeploys,
@@ -2571,6 +2587,7 @@ type SeatTickRefreshCache = {
   tasks: SeatTickTaskInput[];
   ownLanes: SeatTickOwnLaneInput[];
   openIds: Set<string>;
+  openTasks: Set<string>;
   pausedLanes: readonly Pipeline[];
   pipelineById: Map<string, SeatTickPipelineInput>;
   children: SeatTickCheckInput["children"];
@@ -2627,6 +2644,7 @@ function reuseSeatTickProjection(input: SeatTickCheckInput, sources: SeatTickSou
     && input.settledDeploys === cache.settledDeploys && input.settledMaintenance === cache.settledMaintenance;
   const refreshed: SeatTickCheckInput = {
     ...input, now, pipelines, tasks: cache.tasks, ownLanes: cache.ownLanes, events: linked, signals, settings,
+    overdueTasks: overdueTaskInputs(sources, input.project, now, cache.openTasks, input.state.itemsShown ?? []),
     changeFingerprint: fingerprintStable ? cache.fingerprint : seatTickFingerprint(pipelines, cache.tasks, input.children,
       input.pullRequests, input.pullRequestsUnavailable, cache.ownLanes, input.settledDeploys ?? [], input.settledMaintenance ?? []),
   };
@@ -2938,7 +2956,7 @@ async function gatherSeatTickInputWork(
     title: taskEvidence[index]!.title,
     status: task.status,
     owned: task.chosen === true ? openTasks.has(task.id) : taskEvidence[index]!.owner !== null,
-    updatedAt: task.updatedAt ?? null,
+    updatedAt: task.updatedAt ?? null, dueAt: task.dueAt,
     accepted: task.chosen === true, hold: task.hold, waitingSince: task.statusBy?.at ?? task.createdAt ?? task.updatedAt,
     /* The guard is the guarantee; this only saves wakes (M.4). */
     ...(linked && !runsHere(task, linked) ? { runsOn: machineLabel(task.machine!, linked).label } : {}),
@@ -3019,6 +3037,7 @@ async function gatherSeatTickInputWork(
     ...(seat ? {} : { seatEverHeld: sources.seatEverHeld?.(canonical) ?? true }),
     pipelines,
     tasks,
+    overdueTasks: overdueTaskInputs(sources, canonical, now, openTasks, state.itemsShown ?? []),
     ...(workerAsks.length ? { workerAsks } : {}),
     events,
     pullRequests,
@@ -3058,7 +3077,7 @@ async function gatherSeatTickInputWork(
       announcedKey: announcedLaneKey(gathered.state, seatTickCatchUp(gathered)?.key ?? null),
       aliasesKey: JSON.stringify(projectAliasSnapshot().aliases), pipelines, tasks, ownLanes,
       linkedKey: linked ? JSON.stringify(linked) : null,
-      openIds: openPipelineIds,
+      openIds: openPipelineIds, openTasks,
       pipelineById: new Map(pipelines.map(pipeline => [pipeline.id, pipeline])),
       pausedLanes: hotLanes.filter(pipeline => pipeline.state === "paused" && canonicalProject(pipeline.project) === canonical),
       children: gathered.children, pullRequests: gathered.pullRequests,

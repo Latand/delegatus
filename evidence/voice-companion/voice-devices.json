@@ -1,0 +1,5467 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "synthetic": true,
+  "viewportBasis": "configured scene width",
+  "measurements": [
+    {
+      "label": "1440-en-light-noperm",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "System default",
+          "options": [
+            "System default"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false
+          ],
+          "hint": "The browser names devices only after you allow the microphone. Show devices",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "System default",
+          "options": [
+            "System default"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": {
+        "text": "Show devices",
+        "height": 36,
+        "left": 833.859375,
+        "right": 913.234375
+      },
+      "controls": [
+        32,
+        36,
+        32
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "1440-en-light-noperm-granted",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Microphone Array (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Speakers (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "1440-en-light-denied",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "System default",
+          "options": [
+            "System default"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": "The browser blocks the microphone for this site. Allow it in the site settings, then reopen this window.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "System default",
+          "options": [
+            "System default"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "1440-en-light-default",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Microphone Array (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Speakers (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "1440-en-light-chosen",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Навушники AirPods Pro (Bluetooth)",
+          "options": [
+            "System default",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 208,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "DELL U2723QE (NVIDIA High Definition Audio)",
+          "options": [
+            "System default",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 274,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": "{\"id\":\"mic-pods\",\"label\":\"Навушники AirPods Pro (Bluetooth)\"}",
+        "output": "{\"id\":\"spk-monitor\",\"label\":\"DELL U2723QE (NVIDIA High Definition Audio)\"}"
+      }
+    },
+    {
+      "label": "1440-en-light-gone",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Not connected · Конференц-мікрофон Jabra Speak 750",
+          "options": [
+            "System default",
+            "Not connected · Конференц-мікрофон Jabra Speak 750",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            true,
+            false,
+            false,
+            false
+          ],
+          "hint": "Конференц-мікрофон Jabra Speak 750 is not connected. Using the system default until it is connected again.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 328,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "Not connected · Bluetooth Speaker (JBL Flip 6)",
+          "options": [
+            "System default",
+            "Not connected · Bluetooth Speaker (JBL Flip 6)",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            true,
+            false,
+            false,
+            false
+          ],
+          "hint": "Bluetooth Speaker (JBL Flip 6) is not connected. Using the system default until it is connected again.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 272,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": "{\"id\":\"mic-gone\",\"label\":\"Конференц-мікрофон Jabra Speak 750\"}",
+        "output": "{\"id\":\"spk-gone\",\"label\":\"Bluetooth Speaker (JBL Flip 6)\"}"
+      }
+    },
+    {
+      "label": "1440-en-light-nosink",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Microphone Array (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "This browser does not let a site choose speakers. Sound plays through the system output.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "1440-en-dark-noperm",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "System default",
+          "options": [
+            "System default"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false
+          ],
+          "hint": "The browser names devices only after you allow the microphone. Show devices",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "System default",
+          "options": [
+            "System default"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": {
+        "text": "Show devices",
+        "height": 36,
+        "left": 833.859375,
+        "right": 913.234375
+      },
+      "controls": [
+        32,
+        36,
+        32
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "1440-en-dark-noperm-granted",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Microphone Array (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Speakers (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "1440-en-dark-denied",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "System default",
+          "options": [
+            "System default"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": "The browser blocks the microphone for this site. Allow it in the site settings, then reopen this window.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "System default",
+          "options": [
+            "System default"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "1440-en-dark-default",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Microphone Array (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Speakers (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "1440-en-dark-chosen",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Навушники AirPods Pro (Bluetooth)",
+          "options": [
+            "System default",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 208,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "DELL U2723QE (NVIDIA High Definition Audio)",
+          "options": [
+            "System default",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 274,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": "{\"id\":\"mic-pods\",\"label\":\"Навушники AirPods Pro (Bluetooth)\"}",
+        "output": "{\"id\":\"spk-monitor\",\"label\":\"DELL U2723QE (NVIDIA High Definition Audio)\"}"
+      }
+    },
+    {
+      "label": "1440-en-dark-gone",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Not connected · Конференц-мікрофон Jabra Speak 750",
+          "options": [
+            "System default",
+            "Not connected · Конференц-мікрофон Jabra Speak 750",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            true,
+            false,
+            false,
+            false
+          ],
+          "hint": "Конференц-мікрофон Jabra Speak 750 is not connected. Using the system default until it is connected again.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 328,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "Not connected · Bluetooth Speaker (JBL Flip 6)",
+          "options": [
+            "System default",
+            "Not connected · Bluetooth Speaker (JBL Flip 6)",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            true,
+            false,
+            false,
+            false
+          ],
+          "hint": "Bluetooth Speaker (JBL Flip 6) is not connected. Using the system default until it is connected again.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 272,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": "{\"id\":\"mic-gone\",\"label\":\"Конференц-мікрофон Jabra Speak 750\"}",
+        "output": "{\"id\":\"spk-gone\",\"label\":\"Bluetooth Speaker (JBL Flip 6)\"}"
+      }
+    },
+    {
+      "label": "1440-en-dark-nosink",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Microphone Array (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "This browser does not let a site choose speakers. Sound plays through the system output.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "1440-uk-light-noperm",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false
+          ],
+          "hint": "Браузер показує назви пристроїв лише після дозволу на мікрофон. Показати пристрої",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": {
+        "text": "Показати пристрої",
+        "height": 36,
+        "left": 485,
+        "right": 595.390625
+      },
+      "controls": [
+        32,
+        36,
+        32
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "1440-uk-light-noperm-granted",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Microphone Array (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Speakers (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "1440-uk-light-denied",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": "Браузер блокує мікрофон для цього сайту. Дозвольте його в налаштуваннях сайту й відкрийте це вікно знову.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "1440-uk-light-default",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Microphone Array (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Speakers (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "1440-uk-light-chosen",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Навушники AirPods Pro (Bluetooth)",
+          "options": [
+            "Системний за замовчуванням",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 208,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "DELL U2723QE (NVIDIA High Definition Audio)",
+          "options": [
+            "Системний за замовчуванням",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 274,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": "{\"id\":\"mic-pods\",\"label\":\"Навушники AirPods Pro (Bluetooth)\"}",
+        "output": "{\"id\":\"spk-monitor\",\"label\":\"DELL U2723QE (NVIDIA High Definition Audio)\"}"
+      }
+    },
+    {
+      "label": "1440-uk-light-gone",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Не під’єднано · Конференц-мікрофон Jabra Speak 750",
+          "options": [
+            "Системний за замовчуванням",
+            "Не під’єднано · Конференц-мікрофон Jabra Speak 750",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            true,
+            false,
+            false,
+            false
+          ],
+          "hint": "Конференц-мікрофон Jabra Speak 750 не під’єднано. Поки його немає, працює системний за замовчуванням.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 328,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "Не під’єднано · Bluetooth Speaker (JBL Flip 6)",
+          "options": [
+            "Системний за замовчуванням",
+            "Не під’єднано · Bluetooth Speaker (JBL Flip 6)",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            true,
+            false,
+            false,
+            false
+          ],
+          "hint": "Bluetooth Speaker (JBL Flip 6) не під’єднано. Поки його немає, працює системний за замовчуванням.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 272,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": "{\"id\":\"mic-gone\",\"label\":\"Конференц-мікрофон Jabra Speak 750\"}",
+        "output": "{\"id\":\"spk-gone\",\"label\":\"Bluetooth Speaker (JBL Flip 6)\"}"
+      }
+    },
+    {
+      "label": "1440-uk-light-nosink",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Microphone Array (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Цей браузер не дає сайту вибрати динаміки. Звук іде через системний вихід.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "1440-uk-dark-noperm",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false
+          ],
+          "hint": "Браузер показує назви пристроїв лише після дозволу на мікрофон. Показати пристрої",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": {
+        "text": "Показати пристрої",
+        "height": 36,
+        "left": 485,
+        "right": 595.390625
+      },
+      "controls": [
+        32,
+        36,
+        32
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "1440-uk-dark-noperm-granted",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Microphone Array (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Speakers (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "1440-uk-dark-denied",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": "Браузер блокує мікрофон для цього сайту. Дозвольте його в налаштуваннях сайту й відкрийте це вікно знову.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "1440-uk-dark-default",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Microphone Array (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Speakers (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "1440-uk-dark-chosen",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Навушники AirPods Pro (Bluetooth)",
+          "options": [
+            "Системний за замовчуванням",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 208,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "DELL U2723QE (NVIDIA High Definition Audio)",
+          "options": [
+            "Системний за замовчуванням",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 274,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": "{\"id\":\"mic-pods\",\"label\":\"Навушники AirPods Pro (Bluetooth)\"}",
+        "output": "{\"id\":\"spk-monitor\",\"label\":\"DELL U2723QE (NVIDIA High Definition Audio)\"}"
+      }
+    },
+    {
+      "label": "1440-uk-dark-gone",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Не під’єднано · Конференц-мікрофон Jabra Speak 750",
+          "options": [
+            "Системний за замовчуванням",
+            "Не під’єднано · Конференц-мікрофон Jabra Speak 750",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            true,
+            false,
+            false,
+            false
+          ],
+          "hint": "Конференц-мікрофон Jabra Speak 750 не під’єднано. Поки його немає, працює системний за замовчуванням.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 328,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "Не під’єднано · Bluetooth Speaker (JBL Flip 6)",
+          "options": [
+            "Системний за замовчуванням",
+            "Не під’єднано · Bluetooth Speaker (JBL Flip 6)",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            true,
+            false,
+            false,
+            false
+          ],
+          "hint": "Bluetooth Speaker (JBL Flip 6) не під’єднано. Поки його немає, працює системний за замовчуванням.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 272,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": "{\"id\":\"mic-gone\",\"label\":\"Конференц-мікрофон Jabra Speak 750\"}",
+        "output": "{\"id\":\"spk-gone\",\"label\":\"Bluetooth Speaker (JBL Flip 6)\"}"
+      }
+    },
+    {
+      "label": "1440-uk-dark-nosink",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Microphone Array (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Цей браузер не дає сайту вибрати динаміки. Звук іде через системний вихід.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "820-en-light-noperm",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "System default",
+          "options": [
+            "System default"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false
+          ],
+          "hint": "The browser names devices only after you allow the microphone. Show devices",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "System default",
+          "options": [
+            "System default"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": {
+        "text": "Show devices",
+        "height": 36,
+        "left": 523.859375,
+        "right": 603.234375
+      },
+      "controls": [
+        32,
+        36,
+        32
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "820-en-light-noperm-granted",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Microphone Array (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Speakers (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "820-en-light-denied",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "System default",
+          "options": [
+            "System default"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": "The browser blocks the microphone for this site. Allow it in the site settings, then reopen this window.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "System default",
+          "options": [
+            "System default"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "820-en-light-default",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Microphone Array (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Speakers (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "820-en-light-chosen",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Навушники AirPods Pro (Bluetooth)",
+          "options": [
+            "System default",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 208,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "DELL U2723QE (NVIDIA High Definition Audio)",
+          "options": [
+            "System default",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 274,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": "{\"id\":\"mic-pods\",\"label\":\"Навушники AirPods Pro (Bluetooth)\"}",
+        "output": "{\"id\":\"spk-monitor\",\"label\":\"DELL U2723QE (NVIDIA High Definition Audio)\"}"
+      }
+    },
+    {
+      "label": "820-en-light-gone",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Not connected · Конференц-мікрофон Jabra Speak 750",
+          "options": [
+            "System default",
+            "Not connected · Конференц-мікрофон Jabra Speak 750",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            true,
+            false,
+            false,
+            false
+          ],
+          "hint": "Конференц-мікрофон Jabra Speak 750 is not connected. Using the system default until it is connected again.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 328,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "Not connected · Bluetooth Speaker (JBL Flip 6)",
+          "options": [
+            "System default",
+            "Not connected · Bluetooth Speaker (JBL Flip 6)",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            true,
+            false,
+            false,
+            false
+          ],
+          "hint": "Bluetooth Speaker (JBL Flip 6) is not connected. Using the system default until it is connected again.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 272,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": "{\"id\":\"mic-gone\",\"label\":\"Конференц-мікрофон Jabra Speak 750\"}",
+        "output": "{\"id\":\"spk-gone\",\"label\":\"Bluetooth Speaker (JBL Flip 6)\"}"
+      }
+    },
+    {
+      "label": "820-en-light-nosink",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Microphone Array (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "This browser does not let a site choose speakers. Sound plays through the system output.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "820-en-dark-noperm",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "System default",
+          "options": [
+            "System default"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false
+          ],
+          "hint": "The browser names devices only after you allow the microphone. Show devices",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "System default",
+          "options": [
+            "System default"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": {
+        "text": "Show devices",
+        "height": 36,
+        "left": 523.859375,
+        "right": 603.234375
+      },
+      "controls": [
+        32,
+        36,
+        32
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "820-en-dark-noperm-granted",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Microphone Array (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Speakers (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "820-en-dark-denied",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "System default",
+          "options": [
+            "System default"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": "The browser blocks the microphone for this site. Allow it in the site settings, then reopen this window.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "System default",
+          "options": [
+            "System default"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "820-en-dark-default",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Microphone Array (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Speakers (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "820-en-dark-chosen",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Навушники AirPods Pro (Bluetooth)",
+          "options": [
+            "System default",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 208,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "DELL U2723QE (NVIDIA High Definition Audio)",
+          "options": [
+            "System default",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 274,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": "{\"id\":\"mic-pods\",\"label\":\"Навушники AirPods Pro (Bluetooth)\"}",
+        "output": "{\"id\":\"spk-monitor\",\"label\":\"DELL U2723QE (NVIDIA High Definition Audio)\"}"
+      }
+    },
+    {
+      "label": "820-en-dark-gone",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Not connected · Конференц-мікрофон Jabra Speak 750",
+          "options": [
+            "System default",
+            "Not connected · Конференц-мікрофон Jabra Speak 750",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            true,
+            false,
+            false,
+            false
+          ],
+          "hint": "Конференц-мікрофон Jabra Speak 750 is not connected. Using the system default until it is connected again.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 328,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "Not connected · Bluetooth Speaker (JBL Flip 6)",
+          "options": [
+            "System default",
+            "Not connected · Bluetooth Speaker (JBL Flip 6)",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            true,
+            false,
+            false,
+            false
+          ],
+          "hint": "Bluetooth Speaker (JBL Flip 6) is not connected. Using the system default until it is connected again.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 272,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": "{\"id\":\"mic-gone\",\"label\":\"Конференц-мікрофон Jabra Speak 750\"}",
+        "output": "{\"id\":\"spk-gone\",\"label\":\"Bluetooth Speaker (JBL Flip 6)\"}"
+      }
+    },
+    {
+      "label": "820-en-dark-nosink",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Microphone Array (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "This browser does not let a site choose speakers. Sound plays through the system output.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 86,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "820-uk-light-noperm",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false
+          ],
+          "hint": "Браузер показує назви пристроїв лише після дозволу на мікрофон. Показати пристрої",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": {
+        "text": "Показати пристрої",
+        "height": 36,
+        "left": 175,
+        "right": 285.390625
+      },
+      "controls": [
+        32,
+        36,
+        32
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "820-uk-light-noperm-granted",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Microphone Array (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Speakers (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "820-uk-light-denied",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": "Браузер блокує мікрофон для цього сайту. Дозвольте його в налаштуваннях сайту й відкрийте це вікно знову.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "820-uk-light-default",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Microphone Array (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Speakers (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "820-uk-light-chosen",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Навушники AirPods Pro (Bluetooth)",
+          "options": [
+            "Системний за замовчуванням",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 208,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "DELL U2723QE (NVIDIA High Definition Audio)",
+          "options": [
+            "Системний за замовчуванням",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 274,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": "{\"id\":\"mic-pods\",\"label\":\"Навушники AirPods Pro (Bluetooth)\"}",
+        "output": "{\"id\":\"spk-monitor\",\"label\":\"DELL U2723QE (NVIDIA High Definition Audio)\"}"
+      }
+    },
+    {
+      "label": "820-uk-light-gone",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Не під’єднано · Конференц-мікрофон Jabra Speak 750",
+          "options": [
+            "Системний за замовчуванням",
+            "Не під’єднано · Конференц-мікрофон Jabra Speak 750",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            true,
+            false,
+            false,
+            false
+          ],
+          "hint": "Конференц-мікрофон Jabra Speak 750 не під’єднано. Поки його немає, працює системний за замовчуванням.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 328,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "Не під’єднано · Bluetooth Speaker (JBL Flip 6)",
+          "options": [
+            "Системний за замовчуванням",
+            "Не під’єднано · Bluetooth Speaker (JBL Flip 6)",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            true,
+            false,
+            false,
+            false
+          ],
+          "hint": "Bluetooth Speaker (JBL Flip 6) не під’єднано. Поки його немає, працює системний за замовчуванням.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 272,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": "{\"id\":\"mic-gone\",\"label\":\"Конференц-мікрофон Jabra Speak 750\"}",
+        "output": "{\"id\":\"spk-gone\",\"label\":\"Bluetooth Speaker (JBL Flip 6)\"}"
+      }
+    },
+    {
+      "label": "820-uk-light-nosink",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Microphone Array (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Цей браузер не дає сайту вибрати динаміки. Звук іде через системний вихід.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "820-uk-dark-noperm",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false
+          ],
+          "hint": "Браузер показує назви пристроїв лише після дозволу на мікрофон. Показати пристрої",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": {
+        "text": "Показати пристрої",
+        "height": 36,
+        "left": 175,
+        "right": 285.390625
+      },
+      "controls": [
+        32,
+        36,
+        32
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "820-uk-dark-noperm-granted",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Microphone Array (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Speakers (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "820-uk-dark-denied",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": "Браузер блокує мікрофон для цього сайту. Дозвольте його в налаштуваннях сайту й відкрийте це вікно знову.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "820-uk-dark-default",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Microphone Array (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Speakers (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "820-uk-dark-chosen",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Навушники AirPods Pro (Bluetooth)",
+          "options": [
+            "Системний за замовчуванням",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 208,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "DELL U2723QE (NVIDIA High Definition Audio)",
+          "options": [
+            "Системний за замовчуванням",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": null,
+          "width": 455,
+          "height": 32,
+          "textWidth": 274,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": "{\"id\":\"mic-pods\",\"label\":\"Навушники AirPods Pro (Bluetooth)\"}",
+        "output": "{\"id\":\"spk-monitor\",\"label\":\"DELL U2723QE (NVIDIA High Definition Audio)\"}"
+      }
+    },
+    {
+      "label": "820-uk-dark-gone",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Не під’єднано · Конференц-мікрофон Jabra Speak 750",
+          "options": [
+            "Системний за замовчуванням",
+            "Не під’єднано · Конференц-мікрофон Jabra Speak 750",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            true,
+            false,
+            false,
+            false
+          ],
+          "hint": "Конференц-мікрофон Jabra Speak 750 не під’єднано. Поки його немає, працює системний за замовчуванням.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 328,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "Не під’єднано · Bluetooth Speaker (JBL Flip 6)",
+          "options": [
+            "Системний за замовчуванням",
+            "Не під’єднано · Bluetooth Speaker (JBL Flip 6)",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            true,
+            false,
+            false,
+            false
+          ],
+          "hint": "Bluetooth Speaker (JBL Flip 6) не під’єднано. Поки його немає, працює системний за замовчуванням.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 272,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": "{\"id\":\"mic-gone\",\"label\":\"Конференц-мікрофон Jabra Speak 750\"}",
+        "output": "{\"id\":\"spk-gone\",\"label\":\"Bluetooth Speaker (JBL Flip 6)\"}"
+      }
+    },
+    {
+      "label": "820-uk-dark-nosink",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Microphone Array (Realtek(R) Audio)",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Цей браузер не дає сайту вибрати динаміки. Звук іде через системний вихід.",
+          "width": 455,
+          "height": 32,
+          "textWidth": 181,
+          "room": 419,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        32,
+        32
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "390-en-light-noperm",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "System default",
+          "options": [
+            "System default"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false
+          ],
+          "hint": "The browser names devices only after you allow the microphone. Show devices",
+          "width": 316,
+          "height": 44,
+          "textWidth": 106,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "System default",
+          "options": [
+            "System default"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": null,
+          "width": 316,
+          "height": 44,
+          "textWidth": 106,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": {
+        "text": "Show devices",
+        "height": 44,
+        "left": 106.390625,
+        "right": 185.765625
+      },
+      "controls": [
+        44,
+        44,
+        44
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "390-en-light-noperm-granted",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Microphone Array (Realtek(R) Audio)",
+          "width": 316,
+          "height": 44,
+          "textWidth": 106,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Speakers (Realtek(R) Audio)",
+          "width": 316,
+          "height": 44,
+          "textWidth": 106,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        44,
+        44
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "390-en-light-denied",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "System default",
+          "options": [
+            "System default"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": "The browser blocks the microphone for this site. Allow it in the site settings, then reopen this window.",
+          "width": 316,
+          "height": 44,
+          "textWidth": 106,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "System default",
+          "options": [
+            "System default"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": null,
+          "width": 316,
+          "height": 44,
+          "textWidth": 106,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        44,
+        44
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "390-en-light-default",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Microphone Array (Realtek(R) Audio)",
+          "width": 316,
+          "height": 44,
+          "textWidth": 106,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Speakers (Realtek(R) Audio)",
+          "width": 316,
+          "height": 44,
+          "textWidth": 106,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        44,
+        44
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "390-en-light-chosen",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Навушники AirPods Pro (Bluetooth)",
+          "options": [
+            "System default",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Навушники AirPods Pro (Bluetooth)",
+          "width": 316,
+          "height": 44,
+          "textWidth": 256,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "DELL U2723QE (NVIDIA High Definition Audio)",
+          "options": [
+            "System default",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: DELL U2723QE (NVIDIA High Definition Audio)",
+          "width": 316,
+          "height": 44,
+          "textWidth": 337,
+          "room": 280,
+          "truncated": true,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        44,
+        44
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": "{\"id\":\"mic-pods\",\"label\":\"Навушники AirPods Pro (Bluetooth)\"}",
+        "output": "{\"id\":\"spk-monitor\",\"label\":\"DELL U2723QE (NVIDIA High Definition Audio)\"}"
+      }
+    },
+    {
+      "label": "390-en-light-gone",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Not connected · Конференц-мікрофон Jabra Speak 750",
+          "options": [
+            "System default",
+            "Not connected · Конференц-мікрофон Jabra Speak 750",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            true,
+            false,
+            false,
+            false
+          ],
+          "hint": "Конференц-мікрофон Jabra Speak 750 is not connected. Using the system default until it is connected again.",
+          "width": 316,
+          "height": 44,
+          "textWidth": 403,
+          "room": 280,
+          "truncated": true,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "Not connected · Bluetooth Speaker (JBL Flip 6)",
+          "options": [
+            "System default",
+            "Not connected · Bluetooth Speaker (JBL Flip 6)",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            true,
+            false,
+            false,
+            false
+          ],
+          "hint": "Bluetooth Speaker (JBL Flip 6) is not connected. Using the system default until it is connected again.",
+          "width": 316,
+          "height": 44,
+          "textWidth": 335,
+          "room": 280,
+          "truncated": true,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        44,
+        44
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": "{\"id\":\"mic-gone\",\"label\":\"Конференц-мікрофон Jabra Speak 750\"}",
+        "output": "{\"id\":\"spk-gone\",\"label\":\"Bluetooth Speaker (JBL Flip 6)\"}"
+      }
+    },
+    {
+      "label": "390-en-light-nosink",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Microphone Array (Realtek(R) Audio)",
+          "width": 316,
+          "height": 44,
+          "textWidth": 106,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "This browser does not let a site choose speakers. Sound plays through the system output.",
+          "width": 316,
+          "height": 44,
+          "textWidth": 106,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        44,
+        44
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "390-en-dark-noperm",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "System default",
+          "options": [
+            "System default"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false
+          ],
+          "hint": "The browser names devices only after you allow the microphone. Show devices",
+          "width": 316,
+          "height": 44,
+          "textWidth": 106,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "System default",
+          "options": [
+            "System default"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": null,
+          "width": 316,
+          "height": 44,
+          "textWidth": 106,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": {
+        "text": "Show devices",
+        "height": 44,
+        "left": 106.390625,
+        "right": 185.765625
+      },
+      "controls": [
+        44,
+        44,
+        44
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "390-en-dark-noperm-granted",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Microphone Array (Realtek(R) Audio)",
+          "width": 316,
+          "height": 44,
+          "textWidth": 106,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Speakers (Realtek(R) Audio)",
+          "width": 316,
+          "height": 44,
+          "textWidth": 106,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        44,
+        44
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "390-en-dark-denied",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "System default",
+          "options": [
+            "System default"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": "The browser blocks the microphone for this site. Allow it in the site settings, then reopen this window.",
+          "width": 316,
+          "height": 44,
+          "textWidth": 106,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "System default",
+          "options": [
+            "System default"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": null,
+          "width": 316,
+          "height": 44,
+          "textWidth": 106,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        44,
+        44
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "390-en-dark-default",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Microphone Array (Realtek(R) Audio)",
+          "width": 316,
+          "height": 44,
+          "textWidth": 106,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Speakers (Realtek(R) Audio)",
+          "width": 316,
+          "height": 44,
+          "textWidth": 106,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        44,
+        44
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "390-en-dark-chosen",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Навушники AirPods Pro (Bluetooth)",
+          "options": [
+            "System default",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Навушники AirPods Pro (Bluetooth)",
+          "width": 316,
+          "height": 44,
+          "textWidth": 256,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "DELL U2723QE (NVIDIA High Definition Audio)",
+          "options": [
+            "System default",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: DELL U2723QE (NVIDIA High Definition Audio)",
+          "width": 316,
+          "height": 44,
+          "textWidth": 337,
+          "room": 280,
+          "truncated": true,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        44,
+        44
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": "{\"id\":\"mic-pods\",\"label\":\"Навушники AirPods Pro (Bluetooth)\"}",
+        "output": "{\"id\":\"spk-monitor\",\"label\":\"DELL U2723QE (NVIDIA High Definition Audio)\"}"
+      }
+    },
+    {
+      "label": "390-en-dark-gone",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Not connected · Конференц-мікрофон Jabra Speak 750",
+          "options": [
+            "System default",
+            "Not connected · Конференц-мікрофон Jabra Speak 750",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            true,
+            false,
+            false,
+            false
+          ],
+          "hint": "Конференц-мікрофон Jabra Speak 750 is not connected. Using the system default until it is connected again.",
+          "width": 316,
+          "height": 44,
+          "textWidth": 403,
+          "room": 280,
+          "truncated": true,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "Not connected · Bluetooth Speaker (JBL Flip 6)",
+          "options": [
+            "System default",
+            "Not connected · Bluetooth Speaker (JBL Flip 6)",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            true,
+            false,
+            false,
+            false
+          ],
+          "hint": "Bluetooth Speaker (JBL Flip 6) is not connected. Using the system default until it is connected again.",
+          "width": 316,
+          "height": 44,
+          "textWidth": 335,
+          "room": 280,
+          "truncated": true,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        44,
+        44
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": "{\"id\":\"mic-gone\",\"label\":\"Конференц-мікрофон Jabra Speak 750\"}",
+        "output": "{\"id\":\"spk-gone\",\"label\":\"Bluetooth Speaker (JBL Flip 6)\"}"
+      }
+    },
+    {
+      "label": "390-en-dark-nosink",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "In use: Microphone Array (Realtek(R) Audio)",
+          "width": 316,
+          "height": 44,
+          "textWidth": 106,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "System default",
+          "options": [
+            "System default",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "This browser does not let a site choose speakers. Sound plays through the system output.",
+          "width": 316,
+          "height": 44,
+          "textWidth": 106,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        44,
+        44
+      ],
+      "outside": [],
+      "title": "Microphone and speakers",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "390-uk-light-noperm",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false
+          ],
+          "hint": "Браузер показує назви пристроїв лише після дозволу на мікрофон. Показати пристрої",
+          "width": 316,
+          "height": 44,
+          "textWidth": 222,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": null,
+          "width": 316,
+          "height": 44,
+          "textWidth": 222,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": {
+        "text": "Показати пристрої",
+        "height": 44,
+        "left": 96.375,
+        "right": 206.765625
+      },
+      "controls": [
+        44,
+        44,
+        44
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "390-uk-light-noperm-granted",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Microphone Array (Realtek(R) Audio)",
+          "width": 316,
+          "height": 44,
+          "textWidth": 222,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Speakers (Realtek(R) Audio)",
+          "width": 316,
+          "height": 44,
+          "textWidth": 222,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        44,
+        44
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "390-uk-light-denied",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": "Браузер блокує мікрофон для цього сайту. Дозвольте його в налаштуваннях сайту й відкрийте це вікно знову.",
+          "width": 316,
+          "height": 44,
+          "textWidth": 222,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": null,
+          "width": 316,
+          "height": 44,
+          "textWidth": 222,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        44,
+        44
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "390-uk-light-default",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Microphone Array (Realtek(R) Audio)",
+          "width": 316,
+          "height": 44,
+          "textWidth": 222,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Speakers (Realtek(R) Audio)",
+          "width": 316,
+          "height": 44,
+          "textWidth": 222,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        44,
+        44
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "390-uk-light-chosen",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Навушники AirPods Pro (Bluetooth)",
+          "options": [
+            "Системний за замовчуванням",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Навушники AirPods Pro (Bluetooth)",
+          "width": 316,
+          "height": 44,
+          "textWidth": 256,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "DELL U2723QE (NVIDIA High Definition Audio)",
+          "options": [
+            "Системний за замовчуванням",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: DELL U2723QE (NVIDIA High Definition Audio)",
+          "width": 316,
+          "height": 44,
+          "textWidth": 337,
+          "room": 280,
+          "truncated": true,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        44,
+        44
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": "{\"id\":\"mic-pods\",\"label\":\"Навушники AirPods Pro (Bluetooth)\"}",
+        "output": "{\"id\":\"spk-monitor\",\"label\":\"DELL U2723QE (NVIDIA High Definition Audio)\"}"
+      }
+    },
+    {
+      "label": "390-uk-light-gone",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Не під’єднано · Конференц-мікрофон Jabra Speak 750",
+          "options": [
+            "Системний за замовчуванням",
+            "Не під’єднано · Конференц-мікрофон Jabra Speak 750",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            true,
+            false,
+            false,
+            false
+          ],
+          "hint": "Конференц-мікрофон Jabra Speak 750 не під’єднано. Поки його немає, працює системний за замовчуванням.",
+          "width": 316,
+          "height": 44,
+          "textWidth": 403,
+          "room": 280,
+          "truncated": true,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "Не під’єднано · Bluetooth Speaker (JBL Flip 6)",
+          "options": [
+            "Системний за замовчуванням",
+            "Не під’єднано · Bluetooth Speaker (JBL Flip 6)",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            true,
+            false,
+            false,
+            false
+          ],
+          "hint": "Bluetooth Speaker (JBL Flip 6) не під’єднано. Поки його немає, працює системний за замовчуванням.",
+          "width": 316,
+          "height": 44,
+          "textWidth": 335,
+          "room": 280,
+          "truncated": true,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        44,
+        44
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": "{\"id\":\"mic-gone\",\"label\":\"Конференц-мікрофон Jabra Speak 750\"}",
+        "output": "{\"id\":\"spk-gone\",\"label\":\"Bluetooth Speaker (JBL Flip 6)\"}"
+      }
+    },
+    {
+      "label": "390-uk-light-nosink",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Microphone Array (Realtek(R) Audio)",
+          "width": 316,
+          "height": 44,
+          "textWidth": 222,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        },
+        {
+          "kind": "output",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Цей браузер не дає сайту вибрати динаміки. Звук іде через системний вихід.",
+          "width": 316,
+          "height": 44,
+          "textWidth": 222,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(255, 253, 250)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        44,
+        44
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(244, 241, 236)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "390-uk-dark-noperm",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false
+          ],
+          "hint": "Браузер показує назви пристроїв лише після дозволу на мікрофон. Показати пристрої",
+          "width": 316,
+          "height": 44,
+          "textWidth": 222,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": null,
+          "width": 316,
+          "height": 44,
+          "textWidth": 222,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": {
+        "text": "Показати пристрої",
+        "height": 44,
+        "left": 96.375,
+        "right": 206.765625
+      },
+      "controls": [
+        44,
+        44,
+        44
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "390-uk-dark-noperm-granted",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Microphone Array (Realtek(R) Audio)",
+          "width": 316,
+          "height": 44,
+          "textWidth": 222,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Speakers (Realtek(R) Audio)",
+          "width": 316,
+          "height": 44,
+          "textWidth": 222,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        44,
+        44
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "390-uk-dark-denied",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": "Браузер блокує мікрофон для цього сайту. Дозвольте його в налаштуваннях сайту й відкрийте це вікно знову.",
+          "width": 316,
+          "height": 44,
+          "textWidth": 222,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false
+          ],
+          "hint": null,
+          "width": 316,
+          "height": 44,
+          "textWidth": 222,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        44,
+        44
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "390-uk-dark-default",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Microphone Array (Realtek(R) Audio)",
+          "width": 316,
+          "height": 44,
+          "textWidth": 222,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Speakers (Realtek(R) Audio)",
+          "width": 316,
+          "height": 44,
+          "textWidth": 222,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        44,
+        44
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    },
+    {
+      "label": "390-uk-dark-chosen",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Навушники AirPods Pro (Bluetooth)",
+          "options": [
+            "Системний за замовчуванням",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Навушники AirPods Pro (Bluetooth)",
+          "width": 316,
+          "height": 44,
+          "textWidth": 256,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "DELL U2723QE (NVIDIA High Definition Audio)",
+          "options": [
+            "Системний за замовчуванням",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: DELL U2723QE (NVIDIA High Definition Audio)",
+          "width": 316,
+          "height": 44,
+          "textWidth": 337,
+          "room": 280,
+          "truncated": true,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        44,
+        44
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": "{\"id\":\"mic-pods\",\"label\":\"Навушники AirPods Pro (Bluetooth)\"}",
+        "output": "{\"id\":\"spk-monitor\",\"label\":\"DELL U2723QE (NVIDIA High Definition Audio)\"}"
+      }
+    },
+    {
+      "label": "390-uk-dark-gone",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Не під’єднано · Конференц-мікрофон Jabra Speak 750",
+          "options": [
+            "Системний за замовчуванням",
+            "Не під’єднано · Конференц-мікрофон Jabra Speak 750",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            true,
+            false,
+            false,
+            false
+          ],
+          "hint": "Конференц-мікрофон Jabra Speak 750 не під’єднано. Поки його немає, працює системний за замовчуванням.",
+          "width": 316,
+          "height": 44,
+          "textWidth": 403,
+          "room": 280,
+          "truncated": true,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "Не під’єднано · Bluetooth Speaker (JBL Flip 6)",
+          "options": [
+            "Системний за замовчуванням",
+            "Не під’єднано · Bluetooth Speaker (JBL Flip 6)",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            true,
+            false,
+            false,
+            false
+          ],
+          "hint": "Bluetooth Speaker (JBL Flip 6) не під’єднано. Поки його немає, працює системний за замовчуванням.",
+          "width": 316,
+          "height": 44,
+          "textWidth": 335,
+          "room": 280,
+          "truncated": true,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        44,
+        44
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": "{\"id\":\"mic-gone\",\"label\":\"Конференц-мікрофон Jabra Speak 750\"}",
+        "output": "{\"id\":\"spk-gone\",\"label\":\"Bluetooth Speaker (JBL Flip 6)\"}"
+      }
+    },
+    {
+      "label": "390-uk-dark-nosink",
+      "kinds": [
+        {
+          "kind": "input",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Microphone Array (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "USB Audio Device (Blue Yeti Nano)"
+          ],
+          "disabled": false,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Використовується: Microphone Array (Realtek(R) Audio)",
+          "width": 316,
+          "height": 44,
+          "textWidth": 222,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        },
+        {
+          "kind": "output",
+          "selected": "Системний за замовчуванням",
+          "options": [
+            "Системний за замовчуванням",
+            "Speakers (Realtek(R) Audio)",
+            "Навушники AirPods Pro (Bluetooth)",
+            "DELL U2723QE (NVIDIA High Definition Audio)"
+          ],
+          "disabled": true,
+          "optionDisabled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "hint": "Цей браузер не дає сайту вибрати динаміки. Звук іде через системний вихід.",
+          "width": 316,
+          "height": 44,
+          "textWidth": 222,
+          "room": 280,
+          "truncated": false,
+          "background": "rgb(25, 27, 35)"
+        }
+      ],
+      "button": null,
+      "controls": [
+        44,
+        44
+      ],
+      "outside": [],
+      "title": "Мікрофон і динаміки",
+      "sideways": 0,
+      "dialogSideways": 0,
+      "dialogBackground": "rgb(17, 18, 24)",
+      "stored": {
+        "input": null,
+        "output": null
+      }
+    }
+  ]
+}

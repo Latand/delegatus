@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 
 import { codexAccountBinary, CodexAppServerClient, type CodexAppServerOptions } from "./codexAppServer";
 
@@ -95,9 +95,22 @@ function clientWith(handler: (child: FakeChild, message: Record<string, unknown>
   child.onWrite = (message) => handler(child, message);
   return {
     child,
-    start: (options = {}) => CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", signalProcess: signalFakeGroup, ...options, home: "/fake/home", spawn: () => child as never }),
+    start: (options = {}) => CodexAppServerClient.start({ launchBinary: "/fixture/codex", readProtocolVersion: () => "0.162.1", signalProcess: signalFakeGroup, ...options, home: "/fake/home", spawn: () => child as never }),
   };
 }
+
+test("mocked app-server launch uses its fixture binary and never touches an installed prefix", async () => {
+  const original = fs.mkdirSync, updaterDirectories: string[] = [];
+  const mkdir = spyOn(fs, "mkdirSync").mockImplementation((directory, options) => {
+    if (path.basename(String(directory)) === ".delegatus-codex") updaterDirectories.push(String(directory));
+    return original(directory, options);
+  });
+  const f = clientWith((child, message) => { if (typeof message.id === "number") child.respond(requestId(message), {}); });
+  try {
+    const client = await f.start(); client.close();
+    expect(updaterDirectories).toEqual([]);
+  } finally { mkdir.mockRestore(); }
+});
 
 test("an unsupported executable is refused before spawning an account app-server", async () => {
   let spawned = false;
@@ -105,6 +118,7 @@ test("an unsupported executable is refused before spawning an account app-server
   const generateProtocolSchemas = async () => ({ stable: '{"definitions":{}}', experimental: '{"definitions":{}}' });
   await expect(CodexAppServerClient.start({
     home: "/fake/home",
+    launchBinary: "/fixture/codex",
     readProtocolVersion: () => "0.999.0",
     generateProtocolSchemas,
     signalProcess: signalFakeGroup,
@@ -112,6 +126,7 @@ test("an unsupported executable is refused before spawning an account app-server
   })).rejects.toThrow("CLI 0.999.0 has no pinned schema and is not an additive extension of pin 0.163.0. Pin the CLI");
   await expect(CodexAppServerClient.start({
     home: "/fake/home",
+    launchBinary: "/fixture/codex",
     readProtocolVersion: () => "0.150.0",
     signalProcess: signalFakeGroup,
     spawn: () => { spawned = true; return new FakeChild() as never; },
@@ -127,6 +142,7 @@ test("account-management app-server retains zero-MCP process isolation", async (
   let spawnArgs: unknown;
   const client = await CodexAppServerClient.start({
     readProtocolVersion: () => "0.162.1",
+    launchBinary: "/fixture/codex",
     home: "/managed/home",
     signalProcess: signalFakeGroup,
     spawn: (...args: unknown[]) => {
@@ -150,7 +166,7 @@ test.each(["0.154.0", "0.159.0", "0.162.1", "0.163.0"])("a voice caller can choo
   const child = new FakeChild();
   child.onWrite = message => { if (message.id) child.respond(requestId(message), {}); };
   let args: readonly string[] = [];
-  const client = await CodexAppServerClient.start({ home: "/managed/home", args: ["--enable", "realtime_conversation", "app-server"],
+  const client = await CodexAppServerClient.start({ home: "/managed/home", launchBinary: "/fixture/codex", args: ["--enable", "realtime_conversation", "app-server"],
     protocolProfile: "voice", readProtocolVersion: () => version, signalProcess: signalFakeGroup,
     spawn: (_home, passed) => { args = passed; return child as never; } });
   try {
@@ -376,6 +392,7 @@ test("a child exit rejects an in-flight request and reaps the child", async () =
   const clock = new FakeClock();
   const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
   const client = await CodexAppServerClient.start({
+    launchBinary: "/fixture/codex",
     readProtocolVersion: () => "0.162.1",
     home: "/fake/home",
     spawn: () => child as never,
@@ -447,7 +464,7 @@ test("an ambiguous request timeout closes the transport and ignores later bytes"
   child.onWrite = (message) => {
     if (message.method === "initialize") child.respond(requestId(message), {});
   };
-  const client = await CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", signalProcess: signalFakeGroup, home: "/fake/home", spawn: () => child as never, clock, requestTimeoutMs: 1, shutdownGraceMs: 1 });
+  const client = await CodexAppServerClient.start({ launchBinary: "/fixture/codex", readProtocolVersion: () => "0.162.1", signalProcess: signalFakeGroup, home: "/fake/home", spawn: () => child as never, clock, requestTimeoutMs: 1, shutdownGraceMs: 1 });
   const seen: string[] = [];
   client.onNotification((notification) => seen.push(notification.method));
   const pending = client.readAccount();
@@ -531,7 +548,7 @@ test("SIGTERM acknowledgement and escalation both end in a reaped child", async 
   const unacknowledged = new FakeChild();
   unacknowledged.onWrite = (message) => { if (message.method === "initialize") unacknowledged.respond(requestId(message), {}); };
   const reaped: string[] = [];
-  const escalating = await CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", signalProcess: signalFakeGroup, home: "/fake/home", spawn: () => unacknowledged as never, clock, shutdownGraceMs: 1 });
+  const escalating = await CodexAppServerClient.start({ launchBinary: "/fixture/codex", readProtocolVersion: () => "0.162.1", signalProcess: signalFakeGroup, home: "/fake/home", spawn: () => unacknowledged as never, clock, shutdownGraceMs: 1 });
   escalating.onLifecycle((event) => { if (event.type === "reaped") reaped.push(event.type); });
   escalating.close();
   clock.runAll();
@@ -548,6 +565,7 @@ test("shutdown escalates the detached process group after its leader exits durin
   const clock = new FakeClock();
   const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
   const client = await CodexAppServerClient.start({
+    launchBinary: "/fixture/codex",
     readProtocolVersion: () => "0.162.1",
     home: "/fake/home",
     spawn: () => child as never,
@@ -578,6 +596,7 @@ test("unexpected leader exit still cleans its detached process group", async () 
   const clock = new FakeClock();
   const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
   await CodexAppServerClient.start({
+    launchBinary: "/fixture/codex",
     readProtocolVersion: () => "0.162.1",
     home: "/fake/home",
     spawn: () => child as never,

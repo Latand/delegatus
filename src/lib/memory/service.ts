@@ -19,7 +19,8 @@ export function memoryIndex(): MemoryIndex {
   return index;
 }
 
-async function defaultRoots(): Promise<MemoryRoots> {
+/** The engine memory locations of this install; the transfer export counts them for its notice. */
+export async function defaultMemoryRoots(): Promise<MemoryRoots> {
   const home = os.homedir();
   const claudeHome = process.env.LLV_CLAUDE_HOME || path.join(home, ".claude");
   const codexHome = process.env.LLV_CODEX_HOME || path.join(home, ".codex");
@@ -49,7 +50,7 @@ export async function refreshMemoryIndex(roots?: MemoryRoots) {
  * Only counts return to the Viewer; searches keep their own read connection. */
 export async function refreshMemoryIndexLocally(roots?: MemoryRoots) {
   const inventory = await withViewerOperation("memory.discovery", () =>
-    performanceSpans.wait("memory.discovery", async () => discoverMemorySources(roots ?? await defaultRoots())));
+    performanceSpans.wait("memory.discovery", async () => discoverMemorySources(roots ?? await defaultMemoryRoots())));
   return withViewerOperation("memory.refresh", () =>
     performanceSpans.wait("memory.refresh", () => memoryIndex().refresh(inventory.sources, { complete: inventory.complete })));
 }
