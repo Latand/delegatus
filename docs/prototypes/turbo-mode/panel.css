@@ -1,0 +1,210 @@
+/* The seat tick panel as the product draws it, for the Turbo prototype.
+
+   Hand-copied from the Tailwind classes in
+   src/components/orchestrator/SeatTickBody.tsx (status, wakes, Full autonomy
+   sections, Toggle, StatusLine), SeatTickChip.tsx (the desktop popover:
+   w-80, max-h 70vh, rounded-surface, shadow-2), MobileSheet.tsx (the phone
+   sheet: raised, rounded-t 16px, max-h 88%, 48 px header) and
+   AttachTerminalDialog.tsx (a modal: scrim black/40, rounded-surface, p-4).
+   Every value is a product token from tokens.css; the comments name the
+   class each rule stands for. Nothing here is new to the product except the
+   frame tag, which only the prototype prints. */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; border: 0 solid; }
+html, body { height: 100%; }
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  background: var(--color-canvas);
+  color: var(--color-primary);
+  line-height: 1.5;
+}
+button, input, select, textarea { font: inherit; color: inherit; background: transparent; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+svg { display: block; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* ── The app behind the panel (desktop) ─────────────────────────────────── */
+.app { position: relative; min-height: 100vh; overflow: hidden; background: var(--surface-board); }
+.dock {
+  display: flex; align-items: center; gap: 12px; height: 44px; padding: 0 16px;
+  background: var(--color-card); border-bottom: 1px solid var(--color-border);
+}
+.dock-brand { font-size: var(--text-body); font-weight: 700; color: var(--color-primary); }
+.dock-project { font-size: var(--text-ui); color: var(--color-secondary); }
+.dock-spacer { flex: 1; }
+.dock-label { font-size: var(--text-ui); color: var(--color-secondary); }
+.board-ghost { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 16px; }
+.board-ghost > div { height: 220px; border-radius: var(--radius-surface); background: var(--surface-well); border: 1px solid var(--color-border); }
+.board-ghost > div:nth-child(2) { height: 300px; }
+.board-ghost > div:nth-child(3) { height: 180px; }
+
+/* The seat tick switch in the dock (SeatTickSwitch.tsx, at the «1 год» stop). */
+.tick-switch { display: inline-flex; align-items: center; gap: 6px; }
+.tick-track {
+  position: relative; display: inline-block; height: 24px; width: 112px;
+  border-radius: 999px; border: 1px solid var(--color-border);
+  background: var(--color-sunken);
+}
+.tick-fill { position: absolute; inset: 0 auto 0 0; width: 90px; border-radius: 999px; background: color-mix(in oklab, var(--tick-2) 18%, var(--color-sunken)); }
+.tick-thumb {
+  position: absolute; top: 2px; left: 42px; height: 18px; width: 46px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 999px; border: 1px solid var(--tick-2); background: var(--color-card);
+  box-shadow: var(--shadow-1); font-size: var(--text-caption); font-weight: 600;
+  color: color-mix(in oklch, var(--tick-2) 60%, var(--color-primary));
+}
+.tick-notch { position: absolute; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px; border-radius: 999px; background: var(--color-strong); }
+.dot { width: 6px; height: 6px; flex-shrink: 0; border-radius: 999px; }
+.dot-ok { background: var(--color-success); }
+
+/* ── The desktop popover (SeatTickChip.tsx) ─────────────────────────────── */
+.popover {
+  position: absolute; top: 50px; right: 16px; width: 320px; max-width: calc(100vw - 16px);
+  max-height: 70vh; overflow-y: auto; display: flex; flex-direction: column;
+  border-radius: var(--radius-surface); border: 1px solid var(--color-border);
+  background: var(--color-card); box-shadow: var(--shadow-2);
+}
+
+/* ── The body (SeatTickBody.tsx) ────────────────────────────────────────── */
+.body { display: flex; min-width: 0; flex-direction: column; gap: 12px; padding: 12px; }
+.phone .body { padding: 0 16px 12px; }
+.head { font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.status { display: flex; min-width: 0; flex-direction: column; gap: 6px; }
+.status-line { display: flex; min-width: 0; align-items: flex-start; gap: 6px; font-size: var(--text-ui); color: var(--color-primary); }
+.status-line > .dot, .status-line > .status-mark { margin-top: 5px; }
+.status-line > .status-mark { margin-top: 3px; }
+.status-detail { padding-left: 12px; font-size: var(--text-caption); line-height: 16px; color: var(--color-muted); }
+.section { display: flex; min-width: 0; flex-direction: column; gap: 8px; border-top: 1px solid var(--color-border); padding-top: 10px; }
+.row { display: flex; min-width: 0; align-items: center; gap: 8px; min-height: 28px; }
+.phone .row { min-height: 44px; }
+.section-head { min-width: 0; flex: 1; font-size: var(--text-label); font-weight: 600; text-transform: uppercase; letter-spacing: .025em; color: var(--color-muted); }
+.caption { font-size: var(--text-caption); line-height: 16px; color: var(--color-secondary); }
+.caption-muted { color: var(--color-muted); }
+.field { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.field-label { font-size: var(--text-ui); color: var(--color-primary); }
+.control {
+  height: 28px; width: 100%; border-radius: var(--radius-control); border: 1px solid var(--color-border);
+  background: var(--color-card); padding: 0 8px; font-size: var(--text-ui); color: var(--color-primary);
+}
+.phone .control { height: 44px; padding: 0 10px; font-size: var(--text-body); }
+.control::placeholder { color: var(--color-muted); }
+.textarea { height: auto; min-height: 0; padding: 6px 8px; resize: none; line-height: 1.4; }
+.phone .textarea { font-size: var(--text-body); }
+.lines { display: flex; flex-direction: column; gap: 8px; font-size: var(--text-ui); list-style: none; }
+.lines .meta { font-size: var(--text-caption); color: var(--color-muted); }
+
+/* Toggle (SeatTickBody.tsx): h-5 w-9 desktop, h-7 w-12 phone. */
+.toggle {
+  position: relative; flex-shrink: 0; height: 20px; width: 36px; border-radius: 999px;
+  border: 1px solid var(--color-border); background: var(--color-sunken); transition: background-color .15s, border-color .15s;
+}
+.toggle > span { position: absolute; top: 2px; left: 2px; height: 14px; width: 14px; border-radius: 999px; background: var(--color-card); box-shadow: var(--shadow-1); transition: left .15s; }
+.toggle[aria-checked="true"] { border-color: var(--color-accent); background: var(--color-accent); }
+.toggle[aria-checked="true"] > span { left: 18px; }
+.phone .toggle { height: 28px; width: 48px; }
+.phone .toggle > span { height: 20px; width: 20px; }
+.phone .toggle[aria-checked="true"] > span { left: 24px; }
+
+/* The product's focus ring: ring-2 ring-accent/40. */
+.ring:focus-visible, .ring.sim-focus { outline: none; box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-accent) 40%, transparent); }
+
+/* ── Buttons (SeatTickActions; AttachTerminalDialog's close) ───────────── */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 0;
+  height: 28px; padding: 0 12px; border-radius: var(--radius-control);
+  font-size: var(--text-ui); font-weight: 600; white-space: nowrap;
+}
+.phone .btn { min-height: 44px; height: auto; font-size: var(--text-body); }
+.btn-brand { border: 1px solid var(--color-brand); background: var(--color-brand); color: var(--color-on-brand); box-shadow: var(--shadow-1); }
+.btn-quiet { border: 1px solid var(--color-border); background: var(--color-card); color: var(--color-primary); }
+.btn-quiet.sim-focus, .btn-quiet:focus-visible { outline: none; box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-accent) 40%, transparent); }
+
+/* ── Modal (AttachTerminalDialog.tsx) and the phone sheet (MobileSheet.tsx) */
+.scrim { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgb(0 0 0 / .4); z-index: 50; }
+.dialog {
+  display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: 720px; max-height: 85vh; overflow: hidden;
+  border-radius: var(--radius-surface); border: 1px solid var(--color-border); background: var(--color-card);
+  padding: 16px; box-shadow: var(--shadow-2);
+}
+.dialog-title { display: flex; flex-shrink: 0; align-items: flex-start; gap: 8px; }
+/* The body scrolls between the pinned title and buttons, if a window is ever
+   too short for it; at 1000x700 and up it fits whole. */
+.dialog-scroll { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; gap: 12px; overflow-y: auto; }
+.dialog-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.dialog-col { display: flex; min-width: 0; flex-direction: column; gap: 12px; }
+.phone .dialog-cols { display: flex; flex-direction: column; gap: 12px; }
+.dialog-title h2 { font-size: var(--text-body); font-weight: 700; color: var(--color-primary); line-height: 1.35; }
+.dialog-lead { font-size: var(--text-ui); line-height: 1.45; color: var(--color-primary); }
+.dialog-block { display: flex; flex-direction: column; gap: 2px; }
+.dialog-block-head { font-size: var(--text-label); font-weight: 600; text-transform: uppercase; letter-spacing: .025em; color: var(--color-muted); }
+.dialog-text { font-size: var(--text-ui); line-height: 1.45; color: var(--color-primary); }
+.dialog-note { font-size: var(--text-caption); line-height: 16px; color: var(--color-secondary); }
+.accounts { list-style: none; border-radius: var(--radius-control); border: 1px solid var(--color-border); background: var(--color-sunken); }
+.accounts li { display: flex; flex-direction: column; gap: 1px; padding: 6px 10px; }
+.accounts li + li { border-top: 1px solid var(--color-border); }
+.account-top { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 8px; }
+.account-name { font-size: var(--text-ui); font-weight: 600; color: var(--color-primary); }
+.account-plan { font-weight: 400; color: var(--color-secondary); }
+.account-usage { font-size: var(--text-caption); color: var(--color-secondary); font-variant-numeric: tabular-nums; }
+.account-tier { font-size: var(--text-caption); line-height: 15px; color: var(--color-primary); }
+.account-shared { font-size: var(--text-caption); line-height: 15px; color: var(--color-muted); }
+.dialog-actions { display: flex; flex-shrink: 0; justify-content: flex-end; gap: 8px; padding-top: 2px; }
+.phone .dialog-actions { justify-content: stretch; }
+.phone .dialog-actions .btn { flex: 1; }
+
+.phone-app { position: relative; height: 100vh; overflow: hidden; background: var(--surface-board); }
+.phone-top { display: flex; align-items: center; gap: 8px; height: 48px; padding: 0 12px; background: var(--color-card); border-bottom: 1px solid var(--color-border); }
+.phone-ghost { display: flex; flex-direction: column; gap: 10px; padding: 12px; }
+.phone-ghost > div { height: 96px; border-radius: var(--radius-surface); background: var(--surface-well); border: 1px solid var(--color-border); }
+.sheet-scrim { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: flex-end; background: rgb(0 0 0 / .4); }
+.sheet {
+  display: flex; flex-direction: column; max-height: 88%; background: var(--color-raised);
+  border-radius: 16px 16px 0 0; box-shadow: var(--shadow-2); padding-bottom: 6px;
+}
+.sheet-grab { flex-shrink: 0; padding: 8px 24px 2px; }
+.sheet-grab > span { display: block; margin: 0 auto; height: 4px; width: 36px; border-radius: 4px; background: var(--color-strong); }
+.sheet-header { display: flex; flex-shrink: 0; align-items: center; gap: 4px; min-height: 48px; padding: 0 4px 0 16px; }
+.sheet-header h2 { min-width: 0; flex: 1; font-size: var(--text-title); font-weight: 600; color: var(--color-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sheet-close { display: flex; height: 44px; width: 44px; flex-shrink: 0; align-items: center; justify-content: center; border-radius: 8px; color: var(--color-secondary); }
+.sheet-body { min-height: 0; overflow-y: auto; overflow-x: hidden; padding-bottom: 4px; }
+.sheet-footer { display: flex; flex-shrink: 0; gap: 8px; padding: 10px 16px 0; }
+.sheet-scrim-top { z-index: 40; }
+.sheet-scrim-top .sheet { max-height: 94%; }
+.sheet .dialog-body { display: flex; flex-direction: column; gap: 12px; padding: 0 16px 8px; }
+
+/* ── The prototype's own tag: which variant and which state a frame shows. */
+.frame-tag {
+  position: fixed; left: 16px; bottom: 12px; z-index: 80;
+  padding: 3px 8px; border-radius: var(--radius-control); border: 1px dashed var(--color-strong);
+  background: var(--color-card); font-size: var(--text-label); font-weight: 600; color: var(--color-secondary);
+}
+.phone .frame-tag { left: auto; right: 8px; bottom: auto; top: 54px; }
+
+/* ── Story mode: the state picker shown when the page opens without ?state */
+.story-bar { position: fixed; left: 16px; top: 52px; z-index: 90; display: flex; flex-wrap: wrap; gap: 6px; max-width: 760px; }
+.story-bar a { font-size: var(--text-ui); padding: 2px 8px; border-radius: var(--radius-control); border: 1px solid var(--color-border); background: var(--color-card); color: var(--color-accent); text-decoration: none; }
+.phone .story-bar { top: auto; bottom: 8px; left: 8px; right: 8px; z-index: 30; }
+
+/* ── The paid-credit approval (design §2.3): its own box under the accounts,
+   the account list's shape in the warning tone, with the product's native
+   checkbox (size-4, size-6 on the phone, as SeatTickRelease's ask). Ticked,
+   it turns to the danger tone, because from then on Turbo may spend money. */
+.account-credit { font-size: var(--text-caption); line-height: 15px; color: var(--color-secondary); }
+.account-credit.is-paid { color: var(--color-danger); font-weight: 600; }
+.credits {
+  display: flex; flex-direction: column; gap: 4px; padding: 8px 10px;
+  border-radius: var(--radius-control); border: 1px solid var(--color-warning); background: var(--color-warning-soft);
+}
+.credits.is-on { border-color: var(--color-danger); background: var(--color-danger-soft); }
+.credits-opt { display: flex; align-items: center; gap: 8px; min-height: 24px; cursor: pointer; }
+.credits-opt input { width: 16px; height: 16px; flex-shrink: 0; margin: 0; }
+.phone .credits-opt { min-height: 44px; }
+.phone .credits-opt input { width: 24px; height: 24px; }
+.credits-title { font-size: var(--text-ui); font-weight: 700; color: var(--color-primary); }
+.credits-text { font-size: var(--text-caption); line-height: 16px; color: var(--color-primary); }
+.credits-muted { color: var(--color-secondary); }
+.credits-list { list-style: none; display: flex; flex-direction: column; gap: 1px; font-size: var(--text-caption); line-height: 16px; color: var(--color-primary); }
+.credits-list li::before { content: "· "; color: var(--color-secondary); }
+.cap-head.cap-paid { color: var(--color-danger); }

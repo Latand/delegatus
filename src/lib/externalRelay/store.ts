@@ -94,6 +94,8 @@ export type RelayStore = {
 export type RunRecord = {
   /** Execution ended; retained delivery/cleanup custody owns no target slot. */
   capacityReleased?: true;
+  /** The service accepted this request's completion; recovery only cleans up. */
+  completionAccepted?: true;
   /** Present only on a full owner run, bound by the Viewer to its spawn receipt. */
   conversationId?: string;
   /** Durable custody survives a lost lease, cutoff, or Viewer restart. */

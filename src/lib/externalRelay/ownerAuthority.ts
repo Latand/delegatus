@@ -6,6 +6,8 @@ import { agentRegistry } from "@/lib/agent/registry";
 import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
 import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
 import { externalRelayFile, type RunLedger, type RelayStore, type RunRecord } from "./store";
+import type { ExternalRelayCompletion } from "./protocol";
+import { isOwnerRequestTimeoutReply } from "./requestTimeout";
 
 /** MCP reads only: no store creation, pruning or mutation during admission. */
 export function liveOwnerRelayConversation(conversationId: string): boolean {
@@ -60,13 +62,23 @@ export function ownerRelayTargetMatches(conversationId: string, project: string,
 
 /** Fail closed at every admission and delivery boundary; reads only. */
 export function ownerRelayAuthorized(relayId: string, targetId: string, requestId: string): boolean {
+  return ownerRelayReplyAuthorized(relayId, targetId, requestId, false);
+}
+
+/** The fixed deadline notice may precede stop confirmation. It grants no
+ * execution authority and still requires current request/relay settings. */
+export function ownerRelayStatusReplyAuthorized(relayId: string, targetId: string, requestId: string, body: ExternalRelayCompletion, plainMax: number): boolean {
+  return isOwnerRequestTimeoutReply(body, plainMax) && ownerRelayReplyAuthorized(relayId, targetId, requestId, true);
+}
+
+function ownerRelayReplyAuthorized(relayId: string, targetId: string, requestId: string, statusReply: boolean): boolean {
   try {
     const store = JSON.parse(fs.readFileSync(externalRelayFile("relays"), "utf8")) as RelayStore;
     const ledger = JSON.parse(fs.readFileSync(externalRelayFile("runs"), "utf8")) as RunLedger;
     const relay = store.relays.find(r => r.id === relayId);
     const target = relay?.targets.find(t => t.id === targetId);
     const run = ledger.runs.find(r => r.requestId === requestId && r.relayId === relayId && r.targetId === targetId);
-    return store.v === 1 && ledger.v === 1 && !!run?.ownerTurn && !run.ownerTurn.cancel
+    return store.v === 1 && ledger.v === 1 && !!run?.ownerTurn && (!run.ownerTurn.cancel || statusReply)
       && relay?.paused === false && target?.enabled === true && (target.ownerTier === true || run.ownerTurn.prototype === true);
   } catch { return false; }
 }

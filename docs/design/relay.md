@@ -1776,7 +1776,7 @@ Completion reasons. These follow the target's fallback setting, except
 | failed | `agent_error` | The CLI exited with an error or reported an error result. |
 | failed | `invalid_answer` | The answer failed the checks of §A.8. |
 | failed | `profile_violation` | A runtime tripwire saw a tool or server the profile excludes (§B.6.5). |
-| failed | `hard_cap` | The orphan guard ended the run. |
+| failed | `hard_cap` | The configured ordinary-agent hard cap ended the run. Owner request-window expiry posts the fixed timeout reply described in the 2026-10-22 amendment. |
 | failed | `install_restarted` | The Viewer that owned the run is gone (§B.3). |
 | failed | `cancelled` | The operator stopped the run. |
 
@@ -3310,7 +3310,7 @@ The install announces `request_deadline` in claim negotiation. Answer claims
 may carry optional `request.deadline_at`, original `created_at` + 120 s,
 RFC 3339 UTC ending in `Z`. The install reads it from the raw request and
 uses that absolute timestamp. Older peers omit it; compact claims omit it.
-Absent or malformed fields use one fixed receipt + 120 s budget. Past values
+Absent or malformed fields use one fixed receipt + 600 s budget (amended 2026-10-22). Past values
 use that same fallback delivery budget and complete `declined` / `busy`
 immediately without holding. The field stays outside request validation.
 The service sends `request.liveness.stall_window_s` as
@@ -3335,3 +3335,16 @@ when its descriptor offers it, and fills those claims once with bounded
 and use request-bound `relay_service_tools` to describe and call tools through
 the same tool loop as restricted agents. The relay wire protocol is unchanged.
 See [owner service tools](relay-owner-service-tools.md).
+
+
+### 2026-10-22 owner request window amendment
+
+The receipt fallback is ten minutes. A valid service `deadline_at` remains
+unchanged, so a service still supplying two minutes still gives two minutes.
+Owner execution receives the remaining request window, including when the
+ordinary target cap is shorter. Ready answers complete immediately. Expiry
+sends an `answered` plain timeout notice even with service fallback disabled, while unconfirmed
+stop custody remains in the ledger for recovery. Busy holds retain ten seconds
+for explicit completion; per-call, upload and history limits stay unchanged.
+See [relay-request-window.md](relay-request-window.md) for the timer audit,
+journal observations and validation.

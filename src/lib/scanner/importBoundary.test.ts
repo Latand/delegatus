@@ -66,3 +66,7 @@ test("normalizes Windows paths when identifying the allowed team response helper
 test("the scanner worker's runtime import graph stays outside next/server", () => {
   expect(nextServerImports("src/lib/scanner/index.ts")).toEqual([]);
 });
+
+test("Turbo's runtime import graph stays outside next/server when reached by the scanner", () => {
+  expect(nextServerImports("src/lib/monitor/turboRuntime.ts")).toEqual([]);
+});
