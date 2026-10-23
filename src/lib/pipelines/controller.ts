@@ -8,7 +8,7 @@ import { writeJsonDurably } from "@/lib/state/durableJson";
 import { scheduleAutoMerge } from "@/lib/forge/autoMerge";
 import { scheduleForgeSweep } from "@/lib/forge/sweep";
 import { loadTasksForList } from "@/lib/tasks/store";
-import { completedFileScan } from "@/lib/scanner/scanCache";
+import { completedFileScan, lastScannedFiles, RetainedFileScanError } from "@/lib/scanner/scanCache";
 import { isFileScanIncompleteError } from "@/lib/scanner/incompleteScan";
 import { activeRestartGate } from "@/lib/selfUpdate/restartGate";
 import type { FileEntry } from "@/lib/types";
@@ -108,6 +108,12 @@ export async function controllerFileScan(): Promise<{ files: FileEntry[]; comple
     const completed = await completedFileScan({ wait: false });
     return { files: completed.snapshot.files, complete: completed.snapshot.complete };
   } catch (error) {
+    // A failed background generation leaves the last completed inventory
+    // authoritative. completedFileScan has already paced/joined its retry.
+    if (error instanceof RetainedFileScanError) {
+      const files = lastScannedFiles();
+      return { files: files ? structuredClone([...files]) : [], complete: files !== null };
+    }
     if (!isFileScanIncompleteError(error)) throw error;
     return { files: [], complete: false };
   }

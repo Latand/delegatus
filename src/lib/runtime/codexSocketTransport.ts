@@ -69,9 +69,11 @@ async function startStderrDrain(fifo: string, file: string): Promise<StderrDrain
   try {
     // A writer must exist before the drain opens the read end.
     writer = fs.openSync(fifo, fs.constants.O_RDWR);
+    // The shell creates the empty sink before launch. Do not let dd truncate a
+    // wrapper's diagnostic through its alias when the FIFO ends without bytes.
     // dd copies the first bytes unbuffered; cat then discards the rest.
     const script = `umask 077; exec 3<"$1" 4>"$2" || exit 1; echo ready; exec >/dev/null
-trap '' HUP; dd bs=1 count="$3" <&3 >&4 2>/dev/null; cat <&3 >/dev/null`;
+trap '' HUP; dd bs=1 count="$3" conv=notrunc <&3 >&4 2>/dev/null; cat <&3 >/dev/null`;
     const drain = spawn("sh", ["-c", script, "sh", fifo, file, String(STDERR_KEEP_BYTES)], { stdio: ["ignore", "pipe", "ignore"], detached: true });
     const finished = new Promise<void>(resolve => { drain.once("close", () => resolve()); drain.once("error", () => resolve()); });
     drain.unref();
