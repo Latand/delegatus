@@ -3,6 +3,7 @@ import { databaseFileIdentity, openCurrentDatabase } from "@/lib/state/currentDa
 import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { canonicalScope, roleMemoryCollection, RoleMemoryRefusal } from "./roleStore";
 import { readMemorySourceFile } from "./source";
+import { curatableImportId, memorySyncIntervalHours } from "./importSync";
 import { importCollection, readImportRecord } from "./importStore";
 import type { ImportCandidate } from "./importTypes";
 import { passIsLive, passMetadata, curationCollection, readPass, type CuratorPass } from "./curation/store";
@@ -78,7 +79,7 @@ const owner = globalThis as typeof globalThis & { __delegatusImportBatches?: Map
 export function selectImportBatch(project: string): ImportBatch | null {
   const file = statePath("state.sqlite"), aliases = projectAliasSnapshot().aliases;
   const key = `${file}:${canonicalProject(project)}`;
-  const stamp = `${databaseFileIdentity(file)}:${importCollection()?.revision()}:${roleMemoryCollection()?.revision()}:${curationCollection()?.revision()}:${JSON.stringify(readMemorySourceFile())}:${JSON.stringify(aliases)}`;
+  const stamp = `${databaseFileIdentity(file)}:${importCollection()?.revision()}:${roleMemoryCollection()?.revision()}:${curationCollection()?.revision()}:${JSON.stringify(readMemorySourceFile())}:${memorySyncIntervalHours()}:${JSON.stringify(aliases)}`;
   const cache = owner.__delegatusImportBatches ??= new Map();
   const held = cache.get(key);
   if (held?.stamp === stamp) { cache.delete(key); cache.set(key, held); return held.batch ? structuredClone(held.batch) : null; }
@@ -88,9 +89,10 @@ export function selectImportBatch(project: string): ImportBatch | null {
   return batch ? structuredClone(batch) : null;
 }
 function selectBatch(project: string): ImportBatch | null {
-  const source = readMemorySourceFile();
-  if (source?.source !== "delegatus" || !source.importId || readImportRecord(source.importId)?.state !== "ready") return null;
-  const record = readImportRecord(source.importId)!;
+  const importId = curatableImportId();
+  if (!importId || readImportRecord(importId)?.state !== "ready") return null;
+  const source = { importId };
+  const record = readImportRecord(importId)!;
   const sqlite = process.getBuiltinModule("bun:sqlite") as typeof import("bun:sqlite");
   const db = openCurrentDatabase(statePath("state.sqlite"), () => new sqlite.Database(statePath("state.sqlite"), { readonly: true, strict: true }));
   try {
@@ -143,8 +145,7 @@ export async function readImportBatch(pass: CuratorPass) {
   if (!pass.importBatch) return [];
   return waitForStateLock("memory.import.read", () => {
     const fresh = readPass(pass.id);
-    const source = readMemorySourceFile();
-    if (!passIsLive(fresh) || source?.source !== "delegatus" || source.importId !== pass.importBatch!.importId) return refuse("import pass is no longer active");
+    if (!passIsLive(fresh) || curatableImportId() !== pass.importBatch!.importId) return refuse("import pass is no longer active");
     const rows = pass.importBatch!.candidates.map(id => candidateById(pass.importBatch!.importId, id) ?? refuse("import candidate missing"));
     importCollection(true)!.boundedPatch(160, tx => {
       for (const row of rows) if (!row.readBy?.includes(pass.id)) tx.put({ ...row, readBy: [...row.readBy ?? [], pass.id] });
@@ -154,8 +155,7 @@ export async function readImportBatch(pass: CuratorPass) {
   });
 }
 export function assertImportCandidate(pass: CuratorPass, id: string) {
-  const source = readMemorySourceFile();
-  if (!pass.importBatch || source?.source !== "delegatus" || source.importId !== pass.importBatch.importId || !pass.importBatch.candidates.includes(id)) return refuse("candidate does not belong to this active import batch");
+  if (!pass.importBatch || curatableImportId() !== pass.importBatch.importId || !pass.importBatch.candidates.includes(id)) return refuse("candidate does not belong to this active import batch");
   const row = candidateById(pass.importBatch.importId, id) ?? refuse("import candidate missing");
   if (!row.readBy?.includes(pass.id)) return refuse("the pass must read this part before dispositioning it");
   return row;

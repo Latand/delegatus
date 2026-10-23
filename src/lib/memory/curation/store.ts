@@ -247,13 +247,15 @@ export function curationStatus(project: string, now = Date.now(), setting = effe
 
   });
 }
-export function claimPass(input: { project: string; repoDir: string | null; now: number; setting?: ReturnType<typeof effectiveCurationSetting> }): CuratorPass | null {
+export function claimPass(input: { project: string; repoDir: string | null; now: number; setting?: ReturnType<typeof effectiveCurationSetting>; importOnly?: boolean }): CuratorPass | null {
   const project = canonicalProject(input.project);
   const prior = projectRow(project);
   const setting = input.setting ?? effectiveCurationSetting(readSeatTickSettings(project));
   const status = curationStatus(project, input.now, setting);
   if (!status.due) return null;
   const importBatch = selectImportBatch(project);
+  // The engines position never claims an ordinary pass (§4.9).
+  if (input.importOnly && !importBatch) return null;
   const scopes = [...new Set([...passScopes(project), ...(importBatch ? importBatchScopes(importBatch) : [])])];
   const claimRevisions: Record<string, number> = Object.fromEntries(scopes.map(scope => [scope, 0]));
   for (const row of curationScopes(project)) {
