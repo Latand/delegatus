@@ -576,15 +576,25 @@ test("a completed refresh advances its parent's check state before merging", asy
 });
 
 
-test.each(["main", "release/stable"])("a PR successor refreshes from forge base %s instead of its delivery branch", async base => {
+test.each(["main", "release/stable"])("a PR successor names the forge base and its tip as the source, and the delivery branch only as the target", async base => {
   const value = finished();
   value.baseBranch = "topic";
   const h = harness({ lanes: [value], prs: [{ ...conflicting(), base }] });
   await h.sweep();
   const request = h.creates[0]!.request as CreatePipelineRequest;
+  const [refresh, review, fix] = request.stages;
+  const publicText = [request.task, request.spec, ...request.stages.map(stage => stage.prompt)].join("\n");
+  expect(h.merge("finished")!.refresh).toMatchObject({ baseBranch: base, base: MAIN_1 });
   expect(request.baseBranch).toBe(base);
-  expect(request.stages[0]!.prompt).toContain(`Merge current origin/${base} into`);
-  expect(request.stages[0]!.prompt).not.toContain("origin/topic into");
+  expect(request.task).toContain(`merge current ${base}`);
+  expect(request.spec).toContain(`refresh from ${base}`);
+  expect(refresh!.prompt).toContain(`Merge current origin/${base} into this PR's delivery branch refs/heads/topic`);
+  expect(refresh!.prompt).toContain(`base ${base} at ${MAIN_1}; reviewed head ${HEAD_A}; delivery refs/heads/topic`);
+  expect(review!.prompt).toContain(`plus ${base}'s changes`);
+  expect(fix!.prompt).toContain("this PR's delivery branch refs/heads/topic");
+  expect(publicText).not.toContain("origin/topic");
+  expect(publicText).not.toContain("base topic");
+  expect(publicText).not.toContain("refresh from topic");
 });
 
 
