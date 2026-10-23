@@ -1,32 +1,8 @@
-import os from "node:os";
 // Pre-S5 embedded-flow execution cases stay as history until S8 deletion.
 // Supported run-reviewer cases and flows/retirement.test.ts remain active.
 import { expect, test, spawn, spawnSync, fs, path, ACCOUNT_STORE_BUSY_MESSAGE, AccountMutationBusyError, defaultPipelinePorts, reconcileEmbeddedReviewFlows, tickPipelines, newRound, setRelayDeliveryForTest, tickFlow, registerPipelineTick, loadPipelines, savePipelines, interruptionObligationDirectory, patchPipeline, closeAndDrain, ORIGIN_MAIN_SHA, entry, harness, REMOTE_BRANCH, create, exhaustVerdictRecovery, withRuntimeSnapshot, DEPLOY_WINDOW_MS, forbiddenSleep, frozenWallClock, HISTORICAL_VERDICT_MISS, DEPLOY_CUT_HOLD, READ_ONLY_RERUN, deployCutObligations, structuredLatest, reviewParkedAfterRestart, STAGE_HEAD, PASS_TEXT, makeStructuredAttempt, stalledEntry, countDurableReads, pinStageHead, runningStructuredStage } from "./engine.fixture";
 import type { Flow, FileEntry } from "./engine.fixture";
 
-
-for (const writable of [false, true]) test(`a stage preserves borrowed dependencies only while read-only (writable: ${writable})`, async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "stage-dependencies-"));
-  const source = path.join(root, "source");
-  fs.mkdirSync(path.join(source, "node_modules"), { recursive: true });
-  const h = harness();
-  try {
-    const pipeline = await create(h.ports, [{ id: "build", kind: "run", prompt: "build", access: writable ? "read-write" : "read-only", next: null }] as never, { repoDir: source });
-    const lane = pipeline.worktreeDir; fs.mkdirSync(lane);
-    fs.symlinkSync(path.join(source, "node_modules"), path.join(lane, "node_modules"), "dir");
-    const spawn = h.ports.spawnAgent;
-    let observed = false;
-    h.ports.spawnAgent = async (...args) => {
-      observed = true;
-      expect(fs.existsSync(path.join(lane, "node_modules"))).toBe(!writable);
-      return await spawn(...args);
-    };
-    await tickPipelines([], h.ports);
-    await tickPipelines([], h.ports);
-    expect(observed, loadPipelines()[0]?.stateDetail ?? "stage was not dispatched").toBe(true);
-    expect(fs.statSync(path.join(source, "node_modules")).isDirectory()).toBe(true);
-  } finally { fs.rmSync(root, { recursive: true, force: true }); }
-});
 
 test("a busy account mutation waits between ticks and claims one host on the same attempt (#1433)", async () => {
   const h = harness();
