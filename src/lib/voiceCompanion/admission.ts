@@ -196,7 +196,7 @@ export class CompanionAdmission {
         data: { callId: event.callId, delegationId: event.sourceItemId, instruction: event.instruction, status: "proposed" } });
     } else if (event.type === "delegation.sending" || event.type === "delegation.confirmation.required") {
       this.requestRecord(session.id, { id: `request-${event.proposal.callId}`, kind: "request", atMs: event.atMs,
-        data: { ...event.proposal, status: event.type === "delegation.sending" ? "sending" : "awaiting_confirmation" } });
+        data: { ...event.proposal, projectName: reportHeaderName(event.proposal.recipient.project, session.locale), status: event.type === "delegation.sending" ? "sending" : "awaiting_confirmation" } });
     } else if (event.type === "delegation.tool.result" || event.type === "delegation.delivery.settled") {
       const callId = event.type === "delegation.tool.result" ? event.callId : event.delivery.callId;
       const delivery = event.type === "delegation.tool.result" ? ("delivery" in event.result ? event.result.delivery : null) : event.delivery;

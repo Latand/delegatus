@@ -54,7 +54,7 @@
     "entities": "^8.0.0",
     "highlight.js": "^11.11.1",
     "lucide-react": "^1.23.0",
-    "next": "16.3.8",
+    "next": "16.4.1",
     "pdfjs-dist": "^6.2.108",
     "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0",
@@ -113,7 +113,6 @@
     "fast-uri": "^3.1.6"
   },
   "patchedDependencies": {
-    "next@16.3.8": "patches/next-16.3.8.patch",
     "braces@3.0.3": "patches/braces-3.0.3.patch"
   }
 }
