@@ -103,9 +103,11 @@ export function useMaintainerRole(enabled: boolean): MaintainerRoleRead {
     const stored = cache?.config;
     if (!stored) return { ok: false, error: "the maintainer's runtime has not been read yet", stale: false };
     /* Everything the row already carries that the picker does not touch — the
-       service tier — survives a change of model and is dropped with a change
-       of engine, where it would name a tier the other engine does not have. */
-    const config: RoleConfig = stored.engine === runtime.engine ? { ...stored, ...runtime } : { ...runtime };
+       service tier and the memory cap — survives a change of model. A change
+       of engine drops the tier, which the other engine does not have, and
+       keeps the cap, which belongs to no engine. */
+    const config: RoleConfig = stored.engine === runtime.engine ? { ...stored, ...runtime }
+      : { ...runtime, ...(stored.agentMemoryMaxBytes != null ? { agentMemoryMaxBytes: stored.agentMemoryMaxBytes } : {}) };
     /* Drawn at once (audit B21); the stored catalogue stays the cache, so a
        refusal shows it again. */
     const held = cache;

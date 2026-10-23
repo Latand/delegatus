@@ -366,6 +366,20 @@ That stop shows in Needs you and is never silent.
 
 Waiting is bounded. The runner polls every 60 s for at most 90 minutes from
 the first read of a head, then blocks with "checks did not finish in 90 min".
+An expired head is read even when its next poll is scheduled later: settled
+green checks can merge, while an unresolved or unreadable head releases the
+repository slot with the timeout reason. A retry starts a fresh head clock.
+
+Same-name checks whose app and workflow identity is unavailable retain every
+reported verdict. Successful duplicates can settle together; any independent
+failure still blocks and any required pending run still waits. Only a proved
+same-source rerun supersedes an earlier result.
+
+Each sweep reports held lanes, queued peers and skipped completed lanes when
+their reason changes. Messages are single lines bounded to 400 reason
+characters, with one remembered reason per retained completed merge lane;
+departed or reopened lanes are evicted. A process restart reports its first
+observation again. Queued peers name the lane holding their repository slot.
 
 ### 4.4 How the merge runs
 
@@ -396,7 +410,7 @@ Per eligible lane, a small state machine stored on the pipeline as
 queued → checking ─┬─ head in chain, CLEAN/HAS_HOOKS/UNSTABLE, required checks settled + green, no red ─→ merging → merged
                    ├─ checks not settled, UNKNOWN, mergeable null/UNKNOWN,
                    │  BLOCKED while a required check is pending ─→ waiting-checks (60 s, ≤ 90 min) → checking
-                   ├─ BEHIND ─→ updating (update-branch) → waiting-checks
+                   ├─ BEHIND ─→ refreshing (owned local merge + review) → successor waits for its own checks
                    └─ DIRTY, a red check, BLOCKED with checks settled, head outside chain,
                       draft, closed, gh error ─→ blocked(reason)
 ```
@@ -412,25 +426,24 @@ queued → checking ─┬─ head in chain, CLEAN/HAS_HOOKS/UNSTABLE, required 
    `BLOCKED` after the checks have settled green means protection wants
    something the runner cannot give (an approving review, a signed commit),
    and blocks with GitHub's reason.
-2. **Head fence, as a chain.** The runner keeps `merge.chain`: the lane's
-   `lastPassedCommit`, then each head its own updates produced, in order. The
-   PR head must be **in** the chain. `update-branch` answers `202` with no sha,
-   so after each update the runner reads the PR, and it adds a new head to the
-   chain only when all of these hold: an update is outstanding (recorded
-   `merge.updates[i].requestedAt`, no head recorded yet), the new head's
-   parents (`gh api repos/<r>/commits/<sha> --jq '[.parents[].sha]'`) are two,
-   the first is the chain's tip, and GitHub is its committer (`web-flow`). A
-   web-UI file edit also carries `web-flow` but has one parent, so it fails
-   the check. Then `merge.updates[i].head` is set. A second or third update
-   extends the same chain, so the runner never blocks on its own commit. Any
-   other head means someone pushed after the lane finished, and the lane is
-   blocked with "the PR head changed after the lane finished".
-3. **Behind base** (`BEHIND`, the "up to date" rule): `gh api -X PUT
-   repos/<r>/pulls/<n>/update-branch -f expected_head_sha=<chain tip>`, then
-   wait for checks on the new head (§4.3, from zero). That is at most three
-   updates per lane; a fourth blocks with "main keeps moving". This is the call
-   the seat already makes by hand. It works with the repository's "suggest
-   updating" option off, and the repository has it off.
+2. **Head fence.** Each lane merges its reviewed head, with local declared
+   output commits admitted by their existing proof. A completed refresh lane
+   owns its newly reviewed merge head and starts its own check clock. Reads use
+   that PR head's rollup; checks from the old head are never copied to it.
+   Retained records from older runners can still reconcile an outstanding
+   branch update only when its two-parent commit extends the recorded chain
+   and carries the expected forge committer. No new GitHub branch update is
+   issued.
+3. **Behind base** (`BEHIND`, the strict up-to-date rule): start the same owned,
+   visible refresh pipeline used for conflicts. It merges the forge's saved
+   base into the delivery branch locally, under the enforced machine identity,
+   then runs resolution review and publication checks. GitHub update-branch is
+   forbidden: its merge identity can fail the privacy gate. The original leaves
+   the repository queue while the successor runs. The successor waits for its
+   own head's checks from zero before merging. An unavailable refresh owner or
+   refused admission blocks with a visible refresh reason; no API fallback runs.
+   A second base movement can require another refresh after completion, while
+   the saved base and reservation prevent duplicate work for the same attempt.
 4. **Merge**: `gh pr merge <n> --repo <r> --squash --match-head-commit <head>`.
    `--match-head-commit` makes GitHub refuse the merge if the head moved between
    the read and the merge. The method is squash when the repository allows it

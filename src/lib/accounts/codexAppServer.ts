@@ -35,6 +35,8 @@ export interface CodexAppServerClock {
 
 export interface CodexAppServerOptions {
   home: string;
+  /** Executable used for launch admission; tests and embedded callers can pin a private fixture. */
+  launchBinary?: string;
   /** Complete argv for a specialised app-server consumer. */
   args?: readonly string[];
   spawn?: CodexAppServerSpawn;
@@ -171,8 +173,8 @@ export function codexAccountBinary(env: NodeJS.ProcessEnv = process.env, lookup 
   return findAgentBinary("codex", lookup) || "codex";
 }
 
-function spawnCodexAppServer(home: string, args: readonly string[]): CodexAppServerChild {
-  const child = spawn(codexAccountBinary(), [...args], {
+function spawnCodexAppServer(home: string, args: readonly string[], binary = codexAccountBinary()): CodexAppServerChild {
+  const child = spawn(binary, [...args], {
     env: codexAppServerEnvironment(home),
     stdio: ["pipe", "pipe", "pipe"],
     detached: true,
@@ -293,7 +295,12 @@ export class CodexAppServerClient {
   }
 
   static async start(options: CodexAppServerOptions): Promise<CodexAppServerClient> {
-    const binary = codexAccountBinary();
+    const { withCodexCliLaunch } = await import("@/lib/codexUpdate/installation");
+    return withCodexCliLaunch(options.launchBinary ?? codexAccountBinary(), () => this.startWithCliGuard(options));
+  }
+
+  private static async startWithCliGuard(options: CodexAppServerOptions): Promise<CodexAppServerClient> {
+    const binary = options.launchBinary ?? codexAccountBinary();
     const protocol = await resolveCodexProtocol((options.readProtocolVersion ?? installedCodexVersion)(binary, process.env), binary, process.env, options.generateProtocolSchemas);
     const capabilities = options.protocolProfile === "thread-control"
       ? protocol.initializeCapabilities(["thread/fork", "thread/resume", "thread/read", "thread/name/set", "thread/goal/set"], [{ method: "thread/resume", field: "path" }])
@@ -301,7 +308,8 @@ export class CodexAppServerClient {
       ? protocol.initializeCapabilities(["account/read", "account/rateLimits/read", "thread/start", "thread/realtime/start", "thread/realtime/appendSpeech", "thread/realtime/stop"])
       : protocol.initializeCapabilities(["account/read", "account/rateLimits/read", "account/login/start"]);
     const client = new CodexAppServerClient(
-      (options.spawn ?? spawnCodexAppServer)(options.home, options.args ?? CODEX_ACCOUNT_APP_SERVER_ARGS),
+      options.spawn ? options.spawn(options.home, options.args ?? CODEX_ACCOUNT_APP_SERVER_ARGS)
+        : spawnCodexAppServer(options.home, options.args ?? CODEX_ACCOUNT_APP_SERVER_ARGS, binary),
       options.clock ?? defaultClock,
       options.requestTimeoutMs ?? DEFAULT_TIMEOUT_MS,
       options.shutdownGraceMs ?? DEFAULT_SHUTDOWN_GRACE_MS,

@@ -28,7 +28,8 @@ const TICKET_MAX_AGE_MS = 600_000;
 const HEARTBEAT_MS = 10_000;
 
 type LockOwner = { pid: number; startIdentity: string | null; ns: string | null; token: string; holder?: string; acquiredAt?: number };
-type TransactionContext = { active: boolean };
+/** `token`: the hold's owner token, which only {@link withAccountMutationLeaseAsync} hands out. */
+type TransactionContext = { active: boolean; token?: string };
 type PendingLock = { lock: string; queue: string; owner: LockOwner; ticket: string };
 type AcquiredLock = { context: TransactionContext; release(): void };
 
@@ -269,7 +270,7 @@ function tryAcquireFile(pending: PendingLock): AcquiredLock | null {
     fs.rmSync(pending.lock, { force: true });
     throw error;
   }
-  const context = { active: true };
+  const context: TransactionContext = { active: true, token: pending.owner.token };
   const heartbeat = setInterval(() => touchOwnerFile(pending.lock), HEARTBEAT_MS);
   heartbeat.unref?.();
   return {
@@ -389,6 +390,37 @@ export async function withAccountMutationLockAsync<T>(operation: () => T | Promi
   } finally {
     transaction.release();
   }
+}
+
+/**
+ * Hold the lock for `operation` and hand it the hold's token, so a child
+ * process it starts can do its work under this same hold
+ * ({@link underLentAccountMutationLease}). The hold outlives the child: when
+ * the child dies, no waiter can take the lock between its death and what the
+ * holder does next, which a lock the child took itself would hand to the
+ * first waiter in line.
+ */
+export async function withAccountMutationLeaseAsync<T>(operation: (lease: string) => Promise<T>, options: AccountMutationOptions = {}): Promise<T> {
+  return withAccountMutationLockAsync(() => {
+    const token = transactionContext.getStore()?.token;
+    if (!token) throw new Error("the account mutation hold has no token to lend");
+    return operation(token);
+  }, options);
+}
+
+/**
+ * Run a child process's work under the hold its parent lent it. Admitted only
+ * while the lock file names that hold, so a token outlives nothing: once the
+ * parent released (or a stale hold was taken over) the child is refused.
+ */
+export async function underLentAccountMutationLease<T>(lease: string, operation: () => Promise<T>): Promise<T> {
+  let owner: Partial<LockOwner> | null = null;
+  try { owner = JSON.parse(fs.readFileSync(statePath("account-selection.lock"), "utf8")) as Partial<LockOwner>; }
+  catch { owner = null; }
+  if (!owner || typeof owner.token !== "string" || owner.token !== lease) throw new AccountMutationBusyError();
+  const context: TransactionContext = { active: true, token: lease };
+  try { return await transactionContext.run(context, operation); }
+  finally { context.active = false; }
 }
 
 /** Durable account mutation progress, for interprocess tests: the `accounts`
