@@ -14,7 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { deflateSync } from "node:zlib";
 
 import { auditGithubPublication, shouldFailGithubAudit } from "./privacy-github-audit";
@@ -32,6 +32,7 @@ import {
 } from "./privacy-publication-gate";
 
 import { runPrivacyTestProcess } from "./privacy-test-process";
+import { PRIVACY_GENERATOR_BUN_VERSION, privacyGeneratorRuntime } from "./privacy-generator-runtime";
 import { assertPrivacyWorkBound } from "./privacy-work-bound";
 
 const gate = join(import.meta.dir, "privacy-publication-gate.ts");
@@ -406,6 +407,26 @@ async function runGate(paths: string[], environment: Record<string, string> = {}
   return runGateArguments(["--paths", ...paths], environment);
 }
 
+test.serial("the configured generator runtime must match the provenance pin", () => {
+  const saved = process.env.LLV_PRIVACY_GENERATOR_BUN;
+  const selected = privacyGeneratorRuntime();
+  try {
+    process.env.LLV_PRIVACY_GENERATOR_BUN = process.execPath;
+    if (Bun.version === PRIVACY_GENERATOR_BUN_VERSION) {
+      expect(privacyGeneratorRuntime()).toBe(process.execPath);
+    } else {
+      expect(() => privacyGeneratorRuntime()).toThrow(`requires Bun ${PRIVACY_GENERATOR_BUN_VERSION}`);
+    }
+    process.env.LLV_PRIVACY_GENERATOR_BUN = join(tmpdir(), "missing-privacy-generator", "bun");
+    expect(() => privacyGeneratorRuntime()).toThrow(`requires Bun ${PRIVACY_GENERATOR_BUN_VERSION}`);
+    process.env.LLV_PRIVACY_GENERATOR_BUN = relative(process.cwd(), selected);
+    expect(privacyGeneratorRuntime()).toBe(selected);
+  } finally {
+    if (saved === undefined) delete process.env.LLV_PRIVACY_GENERATOR_BUN;
+    else process.env.LLV_PRIVACY_GENERATOR_BUN = saved;
+  }
+});
+
 test("prepared text keeps known-value configurations independent", async () => {
   const environment = {
     LLV_PRIVACY_KNOWN_VALUES: "", LLV_PRIVACY_KNOWN_VALUES_FILE: "",
@@ -444,7 +465,7 @@ function generatePrivacyPlaceholders(repositoryRoot: string) {
     readFileSync(join(import.meta.dir, "generate-privacy-placeholders.ts")),
   );
   return Bun.spawnSync({
-    cmd: [process.execPath, join(scriptsDirectory, "generate-privacy-placeholders.ts")],
+    cmd: [privacyGeneratorRuntime(), join(scriptsDirectory, "generate-privacy-placeholders.ts")],
     cwd: repositoryRoot,
     stderr: "pipe",
     stdout: "pipe",
@@ -2377,15 +2398,15 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       }>;
       expect(results.map((entry) => entry.source)).toEqual(sources);
       for (const entry of results) {
+        if (process.env.LLV_PRIVACY_TEST_TIMINGS === "1") console.error("privacy work " + JSON.stringify({
+          case: specimen.name, source: entry.source, small: entry.small.map(sample => sample.cpu), large: entry.large.map(sample => sample.cpu),
+        }));
         assertPrivacyWorkBound(entry.small.map(sample => sample.cpu), entry.large.map(sample => sample.cpu), entry.source);
         for (const { value } of [...entry.small, ...entry.large]) {
           expect(value.findings.length === 0, entry.source).toBe(specimen.pass);
           expect(value.findings.includes("known_value"), entry.source).toBe(!specimen.pass);
           expect(value.report).not.toContain(domain);
         }
-        if (process.env.LLV_PRIVACY_TEST_TIMINGS === "1") console.error("privacy work " + JSON.stringify({
-          case: specimen.name, source: entry.source, small: entry.small.map(sample => sample.cpu), large: entry.large.map(sample => sample.cpu),
-        }));
       }
     }, 660_000);
     // Read each immutable corpus across all configurations before moving to
