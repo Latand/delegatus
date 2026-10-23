@@ -90,3 +90,24 @@ Final retained full-file results: 132 passed, 10 skipped, zero failed across fiv
 Admission attempts before the canonical runs: the stage-provided gate-slot wrapper around the verdict remote command passed (exit 0); a redundant nested remote gate admission was canceled before tests (exit 143); the local admission for the original seat-delivery file was canceled before tests (SIGTERM, recorded -15). A revert driver stopped before #2254 because its guard selector matched an older spelling (exit 1); the source was re-read and the remaining seven controls completed. Canceled admissions contributed no test verdicts.
 
 The first `git commit --file "$COMMIT_MESSAGE"` returned exit 1 after whitespace and privacy passed: the checkout had no local dependencies, and an ESLint plugin resolved from a package cache could not find its ESLint peer. An owned dependency checkout was prepared with `bun install --frozen-lockfile --ignore-scripts` (exit 0), followed by `node -e 'require("eslint-plugin-react"); require("eslint/package.json"); process.stdout.write("ESLint plugin peer import passed\n")'` (exit 0). A temporary checkout link supplies these dependencies to the unchanged commit hooks.
+
+## Publication repair: native fixture startup deadline
+
+The publication refusal came from `src/lib/runtime/nativeQueueCompaction.integration.test.ts`: its real app-server was given a one-second RPC deadline. The case now uses the production 30-second RPC deadline, with a 60-second whole-test bound. All recovery, queue, registry and no-engine-write assertions remain active.
+
+The entire file was run in fresh isolated roots on accepted head `5dea4d29` and original base `adce5764`. Both passed three ordinary runs. A wrapper delaying only actual app-server startup by two seconds reproduced `initialize timed out` on both revisions in both trials. Version, feature and schema probes forwarded immediately. The same delayed startup passes with the repair. An unresponsive-start control still fails with `initialize timed out` at the production deadline and exits within the whole-test bound.
+
+Every row runs `NATIVE_CODEX_QUEUE_TEST_BINARY="$CODEX_FIXTURE" bun test src/lib/runtime/nativeQueueCompaction.integration.test.ts --timeout=60000` through `gate-remote`, with a fresh supervised test process per observation. `CODEX_FIXTURE` names the pinned executable or its isolated startup-delay wrapper. Loops start each test with `setsid` and closed stdin and finish with an explicit run count.
+
+| Revision / setup | CLI version | Whole-file exit codes |
+| --- | --- | --- |
+| Accepted head, ordinary startup | 0.162.1 | 0, 0, 0 |
+| Original base, ordinary startup | 0.162.1 | 0, 0, 0 |
+| Accepted head, two-second delayed startup | 0.162.1 | 1, 1 (expected reproduction) |
+| Original base, two-second delayed startup | 0.162.1 | 1, 1 (expected reproduction) |
+| Repaired, ordinary startup | 0.154.0 | 0, 0, 0 |
+| Repaired, ordinary startup | 0.159.0 | 0, 0, 0 |
+| Repaired, ordinary startup | 0.162.1 | 0, 0, 0 |
+| Repaired, ordinary startup | 0.163.0 | 0, 0, 0 |
+| Repaired, two-second delayed startup | 0.162.1 | 0, 0, 0 |
+| Repaired, unresponsive startup | 0.162.1 | 1 (expected timeout control) |
