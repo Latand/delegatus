@@ -1218,13 +1218,20 @@ of its six rendered sources; screenshots remain in the capture scratch.
 causing a send. Once an added tool's result is in the backend's context (this
 delegation on the API backend, the rest of the call on Codex),
 `request_orchestrator_delegation` is refused with `added_tool_result` unless the
-operator's own words in that turn ask for a send (the same explicit-request and
-delivery-language readings the delivery claim check uses). A spoken answer to
-a waiting confirmation is a send too: `resolve_orchestrator_confirmation` with
-the decision `send` is refused with `added_tool_result` unless the operator's
-own words in that turn say yes ("yes", "go ahead", "send it", "так",
-"відправляй", "да") with no decline, retraction or condition beside it
-(`gate.ts#spokenAgreement`). The admission check alone would not do: it asks
+operator's own words in that turn ask for a send: the explicit-request grammar,
+or an imperative sending verb ("send it", "pass it on", "передай") with no
+sentence in the turn that negates, retracts, makes it conditional or asks a
+question (`gate.ts#spokenSendRequest`). A sending word alone is no ask: "Don't
+send anything…", "Did the build pass?" and "Has anything been sent yet?" send
+nothing. A spoken answer to a waiting confirmation is a send too:
+`resolve_orchestrator_confirmation` with the decision `send` is refused with
+`added_tool_result` unless every sentence of the operator's turn is a yes
+("yes", "go ahead", "send it", "так", "відправляй", "да") built only from
+agreement words and what the send names, with no question
+(`gate.ts#spokenAgreement`). A turn that starts like a yes and asks or answers
+something else is no yes: "Okay, what is playing right now?", «Так, а що зараз
+грає?» («так» is also "so") and «Давай подивимось…» («давай» is also "let's")
+leave the request waiting. The admission check alone would not do: it asks
 only that the answer come in a later operator turn, and never reads the words.
 The refusal sends nothing and leaves the request waiting; a spoken cancel and
 the card's buttons still answer it. The tests drive a fake model that obeys a
@@ -1252,7 +1259,10 @@ acting tool.
 - A server stops after 5 minutes without calls, or 60 s after the last open
   call that took it ends. Idle time never runs out under a call in flight.
 - Two failed starts within a call make the server unavailable for the rest of
-  that call; another call counts its own. A crash fails the pending call, and
+  that call; another call counts its own. A start has its own 20 s cold-start
+  bound: a server that hangs during startup (it never answers `initialize`)
+  fails that start, counts, and loses its worker, so the third call answers
+  at once. A crash fails the pending call, and
   the next call starts the server again.
 - At most eight children, shared by dry runs and sessions.
 - Live `tools/list` is compared with the approved catalog at each start: a
@@ -1299,6 +1309,11 @@ performance gain.
 - **Deferred:** the run in the Docker deployment that confirms a `uv` or `bun`
   child started through a host shim is reaped when its call ends (§4.8, §14).
   Slices 3 and 4 are unchanged.
+- **Residual:** on the API backend the send and acting gates cover the
+  delegation that read the added result. A hostile result that the voice
+  repeats aloud reaches later delegations as part of the call's transcript,
+  where no added-result gate applies; the call's ordinary send rules and the
+  prompt rule still apply there. Codex keeps the gates for the whole call.
 - **Residual:** the acting gate trusts the voice's reading of the operator's
   next turn, as the ask-first switch always has: a later turn in which a
   misled voice calls the tool again runs it.

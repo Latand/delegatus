@@ -240,7 +240,9 @@ const boundedFetch = async (input: string | URL | Request, init?: RequestInit): 
 };
 
 const write = (value: unknown) => new Promise<void>(resolve => process.stdout.write(JSON.stringify(value) + "\n", () => resolve()));
-const masked = (text: string) => Object.values(request.secrets).reduce((value, secret) => secret.length >= 8 ? value.replaceAll(secret, "[masked]") : value, text);
+// A secret is masked as written and as JSON writes it inside structuredContent (a quote or backslash escaped).
+const masked = (text: string) => Object.values(request.secrets).filter(secret => secret.length >= 8).flatMap(secret => [secret, JSON.stringify(secret).slice(1, -1)])
+  .reduce((value, form) => value.replaceAll(form, "[masked]"), text);
 function cutText(text: string, limit: number): string {
   if (Buffer.byteLength(text) <= limit) return text;
   const marker = `\n[cut: the answer is longer than ${Math.round(limit / 1024)} KB]`;

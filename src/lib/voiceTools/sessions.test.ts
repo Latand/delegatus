@@ -8,6 +8,7 @@ import { spawnSync } from "node:child_process";
 import { VoiceToolHub } from "./hub";
 import { VoiceToolSessions } from "./sessions";
 import { VoiceToolsStore } from "./store";
+import { voiceToolBounds } from "./contracts";
 
 const roots: string[] = [];
 const listeners: ReturnType<typeof Bun.serve>[] = [];
@@ -55,7 +56,9 @@ async function setup() {
 }
 type Call = { name: string; arguments: Record<string, unknown> };
 /** A Streamable HTTP MCP peer: its catalog and its answers are the test's to choose. */
-function fakeServer(options: { tools?: () => ToolRow[]; call?: (call: Call) => unknown | Promise<unknown> } = {}) {
+function fakeServer(options: { tools?: () => ToolRow[]; call?: (call: Call) => unknown | Promise<unknown>;
+  /** Runs before initialize is answered, with the request's own abort signal: it ends when the worker's connection does. */
+  initialize?: (signal: AbortSignal) => void | Promise<void> } = {}) {
   const methods: string[] = [];
   const calls: Call[] = [];
   let initialized = 0;
@@ -67,6 +70,7 @@ function fakeServer(options: { tools?: () => ToolRow[]; call?: (call: Call) => u
     if (message.id === undefined) return new Response(null, { status: 202 });
     if (message.method === "initialize") {
       initialized++;
+      await options.initialize?.(req.signal);
       return Response.json({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "fake", version: "1" } } });
     }
     if (message.method === "tools/list") return Response.json({ jsonrpc: "2.0", id: message.id, result: { tools: (options.tools ?? (() => [echo, play]))() } });
@@ -183,6 +187,34 @@ test("a server that is down fails its calls, and two failed starts make it unava
   // Another call keeps its own count.
   sessions.open("call_b", snapshot);
   expect(await sessions.call("call_b", snapshot, "music__echo", { text: "d" })).toMatchObject({ code: "TOOL_SERVER_UNAVAILABLE", speech: "Music did not start." });
+}, 30_000);
+
+test("a server that hangs at startup fails each start at the cold-start bound: two make it unavailable at once, and no worker is left", async () => {
+  const { store, hub, sessions, clock } = await setup();
+  let hang = false;
+  const held: AbortSignal[] = [];
+  // It answers the dry run, then answers no initialize until the worker's connection is gone.
+  const server = fakeServer({ initialize: signal => { if (!hang) return; held.push(signal); return new Promise<void>(resolve => signal.addEventListener("abort", () => resolve())); } });
+  await approve(store, hub, http("music", server.url), both);
+  hang = true;
+  const snapshot = sessions.snapshot(operator);
+  sessions.open("call_a", snapshot);
+  for (const [index, text] of ["a", "b"].entries()) {
+    const pending = sessions.call("call_a", snapshot, "music__echo", { text });
+    await until(() => held.length === index + 1, "the worker's initialize to reach the server");
+    expect(sessions.size).toBe(1);
+    // The start's own bound and the call's deadline: the start fails and counts, and the call answers.
+    expect(clock.fire(voiceToolBounds.coldStartMs)).toBe(2);
+    expect(await pending).toEqual({ status: "failed", code: "TOOL_SERVER_UNAVAILABLE", speech: "Music did not start." });
+    expect(sessions.size).toBe(0);
+    // The hung worker is gone: its connection to the server closed with it.
+    await until(() => held[index].aborted, "the hung worker's connection to close");
+  }
+  // The third call answers at once: no timer to wait out and no third start.
+  expect(await sessions.call("call_a", snapshot, "music__echo", { text: "c" })).toEqual({ status: "failed", code: "TOOL_SERVER_UNAVAILABLE", speech: "Music is unavailable for the rest of this call." });
+  expect(clock.pending(voiceToolBounds.coldStartMs)).toBe(0);
+  expect(held).toHaveLength(2);
+  expect(sessions.size).toBe(0);
 }, 30_000);
 
 test("catalog drift: a changed approved tool marks the server changed and keeps serving it; a removed one fails plainly; an added one stays hidden", async () => {
@@ -304,9 +336,12 @@ test("a server changed since approval still counts toward the per-call bounds", 
 
 test("the snapshot is the owner's, read from memory, and names the secrets the call must mask", async () => {
   const { store, hub, root } = await setup();
-  const server = fakeServer({ call: () => ({ content: [{ type: "text", text: "token synthetic-music-credential here" }] }) });
+  // A quote in the credential: JSON escapes it inside structuredContent, and that form is masked too.
+  const credential = 'synthetic-music-"credential"';
+  const server = fakeServer({ call: call => call.arguments.text === "structured" ? { content: [], structuredContent: { token: credential } }
+    : { content: [{ type: "text", text: `token ${credential} here` }] } });
   await store.propose({ ...http("music", server.url), transport: { type: "http", url: server.url, headers: { Authorization: { secretRef: "music-token" } } } }, actor);
-  await store.saveSecrets({ "music-token": { value: "synthetic-music-credential", destinations: [new URL(server.url).origin] } });
+  await store.saveSecrets({ "music-token": { value: credential, destinations: [new URL(server.url).origin] } });
   await hub.dryRun("music", (await store.view()).servers.music.digest);
   await store.operatorChange("music", (await store.view()).servers.music.digest, "configure", { tools: both });
   await store.operatorChange("music", (await store.view()).servers.music.digest, "approve");
@@ -318,29 +353,36 @@ test("the snapshot is the owner's, read from memory, and names the secrets the c
   await fs.rename(store.file, path.join(root, "moved.json"));
   const snapshot = sessions.snapshot(operator);
   expect(snapshot.servers.map(row => row.name)).toEqual(["music"]);
-  expect(JSON.stringify(snapshot)).not.toContain("synthetic-music-credential");
-  expect(sessions.secrets(snapshot)).toEqual(["synthetic-music-credential"]);
+  expect(JSON.stringify(snapshot)).not.toContain("synthetic-music-");
+  expect(sessions.secrets(snapshot)).toEqual([credential]);
   // An answer that echoes the credential is masked before it leaves the worker.
   sessions.open("call_a", snapshot);
   expect(await sessions.call("call_a", snapshot, "music__echo", { text: "x" })).toEqual({ status: "done", content: "token [masked] here", speech: "Music answered." });
+  expect(await sessions.call("call_a", snapshot, "music__echo", { text: "structured" })).toEqual({ status: "done", content: '{"token":"[masked]"}', speech: "Music answered." });
 }, 30_000);
 
 /** A stdio MCP server run under the dry run's own sandbox; it reports each start to a local listener. */
-async function stdioServer(root: string, starts: { count: number }) {
-  const ready = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { starts.count++; return new Response("ok"); } }); listeners.push(ready);
+async function stdioServer(root: string, starts: { count: number }, stubborn?: { held: AbortSignal[] }) {
+  const ready = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(req) {
+    // A stubborn server holds one request open for its whole life: it ends only when the process does.
+    if (new URL(req.url).pathname === "/hold") { stubborn?.held.push(req.signal); return new Promise<Response>(resolve => req.signal.addEventListener("abort", () => resolve(new Response(null)))); }
+    starts.count++; return new Response("ok");
+  } }); listeners.push(ready);
   const entry = path.join(root, "server.mjs");
   const source = `import readline from 'node:readline';
 const input = readline.createInterface({ input: process.stdin });
 input.on('line', line => { const m = JSON.parse(line); if (m.id === undefined) return;
   let result;
-  if (m.method === 'initialize') { void fetch(process.env.READY_URL); result = { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'fake', version: '1' } }; }
+  if (m.method === 'initialize') { void fetch(process.env.READY_URL); if (process.env.HOLD_URL) void fetch(process.env.HOLD_URL).catch(() => undefined); result = { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'fake', version: '1' } }; }
   else if (m.method === 'tools/list') result = { tools: [{ name: 'echo', description: 'Echo text', inputSchema: { type: 'object' } }, { name: 'crash', description: 'Crash', inputSchema: { type: 'object' } }] };
   else if (m.params.name === 'crash') process.exit(3);
   else result = { content: [{ type: 'text', text: 'echo:' + JSON.stringify(m.params.arguments) }] };
-  console.log(JSON.stringify({ jsonrpc: '2.0', id: m.id, result })); });`;
+  console.log(JSON.stringify({ jsonrpc: '2.0', id: m.id, result })); });
+if (process.env.HOLD_URL) { process.on('SIGTERM', () => undefined); input.on('close', () => setInterval(() => undefined, 1000)); }`;
   await fs.writeFile(entry, source);
   return { name: "music", title: "Music", capability: "Plays music.", entryFile: { path: entry, sha256: createHash("sha256").update(source).digest("hex") },
-    transport: { type: "stdio" as const, command: "bun" as const, args: [entry], env: { READY_URL: { value: `http://127.0.0.1:${ready.port}/ready` } } } };
+    transport: { type: "stdio" as const, command: "bun" as const, args: [entry], env: { READY_URL: { value: `http://127.0.0.1:${ready.port}/ready` },
+      ...(stubborn ? { HOLD_URL: { value: `http://127.0.0.1:${ready.port}/hold` } } : {}) } } };
 }
 
 stdioSandboxTest("a stdio server warms at call start, a crash mid-call fails that call, and the next call starts it again", async () => {
@@ -373,4 +415,21 @@ stdioSandboxTest("a changed entry file keeps a stdio server from starting until 
   await until(async () => (await store.view()).servers.music.state === "changed" && (await store.view()).servers.music.approval === null, "the approval to be removed");
   expect(starts.count).toBe(1);
   expect(sessions.snapshot(operator).servers).toEqual([]);
+}, 60_000);
+
+stdioSandboxTest("a stdio server that ignores SIGTERM and a closed stdin is gone after its call ends and the 60 s pass", async () => {
+  const { store, hub, sessions, clock } = await setup();
+  const external = await fs.mkdtemp(path.join(os.tmpdir(), "voice-tools-sessions-entry-")); roots.push(external);
+  const stubborn = { held: [] as AbortSignal[] };
+  await approve(store, hub, await stdioServer(external, { count: 0 }, stubborn), { echo: { enabled: true, acts: false } });
+  await until(() => stubborn.held.length === 1 && stubborn.held[0].aborted, "the dry run's server to be gone");
+  const snapshot = sessions.snapshot(operator);
+  sessions.open("call_a", snapshot);
+  expect(await sessions.call("call_a", snapshot, "music__echo", { a: 1 })).toMatchObject({ status: "done" });
+  await until(() => stubborn.held.length === 2, "the session's server to hold its request");
+  sessions.close("call_a");
+  expect(clock.fire(voiceToolBounds.afterCallMs)).toBe(1);
+  expect(sessions.size).toBe(0);
+  // Its held request closes only when the server process itself has ended.
+  await until(() => stubborn.held[1].aborted, "the session's server process to end");
 }, 60_000);

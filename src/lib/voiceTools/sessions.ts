@@ -149,7 +149,9 @@ export class VoiceToolSessions implements VoiceToolCalls {
   private start(server: VoiceToolSnapshotServer): Live {
     const live: Live = { name: server.name, title: server.title, approval: server.approvalDigest, state: "starting", ready: Promise.resolve(),
       removed: new Set(), pending: new Map(), chain: Promise.resolve(), calls: new Set() };
-    live.ready = performanceSpans.wait("voice-tools.spawn", () => this.launch(live, server)).catch(error => {
+    // A start has its own cold-start bound: one that hangs (a server that never answers initialize) fails here and
+    // counts, rather than leaving every later call to wait out its own deadline behind it.
+    live.ready = performanceSpans.wait("voice-tools.spawn", () => this.deadline(this.launch(live, server), voiceToolBounds.coldStartMs)).catch(error => {
       // A failed start counts once for every call that was waiting for it (§4.2: two within a call make it unavailable).
       for (const callId of live.calls) {
         const failures = this.calls.get(callId)?.failures;
@@ -168,7 +170,11 @@ export class VoiceToolSessions implements VoiceToolCalls {
     if (prepared.stdio === null) throw new VoiceToolsError("START_FAILED");
     // Preparation awaited disk I/O: the approval and credential bindings are read again before dispatch.
     input = this.store.sessionInput(server.name, server.approvalDigest);
-    if (live.closedBy) throw new VoiceToolsError("TOOL_REVOKED");
+    if (live.closedBy) {
+      // Stopped while preparing: the stop saw no run root to remove.
+      await fs.rm(prepared.runRoot, { recursive: true, force: true }).catch(() => undefined);
+      throw new VoiceToolsError("TOOL_REVOKED");
+    }
     const child = live.child = spawnLeasedHelper("voice-tools-session", { command: prepared.executable.executable, args: [prepared.executable.worker],
       cwd: process.cwd(), env: voiceToolEnvironment(prepared.home, process.env) }, this.store.directory, { input: true, stdout: "pipe", stderr: "ignore" });
     const pipe = live.input = leasedHelperInput(child);
