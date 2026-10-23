@@ -257,7 +257,11 @@ for (const mode of ["fresh", "resume", "denied"] as const) test.skipIf(originalE
   const restoreFeatures = setCodexFeatureReaderForTest(undefined);
   const previousBinary = process.env.LLV_CODEX_BINARY;
   const previousPath = process.env.PATH;
-  process.env.LLV_CODEX_BINARY = originalEnv.LLV_CODEX_BINARY ?? "codex";
+  const requestedBinary = originalEnv.LLV_CODEX_BINARY?.trim() || "codex";
+  const selectedBinary = path.isAbsolute(requestedBinary) || requestedBinary.includes(path.sep)
+    ? path.resolve(requestedBinary)
+    : Bun.which(requestedBinary) ?? requestedBinary;
+  process.env.LLV_CODEX_BINARY = selectedBinary;
   const root = path.join(sandbox, `terminal-${mode}`);
   const configRoot = path.join(root, "config");
   const home = path.join(configRoot, "accounts", "codex", "fixture");
@@ -281,7 +285,6 @@ for (const mode of ["fresh", "resume", "denied"] as const) test.skipIf(originalE
     experimental_supported_tools: [], tool_mode: "direct", multi_agent_version: "v2", context_window: 32000, prefer_websockets: false,
   }] }));
   const invocationLog = path.join(root, "codex-invocations.log");
-  const selectedBinary = process.env.LLV_CODEX_BINARY!;
   const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
   const selectedWrapper = path.join(root, "selected-codex");
   fs.writeFileSync(selectedWrapper, `#!/bin/sh\nprintf '%s\\n' "$*" >> ${quote(invocationLog)}\nexec ${quote(selectedBinary)} "$@"\n`, { mode: 0o700 });

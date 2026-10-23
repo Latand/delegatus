@@ -88,16 +88,24 @@ test("a registered stdio Viewer remains unchanged with an HTTP launch preference
   }
 });
 
-test("the selected Codex executable is used by fresh and resumed terminal commands", () => {
-  const selected = path.join(root, "selected-codex");
-  fs.writeFileSync(selected, "#!/bin/sh\nprintf '[{\"name\":\"other\"}]'\n", { mode: 0o700 });
+test("fresh and resumed launches execute the selected Codex path containing spaces", () => {
+  const selected = path.join(root, "selected codex");
+  const invocationLog = path.join(root, "selected-codex-invocations.log");
+  fs.writeFileSync(selected, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${invocationLog}'\ncase "$*" in *"mcp list"*) printf '[{"name":"other"}]' ;; esac\n`, { mode: 0o700 });
   const previous = process.env.LLV_CODEX_BINARY;
   process.env.LLV_CODEX_BINARY = selected;
   try {
     const fresh = freshSpecFor("codex", root, { codexHome: root, cleanMemory: true });
     const resumed = resumeSpecForSession("codex", "12345678-1234-1234-1234-123456789abc", root, root, { cleanMemory: true })!;
-    expect(fresh.codexPublication?.command).toContain(selected);
-    expect(resumed.codexPublication?.command).toContain(selected);
+    for (const spec of [fresh, resumed]) {
+      const result = Bun.spawnSync(["sh", "-c", spec.command], {
+        cwd: root, env: { ...process.env, CODEX_HOME: root }, stdout: "pipe", stderr: "pipe",
+      });
+      expect({ code: result.exitCode, error: result.stderr.toString() }).toEqual({ code: 0, error: "" });
+    }
+    const invocations = fs.readFileSync(invocationLog, "utf8");
+    expect(invocations).toContain("exec");
+    expect(invocations).toContain("resume");
   } finally {
     if (previous === undefined) delete process.env.LLV_CODEX_BINARY; else process.env.LLV_CODEX_BINARY = previous;
   }

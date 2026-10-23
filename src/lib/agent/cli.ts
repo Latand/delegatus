@@ -665,7 +665,7 @@ export function resumeSpecForSession(
     };
   }
   const codexBinary = resolveCodexBinary(options.hostTerminal);
-  let command = codexBinary;
+  let command = shellQuote(codexBinary);
   if (engineMemoryOff(options)) command += " -c features.memories=false";
   const publicationArgs = agentCodexPublicationArgs({}, process.env);
   command += ` ${publicationArgs.map(shellQuote).join(" ")}`;
