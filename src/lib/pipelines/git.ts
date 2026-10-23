@@ -597,27 +597,12 @@ async function finishInterruptedCheckout(pipeline: Pipeline, branch: string, sta
 async function changedWorktreePaths(
   exec: ExecPort,
   cwd: string,
-  declaredOutputs: readonly string[] = [],
 ): Promise<{ ok: true; paths: string[] } | { ok: false; error: string }> {
   const tracked = (await exec("git", ["diff", "--name-only", "--no-renames", "-z", "HEAD", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], cwd));
   if (tracked.code !== 0) return failure("checking tracked stage output paths", tracked);
   const untracked = (await exec("git", ["ls-files", "--others", "--exclude-standard", "-z", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], cwd));
   if (untracked.code !== 0) return failure("checking untracked stage output paths", untracked);
-  let ignoredOutputs = "";
-  if (declaredOutputs.length > 0) {
-    const ignored = (await exec(
-      "git",
-      ["ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", ...declaredOutputs, ...CONTROLLER_ARTIFACT_PATHSPECS],
-      cwd,
-    ));
-    if (ignored.code !== 0) return failure("checking ignored declared stage output paths", ignored);
-    // A directory declaration does not opt every ignored descendant into a
-    // commit. Only a file named exactly by the stage may bypass .gitignore.
-    ignoredOutputs = ignored.stdout.split("\0")
-      .filter((candidate) => declaredOutputs.includes(candidate))
-      .join("\0");
-  }
-  const paths = `${tracked.stdout}\0${untracked.stdout}\0${ignoredOutputs}`.split("\0").filter(Boolean);
+  const paths = `${tracked.stdout}\0${untracked.stdout}`.split("\0").filter(Boolean);
   return { ok: true, paths: [...new Set(paths)] };
 }
 
@@ -728,7 +713,7 @@ async function recoverStageCommit(
   const paths = committed.stdout.split("\0").filter(Boolean);
   if (paths.length !== new Set(receipt.paths).size
     || paths.some((file) => !receipt.paths.includes(file) || !pathIsDeclaredOutput(file, declaredOutputs))) return null;
-  const remaining = await changedWorktreePaths(exec, cwd, declaredOutputs);
+  const remaining = await changedWorktreePaths(exec, cwd);
   if (!remaining.ok) return remaining;
   if (remaining.paths.length) return { ok: false, error: "the owned stage commit has newer worktree changes; preserve them before recovery" };
   const unstage = await unstageControllerArtifacts(exec, cwd);
@@ -871,7 +856,7 @@ export async function commitPipelineStage(
       if (!status.stdout.trim()) return settleWithoutCommit();
       return { ok: false, error: `read-only stage ${stageId} modified the pipeline worktree` };
     }
-    const changed = (await changedWorktreePaths(exec, pipeline.worktreeDir, declaredOutputs));
+    const changed = (await changedWorktreePaths(exec, pipeline.worktreeDir));
     if (!changed.ok) return changed;
     const refused = changed.paths.filter((candidate) => !pathIsDeclaredOutput(candidate, declaredOutputs));
     if (refused.length > 0) {

@@ -1771,7 +1771,10 @@ test("read-only stage records a declared report without granting source commits"
   }
 });
 
-test("read-only stage records an ignored declared report", async () => {
+test.each([
+  { label: "read-write", allowCommit: true },
+  { label: "read-only", allowCommit: false },
+])("$label settlement leaves an ignored declared report untracked", async ({ allowCommit }) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-ignored-output-"));
   try {
     (await git(root, "init", "--initial-branch=main"));
@@ -1786,14 +1789,16 @@ test("read-only stage records an ignored declared report", async () => {
     const subject = pipeline();
     subject.worktreeDir = root;
     subject.lastPassedCommit = (await git(root, "rev-parse", "HEAD"));
+    const head = subject.lastPassedCommit;
     fs.mkdirSync(path.join(root, "reports"));
     fs.writeFileSync(path.join(root, "reports", "audit.md"), "audited\n");
 
     expect((await git(root, "status", "--porcelain"))).toBe("");
-    const result = (await commitPipelineStage(subject, "audit", false, realExec, ["reports/audit.md"]));
-    expect(result.ok).toBeTrue();
-    expect(result.ok && result.sha).not.toBe(subject.lastPassedCommit);
-    expect((await git(root, "show", "HEAD:reports/audit.md"))).toBe("audited");
+    const result = (await commitPipelineStage(subject, "audit", allowCommit, realExec, ["reports/audit.md"]));
+    expect(result).toEqual({ ok: true, sha: head });
+    expect((await git(root, "ls-files", "--", "reports/audit.md"))).toBe("");
+    expect((await git(root, "rev-parse", "HEAD"))).toBe(head);
+    expect(fs.readFileSync(path.join(root, "reports", "audit.md"), "utf8")).toBe("audited\n");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
