@@ -48,6 +48,11 @@ afterEach(() => {
 });
 
 const noReads = () => fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] });
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
+}
 function fixture(key = "synthetic-credential", prototype?: import("@/lib/tasks/types").BoardTask, now = Date.now) {
   const storage = new CompanionStorage(now);
   storage.updateSettings({ enabled: true });
@@ -559,20 +564,29 @@ test("a repeated logical delegation in a later backend round reuses its stored s
 
 test("a delayed yes from one backend turn cannot confirm a newer proposal", async () => {
   const f = fixture();
+  const thirdRequest = deferred();
+  const secondProposal = deferred();
+  const propose = f.admission.propose.bind(f.admission);
+  let proposalCount = 0;
+  f.admission.propose = (...args: Parameters<typeof f.admission.propose>) => {
+    const proposal = propose(...args);
+    if (proposal && ++proposalCount === 2) secondProposal.resolve();
+    return proposal;
+  };
   let releaseAnswer!: () => void;
   f.provider.responder = (_request, index) => index === 0
     ? backendResponse("resp_a", [functionCall("call-a", "request_orchestrator_delegation", { instruction: "Delete the old presets", confirmation_reason: "A needs confirmation." })])
-      : index === 2 ? new Promise(resolve => { releaseAnswer = () => resolve(backendResponse("resp_yes", [functionCall("call-yes", "resolve_orchestrator_confirmation", { decision: "send" })])); })
+      : index === 2 ? (thirdRequest.resolve(), new Promise(resolve => { releaseAnswer = () => resolve(backendResponse("resp_yes", [functionCall("call-yes", "resolve_orchestrator_confirmation", { decision: "send" })])); }))
         : index === 3 ? backendResponse("resp_b", [functionCall("call-b", "request_orchestrator_delegation", { instruction: "Deploy the new release", confirmation_reason: "B needs confirmation." })])
           : backendResponse(`resp_${index}`, [message("Waiting for confirmation.")]);
   const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
   f.provider.replay(s.providerId, delegationCreated("delegation-a", 10));
   await f.service.drain(s.sessionId);
   f.provider.replay(s.providerId, delegationCreated("answer-turn-a", 20));
-  for (let waited = 0; waited < 50 && f.provider.requests.length < 3; waited++) await new Promise(resolve => setTimeout(resolve, 2));
+  await thirdRequest.promise;
   expect(f.provider.requests).toHaveLength(3);
   f.provider.replay(s.providerId, delegationCreated("delegation-b", 30));
-  for (let waited = 0; waited < 50 && Object.values(f.admission.session(s.sessionId).proposals).length < 2; waited++) await new Promise(resolve => setTimeout(resolve, 2));
+  await secondProposal.promise;
   const proposals = Object.values(f.admission.session(s.sessionId).proposals);
   expect(proposals).toHaveLength(2);
   expect(proposals.map(row => row.state)).toEqual(["pending", "pending"]);
@@ -653,14 +667,15 @@ test("parallel delegations keep their own calls, outputs and spoken answers", as
 test("session closure waits for a backend response in flight before releasing the reservation", async () => {
   const f = fixture();
   f.provider.autoClose = false;
+  const requestStarted = deferred();
   let answer!: () => void;
-  f.provider.responder = () => new Promise(resolve => { answer = () => resolve(backendResponse("resp_late", [message("Late.")])); });
+  f.provider.responder = () => { requestStarted.resolve(); return new Promise(resolve => { answer = () => resolve(backendResponse("resp_late", [message("Late.")])); }); };
   const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
   f.provider.replay(s.providerId, delegationCreated("a", 10));
-  await new Promise(resolve => setTimeout(resolve, 0));
+  await requestStarted.promise;
   const closing = f.service.close(s.sessionId);
   f.provider.replay(s.providerId, { type: "session.closed", event_id: "closed-first", usage: { seconds: 21 } });
-  await new Promise(resolve => setTimeout(resolve, 5));
+  await f.service.events(s.sessionId, 0);
   expect(f.provider.attached).toBe(1);
   answer();
   await closing;
@@ -1074,7 +1089,7 @@ test("a hangup the provider refused is asked again after a restart until it is c
   const live = await second.service.start({ project: "fixture", locale: "en", sdp: "v=1", requestId: "forced" });
   f.provider.hangupFailures = 1;
   f.provider.disconnect(live.providerId);
-  await new Promise(resolve => setTimeout(resolve, 10));
+  await second.service.close(live.sessionId);
   expect(second.storage.read().sessions[live.sessionId]).toMatchObject({ closed: true, remoteOpen: true });
   await second.service.recover();
   expect(second.storage.read().sessions[live.sessionId]).toMatchObject({ closed: true, remoteOpen: false });
@@ -1089,14 +1104,15 @@ test("a restart between a send and its recorded outcome recovers that very send 
     // The relay keeps one message per key, as the orchestrator send path does.
     const relay = new Map<string, string>();
     const keys: string[] = [];
+    const sendStarted = deferred();
     const deliver = (key: string, text: string) => { keys.push(key); if (!relay.has(key)) relay.set(key, text); return { status: "queued" as const, operationId: `operation-${key}` }; };
     const admission = new CompanionAdmission(storage, { recipient: () => recipient, reports: () => [],
-      send: async ({ delivery, text }) => { if (crash === "after-relay") deliver(delivery.clientMessageId, text); return new Promise(() => undefined); } });
+      send: async ({ delivery, text }) => { if (crash === "after-relay") deliver(delivery.clientMessageId, text); sendStarted.resolve(); return new Promise(() => undefined); } });
     const provider = new FakeLiveProvider();
     const service = new CompanionLiveSessions(storage, admission, noReads(), provider, { key: () => KEY, timers: false, closeTimeoutMs: 20 });
     const s = await service.start({ project: "fixture", locale: "en", sdp: "v=0" });
     void admission.delegate(s.sessionId, "call", "delegation", "Review the plan");
-    await new Promise(resolve => setTimeout(resolve, 5));
+    await sendStarted.promise;
     const [held] = Object.values(storage.read().sessions[s.sessionId].proposals);
     const proposal = held.proposal;
     expect(held).toMatchObject({ state: "admitted", status: "unknown" });
@@ -1272,6 +1288,8 @@ test("no new session is minted while the provider has not confirmed an earlier o
 });
 
 test("a session the provider never confirmed closed is charged for the time it may have run, and the timer asks again by itself", async () => {
+  jest.useFakeTimers();
+  try {
   const storage = new CompanionStorage(); storage.updateSettings({ enabled: true });
   let now = Date.parse("2026-10-06T12:00:00Z");
   const admission = new CompanionAdmission(storage, { recipient: () => null, send: async () => { throw new Error("unexpected"); }, reports: () => [] }, () => now);
@@ -1280,14 +1298,18 @@ test("a session the provider never confirmed closed is charged for the time it m
   provider.hangupFailures = 2;
   const service = new CompanionLiveSessions(new CompanionStorage(() => now), admission, noReads(), provider, { key: () => KEY, now: () => now, closeTimeoutMs: 10 });
   const s = await service.start({ project: "fixture", locale: "en", sdp: "v=0" });
-  await service.close(s.sessionId);
+  const closing = service.close(s.sessionId);
+  jest.advanceTimersByTime(10);
+  await closing;
   expect(storage.read().sessions[s.sessionId]).toMatchObject({ closed: true, remoteOpen: true });
   now += 20 * 60_000; // twenty minutes with the provider session possibly open
   await expect(service.start({ project: "fixture", locale: "en", sdp: "v=1" })).rejects.toThrow("PROVIDER_ERROR");
   expect(storage.read().charges[s.sessionId]).toMatchObject({ reserved: false, incomplete: true });
   expect(storage.read().charges[s.sessionId].usd).toBeCloseTo(20 * 0.05, 6);
-  // The retry timer of the forced close confirms the hangup with no further call.
-  for (let waited = 0; waited < 40 && storage.read().sessions[s.sessionId].remoteOpen; waited += 1) await new Promise(resolve => setTimeout(resolve, 100));
+  // Advancing the retry schedule confirms the hangup with no further call.
+  jest.advanceTimersByTime(1_000);
+  expect(provider.hangups).toHaveLength(3);
+  await service.recover();
   expect(storage.read().sessions[s.sessionId].remoteOpen).toBe(false);
   expect(provider.hangups).toHaveLength(3);
   expect(provider.sessions).toHaveLength(1);
@@ -1295,6 +1317,7 @@ test("a session the provider never confirmed closed is charged for the time it m
   expect(provider.sessions).toHaveLength(2);
   provider.autoClose = true;
   await service.close(next.sessionId);
+  } finally { jest.useRealTimers(); }
 });
 
 test("end_conversation closes nothing unless the operator asked to end the call; an explicit request and the hang-up close it once", async () => {
@@ -1305,7 +1328,6 @@ test("end_conversation closes nothing unless the operator asked to end the call;
     const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
     f.provider.replay(s.providerId, { ...said(question, 0), end_ms: 100 }, delegationCreated("ending", 200));
     await f.service.drain(s.sessionId);
-    await new Promise(resolve => setTimeout(resolve, 5));
     expect(f.admission.session(s.sessionId).closed, question).toBe(false);
     expect(f.provider.commands.some(row => row.type === "session.close"), question).toBe(false);
     expect(f.admission.events(s.sessionId, 0), question).toContainEqual(expect.objectContaining({ type: "tool.result", callId: "end-call", status: "failed" }));
