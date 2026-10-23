@@ -157,6 +157,33 @@ test("a stored id becomes an exact deviceId and the active input names that micr
   expect(activeVoiceInput()).toBeNull();
 });
 
+test("a choice another tab wrote straight into storage is read with no subscriber, and the call opens that device", async () => {
+  const storage = memoryStorage();
+  configureVoiceDeviceStorage(storage);
+  const media = fakeDevices();
+  setVoiceDeviceChoice("input", { id: "mic-headset", label: "Headset Mic" });
+  expect(voiceDeviceChoice("input")).toEqual({ id: "mic-headset", label: "Headset Mic" });
+  storage.data.set(VOICE_INPUT_KEY, JSON.stringify({ id: "mic-array", label: "Microphone Array (Realtek(R) Audio)" }));
+  expect(voiceDeviceChoice("input")).toEqual({ id: "mic-array", label: "Microphone Array (Realtek(R) Audio)" });
+  const opened = await openVoiceMicrophone({ echoCancellation: true });
+  expect(media.asked).toEqual([{ audio: { echoCancellation: true, deviceId: { exact: "mic-array" } } }]);
+  opened.release();
+  storage.data.delete(VOICE_INPUT_KEY);
+  expect(voiceDeviceChoice("input")).toBeNull();
+});
+
+test("an unchanged stored choice reads as the same object, so a store snapshot stays stable", () => {
+  setVoiceDeviceChoice("output", { id: "spk-desk", label: "Desk speakers" });
+  expect(voiceDeviceChoice("output")).toBe(voiceDeviceChoice("output"));
+});
+
+test("a write the browser refuses still holds for this page", () => {
+  const storage = memoryStorage();
+  configureVoiceDeviceStorage({ ...storage, setItem: () => { throw new Error("quota"); } });
+  setVoiceDeviceChoice("input", { id: "mic-array", label: "Microphone Array (Realtek(R) Audio)" });
+  expect(voiceDeviceChoice("input")).toEqual({ id: "mic-array", label: "Microphone Array (Realtek(R) Audio)" });
+});
+
 test("a rotated id is found by its name before the call opens", async () => {
   const media = fakeDevices();
   setVoiceDeviceChoice("input", { id: "stale-id", label: "Microphone Array (Realtek(R) Audio)" });

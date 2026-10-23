@@ -6,7 +6,9 @@
     "product",
     "navigation",
     "navigation-product",
-    "devices"
+    "devices",
+    "speakers",
+    "nextcall"
   ],
   "readings": [
     {
@@ -2571,6 +2573,180 @@
         "textInPop": true,
         "lineHeight": 38,
         "popWidth": 236
+      }
+    },
+    {
+      "group": "speakers",
+      "combo": "390x844-uk-light",
+      "scene": "speakers-fallback",
+      "reading": {
+        "head": {
+          "x": 330,
+          "y": 665,
+          "width": 52,
+          "height": 52
+        },
+        "bubble": {
+          "x": 42,
+          "y": 665,
+          "width": 280,
+          "height": 52
+        },
+        "plate": null,
+        "pop": null,
+        "sheet": null,
+        "footer": null,
+        "phase": "thinking",
+        "side": "right",
+        "sheetState": null,
+        "callStart": 1792745064885,
+        "chromeLine": 725,
+        "textUnderHeadPx2": 0,
+        "textUnderWordsPx2": 0,
+        "controlsUnderHeadPx2": 0,
+        "controlsUnderWordsPx2": 0,
+        "rowsCutByWords": 0,
+        "marksCutByWords": 0,
+        "blocksSplitByWords": 0,
+        "plateLook": {
+          "background": "rgb(255, 253, 250)",
+          "borderTop": "0px",
+          "shadow": "none",
+          "underScrim": false
+        },
+        "headOverSheetPx2": 0,
+        "wordsOverSheetPx2": 0,
+        "headOverSheetTextPx2": 0,
+        "headOverSheetControlsPx2": 0,
+        "headOverFooterPx2": 0,
+        "sheetBody": null,
+        "inViewport": true,
+        "wordsCut": false,
+        "words": "Вибрані динаміки не під’єднано. Звук іде через системні за замовчуванням.",
+        "dot": 13,
+        "headLook": {
+          "border": "solid",
+          "character": "1"
+        },
+        "popRows": [],
+        "status": null,
+        "sideways": 0,
+        "feedBand": 76,
+        "feedAtEnd": true,
+        "paneAtEnd": true,
+        "listTail": {
+          "paneBottom": 649,
+          "padding": 12,
+          "lastBottom": 626
+        },
+        "stored": null,
+        "record": {
+          "starts": [
+            "atlas"
+          ],
+          "projects": [
+            "atlas"
+          ],
+          "closes": 0,
+          "sessionRequests": 0
+        }
+      }
+    },
+    {
+      "group": "speakers",
+      "combo": "375x667-en-dark",
+      "scene": "speakers-fallback",
+      "reading": {
+        "head": {
+          "x": 315,
+          "y": 488,
+          "width": 52,
+          "height": 52
+        },
+        "bubble": {
+          "x": 27,
+          "y": 488,
+          "width": 280,
+          "height": 52
+        },
+        "plate": null,
+        "pop": null,
+        "sheet": null,
+        "footer": null,
+        "phase": "thinking",
+        "side": "right",
+        "sheetState": null,
+        "callStart": 1792745078986,
+        "chromeLine": 548,
+        "textUnderHeadPx2": 0,
+        "textUnderWordsPx2": 0,
+        "controlsUnderHeadPx2": 0,
+        "controlsUnderWordsPx2": 0,
+        "rowsCutByWords": 0,
+        "marksCutByWords": 0,
+        "blocksSplitByWords": 0,
+        "plateLook": {
+          "background": "rgb(25, 27, 35)",
+          "borderTop": "0px",
+          "shadow": "none",
+          "underScrim": false
+        },
+        "headOverSheetPx2": 0,
+        "wordsOverSheetPx2": 0,
+        "headOverSheetTextPx2": 0,
+        "headOverSheetControlsPx2": 0,
+        "headOverFooterPx2": 0,
+        "sheetBody": null,
+        "inViewport": true,
+        "wordsCut": false,
+        "words": "The chosen speakers are not connected. Sound plays through the system default.",
+        "dot": 13,
+        "headLook": {
+          "border": "solid",
+          "character": "1"
+        },
+        "popRows": [],
+        "status": null,
+        "sideways": 0,
+        "feedBand": 76,
+        "feedAtEnd": true,
+        "paneAtEnd": true,
+        "listTail": {
+          "paneBottom": 472,
+          "padding": 12,
+          "lastBottom": 431
+        },
+        "stored": null,
+        "record": {
+          "starts": [
+            "atlas"
+          ],
+          "projects": [
+            "atlas"
+          ],
+          "closes": 0,
+          "sessionRequests": 0
+        }
+      }
+    },
+    {
+      "group": "nextcall",
+      "combo": "390x844-uk-light",
+      "scene": "next-call-box",
+      "reading": {
+        "hint": "Новий мікрофон працюватиме з наступної розмови.",
+        "lines": 1,
+        "inside": true
+      }
+    },
+    {
+      "group": "nextcall",
+      "combo": "375x667-en-dark",
+      "scene": "next-call-box",
+      "reading": {
+        "hint": "The new microphone is used from the next call.",
+        "lines": 1,
+        "inside": true
       }
     }
   ],

@@ -1536,6 +1536,63 @@ test("phone: a live call names its microphone in the head's popover and the head
   }
 });
 
+/** A browser that can pick speakers, with a call whose chosen speakers are no longer listed. */
+async function speakersGone() {
+  const voiceDevices = await import("@/lib/audio/voiceDevices");
+  const track = { enabled: true, stop() {}, label: "Default - Headset Mic", getSettings: () => ({ deviceId: "default" }) };
+  const had = Object.getOwnPropertyDescriptor(globalThis, "HTMLMediaElement");
+  Object.defineProperty(globalThis, "HTMLMediaElement", { configurable: true, writable: true, value: class { setSinkId() { return Promise.resolve(); } } });
+  Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: {
+    getUserMedia: async () => ({ getTracks: () => [track], getAudioTracks: () => [track] }),
+    enumerateDevices: async () => [
+      { deviceId: "default", kind: "audioinput", label: "Default - Headset Mic", groupId: "g1" },
+      { deviceId: "mic-headset", kind: "audioinput", label: "Headset Mic", groupId: "g1" },
+      { deviceId: "default", kind: "audiooutput", label: "Default - Headphones", groupId: "g1" },
+      { deviceId: "spk-headset", kind: "audiooutput", label: "Headphones", groupId: "g1" },
+    ],
+  } });
+  voiceDevices.setVoiceDeviceChoice("output", { id: "spk-gone", label: "Desk speakers" });
+  return {
+    voiceDevices,
+    restore() {
+      voiceDevices.setVoiceDeviceChoice("output", null);
+      voiceDevices.configureVoiceDeviceStorage(undefined);
+      if (had) Object.defineProperty(globalThis, "HTMLMediaElement", had); else Reflect.deleteProperty(globalThis, "HTMLMediaElement");
+    },
+  };
+}
+
+test("a call whose chosen speakers are gone says the system default plays and keeps the choice; the notice goes with the call", async () => {
+  const live = await liveHarness();
+  const gone = await speakersGone();
+  try {
+    await mount(<VoiceCompanionHost project="atlas" mobile={false} />);
+    expect(document.querySelector('[data-companion-notice][data-code="SPEAKERS_FALLBACK"]')).toBeNull();
+    await click(document.querySelector("[data-companion-talk]"));
+    await pause(300);
+    const notice = document.querySelector('[data-companion-notice][data-code="SPEAKERS_FALLBACK"]');
+    expect(notice?.querySelector(".vc-notice-text")?.textContent).toBe(companionErrorMessage("SPEAKERS_FALLBACK", "en"));
+    expect(notice?.querySelector("[data-companion-open-settings]")).toBeTruthy();
+    expect(document.querySelector('[data-companion-notice][data-code="MICROPHONE_FALLBACK"]')).toBeNull();
+    expect(gone.voiceDevices.voiceDeviceChoice("output")?.id).toBe("spk-gone");
+    await click(document.querySelector("[data-companion-end]"));
+    await pause(200);
+    expect(gone.voiceDevices.voiceOutputFellBack()).toBe(false);
+  } finally { gone.restore(); await unmountNow(); await live.release(); }
+});
+
+test("phone: a call whose chosen speakers are gone says so in the head", async () => {
+  const live = await liveHarness();
+  const gone = await speakersGone();
+  try {
+    await mount(<VoiceCompanionHost project="atlas" mobile />);
+    await phoneRow("talk");
+    await pause(300);
+    expect(document.querySelector("[data-phone-voice-words]")?.textContent?.replace(/[\s\u200b]+/g, " ")).toContain(companionErrorMessage("SPEAKERS_FALLBACK", "en"));
+    expect(gone.voiceDevices.voiceDeviceChoice("output")?.id).toBe("spk-gone");
+  } finally { gone.restore(); await unmountNow(); await live.release(); }
+});
+
 test("phone: a project change, and a view with no project, keep the same head and the same live call", async () => {
   const live = await liveHarness();
   let closed = false, seq = 0;

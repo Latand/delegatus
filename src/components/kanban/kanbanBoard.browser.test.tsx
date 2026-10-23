@@ -23065,7 +23065,7 @@ describe("floating voice companion", () => {
     const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
     const measurements: unknown[] = [];
     try {
-      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const state of ["callchosen", "callgone"] as const) {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const state of ["callchosen", "callgone", "callspkgone", "callnext"] as const) {
         const label = `${lang}-${scheme}-${state}`;
         const { context, page, pageErrors } = await openVoice(browser, server.base, `&dev=${state}`, { viewport: VIEWPORT, scheme, lang, motion: "reduce", init: stubVoiceDevices });
         try {
@@ -23075,7 +23075,7 @@ describe("floating voice companion", () => {
           /* The simulator adds a «Simulated voice» line that the product's adapter never draws; the block is read as the product has it. */
           await page.addStyleTag({ content: ".vc-sim { display: none !important; }" });
           await page.waitForTimeout(600);
-          const mic = state === "callchosen" ? "Навушники AirPods Pro (Bluetooth)" : "Microphone Array (Realtek(R) Audio)";
+          const mic = state === "callchosen" || state === "callnext" ? "Навушники AirPods Pro (Bluetooth)" : "Microphone Array (Realtek(R) Audio)";
           const reading = await page.evaluate(() => {
             const block = document.querySelector<HTMLElement>(".vc-block")!;
             const status = document.querySelector<HTMLElement>("[data-companion-phase]")!;
@@ -23101,22 +23101,50 @@ describe("floating voice companion", () => {
           expect(reading.status.bottom, `${label}: the status block meets the controls (measured ${JSON.stringify(reading.status)} against ${JSON.stringify(reading.controls)})`).toBeLessThanOrEqual(reading.controls.y + 0.5);
           expect(reading.controls.bottom, `${label}: the controls end inside the block`).toBeLessThanOrEqual(reading.block.bottom + 0.5);
           expect(reading.line.right, label).toBeLessThanOrEqual(reading.block.right + 0.5);
-          if (state === "callgone") {
-            await page.waitForSelector('[data-companion-notice][data-code="MICROPHONE_FALLBACK"]', { timeout: 10_000 });
-            const notice = await page.evaluate(() => {
-              const element = document.querySelector<HTMLElement>('[data-companion-notice][data-code="MICROPHONE_FALLBACK"]')!;
+          /* The device notice the state calls for, whole and inside the window with its way to the settings; the other one is absent. */
+          const noticeCode = state === "callgone" ? "MICROPHONE_FALLBACK" : state === "callspkgone" ? "SPEAKERS_FALLBACK" : null;
+          for (const code of ["MICROPHONE_FALLBACK", "SPEAKERS_FALLBACK"] as const) {
+            if (code !== noticeCode) { expect(await page.locator(`[data-companion-notice][data-code="${code}"]`).count(), `${label}: ${code}`).toBe(0); continue; }
+            await page.waitForSelector(`[data-companion-notice][data-code="${code}"]`, { timeout: 10_000 });
+            const notice = await page.evaluate((selector) => {
+              const element = document.querySelector<HTMLElement>(selector)!;
               const text = element.querySelector<HTMLElement>(".vc-notice-text")!;
               const box = element.getBoundingClientRect();
               return { text: text.innerText.trim(), tone: element.dataset.tone, settings: !!element.querySelector("[data-companion-open-settings]"),
                 inside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, clipped: text.scrollWidth > text.clientWidth + 1 || text.scrollHeight > text.clientHeight + 1 };
+            }, `[data-companion-notice][data-code="${code}"]`);
+            expect(notice, label).toEqual({ text: companionErrorMessage(code, lang), tone: "note", settings: true, inside: true, clipped: false });
+          }
+          let nextCall: unknown = null;
+          if (state === "callnext") {
+            /* Another microphone is chosen while the call runs: the settings row says it is used from the next call. */
+            await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-voice-companion-settings")));
+            const microphone = page.locator("[data-voice-device='input'] select");
+            await microphone.waitFor();
+            await page.waitForFunction(() => document.querySelectorAll("[data-voice-device='input'] option").length >= 4);
+            await microphone.selectOption("mic-array");
+            await page.waitForSelector("[data-voice-device-hint='input']", { timeout: 10_000 });
+            nextCall = await page.evaluate(() => {
+              const row = document.querySelector<HTMLElement>("[data-voice-device='input']")!;
+              const dialog = row.closest<HTMLElement>("[role=dialog]")!.getBoundingClientRect();
+              const hint = row.querySelector<HTMLElement>("[data-voice-device-hint]")!;
+              row.scrollIntoView({ block: "center" });
+              const range = document.createRange(); range.selectNodeContents(hint);
+              const lines = [...range.getClientRects()].filter((line) => line.width >= 1);
+              return { hint: hint.textContent?.replace(/\s+/g, " ").trim(), lines: lines.length,
+                inside: lines.every((line) => line.left >= dialog.left - 0.5 && line.right <= dialog.right + 0.5 && line.top >= dialog.top - 0.5 && line.bottom <= dialog.bottom + 0.5 && line.bottom <= innerHeight + 0.5 && line.right <= innerWidth + 0.5) };
             });
-            expect(notice, label).toEqual({ text: companionErrorMessage("MICROPHONE_FALLBACK", lang), tone: "note", settings: true, inside: true, clipped: false });
-          } else expect(await page.locator('[data-companion-notice][data-code="MICROPHONE_FALLBACK"]').count(), label).toBe(0);
+            expect(nextCall, label).toEqual({ hint: translate(lang, "voiceCompanion.devices.nextCall"), lines: (nextCall as { lines: number }).lines, inside: true });
+            expect((nextCall as { lines: number }).lines, label).toBeGreaterThan(0);
+            await page.screenshot({ path: path.join(out, `call-${label}-settings.png`) });
+            await page.keyboard.press("Escape");
+            await page.waitForSelector("[role=dialog]", { state: "detached", timeout: 10_000 });
+          }
           await page.screenshot({ path: path.join(out, `call-${label}.png`) });
           await page.locator("[data-companion-end]").click();
           await page.waitForSelector("[data-companion-mic]", { state: "detached", timeout: 10_000 });
           expect(pageErrors, label).toEqual([]);
-          measurements.push({ label, ...reading });
+          measurements.push({ label, ...reading, ...(nextCall ? { nextCall } : {}) });
         } finally { await context.close(); }
       }
       fs.mkdirSync("evidence/voice-companion", { recursive: true });

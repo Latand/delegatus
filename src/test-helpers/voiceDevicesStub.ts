@@ -3,7 +3,7 @@
  * device picker (docs/design/voice-device-picker.md). Handed to `addInitScript`, so it runs in the page before its own
  * scripts and must not refer to anything outside its body. `?dev=<state>` picks the scene: `default`, `chosen`, `gone`
  * (the stored devices are not connected), `noperm` (names withheld until Show devices), `denied`, `nosink` (no
- * `setSinkId`), and `callchosen` / `callgone` for a call whose stored microphone is present or missing.
+ * `setSinkId`), and `callchosen` / `callgone` for a call whose stored microphone is present or missing, `callnext` for a call whose microphone is changed in the settings while it runs, `callspkgone` for one whose stored speakers are missing.
  */
 export function stubVoiceDevices(): void {
   const state = new URLSearchParams(location.search).get("dev");
@@ -26,6 +26,8 @@ export function stubVoiceDevices(): void {
     callchosen: { llvVoiceInputDevice: { id: "mic-pods", label: "Навушники AirPods Pro (Bluetooth)" } },
     gone: { llvVoiceInputDevice: { id: "mic-gone", label: "Конференц-мікрофон Jabra Speak 750" }, llvVoiceOutputDevice: { id: "spk-gone", label: "Bluetooth Speaker (JBL Flip 6)" } },
     callgone: { llvVoiceInputDevice: { id: "mic-gone", label: "Конференц-мікрофон Jabra Speak 750" } },
+    callnext: { llvVoiceInputDevice: { id: "mic-pods", label: "Навушники AirPods Pro (Bluetooth)" } },
+    callspkgone: { llvVoiceOutputDevice: { id: "spk-gone", label: "Bluetooth Speaker (JBL Flip 6)" } },
   };
   for (const [key, value] of Object.entries(seeds[state] ?? {})) localStorage.setItem(key, JSON.stringify(value));
   let granted = state !== "noperm" && state !== "denied";

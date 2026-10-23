@@ -65,7 +65,15 @@ export interface VoiceDeviceStorage {
 const KEYS: Record<VoiceDeviceKind, string> = { input: VOICE_INPUT_KEY, output: VOICE_OUTPUT_KEY };
 
 let injected: VoiceDeviceStorage | null | undefined;
-const choices: Record<VoiceDeviceKind, VoiceDeviceChoice | null | undefined> = { input: undefined, output: undefined };
+/**
+ * The parsed choice per kind, keyed by the stored text it came from. Storage is
+ * read on every call so a write from another tab is seen with no listener
+ * installed; the text decides whether the parsed object can be handed out again,
+ * which keeps a store snapshot stable between writes.
+ */
+const choices: Record<VoiceDeviceKind, { raw: string | null; choice: VoiceDeviceChoice | null } | undefined> = { input: undefined, output: undefined };
+/** A kind whose write the browser refused: the choice lasts for this page only, so storage no longer speaks for it. */
+const pageOnly: Record<VoiceDeviceKind, boolean> = { input: false, output: false };
 const listeners = new Set<() => void>();
 let stopStorageWatch: (() => void) | null = null;
 
@@ -74,6 +82,8 @@ export function configureVoiceDeviceStorage(storage: VoiceDeviceStorage | null |
   injected = storage;
   choices.input = undefined;
   choices.output = undefined;
+  pageOnly.input = false;
+  pageOnly.output = false;
   notify();
 }
 
@@ -101,17 +111,18 @@ function parseChoice(raw: string | null): VoiceDeviceChoice | null {
   }
 }
 
-/** The stored choice for a kind; null is System default. Memoized between writes so a store snapshot is stable. */
+/** The stored choice for a kind; null is System default. Always read from storage, so another tab's write counts at once. */
 export function voiceDeviceChoice(kind: VoiceDeviceKind): VoiceDeviceChoice | null {
   const cached = choices[kind];
-  if (cached !== undefined) return cached;
+  if (pageOnly[kind] && cached) return cached.choice;
   let raw: string | null = null;
   try {
     raw = activeStorage()?.getItem(KEYS[kind]) ?? null;
   } catch {
     raw = null;
   }
-  return (choices[kind] = parseChoice(raw));
+  if (cached && cached.raw === raw) return cached.choice;
+  return (choices[kind] = { raw, choice: parseChoice(raw) }).choice;
 }
 
 function notify(): void {
@@ -121,13 +132,17 @@ function notify(): void {
 /** Stores a choice, or clears it with null (System default). A live call's speakers follow at once. */
 export function setVoiceDeviceChoice(kind: VoiceDeviceKind, choice: VoiceDeviceChoice | null): void {
   const storage = activeStorage();
+  const kept = choice ? { id: choice.id, label: choice.label } : null;
+  const raw = kept ? JSON.stringify(kept) : null;
+  pageOnly[kind] = !storage;
   try {
-    if (choice) storage?.setItem(KEYS[kind], JSON.stringify({ id: choice.id, label: choice.label }));
+    if (raw) storage?.setItem(KEYS[kind], raw);
     else storage?.removeItem(KEYS[kind]);
   } catch {
     /* The write was refused: the choice still applies for this page. */
+    pageOnly[kind] = true;
   }
-  choices[kind] = choice ? { id: choice.id, label: choice.label } : null;
+  choices[kind] = { raw, choice: kept };
   notify();
   if (kind === "output") reapplyOutputs();
 }
@@ -137,8 +152,8 @@ function watchStorage(): void {
   /* Another tab of this browser chose a device — adopt it, don't fight it. */
   const onStorage = (event: StorageEvent) => {
     if (event.key !== null && event.key !== VOICE_INPUT_KEY && event.key !== VOICE_OUTPUT_KEY) return;
-    choices.input = undefined;
-    choices.output = undefined;
+    pageOnly.input = false;
+    pageOnly.output = false;
     notify();
     reapplyOutputs();
   };

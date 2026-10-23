@@ -33,7 +33,7 @@ import { VoiceCompanion } from "@/components/voiceCompanion/VoiceCompanion";
 import { sampleCallHistory, sampleTranscript, sampleOrchestratorMessage } from "@/components/voiceCompanion/transcriptSample.fixture";
 import type { CompanionEvent, CompanionPlan } from "@/lib/voiceCompanion/contract";
 import { DEMO_IDS, SCENARIO_PLAYBACK_PAUSE, demoAnswer, demoInstruction, isScenario, scenarioScript } from "@/lib/voiceCompanion/scenarios";
-import { openVoiceMicrophone, type VoiceMicrophone } from "@/lib/audio/voiceDevices";
+import { attachVoiceOutput, openVoiceMicrophone, type VoiceMicrophone } from "@/lib/audio/voiceDevices";
 import { createSimulatedCompanion, realClock } from "@/lib/voiceCompanion/simulator";
 import type { VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
 
@@ -4970,14 +4970,16 @@ function voiceCompanionScene() {
   Object.assign(window, { voiceCompanion: voice });
   let sendLost = params.get("sendlost") === "1";
   /* `&dev=<state>` (docs/design/voice-device-picker.md): the driver stubs `navigator.mediaDevices`, and a start opens the
-     microphone through the product's own `openVoiceMicrophone`, as a real call does, so the status block names it. */
+     microphone through the product's own `openVoiceMicrophone` and gives an audio element to `attachVoiceOutput`, as a real
+     call does, so the status block names the microphone and the chosen speakers are looked for. */
   let microphone: VoiceMicrophone | null = null;
+  let detachOutput: (() => void) | null = null;
   const withDevices = params.has("dev");
   const shown: VoiceCompanionAdapter = {
     mode: adapter.mode,
-    start: async options => { if (withDevices) microphone = await openVoiceMicrophone({}); return adapter.start(options); },
+    start: async options => { if (withDevices) { microphone = await openVoiceMicrophone({}); detachOutput = attachVoiceOutput(new Audio()); } return adapter.start(options); },
     subscribe: emit => { listeners.add(emit); return () => listeners.delete(emit); },
-    close: () => { microphone?.release(); microphone = null; return adapter.close(); },
+    close: () => { microphone?.release(); microphone = null; detachOutput?.(); detachOutput = null; return adapter.close(); },
     command: async command => {
       if (sendLost && command.type === "confirmation" && command.decision === "send") { sendLost = false; throw new Error("COMPANION_UNAVAILABLE"); }
       return adapter.command(command);
