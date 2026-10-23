@@ -4,6 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { changedSinceBase, platformScope, workflowEntries } from "./ci-platform-scope";
 import { cpuBudgetTimer, cpuInheritedWaitMs, cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
+import { cacheDirectory, checkEnvironment, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint, workingInputsFingerprint } from "./gate-cache";
 import { publicationHookDeadline, publicationPushBudgetMs } from "../src/lib/pipelines/gateBudget";
 
 export type Mode = "pre-commit" | "pre-push";
@@ -74,7 +75,11 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
   const lintFiles = files.filter(lintable).map(file => `./${file}`);
   if (lintFiles.length) steps.push({ name: "eslint", command: ["bun", "scripts/eslint-changes.ts", "--base", env.lintBase ?? env.base, ...lintFiles], capped: mode === "pre-push" || lintFiles.length > 40 });
   if (mode === "pre-commit") return steps;
-  const touched = new Set(files.filter(isTest));
+  const touched = new Set<string>();
+  if (changedFiles.some(file => ["scripts/gate-cache.ts", "scripts/local-gate.fixture.ts"].includes(file))) {
+    for (const test of env.tests) if (/^scripts\/(?:local-gate(?:\.receipts|-tests)?|eslint-changes|gate-cache)\.test\.ts$/.test(test)) touched.add(test);
+  }
+  for (const file of files.filter(isTest)) touched.add(file);
   for (const file of files.filter(lintable)) {
     const stem = file.replace(/\.[^.]+$/, "");
     for (const test of env.tests) if (test.startsWith(`${stem}.`) && isTest(test)) touched.add(test);
@@ -556,10 +561,73 @@ async function prepared(prepare: RunOptions["prepare"], step: Step, until: numbe
   }
 }
 const isOutcome = (value: Prepared | Outcome): value is Outcome => "stopped" in value;
+interface PassRecord { at: string }
+export interface StepPasses { reused(step: Step, until?: number): boolean; passed(step: Step): void }
+/** Only checks with no output dependency are independent. The private build
+ * and its consumers reuse together; a partial runtime run rebuilds afresh.
+ * Privacy, install and advisory data always receive a fresh observation.
+ */
+export function stepPasses(root: string, base: string, steps: readonly Step[], say: (line: string) => void, env: NodeJS.ProcessEnv = process.env): StepPasses {
+  const checkEnv = checkEnvironment(env);
+  const store = new GateCache<PassRecord>(cacheDirectory(root, "passes"), (value): value is PassRecord =>
+    !!value && typeof value === "object" && "at" in value && typeof value.at === "string" && Number.isFinite(Date.parse(value.at)));
+  const toolRoot = path.resolve(import.meta.dir, "..");
+  const toolFiles = gateToolFiles(toolRoot);
+  const reusable = (step: Step) => !["privacy", "frozen install", "supply chain", "staged whitespace"].includes(step.name);
+  let unavailableReason = "dirty worktree";
+  const snapshot = () => {
+    try {
+      if (git(root, ["ls-files", "-v"]).split("\n").some(line => /^[a-zS] /.test(line))) return;
+      const status = git(root, ["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"]);
+      if (status) { unavailableReason = "dirty worktree"; return; }
+      if (git(root, ["merge-base", "HEAD", "origin/main"]) !== base) { unavailableReason = "base changed"; return; }
+      const head = git(root, ["rev-parse", "HEAD"]), tree = git(root, ["rev-parse", "HEAD^{tree}"]);
+      const runtimeCache = path.join(env.XDG_CACHE_HOME ?? path.join(homedir(), ".cache"), "delegatus-gate");
+      const pins = steps.filter(step => step.pinned).length && existsSync(path.join(root, "Dockerfile"))
+        ? [path.join(runtimeCache, `bun-${pinnedBunVersion(readFileSync(path.join(root, "Dockerfile"), "utf8"))}/node_modules/.bin/bun`)] : [];
+      for (const version of new Set(steps.flatMap(step => step.codex ? [step.codex] : []))) {
+        const target = process.arch === "x64" ? "x86_64" : "aarch64";
+        pins.push(path.join(runtimeCache, `codex-${version}/node_modules/@openai/codex-linux-${process.arch}/vendor/${target}-unknown-linux-musl/bin/codex`));
+      }
+      const which = (name: string) => Bun.which(name, { PATH: checkEnv.PATH ?? "" });
+      const tools = [process.execPath, which("bun"), which("bunx"), which("node"), which("git"), ...pins,
+        ...["node_modules/.bun/lock", "node_modules/typescript/package.json", "node_modules/eslint/package.json"].map(file => path.join(root, file))];
+      // Hash what the checks receive, never store its values. Execution roots,
+      // deadlines and CPU tickets belong to a run, rather than its result.
+      const environment = environmentFingerprint(checkEnv);
+      const toolchain = [...tools.map(file => file ? fileFingerprint(file) : "missing"), ...toolFiles.map(file => fileFingerprint(path.join(toolRoot, file)))];
+      return { head, tree, key: fingerprint([3, head, tree, base, spawnSync("git", ["symbolic-ref", "--short", "-q", "HEAD"], { cwd: root, encoding: "utf8" }).stdout, Bun.version, process.platform, process.arch, toolchain, installedFingerprint(root), workingInputsFingerprint(root), environment,
+        spawnSync("git", ["config", "--get-regexp", "^remote\\."], { cwd: root, encoding: "utf8" }).stdout] ) };
+    } catch (error) { unavailableReason = error instanceof Error ? error.name : "input fingerprint unavailable"; return; }
+  };
+  const initial = snapshot();
+  const key = (step: Step) => fingerprint([initial?.key, step]);
+  const runtime = steps.filter(step => step.lane === "runtime");
+  // Hold the complete runtime verdict for this invocation: eviction must not
+  // make a consumer run after its private build was skipped.
+  const runtimeRecords = new Map(runtime.map(step => [key(step), store.read(key(step))]));
+  const runtimeComplete = runtime.every(step => runtimeRecords.get(key(step)));
+  if (!initial) say("pre-push: pass reuse disabled: worktree is dirty or inputs could not be fingerprinted (" + unavailableReason + ")");
+  const current = () => initial && snapshot()?.key === initial.key;
+  return {
+    reused(step, until = Infinity) {
+      if (Date.now() >= until || !initial || !reusable(step) || (step.lane === "runtime" && !runtimeComplete)) return false;
+      const record = step.lane === "runtime" ? runtimeRecords.get(key(step)) : store.read(key(step));
+      if (!record || !current() || Date.now() >= until) return false;
+      say(`pre-push: ${step.name}: reused pass from ${record.at} for tree ${initial.tree.slice(0, 12)} against base ${base.slice(0, 12)}; identical inputs, skipped`);
+      return true;
+    },
+    passed(step) {
+      if (initial && reusable(step) && current()) store.write(key(step), { at: new Date().toISOString() });
+    },
+  };
+}
+
 interface RunOptions {
   root: string; deadline: PushDeadline | null; logDir: string; say?: (line: string) => void; ref?: string;
   /** The other half of publication refused; stop owned work before returning. */
   cancel?: AbortSignal;
+  passes?: StepPasses;
   /** Anything it waits on ends by `until`, or at once on `cancel`, through the
       installers above. */
   prepare: (step: Step, until: number, cancel?: AbortSignal, waitEnv?: NodeJS.ProcessEnv) => Prepared | Promise<Prepared>;
@@ -621,6 +689,7 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
       index = end;
       say(`${mode}: ${step.group ?? step.name}`);
       if (!step.group) {
+        if (options.passes?.reused(step, until + cpuInheritedWaitMs(budget.env))) continue;
         const ready = await prepared(prepare, step, until, options.cancel, budget.env);
         const log = mode === "pre-push" && comparableStep(step) ? path.join(logDir, `${step.name.replace(/[^\w.-]+/g, "-")}.log`) : undefined;
         const outcome = isOutcome(ready) ? ready : await runPrepared(step, ready, log, options.cancel);
@@ -633,6 +702,7 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
           return deferred;
         }
         if (!settle(step, outcome)) throw new Error(`${isOutcome(ready) ? step.name : ready.command[0]} failed (${outcome.code})`);
+        if (!outcome.stopped && outcome.code === 0) options.passes?.passed(step);
         continue;
       }
       // Grouped steps take their machine admission together and wait for none
@@ -653,10 +723,12 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
           if (cancel.signal.aborted) return { code: null, stopped: true, ranMs: null, cancelled: true };
           const started = Date.now();
           try {
+            if (options.passes?.reused(member, until + cpuInheritedWaitMs(budget.env))) return { code: 0, stopped: false, ranMs: 0 };
             const ready = await prepared(prepare, member, until, cancel.signal, budget.env);
             const outcome = isOutcome(ready) ? ready : await runPrepared(member, ready, log, cancel.signal);
             if (!outcome.cancelled && !settle(member, outcome)) throw new Error(String(outcome.code));
             if (!outcome.stopped && ["touched tests", "Linux tests", "eslint"].includes(member.name) && existsSync(log)) say(readFileSync(log, "utf8").trimEnd());
+            if (!outcome.stopped && !outcome.cancelled && outcome.code === 0) options.passes?.passed(member);
             if (!outcome.stopped) say(`${mode}: ${member.name}: passed in ${seconds(Date.now() - started)}`);
             return outcome;
           } catch (error) { errors.set(at, error); cancel.abort(); return null; }
@@ -787,6 +859,7 @@ async function main(mode: Mode, admitted = false): Promise<void> {
     deadline = { startedAt, at: publicationHookDeadline(publicationPushBudgetMs(files), startedAt) };
   }
   if (mode === "pre-push" && !files.length) console.error(`pre-push: nothing changed since ${base.slice(0, 12)}; checking the pushed commits for privacy only`);
+  if (mode === "pre-push" && files.length && files.every(proseOnly)) console.error("pre-push: prose-only diff; types, lint and touched tests skipped because no compiler or executable source input changed");
   const cache = path.join(process.env.XDG_CACHE_HOME ?? path.join(homedir(), ".cache"), "delegatus-gate");
   // Installed on first use, inside the step that needs it and by its deadline.
   let runtime: Promise<string> | undefined;
@@ -794,7 +867,9 @@ async function main(mode: Mode, admitted = false): Promise<void> {
   const fixtures = new Map<string, Promise<string>>();
   const sandbox = createGateSandbox();
   try {
-    const isolated = isolatedEnvironment(sandbox, process.env);
+    // Pre-push checks see one canonical environment, so a producer's pass and
+    // the publication of the same tree share a key (scripts/gate-cache.ts).
+    const isolated = isolatedEnvironment(sandbox, mode === "pre-push" ? checkEnvironment(process.env) : process.env);
     const privacyEnv = {
       ...process.env,
       LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: path.join(root, "scripts/privacy-known-value-fingerprints.json"),
@@ -802,7 +877,7 @@ async function main(mode: Mode, admitted = false): Promise<void> {
     };
     const prepare = async (step: Step, until: number, cancel?: AbortSignal, waitEnv = process.env) => {
       const command = [...step.command];
-      const env: NodeJS.ProcessEnv = { ...(step.isolated ? isolated : process.env), LLV_CPU_WAIT_ROOTS: waitEnv.LLV_CPU_WAIT_ROOTS };
+      const env: NodeJS.ProcessEnv = { ...(step.isolated || mode === "pre-push" && !["privacy", "frozen install", "supply chain"].includes(step.name) ? isolated : process.env), LLV_CPU_WAIT_ROOTS: waitEnv.LLV_CPU_WAIT_ROOTS };
       if (step.name === "privacy") Object.assign(env, privacyEnv);
       if (step.pinned) {
         runtime ??= pinnedRuntime(root, cache, until, cancel, env);
@@ -830,7 +905,8 @@ async function main(mode: Mode, admitted = false): Promise<void> {
       return { command: step.capped ? ["bash", "scripts/gate-slot.sh", ...command] : command, env, ...(usesBuild ? { root: runtimeTree } : {}) };
     };
     const branch = spawnSync("git", ["symbolic-ref", "--short", "-q", "HEAD"], { cwd: root, encoding: "utf8" }).stdout?.trim();
-    const options = { root, deadline, logDir: sandbox, prepare, ...(branch ? { ref: branch } : {}) };
+    const passes = admitted ? stepPasses(root, base, steps, console.error) : undefined;
+    const options = { root, deadline, logDir: sandbox, prepare, passes, ...(branch ? { ref: branch } : {}) };
     if (mode === "pre-push" && !admitted) {
       const privacy = (cancel?: AbortSignal) => runSteps(mode, steps.filter(step => step.name === "privacy"), { ...options, cancel });
       const checks = (cancel: AbortSignal) => runAdmittedChecks(
