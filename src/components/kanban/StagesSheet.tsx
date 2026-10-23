@@ -495,7 +495,7 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
       {rounds.length ? (
         <div className="rounds" aria-label={t("kanban.stages.rounds")}>
           {rounds.map((round) => (
-            <button type="button" key={round.n} onClick={() => { if (shown?.flowId) openReviewHistory(shown.flowId, round.n); }} className={`rchip ${round.verdict === "approved" ? "ok" : round.verdict === "changes" ? "bad" : "open"}`}>
+            <button type="button" key={round.n} onClick={() => { if (shown?.flowId) openReviewHistory(shown.flowId, round.n); }} className={`rchip min-h-6 pointer-coarse:min-h-11 ${round.verdict === "approved" ? "ok" : round.verdict === "changes" ? "bad" : "open"}`}>
               {t("kanban.stages.round", { n: round.n, verdict: t(`kanban.graph.verdict.${round.verdict}`) })}
             </button>
           ))}
