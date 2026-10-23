@@ -227,7 +227,7 @@ export function RoundDeck({
     <button
       type="button"
       data-review-deck-collapse
-      className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] border border-border bg-canvas text-muted shadow-1 hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+      className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-[8px] border border-border bg-canvas text-muted shadow-1 hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       aria-label={t("roundDeck.collapseStack", { count: rounds.length })}
       aria-expanded="true"
       title={t("roundDeck.collapseStack", { count: rounds.length })}
@@ -287,6 +287,7 @@ export function RoundDeck({
             {rounds.map((item, index) => <option key={item.key} value={item.key}>{roundLabel(t, item.round, archived)} · {index + 1}/{rounds.length}</option>)}
           </select>
           {archived ? <button type="button" className="min-h-11 shrink-0 px-2 text-xs text-accent" onClick={() => openReviewHistory(flow.id, front.round.n)}>{t("reviewHistory.open")}</button> : null}
+          {collapseControl}
         </nav>
         {front.file ? (
           <BranchPane
@@ -295,7 +296,6 @@ export function RoundDeck({
             isRoot={false}
             dormant={dormant}
             readOnly
-            headerActions={collapseControl}
             banner={
               <div
                 className="flex h-6 shrink-0 items-center gap-1.5 border-b border-border px-2.5 text-[10.5px] font-bold"
@@ -315,7 +315,6 @@ export function RoundDeck({
           />
         ) : (
           <div className="relative flex h-full flex-col items-center justify-center gap-1 rounded-[10px] border border-border bg-card shadow-1">
-            <div className="absolute right-1.5 top-1.5">{collapseControl}</div>
             <span className="text-[12px] font-semibold text-muted">{roundLabel(t, front.round, archived)}</span>
             <span className="text-[11px] text-muted">
               {front.round.error ? front.round.error : t(archived ? "reviewHistory.artifactMissing" : "roundDeck.spawningReviewer")}

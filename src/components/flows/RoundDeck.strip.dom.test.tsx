@@ -141,3 +141,16 @@ test.each([false, true])("expanded archive has no transcript or host mutation co
   expect(host.querySelector("[data-agent-control-strip], textarea, [data-session-title-edit]")).toBeNull();
   expect(writes).toEqual([]);
 });
+
+
+test("the phone can fold an expanded archive with a retained transcript", async () => {
+  dom.happyDOM.setWindowSize({ width: 390, height: 844 });
+  try {
+    const host = render([{ key: "r1", round: round(), file: subagent }]);
+    const collapse = host.querySelector<HTMLButtonElement>("nav [data-review-deck-collapse]");
+    expect(collapse).not.toBeNull();
+    flushSync(() => collapse!.click());
+    for (let n = 0; n < 1000 && !host.querySelector("[data-review-deck-collapsed]"); n++) await new Promise(resolve => setTimeout(resolve, 1));
+    expect(host.querySelector("[data-review-deck-collapsed]")).not.toBeNull();
+  } finally { dom.happyDOM.setWindowSize({ width: 1024, height: 768 }); }
+});
