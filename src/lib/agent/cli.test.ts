@@ -922,7 +922,9 @@ for (const engine of ["claude", "codex"] as const) test(`${engine} terminal boun
   }
   try {
     const spec = freshSpecFor(engine, SANDBOX, { codexHome: home, claudeConfigDir: home, deferClaudeSpawnPolicy: true });
-    const boundary = ` ${shellQuote(resolveBinary(engine))} `;
+    // Codex launches embed LLV_CODEX_BINARY, which this case points at the inventory stub.
+    const binary = engine === "codex" ? process.env.LLV_CODEX_BINARY! : resolveBinary(engine);
+    const boundary = ` ${shellQuote(binary)} `;
     const index = spec.command.indexOf(boundary);
     expect(index).toBeGreaterThan(0);
     const names = ["LLV_TOKEN", "DELEGATUS_TOKEN", "LLV_OPERATOR_TOKEN", "DELEGATUS_OPERATOR_TOKEN"];
