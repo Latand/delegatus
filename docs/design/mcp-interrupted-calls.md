@@ -99,3 +99,27 @@ its first underlying error once, and logs a terminal failure if one occurs.
 owner startup, the import/publication handoff, deadlines, rotation during a
 wait, service recovery, redaction and SDK HTTP discovery. These checks use
 synthetic state and claim no performance improvement.
+
+## Receipts startup ownership
+
+Viewer hot-state startup creates or repairs the receipt tables, columns and
+indexes and imports legacy receipts before publishing readiness. This also
+repairs the schema-less 4096-byte database an earlier MCP opener could leave.
+
+Against operator state, an MCP owner opens an existing database without
+SQLite's create flag and validates its tables, columns and indexes before any
+journal setting or write.
+It performs no schema repair, legacy import, startup pruning or permission
+repair. Normal tool calls still claim and complete receipts transactionally.
+Reopening after a durability swap applies the same validation.
+
+A call before preparation returns `receipts_not_ready`, with `retryable: true`
+and instructions to start or restart the Viewer. No binding or receipt claim
+has run. HTTP task calls carry this as an MCP tool error so the stdio adapter
+preserves the message. Failed initialization is evicted; the same worker can
+serve a later call after Viewer startup prepares the database.
+
+`src/lib/mcp/receiptsStartup.test.ts` drives isolated operator-shaped state,
+real stdio calls, worker restarts, same-worker recovery and the Viewer's startup
+entry. Missing tables, columns and indexes remain untouched by the MCP owner.
+These checks claim no performance improvement.

@@ -1,6 +1,7 @@
 import { captureProcessIdentity, processIdentityProvenDead, type ProcessIdentity } from "@/lib/processIdentity";
 import { trackMcpClaim, installMcpLifecycle, logMcpLifecycle, drainMcpClaims } from "../../../bin/mcp-lifecycle.mjs";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
+import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
 import { blockingWaitRole } from "@/lib/blockingWaits";
 import { shortIdsInAnswer, shortenHashesInText } from "@/lib/shortIds";
 import { normalizeShortIdArgs } from "./shortIdArgs";
@@ -1789,6 +1790,24 @@ const receiptIndexes = declaredIndexes([
         ON mcp_receipts(retention, sequence)`,
 ]);
 
+export class McpReceiptsNotReadyError extends Error {
+  constructor() {
+    super("MCP receipts are not ready. Start or restart the Viewer to prepare the receipts database, then retry the call.");
+    this.name = "McpReceiptsNotReadyError";
+  }
+}
+
+/** Readiness is checked before journal pragmas or any schema write, including
+ * after an activation fallback replaces the file beneath an MCP connection. */
+function assertReceiptsPrepared(db: BunDatabase): void {
+  const objects = new Set(db.query<{ name: string }, []>("SELECT name FROM sqlite_master").all().map(row => row.name));
+  const columns = new Set(db.query<{ name: string }, []>("PRAGMA table_info(mcp_receipts)").all().map(row => row.name));
+  const meta = new Set(db.query<{ name: string }, []>("PRAGMA table_info(mcp_receipt_meta)").all().map(row => row.name));
+  if (!objects.has("mcp_receipts") || !objects.has("mcp_receipt_meta") || !receiptIndexes.ready(objects)
+    || !["sequence", "receipt_key", "digest", "retention", "result_json", "storage_bytes", "claimed_at", "binding_json", "stage", "recovery_result_json"].every(name => columns.has(name))
+    || !["key", "value"].every(name => meta.has(name))) throw new McpReceiptsNotReadyError();
+}
+
 /**
  * Keyed durable receipts for the production MCP server.
  *
@@ -1805,7 +1824,8 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
   private readonly now: () => number;
 
   constructor(readonly filename: string, options: SqliteMcpReceiptStoreOptions = {}) {
-    fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
+    const prepare = mayRunStateStartupMutation(path.dirname(filename));
+    if (prepare) fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
     const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
     if (!sqlite) throw new Error("SQLite MCP receipts require the Bun runtime");
     /* Bound to the file at its name: a receipt store the activation fallback
@@ -1813,9 +1833,27 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
        handle. The journal mode cannot change inside a transaction, so these
        pragmas run before the schema transaction. */
     this.db = openCurrentDatabase(filename, () => {
-      const db = observeSqlite(new sqlite.Database(filename, { create: true, strict: true }), "mcp-receipts");
+      // A consumer never creates a file, even when the Viewer has not started
+      // or a durability swap left the name absent. SQLite readwrite omits CREATE.
+      if (!prepare && !fs.existsSync(filename)) throw new McpReceiptsNotReadyError();
+      let db: BunDatabase;
+      try {
+        db = observeSqlite(new sqlite.Database(filename, prepare
+          ? { create: true, strict: true } : { create: false, readwrite: true, strict: true }), "mcp-receipts");
+      } catch (error) {
+        // The name may disappear between the existence check and SQLite open.
+        if (!prepare && (error as { code?: string }).code === "SQLITE_CANTOPEN") throw new McpReceiptsNotReadyError();
+        throw error;
+      }
       try {
         db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(options.busyTimeoutMs ?? 5000))}`);
+        if (!prepare) {
+          assertReceiptsPrepared(db);
+          // These settings affect this connection only. WAL and vacuum mode
+          // belong to the Viewer's preparation, never an MCP startup attempt.
+          db.exec("PRAGMA synchronous = FULL");
+          return db;
+        }
         const walEnabled = () => db.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get()?.journal_mode === "wal";
         if (!walEnabled()) {
           try { db.exec("PRAGMA journal_mode = WAL"); }
@@ -1833,23 +1871,25 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
         db.close();
         throw error;
       }
-    }, { reopened: () => this.initializeSchema() });
+    }, { reopened: () => { if (prepare) this.initializeSchema(); } });
     this.readReceiptCountCap = Math.max(1, Math.floor(options.readReceiptCountCap ?? FILE_RECEIPT_CAP));
     this.readReceiptByteCap = Math.max(1, Math.floor(options.readReceiptByteCap ?? SQLITE_READ_RECEIPT_BYTE_CAP));
     this.boundedPendingTtlMs = Math.max(1, Math.floor(options.boundedPendingTtlMs ?? SQLITE_BOUNDED_PENDING_TTL_MS));
     this.now = options.now ?? Date.now;
     try {
-      this.initializeSchema();
-      this.importLegacyFile(options.legacyFilePath);
-      this.db.exec("BEGIN IMMEDIATE");
-      try {
-        this.pruneBoundedReceipts(this.now());
-        this.db.exec("COMMIT");
-      } catch (error) {
-        try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
-        throw error;
+      if (prepare) {
+        this.initializeSchema();
+        this.importLegacyFile(options.legacyFilePath);
+        this.db.exec("BEGIN IMMEDIATE");
+        try {
+          this.pruneBoundedReceipts(this.now());
+          this.db.exec("COMMIT");
+        } catch (error) {
+          try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+          throw error;
+        }
+        this.secureFiles();
       }
-      this.secureFiles();
     } catch (error) {
       this.db.close();
       throw error;
@@ -2067,14 +2107,12 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
 
   /**
    * Creates the tables and adds every column a database from an earlier
-   * schema lacks, in ONE write transaction. Several MCP processes start cold
-   * against the same database at once; the write lock makes one of them
-   * inspect and migrate while the others retry admission and then find
-   * the columns already there. Two processes that both inspected first would
-   * both ALTER, and the second would throw "duplicate column name".
+   * schema lacks, in ONE write transaction under the startup owner's fence.
+   * Other processes only validate the schema the Viewer prepared. The write
+   * lock serializes inspection and migration by permitted startup owners.
    */
   private initializeSchema(): void {
-    receiptIndexes.assertRepairAuthority(this.db, path.dirname(this.filename));
+    assertStateStartupMutation(path.dirname(this.filename), "MCP receipts schema preparation");
     this.db.exec("BEGIN IMMEDIATE");
     try {
       this.db.exec(`
@@ -2082,6 +2120,8 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
           key TEXT PRIMARY KEY,
           value TEXT NOT NULL
         );
+      `);
+      this.db.exec(`
         CREATE TABLE IF NOT EXISTS mcp_receipts (
           sequence INTEGER PRIMARY KEY AUTOINCREMENT,
           receipt_key TEXT NOT NULL UNIQUE,
@@ -5078,7 +5118,10 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
         inline = created;
         created.catch(() => { if (inline === created) inline = undefined; });
       }
-      return (await inline).callTool(name, args, context);
+      let ready: McpToolService;
+      try { ready = await inline; }
+      catch (error) { return taskExecutorFailure(name, args, error); }
+      return ready.callTool(name, args, context);
     } };
   }
   const controlDependencies = productionViewerControlDependencies(hostHealthProbe);
@@ -5093,6 +5136,9 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
 }
 
 export function taskExecutorFailure(name: string, args: McpToolArgs, error: unknown): McpToolResult {
+  if (error instanceof McpReceiptsNotReadyError) {
+    return failure(name, clientRequestId(args), "receipts_not_ready", error.message, true);
+  }
   const mutation = isMutatingMcpTool(name as McpToolName);
   return failure(name, clientRequestId(args), mutation ? "outcome_unknown" : "tool_failed",
     error instanceof Error ? error.message : "task executor unavailable", !mutation, false,
