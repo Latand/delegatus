@@ -287,13 +287,63 @@ test("the curator sees usage even for no-lesson answers and can retire guidance 
     tx.put({ kind: "request", ...source, at: NOW, ruleIds: [], none: "No new lesson.", applied: [local.id] });
     tx.put({ kind: "request", ...source, attempt: 2, at: NOW, ruleIds: [], none: "No new lesson.", misled: [local.id] });
   });
-  const pass = claimPass({ project: PROJECT, repoDir: process.cwd(), now: Date.parse(NOW) })!;
+  const repository = path.join(root, "project");
+  fs.mkdirSync(repository);
+  expect(spawnSync("git", ["init", "--quiet", repository]).status).toBe(0);
+  const pass = claimPass({ project: PROJECT, repoDir: repository, now: Date.parse(NOW) })!;
   const page = await readCuration(pass, local.scope, undefined, Date.parse(NOW));
   if (!("rules" in page)) throw Error("Expected a scope page");
   expect(page.rules.find(rule => rule.id === local.id)).toMatchObject({ applied: 1, misled: 1 });
   expect(page).toMatchObject({ swarmReceiving: true, swarm: [{ id: entry().id, rule: TEXT, readOnly: true }] });
-  expect(curatorBrief(PROJECT)).toContain("src/lib/memory/swarmRules.json as where");
+  applyCuration(pass, { scopes: [{ scope: local.scope, revision: page.revision, order: [] }], archive: [{ id: local.id, reason: "in-instructions", where: `swarm:${entry().id}`, note: "The receiving pack holds the same action and conditions." }] }, NOW);
+  expect(projectView(PROJECT).scopes.find(scope => scope.scope === local.scope)?.left[0]).toMatchObject({ id: local.id, reason: "in-instructions", where: `swarm:${entry().id}` });
+  expect(curatorBrief(PROJECT)).toContain("swarm:<id> as where");
   expect(curatorBrief(PROJECT)).toContain("applied and misled counts");
-  applyCuration(pass, { scopes: [{ scope: local.scope, revision: page.revision, order: [] }], archive: [{ id: local.id, reason: "in-instructions", where: "src/lib/memory/swarmRules.json", note: "The receiving pack holds the same action and conditions." }] }, NOW);
-  expect(projectView(PROJECT).scopes.find(scope => scope.scope === local.scope)?.left[0]).toMatchObject({ id: local.id, reason: "in-instructions", where: "src/lib/memory/swarmRules.json" });
+});
+
+test.each(["missing", "other-role", "in-code", "stale", "disabled", "withdrawn", "project", "machine"])("curator refuses %s swarm evidence atomically", async scenario => {
+  const local = seed(TEXT);
+  updatePreferences({ swarmRules: true });
+  const other = entry(TEXT, "architect");
+  packRules.push(other);
+  if (scenario === "project" || scenario === "machine") {
+    const scope = scenario === "project" ? `project:${PROJECT}` : "machine";
+    roleMemoryCollection()!.boundedPatch(3, tx => {
+      tx.put({ kind: "scope", scope: local.scope, revision: 2, active: [], history: [] });
+      tx.put({ ...local, scope });
+      tx.put({ kind: "scope", scope, revision: 1, active: [local.id], history: [] });
+    });
+    local.scope = scope;
+  }
+  const pass = claimPass({ project: PROJECT, repoDir: root, now: Date.parse(NOW) })!;
+  const page = await readCuration(pass, local.scope, undefined, Date.parse(NOW));
+  if (!("rules" in page)) throw Error("Expected a scope page");
+  // Consent and pack withdrawal are checked again after the evidence was read.
+  if (scenario === "disabled") updatePreferences({ swarmRules: false });
+  if (scenario === "withdrawn") packRules.splice(0, 1);
+  const before = projectView(PROJECT);
+  const id = scenario === "missing" ? "r_ffffffffffffffff" : scenario === "other-role" ? other.id : entry().id;
+  const reason = scenario === "in-code" ? "in-code" : scenario === "stale" ? "stale" : "in-instructions";
+  expect(() => applyCuration(pass, {
+    scopes: [{ scope: local.scope, revision: page.revision, order: [] }],
+    archive: [{ id: local.id, reason, where: `swarm:${id}`, note: "The pack is claimed to hold this guidance." }],
+  }, NOW)).toThrow(expect.objectContaining({ code: "CURATE_EVIDENCE" }));
+  expect(projectView(PROJECT)).toEqual(before);
+});
+
+test("curator swarm instructions and evidence follow consent; off preserves the pre-swarm brief byte for byte", async () => {
+  const local = seed();
+  // SHA-256 of curatorBrief(PROJECT) at bf1c0024 with the default seat budget.
+  const original = "854873a8fcd42469eebc22bfda1171ac5677f16aadfcccf0d90ff7f15ec8f1b0";
+  expect(digest(curatorBrief(PROJECT))).toBe(original);
+  const pass = claimPass({ project: PROJECT, repoDir: root, now: Date.parse(NOW) })!;
+  const off = await readCuration(pass, local.scope, undefined, Date.parse(NOW));
+  expect(off).not.toHaveProperty("swarm");
+  expect(off).not.toHaveProperty("swarmReceiving");
+  updatePreferences({ swarmRules: true });
+  expect(curatorBrief(PROJECT)).toContain("swarm:<id> as where");
+  expect(curatorBrief(PROJECT)).toContain("candidates for the maintainers’ swarm pack pass");
+  expect(curatorBrief(PROJECT)).toContain("applied and misled counts");
+  updatePreferences({ swarmRules: false });
+  expect(digest(curatorBrief(PROJECT))).toBe(original);
 });

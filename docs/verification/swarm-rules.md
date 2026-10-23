@@ -14,7 +14,7 @@ maintainers' pack pipeline remain deferred.
 | 2. Fifth scope and delivery | `roleScopes.ts`, `roleTypes.ts`, `roleStore.ts`, `roleRender.ts`: `swarm:<role>` follows the role-on-every-project scope, has its own public notice and count, and goes through the existing snapshot, byte ceiling and delivery ledger. Tests pin the exact off-state block, order, cap, ledger hash, delivered and undelivered usage ids, clean roles and memory off-switches. |
 | 3. Frozen re-render and withdrawal | `roleSelection.ts` resolves entries from the serving pack or their frozen line, verifying the content id and SHA-256 hash. Tests restart a real process with an empty serving pack, withdraw a local rule, reject an unprovable frozen line, and switch receiving off during asynchronous selection and on resume. |
 | 4. Narrow privacy exemption | `roleStore.ts` builds a normalized matcher from the shipped pack for each privacy read. Only matching stored rule text is exempt; every explanation remains private. Tests run the real publication gate: public pack text passes; explanations and private case/punctuation variants fail. A local lookalike still gets withheld. |
-| 5. Curator | `curation/brief.ts`, `curation/read.ts`, `roleViewSource.ts` supply read-only pack evidence, receiving status, and applied/misled counts from lesson requests, including answers that left no lesson. A real curation test archives redundant local guidance as `in-instructions`, with the pack file as evidence. The final-message instructions add pack candidate ids and counts. |
+| 5. Curator | `curation/brief.ts`, `curation/read.ts`, `roleViewSource.ts` supply read-only pack evidence, receiving status, and applied/misled counts from lesson requests, including answers that left no lesson. A real curation test archives redundant local guidance as `in-instructions`, with `swarm:<id>` evidence checked against the serving pack for the same role, including on a separate repository. The final-message instructions add pack candidate ids and counts. |
 | 6. One switch and read-only window | `src/lib/telemetry/store.ts`, `src/app/api/telemetry/route.ts`, `TelemetrySettings.tsx`: persisted receiving defaults off, independently of install ping. Both locales disclose receiving now and anonymous text-free counts later. `LearnedRules.tsx`, `MemoryProfile.tsx` and `profile.ts` preserve the swarm role identity, count and read-only presentation. Origin and invalid-body tests prove refused writes leave consent unchanged. DOM tests cover failed saves. |
 | 7. Maintainers' pass | `docs/guide/swarm-pack-pass.md` specifies a weekly pipeline that drafts a pack pull request, requires operator approval and ships the approved pack in a release. This stage did not run it. |
 
@@ -127,3 +127,63 @@ change. The tracked base remained `bf1c0024` during verification.
   was then stopped, exit **143**. That run has no full-driver verdict. The
   affected settings cases have the focused passing verdict above; this stage
   makes no performance claim.
+
+## Curator review fixes
+
+The archive write accepts `swarm:<id>` only for `in-instructions`, while
+receiving is enabled and the serving pack holds that id for the archived
+rule's role. Project and machine scopes cannot cite a role's pack entry.
+The existing repository-file evidence checker still handles file citations;
+import drops retain that checker. The MCP schema already passes `where` as
+an optional string, and archive history, operator views and restore retain
+or clear it through their existing copies. No schema migration is needed.
+
+The curator brief includes the pack evidence instruction and pack-pass
+candidate request only while receiving is enabled. Its off-state SHA-256 is
+pinned to the brief from `bf1c0024` with the default seat budget. Scope reads
+also omit swarm metadata while receiving is disabled.
+
+Focused regressions in `src/lib/memory/swarm.test.ts` use a freshly initialized
+repository separate from Delegatus for successful curation. Refusal cases
+cover absent ids, another role's id, other archive reasons, consent revoked
+after reading, pack withdrawal after reading, and project/machine scopes;
+each refusal preserves the view. The prompt check toggles consent off/on/off.
+
+Fix-round verification uses the owned gate wrapper and `gate-remote` with
+isolated HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR. On the revised
+source, `bunx tsc --noEmit` and ESLint on the four touched TypeScript files
+both exit 0 with no diagnostics. `bun run test` over these explicit paths
+exits 0 with 155 passes and no failures:
+
+- `src/lib/memory/swarm.test.ts`
+- `src/lib/memory/curation/curation.test.ts`
+- `src/lib/memory/curation/import.test.ts`
+- `src/lib/memory/curation/seatRules.test.ts`
+- `src/lib/memory/curation/reviewLessons.test.ts`
+
+The two finding reproductions run with the revised tests and the three
+curation source files restored to `e80171f0d` in the remote scratch export:
+`bun run test src/lib/memory/swarm.test.ts -t "curator sees usage|curator swarm instructions"`
+exits 1 with exactly 2 failures: missing file evidence and the off-state brief
+hash. Restoring the revised source and running
+`bun run test src/lib/memory/swarm.test.ts -t curator` exits 0 with 11 passes.
+
+The following additional explicit-path batch was compared on `e80171f0d`
+and the revised source under the same isolation:
+
+| Test file | Reviewed source passes | Revised source passes |
+| --- | ---: | ---: |
+| `src/lib/mcp/curateRules.test.ts` | 3 | 3 |
+| `src/app/api/role-memory/curation.test.ts` | 1 | 1 |
+| `src/lib/memory/roleView.test.ts` | 16 | 16 |
+| `src/lib/memory/roleReviewLessons.test.ts` | 10 | 10 |
+| `src/lib/memory/roleProblems.test.ts` | 8 | 8 |
+| `src/lib/memory/importLifecycle.test.ts` | 17 | 17 |
+| `src/lib/memory/importSync.test.ts` | 16 | 16 |
+| `src/lib/memory/source.import.test.ts` | 13 | 13 |
+
+Both runs exit 1 with 84 passed tests and one unnamed teardown failure at
+`src/lib/testing/testChildren.ts:102`: two test-created workers survive until
+the harness cleans them up. The original revised-source run has the same
+outcome. There is no new assertion failure; the cleanup failure also occurs
+on the reviewed source. This fix makes no change to the worker lifecycle.

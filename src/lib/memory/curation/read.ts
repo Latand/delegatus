@@ -60,7 +60,7 @@ async function readRuleCuration(pass: CuratorPass, scope?: string, cursor?: stri
   const usage = ruleUsageCounts(entries.map(entry => String(entry.id)));
   for (const entry of entries) Object.assign(entry, usage[String(entry.id)] ?? { applied: 0, misled: 0 });
   const meta = { pass: pass.id, scope: resolvedScope, revision, chars: rules?.chars ?? scopeChars([]), bound: ROLE_MEMORY_BOUND, attempts, scaffold,
-    swarmReceiving: swarmRulesEnabled(), swarm: role ? swarmRulesForRole(role).map(({ id, rule }) => ({ id, rule, readOnly: true })) : [] };
+    ...(swarmRulesEnabled() ? { swarmReceiving: true, swarm: role ? swarmRulesForRole(role).map(({ id, rule }) => ({ id, rule, readOnly: true })) : [] } : {}) };
   const page: Record<string, unknown>[] = [];
   let bytes = Buffer.byteLength(JSON.stringify(meta)) + 512;
   while (offset + page.length < entries.length) {
