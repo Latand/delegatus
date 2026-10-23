@@ -397,8 +397,9 @@ New `src/lib/state/stateLeaseRecovery.test.ts`:
    acquisition path can clear the row). `await c.mutate(...)` resolves with the
    callback's value and its row is committed; a read-only connection sees the
    `state_leases` row with that token. The same process runs
-   `c.boundedPatch(...)`: it returns in under 1 s, its row is committed, and
-   the first token is no longer in `state_leases`. Clear the fault: within 3 s
+   `c.boundedPatch(...)`: it returns synchronously while the release fault is
+   still active, its row is committed, and the first token is no longer in
+   `state_leases`. Clear the fault: within the fixture watchdog
    no `probe` row remains.
 2. **The abandoned release is retried in the background.** Fault `release`
    with `times: 3`; after the write, poll `state_leases` until the row is gone,
@@ -406,7 +407,9 @@ New `src/lib/state/stateLeaseRecovery.test.ts`:
 3. **Recovery without a restart, across processes.** A child process
    (`src/lib/state/stateLeaseOwner.fixture.ts`, run with `bun`, its own
    `LLV_STATE_DIR` = the test's sandbox) faults every `release`, writes once,
-   reports ready and stays alive. The parent, probe reporting plenty of space:
+   reports ready over IPC after its write and stays alive. Startup and exit
+   have owned 30-second watchdogs; successful completion clears them. The
+   parent, probe reporting plenty of space:
    `mutate` with `lockWaitMs: 300` refuses with busy (the owner is alive and
    the lease is young). The parent then creates the child's `lift` file; the
    child clears the fault; the parent's `mutate` with `lockWaitMs: 10_000`
@@ -430,10 +433,11 @@ New `src/lib/state/stateLeaseRecovery.test.ts`:
    and `release` on one collection; `boundedPatch` throws `StateDiskFullError`
    whose message starts `disk full, state writes failing`, never the busy
    message.
-8. **A contender on a full disk says disk full within about a second.** A
+8. **A contender on a full disk refuses on its first disk-space probe.** A
    lease held by a live child (case 3's fixture), probe returning 0: the
-   parent's `mutate` rejects with `StateDiskFullError` in under 2 s, where the
-   current code waits out 6,000 attempts.
+   parent's async `mutate` and synchronous `boundedPatch` reject with
+   `StateDiskFullError` after exactly one probe, without writing or retrying
+   acquisition.
 
 New `src/lib/state/diskFull.test.ts`:
 

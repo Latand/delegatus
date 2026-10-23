@@ -19,7 +19,7 @@ import { FENCED_MESSAGE_RETRY_DELAYS_MS, fencedFirstMessageRetrySafe } from "./f
 import { stageRepairDelivery } from "./repairDelivery";
 import { PUBLICATION_RETRY_DELAYS_MS, publicationInterrupted, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
 import type { RuntimeSwitchDelivery } from "./runtimeSwitch";
-import type { PipelineRuntimeSwitch } from "./types";
+import type { PipelineAccountHold, PipelineRuntimeSwitch } from "./types";
 import { launchServiceTier } from "@/lib/runtime/codexTurnProfile";
 import { isAccountMutationContention } from "@/lib/accounts/contentionMessage";
 import { AccountCommitBusyError } from "@/lib/accounts/accountMutationContext";
@@ -43,7 +43,7 @@ import { accountManager, AccountAuthenticationRequiredError, ProjectAccountRefus
 import { validateMigrationTargetRoot } from "@/lib/accounts/migration/targetRoot";
 import { sanitizeProviderError } from "@/lib/accounts/migration/safeHistoryCopy";
 import type { AccountContext, ProjectSpawnResolution } from "@/lib/accounts/contracts";
-import { selectHeadlessAccount } from "@/lib/accounts/headlessSelection";
+import { accountQuotaVerdict, selectHeadlessAccount } from "@/lib/accounts/headlessSelection";
 import { AccountProjectBindingsUnreadableError, allowedAccountIdsForProject } from "@/lib/accounts/projectBindings";
 import {
   ENGINE_NOT_CONNECTED,
@@ -149,7 +149,7 @@ import { isReviewGate, launchSizingRefusal, reviewGateRefusal, type Briefer, typ
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import { normalizeStageOutputPath } from "./stageAccess";
 import { settlePendingStageProvenance, stageProvenanceFence } from "./stageProvenance";
-import { commitAndAdoptStageBranch, observeStageBranchProtection, stageBranchOwnershipFence, type StageBranchProtection } from "./stageBranch";
+import { commitAndAdoptStageBranch, observeStageBranchProtection, stageBranchOwnershipReader, type StageBranchProtection } from "./stageBranch";
 import { graphDigest, stageDigest } from "./stageDigest";
 import { matchesShortId, resolveShortId, shortId } from "@/lib/shortIds";
 import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRuntimeProfile } from "./stageSandbox";
@@ -157,7 +157,7 @@ import { pipelineValidationError, type PipelineValidationViolation } from "./val
 import { firstRunsElsewhere, TASK_RUNS_ELSEWHERE } from "@/lib/links/linked";
 import { pipelineHostHasLiveWork } from "./hostRetirement";
 import { pipelineRecordRevalidator } from "./revalidation";
-import { controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, controllerUnclaimedPublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines as selectAllControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation as withAllPipelineControllerMutation, withPipelineMutation } from "./store";
+import { controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, controllerUnclaimedPublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines as selectAllControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, controllerPipelineVersionNow, pipelineRecordReader, cloneControllerPipeline, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation as withAllPipelineControllerMutation, withPipelineMutation } from "./store";
 import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQueue";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { mergeOnReviewEnabled } from "@/lib/projects/settings";
@@ -198,6 +198,7 @@ import type {
   PipelineTerminalReap,
   PipelineUnconfirmedHost,
   PipelineUnresolvedTermination,
+  PipelineAttemptState,
 } from "./types";
 import { PIPELINE_FAIL_EDGE_EXHAUSTIONS } from "./types";
 import { fencedBlocks, MAX_OUTPUT_CHARS, normalizeStageCompletion, parseStageVerdict, stageVerdictProse, stageVerdictRejectionReason, verdictRoutesAsFail, type ParsedStageVerdict, type StageCompletionInput } from "./verdict";
@@ -372,6 +373,10 @@ export interface PipelinePorts {
   /** What still runs, with no stream, for any registry row of these
       conversations, or null when nothing does (#2790). */
   stageHostTreeStillRunning?(conversationIds: readonly string[]): string | null;
+  /** Stops a settled earlier stage agent whose recorded processes still run in
+      the worktree a new attempt is waiting for, by those recorded identities
+      only. `deferred` while its host is in a turn. */
+  stopSettledStageWriter?(target: PipelineStageHostRef, operationId: string): Promise<PipelineStageStopResult>;
   /** Monotonic milliseconds, kept apart from `now()` so a teardown budget can be
       bounded independently of the ISO timestamps written to the record. */
   monotonicNow(): number;
@@ -532,6 +537,8 @@ export interface PipelinePorts {
   accountLabel?(engine: FlowEngine, accountId: string): string;
   /** The same capacity classifier used for admission, including the paid-credit guard. */
   accountExhausted?(engine: FlowEngine, accountId: string, model: string | null): boolean;
+  /** The same classifier's verdict with the reading behind it, for a guard hold. */
+  accountQuota?(engine: FlowEngine, accountId: string, model: string | null): ReturnType<typeof accountQuotaVerdict>;
   now(): string;
 }
 
@@ -946,6 +953,11 @@ export type StageStopProbes = {
       attempt keeps as its own record. A row on which only these may still
       run, its engine gone, is not signalled again (#1501, #2790). */
   recordedSurvivors?: readonly ProcessIdentity[];
+  /** The caller's own evidence that the host is still not at work, asked by a
+      stop through recorded identities after each await and one step before
+      each signal. With `onlyIfIdle`, a runtime that cannot be reached falls
+      to that stop instead of deferring. */
+  observationGuard?: () => { status: 409; error: string } | null;
   action?: (request: {
     operationId?: string;
     conversationId: string;
@@ -1001,6 +1013,12 @@ type StageHostProbe = {
 
 const PRIOR_WRITER_WAIT_PREFIX = "waiting for an earlier stage agent to stop before a new attempt starts in its worktree: ";
 const PRIOR_WRITER_WAIT_MS = 5_000;
+/* A settled earlier attempt's agent gets this many automatic stops, at least
+   PRIOR_WRITER_WAIT_MS apart; each one escalates from SIGTERM to SIGKILL inside
+   its own bounded ladder. Then the lane parks and says so. */
+const PRIOR_WRITER_STOP_TRIES = 3;
+const PRIOR_WRITER_PARK_PREFIX = "an earlier stage agent could not be stopped before a new attempt starts in its worktree: ";
+const SETTLED_ATTEMPT_STATES: ReadonlySet<PipelineAttemptState> = new Set(["passed", "failed", "needs_decision", "skipped"]);
 
 /** Whether a process a host stop captured onto this row may still run: alive,
     or not provably gone (#2790). An exited, unreaped one (a zombie) cannot,
@@ -1178,7 +1196,7 @@ export async function stopPipelineStageAgent(
     /* A terminal row has no stream for a kill command to travel. Its live
        engine process is ended by its recorded identity instead. */
     if (!probes.onlyIfIdle && probe.orphaned()) {
-      return await stopStageHostByRecordedIdentity(target, probe, probes.termination ?? {});
+      return await stopStageHostByRecordedIdentity(target, probe, probes.termination ?? {}, probes.observationGuard);
     }
     const { conversationId, transcriptPath, resident } = probe;
 
@@ -1193,8 +1211,8 @@ export async function stopPipelineStageAgent(
     });
     const body = result.body as { ok?: boolean; error?: string; code?: string; operationId?: string; receipt?: { status?: string } };
     if (result.status === 503 && body.code === RUNTIME_HOST_UNAVAILABLE_CODE) {
-      if (probes.onlyIfIdle) return { outcome: "deferred" };
-      return await stopStageHostByRecordedIdentity(target, probe, probes.termination ?? {});
+      if (probes.onlyIfIdle && !probes.observationGuard) return { outcome: "deferred" };
+      return await stopStageHostByRecordedIdentity(target, probe, probes.termination ?? {}, probes.observationGuard);
     }
     if (result.status >= 400 || body.ok !== true) {
       if (probes.onlyIfIdle) return { outcome: "deferred" };
@@ -1265,6 +1283,102 @@ export async function retirePipelineStageAgent(
     });
   } catch {
     return { outcome: "deferred" };
+  }
+}
+
+/** Whether the registry row shows a stage host at work: its engine can still
+    run and the row names a turn, a question or activity. An engine that has
+    exited, an unreaped zombie included, has no turn left whatever its row
+    still says (#2967). */
+function settledStageHostBusy(entry: AgentRegistryEntry | undefined, blockingFlags: (flags: readonly string[]) => string[]): boolean {
+  if (!entry || !engineProcessMayRun(entry)) return false;
+  const host = entry.structuredHost;
+  return entry.status === "live" || entry.status === "starting" || entry.status === "handoff"
+    || host?.activeTurnRef != null || (host?.pendingAttention.length ?? 0) > 0
+    || blockingFlags(host?.activeFlags ?? []).length > 0;
+}
+
+/** Whether the runtime's own session read affirms work: a running turn, a
+    question, or an open operation the host has yet to run. A turn the runtime
+    reads as `unknown` affirms nothing: a disconnected or degraded host reads
+    that way with no turn at all, and waiting on it never ends. */
+function runtimeSessionWorking(session: import("@/lib/runtime/contracts").RuntimeSession): boolean {
+  return session.turn === "running" || session.turn === "interrupt_requested" || session.activeTurnId !== null
+    || session.attentionIds.length > 0 || session.retirementBlocked === true;
+}
+
+/**
+ * Ends what a settled stage attempt's agent still runs in the lane's worktree
+ * (lane 376bce9c, 2026-10-20). An idle-host retirement captured its tree and
+ * was refused before its first signal; the engine, the MCP server and its
+ * child kept running, and the next attempt waited an hour on them until the
+ * seat killed the conversation by hand. This is that kill, sent by the engine,
+ * and only while the host is idle:
+ *
+ * - where the runtime host reads the session idle, a conditional kill fenced
+ *   on that read, which the runtime refuses once a turn has begun;
+ * - where the runtime holds the host and reads its turn unknown, nothing: the
+ *   try is spent, so the lane parks once the tries run out;
+ * - otherwise (no runtime, a runtime that does not hold this host, a
+ *   disconnected or degraded one included, or an engine already gone) the
+ *   recorded identities, through the identity-fenced ladder that escalates
+ *   from SIGTERM to SIGKILL.
+ *
+ * Only affirmative work (a running turn, a question, a queued operation, in
+ * the registry or the runtime) answers `deferred`.
+ *
+ * The registry's turn evidence is read again after every await and one step
+ * before each local signal, the grace between SIGTERM and SIGKILL included;
+ * a turn that began since the first read withdraws every further effect and
+ * answers `deferred`, as a host already in a turn does. A process whose
+ * identity cannot be proven is never signalled.
+ */
+export async function stopSettledPipelineStageWriter(
+  target: PipelineStageHostRef,
+  probes: StageStopProbes = {},
+): Promise<PipelineStageStopResult> {
+  try {
+    const probe = await stageHostProbe(target);
+    if (!probe || !probe.resident()) return { outcome: "not-running" };
+    const registry = agentRegistry();
+    const { blockingHostActivityFlags } = await import("@/lib/runtime/hostActivityFlags");
+    const busy = () => settledStageHostBusy(registry.readOnlySnapshot().entries[sessionKeyId(probe.key)], blockingHostActivityFlags);
+    if (busy()) return { outcome: "deferred" };
+    let turnBegan = false;
+    const guard = (): { status: 409; error: string } | null => {
+      if (!busy()) return null;
+      turnBegan = true;
+      return { status: 409, error: "the stage host began a turn before its stop" };
+    };
+    const settle = (stopped: PipelineStageStopResult): PipelineStageStopResult => turnBegan ? { outcome: "deferred" } : stopped;
+    const byIdentity = async () => settle(await stopStageHostByRecordedIdentity(target, probe, probes.termination ?? {}, guard));
+    if (probe.orphaned()) return await byIdentity();
+    const client = probes.client === undefined ? runtimeHostClient() : probes.client;
+    const read = async () => client?.readSession
+      ? await client.readSession({ conversationId: probe.conversationId }).catch(() => null) : null;
+    const session = await read();
+    if (guard() || session && runtimeSessionWorking(session)) return { outcome: "deferred" };
+    /* A runtime that cannot read this host idle cannot fence a kill on it, and
+       one that does not hold it (disconnected, degraded, another artifact)
+       cannot deliver it a turn either. */
+    if (!session || session.host !== "hosted" || session.retirementBlocked !== false || !session.writerClaim
+      || session.artifactPath !== probe.transcriptPath) return await byIdentity();
+    /* A runtime that holds the host and cannot say whether it is idle can
+       neither fence a kill on it nor rule out a turn it delivers next: no
+       signal, and the try is spent so the lane parks once they run out. */
+    if (session.turn !== "idle") {
+      return { outcome: "failed", error: `the runtime host holds the stage host but reads its turn as ${session.turn}, so no stop could be fenced on it` };
+    }
+    const stopped = settle(await stopPipelineStageAgent(target, { ...probes, client, automatic: true,
+      onlyIfIdle: { revision: session.revision, writerClaim: session.writerClaim }, observationGuard: guard }));
+    if (stopped.outcome !== "deferred" || turnBegan) return stopped;
+    /* The conditional kill was refused or did not answer. A turn that began
+       explains it; a host still idle does not, and that try is spent. */
+    const after = await read();
+    if (guard() || after && runtimeSessionWorking(after)) return { outcome: "deferred" };
+    return { outcome: "failed", error: "the runtime host did not stop the idle stage host" };
+  } catch (error) {
+    return { outcome: "failed", error: error instanceof Error ? error.message : String(error) };
   }
 }
 
@@ -1613,6 +1727,7 @@ export function defaultPipelinePorts(
     resolveProjectSpawn: (engine, request) => accountManager.resolveProjectSpawn(engine, request),
     accountExhausted: (engine, accountId, model) => selectHeadlessAccount([{ id: accountId, authPresent: true }],
       registry.quotaObservations(engine), accountId, [], Date.now(), model).kind === "exhausted",
+    accountQuota: (engine, accountId, model) => accountQuotaVerdict(registry.quotaObservations(engine), accountId, Date.now(), model),
     accountForTranscript: (engine, transcriptPath) => {
       const owner = accountManager.resolveTranscriptOwner(engine, transcriptPath);
       if (!owner) return null;
@@ -1965,6 +2080,9 @@ export function defaultPipelinePorts(
       return changed && stopped.outcome === "failed" ? null : stopped;
     },
     stopStagePane: (target) => stopPipelineStagePane(target),
+    stopSettledStageWriter: (target, operationId) => withViewerOperation("pipelines.prior-writer-stop", () =>
+      performanceSpans.wait("pipeline.prior-writer-stop", () =>
+        stopSettledPipelineStageWriter(target, { operationId, termination: dependencies.termination }))),
     stageHostTreeStillRunning: (conversationIds) => {
       const current = registry.readOnlySnapshot();
       for (const id of conversationIds) {
@@ -7493,14 +7611,92 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
   return changed;
 }
 
+const USAGE_GUARD_DETAIL = "the stage account reached its usage or paid-credit guard";
+
+function stageAccountId(attempt: PipelineStageAttempt, ports: PipelinePorts): string | null {
+  const engine = attempt.effectiveRole.engine;
+  return attempt.accountId ?? attempt.providerWait?.accountId ?? (attempt.agentPath ? ports.accountForTranscript?.(engine, attempt.agentPath)?.accountId ?? null : null);
+}
+
 function stageAccountBlocked(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts): string | null {
   const engine = attempt.effectiveRole.engine;
-  const accountId = attempt.accountId ?? attempt.providerWait?.accountId ?? (attempt.agentPath ? ports.accountForTranscript?.(engine, attempt.agentPath)?.accountId : null);
+  const accountId = stageAccountId(attempt, ports);
   if (!accountId) return null;
-  if (ports.accountExhausted?.(engine, accountId, attempt.effectiveRole.model)) return "the stage account reached its usage or paid-credit guard";
+  if (ports.accountExhausted?.(engine, accountId, attempt.effectiveRole.model)) return USAGE_GUARD_DETAIL;
   const pool = ports.allowedAccountIds?.(pipeline.project, engine);
   if (pool && !pool.includes(accountId)) return "the stage account left the project binding";
   return null;
+}
+
+/** Whether a hold has ended: its known reset passed, or a reading newer than
+    the one that confirmed it shows capacity. */
+function accountHoldEnded(hold: PipelineAccountHold, quota: ReturnType<typeof accountQuotaVerdict>, ports: PipelinePorts): boolean {
+  if (hold.resetsAt !== null && unixMs(ports.now()) >= hold.resetsAt * 1_000) return true;
+  return quota.capacity === "available" && quota.observedAt !== null
+    && (hold.observedAt === null || unixMs(quota.observedAt) > unixMs(hold.observedAt));
+}
+
+/** Records or refreshes the confirmed exhaustion behind an account suspension
+    (issue #3158). Only a reading newer than the one behind the hold refreshes
+    it; a later read that has only aged, or the same reading after its reset
+    passed, leaves the confirmed reset in place, and the hold ends there. */
+function recordAccountHold(attempt: PipelineStageAttempt, blocked: string | null, ports: PipelinePorts): void {
+  const suspension = attempt.suspension!;
+  if (suspension.reason !== "account" || !ports.accountQuota) return;
+  let quota: ReturnType<typeof accountQuotaVerdict>;
+  let accountId: string | null;
+  try {
+    accountId = suspension.hold?.accountId ?? stageAccountId(attempt, ports);
+    if (!accountId) return;
+    quota = ports.accountQuota(attempt.effectiveRole.engine, accountId, attempt.effectiveRole.model);
+  } catch { return; } // An unreadable reading neither confirms nor ends a hold.
+  const prior = suspension.hold;
+  if (blocked === USAGE_GUARD_DETAIL && quota.capacity === "exhausted" && (!prior || quota.observedAt !== null
+    && (prior.observedAt === null || unixMs(quota.observedAt) > unixMs(prior.observedAt)))) {
+    suspension.hold = { accountId, resetsAt: quota.resetsAt, observedAt: quota.observedAt };
+  }
+  if (suspension.hold && accountHoldEnded(suspension.hold, quota, ports)) delete suspension.hold;
+}
+
+/** Reads the hold's account quota for this attempt; an unreadable reading
+    neither confirms nor ends a hold. */
+function accountHoldEndedNow(attempt: PipelineStageAttempt, hold: PipelineAccountHold, ports: PipelinePorts): boolean {
+  try {
+    return !!ports.accountQuota && accountHoldEnded(hold, ports.accountQuota(attempt.effectiveRole.engine, hold.accountId,
+      attempt.effectiveRole.model), ports);
+  } catch { return false; }
+}
+
+/** Every hold in this stage's attempts that still stands. A replacement
+    inherits its predecessors' holds, and carries a copy of them, so it never
+    returns to an account an earlier attempt left at its confirmed limit
+    before that account's reset. A hold seen ended is removed from every
+    attempt that carries it, so the reading that ended it can age without
+    bringing it back; only a new exhaustion establishes another hold. Callers
+    persist the pipeline. */
+function standingAccountHolds(pipeline: Pipeline, stage: PipelineStage, ports: PipelinePorts): PipelineAccountHold[] {
+  const holds = new Map<string, PipelineAccountHold>();
+  for (const attempt of runFor(pipeline, stage.id)?.attempts ?? []) {
+    const own = attempt.suspension?.reason === "account" ? attempt.suspension.hold : undefined;
+    for (const hold of [...attempt.accountHolds ?? [], ...own ? [own] : []]) {
+      if (accountHoldEndedNow(attempt, hold, ports)) {
+        if (hold === own) delete attempt.suspension!.hold;
+        else {
+          const kept = attempt.accountHolds!.filter(item => item !== hold);
+          if (kept.length) attempt.accountHolds = kept; else delete attempt.accountHolds;
+        }
+        continue;
+      }
+      holds.set(hold.accountId, hold); // A later attempt's hold rests on a newer reading.
+    }
+  }
+  return [...holds.values()];
+}
+
+function accountHoldDetail(attempt: PipelineStageAttempt, hold: PipelineAccountHold, ports: PipelinePorts): string {
+  const label = ports.accountLabel?.(attempt.effectiveRole.engine, hold.accountId) ?? hold.accountId;
+  return `${attempt.suspension!.detail}; host stopped; waiting for account ${label}${hold.resetsAt !== null
+    ? ` to reset at ${new Date(hold.resetsAt * 1_000).toISOString()}` : " until a new reading shows capacity"}; keeping the current worktree`;
 }
 
 function suspensionStopKey(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): string {
@@ -7566,8 +7762,19 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   let blocked: string | null;
   try { blocked = stageAccountBlocked(pipeline, attempt, ports); }
   catch { return !!attempt.suspension; } // An unreadable binding cannot authorize a successor.
-  if (!attempt.suspension && !blocked) return false;
+  if (!attempt.suspension && !blocked) {
+    // Headroom seen while a healthy replacement runs ends its predecessors'
+    // holds now; a later tick may see only that reading aged (issue #3158).
+    // The replacement's own copies are read each tick; retained history is
+    // walked only to retire a hold that ended.
+    if (attempt.accountHolds?.some(hold => accountHoldEndedNow(attempt, hold, ports))) {
+      standingAccountHolds(pipeline, stage, ports);
+      await persist();
+    }
+    return false;
+  }
   attempt.suspension ??= { reason: "account", detail: blocked!, requestedAt: ports.now() };
+  recordAccountHold(attempt, blocked, ports);
   if (!await stopSuspendedStage(pipeline, stage, attempt, ports, persist)) return true;
   if (pipeline.state === "paused" || attempt.report) return true;
   if (attempt.conversationId && ports.conversationOperatorStopped) {
@@ -7592,10 +7799,14 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
     if (parsed) { await settleStageVerdict(pipeline, stage, attempt, parsed, ports, persist); return true; }
   }
   let resolution: ProjectSpawnResolution;
+  // Every standing hold in this stage's attempts leaves selection, so another
+  // allowed account with capacity takes the stage once and the stage never
+  // returns to a held account before its reset.
+  const holds = standingAccountHolds(pipeline, stage, ports);
   try {
     resolution = (ports.resolveProjectSpawn ?? accountManager.resolveProjectSpawn.bind(accountManager))(attempt.effectiveRole.engine,
       { project: pipeline.project, model: attempt.effectiveRole.model, preferredId: attempt.accountId,
-        unavailableIds: blocked && attempt.accountId ? [attempt.accountId] : [] });
+        unavailableIds: [...new Set([...blocked && attempt.accountId ? [attempt.accountId] : [], ...holds.map(hold => hold.accountId)])] });
   } catch (error) {
     pipeline.stateDetail = `${attempt.suspension.detail}; waiting for account selection: ${redactBounded(String(error), 300)}`;
     await persist(); ports.scheduleTick?.(30_000); return true;
@@ -7604,9 +7815,16 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   let targetBlocked = true;
   try { targetBlocked = !target || Boolean(stageAccountBlocked(pipeline, { ...attempt, accountId: target }, ports)); }
   catch { /* Retain stop custody until the binding can be read. */ }
-  if (!target || targetBlocked) {
-    pipeline.stateDetail = `${attempt.suspension.detail}; host stopped; waiting for an allowed account with capacity`;
-    await persist(); ports.scheduleTick?.(30_000); return true;
+  // Aged readings of a confirmed exhaustion are no evidence of capacity.
+  const targetHold = holds.find(hold => hold.accountId === target);
+  if (!target || targetBlocked || targetHold) {
+    const hold = targetHold ?? attempt.suspension.hold ?? holds[0];
+    pipeline.stateDetail = hold ? accountHoldDetail(attempt, hold, ports)
+      : `${attempt.suspension.detail}; host stopped; waiting for an allowed account with capacity`;
+    await persist();
+    ports.scheduleTick?.(!targetHold ? 30_000 : targetHold.resetsAt === null ? 60_000
+      : Math.min(5 * 60_000, Math.max(30_000, targetHold.resetsAt * 1_000 - unixMs(ports.now()))));
+    return true;
   }
   const oldDefinition = attemptStage(stage, attempt);
   // Transcript and operator-evidence reads above yielded custody. Reconfirm
@@ -7615,6 +7833,23 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   try {
     if (stageAccountBlocked(pipeline, { ...attempt, accountId: target }, ports)) return true;
   } catch { return true; }
+  if (!attempt.launchId && !attempt.conversationId && !attempt.agentPath && !attempt.paneId) {
+    // Nothing ran for this attempt (its launch was refused before a
+    // reservation), so it launches again itself: a replacement edge whose
+    // parent never launched carries no creation receipts (issue #3158). Its
+    // standing holds stay, so it never returns to a held account.
+    const kept = [...attempt.accountHolds ?? [], ...attempt.suspension.hold ? [attempt.suspension.hold] : []]
+      .filter(hold => hold.accountId !== target && holds.includes(hold));
+    if (kept.length) attempt.accountHolds = kept; else delete attempt.accountHolds;
+    delete attempt.suspension;
+    attempt.state = "pending"; attempt.completedAt = null; attempt.error = null;
+    attempt.accountId = target;
+    if (attempt.definition) attempt.definition.account = target;
+    resetStageForRetry(pipeline, stage);
+    pipeline.stateDetail = "launching the stopped stage on an allowed account; keeping the current worktree";
+    await persist(); ports.scheduleTick?.(0);
+    return true;
+  }
   attempt.state = "failed"; attempt.completedAt = ports.now(); attempt.error = attempt.suspension.detail;
   resetStageForRetry(pipeline, stage);
   const next = (await newAttempt(pipeline, stage))!;
@@ -7622,10 +7857,99 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   next.activatedBy = attempt.activatedBy ? { ...attempt.activatedBy } : null;
   next.restartContext = { previousAttempt: attempt.n, transcriptPath: attempt.agentPath };
   next.accountId = target;
+  if (holds.length) next.accountHolds = holds.map(hold => ({ ...hold }));
   bindAttemptDefinition({ ...oldDefinition, account: target }, next, ports);
   pipeline.stateDetail = "continuing the stopped stage on an allowed account; keeping the current worktree";
   await persist(); ports.scheduleTick?.(0);
   return true;
+}
+
+/**
+ * The launch gate's answer to an earlier attempt's agent that still runs in
+ * the worktree (#2790): null once nothing does, `{ detail }` while the launch
+ * waits, `{ park, detail }` once the bounded stops are spent.
+ *
+ * An attempt still at work keeps the launch waiting, as it always did. A
+ * settled one (passed, failed, parked or skipped) has no work left in this
+ * lane, so what it still runs is stopped here while its host is idle, at most
+ * PRIOR_WRITER_STOP_TRIES times PRIOR_WRITER_WAIT_MS apart. The tries live on
+ * the waiting attempt, so a restart neither resets nor repeats them, and each
+ * try keeps its own operation key, so a retry after a lost answer replays
+ * that try instead of sending another.
+ *
+ * The record holds one conversation's sequence. Once it starts, no other
+ * earlier conversation is stopped until that one is gone or the lane parks,
+ * so every conversation that still runs spends a whole budget of its own and
+ * none can reset another's.
+ */
+async function endSettledPriorWriters(
+  pipeline: Pipeline,
+  waitingStageId: string,
+  attempt: PipelineStageAttempt,
+  priorAttempts: ReadonlyArray<{ stageId: string; candidate: PipelineStageAttempt }>,
+  ports: PipelinePorts,
+  persist: () => void | Promise<void>,
+): Promise<{ detail: string; park?: true } | null> {
+  /* A conversation an unsettled attempt still names, the waiting one included,
+     is that attempt's agent and never this gate's to stop. */
+  const live = new Set([attempt, ...priorAttempts.map(({ candidate }) => candidate)]
+    .filter(candidate => candidate.conversationId && !SETTLED_ATTEMPT_STATES.has(candidate.state))
+    .map(candidate => candidate.conversationId!));
+  /* Newest attempt first, one entry per conversation: that attempt is the
+     agent's latest launch, and its identities are the ones a stop binds to. */
+  const blocking = new Map<string, { stageId: string; candidate: PipelineStageAttempt; running: string }>();
+  for (const { stageId, candidate } of [...priorAttempts].reverse()) {
+    const conversationId = candidate.conversationId!;
+    if (blocking.has(conversationId)) continue;
+    const running = ports.stageHostTreeStillRunning?.([conversationId]);
+    if (running) blocking.set(conversationId, { stageId, candidate, running });
+  }
+  if (attempt.priorWriterStop && !blocking.has(attempt.priorWriterStop.conversationId)) delete attempt.priorWriterStop;
+  const record = attempt.priorWriterStop;
+  const ordered = [...blocking].sort(([a], [b]) => Number(b === record?.conversationId) - Number(a === record?.conversationId));
+  let waiting: string | null = null;
+  for (const [conversationId, { stageId, candidate, running }] of ordered) {
+    const sequence = attempt.priorWriterStop;
+    if (live.has(conversationId) || !ports.stopSettledStageWriter || sequence && sequence.conversationId !== conversationId) {
+      waiting ??= running;
+      continue;
+    }
+    const tries = sequence?.tries ?? 0;
+    const spent = (stopped: number, error: string | null) => `${running}; ${stopped} automatic stop${stopped === 1 ? "" : "s"} left them running${error ? ` (last: ${error})` : ""}; stop those processes, then retry the stage`;
+    if (tries >= PRIOR_WRITER_STOP_TRIES) return { park: true, detail: `${PRIOR_WRITER_PARK_PREFIX}${spent(tries, sequence?.error ?? null)}` };
+    if (sequence && unixMs(ports.now()) - unixMs(sequence.lastAt) < PRIOR_WRITER_WAIT_MS) {
+      waiting ??= `${running}; automatic stop ${tries} of ${PRIOR_WRITER_STOP_TRIES} left them running, next at ${new Date(unixMs(sequence.lastAt) + PRIOR_WRITER_WAIT_MS).toISOString()}`;
+      continue;
+    }
+    const target: PipelineStageHostRef = { stageId, attempt: candidate.n, conversationId, launchId: candidate.launchId ?? null,
+      agentPath: candidate.agentPath ?? null, paneId: null };
+    const stopped = await ports.stopSettledStageWriter(target, priorWriterStopKey(pipeline, waitingStageId, attempt, conversationId, tries + 1));
+    const still = ports.stageHostTreeStillRunning?.([conversationId]);
+    if (!still) {
+      delete attempt.priorWriterStop;
+      continue;
+    }
+    if (stopped.outcome === "deferred") {
+      waiting ??= `${still}; its agent is in a turn or has work queued, so it is left to finish`;
+      continue;
+    }
+    const error = "error" in stopped ? stopped.error : "detail" in stopped && stopped.detail ? stopped.detail : `the stop answered ${stopped.outcome}`;
+    attempt.priorWriterStop = { conversationId, tries: tries + 1, lastAt: ports.now(), error };
+    await persist();
+    if (tries + 1 >= PRIOR_WRITER_STOP_TRIES) return { park: true, detail: `${PRIOR_WRITER_PARK_PREFIX}${spent(tries + 1, error)}` };
+    waiting ??= `${still}; automatic stop ${tries + 1} of ${PRIOR_WRITER_STOP_TRIES} left them running (${error})`;
+  }
+  return waiting === null ? null : { detail: waiting };
+}
+
+/** The runtime journal admits an operation id with no colon or whitespace, at
+    most RUNTIME_IDEMPOTENCY_KEY_LIMIT characters: the lane, the waiting
+    attempt and the conversation are hashed, the try stays readable. */
+function priorWriterStopKey(pipeline: Pipeline, waitingStageId: string, attempt: PipelineStageAttempt,
+  conversationId: string, tryNumber: number): string {
+  const digest = crypto.createHash("sha256")
+    .update(JSON.stringify([pipeline.id, waitingStageId, attempt.n, conversationId])).digest("hex").slice(0, 32);
+  return `prior-writer-stop-${digest}-${tryNumber}`;
 }
 
 async function tickRunStage(
@@ -7817,19 +8141,27 @@ async function tickRunStage(
        stream is gone while its engine, or a process a stop captured from its
        tree, may still run holds this launch until a stop proves it gone; the
        terminal reap and the interrupted-turn recovery are what end it. */
-    const priorWriter = ports.stageHostTreeStillRunning?.(pipeline.runs.flatMap(run => run.attempts)
-      .filter(candidate => candidate !== attempt && candidate.conversationId)
-      .map(candidate => candidate.conversationId!));
-    if (priorWriter) {
-      const detail = `${PRIOR_WRITER_WAIT_PREFIX}${priorWriter}`;
-      if (pipeline.stateDetail !== detail) {
-        pipeline.stateDetail = detail;
+    const priorAttempts = pipeline.runs.flatMap(run => run.attempts.map(candidate => ({ stageId: run.stageId, candidate })))
+      .filter(({ candidate }) => candidate !== attempt && candidate.conversationId);
+    if (ports.stageHostTreeStillRunning?.(priorAttempts.map(({ candidate }) => candidate.conversationId!))) {
+      const held = await endSettledPriorWriters(pipeline, stage.id, attempt, priorAttempts, ports, persist);
+      if (held?.park) {
+        await park(pipeline, held.detail, attempt);
         await persist();
+        return;
       }
-      ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
-      ports.scheduleTick?.(PRIOR_WRITER_WAIT_MS);
-      return;
+      if (held) {
+        const detail = `${PRIOR_WRITER_WAIT_PREFIX}${held.detail}`;
+        if (pipeline.stateDetail !== detail) {
+          pipeline.stateDetail = detail;
+          await persist();
+        }
+        ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
+        ports.scheduleTick?.(PRIOR_WRITER_WAIT_MS);
+        return;
+      }
     }
+    if (attempt.priorWriterStop) delete attempt.priorWriterStop;
     if (pipeline.stateDetail?.startsWith(PRIOR_WRITER_WAIT_PREFIX)) pipeline.stateDetail = null;
     // Consume CPU admission only once the other launch gates allow a start.
     if (await holdStageLaunch(pipeline, ports, persist)) return;
@@ -10231,6 +10563,9 @@ function isStructuredDeliveryControllerFailure(failure: string): boolean {
     refusal "structured host ownership is unavailable" is a different sentence
     and a different class, and stays out. */
 function isRuntimeHostUnavailableSpawnFailure(failure: string): boolean {
+  // A callback startup failure uses the same receipt fence and persisted host
+  // wait budget. Ownership and cleanup refusals retain their separate class.
+  if (failure.startsWith("Codex callback ")) return failure.startsWith("Codex callback listener failed before dispatch: ");
   return failure.includes("runtime host is unavailable");
 }
 
@@ -10457,6 +10792,8 @@ function isLaunchAdmissionContention(error: unknown): boolean {
 }
 
 function isTransientStructuredSpawnFailure(failure: string): boolean {
+  // Diagnostic stderr cannot turn an ownership or cleanup refusal into a retry.
+  if (failure.startsWith("Codex callback ")) return isRuntimeHostUnavailableSpawnFailure(failure);
   return failure === SEND_LOST_REASON || isStructuredDeliveryControllerFailure(failure)
     || isAccountMutationContention(failure)
     || isRuntimeHostUnavailableSpawnFailure(failure)
@@ -11088,12 +11425,19 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
     const flow = stage.kind === "review-loop" && attempt.flowId ? ports.getFlow(attempt.flowId) : null;
     const approved = stage.kind === "review-loop" && flow?.state === "approved";
     if (preview.cursor?.state !== "committing" && !approved) continue;
-    let fingerprint = JSON.stringify(preview);
+    let fingerprint = controllerTickFingerprint(preview);
     const flowFingerprint = JSON.stringify(flow);
-    const ownershipFence = performanceSpans.sync("controller.ownership", () => stageBranchOwnershipFence(loadPipelinesForList(), preview.id));
-    const matches = (current: Pipeline | null) => performanceSpans.sync("controller.ownership", () => JSON.stringify(current) === fingerprint
-      && (!attempt.flowId || JSON.stringify(ports.getFlow(attempt.flowId)) === flowFingerprint)
-      && stageBranchOwnershipFence(loadPipelinesForList(), preview.id) === ownershipFence);
+    const reader = pipelineRecordReader(preview.id);
+    const version = () => `${reader.version()}:${controllerPipelineVersionNow(preview.id)}`;
+    let rowVersion = version();
+    const ownership = stageBranchOwnershipReader(preview.id);
+    const ownershipFence = await ownership.read();
+    // Selection preceded the asynchronous evidence read. Recheck both inputs
+    // before acquiring or dispatching any work for that selection.
+    if (version() !== rowVersion || controllerTickFingerprint(reader.read()!) !== fingerprint) continue;
+    const matches = (current: Pipeline | null) => current !== null && version() === rowVersion
+      && ownership.current() && controllerTickFingerprint(current) === fingerprint
+      && (!attempt.flowId || JSON.stringify(ports.getFlow(attempt.flowId)) === flowFingerprint);
     const lock = path.join(pipelineArtifactsDir(preview.id), "remote-action.lock");
     let descriptor: number | null;
     try {
@@ -11112,14 +11456,21 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
     }
     if (descriptor === null) { ports.scheduleTick?.(250); continue; }
     const abort = new AbortController();
-    const revalidate = () => withViewerOperation("pipelines.revalidate", () => { if (!matches(findPipelineRecord(preview.id))) abort.abort(); });
-    const watch = setInterval(revalidate, 50);
+    let validation: Promise<void> | undefined;
+    const revalidate = () => validation ??= withViewerOperation("pipelines.revalidate", async () => {
+      try {
+        if (version() !== rowVersion || await ownership.read() !== ownershipFence
+          || version() !== rowVersion
+          || (attempt.flowId && JSON.stringify(ports.getFlow(attempt.flowId)) !== flowFingerprint)) abort.abort();
+      } catch { abort.abort(); }
+    }).finally(() => { validation = undefined; });
+    const watch = setInterval(() => { void revalidate(); }, 50);
     const exec: ExecPort = async (command, args, cwd, env, options) => {
-      revalidate();
+      await revalidate();
       if (abort.signal.aborted) return { code: null, stdout: "", stderr: "stage settlement superseded" };
       return await performanceSpans.wait("controller.git-wait", async () => await ports.exec(command, args, cwd, env, { ...options, signal: abort.signal, inheritFd: descriptor, timeoutMs: command === "timeout" ? 5_000 : options?.timeoutMs ?? 60_000 }));
     };
-    const candidate = performanceSpans.sync("pipeline.copy", () => structuredClone(preview));
+    const candidate = cloneControllerPipeline(preview);
     const effects: Array<() => Promise<void>> = [];
     stageSettlementEffects.set(candidate, effects);
     const candidateStage = currentStage(candidate)!;
@@ -11174,13 +11525,15 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
         }
         if (candidate.publicationRecovery) current.publicationRecovery = structuredClone(candidate.publicationRecovery);
         await persist([current]);
-        fingerprint = JSON.stringify(current);
+        fingerprint = controllerTickFingerprint(current);
+        rowVersion = version();
         changed = true;
       });
+      await revalidate();
       if (abort.signal.aborted) throw new Error("stage settlement superseded before recording its intent");
     };
     try {
-      revalidate();
+      await revalidate();
       if (abort.signal.aborted) continue;
       if (["passed", "skipped"].includes(candidateAttempt.state)) await retryTerminalStagePublication(candidate, candidateStage, candidateAttempt, outside, persistIntent);
       else if (candidateStage.kind !== "review-loop" || await approvedReviewHeadHolds(candidate, candidateAttempt, outside)) {
@@ -11192,8 +11545,8 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
         }
         await commitPassedStage(candidate, candidateStage, candidateAttempt, outside, persistIntent);
       }
-      revalidate();
-      if (!abort.signal.aborted && JSON.stringify(candidate) !== fingerprint) await withPipelineMutation(async (pipelines, persist) => {
+      await revalidate();
+      if (!abort.signal.aborted && controllerTickFingerprint(candidate) !== fingerprint) await withPipelineMutation(async (pipelines, persist) => {
         const current = pipelines.find((pipeline) => pipeline.id === preview.id);
         if (!current || !matches(current)) return;
         Object.assign(current, candidate);
@@ -11202,7 +11555,7 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
         changed = true;
         settledIds?.add(current.id);
       });
-    } finally { stageSettlementEffects.delete(candidate); clearInterval(watch); releasePublicationFileLock(descriptor); }
+    } finally { stageSettlementEffects.delete(candidate); clearInterval(watch); await validation; releasePublicationFileLock(descriptor); }
   }
   return changed;
 }
