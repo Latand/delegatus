@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { assertFrameLayout, buildCaptureEnvironment, SHOTS, cropSvg, judgeRenderBack, RENDER_BACK_TILE, RENDER_BACK_TILE_LIMIT, ringClipPath, type RingBox, snapCrop, withPointSize } from "./capture-readme-media";
+import { alignFeedsToWholeLines, assertFrameLayout, assertTextWhole, buildCaptureEnvironment, SHOTS, cropSvg, judgeRenderBack, RENDER_BACK_TILE, RENDER_BACK_TILE_LIMIT, ringClipPath, type RingBox, snapCrop, withPointSize } from "./capture-readme-media";
 
 const box = (overrides: Partial<RingBox> = {}): RingBox => ({
   width: 200,
@@ -148,6 +148,58 @@ test.skipIf(!process.env.CHROME_BIN)("frame geometry accepts a whole subject and
     await page.setContent('<div id="subject" style="width:100px;height:100px"></div>');
     await expect(assertFrameLayout(page, shot, { x: 0, y: 0, width: 50, height: 50 })).rejects.toThrow("clipped");
     await expect(assertFrameLayout(page, { ...shot, subjects: ["#missing"] })).rejects.toThrow();
+  } finally {
+    await browser.close();
+  }
+}, 60_000);
+
+/* A feed of 20 px lines, scrolled to its tail, whose top edge falls 8 px into a line. */
+const CUT_FEED = `<div class="reader" style="font:14px/20px monospace">
+  <div data-log-feed-scroller style="box-sizing:border-box;height:110px;overflow-y:auto;padding:0 0 2px">
+    ${Array.from({ length: 12 }, (_, index) => `<div>line ${index + 1}</div>`).join("")}
+  </div>
+</div>`;
+
+test.skipIf(!process.env.CHROME_BIN)("text check refuses a line cut by a feed edge, a clipping box or the frame, and the feed rests on a whole line", async () => {
+  const { chromium } = await import("playwright-core");
+  const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
+  try {
+    const page = await browser.newPage({ viewport: { width: 320, height: 240 } });
+    const shot = { id: "control", viewport: { width: 320, height: 240 } };
+    await page.setContent(`<body style="margin:0">${CUT_FEED}</body>`);
+    await page.locator("[data-log-feed-scroller]").evaluate((feed) => { feed.scrollTop = feed.scrollHeight; });
+    await expect(assertTextWhole(page, shot)).rejects.toThrow("text cut");
+    await alignFeedsToWholeLines(page, ".reader");
+    await assertTextWhole(page, shot);
+    const top = await page.locator("[data-log-feed-scroller]").evaluate((feed) => {
+      const edge = feed.getBoundingClientRect().top;
+      return Math.min(...[...feed.children].map((line) => {
+        const range = document.createRange();
+        range.selectNodeContents(line);
+        return range.getBoundingClientRect().top - edge;
+      }).filter((offset) => offset >= 0));
+    });
+    /* The first whole line starts at the edge, not a gap below it. */
+    expect(top).toBeLessThan(1);
+
+    /* A meta line that runs out of room and clips its last word. */
+    await page.setContent('<body style="margin:0;font:14px sans-serif"><div style="width:120px;display:flex;overflow:hidden;white-space:nowrap"><span style="flex-shrink:0">done · 30m ago · Opus 5.5 · high</span></div></body>');
+    await expect(assertTextWhole(page, shot)).rejects.toThrow("left/right");
+    /* The same line shortened with an ellipsis is the product's own truncation. */
+    await page.setContent('<body style="margin:0;font:14px sans-serif"><div style="width:120px;overflow:hidden"><span style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">done · 30m ago · Opus 5.5 · high</span></div></body>');
+    await assertTextWhole(page, shot);
+    /* A code line in a sideways scrolling block, and a line scrolled wholly out of view. */
+    await page.setContent('<body style="margin:0;font:14px/20px monospace"><pre style="width:120px;overflow-x:auto;margin:0">const charge = await payments.refund(body.chargeId);</pre><div style="height:40px;overflow-y:auto"><div>first</div><div>second</div><div>third</div></div></body>');
+    await page.locator("div").first().evaluate((feed) => { feed.scrollTop = 20; });
+    await assertTextWhole(page, shot);
+
+    /* The frame's own edge through a line, unless a window drawn over it hides the line. */
+    await page.setContent('<body style="margin:0;font:14px/20px sans-serif"><div style="position:absolute;left:0;top:50px">harbor-api</div></body>');
+    await expect(assertTextWhole(page, shot, { x: 20, y: 0, width: 200, height: 200 })).rejects.toThrow("the frame's edge");
+    await expect(assertTextWhole(page, shot, { x: 0, y: 55, width: 200, height: 100 })).rejects.toThrow("the frame's edge");
+    await assertTextWhole(page, shot, { x: 0, y: 0, width: 200, height: 200 });
+    await page.setContent('<body style="margin:0;font:14px/20px sans-serif"><div style="position:absolute;left:0;top:50px">harbor-api</div><div style="position:absolute;left:20px;top:0;width:200px;height:200px;background:#111"></div></body>');
+    await assertTextWhole(page, shot, { x: 20, y: 0, width: 200, height: 200 });
   } finally {
     await browser.close();
   }
