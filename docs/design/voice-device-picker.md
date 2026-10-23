@@ -149,11 +149,11 @@ resolves.
 |---|---|---|---|
 | No permission yet (`labelled` false; permission `prompt` or `unavailable`) | only «System default», enabled | only «System default», disabled | `devices.permission` hint plus the `devices.allow` button. The button runs `getUserMedia({ audio: true })`, stops the tracks at once, calls `rememberMicGrant()`, then lists the devices again |
 | Permission denied | «System default», disabled | disabled | `devices.denied` |
-| Default (nothing stored) | «System default · {name}» selected, then one option per input | the same for outputs | none |
-| Chosen device present | that device selected | that device selected | none |
-| Chosen device gone | a selected disabled option «{name} (not connected)» stays first after System default | the same | `devices.missingHint`. The stored choice is kept, so replugging restores it; picking another device replaces it |
+| Default (nothing stored) | «System default» selected, then one option per input | the same for outputs | `devices.inUse` names the default device ({name}), so a long name is whole at 390 px where a native select cuts it |
+| Chosen device present | that device selected | that device selected | on the phone only (below 640 px) `devices.inUse` repeats the name whole under the select; above that the select shows it |
+| Chosen device gone | a selected disabled option «Not connected · {name}» stays first after System default; the marker leads, so a cut select still shows it | the same | `devices.missingHint` with the name whole. The stored choice is kept, so replugging restores it; picking another device replaces it |
 | `setSinkId` unsupported, or no output listed (Firefox without `selectAudioOutput`, iOS) | as above | «System default», disabled | `devices.outputUnsupported` under Speakers |
-| Call live, microphone changed | as above | as above | `devices.nextCall` under Microphone. The microphone applies from the next call; the speakers apply at once |
+| Call live, microphone changed | as above | as above | `devices.nextCall` under Microphone, after the `devices.inUse` line. The microphone applies from the next call; the speakers apply at once |
 | Phone, 390 px | dialog `max-w-lg p-5` inside `p-4` leaves about 318 px of content: selects full width, `min-h-11`, long names truncated by the native select | same | Hints wrap. No horizontal overflow |
 | Desktop | same column, 512 px dialog | same | none |
 
@@ -180,7 +180,10 @@ clears the key.
   styled like `.vc-sim`: a 10 px `Mic` icon and the device name, with
   `max-width: 100%`, `overflow: hidden` and `text-overflow: ellipsis`. Also
   give the mute button (`:1361`) `title` and `aria-label` suffixed with
-  `voiceCompanion.micInUse`, because `.vc-state` is `aria-hidden`.
+  `voiceCompanion.micInUse`, because `.vc-state` is `aria-hidden`. The block
+  cuts a long name with an ellipsis, so `.vc-mic` takes the pointer
+  (`pointer-events: auto`, the block lets it through) and carries the whole
+  name as its `title`.
 
   Geometry: the block is 132 × 148 (`VoiceCompanion.tsx:58`). Character plus
   padding is 76, pill 20 → 34, controls 28, two gaps of 4, for 146 in total.
@@ -191,9 +194,11 @@ clears the key.
   line under the status, «Мікрофон: {name}», truncated in one line within
   the 236 px popover.
 - **Composer panel (`VoiceConversation.tsx:289`).** While `live`, take the
-  name from `stream?.getAudioTracks()[0]` and show `voice.liveMic` instead of
-  `voice.live`. The panel already receives `stream`, so no client change is
-  needed.
+  name from `stream?.getAudioTracks()[0]`. The status shows a `Mic` icon and
+  the name alone, so the name gets the 214–224 px the row has at 380 and 390
+  px (the live dot and the timer say the call is on); the `voice.liveMic`
+  sentence is the status's `title` and `aria-label`. The panel already
+  receives `stream`, so no client change is needed.
 - **Fallback notices.** Add `MICROPHONE_FALLBACK` and `SPEAKERS_FALLBACK` to
   `COMPANION_MESSAGES`, said once per call as tone `note`:
   - desktop: `say("device-in" | "device-out", code, "note")` in
@@ -217,13 +222,13 @@ Put the keys in one contiguous block after `voiceCompanion.settings.uncertain.re
 | `voiceCompanion.devices.microphone` | Microphone | Мікрофон |
 | `voiceCompanion.devices.speakers` | Speakers | Динаміки |
 | `voiceCompanion.devices.default` | System default | Системний за замовчуванням |
-| `voiceCompanion.devices.defaultNamed` | System default · {name} | Системний за замовчуванням · {name} |
+| `voiceCompanion.devices.inUse` | In use: {name} | Використовується: {name} |
 | `voiceCompanion.devices.unnamed` | Device {n} | Пристрій {n} |
 | `voiceCompanion.devices.permission` | The browser names devices only after you allow the microphone. | Браузер показує назви пристроїв лише після дозволу на мікрофон. |
 | `voiceCompanion.devices.allow` | Show devices | Показати пристрої |
 | `voiceCompanion.devices.denied` | The browser blocks the microphone for this site. Allow it in the site settings, then reopen this window. | Браузер блокує мікрофон для цього сайту. Дозвольте його в налаштуваннях сайту й відкрийте це вікно знову. |
-| `voiceCompanion.devices.missingOption` | {name} (not connected) | {name} (не під’єднано) |
-| `voiceCompanion.devices.missingHint` | Using the system default until it is connected again. | Поки його немає, працює системний за замовчуванням. |
+| `voiceCompanion.devices.missingOption` | Not connected · {name} | Не під’єднано · {name} |
+| `voiceCompanion.devices.missingHint` | {name} is not connected. Using the system default until it is connected again. | {name} не під’єднано. Поки його немає, працює системний за замовчуванням. |
 | `voiceCompanion.devices.outputUnsupported` | This browser does not let a site choose speakers. Sound plays through the system output. | Цей браузер не дає сайту вибрати динаміки. Звук іде через системний вихід. |
 | `voiceCompanion.devices.nextCall` | The new microphone is used from the next call. | Новий мікрофон працюватиме з наступної розмови. |
 | `voiceCompanion.micInUse` | Microphone: {name} | Мікрофон: {name} |
@@ -283,8 +288,10 @@ such as «Microphone Array (Realtek(R) Audio)» and «Навушники AirPods
 - **Phone head popover with the mic line and the fallback notice, at 390 ×
   844 and 375 × 667.** Add a case to `describe("phone voice head")` in
   `src/components/mobile/issue1671Evidence.browser.test.tsx:10784`.
-- **Composer panel status.** Use the DOM test above. No driver mounts a live
-  composer call today; the PR states this gap rather than adding a driver.
+- **Composer panel status.** The DOM test above, plus the case "the composer's
+  voice call panel gives the microphone name the room" in
+  `src/components/kanban/kanbanBoard.browser.test.tsx`, which mounts the panel
+  through the fixture's `?scenario=voice-panel` at 380, 390 and 640.
 
 ## What not to touch
 

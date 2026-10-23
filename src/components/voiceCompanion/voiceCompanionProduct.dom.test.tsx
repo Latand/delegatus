@@ -710,6 +710,8 @@ test("a call whose chosen microphone is gone names the microphone it uses in the
     await pause(300);
     const line = document.querySelector("[data-companion-mic]");
     expect(line?.textContent).toBe("Headset Mic");
+    /* The block cuts a long name, so the line itself carries the whole one for a hover. */
+    expect(line?.getAttribute("title")).toBe("Headset Mic");
     expect(document.querySelector("[data-companion-phase]")?.hasAttribute("aria-hidden")).toBe(true);
     const mute = document.querySelector<HTMLElement>(".vc-btn[aria-pressed]")!;
     expect(mute.getAttribute("aria-label")).toBe(`${translate("en", "voiceCompanion.mute")} · ${translate("en", "voiceCompanion.micInUse", { name: "Headset Mic" })}`);

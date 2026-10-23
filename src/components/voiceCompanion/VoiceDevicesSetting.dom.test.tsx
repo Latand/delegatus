@@ -80,7 +80,12 @@ async function mount(locale: "en" | "uk" = "en"): Promise<HTMLElement> {
 }
 const select = (host: Element, kind: "input" | "output") => host.querySelector<HTMLSelectElement>(`[data-voice-device='${kind}'] select`)!;
 const options = (element: HTMLSelectElement) => [...element.options].map(option => option.textContent);
-const hint = (host: Element, kind: "input" | "output") => host.querySelector(`[data-voice-device-hint='${kind}']`)?.textContent ?? null;
+/* The lines under a select, one per paragraph (the chosen device's own line is hidden above 640 px by CSS, which jsdom does not apply). */
+const hint = (host: Element, kind: "input" | "output") => {
+  const lines = [...host.querySelectorAll(`[data-voice-device-hint='${kind}'] p`)].map(line => line.textContent);
+  return lines.length > 0 ? lines.join("\n") : null;
+};
+const inUse = (locale: "en" | "uk", name: string) => tr(locale, "voiceCompanion.devices.inUse", { name });
 async function choose(element: HTMLSelectElement, value: string) {
   await act(async () => {
     element.value = value;
@@ -123,13 +128,14 @@ for (const locale of ["en", "uk"] as const) {
 
   test(`${locale}: with nothing stored the default device is named and every device is listed`, async () => {
     const host = await mount(locale);
-    const defaultNamed = (name: string) => tr(locale, "voiceCompanion.devices.defaultNamed", { name });
-    expect(options(select(host, "input"))).toEqual([defaultNamed("Microphone Array (Realtek(R) Audio)"), "Microphone Array (Realtek(R) Audio)", "Навушники AirPods Pro (Bluetooth)"]);
-    expect(options(select(host, "output"))).toEqual([defaultNamed("Realtek Speakers"), "Realtek Speakers", "Навушники AirPods Pro (Bluetooth)"]);
+    const plain = tr(locale, "voiceCompanion.devices.default");
+    expect(options(select(host, "input"))).toEqual([plain, "Microphone Array (Realtek(R) Audio)", "Навушники AirPods Pro (Bluetooth)"]);
+    expect(options(select(host, "output"))).toEqual([plain, "Realtek Speakers", "Навушники AirPods Pro (Bluetooth)"]);
     expect(select(host, "input").value).toBe("");
     expect([select(host, "input").disabled, select(host, "output").disabled]).toEqual([false, false]);
-    expect(hint(host, "input")).toBeNull();
-    expect(hint(host, "output")).toBeNull();
+    /* The short option keeps the device name whole at 390 px: the line under the select names it. */
+    expect(hint(host, "input")).toBe(inUse(locale, "Microphone Array (Realtek(R) Audio)"));
+    expect(hint(host, "output")).toBe(inUse(locale, "Realtek Speakers"));
   });
 
   test(`${locale}: a stored device that is present is selected`, async () => {
@@ -138,7 +144,8 @@ for (const locale of ["en", "uk"] as const) {
     const host = await mount(locale);
     expect(select(host, "input").value).toBe("mic-pods");
     expect(select(host, "output").value).toBe("spk-pods");
-    expect(hint(host, "input")).toBeNull();
+    expect(hint(host, "input")).toBe(inUse(locale, "Навушники AirPods Pro (Bluetooth)"));
+    expect(host.querySelector("[data-voice-device-hint='input'] p")?.className).toBe("sm:hidden");
   });
 
   test(`${locale}: a stored device that is gone stays as a disabled option, keeps the choice and says what plays instead`, async () => {
@@ -150,8 +157,10 @@ for (const locale of ["en", "uk"] as const) {
     expect(select(host, "input").value).toBe("usb");
     expect(select(host, "input").options[1]!.disabled).toBe(true);
     expect(select(host, "output").options[1]!.textContent).toBe(missing("Bluetooth speaker"));
-    expect(hint(host, "input")).toBe(tr(locale, "voiceCompanion.devices.missingHint"));
-    expect(hint(host, "output")).toBe(tr(locale, "voiceCompanion.devices.missingHint"));
+    expect(hint(host, "input")).toBe(tr(locale, "voiceCompanion.devices.missingHint", { name: "USB Microphone" }));
+    expect(hint(host, "output")).toBe(tr(locale, "voiceCompanion.devices.missingHint", { name: "Bluetooth speaker" }));
+    /* The marker leads the option, so a select that cuts a long name still shows that the device is not connected. */
+    expect(missing("USB Microphone").startsWith(tr(locale, "voiceCompanion.devices.missingOption", { name: "" }).trimEnd())).toBe(true);
     expect(voice.voiceDeviceChoice("input")?.id).toBe("usb");
     /* Picking another device replaces it. */
     await choose(select(host, "input"), "mic-array");
@@ -198,11 +207,11 @@ test("devicechange lists again, so a plugged-in device appears and an unplugged 
   await act(async () => { target.dispatchEvent(new harness.dom.Event("devicechange")); await settle(); });
   expect(select(host, "input").value).toBe("mic-usb");
   expect(select(host, "input").options[1]!.disabled).toBe(false);
-  expect(hint(host, "input")).toBeNull();
+  expect(hint(host, "input")).toBe(translate("en", "voiceCompanion.devices.inUse", { name: "USB Microphone" }));
   world.devices = LABELLED;
   await act(async () => { target.dispatchEvent(new harness.dom.Event("devicechange")); await settle(); });
   expect(select(host, "input").options[1]!.disabled).toBe(true);
-  expect(hint(host, "input")).toBe(translate("en", "voiceCompanion.devices.missingHint"));
+  expect(hint(host, "input")).toBe(translate("en", "voiceCompanion.devices.missingHint", { name: "USB Microphone" }));
 });
 
 test("during a call a different microphone is announced for the next call, and the speakers need no such line", async () => {
@@ -212,8 +221,8 @@ test("during a call a different microphone is announced for the next call, and t
   try {
     voice.setVoiceDeviceChoice("input", { id: "mic-pods", label: "Навушники AirPods Pro (Bluetooth)" });
     const host = await mount();
-    expect(hint(host, "input")).toBe(translate("en", "voiceCompanion.devices.nextCall"));
-    expect(hint(host, "output")).toBeNull();
+    expect(hint(host, "input")).toBe(`${translate("en", "voiceCompanion.devices.inUse", { name: "Навушники AirPods Pro (Bluetooth)" })}\n${translate("en", "voiceCompanion.devices.nextCall")}`);
+    expect(hint(host, "output")).toBe(translate("en", "voiceCompanion.devices.inUse", { name: "Realtek Speakers" }));
   } finally {
     await act(async () => call.release());
   }

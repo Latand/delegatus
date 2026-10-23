@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import { Select } from "@/components/ui/Select";
 import {
@@ -16,6 +16,8 @@ import {
 } from "@/lib/audio/voiceDevices";
 import { useLocale } from "@/lib/i18n";
 import { queryMicPermission, rememberMicGrant, type MicPermissionState, type PermissionsLike } from "@/lib/micPermission";
+
+type HintLine = { key: string; text: ReactNode; phoneOnly?: boolean };
 
 const NO_DEVICES: VoiceDeviceList = { inputs: [], outputs: [], defaultInputName: null, defaultOutputName: null, labelled: false };
 
@@ -84,7 +86,7 @@ export function VoiceDevicesSetting() {
       const entry = entries.find(candidate => candidate.id === next);
       setVoiceDeviceChoice(kind, entry ? { id: entry.id, label: entry.label } : null);
     };
-    const line = hint(kind, resolved.state, resolved.state === "present" ? resolved.label : "");
+    const lines = hint(kind, resolved.state, resolved.state === "present" ? resolved.label : "", choice?.label ?? "", defaultName);
     return (
       <div className="min-w-0" data-voice-device={kind} data-device-state={resolved.state}>
         <label htmlFor={kind === "input" ? ids.microphone : ids.speakers} className="font-semibold text-primary">
@@ -96,37 +98,42 @@ export function VoiceDevicesSetting() {
           className="mt-1.5 w-full max-sm:min-h-11"
           value={value}
           disabled={disabled}
-          aria-describedby={line ? (kind === "input" ? ids.microphoneHint : ids.speakersHint) : undefined}
+          aria-describedby={lines.length > 0 ? (kind === "input" ? ids.microphoneHint : ids.speakersHint) : undefined}
           onChange={event => onChange(event.target.value)}
         >
-          <option value="">{defaultName && !hidden ? t("voiceCompanion.devices.defaultNamed", { name: defaultName }) : t("voiceCompanion.devices.default")}</option>
+          <option value="">{t("voiceCompanion.devices.default")}</option>
           {resolved.state === "missing" ? <option value={choice!.id} disabled>{t("voiceCompanion.devices.missingOption", { name: resolved.label })}</option> : null}
           {hidden ? null : entries.map(entry => <option key={entry.id} value={entry.id}>{nameOf(entry, entries)}</option>)}
         </Select>
-        {line ? <p id={kind === "input" ? ids.microphoneHint : ids.speakersHint} className="mt-1 text-[12px] leading-snug text-muted" data-voice-device-hint={kind}>{line}</p> : null}
+        {lines.length > 0 ? <div id={kind === "input" ? ids.microphoneHint : ids.speakersHint} className="mt-1 text-[12px] leading-snug text-muted" data-voice-device-hint={kind}>{lines.map(entry => <p key={entry.key} className={entry.phoneOnly ? "sm:hidden" : undefined}>{entry.text}</p>)}</div> : null}
       </div>
     );
   };
 
-  /* The one line a row can carry; a row with nothing to say draws none. */
-  const hint = (kind: VoiceDeviceKind, state: "default" | "present" | "missing", chosen: string) => {
+  /* The lines a row carries under its select, each whole at 390 px where a native select cuts a long device name: the
+     device in use (the select shows it too, so the chosen device's line is drawn on the phone only), the marker of a
+     choice that is not connected, and the row's own remark. A row with nothing to say draws none. */
+  const hint = (kind: VoiceDeviceKind, state: "default" | "present" | "missing", chosen: string, stored: string, defaultName: string | null): HintLine[] => {
+    const inUse = (name: string, phoneOnly: boolean): HintLine => ({ key: "in-use", phoneOnly, text: t("voiceCompanion.devices.inUse", { name }) });
+    const gone: HintLine = { key: "gone", text: t("voiceCompanion.devices.missingHint", { name: stored }) };
     if (kind === "input") {
-      if (denied) return t("voiceCompanion.devices.denied");
-      if (!list.labelled) return (
+      if (denied) return [{ key: "denied", text: t("voiceCompanion.devices.denied") }];
+      if (!list.labelled) return [{ key: "permission", text: (
         <>
           {t("voiceCompanion.devices.permission")}{" "}
           <button type="button" data-voice-devices-allow onClick={() => void allow()} className="min-h-9 rounded-[6px] font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:min-h-11">{t("voiceCompanion.devices.allow")}</button>
         </>
-      );
-      if (state === "missing") return t("voiceCompanion.devices.missingHint");
-      const using = state === "present" ? chosen : list.defaultInputName ?? "";
-      if (active && active.label && using && using !== active.label) return t("voiceCompanion.devices.nextCall");
-      return null;
+      ) }];
+      const using = state === "present" ? chosen : defaultName ?? "";
+      const lines: HintLine[] = state === "missing" ? [gone] : using ? [inUse(using, state === "present")] : [];
+      if (state !== "missing" && active && active.label && using && using !== active.label) lines.push({ key: "next-call", text: t("voiceCompanion.devices.nextCall") });
+      return lines;
     }
-    if (hidden) return null;
-    if (!speakersSupported) return t("voiceCompanion.devices.outputUnsupported");
-    if (state === "missing") return t("voiceCompanion.devices.missingHint");
-    return null;
+    if (hidden) return [];
+    if (!speakersSupported) return [{ key: "unsupported", text: t("voiceCompanion.devices.outputUnsupported") }];
+    if (state === "missing") return [gone];
+    const using = state === "present" ? chosen : defaultName ?? "";
+    return using ? [inUse(using, state === "present")] : [];
   };
 
   return (

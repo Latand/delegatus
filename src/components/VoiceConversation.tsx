@@ -258,12 +258,13 @@ export function VoiceConversationPanel({
   const live = phase === "live";
   /* The name the browser gives the track is the microphone this call listens to. */
   const mic = live ? (stream?.getAudioTracks()[0]?.label ?? "").replace(/^(Default|Communications) - /, "") : "";
+  const micStatus = mic ? t("voice.liveMic", { mic }) : "";
   const status = phase === "connecting"
     ? t("voice.connecting")
     : phase === "stopping"
       ? t("voice.stopping")
       : live
-        ? mic ? t("voice.liveMic", { mic }) : t("voice.live")
+        ? t("voice.live")
         : phase === "error"
           ? t("voice.failed")
           : t("voice.ended");
@@ -288,7 +289,13 @@ export function VoiceConversationPanel({
           }`}
           aria-hidden
         />
-        <span className="min-w-0 flex-1 truncate text-caption text-muted" role="status">{status}</span>
+        {/* With a named microphone the line gives the name the room: the live dot and the timer already say the call is on, and the title carries the whole sentence. */}
+        {mic ? (
+          <span className="flex min-w-0 flex-1 items-center gap-1 text-caption text-muted" role="status" title={micStatus} aria-label={micStatus} data-voice-status-mic>
+            <Mic size={12} className="shrink-0" aria-hidden />
+            <span className="min-w-0 truncate">{mic}</span>
+          </span>
+        ) : <span className="min-w-0 flex-1 truncate text-caption text-muted" role="status">{status}</span>}
         {live && startedAt !== null ? <CallTimer startedAt={startedAt} t={t} /> : null}
         {live && !micMuted ? <MicLevelMeter stream={stream} t={t} /> : null}
         {/* Muting is the move when someone walks in mid-call; hanging up and

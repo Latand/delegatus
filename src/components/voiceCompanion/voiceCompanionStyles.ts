@@ -73,7 +73,8 @@ export const VOICE_COMPANION_CSS = `
 }
 .vc-phase { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; white-space: nowrap; }
 .vc-sim { color: var(--color-muted); white-space: nowrap; }
-.vc-mic { display: inline-flex; align-items: center; justify-content: center; gap: 3px; max-width: 100%; color: var(--color-muted); white-space: nowrap; }
+/* The status block lets pointers through; the name takes them so its title can show the whole device. */
+.vc-mic { pointer-events: auto; display: inline-flex; align-items: center; justify-content: center; gap: 3px; max-width: 100%; color: var(--color-muted); white-space: nowrap; }
 .vc-mic > svg { flex: none; }
 .vc-mic-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .vc-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--vc-ring); }

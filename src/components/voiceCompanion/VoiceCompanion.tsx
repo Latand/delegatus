@@ -1361,7 +1361,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
           >
             <CompanionCharacter ref={character} size={CHARACTER} />
           </button>
-          <span className="vc-state" data-companion-phase aria-hidden><span className="vc-phase"><span className="vc-dot" />{phaseLabel}</span>{adapter.mode === "simulated" ? <span className="vc-sim">{t("voiceCompanion.simulated")}</span> : null}{connected && micInUse?.label ? <span className="vc-mic" data-companion-mic><Mic size={10} aria-hidden /><span className="vc-mic-name">{micInUse.label}</span></span> : null}</span>
+          <span className="vc-state" data-companion-phase aria-hidden><span className="vc-phase"><span className="vc-dot" />{phaseLabel}</span>{adapter.mode === "simulated" ? <span className="vc-sim">{t("voiceCompanion.simulated")}</span> : null}{connected && micInUse?.label ? <span className="vc-mic" data-companion-mic title={micInUse.label}><Mic size={10} aria-hidden /><span className="vc-mic-name">{micInUse.label}</span></span> : null}</span>
           <div className="vc-controls">
             {connected || starting ? (
               <>

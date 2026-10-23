@@ -11254,7 +11254,7 @@ describe("phone voice head", () => {
               readings.push({ group, combo, scene: "next-call-box", reading: next });
               await stamp(size, await page.screenshot(), band("next-call", false), path.join(out, `next-call-${combo}.png`));
               if (pageErrors.length) fail("next-call", `page errors: ${pageErrors.join(" | ")}`);
-              if (next.hint !== translate(lang, "voiceCompanion.devices.nextCall")) fail("next-call", `the row says ${JSON.stringify(next.hint)}`);
+              if (!next.hint?.endsWith(translate(lang, "voiceCompanion.devices.nextCall"))) fail("next-call", `the row says ${JSON.stringify(next.hint)}`);
               if (!next.lines || !next.inside) fail("next-call", `the line is cut or leaves the dialog: ${JSON.stringify(next)}`);
             } else if (group === "product") {
               /* The stored choice says hidden, as a reload after «Сховати» finds it. The row stands in the ⋯ menu that holds

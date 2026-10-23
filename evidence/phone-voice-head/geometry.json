@@ -2225,7 +2225,7 @@
         "phase": "thinking",
         "side": "right",
         "sheetState": null,
-        "callStart": 1792739633130,
+        "callStart": 1792751965468,
         "chromeLine": 725,
         "textUnderHeadPx2": 0,
         "textUnderWordsPx2": 0,
@@ -2302,7 +2302,7 @@
         "phase": "speaking",
         "side": "right",
         "sheetState": null,
-        "callStart": 1792739633130,
+        "callStart": 1792751965468,
         "chromeLine": 725,
         "textUnderHeadPx2": 0,
         "textUnderWordsPx2": 0,
@@ -2412,7 +2412,7 @@
         "phase": "thinking",
         "side": "right",
         "sheetState": null,
-        "callStart": 1792739645094,
+        "callStart": 1792751985333,
         "chromeLine": 548,
         "textUnderHeadPx2": 0,
         "textUnderWordsPx2": 0,
@@ -2489,7 +2489,7 @@
         "phase": "speaking",
         "side": "right",
         "sheetState": null,
-        "callStart": 1792739645094,
+        "callStart": 1792751985333,
         "chromeLine": 548,
         "textUnderHeadPx2": 0,
         "textUnderWordsPx2": 0,
@@ -2599,7 +2599,7 @@
         "phase": "thinking",
         "side": "right",
         "sheetState": null,
-        "callStart": 1792745064885,
+        "callStart": 1792751971400,
         "chromeLine": 725,
         "textUnderHeadPx2": 0,
         "textUnderWordsPx2": 0,
@@ -2676,7 +2676,7 @@
         "phase": "thinking",
         "side": "right",
         "sheetState": null,
-        "callStart": 1792745078986,
+        "callStart": 1792751991200,
         "chromeLine": 548,
         "textUnderHeadPx2": 0,
         "textUnderWordsPx2": 0,
@@ -2734,8 +2734,8 @@
       "combo": "390x844-uk-light",
       "scene": "next-call-box",
       "reading": {
-        "hint": "Новий мікрофон працюватиме з наступної розмови.",
-        "lines": 1,
+        "hint": "Використовується: Microphone Array (Realtek(R) Audio)Новий мікрофон працюватиме з наступної розмови.",
+        "lines": 4,
         "inside": true
       }
     },
@@ -2744,8 +2744,8 @@
       "combo": "375x667-en-dark",
       "scene": "next-call-box",
       "reading": {
-        "hint": "The new microphone is used from the next call.",
-        "lines": 1,
+        "hint": "In use: Microphone Array (Realtek(R) Audio)The new microphone is used from the next call.",
+        "lines": 4,
         "inside": true
       }
     }

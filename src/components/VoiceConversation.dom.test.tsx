@@ -94,7 +94,13 @@ test("a live call's status names the microphone its track carries, and says noth
     document.body.append(host);
     const root = createRoot(host);
     flushSync(() => root.render(<VoiceConversationPanel phase={phase} error={null} startedAt={null} stream={mic} lines={[]} t={t} />));
-    const status = host.querySelector('[role="status"]')?.textContent;
+    const element = host.querySelector('[role="status"]');
+    /* A named microphone is the visible text; the whole sentence is the title and the accessible name. */
+    const status = element?.getAttribute("title") ?? element?.textContent ?? null;
+    if (element?.getAttribute("title")) {
+      expect(element.getAttribute("aria-label")).toBe(status);
+      expect(element.textContent).toBe(status!.replace(/^Voice conversation is live · /, ""));
+    }
     flushSync(() => root.unmount());
     return status;
   };

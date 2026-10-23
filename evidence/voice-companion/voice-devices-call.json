@@ -63,6 +63,8 @@
         "right": 288
       },
       "text": 175.78125,
+      "title": "Навушники AirPods Pro (Bluetooth)",
+      "hit": true,
       "nameCut": true,
       "name": "Навушники AirPods Pro (Bluetooth)",
       "muteLabel": "Mute · Microphone: Навушники AirPods Pro (Bluetooth)",
@@ -131,6 +133,8 @@
         "right": 288
       },
       "text": 179.75,
+      "title": "Microphone Array (Realtek(R) Audio)",
+      "hit": true,
       "nameCut": true,
       "name": "Microphone Array (Realtek(R) Audio)",
       "muteLabel": "Mute · Microphone: Microphone Array (Realtek(R) Audio)",
@@ -199,6 +203,8 @@
         "right": 288
       },
       "text": 179.75,
+      "title": "Microphone Array (Realtek(R) Audio)",
+      "hit": true,
       "nameCut": true,
       "name": "Microphone Array (Realtek(R) Audio)",
       "muteLabel": "Mute · Microphone: Microphone Array (Realtek(R) Audio)",
@@ -267,6 +273,8 @@
         "right": 288
       },
       "text": 175.78125,
+      "title": "Навушники AirPods Pro (Bluetooth)",
+      "hit": true,
       "nameCut": true,
       "name": "Навушники AirPods Pro (Bluetooth)",
       "muteLabel": "Mute · Microphone: Навушники AirPods Pro (Bluetooth)",
@@ -275,7 +283,7 @@
       "blockOverflow": 0,
       "nextCall": {
         "hint": "The new microphone is used from the next call.",
-        "lines": 1,
+        "lines": 2,
         "inside": true
       }
     },
@@ -340,6 +348,8 @@
         "right": 288
       },
       "text": 175.78125,
+      "title": "Навушники AirPods Pro (Bluetooth)",
+      "hit": true,
       "nameCut": true,
       "name": "Навушники AirPods Pro (Bluetooth)",
       "muteLabel": "Mute · Microphone: Навушники AirPods Pro (Bluetooth)",
@@ -408,6 +418,8 @@
         "right": 288
       },
       "text": 179.75,
+      "title": "Microphone Array (Realtek(R) Audio)",
+      "hit": true,
       "nameCut": true,
       "name": "Microphone Array (Realtek(R) Audio)",
       "muteLabel": "Mute · Microphone: Microphone Array (Realtek(R) Audio)",
@@ -476,6 +488,8 @@
         "right": 288
       },
       "text": 179.75,
+      "title": "Microphone Array (Realtek(R) Audio)",
+      "hit": true,
       "nameCut": true,
       "name": "Microphone Array (Realtek(R) Audio)",
       "muteLabel": "Mute · Microphone: Microphone Array (Realtek(R) Audio)",
@@ -544,6 +558,8 @@
         "right": 288
       },
       "text": 175.78125,
+      "title": "Навушники AirPods Pro (Bluetooth)",
+      "hit": true,
       "nameCut": true,
       "name": "Навушники AirPods Pro (Bluetooth)",
       "muteLabel": "Mute · Microphone: Навушники AirPods Pro (Bluetooth)",
@@ -552,7 +568,7 @@
       "blockOverflow": 0,
       "nextCall": {
         "hint": "The new microphone is used from the next call.",
-        "lines": 1,
+        "lines": 2,
         "inside": true
       }
     },
@@ -617,6 +633,8 @@
         "right": 288
       },
       "text": 175.78125,
+      "title": "Навушники AirPods Pro (Bluetooth)",
+      "hit": true,
       "nameCut": true,
       "name": "Навушники AirPods Pro (Bluetooth)",
       "muteLabel": "Вимкнути мікрофон · Мікрофон: Навушники AirPods Pro (Bluetooth)",
@@ -685,6 +703,8 @@
         "right": 288
       },
       "text": 179.75,
+      "title": "Microphone Array (Realtek(R) Audio)",
+      "hit": true,
       "nameCut": true,
       "name": "Microphone Array (Realtek(R) Audio)",
       "muteLabel": "Вимкнути мікрофон · Мікрофон: Microphone Array (Realtek(R) Audio)",
@@ -753,6 +773,8 @@
         "right": 288
       },
       "text": 179.75,
+      "title": "Microphone Array (Realtek(R) Audio)",
+      "hit": true,
       "nameCut": true,
       "name": "Microphone Array (Realtek(R) Audio)",
       "muteLabel": "Вимкнути мікрофон · Мікрофон: Microphone Array (Realtek(R) Audio)",
@@ -821,6 +843,8 @@
         "right": 288
       },
       "text": 175.78125,
+      "title": "Навушники AirPods Pro (Bluetooth)",
+      "hit": true,
       "nameCut": true,
       "name": "Навушники AirPods Pro (Bluetooth)",
       "muteLabel": "Вимкнути мікрофон · Мікрофон: Навушники AirPods Pro (Bluetooth)",
@@ -829,7 +853,7 @@
       "blockOverflow": 0,
       "nextCall": {
         "hint": "Новий мікрофон працюватиме з наступної розмови.",
-        "lines": 1,
+        "lines": 2,
         "inside": true
       }
     },
@@ -894,6 +918,8 @@
         "right": 288
       },
       "text": 175.78125,
+      "title": "Навушники AirPods Pro (Bluetooth)",
+      "hit": true,
       "nameCut": true,
       "name": "Навушники AirPods Pro (Bluetooth)",
       "muteLabel": "Вимкнути мікрофон · Мікрофон: Навушники AirPods Pro (Bluetooth)",
@@ -962,6 +988,8 @@
         "right": 288
       },
       "text": 179.75,
+      "title": "Microphone Array (Realtek(R) Audio)",
+      "hit": true,
       "nameCut": true,
       "name": "Microphone Array (Realtek(R) Audio)",
       "muteLabel": "Вимкнути мікрофон · Мікрофон: Microphone Array (Realtek(R) Audio)",
@@ -1030,6 +1058,8 @@
         "right": 288
       },
       "text": 179.75,
+      "title": "Microphone Array (Realtek(R) Audio)",
+      "hit": true,
       "nameCut": true,
       "name": "Microphone Array (Realtek(R) Audio)",
       "muteLabel": "Вимкнути мікрофон · Мікрофон: Microphone Array (Realtek(R) Audio)",
@@ -1098,6 +1128,8 @@
         "right": 288
       },
       "text": 175.78125,
+      "title": "Навушники AirPods Pro (Bluetooth)",
+      "hit": true,
       "nameCut": true,
       "name": "Навушники AirPods Pro (Bluetooth)",
       "muteLabel": "Вимкнути мікрофон · Мікрофон: Навушники AirPods Pro (Bluetooth)",
@@ -1106,7 +1138,7 @@
       "blockOverflow": 0,
       "nextCall": {
         "hint": "Новий мікрофон працюватиме з наступної розмови.",
-        "lines": 1,
+        "lines": 2,
         "inside": true
       }
     }
