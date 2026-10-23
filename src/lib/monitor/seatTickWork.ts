@@ -30,13 +30,18 @@ export class SeatTickWork {
   }
 
   async wait<T>(label: string, value: PromiseLike<T>): Promise<T> {
+    // The caller may have already started this work. Install a rejection
+    // observer before checking the deadline so an expired opening scope
+    // cannot abandon a later rejecting continuation.
+    const observed = Promise.resolve(value);
+    void observed.catch(() => {});
     this.assert();
     this.phase = label;
     this.progressed = this.clock();
     const signal = this.deadline.signal;
     let abort!: () => void;
     try {
-      const result = await Promise.race([Promise.resolve(value), new Promise<never>((_, reject) => {
+      const result = await Promise.race([observed, new Promise<never>((_, reject) => {
         abort = () => reject(signal.reason);
         signal.addEventListener("abort", abort, { once: true });
       })]);

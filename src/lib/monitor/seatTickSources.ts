@@ -2499,7 +2499,7 @@ export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTic
     && cache.pipelinesSource === hotLanes && cache.tasksSource === sourceTasks
     && cache.project === input.project && cache.seatKey === seatInputKey(input.seat)
     && cache.announcedKey === announcedKey
-    && cache.aliasesKey === JSON.stringify(projectAliasSnapshot().aliases)
+    && cache.aliasesKey === `${projectRowsAliasKey(hotLanes)}\0${projectRowsAliasKey(sourceTasks)}`
     && cache.linkedKey === (cache.linkedKey === null ? null : JSON.stringify(linkedContext()))) {
     return reuseSeatTickProjection(input, sources, cache, now, settings);
   }
@@ -2547,7 +2547,7 @@ export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTic
     seatTickRefreshCache.set(refreshed, {
       pipelinesSource: hotLanes, tasksSource: sourceTasks, project: input.project,
       seatKey: seatInputKey(input.seat), announcedKey,
-      aliasesKey: JSON.stringify(projectAliasSnapshot().aliases), pipelines, tasks, ownLanes,
+      aliasesKey: `${projectRowsAliasKey(hotLanes)}\0${projectRowsAliasKey(sourceTasks)}`, pipelines, tasks, ownLanes,
       linkedKey: linked ? JSON.stringify(linked) : null,
       openIds, pausedLanes: hotLanes.filter(lane => lane.state === "paused" && canonicalProject(lane.project) === input.project),
       pipelineById: new Map(pipelines.map(pipeline => [pipeline.id, pipeline])),
@@ -2649,11 +2649,8 @@ async function refreshSeatTickInputCooperatively(
 ): Promise<SeatTickCheckInput> {
   return withViewerOperation("seat-tick.check", async () => {
     let pipelines = sources.pipelines(), tasks = sources.tasks();
-    const cached = seatTickRefreshCache.get(input);
-    if (cached && Object.isFrozen(pipelines) && Object.isFrozen(tasks)
-      && cached.pipelinesSource === pipelines && cached.tasksSource === tasks) {
-      return performanceSpans.sync("seat-tick.project", () => refreshSeatTickInput(input, sources));
-    }
+    /* Even a projection cache hit crosses preparation once so durable alias
+       changes invalidate its in-memory grouping before the rows are reused. */
     for (let attempt = 0; ; attempt++) {
       pipelines = sources.pipelines();
       tasks = sources.tasks();
@@ -2755,12 +2752,12 @@ type ProjectRow = { project: string };
 const projectRowsCache = new WeakMap<readonly ProjectRow[], {
   aliases: string; byProject: Map<string, readonly ProjectRow[]>; ready: Promise<void>; complete: boolean; taskLanes: Map<string, Pipeline[]>; openIds: Set<string>; order: Map<Pipeline, number>;
 }>();
-async function prepareProjectRows(rows: readonly ProjectRow[]): Promise<void> {
+async function prepareProjectRows(rows: readonly ProjectRow[], snapshot = projectAliasSnapshot()): Promise<void> {
   if (!Object.isFrozen(rows)) return;
-  const aliases = JSON.stringify(projectAliasSnapshot().aliases);
+  const aliases = JSON.stringify(snapshot.aliases);
   const held = projectRowsCache.get(rows);
   if (held?.aliases === aliases) return held.ready;
-  const canonical = seatProjectResolver();
+  const canonical = projectAliasResolver(snapshot);
   const byProject = new Map<string, ProjectRow[]>();
   const entry = { aliases, byProject, ready: Promise.resolve(), complete: false,
     taskLanes: new Map<string, Pipeline[]>(), openIds: new Set<string>(), order: new Map<Pipeline, number>() };
@@ -2794,10 +2791,15 @@ async function prepareProjectRows(rows: readonly ProjectRow[]): Promise<void> {
 }
 function projectRows<T extends ProjectRow>(rows: readonly T[], project: string): readonly T[] {
   const held = Object.isFrozen(rows) ? projectRowsCache.get(rows) : undefined;
-  if (held?.complete && held.aliases === JSON.stringify(projectAliasSnapshot().aliases)) return (held.byProject.get(project) ?? []) as readonly T[];
+  // Alias freshness is sampled at the async preparation boundary. Every
+  // projection lookup after that boundary is an in-memory map access.
+  if (held?.complete) return (held.byProject.get(project) ?? []) as readonly T[];
   const canonical = seatProjectResolver();
   const selected = rows.filter(row => canonical(row.project) === project);
   return selected.length === rows.length ? rows : selected;
+}
+function projectRowsAliasKey(rows: readonly ProjectRow[]): string | null {
+  return Object.isFrozen(rows) ? projectRowsCache.get(rows)?.aliases ?? null : null;
 }
 
 function seatTaskPipelineIds(tasks: readonly BoardTask[], pipelines: readonly Pipeline[]) {
@@ -2818,8 +2820,10 @@ async function prepareSeatTickProjection(
   pipelines: readonly Pipeline[] = sources.pipelines(),
   tasks: readonly BoardTask[] = sources.tasks(),
 ): Promise<void> {
-  await prepareProjectRows(pipelines);
-  await prepareProjectRows(tasks);
+  const aliases = projectAliasSnapshot();
+  const aliasesKey = JSON.stringify(aliases.aliases);
+  await prepareProjectRows(pipelines, aliases);
+  await prepareProjectRows(tasks, aliases);
   await forEachCooperatively(projectRows(pipelines, project), async pipeline => {
     await preparePipelineMetadata(pipeline);
     if (isOpen(pipeline)) await preparePipelineEvidence(pipeline);
@@ -2827,6 +2831,9 @@ async function prepareSeatTickProjection(
   await forEachCooperatively(projectRows(tasks, project), task => {
     if (deeplyFrozen(task)) taskEvidenceFor(task);
   }, { batchSize: 4, timeBudgetMs: 8 });
+  if (JSON.stringify(projectAliasSnapshot().aliases) !== aliasesKey) {
+    throw new Error("seat project aliases changed while preparing the project projection");
+  }
 }
 
 /** The source read completed, but its evidence key moved again before the
@@ -2877,15 +2884,16 @@ function laneEvidenceHash(lane: Pipeline): string {
 
 async function pullRequestEvidenceKey(input: Pick<SeatTickCheckInput, "project" | "now" | "settings" | "seat" | "state">, sources: SeatTickSources): Promise<string> {
   return withViewerOperation("seat-tick.check", async () => {
-    const canonicalProject = seatProjectResolver();
-    const aliases = JSON.stringify(projectAliasSnapshot().aliases);
+    const aliasesSnapshot = projectAliasSnapshot();
+    const canonicalProject = projectAliasResolver(aliasesSnapshot);
+    const aliases = JSON.stringify(aliasesSnapshot.aliases);
     const seatIdentity = () => {
       const seat = sources.seatFor(input.project).active;
       return JSON.stringify([seat?.conversationId, seat?.seatEpoch]);
     };
     const seat = seatIdentity();
     const allLanes = sources.pipelines();
-    await prepareProjectRows(allLanes);
+    await prepareProjectRows(allLanes, aliasesSnapshot);
     const lanes = projectRows(allLanes, input.project);
     const hashes: string[] = [];
     await forEachCooperatively(lanes, lane => {
@@ -2958,7 +2966,9 @@ export async function gatherSeatTickDeployInput(project: string, state: SeatTick
   if (!settledDeploys.length) return null;
   const seat = await seatInput(project, policy, sources);
   if (!seat || seat.conversationId !== identity.conversationId || seat.seatEpoch !== identity.seatEpoch) return null;
-  const observedReports = reports === undefined ? await reportsInput(project, sources) : reports ?? undefined;
+  /* Reports enrich a deploy wake, but they are optional and share a serial
+     worker with unrelated projects. Keep the critical settlement path clear. */
+  const observedReports = reports ?? undefined;
   assertSeatTickWork();
   const current = sources.seatFor(project).active;
   if (current?.conversationId !== seat.conversationId || current?.seatEpoch !== seat.seatEpoch) return null;
@@ -2975,7 +2985,7 @@ export async function gatherSeatTickDeployInput(project: string, state: SeatTick
   return { project, now: sources.now(), seat, state, policy, settings,
     pipelines, tasks: [], events: [], children: [], childrenUnavailable: null,
     ownLanes: [], pullRequests: [], pullRequestsUnavailable: null, pullRequestsObserved: false,
-    signals: [], settledDeploys, ...(observedReports ? { reports: observedReports } : {}),
+    signals: [], settledDeploys, deploySettlementWakeDue: true, ...(observedReports ? { reports: observedReports } : {}),
     changeFingerprint: seatTickFingerprint(pipelines, [], [], [], null, [], settledDeploys, []),
     digestFingerprint: state.checkFingerprint ?? undefined,
   };
@@ -3163,7 +3173,7 @@ async function gatherSeatTickInputWork(
       pipelinesSource: hotLanes, tasksSource: hotTasks, project: canonical,
       seatKey: seatInputKey(seat),
       announcedKey: announcedLaneKey(gathered.state, seatTickCatchUp(gathered)?.key ?? null),
-      aliasesKey: JSON.stringify(projectAliasSnapshot().aliases), pipelines, tasks, ownLanes,
+      aliasesKey: `${projectRowsAliasKey(hotLanes)}\0${projectRowsAliasKey(hotTasks)}`, pipelines, tasks, ownLanes,
       linkedKey: linked ? JSON.stringify(linked) : null,
       openIds: openPipelineIds,
       pipelineById: new Map(pipelines.map(pipeline => [pipeline.id, pipeline])),

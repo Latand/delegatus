@@ -39,7 +39,13 @@ test("a deploy settling during an overlong pass revives its gone seat before one
   const clock = virtualClock();
   const settlement = rig.deps.sources!.deployment!;
   let settled = false;
-  rig.deps.sources!.deployment = id => settled ? settlement(id) : { state: "unreadable", error: "still promoting" } as never;
+  let sourceNow = NOW;
+  rig.deps.sources!.now = () => sourceNow;
+  rig.deps.sources!.deployment = id => {
+    if (!settled) return { state: "unreadable", error: "still promoting" } as never;
+    const result = settlement(id) as { state: string; value?: { updatedAt?: string } };
+    return { ...result, value: result.value ? { ...result.value, updatedAt: new Date(NOW + 61_000).toISOString() } : undefined } as never;
+  };
   const preparation = deferred();
   const entered = deferred();
   rig.deps.sources!.prepareRead = async () => { entered.resolve(); await preparation.promise; };
@@ -64,17 +70,22 @@ test("a deploy settling during an overlong pass revives its gone seat before one
     log: line => logs.push(line), appendRecord: () => {} });
   try {
     await entered.promise;
-    clock.advance(DEFAULT_SEAT_TICK_POLICY.checkIntervalMs * 1.25);
+    settled = true;
+    clock.advance(DEFAULT_SEAT_TICK_POLICY.checkIntervalMs / 4);
+    sourceNow = NOW + clock.now();
+    rig.deps.writeState!(PROJECT, { ...rig.deps.readState!(PROJECT), lastWakeAt: new Date(NOW + 60_000).toISOString() });
     // Let the expired project unwind; the first pass stays open independently.
     await new Promise<void>(resolve => setImmediate(resolve));
-    settled = true;
-    const settledAt = clock.now();
+    clock.advance(DEFAULT_SEAT_TICK_POLICY.checkIntervalMs / 4);
+    sourceNow = NOW + clock.now();
+    const settledAt = NOW + 61_000;
     clock.advance(pollMs);
     callback();
     await delivered.promise;
     await latestCheck;
-    expect(clock.now()).toBeGreaterThan(DEFAULT_SEAT_TICK_POLICY.checkIntervalMs);
-    expect(clock.now() - settledAt).toBeLessThan(DEFAULT_SEAT_TICK_POLICY.checkIntervalMs);
+    expect(clock.now()).toBe(DEFAULT_SEAT_TICK_POLICY.checkIntervalMs);
+    expect(sourceNow - settledAt).toBeGreaterThanOrEqual(0);
+    expect(sourceNow - settledAt).toBeLessThan(DEFAULT_SEAT_TICK_POLICY.checkIntervalMs);
     expect(rig.sent).toHaveLength(1);
     expect(rig.sent[0]!.text).toContain("deploy settled");
     expect(logs.some(line => line.includes("sweep-running") && line.includes("ageMs=") && line.includes("state=long-running"))).toBe(true);
@@ -191,6 +202,30 @@ test("a priority deploy preserves opening problem credit before epoch reset", as
   expect(rig.sent).toHaveLength(1);
 });
 
+test.each([300_000, 30_000])("an unannounced deploy wakes inside the interval despite a recent wake (%i ms)", async intervalMs => {
+  const rig = deployRig();
+  const settings = rig.deps.sources!.settings(PROJECT);
+  rig.deps.sources!.settings = () => ({ ...settings, wakeIntervalMinutes: intervalMs / 60_000,
+    updatedAt: new Date(NOW - 1_000).toISOString() });
+  const initial = rig.deps.readState!(PROJECT);
+  rig.deps.writeState!(PROJECT, { ...initial, lastWakeAt: new Date(NOW - 10_000).toISOString() });
+  // The deploy settled two minutes ago; this project's last wake is recent
+  // relative to its normal cadence. The settlement deadline is now due.
+  expect((await runSeatTickCheck(PROJECT, rig.deps))?.delivery?.outcome).toBe("delivered");
+  expect(rig.sent).toHaveLength(1);
+  expect(rig.journal.at(-1)).toMatchObject({ verdict: "wake", reasons: ["deploy-settled"] });
+});
+
+test("a blocked optional report read cannot hold up a settled deploy wake", async () => {
+  const rig = deployRig();
+  let reportReads = 0;
+  rig.deps.sources!.reports = { log: () => { reportReads++; return new Promise(() => {}); }, enabled: () => true, operatorLocale: () => "en" } as never;
+  const result = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(result).toMatchObject({ verdict: "wake", reasons: ["deploy-settled"], delivery: { outcome: "delivered" } });
+  expect(reportReads).toBe(0);
+  expect(rig.sent).toHaveLength(1);
+});
+
 test("release authority lost during a deploy check fences dispatch", async () => {
   const rig = deployRig();
   const read = rig.deps.sources!.liveness;
@@ -226,6 +261,38 @@ test("an expired transport continuation keeps its original outstanding key and n
   expect(rig.written).toHaveLength(writes);
 });
 
+test("a synchronous opening state read that exhausts the budget records one overflow", async () => {
+  const clock = virtualClock();
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
+  Object.assign(rig.deps, { workClock: clock.now, workScheduler: clock.scheduler, workBudgetMs: 100 });
+  const readState = rig.deps.readState!;
+  rig.deps.readState = project => { clock.advance(100); return readState(project); };
+  const result = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(result).toMatchObject({ verdict: "error" });
+  expect(result?.detail).toContain("phase=check");
+  expect(rig.journal.filter(record => record.verdict === "error")).toHaveLength(1);
+  expect(rig.sent).toHaveLength(0);
+  expect(rig.written).toHaveLength(0);
+});
+
+test("opening expiry observes a late rejecting preparation port and records one overflow", async () => {
+  const clock = virtualClock();
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
+  Object.assign(rig.deps, { workClock: clock.now, workScheduler: clock.scheduler, workBudgetMs: 100 });
+  rig.deps.sources!.prepareRead = async () => {
+    clock.advance(100);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    throw new Error("late preparation rejection");
+  };
+  const result = await runSeatTickCheck(PROJECT, rig.deps);
+  await new Promise<void>(resolve => setImmediate(resolve));
+  expect(result).toMatchObject({ verdict: "error" });
+  expect(result?.detail).toContain("phase=check.sources.prepareRead");
+  expect(rig.journal.filter(record => record.verdict === "error")).toHaveLength(1);
+  expect(rig.sent).toHaveLength(0);
+  expect(rig.written).toHaveLength(0);
+});
+
 
 test("the project deadline reaches the production liveness reader", async () => {
   const liveness = await import("@/lib/lifecycle/liveness");
@@ -258,9 +325,16 @@ test.skipIf(!childMode)("seat deadline subprocess case", async () => {
   const rig = harness({ pipelines: OPEN_LANE, stateFile: filename, wakeState: "landed",
     ...(childMode === "expire" ? { deliverWith: async () => {
       process.stdout.write("DEADLINE_READY\n");
+      await new Promise<void>(resolve => setTimeout(resolve, 1_500));
+      expireDeadline();
       return new Promise<DeliveryOutcome>(() => {});
     } } : {}) });
   rig.deps.workBudgetMs = 1000;
+  let expireDeadline = () => {};
+  if (childMode === "expire") rig.deps.workScheduler = {
+    setTimeout: callback => { expireDeadline = callback; return 1 as never; },
+    clearTimeout: () => {},
+  };
   if (childMode === "recover") {
     const key = readSeatTickState(PROJECT, filename).outstandingWake?.clientMessageId;
     expect(typeof key).toBe("string");
@@ -269,9 +343,11 @@ test.skipIf(!childMode)("seat deadline subprocess case", async () => {
   const record = await runSeatTickCheck(PROJECT, rig.deps);
   const state = readSeatTickState(PROJECT, filename);
   if (childMode === "expire") {
+    const key = state.outstandingWake?.clientMessageId;
+    expect(typeof key).toBe("string");
     expect(record?.verdict).toBe("error");
     expect(record?.detail).toContain("deadline exceeded");
-    expect(state.outstandingWake?.clientMessageId ?? null).toBe(rig.sent[0]?.clientMessageId ?? null);
+    expect(key ?? undefined).toBe(rig.sent[0]?.clientMessageId ?? undefined);
     expect(state.lastWakeAt).toBe(OVERDUE.lastWakeAt);
   } else {
     expect(state.outstandingWake).toBeNull();

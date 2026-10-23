@@ -1388,6 +1388,9 @@ export interface SeatTickCheckInput {
       (#2063). Absent reads as none. */
   settledMaintenance?: readonly MaintenanceRun[];
   settledDeploys?: readonly SeatTickDeployInput[];
+  /** A deploy-only check carries an unannounced settlement deadline, so its
+      delivery must not inherit an unrelated recent wake's quiet period. */
+  deploySettlementWakeDue?: boolean;
   /** The seat's own standalone children (#1465), bounded and project-scoped,
       with already-harvested terminal ones removed. Empty when the seat spawned
       nothing, and empty when the registry could not be read — the field below

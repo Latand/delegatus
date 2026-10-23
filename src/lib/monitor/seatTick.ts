@@ -66,14 +66,13 @@ import {
  *   plane cannot answer for at all — is not a turn the tick may wait behind
  *   forever, because the seat's own dead host is exactly the condition a wake
  *   exists to clear.
- * - **Every wake waits out the project's wake interval.** One hour by default,
- *   with no exception and no reason allowed to jump it: a terminal lane event
- *   is the FIRST thing the next wake carries, never a reason to raise one
- *   early. The bound is what the ADR's cost argument rests on — one resume per
- *   project per interval. What sets the interval is the project's own recorded
- *   settings (#1275, and the ADR amendment it carries): the seat governs its
- *   own tick, deliberately and with the reason on the record, and a project
- *   nobody configured runs on the default hour exactly as before.
+ * - **Ordinary wakes wait out the project's wake interval.** One hour by
+ *   default, with the terminal lane event first among its reasons. An
+ *   unannounced deploy the seat started has its own settlement deadline and
+ *   can become due while the ordinary interval is still quiet. What sets the
+ *   ordinary interval is the project's own recorded settings (#1275, and the
+ *   ADR amendment it carries): a project nobody configured runs on the default
+ *   hour exactly as before.
  * - **Nothing here creates or wakes anything.** The decision names what is
  *   owed; the controller sends it, re-reads the seat epoch before it does, and
  *   only a delivered send advances a stamp. The one thing a check may settle on
@@ -838,8 +837,9 @@ function elapsed(since: string | null, now: number, window: number): boolean {
 }
 
 /**
- * The one gate every wake passes, exported so the gather can apply the SAME
- * clause rather than a second copy of it.
+ * The ordinary wake interval gate, exported so the gather can apply the same
+ * clause rather than a second copy of it. Deploy settlement carries a
+ * separate deadline flag into the decision.
  *
  * It reads `lastWakeAt`, which the project keeps across a rotation, so an
  * incoming seat inherits the bound rather than a clean slate the predecessor's
@@ -1277,7 +1277,8 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   const childInterval = childrenSettled
     ? SEAT_TICK_SETTLED_CHILD_WAKE_INTERVAL_MS
     : liveChildren.length > 0 ? SEAT_TICK_RUNNING_CHILD_WAKE_INTERVAL_MS : Number.POSITIVE_INFINITY;
-  const wakeDue = seatTickWakeDue(input.state.lastWakeAt, input.now, Math.min(input.settings.wakeIntervalMs, childInterval));
+  const wakeDue = input.deploySettlementWakeDue === true
+    || seatTickWakeDue(input.state.lastWakeAt, input.now, Math.min(input.settings.wakeIntervalMs, childInterval));
 
   const observed: SeatTickProjectState = { ...base, stalledSeen: stalledNow };
 
