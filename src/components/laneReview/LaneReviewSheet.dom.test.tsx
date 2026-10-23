@@ -244,6 +244,33 @@ describe("the desktop sheet", () => {
     expect(deliveries.length).toBe(0);
   });
 
+  test("a base-only move is stale too: the banner and Re-anchor appear, and Send then delivers once", async () => {
+    lane.git("checkout", "-q", LANE_BRANCH);
+    const tipA = lane.git("rev-parse", "HEAD");
+    lane.write("src/app.ts", `${fs.readFileSync(path.join(lane.dir, "src/app.ts"), "utf8")}tail line\n`);
+    lane.commit("second lane commit");
+    lane.git("checkout", "-q", "--detach");
+    await ready();
+    click('[data-lane-review-file="src/app.ts"]');
+    await until(() => Boolean($('[data-lane-review-line="new:32"]')), "the tail row");
+    click('[data-lane-review-line="new:32"]');
+    type("[data-lane-review-editor] textarea", "Name the tail.");
+    click("[data-lane-review-save]");
+    /* origin/main now holds the first lane commit; the branch tip stays put. */
+    lane.git("update-ref", "refs/remotes/origin/main", tipA);
+    click("[data-lane-review-send]");
+    await until(() => state() === "stale", "stale after a base-only move");
+    expect(deliveries.length).toBe(0);
+    expect($("[data-lane-review-stale]")!.textContent).toContain("Your 1 comment is kept.");
+    expect(send().disabled).toBe(true);
+    click("[data-lane-review-reanchor]");
+    await until(() => Boolean($("[data-lane-review-reanchored]")), "re-anchored");
+    expect(state()).toBe("ready");
+    click("[data-lane-review-send]");
+    await until(() => deliveries.length === 1, "one delivery");
+    expect(deliveries[0]!.text).toContain("Name the tail.");
+  });
+
   test("sent: one delivery, the receipt word, and a renewed draft; a failed receipt retries through the runtime", async () => {
     await ready();
     await commentOnNewLine5();

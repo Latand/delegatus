@@ -121,7 +121,7 @@ export function LaneReviewSheet(props: {
           stored = null;
         }
       }
-      if (stored && (stored.head === summary.head || hasContent(stored))) return stored;
+      if (stored && ((stored.head === summary.head && stored.base === summary.base) || hasContent(stored))) return stored;
       /* A draft with nothing in it simply follows the branch. */
       return {
         v: 1, pipelineId: props.pipelineId, draftId: stored?.draftId ?? ports.newId(), base: summary.base, head: summary.head,
@@ -149,7 +149,8 @@ export function LaneReviewSheet(props: {
 
   const summary = load.kind === "ready" ? load.summary : null;
   const target = load.kind === "ready" ? load.target : null;
-  const stale = Boolean(summary && draft && draft.head !== summary.head);
+  /* The server refuses a moved base as it refuses a moved head, so both make a draft stale. */
+  const stale = Boolean(summary && draft && (draft.head !== summary.head || draft.base !== summary.base));
   const pairKey = draft ? `${draft.base}..${draft.head}` : "";
 
   /* The draft's own pair lists its own files; a moved branch keeps them. */
@@ -332,7 +333,7 @@ export function LaneReviewSheet(props: {
 
         {stale && summary && draft ? (
           <div className="flex flex-wrap items-center gap-2 border-b border-border bg-sunken px-4 py-2 text-ui" role="status" data-lane-review-stale="">
-            <span className="min-w-0 flex-1">{t("laneReview.stale", { old: shortSha(draft.head), new: shortSha(summary.head), count: commentCount })}</span>
+            <span className="min-w-0 flex-1">{t("laneReview.stale", draft.head === summary.head ? { old: `${shortSha(draft.base)}..${shortSha(draft.head)}`, new: `${shortSha(summary.base)}..${shortSha(summary.head)}`, count: commentCount } : { old: shortSha(draft.head), new: shortSha(summary.head), count: commentCount })}</span>
             <button type="button" className="btn" data-lane-review-reanchor="" disabled={reanchoring} onClick={() => void doReanchor()}>
               {reanchoring ? t("laneReview.reanchoring") : t("laneReview.reanchor", { new: shortSha(summary.head) })}
             </button>
