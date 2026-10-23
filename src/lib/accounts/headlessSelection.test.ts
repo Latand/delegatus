@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 
 import type { DurableQuotaObservation } from "./migration/contracts";
-import { selectHeadlessAccount } from "./headlessSelection";
+import { accountQuotaVerdict, selectHeadlessAccount } from "./headlessSelection";
 
 const NOW = Date.parse("2026-07-12T10:00:00.000Z");
 
@@ -214,6 +214,14 @@ test("headless selection keeps reset unknown when exhausted evidence names an ex
     kind: "exhausted",
     resetsAt: null,
   });
+});
+
+test("the hold verdict keeps an expired reset that selection reports as unknown, and the reading it rests on (#3158)", () => {
+  const expiredReset = Math.floor(NOW / 1_000) - 1;
+  const observations = [observation("default", 100, expiredReset)];
+  expect(accountQuotaVerdict(observations, "default", NOW)).toEqual({
+    capacity: "exhausted", resetsAt: expiredReset, observedAt: new Date(NOW - 1_000).toISOString() });
+  expect(accountQuotaVerdict([observation("default", 100)], "default", NOW)).toMatchObject({ capacity: "exhausted", resetsAt: null });
 });
 
 test("headless retry prefers an eligible account that has not already failed", () => {

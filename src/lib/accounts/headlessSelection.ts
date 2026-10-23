@@ -13,7 +13,9 @@ type SelectableAccount = { id: string; authPresent: boolean };
 
 type Capacity =
   | { kind: "available"; remaining: number; resetsAt: number | null }
-  | { kind: "exhausted"; resetsAt: number | null }
+  /** `passedResetsAt`: every exhausted window named a reset and the latest
+      has already passed, though the reading is still fresh. */
+  | { kind: "exhausted"; resetsAt: number | null; passedResetsAt?: number }
   | { kind: "unavailable" }
   | { kind: "unknown" };
 
@@ -75,8 +77,26 @@ function capacity(observation: DurableQuotaObservation | undefined, now: number,
   }
   if (!exhaustedWindows.length) return { kind: "exhausted", resetsAt: null };
   if (copilotTranscript && exhaustedWindows.some((window) => window.resetsAt === null || window.resetsAt <= nowSeconds)) return { kind: "unknown" };
-  if (exhaustedWindows.some((window) => window.resetsAt === null || window.resetsAt <= nowSeconds)) return { kind: "exhausted", resetsAt: null };
+  if (exhaustedWindows.some((window) => window.resetsAt === null)) return { kind: "exhausted", resetsAt: null };
+  if (exhaustedWindows.some((window) => window.resetsAt! <= nowSeconds)) {
+    return { kind: "exhausted", resetsAt: null, passedResetsAt: Math.max(...exhaustedWindows.map((window) => window.resetsAt!)) };
+  }
   return { kind: "exhausted", resetsAt: Math.max(...exhaustedWindows.map((window) => window.resetsAt!)) };
+}
+
+/**
+ * One account's quota verdict with the reading it rests on. A stage guard
+ * hold compares `observedAt` with the reading that confirmed the hold, so an
+ * aged copy of that reading never counts as new evidence of capacity. An
+ * exhausted reading whose named reset has passed while it is still fresh keeps
+ * that reset here, so a hold built from it ends at once.
+ */
+export function accountQuotaVerdict(observations: DurableQuotaObservation[], accountId: string, now = Date.now(),
+  model?: string | null): { capacity: Capacity["kind"]; resetsAt: number | null; observedAt: string | null } {
+  const observation = observations.find((item) => item.accountId === accountId);
+  const verdict = capacity(observation, now, model);
+  return { capacity: verdict.kind, resetsAt: verdict.kind === "exhausted" ? verdict.resetsAt ?? verdict.passedResetsAt ?? null : null,
+    observedAt: observation?.observedAt ?? null };
 }
 
 /**

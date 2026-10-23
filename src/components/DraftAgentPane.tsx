@@ -53,6 +53,7 @@ import {
   upgradeLegacySpawnAttempt,
 } from "./draftSpawn";
 import { draftWorkingDirectory } from "./projectModel";
+import { cleanTitle } from "@/lib/title";
 
 type Engine = "claude" | "codex" | "copilot";
 
@@ -647,7 +648,15 @@ export function DraftAgentPane({
          Only an accepted launch sounds here (S9); a failed one reaches the
          needs-you queue as reason `launch` and sounds there, once. */
       if (outcome.kind === "launched") {
-        playCue({ cue: "launched", eventId: `launch:${outcome.launchId ?? candidate.clientAttemptId}` });
+        playCue({
+          cue: "launched",
+          eventId: `launch:${outcome.launchId ?? candidate.clientAttemptId}`,
+          caption: {
+            what: "launched",
+            subject: cleanTitle(candidate.prompt.split("\n").find((line) => line.trim()) ?? "", 90) || null,
+            target: outcome.conversationId ? { kind: "conversation", conversationId: outcome.conversationId } : null,
+          },
+        });
         /* The launch's first completed turn answers with the reply sound. */
         if (outcome.conversationId) awaitReply(outcome.conversationId, "launch");
       }
