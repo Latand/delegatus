@@ -79,7 +79,7 @@ this plan leaves that file alone.
 | E9 | Prototype review delivery: a Bot API `sendRichMessage` (photo slideshow, copy buttons) to the owner's private chat, then polls on the receiving bot's own transport. | `src/lib/prototypeReview/telegramPost.ts:128-164`; `service.ts:1182-1221`, `:1231-1325`, polls `:1210-1219` |
 | E10 | The operator's test post goes through the same selection. | `service.ts:779-812` |
 | E11 | Listing: `listChats` / `agentChat` call a chat postable only when some bot can post; the panel lists per-bot state when a chat has more than one bot and moves non-member chats to the inactive list; the report picker and its "refused" marker read the same flags. | `service.ts:974-1029`, `:528-567`; `src/components/TelegramBot.tsx:169-182`, `:395-397`; `src/lib/projects/reportDestination.ts:22-32`, `:63-86` |
-| E12 | Clone-covered, locally recorded group chats can be listed, allowlisted and sent to without a stored bot token. Other bot-backed operations still require it; removing the bot deletes the tokens and the store that holds the chat allowlist. | `service.ts:500-505`, `:817-832`, `:1000-1022`, `:1070-1084` |
+| E12 | Pairing discovery registers verified clone-covered groups locally with posting disabled. The operator can list and allow them without a stored bot token, then send through the clone. Other bot-backed operations still require a token; removing the bot deletes the tokens and the store that holds the chat allowlist. | `service.ts:530-582`, `:1013-1036`, `:1080-1094`; `cloneDirectory.ts:145-165` |
 | E13 | Owner reply context: a reply to a bridge report resolves through the published reference and the report's message ids; question and history context keys outgoing rows by the receiving bot's id. | `src/lib/externalRelay/ownerBridgeContext.ts:37-56`; `ownerOutboundContext.ts:26-55` |
 | E14 | Deadlines: an MCP tool call gets at most 30 s; a Bot API call defaults to 20 s. | `src/lib/mcp/server.ts:4946-4947`; `src/lib/telegram/bot/transport.ts:53` |
 | E15 | Harnesses: a fake relay on port 0 and a scripted Bot API transport. | `src/lib/externalRelay/testRelay.ts:1-30`; `src/lib/telegram/bot/fakeTransport.ts` |
@@ -515,13 +515,11 @@ when all of these hold:
 - **Reply context for owner replies to clone-posted agent questions in groups**
   (`ownerOutboundContext.ts:26-55` keys rows by the receiving bot). Bridge
   report replies already resolve (§7). Same trigger as the line above.
-- **Posting into a chat only a clone was ever in.** The allowlist holds only
-  chats a bot has seen or looked up. Trigger: the operator asks to post into
-  such a group, or the token-removal step.
-- **Adding a chat that only a clone has discovered.** `addChat` still uses the
-  Bot API to verify a chat before writing its local allowlist row. Trigger: a
-  clone-backed chat registration path that preserves the existing allowlist
-  checks.
+- Posting into a chat discovered by a paired clone is supported: listing
+  refreshes the bounded clone directory, stores each verified covered group
+  with posting disabled, and exposes its existing allowlist switch. The
+  operator must enable posting before any send; discovery alone never grants
+  send permission.
 - **Settling a pending clone claim on a later retry** by asking the relay with
   the same key. The derived keys keep this possible without a migration.
   Trigger: `send_uncertain` from the clone path shows up in practice.

@@ -826,7 +826,7 @@ browserTest("linked installs: this install renders at 390 and desktop widths in 
         const state = await page.locator(`[data-linked-state="${expected}"]`).innerText();
         expect(overflow).toBe(false);
         const savedAddress = mode === "lan-dns" ? "http://board.internal.test:8897" : "https://delegatus.example.com";
-        expect(await dialog.locator('input[type="url"]').inputValue()).toBe(savedAddress);
+        expect(await dialog.locator('input[placeholder="https://delegatus.example.com"]').inputValue()).toBe(savedAddress);
         const warning = dialog.locator("[data-linked-http-warning]");
         if (mode === "lan-dns") {
           expect(await warning.isVisible()).toBe(true);
@@ -4048,7 +4048,7 @@ browserTest("#2098: the phone's Overview is the phone kanban over three projects
  */
 const BOT_OUT = path.resolve(process.env.LLV_TELEGRAM_BOT_OUT ?? ".artifacts/telegram-bot");
 const BOT_EVIDENCE = path.resolve("evidence/telegram-bot");
-const BOT_SCENES = ["none", "chats", "webhook", "clone"] as const;
+const BOT_SCENES = ["none", "chats", "webhook", "clone", "pairing"] as const;
 
 async function readTelegramPanel(page: Page, phone: boolean) {
   return page.evaluate((isPhone) => {
@@ -4160,7 +4160,7 @@ browserTest("telegram bot: the setup panel on the phone and the desktop holds it
   );
   for (const viewport of [{ width: 390, height: 844 }, { width: 410, height: 880 }, { width: 430, height: 932 }, { width: 1280, height: 800 }])
     for (const scheme of SCHEMES) for (const lang of ["en", "uk"] as const)
-      cases.push({ viewport, scheme, phone: viewport.width < 600, lang, scenes: ["clone"] });
+      cases.push({ viewport, scheme, phone: viewport.width < 600, lang, scenes: ["clone", "pairing"] });
   try {
     for (const { viewport, scheme, phone, lang, scenes } of cases) {
       for (const scene of scenes) {
@@ -4180,7 +4180,7 @@ browserTest("telegram bot: the setup panel on the phone and the desktop holds it
             : scene === "refused" ? [lang === "uk" ? "Звіти оркестратора: Atlas. Дописи сюди зараз відхиляються, тож звіти лишаються лише в журналі: увімкніть дописи або оберіть інший чат" : "Orchestrator reports: Atlas. Posts are refused here now, so they reach the log only: switch posting on or pick another chat"]
             : [];
           if (JSON.stringify(reportsLine) !== JSON.stringify(expectedReports)) failures.push(`${key}: the chat's reports line reads ${JSON.stringify(reportsLine)}`);
-          if (scene === "clone") {
+          if (scene === "clone" || scene === "pairing") {
             const state = page.getByLabel(`Report clone: ${lang === "uk" ? "Агентам можна писати" : "Agents may post"}`, { exact: true });
             await state.scrollIntoViewIfNeeded();
             if (!await state.isVisible()) failures.push(`${key}: clone posting status is missing`);
@@ -4190,6 +4190,18 @@ browserTest("telegram bot: the setup panel on the phone and the desktop holds it
             }).catch(() => false);
             if (!ink) failures.push(`${key}: clone posting status is clipped`);
             await page.screenshot({ path: path.join(BOT_OUT, `${key}-clone.png`) });
+          }
+          if (scene === "pairing") {
+            const switchName = (lang === "uk" ? "Агентам можна писати" : "Agents may post") + ": Team Reports";
+            const toggle = page.getByRole("switch", { name: switchName, exact: true });
+            if (await page.locator('input[type="password"]').count() !== 1) failures.push(`${key}: token setup is not visible`);
+            if (await toggle.getAttribute("aria-checked") !== "false") failures.push(`${key}: clone group did not start disabled`);
+            if (phone) await toggle.tap(); else await toggle.click();
+            await page.waitForFunction(({ name }) => document.querySelector(`[role="switch"][aria-label="${name}"]`)?.getAttribute("aria-checked") === "true", { name: switchName }, { timeout: 5_000 })
+              .catch(() => failures.push(`${key}: clone group did not become allowed`));
+            const posts = await page.evaluate(() => structuredClone((window as unknown as { evidence: { botPosts: Array<Record<string, unknown>> } }).evidence.botPosts));
+            const expected = { action: "chat", chatId: "-1000000000101", alias: "team-reports", postAllowed: true };
+            if (posts.length !== 1 || JSON.stringify(posts[0]) !== JSON.stringify(expected)) failures.push(`${key}: expected exactly one clone group allowlist save, saw ${JSON.stringify(posts)}`);
           }
           /* The panel scrolls inside itself; the second frame is its end. */
           await page.evaluate(() => {

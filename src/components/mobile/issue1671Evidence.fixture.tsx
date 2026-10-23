@@ -1250,7 +1250,17 @@ const botChat = (over: Record<string, unknown>) => ({
   lastMessageAt: iso(600), lastPostAt: null, lastPostBy: null, storedMessages: 12, ...over,
 });
 /* `typed`: one group whose title suggests no alias, so the field shows. */
-const telegramBot = BOT_SCENE === "typed"
+const telegramBot = BOT_SCENE === "pairing"
+  ? {
+    connected: false,
+    bot: null,
+    receiving: "stopped",
+    lastUpdateAt: null,
+    lastCheckedAt: null,
+    chats: [botChat({ alias: null, postAllowed: false, postable: false, lastMessageAt: null, storedMessages: 0 })],
+    limits: [],
+  }
+  : BOT_SCENE === "typed"
   ? {
     connected: true,
     bot: { name: "Atlas Reports", username: "atlas_reports_bot", canReadAllGroupMessages: false, canJoinGroups: true },
@@ -1315,6 +1325,14 @@ if (BOT_SCENE === "clone") {
       { name: "Atlas Reports", username: "atlas_reports_bot", assigned: false, member: false, status: "kicked", canPost: false,
         canSendPhotos: false, canSendDocuments: false, canManageTopics: false, reason: "bot_not_in_chat", checkedAt: "2026-10-20T12:00:00Z" },
     ] });
+}
+if (BOT_SCENE === "pairing") {
+  Object.assign(telegramBot.chats[0]!, { bots: [
+    { name: "Report clone", username: null, assigned: false, member: true, status: null, canPost: true,
+      canSendPhotos: false, canSendDocuments: false, canManageTopics: false, reason: null, checkedAt: null },
+    { name: "Atlas Reports", username: "atlas_reports_bot", assigned: false, member: false, status: "kicked", canPost: false,
+      canSendPhotos: false, canSendDocuments: false, canManageTopics: false, reason: "bot_not_in_chat", checkedAt: null },
+  ] });
 }
 if (BOT_SCENE?.startsWith("multi-")) {
   const bots = BOT_SCENE === "multi-one" ? multiBots.slice(0, 1) : multiBots;

@@ -17,14 +17,14 @@ const group = { id: -1000000000101, type: "supergroup", title: "Fixture reports"
 let service: TelegramBotService, bot: FakeBotTransport, server: Awaited<ReturnType<typeof startTestRelay>>;
 let directory: CloneDirectory, port: ClonePostingPort, relay: ReturnType<typeof clonePairing>;
 let store: ReturnType<ReturnType<typeof productionTelegramBotDependencies>["openStore"]>;
-let sends: CloneSendInput[], answer: (input: CloneSendInput) => ReturnType<Parameters<typeof startTestRelay>[0]>;
+let sends: CloneSendInput[], discoveries: number, answer: (input: CloneSendInput) => ReturnType<Parameters<typeof startTestRelay>[0]>;
 let now: number, sequence = 0;
 beforeEach(async () => {
-  now = Date.parse("2026-10-20T12:00:00Z"); sends = [];
+  now = Date.parse("2026-10-20T12:00:00Z"); sends = []; discoveries = 0;
   process.env.LLV_STATE_DIR = path.join(root, String(++sequence));
   answer = () => ({ body: cloneReceipt(100 + sends.length) });
   server = await startTestRelay((req, body) => {
-    if (req.url!.includes("include=chats")) return { body: cloneTargets() };
+    if (req.url!.includes("include=chats")) { discoveries++; return { body: cloneTargets() }; }
     if (!req.url!.endsWith("/send")) throw new Error("unexpected relay route");
     sends.push(body as CloneSendInput); return answer(body as CloneSendInput);
   });
@@ -70,14 +70,28 @@ test("pairing-only clone discovery, allowlisting and idempotent send work withou
   fs.rmSync(telegramBotTokenPath(), { force: true });
   const calls: string[] = [];
   const deps = productionTelegramBotDependencies();
+  store.close();
+  process.env.LLV_STATE_DIR = path.join(root, `${sequence}-pairing-only`);
+  store = deps.openStore();
+  discoveries = 0;
+  directory = new CloneDirectory({ file: path.join(process.env.LLV_STATE_DIR, "clones.json"), relays: () => [relay], now: () => now, origin: server.origin });
+  port = { route: chat => directory.route(chat), peek: chat => directory.peek(chat), valid: (r, chat) => directory.valid(r, chat),
+    invalidate: (r, kind) => directory.invalidate(r, kind), discoverChats: () => directory.discoverChats(),
+    send: (r, input, options) => sendAsClone(r.relay, r.targetId, input, { ...options, now: () => now, deadline: now + 300,
+      sleep: async ms => { now += ms; } }) };
   service = new TelegramBotService({ ...deps, clones: port, openStore: () => store,
     withStoredToken: () => null, transportFor: () => { calls.push("bot-api"); return bot; },
     now: () => new Date(now), documentEnvironment: () => ({ home: root, stateDir: process.env.LLV_STATE_DIR! }) });
 
+  expect(store.chats()).toEqual([]);
+  await service.discoverCloneChats();
   const listed = service.listChats();
-  expect(listed).toMatchObject({ bot: { connected: false }, chats: [expect.objectContaining({ chat: "reports", bots: [expect.objectContaining({ name: "Report clone", canPost: true })] })] });
+  expect(listed).toMatchObject({ bot: { connected: false }, chats: [expect.objectContaining({ chatId: String(group.id), alias: null, postAllowed: false, bots: [expect.objectContaining({ name: "Report clone", canPost: true })] })] });
+  expect(service.status()).toMatchObject({ connected: false, chats: [expect.objectContaining({ chatId: String(group.id), postAllowed: false, member: true })] });
+  expect(discoveries).toBe(1);
   service.setChat(String(group.id), "reports", false);
-  service.setChat(String(group.id), "reports", true);
+  const saved = service.setChat(String(group.id), "reports", true);
+  expect(saved).toMatchObject({ connected: false, chats: [expect.objectContaining({ chatId: String(group.id), alias: "reports", postAllowed: true, postable: true })] });
   expect(await send()).toMatchObject({ messageIds: [101], sentBy: { name: "Report clone", username: null } });
   expect(await send()).toMatchObject({ alreadySent: true });
   expect(sends).toHaveLength(1);

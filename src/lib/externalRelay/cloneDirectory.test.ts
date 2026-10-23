@@ -34,6 +34,16 @@ test("active binding is covered once; pause, disable, unpair, foreign origin and
   const ambiguous = await fixture(() => { const body = cloneTargets(); body.targets.push({ ...body.targets[0]!, target_id: "other" }); return { body }; });
   expect(await ambiguous.directory.route(chat)).toBeNull();
 });
+test("listing discovers only active groups covered by an enabled paired clone", async () => {
+  let calls = 0;
+  const f = await fixture(() => { calls++; return { body: cloneTargets() }; });
+  expect(await f.directory.discoverChats()).toEqual([{ chatId: chat, title: "Fixture reports" }]);
+  expect(calls).toBe(1);
+  expect(await f.directory.discoverChats()).toEqual([{ chatId: chat, title: "Fixture reports" }]);
+  expect(calls).toBe(1);
+  f.relay.targets[0]!.enabled = false;
+  expect(await f.directory.discoverChats()).toEqual([]);
+});
 test("pre-release discovery is unsupported and never refetches within the soft TTL", async () => {
   for (const answer of [{ status: 400, body: { error: { code: "malformed" } } }, { body: { targets: [{ target_id: "fixture-clone", name: "Old target" }] } }]) {
     let calls = 0;

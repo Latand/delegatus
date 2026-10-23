@@ -1,10 +1,11 @@
-import { cloneDirectory, type CloneRoute } from "@/lib/externalRelay/cloneDirectory";
+import { cloneDirectory, type CloneRoute, type DiscoveredCloneChat } from "@/lib/externalRelay/cloneDirectory";
 import { cloneClientKey, clonePayloadSupported, sendAsClone, type CloneSendInput, type CloneSendOptions, type CloneSendResult } from "@/lib/externalRelay/cloneSend";
 import type { TelegramChatBot } from "./contracts";
 import { TelegramBotError } from "./errors";
 import type { BotTransport } from "./transport";
 
 export interface ClonePostingPort {
+  discoverChats?(): Promise<DiscoveredCloneChat[]>;
   route(chatId: string): Promise<CloneRoute | null>;
   peek(chatId: string): CloneRoute | null;
   valid(route: CloneRoute, chatId: string): boolean;
@@ -12,6 +13,7 @@ export interface ClonePostingPort {
   send(route: CloneRoute, input: CloneSendInput, options: CloneSendOptions): Promise<CloneSendResult>;
 }
 export const productionClonePosting: ClonePostingPort = {
+  discoverChats: () => cloneDirectory().discoverChats(),
   route: chat => cloneDirectory().route(chat), peek: chat => cloneDirectory().peek(chat),
   valid: (route, chat) => cloneDirectory().valid(route, chat), invalidate: (route, kind) => cloneDirectory().invalidate(route, kind),
   send: (route, input, options) => sendAsClone(route.relay, route.targetId, input, options),

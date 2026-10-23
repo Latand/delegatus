@@ -18,6 +18,7 @@ const entrySchema = z.object({ relayId: z.string(), apiBase: z.string(), pairedA
   snapshot: snapshotSchema.nullable() });
 type Entry = z.infer<typeof entrySchema>;
 export interface CloneRoute { id: string; relay: PairedRelay; targetId: string; name: string }
+export interface DiscoveredCloneChat { chatId: string; title: string }
 export interface CloneDirectoryPorts { file: string; relays(): PairedRelay[]; now(): number; origin: string }
 const same = (entry: Pick<Entry, "relayId" | "apiBase" | "pairedAt">, relay: PairedRelay) =>
   entry.relayId === relay.id && entry.apiBase === relay.api_base && entry.pairedAt === relay.pairedAt;
@@ -140,6 +141,26 @@ export class CloneDirectory {
     const relays = this.relays();
     if (!this.peek(chatId)) await Promise.all(relays.filter(r => !this.snapshot(r)).map(r => this.refresh(r)));
     return this.peek(chatId);
+  }
+  async discoverChats(): Promise<DiscoveredCloneChat[]> {
+    const relays = this.relays();
+    await Promise.all(relays.map(relay => {
+      const snapshot = this.snapshot(relay);
+      return !snapshot || this.ports.now() - snapshot.fetchedAt >= SOFT_TTL ? this.refresh(relay) : Promise.resolve();
+    }));
+    const chats = new Map<string, DiscoveredCloneChat>();
+    for (const relay of relays) {
+      const snapshot = this.snapshot(relay);
+      if (!snapshot?.supported) continue;
+      for (const target of snapshot.targets) {
+        if (!target.active || !relay.targets.some(binding => binding.id === target.target_id && binding.enabled)) continue;
+        for (const chat of target.chats) {
+          const chatId = String(chat.chat_id), route = this.peek(chatId);
+          if (route?.relay.id === relay.id && route.targetId === target.target_id) chats.set(chatId, { chatId, title: chat.title });
+        }
+      }
+    }
+    return [...chats.values()];
   }
   async idle(): Promise<void> { await Promise.all(this.#flights.values()); }
   valid(route: CloneRoute, chatId: string) {

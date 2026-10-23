@@ -528,21 +528,23 @@ export class TelegramBotService {
   /* ---- the operator surface -------------------------------------------- */
 
   status(): TelegramBotStatusPayload {
-    if (this.storedBotId() === null) return { ...DISCONNECTED_BOT_STATUS };
+    const connected = this.storedBotId() !== null;
     const store = this.store();
-    const bot = store.bot();
-    const bots = this.postingBots();
+    const bot = connected ? store.bot() : null;
+    const bots = connected ? this.postingBots() : [];
+    const receiving = connected ? this.receiving(bot) : "stopped";
     return {
-      connected: true,
-      bots: bots.map(({ name, username, receiving, tokenState }) => ({ name, username, receiving, tokenState })),
+      connected,
+      ...(connected ? { bots: bots.map(({ name, username, receiving, tokenState }) => ({ name, username, receiving, tokenState })) } : {}),
       bot: bot ? { name: bot.name, username: bot.username, canReadAllGroupMessages: bot.canReadAllGroupMessages, canJoinGroups: bot.canJoinGroups } : null,
-      receiving: this.receiving(bot),
+      receiving,
       lastUpdateAt: bot?.lastUpdateAt ?? null,
       lastCheckedAt: bot?.lastCheckedAt ?? null,
-      chats: store.chats().map((chat) => {
+      chats: store.chats().flatMap((chat) => {
         const visibility = chatVisibility(chat, bot);
         const posting = this.postingView(chat, bots);
-        return {
+        if (!connected && !posting.bots.some(candidate => candidate.member !== false)) return [];
+        return [{
           ...posting,
           chatId: chat.chatId,
           title: chat.title,
@@ -559,13 +561,25 @@ export class TelegramBotService {
           lastPostAt: chat.lastPostAt,
           lastPostBy: this.lastPostBy(chat),
           storedMessages: chat.storedMessages,
-        };
+        }];
       }),
-      documents: this.documentRoots(store),
-      reportReplies: !this.deps.reportReplies?.operatorId() ? "operator_unlinked"
-        : this.receiving(bot) !== "polling" ? "receiving_unavailable" : "ready",
+      ...(connected ? { documents: this.documentRoots(store),
+        reportReplies: !this.deps.reportReplies?.operatorId() ? "operator_unlinked" as const
+          : receiving !== "polling" ? "receiving_unavailable" as const : "ready" as const } : {}),
       limits: TELEGRAM_BOT_LIMITS,
     };
+  }
+
+  /** Refresh paired-clone discovery and register verified groups as off by default. */
+  async discoverCloneChats(): Promise<void> {
+    const discovered = await this.deps.clones?.discoverChats?.() ?? [];
+    const store = this.store();
+    const now = this.deps.now();
+    for (const chat of discovered) {
+      const id = validTelegramChatId(chat.chatId);
+      if (id === null || !id.startsWith("-")) continue;
+      store.recordLookedUpChat({ id: Number(id), type: "supergroup", title: chat.title }, null, now);
+    }
   }
 
   /** The operator's document roots, or the default while none are set. */
@@ -999,7 +1013,7 @@ export class TelegramBotService {
 
   listChats(options: { includeInactive?: boolean } = {}): TelegramBotChatsAnswer {
     const connected = this.storedBotId() !== null;
-    const status = connected ? this.status() : null;
+    const status = this.status();
     const store = this.store();
     const bot = connected ? store.bot() : null;
     const all = store.chats().filter((chat) => options.includeInactive || this.postingView(chat).bots.some(b => b.member !== false));
@@ -1007,10 +1021,10 @@ export class TelegramBotService {
     return {
       bot: connected ? {
         connected: true, name: bot?.name ?? null, username: bot?.username ?? null,
-        receiving: status!.receiving, receivingNote: RECEIVING_NOTES[status!.receiving], lastUpdateAt: bot?.lastUpdateAt ?? null,
+        receiving: status.receiving, receivingNote: RECEIVING_NOTES[status.receiving], lastUpdateAt: bot?.lastUpdateAt ?? null,
       } : { connected: false, name: null, username: null, receiving: "stopped", receivingNote: RECEIVING_NOTES.stopped, lastUpdateAt: null },
       chats,
-      ...(status ? { bots: status.bots } : {}),
+      ...(connected && status.bots ? { bots: status.bots } : {}),
       ...(all.length > chats.length ? { truncated: all.length - chats.length } : {}),
       ...(chats.length === 0 ? { note: connected
         ? "The bot has not seen any chat yet. A chat appears once the bot is added to it or receives a message there; in a group with privacy mode on, mention the bot once (for example /start@botname)."
