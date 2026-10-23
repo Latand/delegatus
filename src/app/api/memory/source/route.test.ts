@@ -67,3 +67,29 @@ test("a durable write failure reports an error and leaves the selected source in
     expect(readMemorySourceFile()).toEqual(before);
   } finally { rename.mockRestore(); }
 });
+
+test("the operator sets the sync interval; other callers and invalid values change nothing", async () => {
+  const file = path.join(root, "memory-sync.json");
+  for (const value of [-1, 169, 1.5, "6", null]) expect((await PUT(request({ syncIntervalHours: value }))).status).toBe(400);
+  expect((await PUT(request({ syncIntervalHours: 6 }, { Origin: "https://other.example" }))).status).toBe(403);
+  expect(fs.existsSync(file)).toBe(false);
+  const accepted = await PUT(request({ syncIntervalHours: 0 }));
+  expect(accepted.status).toBe(200);
+  expect(await accepted.json()).toEqual({ choice: null, phase: null });
+  expect(JSON.parse(fs.readFileSync(file, "utf8"))).toMatchObject({ schemaVersion: 1, intervalHours: 0 });
+  expect(readMemorySourceFile()).toBeNull();
+});
+
+test("GET carries the sync schedule in the engines position with a ready import, counts only", async () => {
+  chooseSource("draining");
+  expect((await (await GET()).json()).sync).toBeUndefined();
+  const { importCollection } = await import("@/lib/memory/importStore");
+  importCollection(true)!.boundedPatch(2, tx => tx.put({ kind: "import", id: "fixture-import", state: "ready", at: "2026-10-17T00:00:00.000Z", previous: null, backup: path.join(root, "backups", "engine-memory", "fixture-import"), files: 1, candidates: 1, parts: 1,
+    sync: { lastAt: "2026-10-22T00:00:00.000Z", result: "ok", added: 3 } }));
+  expect((await PUT(request({ source: "engines" }))).status).toBe(200);
+  const body = await (await GET()).json();
+  expect(body.sync).toEqual({ intervalHours: 24, lastAt: "2026-10-22T00:00:00.000Z", nextAt: expect.any(String), added: 3, capped: false, failure: null });
+  expect(JSON.stringify(body)).not.toContain(root);
+  expect((await PUT(request({ source: "engines", syncIntervalHours: 0 }))).status).toBe(200);
+  expect((await (await GET()).json()).sync).toMatchObject({ intervalHours: 0, nextAt: null });
+});

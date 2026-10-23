@@ -103,6 +103,98 @@ const get = (query: string, headers: Record<string, string> = { host: "127.0.0.1
 const put = (body: unknown, headers: Record<string, string> = browser) =>
   PUT(new NextRequest(URL_BASE, { method: "PUT", headers: { ...(headers === browser ? { cookie: `llv_operator=${soloBrowserSession()}` } : {}), ...headers }, body: JSON.stringify(body) }));
 
+test("Turbo paid credits require the separate operator-browser approval; script, worker and seat claims cannot grant it", async () => {
+  const body = { project: PROJECT, turbo: { enabled: true, hours: 2, credits: true, creditAccounts: ["default"] } };
+  const script = await put(body, { host: "127.0.0.1:8898", "content-type": "application/json" });
+  expect(script.status).toBe(403);
+  expect((await script.json()).error).toContain("operator's own browser");
+  for (const conversationId of [OTHER_CONVERSATION, SEAT_CONVERSATION]) {
+    setCallerConversationResolverForTests(() => conversationId);
+    const response = await put(body, { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY });
+    expect(response.status).toBe(403);
+    expect((await response.json()).error).toContain("operator's own browser");
+  }
+  setCallerConversationResolverForTests(() => null);
+  expect((await put(body, { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: "unrecognised" })).status).toBe(403);
+  expectNothingStored();
+});
+
+test("Turbo cannot be enabled by an anonymous script even without paid credits", async () => {
+  const response = await put({ project: PROJECT, turbo: { enabled: true, hours: 2 } }, { host: "127.0.0.1:8898", "content-type": "application/json" });
+  expect(response.status).toBe(403);
+  expectNothingStored();
+});
+
+test.each([{ change: { enabled: false }, active: false }, { change: { credits: false }, active: true }])("Turbo revocation ignores unreadable account bindings: %j", async ({ change, active }) => {
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(SANDBOX, "turbo-revocation-"));
+  setSystemTime(new Date("2026-10-21T12:00:00.000Z"));
+  try {
+    const { applySeatTickSettingsChange, defaultSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+    const { seedAccountSource } = await import("@/lib/accounts/accountsStoreFixture");
+    const { BINDINGS_SOURCE } = await import("@/lib/accounts/accountsStore");
+    const { allowedAccountIdsForProject } = await import("@/lib/accounts/projectBindings");
+    const seeded = applySeatTickSettingsChange(defaultSeatTickSettings(PROJECT), { turbo: { enabled: true, hours: 2, credits: true, creditAccounts: ["acct-a"] } }, {
+      at: new Date().toISOString(), actor: { kind: "gateway", project: null, conversationId: null, seatEpoch: null },
+      turbo: { allowedAccounts: ["acct-a"], plan: [{ accountId: "acct-a", label: "Account A", plan: "pro", tiers: { "gpt-6.1-sol": "priority" }, hadCredits: true }] },
+    });
+    if (!seeded.ok) throw new Error(seeded.error);
+    writeSeatTickSettings(PROJECT, seeded.settings);
+    seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "codex" }] });
+    expect(() => allowedAccountIdsForProject(PROJECT, "codex")).toThrow("unreadable");
+    const response = await put({ project: PROJECT, turbo: change });
+    expect(response.status).toBe(200);
+    expect((await response.json()).turbo).toMatchObject({ active, episode: { credits: { approved: false } } });
+    expect(readSeatTickSettings(PROJECT).turbo?.credits.approved).toBe(false);
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+  }
+});
+
+test("Turbo operator confirmation stores a separate finite paid approval and off withdraws it", async () => {
+  const home = fs.mkdtempSync(path.join(SANDBOX, "turbo-catalog-"));
+  const previous = process.env.LLV_CODEX_HOME;
+  process.env.LLV_CODEX_HOME = home;
+  try {
+    fs.writeFileSync(path.join(home, "auth.json"), "{}");
+    fs.writeFileSync(path.join(home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-6.1-sol", service_tiers: [{ id: "priority" }] }] }));
+    const response = await put({ project: PROJECT, turbo: { enabled: true, hours: 2, credits: true, creditAccounts: ["default"] } });
+    expect(response.status).toBe(200);
+    expect((await response.json()).turbo).toMatchObject({ active: true, episode: { credits: { approved: true, accounts: ["default"] } } });
+    const invalid = await put({ project: PROJECT, turbo: { hours: null, credits: true, creditAccounts: ["default"] } });
+    expect(invalid.status).toBe(400);
+    const off = await put({ project: PROJECT, turbo: { enabled: false } });
+    expect(off.status).toBe(200);
+    expect((await off.json()).turbo).toMatchObject({ active: false, episode: { credits: { approved: false } } });
+  } finally {
+    if (previous === undefined) delete process.env.LLV_CODEX_HOME; else process.env.LLV_CODEX_HOME = previous;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("proactive enable requires the operator browser and returns persisted effective permission", async () => {
+  setSystemTime(new Date("2026-10-22T00:00:00.000Z"));
+  const autonomy = { enabled: true, proactive: { enabled: true } };
+  for (const headers of [
+    { host: "127.0.0.1:8898", "content-type": "application/json" },
+    { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY },
+  ]) {
+    const refused = await put({ project: PROJECT, autonomy, actor: { kind: "gateway" } }, headers);
+    expect(refused.status).toBe(403);
+    expect((await refused.json()).error).toContain("only the operator browser");
+    expectNothingStored();
+  }
+  const saved = await put({ project: PROJECT, autonomy });
+  expect(saved.status).toBe(200);
+  expect((await saved.json()).autonomy.proactive).toEqual({ enabled: true });
+  expect((await (await get(`?project=${PROJECT}`)).json()).autonomy.proactive).toEqual({ enabled: true });
+  seatFile({ project: PROJECT, conversationId: SEAT_CONVERSATION, seatEpoch: 12 });
+  setCallerConversationResolverForTests(() => SEAT_CONVERSATION);
+  const stopped = await put({ project: PROJECT, autonomy: { proactive: { enabled: false }, why: "Stop discovery" } }, { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY });
+  expect(stopped.status).toBe(200);
+  expect((await stopped.json()).autonomy).toMatchObject({ active: true, proactive: { enabled: false } });
+});
+
 test("HTTP and seat_tick_settings report maintenance paused while wakes are off", async () => {
   const written = await put({ project: PROJECT, enabled: false, reason: "fixture pause", maintenance: { enabled: true, intervalHours: 3 } });
   expect(written.status).toBe(200);

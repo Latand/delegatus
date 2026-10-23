@@ -43,7 +43,9 @@ export function callerConversationId(request: Pick<NextRequest, "headers">): str
   return resolveConversation(crypto.createHash("sha256").update(capability).digest("hex"));
 }
 
-/** Voice transport uses the same authenticated operator boundary as operator actions. */
+/** Voice transport uses the same authenticated operator boundary as operator
+    actions. Extensible voice tool management additionally requires a live owner
+    member session in voiceTools/http.ts. */
 export function voiceTransportOperator(request: Pick<NextRequest, "headers">): boolean {
   return requireOperatorAuthority(request).ok;
 }

@@ -154,17 +154,27 @@ test("a retained archived collection keeps its retired reader alive after its ro
     }
   }, false);
   expect(writer.archiveInactive(8)).toBeGreaterThan(0);
+  // Reading a WeakRef keeps its target alive until the task ends, so a
+  // collection in the same task could never release the root. The test sees
+  // the root only through its own finalization callback.
+  let rootCollected = false;
+  const observer = new FinalizationRegistry<void>(() => { rootCollected = true; });
   const retained = await (async () => {
     const view = await reader.prepareReadOnlySnapshot();
-    return { collection: view.file.receipts, root: new WeakRef(view.file) };
+    observer.register(view.file, undefined);
+    return { collection: view.file.receipts };
   })();
   writer.mutate(file => { file.receipts[kept]!.error = "new generation"; }, false);
   await reader.prepareReadOnlySnapshot();
-  for (let attempt = 0; attempt < 20 && retained.root.deref(); attempt++) {
+  const nextTask = () => new Promise<void>(resolve => setImmediate(resolve));
+  for (let attempt = 0; attempt < 50 && !rootCollected; attempt++) {
+    await nextTask();
     Bun.gc(true);
-    await new Promise<void>(resolve => setImmediate(resolve));
+    await nextTask();
   }
-  expect(retained.root.deref()).toBeUndefined();
+  expect(rootCollected).toBe(true);
+  // The store's finalizer for the same root is queued by the same collection.
+  for (let turn = 0; turn < 3; turn++) await nextTask();
   expect(retained.collection["retained-collection-0"]?.error).toBe("receipt-0");
 });
 

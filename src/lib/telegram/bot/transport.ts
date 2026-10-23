@@ -41,10 +41,12 @@ export type BotCallResult<T = unknown> =
     description: string | null;
     retryAfterSeconds: number | null;
     migrateToChatId: string | null;
+    /** A trusted transport's fixed classification; never read from the wire. */
+    classified?: { code: import("./contracts").TelegramBotErrorCode; fallback: boolean };
   };
 
 export interface BotTransport {
-  call<T = unknown>(method: string, params: Record<string, unknown>, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<BotCallResult<T>>;
+  call<T = unknown>(method: string, params: Record<string, unknown>, options?: { signal?: AbortSignal; timeoutMs?: number; partIndex?: number }): Promise<BotCallResult<T>>;
 }
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;

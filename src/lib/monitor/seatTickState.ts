@@ -99,6 +99,7 @@ function normalizeWakeCommit(value: unknown): SeatTickWakeCommit | null {
     announcedDeploys: conversationIds(raw.announcedDeploys),
     /* A plan from before #2030 records no note, so the next wake shows it. */
     ...(typeof raw.autonomyShown === "string" ? { autonomyShown: raw.autonomyShown } : {}),
+    ...(typeof raw.turboShown === "string" ? { turboShown: raw.turboShown } : {}),
     ...(typeof raw.autonomySummaryFor === "string" ? { autonomySummaryFor: raw.autonomySummaryFor } : {}),
     ...(noteRevision(raw.noteShown) === undefined ? {} : { noteShown: noteRevision(raw.noteShown) }),
     /* A plan from before reported stalls records none, so no stall yields. */
@@ -308,6 +309,7 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
     /* Absent on every row from before #2030: a seat remembered as having been
        shown no note is shown it. */
     ...(typeof raw.autonomyShown === "string" ? { autonomyShown: raw.autonomyShown } : {}),
+    ...(typeof raw.turboShown === "string" ? { turboShown: raw.turboShown } : {}),
     ...(typeof raw.autonomySummaryFor === "string" ? { autonomySummaryFor: raw.autonomySummaryFor } : {}),
     ...(noteRevision(raw.noteShown) === undefined ? {} : { noteShown: noteRevision(raw.noteShown) }),
     /* Absent reads as empty: a stall no wake is remembered naming keeps its

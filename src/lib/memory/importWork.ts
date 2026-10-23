@@ -15,6 +15,8 @@ import { ImportCandidates, importOccurrenceIds, topicMetadata } from "./importCa
 import { commitImportManifest, pruneMemoryBackups } from "./importBackup";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { guardedContext } from "@/lib/stateOwnership";
+import { waitForStateLock } from "@/lib/state/lockWait";
+import { MEMORY_SYNC_MAX_FILES, memorySyncIntervalHours } from "./importSync";
 
 const hash = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT";
@@ -107,14 +109,28 @@ async function outsideCheckout(directory: string) {
     if (path.dirname(current) === current) break;
   }
 }
-async function rejectPreflight(error: unknown, request: ImportRequest, roots: ImportRoots): Promise<never> {
+async function rejectPreflight(error: unknown, request: ImportRequest, roots: ImportRoots, syncAt?: string): Promise<never> {
   if (!(await sourceStoresAreSeparate(stateDir(), roots))) throw error;
+  // A sync refused before its lock still spends its attempt, so the next refresh waits (§4.9).
+  if (request.sync && syncAt) await recordSyncAttempt(request.importId, syncAt, { result: "failed", added: 0, reason: error instanceof MemoryImportError ? error.reason : "failed" });
   try { await restoreMemorySourceAfterImport(request.importId, request.previous); }
   catch (restoreError) {
     const reason = error instanceof MemoryImportError ? error.reason : "backup_refused";
     throw new MemoryImportRecoveryError(reason, false, true, [error, restoreError]);
   }
   throw error;
+}
+/** Writes this attempt's sync marker on the ready import. Its outcome replaces only this
+    attempt's own marker, so a refusal before the marker (the source moved) writes nothing
+    and a slower attempt never overwrites a newer one. */
+async function recordSyncAttempt(importId: string, lastAt: string, run: Omit<NonNullable<ImportRecord["sync"]>, "lastAt">) {
+  const sync = { lastAt, ...run };
+  await waitForStateLock("memory.import", () => {
+    const record = readImportRecord(importId);
+    if (record?.state !== "ready") return;
+    if (run.result !== "running" && (record.sync?.lastAt !== lastAt || record.sync.result !== "running")) return;
+    importCollection(true)!.boundedPatch(1, tx => tx.put({ ...record, sync }));
+  });
 }
 export async function defaultImportRoots(): Promise<ImportRoots> {
   if (guardedContext()) throw new MemoryImportError("backup_refused");
@@ -125,8 +141,13 @@ export async function defaultImportRoots(): Promise<ImportRoots> {
   };
   return { claudeHomes: [process.env.LLV_CLAUDE_HOME || path.join(home, ".claude"), ...await homes("claude")], codexHomes: [process.env.LLV_CODEX_HOME || path.join(home, ".codex"), ...await homes("codex")] };
 }
-function assertCurrent(id: string, rescan = false) {
+function assertCurrent(id: string, rescan = false, sync = false) {
   const source = readMemorySourceFile();
+  // A sync extends the ready import only while the engines' memory is selected and the sync is on (§4.9).
+  if (sync) {
+    if (source?.source !== "engines" || source.importId !== id || memorySyncIntervalHours() <= 0) throw new MemoryImportError("source_changed");
+    return;
+  }
   if (source?.source !== "delegatus" || (!rescan && source.phase !== "importing" || rescan && !["importing", "draining"].includes(source.phase!)) || source.importId !== id) throw new MemoryImportError("source_changed");
 }
 
@@ -187,22 +208,31 @@ async function inventory(roots: ImportRoots, projectForSlug: (slug: string) => s
 export async function runMemoryImportWork(request: ImportRequest, ports: ImportWorkPorts = {}): Promise<ImportRecord> {
   validateImportId(request.importId);
   const directory = stateDir();
-  const assertOwned = () => assertCurrent(request.importId, request.rescan);
+  const sync = request.sync === true;
+  const syncAt = new Date(request.at ?? Date.now()).toISOString();
+  // A sync is a delta scan of the same verified backup (§4.6 step 2, §4.9).
+  const rescan = request.rescan === true || sync;
+  const assertOwned = () => assertCurrent(request.importId, rescan, sync);
   const backups = path.join(directory, "backups"), parent = path.join(backups, "engine-memory");
   let files: Awaited<ReturnType<typeof inventory>>["files"], stores: string[];
   let roots: ImportRoots | undefined;
   let sourceSeparationProven = false;
   try {
-    roots = request.roots ?? await defaultImportRoots();
+    // A sync scans the very roots its import recorded.
+    roots = request.roots ?? (sync ? readImportRecord(request.importId)?.roots : undefined) ?? await defaultImportRoots();
     sourceSeparationProven = await sourceStoresAreSeparate(directory, roots);
     if (!sourceSeparationProven) throw new MemoryImportError("backup_refused");
+    // Once the state directory is proven apart from every engine store, a sync marks its
+    // attempt before the inventory, the lock wait and every copy: a helper its deadline or
+    // a crash ends in any of them leaves the marker, which defers the retry by an hour (§4.9).
+    if (sync) { assertOwned(); await recordSyncAttempt(request.importId, syncAt, { result: "running", added: 0 }); }
     await outsideCheckout(directory);
     await outsideCheckout(path.join(directory, "state.sqlite"));
     assertPrivateImportDatabaseFiles(path.join(directory, "state.sqlite"));
     ({ files, stores } = await inventory(roots, ports.projectForSlug ?? (await import("@/lib/scanner/describe")).projectForClaudeMemorySlug));
   }
   catch (error) {
-    if (roots && await sourceStoresAreSeparate(directory, roots)) return rejectPreflight(error, request, roots);
+    if (roots && await sourceStoresAreSeparate(directory, roots)) return rejectPreflight(error, request, roots, syncAt);
     throw error;
   }
   const transaction = path.join(parent, "import-job");
@@ -220,23 +250,29 @@ export async function runMemoryImportWork(request: ImportRequest, ports: ImportW
   } catch (error) {
     const state = await resolvedDestination(directory);
     if (stores.some(store => within(store, state) || within(state, store))) throw error;
-    return rejectPreflight(error, request, roots!);
+    return rejectPreflight(error, request, roots!, syncAt);
   }
   await privateDirectory(directory);
   await privateDirectory(backups); await privateDirectory(parent); await outsideCheckout(parent);
+  let admitted = false;
   return withFileTransaction(path.join(parent, "import-job"), "memory import busy", async () => {
+    admitted = true;
     assertOwned();
     const prior = readImportRecord(request.importId);
-    if (prior?.state === "ready" && !request.rescan) return prior;
+    if (prior?.state === "ready" && !rescan) return prior;
+    if (sync && prior?.state !== "ready") throw new MemoryImportError("source_changed");
+    let hashed = 0, capped = false;
     const record: ImportRecord = prior?.state === "ready" ? { ...prior } : { kind: "import", id: request.importId, state: "copying", at: new Date(request.at ?? Date.now()).toISOString(), previous: prior ? prior.previous : request.previous, backup: path.join(parent, request.importId), files: 0, candidates: 0, parts: 0 };
+    // The marker written before the inventory, kept on the record this run rewrites (§4.9).
+    if (sync) record.sync = { lastAt: syncAt, result: "running", added: 0 };
     await writeImportRows([record], assertOwned);
     try {
       ports.phase?.("backup");
-      try { if (!request.rescan) await fs.mkdir(record.backup, { mode: 0o700 }); }
+      try { if (!rescan) await fs.mkdir(record.backup, { mode: 0o700 }); }
       catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new MemoryImportError("interrupted"); throw error; }
       if (record.backup !== path.join(parent, request.importId)) throw new MemoryImportError("backup_refused");
-      if (request.rescan) await privateDirectory(record.backup);
-      const manifest: ImportManifest = request.rescan ? JSON.parse(await fs.readFile(path.join(record.backup, "manifest.json"), "utf8")) : { schemaVersion: 1, importId: record.id, createdAt: record.at, files: [] };
+      if (rescan) await privateDirectory(record.backup);
+      const manifest: ImportManifest = rescan ? JSON.parse(await fs.readFile(path.join(record.backup, "manifest.json"), "utf8")) : { schemaVersion: 1, importId: record.id, createdAt: record.at, files: [] };
       if (manifest.schemaVersion !== 1 || manifest.importId !== record.id || !Array.isArray(manifest.files)) throw new MemoryImportError("integrity");
       const newFiles: { file: typeof files[number]; entry: ImportManifestFile; copied: boolean }[] = [];
       for (const file of files) {
@@ -244,16 +280,20 @@ export async function runMemoryImportWork(request: ImportRequest, ports: ImportW
         const { source, store, ...entry } = file;
         const previous = manifest.files.findLast(entry => entry.home === file.home && entry.file === file.file);
         const recover = (entry: ImportManifestFile) => entry.kind === "claude_topic" || entry.kind === "codex_summary";
-        if (request.rescan && previous?.size === file.size && previous.modifiedAt === file.modifiedAt) {
+        if (rescan && previous?.size === file.size && previous.modifiedAt === file.modifiedAt) {
           if (previous.candidatesComplete !== true && recover(previous)) newFiles.push({ file, entry: previous, copied: false });
           continue;
         }
+        if (sync && hashed >= MEMORY_SYNC_MAX_FILES) { capped = true; continue; }
+        hashed += 1;
         const sourceHash = await digest(source);
         if (previous?.sha256 === sourceHash) {
-          if (request.rescan && previous.candidatesComplete !== true && recover(previous)) newFiles.push({ file, entry: previous, copied: false });
+          // Same bytes, newer time: a sync records it so the prefilter skips the file next run.
+          if (sync) Object.assign(previous, { size: file.size, modifiedAt: file.modifiedAt });
+          if (rescan && previous.candidatesComplete !== true && recover(previous)) newFiles.push({ file, entry: previous, copied: false });
           continue;
         }
-        const copy = path.join("stores", hash(await fs.realpath(store)).slice(0, 16), ...(request.rescan ? ["versions", sourceHash, randomUUID()] : []), path.relative(store, source));
+        const copy = path.join("stores", hash(await fs.realpath(store)).slice(0, 16), ...(rescan ? ["versions", sourceHash, randomUUID()] : []), path.relative(store, source));
         const destination = path.join(record.backup, copy);
         const resolved = await resolvedDestination(destination);
         if (!within(await fs.realpath(directory), resolved) || stores.some(store => within(store, resolved) || within(resolved, store))) throw new MemoryImportError("backup_refused");
@@ -283,6 +323,8 @@ export async function runMemoryImportWork(request: ImportRequest, ports: ImportW
       for (const file of files) {
         if (file.kind !== "claude_index" || !file.loadedAtStart) continue;
         const entry = manifest.files.findLast(entry => entry.home === file.home && entry.file === file.file);
+        // A sync's capped run leaves later files, indexes included, for its next run.
+        if (!entry && capped) continue;
         if (!entry) throw new MemoryImportError("integrity");
         const text = await fs.readFile(path.join(record.backup, entry.copy), "utf8");
         for (const match of text.matchAll(/\[[^\]]*\]\(([^)]+\.md)(?:#[^)]*)?\)/g)) {
@@ -298,7 +340,7 @@ export async function runMemoryImportWork(request: ImportRequest, ports: ImportW
         const bytes = await fs.readFile(backupFile);
         const body = bytes.toString("utf8");
         if (!Buffer.from(body).equals(bytes) || await digest(backupFile) !== entry.sha256) throw new MemoryImportError("integrity");
-        entry.loadedAtStart = request.rescan ? !copied && entry.loadedAtStart : entry.loadedAtStart || loaded.has(file.physical);
+        entry.loadedAtStart = rescan ? !copied && entry.loadedAtStart : entry.loadedAtStart || loaded.has(file.physical);
         const session = entry.engine === "claude" ? topicMetadata(body).session : undefined;
         if (session && !resolveWriter) resolveWriter = await (await import("./importWriter")).productionImportWriter();
         builder.add(entry, body, session ? await resolveWriter!(session) : undefined);
@@ -389,12 +431,14 @@ export async function runMemoryImportWork(request: ImportRequest, ports: ImportW
       record.hostProject ??= ports.hostProject ?? projects.find(project => orchestratorSeatFor(project).active) ?? projects[0];
       if (!record.hostProject) throw new MemoryImportError("backup_refused");
       record.roots ??= roots;
-      const { inheritImportDispositions } = await import("./importHistory");
+      const { importHistoryKeys, inheritImportDispositions } = await import("./importHistory");
       for (const candidate of candidates) {
         const project = candidate.occurrences[0].project;
         candidate.curationProject = project && orchestratorSeatFor(project).active ? project : record.hostProject;
-        if (!request.rescan) inheritImportDispositions(candidate);
       }
+      // A sync offers only new content: equal content and applicability inherit (§4.9).
+      const history = !rescan ? {} : sync ? { byContent: true, sameImport: true } : null;
+      const historyKeys = history ? importHistoryKeys(candidates, history) : new Map<string, string[]>();
       assertOwned();
       commitImportManifest(record.backup, manifest);
       for (let offset = 0, batchIndex = 0; offset < candidates.length; offset += 40, batchIndex++) {
@@ -403,9 +447,18 @@ export async function runMemoryImportWork(request: ImportRequest, ports: ImportW
         await importCollection(true)!.patch(() => {
           assertOwned();
           return { records: withImportLookups(batch.map(candidate => {
-            const prior = importCollection()!.get(candidateKey(candidate));
-            if (prior?.kind !== "candidate") return candidate;
-            return { ...prior, linked: [...new Set([...prior.linked, ...candidate.linked])], occurrences: [...prior.occurrences, ...candidate.occurrences.filter(o => !prior.occurrences.some(p => p.id === o.id))] };
+            const stored = importCollection()!.get(candidateKey(candidate));
+            const prior = stored?.kind === "candidate" ? stored : null;
+            const fresh = candidate.occurrences.filter(o => !prior?.occurrences.some(p => p.id === o.id));
+            const row: ImportCandidate = !prior ? { ...candidate, dispositions: [...candidate.dispositions] }
+              : { ...prior, linked: [...new Set([...prior.linked, ...candidate.linked])], dispositions: [...prior.dispositions], occurrences: [...prior.occurrences, ...fresh] };
+            // The rows of equal content are reread inside the write's transaction, so a
+            // curator outcome committed after the lookup covers the new occurrence (§4.9).
+            if (history) inheritImportDispositions(row, (historyKeys.get(candidate.id) ?? []).flatMap(key => {
+              const held = importCollection()!.get(key);
+              return held?.kind === "candidate" ? [held] : [];
+            }), { ...history, occurrences: new Set(fresh.map(o => o.id)) });
+            return row;
           })) };
         });
       }
@@ -437,14 +490,33 @@ export async function runMemoryImportWork(request: ImportRequest, ports: ImportW
       commitImportManifest(record.backup, manifest);
       ports.phase?.("retention");
       await pruneMemoryBackups(parent);
+      if (sync) {
+        // Files of this run with an occurrence that inherited no disposition.
+        const fileOf = new Map<string, string>();
+        for (const { entry } of newFiles) {
+          if (entry.kind !== "claude_topic" && entry.kind !== "codex_summary") continue;
+          const body = await fs.readFile(path.join(record.backup, entry.copy), "utf8");
+          for (const id of importOccurrenceIds(entry as ImportManifestFile, body)) fileOf.set(id, entry.copy);
+        }
+        const offered = new Set<string>();
+        for (const candidate of candidates) {
+          const stored = candidateById(record.id, candidate.id);
+          for (const occurrence of stored?.occurrences ?? []) {
+            const file = fileOf.get(occurrence.id);
+            if (file && !stored!.dispositions.some(d => d.occurrences.includes(occurrence.id))) offered.add(file);
+          }
+        }
+        record.sync = { lastAt: syncAt, result: capped ? "capped" : "ok", added: offered.size };
+      }
       Object.assign(record, { state: "ready", curationDirty: true, files: manifest.files.length,
-        candidates: (request.rescan ? record.candidates : 0) + new Set(missingCandidates.map(row => row.group)).size,
-        parts: (request.rescan ? record.parts : 0) + missingCandidates.length });
+        candidates: (rescan ? record.candidates : 0) + new Set(missingCandidates.map(row => row.group)).size,
+        parts: (rescan ? record.parts : 0) + missingCandidates.length });
       delete record.reason;
       await writeImportRows([record], assertOwned);
       return record;
     } catch (error) {
-      record.state = request.rescan ? "ready" : "failed"; record.reason = error instanceof MemoryImportError ? error.reason : "failed";
+      record.state = rescan ? "ready" : "failed"; record.reason = error instanceof MemoryImportError ? error.reason : "failed";
+      if (sync) record.sync = { lastAt: syncAt, result: "failed", added: 0, reason: record.reason };
       let statusFailure: unknown, restoreFailure: unknown;
       if (!(await sourceStoresAreSeparate(directory, roots!))) throw error;
       try { await writeImportRows([record]); } catch (caught) { statusFailure = caught; }
@@ -458,6 +530,10 @@ export async function runMemoryImportWork(request: ImportRequest, ports: ImportW
       }
       throw error;
     }
+  }).catch(async error => {
+    // A sync the lock refused (busy past the wait) records that failure in place of its marker.
+    if (sync && !admitted && await sourceStoresAreSeparate(directory, roots!)) await recordSyncAttempt(request.importId, syncAt, { result: "failed", added: 0, reason: "failed" });
+    throw error;
   });
 }
 

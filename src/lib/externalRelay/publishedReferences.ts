@@ -55,3 +55,12 @@ export function recordPublishedRelayReference(apiBase: string, route: string, me
 export function publishedRelayReference(apiBase: string, targetId: string, messageKey: string): PublishedRelayReference | null {
   return collection()?.get(key(apiBase, targetId, messageKey)) ?? null;
 }
+
+/** Clone sends already have the partner's publication reference. Reuse the
+ * same validator and conflict check without issuing a publish request. */
+export function recordSentRelayReference(apiBase: string, targetId: string,
+  sent: { messageKey: string; chatId: string; messageId: number; topicId: number | null }): void {
+  recordPublishedRelayReference(apiBase, `/targets/${encodeURIComponent(targetId)}/messages`, "POST",
+    { chat_id: Number(sent.chatId), message_id: sent.messageId, ...(sent.topicId === null ? {} : { message_thread_id: sent.topicId }) },
+    200, { message_key: sent.messageKey, replayed: false });
+}

@@ -14,6 +14,7 @@ import { agentRegistry, type AgentRegistry } from "@/lib/agent/registry";
 import { AccountProjectBindingsUnreadableError, accountProjectBindings, allowedAccountIdsForProject, projectAccountRefusalDetail, type AccountProjectBinding } from "./projectBindings";
 import { selectProjectAccount } from "./projectSelection";
 import { creditGuardBlock } from "./creditGuard";
+import { turboCreditExemptFor } from "./turboCreditExemption";
 import { refreshStaleExhaustion, type LiveLimitsDeps } from "./liveLimits";
 import { selectHealthyClaudeAccount } from "./spawnHealth";
 import { classifySpawnAccountAdmission, type SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
@@ -32,16 +33,16 @@ function listedAccountId(engine: "claude" | "codex", id: string | null | undefin
   return (engine === "claude" ? claudeAccountListed(id) : codexAccountListed(id)) ? id : null;
 }
 
-function contextForSpawn(engine: "claude" | "codex", requested?: string | null) {
+function contextForSpawn(engine: "claude" | "codex", requested?: string | null, project: string | null = null) {
   if (engine === "claude") { const item = claudeAccountForSpawn(requested); return { engine, accountId: item.id, kind: item.kind, home: item.home, transcriptRoot: item.projectsDir, env: item.kind === "managed" ? claudeAccountEnvironment(item) : withoutUnsupportedApiCredentials(process.env), ...(item.provider ? { claudeProvider: item.provider } : {}) }; }
   const item = accountForSpawn(requested);
-  assertCodexCreditCapacity(item.id);
+  assertCodexCreditCapacity(item.id, project);
   return { engine, accountId: item.id, kind: item.kind, home: item.home, transcriptRoot: item.sessionsDir, env: { ...withoutUnsupportedApiCredentials(process.env), CODEX_HOME: item.home } };
 }
 
-function assertCodexCreditCapacity(accountId: string): void {
+function assertCodexCreditCapacity(accountId: string, project: string | null = null): void {
   const guarded = creditGuardBlock("codex", agentRegistry().quotaObservations("codex").find(item => item.accountId === accountId)?.limits);
-  if (guarded) throw new ProjectAccountRefusedError({ kind: "exhausted", ...guarded, allowedAccountIds: [accountId] }, "codex", null,
+  if (guarded && !turboCreditExemptFor(project, accountId)) throw new ProjectAccountRefusedError({ kind: "exhausted", ...guarded, allowedAccountIds: [accountId] }, "codex", project,
     "paid-credit guard reached; continue on an allowed account with capacity");
 }
 
@@ -208,7 +209,7 @@ export async function resolveHealthySpawnAccount(
   });
   if (engine === "codex") {
     try {
-      const context = contextForSpawn(engine, routed);
+      const context = contextForSpawn(engine, routed, project);
       if (appliedTier && serviceTier && !tierOffers([{ id: context.accountId, home: context.home }], serviceTier.model, appliedTier).offering.length) {
         if (serviceTier.required) throw new CodexServiceTierUnavailableError(`selected account does not offer serviceTier ${appliedTier}; offered: ${(codexModelServiceTiers(context.home, serviceTier.model) ?? []).map(tier => tier.id).join(", ") || "none"}`);
         appliedTier = null;
@@ -221,7 +222,7 @@ export async function resolveHealthySpawnAccount(
          that this project's binding permits, and the original failure stands
          rather than being answered with an account outside the pool. */
       if (!hasAutomatic) throw error;
-      return { ...contextForSpawn(engine, active), requestedAdmission: missingRequested,
+      return { ...contextForSpawn(engine, active, project), requestedAdmission: missingRequested,
         ...(serviceTier ? { serviceTier: appliedTier } : {}) };
     }
   }
@@ -262,7 +263,7 @@ export async function resolveHealthySpawnAccount(
       model,
     );
     return {
-      ...contextForSpawn(engine, selected.account.id),
+      ...contextForSpawn(engine, selected.account.id, project),
       admission: selected.admission,
       ...(named !== null && !requestedExists
         ? { requestedAdmission: missingRequested }
@@ -398,7 +399,7 @@ export function resolveContinuityAccount(
      has none of, and resolves exactly as an unbound one always did. */
   project: string | null,
 ): AccountContext {
-  if (accountId !== null) return accountManager.resolveSpawn(engine, accountId);
+  if (accountId !== null) return engine === "codex" ? contextForSpawn(engine, accountId, project) : accountManager.resolveSpawn(engine, accountId);
   if (engine === "copilot") return resolveProjectSpawnAccount(engine, project);
   return resolveProjectSpawnAccount(engine, project);
 }
@@ -438,7 +439,7 @@ export function resolveResumeAccountId(
   const accounts = engine === "claude" ? listClaudeAccounts() : listCodexAccounts();
   const recorded = recordedAccountId?.trim() || null;
   if (recorded !== null && accounts.some((account) => account.id === recorded)) {
-    if (engine === "codex") assertCodexCreditCapacity(recorded);
+    if (engine === "codex") assertCodexCreditCapacity(recorded, project);
     return recorded;
   }
   const bindings = accountProjectBindings();
@@ -652,7 +653,7 @@ export const accountManager: AccountManager = {
       model,
     });
     if (selected.kind === "available") {
-      return { kind: "available", account: contextForSpawn(engine, selected.accountId ?? undefined) };
+      return { kind: "available", account: contextForSpawn(engine, selected.accountId ?? undefined, project) };
     }
     return selected.kind === "exhausted"
       ? { kind: "exhausted", resetsAt: selected.resetsAt }
@@ -699,7 +700,7 @@ export const accountManager: AccountManager = {
       unavailableIds: request.unavailableIds ?? [],
     });
     if (selected.kind !== "available") return selected;
-    return { kind: "available", account: contextForSpawn(engine, selected.accountId ?? undefined) };
+    return { kind: "available", account: contextForSpawn(engine, selected.accountId ?? undefined, request.project) };
   },
   resolveTranscriptOwner(engine, transcript) {
     if (engine === "copilot") {

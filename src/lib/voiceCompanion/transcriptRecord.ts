@@ -18,7 +18,8 @@ export interface TranscriptEntry {
   /** First occurrence, retained when fragments or delivery states update. */
   order?: number;
 }
-export interface SessionTranscriptRecord { entries: TranscriptEntry[]; truncated: boolean; usage?: CompanionUsage }
+/** `sessionId`: the call the session route served it for. */
+export interface SessionTranscriptRecord { entries: TranscriptEntry[]; truncated: boolean; usage?: CompanionUsage; sessionId?: string }
 const MAX_BYTES = 4 * 1024 * 1024;
 const CLOSE_RESERVE = 8192;
 const TRUNCATION_MARKER = JSON.stringify({ type: "transcript_truncated", version: 1 }) + "\n";
@@ -96,6 +97,13 @@ export class CompanionTranscriptRecords {
       held.persisted.add(entry.id);
     }
   }
+  /** The settled journal's identity on disk, so a reader may reuse what it derived from it; null while this
+   * process holds the call's entries in memory, or when there is no journal. */
+  stamp(id: string): string | null {
+    if (this.active.has(id)) return null;
+    try { const stat = fs.statSync(this.file(id)); return `${stat.dev}:${stat.ino}:${stat.mtimeMs}:${stat.size}`; }
+    catch { return null; }
+  }
   read(id: string): SessionTranscriptRecord {
     const held = this.active.get(id) ?? this.load(id);
     // Insertion order preserves the first occurrence of an updated segment.
@@ -124,23 +132,29 @@ export class CompanionTranscriptRecords {
    * orphan its summary. Legacy journals without ownership remain unreadable as
    * memory unless their retained state row supplies that authority. */
   sessions(requireOwner = true): StoredSession[] {
+    return this.ids().flatMap(id => { const session = this.journalSession(id, requireOwner); return session ? [session] : []; });
+  }
+  /** The ids of the journals on disk. */
+  ids(): string[] {
     let files: string[];
     try { files = fs.readdirSync(this.directory()); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
-    return files.flatMap(file => {
-      if (!file.endsWith(".jsonl") || !validId(file.slice(0,-6))) return [];
-      const id = file.slice(0,-6);
-      const entries = this.read(id).entries;
-      const start = entries.find(row => row.kind === "session_start")?.data;
-      const end = entries.find(row => row.kind === "session_end")?.data;
-      if (!start || !end || !Number.isFinite(start.createdAt) || !Number.isFinite(end.endedAt)) return [];
-      const owner = start.startedBy;
-      const owned = owner && typeof owner === "object" && !Array.isArray(owner) && Object.keys(owner).length === 1
-        && ("operator" in owner && owner.operator === true || "memberId" in owner && typeof owner.memberId === "string" && owner.memberId.length > 0);
-      if (requireOwner && (!owned || typeof start.project !== "string" || !start.project || !["en","uk"].includes(String(start.locale)))) return [];
-      return [{ id, project: typeof start.project === "string" ? start.project : "unknown", locale: start.locale === "uk" ? "uk" : "en", startedBy: owned ? owner as StoredSession["startedBy"] : undefined,
-        createdAt: start.createdAt as number, endedAt: end.endedAt as number, closed: true, generation: 1, seq: 0, inputs: [], events: [], proposals: {} }];
-    });
+    return files.flatMap(file => file.endsWith(".jsonl") && validId(file.slice(0,-6)) ? [file.slice(0,-6)] : []);
+  }
+  /** One ended call as its own journal describes it, with the owner it recorded; null when the journal is absent,
+   * has not ended, or (with `requireOwner`) names no owner. An unreadable journal throws. */
+  journalSession(id: string, requireOwner = true): StoredSession | null {
+    if (!validId(id)) return null;
+    const entries = this.read(id).entries;
+    const start = entries.find(row => row.kind === "session_start")?.data;
+    const end = entries.find(row => row.kind === "session_end")?.data;
+    if (!start || !end || !Number.isFinite(start.createdAt) || !Number.isFinite(end.endedAt)) return null;
+    const owner = start.startedBy;
+    const owned = owner && typeof owner === "object" && !Array.isArray(owner) && Object.keys(owner).length === 1
+      && ("operator" in owner && owner.operator === true || "memberId" in owner && typeof owner.memberId === "string" && owner.memberId.length > 0);
+    if (requireOwner && (!owned || typeof start.project !== "string" || !start.project || !["en","uk"].includes(String(start.locale)))) return null;
+    return { id, project: typeof start.project === "string" ? start.project : "unknown", locale: start.locale === "uk" ? "uk" : "en", startedBy: owned ? owner as StoredSession["startedBy"] : undefined,
+      createdAt: start.createdAt as number, endedAt: end.endedAt as number, closed: true, generation: 1, seq: 0, inputs: [], events: [], proposals: {} };
   }
   prune(sessions: Record<string, StoredSession>, now: number): void {
     const known = new Map(this.sessions(false).map(session => [session.id,session]));

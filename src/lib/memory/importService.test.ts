@@ -70,3 +70,33 @@ test("large private root inventories stay in state while the leased helper retur
   expect(result.state).toBe("ready"); expect(result.roots).toBeUndefined();
   expect(readImportRecord(id)?.roots?.claudeHomes).toHaveLength(homes.length);
 });
+
+test("the refresh cadence starts a due sync through the leased helper in the engines position, once per interval", async () => {
+  const fixtureHome = await fixture();
+  const id = "sync-schedule";
+  await fs.writeFile(path.join(fixtureHome.memory, "topic.md"), "Fixture topic.\n");
+  await fs.writeFile(path.join(process.env.LLV_STATE_DIR!, "memory-source.json"), JSON.stringify({ schemaVersion: 1, source: "delegatus", phase: "importing", importId: id, changedAt: at }));
+  expect((await runMemoryImport({ importId: id, previous: null, at, roots: fixtureHome.roots })).state).toBe("ready");
+  const { scheduleMemoryImport } = await import("./importController");
+  await fs.writeFile(path.join(process.env.LLV_STATE_DIR!, "memory-source.json"), JSON.stringify({ schemaVersion: 1, source: "engines", phase: "importing", importId: id, changedAt: at }));
+  const late = "A note written while the engines' memory is on.\n";
+  await fs.writeFile(path.join(fixtureHome.memory, "late.md"), late);
+  // One fixed clock drives the due check and the helper's stamp; no wall time has to pass.
+  const first = Date.parse("2026-10-22T00:00:00.000Z");
+  await scheduleMemoryImport(() => first);
+  const synced = readImportRecord(id)!;
+  expect(synced.sync).toEqual({ lastAt: "2026-10-22T00:00:00.000Z", result: "ok", added: 1 });
+  expect(readImportCandidates(id).candidates.some(row => row.body === late)).toBe(true);
+  // Within the interval the cadence starts nothing, even with a new note on disk.
+  const later = "Another note, for the next day.\n";
+  await fs.writeFile(path.join(fixtureHome.memory, "later.md"), later);
+  for (const within of [60_000, 24 * 3600_000 - 1]) {
+    await scheduleMemoryImport(() => first + within);
+    expect(readImportRecord(id)!.sync).toEqual(synced.sync);
+    expect(readImportCandidates(id).candidates.some(row => row.body === later)).toBe(false);
+  }
+  // Due at the interval: the next run imports the new note under the same clock.
+  await scheduleMemoryImport(() => first + 24 * 3600_000);
+  expect(readImportRecord(id)!.sync).toEqual({ lastAt: "2026-10-23T00:00:00.000Z", result: "ok", added: 1 });
+  expect(readImportCandidates(id).candidates.some(row => row.body === later)).toBe(true);
+});

@@ -15,6 +15,7 @@
  */
 
 import type { SessionTranscriptRecord } from "./transcriptRecord";
+import type { RetainedCall } from "./callHistoryTypes";
 
 export type Id = string;
 export type Locale = "en" | "uk";
@@ -148,9 +149,16 @@ export type CompanionCommand =
   | { type: "interrupt"; responseId: Id }
   | { type: "mute"; muted: boolean };
 
+/** A call that dropped and can go on as the same conversation. */
+export interface ResumableCall { sessionId: Id; project: string | null }
+/** An open call whose browser has not polled for this long has lost it: a live browser polls every half second.
+ * Until then the Viewer answers that nothing dropped, so a page that reloaded mid-call asks again after it. */
+export const STALE_BROWSER_MS = 5_000;
+
 export interface VoiceCompanionAdapter {
   readonly mode: CompanionMode;
-  start(options: { locale: Locale; project: Id }): Promise<void>;
+  /** `resume` continues a dropped call: the new session starts with its conversation. */
+  start(options: { locale: Locale; project: Id; resume?: Id }): Promise<void>;
   /** Updates browser context on the same call, including while it starts. */
   setProject?(project: string | null): Promise<void>;
   subscribe(emit: (event: CompanionEvent) => void): () => void;
@@ -160,7 +168,12 @@ export interface VoiceCompanionAdapter {
   /** Optional read-only delivery observation, including after media hangup. */
   refresh?(): Promise<void>;
   /** The whole conversation of the latest session, still readable after it ended; null before the first. */
-  transcript?(): Promise<SessionTranscriptRecord | null>;
+  transcript?(sessionId?: Id): Promise<SessionTranscriptRecord | null>;
+  /** The operator's retained calls, newest first, each with what it did; `transcript(sessionId)` opens one. Read
+   * when a page opens, so a reload keeps the history the page itself never saw. */
+  calls?(): Promise<RetainedCall[]>;
+  /** The operator's dropped call the Viewer still offers, read when a page opens and after a drop; its record becomes the one `transcript` reads. */
+  resumable?(): Promise<ResumableCall | null>;
   /** Unmount also releases delivery observation. */
   dispose?(): Promise<void>;
 }

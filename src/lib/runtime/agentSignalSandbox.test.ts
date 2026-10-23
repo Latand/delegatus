@@ -534,3 +534,63 @@ test("malformed boundary-off status is dropped rather than trusted", () => {
     expect(normalizeSignalBoundaryOff(value)).toBeUndefined();
   }
 });
+
+/** A socket engine launched through each launcher path writes to stderr. */
+async function socketStderr(shim: string, env: NodeJS.ProcessEnv, keep: boolean, root: string): Promise<string> {
+  const go = path.join(root, `go-${keep}`);
+  const child = await spawnSignalSandbox(shim, ["-c", `while [ ! -e '${go}' ]; do sleep 0.01; done; echo native-bind-cause >&2`], {
+    env: { ...env, LLV_SIGNAL_IGNORE_NATIVE_STDIO: "1", ...(keep ? { LLV_SIGNAL_KEEP_NATIVE_STDERR: "1" } : {}) }, stdio: ["ignore", "pipe", "pipe"], detached: true });
+  // Discarded stderr closes the pipe at once; an ended stream carries nothing.
+  const errors = child.stderr!.readableEnded ? Promise.resolve("") : readAll(child.stderr!); child.stdout!.resume();
+  fs.writeFileSync(go, "");
+  await exited(child);
+  return errors;
+}
+
+test.skipIf(process.platform !== "linux" || !tempOutsideHome).each([
+  ["the container shim without python3", (root: string) => bridgeShim(root, path.join(root, "absent", "python3"))],
+  ["the launcher boundary-off path", (root: string) => bridgeShim(root)],
+] as const)("%s keeps native stderr only when the caller bounds it", async (_name, shimFor) => {
+  if (_name.includes("launcher") && !fs.existsSync("/usr/bin/python3")) return;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-keep-stderr-"));
+  const { enter } = recordingEnter(root);
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const shim = shimFor(root);
+    const env = fallbackEnv(root, { LLV_DOCKER_NSENTER_SHIMS: "1", FIXTURE_ENTER: enter });
+    expect(await socketStderr(shim, env, true, root)).toContain("native-bind-cause");
+    expect(await socketStderr(shim, env, false, root)).toBe("");
+  } finally { warn.mockRestore(); fs.rmSync(root, { recursive: true, force: true }); }
+}, 30_000);
+
+const KEY_BODY = Array.from({ length: 150 }, (_, line) => `KEYPAYLOAD${String(line).padStart(3, "0")}${"A".repeat(50)}`).join("\n");
+const SECRET_STDERR = {
+  "a complete key": `bind refused\n-----BEGIN PRIVATE KEY-----\n${KEY_BODY}\n-----END PRIVATE KEY-----\n`,
+  "a key clipped past the read bound": `bind refused\n-----BEGIN PRIVATE KEY-----\n${KEY_BODY}\n${KEY_BODY}\n`,
+  "a bearer value and a private path": `bind refused\nAuthorization: ${["Bea", "rer"].join("")} ${"abcdefghij".repeat(3)}\n@ROOT@/private/file\n`,
+};
+for (const [secret, text] of Object.entries(SECRET_STDERR)) for (const channel of ["pipe", "file"] as const) {
+  test.skipIf(process.platform !== "linux")(`a launcher that fails after printing ${secret} on its ${channel} reports the cause without the secret`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-wrapper-secret-"));
+    const bin = path.join(root, "bin"); fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(root, "secret.txt"), text.replace("@ROOT@", root));
+    // Stands in for a launcher whose setup fails after printing the secret.
+    fs.writeFileSync(path.join(bin, "python3"), channel === "pipe"
+      ? `#!/bin/sh\ncat '${path.join(root, "secret.txt")}' >&2\nexit 9\n`
+      : `#!/bin/sh\ncat '${path.join(root, "secret.txt")}' > "$LLV_SIGNAL_DIAGNOSTIC"\nexit 9\n`, { mode: 0o755 });
+    const error = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const env = fallbackEnv(root, { PATH: `${bin}:/usr/bin:/bin`, ...(channel === "file" ? { LLV_SIGNAL_IGNORE_NATIVE_STDIO: "1" } : {}) });
+      let message = "";
+      try { await spawnSignalSandbox("/bin/true", [], { env, stdio: ["ignore", "pipe", "pipe"] }); }
+      catch (thrown) { message = (thrown as Error).message; }
+      expect(message).toStartWith("agent signal sandbox unavailable: ");
+      expect(message).toContain("bind refused");
+      expect(message).not.toContain("KEYPAYLOAD");
+      expect(message).not.toContain("PRIVATE KEY");
+      expect(message).not.toContain("abcdefghij".repeat(3));
+      expect(message).not.toContain(root);
+      expect(message.length).toBeLessThanOrEqual(2100);
+    } finally { error.mockRestore(); fs.rmSync(root, { recursive: true, force: true }); }
+  }, 20_000);
+}
