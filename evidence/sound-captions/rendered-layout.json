@@ -1,0 +1,938 @@
+{
+  "capturedAt": "2026-10-23T02:43:08.372Z",
+  "command": "CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t \"sound captions\" (isolated roots, scripts/gate-slot.sh)",
+  "sourceDigests": {
+    "src/components/SoundCaptions.tsx": "4a6f7bf9edd6139ec4233599cd8c87a79f6a73a6f153c369d4f08921101c42ae",
+    "src/components/soundCaptionStyles.ts": "ef11b7e4d27255e4621f823b805d6e175e8b726a00888dca4a7b12de783c6090",
+    "src/lib/audio/captions.ts": "aa34bd96d37b4e26a5d80a4aa0a9df9f451f17806fa21e564491876ecde47889",
+    "src/lib/i18n/en.ts": "c7504d33ca1839397b185a1185186fa675da8461a353a88e8394dec5597fd60c",
+    "src/lib/i18n/uk.ts": "5fc068997fe4d5469dd40f20681c37d93eb4c751316f4a73a476334ab94cf1d3"
+  },
+  "readings": [
+    {
+      "tag": "1440×900 en light",
+      "width": 1440,
+      "height": 900,
+      "lang": "en",
+      "theme": "light",
+      "stacked": [
+        {
+          "sound": "step",
+          "line": "Visual critic passed",
+          "rect": [
+            1156.5,
+            126,
+            1424,
+            182
+          ]
+        },
+        {
+          "sound": "landed",
+          "line": "Merged · PR #3218",
+          "rect": [
+            1124,
+            190,
+            1424,
+            246
+          ]
+        },
+        {
+          "sound": "your-move",
+          "line": "An agent asks you",
+          "rect": [
+            1189.2,
+            254,
+            1424,
+            310
+          ]
+        },
+        {
+          "sound": "fault",
+          "line": "An agent was stopped: out of memory",
+          "rect": [
+            1124,
+            318,
+            1424,
+            374
+          ]
+        }
+      ],
+      "single": [
+        [
+          1274.3,
+          126,
+          1424,
+          182
+        ]
+      ],
+      "island": [
+        1311.6,
+        7.5,
+        1424,
+        39.5
+      ],
+      "taskOpen": {
+        "header": [
+          256,
+          56,
+          503,
+          97
+        ],
+        "toast": [
+          1288.3,
+          126,
+          1424,
+          182
+        ]
+      }
+    },
+    {
+      "tag": "1000×700 en light",
+      "width": 1000,
+      "height": 700,
+      "lang": "en",
+      "theme": "light",
+      "stacked": [
+        {
+          "sound": "step",
+          "line": "Visual critic passed",
+          "rect": [
+            716.5,
+            126,
+            984,
+            182
+          ]
+        },
+        {
+          "sound": "landed",
+          "line": "Merged · PR #3218",
+          "rect": [
+            684,
+            190,
+            984,
+            246
+          ]
+        },
+        {
+          "sound": "your-move",
+          "line": "An agent asks you",
+          "rect": [
+            749.2,
+            254,
+            984,
+            310
+          ]
+        },
+        {
+          "sound": "fault",
+          "line": "An agent was stopped: out of memory",
+          "rect": [
+            684,
+            318,
+            984,
+            374
+          ]
+        }
+      ],
+      "single": [
+        [
+          834.3,
+          126,
+          984,
+          182
+        ]
+      ],
+      "island": [
+        875.6,
+        7.5,
+        988,
+        39.5
+      ],
+      "taskOpen": {
+        "header": [
+          8,
+          8,
+          227,
+          49
+        ],
+        "toast": [
+          848.3,
+          126,
+          984,
+          182
+        ]
+      }
+    },
+    {
+      "tag": "640×700 en light",
+      "width": 640,
+      "height": 700,
+      "lang": "en",
+      "theme": "light",
+      "stacked": [
+        {
+          "sound": "step",
+          "line": "Visual critic passed",
+          "rect": [
+            341.5,
+            126,
+            609,
+            182
+          ]
+        },
+        {
+          "sound": "landed",
+          "line": "Merged · PR #3218",
+          "rect": [
+            309,
+            190,
+            609,
+            246
+          ]
+        },
+        {
+          "sound": "your-move",
+          "line": "An agent asks you",
+          "rect": [
+            374.2,
+            254,
+            609,
+            310
+          ]
+        },
+        {
+          "sound": "fault",
+          "line": "An agent was stopped: out of memory",
+          "rect": [
+            309,
+            318,
+            609,
+            374
+          ]
+        }
+      ],
+      "single": [
+        [
+          459.3,
+          126,
+          609,
+          182
+        ]
+      ],
+      "island": [
+        608.7,
+        7.5,
+        654.4,
+        39.5
+      ],
+      "taskOpen": {
+        "header": [
+          8,
+          8,
+          227,
+          49
+        ],
+        "toast": [
+          473.3,
+          126,
+          609,
+          182
+        ]
+      }
+    },
+    {
+      "tag": "1440×900 en dark",
+      "width": 1440,
+      "height": 900,
+      "lang": "en",
+      "theme": "dark",
+      "stacked": [
+        {
+          "sound": "step",
+          "line": "Visual critic passed",
+          "rect": [
+            1156.5,
+            126,
+            1424,
+            182
+          ]
+        },
+        {
+          "sound": "landed",
+          "line": "Merged · PR #3218",
+          "rect": [
+            1124,
+            190,
+            1424,
+            246
+          ]
+        },
+        {
+          "sound": "your-move",
+          "line": "An agent asks you",
+          "rect": [
+            1189.2,
+            254,
+            1424,
+            310
+          ]
+        },
+        {
+          "sound": "fault",
+          "line": "An agent was stopped: out of memory",
+          "rect": [
+            1124,
+            318,
+            1424,
+            374
+          ]
+        }
+      ],
+      "single": [
+        [
+          1274.3,
+          126,
+          1424,
+          182
+        ]
+      ],
+      "island": [
+        1311.6,
+        7.5,
+        1424,
+        39.5
+      ],
+      "taskOpen": {
+        "header": [
+          256,
+          56,
+          503,
+          97
+        ],
+        "toast": [
+          1288.3,
+          126,
+          1424,
+          182
+        ]
+      }
+    },
+    {
+      "tag": "1000×700 en dark",
+      "width": 1000,
+      "height": 700,
+      "lang": "en",
+      "theme": "dark",
+      "stacked": [
+        {
+          "sound": "step",
+          "line": "Visual critic passed",
+          "rect": [
+            716.5,
+            126,
+            984,
+            182
+          ]
+        },
+        {
+          "sound": "landed",
+          "line": "Merged · PR #3218",
+          "rect": [
+            684,
+            190,
+            984,
+            246
+          ]
+        },
+        {
+          "sound": "your-move",
+          "line": "An agent asks you",
+          "rect": [
+            749.2,
+            254,
+            984,
+            310
+          ]
+        },
+        {
+          "sound": "fault",
+          "line": "An agent was stopped: out of memory",
+          "rect": [
+            684,
+            318,
+            984,
+            374
+          ]
+        }
+      ],
+      "single": [
+        [
+          834.3,
+          126,
+          984,
+          182
+        ]
+      ],
+      "island": [
+        875.6,
+        7.5,
+        988,
+        39.5
+      ],
+      "taskOpen": {
+        "header": [
+          8,
+          8,
+          227,
+          49
+        ],
+        "toast": [
+          848.3,
+          126,
+          984,
+          182
+        ]
+      }
+    },
+    {
+      "tag": "640×700 en dark",
+      "width": 640,
+      "height": 700,
+      "lang": "en",
+      "theme": "dark",
+      "stacked": [
+        {
+          "sound": "step",
+          "line": "Visual critic passed",
+          "rect": [
+            341.5,
+            126,
+            609,
+            182
+          ]
+        },
+        {
+          "sound": "landed",
+          "line": "Merged · PR #3218",
+          "rect": [
+            309,
+            190,
+            609,
+            246
+          ]
+        },
+        {
+          "sound": "your-move",
+          "line": "An agent asks you",
+          "rect": [
+            374.2,
+            254,
+            609,
+            310
+          ]
+        },
+        {
+          "sound": "fault",
+          "line": "An agent was stopped: out of memory",
+          "rect": [
+            309,
+            318,
+            609,
+            374
+          ]
+        }
+      ],
+      "single": [
+        [
+          459.3,
+          126,
+          609,
+          182
+        ]
+      ],
+      "island": [
+        608.7,
+        7.5,
+        654.4,
+        39.5
+      ],
+      "taskOpen": {
+        "header": [
+          8,
+          8,
+          227,
+          49
+        ],
+        "toast": [
+          473.3,
+          126,
+          609,
+          182
+        ]
+      }
+    },
+    {
+      "tag": "1440×900 uk light",
+      "width": 1440,
+      "height": 900,
+      "lang": "uk",
+      "theme": "light",
+      "stacked": [
+        {
+          "sound": "step",
+          "line": "Критик вигляду — пройдено",
+          "rect": [
+            1156.5,
+            126,
+            1424,
+            182
+          ]
+        },
+        {
+          "sound": "landed",
+          "line": "Злито · PR #3218",
+          "rect": [
+            1124,
+            190,
+            1424,
+            246
+          ]
+        },
+        {
+          "sound": "your-move",
+          "line": "Агент питає вас",
+          "rect": [
+            1189.2,
+            254,
+            1424,
+            310
+          ]
+        },
+        {
+          "sound": "fault",
+          "line": "Агента зупинено: забракло пам'яті",
+          "rect": [
+            1124,
+            318,
+            1424,
+            374
+          ]
+        }
+      ],
+      "single": [
+        [
+          1287.8,
+          126,
+          1424,
+          182
+        ]
+      ],
+      "island": [
+        1304,
+        7.5,
+        1424,
+        39.5
+      ],
+      "taskOpen": {
+        "header": [
+          256,
+          56,
+          503,
+          97
+        ],
+        "toast": [
+          1295.6,
+          126,
+          1424,
+          182
+        ]
+      }
+    },
+    {
+      "tag": "1000×700 uk light",
+      "width": 1000,
+      "height": 700,
+      "lang": "uk",
+      "theme": "light",
+      "stacked": [
+        {
+          "sound": "step",
+          "line": "Критик вигляду — пройдено",
+          "rect": [
+            716.5,
+            126,
+            984,
+            182
+          ]
+        },
+        {
+          "sound": "landed",
+          "line": "Злито · PR #3218",
+          "rect": [
+            684,
+            190,
+            984,
+            246
+          ]
+        },
+        {
+          "sound": "your-move",
+          "line": "Агент питає вас",
+          "rect": [
+            749.2,
+            254,
+            984,
+            310
+          ]
+        },
+        {
+          "sound": "fault",
+          "line": "Агента зупинено: забракло пам'яті",
+          "rect": [
+            684,
+            318,
+            984,
+            374
+          ]
+        }
+      ],
+      "single": [
+        [
+          847.8,
+          126,
+          984,
+          182
+        ]
+      ],
+      "island": [
+        868,
+        7.5,
+        988,
+        39.5
+      ],
+      "taskOpen": {
+        "header": [
+          8,
+          8,
+          227,
+          49
+        ],
+        "toast": [
+          855.6,
+          126,
+          984,
+          182
+        ]
+      }
+    },
+    {
+      "tag": "640×700 uk light",
+      "width": 640,
+      "height": 700,
+      "lang": "uk",
+      "theme": "light",
+      "stacked": [
+        {
+          "sound": "step",
+          "line": "Критик вигляду — пройдено",
+          "rect": [
+            341.5,
+            126,
+            609,
+            182
+          ]
+        },
+        {
+          "sound": "landed",
+          "line": "Злито · PR #3218",
+          "rect": [
+            309,
+            190,
+            609,
+            246
+          ]
+        },
+        {
+          "sound": "your-move",
+          "line": "Агент питає вас",
+          "rect": [
+            374.2,
+            254,
+            609,
+            310
+          ]
+        },
+        {
+          "sound": "fault",
+          "line": "Агента зупинено: забракло пам'яті",
+          "rect": [
+            309,
+            318,
+            609,
+            374
+          ]
+        }
+      ],
+      "single": [
+        [
+          472.8,
+          126,
+          609,
+          182
+        ]
+      ],
+      "island": [
+        608.7,
+        7.5,
+        654.4,
+        39.5
+      ],
+      "taskOpen": {
+        "header": [
+          8,
+          8,
+          227,
+          49
+        ],
+        "toast": [
+          480.6,
+          126,
+          609,
+          182
+        ]
+      }
+    },
+    {
+      "tag": "1440×900 uk dark",
+      "width": 1440,
+      "height": 900,
+      "lang": "uk",
+      "theme": "dark",
+      "stacked": [
+        {
+          "sound": "step",
+          "line": "Критик вигляду — пройдено",
+          "rect": [
+            1156.5,
+            126,
+            1424,
+            182
+          ]
+        },
+        {
+          "sound": "landed",
+          "line": "Злито · PR #3218",
+          "rect": [
+            1124,
+            190,
+            1424,
+            246
+          ]
+        },
+        {
+          "sound": "your-move",
+          "line": "Агент питає вас",
+          "rect": [
+            1189.2,
+            254,
+            1424,
+            310
+          ]
+        },
+        {
+          "sound": "fault",
+          "line": "Агента зупинено: забракло пам'яті",
+          "rect": [
+            1124,
+            318,
+            1424,
+            374
+          ]
+        }
+      ],
+      "single": [
+        [
+          1287.8,
+          126,
+          1424,
+          182
+        ]
+      ],
+      "island": [
+        1304,
+        7.5,
+        1424,
+        39.5
+      ],
+      "taskOpen": {
+        "header": [
+          256,
+          56,
+          503,
+          97
+        ],
+        "toast": [
+          1295.6,
+          126,
+          1424,
+          182
+        ]
+      }
+    },
+    {
+      "tag": "1000×700 uk dark",
+      "width": 1000,
+      "height": 700,
+      "lang": "uk",
+      "theme": "dark",
+      "stacked": [
+        {
+          "sound": "step",
+          "line": "Критик вигляду — пройдено",
+          "rect": [
+            716.5,
+            126,
+            984,
+            182
+          ]
+        },
+        {
+          "sound": "landed",
+          "line": "Злито · PR #3218",
+          "rect": [
+            684,
+            190,
+            984,
+            246
+          ]
+        },
+        {
+          "sound": "your-move",
+          "line": "Агент питає вас",
+          "rect": [
+            749.2,
+            254,
+            984,
+            310
+          ]
+        },
+        {
+          "sound": "fault",
+          "line": "Агента зупинено: забракло пам'яті",
+          "rect": [
+            684,
+            318,
+            984,
+            374
+          ]
+        }
+      ],
+      "single": [
+        [
+          847.8,
+          126,
+          984,
+          182
+        ]
+      ],
+      "island": [
+        868,
+        7.5,
+        988,
+        39.5
+      ],
+      "taskOpen": {
+        "header": [
+          8,
+          8,
+          227,
+          49
+        ],
+        "toast": [
+          855.6,
+          126,
+          984,
+          182
+        ]
+      }
+    },
+    {
+      "tag": "640×700 uk dark",
+      "width": 640,
+      "height": 700,
+      "lang": "uk",
+      "theme": "dark",
+      "stacked": [
+        {
+          "sound": "step",
+          "line": "Критик вигляду — пройдено",
+          "rect": [
+            341.5,
+            126,
+            609,
+            182
+          ]
+        },
+        {
+          "sound": "landed",
+          "line": "Злито · PR #3218",
+          "rect": [
+            309,
+            190,
+            609,
+            246
+          ]
+        },
+        {
+          "sound": "your-move",
+          "line": "Агент питає вас",
+          "rect": [
+            374.2,
+            254,
+            609,
+            310
+          ]
+        },
+        {
+          "sound": "fault",
+          "line": "Агента зупинено: забракло пам'яті",
+          "rect": [
+            309,
+            318,
+            609,
+            374
+          ]
+        }
+      ],
+      "single": [
+        [
+          472.8,
+          126,
+          609,
+          182
+        ]
+      ],
+      "island": [
+        608.7,
+        7.5,
+        654.4,
+        39.5
+      ],
+      "taskOpen": {
+        "header": [
+          8,
+          8,
+          227,
+          49
+        ],
+        "toast": [
+          480.6,
+          126,
+          609,
+          182
+        ]
+      }
+    }
+  ],
+  "failures": []
+}

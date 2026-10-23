@@ -70,6 +70,7 @@ import { TeamPage } from "@/components/team/TeamPage";
 import { WorkspacePage } from "@/components/team/WorkspacePage";
 import { FIXTURE_WORKSPACE_IDS, workspacesFixture } from "@/components/team/workspacesEvidence.fixture";
 import { WORKSPACE_STORAGE_KEY } from "@/components/team/workspacesClient";
+import { pushSoundCaption } from "@/lib/audio/captions";
 
 /*
  * The real Viewer on the kanban face (#1695), over invented content equivalent
@@ -453,6 +454,11 @@ const REVIEW_STOPS = SCENARIO === "review-stops";
    on by default and off with `&merge=off`. */
 const AUTO_REFRESH = SCENARIO === "auto-refresh";
 const MERGE_STATES = SCENARIO === "merge-states" || AUTO_REFRESH;
+/* Sound captions (docs/design/sound-captions.md §6): the default board plus one lane whose visual critic is running.
+   The page exposes `soundCaptionsFixture`: `push` puts a caption on the stack directly (the layout states), and
+   `passStage` turns the critic's attempt to `passed`, which the next files poll carries to the real planner and
+   from there through the real cue player. */
+const SOUND_CAPTIONS = SCENARIO === "sound-captions";
 /* #2187 §5.3, §6 (mockup D4): a lane marked as finishing its task, running;
    a task whose marked lane merged while a second lane still runs, so its move
    to Done waits; and a Done task its marked lane finished. */
@@ -610,6 +616,26 @@ function pipeline(id: string, task: string, taskId: string, state: string, stage
     baseBranch: "main", baseRef: "main", lastPassedCommit: "", stages, runs, cursor, state, pausedState: null, stateDetail: null,
     srcPath: null, srcConversationId: null, createdAt: iso(8 * 60 * MIN), closedAt: null, ...over,
   } as unknown as Pipeline;
+}
+
+const soundCaptionPipelines: Pipeline[] = SOUND_CAPTIONS ? [
+  pipeline("p-captions", L("Sound captions: say what each sound means", "Підписи до звуків: що означає кожен"), "t-captions", "running",
+    [stage("implement", "builder", "visual-critic"), stage("visual-critic", "visual-critic", null)],
+    [
+      { stageId: "implement", attempts: [attempt(1, "passed", null, { completedAt: iso(30 * 60) })] },
+      { stageId: "visual-critic", attempts: [attempt(1, "running", null)] },
+    ],
+    { stageId: "visual-critic", state: "running", input: null, activatedBy: null }),
+] : [];
+if (SOUND_CAPTIONS) {
+  Object.assign(window, { soundCaptionsFixture: {
+    push: pushSoundCaption,
+    passStage() {
+      const critic = (soundCaptionPipelines[0]!.runs as unknown as Array<{ stageId: string; attempts: Array<{ state: string; completedAt: string | null }> }>).find((run) => run.stageId === "visual-critic")!;
+      critic.attempts[0]!.state = "passed";
+      critic.attempts[0]!.completedAt = new Date().toISOString();
+    },
+  } });
 }
 
 const files: FileEntry[] = [];
@@ -1722,6 +1748,7 @@ const pipelines: Pipeline[] = [
   ...reviewSpentPipelines,
   ...reviewStopPipelines,
   ...mergeStatePipelines,
+  ...soundCaptionPipelines,
   ...taskFinishPipelines,
   ...balancePipelines,
   ...arcPipelines,
@@ -1994,6 +2021,7 @@ const tasks: BoardTask[] = [
     task("t-rem-old", "assigned", L("A task from a peer that predates lane rows", "Задача від вузла, що ще не знає про рядки етапів"), "", 31 * MIN, [], { machine: STAGE_INSTALL } as Partial<BoardTask>),
     task("t-rem-done", "done", L("Publish the linked boards guide", "Опублікувати посібник зі зв’язаних дошок"), "", 3 * 60 * MIN, [], { machine: STAGE_INSTALL } as Partial<BoardTask>),
   ] : []),
+  ...(SOUND_CAPTIONS ? [task("t-captions", "assigned", L("Sound captions: say what each sound means", "Підписи до звуків: що означає кожен"), "", 3 * MIN)] : []),
   ...(MANY ? [task("t-many", "assigned", "Kanban: say what each pipeline of a task does", "Five pipelines on one card: two running, three finished.", 5 * MIN)] : []),
   ...(MARKS ? [task("t-marks", "assigned", "Say who runs each stage, and how often an edge fired", "Two pipelines: one fail edge fired twice of three, one with its budget spent.", 4 * MIN)] : []),
   ...(GLYPHS ? [
