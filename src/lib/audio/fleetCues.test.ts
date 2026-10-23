@@ -111,7 +111,7 @@ describe("S8: the conversation this device wrote to has answered", () => {
     expect(h.played).toEqual([]);
     h.step((s) => ({ ...s, a: { ...s.a!, turn: "running", activeTurnId: "t2", settledTurnId: null } }));
     h.step((s) => ({ ...s, a: { ...s.a!, turn: "idle", activeTurnId: null, settledTurnId: "t2", lastTurnOutcome: "completed" } }));
-    expect(h.played).toEqual([{ cue: "reply", eventId: "reply:a:t2" }]);
+    expect(h.played).toEqual([{ cue: "reply", eventId: "reply:a:t2", caption: { what: "reply", subject: null, target: { kind: "conversation", conversationId: "a" } } }]);
   });
 
   test("a later turn that is interrupted keeps the wait; the one after it answers", () => {

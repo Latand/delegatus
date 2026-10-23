@@ -8,6 +8,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
 import type { FileEntry } from "@/lib/types";
 
+import type { CueRequest } from "./cues";
 import { createCuePlayer, type CueTransport, type EventStartRequest } from "./cuePlayer";
 import { createFakeTimers } from "./fakeTimers.fixture";
 import { createHeardKeys, planDoneCues, planNeedsYouCues, planPipelineCues, type HeardStorage } from "./workCues";
@@ -42,6 +43,10 @@ function prototype(id: string, taskId: string | null, createdMsAgo = 5000): Mobi
 function update(id: string, atMsAgo = 5000): MobileAttentionEntry {
   return { kind: "update", id: `auto-update:${id}`, decision: { id, at: iso(atMsAgo), project: "p", blockers: null } };
 }
+
+/* These cases pin each request's identity, clock and obligation. What each one
+   says in its toast has its own cases at the end of the file. */
+const bare = (requests: CueRequest[]) => requests.map((request) => { const { caption, ...rest } = request; void caption; return rest; });
 
 describe("S6 and S7 read the needs-you queue (§4.1)", () => {
   const baseline = (entries: MobileAttentionEntry[] = []) => planNeedsYouCues(entries, null, "p", NOW)!;
@@ -92,7 +97,7 @@ describe("S6 and S7 read the needs-you queue (§4.1)", () => {
 
   test("a parked lane asks from `now − seconds`, and is keyed by its task", () => {
     const plan = planNeedsYouCues([pipelineRow("lane-1", 7, ["task-9"])], baseline(), "p", NOW)!;
-    expect(plan.requests).toEqual([{ cue: "your-move", eventId: "needs-you:lane-1:review:1", occurredAt: NOW - 7000, obligation: "task-9" }]);
+    expect(bare(plan.requests)).toEqual([{ cue: "your-move", eventId: "needs-you:lane-1:review:1", occurredAt: NOW - 7000, obligation: "task-9" }]);
   });
 
   test("a lane that parks a second time earns a new identity, and S6 sounds again after the obligation memory", () => {
@@ -140,7 +145,7 @@ describe("S6 and S7 read the needs-you queue (§4.1)", () => {
 
   test("a seat's decision form with no task, and the update decision, are their own obligations", () => {
     const plan = planNeedsYouCues([prototype("seat-decision-1", null, 9000), update("u1", 1000)], baseline(), "p", NOW)!;
-    expect(plan.requests).toEqual([
+    expect(bare(plan.requests)).toEqual([
       { cue: "your-move", eventId: "needs-you:seat-decision-1", occurredAt: NOW - 9000, obligation: "seat-decision-1" },
       { cue: "your-move", eventId: "needs-you:auto-update:u1", occurredAt: NOW - 1000, obligation: "auto-update:u1" },
     ]);
@@ -175,7 +180,7 @@ describe("S6 and S7 read the needs-you queue (§4.1)", () => {
     const queue = buildNeedsYouQueue([failed], [], nowSeconds, []);
     expect(queue.map((entry) => entry.id)).toEqual(["spawn:launch-1:launch-failed"]);
     const after = planNeedsYouCues(queue, before, "p", NOW)!;
-    expect(after.requests).toEqual([{ cue: "fault", eventId: "needs-you:spawn:launch-1:launch-failed", occurredAt: NOW - 3000, obligation: "spawn:launch-1:launch-failed" }]);
+    expect(bare(after.requests)).toEqual([{ cue: "fault", eventId: "needs-you:spawn:launch-1:launch-failed", occurredAt: NOW - 3000, obligation: "spawn:launch-1:launch-failed" }]);
   });
 
   test("a stand-in read for a scope still loading changes nothing", () => {
@@ -204,7 +209,7 @@ describe("S3, S4 and S7 read the board's pipelines (§4.2)", () => {
   test("an attempt entering `passed` is a step, keyed by lane, stage and attempt, on its own clock", () => {
     const before = seed([lane("a", { runs: [stage("build", [{ n: 1, state: "running" }])] })]);
     const after = planPipelineCues([lane("a", { runs: [stage("build", [{ n: 1, state: "passed", completedAt: iso(2000) }])] })], before, "p")!;
-    expect(after.requests).toEqual([{ cue: "step", eventId: "step:a:build:1", occurredAt: NOW - 2000, pipeline: "a" }]);
+    expect(bare(after.requests)).toEqual([{ cue: "step", eventId: "step:a:build:1", occurredAt: NOW - 2000, pipeline: "a" }]);
   });
 
   test("a failed attempt is silent: the review loop is working", () => {
@@ -222,7 +227,7 @@ describe("S3, S4 and S7 read the board's pipelines (§4.2)", () => {
   test("a merge reaching `merged` is a landing, on `mergedAt`", () => {
     const before = seed([lane("a", { merge: { state: "queued" } as Pipeline["merge"] })]);
     const after = planPipelineCues([lane("a", { merge: { state: "merged", mergedAt: iso(3000) } as Pipeline["merge"] })], before, "p")!;
-    expect(after.requests).toEqual([{ cue: "landed", eventId: "landed:a", occurredAt: NOW - 3000, pipeline: "a" }]);
+    expect(bare(after.requests)).toEqual([{ cue: "landed", eventId: "landed:a", occurredAt: NOW - 3000, pipeline: "a" }]);
   });
 
   test("a merged lane that then completes lands once", () => {
@@ -234,7 +239,7 @@ describe("S3, S4 and S7 read the board's pipelines (§4.2)", () => {
 
   test("a lane completing with no merge to make is a landing, on `closedAt`", () => {
     const after = planPipelineCues([lane("a", { state: "completed", closedAt: iso(1500) })], seed([lane("a")]), "p")!;
-    expect(after.requests).toEqual([{ cue: "landed", eventId: "landed:a", occurredAt: NOW - 1500, pipeline: "a" }]);
+    expect(bare(after.requests)).toEqual([{ cue: "landed", eventId: "landed:a", occurredAt: NOW - 1500, pipeline: "a" }]);
   });
 
   test("a lane completing with its merge blocked or cancelled never lands", () => {
@@ -251,7 +256,7 @@ describe("S3, S4 and S7 read the board's pipelines (§4.2)", () => {
       lane("a", { merge: { state: "blocked", blockedAt: iso(4000) } as Pipeline["merge"] }),
       lane("b", { merge: { state: "cancelled", blockedAt: iso(4000) } as Pipeline["merge"] }),
     ], before, "p")!;
-    expect(after.requests).toEqual([{ cue: "fault", eventId: "merge-blocked:a", occurredAt: NOW - 4000 }]);
+    expect(bare(after.requests)).toEqual([{ cue: "fault", eventId: "merge-blocked:a", occurredAt: NOW - 4000 }]);
   });
 
   test("a lane new to this scope is compared with nothing; the staleness rule absorbs old history", () => {
@@ -291,7 +296,7 @@ describe("S5 and the deploy and limit faults read the «Готово» feed (§4
       done("pr:1", "pr", 1000),
       done("task:1", "task", 1000),
     ], first, NOW, heard);
-    expect(plan.requests).toEqual([
+    expect(bare(plan.requests)).toEqual([
       { cue: "released", eventId: "done:deploy:1", occurredAt: NOW - 1000, maxAgeMs: 5 * 60_000 },
       { cue: "fault", eventId: "done:deploy:2", occurredAt: NOW - 1000, maxAgeMs: 5 * 60_000 },
       { cue: "fault", eventId: "done:deploy:3", occurredAt: NOW - 1000, maxAgeMs: 5 * 60_000 },
@@ -330,5 +335,110 @@ describe("S5 and the deploy and limit faults read the «Готово» feed (§4
     const broken: HeardStorage = { getItem: () => { throw new Error("denied"); }, setItem: () => { throw new Error("denied"); } };
     const plan = planDoneCues([done("deploy:9", "deploy", 1000, "succeeded")], null, NOW, createHeardKeys(broken));
     expect(plan.requests).toHaveLength(1);
+  });
+});
+
+/*
+ * What each sound's toast announces and about whom (docs/design/sound-captions.md §1):
+ * the planners attach plain data, and the stack names it in the operator's language.
+ */
+describe("the caption each planner attaches", () => {
+  const baseline = (entries: MobileAttentionEntry[] = []) => planNeedsYouCues(entries, null, "p", NOW)!;
+  const captionOf = (requests: CueRequest[]) => requests.map((request) => request.caption);
+  const withFile = (entry: MobileAttentionEntry, file: Partial<FileEntry>): MobileAttentionEntry => {
+    if (entry.kind !== "conversation") throw new Error("a conversation entry");
+    return { ...entry, item: { ...entry.item, file: file as FileEntry } };
+  };
+  const laneTarget = { kind: "lane", pipelineId: "a", project: "proj" } as const;
+
+  test("each conversation reason names itself, its conversation's title, and the entry that a click jumps to", () => {
+    const kinds = ["decision", "question", "plan", "permission", "delivery", "launch", "memory"] as const;
+    const entries = kinds.map((kind) => withFile(conversation(`c-${kind}`, kind), { title: `Title of ${kind}`, path: `/p/${kind}.jsonl`, conversationId: `conv-${kind}` }));
+    const plan = planNeedsYouCues(entries, baseline(), "p", NOW)!;
+    expect(captionOf(plan.requests)).toEqual(kinds.map((kind) => ({
+      what: kind,
+      subject: `Title of ${kind}`,
+      target: { kind: "needs-you", entryId: `c-${kind}`, then: { kind: "conversation", path: `/p/${kind}.jsonl`, conversationId: `conv-${kind}` } },
+    })));
+  });
+
+  test("a parked lane, a prototype choice and the update decision each have their own line", () => {
+    const row = pipelineRow("lane-1", 3, ["task-1"]);
+    if (row.kind !== "pipeline") throw new Error("a pipeline entry");
+    row.row.task = "Ship the thing";
+    row.row.pipeline.project = "proj";
+    const proto = prototype("proto-1", "task-1");
+    if (proto.kind !== "prototype") throw new Error("a prototype entry");
+    proto.notice.title = "Pick a variant";
+    const plan = planNeedsYouCues([row, proto, update("u1")], baseline(), "p", NOW)!;
+    expect(captionOf(plan.requests)).toEqual([
+      { what: "lane-decision", subject: "Ship the thing", target: { kind: "needs-you", entryId: "lane-1", then: { kind: "lane", pipelineId: "lane-1", project: "proj" } } },
+      { what: "prototype", subject: "Pick a variant", target: { kind: "needs-you", entryId: "proto-1", then: null } },
+      { what: "update", subject: null, target: { kind: "needs-you", entryId: "auto-update:u1", then: null } },
+    ]);
+  });
+
+  test("a subject is cut to 90 characters with the title cleaner, so a long task never makes a wide toast", () => {
+    const row = pipelineRow("lane-1", 3);
+    if (row.kind !== "pipeline") throw new Error("a pipeline entry");
+    row.row.task = `**${"word ".repeat(40)}**`;
+    const [request] = planNeedsYouCues([row], baseline(), "p", NOW)!.requests;
+    expect(request!.caption!.subject).toHaveLength(90);
+    expect(request!.caption!.subject!.endsWith("…")).toBe(true);
+    expect(request!.caption!.subject).not.toContain("*");
+  });
+
+  test("a record missing its title still sounds, with a caption that has no subject", () => {
+    const [request] = planNeedsYouCues([conversation("c1", "question")], baseline(), "p", NOW)!.requests;
+    expect(request!.cue).toBe("your-move");
+    expect(request!.caption).toMatchObject({ what: "question", subject: null });
+  });
+
+  test("a step names the stage that passed and the task, and leads to the lane's card", () => {
+    const stages = [{ id: "visual-critic", kind: "run", role: { roleId: "visual-critic" } }, { id: "build", kind: "run" }];
+    const before = planPipelineCues([lane("a", { task: "Sound captions", project: "proj", stages, runs: [stage("visual-critic", [{ n: 1, state: "running" }])] } as Partial<Pipeline>)], null, "p")!;
+    const after = planPipelineCues([lane("a", { task: "Sound captions", project: "proj", stages, runs: [stage("visual-critic", [{ n: 1, state: "passed", completedAt: iso(1000) }])] } as Partial<Pipeline>)], before, "p")!;
+    expect(captionOf(after.requests)).toEqual([
+      { what: "step", subject: "Sound captions", stage: { id: "visual-critic", kind: "run", role: { roleId: "visual-critic" } }, target: laneTarget },
+    ]);
+  });
+
+  test("a stage id that holds a colon still finds its stage", () => {
+    const stages = [{ id: "review:2", kind: "run" }];
+    const before = planPipelineCues([lane("a", { task: "t", project: "proj", stages, runs: [stage("review:2", [{ n: 1, state: "running" }])] } as Partial<Pipeline>)], null, "p")!;
+    const after = planPipelineCues([lane("a", { task: "t", project: "proj", stages, runs: [stage("review:2", [{ n: 1, state: "passed", completedAt: iso(1000) }])] } as Partial<Pipeline>)], before, "p")!;
+    expect(after.requests[0]!.caption!.stage).toEqual({ id: "review:2", kind: "run", role: undefined });
+  });
+
+  test("a landing says merged with its PR, or lane finished when there was no merge, and a blocked merge says so", () => {
+    const base = { task: "Ship it", project: "proj" } as Partial<Pipeline>;
+    const merged = planPipelineCues([lane("a", { ...base, merge: { state: "merged", mergedAt: iso(1000), prNumber: 3218 } as Pipeline["merge"] })], planPipelineCues([lane("a", base)], null, "p")!, "p")!;
+    const finished = planPipelineCues([lane("a", { ...base, state: "completed", closedAt: iso(1000) })], planPipelineCues([lane("a", base)], null, "p")!, "p")!;
+    const blocked = planPipelineCues([lane("a", { ...base, merge: { state: "blocked", blockedAt: iso(1000) } as Pipeline["merge"] })], planPipelineCues([lane("a", base)], null, "p")!, "p")!;
+    expect(captionOf(merged.requests)).toEqual([{ what: "merged", subject: "Ship it", pr: 3218, target: laneTarget }]);
+    expect(captionOf(finished.requests)).toEqual([{ what: "lane-done", subject: "Ship it", target: laneTarget }]);
+    expect(captionOf(blocked.requests)).toEqual([{ what: "merge-blocked", subject: "Ship it", target: laneTarget }]);
+  });
+
+  test("a release, a failed or rolled-back deploy and a limit episode name themselves and lead nowhere", () => {
+    const heard = createHeardKeys(memoryStorage());
+    const first = planDoneCues([], null, NOW, heard);
+    const item = (key: string, kind: DoneItemV1["kind"], extra: Partial<DoneItemV1>) => ({ ...done(key, kind, 1000, extra.refs?.phase), ...extra }) as DoneItemV1;
+    const plan = planDoneCues([
+      item("d1", "deploy", { title: "Release 1.2", refs: { phase: "succeeded" } }),
+      item("d2", "deploy", { title: "", refs: { phase: "succeeded", sha: "0123456789abcdef" } }),
+      item("d3", "deploy", { title: "x", refs: { phase: "failed" } }),
+      item("d4", "deploy", { title: "x", refs: { phase: "rolled-back" } }),
+      item("l1", "limit", { refs: { account: { engine: "codex", accountId: "acct-1", window: "5h", label: "Account A" } } }),
+      item("l2", "limit", { refs: { account: { engine: "codex", accountId: "acct-2", window: "week" } } }),
+    ], first, NOW, heard);
+    expect(captionOf(plan.requests)).toEqual([
+      { what: "released", subject: "Release 1.2", target: null },
+      { what: "released", subject: "0123456", target: null },
+      { what: "deploy-failed", subject: null, target: null },
+      { what: "deploy-rolled-back", subject: null, target: null },
+      { what: "limit", subject: "Account A · 5h", target: null },
+      { what: "limit", subject: "acct-2 · week", target: null },
+    ]);
   });
 });

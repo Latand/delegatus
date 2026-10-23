@@ -1,5 +1,6 @@
 "use client";
 
+import type { CueCaption } from "./captions";
 import { isPriorityCue, isTypingCue, TYPING_GAIN, typingAsset, type AudioCue, type CueRequest } from "./cues";
 import { createEventLane, type EventLane, type LaneTimers } from "./eventLane";
 import type { EventSoundId } from "./synth";
@@ -143,6 +144,14 @@ export interface CuePlayerOptions {
   timers?: LaneTimers;
   /** Called after S6 or S7 actually starts — the ambient loop ducks. */
   onPriorityCue?: (cue: AudioCue) => void;
+  /**
+   * Called after an event sound actually started and is audible (a non-null
+   * handle at a volume above zero), never for a preview: the caption that says
+   * what it announced. `captions` is empty when no request carried one. A cut
+   * sound's replay (captions null in the lane) already showed its toast and
+   * does not call this.
+   */
+  onPlayed?: (sound: EventSoundId, batch: number, captions: CueCaption[]) => void;
   dedupeCapacity?: number;
   /** Slice choice, injectable for tests. */
   pick?: () => number;
@@ -182,7 +191,7 @@ export function createCuePlayer(options: CuePlayerOptions): CuePlayer {
 
   const lane: EventLane = createEventLane({
     timers,
-    start(sound, batch) {
+    start(sound, batch, captions) {
       /* Read at play time: a mute or a call that arrived while the sound
          waited in its window wins. */
       const prefs = options.prefs();
@@ -196,6 +205,7 @@ export function createCuePlayer(options: CuePlayerOptions): CuePlayer {
         batch,
       });
       if (handle && isPriorityCue(sound)) options.onPriorityCue?.(sound);
+      if (handle && captions && prefs.cueVolume > 0) options.onPlayed?.(sound, batch, captions);
       return handle;
     },
   });
@@ -251,7 +261,7 @@ export function createCuePlayer(options: CuePlayerOptions): CuePlayer {
       if (now.voiceCall && QUIET_DURING_CALL.has(request.cue)) return "disabled";
       /* One device, one sound per event: only the tab that owns them. */
       if (!now.ownsEvents()) return "dropped";
-      const outcome = lane.request({ sound: request.cue, obligation: request.obligation, pipeline: request.pipeline });
+      const outcome = lane.request({ sound: request.cue, obligation: request.obligation, pipeline: request.pipeline, caption: request.caption });
       return outcome === "accepted" ? "scheduled" : "dropped";
     },
 

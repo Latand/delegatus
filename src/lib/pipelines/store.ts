@@ -259,7 +259,16 @@ function isStageSuspension(value: unknown): boolean {
     && dated(suspension.requestedAt)
     && (suspension.stoppedAt === undefined || dated(suspension.stoppedAt))
     && (suspension.stopRevision === undefined || Number.isSafeInteger(suspension.stopRevision) && (suspension.stopRevision as number) >= 0)
-    && (suspension.operatorStoppedAt === undefined || dated(suspension.operatorStoppedAt));
+    && (suspension.operatorStoppedAt === undefined || dated(suspension.operatorStoppedAt))
+    && (suspension.hold === undefined || isSuspensionHold(suspension.hold));
+}
+
+function isSuspensionHold(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const hold = value as Record<string, unknown>;
+  return typeof hold.accountId === "string" && hold.accountId.length > 0
+    && (hold.resetsAt === null || Number.isSafeInteger(hold.resetsAt) && (hold.resetsAt as number) >= 0)
+    && (hold.observedAt === null || typeof hold.observedAt === "string" && Number.isFinite(Date.parse(hold.observedAt)));
 }
 
 function isPublicationTextRepair(value: unknown): boolean {
@@ -369,6 +378,7 @@ function isAttempt(value: unknown, index: number): boolean {
     isVerdictRecovery(attempt.verdictRecovery) &&
     isRuntimeSwitches(attempt.runtimeSwitches) &&
     isStageSuspension(attempt.suspension) &&
+    (attempt.accountHolds === undefined || Array.isArray(attempt.accountHolds) && attempt.accountHolds.every(isSuspensionHold)) &&
     (attempt.runtimeEvidenceSince === undefined || typeof attempt.runtimeEvidenceSince === "string" && Number.isFinite(Date.parse(attempt.runtimeEvidenceSince))) &&
     (attempt.runtimeAccountPin === undefined || isNullableString(attempt.runtimeAccountPin)) &&
     isAttemptDefinition(attempt.definition) &&
@@ -1495,6 +1505,7 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
         ? run.attempts.map((attempt) => ({
             ...attempt,
             ...(attempt.suspension ? { suspension: { ...attempt.suspension } } : {}),
+            ...(attempt.accountHolds ? { accountHolds: attempt.accountHolds.map((hold) => ({ ...hold })) } : {}),
             ...(attempt.runtimeSwitches ? { runtimeSwitches: structuredClone(attempt.runtimeSwitches) } : {}),
             launchId: attempt.launchId ?? null,
             conversationId: attempt.conversationId ?? null,
