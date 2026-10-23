@@ -248,7 +248,7 @@ import {
 import { resolveProjectAttribution } from "@/lib/session/projectResolution";
 import { overlaySessionTitles } from "@/lib/session/titleProjection";
 import { linkedContext, withOwnership } from "@/lib/links/linked";
-import { applyAssignmentPatches, createTask, patchTask, type CreateTaskInput, type PatchTaskInput } from "@/lib/tasks/commands";
+import { applyAssignmentPatches, createTask, patchTask, taskDuePatch, type CreateTaskInput, type PatchTaskInput } from "@/lib/tasks/commands";
 import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
 import { recordAuthors, type RecordAuthor } from "@/lib/team";
 import { pipelineWorkLinks, pullRequestSummary, taskWorkLinkContext, taskWorkLinks } from "@/lib/forge/resolve";
@@ -2260,7 +2260,18 @@ async function refineBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
   }), omittedRecordCount: fullAnswer(args) ? 0 : result.refined.length, ...answerHint(args, "get_task(taskId) or update_task with full:true returns the full task.") };
 }
 
+/** Reads only: deterministic date refusals must precede the MCP receipt claim. */
+function admitTaskDuePatch(args: McpToolArgs): void {
+  if (args.refine !== undefined || !Object.hasOwn(args, "dueAt") && !Object.hasOwn(args, "dueTz")) return;
+  const taskId = required(args, "taskId");
+  const task = taskSelectionSource()?.read(taskId);
+  if (!task) return; // The ordinary command owns the missing-task refusal.
+  const result = taskDuePatch(task, args as PatchTaskInput, new Date().toISOString(), { actor: "agent" });
+  if (!result.ok) throw new McpToolRefusal(result.error, { code: result.code ?? "TASK_INVALID_FIELD", field: result.field, status: result.status });
+}
+
 async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  admitTaskDuePatch(args);
   const maintainer = maintenanceCaller(dependencies);
   const caller = attributionOf(dependencies);
   if (args.refine !== undefined) {
@@ -8130,7 +8141,7 @@ export function viewerMcpBindings(
     send_message: (args, context) => sendMessage(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
     message_receipt: (args) => messageReceipt(args),
     create_task: orchestratorProjectBinding(domainDependencies, (args) => createBoardTask(args, domainDependencies), true, true, true),
-    update_task: (args) => updateBoardTask(args, domainDependencies),
+    update_task: Object.assign((args: McpToolArgs) => updateBoardTask(args, domainDependencies), { prepareAdmission: admitTaskDuePatch }),
     create_pipeline: (args, context) => unadmittedBeforeMutation(async () => (await createPipeline(args, context, domainDependencies))),
     pipeline_action: Object.assign(
       (args: McpToolArgs) => unadmittedBeforeMutation(() => pipelineAction(args, domainDependencies)),

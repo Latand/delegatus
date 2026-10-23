@@ -294,6 +294,47 @@ function normalizeDue(dueAt: unknown, dueTz: unknown): DueResult {
   return { ok: true, dueAt: new Date(parsed).toISOString(), dueTz };
 }
 
+/** Pure date admission, shared by pre-receipt MCP admission and the locked write. */
+export function taskDuePatch(task: BoardTask, input: PatchTaskInput, now: string, options: PatchTaskOptions = {}):
+  { ok: true; patch: Partial<BoardTask> } | TaskRefusal {
+  const patch: Partial<BoardTask> = {};
+  if (Object.hasOwn(input, "dueAt") || Object.hasOwn(input, "dueTz")) {
+    if (input.dueAt === null && input.dueTz === undefined) {
+      patch.dueAt = undefined;
+      patch.dueTz = undefined;
+    } else {
+      const due = normalizeDue(input.dueAt, input.dueTz ?? (input.dueAt ? task.dueTz ?? Intl.DateTimeFormat().resolvedOptions().timeZone : undefined));
+      if (!due.ok) return { ok: false, error: due.error, status: 400 };
+      patch.dueAt = due.dueAt;
+      patch.dueTz = due.dueTz;
+    }
+    if (options.actor === "agent" && !patch.dueAt) {
+      return { ok: false, status: 400, code: "TASK_DUE_REQUIRED", field: "dueAt", error: "Only the operator can clear a due date" };
+    }
+    if (patch.dueAt) {
+      const next = Date.parse(patch.dueAt);
+      if (options.actor === "agent" && next <= Date.parse(now)) {
+        return { ok: false, status: 400, code: "TASK_DUE_PAST", field: "dueAt", error: "dueAt must be in the future" };
+      }
+      const reason = typeof input.dueReason === "string" ? input.dueReason.trim() : undefined;
+      const slip = !!task.dueAt && Date.parse(task.dueAt) <= Date.parse(now) && next > Date.parse(task.dueAt);
+      if (slip && options.actor === "agent" && (!reason || reason.length > 200)) {
+        return { ok: false, status: 400, code: "TASK_DUE_REASON_REQUIRED", field: "dueReason", error: "A slip needs a dueReason of 1 to 200 characters" };
+      }
+      if (input.dueReason !== undefined && (typeof input.dueReason !== "string" || (reason?.length ?? 0) > 200)) {
+        return { ok: false, status: 400, code: "TASK_INVALID_FIELD", field: "dueReason", error: "dueReason must be at most 200 characters" };
+      }
+      const history = storedDueHistory(task.dueHistory) ?? { firstAt: task.dueAt ?? patch.dueAt, slips: 0 };
+      patch.dueHistory = slip ? { ...history, slips: history.slips + 1, last: {
+        at: now, from: task.dueAt!, to: patch.dueAt, by: options.actor ?? "operator",
+        ...(reason ? { reason } : {}), ...(options.conversationId ? { conversationId: options.conversationId } : {}),
+      } } : history;
+    } else patch.dueHistory = undefined;
+  }
+
+  return { ok: true, patch };
+}
+
 type AttachmentsResult = { ok: true; attachments?: TaskAttachment[] } | TaskRefusal;
 
 function normalizeAttachments(value: unknown, exists: (att: TaskAttachment) => boolean): AttachmentsResult {
@@ -690,41 +731,9 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     if (!edited.ok) return edited;
     if (edited.changed) patch.workLinks = edited.links.length ? edited.links : undefined;
   }
-  /* Clearing is operator-only. A supplied date retains its zone when omitted;
-     rescheduling a passed date records a slip atomically with the new date. */
-  if (Object.hasOwn(input, "dueAt") || Object.hasOwn(input, "dueTz")) {
-    if (input.dueAt === null && input.dueTz === undefined) {
-      patch.dueAt = undefined;
-      patch.dueTz = undefined;
-    } else {
-      const due = normalizeDue(input.dueAt, input.dueTz ?? (input.dueAt ? task.dueTz ?? Intl.DateTimeFormat().resolvedOptions().timeZone : undefined));
-      if (!due.ok) return { ok: false, error: due.error, status: 400 };
-      patch.dueAt = due.dueAt;
-      patch.dueTz = due.dueTz;
-    }
-    if (options.actor === "agent" && !patch.dueAt) {
-      return { ok: false, status: 400, code: "TASK_DUE_REQUIRED", field: "dueAt", error: "Only the operator can clear a due date" };
-    }
-    if (patch.dueAt) {
-      const next = Date.parse(patch.dueAt);
-      if (options.actor === "agent" && next <= Date.parse(now)) {
-        return { ok: false, status: 400, code: "TASK_DUE_PAST", field: "dueAt", error: "dueAt must be in the future" };
-      }
-      const reason = typeof input.dueReason === "string" ? input.dueReason.trim() : undefined;
-      const slip = !!task.dueAt && Date.parse(task.dueAt) <= Date.parse(now) && next > Date.parse(task.dueAt);
-      if (slip && options.actor === "agent" && (!reason || reason.length > 200)) {
-        return { ok: false, status: 400, code: "TASK_DUE_REASON_REQUIRED", field: "dueReason", error: "A slip needs a dueReason of 1 to 200 characters" };
-      }
-      if (input.dueReason !== undefined && (typeof input.dueReason !== "string" || (reason?.length ?? 0) > 200)) {
-        return { ok: false, status: 400, code: "TASK_INVALID_FIELD", field: "dueReason", error: "dueReason must be at most 200 characters" };
-      }
-      const history = storedDueHistory(task.dueHistory) ?? { firstAt: task.dueAt ?? patch.dueAt, slips: 0 };
-      patch.dueHistory = slip ? { ...history, slips: history.slips + 1, last: {
-        at: now, from: task.dueAt!, to: patch.dueAt, by: options.actor ?? "operator",
-        ...(reason ? { reason } : {}), ...(options.conversationId ? { conversationId: options.conversationId } : {}),
-      } } : history;
-    } else patch.dueHistory = undefined;
-  }
+  const due = taskDuePatch(task, input, now, options);
+  if (!due.ok) return due;
+  Object.assign(patch, due.patch);
 
   const candidateKey = Object.hasOwn(patch, "findingKey") ? patch.findingKey : task.findingKey;
   if (candidateKey !== undefined && (patch.status ?? task.status) !== "done"
