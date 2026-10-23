@@ -328,8 +328,10 @@ test("overdue selection runs once on gather and every refresh, including cached 
   const pipelines = Object.freeze([]);
   ports.pipelines = () => pipelines;
   ports.now = () => now;
-  ports.overdueTasks = (project, at) => {
+  const forwarded: string[][] = [];
+  ports.overdueTasks = (project, at, shown) => {
     expect(project).toBe(PROJECT);
+    forwarded.push([...shown]);
     calls.push(at);
     return at >= Date.parse(task.dueAt!) ? [task] : [];
   };
@@ -342,7 +344,14 @@ test("overdue selection runs once on gather and every refresh, including cached 
   expect(refreshed.overdueTasks?.[0]?.id).toBe(task.id);
   const again = refreshSeatTickInput(refreshed, ports);
   expect(calls).toEqual([NOW, now, now]);
-  expect(seatTickDecision(again).verdict.kind).toBe("wake");
+  const decision = seatTickDecision(again);
+  expect(decision.verdict.kind).toBe("wake");
+  if (decision.verdict.kind !== "wake") throw new Error("missing overdue wake");
+  const { seatTickWakeCommit, seatTickWakeCommitPlan } = await import("./seatTick");
+  const commit = seatTickWakeCommitPlan(decision.verdict, { fingerprint: again.changeFingerprint, eventsThrough: 0 })!;
+  const landed = seatTickWakeCommit(decision.state, commit, now);
+  refreshSeatTickInput({ ...again, state: landed }, ports);
+  expect(forwarded).toEqual([[], [], [], [`t:${task.id}:${Date.parse(task.dueAt!)}`]]);
   ports.overdueTasks = () => { throw new Error("overdue source unavailable"); };
   expect(() => refreshSeatTickInput(again, ports)).toThrow("overdue source unavailable");
 });

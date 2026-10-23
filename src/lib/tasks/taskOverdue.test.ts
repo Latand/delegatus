@@ -44,8 +44,8 @@ test("indexed overdue selection decodes three of 1000 dated open rows, excludes 
       finally { db.exec("ROLLBACK"); }
       // Capture EXPLAIN for the exact production predicate/order/limit, including aliases and duplicate binds.
       for (const projects of [["fixture"], ["old", "fixture"], ["fixture", "fixture"]]) {
-        const plan = db.query<{ detail: string }, [string, number, number, string | null, number]>(`EXPLAIN QUERY PLAN ${OVERDUE_TASK_KEYS_SQL}`)
-          .all(JSON.stringify(projects), NOW, NOW, null, 51);
+        const plan = db.query<{ detail: string }, [string, string, number, string, number, string]>(`EXPLAIN QUERY PLAN ${OVERDUE_TASK_KEYS_SQL}`)
+          .all(JSON.stringify(projects), JSON.stringify([""]), NOW, "[]", 51, "null");
         expect(plan.some(row => row.detail.includes("SEARCH") && row.detail.includes("state_rows_task_due"))).toBe(true);
         expect(plan.some(row => /SCAN state_rows/.test(row.detail))).toBe(false);
       }
@@ -75,4 +75,66 @@ test("task reader resolves canonical projects and aliases without a whole-store 
     else process.env.LLV_STATE_DIR = previousState;
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+// Python exposes SQLite's VM progress counter, so the check measures examined
+// work rather than treating a decoder count or a LIMIT as a work bound.
+test.skipIf(process.platform !== "linux")("SQLite VM work stays bounded as eligible, future-held and remote prefixes grow", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "overdue-work-"));
+  const filename = path.join(root, "state.sqlite");
+  try {
+    initializeStateCollections(filename, [{ collection: "tasks", schemaVersion: 1, migrationId: "work",
+      key: (row: BoardTask) => `t:${row.id}`, loadRecords: () => [] }]);
+    const script = `
+import sqlite3, sys, json
+conn = sqlite3.connect(sys.argv[1])
+query, now = sys.argv[2], int(sys.argv[3])
+counts = {}
+for case in ['eligible', 'held', 'remote', 'eligible-sweep', 'held-sweep', 'remote-sweep']:
+    mode = case.split('-')[0]
+    cursor = json.dumps([0, 1792627200000, 't:eligible-030']) if case.endswith('-sweep') else 'null'
+    observed = []
+    for size in [1000, 10000]:
+        conn.execute("DELETE FROM state_rows WHERE collection='tasks'")
+        rows = []
+        for n in range(size):
+            row = dict(id=f'prefix-{n:05}', project='fixture', status='inbox', dueAt='2026-10-01T00:00:00Z')
+            if mode == 'held': row['hold'] = dict(until='2026-12-01T00:00:00Z')
+            if mode == 'remote': row['machine'] = 'elsewhere'
+            rows.append(('tasks', 't:'+row['id'], json.dumps(row), n, 1, 0))
+        for n in range(60):
+            row = dict(id=f'eligible-{n:03}', project='fixture', status='inbox', priority='high', dueAt='2026-10-22T00:00:00Z')
+            rows.append(('tasks', 't:'+row['id'], json.dumps(row), size+n, 1, 0))
+        conn.executemany('INSERT INTO state_rows VALUES (?,?,?,?,?,?)', rows)
+        conn.commit()
+        # Warm statement preparation and schema-cookie revalidation before
+        # measuring the two observations under identical conditions.
+        params = {'1': json.dumps(['fixture','fixture','alias']), '2': json.dumps(['','self','self']), '3': now, '4': '[]', '5': 51, '6': cursor}
+        conn.execute(query, params).fetchall()
+        repeats = []
+        for repeat in range(2):
+            steps = [0]
+            def count():
+                steps[0] += 1
+                return 0
+            conn.set_progress_handler(count, 1)
+            keys = conn.execute(query, params).fetchall()
+            conn.set_progress_handler(None, 0)
+            assert len(keys) == 51
+            assert all(key[0].startswith('t:eligible-') for key in keys)
+            repeats.append(steps[0])
+        observed.append(repeats)
+    counts[case] = observed
+print(json.dumps(counts))
+`;
+    const child = Bun.spawnSync({ cmd: ["python3", "-c", script, filename, OVERDUE_TASK_KEYS_SQL, String(NOW)], stdout: "pipe", stderr: "pipe" });
+    expect(child.exitCode, child.stderr.toString()).toBe(0);
+    const counts = JSON.parse(child.stdout.toString()) as Record<string, number[][]>;
+    for (const observations of Object.values(counts)) {
+      expect(observations[0]![0], JSON.stringify(counts)).toBe(observations[0]![1]);
+      expect(observations[1]![0], JSON.stringify(counts)).toBe(observations[1]![1]);
+      expect(observations[1]![0]!).toBeLessThanOrEqual(observations[0]![0]! + 50);
+      expect(observations[1]![0]!).toBeLessThan(50000);
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

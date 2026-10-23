@@ -613,6 +613,8 @@ export interface SeatTickOwnLaneInput {
 }
 
 export interface SeatTickTaskInput {
+  /** Read-only selection credit; a landing alone advances the overdue sweep. */
+  overdueSweep?: string;
   dueAt?: string;
   dueHistory?: import("@/lib/tasks/types").BoardTask["dueHistory"];
   priority?: import("@/lib/tasks/types").BoardTask["priority"];

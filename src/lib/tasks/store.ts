@@ -26,7 +26,7 @@ import {
   type LegacyImportOutcome,
   type LegacyReconcileSummary,
 } from "@/lib/state/legacyImport";
-import { readStateImport, SqliteStateCollection, type StateImportRecord, type StateImportRow } from "@/lib/state/sqliteStateStore";
+import { readStateImport, SqliteStateCollection, type StateImportRecord, type StateImportRow, type OverdueTaskCursor } from "@/lib/state/sqliteStateStore";
 
 import { TASK_SYNC_GROUPS } from "./types";
 import { derivedStamp } from "@/lib/links/stamp";
@@ -570,19 +570,20 @@ export function loadTasksFile(filePath = TASKS_FILE): TasksFileState {
 }
 
 /** The tick reads only overdue payloads, independently of the board snapshot. */
-export function overdueTasks(project: string, nowMs: number, filePath = TASKS_FILE): BoardTask[] {
+export type OverdueBoardTask = BoardTask & { overdueSweep?: string };
+export function overdueTasks(project: string, nowMs: number, filePath = TASKS_FILE, shown: readonly string[] = [], cursor: OverdueTaskCursor | null = null): OverdueBoardTask[] {
   const collection = taskCollection(filePath, "read");
   if (!collection) throw new Error("overdue task selection requires the SQLite task store");
   const canonical = canonicalProject(project);
   const projects = [canonical, ...Object.keys(projectAliasSnapshot().aliases).filter(alias => canonicalProject(alias) === canonical)];
   const context = linkedContext();
-  return collection.overdueTaskKeys(projects, nowMs, 51, context.self?.id ?? null)
-    .flatMap(key => {
-      const row = collection.get(key);
+  return collection.overdueTaskRows(projects, nowMs, 51, context.self?.id ?? null, shown, cursor)
+    .flatMap(selection => {
+      const row = collection.get(selection.row_key);
       const task = row ? coerceTask(row) : null;
       return task && canonicalProject(task.project) === canonical && task.status !== "done" && runsHere(task, context)
         && task.dueAt && Date.parse(task.dueAt) <= nowMs
-        && !(task.hold?.until && Date.parse(task.hold.until) > nowMs) ? [task] : [];
+        && !(task.hold?.until && Date.parse(task.hold.until) > nowMs) ? [{ ...task, ...(selection.advance ? { overdueSweep: Buffer.from(JSON.stringify([selection.priority, selection.eligible_at, selection.row_key])).toString("base64url") } : {}) }] : [];
     });
 }
 

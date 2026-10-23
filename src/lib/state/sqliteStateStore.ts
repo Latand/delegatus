@@ -408,7 +408,10 @@ const stateSchema = [
       AND json_extract(value_json,'$.status') <> 'done'`,
   `CREATE INDEX IF NOT EXISTS state_rows_task_due ON state_rows(
     json_extract(value_json,'$.project'),
-    round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000), row_key)
+    coalesce(json_extract(value_json,'$.machine'),''),
+    CASE json_extract(value_json,'$.priority') WHEN 'high' THEN 0 WHEN 'low' THEN 2 ELSE 1 END,
+    max(round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000),
+      coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0)), row_key)
     WHERE collection='tasks' AND json_valid(value_json)
       AND json_type(value_json,'$.dueAt')='text' AND json_type(value_json,'$.status')='text'
       AND json_extract(value_json,'$.status') <> 'done'`,
@@ -473,6 +476,11 @@ const stateSchema = [
 ];
 const stateSchemaNames = stateSchema.map(sql => /^CREATE (?:UNIQUE )?(?:TABLE|INDEX|TRIGGER) IF NOT EXISTS (\w+)/.exec(sql)![1]!);
 
+function taskDueIndexCurrent(db: Database): boolean {
+  return db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE type='index' AND name='state_rows_task_due'")
+    .get()?.sql.includes("coalesce(json_extract(value_json,'$.machine'),'')") === true;
+}
+
 function openRawDatabase(filename: string): Database {
   const db = connectRawDatabase(filename);
   try {
@@ -489,6 +497,7 @@ function openRawDatabase(filename: string): Database {
           && pipelineControllerReferencesReady(db, names)
           && (pipelineControllerReferencesCurrent(db) || !mayRunStateStartupMutation(path.dirname(filename)))
           && pipelineEvidenceIndexReady(db)
+          && taskDueIndexCurrent(db)
           && db.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get()?.journal_mode === "wal"
           && db.query<{ name: string }, []>("PRAGMA table_info(state_collections)").all().some(row => row.name === "change_floor")
           && db.query<{ name: string }, []>("PRAGMA table_info(state_imports)").all().some(row => row.name === "reconciled_sha256")) return db;
@@ -500,6 +509,7 @@ function openRawDatabase(filename: string): Database {
         db.exec("PRAGMA journal_mode = WAL");
         db.exec("PRAGMA auto_vacuum = INCREMENTAL");
         db.exec("BEGIN IMMEDIATE");
+        if (!taskDueIndexCurrent(db)) db.exec("DROP INDEX IF EXISTS state_rows_task_due");
         for (const sql of stateSchema) db.exec(sql);
         const collectionColumns = db.query<{ name: string }, []>("PRAGMA table_info(state_collections)").all();
         if (!collectionColumns.some((column) => column.name === "change_floor")) {
@@ -1237,19 +1247,57 @@ function sharedStateReadonlyDatabase(filename: string): Database {
   return db;
 }
 
+export type OverdueTaskCursor = readonly [priority: number, eligibleAt: number, rowKey: string];
+type OverdueTaskRow = { row_key: string; priority: number; eligible_at: number; advance: number | null };
+
+/** Bounded head and sweep pages share the eligibility index. The fixed head
+ * notices urgent arrivals; the sweep advances beyond daily repeats. */
 export const OVERDUE_TASK_KEYS_SQL = `
-      SELECT row_key FROM state_rows INDEXED BY state_rows_task_due
-      WHERE collection='tasks' AND json_valid(value_json)
-        AND json_type(value_json,'$.dueAt')='text' AND json_type(value_json,'$.status')='text'
-        AND json_extract(value_json,'$.status') <> 'done'
-        AND json_extract(value_json,'$.project') IN (SELECT value FROM json_each(?))
-        AND round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) <= ?
-        AND coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0) <= ?
-        AND (coalesce(json_extract(value_json,'$.machine'),'') = '' OR json_extract(value_json,'$.machine') = ?)
-      ORDER BY CASE json_extract(value_json,'$.priority') WHEN 'high' THEN 0 WHEN 'low' THEN 2 ELSE 1 END,
-        round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000), row_key
-      LIMIT ?
-    `;
+  WITH scopes AS (
+    SELECT DISTINCT p.value AS project, m.value AS machine, q.value AS priority, pass.value AS pass
+    FROM json_each(?1) p, json_each(?2) m, json_each('[0,1,2]') q, json_each('[0,1]') pass
+  ), pages AS MATERIALIZED (
+    SELECT priority, pass, (
+      SELECT json_group_array(json_object('key', row_key, 'due', due, 'eligible', eligible)) FROM (
+        SELECT row_key, round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) AS due,
+          max(round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000),
+            coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0)) AS eligible
+        FROM state_rows INDEXED BY state_rows_task_due
+        WHERE collection='tasks' AND json_valid(value_json)
+          AND json_type(value_json,'$.dueAt')='text' AND json_type(value_json,'$.status')='text'
+          AND json_extract(value_json,'$.status') <> 'done'
+          AND json_extract(value_json,'$.project')=scopes.project
+          AND coalesce(json_extract(value_json,'$.machine'),'')=scopes.machine
+          AND CASE json_extract(value_json,'$.priority') WHEN 'high' THEN 0 WHEN 'low' THEN 2 ELSE 1 END=scopes.priority
+          AND (scopes.pass=0 OR scopes.priority >= coalesce(json_extract(?6,'$[0]'), -1))
+          AND (max(round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000),
+            coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0)), row_key) > (
+              CASE WHEN scopes.pass=1 AND scopes.priority=json_extract(?6,'$[0]') THEN json_extract(?6,'$[1]') ELSE -9007199254740991 END,
+              CASE WHEN scopes.pass=1 AND scopes.priority=json_extract(?6,'$[0]') THEN json_extract(?6,'$[2]') ELSE '' END)
+          AND max(round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000),
+            coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0)) <= ?3
+          AND row_key || ':' || CAST(round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) AS INTEGER)
+            NOT IN (SELECT value FROM json_each(CASE scopes.pass WHEN 1 THEN ?4 ELSE '[]' END))
+        ORDER BY max(round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000),
+          coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0)), row_key
+        LIMIT 51
+      )
+    ) AS rows FROM scopes
+  ), expanded AS MATERIALIZED (
+    SELECT priority, pass, json_extract(item.value,'$.key') AS row_key,
+      json_extract(item.value,'$.due') AS due, json_extract(item.value,'$.eligible') AS eligible_at
+    FROM pages, json_each(pages.rows) item
+  ), head AS MATERIALIZED (
+    SELECT row_key, priority, due, eligible_at FROM expanded WHERE pass=0 ORDER BY priority, eligible_at, row_key LIMIT 25
+  ), sweep AS MATERIALIZED (
+    SELECT row_key, priority, due, eligible_at FROM expanded WHERE pass=1 ORDER BY priority, eligible_at, row_key LIMIT 51
+  ), combined AS (
+    SELECT * FROM head UNION SELECT * FROM sweep
+  )
+  SELECT row_key, priority, eligible_at,
+    row_key=(SELECT row_key FROM sweep ORDER BY priority, eligible_at, row_key LIMIT 1) AS advance
+  FROM combined ORDER BY priority, due, row_key LIMIT ?5
+`;
 
 export class SqliteStateCollection<T> {
   private readonly readDb: Database;
@@ -1547,10 +1595,16 @@ export class SqliteStateCollection<T> {
   }
 
   /** One indexed read; rejected holds and remote rows never reach the decoder. */
-  overdueTaskKeys(projects: readonly string[], nowMs: number, limit = 51, machine: string | null = null): string[] {
+  overdueTaskKeys(projects: readonly string[], nowMs: number, limit = 51, machine: string | null = null, shown: readonly string[] = [], cursor: OverdueTaskCursor | null = null): string[] {
+    return this.overdueTaskRows(projects, nowMs, limit, machine, shown, cursor).map(row => row.row_key);
+  }
+
+  overdueTaskRows(projects: readonly string[], nowMs: number, limit = 51, machine: string | null = null, shown: readonly string[] = [], cursor: OverdueTaskCursor | null = null): OverdueTaskRow[] {
     if (!projects.length) return [];
     if (!Number.isFinite(nowMs) || !Number.isSafeInteger(limit) || limit < 1 || limit > 51) throw new Error("invalid overdue task selection");
-    return this.readDb.query<{ row_key: string }, [string, number, number, string | null, number]>(OVERDUE_TASK_KEYS_SQL).all(JSON.stringify([...new Set(projects)]), nowMs, nowMs, machine, limit).map(row => row.row_key);
+    const machines = machine ? ["", machine] : [""];
+    return this.readDb.query<OverdueTaskRow, [string, string, number, string, number, string]>(OVERDUE_TASK_KEYS_SQL)
+      .all(JSON.stringify([...new Set(projects)]), JSON.stringify(machines), nowMs, JSON.stringify(shown), limit, JSON.stringify(cursor));
   }
 
   /** Release an evicted document owner's connection. */

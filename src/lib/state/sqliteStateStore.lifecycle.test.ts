@@ -110,6 +110,16 @@ test("reopening repairs every core index before indexed queries can run", () => 
         initializeStateCollections(filename, seed);
         expect(schema()).toEqual(complete);
       }
+      db.exec("DROP INDEX state_rows_task_due");
+      db.exec(`CREATE INDEX state_rows_task_due ON state_rows(
+        json_extract(value_json,'$.project'),
+        round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000), row_key)
+        WHERE collection='tasks' AND json_valid(value_json)
+          AND json_type(value_json,'$.dueAt')='text' AND json_type(value_json,'$.status')='text'
+          AND json_extract(value_json,'$.status') <> 'done'`);
+      initializeStateCollections(filename, seed);
+      expect(db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE name='state_rows_task_due'").get()!.sql)
+        .toContain("coalesce(json_extract(value_json,'$.machine'),'')");
       // A ready database opens without requesting SQLite's writer lock.
       db.exec("BEGIN IMMEDIATE");
       try { initializeStateCollections(filename, seed); }

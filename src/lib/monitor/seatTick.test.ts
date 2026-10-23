@@ -277,6 +277,76 @@ describe("overdue board tasks", () => {
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 
+  test("a cropped overdue bullet earns neither a reminder stamp nor a selection exclusion", async () => {
+    const { shownOverdueDates } = await import("./seatTickReminders");
+    const task = dated("cropped-date");
+    const first = seatTickDecision(input({ tasks: [task], overdueTasks: [task] }));
+    const commit = plan(first.verdict, "fp-1", 0);
+    const state = seatTickWakeCommit({ ...first.state, outstandingWake: { clientMessageId: "cropped-due", conversationId: CONVERSATION,
+      seatEpoch: 7, operationId: null, text: "The agenda was cropped", commit } }, commit, NOW);
+    expect(shownOverdueDates(state.itemsShown ?? [], NOW)).toEqual([]);
+    expect(seatTickDecision(input({ tasks: [task], overdueTasks: [task], state, now: NOW + HOUR })).verdict.kind).toBe("wake");
+    const landed = seatTickWakeCommit(first.state, commit, NOW);
+    expect(shownOverdueDates(landed.itemsShown ?? [], NOW)).toEqual([`t:${task.id}:${Date.parse(task.dueAt!)}`]);
+    expect(shownOverdueDates(landed.itemsShown ?? [], NOW + DAY)).toEqual([]);
+    expect(shownOverdueDates(["reminder:overdue-date:bad@" + NOW, "reminder:overdue-date:e30@" + NOW], NOW)).toEqual([]);
+  });
+
+  test.each([60, 155])("%i unchanged overdue dates drain across daily repeats with a fresh process for each wake", async (count) => {
+    const { saveTasks } = await import("@/lib/tasks/store");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "due-drain-"));
+    const file = path.join(root, "tasks.json");
+    const inputFile = path.join(root, "input.json");
+    const tasks = Array.from({ length: count }, (_, n) => dated(`due-${String(n).padStart(3, "0")}`));
+    const original = tasks.map(task => ({ id: task.id, project: PROJECT, text: task.title, status: "inbox" as const,
+      placement: "unplaced" as const, assignments: [], createdAt: task.createdAt!, updatedAt: task.createdAt!, dueAt: task.dueAt!, dueTz: "UTC" }));
+    try {
+      saveTasks(original, file);
+      const source = `
+        import fs from "node:fs";
+        import {overdueTasks} from ${JSON.stringify(path.join(import.meta.dir, "../tasks/store.ts"))};
+        import {shownOverdueDates, overdueSweepCursor} from ${JSON.stringify(path.join(import.meta.dir, "seatTickReminders.ts"))};
+        import {seatTickDecision, seatTickWakeCommit, seatTickWakeCommitPlan} from ${JSON.stringify(path.join(import.meta.dir, "seatTick.ts"))};
+        const input = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+        input.overdueTasks = overdueTasks(input.project, input.now, process.argv[2], shownOverdueDates(input.state.itemsShown ?? [], input.now), overdueSweepCursor(input.state.itemsShown ?? [], input.now))
+          .map(task => ({id: task.id, title: task.text, status: task.status, createdAt: task.createdAt, dueAt: task.dueAt, owned: false, overdueSweep: task.overdueSweep}));
+        const decision = seatTickDecision(input);
+        const commit = seatTickWakeCommitPlan(decision.verdict, {fingerprint: input.changeFingerprint, eventsThrough: 0});
+        console.log(JSON.stringify({verdict: decision.verdict, state: commit ? seatTickWakeCommit(decision.state, commit, input.now) : decision.state}));
+      `;
+      let state = input().state;
+      const delivered = new Set<string>();
+      const lastShown = new Map<string, number>();
+      let quiet = false;
+      for (let wake = 0; wake <= Math.ceil(count / 5) + 10; wake++) {
+        fs.writeFileSync(inputFile, JSON.stringify(input({ now: NOW + wake * HOUR, tasks, state })));
+        const child = Bun.spawnSync({ cmd: [process.execPath, "-e", source, inputFile, file], stdout: "pipe", stderr: "pipe",
+          env: { ...process.env, LLV_STATE_DIR: path.join(root, "state") } });
+        expect(child.exitCode, child.stderr.toString()).toBe(0);
+        const result = JSON.parse(child.stdout.toString()) as { verdict: SeatTickVerdict; state: SeatTickProjectState };
+        if (delivered.size === count) {
+          expect(result.verdict.kind).toBe("quiet");
+          quiet = true;
+          break;
+        }
+        expect(result.verdict.kind).toBe("wake");
+        if (result.verdict.kind !== "wake") throw new Error("missing overdue wake");
+        if (count === 60) expect(result.verdict.items.map(item => item.id)).toEqual(tasks.slice(wake * 5, wake * 5 + 5).map(task => task.id));
+        for (const item of result.verdict.items) {
+          const prior = lastShown.get(item.id);
+          if (prior !== undefined) expect(wake - prior).toBeGreaterThanOrEqual(24);
+          lastShown.set(item.id, wake);
+          delivered.add(item.id);
+        }
+        state = result.state;
+      }
+      expect(quiet).toBe(true);
+      expect(delivered.size).toBe(count);
+      const { loadTasks } = await import("@/lib/tasks/store");
+      expect(loadTasks(file).map(task => task.dueAt)).toEqual(original.map(task => task.dueAt));
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
   test("accepted-work and overdue reminders merge to one line; three slips ask for structural action; 51st says 50 or more", () => {
     const task = dated("slips", { dueHistory: { firstAt: new Date(NOW - 4 * DAY).toISOString(), slips: 3 } });
     const decision = seatTickDecision(input({ tasks: [task], overdueTasks: [task] }));

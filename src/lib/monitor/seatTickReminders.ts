@@ -1,3 +1,4 @@
+import type { OverdueTaskCursor } from "@/lib/state/sqliteStateStore";
 import { createHash } from "node:crypto";
 import type { SeatTickCheckInput, SeatTickItem, SeatTickTaskInput, SeatTickPipelineInput } from "./types";
 
@@ -7,7 +8,8 @@ const PREFIX = "reminder:";
 
 /** The existing delivered-item ledger owns these stamps, including after restart. */
 export function reminderDeliveredVersion(version: string, receivedAt: number): string {
-  return version.startsWith(PREFIX) ? `${version.split("@")[0]}@${receivedAt}` : version;
+  const [key, , ...metadata] = version.split("@");
+  return version.startsWith(PREFIX) ? [key, receivedAt, ...metadata].join("@") : version;
 }
 
 export function isReminderVersion(version: string): boolean { return version.startsWith(PREFIX); }
@@ -43,6 +45,41 @@ function age(ms: number): string {
   return hours >= 24 ? `${Math.floor(hours / 24)}d${hours % 24 ? ` ${hours % 24}h` : ""}` : `${hours}h`;
 }
 
+function overdueReminderKey(id: string, dueAt: string): string {
+  return `${PREFIX}overdue:${createHash("sha256").update(JSON.stringify([id, new Date(dueAt).toISOString()])).digest("hex")}`;
+}
+
+/** Credits share the exact rendered bullet with the hashed reminder version.
+ * Only delivery records them, so selection cannot skip an unseen task. */
+function overdueDateVersion(id: string, dueAt: string, now: number): string {
+  return `${PREFIX}overdue-date:${Buffer.from(JSON.stringify([id, Date.parse(dueAt)])).toString("base64url")}@${now}`;
+}
+
+/** Decode recent delivery credits into indexed exclusions; malformed and old
+ * ledger entries confer no selection credit. */
+export function shownOverdueDates(versions: readonly string[], now: number): string[] {
+  return versions.flatMap(version => {
+    if (!version.startsWith(`${PREFIX}overdue-date:`) || !recentReminderVersion(version, now)) return [];
+    try {
+      const pair: unknown = JSON.parse(Buffer.from(version.split("@")[0]!.slice(`${PREFIX}overdue-date:`.length), "base64url").toString());
+      return Array.isArray(pair) && pair.length === 2 && typeof pair[0] === "string" && Number.isFinite(pair[1])
+        ? [`t:${pair[0]}:${pair[1]}`] : [];
+    } catch { return []; }
+  });
+}
+
+/** One recent cursor, replaced only by a complete delivered sweep bullet. */
+export function overdueSweepCursor(versions: readonly string[], now: number): OverdueTaskCursor | null {
+  for (const version of [...versions].reverse()) {
+    if (!version.startsWith(`${PREFIX}overdue-sweep@`) || !recentReminderVersion(version, now)) continue;
+    try {
+      const value: unknown = JSON.parse(Buffer.from(version.split("@")[2] ?? "", "base64url").toString());
+      if (Array.isArray(value) && value.length === 3 && [0, 1, 2].includes(value[0]) && Number.isFinite(value[1]) && typeof value[2] === "string") return [value[0], value[1], value[2]];
+    } catch { /* Malformed metadata grants no cursor. */ }
+  }
+  return null;
+}
+
 /** One lookup per check over the already bounded delivered agenda. */
 export function seatTickReminders(input: SeatTickCheckInput): SeatTickItem[] {
   const shown = new Map<string, number>();
@@ -57,7 +94,7 @@ export function seatTickReminders(input: SeatTickCheckInput): SeatTickItem[] {
   const overdueIds = new Set(overdue.map(task => task.id));
   const priority = (task: SeatTickTaskInput) => task.priority === "high" ? 0 : task.priority === "low" ? 2 : 1;
   for (const task of [...overdue].sort((a, b) => priority(a) - priority(b) || Date.parse(a.dueAt!) - Date.parse(b.dueAt!) || a.id.localeCompare(b.id))) {
-    const key = `${PREFIX}overdue:${createHash("sha256").update(JSON.stringify([task.id, new Date(task.dueAt!).toISOString()])).digest("hex")}`;
+    const key = overdueReminderKey(task.id, task.dueAt!);
     const last = shown.get(key);
     if (last !== undefined && input.now - last < SEAT_REMINDER_REPEAT_MS) continue;
     const history = task.dueHistory;
@@ -68,6 +105,8 @@ export function seatTickReminders(input: SeatTickCheckInput): SeatTickItem[] {
     overdueItems.push({
       kind: "task", reminderKind: "overdue", id: task.id, occurredAt: task.dueAt,
       itemVersion: `${key}@${input.now}`,
+      creditVersions: [overdueDateVersion(task.id, task.dueAt!, input.now),
+        ...(task.overdueSweep ? [`${PREFIX}overdue-sweep@${input.now}@${task.overdueSweep}`] : [])],
       label: `overdue ${age(input.now - Date.parse(task.dueAt!))} · open ${Number.isFinite(opened) ? age(input.now - opened) : "unknown"} · ${task.priority ?? "normal"} · moved ${moved}×${action} (first due ${first}) · ${task.owned ? "lane running" : "no lane"} — ${task.title}`,
     });
   }
