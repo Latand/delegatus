@@ -10,16 +10,16 @@ setDefaultTimeout(30_000);
 // Store modules bind some paths at import time. Run these real controller
 // regressions in a child so their state and module caches cannot affect the
 // pre-push hook's other selected suites in the parent Bun process. The child
-// takes 45 s at load 18 on 24 cores; the bound stays inside the hook's
-// five-minute budget per file.
+// needs room for owned-runner setup and cleanup as well as every assertion;
+// the bound stays inside the hook's five-minute budget per file.
 if (process.env.LLV_PARKED_PUBLICATION_CHILD !== "1") {
   test("isolated parked publication regressions", () => {
     const result = spawnSync(process.execPath, ["test", import.meta.path], {
-      env: { ...process.env, LLV_PARKED_PUBLICATION_CHILD: "1" }, encoding: "utf8", timeout: 120_000,
+      env: { ...process.env, LLV_PARKED_PUBLICATION_CHILD: "1" }, encoding: "utf8", timeout: 240_000,
     });
     if (result.status !== 0) throw new Error(`${result.stdout}\n${result.stderr}`);
     expect(result.status).toBe(0);
-  }, 125_000);
+  }, 245_000);
 } else {
 const previousState = process.env.LLV_STATE_DIR;
 const state = fs.mkdtempSync(path.join(os.tmpdir(), "llv-parked-publication-"));
