@@ -16,6 +16,8 @@
 @import "../components/kanban/modelGlyph.css";
 /* The task icon picker (#2102), desktop and phone. */
 @import "../components/tasks/taskIcon.css";
+/* Turbo's «Форсаж» switch and its mark (docs/design/turbo-mode.md §6). */
+@import "../components/orchestrator/turbo.css";
 
 /* Role frames on agent conversations: drawn only under
    `html[data-role-frame]`, see src/lib/roleFrames.ts. */

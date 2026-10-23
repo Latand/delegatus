@@ -150,7 +150,8 @@ test("mixed controller waits publish only the current busy retry time", async ()
   pipeline = loadPipelines()[0]!;
   const rebindingRetryAfter = pipeline.runs[0]!.attempts[0]!.controllerWait!.retryAfter;
   expect(rebindingRetryAfter).not.toBe(firstRetryAfter);
-  expect(pipeline.stateDetail).toBeNull();
+  expect(pipeline.stateDetail).toBe(`stage spawn deferred: waiting for the delivery controller (rebinding); retry at ${rebindingRetryAfter}`);
+  expect(pipeline.stateDetail).not.toContain(firstRetryAfter);
   expect(spawnCalls).toBe(1);
 
   Object.assign(h.ports, { structuredDeliveryPublication: () => "ready" as const });
@@ -444,7 +445,7 @@ test("a controller that is between publications is never spawned into (#1191)", 
   expect(scheduled).toEqual([1_000]);
   expect(loadPipelines()[0]!).toMatchObject({
     state: "running",
-    stateDetail: null,
+    stateDetail: expect.stringContaining("waiting for the delivery controller (rebinding)"),
     cursor: { stageId: "plan", state: "pending" },
   });
 
@@ -548,7 +549,7 @@ test("a process without a delivery controller publication defers stage activatio
   const deferred = loadPipelines()[0]!;
   expect(spawnCalls).toBe(0);
   expect(deferred.state).toBe("running");
-  expect(deferred.stateDetail).toBeNull();
+  expect(deferred.stateDetail).toBe("stage spawn deferred: waiting for the delivery controller (unbound)");
   expect(deferred.cursor).toMatchObject({ stageId: "plan", state: "pending" });
   expect(deferred.runs[0]!.attempts).toHaveLength(1);
   expect(deferred.runs[0]!.attempts.at(-1)!.state).toBe("pending");

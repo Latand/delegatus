@@ -11365,6 +11365,130 @@ describe("phone orchestrator reads", () => {
   }, 180_000);
 });
 
+describe("phone voice call history", () => {
+  /* GitHub #2975 on the phone: the page opens as after a reload, with no call of its own (`?voice=history`). The
+     head's menu still offers the conversation, which opens the newest retained call; the panel's picker opens each
+     earlier one, and an opened request says why it was not sent or delivered and links its orchestrator. Every text
+     the case names is measured whole from its text ranges; frames go to the run's own `.artifacts`, never the tree. */
+  browserTest("after a reload the head opens the retained calls, a picker opens each, and a request's reason and orchestrator link fit at 390 px", async () => {
+    const out = path.resolve(".artifacts/voice-companion/history-phone");
+    fs.mkdirSync(out, { recursive: true });
+    const { base, stop } = await serveFixture();
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const readings: unknown[] = [];
+    /* The first action of an opened call (a tool call or a request to the orchestrator) and its status text. */
+    const FIRST_ACTION = ['.vc-tr-list > li:is([data-kind="call"], [data-kind="request"])', '.vc-tr-list > li:is([data-kind="call"], [data-kind="request"]) .vc-call-state'];
+    const whole = (page: Page, selectors: string[]) => page.evaluate((list) => {
+      const view = document.querySelector<HTMLElement>("[data-companion-transcript-view]")!;
+      const body = view.querySelector<HTMLElement>("[data-transcript-body]")!;
+      const result: Record<string, { found: boolean; whole: boolean; text: string; height: number }> = {};
+      for (const selector of list) {
+        const element = view.querySelector<HTMLElement>(selector);
+        if (!element) { result[selector] = { found: false, whole: false, text: "", height: 0 }; continue; }
+        const clip = (body.contains(element) ? body : view).getBoundingClientRect();
+        const range = document.createRange(); range.selectNodeContents(element);
+        const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+        /* Nothing else stands over the text: the topmost element at each piece's middle is the element itself. */
+        const uncovered = rects.every((rect) => { const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2); return !!top && (element === top || element.contains(top)); });
+        result[selector] = { found: true, text: element.innerText, height: element.getBoundingClientRect().height, whole: rects.length > 0 && uncovered && rects.every((rect) => rect.top >= clip.top - 0.5 && rect.bottom <= clip.bottom + 0.5
+          && rect.left >= clip.left - 0.5 && rect.right <= clip.right + 0.5 && rect.top >= 0 && rect.bottom <= innerHeight && rect.left >= 0 && rect.right <= innerWidth) };
+      }
+      const picker = view.querySelector<HTMLSelectElement>("select[data-transcript-calls]")!;
+      const style = getComputedStyle(picker);
+      const context = document.createElement("canvas").getContext("2d")!;
+      context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+      const label = picker.selectedOptions[0]?.textContent ?? "";
+      const box = view.getBoundingClientRect(); const pick = picker.getBoundingClientRect();
+      return { result, picker: { label, fits: context.measureText(label).width <= picker.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - 20, height: pick.height,
+        inside: pick.left >= box.left && pick.right <= box.right && pick.top >= box.top && pick.bottom <= box.bottom
+          && document.elementFromPoint(pick.left + pick.width / 2, pick.top + pick.height / 2) === picker },
+        panelInside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, sideways: body.scrollWidth - body.clientWidth,
+        /* A row of the list the body's top edge runs through: a retained call opens at its start, so none is cut there. */
+        cutByTop: [...body.querySelectorAll<HTMLElement>(".vc-tr-list > li")].filter((row) => { const rect = row.getBoundingClientRect(); return rect.top < body.getBoundingClientRect().top - 0.5 && rect.bottom > body.getBoundingClientRect().top + 0.5; })
+          .map((row) => row.getAttribute("data-kind") ?? ""),
+        scrolled: Math.round(body.scrollTop),
+        /* The opened request's name, whole in its own line. */
+        title: [...view.querySelectorAll<HTMLElement>("[data-transcript-request] [data-human-label]")].map((node) => ({ text: node.innerText, whole: node.scrollWidth <= node.clientWidth && node.scrollHeight <= node.clientHeight + 1 })) };
+    }, selectors);
+    const openRequest = async (page: Page) => {
+      const request = page.locator('[data-companion-transcript-view] [data-transcript-call="request_orchestrator_delegation"]');
+      await request.locator("[data-transcript-toggle]").tap();
+      await request.locator("[data-transcript-detail]").waitFor();
+      await request.evaluate((element) => { const body = element.closest<HTMLElement>("[data-transcript-body]")!; body.scrollTop += element.getBoundingClientRect().top - body.getBoundingClientRect().top - 8; });
+      await pause(page, 200);
+    };
+    try {
+      for (const size of [{ width: 390, height: 844 }]) for (const lang of ["uk", "en"]) for (const scheme of ["light", "dark"] as const) {
+        const prefix = `${size.width}x${size.height}-${lang}-${scheme}`;
+        console.info(`phone voice call history: ${prefix}`);
+        const context = await browser.newContext({ viewport: size, hasTouch: true, isMobile: true, colorScheme: scheme });
+        try {
+          await context.addInitScript((language) => localStorage.setItem("llv_lang", language), lang);
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", error => errors.push(error.message));
+          /* On the board: the orchestrator link then opens a screen of its own. */
+          await page.goto(`${base}/?voice=history&seatnoise=ii&runtime=structured`);
+          const head = page.locator("[data-phone-voice-head]");
+          await head.waitFor(); await pause(page, 900);
+          expect(await page.evaluate(() => (history.state as { mobile2?: { stack: Array<{ kind: string }> } } | null)?.mobile2?.stack.at(-1)?.kind ?? "board")).toBe("board");
+          await head.tap();
+          await page.locator("[data-phone-voice-transcript]").tap();
+          const panel = page.locator("[data-companion-transcript-view]");
+          const picker = panel.locator("select[data-transcript-calls]");
+          await picker.waitFor();
+          await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); const end = animation.effect?.getComputedTiming().endTime; animation.currentTime = typeof end === "number" && Number.isFinite(end) ? end : 0; } });
+          expect(await panel.getAttribute("aria-modal")).toBe("true");
+          expect(await picker.inputValue()).toBe("call_delegation");
+          expect(await page.evaluate(() => (window as unknown as { phoneVoice: { starts: string[] } }).phoneVoice.starts)).toEqual([]);
+          const newest = await whole(page, [".vc-tr-title", ".vc-tr-sub", ...FIRST_ACTION]);
+          await page.screenshot({ path: path.join(out, `${prefix}-1-newest.png`) });
+
+          await picker.selectOption("call_failed_delivery");
+          await panel.locator('[data-transcript-request][data-stage="failed"]').waitFor();
+          const failedStart = await whole(page, FIRST_ACTION);
+          await openRequest(page);
+          const failed = await whole(page, ['[data-transcript-request][data-stage="failed"] .vc-call-state', "[data-transcript-reason]", "a[data-transcript-orchestrator]"]);
+          expect(failed.result["a[data-transcript-orchestrator]"]!.text).toBe("Atlas");
+          expect(failed.result["[data-transcript-reason]"]!.text, `${prefix}: the failure reason reads in the owner's language, with no code in it`).not.toMatch(lang === "uk" ? /[A-Za-z]/u : /[(_)]/u);
+          expect(failed.result["a[data-transcript-orchestrator]"]!.height, "the link is a whole touch target").toBeGreaterThanOrEqual(44);
+          await page.screenshot({ path: path.join(out, `${prefix}-2-failed.png`) });
+
+          await picker.selectOption("call_refused");
+          await panel.locator('[data-transcript-request][data-stage="refused"]').waitFor();
+          const refusedStart = await whole(page, FIRST_ACTION);
+          await openRequest(page);
+          const refused = await whole(page, ['[data-transcript-request][data-stage="refused"] .vc-call-state', "[data-transcript-reason]"]);
+          await page.screenshot({ path: path.join(out, `${prefix}-3-refused.png`) });
+
+          /* Each call opens at its start: its first action row and that row's status text stand whole in the body and no row is cut by the body's top edge. */
+          for (const [step, reading] of [["newest", newest], ["failed", failedStart], ["refused", refusedStart]] as const) {
+            expect(Object.entries(reading.result).filter(([selector, value]) => FIRST_ACTION.includes(selector) && (!value.found || !value.whole)).map(([selector]) => selector), `${prefix} ${step}: the first action row and its status are whole on opening`).toEqual([]);
+            expect([reading.scrolled, reading.cutByTop], `${prefix} ${step}: opened at the start, no row cut by the body's top edge`).toEqual([0, []]);
+          }
+          for (const [step, reading] of [["newest", newest], ["failed", failed], ["refused", refused]] as const) {
+            expect(Object.entries(reading.result).filter(([, value]) => !value.found || !value.whole).map(([selector]) => selector), `${prefix} ${step}: every named text is whole`).toEqual([]);
+            expect([reading.panelInside, reading.picker.inside, reading.picker.fits, reading.sideways <= 1, reading.picker.height >= 44], `${prefix} ${step}: panel, picker, its label and its target`).toEqual([true, true, true, true, true]);
+          }
+          for (const [step, reading] of [["failed", failed], ["refused", refused]] as const) expect(reading.title.filter((title) => !title.whole), `${prefix} ${step}: the request's name is whole in its line`).toEqual([]);
+          /* The link gives the screen to the orchestrator's conversation. */
+          await picker.selectOption("call_failed_delivery");
+          await openRequest(page);
+          await panel.locator("a[data-transcript-orchestrator]").tap();
+          await panel.waitFor({ state: "detached" });
+          /* The phone's navigation store opens the orchestrator's conversation over the board. */
+          await page.waitForFunction(() => (history.state as { mobile2?: { stack: Array<{ kind: string; id?: string }> } } | null)?.mobile2?.stack.at(-1)?.id?.endsWith("/running.jsonl") === true);
+          await page.locator("[data-mobile-message=agent]").first().waitFor();
+          await page.screenshot({ path: path.join(out, `${prefix}-4-orchestrator.png`) });
+          expect(errors).toEqual([]);
+          readings.push({ viewport: size, lang, scheme, newest, failed, refused, linkCloses: true });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); stop(); }
+    fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
+  }, 180_000);
+});
+
 describe("phone voice drop", () => {
   /*
    * A call whose connection drops keeps what was said, offers the same call back in one tap, still does after a

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { codexLaunchTier, codexModelServiceTiers, tierOffers } from "./codexServiceTiers";
+import { codexLaunchTier, codexModelServiceTiers, fastestTier, raisesTier, tierOffers } from "./codexServiceTiers";
 
 test("catalog tiers are per account and never inferred from speed hints", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-tier-catalog-"));
@@ -34,4 +34,38 @@ test("explicit tiers, fast compatibility and role preference resolution", () => 
   for (const serviceTier of [false, "", "bad tier"]) expect(codexLaunchTier({ ...input, serviceTier })).toHaveProperty("error");
   expect(codexLaunchTier({ ...input, engine: "claude", serviceTier: "ultrafast" })).toHaveProperty("error");
   expect(codexLaunchTier({ ...input, model: null, serviceTier: "ultrafast" })).toHaveProperty("error");
+});
+
+test("Turbo's fastest tier per account catalog: ultrafast, else priority, else none", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-tier-fastest-"));
+  try {
+    const home = (id: string, rows: unknown[]) => {
+      const dir = path.join(root, id); fs.mkdirSync(dir);
+      fs.writeFileSync(path.join(dir, "models_cache.json"), JSON.stringify({ models: rows }));
+      return dir;
+    };
+    // Account A lists ultrafast only for Sol and Astra; B and C only priority; D lists no tiers.
+    const a = home("a", [
+      { slug: "gpt-6.1-sol", service_tiers: [{ id: "priority" }, { id: "ultrafast" }] },
+      { slug: "gpt-6-luna", service_tiers: [{ id: "priority" }] },
+    ]);
+    const b = home("b", [{ slug: "gpt-6.1-sol", service_tiers: [{ id: "priority" }] }, { slug: "gpt-daybreak-blue-latest", service_tiers: [] }]);
+    expect(fastestTier(a, "gpt-6.1-sol")).toBe("ultrafast");
+    expect(fastestTier(a, "gpt-6-luna")).toBe("priority");
+    expect(fastestTier(b, "gpt-6.1-sol")).toBe("priority");
+    expect(fastestTier(b, "gpt-daybreak-blue-latest")).toBeNull();
+    expect(fastestTier(b, "unlisted")).toBeNull();
+    expect(fastestTier(path.join(root, "missing"), "gpt-6.1-sol")).toBeNull();
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("Turbo only raises: tier order flex < default < priority < ultrafast, unknown ids left alone", () => {
+  expect(raisesTier(null, "priority")).toBe(true);
+  expect(raisesTier("default", "priority")).toBe(true);
+  expect(raisesTier("standard", "ultrafast")).toBe(true);
+  expect(raisesTier("flex", "priority")).toBe(true);
+  expect(raisesTier("priority", "ultrafast")).toBe(true);
+  expect(raisesTier("priority", "priority")).toBe(false);
+  expect(raisesTier("ultrafast", "priority")).toBe(false);
+  expect(raisesTier("scale", "ultrafast")).toBe(false);
 });
