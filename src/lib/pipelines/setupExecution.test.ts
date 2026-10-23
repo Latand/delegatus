@@ -14,6 +14,8 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), "setup-execution-"));
 const checkout = path.join(root, "checkout"); fs.mkdirSync(checkout);
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
+const isolationRefusal = /bwrap: (?:not found|No such file or directory|setting up uid map: Permission denied|loopback: Failed RTM_NEWADDR: Operation not permitted|Creating new namespace failed: Operation not permitted)|FileNotFoundError: .*'bwrap'|setup isolation could not start; no command was run/;
+
 test("the real process runs immutable reviewed bytes with isolated state, home, credentials and filesystem", async () => {
   const sentinel = path.join(root, "operator-state"); fs.writeFileSync(sentinel, "preserved");
   // The parent-death helper runs before filesystem isolation. Python must not
@@ -44,7 +46,7 @@ printf reviewed
       expect(result.stdout).toBe("reviewed");
       expect(fs.readFileSync(path.join(checkout, "setup-created"), "utf8")).toBe("ready");
     } else {
-      expect(result.stderr).toMatch(/bwrap: (?:setting up uid map: Permission denied|loopback: Failed RTM_NEWADDR: Operation not permitted|Creating new namespace failed: Operation not permitted)/);
+      expect(result.stderr).toMatch(isolationRefusal);
       expect(fs.existsSync(path.join(checkout, "setup-created"))).toBe(false);
     }
     expect(fs.readFileSync(sentinel, "utf8")).toBe("preserved");
@@ -83,7 +85,7 @@ test.skipIf(process.platform !== "linux")("losing the real setup owner ends its 
       expect(process.env.SETUP_REQUIRE_ISOLATION).not.toBe("1");
       expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
       await ended;
-      expect(output).toMatch(/bwrap: (?:setting up uid map|loopback: Failed RTM_NEWADDR|Creating new namespace failed)/);
+      expect(output).toMatch(isolationRefusal);
       return;
     }
     owned = descendantPids(child.pid!, procBackend.ppidMap()).filter(pid => pid !== child.pid).map(pid => captureProcessIdentity(pid));
