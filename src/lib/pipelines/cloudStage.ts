@@ -74,6 +74,10 @@ export function validCloudTaskReference(taskId: unknown, taskUrl: unknown): bool
     || typeof taskUrl !== "string" || taskUrl.length > 2048) return false;
   try {
     const url = new URL(taskUrl);
+    if (url.protocol === "codex:") return url.hostname === "threads" && url.pathname === `/${taskId}`
+      && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(taskId)
+      && !url.username && !url.password && !url.port && !url.hash
+      && url.searchParams.size === 1 && url.searchParams.get("hostId") === "durable";
     return url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash;
   } catch { return false; }
 }

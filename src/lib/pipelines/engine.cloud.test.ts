@@ -43,10 +43,10 @@ async function step(h: ReturnType<typeof harness>) {
   await tickPipelines([], h.ports);
   await settlePipelineControllerJobs();
 }
-async function submitted(h: ReturnType<typeof harness>) {
+async function submitted(h: ReturnType<typeof harness>, expectedTaskId = taskId) {
   for (let i = 0; i < 4 && !lane().runs[0]?.attempts.at(-1)?.cloud?.taskId && ["provisioning", "running"].includes(lane().state); i++) await step(h);
   expect({ phase: attempt().cloud?.phase, error: attempt().error, cloudError: attempt().cloud?.error }).toEqual({ phase: "polling", error: null, cloudError: undefined });
-  expect(attempt().cloud?.taskId).toBe(taskId);
+  expect(attempt().cloud?.taskId).toBe(expectedTaskId);
 }
 
 test("cloud reviewers submit the role scaffold, relay and lane facts, settle through the local verdict path", async () => {
@@ -317,9 +317,13 @@ test("stage overrides validate the proposed explicit cloud model before copying 
 
 test("hosted thread and turn handles survive restart and reach poll and final-message reads", async () => {
   const { h } = await fixture();
-  const thread = { threadId: "hosted-thread-1", turnId: "hosted-turn-1" };
-  h.ports.cloudClient!.submit = async () => ({ taskId, taskUrl, thread });
-  await submitted(h);
+  const thread = { threadId: "00000000-0000-0000-0000-000000000000", turnId: "hosted-turn-1",
+    hosted: { environmentId: "ccarenv_fixture", cwd: "/workspace/project", model: "gpt-6.1-sol" } };
+  const hostedUrl = `codex://threads/${thread.threadId}?hostId=durable`;
+  h.ports.cloudClient!.submit = async () => ({ taskId: thread.threadId, taskUrl: hostedUrl, thread });
+  await submitted(h, thread.threadId);
+  expect(attempt().cloud?.taskUrl).toBe(hostedUrl);
+  expect(attempt().cloud?.model).toBe("gpt-6.1-sol");
   const child = spawnSync(process.execPath, [path.join(process.cwd(), "src/lib/pipelines/fixtures/cloudStageRestart.ts"), lane().id], {
     env: { ...process.env, LLV_CLOUD_RESTART_PROBE: "1" }, encoding: "utf8",
   });
@@ -331,7 +335,8 @@ test("hosted thread and turn handles survive restart and reach poll and final-me
   expect(reads).toEqual(["poll", "final"]); expect(attempt().state).toBe("passed");
 });
 
-test.each(["before-submit", "submit", "poll"])("delivery withdrawal at %s cannot advance the cloud stage", async seam => {
+test.each(["delivery", "disabled-environment", "changed-environment"].flatMap(kind =>
+  ["before-submit", "submit", "poll"].map(seam => [kind, seam])))("%s withdrawal at %s cannot advance the cloud stage", async (kind, seam) => {
   const { h, submits } = await fixture();
   if (seam === "poll") await submitted(h);
   let ready!: () => void, release!: () => void;
@@ -353,12 +358,21 @@ test.each(["before-submit", "submit", "poll"])("delivery withdrawal at %s cannot
   try {
     await tickPipelines([], h.ports); await tickPipelines([], h.ports);
     await started;
-    const record = lane();
-    record.delivery!.active = false; record.delivery!.publish = "disabled"; record.delivery!.releasedAt = h.ports.now();
-    savePipelines([record]);
+    if (kind === "delivery") {
+      const record = lane();
+      record.delivery!.active = false; record.delivery!.publish = "disabled"; record.delivery!.releasedAt = h.ports.now();
+      savePipelines([record]);
+    } else {
+      expect(setCodexCloudEnvironmentId(lane().project, kind === "disabled-environment" ? "" : "asenvcfg_other")).toBe(true);
+    }
+    if (seam === "submit") {
+      await tickPipelines([], h.ports);
+      expect(attempt().state).toBe("failed");
+    }
   } finally { release(); await settlePipelineControllerJobs(); }
   await step(h);
   expect(attempt().state).toBe("failed"); expect(attempt().verdict).toBeNull();
-  expect(attempt().error).toContain("active published lane branch");
+  expect(attempt().error).toContain(kind === "delivery" ? "active published lane branch" : kind === "disabled-environment" ? "disabled" : "environment changed");
   expect(submits).toHaveLength(seam === "before-submit" ? 0 : 1);
+  if (seam === "submit") expect(attempt().cloud).toMatchObject({ taskId, taskUrl, phase: "failed" });
 });

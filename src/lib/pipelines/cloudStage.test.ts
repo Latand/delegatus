@@ -66,6 +66,15 @@ describe("durable cloud attempts", () => {
     expect(validCloudTaskReference(reference.taskId, reference.taskUrl + "#private")).toBe(false);
     for (const id of ["", "../task", "a".repeat(161), null]) expect(validCloudTaskReference(id, reference.taskUrl)).toBe(false);
   });
+  test("current cloud links select the durable thread without arbitrary protocol actions", () => {
+    const id = "00000000-0000-0000-0000-000000000000";
+    const url = `codex://threads/${id}?hostId=durable`;
+    expect(validCloudTaskReference(id, url)).toBe(true);
+    expect(isCloudStageAttempt({ ...reserved, phase: "polling", taskId: id, taskUrl: url })).toBe(true);
+    for (const bad of [url.replace("durable", "foreign"), url.replace(id, "other"), url + "&action=run", url + "#fragment", url.replace("threads", "settings")]) {
+      expect(validCloudTaskReference(id, bad)).toBe(false);
+    }
+  });
 });
 
 test("hosted handles retain only a bounded thread and turn identity", () => {

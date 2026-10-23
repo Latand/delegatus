@@ -8,7 +8,7 @@ import type { CloudTaskAccess, CloudStageClient } from "./cloudStage";
 type Frame = { id?: number; method?: string; params?: Record<string, unknown>; result?: unknown; error?: unknown };
 const model = "gpt-6.1-sol", environmentId = "asenvcfg_fixture", headSha = "a".repeat(40);
 const environment = { environmentId: "ccarenv_fixture", environmentConfigId: environmentId, cwd: "/workspace/project" };
-const thread = { id: "thread-fixture", ephemeral: false, environments: [environment] };
+const thread = { id: "00000000-0000-0000-0000-000000000000", ephemeral: false, environments: [environment] };
 const turn = { id: "turn-fixture", model, status: "completed" };
 const account = { engine: "codex" as const, accountId: "fixture", kind: "managed" as const, home: "fixture", transcriptRoot: "fixture", env: { NODE_ENV: "test" as const } };
 
@@ -66,7 +66,7 @@ function fixture(overrides: Partial<HostedCloudDependencies> = {}) {
 test("hosted launch pins model, effort, permissions, ASB configuration and published branch before the work turn", async () => {
   const f = fixture();
   const receipt = await f.client.submit(f.input);
-  expect(receipt).toEqual({ taskId: thread.id, taskUrl: `https://chatgpt.com/codex/tasks/${thread.id}`, thread: f.access.thread });
+  expect(receipt).toEqual({ taskId: thread.id, taskUrl: `codex://threads/${thread.id}?hostId=durable`, thread: f.access.thread });
   expect(f.fetches[0]!.url).toEndWith(`/v1/environment-configs/${environmentId}`);
   expect(f.fetches[0]!.options?.redirect).toBe("error");
   expect(f.frames.filter(frame => frame.method).map(frame => frame.method)).toEqual(["initialize", "initialized", "thread/start", "command/exec", "turn/start"]);
@@ -171,6 +171,13 @@ test("abort releases an unanswered socket read", async () => {
   expect(f.sockets[0]!.readyState).toBe(3);
 });
 
+test("an already cancelled operation opens no authentication client or socket", async () => {
+  const f = fixture(); f.abort.abort();
+  await expect(f.client.submit(f.input)).rejects.toThrow("timed out");
+  expect(f.authCalls()).toBe(0);
+  expect(f.sockets).toHaveLength(0);
+});
+
 test.each(["success", "foreign", "missing", "changed-head", "cursor"])("final message read handles %s", async failure => {
   const f = fixture();
   f.respond((frame, socket) => {
@@ -188,16 +195,19 @@ test.each(["success", "foreign", "missing", "changed-head", "cursor"])("final me
 });
 
 test.each(["success", "checksum", "chunk"])("chunked diff export verifies %s without launching a turn", async failure => {
-  const f = fixture(), patch = Buffer.from("fixture diff\n"), checksum = createHash("sha256").update(patch).digest("hex");
+  const f = fixture(), patch = Buffer.from("fixture diff\n".repeat(600)), checksum = createHash("sha256").update(patch).digest("hex");
   let commands = 0;
   f.respond((frame, socket) => {
-    if (frame.method === "command/exec") return { exitCode: 0, stdout: commands++ === 0
-      ? JSON.stringify({ bytes: patch.length, sha256: failure === "checksum" ? "b".repeat(64) : checksum })
-      : failure === "chunk" ? "bad" : patch.toString("base64") };
+    if (frame.method === "command/exec") {
+      if (commands++ === 0) return { exitCode: 0, stdout: JSON.stringify({ bytes: patch.length, sha256: failure === "checksum" ? "b".repeat(64) : checksum }) };
+      const offset = (commands - 2) * 3072;
+      return { exitCode: 0, stdout: failure === "chunk" ? "bad" : patch.subarray(offset, offset + 3072).toString("base64") };
+    }
     return f.original(frame, socket);
   });
   if (failure === "success") expect(await f.client.readDiff(f.access)).toBe(patch.toString());
   else await expect(f.client.readDiff(f.access)).rejects.toThrow("Codex Cloud diff");
+  expect(commands).toBe(failure === "chunk" ? 2 : 4);
   expect(f.frames.some(frame => frame.method === "turn/start" || frame.method === "thread/resume")).toBe(false);
 });
 
@@ -207,6 +217,16 @@ test("unsupported models and source-version configuration IDs are refused", asyn
   expect(f.client.supportsModel(model, "unsupported")).toBe(false);
   await expect(f.client.submit({ ...f.input, environmentId: "cecfg_fixture" })).rejects.toThrow("ASB configuration");
   expect(f.frames.some(frame => frame.method === "thread/start")).toBe(false);
+});
+
+test("qualified ASB configuration IDs retain their exact identity", async () => {
+  const qualified = "region~asenvcfg_fixture-config";
+  const f = fixture({ fetch: async () => Response.json({ id: qualified, repositories: [{ mount_path: environment.cwd }] }) });
+  f.respond((frame, socket) => frame.method === "thread/start"
+    ? { model, thread: { ...thread, environments: [{ ...environment, environmentConfigId: qualified }] } }
+    : f.original(frame, socket));
+  await f.client.submit({ ...f.input, environmentId: qualified });
+  expect(f.frames.find(frame => frame.method === "thread/start")!.params!.environments).toEqual([{ environmentConfigId: qualified, cwd: environment.cwd }]);
 });
 
 test("the verified minimal hosted metadata retains launch proof across status reads", async () => {
@@ -223,12 +243,43 @@ test("the verified minimal hosted metadata retains launch proof across status re
   await expect(f.client.poll({ ...f.access, thread: { threadId: thread.id, turnId: turn.id } })).rejects.toThrow("thread receipt missing");
 });
 
+test.each(["success", "http", "invalid-name", "revoked"])("empty environment mounts resolve through the shared repository catalog: %s", async outcome => {
+  const calls: string[] = [];
+  const f: ReturnType<typeof fixture> = fixture({ fetch: async url => {
+    calls.push(url);
+    if (url.includes("/environment-configs/")) return Response.json({ id: environmentId,
+      repositories: [{ repository_id: "repository-fixture", mount_path: "" }] });
+    if (outcome === "http") return new Response("fixture-auth", { status: 403 });
+    if (outcome === "revoked") f.supersede();
+    return Response.json({ repository_full_name: outcome === "invalid-name" ? "fixture/../other" : "fixture/project" });
+  } });
+  if (outcome === "success") {
+    await f.client.submit(f.input);
+    expect(f.frames.find(frame => frame.method === "thread/start")!.params!.environments).toEqual([{ environmentConfigId: environmentId, cwd: environment.cwd }]);
+  } else {
+    await expect(f.client.submit(f.input)).rejects.toThrow("Codex Cloud");
+    expect(f.frames.some(frame => frame.method === "thread/start")).toBe(false);
+  }
+  expect(calls).toHaveLength(2);
+  expect(calls[1]).toBe("https://chatgpt.com/backend-api/wham/github/repositories/repository-fixture");
+});
+
 test("a known accepted receipt is returned after authority changes without another effect", async () => {
   const f = fixture();
   f.respond((frame, socket) => { if (frame.method === "turn/start") f.supersede(); return f.original(frame, socket); });
   const receipt = await f.client.submit(f.input);
   expect(receipt.thread?.turnId).toBe(turn.id);
   expect(f.frames.at(-1)!.method).toBe("turn/start");
+});
+
+test.each(["authentication", "configuration"])("authority is checked after asynchronous %s preparation", async seam => {
+  const f: ReturnType<typeof fixture> = fixture(seam === "authentication" ? {
+    authenticate: async () => { f.supersede(); return { token: "fixture-auth" }; },
+  } : {
+    fetch: async () => { f.supersede(); return Response.json({ id: environmentId, repositories: [{ mount_path: environment.cwd }] }); },
+  });
+  await expect(f.client.submit(f.input)).rejects.toThrow("Codex Cloud");
+  expect(f.frames.some(frame => frame.method === "thread/start")).toBe(false);
 });
 
 test.each(["auth", "http", "catalog", "oversized"])("hosted %s failure is bounded, credential-free and starts no thread", async failure => {

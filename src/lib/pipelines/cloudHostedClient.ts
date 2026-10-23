@@ -146,7 +146,7 @@ class HostedConnection {
       if (!pending || message.method) return;
       this.pending.delete(Number(message.id));
       // Remote messages may contain credentials; publish only the error code.
-      if (message.error) pending.reject(new Error(`Codex Cloud RPC refused (${Number(row(message.error).code) || "unknown"})`));
+      if (message.error) pending.reject(new Error(`Codex Cloud ${pending.method} refused (${Number(row(message.error).code) || "unknown"})`));
       else {
         const result = row(message.result);
         if (pending.method === "thread/start" && typeof row(result.thread).id === "string") this.watch(String(row(result.thread).id));
@@ -265,7 +265,7 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
     supportsModel: (model, effort) => model === MODEL && (effort === null || ["none", "minimal", "low", "medium", "high", "xhigh"].includes(effort)),
     submit: input => using(input, async (client, auth, scope) => {
       requireCloud(input.model === MODEL && input.allowProviderModelFallback === false, "explicit model unsupported");
-      requireCloud(/(?:^|~)asenvcfg_[A-Za-z0-9]+$/.test(input.environmentId), "environment must be an ASB configuration");
+      requireCloud(/^(?:[A-Za-z0-9_-]+~)?asenvcfg_[A-Za-z0-9_-]+$/.test(input.environmentId), "environment must be an ASB configuration");
       requireCloud(/^[a-f0-9]{40}$/i.test(input.headSha) && Buffer.byteLength(input.prompt) <= 1024 * 1024, "submission input invalid");
       guard(input);
       const response = await dependencies.fetch(`${ENDPOINT}/v1/environment-configs/${encodeURIComponent(input.environmentId)}`, {
@@ -278,7 +278,25 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
       guard(input);
       requireCloud(detail.id === input.environmentId && Array.isArray(detail.repositories) && detail.repositories.length === 1, "environment configuration mismatch");
       const repository = row(detail.repositories[0]);
-      const cwd = text(repository.mount_path, "environment mount missing");
+      let cwd = typeof repository.mount_path === "string" ? repository.mount_path : "";
+      if (!cwd) {
+        // The desktop app resolves an opaque repository id through this shared
+        // catalog and maps its full name to the default cloud workspace root.
+        const id = text(repository.repository_id, "environment repository missing");
+        guard(scope);
+        const response = await dependencies.fetch(`https://chatgpt.com/backend-api/wham/github/repositories/${encodeURIComponent(id)}`, {
+          headers: { Authorization: `Bearer ${auth.token}`, "X-OpenAI-Product-Sku": "codex", ...(auth.account ? { "ChatGPT-Account-Id": auth.account } : {}) },
+          redirect: "error", signal: scope.signal,
+        });
+        guard(scope);
+        requireCloud(response.ok, `repository HTTP ${response.status}`);
+        const detail = await configuration(response);
+        guard(scope);
+        const fullName = text(detail.repository_full_name, "repository name missing");
+        requireCloud(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(fullName)
+          && ![".", ".."].includes(fullName.split("/")[1]), "repository name invalid");
+        cwd = "/workspace/" + fullName.split("/")[1];
+      }
       requireCloud(cwd.startsWith("/") && !cwd.includes("\0"), "environment mount invalid");
       const started = await client.rpc("thread/start", { model: input.model, allowProviderModelFallback: false, ephemeral: false,
         approvalPolicy: "never", sandbox: "danger-full-access", serviceName: "codex_cloud",
@@ -287,7 +305,7 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
       requireCloud(started.model === input.model, "resolved model mismatch");
       const thread = row(started.thread), environments = thread.environments;
       const threadId = text(thread.id, "thread id missing");
-      requireCloud(/^[A-Za-z0-9_-]{1,160}$/.test(threadId) && thread.ephemeral === false
+      requireCloud(/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(threadId) && thread.ephemeral === false
         && Array.isArray(environments) && environments.length === 1, "thread identity mismatch");
       const environment = row(environments[0]);
       requireCloud(environment.cwd === cwd && (environment.environmentConfigId == null || environment.environmentConfigId === input.environmentId)
@@ -305,7 +323,7 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
         input: [{ type: "text", text: input.prompt, text_elements: [] }] }, true);
       const turnId = text(row(accepted.turn).id, "accepted turn missing");
       requireCloud(/^[A-Za-z0-9_-]{1,160}$/.test(turnId), "accepted turn invalid");
-      return { taskId: threadId, taskUrl: `https://chatgpt.com/codex/tasks/${threadId}`,
+      return { taskId: threadId, taskUrl: `codex://threads/${threadId}?hostId=durable`,
         thread: { threadId, turnId, hosted: { environmentId: String(environment.environmentId), cwd, model: input.model } } };
     }, true),
     poll: input => using(input, async client => {

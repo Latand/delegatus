@@ -42,7 +42,11 @@ The interface isolates these operations from pipeline orchestration:
 
 - Submit the environment, published branch, role scaffold and prompt, explicit
   model and reasoning effort through the selected account's ChatGPT authentication.
-- Return an opaque task ID and HTTPS task URL. A hosted adapter also returns the
+- Return an opaque task ID and task URL. The hosted adapter uses the current
+  app's `codex://threads/<thread>?hostId=durable` link; it selects the cloud host
+  explicitly. The receipt validator allows only that native action, thread and
+  host selector, alongside credential-free HTTPS URLs for other transports.
+  A hosted adapter also returns the
   thread and turn ID pair in `thread`; it is persisted on the attempt and passed
   back to poll, final-message and diff reads after restarts. Poll pending, completed and failed
   outcomes with actionable, credential-free errors.
@@ -77,7 +81,10 @@ directory from the verified configuration; a local lane path cannot supply it.
 Authentication, including credential-bearing handshake subprotocols, remains
 inside the adapter's memory. There is no API-key fallback.
 
-The ASB detail endpoint supplies the single repository's mount path. After
+The ASB detail endpoint supplies the single repository's mount path. When that
+path is empty, the adapter follows the desktop app's shared repository-catalog
+lookup and derives the default workspace directory from `repository_full_name`.
+An inaccessible repository or unknown name fails before a work turn starts. After
 thread creation the client validates the resolved model and execution instance,
 fetches the published lane branch, checks it out, and requires the resulting
 commit to equal the accepted lane head before starting the work turn. Git
@@ -123,7 +130,7 @@ fenced JSON verdict contract.
 | --- | --- | --- |
 | Stage runtime and explicit model | MCP stage schema and pipeline HTTP inputs; `normalizeStages`; draft copies and role overrides; activation binds runtime and effective model | Store validation, stage digest and cloud dispatch; omitted runtime uses the existing local path |
 | Project environment | Settings HTTP PUT and `setCodexCloudEnvironmentId`; other setting writers spread the existing entry | Canonical project reads, settings GET and cloud admission; absent or cleared value is empty |
-| Cloud attempt | Scoped controller-job checkpoints, serialized by the existing pipeline store | Attempt validation, indexed controller deadlines, API record reads and existing verdict settlement; absent field denotes a local attempt |
+| Cloud attempt | Scoped controller-job checkpoints, serialized by the existing pipeline store | Attempt validation, indexed controller deadlines, API record reads and existing verdict settlement; absent for local attempts and before cloud admission |
 
 ## Controller and persistence
 
@@ -150,6 +157,9 @@ replace another receipt or advance a paused lane. Delivery takeover can clear th
 old lane's active publication claim without advancing its old epoch; cloud jobs
 also fence the owner, active flag, publication policy and disposition, and the
 controller refuses later polling or settlement after that withdrawal.
+Clearing or changing the project environment setting also withdraws authority
+before another remote effect. A known submission receipt can still be retained
+for inspection; the attempt fails instead of polling or accepting a verdict.
 
 `src/lib/pipelines/cloudStage.test.ts` covers the transport contract and durable
 record validation. `src/lib/pipelines/cloudHostedClient.test.ts` uses a fake
@@ -160,3 +170,7 @@ transports to check arguments, model fidelity, polling, real-process restart
 receipts, races, verdicts and errors. `src/app/api/projects/settings/route.test.ts`
 checks setting persistence, defaults and authority refusals. No live cloud task
 or account credential is needed for these checks.
+
+`evidence/cloud-stage-runtime.json` records the verification commands, source
+fingerprints, explicit importer paths, raw check exit codes and repeated
+whole-file observations on the implementation and its starting revision.

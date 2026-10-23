@@ -7983,13 +7983,20 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
       withControllerPipelineScope([id], () => withAllPipelineControllerMutation(async (lanes, persist) => {
         const lane = lanes.find(item => item.id === id);
         const current = lane && currentAttempt(lane, stageId);
+        // A control tick may fail this same submitting attempt while its
+        // acceptance reply is in flight. Retain its receipt without reviving it.
+        const failedReceipt = receiptOnly && current?.cloud?.phase === "failed" && expected.phase === "submitting";
+        const priorError = current?.cloud?.error;
+        const comparable = current?.cloud && structuredClone(current.cloud);
+        if (failedReceipt && comparable) { comparable.phase = expected.phase; delete comparable.error; }
         if (!lane || !current || current.n !== n || current.historical || lane.cursor?.stageId !== stageId
-          || receiptFence(lane) !== originalReceiptFence || JSON.stringify(current.cloud) !== JSON.stringify(expected)
+          || receiptFence(lane) !== originalReceiptFence || JSON.stringify(comparable) !== JSON.stringify(expected)
           || !receiptOnly && !sameCloudIntent(lane, stageId, n, expected, authority)) return false;
         current.cloud = structuredClone(next);
+        if (failedReceipt) { current.cloud.phase = "failed"; current.cloud.error = priorError ?? current.error ?? "Codex Cloud stage failed"; }
         if (accountId) current.accountId = accountId;
         await persist([lane]);
-        expected = structuredClone(next);
+        expected = structuredClone(current.cloud);
         return true;
       }, undefined, true));
     const reader = pipelineRecordReader(id);
@@ -8104,7 +8111,8 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
 function cloudExecutionFence(lane: Pipeline, stageId: string): string {
   return JSON.stringify([lane.state, lane.cursor?.stageId, lane.controlGeneration, lane.pausedAt, lane.resumedAt, lane.closedAt,
     lane.worktreeDir, lane.branch, lane.lastPassedCommit, lane.delivery?.target, lane.delivery?.epoch,
-    lane.delivery?.ownerId, lane.delivery?.active, lane.delivery?.publish, lane.delivery?.disposition, currentAttempt(lane, stageId)?.definition]);
+    lane.delivery?.ownerId, lane.delivery?.active, lane.delivery?.publish, lane.delivery?.disposition,
+    codexCloudEnvironmentId(lane.project), currentAttempt(lane, stageId)?.definition]);
 }
 
 function sameCloudIntent(lane: Pipeline | null, stageId: string, n: number, cloud: CloudStageAttempt, authority: string): boolean {
@@ -8139,9 +8147,10 @@ async function tickCloudStage(pipeline: Pipeline, stage: PipelineStage, attempt:
     || pipeline.delivery.disposition !== "owner" || pipeline.delivery.ownerId !== pipeline.id) {
     return reject("Codex Cloud requires an active published lane branch owned by this lane");
   }
+  const environmentId = codexCloudEnvironmentId(pipeline.project);
+  if (!environmentId) return reject("Codex Cloud is disabled: set the project's codexCloudEnvironmentId");
+  if (attempt.cloud && environmentId !== attempt.cloud.environmentId) return reject("Codex Cloud project environment changed during the stage");
   if (!attempt.cloud) {
-    const environmentId = codexCloudEnvironmentId(pipeline.project);
-    if (!environmentId) return reject("Codex Cloud is disabled: set the project's codexCloudEnvironmentId");
     if (await holdStageLaunchForUpdate(pipeline, ports, persist)) return;
     bindAttemptDefinition(stage, attempt, ports);
     attempt.state = "running"; attempt.startedAt = ports.now();
