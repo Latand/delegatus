@@ -40,6 +40,8 @@ import { AttentionIsland } from "./attention/AttentionIsland";
 import { AttentionPanel, type AttentionPanelPlacement } from "./attention/AttentionPanel";
 import { needsYouCounts } from "./attention/needsYouPanel";
 import { AttentionToast } from "./attention/AttentionToast";
+import { SoundCaptions } from "./SoundCaptions";
+import type { CaptionTarget } from "@/lib/audio/captions";
 import { attentionEntryProject, buildNeedsYouQueue, laneFocusId, laneFocusPath, type MobileAttentionEntry } from "./attention/attentionQueue";
 import { MobileAttentionSheet, type MobileNoticeRow } from "./attention/MobileAttentionSheet";
 import { roleNameById } from "./builderCopy";
@@ -1459,6 +1461,16 @@ function ViewerApp() {
     prototypeJump.current = notice;
     selectProject(notice.project);
   }, [project, selectProject]);
+  /* Lands on a lane's card, whichever project it is in. */
+  const focusLane = useCallback(
+    (pipelineId: string, laneProject: string) => {
+      setPendingHash(null);
+      if (laneProject !== project) selectProject(laneProject);
+      focusNonceRef.current += 1;
+      setFocusRequest({ path: laneFocusPath(pipelineId), nonce: focusNonceRef.current, catalog: false });
+    },
+    [project, selectProject],
+  );
   const openAttentionEntry = useCallback(
     (entry: MobileAttentionEntry) => {
       if (entry.kind === "update") { openSelfUpdate(); return; }
@@ -1468,13 +1480,9 @@ function ViewerApp() {
         requestFocus(entry.item.file.path);
         return;
       }
-      const lane = entry.row.pipeline;
-      setPendingHash(null);
-      if (lane.project !== project) selectProject(lane.project);
-      focusNonceRef.current += 1;
-      setFocusRequest({ path: laneFocusPath(lane.id), nonce: focusNonceRef.current, catalog: false });
+      focusLane(entry.row.pipeline.id, entry.row.pipeline.project);
     },
-    [project, applyProject, selectProject, requestFocus, openPrototypeEntry],
+    [project, applyProject, requestFocus, openPrototypeEntry, focusLane],
   );
 
   useEffect(() => {
@@ -1579,6 +1587,40 @@ function ViewerApp() {
   }, [files]);
 
   const toastFile = toastPath ? files.find((file) => file.path === toastPath) : null;
+
+  /* A sound caption's click (docs/design/sound-captions.md §4): the entry it
+     announced when it is still waiting, else the conversation or lane behind it. */
+  const openCaptionTarget = useCallback(
+    (first: CaptionTarget): void => {
+      let target: CaptionTarget | null = first;
+      if (target.kind === "needs-you") {
+        const { entryId } = target;
+        const entry = needsYou.find((candidate) => candidate.id === entryId);
+        if (entry) {
+          jumpToEntry(entry);
+          return;
+        }
+        target = target.then;
+      }
+      if (!target || target.kind === "needs-you") return;
+      if (target.kind === "lane") {
+        focusLane(target.pipelineId, target.project);
+        return;
+      }
+      const { path, conversationId } = target;
+      const file = allFiles.find((candidate) => (path && candidate.path === path) || (conversationId && candidate.conversationId === conversationId));
+      if (file) openFile(file);
+    },
+    [needsYou, jumpToEntry, focusLane, allFiles, openFile],
+  );
+  /* A caption that names only a conversation takes that conversation's title. */
+  const captionConversationTitle = useCallback(
+    (conversationId: string): string | null => {
+      const file = allFiles.find((candidate) => candidate.conversationId === conversationId);
+      return file ? cleanTitle(file.title, 90) || null : null;
+    },
+    [allFiles],
+  );
 
   /* Crowned conversations pinned atop the panel, mirroring the scheme's
      favorites row (issue #224). */
@@ -1972,6 +2014,17 @@ function ViewerApp() {
           root agent's focus handoff when there is one to answer. Renders
           nothing at all the rest of the time. */}
       <AttentionHost mobile={isMobile} />
+      {/* A short toast for each event sound that plays, beside the needs-you
+          chip. Fixed at the toast layer so an opened task does not cover it;
+          nothing mounts on the phone. */}
+      <SoundCaptions
+        mobile={isMobile}
+        right={panelDocked ? PANEL_WIDTH + 16 : 16}
+        hidden={panelFloating}
+        suppressPath={toastFile && !panelFloating ? toastFile.path : null}
+        titleOf={captionConversationTitle}
+        onOpen={openCaptionTarget}
+      />
       {/* A task's prototype review, opened from its card or from the orchestrator's notice. */}
       <PrototypeReviewHost tasks={tasks} seatDecisions={seatDecisions} />
       {/* #1054: the global "find my messages" palette. Mounted here so one
