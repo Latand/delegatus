@@ -1,0 +1,90 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "readings": [
+    {
+      "lang": "en",
+      "theme": "light",
+      "width": 1440,
+      "frame": "en-light-1440.png",
+      "problems": [],
+      "scroll": 0,
+      "focus": "BODY"
+    },
+    {
+      "lang": "en",
+      "theme": "light",
+      "width": 390,
+      "frame": "en-light-390.png",
+      "problems": [],
+      "scroll": 0,
+      "focus": "BODY"
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "width": 1440,
+      "frame": "en-dark-1440.png",
+      "problems": [],
+      "scroll": 0,
+      "focus": "BODY"
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "width": 390,
+      "frame": "en-dark-390.png",
+      "problems": [],
+      "scroll": 0,
+      "focus": "BODY"
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "width": 1440,
+      "frame": "uk-light-1440.png",
+      "problems": [],
+      "scroll": 0,
+      "focus": "BODY"
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "width": 390,
+      "frame": "uk-light-390.png",
+      "problems": [],
+      "scroll": 0,
+      "focus": "BODY"
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1440,
+      "frame": "uk-dark-1440.png",
+      "problems": [],
+      "scroll": 0,
+      "focus": "BODY"
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "width": 390,
+      "frame": "uk-dark-390.png",
+      "problems": [],
+      "scroll": 0,
+      "focus": "BODY"
+    }
+  ],
+  "recordedAt": "2026-10-23T13:12:59.523954+00:00",
+  "baseRevision": "134a29c63d68d6934d6222c89d5103df3ab4721c",
+  "sourceSha256": {
+    "src/lib/bridge/reportLog.ts": "11387cfe5c9881e270f906ce136a3921c4d565b35e9a7b5fd715113e563aa5f4",
+    "src/lib/bridge/reportLog.test.ts": "445cc41fec6b545bf834f985144208e1c85a3ecd5c90889f2b93c65cf74af90c",
+    "src/components/orchestrator/reportLog/ReportLog.tsx": "044fcf6cc2b79fa217482cf4e238cd11bd8660a8afc396acdb8593fb0daf855b",
+    "src/components/orchestrator/reportLog/ReportLog.dom.test.tsx": "6afdebc276188767431fd0b17bbd77e7531d742e19e7b410b077326941cb375a",
+    "src/components/orchestrator/reportLog/reportLogEvidence.fixture.ts": "da7f993108569f7c89af9d33bda90c5e9327880f4e3458a016394842c467e1b4",
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "efb554ec97f97384580832d58280ec0029150a583e59e7f6abb195b8057ee3dc"
+  },
+  "command": "gate-remote -- env LLV_KANBAN_BROWSER_TEST=1 bun test --timeout=60000 src/components/kanban/kanbanBoard.browser.test.tsx -t 'group chat adapted to report authors'",
+  "exitCode": 0,
+  "framesInspected": 8
+}

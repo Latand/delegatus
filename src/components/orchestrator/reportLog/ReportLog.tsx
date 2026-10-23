@@ -344,6 +344,13 @@ function ReportEntry({ entry, question, current, touch, onResolve, refusal, gith
   const { t } = useLocale();
   const segments = useMemo(() => bodySegments(entry.body, github, entry.cards), [entry.body, github, entry.cards]);
   const resolved = question === "resolved";
+  const author = entry.author;
+  const authorLabel = author ? author.kind === "manager" ? t("render.senderRoleOrchestrator")
+    : author.kind === "gateway" ? t("render.senderRoleGateway")
+    : author.kind === "unidentified" ? t("telegram.bot.unidentified")
+    : author.role ? roleNameById(t, author.role) : t("render.agentLabel") : null;
+  const authorHref = author?.kind !== "unidentified" && author?.conversationId
+    ? `#c=${encodeURIComponent(author.conversationId)}` : null;
   return (
     <li
       className={`flex flex-col gap-1 border-b border-border px-3 py-2.5 ${current ? "ring-2 ring-inset ring-accent/40" : ""}`}
@@ -353,7 +360,7 @@ function ReportEntry({ entry, question, current, touch, onResolve, refusal, gith
       {...(current ? { "data-report-current": "" } : {})}
       {...(fresh ? { "data-report-new": "" } : {})}
     >
-      <div className="flex items-center gap-2 text-caption">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-caption">
         {question ? (
           <label className={`-my-1 inline-flex shrink-0 cursor-pointer items-center ${touch ? "min-h-11 min-w-8" : ""}`} title={t(resolved ? "reportLog.unresolve" : "reportLog.resolve")}>
             <input
@@ -368,6 +375,7 @@ function ReportEntry({ entry, question, current, touch, onResolve, refusal, gith
         ) : null}
         <time dateTime={entry.at} className="tabular-nums text-muted">{entryTime(entry.at, locale, now)}</time>
         <span className={`font-semibold ${resolved ? "text-muted" : CLASS_TONE[entry.class] ?? "text-muted"}`} data-report-class-label="">{classLabel}</span>
+        {authorLabel ? <span className="break-words text-secondary [overflow-wrap:anywhere]" data-report-author="">{authorLabel}</span> : null}
         {resolved ? (
           <span className="inline-flex items-center gap-0.5 text-success" data-report-resolved-mark="">
             <Check className="h-3 w-3" aria-hidden />
@@ -404,6 +412,12 @@ function ReportEntry({ entry, question, current, touch, onResolve, refusal, gith
             </button>
           ))}
       </p>
+      {authorHref ? (
+        <a href={authorHref} data-report-link="author" aria-label={t("reportLog.askOpen", { agent: authorLabel! })}
+          className={`inline-flex self-start items-center text-caption font-semibold text-accent underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${touch ? "min-h-11" : "min-h-7"}`}>
+          {t("render.openSenderConversation")}
+        </a>
+      ) : null}
       {refusal ? <p role="alert" data-report-resolve-error={entry.seq} className="m-0 text-label font-semibold text-danger [overflow-wrap:anywhere]">{refusal}</p> : null}
     </li>
   );

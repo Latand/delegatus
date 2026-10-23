@@ -28,6 +28,9 @@ function sandbox(): void {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-report-log-"));
   sandboxes.push(dir);
   process.env.LLV_STATE_DIR = path.join(dir, "state");
+  // Complete first-boot imports before a fixture opens its write transaction.
+  readBridgeReportLog();
+  readBridgeChannel();
 }
 
 const SCOPE = { project: "repo-project-a", seatConversationId: "conversation_seat_a" };
@@ -46,6 +49,30 @@ function report(index: number, overrides: Partial<BridgeReportInput> = {}): Brid
 
 const NO_CARDS = { knownCards: () => new Map<string, ReportLogCard["kind"]>() };
 const inProjectA = (project: string) => project === SCOPE.project;
+
+test("report authors come from recorded origin, including the actual deputy writer and legacy absence", () => {
+  sandbox();
+  const origins = [
+    { kind: "manager" as const, conversationId: "conversation_old_seat", role: "orchestrator" },
+    { kind: "agent" as const, conversationId: "conversation_builder", role: "builder" },
+    { kind: "gateway" as const, conversationId: "conversation_voice", role: null },
+    { kind: "unidentified" as const, conversationId: null, role: null },
+    { kind: "manager" as const, conversationId: "conversation_seat", role: "orchestrator", via: { deputy: "conversation_deputy" } },
+  ];
+  appendBridgeReports([
+    report(0),
+    ...origins.map((origin, index) => report(index + 1, { origin, body: "Claimed author: someone else" })),
+    report(20, { project: "repo-project-b", targetSeatConversationId: "conversation_other_seat", origin: origins[1] }),
+  ]);
+  const page = readProjectReportLog({ project: SCOPE.project }, NO_CARDS);
+  expect(JSON.parse(JSON.stringify(page)).entries.map((entry: { author?: unknown }) => entry.author)).toEqual([
+    { kind: "manager", conversationId: "conversation_deputy", role: "orchestrator" },
+    origins[3], origins[2], origins[1], origins[0], undefined,
+  ]);
+  expect(page.entries).toHaveLength(6);
+  // The view never rewrites the historical author to the current seat.
+  expect(readBridgeReportLog().reports.find(row => row.seq === 2)?.origin?.conversationId).toBe("conversation_old_seat");
+});
 
 test("a page is one project's reports, newest first, and pages back by seq to the start", () => {
   sandbox();

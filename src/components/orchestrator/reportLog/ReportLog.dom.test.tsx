@@ -31,10 +31,11 @@ Object.assign(globalThis, {
 
 const { setRuntimeBusForTests } = await import("@/hooks/runtimeBus");
 const { ReportLog } = await import("./ReportLog");
+const { setLocale } = await import("@/lib/i18n");
 const { resetBridgeReportsSettingForTests } = await import("./bridgeReportsSetting");
 const { GET } = await import("@/app/api/orchestrator/reports/route");
 const { mutateOperatorAsks } = await import("@/lib/asks/store");
-const { appendBridgeReports } = await import("@/lib/bridge/store");
+const { appendBridgeReports, readBridgeReportLog, readBridgeChannel } = await import("@/lib/bridge/store");
 const { setBridgeReports } = await import("@/lib/projects/settings");
 const { resetDismissalOverlayForTests, useDismissalOverlay } = await import("@/components/attention/dismissalOverlay");
 const { buildNeedsYouQueue } = await import("@/components/attention/attentionQueue");
@@ -63,6 +64,7 @@ function page(entries: ReportLogEntry[], overrides: Partial<ReportLogPage> = {})
 }
 
 beforeEach(() => {
+  setLocale("en");
   doneServer = [];
   doneWrites = [];
   resetDoneItemsForTests();
@@ -138,6 +140,42 @@ function mount(): HTMLElement {
 async function settle(): Promise<void> {
   for (let index = 0; index < 5; index += 1) await Bun.sleep(5);
 }
+
+for (const locale of ["en", "uk"] as const) {
+  test(`recorded authors and conversation links in ${locale}, with no invented legacy or unidentified link`, async () => {
+    setLocale(locale);
+    pages = [page([
+      entry(6, { author: { kind: "manager", conversationId: "conversation_old_seat", role: "orchestrator" } }),
+      entry(5, { author: { kind: "agent", conversationId: "conversation_builder", role: "builder" } }),
+      entry(4, { author: { kind: "gateway", conversationId: "conversation_voice", role: null } }),
+      entry(3, { author: { kind: "unidentified", conversationId: "javascript:alert(1)", role: null } }),
+      entry(2, { author: { kind: "agent", conversationId: null, role: null } }),
+      entry(1),
+    ])];
+    const host = mount();
+    await settle();
+    expect([...host.querySelectorAll("[data-report-author]")].map(node => node.textContent)).toEqual(locale === "en"
+      ? ["Orchestrator", "Builder", "Gateway", "an unidentified caller", "Agent"]
+      : ["Оркестратор", "Білдер", "Шлюз", "невідомий виклик", "Агент"]);
+    expect([...host.querySelectorAll('[data-report-link="author"]')].map(node => node.getAttribute("href"))).toEqual([
+      "#c=conversation_old_seat", "#c=conversation_builder", "#c=conversation_voice",
+    ]);
+    expect(host.querySelector('[data-report-entry="1"] [data-report-author]')).toBeNull();
+    expect(host.textContent).not.toContain("javascript:");
+    expect(settingWrites).toEqual([]);
+    expect(dismissals).toEqual([]);
+  });
+}
+
+test("an author id stays an encoded conversation hash and a custom role renders as text", async () => {
+  const id = "conversation_odd&x=<script>";
+  pages = [page([entry(1, { author: { kind: "agent", conversationId: id, role: "<img src=x onerror=alert(1)>" } })])];
+  const host = mount();
+  await settle();
+  expect(host.querySelector('[data-report-link="author"]')?.getAttribute("href")).toBe(`#c=${encodeURIComponent(id)}`);
+  expect(host.querySelector("img, script")).toBeNull();
+  expect(host.querySelector("[data-report-author]")?.textContent).toBe("<img src=x onerror=alert(1)>");
+});
 
 test("each entry is its time, its class word and its body as written, newest first, with #refs and card ids linked", async () => {
   pages = [page([
@@ -326,6 +364,9 @@ describe("paging back through the real route", () => {
 
   /** `count` reports, one each 50 s from 25 s past, never on an ask's minute. */
   function seedReports(count: number): { at: number; key: string }[] {
+    // Complete first-boot imports before the fixture's write transaction.
+    readBridgeReportLog();
+    readBridgeChannel();
     const inputs = Array.from({ length: count }, (_, index) => ({
       key: `report-${index}`,
       class: "completed" as const,
