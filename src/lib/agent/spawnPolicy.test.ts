@@ -572,7 +572,7 @@ test("a launch prefers HTTP with a capability of its own and a way through the a
   const state = home();
   process.env.LLV_STATE_DIR = state;
   try {
-    const gated = { ...flag, LLV_TOKEN: "operator-key" };
+    const gated = { ...flag, LLV_TOKEN: "operator-key", HOSTNAME: "127.0.0.1" };
     expect(viewerMcpTransportForLaunch(capability, gated)).toBe("http");
     fs.writeFileSync(path.join(state, "viewer-gateway.json"), JSON.stringify({ localEntry: "authenticated" }));
     expect(viewerMcpTransportForLaunch(capability, gated)).toBe("http");
@@ -588,10 +588,11 @@ test("a launch prefers HTTP with a capability of its own and a way through the a
 
 test("enabling phone access keeps the next launch on HTTP without a trusted local entry", () => {
   const capability = { LLV_SPAWN_CAPABILITY: "c".repeat(43) };
-  const previous = { transport: process.env.LLV_MCP_TRANSPORT, token: process.env.LLV_TOKEN, state: process.env.LLV_STATE_DIR };
+  const previous = { transport: process.env.LLV_MCP_TRANSPORT, token: process.env.LLV_TOKEN, state: process.env.LLV_STATE_DIR, bind: process.env.HOSTNAME };
   const state = home();
   process.env.LLV_STATE_DIR = state;
   process.env.LLV_MCP_TRANSPORT = "http";
+  process.env.HOSTNAME = "127.0.0.1";
   delete process.env.LLV_TOKEN;
   try {
     expect(viewerMcpTransportForLaunch(capability)).toBe("http");
@@ -602,7 +603,7 @@ test("enabling phone access keeps the next launch on HTTP without a trusted loca
     fs.writeFileSync(path.join(state, "viewer-gateway.json"), JSON.stringify({ localEntry: "trusted" }));
     expect(viewerMcpTransportForLaunch(capability)).toBe("http");
   } finally {
-    for (const [name, value] of [["LLV_MCP_TRANSPORT", previous.transport], ["LLV_TOKEN", previous.token], ["LLV_STATE_DIR", previous.state]] as const) {
+    for (const [name, value] of [["LLV_MCP_TRANSPORT", previous.transport], ["LLV_TOKEN", previous.token], ["LLV_STATE_DIR", previous.state], ["HOSTNAME", previous.bind]] as const) {
       if (value === undefined) delete process.env[name];
       else process.env[name] = value;
     }

@@ -88,7 +88,7 @@ printf 'credential received\\n'
   const previous = process.env.LLV_CODEX_BINARY;
   process.env.LLV_CODEX_BINARY = selected;
   const source = { NODE_ENV: "test" as const, LLV_TOKEN: crypto.randomBytes(32).toString("base64url"),
-    LLV_MCP_TRANSPORT: "http", LLV_VIEWER_PORT: "41234" };
+    LLV_MCP_TRANSPORT: "http", LLV_VIEWER_PORT: "41234", HOSTNAME: "127.0.0.1" };
   const access = mcpHttpAccessToken(source)!;
   let command = "";
   try {
@@ -126,6 +126,28 @@ printf 'credential received\\n'
   }
 });
 
+test.each(["0.0.0.0", "::", "192.0.2.10"])("a keyed %s bind keeps fresh and resumed terminal launches on stdio without a credential file", async hostname => {
+  const previous = process.env.LLV_CODEX_BINARY;
+  process.env.LLV_CODEX_BINARY = binary;
+  const home = fs.mkdtempSync(path.join(root, "non-loopback-"));
+  try {
+    for (const mode of ["fresh", "resume"]) {
+      const initial = mode === "fresh" ? freshSpecFor("codex", root, { codexHome: home, cleanMemory: true })
+        : resumeSpecForSession("codex", "12345678-1234-1234-1234-123456789abc", root, home, { cleanMemory: true })!;
+      const admitted = withSpawnCapability(await prepareAgentPublicationSpec(initial), "e".repeat(43), {
+        NODE_ENV: "test", LLV_MCP_TRANSPORT: "http", LLV_TOKEN: crypto.randomBytes(32).toString("base64url"), HOSTNAME: hostname,
+      });
+      expect(admitted.command).toContain('mcp_servers.viewer.command="bun"');
+      expect(admitted.command).not.toContain("mcp_servers.viewer.url=");
+      expect(admitted.command).not.toContain("x-delegatus-mcp-access");
+      expect(admitted.command).not.toContain("LLV_MCP_HTTP_ACCESS");
+      expect(fs.existsSync(path.join(home, ".llv", "spawn-mcp"))).toBe(false);
+    }
+  } finally {
+    if (previous === undefined) delete process.env.LLV_CODEX_BINARY; else process.env.LLV_CODEX_BINARY = previous;
+  }
+});
+
 test("a refused terminal credential write stops launch construction", () => {
   const previous = process.env.LLV_CODEX_BINARY;
   process.env.LLV_CODEX_BINARY = binary;
@@ -135,7 +157,7 @@ test("a refused terminal credential write stops launch construction", () => {
   try {
     const initial = freshSpecFor("codex", root, { codexHome: home, cleanMemory: true });
     expect(() => withSpawnCapability(initial, "f".repeat(43), {
-      NODE_ENV: "test", LLV_MCP_TRANSPORT: "http", LLV_TOKEN: crypto.randomBytes(32).toString("base64url"),
+      NODE_ENV: "test", LLV_MCP_TRANSPORT: "http", LLV_TOKEN: crypto.randomBytes(32).toString("base64url"), HOSTNAME: "127.0.0.1",
     })).toThrow();
   } finally {
     if (previous === undefined) delete process.env.LLV_CODEX_BINARY; else process.env.LLV_CODEX_BINARY = previous;

@@ -19,6 +19,10 @@ Both must name loopback: Next's fallback URL alone cannot prove a local bind.
 A wildcard, network or unknown bind refuses the credential even with
 caller-supplied loopback Host and forwarding headers. Tailscale mode binds the
 Viewer to loopback. Network-bound Viewers retain the existing access-key rules.
+Keyed non-loopback `--hostname` installations remain outside this change and
+retain stdio for agent MCP. Their generated HTTP definitions receive no local
+MCP credential. Supporting HTTP MCP there is deferred until a separate
+loopback-only entry is available. Unknown binds also retain stdio.
 A loopback Host, a local or absent Origin, and no remote forwarding address are
 also required.
 The global Host allowlist runs first. Other paths and remote callers retain

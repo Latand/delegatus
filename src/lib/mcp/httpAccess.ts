@@ -6,6 +6,12 @@ export const MCP_HTTP_ACCESS_HEADER = "x-delegatus-mcp-access";
 export const MCP_HTTP_ACCESS_ENV = "LLV_MCP_HTTP_ACCESS";
 type Environment = Readonly<Record<string, string | undefined>>;
 
+/** The launcher must explicitly declare a loopback bind; Next's fallback URL
+ * and caller-controlled headers cannot establish the listener's address. */
+export function mcpHttpLoopbackBound(source: Environment = process.env): boolean {
+  return ["127.0.0.1", "localhost", "::1", "[::1]"].includes(source.HOSTNAME ?? "");
+}
+
 /** A purpose-separated credential for the MCP perimeter. The route still
  * requires a current launch capability and its tool policy. Derivation lets
  * launches survive Viewer restarts without a cache or another durable secret;
@@ -33,7 +39,7 @@ function loopbackUrl(value: string): boolean {
  */
 export function admitsMcpHttpAccess(request: NextRequest): boolean {
   if (request.nextUrl.pathname !== "/api/mcp" || request.method !== "POST") return false;
-  if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(process.env.HOSTNAME ?? "")) return false;
+  if (!mcpHttpLoopbackBound()) return false;
   if (!loopbackUrl(request.url)) return false;
   if (!loopbackUrl(`http://${request.headers.get("host") ?? ""}`)) return false;
   const origin = request.headers.get("origin");

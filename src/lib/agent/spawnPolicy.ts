@@ -7,7 +7,7 @@ import { installMemoryHook } from "@/lib/memory/hook";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 
 import { viewerControlOrigin, viewerControlToken, VIEWER_CONTROL_TOKEN_ENV } from "@/lib/mcp/controlEndpoint";
-import { mcpHttpAccessToken, MCP_HTTP_ACCESS_HEADER, MCP_HTTP_ACCESS_ENV } from "@/lib/mcp/httpAccess";
+import { mcpHttpAccessToken, mcpHttpLoopbackBound, MCP_HTTP_ACCESS_HEADER, MCP_HTTP_ACCESS_ENV } from "@/lib/mcp/httpAccess";
 import { stableMcpRuntimeRoot } from "@/runtime-host/mcpRuntimeRelease";
 
 import { viewerMcpStateContext } from "../../../bin/mcp-state-paths.mjs";
@@ -200,12 +200,13 @@ function stableViewerPort(source: McpEnvironment): string {
 /**
  * Whether an agent can reach the endpoint through the Viewer's access gate.
  * A keyed installation issues a separate credential in the MCP definition.
- * It travels only to the installation's own loopback listener. An override
+ * It travels only to the installation's own explicitly loopback-bound listener. An override
  * naming another port keeps stdio rather than sending it to another service.
  */
 function viewerMcpHttpAdmitted(source: McpEnvironment): boolean {
   if (!source.LLV_TOKEN) return true;
-  return new URL(viewerMcpHttpUrl(source)).port === stableViewerPort(source);
+  return mcpHttpLoopbackBound(source)
+    && new URL(viewerMcpHttpUrl(source)).port === stableViewerPort(source);
 }
 
 const LOOPBACK_MCP_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);

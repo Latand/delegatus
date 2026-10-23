@@ -118,7 +118,7 @@ test("remote callers still authenticate with the normal key, cookie and key-link
 
 test("all generated HTTP definitions use a separate credential and keep it off foreign endpoints", () => {
   const access = keyed();
-  const source = { LLV_TOKEN: process.env.LLV_TOKEN, LLV_VIEWER_PORT: "8898" };
+  const source = { LLV_TOKEN: process.env.LLV_TOKEN, LLV_VIEWER_PORT: "8898", HOSTNAME: "127.0.0.1" };
   const claude = viewerMcpHttpClaudeEntry(source) as { headers: Record<string, string> };
   const codex = viewerMcpHttpCodexEntry(source) as { http_headers: Record<string, string> };
   expect(claude.headers[MCP_HTTP_ACCESS_HEADER] === access).toBe(true);
@@ -135,6 +135,26 @@ test("all generated HTTP definitions use a separate credential and keep it off f
   delete process.env.LLV_TOKEN;
   expect(mcpHttpAccessToken()).toBeNull();
   expect(JSON.stringify([viewerMcpHttpClaudeEntry({}), viewerMcpHttpCodexEntry({})])).not.toContain(MCP_HTTP_ACCESS_HEADER);
+});
+
+test.each([undefined, "", "0.0.0.0", "::", "[::]", "192.0.2.10"])("a keyed %s bind retains stdio and issues no HTTP definition credential", hostname => {
+  keyed();
+  const source = { LLV_TOKEN: process.env.LLV_TOKEN, LLV_VIEWER_PORT: "8898", HOSTNAME: hostname };
+  expect(viewerMcpTransportForLaunch({ LLV_SPAWN_CAPABILITY: "a".repeat(43) }, source)).toBe("stdio");
+  for (const entry of [viewerMcpHttpClaudeEntry(source), viewerMcpHttpCodexEntry(source), viewerMcpHttpCodexEntry(source, true)]) {
+    expect(JSON.stringify(entry)).not.toContain(MCP_HTTP_ACCESS_HEADER);
+    expect(JSON.stringify(entry).includes(mcpHttpAccessToken(source)!)).toBe(false);
+  }
+  expect(viewerMcpTransportForLaunch({ LLV_SPAWN_CAPABILITY: "a".repeat(43) }, { ...source, LLV_TOKEN: undefined })).toBe("http");
+});
+
+test.each(["127.0.0.1", "localhost", "::1", "[::1]"])("a keyed %s bind admits HTTP and issues its credential", hostname => {
+  keyed();
+  const source = { LLV_TOKEN: process.env.LLV_TOKEN, LLV_VIEWER_PORT: "8898", HOSTNAME: hostname };
+  expect(viewerMcpTransportForLaunch({ LLV_SPAWN_CAPABILITY: "a".repeat(43) }, source)).toBe("http");
+  for (const entry of [viewerMcpHttpClaudeEntry(source), viewerMcpHttpCodexEntry(source), viewerMcpHttpCodexEntry(source, true)]) {
+    expect(JSON.stringify(entry)).toContain(MCP_HTTP_ACCESS_HEADER);
+  }
 });
 
 test("independent Viewer processes accept the issued credential and key rotation revokes it", async () => {

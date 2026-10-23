@@ -286,7 +286,9 @@ test("over HTTP, a thread with no registered Viewer reaches the shared endpoint 
 
 test("a keyed Codex HTTP thread receives MCP access in its definition while registered stdio stays intact", () => {
   const previous = process.env.LLV_TOKEN;
+  const previousBind = process.env.HOSTNAME;
   process.env.LLV_TOKEN = crypto.randomBytes(32).toString("base64url");
+  process.env.HOSTNAME = "127.0.0.1";
   try {
     const config = headlessCodexThreadConfig({ config: { mcp_servers: {} } }, false, undefined, undefined, "http") as {
       mcp_servers: { viewer: { http_headers: Record<string, string> } };
@@ -297,6 +299,7 @@ test("a keyed Codex HTTP thread receives MCP access in its definition while regi
     expect((registered.mcp_servers as Record<string, unknown>).viewer).not.toHaveProperty("http_headers");
   } finally {
     if (previous === undefined) delete process.env.LLV_TOKEN; else process.env.LLV_TOKEN = previous;
+    if (previousBind === undefined) delete process.env.HOSTNAME; else process.env.HOSTNAME = previousBind;
   }
 });
 
