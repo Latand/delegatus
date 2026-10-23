@@ -1409,6 +1409,8 @@ test.each([
   const transcript = path.join(account.sessionsDir, "2026", "07", "20", "weekly-burndown.jsonl");
   fs.mkdirSync(path.dirname(transcript), { recursive: true });
   writeQuotaFixture(transcript, [event(7_200, 30), event(3_600, 45)].join("\n") + "\n");
+  fs.utimesSync(transcript, nowS, nowS);
+  expect(fs.statSync(transcript).mtimeMs).toBe(nowS * 1_000);
 
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async () => new Response(null, { status: 503 })) as unknown as typeof fetch;
