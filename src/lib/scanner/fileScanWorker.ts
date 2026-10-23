@@ -112,6 +112,7 @@ export function collectFileScanInWorker(
   if (runtime.signal?.aborted) return Promise.reject(abortError(runtime.signal.reason));
   return withViewerOperation("scanner.worker", async () => {
     const scheduler = runtime.scheduler ?? systemScheduler;
+    const expiresAt = performance.now() + (runtime.timeoutMs ?? FILE_SCAN_WORKER_TIMEOUT_MS);
     // All launches and retry waits belong to one generation and one deadline.
     const deadline = deadlineSignal(runtime.timeoutMs ?? FILE_SCAN_WORKER_TIMEOUT_MS, {
       signal: runtime.signal, scheduler, reason: "file scanner worker timed out",
@@ -120,7 +121,7 @@ export function collectFileScanInWorker(
       for (let attempt = 0; ; attempt++) {
         if (deadline.signal.aborted) throw abortError(deadline.signal.reason);
         try {
-          return await collectFileScanAttempt(options, onResourceSnapshot, { ...runtime, signal: deadline.signal });
+          return await collectFileScanAttempt(options, onResourceSnapshot, { ...runtime, signal: deadline.signal }, expiresAt);
         } catch (error) {
           const delay = FILE_SCAN_BOOTSTRAP_BACKOFF_MS[attempt];
           if (!(error instanceof FileScannerBootstrapBusyError) || delay === undefined) throw error;
@@ -153,6 +154,7 @@ function collectFileScanAttempt(
   options: SerializableFileScanOptions,
   onResourceSnapshot: ((snapshot: FileCatalogScan) => void) | undefined,
   runtime: FileScanWorkerRuntime,
+  expiresAt: number,
 ): Promise<FileCatalogScan> {
   if (runtime.signal?.aborted) return Promise.reject(abortError(runtime.signal.reason));
   const launch = runtime.launch ?? fileScanWorkerLaunch(runtime.cwd);
@@ -183,6 +185,7 @@ function collectFileScanAttempt(
     let listening = false;
     let stdout = "";
     let stderr = "";
+    let diagnosticLine = "";
     let outputBytes = 0;
     let completed: FileCatalogScan | null = null;
     let completedConversationCatalog: FileCatalogScan["conversationCatalog"];
@@ -255,6 +258,18 @@ function collectFileScanAttempt(
     });
     child.stderr!.setEncoding("utf8");
     child.stderr!.on("data", (chunk: string) => {
+      // Successful worker waits must remain visible in the service journal.
+      // Forward only complete, bounded monitoring lines; retain the ordinary
+      // stderr tail below for the existing failure receipt.
+      diagnosticLine += chunk;
+      let newline: number;
+      while ((newline = diagnosticLine.indexOf("\n")) >= 0) {
+        const line = diagnosticLine.slice(0, newline);
+        diagnosticLine = diagnosticLine.slice(newline + 1);
+        if (line.length <= FILE_SCAN_WORKER_STDERR_MAX_BYTES
+          && /^\[(?:blocking-wait|viewer loop-gap|performance summary)\]/.test(line)) console.error(line);
+      }
+      if (diagnosticLine.length > FILE_SCAN_WORKER_STDERR_MAX_BYTES) diagnosticLine = "";
       stderr = `${stderr}${chunk}`;
       if (Buffer.byteLength(stderr) > FILE_SCAN_WORKER_STDERR_MAX_BYTES) {
         stderr = Buffer.from(stderr).subarray(-FILE_SCAN_WORKER_STDERR_MAX_BYTES).toString("utf8");
@@ -302,6 +317,6 @@ function collectFileScanAttempt(
       listening = true;
       if (runtime.signal.aborted) onAbort();
     }
-    input.end(JSON.stringify({ type: "scan", options }));
+    input.end(JSON.stringify({ type: "scan", options, lockWaitMs: Math.max(0, expiresAt - performance.now()) }));
   });
 }
