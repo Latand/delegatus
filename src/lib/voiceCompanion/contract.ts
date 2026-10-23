@@ -15,6 +15,7 @@
  */
 
 import type { SessionTranscriptRecord } from "./transcriptRecord";
+import type { RetainedCall } from "./callHistoryTypes";
 
 export type Id = string;
 export type Locale = "en" | "uk";
@@ -167,7 +168,10 @@ export interface VoiceCompanionAdapter {
   /** Optional read-only delivery observation, including after media hangup. */
   refresh?(): Promise<void>;
   /** The whole conversation of the latest session, still readable after it ended; null before the first. */
-  transcript?(): Promise<SessionTranscriptRecord | null>;
+  transcript?(sessionId?: Id): Promise<SessionTranscriptRecord | null>;
+  /** The operator's retained calls, newest first, each with what it did; `transcript(sessionId)` opens one. Read
+   * when a page opens, so a reload keeps the history the page itself never saw. */
+  calls?(): Promise<RetainedCall[]>;
   /** The operator's dropped call the Viewer still offers, read when a page opens and after a drop; its record becomes the one `transcript` reads. */
   resumable?(): Promise<ResumableCall | null>;
   /** Unmount also releases delivery observation. */
