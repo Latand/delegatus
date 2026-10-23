@@ -19,6 +19,7 @@ import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
 import { defaultModelFor, normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import { internalServiceHeaders, rotationActor, type ViewerActor } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
+import { startDeferredSpawnWork } from "@/lib/agent/spawnDeferral";
 import { deliverConversationMessage } from "@/lib/delivery";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
 import { canonicalProject } from "@/lib/projects/aliases";
@@ -291,6 +292,9 @@ async function postSpawnInProcess(body: Record<string, unknown>, autonomous = fa
     json: async () => body,
   } as unknown as NextRequest;
   const response = await executeSpawnRequest(request, { ...productionSpawnCommandDependencies,
+    // Seat ticks have no Next request lifetime. Select the shared background
+    // scheduler explicitly; operator requests keep response-close deferral.
+    defer: autonomous ? startDeferredSpawnWork : productionSpawnCommandDependencies.defer,
     autonomousAdmissionHeld: () => autonomous && !!activeDrain(),
     assertAccountAdmission: admission?.assertAccount,
     prepareAccountAdmission: admission?.prepareAccount });

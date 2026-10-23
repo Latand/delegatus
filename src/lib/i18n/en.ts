@@ -5569,6 +5569,7 @@ export const en = {
   "seatTick.reason.autonomyIdle": "Find autonomous work",
   "seatTick.reason.autonomyEnded": "Autonomy end report",
   "seatTick.reason.unstartedTask": "unstarted task",
+  "seatTick.reason.overdueTask": "overdue task",
   "seatTick.reason.interval": "interval",
   "seatTick.reason.childTerminal": "finished worker",
   "seatTick.reason.ownLaneSettled": "your lane settled",

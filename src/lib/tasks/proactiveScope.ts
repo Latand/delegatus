@@ -26,9 +26,10 @@ export function proactiveScopeCurrent(task: BoardTask): boolean {
   return !!task.proactive && task.proactive.scopeRevision === 0 && task.proactive.scopeHash === proactiveScopeHash(task);
 }
 
-/** A restored old scope never revives a prior grant (including edit/restore ABA). */
+/** A restored old scope never revives a prior grant (including edit/restore ABA).
+ * Only atomic admission creates provenance, so an ordinary write cannot add it. */
 export function retainProactiveScope(task: BoardTask, previous: BoardTask | undefined): void {
-  if (!previous?.proactive) return;
+  if (!previous?.proactive) { delete task.proactive; return; }
   task.proactive = { ...previous.proactive, scopeRevision: previous.proactive.scopeRevision
     + (proactiveScopeHash(task) === proactiveScopeHash(previous) ? 0 : 1) };
 }

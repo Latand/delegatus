@@ -659,10 +659,18 @@ that.
 unmerged-PR wake owns it); parked on a failed or blocked stage → stays live
 (the lane's own wake reaches the seat); `closed` → `declined` when the go was
 refused, `failed` otherwise, with the last stage and its reason.
+A done bound task settles an otherwise live record as `completed` with reason
+`task-done`, including a record that never obtained a pipeline id. A newer stable
+`v*` tag containing the frozen cut and present on npm settles it as `superseded`,
+recording the tag as its reason. Both paths clear only that run's pending request;
+a later request survives. They free the slot without starting a failure cooldown.
+The next evaluation fetches tags and uses the highest stable version for the
+change range and tag gap; holds, the six-hour soak and publication approval still
+apply.
 
 ### 6.3 Wake items for the seat
 
-- `release-settled`: published, failed or declined, one per run, the
+- `release-settled`: published, failed, declined, completed or superseded, one per run, the
   way `maintenance-settled` works (`src/lib/monitor/seatTick.ts:1297`). A
   published run's item also carries any product defect the screenshot stages
   named (§5.3).
