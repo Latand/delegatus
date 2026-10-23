@@ -24,6 +24,67 @@ async function inspector(value: string, exactOnly: boolean, plaintext: boolean, 
   }
 }
 
+test("the committed catalog permits open-source prose", async () => {
+  const scanner = await inspector("unrelated fixture value", false, false,
+    join(import.meta.dir, "privacy-known-value-fingerprints.json"));
+
+  for (const spelling of ["open-source", "open source", ["open", "source"].join("")]) {
+    expect(scanner.sensitiveClasses(`the ${spelling} core`).has("known_value"), spelling).toBe(false);
+  }
+});
+
+test("the dictionary phrase remains private in identity fields and account paths", async () => {
+  const scanner = await inspector("unrelated fixture value", false, false,
+    join(import.meta.dir, "privacy-known-value-fingerprints.json"));
+  const label = ["open", "source"].join("");
+  const sources = [
+    `account_id="${label}"`, `{"accountId":"${label}"}`, `data-account-id='${label}'`,
+    `id="${label}"`, `account_name: ${label}`, `user_id: ${label}`, `username: ${label}`, `handle = ${label}`, `hostname=${label}`, `@${label}`,
+    `accounts/claude/${label}/sessions`, `accounts/codex/${label}/sessions`,
+    `accounts/copilot/${label}/sessions`, `accounts/${label}/sessions`,
+    `accounts\\codex\\${label}\\sessions`,
+  ];
+  for (const source of sources) {
+    for (const encoded of [source, source.toUpperCase(), encodeURIComponent(source),
+      Array.from(source).map(char => `&#${char.codePointAt(0)};`).join("")]) {
+      expect(scanner.sensitiveClasses(encoded).has("known_value"), source).toBe(true);
+    }
+    expect(scanner.sensitiveClasses(source.replaceAll(label, `prefix${label}suffix`)).has("known_value"), source).toBe(false);
+  }
+});
+
+test("identity-context findings reach file and commit inspection", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "privacy-identity-context-"));
+  try {
+    const scanner = await inspector("unrelated fixture value", false, false,
+      join(import.meta.dir, "privacy-known-value-fingerprints.json"));
+    const label = ["open", "source"].join("");
+    const source = `account_id="${label}"`;
+    const file = join(directory, "sample.txt");
+    writeFileSync(file, source);
+    expect(scanner.inspectPaths([file], false, true, directory).has("known_value")).toBe(true);
+    const git = (...args: string[]) => {
+      const result = Bun.spawnSync(["git", "-C", directory, ...args], {
+        env: { ...process.env, GIT_AUTHOR_DATE: "2026-10-23T10:00:00Z", GIT_COMMITTER_DATE: "2026-10-23T10:00:00Z", GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture",
+          GIT_AUTHOR_EMAIL: "noreply@example.invalid", GIT_COMMITTER_EMAIL: "noreply@example.invalid" },
+        stdout: "pipe", stderr: "pipe",
+      });
+      expect(result.exitCode).toBe(0);
+      return result.stdout.toString().trim();
+    };
+    git("init", "--initial-branch=main");
+    git("-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "Fixture base");
+    const base = git("rev-parse", "HEAD");
+    git("-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", source);
+    expect(scanner.commitMessageFindings(directory, base).has("known_value")).toBe(true);
+    writeFileSync(file, "the open-source core");
+    expect(scanner.inspectPaths([file], false, true, directory).has("known_value")).toBe(false);
+    expect(scanner.commitMessageFindings(directory, "HEAD").size).toBe(0);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("plaintext and opaque inspectors preserve complete reports across Unicode publication views", async () => {
   const directory = mkdtempSync(join(tmpdir(), "privacy-plaintext-reference-"));
   try {

@@ -1667,6 +1667,24 @@ function hasEmailAddress(text: string, source?: EmailTextView["source"]): boolea
   return emailOccurrences(text, source).next().done !== true;
 }
 
+// This dictionary phrase identifies a private label only in identity syntax.
+// Keep its digest here rather than matching it globally inside ordinary prose.
+const contextualIdentityDigest = "b829e805ab160bf10124b48da39c07eecc55bea7b9229820abbcc396ebf35cf1";
+const contextualIdentityPatterns = [
+  /(?:^|[^\p{L}\p{N}])(?:account(?:[_ -]?(?:id|name))?|id|user(?:[_ -]?(?:name|id))?|handle|host(?:name)?)[\t ]*["'` ]*[:=][\t ]*["'` ]*([\p{L}\p{N}._-]{4,512})(?![\p{L}\p{N}._-])/giu,
+  /(?:^|[/\\])accounts?[/\\](?:(?:claude|codex|copilot)[/\\])?([\p{L}\p{N}._-]{4,512})(?=$|[/\\\s"'`])/giu,
+  /(?<![\p{L}\p{N}._-])@([\p{L}\p{N}._-]{4,512})(?![\p{L}\p{N}._-])/giu,
+];
+function matchesContextualIdentity(text: string): boolean {
+  for (const pattern of contextualIdentityPatterns) {
+    for (const match of text.matchAll(pattern)) {
+      const value = compactSensitiveText(match[1]);
+      if (value.length === 10 && createHash("sha256").update(value).digest("hex") === contextualIdentityDigest) return true;
+    }
+  }
+  return false;
+}
+
 export function sensitiveClasses(text: string): Set<FindingClass> {
   const prepared = preparedPrivacyText(text, () => {
     const normalized = normalizedSensitiveText(text);
@@ -1690,7 +1708,8 @@ export function sensitiveClasses(text: string): Set<FindingClass> {
     matchesKnownValue = knownValues.values.some((entry) => entry.exactOnly
       ? known.exactSearchable.includes(entry.primary)
       : normalizedText.includes(entry.primary))
-      || matchesKnownFingerprint(known.compact) || matchesKnownFingerprint(known.exactSearchable, true);
+      || matchesKnownFingerprint(known.compact) || matchesKnownFingerprint(known.exactSearchable, true)
+      || matchesContextualIdentity(known.searchable);
     knownValueMatches.set(prepared, matchesKnownValue);
   }
   if (matchesKnownValue) {
