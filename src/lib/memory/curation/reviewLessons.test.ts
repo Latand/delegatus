@@ -26,8 +26,8 @@ afterEach(() => {
   if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
   fs.rmSync(root, { recursive: true, force: true });
 });
-function request(lane: string, taskId: string): RuleSource {
-  const source = { project: PROJECT, pipelineId: lane, stageId: "fix", attempt: 1, roleId: "builder", fixRound: true, conversationId: `conversation_${lane}` };
+function request(lane: string, taskId: string, roleId = "builder"): RuleSource {
+  const source = { project: PROJECT, pipelineId: lane, stageId: "fix", attempt: 1, roleId, fixRound: true, conversationId: `conversation_${lane}` };
   recordLessonRequest({ ...source, taskId, at: at() });
   return source;
 }
@@ -142,6 +142,62 @@ test("correction lessons lead scope reads and the pass agenda, including a dupli
   expect(row(correction)).toMatchObject({ operatorCorrection: true, note: "Rewrite the correction into the existing practice.", revisedBy: { by: "curator" } });
 });
 
+test("a correction duplicate of a curated rule outlives budget displacement and leads the agenda until reviewed", async () => {
+  const correction = leave("curated", "task-curated");
+  const firstPass = claimPass({ project: PROJECT, repoDir: root, now: NOW + 10 })!;
+  applyCuration(firstPass, input({ [scope()]: [correction] }), at(20));
+  patchPass(firstPass.id, { state: "succeeded", endedAt: at(30) });
+  const again = request("correction-again", "task-correction-again");
+  leaveLessons({ request: again, source: again, lessons: [{ scope: "role", rule: RULE, why: WHY }], correction: true, none: null, now: at(40) });
+  for (let lane = 0; lane < 32; lane++) {
+    const source = request(`ordinary-${lane}`, `task-ordinary-${lane}`);
+    const rule = `For change ${lane} in the settings area, list each control the change adds or moves, render it at every supported width, theme and language, and compare the frames with the previous release before review; a control that moved needs its own frame with focus visible and the label read back from the page, never from source.`;
+    leaveLessons({ request: source, source, lessons: [{ scope: "role", rule, why: WHY }], none: null, now: at(50 + lane) });
+  }
+  const orchestrator = request("orchestrator", "task-orchestrator", "orchestrator");
+  leaveLessons({ request: orchestrator, source: orchestrator, lessons: [{ scope: "role", rule: "Before relaying a stage result, read the stage's own conclusion and quote its verdict.", why: WHY }], none: null, now: at(100) });
+  expect(row(correction)).toMatchObject({ state: "active", operatorCorrection: true });
+  const pass = claimPass({ project: PROJECT, repoDir: root, now: NOW + 7 * 60 * 60_000 })!;
+  const agenda = await readCuration(pass);
+  expect(agenda.scopes.map(entry => entry.scope)).toContain(roleScope(PROJECT, "orchestrator"));
+  expect(agenda.scopes[0]).toMatchObject({ scope: scope(), corrections: 1 });
+  const page = await readCuration(pass, scope());
+  if (!("rules" in page)) throw Error("scope page expected");
+  expect(page.rules[0]).toMatchObject({ id: correction, kind: "active", operatorCorrection: true, newSincePass: true });
+  const held = roleMemoryCollection()!.get(`s:${scope()}`);
+  if (held?.kind !== "scope") throw Error("scope missing");
+  const kept = held.active.slice(-10);
+  applyCuration(pass, input({ [scope()]: kept }, { archive: held.active.filter(id => !kept.includes(id)).map(id => ({ id, reason: "task-specific" as const, note: "One change's settings area alone." })) }), at(200));
+  expect(kept).toContain(correction);
+  patchPass(pass.id, { state: "succeeded", endedAt: at(210) });
+  const reviewed = await readCuration(claimPass({ project: PROJECT, repoDir: root, now: NOW + 14 * 60 * 60_000 })!);
+  expect(reviewed.scopes.find(entry => entry.scope === scope())).toMatchObject({ corrections: 0 });
+});
+
+test("an unreviewed correction that already left by budget still leads the agenda", async () => {
+  const id = leave("departed", "task-departed");
+  const firstPass = claimPass({ project: PROJECT, repoDir: root, now: NOW + 10 })!;
+  applyCuration(firstPass, input({ [scope()]: [id] }), at(20));
+  patchPass(firstPass.id, { state: "succeeded", endedAt: at(30) });
+  const again = request("correction-again", "task-correction-again");
+  leaveLessons({ request: again, source: again, lessons: [{ scope: "role", rule: RULE, why: WHY }], correction: true, none: null, now: at(40) });
+  // The shape an earlier build left: the budget archived the curated survivor before review.
+  roleMemoryCollection(true)!.boundedPatch(4, tx => {
+    const held = tx.get(`s:${scope()}`);
+    if (held?.kind !== "scope") throw Error("scope missing");
+    tx.put({ ...row(id), state: "archived", reason: "budget", changedAt: at(50) });
+    tx.put({ ...held, active: held.active.filter(entry => entry !== id) });
+  });
+  const ordinary = request("ordinary", "task-ordinary", "orchestrator");
+  leaveLessons({ request: ordinary, source: ordinary, lessons: [{ scope: "role", rule: "Before relaying a stage result, read the stage's own conclusion and quote its verdict.", why: WHY }], none: null, now: at(60) });
+  const pass = claimPass({ project: PROJECT, repoDir: root, now: NOW + 7 * 60 * 60_000 })!;
+  const agenda = await readCuration(pass);
+  expect(agenda.scopes.map(entry => entry.scope)).toContain(roleScope(PROJECT, "orchestrator"));
+  expect(agenda.scopes[0]).toMatchObject({ scope: scope(), corrections: 1 });
+  const page = await readCuration(pass, scope());
+  if (!("rules" in page)) throw Error("scope page expected");
+  expect(page.rules[0]).toMatchObject({ id, kind: "left", reason: "budget", operatorCorrection: true, awaitingCuration: true });
+});
 
 for (const decision of ["integrate", "rewrite", "drop"] as const) test(`a correction's ${decision} decision uses reversible curation history`, () => {
   const source = request("decision", "task-decision");

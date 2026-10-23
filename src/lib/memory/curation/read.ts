@@ -28,7 +28,7 @@ async function readRuleCuration(pass: CuratorPass, scope?: string, cursor?: stri
   const attempts = scope ? await readHistoryProjection(db => historyAttemptCounts(db, project, now), { collections: ["pipelines","pipelines_archive"] }) : {};
   const scopes = [...new Set(pass.scopes.map(canonicalScope))];
   const view = await projectViewAsync(project, now);
-  const correctionCounts = new Map(view.scopes.map(s => [s.scope, s.active.filter(rule => rule.operatorCorrection && rule.awaitingCuration).length]));
+  const correctionCounts = new Map(view.scopes.map(s => [s.scope, [...s.active, ...s.left.filter(rule => rule.reason === "budget")].filter(rule => rule.operatorCorrection && rule.awaitingCuration).length]));
   const corrections = (key: string) => correctionCounts.get(key) ?? 0;
   if (!scope) return { pass: pass.id, ...(pass.importBatch ? { import: { candidates: pass.importBatch.candidates.length, scope: "imports" } } : {}), scopes: scopes.slice().sort((a, b) => Number(corrections(b) > 0) - Number(corrections(a) > 0)).map(key => {
     const held = view.scopes.find(s => s.scope === key);
