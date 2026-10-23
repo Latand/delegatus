@@ -7,14 +7,16 @@ import { TelegramBotError, sendFailure } from "./errors";
 import { outboundState, releaseUnsentClaim, type PublicationTarget } from "./outbound";
 import type { ChatRow, TelegramBotStore } from "./store";
 import type { BotCallResult, BotTransport } from "./transport";
+import { cloneChatView, cloneInput, clonePayloadSupported, cloneTransport, type ClonePostingPort } from "./clone";
+import type { CloneRoute } from "@/lib/externalRelay/cloneDirectory";
 
-export type PostingBot = TelegramPostingBot & { id: string; transport: BotTransport };
+export type PostingBot = TelegramPostingBot & { id: string; transport: BotTransport; clone?: CloneRoute };
 export type BotAttempt = TelegramBotRefusal & { botId: string };
 export type Membership = Omit<TelegramChatBot, "name" | "username" | "assigned"> & { expiresAt: string; source: "check" | "refusal" | "update" };
 export const publicBot = (b: Pick<PostingBot, "name" | "username">) => ({ name: b.name, username: b.username });
 export const publicRefusals = (attempts: BotAttempt[]) => attempts.map(({ bot, code, reason, source, at }) => ({ bot, code, reason, source, at }));
-const mayFallback = (r: BotCallResult, code: string) => !r.ok && r.kind === "http"
-  && ["forbidden", "bot_not_in_chat", "not_enough_rights", "token_rejected"].includes(code);
+const mayFallback = (r: BotCallResult, code: string) => !r.ok && (r.classified ? r.classified.fallback : r.kind === "http"
+  && ["forbidden", "bot_not_in_chat", "not_enough_rights", "token_rejected"].includes(code));
 
 export function botRows(db: Database): Array<{ bot_id: string; name: string; username: string | null; token_state: "ok" | "rejected" }> {
   return db.query<{ bot_id: string; name: string; username: string | null; token_state: "ok" | "rejected" }, []>(
@@ -25,7 +27,7 @@ export function botRows(db: Database): Array<{ bot_id: string; name: string; use
 export class BotSelector {
   readonly #checks = new Map<string, { transport: BotTransport; work: Promise<Membership | null> }>();
   constructor(private readonly store: TelegramBotStore, private readonly now: () => Date,
-    private readonly bots: () => PostingBot[]) {}
+    private readonly bots: () => PostingBot[], private readonly clones?: ClonePostingPort) {}
 
   async check(bot: PostingBot, chat: ChatRow, force = false): Promise<Membership | null> {
     if (chat.type === "private") return null;
@@ -167,6 +169,8 @@ export class BotSelector {
         canSendPhotos: fresh ? m.canSendPhotos : null, canSendDocuments: fresh ? m.canSendDocuments : null,
         canManageTopics: fresh ? m.canManageTopics : null, reason: b.tokenState === "rejected" ? "token_rejected" : fresh ? m.reason : null, checkedAt: m?.checkedAt ?? null };
     });
+    const clone = !saved.assigned_bot && chat.type !== "private" ? this.clones?.peek(chat.chatId) : null;
+    if (clone) views.unshift(cloneChatView(clone));
     return { bots: views, assignedBot: bots.find(b => b.id === saved.assigned_bot)?.username ?? null,
       lastDelivery: saved.last_delivery ? parseSqliteJson(saved.last_delivery, db) as TelegramLastDelivery : null };
   }
@@ -180,6 +184,12 @@ export class BotSelector {
     let pinned = false;
     let publicationTarget: PublicationTarget | null = null;
     const attempts: BotAttempt[] = [];
+    const available = (bot: PostingBot) => bot.clone ? this.clones?.valid(bot.clone, chat.chatId) === true : this.bots().some(b => b.id === bot.id);
+    const assignedBot = () => outboundState(this.store.filename, false, db => db.query<{ assigned_bot: string | null }, [string]>("SELECT assigned_bot FROM chats WHERE chat_id=?").get(chat.chatId)?.assigned_bot);
+    const authorizeClone = async () => {
+      if (await assignedBot()) throw new TelegramBotError("chat_not_allowed", "a bot was assigned to this chat");
+      authorize();
+    };
     const fields = () => ({ ...(selected ? { sentBy: publicBot(selected) } : {}), ...(attempts.length ? { refusals: publicRefusals(attempts) } : {}) });
     const delivery = async (state: TelegramLastDelivery["state"]) => {
       try { await outboundState(this.store.filename, true, db => {
@@ -219,30 +229,38 @@ export class BotSelector {
         }
       }
     };
-    const transport: BotTransport = { call: async <T,>(method: string, params: Record<string, unknown>, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<BotCallResult<T>> => {
+    const transport: BotTransport = { call: async <T,>(method: string, params: Record<string, unknown>, options?: Parameters<BotTransport["call"]>[2]): Promise<BotCallResult<T>> => {
       try {
       if (method === "sendRichMessage") capability = (params.rich_message as { media?: unknown[] } | undefined)?.media?.length ? "canSendPhotos" : "canPost";
-      if (selected && !this.bots().some(b => b.id === selected!.id))
+      if (selected && !available(selected))
         throw new TelegramBotError("chat_not_allowed", "the selected bot was removed");
       if (pinned && selected) {
         authorize();
-        if (!this.bots().some(b => b.id === selected!.id)) throw new TelegramBotError("chat_not_allowed", "the selected bot was removed");
+        if (!available(selected)) throw new TelegramBotError("chat_not_allowed", "the selected bot was removed");
         const result = await selected.transport.call<T>(method, params, options);
         if (!result.ok) {
           if (result.kind === "network_failed" || result.kind === "timed_out") await delivery("uncertain");
           else {
             const error = sendFailure(result, chat);
             await record(selected, error, "send");
-            if (mayFallback(result, error.code)) await refreshRefusal(selected, result, error);
+            if (!selected.clone && mayFallback(result, error.code)) await refreshRefusal(selected, result, error);
             await delivery("refused");
           }
         }
         return result;
       }
-      const assigned = await outboundState(this.store.filename, false, db => db.query<{ assigned_bot: string | null }, [string]>("SELECT assigned_bot FROM chats WHERE chat_id=?").get(chat.chatId)?.assigned_bot);
+      const assigned = await assignedBot();
       const bots = connected.filter(b => chat.type !== "private" || b.receiving);
       bots.sort((a, b) => Number(b.id === retryBot) - Number(a.id === retryBot) || Number(b.id === assigned) - Number(a.id === assigned));
       const candidates: Array<{ bot: PostingBot; checked?: boolean; membership?: Membership | null }> = bots.map(bot => ({ bot }));
+      if (!assigned && method === "sendMessage" && chat.type !== "private" && this.clones) {
+        const route = await this.clones.route(chat.chatId);
+        if (route && !await assignedBot() && this.clones.valid(route, chat.chatId)
+          && clonePayloadSupported(cloneInput(route, caller, key, params, options?.partIndex ?? 0))) {
+          candidates.unshift({ bot: { id: route.id, name: route.name, username: null, receiving: false, tokenState: "ok", clone: route,
+            transport: cloneTransport(this.clones, route, caller, key, authorizeClone) }, checked: true });
+        }
+      }
       for (const candidate of candidates) {
         const bot = candidate.bot;
         const membership = candidate.checked ? candidate.membership ?? null : bot.tokenState === "rejected" ? null : await this.check(bot, chat);
@@ -257,21 +275,21 @@ export class BotSelector {
           continue;
         }
         authorize();
-        if (!this.bots().some(b => b.id === bot.id)) continue;
+        if (!available(bot)) continue;
         selected = bot;
-        try { publicationTarget = target(bot.id); }
+        try { publicationTarget = bot.clone ? null : target(bot.id); }
         catch (error) {
           await releaseUnsentClaim(this.store.filename, caller, key);
           throw error;
         }
         await outboundState(this.store.filename, true, db => {
           authorize();
-          if (!this.bots().some(b => b.id === bot.id)) throw new TelegramBotError("chat_not_allowed", "the selected bot was removed");
+          if (!available(bot)) throw new TelegramBotError("chat_not_allowed", "the selected bot was removed");
           db.query("UPDATE sends SET bot_id=?, bot_identity=? WHERE caller_key=? AND client_request_id=? AND state='pending'")
             .run(bot.id, JSON.stringify(publicBot(bot)), caller, key);
         });
         authorize();
-        if (!this.bots().some(b => b.id === bot.id)) throw new TelegramBotError("chat_not_allowed", "the selected bot was removed");
+        if (!available(bot)) throw new TelegramBotError("chat_not_allowed", "the selected bot was removed");
         retryBot = null;
         const result = await bot.transport.call<T>(method, params, options);
         if (result.ok) {
@@ -299,7 +317,7 @@ export class BotSelector {
           return result;
         }
         await record(bot, error, "send");
-        await refreshRefusal(bot, result, error);
+        if (!bot.clone) await refreshRefusal(bot, result, error);
       }
       const first = attempts[0];
       await delivery("refused");

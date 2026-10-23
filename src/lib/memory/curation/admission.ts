@@ -13,14 +13,16 @@ import { machinePassAuthority, patchPass, readPass, readPassAuthority, passIsLiv
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { curatorCallerOf } from "./guard";
 import { importBatchAccountingGap } from "../importCuration";
+import { syncCurationOpen } from "../importSync";
 
 /** Shared launch and recovery admission, also loaded by the scanner worker. */
 export interface CurationAdmissionPorts {
   sources: SeatTickAdmissionSources;
   archive?: (pass: CuratorPass) => void;
 }
-export function admissionHeld(project: string, ports: CurationAdmissionPorts): string | null {
-  if (!roleMemoryEnabled()) return "curation: paused, memory off";
+/** In the engines position only an import pass of the synced import is admitted (memory-source-switch.md §4.9). */
+export function admissionHeld(project: string, ports: CurationAdmissionPorts, pass?: Pick<CuratorPass, "importBatch"> | null): string | null {
+  if (!roleMemoryEnabled() && !syncCurationOpen(pass?.importBatch?.importId)) return "curation: paused, memory off";
   const settings = effectiveSeatTickSettings(ports.sources.settings(project), ports.sources.now(), SEAT_TICK_WAKE_INTERVAL_MS);
   if (!settings.enabled) return "curation: paused, wakes off";
   if (settings.curation?.enabled === false) return "curation: paused, curator off";
@@ -87,7 +89,7 @@ export async function curatorRecoveryGuard(conversationId: string, sources = def
       settle(current, ports, `abandoned: ${currentHostFailure}`);
       throw new DeliveryAdmissionRefusedError(`curation pass abandoned: ${currentHostFailure}`);
     }
-    const held = admissionHeld(pass.project, ports);
+    const held = admissionHeld(pass.project, ports, current);
     if (held) throw new DeliveryAdmissionRefusedError(held);
     curatorCallerOf(conversationId, withViewerOperation("memory.curation-admission", () => sources.registry().curatorConversationSnapshot(conversationId)));
   };

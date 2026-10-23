@@ -85,6 +85,7 @@ import {
   type SpawnRejection,
 } from "./spawnAdmission";
 import { roleIsClean } from "@/lib/memory/eligibility";
+import { applyOperatorMemorySelector, operatorRootConversation } from "@/lib/memory/operatorMemory";
 import { sessionKeyFromTranscript, sessionKeyId, type SessionKey } from "./sessionKey";
 import {
   defaultRegistrySqliteFilename,
@@ -128,6 +129,9 @@ export interface StructuredTerminationCapture {
   retainedField: boolean;
   previousUpdatedAt: string;
   updatedAt: string;
+  /** The capture fence this write stamped on the row, and the one it replaced. */
+  captureId: string;
+  previousCaptureId: string | null;
 }
 
 export interface TmuxHostEvidence {
@@ -217,6 +221,9 @@ export interface AgentRegistryEntry {
   structuredHost?: StructuredHostColumns | null;
   /** Exact process identities left alive by a partial structured-host kill. */
   structuredTerminationSurvivors?: ProcessIdentity[];
+  /** Names the newest capture of those identities. A capture withdrawn after
+      a later one re-captured them leaves them to that later stop. */
+  structuredTerminationCaptureId?: string;
   claimEpoch: number;
   claimOwner: string | null;
   pendingAction: "spawn" | "resume" | "handoff" | null;
@@ -329,6 +336,9 @@ export interface SpawnReceipt {
   /** The spawn_agent caller that asked to hear when this launch's turns end
       (spawn-completion-notice §1). Null on every other launch. */
   launcher?: SpawnLauncher | null;
+  /** Admission saw an `operator` origin on this new launch. Absent on every
+      other origin, including `external`, and on every successor receipt. */
+  operatorOrigin?: true;
   /** Typed terminal admission rejection (#393). Non-null means this receipt
       never launched: no conversation, lineage edge, membership, transcript,
       or process exists for it. */
@@ -690,6 +700,11 @@ export interface RegistryConversation {
       {@link RegistryConversation.agentRole}. Absent on every conversation no
       agent launched through spawn_agent. */
   launcher?: SpawnLauncher | null;
+  /** Durable proof the operator launched this conversation: stamped once, at
+      birth, from a launch receipt whose admission saw an `operator` origin
+      (memory-source-switch.md §3.3). Absent on external, delegated, scanner and
+      legacy conversations, and never copied from another record. */
+  operatorOrigin?: true;
   turn: TurnState & { observedAt: string | null };
   /**
    * THIS CONVERSATION'S DELIVERY EVIDENCE HAS BEEN COMPLETE SINCE IT BEGAN.
@@ -2477,6 +2492,7 @@ function normalizeConversation(value: RegistryConversation, policy?: McpGrantPol
     agentRole: normalizeAgentRole((value as Partial<RegistryConversation>).agentRole),
     delegationDepth: normalizeDelegationDepth((value as Partial<RegistryConversation>).delegationDepth),
     launcher: normalizeSpawnLauncher((value as Partial<RegistryConversation>).launcher),
+    ...((value as Partial<RegistryConversation>).operatorOrigin === true ? { operatorOrigin: true as const } : {}),
     turn: value.turn && typeof value.turn === "object"
       ? { state: value.turn.state, source: value.turn.source, terminalAt: value.turn.terminalAt ?? null, observedAt: value.turn.observedAt ?? null }
       : { state: "unknown", source: "empty", terminalAt: null, observedAt: null },
@@ -4105,6 +4121,7 @@ function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnRe
     agentRole: normalizeAgentRole(value.agentRole),
     delegationDepth: normalizeDelegationDepth(value.delegationDepth),
     launcher: normalizeSpawnLauncher(value.launcher),
+    ...(value.operatorOrigin === true ? { operatorOrigin: true as const } : {}),
     rejection: normalizeSpawnRejection(value.rejection),
     ...(value.failureAnnouncementSuppressed === true ? { failureAnnouncementSuppressed: true as const } : {}),
     ...(value.failureReporting && typeof value.failureReporting === "object" ? { failureReporting: {
@@ -6631,6 +6648,19 @@ export class AgentRegistry {
       } else if ((memoryRole === "orchestrator" || memoryRole === "maintainer")
         && !profile.cleanMemory && !profile.learnedRules && memoryProject) {
         profile.learnedRules = { project: memoryProject, roleId: memoryRole };
+      } else if (!designatedSeatMembership && !memoryRole) {
+        /* The operator's own root conversation reads project and machine rules
+           while Delegatus memory is on; set at spawn, re-derived on resume.
+           A new launch proves the root by its operator origin, a successor by
+           its durable record (memory-source-switch.md §3.3). */
+        const operatorRoot = existingConversation
+          ? input.purpose !== undefined && input.purpose !== "launch" && operatorRootConversation({
+            operatorOrigin: existingConversation.operatorOrigin === true,
+            agentRole: existingConversation.agentRole, parentConversationId,
+            delegationDepth: existingConversation.delegationDepth, memberships: file.memberships[existingConversation.id] ?? [] })
+          : operatorRootConversation({ operatorOrigin: input.origin?.kind === "operator",
+            agentRole: role, parentConversationId, delegationDepth: 0, memberships: input.memberships ?? [] });
+        applyOperatorMemorySelector(profile, memoryProject, operatorRoot);
       }
       /* A delegated conversation never acquires a plugin grant (#687): a role
          preset or a lineage parent denies it on resume, successor and restart
@@ -6823,6 +6853,7 @@ export class AgentRegistry {
            is where a notice is owed from; a tmux child never would, so it
            records no launcher and stays the seat tick's to harvest. */
         launcher: purpose === "launch" && input.transport === "structured" ? normalizeSpawnLauncher(input.launcher) : null,
+        ...(purpose === "launch" && input.origin?.kind === "operator" ? { operatorOrigin: true as const } : {}),
       };
       file.receipts[receipt.launchId] = receipt;
       /* A rejected launch persists exactly one terminal receipt: no lineage
@@ -7311,6 +7342,9 @@ export class AgentRegistry {
     conversation.agentRole ??= receipt.agentRole;
     conversation.delegationDepth ??= receipt.delegationDepth;
     if (receipt.purpose === "launch") conversation.launcher ??= receipt.launcher ?? null;
+    /* Operator provenance is a birth fact: only the launch that creates the
+       conversation can stamp it, and nothing later adds it. */
+    if (!existingConversation && receipt.purpose === "launch" && receipt.operatorOrigin === true) conversation.operatorOrigin = true;
     if (receipt.purpose === "launch" && receipt.accountPin && receipt.accountId) {
       conversation.pinnedAccountId = receipt.accountId;
     }
@@ -8111,9 +8145,12 @@ export class AgentRegistry {
         identities.set(identityKey(identity), { ...identity });
       }
       const previousUpdatedAt = entry.updatedAt;
+      const previousCaptureId = typeof entry.structuredTerminationCaptureId === "string" ? entry.structuredTerminationCaptureId : null;
+      const captureId = crypto.randomUUID();
       entry.structuredTerminationSurvivors = [...identities.values()];
+      entry.structuredTerminationCaptureId = captureId;
       entry.updatedAt = now();
-      return { added, retainedField, previousUpdatedAt, updatedAt: entry.updatedAt };
+      return { added, retainedField, previousUpdatedAt, updatedAt: entry.updatedAt, captureId, previousCaptureId };
     });
     if (capture) {
       journalStructuredTermination(this.filename, {
@@ -8127,30 +8164,38 @@ export class AgentRegistry {
   /** Undoes one capture whose termination had no effect. Only the identities
       that capture added leave the row. The earlier revision stamp returns only
       while the capture is still the row's newest write, so a row nobody else
-      touched reads exactly as it did before the stop was considered. */
+      touched reads exactly as it did before the stop was considered.
+      A later capture of the same tree (another stop that may already be
+      signalling it) takes the identities over: this capture is released
+      and the row keeps every identity, because only that later stop knows
+      whether they still run. True once this capture no longer holds the row. */
   withdrawStructuredTerminationSurvivors(
     key: SessionKey,
     expectedRoot: Readonly<ProcessIdentity>,
     capture: Readonly<StructuredTerminationCapture>,
     source = "unspecified",
   ): boolean {
-    const withdrawn = this.mutate((file) => {
+    const outcome = this.mutate((file): "withdrawn" | "superseded" | null => {
       const entry = file.entries[sessionKeyId(key)];
       const current = entry?.structuredHost?.process ?? null;
-      if (!entry || !current || !sameRecordedProcessIdentity(current, expectedRoot)) return false;
+      if (!entry || !current || !sameRecordedProcessIdentity(current, expectedRoot)) return null;
+      if (entry.structuredTerminationCaptureId !== capture.captureId) return "superseded";
       const identityKey = (identity: Readonly<ProcessIdentity>) => `${identity.pid}:${identity.startIdentity}:${identity.bootEpoch ?? ""}`;
       const withdrawn = new Set(capture.added.map(identityKey));
       const remaining = (entry.structuredTerminationSurvivors ?? []).filter(identity => !withdrawn.has(identityKey(identity)));
       if (remaining.length === 0 && !capture.retainedField) delete entry.structuredTerminationSurvivors;
       else entry.structuredTerminationSurvivors = remaining;
+      if (capture.previousCaptureId === null) delete entry.structuredTerminationCaptureId;
+      else entry.structuredTerminationCaptureId = capture.previousCaptureId;
       entry.updatedAt = entry.updatedAt === capture.updatedAt ? capture.previousUpdatedAt : now();
-      return true;
+      return "withdrawn";
     });
     journalStructuredTermination(this.filename, {
-      at: now(), event: withdrawn ? "withdrawn" : "withdrawal-refused", source, key: sessionKeyId(key),
-      root: expectedRoot.pid, removed: capture.added.map(identity => identity.pid),
+      at: now(), event: outcome === "withdrawn" ? "withdrawn" : outcome === "superseded" ? "withdrawal-superseded" : "withdrawal-refused",
+      source, key: sessionKeyId(key), root: expectedRoot.pid,
+      removed: outcome === "superseded" ? [] : capture.added.map(identity => identity.pid),
     });
-    return withdrawn;
+    return outcome !== null;
   }
 
   /** Lifts a captured termination tree from its row once every identity it
