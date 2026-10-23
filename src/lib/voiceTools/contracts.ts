@@ -43,15 +43,21 @@ export const proposalSchema = z.object({
 export type VoiceToolProposal = z.infer<typeof proposalSchema>;
 export type Tool = { name: string; description: string; inputSchema: Record<string, unknown>; annotations?: Record<string, unknown> };
 export type Catalog = { digest: string; fetchedAt: string; tools: Tool[] };
-export type ProbeCode = "OK" | "START_FAILED" | "PROTOCOL_ERROR" | "TIMEOUT" | "CATALOG_BOUNDS" | "SECRET_ECHO" | "MISSING_SECRET" | "SECRET_DESTINATION" | "ENTRY_CHANGED" | "BUSY" | "CANCELLED";
-export type ProbeResult = { code: ProbeCode; catalog?: Catalog };
+export const containmentReasonSchema = z.enum(["MACOS", "WINDOWS", "BWRAP_MISSING", "BWRAP_UNAVAILABLE", "PLATFORM_UNSUPPORTED", "LAYOUT_UNAVAILABLE"]);
+export type ContainmentReason = z.infer<typeof containmentReasonSchema>;
+export const uncontainedConsentSchema = z.object({ reason: containmentReasonSchema, runId: z.string().regex(/^sha256:[a-f0-9]{64}$/) }).strict();
+export type UncontainedConsent = z.infer<typeof uncontainedConsentSchema>;
+export const uncontainedConfirmationSchema = z.object({ by: z.literal("operator"), at: z.string().datetime(), tool: serverName, reason: containmentReasonSchema, runId: uncontainedConsentSchema.shape.runId }).strict();
+export type UncontainedConfirmation = z.infer<typeof uncontainedConfirmationSchema>;
+export type ProbeCode = "OK" | "CONTAINMENT_REQUIRED" | "START_FAILED" | "PROTOCOL_ERROR" | "TIMEOUT" | "CATALOG_BOUNDS" | "SECRET_ECHO" | "MISSING_SECRET" | "SECRET_DESTINATION" | "ENTRY_CHANGED" | "BUSY" | "CANCELLED";
+export type ProbeResult = { code: ProbeCode; catalog?: Catalog; containmentReason?: ContainmentReason; confirmation?: UncontainedConfirmation };
 export type VoiceToolServer = Omit<VoiceToolProposal, "name"> & {
   generation: number;
   owner: "installation"; audience: ["voice"]; state: "pending" | "enabled" | "disabled" | "rejected" | "changed";
   proposedBy: { kind: "conversation" | "operator"; conversationId: string | null; at: string };
   approval: { by: "operator"; at: string; digest: string; mac?: string } | null;
   tools: Record<string, { enabled: boolean; acts: boolean }>;
-  catalog: Catalog | null; lastDryRun: { code: ProbeCode; at: string; digest: string } | null;
+  catalog: Catalog | null; lastDryRun: { code: ProbeCode; at: string; digest: string; runId?: string; containmentReason?: ContainmentReason; confirmation?: UncontainedConfirmation } | null;
 };
 export type VoiceToolsRegistry = { version: 1; revision: number; servers: Record<string, VoiceToolServer> };
 export type VoiceToolsView = { version: 1; revision: number; servers: Record<string, Omit<VoiceToolServer, "transport"> & {

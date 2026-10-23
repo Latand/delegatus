@@ -70,7 +70,7 @@ function installRuntime(script: Script): FakeChild[] {
   setManagedCodexRuntimeForTests(new ManagedCodexRuntime({ startClient: async (home) => {
     const child = new FakeChild(script);
     children.push(child);
-    return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
+    return CodexAppServerClient.start({ launchBinary: "/fixture/codex", readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
   } }));
   return children;
 }

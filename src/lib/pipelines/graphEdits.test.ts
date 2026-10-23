@@ -115,6 +115,25 @@ async function started(ports: PipelinePorts, stages: unknown[]): Promise<string>
 const current = () => loadPipelines()[0]!;
 const attemptsOf = (stageId: string) => current().runs.find((run) => run.stageId === stageId)!.attempts;
 
+test("a cap-only edit persists, changes the stale-write digest and leaves a running attempt's cap bound", async () => {
+  const h = harness();
+  const cap = 8 * 2 ** 30;
+  const id = await started(h.ports, [stage("one", "two"), stage("two", null)]);
+  const original = structuredClone(attemptsOf("one")[0]!.definition);
+  const digest = stageDigest(current().stages[0]!);
+  const edited = await patchPipeline(id, { action: "override-stage", stageId: "one", agentMemoryMaxBytes: cap, expectedStageDigest: digest }, h.ports, AGENT);
+  expect(edited.error).toBeUndefined();
+  expect(current().stages[0]!.agentMemoryMaxBytes).toBe(cap);
+  expect(attemptsOf("one")[0]!.definition).toEqual(original);
+  expect(stageDigest(current().stages[0]!)).not.toBe(digest);
+  expect(await patchPipeline(id, { action: "override-stage", stageId: "one", agentMemoryMaxBytes: null, expectedStageDigest: digest }, h.ports, AGENT))
+    .toMatchObject({ status: 409, code: "STAGE_CHANGED" });
+  expect((await patchPipeline(id, { action: "override-stage", stageId: "one", agentMemoryMaxBytes: 0 }, h.ports, AGENT)).status).toBe(400);
+  expect(current().stages[0]!.agentMemoryMaxBytes).toBe(cap);
+  expect((await patchPipeline(id, { action: "override-stage", stageId: "one", agentMemoryMaxBytes: null }, h.ports, AGENT)).error).toBeUndefined();
+  expect(current().stages[0]!.agentMemoryMaxBytes).toBeNull();
+});
+
 test("an attempt binds its stage definition before the spawn call, and an edit under it applies from the next attempt", async () => {
   const h = harness();
   const id = await started(h.ports, [stage("build", "verify"), stage("verify", null, { onFail: { to: "build", maxRounds: 2 } })]);

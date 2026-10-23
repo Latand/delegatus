@@ -5,6 +5,7 @@ import { statePath } from "@/lib/configDir";
 import type { AnswerDrop } from "./answerV2";
 import type { RelayMediaKind, ExternalRelayAnswer, ExternalRelayRequester } from "./protocol";
 import { exemptFromMemberLimit, type RelayAnswerProfile } from "./profile";
+import type { OwnerTurnDiagnostic } from "./diagnostic";
 
 /**
  * One read-only record per relayed request this install claimed (relay.md
@@ -30,6 +31,7 @@ export type RelayToolCallRecord = {
   audience: string | null; truncated: boolean; replayed: boolean; withheld: boolean; local: boolean;
 };
 export type RelayAnswerRecord = {
+  diagnostic?: OwnerTurnDiagnostic;
   features?: string[];
   drops?: AnswerDrop[];
   attachments?: {attachment_id:string;kind:RelayMediaKind;filename:string;bytes:number;sha256:string}[];
@@ -167,6 +169,11 @@ export function answerRecorder(base: {
   return {
     get begun() { return begun; },
     get finished() { return finished; },
+    diagnose(diagnostic: OwnerTurnDiagnostic) {
+      if (record.diagnostic) return;
+      record = { ...record, diagnostic };
+      try { writeRecord(file, record); } catch (error) { logFailure("write", error); }
+    },
     begin(engine: string | null, model: string | null, profile: RelayAnswerProfile) {
       record = { ...record, engine, model, profile, admitted: true };
       begun = true;
@@ -212,7 +219,8 @@ export function answerRecorder(base: {
 export type AnswerRecorder = NonNullable<ReturnType<typeof answerRecorder>>;
 
 /** Settles a record a dead owner left running, as the orphan sweep settles its lease. */
-export function settleInterruptedAnswer(relayId: string, targetId: string, requestId: string, delivery: RelayAnswerDelivery, conversationId?: string): void {
+export function settleInterruptedAnswer(relayId: string, targetId: string, requestId: string, delivery: RelayAnswerDelivery, conversationId?: string,
+  answer?: ExternalRelayAnswer | null): void {
   try {
     for (const file of recordFiles(targetDir(relayId, targetId), requestId)) {
       const record = readRecord(file);
@@ -226,7 +234,8 @@ export function settleInterruptedAnswer(relayId: string, targetId: string, reque
         ...record,
         ...(conversationId ? { conversationId } : {}),
         state: "finished",
-        outcome: "failed:install_restarted",
+        outcome: answer ? "answered" : "failed:install_restarted",
+        ...(answer ? { answer } : {}),
         delivery,
         finishedAt: new Date(now).toISOString(),
         durationMs: now - Date.parse(record.startedAt),

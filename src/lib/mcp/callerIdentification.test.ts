@@ -243,12 +243,18 @@ test("a failed lazy task-service open recovers in the same worker after owner pr
     f.migrate();
     const result = await worker(f, taskRequest(), { afterReply: async (reply, index) => {
       if (index !== 0) return null;
-      expect(reply.error).toBeDefined();
+      expect(reply.http).toMatchObject({ status: 200 });
+      expect(reply.body).toMatchObject({ result: { isError: true,
+        structuredContent: { code: "receipts_not_ready", retryable: true } } });
       await prepareViewer(f);
       return taskRequest();
     } });
     expect(result.replies).toHaveLength(2);
     expect(result.reply.http).toMatchObject({ status: 200 });
+    // The fixture has no task: reaching the binding proves preparation recovered.
+    expect(result.reply.body).toMatchObject({ result: { structuredContent: {
+      code: "tool_failed", error: "task not found",
+    } } });
   } finally { f.sandbox.release(); }
 });
 
