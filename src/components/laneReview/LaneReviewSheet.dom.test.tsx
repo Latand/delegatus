@@ -58,7 +58,7 @@ let deliveries: LaneReviewDelivery[];
 let deliverStatus: number;
 let summaryStatus: number | null;
 let operationReceipt: { status: string; resend?: string };
-let operationCalls: Array<{ url: string; method: string }>;
+let operationCalls: Array<{ url: string; method: string; body?: string }>;
 let ids: number;
 let root: Root | null = null;
 let host: HTMLElement;
@@ -83,7 +83,7 @@ async function serve(input: string, init?: RequestInit): Promise<Response> {
   const url = new URL(input, "http://localhost");
   const method = init?.method ?? "GET";
   if (url.pathname.startsWith("/api/runtime/operations/")) {
-    operationCalls.push({ url: url.pathname, method });
+    operationCalls.push({ url: url.pathname, method, ...(init?.body ? { body: String(init.body) } : {}) });
     return Response.json({ operationId: "op-1", receipt: method === "POST" ? { status: "queued" } : operationReceipt });
   }
   if (url.pathname.endsWith("/changes") && summaryStatus !== null && !url.search) return Response.json({ error: "git could not list the lane's changes" }, { status: summaryStatus });
@@ -294,6 +294,45 @@ describe("the desktop sheet", () => {
     click("[data-lane-review-retry]");
     await until(() => operationCalls.some((call) => call.method === "POST"), "the runtime retry");
     expect(operationCalls.filter((call) => call.method === "POST")).toEqual([{ url: "/api/runtime/operations/op-1", method: "POST" }]);
+  });
+
+  async function sendAndReceive(receipt: { status: string; resend?: string }) {
+    await ready();
+    await commentOnNewLine5();
+    click("[data-lane-review-send]");
+    await until(() => Boolean($("[data-lane-review-sent]")), "sent");
+    await until(() => operationCalls.length > 0, "the receipt read");
+    operationReceipt = receipt;
+    dom.dispatchEvent(new dom.Event("focus") as never);
+  }
+
+  test("a rejected receipt reads not delivered and Retry delivery posts the runtime retry once", async () => {
+    await sendAndReceive({ status: "rejected", resend: "safe" });
+    await until(() => Boolean($("[data-lane-review-retry]")), "Retry delivery");
+    expect($("[data-lane-review-sent]")!.textContent).toContain("not delivered");
+    click("[data-lane-review-retry]");
+    await until(() => operationCalls.some((call) => call.method === "POST"), "the runtime retry");
+    expect(operationCalls.filter((call) => call.method === "POST")).toEqual([{ url: "/api/runtime/operations/op-1", method: "POST" }]);
+  });
+
+  test("an uncertain receipt says delivery is unconfirmed and re-checks verify-first, never a plain retry", async () => {
+    await sendAndReceive({ status: "uncertain", resend: "verify-first" });
+    await until(() => Boolean($("[data-lane-review-recheck]")), "Re-check delivery");
+    expect($("[data-lane-review-sent]")!.textContent).toContain("Delivery unconfirmed");
+    expect($("[data-lane-review-retry]")).toBeNull();
+    click("[data-lane-review-recheck]");
+    await until(() => operationCalls.some((call) => call.method === "POST"), "the verify-first retry");
+    expect(operationCalls.filter((call) => call.method === "POST")).toEqual([
+      { url: "/api/runtime/operations/op-1", method: "POST", body: JSON.stringify({ action: "retry-uncertain" }) },
+    ]);
+  });
+
+  test("a steered receipt reads delivered and offers no retry", async () => {
+    await sendAndReceive({ status: "steered" });
+    await until(() => $("[data-lane-review-sent]")!.textContent!.includes("delivered"), "delivered word");
+    expect($("[data-lane-review-sent]")!.textContent).not.toContain("not delivered");
+    expect($("[data-lane-review-retry]")).toBeNull();
+    expect($("[data-lane-review-recheck]")).toBeNull();
   });
 
   test("failed: the comments are kept and Send again repeats the same key", async () => {

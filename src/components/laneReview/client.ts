@@ -49,7 +49,15 @@ export function sendLaneReview(fetchPort: FetchPort, draft: LaneReviewDraft, con
 export type OperationAnswer = { operationId?: string; receipt?: { status?: string; resend?: string } };
 export const readOperation = (fetchPort: FetchPort, operationId: string) =>
   read<OperationAnswer>(fetchPort, `/api/runtime/operations/${encodeURIComponent(operationId)}`, { cache: "no-store" });
-export const retryOperation = (fetchPort: FetchPort, operationId: string) =>
-  read<OperationAnswer>(fetchPort, `/api/runtime/operations/${encodeURIComponent(operationId)}`, { method: "POST" });
+/** `uncertain` is the composer's verify-first retry: the runtime re-checks
+    delivery before it sends anything a second time. */
+export const retryOperation = (fetchPort: FetchPort, operationId: string, uncertain = false) =>
+  read<OperationAnswer>(
+    fetchPort,
+    `/api/runtime/operations/${encodeURIComponent(operationId)}`,
+    uncertain
+      ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "retry-uncertain" }) }
+      : { method: "POST" },
+  );
 
 export const shortSha = (sha: string) => sha.slice(0, 10);

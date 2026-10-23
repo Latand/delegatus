@@ -4,6 +4,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 
 import { DiffRows, OP_TONE } from "@/components/feed/cards/DiffCard";
 import type { FileDiff } from "@/components/feed/diff";
+import { outboxStateForReceiptStatus, receiptHasUnknownFate } from "@/components/conversation/outbox";
+import type { ReceiptStatus, RuntimeReceipt } from "@/components/runtime/runtimeModel";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import {
   LANE_REVIEW_LIMITS, laneReviewDraftKey, numberRows, orderComments, parseLaneReviewDraft, reanchor, rowAnchor, rowQuote,
@@ -62,11 +64,30 @@ export function reasonText(t: TFunction, answer: { status: number; code: string 
   }
 }
 
-function receiptWord(t: TFunction, status: string | undefined): string | null {
-  if (status === "delivered") return t("laneReview.delivered");
-  if (status === "failed") return t("composer.receiptFailed");
-  if (status === "queued" || status === "pending" || status === "accepted") return t("composer.receiptQueued");
-  return null;
+/* What the sheet says about the send's receipt, read through the composer's own
+   grouping (outbox.ts): rejected and failed are not delivered, uncertain or a
+   verify-first resend is unconfirmed, steered and turn-started are delivered. */
+type ReceiptView = "delivered" | "queued" | "failed" | "unconfirmed";
+
+function receiptView(receipt: { status?: string; resend?: string } | null): ReceiptView | null {
+  if (!receipt?.status) return null;
+  const status = receipt.status as ReceiptStatus;
+  if (receiptHasUnknownFate({ status, resend: receipt.resend as RuntimeReceipt["resend"] })) return "unconfirmed";
+  switch (outboxStateForReceiptStatus(status)) {
+    case "delivered": return "delivered";
+    case "failed": return "failed";
+    default: return "queued";
+  }
+}
+
+function receiptWord(t: TFunction, receipt: { status?: string; resend?: string } | null): string | null {
+  switch (receiptView(receipt)) {
+    case "delivered": return t("laneReview.delivered");
+    case "failed": return t("composer.receiptFailed");
+    case "unconfirmed": return t("composer.deliveryCheckEnded");
+    case "queued": return t("composer.receiptQueued");
+    default: return null;
+  }
 }
 
 export function LaneReviewSheet(props: {
@@ -274,9 +295,9 @@ export function LaneReviewSheet(props: {
     setSend({ kind: "failed", reason: reasonText(t, answer) });
   };
 
-  const doRetryDelivery = async () => {
+  const doRetryDelivery = async (uncertain: boolean) => {
     if (!sentOperation) return;
-    const answer = await retryOperation(ports.fetch, sentOperation);
+    const answer = await retryOperation(ports.fetch, sentOperation, uncertain);
     if (answer.ok && answer.value.receipt) setReceipt(answer.value.receipt);
     else if (!answer.ok) setSend({ kind: "failed", reason: reasonText(t, answer) });
   };
@@ -405,8 +426,11 @@ export function LaneReviewSheet(props: {
             <span className="min-w-0 flex-1 text-secondary" data-lane-review-status="">
               {load.kind === "ready" ? <FooterStatus t={t} locale={locale} draft={draft} target={target} send={send} stale={stale} receipt={receipt} /> : null}
             </span>
-            {draft?.sent && receipt?.status === "failed" && receipt.resend === "safe" ? (
-              <button type="button" className="btn" data-lane-review-retry="" onClick={() => void doRetryDelivery()}>{t("laneReview.retryDelivery")}</button>
+            {draft?.sent && receiptView(receipt) === "failed" && receipt?.resend === "safe" ? (
+              <button type="button" className="btn" data-lane-review-retry="" onClick={() => void doRetryDelivery(false)}>{t("laneReview.retryDelivery")}</button>
+            ) : null}
+            {draft?.sent && receiptView(receipt) === "unconfirmed" ? (
+              <button type="button" className="btn" data-lane-review-recheck="" onClick={() => void doRetryDelivery(true)}>{t("composer.payloadRecheck")}</button>
             ) : null}
             {draft?.sent && props.onOpenConversation ? (
               <button type="button" className="btn quiet" data-lane-review-open="" onClick={() => props.onOpenConversation!(draft.sent!.conversationId)}>{t("laneReview.openConversation")}</button>
@@ -429,7 +453,7 @@ export function LaneReviewSheet(props: {
 }
 
 function FooterStatus({ t, locale, draft, target, send, stale, receipt }: {
-  t: TFunction; locale: string; draft: LaneReviewDraft | null; target: LaneReviewTarget | null; send: SendState; stale: boolean; receipt: { status?: string } | null;
+  t: TFunction; locale: string; draft: LaneReviewDraft | null; target: LaneReviewTarget | null; send: SendState; stale: boolean; receipt: { status?: string; resend?: string } | null;
 }) {
   if (send.kind === "failed") return <span role="alert" data-lane-review-failed="">{t("laneReview.failed", { reason: send.reason })}</span>;
   if (send.kind === "target-changed") return <span role="status">{t("laneReview.targetChanged", { stage: send.stage })}</span>;
@@ -437,7 +461,7 @@ function FooterStatus({ t, locale, draft, target, send, stale, receipt }: {
   if (!target) return <span data-lane-review-no-target="">{t("laneReview.noTarget")}</span>;
   if (draft?.sent && !draft.comments.length && !draft.note.trim()) {
     const time = new Date(draft.sent.at).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
-    const word = receiptWord(t, receipt?.status);
+    const word = receiptWord(t, receipt);
     return <span role="status" data-lane-review-sent="">{t("laneReview.sent", { stage: draft.sent.stageName, time })}{word ? ` · ${word}` : ""}</span>;
   }
   return <span>{t("laneReview.footer", { count: draft?.comments.length ?? 0, stage: target.stageName, engine: engineName(target.engine) })}</span>;
