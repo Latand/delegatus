@@ -608,6 +608,45 @@ test("four host-loss attempts preserve their receipt ancestry", async () => {
   }
 });
 
+// Issue #3158: an account usage guard failed a replacement whose launch had
+// been refused for capacity, so it never reserved a launch, and replaced it.
+// The persisted chain is launched -> never launched -> launched.
+test.each(["settles", "forged transcript edge", "unreceipted commit"] as const)("a usage-guard chain through a never-launched attempt: %s", async variant => {
+  const f = await fixture();
+  const childLaunch = `stage-proof-guard-chain-${nextFixture}`;
+  try {
+    await f.commit("first attempt output");
+    const first = { ...f.attempt, n: 1, state: "failed", completedAt: "2026-10-16T09:00:00.000Z",
+      agentPath: "/stage/guard-1.jsonl", error: "the stage account reached its usage or paid-credit guard" } as PipelineStageAttempt;
+    const refused = { ...f.attempt, n: 2, state: "failed", launchId: null, conversationId: null, agentPath: null, paneId: null,
+      startedAt: "2026-10-16T09:05:00.000Z", completedAt: "2026-10-16T09:06:00.000Z",
+      error: "the stage account reached its usage or paid-credit guard",
+      restartContext: { previousAttempt: 1, transcriptPath: first.agentPath } } as PipelineStageAttempt;
+    if (variant === "unreceipted commit") {
+      const outside: NodeJS.ProcessEnv = { ...f.env };
+      delete outside.LLV_STAGE_GIT_RECEIPT;
+      delete outside.LLV_STAGE_GIT_WORKTREE;
+      const made = await realExec("git", ["commit", "--allow-empty", "-m", "made while no attempt ran"], f.lane, outside);
+      expect(made.code, made.stderr).toBe(0);
+    }
+    const foreign = await f.own("rev-parse", "HEAD");
+    Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, "2026-10-16T10:00:00.000Z"));
+    const child = { ...f.attempt, n: 3, launchId: childLaunch, startedAt: "2026-10-16T10:00:00.000Z", completedAt: NOW,
+      state: "passed", agentPath: "/stage/guard-3.jsonl",
+      restartContext: { previousAttempt: 2, transcriptPath: variant === "forged transcript edge" ? first.agentPath : null } } as PipelineStageAttempt;
+    const head = await f.commit("replacement output after the reset");
+    f.pipeline.runs = [{ stageId: "build", attempts: [first, refused, child] }] as never;
+    await f.push();
+    const result = await settleStageAttemptPush(f.pipeline, child, realExec, NOW);
+    if (variant === "settles") expect(result).toEqual({ ok: true, sha: head });
+    else if (variant === "forged transcript edge") expect(result).toMatchObject({ ok: false, error: expect.stringContaining("creation lineage is invalid") });
+    else expect(result).toMatchObject({ ok: false, error: expect.stringContaining(foreign) });
+  } finally {
+    await fs.rm(stageGitReceiptDirectory(childLaunch), { recursive: true, force: true });
+    await f.close();
+  }
+});
+
 test.each([1, 3])("A: main fast-forward plus %i own commits settles after an in-worktree push", async count => {
   const f = await fixture();
   try {
