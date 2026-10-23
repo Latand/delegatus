@@ -135,6 +135,25 @@ from the producer that wrote them; its park keeps the cause on the first line.
 the branch is behind `origin/main`. Missing local media tools defer named media
 files to the required CI OCR gate. See CONTRIBUTING.md for slot settings.
 
+## Heavy commands may run on the gate runner
+
+When `~/.config/delegatus/gate-runner.json` exists under the account's passwd
+home (`{"ssh": "<alias>"}`), a top-level `scripts/gate-slot.sh` call from a git
+work tree or a review export with its `export.json` runs on that SSH host
+instead of here (`docs/design/remote-gate-runner.md`, `scripts/gate-runner/`):
+the hook's admitted checks, `bun test`, `bunx tsc`, `local-gate-tests.ts`,
+`eslint-changes.ts` and the three browser test drivers. Privacy, fetch, push,
+pre-commit, builds, the board geometry capture and everything else stay here. The client ships the exact
+working tree as a git bundle after the tree's own privacy scan, and the runner
+starts nothing unless it reproduces the same tree id. Its lines start with
+`gate-runner:`. `running here: <reason>` means the command ran on this machine
+as before; a run that started there and lost its end record exits 75 with
+`gate-runner: no verdict: …`, which the publication retries, and gates then
+stay here for 30 minutes. `LLV_GATE_RUNNER=off` keeps one command here, and a
+campaign that measures this machine's gates must set it; `isolatedEnvironment`
+sets it for every isolated check. Decisions are logged to
+`~/.cache/delegatus-gate/runner-decisions.log` under the passwd home.
+
 # Two ways to do real damage here (both happened, 2026-07-24)
 
 ## Never run this repo's suites against the operator's live state

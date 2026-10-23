@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import type { CueCaption } from "./captions";
 import { createEventLane, type LaneRequest } from "./eventLane";
 import { createFakeTimers } from "./fakeTimers.fixture";
 import type { EventSoundId } from "./synth";
@@ -215,5 +216,117 @@ describe("a landing supersedes its lane's last step", () => {
   test("a step batch keeps the steps of lanes that did not land", () => {
     const plays = harness().run([[0, "step", { pipeline: "p" }], [0.5, "step", { pipeline: "q" }], [1, "landed", { pipeline: "p" }]]);
     expect(plays.map((p) => [p.sound, p.n])).toEqual([["step", 1], ["landed", 1]]);
+  });
+});
+
+/*
+ * Captions ride with each request through the lane (docs/design/sound-captions.md
+ * §2). They never change `n`, a window or a gap: every place that changes `n`
+ * changes the captions with it.
+ */
+describe("captions through the event lane", () => {
+  const caption = (name: string, extra: Partial<CueCaption> = {}): CueCaption => ({ what: "reply", subject: name, target: null, ...extra });
+
+  function captionHarness(lengths: Partial<Record<EventSoundId, number>> = {}) {
+    const timers = createFakeTimers(0);
+    const plays: { sound: EventSoundId; at: number; n: number; captions: string[] | null }[] = [];
+    const lane = createEventLane({
+      timers,
+      lengthMs: (sound) => (lengths[sound] ?? defaultLength(sound)) * 1000,
+      start(sound, n, captions) {
+        plays.push({ sound, at: +(timers.now() / 1000).toFixed(2), n, captions: captions && captions.map((entry) => entry.subject ?? "") });
+        return { cut: () => undefined };
+      },
+    });
+    const at = (seconds: number, request: LaneRequest) => {
+      timers.advance(seconds * 1000 - timers.now());
+      lane.request(request);
+    };
+    return { lane, timers, plays, at, run: (seconds: number) => timers.advance(seconds * 1000) };
+  }
+
+  test("a coalesced play carries every joined caption in arrival order, and a request without one still counts in n", () => {
+    const { plays, at, run } = captionHarness();
+    at(0, { sound: "reply", caption: caption("a") });
+    at(0.2, { sound: "reply" });
+    at(0.4, { sound: "reply", caption: caption("c") });
+    run(10);
+    expect(plays).toEqual([{ sound: "reply", at: 1.5, n: 3, captions: ["a", "c"] }]);
+  });
+
+  test("a request with no caption plays with an empty list, so the stack can say the sound's generic line", () => {
+    const { plays, at, run } = captionHarness();
+    at(0, { sound: "released" });
+    run(10);
+    expect(plays).toEqual([{ sound: "released", at: 0, n: 1, captions: [] }]);
+  });
+
+  test("a step superseded by its lane's landing leaves with its caption; another lane's step stays", () => {
+    const { plays, at, run } = captionHarness();
+    at(0, { sound: "step", pipeline: "p", caption: caption("step p") });
+    at(0.1, { sound: "step", pipeline: "q", caption: caption("step q") });
+    at(0.5, { sound: "landed", pipeline: "p", caption: caption("landed p") });
+    run(30);
+    expect(plays.map((play) => [play.sound, play.n, play.captions])).toEqual([
+      ["step", 1, ["step q"]],
+      ["landed", 1, ["landed p"]],
+    ]);
+  });
+
+  test("a step whose lane landed before its window closed is gone, with its caption, and plays nothing", () => {
+    const { plays, at, run } = captionHarness();
+    at(0, { sound: "landed", pipeline: "p", caption: caption("landed p") });
+    at(1, { sound: "step", pipeline: "p", caption: caption("late step") });
+    run(30);
+    expect(plays.map((play) => [play.sound, play.captions])).toEqual([["landed", ["landed p"]]]);
+  });
+
+  test("a class at its per-minute cap waits for the minute, and plays once with the captions it gathered", () => {
+    const { plays, at, run } = captionHarness({ "your-move": 0.1 });
+    for (let i = 0; i < 6; i += 1) at(i * 8, { sound: "your-move", caption: caption(`early ${i}`) });
+    at(44, { sound: "your-move", caption: caption("a") });
+    at(49, { sound: "your-move", caption: caption("b") });
+    run(120);
+    const last = plays[plays.length - 1]!;
+    expect(plays).toHaveLength(7);
+    expect(last).toEqual({ sound: "your-move", at: 63, n: 2, captions: ["a", "b"] });
+  });
+
+  test("plays queued behind a long sound merge their captions, oldest first", () => {
+    const { plays, at, run } = captionHarness({ "your-move": 10 });
+    at(0, { sound: "your-move", caption: caption("block") });
+    at(2, { sound: "reply", caption: caption("r1") });
+    at(4, { sound: "reply", caption: caption("r2") });
+    run(60);
+    expect(plays.map((play) => [play.sound, play.at, play.n, play.captions])).toEqual([
+      ["your-move", 3, 1, ["block"]],
+      ["reply", 13.15, 2, ["r1", "r2"]],
+    ]);
+  });
+
+  test("a cut sound's replay carries null: it showed its toast already and must not show a second", () => {
+    const { plays, at, run } = captionHarness();
+    at(0, { sound: "landed", pipeline: "p", caption: caption("landed") });
+    at(2.5, { sound: "your-move", caption: caption("move") });
+    run(60);
+    expect(plays.map((play) => [play.sound, play.captions])).toEqual([
+      ["landed", ["landed"]],
+      ["your-move", ["move"]],
+      ["landed", null],
+    ]);
+  });
+
+  test("a captionless request never changes when, how many or how loud a sound plays", () => {
+    const timing = (withCaption: boolean) => {
+      const { plays, at, run } = captionHarness();
+      const extra = (name: string): Partial<LaneRequest> => (withCaption ? { caption: caption(name) } : {});
+      at(0, { sound: "step", pipeline: "p", ...extra("s") });
+      at(0.5, { sound: "landed", pipeline: "q", ...extra("l") });
+      at(1, { sound: "reply", ...extra("r") });
+      at(2, { sound: "your-move", ...extra("m") });
+      run(90);
+      return plays.map(({ sound, at: when, n }) => [sound, when, n]);
+    };
+    expect(timing(true)).toEqual(timing(false));
   });
 });
