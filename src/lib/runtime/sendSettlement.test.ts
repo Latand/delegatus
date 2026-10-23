@@ -2915,7 +2915,9 @@ for (const refuses of [false, true]) test(`settlement sweep prepares selection a
     let preparations = 0;
     active.registry.prepareReadOnlySnapshot = async () => { preparations++; if (refuses) throw new Error("selection unavailable"); return file; };
     active.registry.readOnlySnapshot = () => { throw new Error("settlement sweep refreshed the whole registry synchronously"); };
-    const sweep = settleDueSends({ registry: active.registry, client: active.client, now: () => Date.parse("2026-10-23T00:00:00Z"), progress: null });
+    // Acceptance reads the real clock, so the sweep's frozen clock follows it.
+    const sweepAt = AFTER_THE_WINDOW();
+    const sweep = settleDueSends({ registry: active.registry, client: active.client, now: () => sweepAt, progress: null });
     if (refuses) {
       await expect(sweep).rejects.toThrow("selection unavailable");
       expect(sendReceiptFor(active.registry.deliverySnapshotForOperation(operationId), operationId)?.state).toBe("in-flight");
@@ -2978,8 +2980,9 @@ test("concurrent asynchronous sweep selections claim a conversation only at disp
       statusReads++; entered(); await held; return active.client.operationStatus(...args);
     } };
     const running = new Set<string>();
-    sweeps.push(settleDueSends({ registry: active.registry, client, running, progress: null, now: () => Date.parse("2026-10-23T00:00:00Z") }));
-    sweeps.push(settleDueSends({ registry: active.registry, client, running, progress: null, now: () => Date.parse("2026-10-23T00:00:00Z") }));
+    const sweepAt = AFTER_THE_WINDOW();
+    sweeps.push(settleDueSends({ registry: active.registry, client, running, progress: null, now: () => sweepAt }));
+    sweeps.push(settleDueSends({ registry: active.registry, client, running, progress: null, now: () => sweepAt }));
     await selecting; for (const resume of releases) resume();
     await reading; await new Promise<void>(resolve => setImmediate(resolve));
     expect(statusReads).toBe(1);
@@ -3005,8 +3008,9 @@ for (const when of ["preparation", "selection"] as const) test(`a settlement sel
     const file = await prepare();
     active.registry.prepareReadOnlySnapshot = async () => { if (when === "preparation") owned = false; return file; };
     const client = { ...active.client, operationStatus: async () => { reads++; return null; } };
+    const sweepAt = AFTER_THE_WINDOW();
     await expect(settleDueSends({ registry: active.registry, client, progress: null,
-      now: () => Date.parse("2026-10-23T00:00:00Z"), onDeadline: () => { deadlines++; queueMicrotask(() => { owned = false; }); },
+      now: () => sweepAt, onDeadline: () => { deadlines++; queueMicrotask(() => { owned = false; }); },
       assertActive: () => { if (!owned) throw new Error("settlement owner retired"); },
     })).rejects.toThrow("settlement owner retired");
     expect(deadlines).toBe(when === "preparation" ? 0 : 1); expect(reads).toBe(0);
