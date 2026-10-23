@@ -151,7 +151,9 @@ export class CloneDirectory {
     const entry = this.#entries.get(route.relay.id);
     if (!entry || !same(entry, route.relay) || !entry.snapshot) return;
     entry.snapshot = { ...entry.snapshot, fetchedAt: 0, ...(kind === "unsupported" ? { supported: false } : {}) };
-    this.persist();
+    // The in-memory refusal must take effect even when the artifact cannot be
+    // replaced; callers can then safely continue with the bot path.
+    try { this.persist(); } catch { /* Keep the in-memory invalidation. */ }
   }
   readTarget(relays = this.relays()): { relay: PairedRelay; targetId: string } | null {
     for (const relay of relays.filter(r => !r.paused && r.origin === this.ports.origin)) {

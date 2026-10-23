@@ -74,9 +74,19 @@ test("unused-key refusal records the clone before bot fallback", async () => {
   expect(await send()).toMatchObject({ messageIds: [201], refusals: [{ bot: { name: "Report clone" }, code: "bot_not_in_chat" }] });
   expect(sends).toHaveLength(1); expect(bot.callsOf("sendMessage")).toHaveLength(1);
 });
+test("cache persistence failure after clone_not_in_chat still falls back and settles the claim once", async () => {
+  answer = () => ({ status: 409, body: { error: { code: "clone_not_in_chat" } } });
+  const cacheFile = path.join(process.env.LLV_STATE_DIR!, "clones.json");
+  fs.rmSync(cacheFile, { force: true }); fs.mkdirSync(cacheFile);
+  expect(await send()).toMatchObject({ messageIds: [201], refusals: [{ bot: { name: "Report clone" }, code: "bot_not_in_chat" }] });
+  expect(store.sendRow("text:fixture-writer", "fixture-send")?.state).toBe("sent");
+  answer = () => ({ body: cloneReceipt(999) });
+  expect(await send()).toMatchObject({ alreadySent: true, messageIds: [201] });
+  expect(sends).toHaveLength(1); expect(bot.callsOf("sendMessage")).toHaveLength(1);
+});
 test("429 refuses with a wait, releases only the unsent claim, and the same key later sends", async () => {
   answer = () => ({ status: 429, body: { error: { code: "rate_limited", retry_after_s: 7 } } });
-  await expect(send()).rejects.toMatchObject({ code: "rate_limited", extra: { retryAfterSeconds: 7 } });
+  await expect(send()).rejects.toMatchObject({ code: "rate_limited", message: "Celestia is rate-limiting sends; retry after 7 s", extra: { retryAfterSeconds: 7 } });
   expect(bot.callsOf("sendMessage")).toHaveLength(0);
   answer = () => ({ body: cloneReceipt() }); now += 7000;
   expect(await send()).toMatchObject({ messageIds: [101] });
