@@ -28,6 +28,7 @@ import { FIXTURE_WORKSPACE_IDS, workspacesFixture } from "@/components/team/work
 import { WORKSPACE_STORAGE_KEY } from "@/components/team/workspacesClient";
 import { setVoiceCompanionAdapterForTests } from "@/components/voiceCompanion/VoiceCompanionHost";
 import type { VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
+import { sampleCallHistory } from "@/components/voiceCompanion/transcriptSample.fixture";
 import { scenarioScript } from "@/lib/voiceCompanion/scenarios";
 import { createSimulatedCompanion, realClock } from "@/lib/voiceCompanion/simulator";
 import { OfficialVoiceCompanionAdapter } from "@/lib/voiceCompanion/liveAdapter";
@@ -175,12 +176,13 @@ const MENU_STATE = new URLSearchParams(location.search).get("menu-state");
    shell's own host mounts the phone's voice head. `product` keeps the real voice, whose session route is never to
    be asked; `sim` hands the host a simulator that speaks the long scenario and records each start, each project it
    is told and each close on `window.phoneVoice`. `&voice-long=1` fills the seat's conversation past the screen, so
-   what the head and its words cover is measured over real rows. */
+   what the head and its words cover is measured over real rows. `history` opens as after a reload, with no call of
+   its own and `sampleCallHistory`'s three retained calls, which the conversation panel's picker opens (GitHub #2975). */
 const VOICE_SCENE = new URLSearchParams(location.search).get("voice");
 const VOICE_LONG = new URLSearchParams(location.search).has("voice-long");
 const phoneVoice = { starts: [] as string[], projects: [] as Array<string | null>, closes: 0, sessionRequests: 0 };
 Object.assign(window, { phoneVoice });
-if (VOICE_SCENE === "sim" || VOICE_SCENE === "reads") {
+if (VOICE_SCENE === "sim" || VOICE_SCENE === "reads" || VOICE_SCENE === "history") {
   const uk = localStorage.getItem("llv_lang") === "uk";
   setVoiceCompanionAdapterForTests((): VoiceCompanionAdapter => {
     const simulated = createSimulatedCompanion({
@@ -195,6 +197,11 @@ if (VOICE_SCENE === "sim" || VOICE_SCENE === "reads") {
       command: (command) => simulated.command(command),
       close: () => { phoneVoice.closes += 1; return simulated.close(); },
       ...(VOICE_SCENE === "reads" ? { transcript: async () => (await serverFetch("/evidence/voice-transcript")).json() } : {}),
+      ...(VOICE_SCENE === "history" ? (() => {
+        /* The requests went to the fixture's own running orchestrator, so its link opens a conversation the phone knows. */
+        const history = sampleCallHistory(uk ? "uk" : "en", "atlas", "conversation_running");
+        return { calls: async () => history.calls, transcript: async (sessionId?: string) => history.records[sessionId ?? history.calls[0]!.sessionId] ?? null };
+      })() : {}),
     };
   });
 }

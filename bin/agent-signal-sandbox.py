@@ -19,7 +19,7 @@ POLICY = 1
 READINESS = int(os.environ.get("LLV_SIGNAL_READINESS_MS") or 10_000) / 1000
 ACK = int(os.environ.get("LLV_SIGNAL_ACK_MS") or 15_000) / 1000
 LAUNCH_ENV = ("LLV_SIGNAL_LAUNCHER", "LLV_SIGNAL_RECEIPT", "LLV_SIGNAL_AUTOMATIC", "LLV_SIGNAL_DIAGNOSTIC",
-              "LLV_SIGNAL_IGNORE_NATIVE_STDIO", "LLV_SIGNAL_READINESS_MS", "LLV_SIGNAL_ACK_MS")
+              "LLV_SIGNAL_IGNORE_NATIVE_STDIO", "LLV_SIGNAL_KEEP_NATIVE_STDERR", "LLV_SIGNAL_READINESS_MS", "LLV_SIGNAL_ACK_MS")
 
 
 class Unavailable(Exception):
@@ -111,11 +111,12 @@ def inner(directory, command):
 
 
 def execute(command):
-    # Socket engines outlive their Viewer and inherit no Viewer pipes. Only
-    # pre-exec setup writes the owned diagnostic file; native output is ignored.
+    # Socket engines outlive their Viewer and inherit no Viewer pipes. A caller
+    # that bounds stderr itself keeps it, so a startup failure shows its cause.
     if os.environ.get("LLV_SIGNAL_IGNORE_NATIVE_STDIO") == "1":
+        keep_stderr = os.environ.get("LLV_SIGNAL_KEEP_NATIVE_STDERR") == "1"
         with open(os.devnull, "r+b", buffering=0) as null:
-            for descriptor in (0, 1, 2):
+            for descriptor in (0, 1) if keep_stderr else (0, 1, 2):
                 os.dup2(null.fileno(), descriptor)
     for name in LAUNCH_ENV:
         os.environ.pop(name, None)

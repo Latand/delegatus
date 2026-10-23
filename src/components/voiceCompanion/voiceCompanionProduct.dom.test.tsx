@@ -517,6 +517,7 @@ async function liveHarness() {
   const { CompanionLiveSessions } = await import("@/lib/voiceCompanion/liveSession");
   const { setCompanionSessionsForTests } = await import("@/lib/voiceCompanion/server");
   const route = await import("@/app/api/voice-companion/session/route");
+  const callsRoute = await import("@/app/api/voice-companion/calls/route");
   const storage = new CompanionStorage();
   storage.updateSettings({ enabled: true });
   const provider = new FakeLiveProvider();
@@ -573,6 +574,7 @@ async function liveHarness() {
       const project = target.searchParams.get("project");
       return jsonResponse({ seat: { project, conversationId: `conversation_${project}`, seatEpoch: 1, engine: "claude" }, pending: null, lastFailure: null, exists: true, viewerMcpRegistered: true, previous: [], currentTask: null, all: null });
     }
+    if (target.pathname === "/api/voice-companion/calls") return callsRoute.GET(new NextRequest(`http://127.0.0.1${target.pathname}`, { headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin" } }));
     if (target.pathname === "/api/voice-companion/resume") {
       const resume = await import("@/app/api/voice-companion/resume/route");
       return resume.GET(new NextRequest(`http://127.0.0.1${target.pathname}${target.search}`, { method: "GET", headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin" } }));
@@ -991,6 +993,49 @@ test("a tap on the character opens the whole conversation from the session recor
     expect(live.tones).toEqual([660, 990, 990, 660, 660, 990]);
   } finally { await unmountNow(); await live.release(); }
 });
+
+test("after a reload the character opens the newest retained call, and one picker opens each earlier call with its requests, delivery and orchestrator link", async () => {
+  const live = await liveHarness();
+  try {
+    await mount(<VoiceCompanionHost project="project-a" mobile={false} />);
+    const grip = () => document.querySelector<HTMLElement>("[data-voice-companion] [data-grip]")!;
+    for (const instruction of ["Review the plan", "Check the build"]) {
+      await click(document.querySelector("[data-companion-talk]"));
+      await pause();
+      await live.propose(live.provider.sessions.at(-1)!.id, instruction);
+      await click(document.querySelector("[data-companion-end]"));
+      await pause(200);
+    }
+    expect(live.sent).toHaveLength(2);
+    /* A reload: a new page with no call of its own. */
+    await unmountNow();
+    await mount(<VoiceCompanionHost project="project-a" mobile={false} />);
+    await pause(200);
+    expect(grip().getAttribute("aria-expanded")).toBe("false");
+    await click(grip());
+    await pause(200);
+    const view = () => document.querySelector<HTMLElement>("[data-companion-transcript-view]")!;
+    const opened = async () => {
+      const request = view().querySelector<HTMLElement>('[data-transcript-call="request_orchestrator_delegation"]')!;
+      expect(request.querySelector("[data-transcript-request]")?.getAttribute("data-stage")).toBe("queued");
+      await click(request.querySelector("[data-transcript-toggle]"));
+      return request.querySelector<HTMLElement>("[data-transcript-detail]")!;
+    };
+    const newest = await opened();
+    expect(newest.textContent).toContain("Check the build");
+    expect(newest.querySelector<HTMLAnchorElement>("a[data-transcript-orchestrator]")?.getAttribute("href")).toBe("#c=conversation_project-a");
+    const picker = view().querySelector<HTMLSelectElement>("select[data-transcript-calls]")!;
+    expect([...picker.options].map((option) => option.value)).toEqual(Object.values(live.storage.read().sessions).sort((a, b) => b.createdAt - a.createdAt).map((row) => row.id));
+    expect(picker.value).toBe(picker.options[0]!.value);
+    await act(async () => { picker.value = picker.options[1]!.value; picker.dispatchEvent(new Event("change", { bubbles: true })); });
+    await pause(200);
+    expect(view().querySelector<HTMLSelectElement>("select[data-transcript-calls]")!.value).toBe(picker.options[1]!.value);
+    expect((await opened()).textContent).toContain("Review the plan");
+    /* Nothing was started or sent for reading. */
+    expect(live.sent).toHaveLength(2);
+    expect(live.provider.sessions).toHaveLength(2);
+  } finally { await unmountNow(); await live.release(); }
+}, 20_000);
 
 test("a dropped call keeps its conversation on screen, offers the same call in one tap, and the reconnect continues it with its context", async () => {
   const live = await liveHarness();

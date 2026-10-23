@@ -20,9 +20,48 @@ export const DELEGATION_REASONS: Record<DelegationCode, string> = {
   request_not_waiting: "That earlier request is not waiting for a report: it was never sent or its delivery failed. Nothing was sent.",
   request_other_project: "That waiting request went to another project's orchestrator, so this ask is not a repeat of it. Nothing was sent.",
 };
+/** Delivery-failure codes the owner reads as a sentence. Any other code is not shown: the generic sentence stands. */
+const DELIVERY_FAILURES: Record<string, { en: string; uk: string }> = {
+  conversation_busy: { en: "the orchestrator's conversation was busy", uk: "розмова оркестратора була зайнята" },
+  conversation_closed: { en: "the orchestrator's conversation is closed", uk: "розмову оркестратора закрито" },
+  member_required: { en: "the call's starter is no longer a team member", uk: "той, хто розпочав розмову, більше не учасник команди" },
+  voice_seat_changed: { en: "the orchestrator changed before delivery", uk: "оркестратор змінився до доставки" },
+};
+/** The route answers its codes in capitals (`CONVERSATION_CLOSED`); the table is keyed in lower case. */
+const knownFailure = (code?: string | null) => { const key = code?.toLowerCase(); return key && Object.hasOwn(DELIVERY_FAILURES, key) ? DELIVERY_FAILURES[key] : null; };
 export function deliveryFailureReason(code?: string): string {
-  return code ? `The orchestrator's conversation refused the message (${code.replaceAll("_", " ").toLowerCase()}), so nothing was sent.`
-    : "The delivery failed. Nothing reached the orchestrator.";
+  const known = knownFailure(code);
+  return known ? `The message was not delivered: ${known.en}, so nothing was sent.` : "The delivery failed. Nothing reached the orchestrator.";
+}
+/** The same reasons as the owner reads them in Ukrainian. The model and the record keep the English ones. */
+const DELEGATION_REASONS_UK: Record<DelegationCode, string> = {
+  no_orchestrator: "У цього проєкту немає призначеного оркестратора, тож нічого не надіслано.",
+  invalid_instruction: "Текст запиту порожній або задовгий.", empty_instruction: "Текст запиту порожній або задовгий.",
+  already_requested: "Цей запит уже надсилали. Нічого нового не надіслано.",
+  not_admitted: "Запит не вдалося прийняти.", session_closed: "Голосову розмову завершено.",
+  duplicate_proposal: "Запит із цієї репліки вже чекає.", proposal_unavailable: "Цей запит більше недоступний.",
+  proposal_changed: "Запит застарів, змінився або змінився його оркестратор до підтвердження.",
+  operator_cancelled: "Ви відхилили запит.", confirmation_expired: "На підтвердження не відповіли вчасно.",
+  source_changed: "Ви забрали запит назад.", retracted: "Ви забрали запит назад.",
+  no_input: "Немає вашої репліки.", not_final: "Ваша репліка ще надходить.",
+  stale_input: "Запит стосується давнішої репліки.", negated: "Ви просили нічого не надсилати.",
+  conditional: "Запит був умовним.", question: "Репліка була питанням про надсилання.", quoted: "Прохання надіслати було цитатою.",
+  not_imperative: "Репліка не просить нічого надіслати.", not_addressed: "Запит не адресовано оркестратору.",
+  not_confirmed: "Підтвердження має прийти в наступній вашій репліці.", not_requested: "Ви не просили нічого надсилати.",
+  operator_refused: "Ви просили нічого не надсилати.",
+  request_not_waiting: "Той давніший запит не чекає звіту: його не надіслали або доставка не вдалася. Нічого не надіслано.",
+  request_other_project: "Той запит, що чекає, пішов оркестратору іншого проєкту, тож це прохання не є його повтором. Нічого не надіслано.",
+};
+/** Why a request ended as it did, in the owner's language, from the code its record keeps; null when its stage
+ * needs no reason or the code is not one of these, and the recorded reason then stands as it is. */
+export function delegationReason(code: string | null | undefined, stage: string, locale: "en" | "uk"): string | null {
+  if (stage === "failed") {
+    if (locale === "en") return deliveryFailureReason(code ?? undefined);
+    const known = knownFailure(code);
+    return known ? `Повідомлення не доставлено: ${known.uk}, тож нічого не надіслано.` : "Доставка не вдалася. До оркестратора нічого не дійшло.";
+  }
+  if (!code || !Object.hasOwn(DELEGATION_REASONS, code)) return null;
+  return (locale === "uk" ? DELEGATION_REASONS_UK : DELEGATION_REASONS)[code as DelegationCode];
 }
 
 const SPOKEN_CUT = " The rest of the answer was left out.";

@@ -265,9 +265,11 @@ compares each changed file with its version at the merge base with `origin/main`
 Only additional errors block: counts are matched per file, rule and message,
 excluding locations/source frames embedded in React diagnostics. New files have
 an empty baseline; deleted files are ignored. The output names introduced sites
-and counts existing base errors. Warnings do not block; tool/config failures do.
-Privacy and TypeScript still check absolutely. Base linting runs only for the
-selected files, in the same gate slot as head linting. Controller stage commits
+and counts existing base errors in files with head errors. Warnings do not
+block; tool/config failures do.
+Privacy and TypeScript still check absolutely. Base linting runs only for
+selected files with head errors, in the same gate slot as head linting.
+Controller stage commits
 allow fifteen minutes for hooks; a controller deadline keeps the passed attempt
 in committing and retries with backoff, without asking the stage to repair
 files or parking the lane. CPU admission and its wait accounting follow the
@@ -297,7 +299,8 @@ explicit caller deadline takes precedence. File, phase and paired-confirmation
 budgets remain unchanged.
 
 The three verdicts read as follows.
-`PRE-EXISTING`: the assertion failed the initial sample on both sides. It is
+`PRE-EXISTING`: the assertion failed the initial sample on both sides. Its
+initial base sample may be reused under the cache rules below. It is
 classified on those two samples, runs no further, and permits the push.
 `FLAKY`: the assertion failed the initial head sample, passed the initial base
 sample, and then gave mixed results on at least one side. It is listed with the
@@ -363,8 +366,39 @@ Four independent base samples detect it with probability `34.39%` overall;
 rare or correlated failures can still evade this bounded sampling. Head
 recovery supplies a separate opportunity to identify intermittency.
 
-Baseline results are not cached. Every failure receives a fresh base sample
-and fresh filtered confirmation runs.
+Initial complete baseline assertion samples are cached only after two matching
+fresh observations. The key includes the immutable base commit, file, failing
+name filter, origin, dependency graph, comparator source closure, Bun binary,
+platform, environment and budgets. Local/workspace dependencies, diagnostics
+and incomplete runs are never cached. Every confirmation round stays fresh.
+Baseline entries expire after 24 hours.
+
+A clean pre-push records each completed check under the clone's common Git
+directory (`delegatus-gate/passes`). A repeated hook, including publication,
+can reuse it only for the same head commit and tree, merge base, command,
+toolchain, environment and comparator sources. Ignored working-tree inputs
+(such as generated TypeScript declarations) and installed dependency bytes are
+also bound; Git metadata and compiler-owned incremental output are excluded.
+Inputs are checked again before
+reuse and after completion. Dirty trees never read or create pass receipts.
+Privacy, frozen install and the advisory audit always run fresh. The runtime
+build and its consumers reuse together; a partial runtime chain rebuilds.
+Head commit and branch also bind history-sensitive tests. Pass receipts expire
+after seven days. Each receipt family retains at most 256 records and 32 MiB; unavailable or malformed entries run the check again.
+Each reuse prints the step, recorded time, tree and base with its reason.
+Types, lint and tests run in one private, canonical environment
+(`checkEnvironment` in `scripts/gate-cache.ts`). An agent's session, forge
+authority and Viewer endpoint, a commit identity and push credentials never
+reach them, whoever starts the hook. A caller hands another input to the checks
+by naming it in `LLV_GATE_CHECK_ENV`; it is keyed like the rest. The signal
+boundary counts only by its host epoch, so a stage agent's clean hook run is
+reused when the Viewer publishes the same tree on that host.
+
+ESLint uses its native content cache for head files, keyed by the dependency
+and configuration digests. It retains eight generations of at most 4 MiB under
+`delegatus-gate/eslint` in the common Git directory. Base text always gets a
+fresh lint, and only for files with head errors. Neither cache changes hosted
+required checks.
 
 Mandatory privacy inspection runs without admission alongside the isolated
 pre-push checks. Both verdicts must pass; either refusal or timeout stops the
