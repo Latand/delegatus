@@ -860,17 +860,26 @@ describe("eligibility (#2187 §4.2)", () => {
     expect(h.calls).toEqual([]);
   });
 
-  test.each(["pull-request", "reviews", "required-checks", "merge-method"])("the review bar is checked again after %s before merge", async seam => {
+  test.each(["pull-request", "reviews", "required-checks", "merge-method", "mutation-lease"])("the review bar is checked again after %s before merge", async seam => {
     const h = harness({ lanes: [lane("review-moved")], prs: [openPr(11)] });
     await h.sweep(); h.advance(MERGE_SETTLE_MS + MERGE_POLL_MS);
+    resetAutoMergeForTests();
     const run = h.ports.run;
+    const mutate = h.ports.mutate;
     let changed = false;
+    h.ports.mutate = async (...args) => {
+      if (!changed && seam === "mutation-lease") {
+        h.pipeline("review-moved").runs[1]!.attempts[0]!.state = "failed";
+        changed = true;
+      }
+      return mutate(...args);
+    };
     h.ports.run = async args => {
       const result = await run(args);
       const atSeam = seam === "pull-request" ? args[0] === "pr" && args[1] === "view"
         : seam === "reviews" ? args[0] === "api" && args[1]?.includes("/reviews?")
         : seam === "required-checks" ? args[0] === "api" && args[1]?.includes("/branches/")
-        : args[0] === "repo" && args[1] === "view";
+        : seam === "merge-method" && args[0] === "repo" && args[1] === "view";
       if (!changed && atSeam) {
         h.pipeline("review-moved").runs[1]!.attempts[0]!.state = "failed";
         changed = true;

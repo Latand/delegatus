@@ -1,6 +1,15 @@
+import { spyOn } from "bun:test";
 import { expect, test, create, BUDGET_STAGES, movingHeadHarness, driveWithController,
   loadPipelines, realExec, pipelineCompletedUnreviewed } from "./engine.fixture";
 import { mergeEligible } from "@/lib/forge/autoMerge";
+
+async function createFixedLane(h: ReturnType<typeof movingHeadHarness>, stages: unknown, caseId: string) {
+  let sequence = 0;
+  const ids = spyOn(crypto, "randomUUID").mockImplementation(() =>
+    `${caseId}-0000-4000-8000-${(++sequence).toString(16).padStart(12, "0")}`);
+  try { await create(h.ports, stages as never); }
+  finally { ids.mockRestore(); }
+}
 
 function recordReviewLaunches(h: ReturnType<typeof movingHeadHarness>) {
   const observed: Array<{ head: string; state: string }> = [];
@@ -18,19 +27,19 @@ function recordReviewLaunches(h: ReturnType<typeof movingHeadHarness>) {
 }
 
 test.each([
-  { role: "reviewer", rounds: 3, pass: true, changed: true },
-  { role: "reviewer", rounds: 3, pass: false, changed: true },
-  { role: "visual-critic", rounds: 2, pass: true, changed: true },
-  { role: "visual-critic", rounds: 2, pass: false, changed: true },
-  { role: "reviewer", rounds: 1, pass: false, changed: false },
-] as const)("terminal $role re-checks the final fix once (rounds=$rounds, pass=$pass, changed=$changed)", async ({ role, rounds, pass, changed }) => {
+  { caseId: "30370001", role: "reviewer", rounds: 3, pass: true, changed: true },
+  { caseId: "30370002", role: "reviewer", rounds: 3, pass: false, changed: true },
+  { caseId: "30370003", role: "visual-critic", rounds: 2, pass: true, changed: true },
+  { caseId: "30370004", role: "visual-critic", rounds: 2, pass: false, changed: true },
+  { caseId: "30370005", role: "reviewer", rounds: 1, pass: false, changed: false },
+] as const)("terminal $role re-checks the final fix once (rounds=$rounds, pass=$pass, changed=$changed)", async ({ caseId, role, rounds, pass, changed }) => {
   const h = changed ? movingHeadHarness() : movingHeadHarness(() => "1".repeat(40));
   const launched = recordReviewLaunches(h);
   const roleLookup = h.ports.roleLookup!;
   h.ports.roleLookup = id => roleLookup(id === "visual-critic" ? "architect" : id);
   const stages = BUDGET_STAGES({ to: "build", maxRounds: rounds }, null);
   Object.assign(stages[1]!, { role: { roleId: role }, engine: role === "visual-critic" ? "claude" : "codex", access: "read-only" });
-  await create(h.ports, stages as never);
+  await createFixedLane(h, stages, caseId);
   const { pipeline } = await driveWithController(h, (id, n) => id === "critique" && (n <= rounds || !pass));
   const reviews = pipeline.runs.find(run => run.stageId === "critique")!.attempts;
   const builds = pipeline.runs.find(run => run.stageId === "build")!.attempts;
@@ -79,9 +88,9 @@ test.each([
 });
 
 test.each([
-  { kind: "repair", pass: true }, { kind: "repair", pass: false },
-  { kind: "validation", pass: true }, { kind: "validation", pass: false },
-] as const)("the terminal re-check retains the spent handoff through $kind (pass=$pass)", async ({ kind, pass }) => {
+  { caseId: "30370006", kind: "repair", pass: true }, { caseId: "30370007", kind: "repair", pass: false },
+  { caseId: "30370008", kind: "validation", pass: true }, { caseId: "30370009", kind: "validation", pass: false },
+] as const)("the terminal re-check retains the spent handoff through $kind (pass=$pass)", async ({ caseId, kind, pass }) => {
   const h = movingHeadHarness();
   const launched = recordReviewLaunches(h);
   const stages = BUDGET_STAGES({ to: "build", maxRounds: 1 }, null);
@@ -89,7 +98,7 @@ test.each([
   if (kind === "repair") Object.assign(stages[0]!, { onFail: { to: "repair", maxRounds: 1 } });
   else stages[0]!.next = "validation";
   stages.push({ ...stages[0]!, id: kind, next: kind === "repair" ? null : "critique", onFail: undefined } as never);
-  await create(h.ports, stages as never);
+  await createFixedLane(h, stages, caseId);
   const { pipeline } = await driveWithController(h, (id, n) => (id === "critique" && (n === 1 || !pass))
     || (kind === "repair" && id === "build" && n === 2));
   const reviews = pipeline.runs.find(run => run.stageId === "critique")!.attempts;
