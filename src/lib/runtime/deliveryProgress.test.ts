@@ -782,3 +782,86 @@ test("an archived legacy send whose delivery names no operation is restored befo
     } finally { store.close(); registry.close(); }
   }
 });
+
+
+/* An owner stored without its instant, whose delivery lost its digest: the
+   projection cannot tell which candidate normalization takes, so it keeps
+   the later. Compared as text, 'Thu, 01 Oct…' sorts after '2026-10-23…' and
+   the recent send fell out of the window while completeness advanced. */
+test("an archived legacy send with mixed-format candidate endings is restored before completeness advances", async () => {
+  const { restoreMissingRecordsAsync } = await import("./recordWait");
+  const { endingInstant } = await import("@/lib/agent/registryEndings");
+  const recent = "2026-10-23T12:00:00.000Z";
+  const now = Date.parse(recent) + 1000;
+  for (const [variant, retained] of [["mixed", "Thu, 01 Oct 2026 00:00:00 GMT"], ["offset", "2026-10-23T13:00:00+14:00"]] as const) {
+    const directory = fs.mkdtempSync(path.join(root, `legacy-${variant}-ending-`));
+    const options = { sqliteMode: "sqlite" as const, sqliteFilename: path.join(directory, "agent-registry.sqlite") };
+    const open = () => new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, options);
+    const writer = open();
+    const conversation = writer.ensureConversation("codex", path.join(directory, "thread.jsonl"), "default");
+    const held = writer.holdDelivery(conversation.id, "legacy ending", "legacy-key");
+    writer.recordDeliveryOutcome(held.id, "delivered", null, "delivered");
+    writer.close();
+    const operation = held.command.operationId;
+    const db = new Database(options.sqliteFilename);
+    try {
+      const row = (collection: string, key: string) => JSON.parse(db.query<{ value_json: string }, [string, string]>(
+        "SELECT value_json FROM registry_rows WHERE collection=? AND row_key=?").get(collection, key)!.value_json);
+      const owner = row("deliveryOperationOwners", operation);
+      const delivery = row("heldDeliveries", held.id);
+      expect(owner.requestDigest).toBe(delivery.requestDigest);
+      delete owner.settledAt;
+      owner.settledDelivery = { ...delivery, deliveredAt: retained };
+      /* Its digest is derived again from the text it still carries. */
+      delete delivery.requestDigest;
+      delivery.text = "legacy ending";
+      delivery.deliveredAt = recent;
+      const update = db.query("UPDATE registry_rows SET value_json=? WHERE collection=? AND row_key=?");
+      db.transaction(() => {
+        update.run(JSON.stringify(delivery), "heldDeliveries", held.id);
+        update.run(JSON.stringify(owner), "deliveryOperationOwners", operation);
+      })();
+    } finally { db.close(); }
+    const archiver = open();
+    try {
+      archiver.archiveInactiveRows();
+      expect(archiver.readOnlySnapshot().deliveryOperationOwners[operation]?.settledAt).toBe(recent);
+    } finally { archiver.close(); }
+    const cold = new Database(options.sqliteFilename);
+    try {
+      expect(cold.query("SELECT collection FROM registry_cold WHERE row_key IN (?, ?) ORDER BY collection").all(operation, held.id))
+        .toEqual([{ collection: "deliveryOperationOwners" }, { collection: "heldDeliveries" }]);
+    } finally { cold.close(); }
+    /* On the projection this boot prepares, over the reopened prepared one,
+       and rebuilt from nothing; each time from a progress store whose
+       checkpoint an hour earlier leaves only the recent candidate in range. */
+    for (const pass of ["prepared", "reopened", "rebuilt"]) {
+      if (pass === "rebuilt") {
+        const rebuild = new Database(options.sqliteFilename);
+        try {
+          rebuild.run("DELETE FROM registry_owner_endings");
+          rebuild.run("DELETE FROM registry_meta WHERE key='owner_endings_cursor'");
+        } finally { rebuild.close(); }
+      }
+      const progressFile = path.join(directory, `delivery-progress-${pass}.sqlite`);
+      const seed = new DeliveryProgressStore(progressFile, () => now - 3_600_000, noTimer);
+      seed.checkpoint(now - 3_600_000);
+      expect(seed.flush()).toBe(true);
+      seed.close();
+      const registry = open();
+      const store = new DeliveryProgressStore(progressFile, () => now, noTimer);
+      try {
+        expect(store.completenessMark()).toBe(now - 3_600_000);
+        expect(store.get(operation)).toBeNull();
+        expect(await restoreMissingRecordsAsync(registry, store, now)).toBe(true);
+        expect({ variant, pass, record: store.get(operation)?.terminal?.state ?? null }).toEqual({ variant, pass, record: "delivered" });
+      } finally { store.close(); registry.close(); }
+      const projection = new Database(options.sqliteFilename, { readonly: true });
+      try {
+        const ending = projection.query<{ ending_ms: number | null; ending_text: string }, [string]>(
+          "SELECT ending_ms,ending_text FROM registry_owner_endings WHERE operation_id=?").get(operation)!;
+        expect({ variant, pass, instant: ending.ending_ms ?? endingInstant(ending.ending_text) }).toEqual({ variant, pass, instant: Date.parse(recent) });
+      } finally { projection.close(); }
+    }
+  }
+});

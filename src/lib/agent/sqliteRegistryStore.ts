@@ -21,7 +21,7 @@ import { reboundAssembledMcpGrants, rowClaimsBeyondBaselineGrant, type McpGrantP
 import { identityMaterializationFence } from "./identityMaterialization";
 import type { AgentRegistryEntry, ConversationAuthorityFacts, RegistryFile, SeatChildrenAnchor, SeatChildrenPage, SnapshotSpawnProjection, SnapshotTitleConversationProjection } from "./registry";
 import { sessionKeyId } from "./sessionKey";
-import { prepareRegistryEndingsBatch, registryEndingsPrepared } from "./registryEndings";
+import { endingInstant, prepareRegistryEndingsBatch, registryEndingsPrepared } from "./registryEndings";
 import { archiveCandidates, archiveInactiveRegistryRows, installRegistryArchive } from "./registryArchive";
 
 /** The collections the MCP grant decision reads and writes. Touching any one of
@@ -3240,7 +3240,7 @@ export class SqliteAgentRegistryStore {
         if (legacy.length > 128) throw new Error("ending projection needs cooperative timestamp preparation");
         const cursor = page?.after ? this.db.query<{ ending_ms: number | null; ending_text: string; operation_id: string }, [string]>(
           "SELECT ending_ms,ending_text,operation_id FROM registry_owner_endings WHERE operation_id=?").get(page.after) : null;
-        const after = cursor ? { ms: cursor.ending_ms ?? Date.parse(cursor.ending_text), key: cursor.operation_id } : null;
+        const after = cursor ? { ms: cursor.ending_ms ?? endingInstant(cursor.ending_text), key: cursor.operation_id } : null;
         // A redundant lower time bound makes SQLite seek from `since` again
         // on every page. Once the cursor is in the window, seek by its tuple.
         const range = after && after.ms >= ms ? after : null;
@@ -3249,7 +3249,7 @@ export class SqliteAgentRegistryStore {
             AND EXISTS (SELECT 1 FROM registry_cold c WHERE c.collection='deliveryOperationOwners' AND c.row_key=e.operation_id)
           ORDER BY e.ending_ms,e.operation_id LIMIT ?`).all(...(range ? [range.ms,range.key] : [ms]), page?.limit ?? -1);
         for (const row of legacy) {
-          const ending = Date.parse(row.ending_text);
+          const ending = endingInstant(row.ending_text);
           if (ending >= ms && (!after || ending > after.ms || (ending === after.ms && row.operation_id > after.key))) rows.push({ operation_id: row.operation_id, ending_ms: ending });
         }
         rows.sort((a,b) => a.ending_ms - b.ending_ms || (a.operation_id < b.operation_id ? -1 : a.operation_id > b.operation_id ? 1 : 0));

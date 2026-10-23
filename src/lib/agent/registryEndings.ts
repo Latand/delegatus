@@ -11,6 +11,13 @@ const deliveryOperation = `CASE WHEN ${kind("command.operationId")} IS NULL OR $
     OR (${kind("command.operationId")}='text' AND ${field("command.operationId")}='')
   THEN ${field("id")} WHEN ${kind("command.operationId")}='text' THEN ${field("command.operationId")} END`;
 const settledDeliveryAt = "json_extract(o.value_json,'$.settledDelivery.deliveredAt')";
+const isoInstant = (text: string) => `(${text} GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*' AND julianday(${text}) IS NOT NULL)`;
+/* The later of two stored instants, compared as instants: text order puts
+   'Thu, 01 Oct…' after '2026-10-23…'. A pair SQL cannot parse is kept whole
+   as a JSON array with no instant; endingInstant reads the later in JS. */
+const laterInstant = (a: string, b: string) => `CASE WHEN ${a} IS NULL THEN ${b} WHEN ${b} IS NULL THEN ${a}
+  WHEN ${isoInstant(a)} AND ${isoInstant(b)} THEN CASE WHEN julianday(${a})>=julianday(${b}) THEN ${a} ELSE ${b} END
+  ELSE json_array(${a},${b}) END`;
 /* A delivery stored without its digest gets one computed from its text on
    normalization, which SQL cannot reproduce. Such a delivery may or may not be
    the owner's, so the later of both candidate instants stands; the caller
@@ -18,7 +25,7 @@ const settledDeliveryAt = "json_extract(o.value_json,'$.settledDelivery.delivere
 const endingText = `CASE WHEN json_type(o.value_json,'$.settledAt')='text'
   THEN json_extract(o.value_json,'$.settledAt') ELSE COALESCE(
     (SELECT CASE WHEN ${kind("requestDigest")}='text' THEN ${field("deliveredAt")}
-        ELSE max(COALESCE(${field("deliveredAt")},${settledDeliveryAt}),COALESCE(${settledDeliveryAt},${field("deliveredAt")})) END
+        ELSE ${laterInstant(field("deliveredAt"), settledDeliveryAt)} END
       FROM registry_records d
       WHERE d.collection='heldDeliveries' AND d.row_key=json_extract(o.value_json,'$.deliveryId')
         AND (${deliveryOperation})=o.row_key
@@ -28,6 +35,20 @@ const endingSelect = `SELECT o.row_key, json_extract(o.value_json,'$.deliveryId'
   CASE WHEN (${endingText}) GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*'
     THEN CAST(round((julianday(${endingText})-2440587.5)*86400000) AS INTEGER) END, ${endingText}
   FROM registry_records o WHERE o.collection='deliveryOperationOwners'`;
+
+/** The instant a projected ending names: its stored text, or the later of
+    a candidate pair kept as a JSON array. NaN when neither parses. */
+export function endingInstant(text: string): number {
+  if (!text.startsWith("[")) return Date.parse(text);
+  let candidates: unknown;
+  try { candidates = JSON.parse(text); } catch { return NaN; }
+  if (!Array.isArray(candidates)) return NaN;
+  const instants = candidates.flatMap(value => {
+    const ms = typeof value === "string" ? Date.parse(value) : NaN;
+    return Number.isFinite(ms) ? [ms] : [];
+  });
+  return instants.length ? Math.max(...instants) : NaN;
+}
 
 export function refreshOwnerEndingSql(predicate: string): string {
   return `INSERT INTO registry_owner_endings(operation_id,delivery_id,ending_ms,ending_text)
@@ -70,7 +91,7 @@ export function prepareRegistryEndingsBatch(db: Database, limit = 16): boolean {
     WHERE ending_ms IS NULL AND ending_text IS NOT NULL LIMIT ?`).all(limit);
   const parsed = db.query("UPDATE registry_owner_endings SET ending_ms=?,ending_text=? WHERE operation_id=?");
   for (const row of legacy) {
-    const ms = Date.parse(row.ending_text);
+    const ms = endingInstant(row.ending_text);
     parsed.run(Number.isFinite(ms) ? ms : null, Number.isFinite(ms) ? row.ending_text : null, row.operation_id);
   }
   return keys.length < limit && legacy.length < limit;
