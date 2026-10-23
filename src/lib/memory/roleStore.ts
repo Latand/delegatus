@@ -530,7 +530,7 @@ function view(row: RoleMemoryRule, now: number, byId: ReadonlyMap<string, RoleMe
     .reduce((latest, change) => Math.max(latest, change.revision), 0);
   const curatorRevision = history.filter(change => change.by === "curator" && !change.revertedAt)
     .reduce((latest, change) => Math.max(latest, change.revision), 0);
-  const awaitingCuration = !row.curatedAt || pendingCorrection(row) || (agentRevision && curatorRevision ? agentRevision > curatorRevision
+  const awaitingCuration = !row.curatedAt || row.state === "active" && pendingCorrection(row) || (agentRevision && curatorRevision ? agentRevision > curatorRevision
     : row.revisedBy?.by === "agent" && row.revisedBy.at > row.curatedAt);
   /* A text equal to the one in force is not an earlier text: returning to it would change nothing. */
   const earlier = (row.versions ?? []).flatMap(id => {

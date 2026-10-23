@@ -54,8 +54,9 @@ until a curator pass reviews it; an unreviewed correction that left by budget
 under an earlier build still counts in the agenda. When a project succession
 joins a duplicate (`joinMovedScopes` in `src/lib/memory/roleStore.ts`), an
 unreviewed correction on either side marks the survivor changed at the join,
-and the rule view reports any correction changed since its last curation as
-awaiting curation, so agenda counting, scope order and budget retention all
+and the rule view reports any active correction changed since its last
+curation as awaiting curation (a reviewed correction the budget archives later
+stays reviewed), so agenda counting, scope order and budget retention all
 read the same pending state.
 
 ## Verification procedure
