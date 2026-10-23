@@ -690,6 +690,32 @@ test("GET projects the per-engine quick-switch catalog: active id plus secret-fr
   expect(body.claude.accounts.find((row) => row.id === claudeSpare.id)).toEqual(expect.objectContaining({ label: "Claude Spare", authPresent: false }));
 });
 
+test("accounts GET marks the same reset-aware next choice when it differs from active", async () => {
+  const active = createManagedClaudeAccount("Account A");
+  const next = createManagedClaudeAccount("Account B");
+  authenticateClaude(active);
+  authenticateClaude(next);
+  setActiveClaudeAccount(active.id);
+  const observedAt = new Date().toISOString();
+  const nowS = Math.floor(Date.now() / 1000);
+  agentRegistry().recordQuotaEvaluation({
+    engine: "claude",
+    observations: [
+      { engine: "claude", accountId: active.id, authenticated: true, authCheckedAt: observedAt, observedAt, bootId: "route-test", provenance: { source: "live", reason: null, staleSince: null }, limits: { session: null, weekly: { usedPercent: 10, resetsAt: nowS + 2 * 86_400, windowMinutes: 10_080 }, tiers: [], plan: "max", capturedAt: nowS } },
+      { engine: "claude", accountId: next.id, authenticated: true, authCheckedAt: observedAt, observedAt, bootId: "route-test", provenance: { source: "live", reason: null, staleSince: null }, limits: { session: null, weekly: { usedPercent: 50, resetsAt: nowS + 86_400, windowMinutes: 10_080 }, tiers: [], plan: "max", capturedAt: nowS } },
+    ],
+    signature: null,
+    bootId: "route-test",
+    now: observedAt,
+    minimumGapMs: 60_000,
+  });
+
+  const body = await (await GET()).json() as { claude: { active: string; accounts: { id: string; nextChosen?: boolean }[] } };
+  expect(body.claude.active).toBe(active.id);
+  expect(body.claude.accounts.find((row) => row.id === active.id)?.nextChosen).toBe(false);
+  expect(body.claude.accounts.find((row) => row.id === next.id)?.nextChosen).toBe(true);
+});
+
 test("Copilot accounts with unknown auth stay selectable until known signed out", async () => {
   const copilot = createManagedCopilotAccount("Auth state unknown");
   const body = await (await GET()).json() as { copilot: { accounts: Array<{ id: string; authPresent: boolean }> } };

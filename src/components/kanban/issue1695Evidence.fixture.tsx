@@ -139,7 +139,8 @@ const EDITING = SCENARIO === "editing";
    provider's own human label and one carrying none. */
 const CODENAME_TIERS = SCENARIO === "tier-codename";
 const TIER_LIMITS = SCENARIO === "tier-limits" || CODENAME_TIERS;
-const ACCOUNTS = SCENARIO === "accounts" || TIER_LIMITS;
+const NEXT_CHOICE_FIXTURE = new URLSearchParams(location.search).has("nextchoicefixture");
+const ACCOUNTS = SCENARIO === "accounts" || TIER_LIMITS || NEXT_CHOICE_FIXTURE;
 /* `&overlay-links`: the running verifier's last answer links one file of each preview kind, so a driver opens
    the document preview from the feed the way an operator does. */
 const OVERLAY_LINKS = new URLSearchParams(location.search).has("overlay-links");
@@ -1875,20 +1876,20 @@ const tierLimits = {
   ],
   plan: "max", capturedAt: now,
 };
-const accountRow = (id: string, label: string, plan: string, usedPercent: number, resetsInMinutes: number) => ({
+const accountRow = (id: string, label: string, plan: string, usedPercent: number, resetsInMinutes: number, weekly: { usedPercent: number; resetsAt: number; windowMinutes: number } | null = null) => ({
   id, label, kind: "managed", authPresent: true, loginPending: false, loginState: "authenticated", deviceAuth: null,
   auth: { state: "authenticated", plan },
-  limits: { state: "fresh", session: { usedPercent, resetsAt: resetIn(resetsInMinutes), windowMinutes: 300 }, weekly: null },
+  limits: { state: "fresh", session: { usedPercent, resetsAt: resetIn(resetsInMinutes), windowMinutes: 300 }, weekly },
 });
 const accountsBody = {
   claude: {
     active: "default",
-    accounts: [accountRow("default", "Account A", "Max", 72, 140), accountRow("account-c", "Account C", "Max", 18, 170), accountRow("account-g", "Account G", "Pro", 41, 125), accountRow("account-e", "Account E", "Pro", 100, 80)],
+    accounts: [accountRow("default", "Account A", "Max", 72, 140), accountRow("account-c", "Account C", "Max", 18, 170, NEXT_CHOICE_FIXTURE ? { usedPercent: 36, resetsAt: resetIn(3 * 24 * 60 - 90), windowMinutes: 10080 } : null), accountRow("account-g", "Account G", "Pro", 41, 125), accountRow("account-e", "Account E", "Pro", 100, 80)],
     mutationLocked: false, migration: null, autoBalance: null,
   },
   codex: {
     active: "default",
-    accounts: [accountRow("default", "Account B", "Pro", 35, 200), accountRow("account-d", "Account D", "Plus", 12, 230)],
+    accounts: [accountRow("default", "Account B", "Pro", 35, 200), accountRow("account-d", "Account D", "Plus", 12, 230, NEXT_CHOICE_FIXTURE ? { usedPercent: 77, resetsAt: resetIn(3 * 24 * 60 - 90), windowMinutes: 10080 } : null)],
     mutationLocked: false, migration: null, autoBalance: null,
   },
 };
@@ -3974,7 +3975,6 @@ const pickerAccounts = SIDEBAR_WEEKLY ? {
     pickerRow("fresh", "Fresh", "Plus", pickerReading(null, 4)),
   ] },
 };
-
 /* The header menu's driver block (kanbanBoard.browser.test.tsx, "the header's menu, built"): `&header=1`
    hands shared memory, the key, the ping and the team to the driver, and `&member=1` signs a member in. */
 const HEADER_MENU = new URLSearchParams(location.search).has("header");
@@ -4636,7 +4636,15 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       ? { ...row, limits: { ...tierLimits, state: "fresh", checkedAt: iso(0) } } : row) },
   } : accountsBody);
   if (ACCOUNTS && url.pathname === "/api/account-project-bindings" && method === "GET") {
-    return evidence.bindingsUnreadable ? json({ error: "the account binding record is unreadable in the evidence fixture", code: "RECORD_UNREADABLE" }, 409) : json(bindingsBody);
+    const params = new URLSearchParams(location.search);
+    const nextClaude = params.get("nextchoice");
+    const nextCodex = params.get("codexnextchoice");
+    const view = nextClaude || nextCodex ? { ...bindingsBody, engines: {
+      ...bindingsBody.engines,
+      claude: { ...bindingsBody.engines.claude, ...(nextClaude ? { nextChosenAccountId: nextClaude } : {}) },
+      codex: { ...bindingsBody.engines.codex, ...(nextCodex ? { nextChosenAccountId: nextCodex } : {}) },
+    } } : bindingsBody;
+    return evidence.bindingsUnreadable ? json({ error: "the account binding record is unreadable in the evidence fixture", code: "RECORD_UNREADABLE" }, 409) : json(view);
   }
   const migrationRoute = ACCOUNTS && method === "POST" ? /^\/api\/conversations\/([^/]+)\/migration$/.exec(url.pathname) : null;
   if (migrationRoute) {

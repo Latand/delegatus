@@ -5,9 +5,13 @@ import { createRoot, type Root } from "react-dom/client";
 
 import type { AccountOption, EngineAccountsState } from "@/hooks/useEngineAccounts";
 import { installActEnv } from "@/test-helpers/actEnv";
+import { getLocale, setLocale, translate } from "@/lib/i18n";
+import { selectProjectAccount } from "@/lib/accounts/projectSelection";
+import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 
-import { MobileAccountsBody, mobileAccountCorner, mobileAccountState } from "./AccountsPanel";
+import { MobileAccountsBody, mobileAccountCorner, mobileAccountState, ProjectAwareMobileAccountsBody } from "./AccountsPanel";
 import { createReceiptStore, type ReceiptStore } from "./mobile/MobileReceipt";
+import { formatResetClock, formatResetEta } from "./rateLimit";
 
 /*
  * The Accounts & limits screen on the phone (issue #1439, lane 9;
@@ -148,30 +152,134 @@ function engineState(engine: "claude" | "codex", accounts: AccountOption[], acti
 }
 
 const mounted: Array<{ root: Root; host: HTMLDivElement }> = [];
+const realFetch = globalThis.fetch;
 afterEach(async () => {
   await Promise.all(mounted.splice(0).map(async ({ root, host }) => {
     await act(async () => root.unmount());
     host.remove();
   }));
   document.body.replaceChildren();
+  globalThis.fetch = realFetch;
 });
 
-async function mount(engines: EngineAccountsState[], receipts: ReceiptStore = createReceiptStore()): Promise<{ host: HTMLDivElement; receipts: ReceiptStore; rerender(next: EngineAccountsState[]): Promise<void> }> {
+async function mount(engines: EngineAccountsState[], receipts: ReceiptStore = createReceiptStore(), nextChosenAccountIds?: Partial<Record<"claude" | "codex", string | null>>, project?: string): Promise<{ host: HTMLDivElement; receipts: ReceiptStore; rerender(next: EngineAccountsState[], now?: number): Promise<void> }> {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
   mounted.push({ root, host });
-  const render = async (next: EngineAccountsState[]) => {
-    await act(async () => root.render(<MobileAccountsBody engines={next} now={NOW} receipts={receipts} />));
+  const render = async (next: EngineAccountsState[], nextNow = NOW) => {
+    await act(async () => root.render(project
+      ? <ProjectAwareMobileAccountsBody engines={next} now={nextNow} project={project} receipts={receipts} />
+      : <MobileAccountsBody engines={next} now={nextNow} receipts={receipts} nextChosenAccountIds={nextChosenAccountIds} />));
   };
   await render(engines);
   return { host, receipts, rerender: render };
 }
 
+test("phone next choice follows refreshed quota selection while the project stays mounted", async () => {
+  let selected = "b";
+  let reads = 0;
+  let otherCalls = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    if (String(input).startsWith("/api/account-project-bindings")) {
+      reads += 1;
+      return Response.json({ engines: { claude: { nextChosenAccountId: selected } } });
+    }
+    otherCalls += 1;
+    return new Response(null, { status: 500 });
+  }) as typeof fetch;
+  const a = account({ id: "a", label: "Account A", limits: { freshness: "fresh", session: null, weekly: windowWeek(30, NOW + DAY * 2) } });
+  const b = account({ id: "b", label: "Account B", limits: { freshness: "fresh", session: null, weekly: windowWeek(50, NOW + DAY) } });
+  const initial = engineState("claude", [a, b], "a");
+  const view = await mount([initial], createReceiptStore(), undefined, "project-p");
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect([...view.host.querySelectorAll("[data-mobile2-account]")].map((row) => row.getAttribute("data-mobile2-account"))).toEqual(["b", "a"]);
+  expect(view.host.querySelector('[data-mobile2-account="b"]')?.textContent).toContain(translate(getLocale(), "accounts.nextForUnpinnedShort"));
+
+  selected = "a";
+  await view.rerender([engineState("claude", [
+    { ...a, limits: { freshness: "fresh", session: null, weekly: windowWeek(30, NOW + DAY) } },
+    { ...b, limits: { freshness: "fresh", session: null, weekly: windowWeek(50, NOW + DAY * 2) } },
+  ], "a", { limitsVersion: 1 })]);
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(reads).toBe(2);
+  expect([...view.host.querySelectorAll("[data-mobile2-account]")].map((row) => row.getAttribute("data-mobile2-account"))).toEqual(["a", "b"]);
+  expect(view.host.querySelector('[data-mobile2-account="a"]')?.textContent).toContain(translate(getLocale(), "accounts.nextForUnpinnedShort"));
+  expect(view.host.querySelector('[data-mobile2-account="b"]')?.textContent).not.toContain(translate(getLocale(), "accounts.nextForUnpinnedShort"));
+
+  selected = "b";
+  await view.rerender([engineState("claude", [
+    { ...a, limits: { freshness: "fresh", session: null, weekly: windowWeek(30, NOW + DAY) } },
+    { ...b, limits: { freshness: "fresh", session: null, weekly: windowWeek(50, NOW + DAY * 2) } },
+  ], "a", { limitsVersion: 1 })], NOW + DAY);
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(reads).toBe(3);
+  expect([...view.host.querySelectorAll("[data-mobile2-account]")].map((row) => row.getAttribute("data-mobile2-account"))).toEqual(["b", "a"]);
+  expect(otherCalls).toBe(0);
+});
+
 const click = async (element: Element | null) => {
   expect(element).toBeTruthy();
   await act(async () => (element as HTMLElement).click());
 };
+
+test.each(["en", "uk"] as const)("phone reset rows show Claude beside Codex in %s", async (locale) => {
+  const previous = getLocale();
+  setLocale(locale);
+  try {
+    const reset = NOW + DAY;
+    const engines = (["claude", "codex"] as const).map(engine => {
+      const candidate = account({ id: `${engine}-windows`, label: "Account A", limits: {
+        freshness: "fresh", checkedAt: new Date(NOW * 1000).toISOString(),
+        session: window5h(20, NOW + HOUR), weekly: windowWeek(40, reset),
+        tiers: engine === "claude" ? [{ tier: "opus", ...windowWeek(50, reset + DAY) }] : [],
+      } });
+      return engineState(engine, [candidate], candidate.id);
+    });
+    const view = await mount(engines);
+    for (const engine of ["claude", "codex"] as const) {
+      const block = view.host.querySelector(`[data-account-limits="${engine}-windows"]`)!;
+      expect(block.querySelector('[data-limit-row="weekly"]')?.textContent).toContain(translate(locale, "limits.reset", {
+        eta: formatResetEta(reset, NOW), at: formatResetClock(reset, NOW),
+      }));
+      if (engine === "claude") expect(block.querySelector('[data-limit-row="tier:opus"]')?.textContent).toContain(formatResetClock(reset + DAY, NOW));
+    }
+  } finally { setLocale(previous); }
+});
+
+test.each(["en", "uk"] as const)("phone panel marks and leads with the reset-aware next choice in %s", async (locale) => {
+  const previous = getLocale();
+  setLocale(locale);
+  try {
+    const now = NOW * 1_000;
+    const observation = (accountId: string, usedPercent: number, resetDays: number): DurableQuotaObservation => ({
+      engine: "claude", accountId, authenticated: true,
+      authCheckedAt: new Date(now - 60_000).toISOString(), observedAt: new Date(now - 60_000).toISOString(),
+      provenance: { source: "live", reason: null, staleSince: null }, bootId: "phone-reset-choice",
+      limits: {
+        session: { usedPercent, resetsAt: NOW + resetDays * DAY },
+        weekly: { usedPercent, resetsAt: NOW + resetDays * DAY },
+        plan: "max", capturedAt: NOW - 60,
+      },
+    });
+    const selected = selectProjectAccount({
+      project: "project-fixture", engine: "claude",
+      accounts: [{ id: "a", authPresent: true }, { id: "b", authPresent: true }],
+      observations: [observation("a", 10, 2), observation("b", 50, 1)],
+      bindings: [], preferredId: "a", model: "sonnet", now,
+    });
+    expect(selected).toEqual({ kind: "available", accountId: "b" });
+    const selectedId = selected.kind === "available" ? selected.accountId : null;
+    const a = account({ id: "a", label: "Account A" });
+    const b = account({ id: "b", label: "Account B" });
+    const view = await mount([engineState("claude", [a, b], "a")], createReceiptStore(), { claude: selectedId });
+    const rows = [...view.host.querySelectorAll('[data-mobile2-account]')];
+    expect(rows.map((row) => row.getAttribute("data-mobile2-account"))).toEqual(["b", "a"]);
+    expect(rows[0]?.textContent).toContain(translate(locale, "accounts.nextForUnpinnedShort"));
+    expect(rows[0]?.getAttribute("data-mobile2-account-state")).toBe("ready");
+    expect(rows[1]?.getAttribute("data-mobile2-account-state")).toBe("active");
+  } finally { setLocale(previous); }
+});
 
 const text = (element: Element | null | undefined) => (element?.textContent ?? "").replace(/\s+/g, " ").trim();
 

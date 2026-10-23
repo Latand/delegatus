@@ -1030,10 +1030,19 @@ export interface ViewerMcpDomainDependencies {
  * No second resolution scheme: `projectForCwd` IS `projectInfoFromCwd`.
  */
 function productionCallerProject(): string | null {
+  const snapshot = agentRegistry().readOnlySnapshot();
+  const conversation = productionCallerConversation(snapshot);
+  return conversation ? callerProjectFromSnapshot(snapshot, conversation.id) : null;
+}
+
+/** The same authenticated conversation that supplies the project also carries
+    the model used to judge that caller's next unpinned account. */
+function productionCallerConversation(snapshot: RegistrySnapshot) {
   const authority = attentionCallerAuthority(attentionCallerSources());
   const conversationId = authority.kind === "root" || authority.kind === "worker" ? authority.conversationId : null;
-  if (!conversationId) return null;
-  return callerProjectFromSnapshot(agentRegistry().readOnlySnapshot(), conversationId);
+  return conversationId
+    ? readOnlyConversationLookupFromSnapshot(snapshot).conversation(conversationId as `conversation_${string}`)
+    : null;
 }
 
 /**
@@ -5356,10 +5365,12 @@ async function accountProjectBindingTool(args: McpToolArgs, dependencies: Viewer
 /** The same records `GET /api/accounts` projects its limit rows from. */
 function productionAccountLimitsSource(): Omit<AccountLimitsInput, "engine" | "accountId"> {
   const snapshot = agentRegistry().readOnlySnapshot();
+  const caller = productionCallerConversation(snapshot);
+  const project = caller ? callerProjectFromSnapshot(snapshot, caller.id) : null;
   return {
     accounts: {
-      claude: listClaudeAccounts().map((account) => ({ accountId: account.id })),
-      codex: listCodexAccounts().map((account) => ({ accountId: account.id })),
+      claude: listClaudeAccounts().map((account) => ({ accountId: account.id, authPresent: account.authPresent })),
+      codex: listCodexAccounts().map((account) => ({ accountId: account.id, authPresent: account.authPresent })),
       copilot: listCopilotAccounts().map((account) => ({ accountId: account.id })),
     },
     active: {
@@ -5368,6 +5379,9 @@ function productionAccountLimitsSource(): Omit<AccountLimitsInput, "engine" | "a
       copilot: snapshot.engineRouting.copilot.activeAccountId ?? activeCopilotAccountId(),
     },
     observations: snapshot.quotaObservations,
+    project,
+    bindings: project ? accountProjectBindings() : [],
+    model: caller?.generations.at(-1)?.launchProfile.model ?? null,
     now: Date.now(),
   };
 }

@@ -322,7 +322,7 @@ function AuthIdentity({ account }: { account: AccountOption }) {
 /** How long an armed removal waits for its confirm before it disarms. */
 const REMOVE_ARM_MS = 10_000;
 
-function AccountRow({ account, engine, quota, activeId, onSelect, onRemove, onCopyCommand, disabled, removing = false, refusal = null, focused = false, children }: { account: AccountOption; engine: "claude" | "codex"; quota: ReconciledQuota; activeId: string; onSelect: () => void; onRemove: () => void; onCopyCommand: () => void; disabled: boolean; removing?: boolean; refusal?: React.ReactNode; focused?: boolean; children?: React.ReactNode }) {
+function AccountRow({ account, engine, quota, activeId, nextChosen = false, onSelect, onRemove, onCopyCommand, disabled, removing = false, refusal = null, focused = false, children }: { account: AccountOption; engine: "claude" | "codex"; quota: ReconciledQuota; activeId: string; nextChosen?: boolean; onSelect: () => void; onRemove: () => void; onCopyCommand: () => void; disabled: boolean; removing?: boolean; refusal?: React.ReactNode; focused?: boolean; children?: React.ReactNode }) {
   const { t } = useLocale();
   const state = rowState(account, activeId);
   const isActive = account.id === activeId;
@@ -349,6 +349,7 @@ function AccountRow({ account, engine, quota, activeId, onSelect, onRemove, onCo
   return (
     <div
       data-account-row={account.id}
+      data-account-next-chosen={nextChosen ? "true" : undefined}
       aria-busy={removing || undefined}
       className={`relative ${focused ? "ring-2 ring-inset ring-accent/50" : ""} ${removing ? "opacity-60" : ""}`}
       // The active account reads as a tinted wash + hairline identity bar —
@@ -370,6 +371,7 @@ function AccountRow({ account, engine, quota, activeId, onSelect, onRemove, onCo
         />
         <span className="min-w-0 flex-1">
           <span className={`block break-words text-[13px] leading-tight ${isActive ? "font-bold text-primary" : "font-semibold"}`}>{account.label}</span>
+          {nextChosen ? <span className="block pt-0.5 text-[10px] font-semibold text-accent">{t("accounts.nextForUnpinned")}</span> : null}
           <AuthIdentity account={account} />
         </span>
         <CapacityChip quota={quota} engine={engine} />
@@ -458,6 +460,7 @@ function AccountRow({ account, engine, quota, activeId, onSelect, onRemove, onCo
 
 export type ProjectAccountContext = {
   project: string;
+  nextChosenAccountId?: string | null;
   restricted: boolean;
   allowed: { accountId: string; label: string }[];
   carrying: { accountId: string; label: string }[];
@@ -975,9 +978,12 @@ export function AccountsPanel({
   };
 
   const rows = accounts.map((account) => ({
-    account,
+    account: projectContext
+      ? { ...account, nextChosen: projectContext.nextChosenAccountId != null && account.id === projectContext.nextChosenAccountId }
+      : account,
     quota: quotaOverride?.accountId === active && account.id === active ? quotaOverride.quota : accountQuota(account, quotaNow),
-  }));
+  })).sort((a, b) => Number(b.account.nextChosen === true) - Number(a.account.nextChosen === true)
+    || Number(b.account.id === active) - Number(a.account.id === active));
   // One label column for the whole list (#1358): a tier row's longer label
   // widens every card's column, so the meters stay aligned from card to card.
   const wideLabels = rows.some(({ quota }) => quota.tiers.length > 0);
@@ -1057,7 +1063,7 @@ export function AccountsPanel({
                 // shows neither numbers nor actions.
                 const showLimits = account.authPresent || Boolean(quota.session || quota.weekly || quota.tiers.length);
                 return (
-                  <AccountRow key={account.id} account={account} engine={engine} quota={quota} activeId={active} disabled={mutation !== null} removing={state.removing === account.id} refusal={rowRefusal(state, account.id)} focused={account.id === focusAccountId} onSelect={() => void onSelect(account.id)} onRemove={() => void state.remove(account.id)} onCopyCommand={() => void state.copyTerminalCommand(account.id)}>
+                  <AccountRow key={account.id} account={account} engine={engine} quota={quota} activeId={active} nextChosen={account.nextChosen} disabled={mutation !== null} removing={state.removing === account.id} refusal={rowRefusal(state, account.id)} focused={account.id === focusAccountId} onSelect={() => void onSelect(account.id)} onRemove={() => void state.remove(account.id)} onCopyCommand={() => void state.copyTerminalCommand(account.id)}>
                     {showLimits ? account.provider ? <div className="px-3 pb-2 pl-[30px] text-[10px] text-muted">{t("accounts.provider.limitsUnknown")}</div> : <AccountLimitsBlock
                         account={account}
                         engine={engine}
@@ -1304,9 +1310,10 @@ function MobileAccountHead({ account, engine, state, quota, t }: { account: Acco
     <>
       <MobileEngineFill engine={engine} />
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className={`flex items-center gap-1.5 text-body font-semibold leading-[1.25] ${state === "active" ? "text-primary" : "text-secondary"}`}>
-          <span className="min-w-0 truncate">{account.label}</span>
+        <span className={`flex flex-wrap items-center gap-x-1.5 gap-y-1 text-body font-semibold leading-[1.25] ${state === "active" ? "text-primary" : "text-secondary"}`}>
+          <span data-mobile2-account-name className="basis-full min-w-0 truncate">{account.label}</span>
           {state === "active" ? <MobileBadge tone="success">{t("accounts.active")}</MobileBadge> : null}
+          {account.nextChosen ? <MobileBadge tone="warning">{t("accounts.nextForUnpinnedShort")}</MobileBadge> : null}
           {state === "ready" ? <MobileBadge tone="neutral">{t("mobile2.accounts.ready")}</MobileBadge> : null}
           {state === "needsSignIn" ? <MobileBadge tone="warning">{t("accounts.needsLogin")}</MobileBadge> : null}
           {state === "error" ? <MobileBadge tone="danger">{t("accounts.provider.credentialError")}</MobileBadge> : null}
@@ -1554,7 +1561,8 @@ function MobileEngineSection({ state, now, focusAccountId, receipts }: { state: 
   const dismissRemoval = state.dismissRemoval;
   useEffect(() => dismissRemoval, [dismissRemoval]);
   /* The active card leads; the rest keep the registry's order. */
-  const ordered = [...accounts].sort((a, b) => Number(mobileAccountState(b, active) === "active") - Number(mobileAccountState(a, active) === "active"));
+  const ordered = [...accounts].sort((a, b) => Number(b.nextChosen === true) - Number(a.nextChosen === true)
+    || Number(mobileAccountState(b, active) === "active") - Number(mobileAccountState(a, active) === "active"));
 
   const switchTo = (account: AccountOption) => {
     const before = active;
@@ -1644,24 +1652,78 @@ function MobileEngineSection({ state, now, focusAccountId, receipts }: { state: 
 }
 
 /** The screen's body over given engine states — the shape the tests drive. */
-export function MobileAccountsBody({ engines, now, focusAccountId = null, receipts = tabReceipts }: {
+export function MobileAccountsBody({ engines, now, focusAccountId = null, receipts = tabReceipts, nextChosenAccountIds }: {
   engines: EngineAccountsState[];
   /** Unix seconds the reset ETAs and staleness are read against. */
   now: number;
   /** The account a badge tap steered here (issue #229): scrolled to and ringed. */
   focusAccountId?: string | null;
   receipts?: ReceiptStore;
+  /** The project route's shared selector result, keyed by engine. */
+  nextChosenAccountIds?: Partial<Record<"claude" | "codex", string | null>>;
 }) {
+  const projected = nextChosenAccountIds
+    ? engines.map((state) => ({
+        ...state,
+        accounts: state.accounts.map((account) => ({
+          ...account,
+          nextChosen: nextChosenAccountIds[state.engine] === account.id,
+        })),
+      }))
+    : engines;
   return (
     <div data-mobile2-accounts-body className="flex flex-col pb-5 pt-1">
-      {engines.map((state) => <MobileEngineSection key={state.engine} state={state} now={now} focusAccountId={focusAccountId} receipts={receipts} />)}
+      {projected.map((state) => <MobileEngineSection key={state.engine} state={state} now={now} focusAccountId={focusAccountId} receipts={receipts} />)}
     </div>
   );
 }
 
+/** Keeps the project's read-only router choice aligned with the account rows
+    shown on the phone. A new reading, account set, or presentation minute
+    invalidates the prior response while the route is re-read. */
+export function ProjectAwareMobileAccountsBody({ engines, now, project, focusAccountId = null, receipts = tabReceipts }: {
+  engines: EngineAccountsState[];
+  now: number;
+  project?: string | null;
+  focusAccountId?: string | null;
+  receipts?: ReceiptStore;
+}) {
+  const [nextChoice, setNextChoice] = useState<{ key: string; ids: Partial<Record<"claude" | "codex", string | null>> } | null>(null);
+  const key = project ? JSON.stringify([project, now, ...engines.map((state) => [state.engine, state.identityVersion, state.limitsVersion,
+    state.accounts.map((account) => [account.id, account.authPresent, account.authHealth, account.loginState])])]) : "";
+  useEffect(() => {
+    if (!project) return;
+    let live = true;
+    void (async () => {
+      try {
+        const response = await fetch(`/api/account-project-bindings?project=${encodeURIComponent(project)}`, { cache: "no-store" });
+        if (!response.ok) return;
+        const payload: unknown = await response.json();
+        if (!payload || typeof payload !== "object") return;
+        const blocks = (payload as { engines?: unknown }).engines;
+        if (!blocks || typeof blocks !== "object") return;
+        const ids: Partial<Record<"claude" | "codex", string | null>> = {};
+        for (const engine of ["claude", "codex"] as const) {
+          const block = (blocks as Record<string, unknown>)[engine];
+          if (block && typeof block === "object") {
+            const id = (block as { nextChosenAccountId?: unknown }).nextChosenAccountId;
+            if (typeof id === "string" || id === null) ids[engine] = id;
+          }
+        }
+        if (live) setNextChoice({ key, ids });
+      } catch {
+        // Keep account rows usable when the project view is unavailable.
+      }
+    })();
+    return () => { live = false; };
+  }, [key, project]);
+  const ids = nextChoice?.key === key && project ? nextChoice.ids : undefined;
+  return <MobileAccountsBody engines={engines} now={now} focusAccountId={focusAccountId} receipts={receipts} nextChosenAccountIds={ids} />;
+}
+
 /** The screen the shell mounts under its bar: both engines' stores, the
     presentation clock, and the focus a badge asked for. */
-export function MobileAccountsPanel({ receipts }: { receipts?: ReceiptStore }) {
+export function MobileAccountsPanel({ receipts, project }: { receipts?: ReceiptStore; project?: string | null }) {
   const claude = useEngineAccounts("claude");
   const codex = useEngineAccounts("codex");
   const [focus, setFocus] = useState<string | null>(null);
@@ -1672,8 +1734,10 @@ export function MobileAccountsPanel({ receipts }: { receipts?: ReceiptStore }) {
   }, []);
   useEffect(() => {
     const pending = consumePendingAccountPanel("claude") ?? consumePendingAccountPanel("codex");
+    // This mount-only value comes from the external account-navigation queue.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- restore focus from the surface that opened this screen.
     if (pending) setFocus(pending.accountId);
     return onAccountPanelRequest((request) => setFocus(request.accountId));
   }, []);
-  return <MobileAccountsBody engines={[claude, codex]} now={now} focusAccountId={focus} receipts={receipts} />;
+  return <ProjectAwareMobileAccountsBody engines={[claude, codex]} now={now} project={project} focusAccountId={focus} receipts={receipts} />;
 }

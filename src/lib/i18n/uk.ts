@@ -840,6 +840,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "accounts.title": "Акаунти Codex",
   "accounts.trigger": "Акаунти",
   "accounts.active": "активний",
+  "accounts.nextForUnpinned": "Наступний для роботи без закріплення",
+  "accounts.nextForUnpinnedShort": "Наступний вибір",
   "accounts.needsLogin": "потрібен вхід",
   "accounts.pendingLogin": "вхід…",
   "accounts.auth.authenticated": "Авторизовано",
