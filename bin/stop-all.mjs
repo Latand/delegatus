@@ -256,19 +256,23 @@ async function until(done, ms, pollMs, sleep) {
 
 /* SIGTERM, then SIGKILL after the grace, each sent only to a member whose
    identity still matches one step before the signal. A refused signal
-   (EPERM) leaves its member among the survivors. */
+   (EPERM) leaves its member among the survivors. `signalled` holds the pids
+   SIGTERM reached: a member that exited, or whose pid went to another
+   process, after it was captured is in neither set. */
 async function terminate(members, probe, options) {
   const live = () => members.filter((member) => probe.identity(member.pid) === member.identity);
   const send = (value) => {
-    for (const member of live()) {
+    const targets = live();
+    for (const member of targets) {
       try { options.signal(member.pid, value); } catch { /* gone, or refused: the next reading says which */ }
     }
+    return targets;
   };
-  send("SIGTERM");
-  if (await until(() => live().length === 0, options.graceMs, options.pollMs, options.sleep)) return { survivors: [] };
+  const signalled = new Set(send("SIGTERM").map((member) => member.pid));
+  if (await until(() => live().length === 0, options.graceMs, options.pollMs, options.sleep)) return { signalled, survivors: [] };
   send("SIGKILL");
   await until(() => live().length === 0, options.killMs, options.pollMs, options.sleep);
-  return { survivors: live() };
+  return { signalled, survivors: live() };
 }
 
 /* Every launcher record in the state directory: each install sharing it
@@ -409,8 +413,13 @@ export async function stopEverything(input) {
   const outcome = await terminate(trees.flatMap(({ members }) => members), probe, options);
   const survivors = new Set(outcome.survivors.map((member) => member.pid));
   for (const { target, members } of trees) {
-    const entry = { pid: target.pid, kind: target.kind, session: target.session, under: members.length - 1 };
-    if (members.some((member) => survivors.has(member.pid))) report.survived.push(entry);
+    const survived = members.some((member) => survivors.has(member.pid));
+    /* Exited, or its pid went to another process, between its check and the
+       first signal: the stop never reached it. */
+    if (!survived && !outcome.signalled.has(target.pid)) { report.gone++; continue; }
+    const under = members.filter((member) => member.pid !== target.pid && outcome.signalled.has(member.pid)).length;
+    const entry = { pid: target.pid, kind: target.kind, session: target.session, under };
+    if (survived) report.survived.push(entry);
     else report.stopped.push(entry);
   }
   return report;

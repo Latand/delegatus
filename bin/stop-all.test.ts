@@ -41,10 +41,16 @@ fs.writeFileSync(HOST, [
   "import fs from 'node:fs';",
   "const [, , , report, mode] = process.argv;",
   "if (mode === 'stubborn') process.on('SIGTERM', () => {});",
-  "const child = mode === 'leaf' ? null : spawn(process.execPath, [process.argv[1], 'app-server', report + '.leaf', 'leaf'], { stdio: 'ignore' });",
+  "const run = (suffix, childMode) => spawn(process.execPath, [process.argv[1], 'app-server', report + suffix, childMode], { stdio: 'ignore' });",
+  /* Children start in this process's group. `leader`: a member with a child
+     of its own, and a sibling; `orphaner`: a child that starts one of its own
+     and exits, leaving it reparented. */
+  "const child = mode === 'leaf' ? null : mode === 'leader' ? (run('.sibling', 'leaf'), run('.member', 'plain'))",
+  "  : mode === 'orphaner' ? run('.middle', 'middle') : run('.leaf', 'leaf');",
   "fs.writeFileSync(report + '.tmp', JSON.stringify({ pid: process.pid, child: child?.pid ?? null }));",
   "fs.renameSync(report + '.tmp', report);",
-  "setInterval(() => {}, 1000);",
+  "if (mode === 'middle') setInterval(() => { if (fs.existsSync(report + '.leaf')) process.exit(0); }, 10);",
+  "else setInterval(() => {}, 1000);",
   "",
 ].join("\n"));
 
@@ -53,18 +59,32 @@ let serial = 0;
     `socket` puts an install's runtime-host socket in its environment, as the
     launcher does for the Viewer and the runtime host it starts. */
 async function startHost(mode: "plain" | "stubborn" = "plain", socket: string | null = null) {
-  const report = path.join(SANDBOX, `host-${++serial}.json`);
-  const env = { ...process.env };
-  delete env.LLV_RUNTIME_HOST_SOCKET;
-  if (socket) env.LLV_RUNTIME_HOST_SOCKET = socket;
-  const child = spawn(process.execPath, [HOST, "app-server", report, mode], { detached: true, stdio: "ignore", env });
-  handles.push(child);
+  const report = spawnTree(mode, socket);
   for (let i = 0; i < 400 && !(fs.existsSync(report) && fs.existsSync(`${report}.leaf`)); i++) await Bun.sleep(25);
   const { pid, child: leafPid } = JSON.parse(fs.readFileSync(report, "utf8")) as { pid: number; child: number };
   const root = { pid, identity: probe!.identity(pid)! };
   const leaf = { pid: leafPid, identity: probe!.identity(leafPid)! };
   owned.push(root, leaf);
   return { root, leaf, launcherIdentity: probe!.launcherIdentity(pid)! };
+}
+
+/** Starts the script detached, leading a process group of its own; returns its report file. */
+function spawnTree(mode: string, socket: string | null = null): string {
+  const report = path.join(SANDBOX, `host-${++serial}.json`);
+  const env = { ...process.env };
+  delete env.LLV_RUNTIME_HOST_SOCKET;
+  if (socket) env.LLV_RUNTIME_HOST_SOCKET = socket;
+  handles.push(spawn(process.execPath, [HOST, "app-server", report, mode], { detached: true, stdio: "ignore", env }));
+  return report;
+}
+
+/** The pid a report file names once it is written, recorded for cleanup when `own`. */
+async function reported(file: string, own = true) {
+  for (let i = 0; i < 400 && !fs.existsSync(file); i++) await Bun.sleep(25);
+  const { pid } = JSON.parse(fs.readFileSync(file, "utf8")) as { pid: number };
+  const entry = { pid, identity: probe!.identity(pid)! };
+  if (own) owned.push(entry);
+  return entry;
 }
 
 function stateDirectory(): string {
@@ -134,6 +154,115 @@ test.skipIf(!probe)("only recorded hosts stop: a same-named foreign process, a r
   expect(report.gone).toBe(2);
   expect(report.notProven).toEqual([expect.objectContaining({ pid: unproven.root.pid, reason: "no-recorded-identity" })]);
   expect(report.survived).toEqual([]);
+  expect(stopSucceeded(report)).toBe(true);
+});
+
+test.skipIf(!probe)("a recorded host that does not lead its process group stops alone: the group's unrecorded leader and other members keep running", async () => {
+  const state = stateDirectory();
+  /* An unrecorded process leads the group; the recorded host started inside
+     it, as a host started from a tmux pane's shell job would be. */
+  const report = spawnTree("leader");
+  const leader = await reported(report);
+  const sibling = await reported(`${report}.sibling`);
+  const member = await reported(`${report}.member`);
+  const memberLeaf = await reported(`${report}.member.leaf`);
+  const table = probe!.table();
+  expect([leader, sibling, member, memberLeaf].map(({ pid }) => table.get(pid)?.pgid)).toEqual([leader.pid, leader.pid, leader.pid, leader.pid]);
+  await writeRegistry(state, [hostEntry("member", identity(member.pid, member.identity))]);
+
+  const result = await stopEverything({ stateDirectory: state, ...quick });
+
+  expect([member, memberLeaf].map(alive)).toEqual([false, false]);
+  expect([leader, sibling].map(alive)).toEqual([true, true]);
+  expect(result.stopped).toEqual([{ pid: member.pid, kind: "codex-app-server", session: "codex member", under: 1 }]);
+  expect(result.survived).toEqual([]);
+});
+
+test.skipIf(!probe)("a member of the group a recorded host leads is stopped with it after it was reparented away", async () => {
+  const state = stateDirectory();
+  const report = spawnTree("orphaner");
+  const root = await reported(report);
+  const middle = await reported(`${report}.middle`, false);
+  const orphan = await reported(`${report}.middle.leaf`);
+  for (let i = 0; i < 400 && probe!.identity(middle.pid) !== null; i++) await Bun.sleep(25);
+  /* Its parent exited: it is no descendant of the recorded host, only a member of its group. */
+  const table = probe!.table();
+  const ancestors = new Set<number>();
+  for (let pid = orphan.pid; pid > 1 && !ancestors.has(pid); pid = table.get(pid)?.ppid ?? 0) ancestors.add(pid);
+  expect(probe!.identity(middle.pid)).toBeNull();
+  expect(ancestors.has(root.pid)).toBe(false);
+  expect(table.get(orphan.pid)?.pgid).toBe(root.pid);
+  await writeRegistry(state, [hostEntry("orphaner", identity(root.pid, root.identity))]);
+
+  const result = await stopEverything({ stateDirectory: state, ...quick });
+
+  expect([root, orphan].map(alive)).toEqual([false, false]);
+  expect(result.stopped).toEqual([{ pid: root.pid, kind: "codex-app-server", session: "codex orphaner", under: 1 }]);
+});
+
+test("the kill phase signals a captured process only while its identity matches: a pid reused before SIGTERM or before SIGKILL gets nothing more", async () => {
+  const state = stateDirectory();
+  const epoch = "linux:fixture-boot:pidns:pid:[4026531836]";
+  /* Three recorded hosts as an injected probe reads them; nothing here is a
+     real process. A pid marked `reusedAfterCapture` reads as its recorded
+     process once after the process table is taken (the check that captures
+     it), then as another process at the same pid. `term` is what SIGTERM
+     does to the recorded process; `reused` ends it and starts another
+     process at its pid. */
+  type Fixture = { ppid: number; pgid: number; identity: string | null; term: "exit" | "ignore" | "reused"; reusedAfterCapture?: boolean; reads: number };
+  const processes = new Map<number, Fixture>([
+    [4_000_100, { ppid: 1, pgid: 4_000_100, identity: "4000100:7", term: "exit", reusedAfterCapture: true, reads: 0 }],
+    [4_000_200, { ppid: 1, pgid: 4_000_200, identity: "4000200:7", term: "ignore", reads: 0 }],
+    [4_000_201, { ppid: 4_000_200, pgid: 4_000_200, identity: "4000201:7", term: "reused", reads: 0 }],
+    [4_000_300, { ppid: 1, pgid: 4_000_300, identity: "4000300:7", term: "exit", reads: 0 }],
+    [4_000_301, { ppid: 4_000_300, pgid: 4_000_300, identity: "4000301:7", term: "exit", reusedAfterCapture: true, reads: 0 }],
+  ]);
+  const recorded = (pid: number) => `${pid}:7`;
+  const reuse = (pid: number, row: Fixture) => { row.identity = `${pid}:99`; row.reusedAfterCapture = false; };
+  let tableTaken = false;
+  const signals: string[] = [];
+  const fake = {
+    identity(pid: number) {
+      const row = processes.get(pid);
+      if (!row) return null;
+      if (tableTaken && row.reusedAfterCapture && ++row.reads > 1) reuse(pid, row);
+      return row.identity;
+    },
+    launcherIdentity: () => null,
+    bootEpoch: () => epoch,
+    bootTimeMs: () => 0,
+    ownsInstall: () => false,
+    table() {
+      tableTaken = true;
+      return new Map([...processes].filter(([, row]) => row.identity !== null).map(([pid, row]) => [pid, { ppid: row.ppid, pgid: row.pgid }]));
+    },
+  };
+  const signal = (pid: number, value: NodeJS.Signals) => {
+    const row = processes.get(pid);
+    signals.push(`${pid}:${row?.identity}:${value}`);
+    if (!row || row.identity !== recorded(pid)) return;
+    if (value === "SIGKILL" || row.term === "exit") row.identity = null;
+    else if (row.term === "reused") reuse(pid, row);
+  };
+  await writeRegistry(state, [4_000_100, 4_000_200, 4_000_300].map((pid) =>
+    hostEntry(`h${pid}`, { pid, startIdentity: recorded(pid), bootEpoch: epoch })));
+
+  const report = await stopEverything({ stateDirectory: state, probe: fake as unknown as ReturnType<typeof processProbe>, signal,
+    graceMs: 40, killMs: 40, pollMs: 5, launcherWaitMs: 40 });
+
+  /* The pid reused before SIGTERM (a recorded root and a member) gets no
+     signal; the one reused after SIGTERM gets no SIGKILL. */
+  expect([...signals].sort()).toEqual([
+    "4000200:4000200:7:SIGKILL", "4000200:4000200:7:SIGTERM", "4000201:4000201:7:SIGTERM", "4000300:4000300:7:SIGTERM",
+  ]);
+  expect(signals.at(-1)).toBe("4000200:4000200:7:SIGKILL");
+  expect([...report.stopped].sort((a, b) => a.pid - b.pid)).toEqual([
+    { pid: 4_000_200, kind: "codex-app-server", session: "codex h4000200", under: 1 },
+    { pid: 4_000_300, kind: "codex-app-server", session: "codex h4000300", under: 0 },
+  ]);
+  expect(report.survived).toEqual([]);
+  expect(report.gone).toBe(1);
+  expect(report.notProven).toEqual([]);
   expect(stopSucceeded(report)).toBe(true);
 });
 
