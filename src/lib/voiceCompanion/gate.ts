@@ -166,25 +166,44 @@ const AGREEMENT_WORDS = new Set([
 /** Whether the operator's own words agree to send a request that waits for them, and say nothing else: every
  * sentence is a yes, no word declines, takes it back, makes it conditional or asks something, and no sentence is a
  * question. Read where text the operator did not speak may have asked the backend to answer for them (design
- * docs/design/voice-extensible-tools.md §3.6). */
-export function spokenAgreement(utterance: string): boolean {
+ * docs/design/voice-extensible-tools.md §3.6). `also` names the words of the action being agreed to ("Yes, play it."). */
+export function spokenAgreement(utterance: string, also: readonly string[] = []): boolean {
   const all = gateSentences(utterance);
   return all.length > 0 && all.every((sentence) => AGREEMENT.test(sentence) && !sentence.includes("?")
-    && (sentence.match(/[\p{L}\p{N}']+/gu) ?? []).every((word) => AGREEMENT_WORDS.has(word)));
+    && (sentence.match(/[\p{L}\p{N}']+/gu) ?? []).every((word) => AGREEMENT_WORDS.has(word) || also.includes(word)));
 }
 
-/* An imperative sending verb in the operator's own words: "send it", "forward this", "pass it on", "відправ", "передай". */
-const SEND_IMPERATIVE = /(?<![\p{L}'])(?:send|forward|relay|deliver|pass\s+(?:(?:it|this|that|them)\s+)?(?:on|along|to)|відправ(?:те|ляй|ляйте)?|надішли(?:те)?|надсилай(?:те)?|передай(?:те)?|перешли(?:те)?|пересилай(?:те)?|отправь(?:те)?|отправляй(?:те)?)(?![\p{L}'])/u;
+/* A sending verb addressed to the orchestrator inside a clause of the operator's own words: "…and send it to the
+   orchestrator", "pass the summary on to our orchestrator", "…і передай це оркестратору", or an asking verb with the
+   orchestrator as its object at the start of a clause ("…and tell the orchestrator", "…і попроси оркестратора"). */
+const SEND_VERB = String.raw`(?:send|forward|relay|deliver|pass|give|hand)`;
+const CLAUSE = String.raw`(?:^|[,;:—–]\s*|\b(?:and|then|also)\s+)(?:please\s+)?`;
+const EN_SENT = String.raw`${CLAUSE}${SEND_VERB}\s+(?:[\p{L}\p{N}'-]+\s+){0,5}?(?:(?:on|over|along)\s+)?to\s+${EN_TARGET}`;
+const EN_TOLD = String.raw`${CLAUSE}(?:(?:ask|tell|message|have)\s+${EN_TARGET}|let\s+${EN_TARGET}\s+know\b)`;
+const UK_CLAUSE = String.raw`(?:^|[,;:—–]\s*|(?:^|\s)(?:і|й|та|а\s+потім|потім|також)\s+)(?:будь\s+ласка,?\s+)?`;
+const UK_SENT = String.raw`${UK_CLAUSE}(?:передай|надішли|відправ|перешли|скажи|напиши|доручи)(?:те)?\s+(?:[\p{L}\p{N}'-]+\s+){0,5}?(?:(?:нашому|моєму|цьому)\s+)?оркестратору${UK_END}`;
+const UK_TOLD = String.raw`${UK_CLAUSE}(?:попроси|запитай|спитай)(?:те)?\s+(?:[ув]\s+)?(?:(?:нашого|мого|цього)\s+)?оркестратора${UK_END}`;
+const ADDRESSED_SEND = new RegExp(`${EN_SENT}|${EN_TOLD}|${UK_SENT}|${UK_TOLD}`, "u");
+/* A bare send in answer to an offer: the sending verb, what it points at and politeness, nothing else ("Send it.",
+   "Forward this.", "Pass it on.", "Відправ.", "Передай це."). A verb with any other object is no ask to send. */
+const SEND_IMPERATIVE = /(?<![\p{L}'])(?:send|forward|relay|deliver|pass|відправ(?:те|ляй|ляйте)?|надішли(?:те)?|надсилай(?:те)?|передай(?:те)?|перешли(?:те)?|пересилай(?:те)?|отправь(?:те)?|отправляй(?:те)?)(?![\p{L}'])/u;
+const BARE_SEND_WORDS = new Set([...AGREEMENT_WORDS, "forward", "relay", "deliver", "pass", "on", "along", "them", "these", "and", "just",
+  "відправте", "відправляй", "відправляйте", "надішліть", "надсилайте", "передай", "передайте", "перешли", "перешліть", "пересилай", "пересилайте", "отправьте", "отправляйте"]);
 
-/** Whether the operator's own words ask to send something, in a form the strict grammar of
- * `explicitDelegationRequest` does not cover ("Check what is playing and send it to the orchestrator."): a sentence
- * holds an imperative sending verb, and no sentence negates, takes it back, makes it conditional or asks something.
- * Read once an added tool's answer is in the backend's context (design §3.6). */
+/** Whether the operator's own words ask to send something to the orchestrator, in a form the strict grammar of
+ * `explicitDelegationRequest` does not cover ("Check what is playing and send it to the orchestrator."), with no
+ * sentence that negates, takes it back, makes it conditional or asks something. The send must be addressed: a sending
+ * verb whose target is the orchestrator, or a bare send that names nothing else ("Send it."). A sending verb that
+ * belongs to another clause or object ("Look up how to forward ports", "I will send it myself later", "Передай привіт
+ * мамі") is no ask. Read once an added tool's answer is in the backend's context (design §3.6). */
 export function spokenSendRequest(utterance: string): boolean {
   const all = gateSentences(utterance);
-  return all.some((sentence) => SEND_IMPERATIVE.test(sentence))
-    && !all.some((sentence) => sentence.includes("?") || NEGATION.test(sentence) || RETRACTION.test(sentence) || CONDITION.test(sentence)
-      || FOLLOWUP_CONDITION.test(sentence) || TRAILING_CONDITION.test(sentence));
+  if (!all.length || QUOTES.test(utterance)) return false;
+  if (all.some((sentence) => sentence.includes("?") || NEGATION.test(sentence) || RETRACTION.test(sentence) || CONDITION.test(sentence)
+    || FOLLOWUP_CONDITION.test(sentence) || TRAILING_CONDITION.test(sentence))) return false;
+  const bare = all.every((sentence) => (sentence.match(/[\p{L}\p{N}']+/gu) ?? []).every((word) => BARE_SEND_WORDS.has(word)))
+    && all.some((sentence) => SEND_IMPERATIVE.test(sentence));
+  return bare || all.some((sentence) => ADDRESSED_SEND.test(sentence));
 }
 
 /**

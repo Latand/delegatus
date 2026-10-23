@@ -433,7 +433,9 @@ How each step maps onto today's code:
 
 - **A tool that acts counts as `egress`.** After a private read in the call it
   is refused, by the same rule that refuses sends after a Telegram group read
-  (`liveSession.ts:554-579`).
+  (`liveSession.ts:554-579`). So is every other added tool: its arguments leave
+  the call for a third-party server, and a hostile result could ask the voice
+  to put the group's text in them.
 - **A `private` server's successful result marks the call** exactly as
   `relay_owner_history` does (`liveSession.ts:584-591`). Its text then never
   reaches the orchestrator or the call memory.
@@ -1208,22 +1210,28 @@ of its six rendered sources; screenshots remain in the capture scratch.
 | Arguments are validated against the approved input schema with Ajv, inside the worker | `probe.worker.ts#serve` |
 | One deadline per call (`callTimeoutMs`), plus up to 20 s for a cold start; it starts when the call is asked, so a wait behind an earlier call to the same server counts, and a call given up while queued is never sent; expiry sends MCP `notifications/cancelled` | `sessions.ts#dispatch`, `#deadline` |
 | Text joined and cut to 16 KB with a marker; `structuredContent` when there is no text; up to three images; other content named as omitted; `isError` maps to `failed` | `probe.worker.ts#mapResult` |
-| Results skip the board-read cache and pass the credential and local-path scrub where they are made, so both backends and the record get the cleaned text; images pass unchanged | `liveSession.ts#addedTool` |
-| A tool that acts counts as egress after a private read (`private_data_boundary`); the backend reads the refusal and answers | `liveSession.ts#tool` |
+| Results skip the board-read cache and pass the credential and local-path scrub where they are made, so both backends and the record get the cleaned text; images pass unchanged. Beyond the shared redactor, the voice scrub masks Telegram bot tokens, a password in a URL's user part, GitLab and Stripe secret keys, a secret assigned to a key that names one anywhere in it (`aws_secret_access_key = …`), and a path after a colon (`HOME:/…`, `PATH=/usr/bin:/…`) | `liveSession.ts#addedTool`, `redaction.ts` |
+| After a private read every added tool counts as egress, read-only ones too, since their arguments leave the call (`private_data_boundary`); the backend reads the refusal and answers | `liveSession.ts#tool` |
 | A private server's successful answer marks the call like a Telegram group read; its arguments and text stay out of the record | `liveSession.ts#tool` |
-| An ask-first server's acting tool returns `awaiting_confirmation` and runs only in a later operator turn; once an added result is in context, every acting added tool does | `liveSession.ts#tool` |
-| Once an added result is in context, a send needs the operator's own words: `request_orchestrator_delegation` needs an ask for a send, and `resolve_orchestrator_confirmation` with `send` needs a spoken yes; either is refused with `added_tool_result` and the waiting request stays waiting | `liveSession.ts#tool`, `gate.ts#spokenAgreement` |
+| An ask-first server's acting tool returns `awaiting_confirmation` and runs only in a later operator turn that agrees in the operator's own words; a decline is refused with `operator_declined` and any other turn is asked again; once an added result is in context, every acting added tool does | `liveSession.ts#tool`, `gate.ts#spokenAgreement`, `liveGate.ts#spokenDecline` |
+| Once an added result is in context, a send or a cancel needs the operator's own words: `request_orchestrator_delegation` needs an ask for a send addressed to the orchestrator, `resolve_orchestrator_confirmation` with `send` needs a spoken yes and with `cancel` a spoken decline; each is refused with `added_tool_result` and the waiting request stays waiting | `liveSession.ts#tool`, `gate.ts#spokenSendRequest`, `gate.ts#spokenAgreement`, `liveGate.ts#spokenDecline` |
 
 **Server-side send gate.** Instructions alone do not keep a tool result from
 causing a send. Once an added tool's result is in the backend's context (this
 delegation on the API backend, the rest of the call on Codex),
 `request_orchestrator_delegation` is refused with `added_tool_result` unless the
 operator's own words in that turn ask for a send: the explicit-request grammar,
-or an imperative sending verb ("send it", "pass it on", "передай") with no
-sentence in the turn that negates, retracts, makes it conditional or asks a
-question (`gate.ts#spokenSendRequest`). A sending word alone is no ask: "Don't
-send anything…", "Did the build pass?" and "Has anything been sent yet?" send
-nothing. A spoken answer to a waiting confirmation is a send too:
+or a send addressed to the orchestrator with no sentence in the turn that
+negates, retracts, makes it conditional or asks a question
+(`gate.ts#spokenSendRequest`). Addressed means a sending verb whose target is
+the orchestrator ("…and send it to the orchestrator", «…і передай це
+оркестратору»), an asking verb with the orchestrator as its object at the start
+of a clause ("…and tell the orchestrator"), or a bare send that names nothing
+else ("Send it.", "Forward this.", «Передай це.»). A sending word alone is no
+ask: "Don't send anything…", "Did the build pass?", "Has anything been sent
+yet?", "Look up how to forward ports on my router.", "I will send it myself
+later.", "Skip this track, and turn on the Relay playlist." and «Передай привіт
+мамі…» send nothing. A spoken answer to a waiting confirmation is a send too:
 `resolve_orchestrator_confirmation` with the decision `send` is refused with
 `added_tool_result` unless every sentence of the operator's turn is a yes
 ("yes", "go ahead", "send it", "так", "відправляй", "да") built only from
@@ -1233,16 +1241,25 @@ something else is no yes: "Okay, what is playing right now?", «Так, а що 
 грає?» («так» is also "so") and «Давай подивимось…» («давай» is also "let's")
 leave the request waiting. The admission check alone would not do: it asks
 only that the answer come in a later operator turn, and never reads the words.
-The refusal sends nothing and leaves the request waiting; a spoken cancel and
-the card's buttons still answer it. The tests drive a fake model that obeys a
+The refusal sends nothing and leaves the request waiting. A spoken cancel ends
+the operator's request, so in the same context it needs their own decline
+("No.", "Cancel it.", "Don't send it.", «Ні, не треба»; `liveGate.ts#spokenDecline`,
+the grammar that withdraws a waiting confirmation): a result that says the
+operator changed their mind leaves the request waiting. The card's buttons
+answer it either way. The tests drive a fake model that obeys a
 hostile result; with either gate removed in a scratch copy both the API and the
 Codex case send.
 
 **Server-side acting gate.** In the same context, an acting added tool goes
 through the ask-first path whatever the server's switch: it returns
-`awaiting_confirmation` and runs only in a later operator turn. A hostile
-result that asks for an acting tool therefore runs nothing in that turn. With
-no added result in context, the operator's own ask runs the tool at once. With
+`awaiting_confirmation` and runs only in a later operator turn whose words
+agree: every sentence a yes built from agreement words and the action's own
+words ("Yes.", "Yes, play it.", «Так»). A turn that declines ("No, don't play
+anything.") is refused with `operator_declined` and runs nothing; any other
+turn, a question or a yes with another request beside it, is asked again. A
+hostile result that asks for an acting tool therefore runs nothing until the
+operator agrees. With no added result in context, the operator's own ask runs
+the tool at once, unless the server asks first. With
 the gate removed in a scratch copy, the API and the Codex case both run the
 acting tool.
 
