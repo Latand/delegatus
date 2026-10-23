@@ -2485,6 +2485,7 @@ export const en = {
   "voiceCompanion.tool.agent_activity": "Who is running now",
   "voiceCompanion.tool.conversation_messages": "An agent's recent messages",
   "voiceCompanion.tool.end_conversation": "Ending the conversation",
+  "voiceCompanion.history.actions": { one: "{count} action", other: "{count} actions" },
   "voiceCompanion.tool.failed": "could not be read",
   "voiceCompanion.memory.scroll": "Long notes scroll within this list.",
   "voiceCompanion.memory.pending": "Summarizing this call…",
