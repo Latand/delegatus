@@ -1,10 +1,13 @@
 import "./fileScanner.workerMode";
 
 import { listFilesWithProjectCatalog, type FileCatalogScan, type FileScanOptions } from "./scanner";
+import { agentRegistry } from "./agent/registry";
+import { stateLockAttempt, waitForStateLock } from "./state/lockWait";
 
 type FileScannerWorkerRequest = {
   type: "scan";
   options: Omit<FileScanOptions, "onResourceSnapshot">;
+  lockWaitMs?: number;
 };
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -23,6 +26,15 @@ function send(type: "resource" | "complete", snapshot: FileCatalogScan): void {
 async function run(value: unknown): Promise<void> {
   const request = requestFrom(value);
   if (!request) throw new Error("file scanner worker received an invalid request");
+  // The cold registry constructor takes a schema writer transaction even for
+  // a read-only scan. Admit it before any synchronous scanner projection uses
+  // the facade. Only acquisition is retried; the scan's effects run once.
+  await waitForStateLock("scanner.registry.open", () =>
+    stateLockAttempt("scanner.registry.open", () => agentRegistry()), {
+    waitMs: typeof request.lockWaitMs === "number" && Number.isFinite(request.lockWaitMs)
+      ? Math.max(0, request.lockWaitMs) : 5 * 60_000,
+    subject: "agent-registry",
+  });
   const snapshot = await listFilesWithProjectCatalog(undefined, {
     ...request.options,
     onResourceSnapshot: (resource) => send("resource", resource),
