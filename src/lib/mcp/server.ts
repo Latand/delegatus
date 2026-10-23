@@ -4152,6 +4152,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       branch: z.string().startsWith("refs/heads/"),
       remote: z.string().optional(),
       pr: z.number().int().positive().optional(),
+      prRepository: z.string().optional().describe("Only for a PR from a fork: the <owner>/<repo> the PR was opened in, which must be the checkout's GitHub origin, while remote names the fork."),
       rejectedHead: z.string().regex(/^[0-9a-f]{7,40}$/i).optional().describe("Commit SHA or unique local commit prefix (7+ hex)."),
       comparison: z.boolean().optional(),
     }).optional().describe("Delivery target, using the PR head repository remote and full branch. The canonical repository plus branch has one Delegatus publisher. A competing creation becomes an internal comparison lane and names its owner; host Git/gh tools remain unchanged."),

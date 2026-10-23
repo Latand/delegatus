@@ -27,7 +27,8 @@ function dependencies(answers: Record<string, unknown>, preflight?: PipelineRepo
       if (answer === undefined) throw Object.assign(new Error("gh failed"), { stderr: "HTTP 404: Not Found" });
       return JSON.stringify(answer);
     },
-    exec: () => ({ code: 0, stdout: "remote.origin.url https://github.com/owner/project.git\n", stderr: "" }),
+    /* `git remote` lists origin; each `git remote get-url` answers its URL. */
+    exec: (_command, args) => ({ code: 0, stdout: args.length === 1 ? "origin\n" : "https://github.com/owner/project.git\n", stderr: "" }),
     tasks: () => [],
     pipelines: () => [],
     projectForCwd: () => "repo-project",

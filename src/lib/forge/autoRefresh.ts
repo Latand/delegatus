@@ -45,7 +45,7 @@ export function refreshRequest(lane: Pipeline, legacyBase = "main"): CreatePipel
     finishesTask: lane.finishesTaskIds ?? false,
     repoDir: lane.repoDir,
     baseBranch: base,
-    delivery: { branch: target.branch, remote: target.remote, pr: merge.prNumber! },
+    delivery: { branch: target.branch, remote: target.remote, pr: merge.prNumber!, ...(target.prRepository ? { prRepository: target.prRepository } : {}) },
     publication: "remote-branch",
     autoStart: true,
     spec: `Automatic refresh is authorized for conflicts with the PR base branch.

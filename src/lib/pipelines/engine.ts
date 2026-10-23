@@ -167,7 +167,7 @@ import { MAX_DECISION_ANSWER_CHARS } from "./types";
 import { lanePullRequest, mergeAdmission, mergeEligible, nudgeAutoMerge } from "@/lib/forge/autoMerge";
 import { forgeCacheView, nudgeForgeSweep } from "@/lib/forge/cache";
 import { cachedKindOf, canonicalRepository, pipelineRepository } from "@/lib/forge/resolve";
-import { editStoredWorkLinks, normalizeWorkLinkInput, resolvePipelineLinks, workLinkInputs, type NormalizedWorkLink } from "@/lib/forge/workLinks";
+import { boundedRepository, editStoredWorkLinks, githubRepositoryOfRemote, normalizeWorkLinkInput, resolvePipelineLinks, workLinkInputs, type NormalizedWorkLink } from "@/lib/forge/workLinks";
 import { productionDeputyPrincipal } from "@/lib/orchestrator/deputies";
 import { canonicalOrchestratorProject, orchestratorSeatIn, readOrchestratorSeatFileOrNull } from "@/lib/orchestrator/seats";
 import type {
@@ -12920,9 +12920,10 @@ export async function createPipelineFromRequest(
   if (targetInput && (typeof targetInput !== "object" || typeof targetInput.branch !== "string" || !targetInput.branch.startsWith("refs/heads/")
     || pipelineBaseBranchError(targetInput.branch.slice("refs/heads/".length))
     || (targetInput.pr !== undefined && (!Number.isSafeInteger(targetInput.pr) || targetInput.pr < 1))
+    || (targetInput.prRepository !== undefined && (targetInput.pr === undefined || !boundedRepository(targetInput.prRepository)))
     || (targetInput.comparison !== undefined && typeof targetInput.comparison !== "boolean")
     || (targetInput.rejectedHead !== undefined && !/^[0-9a-f]{7,40}$/i.test(targetInput.rejectedHead)))) {
-    return { error: "delivery requires a full refs/heads branch, positive PR number and a commit SHA or unique prefix", status: 400 };
+    return { error: "delivery requires a full refs/heads branch, positive PR number, an <owner>/<repo> prRepository only beside pr, and a commit SHA or unique prefix", status: 400 };
   }
   let rejectedHead = targetInput?.rejectedHead;
   if (rejectedHead && rejectedHead.length < 40) {
@@ -12952,8 +12953,26 @@ export async function createPipelineFromRequest(
       return { error: "review-loop delivery must use the origin repository; create the lane in a checkout of the PR head repository", status: 400 };
     }
   }
+  /* A fork PR's number names a PR of the checkout's origin, the upstream; the
+     lane still pushes to the fork. Any other repository is refused, so a
+     caller cannot point the lane's PR reads and body edits elsewhere. */
+  let prRepository: string | undefined;
+  if (targetInput?.prRepository !== undefined) {
+    const canonical = canonicalRepository(forgeCacheView());
+    const requested = canonical(targetInput.prRepository.toLowerCase()).toLowerCase();
+    const upstream = await ports.exec("git", ["remote", "get-url", "origin"], repoDir);
+    const upstreamRepository = upstream.code === 0 ? githubRepositoryOfRemote(upstream.stdout.trim()) : null;
+    if (upstream.code !== 0 && upstream.code !== 2) {
+      return { error: `could not read the repository's remotes: ${(upstream.stderr || upstream.stdout || "no output").trim()}; retry the request`, status: 409 };
+    }
+    if (!upstreamRepository || canonical(upstreamRepository).toLowerCase() !== requested) {
+      return { error: `delivery prRepository ${targetInput.prRepository} is not this checkout's GitHub origin; a fork PR is delivered from a checkout of the repository it was opened in`, status: 400 };
+    }
+    const pushRepository = githubRepositoryOfRemote(origin);
+    if (!pushRepository || canonical(pushRepository).toLowerCase() !== requested) prRepository = requested;
+  }
   const target = { repository, remote: origin, branch: targetInput?.branch ?? `refs/heads/${pipeline.branch}`,
-    ...(targetInput?.pr ? { pr: targetInput.pr } : {}), ...(rejectedHead ? { rejectedHead } : {}) };
+    ...(targetInput?.pr ? { pr: targetInput.pr } : {}), ...(prRepository ? { prRepository } : {}), ...(rejectedHead ? { rejectedHead } : {}) };
   pipeline.creationRequest = options.creationRequest;
   if (options.refreshOf) pipeline.refreshOf = { pipelineId: options.refreshOf.pipelineId, base: options.refreshOf.base };
   if (!options.ensureTask) {

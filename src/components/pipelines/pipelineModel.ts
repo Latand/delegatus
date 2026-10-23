@@ -1374,9 +1374,15 @@ export async function createDraftPipeline(
     autoStart: false,
   });
   if (!created.pipeline || !from?.source.attachLink) return created;
-  /* A new lane names nothing about an issue, so the issue is attached to it. */
-  const failure = await patchPipeline(created.pipeline.id, "attach-link", { link: from.source.attachLink, kind: from.source.kind });
+  const failure = await attachDraftLink(created.pipeline.id, from.source);
   return failure ? { ...created, warning: failure } : created;
+}
+
+/** A new lane names nothing about an issue, so the issue is attached to the
+    draft; a failed attach is retried on the same draft. Null: attached. */
+export function attachDraftLink(pipelineId: string, source: Pick<PipelineLinkSource, "attachLink" | "kind">): Promise<string | null> {
+  if (!source.attachLink) return Promise.resolve(null);
+  return patchPipeline(pipelineId, "attach-link", { link: source.attachLink, kind: source.kind });
 }
 
 /**

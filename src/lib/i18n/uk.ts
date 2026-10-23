@@ -3049,6 +3049,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "pipelineLink.forkLocked": "Форк не дозволяє правки мейнтейнерам, тож публікацію в його гілку буде відхилено.",
   "pipelineLink.startHintPr": "Чернетка: нічого не запуститься, доки ви її не запустите, і запуск візьме PR у тому стані, який буде тоді.",
   "pipelineLink.startHintIssue": "Чернетка: нічого не запуститься, доки ви її не запустите.",
+  "pipelineLink.attachFailed": "Чернетку створено, але прикріпити до неї {link} не вдалося: {error}",
+  "pipelineLink.openDraft": "Відкрити чернетку без нього",
   "pipelineLink.refused.invalid": "Це не посилання на pull request або issue на GitHub.",
   "pipelineLink.refused.not_found": "#{number} не знайдено в {repository}, або вхід у GitHub на цій машині його не бачить.",
   "pipelineLink.refused.closed": "#{number} у {repository} закрито.",

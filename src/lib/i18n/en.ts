@@ -3092,6 +3092,8 @@ export const en = {
   "pipelineLink.forkLocked": "The fork does not allow maintainer edits, so publishing to its branch will be refused.",
   "pipelineLink.startHintPr": "A draft: nothing runs until you start it, and the run takes the PR head as it is then.",
   "pipelineLink.startHintIssue": "A draft: nothing runs until you start it.",
+  "pipelineLink.attachFailed": "The draft was created, and attaching {link} to it failed: {error}",
+  "pipelineLink.openDraft": "Open the draft without it",
   "pipelineLink.refused.invalid": "This is not a GitHub pull request or issue link.",
   "pipelineLink.refused.not_found": "#{number} was not found in {repository}, or this machine's GitHub sign-in cannot see it.",
   "pipelineLink.refused.closed": "#{number} in {repository} is closed.",

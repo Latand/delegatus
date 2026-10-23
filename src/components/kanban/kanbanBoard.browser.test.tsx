@@ -35191,13 +35191,14 @@ describe("pipeline from a PR or issue link", () => {
       { name: "fork", link: "https://github.com/example/atlas/pull/42", state: "resolved" },
       { name: "issue", link: "https://github.com/example/atlas/issues/7", state: "resolved" },
       { name: "refused", link: "https://github.com/example/atlas/pull/9", state: "refused" },
+      { name: "attach", link: "https://github.com/example/atlas/issues/7", state: "resolved" },
       { name: "editor", link: "", state: "" },
     ] as const;
     try {
       browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: socketRoot } });
       for (const width of [390, 1280]) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) for (const entry of cases) {
         const height = width === 390 ? 844 : 900;
-        const { context, page, pageErrors } = await openFixture(browser, server.base + "?pipelinelink=" + (entry.name === "editor" ? "editor" : "picker"),
+        const { context, page, pageErrors } = await openFixture(browser, server.base + "?pipelinelink=" + (entry.name === "editor" || entry.name === "attach" ? entry.name : "picker"),
           { width, height }, scheme, lang, "reduce", width === 390);
         try {
           let scope;
@@ -35221,10 +35222,20 @@ describe("pipeline from a PR or issue link", () => {
               expect(await page.locator("[data-pipeline-link-warning]").count()).toBe(1);
             }
             if (entry.name === "issue") expect(await page.locator("[data-pipeline-link-no-task]").count()).toBe(1);
+            /* The draft exists and attaching the issue failed: the reason stays with Retry and Open, and nothing can make a second draft. */
+            if (entry.name === "attach") {
+              await page.locator("button", { hasText: translate(lang, "pipelineTemplates.blank") }).click();
+              const alert = page.locator("[data-pipeline-link-attach-failed]");
+              await alert.waitFor();
+              expect(await alert.innerText()).toContain(translate(lang, "pipelineLink.attachFailed", { link: "example/atlas#7", error: "the pipeline store is busy; retry" }));
+              expect(await page.locator("[data-pipeline-link-attach-retry]").innerText()).toBe(translate(lang, "pipelineTemplates.retry"));
+              expect(await page.locator("[data-pipeline-link-attach-skip]").innerText()).toBe(translate(lang, "pipelineLink.openDraft"));
+              expect(await page.locator("[data-pipeline-link-input]").isDisabled()).toBe(true);
+            }
             if (entry.name === "refused") expect(preview).toBe(translate(lang, "pipelineLink.refused.merged", { repository: "example/atlas", number: 9 }));
             /* A resolved link enables the templates; a refused one keeps them off. */
             const blank = page.locator("button", { hasText: translate(lang, "pipelineTemplates.blank") });
-            expect(await blank.isEnabled()).toBe(entry.state === "resolved");
+            expect(await blank.isEnabled()).toBe(entry.state === "resolved" && entry.name !== "attach");
           }
           const text = await scope.innerText();
           expect(text).not.toMatch(/pipelineLink\.|groupOverride\.|pipelineTemplates\./);

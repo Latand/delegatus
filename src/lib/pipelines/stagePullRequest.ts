@@ -4,7 +4,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { engineForgeWriteEnv } from "@/lib/git/agentForgeCredentials";
-import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
+import { deliveryPullRequestRepository, githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { canonicalSensitiveText } from "@/lib/privacy/canonicalText";
 import { staticSensitiveClasses } from "@/lib/privacy/staticDetectors";
 import { mailboxPattern } from "@/lib/privacy/mailbox";
@@ -77,8 +77,13 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
   const delivery = pipeline.delivery;
   if (!delivery || delivery.publish !== "enabled" || !delivery.active || delivery.disposition !== "owner"
     || delivery.ownerId !== pipeline.id || (acceptedHead === pipeline.baseRef && delivery.target.pr === undefined)) return { ok: true };
-  const repository = githubRepositoryOfRemote(delivery.target.remote);
-  if (!repository) return { ok: false, error: "the delivery remote has no supported pull request service" };
+  /* A fork PR lives in the upstream `prRepository`, and its head in the fork
+     the delivery remote pushes to. */
+  const pushRepository = githubRepositoryOfRemote(delivery.target.remote);
+  const repository = deliveryPullRequestRepository(delivery.target);
+  if (!repository || !pushRepository) return { ok: false, error: "the delivery remote has no supported pull request service" };
+  const crossRepository = repository !== pushRepository;
+  if (crossRepository && delivery.target.pr === undefined) return { ok: false, error: "a fork delivery names no pull request; the lane cannot open one in the fork" };
   const branch = delivery.target.branch.replace(/^refs\/heads\//, "");
   const refresh = isFinalBudgetFix(attempt);
   // Only this attempt's accepted publication can explain a temporarily stale
@@ -91,7 +96,8 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
   type Found = { ok: true; number: number | null; body?: string; title?: string } | (Extract<StagePullRequestResult, { ok: false }> & { retryHead?: true });
   const readOnce = async (timeoutMs: number): Promise<Found> => {
     const linked = delivery.target.pr;
-    const fields = "number,headRefName,baseRefName,state,headRefOid,isCrossRepository" + (refresh ? ",body,title" : "");
+    const fields = "number,headRefName,baseRefName,state,headRefOid,isCrossRepository"
+      + (crossRepository ? ",headRepository,headRepositoryOwner" : "") + (refresh ? ",body,title" : "");
     const args = linked !== undefined
       ? ["pr", "view", String(linked), "--repo", repository, "--json", fields]
       : ["pr", "list", "--repo", repository, "--head", branch, "--base", pipeline.baseBranch,
@@ -102,14 +108,16 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
     if (!Array.isArray(rows) || rows.length > 1) return { ok: false, error: "the delivery pull request is ambiguous" };
     if (!rows.length) return { ok: true, number: null };
     const pr = rows[0];
-    // A linked PR is addressed in the delivery repository. Its base can differ
+    // A linked PR is addressed in its own repository. Its base can differ
     // from a successor lane's base, which is commonly the PR's own head branch.
     const mismatches = [
       !Number.isSafeInteger(pr?.number) || pr.number < 1 || (linked !== undefined && pr.number !== linked) ? "number" : null,
       pr?.state !== "OPEN" ? `state (expected OPEN, received ${["CLOSED", "MERGED"].includes(pr?.state) ? pr.state : "unknown"})` : null,
       pr?.headRefName !== branch ? "headRefName" : null,
       pr?.headRefOid !== acceptedHead ? "headRefOid" : null,
-      pr?.isCrossRepository !== false ? "isCrossRepository (expected same repository)" : null,
+      pr?.isCrossRepository !== crossRepository ? `isCrossRepository (expected ${crossRepository ? "the fork" : "same repository"})` : null,
+      crossRepository && `${pr?.headRepositoryOwner?.login}/${pr?.headRepository?.name}`.toLowerCase() !== pushRepository
+        ? "headRepository (expected the delivery remote's repository)" : null,
       linked === undefined && pr?.baseRefName !== pipeline.baseBranch ? "baseRefName" : null,
     ].filter(Boolean);
     if (mismatches.length) return { ok: false, error: `the delivery pull request differs in ${mismatches.join(", ")}`,

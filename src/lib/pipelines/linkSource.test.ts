@@ -31,8 +31,12 @@ function task(id: string, overrides: Partial<BoardTask> = {}): BoardTask {
     placement: "unplaced", assignments: [], createdAt: "2026-10-01T00:00:00.000Z", ...overrides } as unknown as BoardTask;
 }
 
+/** A checkout's remotes as Git resolves them: fetch URLs, and push URLs when
+    they differ (`pushurl`). */
+type Remotes = Record<string, { url: string[]; push?: string[] }>;
+
 function ports(options: {
-  answers?: Answers; remotes?: string; remotesCode?: number; tasks?: BoardTask[]; pipelines?: Pipeline[]; project?: string | null;
+  answers?: Answers; remotes?: Remotes; remotesCode?: number; tasks?: BoardTask[]; pipelines?: Pipeline[]; project?: string | null;
 } = {}): PipelineLinkPorts & { ghCalls: string[][] } {
   const ghCalls: string[][] = [];
   const answers = options.answers ?? {};
@@ -45,9 +49,14 @@ function ports(options: {
       if (answer === undefined) throw Object.assign(new Error("Command failed: gh api"), { stderr: "gh: Not Found (HTTP 404)" });
       return JSON.stringify(answer);
     },
-    exec: (_command, args) => {
-      expect(args.slice(0, 2)).toEqual(["config", "--get-regexp"]);
-      return { code: options.remotesCode ?? 0, stdout: options.remotes ?? `remote.origin.url ${ORIGIN_URL}\n`, stderr: "" };
+    exec: (command, args) => {
+      expect(command).toBe("git");
+      const remotes = options.remotes ?? { origin: { url: [ORIGIN_URL] } };
+      if (args.length === 1 && args[0] === "remote") return { code: options.remotesCode ?? 0, stdout: Object.keys(remotes).map((name) => `${name}\n`).join(""), stderr: "" };
+      const name = args.at(-1)!;
+      expect(args).toEqual(["remote", "get-url", ...(args.includes("--push") ? ["--push"] : []), "--all", name]);
+      const remote = remotes[name]!;
+      return { code: 0, stdout: (args.includes("--push") ? remote.push ?? remote.url : remote.url).map((url) => `${url}\n`).join(""), stderr: "" };
     },
     tasks: () => options.tasks ?? [],
     pipelines: () => options.pipelines ?? [],
@@ -83,7 +92,7 @@ test("a same-repository PR resolves its base, head and an origin delivery to the
 
 test("a fork PR delivers through the remote that names the fork", async () => {
   const p = ports({
-    remotes: `remote.origin.url ${ORIGIN_URL}\nremote.contributor.url https://github.com/Contributor/Project.git\nremote.mirror.url /srv/mirror.git\n`,
+    remotes: { origin: { url: [ORIGIN_URL] }, contributor: { url: ["https://github.com/Contributor/Project.git"] }, mirror: { url: ["/srv/mirror.git"] } },
     answers: {
       "repos/owner/project/issues/41": { number: 41, state: "open", pull_request: { url: "x" } },
       "repos/owner/project/pulls/41": prJson({ draft: true, head: { ref: "main", sha: HEAD_SHA, repo: { full_name: "Contributor/Project" } } }),
@@ -93,7 +102,8 @@ test("a fork PR delivers through the remote that names the fork", async () => {
   if (!result.ok) throw new Error(result.error);
   expect(result.source.state).toBe("draft");
   expect(result.source.head).toEqual({ branch: "main", sha: HEAD_SHA, repository: "contributor/project", remote: "contributor", fork: true, maintainerCanModify: true });
-  expect(result.source.request.delivery).toEqual({ branch: "refs/heads/main", remote: "contributor", pr: 41 });
+  /* The PR number names a PR of the upstream, which the delivery carries. */
+  expect(result.source.request.delivery).toEqual({ branch: "refs/heads/main", remote: "contributor", pr: 41, prRepository: "owner/project" });
   /* `owner/repo#N` names no kind, so the issues path told a PR apart first. */
   expect(p.ghCalls.map((call) => call.at(-1))).toEqual(["repos/owner/project/issues/41", "repos/owner/project/pulls/41"]);
 });
@@ -103,7 +113,42 @@ test("a fork no remote names is delivered to by URL, and a locked fork says so",
   const result = await resolvePipelineLink("https://github.com/owner/project/pull/41", REPO_DIR, p);
   if (!result.ok) throw new Error(result.error);
   expect(result.source.head).toMatchObject({ remote: "https://github.com/someone/project.git", fork: true, maintainerCanModify: false });
-  expect(result.source.request.delivery).toEqual({ branch: "refs/heads/fix", remote: "https://github.com/someone/project.git", pr: 41 });
+  expect(result.source.request.delivery).toEqual({ branch: "refs/heads/fix", remote: "https://github.com/someone/project.git", pr: 41, prRepository: "owner/project" });
+});
+
+test("a remote is chosen only when every fetch and push URL names the head repository", async () => {
+  const forkPr = prJson({ head: { ref: "fix", sha: HEAD_SHA, repo: { full_name: "Contributor/Project" } } });
+  const deliveryOf = async (remotes: Remotes, pr = forkPr) => {
+    const result = await resolvePipelineLink("https://github.com/owner/project/pull/41", REPO_DIR, ports({ remotes, answers: { "repos/owner/project/pulls/41": pr } }));
+    if (!result.ok) throw new Error(result.error);
+    expect(result.source.head!.remote).toBe(result.source.request.delivery!.remote!);
+    return result.source.request.delivery!.remote;
+  };
+  /* A fork remote whose pushurl names another repository would publish there. */
+  expect(await deliveryOf({ origin: { url: [ORIGIN_URL] }, contributor: { url: ["https://github.com/contributor/project.git"], push: ["ssh://github.com/elsewhere/project.git"] } }))
+    .toBe("https://github.com/contributor/project.git");
+  /* One of several pushurls naming another repository is enough to refuse the remote. */
+  expect(await deliveryOf({ origin: { url: [ORIGIN_URL] }, contributor: { url: ["https://github.com/contributor/project.git"], push: ["ssh://github.com/contributor/project.git", "/srv/backup.git"] } }))
+    .toBe("https://github.com/contributor/project.git");
+  /* A fetch URL elsewhere fails the publication's own fetch fence, so it is not chosen either. */
+  expect(await deliveryOf({ origin: { url: [ORIGIN_URL] }, contributor: { url: ["https://github.com/elsewhere/project.git"], push: ["ssh://github.com/contributor/project.git"] } }))
+    .toBe("https://github.com/contributor/project.git");
+  /* Separate fetch and push URLs of the same fork are one repository. */
+  expect(await deliveryOf({ origin: { url: [ORIGIN_URL] }, contributor: { url: ["https://github.com/contributor/project.git"], push: ["ssh://github.com/Contributor/Project.git"] } }))
+    .toBe("contributor");
+  /* A same-repository PR: origin whose pushurl names another repository is passed over for a remote that names it, else its URL. */
+  const samePr = prJson();
+  expect(await deliveryOf({ origin: { url: [ORIGIN_URL], push: ["ssh://github.com/mirror/project.git"] } }, samePr)).toBe("https://github.com/owner/project.git");
+  expect(await deliveryOf({ origin: { url: [ORIGIN_URL], push: ["ssh://github.com/mirror/project.git"] }, upstream: { url: [ORIGIN_URL] } }, samePr)).toBe("upstream");
+  expect(await deliveryOf({ origin: { url: [ORIGIN_URL], push: ["ssh://github.com/owner/project.git"] }, upstream: { url: [ORIGIN_URL] } }, samePr)).toBe("origin");
+});
+
+test("a same-repository PR whose origin pushes elsewhere still names no prRepository, and the preview shows where it pushes", async () => {
+  const result = await resolvePipelineLink("https://github.com/owner/project/pull/41", REPO_DIR, ports({
+    remotes: { origin: { url: [ORIGIN_URL], push: ["ssh://github.com/mirror/project.git"] } }, answers: { "repos/owner/project/pulls/41": prJson() } }));
+  if (!result.ok) throw new Error(result.error);
+  expect(result.source.head).toMatchObject({ repository: "owner/project", remote: "https://github.com/owner/project.git", fork: false });
+  expect(result.source.request.delivery).toEqual({ branch: "refs/heads/feature/links", remote: "https://github.com/owner/project.git", pr: 41 });
 });
 
 test("an issue resolves to a new lane on the default branch with the issue attached", async () => {
@@ -177,7 +222,7 @@ test("stale and unknown links are refused with a reason that names them", async 
 });
 
 test("a checkout without a GitHub origin is refused, and a bare number names nothing there", async () => {
-  const noRemote = ports({ remotes: "", remotesCode: 1 });
+  const noRemote = ports({ remotes: {} });
   expect(await resolvePipelineLink("https://github.com/owner/project/pull/41", REPO_DIR, noRemote)).toMatchObject({ ok: false, code: "no_origin" });
   expect(await resolvePipelineLink("#41", REPO_DIR, noRemote)).toMatchObject({ ok: false, code: "invalid" });
   expect(noRemote.ghCalls).toEqual([]);

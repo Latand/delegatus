@@ -288,7 +288,7 @@ const PR_SOURCE = {
     { id: "task-old", text: "Older linked task", updatedAt: "2026-10-20T09:00:00Z" },
   ],
   request: { task: "PR #41: Teach the picker links", spec: "Source: https://github.com/owner/project/pull/41", baseBranch: "release",
-    delivery: { branch: "refs/heads/feature/links", remote: "contributor", pr: 41 } },
+    delivery: { branch: "refs/heads/feature/links", remote: "contributor", pr: 41, prRepository: "owner/project" } },
   attachLink: null,
 };
 
@@ -427,4 +427,83 @@ test("a late answer for an earlier link cannot replace the answer for the link n
   const shown = host.querySelector("[data-pipeline-link-state='resolved']")!.textContent;
   expect(shown).toContain("Title 2");
   expect(shown).not.toContain("Title 1");
+});
+
+test("an issue draft whose attach failed stays open with the reason, and Retry attaches to that same draft", async () => {
+  setLocale("uk");
+  const issue = { ...PR_SOURCE, kind: "issue", number: 7, title: "Links should start work", head: null, tasks: [], attachLink: "owner/project#7",
+    request: { task: "Issue #7: Links should start work", spec: "Source: x", baseBranch: "trunk" }, base: { branch: "trunk" } };
+  const patches: Array<{ url: string; body: unknown }> = [];
+  const attachAnswers = [{ status: 503, body: { error: "the store is busy" } }, { status: 200, body: { pipeline } }];
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    if (url === "/api/pipelines/preflight") return new Response(JSON.stringify({ ok: true, repoDir: "/canonical/repo", gitCommonDir: "/canonical/repo/.git", worktreeParent: "/canonical" }));
+    if (url === "/api/pipelines/source") return new Response(JSON.stringify({ ok: true, repoDir: "/canonical/repo", source: issue }));
+    patches.push({ url, body });
+    const answer = attachAnswers.shift()!;
+    return new Response(JSON.stringify(answer.body), { status: answer.status });
+  }) as unknown as typeof fetch;
+  const createCalls: unknown[][] = [];
+  const createdDrafts: Pipeline[] = [];
+  const host = mount(
+    <PipelineTemplatePicker repoDir="/alias/repo"
+      onCreate={async (...args) => { createCalls.push(args); return { pipeline, warning: "attach refused by the server" }; }}
+      onCreated={(draft) => createdDrafts.push(draft)} onClose={() => undefined} />,
+  );
+  await settle();
+  paste(host.querySelector<HTMLInputElement>("[data-pipeline-link-input]")!, "https://github.com/owner/project/issues/7");
+  await linkState(host, "resolved");
+  const blank = [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes(translate("uk", "pipelineTemplates.blank")))!;
+  flushSync(() => blank.click());
+  await settle();
+
+  /* The draft exists: the picker stays open, names the failure, and cannot make a second draft. */
+  const alert = () => host.querySelector("[data-pipeline-link-attach-failed]");
+  expect(createCalls).toHaveLength(1);
+  expect(createdDrafts).toEqual([]);
+  expect(alert()?.getAttribute("role")).toBe("alert");
+  expect(alert()?.textContent).toContain(translate("uk", "pipelineLink.attachFailed", { link: "owner/project#7", error: "attach refused by the server" }));
+  expect(blank.disabled).toBe(true);
+  expect(host.querySelector<HTMLInputElement>("[data-pipeline-link-input]")!.disabled).toBe(true);
+  expect(host.querySelector("[data-pipeline-link-state='resolved']")).not.toBeNull();
+
+  /* A failed retry shows the new reason and keeps the draft. */
+  const retry = () => host.querySelector<HTMLButtonElement>("[data-pipeline-link-attach-retry]")!;
+  flushSync(() => retry().click());
+  for (let round = 0; round < 20 && !alert()?.textContent?.includes("the store is busy"); round += 1) await settle();
+  expect(alert()?.textContent).toContain("the store is busy");
+  expect(createdDrafts).toEqual([]);
+
+  /* A successful retry attaches the issue to the same draft and hands it on once. */
+  flushSync(() => retry().click());
+  for (let round = 0; round < 20 && !createdDrafts.length; round += 1) await settle();
+  expect(createdDrafts).toEqual([pipeline]);
+  expect(createCalls).toHaveLength(1);
+  expect(patches).toEqual([1, 2].map(() => ({ url: "/api/pipelines/pipeline-1", body: { action: "attach-link", link: "owner/project#7", kind: "issue" } })));
+});
+
+test("an issue draft whose attach failed can be opened without the link", async () => {
+  const issue = { ...PR_SOURCE, kind: "issue", number: 7, head: null, tasks: [], attachLink: "owner/project#7",
+    request: { task: "Issue #7", spec: "Source: x", baseBranch: "trunk" }, base: { branch: "trunk" } };
+  globalThis.fetch = linkFetch(() => ({ status: 200, body: { ok: true, repoDir: "/canonical/repo", source: issue } }), []);
+  const createdDrafts: Pipeline[] = [];
+  const host = mount(<PipelineTemplatePicker repoDir="/alias/repo" onCreate={async () => ({ pipeline, warning: "offline" })} onCreated={(draft) => createdDrafts.push(draft)} onClose={() => undefined} />);
+  await settle();
+  paste(host.querySelector<HTMLInputElement>("[data-pipeline-link-input]")!, "https://github.com/owner/project/issues/7");
+  await linkState(host, "resolved");
+  flushSync(() => [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Blank canvas"))!.click());
+  for (let round = 0; round < 20 && !host.querySelector("[data-pipeline-link-attach-skip]"); round += 1) await settle();
+  flushSync(() => host.querySelector<HTMLButtonElement>("[data-pipeline-link-attach-skip]")!.click());
+  expect(createdDrafts).toEqual([pipeline]);
+});
+
+test("a same-repository PR whose origin pushes elsewhere shows where the lane pushes", async () => {
+  const source = { ...PR_SOURCE, head: { ...PR_SOURCE.head, repository: "owner/project", remote: "https://github.com/owner/project.git", fork: false, maintainerCanModify: null } };
+  globalThis.fetch = linkFetch(() => ({ status: 200, body: { ok: true, repoDir: "/canonical/repo", source } }), []);
+  const host = mount(<PipelineTemplatePicker repoDir="/alias/repo" onCreate={async () => ({ pipeline })} onCreated={() => undefined} onClose={() => undefined} />);
+  await settle();
+  paste(host.querySelector<HTMLInputElement>("[data-pipeline-link-input]")!, "https://github.com/owner/project/pull/41");
+  await linkState(host, "resolved");
+  expect(host.querySelector("[data-pipeline-link-fork]")).toBeNull();
+  expect(host.querySelector("[data-pipeline-link-push]")?.textContent).toBe("owner/project · https://github.com/owner/project.git");
 });

@@ -2867,7 +2867,7 @@ function linkSourceAnswer(link: string): Response {
       kind: "pr", repository: "example/atlas", number, url: `https://github.com/example/atlas/pull/${number}`,
       title: "Resolve the base and head of a pasted pull request before drafting a pipeline", state: number === 42 ? "draft" : "open",
       base: { branch: "main" }, head: { sha: LINK_SHA, ...head }, tasks,
-      request: { task: `PR #${number}`, spec: "", baseBranch: "main", delivery: { branch: `refs/heads/${String(head.branch)}`, remote: String(head.remote), pr: number } },
+      request: { task: `PR #${number}`, spec: "", baseBranch: "main", delivery: { branch: `refs/heads/${String(head.branch)}`, remote: String(head.remote), pr: number, ...(head.fork ? { prRepository: "example/atlas" } : {}) } },
       attachLink: null,
     },
   });
@@ -5135,7 +5135,8 @@ const relayChainEvidence: RelayChatsPayload = { relays: [{ id: "fixture-relay", 
 createRoot(document.getElementById("root")!).render(SCENARIO === "workspaces-team" ? <TeamPage initialTab="workspaces" initialCreate={WORKSPACE_PARAMS.has("create")} />
   : SCENARIO === "workspaces-page" ? <WorkspacePage id={FIXTURE_WORKSPACE_IDS[(WORKSPACE_PARAMS.get("page") ?? "client") as keyof typeof FIXTURE_WORKSPACE_IDS]} />
   : PIPELINE_LINK === "editor" ? <div className="flex min-h-full items-start justify-center p-3"><PipelineEditor pipeline={linkDraft} onClose={() => {}} /></div>
-  : PIPELINE_LINK ? <PipelineTemplatePicker repoDir="/project" onCreate={async () => ({})} onCreated={() => {}} onClose={() => {}} />
+  /* `attach`: the draft is created and attaching its issue fails, so the picker keeps it with the reason. */
+  : PIPELINE_LINK ? <PipelineTemplatePicker repoDir="/project" onCreate={async () => (PIPELINE_LINK === "attach" ? { pipeline: linkDraft, warning: "the pipeline store is busy; retry" } : {})} onCreated={() => {}} onClose={() => {}} />
   : PIPELINE_INIT ? <PipelineTemplatePicker repoDir="/project" onCreate={async () => ({})} onCreated={() => {}} onClose={() => {}} /> : SCENARIO === "relay-chain-list" ? <RelayChatsView relayId="fixture-relay" payload={relayChainEvidence} /> : dockWidth === "440" || dockWidth === "360" ? (
   <div className="flex h-full min-h-0">
     <OrchestratorDock project={PROJECT} projectName="Atlas" files={files} onClose={() => {}} />

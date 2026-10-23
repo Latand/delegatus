@@ -8,6 +8,7 @@ import type { PipelineLinkSource } from "@/lib/pipelines/linkSource";
 import type { Pipeline, PipelineRepoPreflightErrorCode } from "@/lib/pipelines/types";
 
 import {
+  attachDraftLink,
   PIPELINE_TEMPLATES,
   preflightPipelineRepository,
   resolvePipelineLinkSource,
@@ -43,6 +44,8 @@ type PickerState =
   | { phase: "checking" }
   | { phase: "ready"; repoDir: string }
   | { phase: "creating"; repoDir: string }
+  /* The draft exists and attaching its issue failed: retried on that draft. */
+  | { phase: "attach-failed"; repoDir: string; pipeline: Pipeline; source: PipelineLinkSource; error: string; retrying: boolean }
   | { phase: "blocked"; code: PipelineRepoPreflightErrorCode; path: string; error?: string };
 
 /**
@@ -96,7 +99,7 @@ export function PipelineTemplatePicker({
 
   /* The link is read against the admitted checkout, never a typed path, and
      an answer counts only for the link and checkout it was read for. */
-  const admittedRepo = state.phase === "ready" || state.phase === "creating" ? state.repoDir : null;
+  const admittedRepo = state.phase === "ready" || state.phase === "creating" || state.phase === "attach-failed" ? state.repoDir : null;
   const requestedLink = linkInput.trim();
   useEffect(() => {
     if (!requestedLink || !admittedRepo) return;
@@ -125,11 +128,13 @@ export function PipelineTemplatePicker({
       taskId: taskChoice && taskChoice.source === current.source ? taskChoice.taskId : current.source.tasks[0]?.id ?? null }
     : { phase: "refused", message: current.message };
 
-  const creating = state.phase === "creating";
+  const creating = state.phase === "creating" || (state.phase === "attach-failed" && state.retrying);
+  /* After the draft exists nothing in the form may change what it was made from. */
+  const formLocked = creating || state.phase === "attach-failed";
   /* A typed link must resolve first: a refused or unread link never falls
      back to a plain draft the operator did not ask for. */
   const ready = state.phase === "ready" && (link.phase === "empty" || link.phase === "resolved");
-  const shownRepoDir = state.phase === "ready" || state.phase === "creating" ? state.repoDir : repoInput;
+  const shownRepoDir = admittedRepo ?? repoInput;
   const create = async (template: PipelineTemplate | null) => {
     if (state.phase !== "ready") return;
     const canonicalRepoDir = state.repoDir;
@@ -137,6 +142,10 @@ export function PipelineTemplatePicker({
     setState({ phase: "creating", repoDir: canonicalRepoDir });
     const result = await (from ? onCreate(template, canonicalRepoDir, from) : onCreate(template, canonicalRepoDir));
     if (result.pipeline) {
+      if (result.warning && from?.source.attachLink) {
+        setState({ phase: "attach-failed", repoDir: canonicalRepoDir, pipeline: result.pipeline, source: from.source, error: result.warning, retrying: false });
+        return;
+      }
       onCreated(result.pipeline);
       return;
     }
@@ -146,6 +155,18 @@ export function PipelineTemplatePicker({
       path: result.path ?? canonicalRepoDir,
       error: result.code === "initialization_refused" || !result.code ? result.error : undefined,
     });
+  };
+
+  const retryAttach = async () => {
+    if (state.phase !== "attach-failed" || state.retrying) return;
+    const failed = state;
+    setState({ ...failed, retrying: true });
+    const failure = await attachDraftLink(failed.pipeline.id, failed.source);
+    if (!failure) {
+      onCreated(failed.pipeline);
+      return;
+    }
+    setState({ ...failed, error: failure, retrying: false });
   };
 
   useEffect(() => {
@@ -198,7 +219,7 @@ export function PipelineTemplatePicker({
           <span className="text-label font-semibold text-secondary">{t("pipelineTemplates.repoDir")}</span>
           <input
             value={shownRepoDir}
-            disabled={creating}
+            disabled={formLocked}
             autoFocus={!repoDir.trim()}
             onInput={(event) => {
               const value = event.currentTarget.value;
@@ -214,6 +235,31 @@ export function PipelineTemplatePicker({
           {state.phase === "checking" ? <><span className="h-3 w-3 animate-spin rounded-full border-2 border-accent border-r-transparent" aria-hidden />{t("pipelineTemplates.checking")}</> : null}
           {state.phase === "ready" ? <span className="text-success">{t("pipelineTemplates.ready")}</span> : null}
           {state.phase === "creating" ? <><span className="h-3 w-3 animate-spin rounded-full border-2 border-accent border-r-transparent" aria-hidden />{t("pipelineTemplates.creating")}</> : null}
+          {state.phase === "attach-failed" ? (
+            <span data-pipeline-link-attach-failed className="flex w-full flex-col gap-1.5 rounded-control border border-danger/30 bg-danger-soft px-2 py-1.5 text-danger" role="alert">
+              <span className="min-w-0 break-words">{t("pipelineLink.attachFailed", { link: state.source.attachLink ?? "", error: state.error })}</span>
+              <span className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  data-pipeline-link-attach-retry
+                  disabled={state.retrying}
+                  className="min-h-8 shrink-0 rounded-control border border-danger/30 px-2 text-label font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/40 disabled:opacity-60"
+                  onClick={() => void retryAttach()}
+                >
+                  {t("pipelineTemplates.retry")}
+                </button>
+                <button
+                  type="button"
+                  data-pipeline-link-attach-skip
+                  disabled={state.retrying}
+                  className="min-h-8 shrink-0 rounded-control border border-danger/30 px-2 text-label font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/40 disabled:opacity-60"
+                  onClick={() => onCreated(state.pipeline)}
+                >
+                  {t("pipelineLink.openDraft")}
+                </button>
+              </span>
+            </span>
+          ) : null}
           {state.phase === "blocked" ? (
             <span className="flex w-full items-start gap-2 rounded-control border border-danger/30 bg-danger-soft px-2 py-1.5 text-danger" role="alert">
               <span className="min-w-0 flex-1">{blockedMessage}</span>
@@ -237,7 +283,7 @@ export function PipelineTemplatePicker({
           <input
             data-pipeline-link-input
             value={linkInput}
-            disabled={creating}
+            disabled={formLocked}
             inputMode="url"
             spellCheck={false}
             placeholder={t("pipelineLink.placeholder")}
@@ -246,7 +292,7 @@ export function PipelineTemplatePicker({
             className="h-11 w-full rounded-control border border-border bg-canvas px-3 text-ui font-semibold text-primary placeholder:font-normal placeholder:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
           />
         </label>
-        <LinkSourcePreview link={link} disabled={creating} onTask={(taskId) => { if (link.phase === "resolved") setTaskChoice({ source: link.source, taskId }); }} />
+        <LinkSourcePreview link={link} disabled={formLocked} onTask={(taskId) => { if (link.phase === "resolved") setTaskChoice({ source: link.source, taskId }); }} />
         <div className="flex flex-col gap-1">
           {templates.map((template) => (
             <button
@@ -327,10 +373,12 @@ function LinkSourcePreview({ link, disabled, onTask }: { link: LinkState; disabl
           <dt className="text-muted">{t("pipelineLink.head")}</dt>
           <dd className="break-all font-semibold text-secondary">{head ? `${head.branch} · ${head.sha.slice(0, 7)}` : t("pipelineLink.headNew")}</dd>
         </div>
-        {head?.fork ? (
+        {head && (head.fork || head.remote !== "origin") ? (
           <div className={row}>
             <dt className="text-muted">{t("pipelineLink.pushesTo")}</dt>
-            <dd data-pipeline-link-fork className="break-all font-semibold text-secondary">{`${t("pipelineLink.fork", { repository: head.repository })} · ${head.remote}`}</dd>
+            <dd data-pipeline-link-fork={head.fork ? "" : undefined} data-pipeline-link-push className="break-all font-semibold text-secondary">
+              {`${head.fork ? t("pipelineLink.fork", { repository: head.repository }) : head.repository} · ${head.remote}`}
+            </dd>
           </div>
         ) : null}
       </dl>

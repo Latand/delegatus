@@ -15,7 +15,7 @@ import type { CreatePipelineRequest, Pipeline } from "./types";
 /*
  * A pasted PR or issue link, turned into a draft pipeline's request
  * (docs/research/competitors-2026-10.md, rank 4). Read-only: one or two
- * `gh api` reads and local `git config`; nothing is fetched, created or
+ * `gh api` reads and local `git remote` reads; nothing is fetched, created or
  * written. The draft itself is created through the ordinary create path and
  * starts only on the ordinary Start action.
  */
@@ -48,8 +48,8 @@ export type PipelineLinkSource = {
     sha: string;
     /** `<owner>/<repo>` holding the head branch. */
     repository: string;
-    /** The configured remote name, or the head repository's URL when no
-        remote of this checkout names it. */
+    /** The configured remote whose fetch and push URLs all name the head
+        repository, or the head repository's URL when none does. */
     remote: string;
     fork: boolean;
     /** Forks only: false when GitHub refuses pushes from the base's maintainers. */
@@ -84,21 +84,34 @@ export type PipelineLinkPorts = {
 const refuse = (code: PipelineLinkRefusalCode, error: string, params?: Record<string, string | number>): PipelineLinkResolution =>
   ({ ok: false, code, error, ...(params ? { params } : {}) });
 
-type Remote = { name: string; repository: string };
+/** A configured remote and the GitHub repository each of its URLs names
+    (null: not GitHub), as Git itself resolves them: `insteadOf` rewrites
+    applied, and `pushurl` (every one of them) where it is set. */
+type Remote = { name: string; fetch: Array<string | null>; push: Array<string | null> };
 
-/** Every remote of the checkout that names a GitHub repository. */
-async function githubRemotes(repoDir: string, exec: ExecPort): Promise<Remote[] | null> {
-  const read = await exec("git", ["config", "--get-regexp", "^remote\\..*\\.url$"], repoDir, undefined, { timeoutMs: 10_000 });
-  /* Exit 1 is "no such key": a checkout with no remote at all. */
-  if (read.code === 1) return [];
-  if (read.code !== 0) return null;
+/** Every remote of the checkout with its effective fetch and push URLs. */
+async function checkoutRemotes(repoDir: string, exec: ExecPort): Promise<Remote[] | null> {
+  const git = (args: string[]) => exec("git", args, repoDir, undefined, { timeoutMs: 10_000 });
+  const names = await git(["remote"]);
+  if (names.code !== 0) return null;
   const remotes: Remote[] = [];
-  for (const line of read.stdout.split("\n")) {
-    const match = /^remote\.(.+)\.url\s+(.+)$/.exec(line.trim());
-    const repository = match ? githubRepositoryOfRemote(match[2]) : null;
-    if (match && repository) remotes.push({ name: match[1]!, repository });
+  for (const name of names.stdout.split("\n").map((line) => line.trim()).filter(Boolean)) {
+    const fetch = await git(["remote", "get-url", "--all", name]);
+    const push = await git(["remote", "get-url", "--push", "--all", name]);
+    if (fetch.code !== 0 || push.code !== 0) return null;
+    const repositories = (stdout: string) => stdout.split("\n").map((line) => line.trim()).filter(Boolean).map(githubRepositoryOfRemote);
+    remotes.push({ name, fetch: repositories(fetch.stdout), push: repositories(push.stdout) });
   }
   return remotes;
+}
+
+/** Whether a lane delivering through `remote` reads and writes `repository`
+    and nothing else: a remote whose push URL names another repository would
+    publish the lane there, and one whose fetch URL differs fails the
+    publication's own fence. */
+function remoteNames(remote: Remote, repository: string, canonical: (repository: string) => string): boolean {
+  const urls = [...remote.fetch, ...remote.push];
+  return urls.length > 0 && urls.every((url) => url !== null && canonical(url) === repository);
 }
 
 /** The forge's own JSON for one REST path; a 404 is `null`, any other failure throws. */
@@ -131,9 +144,9 @@ function draftTask(kind: WorkLinkKind, number: number, title: string): string {
  * from `origin`, so a link into any other repository is refused by name.
  */
 export async function resolvePipelineLink(link: string, repoDir: string, ports: PipelineLinkPorts): Promise<PipelineLinkResolution> {
-  const remotes = await githubRemotes(repoDir, ports.exec);
+  const remotes = await checkoutRemotes(repoDir, ports.exec);
   if (!remotes) return refuse("forge_unavailable", "could not read this checkout's remotes; retry");
-  const origin = remotes.find((remote) => remote.name === "origin")?.repository ?? null;
+  const origin = remotes.find((remote) => remote.name === "origin")?.fetch[0] ?? null;
   const parsed = normalizeWorkLinkInput(link, { repository: origin });
   if (!parsed.ok) return refuse("invalid", parsed.error);
   const canonical = (repository: string) => (ports.cache.repository(repository)?.canonical ?? repository).toLowerCase();
@@ -183,11 +196,14 @@ export async function resolvePipelineLink(link: string, repoDir: string, ports: 
     }
     const baseBranch = str(base?.ref);
     if (!baseBranch) return refuse("forge_unavailable", `GitHub returned no base branch for PR #${number}`);
-    const fork = canonical(headRepository) !== repository;
-    const remote = fork
-      ? remotes.find((candidate) => canonical(candidate.repository) === canonical(headRepository))?.name
-        ?? `https://github.com/${headRepository}.git`
-      : "origin";
+    const headCanonical = canonical(headRepository);
+    const fork = headCanonical !== repository;
+    /* The configured remote that reads and pushes the head repository, origin
+       first; else the head repository's own URL, which no configuration of
+       this checkout can redirect. */
+    const remote = [...remotes].sort((a, b) => Number(b.name === "origin") - Number(a.name === "origin"))
+      .find((candidate) => remoteNames(candidate, headCanonical, canonical))?.name
+      ?? `https://github.com/${headRepository}.git`;
     const title = str(pr.title);
     const url = str(pr.html_url) || workLinkUrl(repository, number, "pr");
     return { ok: true, source: {
@@ -200,7 +216,9 @@ export async function resolvePipelineLink(link: string, repoDir: string, ports: 
         task: draftTask("pr", number, title),
         spec: `Source: ${url}`,
         baseBranch,
-        delivery: { branch: `refs/heads/${headBranch}`, remote, pr: number },
+        /* A fork's PR number names a PR of this repository, never of the
+           fork the lane pushes to. */
+        delivery: { branch: `refs/heads/${headBranch}`, remote, pr: number, ...(fork ? { prRepository: repository } : {}) },
       },
       attachLink: null,
     } };
