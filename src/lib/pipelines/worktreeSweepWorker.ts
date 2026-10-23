@@ -29,7 +29,7 @@ type SweepRequest = { kind: "worktrees"; mode: WorktreeSweepMode }
   | { kind: "disk-pressure" };
 type SweepResult = WorktreeSweepReport | TempSweepReport | DiskPressure | Awaited<ReturnType<typeof import("../runtime/attemptTempProduction").runAttemptTempSweep>> | null;
 type Pending = { request: SweepRequest; resolve: (report: SweepResult) => void; reject: (error: Error) => void;
-  timer: ReturnType<typeof setTimeout>; failure?: Error };
+  timer: ReturnType<typeof setTimeout>; finishPhase?: () => void; failure?: Error };
 /** The leased child keeps directory observers between passes. No filesystem
  * inspections, registry snapshots or report writes run on the Viewer loop.
  * The guardian contains its Git/namespace children on owner loss or deadline.
@@ -59,32 +59,44 @@ export class WorktreeSweepWorker {
       this.replyBytes += Buffer.byteLength(chunk);
       if (this.replyBytes > MAX_REPLY_BYTES) { this.fail(new Error("worktree sweep worker reply exceeded its bound")); return; }
       this.output += chunk;
-      const newline = this.output.indexOf("\n");
-      if (newline < 0) return;
-      try {
-        const response = JSON.parse(this.output.slice(0, newline));
-        this.output = this.output.slice(newline + 1);
-        const report = response?.report;
-        const kind = this.pending.request.kind;
-        const valid = kind === "attempt-temp" ? report === null || report && Number.isInteger(report.checked) && Number.isInteger(report.removed)
-          : kind === "disk-pressure"
-          ? report && typeof report.at === "string" && Number.isFinite(Date.parse(report.at))
-            && Array.isArray(report.volumes) && Array.isArray(report.consumers)
-          : (kind === "temp" && report === null) || (report && Array.isArray(report.removed) && Array.isArray(report.errors)
-            && (kind === "worktrees" ? Array.isArray(report.kept)
-              : report.kept && !Array.isArray(report.kept) && typeof report.kept === "object"));
-        if (!response || response.error || !valid)
-          throw new Error(response?.error || "worktree sweep worker returned an invalid report");
-        if (this.pending.failure) return;
-        const pending = this.pending;
-        clearTimeout(pending.timer);
-        this.pending = undefined;
-        unrefLeasedHelper(child);
-        if (kind === "disk-pressure") {
-          this.diskPressureCache = { report: response.report as DiskPressure, observedAt: Date.parse(response.report.at) };
-        }
-        pending.resolve(response.report);
-      } catch (error) { this.fail(error instanceof Error ? error : new Error(String(error))); }
+      while (this.output.includes("\n")) {
+        if (!this.pending) { this.fail(new Error("worktree sweep worker answered without a request")); return; }
+        const newline = this.output.indexOf("\n");
+        try {
+          const response = JSON.parse(this.output.slice(0, newline));
+          this.output = this.output.slice(newline + 1);
+          if (response?.phase !== undefined) {
+            const phase = response.phase;
+            if (this.pending.request.kind !== "worktrees" || !["discovery", "candidate", "accounting"].includes(phase))
+              throw new Error("worktree sweep worker returned an invalid phase");
+            this.pending.finishPhase?.();
+            const label = `worktrees.${phase}` as "worktrees.discovery" | "worktrees.candidate" | "worktrees.accounting";
+            withViewerOperation(label, () => new Promise<void>(resolve => { this.pending!.finishPhase = resolve; }));
+            continue;
+          }
+          const report = response?.report;
+          const kind = this.pending.request.kind;
+          const valid = kind === "attempt-temp" ? report === null || report && Number.isInteger(report.checked) && Number.isInteger(report.removed)
+            : kind === "disk-pressure"
+            ? report && typeof report.at === "string" && Number.isFinite(Date.parse(report.at))
+              && Array.isArray(report.volumes) && Array.isArray(report.consumers)
+            : (kind === "temp" && report === null) || (report && Array.isArray(report.removed) && Array.isArray(report.errors)
+              && (kind === "worktrees" ? Array.isArray(report.kept)
+                : report.kept && !Array.isArray(report.kept) && typeof report.kept === "object"));
+          if (!response || response.error || !valid)
+            throw new Error(response?.error || "worktree sweep worker returned an invalid report");
+          if (this.pending.failure) return;
+          const pending = this.pending;
+          clearTimeout(pending.timer);
+          pending.finishPhase?.();
+          this.pending = undefined;
+          unrefLeasedHelper(child);
+          if (kind === "disk-pressure") {
+            this.diskPressureCache = { report: response.report as DiskPressure, observedAt: Date.parse(response.report.at) };
+          }
+          pending.resolve(response.report);
+        } catch (error) { this.fail(error instanceof Error ? error : new Error(String(error))); return; }
+      }
     });
     leasedHelperInput(child).on("error", error => this.fail(error));
     child.once("error", error => this.fail(error));
@@ -94,6 +106,7 @@ export class WorktreeSweepWorker {
       this.pending = undefined;
       if (pending) {
         clearTimeout(pending.timer);
+        pending.finishPhase?.();
         pending.reject(pending.failure ?? new Error(`worktree sweep worker exited with ${code ?? signal}`));
       }
       resolve();

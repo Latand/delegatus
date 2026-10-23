@@ -36,6 +36,7 @@ export type ViewerOperation = "state.index-repair" | "temp.sweep" | "resources.r
   | "state.document" | "tasks.proactive.admission"
   | "memory.search" | "memory.open"
   | "codex.protocol-admission" | "mcp.page-cursors"
+  | "worktrees.discovery" | "worktrees.candidate" | "worktrees.accounting"
   | "pipelines.controller-job" | "pipelines.controller-lane" | "pipelines.controller-schedule" | "pipelines.publication-recovery"
   | "pipelines.controller-artifacts"
   | "telegram.membership-check" | "telegram.outbound-state" | "telegram.outbound-publication" | "links.telegram-publication" | "orchestrator.recipient-authority" | "orchestrator.seat-channel"
