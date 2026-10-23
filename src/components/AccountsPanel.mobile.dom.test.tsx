@@ -5,9 +5,11 @@ import { createRoot, type Root } from "react-dom/client";
 
 import type { AccountOption, EngineAccountsState } from "@/hooks/useEngineAccounts";
 import { installActEnv } from "@/test-helpers/actEnv";
+import { getLocale, setLocale, translate } from "@/lib/i18n";
 
 import { MobileAccountsBody, mobileAccountCorner, mobileAccountState } from "./AccountsPanel";
 import { createReceiptStore, type ReceiptStore } from "./mobile/MobileReceipt";
+import { formatResetClock, formatResetEta } from "./rateLimit";
 
 /*
  * The Accounts & limits screen on the phone (issue #1439, lane 9;
@@ -172,6 +174,30 @@ const click = async (element: Element | null) => {
   expect(element).toBeTruthy();
   await act(async () => (element as HTMLElement).click());
 };
+
+test.each(["en", "uk"] as const)("phone reset rows show Claude beside Codex in %s", async (locale) => {
+  const previous = getLocale();
+  setLocale(locale);
+  try {
+    const reset = NOW + DAY;
+    const engines = (["claude", "codex"] as const).map(engine => {
+      const candidate = account({ id: `${engine}-windows`, label: "Account A", limits: {
+        freshness: "fresh", checkedAt: new Date(NOW * 1000).toISOString(),
+        session: window5h(20, NOW + HOUR), weekly: windowWeek(40, reset),
+        tiers: engine === "claude" ? [{ tier: "opus", ...windowWeek(50, reset + DAY) }] : [],
+      } });
+      return engineState(engine, [candidate], candidate.id);
+    });
+    const view = await mount(engines);
+    for (const engine of ["claude", "codex"] as const) {
+      const block = view.host.querySelector(`[data-account-limits="${engine}-windows"]`)!;
+      expect(block.querySelector('[data-limit-row="weekly"]')?.textContent).toContain(translate(locale, "limits.reset", {
+        eta: formatResetEta(reset, NOW), at: formatResetClock(reset, NOW),
+      }));
+      if (engine === "claude") expect(block.querySelector('[data-limit-row="tier:opus"]')?.textContent).toContain(formatResetClock(reset + DAY, NOW));
+    }
+  } finally { setLocale(previous); }
+});
 
 const text = (element: Element | null | undefined) => (element?.textContent ?? "").replace(/\s+/g, " ").trim();
 

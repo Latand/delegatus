@@ -4,9 +4,10 @@ import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
 
 import { createEngineAccountsStore, type AccountRemovalRefusal, type AccountRemovalSummary, type ClaudeLoginView, type EngineAccountsState } from "@/hooks/useEngineAccounts";
+import { getLocale, setLocale, translate } from "@/lib/i18n";
 
 import { AccountsPanel } from "./AccountsPanel";
-import { formatQuotaAsOf, formatResetEta } from "./rateLimit";
+import { formatQuotaAsOf, formatResetClock, formatResetEta } from "./rateLimit";
 
 /** An archive under an invented home, composed so the `~` fold is exercised
     without a home path written out in a published source. */
@@ -93,6 +94,37 @@ afterEach(async () => {
 function dispatch(target: EventTarget, event: unknown): boolean {
   return target.dispatchEvent(event as Event);
 }
+
+test.each(["en", "uk"] as const)("Claude and Codex account rows show their own session and weekly reset times in %s", async (locale) => {
+  const now = 1_800_000_000;
+  const previous = getLocale();
+  setSystemTime(new Date(now * 1000));
+  setLocale(locale);
+  try {
+    for (const engine of ["claude", "codex"] as const) {
+      const sessionReset = now + 3_600;
+      const weeklyReset = now + 2 * 86_400;
+      const tierReset = now + 3 * 86_400;
+      const view = await mount(state(login(), { engine, accounts: [{
+        id: "window-fixture", label: "Account A", authPresent: true, authHealth: "authenticated",
+        loginPending: false, loginState: "authenticated", deviceAuth: null,
+        limits: { freshness: "fresh", checkedAt: new Date(now * 1000).toISOString(),
+          session: { usedPercent: 20, resetsAt: sessionReset, windowMinutes: 300 },
+          weekly: { usedPercent: 40, resetsAt: weeklyReset, windowMinutes: 10_080 },
+          tiers: engine === "claude" ? [{ tier: "opus", usedPercent: 50, resetsAt: tierReset, windowMinutes: 10_080 }] : [] },
+      }], active: "window-fixture" }));
+      mounted.push(view);
+      const block = view.host.querySelector('[data-account-limits="window-fixture"]')!;
+      for (const [key, reset] of [["session", sessionReset], ["weekly", weeklyReset], ...(engine === "claude" ? [["tier:opus", tierReset] as const] : [])] as const) {
+        expect(block.querySelector(`[data-limit-row="${key}"]`)?.textContent).toContain(translate(locale, "limits.reset", {
+          eta: formatResetEta(reset, now), at: formatResetClock(reset, now),
+        }));
+      }
+      expect(block.textContent).toContain(translate(locale, "accounts.limitsChecked"));
+      expect(block.querySelectorAll('[data-account-refresh-limits]')).toHaveLength(1);
+    }
+  } finally { setLocale(previous); }
+});
 
 test("provider account controls render on the account row without exposing its token", async () => {
   const view = await mount(state(login(), {
