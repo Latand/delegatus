@@ -116,8 +116,10 @@ if [ -n "\${LLV_SIGNAL_LAUNCHER:-}" ]; then
   reason="required host dependency is missing: python3"
   if [ -n "\$receipt" ] && mkdir -p "\${receipt%/*}"; then printf "{\"policyVersion\":1,\"boundary\":\"off\",\"reason\":\"%s\"}" "\$reason" > "\$receipt.new" && mv -f "\$receipt.new" "\$receipt"; fi
   if [ "\${LLV_SIGNAL_AUTOMATIC:-}" = 1 ]; then echo "agent signal sandbox: boundary off, running unprotected: \$reason" >&2; fi
-  if [ "\${LLV_SIGNAL_IGNORE_NATIVE_STDIO:-}" = 1 ]; then exec </dev/null >/dev/null 2>&1; fi
-  unset LLV_SIGNAL_AUTOMATIC LLV_SIGNAL_DIAGNOSTIC LLV_SIGNAL_IGNORE_NATIVE_STDIO LLV_SIGNAL_READINESS_MS LLV_SIGNAL_ACK_MS
+  if [ "\${LLV_SIGNAL_IGNORE_NATIVE_STDIO:-}" = 1 ]; then
+    if [ "\${LLV_SIGNAL_KEEP_NATIVE_STDERR:-}" = 1 ]; then exec </dev/null >/dev/null; else exec </dev/null >/dev/null 2>&1; fi
+  fi
+  unset LLV_SIGNAL_AUTOMATIC LLV_SIGNAL_DIAGNOSTIC LLV_SIGNAL_IGNORE_NATIVE_STDIO LLV_SIGNAL_KEEP_NATIVE_STDERR LLV_SIGNAL_READINESS_MS LLV_SIGNAL_ACK_MS
 fi
 exec "\$@"' sh "\$wd" "$host_path" "\$@"
 WRAPPER
