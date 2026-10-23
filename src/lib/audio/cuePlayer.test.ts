@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 
 import { createCuePlayer, distantIntervalMs, TYPING_VOICES, type CueContext, type CuePrefs, type CueTransport, type EventStartRequest, type TypingStartRequest } from "./cuePlayer";
+import type { CueCaption } from "./captions";
 import type { AudioCue, CueRequest } from "./cues";
 import { createFakeTimers } from "./fakeTimers.fixture";
 
@@ -276,5 +277,105 @@ describe("event sounds (S3–S9) and the context", () => {
     const { cues, timers } = player(recorder({ refuse: true }));
     for (let i = 0; i < 5; i++) expect(() => cues.play({ cue: "your-move", eventId: `y${i}` })).not.toThrow();
     expect(() => timers.advance(120_000)).not.toThrow();
+  });
+});
+
+describe("onPlayed: the caption hook (docs/design/sound-captions.md §2)", () => {
+  const caption = (subject: string): CueCaption => ({ what: "reply", subject, target: null });
+
+  function captioned(sink = recorder()) {
+    const played: Array<{ sound: string; batch: number; captions: string[] }> = [];
+    const timers = createFakeTimers(10_000_000);
+    const cues = createCuePlayer({
+      transport: sink.transport,
+      prefs: () => prefs,
+      context: () => context,
+      timers,
+      pick: () => 0,
+      onPlayed: (sound, batch, captions) => played.push({ sound, batch, captions: captions.map((entry) => entry.subject ?? "") }),
+    });
+    return { cues, sink, timers, played };
+  }
+
+  test("fires once the sound has started, with the batch and the captions of every joined request", () => {
+    const { cues, timers, played, sink } = captioned();
+    cues.play({ cue: "reply", eventId: "r1", caption: caption("one") });
+    cues.play({ cue: "reply", eventId: "r2", caption: caption("two") });
+    expect(played).toEqual([]);
+    timers.advance(1500);
+    expect(played).toEqual([{ sound: "reply", batch: 2, captions: ["one", "two"] }]);
+    expect(sink.events).toHaveLength(1);
+  });
+
+  test("an event with no caption still reports, with an empty list", () => {
+    const { cues, timers, played } = captioned();
+    cues.play({ cue: "released", eventId: "d1" });
+    timers.advance(10);
+    expect(played).toEqual([{ sound: "released", batch: 1, captions: [] }]);
+  });
+
+  test("a muted tab shows nothing: a mute that arrived while the sound waited in its window wins", () => {
+    const { cues, timers, played, sink } = captioned();
+    cues.play({ cue: "reply", eventId: "r1", caption: caption("one") });
+    prefs.cuesEnabled = false;
+    timers.advance(5000);
+    expect(played).toEqual([]);
+    expect(sink.events).toEqual([]);
+  });
+
+  test("a sound at volume 0 is not heard, so it shows nothing", () => {
+    const { cues, timers, played, sink } = captioned();
+    prefs.cueVolume = 0;
+    cues.play({ cue: "released", eventId: "d1", caption: caption("one") });
+    timers.advance(10);
+    expect(sink.events).toHaveLength(1);
+    expect(played).toEqual([]);
+  });
+
+  test("a step during a voice call is quiet, so it shows nothing; a result still does", () => {
+    const { cues, timers, played } = captioned();
+    context.voiceCall = true;
+    expect(cues.play({ cue: "step", eventId: "s1", caption: caption("step") })).toBe("disabled");
+    cues.play({ cue: "released", eventId: "d1", caption: caption("deploy") });
+    timers.advance(10);
+    expect(played).toEqual([{ sound: "released", batch: 1, captions: ["deploy"] }]);
+  });
+
+  test("a call that connects while the sound waits in its window silences a quiet class", () => {
+    const { cues, timers, played } = captioned();
+    cues.play({ cue: "step", eventId: "s1", pipeline: "p", caption: caption("step") });
+    context.voiceCall = true;
+    timers.advance(5000);
+    expect(played).toEqual([]);
+  });
+
+  test("a transport that will not play (autoplay lock, no graph) shows nothing", () => {
+    const { cues, timers, played } = captioned(recorder({ refuse: true }));
+    cues.play({ cue: "released", eventId: "d1", caption: caption("deploy") });
+    timers.advance(10);
+    expect(played).toEqual([]);
+  });
+
+  test("the settings preview plays at once and never captions", () => {
+    const { cues, played, sink } = captioned();
+    expect(cues.play({ cue: "step", eventId: "preview:step", preview: true, caption: caption("preview") })).toBe("played");
+    expect(sink.events).toHaveLength(1);
+    expect(played).toEqual([]);
+  });
+
+  test("a cut sound's replay does not caption a second time", () => {
+    const { cues, timers, played } = captioned();
+    cues.play({ cue: "landed", eventId: "landed:p", pipeline: "p", caption: caption("landed") });
+    timers.advance(5000);
+    cues.play({ cue: "your-move", eventId: "move", caption: caption("move") });
+    timers.advance(3000);
+    timers.advance(60_000);
+    expect(played.map((entry) => entry.sound)).toEqual(["landed", "your-move"]);
+  });
+
+  test("a typing sound is not an event sound and never captions", () => {
+    const { cues, played } = captioned();
+    expect(cues.play({ cue: "typing", eventId: "tool:1" })).toBe("played");
+    expect(played).toEqual([]);
   });
 });
