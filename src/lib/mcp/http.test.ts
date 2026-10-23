@@ -105,6 +105,14 @@ let listener: ReturnType<typeof Bun.serve> | null = null;
 let port = 0;
 let origin = "";
 let deliveries: Delivery[] = [];
+const nativeMcpRequests: Array<{ capability: string | null; method: string | null }> = [];
+
+function rpcMethods(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(rpcMethods);
+  if (!value || typeof value !== "object") return [];
+  return [...("method" in value && typeof value.method === "string" ? [value.method] : []),
+    ...Object.values(value).flatMap(rpcMethods)];
+}
 /** When set, the next MCP request is served by the route and its answer is
     then lost on the way back, as when the stable listener loses its upstream
     mid-answer during a deploy. */
@@ -139,6 +147,11 @@ function serveViewer(listenPort: number): ReturnType<typeof Bun.serve> {
         return Response.json({ ok: true, operationId, outcome: "queued", receipt: { operationId, status: "queued" } });
       }
       if (url.pathname === "/api/mcp") {
+        const body = request.method === "POST" ? await request.clone().json().catch(() => null) as unknown : null;
+        const methods = rpcMethods(body);
+        for (const method of methods.length ? methods : [null]) {
+          nativeMcpRequests.push({ capability: request.headers.get("x-llv-spawn-capability"), method });
+        }
         const next = new NextRequest(url, {
           method: request.method,
           headers: request.headers,
@@ -243,6 +256,7 @@ for (const mode of ["fresh", "resume", "denied"] as const) test.skipIf(originalE
   const { setCodexFeatureReaderForTest } = await import("@/lib/agent/codexSpawnPolicy");
   const restoreFeatures = setCodexFeatureReaderForTest(undefined);
   const previousBinary = process.env.LLV_CODEX_BINARY;
+  const previousPath = process.env.PATH;
   process.env.LLV_CODEX_BINARY = originalEnv.LLV_CODEX_BINARY ?? "codex";
   const root = path.join(sandbox, `terminal-${mode}`);
   const configRoot = path.join(root, "config");
@@ -254,6 +268,9 @@ for (const mode of ["fresh", "resume", "denied"] as const) test.skipIf(originalE
     if (!found) throw new Error(`missing installer fixture tool: ${tool}`);
     fs.symlinkSync(found, path.join(tools, tool));
   }
+  const pathCodexLog = path.join(root, "path-codex-called.log");
+  fs.writeFileSync(path.join(tools, "codex"), `#!/bin/sh\nprintf called > '${pathCodexLog}'\nexit 93\n`, { mode: 0o700 });
+  process.env.PATH = `${tools}:${previousPath ?? ""}`;
   const catalog = path.join(root, "models.json");
   fs.writeFileSync(catalog, JSON.stringify({ models: [{
     slug: "fixture", display_name: "Fixture", description: null,
@@ -263,6 +280,12 @@ for (const mode of ["fresh", "resume", "denied"] as const) test.skipIf(originalE
     apply_patch_tool_type: "freeform", truncation_policy: { mode: "tokens", limit: 10000 },
     experimental_supported_tools: [], tool_mode: "direct", multi_agent_version: "v2", context_window: 32000, prefer_websockets: false,
   }] }));
+  const invocationLog = path.join(root, "codex-invocations.log");
+  const selectedBinary = process.env.LLV_CODEX_BINARY!;
+  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+  const selectedWrapper = path.join(root, "selected-codex");
+  fs.writeFileSync(selectedWrapper, `#!/bin/sh\nprintf '%s\\n' "$*" >> ${quote(invocationLog)}\nexec ${quote(selectedBinary)} "$@"\n`, { mode: 0o700 });
+  process.env.LLV_CODEX_BINARY = selectedWrapper;
   const config = path.join(home, "config.toml");
   fs.writeFileSync(config, [
     'model="fixture"', 'model_provider="fixture"', `model_catalog_json=${JSON.stringify(catalog)}`,
@@ -289,6 +312,7 @@ for (const mode of ["fresh", "resume", "denied"] as const) test.skipIf(originalE
       : resumeSpecForSession("codex", "12345678-1234-1234-1234-123456789abc", root, home, { cleanMemory: true, hostTerminal: true })!;
     const prepared = await prepareAgentPublicationSpec(initial);
     const capability = mode === "denied" ? "d".repeat(43) : alice.capability;
+    nativeMcpRequests.length = 0;
     const admitted = withSpawnCapability(prepared, capability, { ...process.env, LLV_MCP_TRANSPORT: "http", DELEGATUS_MCP_TRANSPORT: undefined, LLV_MCP_HTTP_URL: `${origin}/api/mcp` });
     const command = admitted.command.replace(prepared.codexPublication!.subcommand ?? /(?= \) \)$)/, " app-server");
     const child = ownFixtureChild(Bun.spawn(["sh", "-c", command], {
@@ -320,9 +344,15 @@ for (const mode of ["fresh", "resume", "denied"] as const) test.skipIf(originalE
         expect(viewer).toBeDefined();
         if (mode === "denied") expect(Object.keys(viewer!.tools)).toHaveLength(0);
         else expect(Object.keys(viewer!.tools)).toContain("list_tasks");
+        const launchRequests = nativeMcpRequests.filter(request => request.capability === capability).map(request => request.method);
+        expect(launchRequests).toContain("initialize");
+        if (mode !== "denied") expect(launchRequests).toContain("tools/list");
         expect(status.data.some(entry => entry.name === "ungranted" && Object.keys(entry.tools).length > 0)).toBe(false);
       };
       await Promise.race([discovered(), child.exited.then(async code => { throw new Error(`native terminal probe exited ${code}: ${await stderr}`); })]);
+      const invocations = fs.readFileSync(invocationLog, "utf8").split("\n");
+      expect(invocations.some(line => line.includes("app-server") && line.includes("mcp_servers.viewer.url="))).toBe(true);
+      expect(fs.existsSync(pathCodexLog)).toBe(false);
       expect(fs.readFileSync(config, "utf8")).toBe(installedConfig);
     } finally {
       clearTimeout(deadline); lines.close(); child.stdin.end();
@@ -333,6 +363,7 @@ for (const mode of ["fresh", "resume", "denied"] as const) test.skipIf(originalE
   } finally {
     restoreFeatures();
     if (previousBinary === undefined) delete process.env.LLV_CODEX_BINARY; else process.env.LLV_CODEX_BINARY = previousBinary;
+    if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
   }
 });
 

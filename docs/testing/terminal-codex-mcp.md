@@ -35,7 +35,12 @@ gate-remote -- bun run test src/lib/agent/cli.mcp.test.ts src/lib/agent/cli.test
 
 The runner isolates HOME, CODEX_HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR.
 Set `LLV_CODEX_BINARY` to select a particular executable for discovery. The
-native cases are opt-in; a run that skips them is insufficient readiness evidence.
+same executable runs MCP inventory, policy probes and the actual fresh/resumed
+terminal launch. The native cases are opt-in; a run that skips them is
+insufficient readiness evidence. They require the selected launch capability to
+make HTTP `initialize` and `tools/list` requests at the fixture endpoint, in
+addition to Codex reporting the Viewer tool catalog; a stdio fallback cannot
+satisfy that evidence.
 The unit cases also cover stdio defaults, existing registrations, denied HTTP
 access, invalid capabilities, publication preparation and both flag spellings.
 

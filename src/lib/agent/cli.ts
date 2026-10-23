@@ -88,6 +88,10 @@ export function resolveBinary(name: string): string {
   return findAgentBinary(name, { home }) ?? name;
 }
 
+function resolveCodexBinary(hostTerminal = false): string {
+  return process.env.LLV_CODEX_BINARY?.trim() || (hostTerminal ? resolveHostBinary : resolveBinary)("codex");
+}
+
 /** Binary path as the OPERATOR'S OWN terminal resolves it. Inside the runtime
     container the nsenter shim lives at /usr/local/bin and points at container
     plumbing that does not exist on the host, so a command composed for a host
@@ -160,7 +164,7 @@ export async function prepareAgentPublicationSpec(spec: ResumeSpec): Promise<Res
   const input = spec.codexPublication;
   if (!input) return spec;
   const source = { ...process.env, CODEX_HOME: input.home };
-  const policy = await readCodexShellPolicy(process.env.LLV_CODEX_BINARY ?? resolveBinary("codex"), spec.cwd, source);
+  const policy = await readCodexShellPolicy(resolveCodexBinary(), spec.cwd, source);
   const args = agentCodexPublicationArgs(policy, source).map(shellQuote).join(" ");
   return { ...spec, command: telegramScopedCommand(`${codexEnvPrefix(input.home, input.mcpServers)} ${input.command} ${args}${input.subcommand ?? ""}`, input.mcpServers) };
 }
@@ -317,7 +321,7 @@ function configuredCodexMcpServers(home: string, cwd: string): string[] {
   const env: NodeJS.ProcessEnv = { ...process.env, CODEX_HOME: home };
   delete env.LLV_TOKEN;
   // eslint-disable-next-line no-restricted-syntax -- Legacy terminal-launch MCP discovery invoked by serving launch controls.
-  const listed = spawnSync(process.env.LLV_CODEX_BINARY ?? resolveBinary("codex"), ["-c", "features.plugins=false", "mcp", "list", "--json"], {
+  const listed = spawnSync(resolveCodexBinary(), ["-c", "features.plugins=false", "mcp", "list", "--json"], {
     cwd,
     env,
     encoding: "utf8",
@@ -499,7 +503,7 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
       },
     };
   }
-  const args = [resolveBinary("codex")];
+  const args = [resolveCodexBinary()];
   if (engineMemoryOff(options)) args.push("-c", "features.memories=false");
   const home = options.codexHome ?? accountForSpawn().home;
   args.push(...agentCodexPublicationArgs({}, process.env));
@@ -660,7 +664,8 @@ export function resumeSpecForSession(
       launchProfile: { ...emptyLaunchProfileForResume(cwd, launchModel, options.effort ?? null), ...(options.cleanMemory !== undefined ? { cleanMemory: options.cleanMemory } : {}), readOnly: options.readOnly ?? null, sandbox: explicitLaunchProfileSandbox(options), permissionMode, allowSubagents: options.allowSubagents ?? false, mcpServers, plugins: grantedPlugins(options.plugins) },
     };
   }
-  let command = `${(options.hostTerminal ? resolveHostBinary : resolveBinary)("codex")}`;
+  const codexBinary = resolveCodexBinary(options.hostTerminal);
+  let command = codexBinary;
   if (engineMemoryOff(options)) command += " -c features.memories=false";
   const publicationArgs = agentCodexPublicationArgs({}, process.env);
   command += ` ${publicationArgs.map(shellQuote).join(" ")}`;
@@ -677,7 +682,7 @@ export function resumeSpecForSession(
   if (options.permissionMode && ["untrusted", "on-request", "never"].includes(options.permissionMode)) {
     command += ` --ask-for-approval ${shellQuote(options.permissionMode)}`;
   }
-  command += ` ${codexSubagentArgs((options.hostTerminal ? resolveHostBinary : resolveBinary)("codex"), options.allowSubagents, process.env, true).join(" ")}`;
+  command += ` ${codexSubagentArgs(codexBinary, options.allowSubagents, process.env, true).join(" ")}`;
   command += ` ${codexProcessCleanupArgs(home).map(shellQuote).join(" ")}`;
   if (options.operatorDecisionForms) command += ` ${codexOperatorQuestionPolicy(home).args.map(shellQuote).join(" ")}`;
   // Publication must stay with the other global options before resume.
