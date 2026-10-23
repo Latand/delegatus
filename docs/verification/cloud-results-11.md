@@ -25,11 +25,15 @@ Open diffs inspected before editing: #3251, #3258, #3269, #3263, #3242, #3241, #
 
 Main first advanced to `3dffc54e145fcba779e3ec82fdcff53030728da3` with eight unrelated catalog/startup paths. A later integration train advanced it to `3e570adfba80059eaba26a978402a2e73a02978e`, including other hunks in `ownerRun.ts`, `ownerTier.test.ts`, `mcp/server.ts` and `voiceTools/hub.test.ts`. The mandate remains v58 there; the published design still specifies +17 bytes. The cumulative patch applies cleanly to that train. A separate clean export runs the 15 directly affected suites before and after applying the delivery, followed by typecheck; those results appear below. No commits are created in the rehearsal export. The assigned pipeline branch and full importer comparison retain their captured task-start base.
 
+The subprocess-validation fix rechecked local `origin/main` at `62235181a310ad5783cb0fc0342721772efa7b54`: it has no competing report edit, and `git apply --check` accepts the cumulative source patch in a private export. The paired test evidence remains bound to the captured main and reviewed branch named below.
+
 ## Commands and exits
 
 `CLOUD_RESULTS` denotes the supplied private export directory. Heavy commands used the pinned installed gate-slot wrapper, one admitted call at a time, and gate-remote. The remote serial loop ran each file through a fresh isolation helper with private HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR and a closed Viewer control endpoint. Each test launch used setsid with stdin from the null device. Typecheck ran after the test loop.
 
-The combined main inventory contains 165 files (6 for result 10 and 160 for result 11, with one overlap). A whole-repository audit added `evals/roles/lifecycle.test.ts` and `evals/roles/manifest.test.ts` to the initial 158-file wording inventory. Its first call hit the wrapper's fifteen-minute execution deadline: exit 124, with 101 complete results saved and no final count. The remaining 62 files, including the incomplete server file, ran in full from a clean export of the same captured main, under a two-hour execution allowance; its final marker was `RAN_COUNT 62 FAILED 23`, exit 1. The interrupted remote processes subsequently ended; a read-only check found none remaining. Partial file results were discarded. The two eval files and a complete member-CLI progress-file repeat then ran on that same main export. All 165 final baseline results reconcile with the inventory. The original 163-file inventory had 60 failing files on unchanged main; the table also records the eval outcomes. The branch ran its initial 158 files, then both eval files, the corrected owner-prompt fingerprint file and the member-CLI progress-file repeat; a second typecheck followed the final test-file change.
+The combined main inventory contains 167 files (6 for result 10 and 162 for result 11, with one overlap). A whole-repository audit added `evals/roles/lifecycle.test.ts` and `evals/roles/manifest.test.ts` to the initial 158-file wording inventory. Review then identified two subprocess importers omitted from that audit: `src/lib/memory/roleEgressUnreadable.test.ts` and `src/lib/state/stateChildResult.test.ts`. Their complete paired runs are recorded below. The inventory includes relative and aliased module paths inside generated child scripts and eval bodies.
+
+The first baseline call hit the wrapper's fifteen-minute execution deadline: exit 124, with 101 complete results saved and no final count. The remaining 62 files, including the incomplete server file, ran in full from a clean export of the same captured main, under a two-hour execution allowance; its final marker was `RAN_COUNT 62 FAILED 23`, exit 1. The interrupted remote processes subsequently ended; a read-only check found none remaining. Partial file results were discarded. The two eval files and a complete member-CLI progress-file repeat then ran on that same main export. Those 165 baseline files, plus the two subprocess importers, reconcile with all 167 inventory entries. The original 163-file inventory had 60 failing files on unchanged main; the subprocess supplement adds one failing file with the same failure on the branch. The branch ran its initial 158 files, then both eval files, the corrected owner-prompt fingerprint file and the member-CLI progress-file repeat; a second typecheck followed the final test-file change. Its two subprocess importers completed in the paired supplement.
 
 | Command | Exit |
 |---|---:|
@@ -42,6 +46,8 @@ The combined main inventory contains 165 files (6 for result 10 and 160 for resu
 | Main supplement: both eval paths and the complete member-CLI progress file | 1 |
 | Branch `gate-remote -- bash -c '<serial isolated test loop, then typecheck>'` for the initial 158 paths | 1 |
 | Final branch supplement: both eval paths, the complete corrected owner-prompt file and the member-CLI progress file | 1 |
+| Paired subprocess supplement: `gate-remote --get paired-importer-output --out "$TMPDIR/paired-importer-validation/logs" -- bash -c '<paired serial isolated test loop>'`, through the pinned wrapper | 1 |
+| Subprocess log comparison by full file/test identity, refusal payload and source hashes | 0 |
 | `bun x tsc --noEmit --incremental false` after the initial 158 files | 0 |
 | `bun x tsc --noEmit --incremental false` after the final supplement | 0 |
 | `bun x eslint src/lib/externalRelay/ownerRun.ts src/lib/mcp/server.ts src/lib/orchestrator/prompt.test.ts src/lib/orchestrator/prompt.ts src/lib/roles/defaults.ts` | 0 |
@@ -54,17 +60,27 @@ The combined main inventory contains 165 files (6 for result 10 and 160 for resu
 | `NODE_ENV=test bun owner-fingerprint-probe.ts` in the private export | 0 |
 | SHA-256 comparisons of the five production/imported files and then all six final changed source files with their remote snapshots | 0 |
 | `git apply --check` of the cumulative delivery against the integration-train export | 0 |
+| Fix-round `git apply --check` of the cumulative source delivery against the latest local main export | 0 |
 | Integration-train baseline: serial remote loop over the 15 directly affected files | 1 |
 | Patched integration-train: same loop, then typecheck | 1 |
 | `bun x tsc --noEmit --incremental false` on the patched integration-train export | 0 |
 | `git diff --check` | 0 |
 | `bun scripts/privacy-publication-gate.ts --require-known-values --base origin/main` | 0 |
+| Fix-round `bun scripts/privacy-publication-gate.ts --require-known-values --base origin/main --check-commits` | 0 |
 
 The first branch observation also failed the member-CLI gate-off assertion, which had passed on main. Complete paired file reruns passed that assertion on both revisions and retained the same three other failures. That initial difference was not reproduced; no cause is attributed to the wording.
 
 The initial probe refusals came from state-ownership checks before prompt comparison; the corrected invocation used a private test context and succeeded. ESLint retains the unchanged unused-variable warning at `src/lib/externalRelay/ownerTier.test.ts:244`.
 
-The branch completed all 160 importer files across the two serial phases; 60 return nonzero. Complete per-file failure identities were compared with main before attribution; no new failure remains. The table lists every file exit code. Browser drivers retain their normal opt-in gates; skipped cases establish no rendered result.
+The branch completed all 162 wording importer files across the serial phases and subprocess supplement; 61 return nonzero. Complete per-file failure identities were compared with main before attribution; no new failure remains. The table lists every file exit code. Browser drivers retain their normal opt-in gates; skipped cases establish no rendered result.
+
+### Subprocess importer completion
+
+`rg -n -F '../mcp/server.ts' src/lib/memory/roleEgressUnreadable.test.ts src/lib/state/stateChildResult.test.ts` finds the imports at lines 42 and 97 respectively. Resolving quoted relative and aliased paths throughout all repository test files, including strings embedded in child scripts, yields 162 wording importers. These are the only two paths absent from the earlier table.
+
+The paired supplement ran from **2026-10-23T21:12:23Z to 2026-10-23T21:12:41Z**, under Bun **1.4.0 (34cbb9a40)**, on captured main `adce5764927f7e838f20070cd2968128912e861c` and reviewed branch `f45dab68e0d0fefecd04b01c6c1a73f59fc6c4d4`. One pinned gate-slot invocation ran `gate-remote`; its serial loop made a detached clone for each revision and launched each complete file with `setsid gate-env bun test --timeout=60000 <file>` and stdin from the null device. Each launch received fresh HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR, a closed Viewer control endpoint, and the same dependency tree. SHA-256 checks matched the MCP server and both test files to their respective Git revisions. The loop completed with **`RAN_COUNT 4 FAILED 2`**, exit **1**.
+
+`src/lib/state/stateChildResult.test.ts` passed all six tests and 64 assertions on each revision, exit 0. `src/lib/memory/roleEgressUnreadable.test.ts` completed both tests and 22 assertions on each revision, exit 1: one passed and one failed. The identical failing identity is `src/lib/memory/roleEgressUnreadable.test.ts` → `a store never created is readable and empty: nothing is withheld and nothing is refused`, at **103:30**. Both runs expected the bridge result to contain `"ok":true` and received `"ok":false`, code `tool_failed`, error `bridge report log is busy`, with retryable true. All file/test outcomes and the complete refusal payload match; neither run reports a between-tests error. There is no unexplained branch-only failure.
 
 | Command | Main exit | Branch exit |
 |---|---:|---:|
@@ -195,6 +211,7 @@ The branch completed all 160 importer files across the two serial phases; 60 ret
 | `bun test --timeout=60000 src/lib/mcp/voiceUtteranceContext.test.ts` | 0 | 0 |
 | `bun test --timeout=60000 src/lib/mcp/workerLimit.test.ts` | 0 | 0 |
 | `bun test --timeout=60000 src/lib/mcp/worktreeBackfill.integration.test.ts` | 0 | 0 |
+| `bun test --timeout=60000 src/lib/memory/roleEgressUnreadable.test.ts` | 1 | 1 |
 | `bun test --timeout=60000 src/lib/monitor/report.test.ts` | 0 | 0 |
 | `bun test --timeout=60000 src/lib/orchestrator/handoffDigest.test.ts` | 0 | 0 |
 | `bun test --timeout=60000 src/lib/orchestrator/operatorDecisionForms.test.ts` | 0 | 0 |
@@ -224,6 +241,7 @@ The branch completed all 160 importer files across the two serial phases; 60 ret
 | `bun test --timeout=60000 src/lib/runtime/deliveredMessageOccurrences.test.ts` | 0 | 0 |
 | `bun test --timeout=60000 src/lib/runtime/structuredSpawn.terminalize.test.ts` | 0 | 0 |
 | `bun test --timeout=60000 src/lib/state/declaredIndexes.test.ts` | 1 | 1 |
+| `bun test --timeout=60000 src/lib/state/stateChildResult.test.ts` | 0 | 0 |
 | `bun test --timeout=60000 src/lib/voiceCompanion/provider.test.ts` | 0 | 0 |
 | `bun test --timeout=60000 src/lib/voiceCompanion/tools.test.ts` | 1 | 1 |
 | `bun test --timeout=60000 src/runtime-host/mcpRuntimeCompatibility.test.ts` | 0 | 0 |
