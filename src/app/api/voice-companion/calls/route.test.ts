@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { FakeLiveProvider } from "@/lib/voiceCompanion/fakeProvider";
 import { fixtureBoardReads } from "@/lib/voiceCompanion/boardReads.fixture";
 
@@ -27,7 +28,7 @@ function fixture() {
   setCompanionSessionsForTests(service);
   return { service, admission, provider };
 }
-const headers = (extra: Record<string, string> = {}) => ({ host: "127.0.0.1", "sec-fetch-site": "same-origin", ...extra });
+const headers = (extra: Record<string, string> = {}) => ({ cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "sec-fetch-site": "same-origin", ...extra });
 const list = (extra: Record<string, string> = {}) => GET(new NextRequest("http://127.0.0.1/api/voice-companion/calls", { headers: headers(extra) }));
 const start = (requestId: string, extra: Record<string, string> = {}) => session.POST(new NextRequest("http://127.0.0.1/api/voice-companion/session",
   { method: "POST", headers: headers(extra), body: JSON.stringify({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId }) }));

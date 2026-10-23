@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
 import { authenticatedAgentSpawnCaller } from "@/app/api/spawn/admission";
 import { agentRegistry } from "@/lib/agent/registry";
-import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
+import { directOperatorActivityAuthority, requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { OPERATOR_PAUSE_RESUME_ACTOR, type PauseResumeActor } from "@/lib/pauseResumeActor";
 import { revokedSeatPipelineRefusal, SeatRevocationStoreUnavailableError } from "@/lib/orchestrator/seatAuthority";
@@ -106,6 +106,10 @@ export async function PATCH(
     return NextResponse.json({ error: `unknown pipeline action (allowed: ${PIPELINE_ACTIONS.join(", ")})` }, { status: 400 });
   }
   const { id } = await ctx.params;
+  if (body.action === "update-draft" && body.repoDir !== undefined) {
+    const authority = requireOperatorAuthority(req);
+    if (!authority.ok) return NextResponse.json({ error: authority.error }, { status: authority.status });
+  }
   try {
     // publish needs its caller only to accept a head whose commit custody was refused.
     const actor = body.action === "resolve-decision" || body.action === "continue-review" || body.action === "accept-head" || body.action === "override-stage"

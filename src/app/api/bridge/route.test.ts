@@ -1,3 +1,4 @@
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -76,7 +77,7 @@ const ORIGIN = "http://127.0.0.1";
 function get(query = ""): Promise<Response> {
   const separator = query.startsWith("?") ? "&" : "?";
   return GET(new NextRequest(`${ORIGIN}/api/bridge${query}${separator}realtimeSessionId=${SESSION}`, {
-    headers: { host: "127.0.0.1" },
+    headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1" },
   })) as unknown as Promise<Response>;
 }
 
@@ -90,7 +91,7 @@ function getUnauthenticated(query = ""): Promise<Response> {
 function post(body: Record<string, unknown>): Promise<Response> {
   return POST(new NextRequest(`${ORIGIN}/api/bridge`, {
     method: "POST",
-    headers: { host: "127.0.0.1", "content-type": "application/json" },
+    headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "content-type": "application/json" },
     body: JSON.stringify({ realtimeSessionId: SESSION, ...body }),
   })) as unknown as Promise<Response>;
 }
@@ -147,7 +148,7 @@ test("an unauthenticated reader cannot harvest a report body", async () => {
 
   /* And a wrong credential is no better than none. */
   const wrong = await GET(new NextRequest(`${ORIGIN}/api/bridge?realtimeSessionId=rt_sess_guess`, {
-    headers: { host: "127.0.0.1" },
+    headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1" },
   })) as unknown as Response;
   expect(wrong.status).toBe(403);
   expect(await wrong.text()).not.toContain("the-branch-the-attacker-wants");
@@ -179,7 +180,7 @@ test("an acknowledgement from an AGENT is refused; the operator's own browser se
   setCallerConversationResolverForTests(() => "conversation_worker");
   const refused = await POST(new NextRequest(`${ORIGIN}/api/bridge`, {
     method: "POST",
-    headers: {
+    headers: { cookie: `llv_operator=${soloBrowserSession()}`,
       host: "127.0.0.1",
       "content-type": "application/json",
       [VIEWER_SPAWN_CAPABILITY_HEADER]: "a".repeat(43),
@@ -190,11 +191,11 @@ test("an acknowledgement from an AGENT is refused; the operator's own browser se
   expect(readBridgeChannel(SCOPE)?.managerReportCursor).toBe(0);
   setCallerConversationResolverForTests(null);
 
-  /* The Viewer's own same-origin POST presents nothing and settles it — the tab
-     that just voiced the batch is the operator, with no key to hold. */
+  /* The Viewer's own same-origin POST carries its browser session and settles
+     the batch that this tab just voiced. */
   const response = await POST(new NextRequest(`${ORIGIN}/api/bridge`, {
     method: "POST",
-    headers: { host: "127.0.0.1", "content-type": "application/json" },
+    headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "content-type": "application/json" },
     body: JSON.stringify({ ackToken: drained.plan.ackToken }),
   })) as unknown as Response;
   expect(response.status).toBe(200);
@@ -232,7 +233,7 @@ test("the acknowledgement route refuses a cross-origin caller", async () => {
   sandbox();
   const response = await POST(new NextRequest(`${ORIGIN}/api/bridge`, {
     method: "POST",
-    headers: {
+    headers: { cookie: `llv_operator=${soloBrowserSession()}`,
       host: "127.0.0.1",
       "content-type": "application/json",
       origin: "https://evil.example",
@@ -268,7 +269,7 @@ test("turn-start drains with NO live call at all — the situation it exists for
   recordManagerReport({ key: "a", class: "blocked", at: new Date().toISOString(), body: "needs a decision" });
 
   const response = await GET(new NextRequest(`${ORIGIN}/api/bridge?mode=turn-start&conversationId=${SCOPE.seatConversationId}`, {
-    headers: { host: "127.0.0.1" },
+    headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1" },
   })) as unknown as Response;
 
   expect(response.status).toBe(200);
@@ -293,13 +294,13 @@ test("a project B turn cannot receive or consume project A's report", async () =
 
   const wrong = await GET(new NextRequest(
     `${ORIGIN}/api/bridge?mode=turn-start&conversationId=${SCOPE_B.seatConversationId}`,
-    { headers: { host: "127.0.0.1" } },
+    { headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1" } },
   )) as unknown as Response;
   expect((await wrong.json() as { prelude: unknown }).prelude).toBeNull();
 
   const intended = await GET(new NextRequest(
     `${ORIGIN}/api/bridge?mode=turn-start&conversationId=${SCOPE.seatConversationId}`,
-    { headers: { host: "127.0.0.1" } },
+    { headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1" } },
   )) as unknown as Response;
   const payload = await intended.json() as { prelude: { text: string } | null };
   expect(payload.prelude?.text).toContain("project A needs a decision");
@@ -309,13 +310,13 @@ test("turn-start serves the Viewer's own same-origin drain, and refuses an agent
   sandbox();
   recordManagerReport({ key: "a", class: "status", at: new Date().toISOString(), body: "one" });
   const response = await GET(new NextRequest(`${ORIGIN}/api/bridge?mode=turn-start&conversationId=${SCOPE.seatConversationId}`, {
-    headers: { host: "127.0.0.1" },
+    headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1" },
   })) as unknown as Response;
   expect(response.status).toBe(200);
 
   setCallerConversationResolverForTests(() => "conversation_worker");
   const agent = await GET(new NextRequest(`${ORIGIN}/api/bridge?mode=turn-start&conversationId=${SCOPE.seatConversationId}`, {
-    headers: { host: "127.0.0.1", [VIEWER_SPAWN_CAPABILITY_HEADER]: "a".repeat(43) },
+    headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", [VIEWER_SPAWN_CAPABILITY_HEADER]: "a".repeat(43) },
   })) as unknown as Response;
   expect(agent.status).toBe(403);
   expect(await agent.text()).not.toContain("needs a decision");
@@ -326,7 +327,7 @@ test("turn-start keeps the cross-origin perimeter: the payload carries deploy no
   sandbox();
   recordManagerReport({ key: "a", class: "status", at: new Date().toISOString(), body: "one" });
   const response = await GET(new NextRequest(`${ORIGIN}/api/bridge?mode=turn-start&conversationId=${SCOPE.seatConversationId}`, {
-    headers: { host: "127.0.0.1", origin: "https://evil.example", "sec-fetch-site": "cross-site" },
+    headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", origin: "https://evil.example", "sec-fetch-site": "cross-site" },
   })) as unknown as Response;
   expect(response.status).toBe(403);
 });
@@ -337,7 +338,7 @@ test("the live drain still requires the call's session id", async () => {
   /* Being the operator does not substitute: the live payload carries nonces and the
      peer proof is what bounds who can read them. */
   const response = await GET(new NextRequest(`${ORIGIN}/api/bridge`, {
-    headers: { host: "127.0.0.1" },
+    headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1" },
   })) as unknown as Response;
   expect(response.status).toBe(403);
 });

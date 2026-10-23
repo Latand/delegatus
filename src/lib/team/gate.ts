@@ -1,5 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 
+import { rejectForeignHost } from "@/lib/sameOrigin";
+import { OPERATOR_COOKIE, soloBrowserSession } from "@/lib/agent/operatorSession";
+
 import { agentCapabilityClaim, internalServiceClaim } from "@/lib/agent/callerClaims";
 
 import { MEMBER_REQUIRED_CODE } from "./contract";
@@ -8,7 +11,7 @@ import { existingTeamStore } from "./store";
 
 /*
  * The identity gate (§4.2): called by `src/proxy.ts` after the perimeter has
- * admitted the connection. In solo mode it answers "pass" after one `stat`.
+ * admitted the connection. Solo page entry establishes a session cookie.
  * In team mode a browser without a live member session is sent to /sign-in,
  * and any other request is answered 401 member_required.
  *
@@ -135,7 +138,15 @@ export function teamGate(request: NextRequest, context: TeamGateContext, nowMs =
   let store;
   try {
     store = existingTeamStore();
-    if (!store || !store.hasActiveOwner()) return null;
+    if (!store || !store.hasActiveOwner()) {
+      // Solo pages open a session after the perimeter admits them, including the trusted local gateway. APIs cannot mint it.
+      if ((!process.env.LLV_TOKEN || context.bearerAuthenticated) && !request.nextUrl.pathname.startsWith("/api/") && isNavigation(request) && !request.headers.has("next-action") && !request.headers.has("x-llv-spawn-capability") && !rejectForeignHost(request)) {
+        const response = NextResponse.next();
+        response.cookies.set({ name: OPERATOR_COOKIE, value: soloBrowserSession(nowMs), httpOnly: true, sameSite: "strict", path: "/", secure: request.headers.get("x-forwarded-proto") === "https", maxAge: 30 * 24 * 60 * 60 });
+        return response;
+      }
+      return null;
+    }
   } catch {
     /* A team store that exists and cannot be read fails closed: letting every
        request through as the unnamed operator is exactly what a team install
