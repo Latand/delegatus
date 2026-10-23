@@ -5,6 +5,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
 import { NextRequest } from "next/server";
+import { Database } from "bun:sqlite";
 import { drainFile, writeDrain, releaseDrain } from "@/lib/selfUpdate/drain";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import type { SpawnCommandDependencies } from "./spawnCommand";
@@ -79,6 +80,74 @@ function structuredRouteDependencies(cwd: string): SpawnCommandDependencies {
     }),
   };
 }
+
+test.each(["released", "refused", "revoked"] as const)("a reserved maintenance launch retries task membership before dispatch: %s", async outcome => {
+  const { productionLaunchMembershipPorts } = await import("@/lib/tasks/launchMembership");
+  const { TASKS_FILE, loadTasks } = await import("@/lib/tasks/store");
+  const { legacyDatabasePath } = await import("@/lib/state/legacyImport");
+  const { AccountAdmissionChangedError } = await import("@/lib/accounts/accountMutation");
+  const cwd = statePath(`maintenance-membership-${outcome}`);
+  fs.mkdirSync(cwd, { recursive: true });
+  const attempt = `maintenance_membership_${outcome}`;
+  const registry = agentRegistry();
+  const dependencies = structuredRouteDependencies(cwd);
+  const deferred: Array<() => Promise<void>> = [];
+  dependencies.defer = work => { deferred.push(work); };
+  const commit = productionLaunchMembershipPorts.commit;
+  loadTasks();
+  const peer = new Database(legacyDatabasePath(TASKS_FILE));
+  let locked = false;
+  let release: ReturnType<typeof setImmediate> | undefined;
+  let calls = 0;
+  dependencies.assertAccountAdmission = () => {
+    if (calls > 0 && outcome === "revoked") throw new AccountAdmissionChangedError();
+  };
+  let reservedId: string | undefined;
+  const membership = spyOn(productionLaunchMembershipPorts, "commit").mockImplementation(input => {
+    calls++;
+    const receipt = registry.spawnReceiptForClientAttempt(attempt)!;
+    expect(receipt).toBeDefined();
+    reservedId ??= receipt.launchId;
+    expect(receipt.launchId).toBe(reservedId);
+    expect(receipt.membershipAdmitted).toBe(false);
+    expect(deferred).toHaveLength(0);
+    if (calls === 1) {
+      // The receipt has committed. A second writer wins the task database
+      // before its membership prerequisite can take the task-store writer.
+      peer.exec("BEGIN IMMEDIATE");
+      locked = true;
+      release = setImmediate(() => { if (locked) { peer.exec("ROLLBACK"); locked = false; } });
+      return commit(input);
+    }
+    if (outcome === "refused") return { ok: false, error: "fixture task membership refused", status: 409 };
+    return commit(input);
+  });
+  const request = () => new NextRequest("http://127.0.0.1/api/spawn", {
+      method: "POST", headers: { origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", host: "127.0.0.1", "content-type": "application/json" },
+      body: JSON.stringify({ clientAttemptId: attempt, title: "Board maintenance fixture", engine: "claude", cwd, prompt: "Inspect the fixture board", mcpServers: [] }),
+    });
+  try {
+    const response = await executeSpawnRequest(request(), dependencies);
+    expect(response.status).toBe(outcome === "released" ? 202 : outcome === "refused" ? 409 : 503);
+    expect(calls).toBe(outcome === "revoked" ? 1 : 2);
+    const receipt = registry.spawnReceiptForClientAttempt(attempt)!;
+    expect(receipt.launchId).toBe(reservedId!);
+    expect(receipt.membershipAdmitted).toBe(outcome === "released");
+    expect(deferred).toHaveLength(outcome === "released" ? 1 : 0);
+    if (outcome === "refused") expect(receipt).toMatchObject({ state: "failed", error: "fixture task membership refused" });
+    membership.mockRestore();
+    if (outcome === "released") {
+      expect((await executeSpawnRequest(request(), dependencies)).status).toBe(202);
+      expect(registry.spawnReceiptForClientAttempt(attempt)!.launchId).toBe(reservedId!);
+      expect(deferred).toHaveLength(1);
+    }
+  } finally {
+    membership.mockRestore();
+    if (release) clearImmediate(release);
+    if (locked) { peer.exec("ROLLBACK"); locked = false; }
+    peer.close();
+  }
+});
 
 test("a refused anonymous structured spawn preserves the real Git index and writes no handoffs", async () => {
   const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
