@@ -596,6 +596,22 @@ test.each([false, true])("retained phone rounds open their exact archive with a 
   } finally { window.removeEventListener("llv:review-history", record); }
 });
 
+test("retained phone attempt offers its archive when the list row is absent", () => {
+  const id = "retained-without-list-row";
+  const pipeline = parkedPipeline({ runs: [{ stageId: "review", attempts: [attempt({ state: "passed", flowId: id })] }] } as unknown as Partial<Pipeline>);
+  const targets: unknown[] = [];
+  const record = (event: Event) => targets.push((event as CustomEvent).detail);
+  window.addEventListener("llv:review-history", record);
+  try {
+    const host = mount(<MobilePipelineScreen pipeline={pipeline} flows={[]} files={[]} now={NOW} onOpenConversation={() => {}} />);
+    click(q(host, "[data-mobile2-past-toggle]"));
+    const entry = q(host, `[data-mobile2-review-history="${id}"]`)!;
+    expect(entry.tagName).toBe("BUTTON");
+    click(entry);
+    expect(targets).toEqual([{ id, round: undefined }]);
+  } finally { window.removeEventListener("llv:review-history", record); }
+});
+
 test("the bar's ⋯ holds the lane's own actions and leads on to the board's menu", async () => {
   const store = nav();
   const boardMenu = (name: string, close: () => void) => (name === "menu" ? <div data-board-menu onClick={close} /> : null);

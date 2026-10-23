@@ -657,7 +657,7 @@ export function MobilePipelineScreen({
 }
 
 interface PastRow {
-  archive?: { id: string; round: number };
+  archive?: { id: string; round?: number };
   key: string;
   label: string;
   state: string;
@@ -696,10 +696,11 @@ function PastAttemptsSection({ pipeline, flows, flowsById, files, names, nowMs, 
   const listed = new Set(history.flatMap((row) => (row.conversation.path ? [row.conversation.path] : [])));
   const rows: PastRow[] = [
     ...history.map((row) => {
-      const archiveId = row.kind === "round" && row.attempt != null
-        ? archiveByStage.get(row.stageId)?.get(row.attempt) : null;
+      const archiveAttempt = row.kind === "round" ? row.attempt : row.kind === "attempt" ? row.n : null;
+      const archiveId = archiveAttempt != null ? archiveByStage.get(row.stageId)?.get(archiveAttempt) : null;
       return {
-        archive: archiveId ? { id: archiveId, round: row.n } : undefined,
+        archive: archiveId && (row.kind === "round" || !flowsById.has(archiveId))
+          ? { id: archiveId, round: row.kind === "round" ? row.n : undefined } : undefined,
         key: row.key,
         label: pastAttemptLabel(t, row, nameOf(row.stageId)),
         state: pastAttemptState(t, row),
