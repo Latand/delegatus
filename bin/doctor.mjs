@@ -1,6 +1,7 @@
 // @ts-check
 import { constants } from "node:fs";
 import { access, lstat, stat } from "node:fs/promises";
+import { request } from "node:http";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -41,13 +42,21 @@ export function doctorHost() {
     home: homedir(), platform: process.platform, arch: process.arch, env: process.env,
     now: Date.now, inspect,
     async viewer(port, signal) {
-      // Fixed loopback, no credentials and no redirect following. HEAD runs no probes.
+      // node:http connects directly, ignoring ambient proxies. HEAD runs no probes.
       try {
-        const response = await fetch(`http://127.0.0.1:${port}/api/onboarding/diagnostics`, {
-          method: "HEAD", redirect: "manual", signal,
+        const response = await new Promise((resolve, reject) => {
+          const call = request({
+            hostname: "127.0.0.1", port, path: "/api/onboarding/diagnostics",
+            method: "HEAD", agent: false, signal,
+          }, incoming => {
+            incoming.once("error", reject);
+            resolve({ status: incoming.statusCode, marker: incoming.headers["x-delegatus-diagnostics"] });
+            incoming.destroy();
+          });
+          call.once("error", reject);
+          call.end();
         });
-        await response.body?.cancel();
-        if (response.status === 204 && response.headers.get("x-delegatus-diagnostics") === "1") return "reachable";
+        if (response.status === 204 && response.marker === "1") return "reachable";
         if ([401, 403].includes(response.status)) return "auth-required";
         return "unrecognized";
       } catch {
@@ -98,13 +107,15 @@ async function binaryPresence(host, engine, signal) {
       : (host.env.PATH ?? "").split(host.platform === "win32" ? ";" : ":").filter(Boolean).map(dir => path.join(dir, binary))));
   }
   if (candidates.length > 256) throw new Error("binary candidates exceed diagnostic bound");
+  let unreadable = false;
   for (const candidate of new Set(candidates)) {
     signal.throwIfAborted();
     const result = await host.inspect(candidate, "executable", signal);
     signal.throwIfAborted();
     if (result === "present") return "present";
-    if (result === "unreadable") throw new Error("binary unreadable");
+    if (result === "unreadable") unreadable = true;
   }
+  if (unreadable) throw new Error("binary unreadable");
   return "absent";
 }
 

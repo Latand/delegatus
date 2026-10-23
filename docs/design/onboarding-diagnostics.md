@@ -47,7 +47,9 @@ Probes use asynchronous filesystem metadata reads and one credential-free,
 loopback-only HEAD request. They never read credentials, execute subprocesses,
 install packages, download models, change login state, restart services or
 write configuration. Remediation sentences are static. Reports contain no
-paths, environment values, file contents or raw errors. Redirects are refused.
+paths, environment values, file contents or raw errors. The direct HTTP transport
+ignores ambient proxies and refuses redirects. Binary discovery skips unusable
+candidates; an unreadable candidate yields unknown only when none is usable.
 Each probe has a 1.5-second deadline; all seven start concurrently. A timed-out
 filesystem read can finish later, but starts no subsequent reads. Binary
 candidate lists and search-path length are bounded. No performance gain is

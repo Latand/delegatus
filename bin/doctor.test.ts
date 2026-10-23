@@ -1,13 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, mkdir, readdir, readFile, writeFile, rm, copyFile, symlink } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, readFile, writeFile, rm, copyFile, symlink, chmod } from "node:fs/promises";
+import { spawn } from "node:child_process";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
-import { agentBinaryCandidates } from "./agent-binaries.mjs";
+import { agentBinaryCandidates, findAgentBinary } from "./agent-binaries.mjs";
 import { doctorHost, doctorWhisperPython, runDoctor } from "./doctor.mjs";
 import { formatDoctor, runDoctorCommand } from "./doctor-command.mjs";
-import { CAPABILITY_IDS, type CapabilityReport, type DoctorHost, type Inspection, type ViewerInspection } from "../src/lib/doctor/contracts";
+import { CAPABILITY_IDS, type CapabilityReport, type DoctorHost, type Inspection } from "../src/lib/doctor/contracts";
 
 const NOW = Date.UTC(2026, 9, 21, 12);
 
@@ -33,6 +35,58 @@ function fakeHost(platform: NodeJS.Platform = "linux") {
 
 function capability(report: CapabilityReport, id: typeof CAPABILITY_IDS[number]) {
   return report.capabilities.find(row => row.id === id)!;
+}
+
+// Start the report clock only after the child has imported the module and is
+// waiting for admission. The parent bounds both delivery and process exit.
+function watchDoctorChild(modulePath: string) {
+  const program = `
+    import { runDoctor as candidate } from ${JSON.stringify(pathToFileURL(modulePath).href)};
+    let release, rejectViewer;
+    const inspected = [];
+    const pending = new Promise(resolve => { release = resolve; });
+    const host = {
+      home: process.cwd(), platform: process.platform, arch: process.arch,
+      env: { PATH: "" }, now: () => Date.UTC(2026, 9, 21, 12),
+      inspect: async file => { inspected.push(file); return pending; },
+      viewer: () => new Promise((_, reject) => { rejectViewer = reject; }),
+    };
+    process.stdout.write("ready\\n");
+    for await (const chunk of process.stdin) { if (chunk.length) break; }
+    const report = await candidate({ host });
+    const count = inspected.length;
+    release("absent");
+    rejectViewer(new Error("synthetic private detail"));
+    await new Promise(resolve => setImmediate(resolve));
+    process.stdout.write(JSON.stringify({ report, count, after: inspected.length }) + "\\n");
+  `;
+  const child = spawn(process.execPath, ["--eval", program], { stdio: ["pipe", "pipe", "pipe"] });
+  return new Promise<{ report: CapabilityReport; count: number; after: number; elapsed: number }>((resolve, reject) => {
+    let output = "", stderr = "", started = 0;
+    let expired: string | undefined;
+    let timer = setTimeout(() => { expired = "child readiness watchdog"; child.kill("SIGKILL"); }, 10_000);
+    child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
+    child.stderr.on("data", chunk => { stderr += chunk; });
+    child.stdout.on("data", chunk => {
+      output += chunk;
+      if (!started && output.startsWith("ready\n")) {
+        started = performance.now();
+        clearTimeout(timer);
+        // 1.5 s production deadline plus 1 s scheduling/delivery allowance.
+        // This deliberately refuses the six-second failure control below.
+        timer = setTimeout(() => { expired = "report and exit watchdog"; child.kill("SIGKILL"); }, 2500);
+        child.stdin.end("go");
+      }
+    });
+    child.once("error", error => { clearTimeout(timer); reject(error); });
+    child.once("close", (code, signal) => {
+      clearTimeout(timer);
+      if (expired) { reject(new Error(expired)); return; }
+      if (code !== 0 || signal || stderr || !started) { reject(new Error("doctor child failed")); return; }
+      try { resolve({ ...JSON.parse(output.slice("ready\n".length)), elapsed: performance.now() - started }); }
+      catch (error) { reject(error); }
+    });
+  });
 }
 
 describe("read-only diagnostics registry", () => {
@@ -75,12 +129,32 @@ describe("read-only diagnostics registry", () => {
     expect(capability(report, "engine.claude").state).toBe("available");
   });
 
-  test("an unreadable binary is unknown, even with a later readable candidate", async () => {
+  test("binary discovery skips unusable candidates and retains unknown only without a usable candidate", async () => {
     const { host, entries } = fakeHost();
     const candidates = agentBinaryCandidates("codex", { home: host.home, envPath: host.env.PATH });
     entries.set(candidates[0], "unreadable");
     entries.set(candidates[1], "present");
-    expect(capability(await runDoctor({ host }), "engine.codex").state).toBe("unknown");
+    expect(capability(await runDoctor({ host }), "engine.codex").state).toBe("available");
+    entries.delete(candidates[1]);
+    expect(capability(await runDoctor({ host }), "engine.codex")).toMatchObject({ state: "unknown", reason: "PROBE_ERROR" });
+  });
+
+  test.skipIf(process.platform === "win32")("real binary discovery agrees with the launcher without executing a later candidate", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "doctor-binaries-"));
+    try {
+      const host = doctorHost(); host.home = root; host.env = { PATH: "" };
+      const candidates = agentBinaryCandidates("codex", { home: root, envPath: "" });
+      const marker = path.join(root, "executed");
+      for (const [index, mode] of [[0, 0o644], [1, 0o755]] as const) {
+        await mkdir(path.dirname(candidates[index]), { recursive: true });
+        await writeFile(candidates[index], `#!/bin/sh\nprintf executed > '${marker.replaceAll("'", "'\\''")}'\n`);
+        await chmod(candidates[index], mode);
+      }
+      host.viewer = async () => "reachable";
+      expect(findAgentBinary("codex", { home: root, envPath: "" })).toBe(candidates[1]);
+      expect(capability(await runDoctor({ host }), "engine.codex").state).toBe("available");
+      expect(await readdir(root)).not.toContain("executed");
+    } finally { await rm(root, { recursive: true, force: true }); }
   });
 
   test("binary overrides and container shims are inspected without executing them", async () => {
@@ -113,20 +187,25 @@ describe("read-only diagnostics registry", () => {
   });
 
   test("hung probes expire; late rejections are handled and start no later reads", async () => {
-    const { host, inspected } = fakeHost();
-    let release!: (value: Inspection) => void;
-    let rejectViewer!: (error: Error) => void;
-    const pending = new Promise<Inspection>(resolve => { release = resolve; });
-    host.inspect = async file => { inspected.push(file); return pending; };
-    host.viewer = () => new Promise<ViewerInspection>((_, reject) => { rejectViewer = reject; });
-    const report = await runDoctor({ host });
+    const { report, count, after, elapsed } = await watchDoctorChild(path.resolve("bin/doctor.mjs"));
     expect(report.capabilities.every(row => row.state === "unknown" && row.reason === "PROBE_TIMEOUT" && row.timedOut)).toBe(true);
-    const count = inspected.length;
-    release("absent");
-    rejectViewer(new Error("synthetic private detail"));
-    await new Promise(resolve => setImmediate(resolve));
-    expect(inspected.length).toBe(count);
+    expect(count).toBeGreaterThan(0);
+    expect(after).toBe(count);
+    expect(elapsed).toBeLessThan(2500);
     expect(JSON.stringify(report)).not.toContain("synthetic private detail");
+  });
+
+  test("parent watchdog rejects a six-second probe deadline and reaps its child", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "doctor-watchdog-"));
+    try {
+      const source = await readFile(path.resolve("bin/doctor.mjs"), "utf8");
+      const delayed = source.replace("DOCTOR_PROBE_TIMEOUT_MS = 1500", "DOCTOR_PROBE_TIMEOUT_MS = 6000");
+      expect(delayed).not.toBe(source);
+      await copyFile(path.resolve("bin/agent-binaries.mjs"), path.join(root, "agent-binaries.mjs"));
+      const modulePath = path.join(root, "doctor.mjs");
+      await writeFile(modulePath, delayed);
+      await expect(watchDoctorChild(modulePath)).rejects.toThrow("report and exit watchdog");
+    } finally { await rm(root, { recursive: true, force: true }); }
   });
 
   test("Whisper cache selection respects explicit, current, legacy and former roots", async () => {
@@ -259,6 +338,66 @@ test("real host recognizes only its endpoint and never follows redirects", async
     expect(hits).toBe(0);
   } finally {
     await Promise.all([source, target].map(server => new Promise<void>(resolve => server.close(() => resolve()))));
+  }
+});
+
+test("real Bun Viewer probe bypasses ambient proxies and sends only the loopback HEAD", async () => {
+  const requests: Array<{ method?: string; url?: string; hasCredentials: boolean }> = [];
+  let proxyHits = 0;
+  const target = http.createServer((req, res) => {
+    requests.push({ method: req.method, url: req.url, hasCredentials: !!(req.headers.authorization || req.headers.cookie) });
+    res.writeHead(204, { "x-delegatus-diagnostics": "1" }); res.end();
+  });
+  const proxy = http.createServer((_req, res) => {
+    proxyHits++;
+    res.writeHead(204, { "x-delegatus-diagnostics": "1" }); res.end();
+  });
+  try {
+    await new Promise<void>(resolve => target.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>(resolve => proxy.listen(0, "127.0.0.1", resolve));
+    const port = (target.address() as { port: number }).port;
+    const proxyUrl = `http://127.0.0.1:${(proxy.address() as { port: number }).port}`;
+    const program = `
+      import { doctorHost } from ${JSON.stringify(new URL("./doctor.mjs", import.meta.url).href)};
+      console.log(await doctorHost().viewer(${port}, AbortSignal.timeout(1500)));
+    `;
+    const child = Bun.spawn([process.execPath, "--eval", program], {
+      env: { ...process.env, HTTP_PROXY: proxyUrl, http_proxy: proxyUrl, HTTPS_PROXY: proxyUrl, https_proxy: proxyUrl,
+        ALL_PROXY: proxyUrl, all_proxy: proxyUrl, NO_PROXY: "", no_proxy: "" },
+      stdout: "pipe", stderr: "pipe", timeout: 5000,
+    });
+    const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect(exit).toBe(0); expect(stderr).toBe(""); expect(stdout.trim()).toBe("reachable");
+    expect(proxyHits).toBe(0);
+    expect(requests).toEqual([{ method: "HEAD", url: "/api/onboarding/diagnostics", hasCredentials: false }]);
+  } finally {
+    await Promise.all([target, proxy].map(server => new Promise<void>(resolve => server.close(() => resolve()))));
+  }
+});
+
+test("real Viewer transport aborts a hung request and closes its connection", async () => {
+  let admitted!: () => void;
+  let closed!: () => void;
+  const received = new Promise<void>(resolve => { admitted = resolve; });
+  const disconnected = new Promise<void>(resolve => { closed = resolve; });
+  const server = http.createServer(() => { admitted(); });
+  server.on("connection", socket => { socket.once("close", closed); });
+  const watchdog = AbortSignal.timeout(3000);
+  const timeout = new Promise<never>((_, reject) => {
+    watchdog.addEventListener("abort", () => reject(new Error("transport watchdog")), { once: true });
+  });
+  try {
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    const controller = new AbortController();
+    const result = doctorHost().viewer((server.address() as { port: number }).port, controller.signal);
+    const rejected = result.then(() => { throw new Error("expected transport rejection"); }, error => error);
+    await Promise.race([received, timeout]);
+    controller.abort(new Error("fixture abort"));
+    expect((await rejected).message).toBe("fixture abort");
+    await Promise.race([disconnected, timeout]);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
   }
 });
 
