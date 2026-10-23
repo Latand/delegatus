@@ -546,14 +546,30 @@ As in §3.3. The dry run executes inside the Viewer, as a leased child with a
 
 As in §3.2, §3.6 and §3.7, plus:
 
-- **A stdio dry run runs under the installation user inside a Linux
+- **Where available, a stdio dry run runs under the installation user inside a Linux
   filesystem sandbox.** The Delegatus state directory is hidden, including
   the secrets file and the per-server registry. A private run directory and
   home are mounted for the probe. The rest of the host filesystem is visible
   read-only, so the proposed program can still read other user files and send
   them over the network. Approval remains the trust boundary; the adjacent
-  settings warning states this limit. On systems without bubblewrap and user
-  namespaces, stdio dry runs fail closed.
+  settings warning states this limit. On macOS, Windows and Linux without usable
+  bubblewrap namespaces, the first attempt reports the platform reason without
+  executing proposed code. The settings show an EN/UK warning that the proposal
+  chose code with access to all files, saved secrets included. Only the paired,
+  authenticated owner can confirm one run through `voiceToolsOperator`; MCP,
+  agent claims, bootstrap sessions, other members and browser-shaped local
+  requests cannot confirm. The confirmation carries the displayed proposal
+  digest, reason and unique warning occurrence and is consumed before execution. A later run needs a fresh
+  confirmation. A changed reason returns a new warning.
+  Each confirmation is written before dispatch to a private JSON record under
+  `voice-tools-confirmations/`, with owner kind, time, tool, reason, digest and
+  registry revision and warning occurrence. The last dry-run result also carries
+  its confirmation. Replaying a confirmation for an older warning cannot
+  authorize a later run, even when its proposal digest and reason are unchanged.
+  These records grant no authority and are never read to permit execution.
+  Uncontained execution retains environment scrubbing, entry verification,
+  secret destination checks and the leased deadline, with unrestricted file
+  and network access.
 - **HTTP servers must be loopback or `https`.** A plain-HTTP remote URL is
   refused, because its bearer header would travel in clear text.
 
@@ -876,7 +892,7 @@ growing a second connector model.
 | Member-owned servers | Depends on #1497 identity; v1 is owner-approved only (question 5) |
 | Namespaces with `tool_search` / deferred loading on the API backend | `gpt-6-luna` support unknown; v1's bound of 32 tools avoids the need |
 | Adding a tool to a running API call | The requirement accepts a restart; on Codex it is impossible (§2.1) |
-| Cross-platform filesystem sandbox support | Linux stdio probes use bubblewrap; systems without bubblewrap and user namespaces refuse dry runs rather than launch without state-directory containment |
+| Cross-platform filesystem sandbox support | Linux stdio probes retain bubblewrap where usable; unavailable containment requires a visible per-run warning and authenticated owner confirmation on macOS, Windows and Linux |
 | Interactive first-run logins (browser OAuth) of a server | The hub runs servers headless. The operator does a one-time login by hand, with the orchestrator's instructions. |
 | MCP resources, prompts, sampling and elicitation | The voice needs tools only; a server's elicitation request is refused |
 | Vendor-run MCP (Responses delegation, Secure MCP Tunnel) | Moves calls out of the Viewer's privacy boundary and call record |
@@ -1110,14 +1126,15 @@ values remain readable but match no current program identity. New values
 require at least eight characters. Legacy string values migrate as unbound
 values and cannot be sent until the owner supplies a destination.
 
-A stdio dry run executes proposal-chosen code inside a bubblewrap mount and
+Where containment is available, a stdio dry run executes proposal-chosen code inside a bubblewrap mount and
 PID namespace. The full Delegatus state directory is overlaid with an empty
 filesystem, while only the probe's private run directory and home are mounted
 back at sandbox paths. The child cannot read saved secrets or other state
 files by their host paths. Treat each stdio dry run as trust in the proposed
 program and its dependencies: files outside Delegatus state remain readable,
 and network access remains available. The settings warning states this
-beside the dry-run control.
+beside the dry-run control. Where containment is unavailable, the owner can
+confirm the full-access warning for one run as described in §4.5.
 
 The producers and consumers of the contract are:
 
@@ -1130,7 +1147,7 @@ The producers and consumers of the contract are:
 | Store secret write | Merge existing private values, sign explicit policies, invalidate dependent probes and approvals when bindings change; blank values retain existing secrets |
 | Store fresh load, mutation reload and probe preparation | Verify MACs, quarantine unsigned or changed grants, refuse unbound/mismatched destinations |
 | Store approval and reapproval | Require allowed destinations and a matching successful dry run before issuing the approval MAC |
-| Hub initial preparation and final dispatch | Reread under the store lock, then send only referenced private values and the policy snapshot to the leased worker; stdio execution hides the state directory in a fail-closed filesystem sandbox |
+| Hub initial preparation and final dispatch | Reread under the store lock, then send only referenced private values and the policy snapshot to the leased worker; stdio execution hides the state directory where containment works; otherwise the worker requires the exact reason confirmed by the owner for this run |
 | Probe worker and every HTTP fetch | Independently check destination before credential resolution/connection and before each request; redirects remain refused |
 | Public view and MCP status copies | Policy names and destinations only; never return private values |
 
@@ -1147,7 +1164,7 @@ The new work makes no performance gain claim.
 | File swap between entry verification and execution by path | Accepted for slice 1. Both checks remain, but path execution has a swap window. The filesystem sandbox limits access to Delegatus state but does not pin the executable image or its dependencies. |
 | Digest covers only the entry file | Accepted for slice 1. Imports, interpreters and registry dependencies remain outside that pin. Approval grants trust to the program and its dependencies; the entry hash detects entry edits and does not attest a dependency closure. |
 | `setsid` escape from the reaped process group | Accepted for slice 1. The sandbox's PID namespace prevents escaped descendants from reaching host processes, but a detached process may continue inside the sandbox and retain network access until the sandbox supervisor exits. |
-| Proposal-chosen stdio code reading saved credentials during dry run | Fixed. Bubblewrap overlays the entire state directory before executing the proposal, so the child cannot read the secrets file or other state files; an end-to-end hub test attempts to read and exfiltrate a secret saved for another HTTPS origin. Systems without the required sandbox fail closed. |
+| Proposal-chosen stdio code reading saved credentials during dry run | Fixed. Bubblewrap overlays the entire state directory before executing the proposal, so the child cannot read the secrets file or other state files; an end-to-end hub test attempts to read and exfiltrate a secret saved for another HTTPS origin. Systems without the required sandbox report why execution was refused and require explicit owner confirmation of full access for each run. |
 | Encoded secret echo | Accepted for slice 1. Literal and JSON-escaped echo detection is a best-effort check. Arbitrary encodings cannot be reliably recognized, and an approved peer receives its authorized credential. Destination restrictions and sending only referenced credentials reduce exposure; only trusted peers should receive a grant. |
 | One-character secret blocks every view | Fixed for new input: values shorter than eight characters are refused explicitly. Old short values remain unbound, are excluded from substring echo scans and cannot acquire a destination grant without replacement. |
 

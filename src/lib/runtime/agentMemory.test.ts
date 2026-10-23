@@ -9,6 +9,22 @@ test("reserves the core budget and bounds each agent at launch", () => {
   expect(agentMemoryCeiling(16 * GIB, 6).limitBytes).toBe(4 * GIB);
 });
 
+test("scoped caps resolve installation then project then role then stage and clamp to the shared budget", () => {
+  const env = { LLV_AGENT_MEMORY_MAX: "3G", LLV_AGENT_MEMORY_RESERVE: "8G" };
+  for (const [scopes, requestedBytes, source] of [
+    [{}, 3 * GIB, "installation"],
+    [{ project: 5 * GIB }, 5 * GIB, "project"],
+    [{ project: 5 * GIB, role: 6 * GIB }, 6 * GIB, "role"],
+    [{ project: 5 * GIB, role: 6 * GIB, stage: 12 * GIB }, 12 * GIB, "stage"],
+    [{ project: 5 * GIB, role: null, stage: null }, 5 * GIB, "project"],
+  ] as const) {
+    const result = agentMemoryCeiling(16 * GIB, 2, env, scopes);
+    expect(result.limitBytes).toBe(Math.min(requestedBytes, 8 * GIB));
+    expect(result).toMatchObject({ reserveBytes: 8 * GIB, budgetBytes: 8 * GIB,
+      requestedBytes, source, clamped: requestedBytes > 8 * GIB });
+  }
+});
+
 import fs from "node:fs";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
