@@ -883,12 +883,27 @@ export async function commitPipelineStage(
     return settleWithoutCommit();
   }
   if (control?.recoveryHead !== undefined) return unrecoveredRetry;
-  const add = (await exec(
-    "git",
-    ["add", ...(allowCommit ? ["-A", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS] : ["-f", "-A", "--", ...changedOutputPaths])],
-    pipeline.worktreeDir,
-  ));
-  if (add.code !== 0) return failure("staging the passed stage", add);
+  const stagingFailure = (result: ExecResult): PipelineGitResult => ({
+    ok: false,
+    error: `${failure("staging the passed stage", result).error}\nWorktree changes:\n${status.stdout.trimEnd()}`,
+  });
+  if (allowCommit) {
+    // With exclusion pathspecs, `add -A .` can reject an ignored directory
+    // even when it contains tracked files. Update the index's tracked paths
+    // first, then add only eligible untracked files using literal pathspecs.
+    const tracked = await exec("git", ["add", "-u", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], pipeline.worktreeDir);
+    if (tracked.code !== 0) return stagingFailure(tracked);
+    const untracked = await exec("git", ["ls-files", "--others", "--exclude-standard", "-z", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], pipeline.worktreeDir);
+    if (untracked.code !== 0) return stagingFailure(untracked);
+    const paths = untracked.stdout.split("\0").filter(Boolean);
+    for (let start = 0; start < paths.length; start += 100) {
+      const add = await exec("git", ["add", "--", ...paths.slice(start, start + 100).map(file => `:(top,literal)${file}`)], pipeline.worktreeDir);
+      if (add.code !== 0) return stagingFailure(add);
+    }
+  } else {
+    const add = await exec("git", ["add", "-f", "-A", "--", ...changedOutputPaths], pipeline.worktreeDir);
+    if (add.code !== 0) return stagingFailure(add);
+  }
   if (!allowCommit) {
     const staged = (await exec(
       "git",

@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { shortId } from "@/lib/shortIds";
 
 import type { CreateFlowRequest, Flow } from "@/lib/flows/types";
 import type { ExecPort, ExecResult } from "@/lib/workflows/provision";
@@ -472,6 +473,8 @@ async function runningStage(h: ReturnType<typeof harness>, access: "read-only" |
     spec: "AC1",
     repoDir: "/repo",
     src: "/claude/creator.jsonl",
+    // These cases exercise settlement; remote publication has its own fixture.
+    publication: "internal",
     stages: [
       access === "read-only"
         ? { id: "study", kind: "run", role: { roleId: "architect" }, access, outputs: ["evidence/draft"], prompt: "Study", next: "verify" }
@@ -514,6 +517,38 @@ test.each(["read-only", "read-write"] as const)("retry-stage retries a refused %
   expect(h.spawnCount()).toBe(launches);
   expect(h.requests).toHaveLength(1);
   expect(h.calls.filter(call => call.startsWith("git commit"))).toHaveLength(2);
+});
+
+test.each(["read-only", "read-write"] as const)("a %s staging refusal parks and retries settlement without relaunching the passed stage", async (access) => {
+  const h = harness({ access });
+  await runningStage(h, access);
+  const execute = h.ports.exec;
+  let refuseStaging = true;
+  h.ports.exec = (command, args, ...rest) => args[0] === "add" && refuseStaging
+    ? refusal(`cannot stage ${OUTPUT}: permission denied`)
+    : execute(command, args, ...rest);
+  h.advance(1_000); h.endTurn(PASS);
+  await tickPipelines([], h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.cursor?.state).toBe("committing");
+  expect(parked.stateDetail).toContain(`cannot stage ${OUTPUT}`);
+  expect(parked.stateDetail).toContain("retry-stage");
+  expect(study().verdict?.status).toBe("pass");
+  expect(study().commitRepair).toBeUndefined();
+  await tickPipelines([], h.ports);
+  expect(h.spawnCount()).toBe(1);
+  expect(h.requests).toHaveLength(0);
+  h.ports.conversationAgentActive = async () => false;
+  refuseStaging = false;
+  expect((await patchPipeline(parked.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.stateDetail).toBeNull();
+  expect(study().state).toBe("passed");
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  expect(h.spawnCount()).toBe(1);
+  expect(h.requests).toHaveLength(0);
+  expect(h.calls.some(call => call.startsWith("git reset --hard") || call.startsWith("git clean"))).toBe(false);
 });
 
 test("retry-stage refuses a settlement retry while the repair turn is still busy or queued", async () => {
@@ -1198,7 +1233,7 @@ test("a request a crash interrupted after the stage accepted it is replayed unde
 
 test.each([
   ["the ancestry check fails", (h: ReturnType<typeof harness>) => h.ancestryAnswers({ code: 128, stdout: "", stderr: "fatal: object store unavailable" }),
-    `stage head ${STAGE_HEAD} does not descend from accepted head ${BASE_SHA}; fatal: object store unavailable`],
+    `stage head ${shortId(STAGE_HEAD)} does not descend from accepted head ${shortId(BASE_SHA)}; fatal: object store unavailable`],
   ["history reconciliation fails", (h: ReturnType<typeof harness>) => {
     h.ancestryAnswers({ code: 1, stdout: "", stderr: "" });
     h.branchRefAnswers({ code: 128, stdout: "", stderr: "fatal: ref HEAD is not a symbolic ref" });
@@ -1362,6 +1397,7 @@ function repairedPublication() {
 
 test.each([
   ["the pre-push hook refuses the repaired head", "publishing the passed stage: ", (h: ReturnType<typeof repairedPublication>) => {
+    fs.mkdirSync(path.dirname(h.hook), { recursive: true });
     fs.writeFileSync(h.hook, "#!/bin/sh\necho 'pre-push: touched tests' >&2\necho '(fail) the stage broke this [2.00ms]' >&2\nexit 1\n", { mode: 0o700 });
   }],
   ["the worktree moved past the repaired head", "the worktree moved to ", (h: ReturnType<typeof repairedPublication>) => {
