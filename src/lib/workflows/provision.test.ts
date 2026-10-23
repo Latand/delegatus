@@ -267,6 +267,7 @@ test("finishMerge leaves failed merge state for explicit recovery", async () => 
 test("finishMerge preserves staged operator changes made after merge failure", async () => {
   const box = await makeIdentityIsolatedRepo();
   const hook = path.join(box.repo, ".git", "hooks", "prepare-commit-msg");
+  fs.mkdirSync(path.dirname(hook), { recursive: true });
   fs.writeFileSync(hook, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
   const originalHead = await box.run("rev-parse", "HEAD");
   let stagedAfterOwnershipProbe = false;
