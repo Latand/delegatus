@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { spawnSync } from "node:child_process";
 import { NextRequest } from "next/server";
 
 import { type Member } from "./contract";
@@ -47,6 +48,14 @@ import { GET as seatGET } from "@/app/api/orchestrator/seat/route";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
 import { GET as memberGET } from "@/app/api/team/workspaces/[id]/members/route";
 import { GET as workspacesGET } from "@/app/api/team/workspaces/route";
+import { POST as spawnPOST } from "@/app/api/spawn/route";
+import { POST as spawnValidatePOST } from "@/app/api/spawn/validate/route";
+import { POST as taskSpawnPOST } from "@/app/api/tasks/[id]/spawn/route";
+import { POST as pipelinesPOST } from "@/app/api/pipelines/route";
+import { POST as preflightPOST } from "@/app/api/pipelines/preflight/route";
+import * as scanCache from "@/lib/scanner/scanCache";
+import * as transcriptHost from "@/lib/agent/transcriptHost";
+import * as tmux from "@/lib/tmux";
 
 const W1 = `w_${"a".repeat(32)}`;
 const W2 = `w_${"b".repeat(32)}`;
@@ -235,6 +244,132 @@ describe("workspace authority", () => {
       setConversationHostDependenciesForTests(null);
       noteSessionTargets(previousTargets);
     }
+  });
+
+  test("a cwd or repoDir that resolves outside the member's workspace is refused on every directory route", async () => {
+    const [alpha, beta] = ["alpha", "beta"].map(name => {
+      const directory = path.join(root, "Projects", name);
+      fs.mkdirSync(directory, { recursive: true });
+      expect(spawnSync("git", ["init", "-q", directory]).status).toBe(0);
+      return directory;
+    }) as [string, string];
+    const [alphaKey, betaKey] = [projectForCwd(alpha)!, projectForCwd(beta)!];
+    expect(alphaKey).not.toBe(betaKey);
+    placeProject(store, owner, alphaKey, W1);
+    placeProject(store, owner, betaKey, W2);
+    saveTasks([...structuredClone(loadTasksForList()), { id: "task-own", project: alphaKey, text: "own", status: "inbox", placement: "unplaced", assignments: [], createdAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString() }]);
+    const link = path.join(alpha, "beta-link");
+    fs.symlinkSync(beta, link);
+    const escapes = [
+      `${alpha}/worktrees/../../beta`,
+      `${alpha}/.claude/worktrees/w/../../../../beta`,
+      `${alpha}/.worktrees/x/../../../beta`,
+      link,
+      `${link}/not-created-yet`,
+      `  ${beta}  `,
+    ];
+    // The recognizers read these segments as the own repository.
+    for (const escape of escapes.slice(0, 3)) expect(projectForCwd(escape)).toBe(alphaKey);
+    const routes = (actor: Member, directory: string) => [
+      ["/api/spawn", () => spawnPOST(request("/api/spawn", actor, "POST", { cwd: directory, engine: "codex", prompt: "escape" }))],
+      ["/api/spawn/validate", () => spawnValidatePOST(request("/api/spawn/validate", actor, "POST", { cwd: directory, engine: "codex" }))],
+      ["/api/tasks/[id]/spawn", () => taskSpawnPOST(request("/api/tasks/task-own/spawn", actor, "POST", { cwd: directory, engine: "codex" }), { params: Promise.resolve({ id: "task-own" }) })],
+      ["/api/pipelines", () => pipelinesPOST(request("/api/pipelines", actor, "POST", { project: alphaKey, repoDir: directory }))],
+      ["/api/pipelines/preflight", () => preflightPOST(request("/api/pipelines/preflight", actor, "POST", { repoDir: directory }))],
+      ["/api/orchestrator/seat", () => seatGET(request(`/api/orchestrator/seat?project=${encodeURIComponent(alphaKey)}&cwd=${encodeURIComponent(directory)}`, actor))],
+    ] as const;
+    for (const actor of [member, manager]) {
+      for (const escape of escapes) {
+        for (const [route, call] of routes(actor, escape)) {
+          const denied = await (call as () => Promise<Response>)();
+          expect(denied.status, `${actor.id} ${route} ${escape}`).toBe(403);
+          expect(await denied.json()).toEqual({ error: "workspace access denied", code: "workspace_forbidden" });
+        }
+      }
+    }
+    expect(loadTasksForList().find(task => task.id === "task-own")?.assignments).toEqual([]);
+
+    // In-workspace directories, including a traversal that stays inside, reach the real handler.
+    for (const own of [alpha, `${alpha}/worktrees/..`, `${alpha}/sub/../`]) {
+      const response = await preflightPOST(request("/api/pipelines/preflight", member, "POST", { repoDir: own }));
+      expect(response.status, own).toBe(200);
+      expect(await response.json()).toMatchObject({ ok: true, repoDir: fs.realpathSync(alpha) });
+    }
+    // The owner's access to the same paths is unchanged.
+    const ownerResponse = await preflightPOST(request("/api/pipelines/preflight", owner, "POST", { repoDir: escapes[0] }));
+    expect(ownerResponse.status).toBe(200);
+    expect(await ownerResponse.json()).toMatchObject({ ok: true, repoDir: fs.realpathSync(beta) });
+    for (const route of ["/api/spawn", "/api/spawn/validate", "/api/pipelines", "/api/pipelines/preflight"]) {
+      const reached: string[] = [];
+      const probe = workspaceRoute(route, async (req: NextRequest) => { reached.push(req.method); return Response.json({ ok: true }); });
+      const body = { cwd: alpha, repoDir: alpha, project: alphaKey };
+      expect((await probe(request(route, member, "POST", body))).status, route).toBe(200);
+      expect((await probe(request(route, owner, "POST", { ...body, cwd: escapes[0], repoDir: escapes[0] }))).status, route).toBe(200);
+      expect(reached).toEqual(["POST", "POST"]);
+    }
+  });
+
+  test("a pid beside an authorized conversation or launch never resolves another workspace's process", async () => {
+    const registry = agentRegistry();
+    const receipt = registry.beginSpawn("codex", root, { project: "repo-alpha", title: "Own conversation" });
+    registry.completeSpawn(receipt.launchId, { key: { engine: "codex", sessionId: fixtureSessionId(4) }, artifactPath: path.join(root, "own.jsonl"), cwd: root, accountId: null, status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: "spawn" });
+    const foreignPid = 4343;
+    const pidLookups: number[] = [];
+    const resolvePid = async (pid: number) => { pidLookups.push(pid); return pid === foreignPid ? "beta-agent:1.0" : null; };
+    const emptyScan = async () => ({ snapshot: { files: [] } }) as never;
+    const emptyHosts = async () => ({ hosts: [], observation: "available", canonicalFor: () => null }) as never;
+    setConversationHostDependenciesForTests({ completedFileScan: emptyScan, readTranscriptHosts: emptyHosts, resolveRequestedTmuxTarget: resolvePid as never });
+    const scan = spyOn(scanCache, "completedFileScan").mockImplementation(emptyScan);
+    const hosts = spyOn(transcriptHost, "readTranscriptHosts").mockImplementation(emptyHosts);
+    const tmuxLookup = spyOn(tmux, "resolveRequestedTmuxTarget").mockImplementation(resolvePid as never);
+    try {
+      for (const route of ["conversation-host", "tmux"]) {
+        const { GET } = await import(`../../app/api/${route}/route.ts`);
+        const { POST } = await import(`../../app/api/${route}/targets/route.ts`);
+        for (const actor of [member, manager]) {
+          for (const identity of [receipt.conversationId, `spawn:${receipt.launchId}`]) {
+            const response = await GET(request(`/api/${route}?path=${encodeURIComponent(identity)}&pid=${foreignPid}`, actor));
+            expect(response.status).toBe(200);
+            expect(await response.json()).toEqual({ target: null });
+          }
+          const batch = await POST(request(`/api/${route}/targets`, actor, "POST", { reqs: [
+            { id: "conversation", path: receipt.conversationId, pid: foreignPid },
+            { id: "launch", path: `spawn:${receipt.launchId}`, pid: foreignPid },
+          ] }));
+          expect(batch.status).toBe(200);
+          expect(await batch.json()).toEqual({ targets: { conversation: null, launch: null } });
+          const pidOnly = await GET(request(`/api/${route}?pid=${foreignPid}`, actor));
+          expect(pidOnly.status).toBe(403);
+          const batchPidOnly = await POST(request(`/api/${route}/targets`, actor, "POST", { reqs: [{ id: "pid", pid: foreignPid }] }));
+          expect(batchPidOnly.status).toBe(403);
+        }
+        expect(pidLookups).toEqual([]);
+        // The owner's pid lookups are unchanged.
+        expect(await (await GET(request(`/api/${route}?pid=${foreignPid}`, owner))).json()).toEqual({ target: "beta-agent:1.0" });
+        expect(await (await POST(request(`/api/${route}/targets`, owner, "POST", { reqs: [{ id: "pid", pid: foreignPid }] }))).json()).toEqual({ targets: { pid: "beta-agent:1.0" } });
+        expect(pidLookups).toEqual([foreignPid, foreignPid]);
+        pidLookups.length = 0;
+      }
+    } finally {
+      setConversationHostDependenciesForTests(null);
+      scan.mockRestore();
+      hosts.mockRestore();
+      tmuxLookup.mockRestore();
+    }
+  });
+
+  test("a request without a live session gets the sign-in refusal before any target is resolved", async () => {
+    const reached: string[] = [];
+    const probe = workspaceRoute("/api/conversation-host", async (req: NextRequest) => { reached.push(req.method); return Response.json({ ok: true }); });
+    const anonymous = (method: string, body?: unknown) => new NextRequest(`http://localhost/api/conversation-host?path=${encodeURIComponent("spawn:missing")}`, { method, headers: { host: "localhost", ...(body === undefined ? {} : { "content-type": "application/json" }) }, body: body === undefined ? undefined : JSON.stringify(body) });
+    for (const call of [anonymous("GET"), anonymous("POST", { conversationId: "conversation_foreign", text: "x" })]) {
+      const response = await probe(call);
+      expect(response.status).toBe(401);
+      expect(await response.json()).toEqual({ error: "sign in required", code: "member_required" });
+    }
+    store.updateMember({ ...member, status: "revoked", revokedAt: new Date(now).toISOString() });
+    expect((await probe(request("/api/conversation-host?path=spawn%3Amissing", member))).status).toBe(401);
+    expect(reached).toEqual([]);
   });
 
   test("project settings reads allow members; writes require that workspace's manager or owner", async () => {

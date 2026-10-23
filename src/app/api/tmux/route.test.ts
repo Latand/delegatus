@@ -511,6 +511,18 @@ test("/api/tmux GET keeps pid lookup for pid-only compatibility requests", async
   expect(pidResolutionFiles).toBe(completedFiles);
 });
 
+test("/api/tmux GET never answers a pid beside a supplied path the transcript roots refuse", async () => {
+  pidResolutionFiles = undefined;
+  pidTargets = new Map([[77, "agents:9.0"]]);
+
+  for (const identity of ["conversation_0000000000000000", "spawn:launch-fixture"]) {
+    const response = await GET(get(`http://127.0.0.1/api/tmux?pid=77&path=${encodeURIComponent(identity)}`));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ target: null });
+  }
+  expect(pidResolutionFiles).toBeUndefined();
+});
+
 test("/api/tmux POST carries concurrent sends through the delivery seam", async () => {
   const received: unknown[] = [];
   delivery = async (message: unknown) => {

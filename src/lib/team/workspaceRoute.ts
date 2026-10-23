@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { tokensMatch } from "@/lib/authToken";
 import { agentCapabilityClaim, internalServiceClaim } from "@/lib/agent/callerClaims";
+import { MEMBER_REQUIRED_CODE } from "./contract";
 import { MEMBER_COOKIE, verifySessionValue } from "./sessions";
 import { existingTeamStore } from "./store";
 import { workspaceScope } from "./workspaceAccess";
@@ -64,6 +65,28 @@ async function pipelineProject(id: string): Promise<string | null> {
   return loadPipelinesForList().find(pipeline => pipeline.id === id)?.project ?? null;
 }
 
+/** Handlers expand `~`, resolve lexically and the filesystem follows links,
+ * while the path recognizers read the raw segments: `<own>/worktrees/../../x`
+ * names the own repository to them. Each form a handler can act on must
+ * resolve to a permitted project. */
+async function directoryProjects(value: string): Promise<(string | null)[]> {
+  const [{ projectForCwd }, { realpath }, path, os] = await Promise.all([
+    import("@/lib/scanner/describe"), import("node:fs/promises"), import("node:path"), import("node:os"),
+  ]);
+  const raw = value.trim();
+  const lexical = path.resolve(raw === "~" || raw.startsWith("~/") ? path.join(os.homedir(), raw.slice(1)) : raw);
+  // A missing tail is created under its deepest existing ancestor, links included.
+  let real: string | null = null;
+  for (let base = lexical, tail = ""; !real; base = path.dirname(base)) {
+    try { real = path.join(await realpath(base), tail); }
+    catch {
+      if (path.dirname(base) === base) break;
+      tail = path.join(path.basename(base), tail);
+    }
+  }
+  return [...new Set([lexical, real ?? lexical])].map(directory => projectForCwd(directory));
+}
+
 /** Every supplied resource is checked, including copied parents and nested targets. */
 async function targetProjects(route: string, request: Request, ctx?: Context): Promise<(string | null)[]> {
   const url = new URL(request.url);
@@ -91,10 +114,7 @@ async function targetProjects(route: string, request: Request, ctx?: Context): P
     }
     if (typeof value !== "string" || !value) return;
     if (["project", "projectId"].includes(key)) projects.push(value);
-    if (["cwd", "repoDir"].includes(key)) {
-      const { projectForCwd } = await import("@/lib/scanner/describe");
-      projects.push(projectForCwd(value));
-    }
+    if (["cwd", "repoDir"].includes(key)) projects.push(...await directoryProjects(value));
     if (["taskId", "parentTaskId", "sourceTaskId"].includes(key)) projects.push(await taskProject(value));
     if (route === "/api/orchestrator/ghost" && ["askId", "retryAskId", "clientRequestId"].includes(key)) {
       const { readDeputies } = await import("@/lib/orchestrator/deputies");
@@ -183,6 +203,8 @@ export function workspaceRoute<F extends (...args: never[]) => unknown>(route: s
     try { scope = requestWorkspaceScope(request); }
     catch { return unavailable(); }
     if (!scope || scope.owner) return invoke(request, ...args);
+    // A request without a live session gets the team gate's sign-in refusal.
+    if (!scope.memberId) return NextResponse.json({ error: "sign in required", code: MEMBER_REQUIRED_CODE }, { status: 401 });
     return (async () => {
       let projects: (string | null)[];
       const read = ["GET", "HEAD"].includes(request.method) || ["/api/logs", "/api/conversation-host/targets", "/api/tmux/targets", "/api/attention/needs-you", "/api/prototype-reviews/read", "/api/spawn/validate"].includes(route);
