@@ -142,8 +142,8 @@ home (`{"ssh": "<alias>"}`), a top-level `scripts/gate-slot.sh` call from a git
 work tree or a review export with its `export.json` runs on that SSH host
 instead of here (`docs/design/remote-gate-runner.md`, `scripts/gate-runner/`):
 the hook's admitted checks, `bun test`, `bunx tsc`, `local-gate-tests.ts`,
-`eslint-changes.ts` and the four browser drivers. Privacy, fetch, push,
-pre-commit, builds and everything else stay here. The client ships the exact
+`eslint-changes.ts` and the three browser test drivers. Privacy, fetch, push,
+pre-commit, builds, the board geometry capture and everything else stay here. The client ships the exact
 working tree as a git bundle after the tree's own privacy scan, and the runner
 starts nothing unless it reproduces the same tree id. Its lines start with
 `gate-runner:`. `running here: <reason>` means the command ran on this machine

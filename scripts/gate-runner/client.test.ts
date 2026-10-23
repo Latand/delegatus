@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isolatedEnvironment } from "../local-gate";
-import { applyReturn, configFile, type Env, Demux, health, mapArguments, markUnhealthy, parseControl, parseProbe, readUstar, redact, remoteEnvironment, resolveTarget, returnPlan, scanBudgetMs, shapeOf, sshFailure, UNHEALTHY_MS, type Control, type Tree } from "./client";
+import { applyReturn, configFile, Demux, health, mapArguments, markUnhealthy, parseControl, parseProbe, readUstar, redact, remoteEnvironment, resolveTarget, returnPlan, scanBudgetMs, shapeOf, sshFailure, UNHEALTHY_MS, type Control, type Tree } from "./client";
 import { envClass } from "./env-classes";
 import { completion, ISOLATED_KEYS, PERSISTENT_KEYS, ustarEntry } from "./serve";
 
@@ -67,7 +67,7 @@ function exportTree(): Tree { return { kind: "export", root: REPO, record: { ver
 
 test("only the declared command shapes go remote, and an export takes only the history-free ones", () => {
   const git = gitTree(), exported = exportTree();
-  const shape = (argv: string[], tree = git, env: Env = {}) => shapeOf(argv, tree, REPO, env);
+  const shape = (argv: string[], tree = git) => shapeOf(argv, tree, REPO);
   expect(shape(["/opt/bun", "scripts/local-gate.ts", "pre-push", "--admitted"])).toMatchObject({ name: "pre-push" });
   expect(shape(["bun", "scripts/local-gate.ts", "pre-push"])).toHaveProperty("reason");
   expect(shape(["bun", "test", "src/x.test.ts"])).toMatchObject({ name: "test", driver: false });
@@ -78,9 +78,9 @@ test("only the declared command shapes go remote, and an export takes only the h
   expect(shape(["bun", "scripts/eslint-changes.ts"])).toMatchObject({ name: "eslint-changes" });
   expect(shape(["bun", "run", "build"])).toHaveProperty("reason");
   expect(shape(["node", "test"])).toHaveProperty("reason");
+  // The geometry driver runs here from either kind of tree (§8.1).
   expect(shape(["bun", "scripts/capture-board-geometry.ts"])).toHaveProperty("reason");
-  expect(shape(["bun", "scripts/capture-board-geometry.ts"], git, { BOARD_CAPTURE_DIR: path.join(REPO, "evidence") })).toHaveProperty("reason");
-  expect(shape(["bun", "scripts/capture-board-geometry.ts"], git, { BOARD_CAPTURE_DIR: os.tmpdir() })).toMatchObject({ name: "board-geometry", driver: true });
+  expect(shape(["bun", "scripts/capture-board-geometry.ts"], exported)).toHaveProperty("reason");
   expect(shape(["bun", "scripts/local-gate.ts", "pre-push", "--admitted"], exported)).toHaveProperty("reason");
   expect(shape(["bun", "scripts/local-gate-tests.ts"], exported)).toHaveProperty("reason");
   expect(shape(["bun", "test", "src/x.test.ts"], exported)).toMatchObject({ name: "test" });

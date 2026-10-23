@@ -103,7 +103,7 @@ export function findTree(cwd: string): Tree | Refusal {
 
 export interface Shape { name: string; driver: boolean; exportOk: boolean }
 /** The commands v1 sends (§8.1). `argv` is the command the wrapper received. */
-export function shapeOf(argv: string[], tree: Tree, cwd: string, env: Env): Shape | Refusal {
+export function shapeOf(argv: string[], tree: Tree, cwd: string): Shape | Refusal {
   const program = path.basename(argv[0] ?? "");
   const script = (index: number) => argv[index] ? path.relative(tree.root, path.resolve(cwd, argv[index]!)) : "";
   let shape: Shape | null = null;
@@ -113,11 +113,9 @@ export function shapeOf(argv: string[], tree: Tree, cwd: string, env: Env): Shap
   else if (program === "bunx" && argv[1] === "tsc") shape = { name: "tsc", driver: false, exportOk: true };
   else if (program === "bun" && script(1) === "scripts/local-gate-tests.ts") shape = { name: "local-gate-tests", driver: false, exportOk: false };
   else if (program === "bun" && script(1) === "scripts/eslint-changes.ts") shape = { name: "eslint-changes", driver: false, exportOk: false };
-  else if (program === "bun" && script(1) === "scripts/capture-board-geometry.ts") {
-    const out = env.BOARD_CAPTURE_DIR;
-    if (!out || !path.isAbsolute(out) || !fs.statSync(out, { throwIfNoEntry: false })?.isDirectory() || inside(tree.root, out)) return { reason: "the geometry driver needs BOARD_CAPTURE_DIR, an existing directory outside the checkout" };
-    shape = { name: "board-geometry", driver: true, exportOk: true };
-  }
+  // It serves the checkout's production build from the ignored .next, which
+  // the shipment never carries, and keeps its captures under its own TMPDIR.
+  else if (program === "bun" && script(1) === "scripts/capture-board-geometry.ts") return { reason: "the geometry driver serves this checkout's own production build, which the runner does not receive" };
   if (!shape) return { reason: "not a command shape the runner takes" };
   if (tree.kind === "export" && !shape.exportOk) return { reason: `${shape.name} reads git history, which an export lacks` };
   return shape;
@@ -760,7 +758,7 @@ async function main(argv: string[]): Promise<number> {
   const tree = findTree(cwd);
   if (refused(tree)) return here(tree.reason, "ineligible");
   kind = tree.kind;
-  const shape = shapeOf(argv, tree, cwd, env);
+  const shape = shapeOf(argv, tree, cwd);
   if (refused(shape)) return here(shape.reason, "ineligible");
   shapeName = shape.name;
   const mapped = mapArguments(argv, tree.root, cwd);

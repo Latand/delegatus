@@ -542,7 +542,6 @@ A command goes remote when all of these hold:
 | `bun test <args>` and `bun run test <args>` | yes | An agent's test files, including the browser drivers below. |
 | `bunx tsc …` | yes | Typecheck. |
 | `bun scripts/local-gate-tests.ts …` and `bun scripts/eslint-changes.ts …` | no | The comparator and changed-file lint run by hand. |
-| `bun scripts/capture-board-geometry.ts …` with `BOARD_CAPTURE_DIR` set to an existing absolute directory outside the tree | yes | The board geometry driver. Without that variable it runs here, because it refuses capture directories inside the repository or the home directory and v1 returns outputs only from known places. |
 
 A review-export checkout with its record therefore runs its test files,
 typecheck and drivers on the runner. Its hook and comparator runs stay here,
@@ -554,11 +553,18 @@ Browser drivers that go remote, with their switches passed through:
   (`LLV_KANBAN_BROWSER_TEST=1`; one case ran on the runner in 13.3 s);
 - `src/components/mobile/issue1671Evidence.browser.test.tsx`
   (`LLV_SWIPE_BROWSER_TEST=1`);
-- `src/components/conversation/conversationWindow.browser.test.tsx`;
-- `scripts/capture-board-geometry.ts`.
+- `src/components/conversation/conversationWindow.browser.test.tsx`
+  (`LLV_CONVERSATION_BROWSER_TEST=1`).
 
-A test file whose name ends in `.browser.test.tsx`, and the geometry script,
-are *driver shapes*: their outputs come back (§8.8).
+A test file whose name ends in `.browser.test.tsx` is a *driver shape*: its
+outputs come back (§8.8).
+
+The board geometry driver, `scripts/capture-board-geometry.ts`, runs here.
+It serves the checkout's own production build with `next start`, and that
+build lives in the ignored `.next`, which the shipment never carries; it
+also refuses a capture directory outside its own `TMPDIR`. The rehearsal
+sent it once from each kind of tree (§8.12 step 5), and it failed in 5 s on
+the second reason before reaching the first.
 
 These stay here:
 
@@ -1079,7 +1085,7 @@ roots** and nothing else:
   back. Deleted files under the roots are listed in one line and not
   propagated.
 - **Output-directory variables** classified `output-dir`: for example
-  `BOARD_CAPTURE_DIR`, `LLV_SEAT_TICK_SHOTS_DIR`, `LLV_TASK_STATES_PNG_DIR`,
+  `LLV_KANBAN_FRAMES`, `LLV_SEAT_TICK_SHOTS_DIR`, `LLV_TASK_STATES_PNG_DIR`,
   `ACTIVITY_RENDER_DIR`, `PD_OUT`, `SEND_PAINT_OUT` and
   `LLV_LONG_HISTORY_OUT`. When such a variable holds an absolute local
   directory outside the tree, the runner sets it to `<dir>/out/<NAME>`, and
@@ -1322,6 +1328,9 @@ once.
   runner's own deadline already excludes it.
 - An agent's direct `bun run build` and other commands whose outputs later
   local commands read.
+- The board geometry driver (§8.1). Sending it needs the runner to build the
+  tree first, which repeats a build the caller already ran here, and a
+  capture directory under the run's `TMPDIR`.
 - Load campaigns and their padding scopes.
 - Running the client through a host-side service for agents whose sandbox
   has no network: they fall back to running here.
