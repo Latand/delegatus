@@ -1208,10 +1208,10 @@ of its six rendered sources; screenshots remain in the capture scratch.
 | Arguments are validated against the approved input schema with Ajv, inside the worker | `probe.worker.ts#serve` |
 | One deadline per call (`callTimeoutMs`), plus up to 20 s for a cold start; it starts when the call is asked, so a wait behind an earlier call to the same server counts, and a call given up while queued is never sent; expiry sends MCP `notifications/cancelled` | `sessions.ts#dispatch`, `#deadline` |
 | Text joined and cut to 16 KB with a marker; `structuredContent` when there is no text; up to three images; other content named as omitted; `isError` maps to `failed` | `probe.worker.ts#mapResult` |
-| Results skip the board-read cache and pass the credential and local-path scrub | `liveSession.ts#addedTool`, `#tool` |
+| Results skip the board-read cache and pass the credential and local-path scrub where they are made, so both backends and the record get the cleaned text; images pass unchanged | `liveSession.ts#addedTool` |
 | A tool that acts counts as egress after a private read (`private_data_boundary`); the backend reads the refusal and answers | `liveSession.ts#tool` |
 | A private server's successful answer marks the call like a Telegram group read; its arguments and text stay out of the record | `liveSession.ts#tool` |
-| An ask-first server's acting tool returns `awaiting_confirmation` and runs only in a later operator turn | `liveSession.ts#tool` |
+| An ask-first server's acting tool returns `awaiting_confirmation` and runs only in a later operator turn; once an added result is in context, every acting added tool does | `liveSession.ts#tool` |
 
 **Server-side send gate.** Instructions alone do not keep a tool result from
 causing a send. Once an added tool's result is in the backend's context (this
@@ -1221,6 +1221,14 @@ operator's own words in that turn ask for a send (the same explicit-request and
 delivery-language readings the delivery claim check uses). The tests drive a
 fake model that obeys a hostile result; with the gate removed in a scratch copy
 both the API and the Codex case send.
+
+**Server-side acting gate.** In the same context, an acting added tool goes
+through the ask-first path whatever the server's switch: it returns
+`awaiting_confirmation` and runs only in a later operator turn. A hostile
+result that asks for an acting tool therefore runs nothing in that turn. With
+no added result in context, the operator's own ask runs the tool at once. With
+the gate removed in a scratch copy, the API and the Codex case both run the
+acting tool.
 
 ### Hub lifecycle (§4.2)
 
@@ -1282,9 +1290,8 @@ performance gain.
 - **Deferred:** the run in the Docker deployment that confirms a `uv` or `bun`
   child started through a host shim is reaped when its call ends (§4.8, §14).
   Slices 3 and 4 are unchanged.
-- **Residual:** no server-side check stops an acting added tool that another
-  tool's hostile result asks for in the same turn. The prompt rule covers it,
-  and after a private read the egress rule does. The ask-first switch adds a
-  server-side stop for a server that acts for the operator.
+- **Residual:** the acting gate trusts the voice's reading of the operator's
+  next turn, as the ask-first switch always has: a later turn in which a
+  misled voice calls the tool again runs it.
 - **Residual:** a worker answer with images is parsed on the Viewer loop as one
   JSON line of at most 6 MB.
