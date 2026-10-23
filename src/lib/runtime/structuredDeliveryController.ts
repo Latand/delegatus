@@ -36,7 +36,7 @@ import { activeDrain } from "@/lib/selfUpdate/drain";
 import { ACCOUNT_MIGRATION_PASS_INTERVAL_MS, requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { actingOperation } from "@/lib/deliveryActuation";
-import { agentRegistry, REGISTRY_WRITER_BUSY, resolveConversationAlias, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity } from "@/lib/agent/registry";
+import { agentRegistry, REGISTRY_WRITER_BUSY, resolveConversationAlias, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type StructuredTerminationCapture } from "@/lib/agent/registry";
 import { registryConversationsForEntryKey } from "@/lib/agent/sqliteRegistryStore";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
@@ -177,6 +177,8 @@ const state: ControllerState = controllerStore.__llvStructuredDeliveryController
 };
 
 const CONTROLLER_UNAVAILABLE_CODE = "structured-delivery-controller-unavailable";
+/** Names this controller's kills in the host termination journal. */
+const CONTROLLER_STOP_SOURCE = "controller-stop";
 
 export class StructuredDeliveryControllerUnavailableError extends Error {
   readonly code = CONTROLLER_UNAVAILABLE_CODE;
@@ -1133,6 +1135,7 @@ export async function bindStructuredDeliveryQueue(
         if (session?.retirementBlocked !== false || !runtimeIdleKillMatches(session, expectedKey, onlyIfIdle)) return false;
       }
       let capturedRetirement: { root: ProcessIdentity; claimEpoch: number } | null = null;
+      let controllerCapture: StructuredTerminationCapture | null = null;
       let recoveryStartedAt: string | null = null;
       let pipelineReader: Awaited<ReturnType<typeof pipelineRetirementReader>> | null = null;
       const recoveryTarget = () => ({ conversationId, sessionId: expectedKey.sessionId, engine: expectedKey.engine,
@@ -1294,13 +1297,27 @@ export async function bindStructuredDeliveryQueue(
             const current = registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)];
             if (!current || current.claimOwner !== retirementCustody?.claimOwner || current.claimEpoch !== retirementCustody?.claimEpoch
               || current.structuredHost?.writerClaimEpoch !== retirementCustody?.writerClaimEpoch) return false;
-            const persisted = registry.recordStructuredTerminationSurvivors(expectedKey, ref, identities);
-            if (persisted && onlyIfIdle) {
+            controllerCapture = registry.captureStructuredTerminationSurvivors(expectedKey, ref, identities, CONTROLLER_STOP_SOURCE);
+            if (controllerCapture && onlyIfIdle) {
               const entry = registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)]!;
               capturedRetirement = { root: ref, claimEpoch: entry.claimEpoch };
             }
-            return persisted;
+            return controllerCapture !== null;
           }),
+          /* Refused before its first signal, this kill ended nothing: the host
+             keeps running and owes the row no capture. Left behind, the capture
+             reads as a stopped host's survivors that may still run, refuses the
+             host's own writes, and holds every later stage of its lane (lane
+             376bce9c, 2026-10-20). */
+          withdrawCapturedTree: async () => {
+            const capture = controllerCapture;
+            if (!capture) return;
+            const withdrawn = await registry.deliveryWriteOrBusy({ label: "registry.controller-stop-withdraw" },
+              () => registry.withdrawStructuredTerminationSurvivors(expectedKey, ref, capture, CONTROLLER_STOP_SOURCE));
+            if (!withdrawn) return;
+            controllerCapture = null;
+            capturedRetirement = null;
+          },
           retireRegistryEntry: (key, expected, confirmed, custody) =>
             registry.deliveryWriteOrBusy({ label: "registry.controller-stop-settle" }, () => registry.terminateStructuredHost(key, expected, confirmed, custody)),
         });

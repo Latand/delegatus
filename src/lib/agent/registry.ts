@@ -130,6 +130,9 @@ export interface StructuredTerminationCapture {
   retainedField: boolean;
   previousUpdatedAt: string;
   updatedAt: string;
+  /** The capture fence this write stamped on the row, and the one it replaced. */
+  captureId: string;
+  previousCaptureId: string | null;
 }
 
 export interface TmuxHostEvidence {
@@ -219,6 +222,9 @@ export interface AgentRegistryEntry {
   structuredHost?: StructuredHostColumns | null;
   /** Exact process identities left alive by a partial structured-host kill. */
   structuredTerminationSurvivors?: ProcessIdentity[];
+  /** Names the newest capture of those identities. A capture withdrawn after
+      a later one re-captured them leaves them to that later stop. */
+  structuredTerminationCaptureId?: string;
   claimEpoch: number;
   claimOwner: string | null;
   pendingAction: "spawn" | "resume" | "handoff" | null;
@@ -8255,9 +8261,12 @@ export class AgentRegistry {
         identities.set(identityKey(identity), { ...identity });
       }
       const previousUpdatedAt = entry.updatedAt;
+      const previousCaptureId = typeof entry.structuredTerminationCaptureId === "string" ? entry.structuredTerminationCaptureId : null;
+      const captureId = crypto.randomUUID();
       entry.structuredTerminationSurvivors = [...identities.values()];
+      entry.structuredTerminationCaptureId = captureId;
       entry.updatedAt = now();
-      return { added, retainedField, previousUpdatedAt, updatedAt: entry.updatedAt };
+      return { added, retainedField, previousUpdatedAt, updatedAt: entry.updatedAt, captureId, previousCaptureId };
     });
     if (capture) {
       journalStructuredTermination(this.filename, {
@@ -8271,30 +8280,38 @@ export class AgentRegistry {
   /** Undoes one capture whose termination had no effect. Only the identities
       that capture added leave the row. The earlier revision stamp returns only
       while the capture is still the row's newest write, so a row nobody else
-      touched reads exactly as it did before the stop was considered. */
+      touched reads exactly as it did before the stop was considered.
+      A later capture of the same tree (another stop that may already be
+      signalling it) takes the identities over: this capture is released
+      and the row keeps every identity, because only that later stop knows
+      whether they still run. True once this capture no longer holds the row. */
   withdrawStructuredTerminationSurvivors(
     key: SessionKey,
     expectedRoot: Readonly<ProcessIdentity>,
     capture: Readonly<StructuredTerminationCapture>,
     source = "unspecified",
   ): boolean {
-    const withdrawn = this.mutate((file) => {
+    const outcome = this.mutate((file): "withdrawn" | "superseded" | null => {
       const entry = file.entries[sessionKeyId(key)];
       const current = entry?.structuredHost?.process ?? null;
-      if (!entry || !current || !sameRecordedProcessIdentity(current, expectedRoot)) return false;
+      if (!entry || !current || !sameRecordedProcessIdentity(current, expectedRoot)) return null;
+      if (entry.structuredTerminationCaptureId !== capture.captureId) return "superseded";
       const identityKey = (identity: Readonly<ProcessIdentity>) => `${identity.pid}:${identity.startIdentity}:${identity.bootEpoch ?? ""}`;
       const withdrawn = new Set(capture.added.map(identityKey));
       const remaining = (entry.structuredTerminationSurvivors ?? []).filter(identity => !withdrawn.has(identityKey(identity)));
       if (remaining.length === 0 && !capture.retainedField) delete entry.structuredTerminationSurvivors;
       else entry.structuredTerminationSurvivors = remaining;
+      if (capture.previousCaptureId === null) delete entry.structuredTerminationCaptureId;
+      else entry.structuredTerminationCaptureId = capture.previousCaptureId;
       entry.updatedAt = entry.updatedAt === capture.updatedAt ? capture.previousUpdatedAt : now();
-      return true;
+      return "withdrawn";
     });
     journalStructuredTermination(this.filename, {
-      at: now(), event: withdrawn ? "withdrawn" : "withdrawal-refused", source, key: sessionKeyId(key),
-      root: expectedRoot.pid, removed: capture.added.map(identity => identity.pid),
+      at: now(), event: outcome === "withdrawn" ? "withdrawn" : outcome === "superseded" ? "withdrawal-superseded" : "withdrawal-refused",
+      source, key: sessionKeyId(key), root: expectedRoot.pid,
+      removed: outcome === "superseded" ? [] : capture.added.map(identity => identity.pid),
     });
-    return withdrawn;
+    return outcome !== null;
   }
 
   /** Lifts a captured termination tree from its row once every identity it
