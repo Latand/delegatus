@@ -275,16 +275,97 @@ test("exhausted spawn reservation admission preserves the retryable response and
   } finally { busy.mockRestore(); }
 });
 
-test("a later registry failure preserves its response after spawn admission", async () => {
-  const { RegistryWriterBusyError } = await import("./registry");
-  const cwd = statePath("post-admission-refusal");
+test("exhausted task membership preserves retryable admission and the seat retries the same reservation", async () => {
+  const { executeOrchestratorSeatRequest } = await import("@/lib/orchestrator/seatCommand");
+  const { orchestratorSeatFor } = await import("@/lib/orchestrator/seats");
+  const { productionLaunchMembershipPorts } = await import("@/lib/tasks/launchMembership");
+  const { TASKS_FILE, loadTasks } = await import("@/lib/tasks/store");
+  const { legacyDatabasePath } = await import("@/lib/state/legacyImport");
+  const cwd = statePath("exhausted-membership");
   fs.mkdirSync(cwd, { recursive: true });
-  const attempt = "post_admission_refusal";
+  const attempt = "exhausted_membership";
+  const project = "membership-admission-fixture";
   const registry = agentRegistry();
   const dependencies = structuredRouteDependencies(cwd);
   const deferred: Array<() => Promise<void>> = [];
   dependencies.defer = work => { deferred.push(work); };
-  dependencies.runtimeHostClient = () => { throw new RegistryWriterBusyError("fixture runtime preparation"); };
+  loadTasks();
+  const peer = new Database(legacyDatabasePath(TASKS_FILE));
+  const commit = productionLaunchMembershipPorts.commit;
+  let locked = false;
+  const membership = spyOn(productionLaunchMembershipPorts, "commit").mockImplementation(input => {
+    if (!locked) {
+      // Hold a real second writer from after reservation until the request
+      // returns, forcing the production membership wait to exhaust.
+      expect(registry.spawnReceiptForClientAttempt(attempt)).not.toBeNull();
+      peer.exec("BEGIN IMMEDIATE");
+      locked = true;
+    }
+    return commit(input);
+  });
+  const keys: unknown[] = [];
+  let reservedId: string | undefined;
+  try {
+    const result = await executeOrchestratorSeatRequest({ project, mandate: "Inspect the fixture board", cwd,
+      clientRequestId: attempt, engine: "claude", model: "opus" }, {
+      resolveProject: project => ({ project, displayName: project }),
+      spawn: async body => {
+        keys.push(body.clientAttemptId);
+        expect(orchestratorSeatFor(project).pending?.intent).toMatchObject({ clientRequestId: attempt, error: null });
+        expect(orchestratorSeatFor(project).history).toEqual([]);
+        const response = await executeSpawnRequest(new NextRequest("http://127.0.0.1/api/spawn", {
+          method: "POST", headers: { origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", host: "127.0.0.1", "content-type": "application/json" },
+          body: JSON.stringify(body),
+        }), dependencies);
+        const answer = await response.json();
+        const receipt = registry.spawnReceiptForClientAttempt(attempt)!;
+        if (keys.length === 1) {
+          expect(locked).toBe(true);
+          reservedId = receipt.launchId;
+          expect(receipt).toMatchObject({ state: "starting", membershipAdmitted: false, admissionOwner: null });
+          expect(deferred).toHaveLength(0);
+          expect(response.status).toBe(503);
+          expect(answer).toMatchObject({ code: "account_store_busy", retryable: true, retrySafe: true });
+          membership.mockRestore();
+          peer.exec("ROLLBACK");
+          locked = false;
+        } else {
+          expect(receipt.launchId).toBe(reservedId!);
+          expect(receipt.membershipAdmitted).toBe(true);
+        }
+        return { status: response.status, body: answer };
+      },
+      deliver: async () => ({ ok: true, outcome: "delivered" }), conversationTarget: () => null,
+      summarizeHandoffs: async () => ({ kind: "fallback", reason: "unavailable" }),
+      launchSettlement: () => ({ kind: "unknown" }), stampRegistryIdentity: () => {},
+      runtimeIdentity: () => ({ engine: "claude", model: "opus" }), resolvedConversation: () => null,
+      now: () => "2026-10-23T00:00:00.000Z",
+    });
+    expect(result.status).toBe(202);
+    expect(keys).toEqual([attempt, attempt]);
+    expect(orchestratorSeatFor(project)).toMatchObject({ pending: null, history: [] });
+    expect(deferred).toHaveLength(1);
+  } finally {
+    membership.mockRestore();
+    if (locked) peer.exec("ROLLBACK");
+    peer.close();
+  }
+});
+
+test.each(["registry", "state"] as const)("a later %s failure preserves its response after spawn admission", async kind => {
+  const { RegistryWriterBusyError } = await import("./registry");
+  const { FileTransactionBusyError } = await import("@/lib/state/fileTransaction");
+  const cwd = statePath(`post-admission-refusal-${kind}`);
+  fs.mkdirSync(cwd, { recursive: true });
+  const attempt = `post_admission_refusal_${kind}`;
+  const registry = agentRegistry();
+  const dependencies = structuredRouteDependencies(cwd);
+  const deferred: Array<() => Promise<void>> = [];
+  dependencies.defer = work => { deferred.push(work); };
+  dependencies.runtimeHostClient = () => {
+    throw kind === "registry" ? new RegistryWriterBusyError("fixture runtime preparation")
+      : new FileTransactionBusyError("state admission timed out at spawn.membership");
+  };
   const response = await executeSpawnRequest(new NextRequest("http://127.0.0.1/api/spawn", {
     method: "POST", headers: { origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", host: "127.0.0.1", "content-type": "application/json" },
     body: JSON.stringify({ clientAttemptId: attempt, title: "Post admission fixture", engine: "claude", cwd, prompt: "Inspect fixture runtime", mcpServers: [] }),

@@ -1,5 +1,6 @@
 import type { AgentRegistry, SpawnReceipt } from "./registry";
 import { RegistryWriterBusyError } from "./registry";
+import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
 import { withSpawnDiagnostics, bindSpawnDiagnostics, spawnDiagnosticError } from "./spawnDiagnostics";
 import fs from "node:fs";
@@ -875,8 +876,9 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     const beginAccountSpawnRequest = async (request: SpawnRequest, guard?: () => void) => {
       try { return await registry.beginSpawnRequestAsync(request, guard); }
       catch (error) {
-        // Keep the spawn admission response shared by seat and task callers.
-        if (error instanceof RegistryWriterBusyError) throw new AccountMutationBusyError();
+        // Reservation and deferred task membership share the same retryable
+        // admission response. Later launch failures keep their own handling.
+        if (error instanceof RegistryWriterBusyError || error instanceof FileTransactionBusyError) throw new AccountMutationBusyError();
         throw error;
       }
     };
