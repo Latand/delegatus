@@ -186,7 +186,8 @@ import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/o
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
 import { splitRelayMessageText } from "@/lib/orchestrator/relayText";
-import { leaveLessonForSeat, leaveLessonForConversation, lessonRequestForReport } from "@/lib/memory/roleStage";
+import { leaveLessonForOperator, leaveLessonForSeat, leaveLessonForConversation, lessonRequestForReport } from "@/lib/memory/roleStage";
+import { operatorMemoryEnabled, storedOperatorRoot } from "@/lib/memory/operatorMemory";
 import { readMemoryProblem } from "@/lib/memory/roleProblems";
 import { RoleMemoryRefusal } from "@/lib/memory/roleStore";
 import { withoutStoredLessonsAsync, renderReportAsync, scrubIssueReportAsync } from "@/lib/memory/privacy";
@@ -962,6 +963,10 @@ export interface ViewerMcpDomainDependencies {
       Null means the invariant "a registered session has a canonical project"
       is violated, and unscoped directive routing fails closed diagnostically. */
   callerProject?(): string | null;
+  /** The operator's own root conversation (no role, no parent, depth zero, no
+      membership) with its canonical project, or null. Production reads the
+      registry; leave_lesson admits it only while Delegatus memory is on. */
+  operatorConversation?(conversationId: string): { project: string | null } | null;
   /** The canonical projects of the repository this Viewer deploys (#1321) —
       the only projects whose designated seat may execute a deploy. Production
       derives them from the canonical Viewer remote, never from the caller's
@@ -1049,6 +1054,18 @@ function viewerOwnProjects(): string[] {
   const configured = process.env.LLV_VIEWER_CANONICAL_REMOTE?.trim();
   const remote = configured || viewerPackageManifest.repository.url.trim();
   return [...new Set(viewerRepositoryProjects(remote, process.cwd()).map(canonicalOrchestratorProject))];
+}
+
+/** The registry's proof that a caller is the operator's own root conversation:
+    the conversation's durable operator-origin stamp plus the root shape. */
+export function operatorConversationFromSnapshot(snapshot: RegistrySnapshot, conversationId: string): { project: string | null } | null {
+  const conversation = readOnlyConversationLookupFromSnapshot(snapshot).conversation(conversationId as `conversation_${string}`);
+  if (!conversation || !storedOperatorRoot(conversation, snapshot.memberships[conversation.id])) return null;
+  return { project: callerProjectFromSnapshot(snapshot, conversation.id) };
+}
+
+function productionOperatorConversation(conversationId: string): { project: string | null } | null {
+  return operatorConversationFromSnapshot(agentRegistry().readOnlySnapshot(), conversationId);
 }
 
 /**
@@ -2673,13 +2690,29 @@ async function leaveLesson(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
     const seat = caller.conversationId && (caller.kind === "manager" || caller.kind === "gateway")
       ? (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources())).find(row => row.conversationId === caller.conversationId)
       : null;
-    if (caller.kind === "manager" && !seat) throw new RoleMemoryRefusal("LESSON_NOT_A_SEAT", "this caller has no active project designation");
-    if (caller.kind === "gateway" && !seat) throw new RoleMemoryRefusal("LESSON_NOT_A_SEAT", "this gateway conversation has no active project designation");
     const answer = { lesson: args.lesson, rewrite: args.rewrite, none: args.none, problem: args.problem, applied: args.applied, misled: args.misled };
-    const result = seat ? leaveLessonForSeat(seat, answer) : leaveLessonForConversation(
-      dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [], caller.conversationId, answer,
-    );
-    return { ...result };
+    /* The operator's own root conversation, in Delegatus mode only: proven by
+       the registry, never by an argument (memory-source-switch.md §3.3). */
+    const operator = () => {
+      if (!caller.conversationId || caller.role || !operatorMemoryEnabled()) return null;
+      const found = (dependencies.operatorConversation ?? productionOperatorConversation)(caller.conversationId);
+      return found ? { project: found.project, conversationId: caller.conversationId } : null;
+    };
+    if (caller.kind === "manager" && !seat) throw new RoleMemoryRefusal("LESSON_NOT_A_SEAT", "this caller has no active project designation");
+    if (caller.kind === "gateway" && !seat) {
+      const own = operator();
+      if (own) return { ...leaveLessonForOperator(own, answer) };
+      throw new RoleMemoryRefusal("LESSON_NOT_A_SEAT", "this gateway conversation has no active project designation");
+    }
+    if (seat) return { ...leaveLessonForSeat(seat, answer) };
+    try {
+      return { ...leaveLessonForConversation(dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [], caller.conversationId, answer) };
+    } catch (error) {
+      // Only a conversation that holds no stage attempt at all may be the operator's.
+      const own = error instanceof RoleMemoryRefusal && error.code === "LESSON_NOT_AN_ATTEMPT" && caller.kind === "agent" ? operator() : null;
+      if (!own) throw error;
+      return { ...leaveLessonForOperator(own, answer) };
+    }
   } catch (error) {
     if (error instanceof RoleMemoryRefusal) {
       throw new McpToolRefusal(error.message, { code: error.code, status: error.code === "LESSON_INVALID" ? 400 : 409 });
