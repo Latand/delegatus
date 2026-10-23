@@ -73,7 +73,7 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<ApiError> | 
        the open file lies at that path. A directory swapped for a link after
        the check must not answer with another place's picture. */
     const workspace = requestWorkspaceScope(req);
-    if (workspace && workspace.access(projectForCwd(path.dirname(real))) === "none") return workspaceDenied();
+    if (workspace && !workspace.canReadFile(projectForCwd(path.dirname(real)))) return workspaceDenied();
     handle = await openAdmitted(real);
     if (!(await handle.stat()).isFile()) return NextResponse.json({ error: "not a file" }, { status: 404 });
     data = await handle.readFile();

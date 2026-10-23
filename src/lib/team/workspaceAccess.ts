@@ -1,26 +1,30 @@
 import type { Member, TeamActor } from "./contract";
 import { TeamError } from "./members";
 import { existingTeamStore, type TeamStore } from "./store";
-import { workspaceDirectory } from "./workspaces";
+import { projectAliasResolver } from "@/lib/projects/aliases";
+import { knownWorkspaceProjects, workspaceDirectory } from "./workspaces";
 
 export type WorkspaceAccess = "owner" | "manager" | "member" | "none";
 
 /** One request owns this snapshot; membership is never cached across requests. */
 export function workspaceScope(store: TeamStore, memberId: string) {
   const member = store.member(memberId);
-  const directory = workspaceDirectory(store);
+  const resolve = projectAliasResolver();
+  const directory = workspaceDirectory(store, { resolve });
+  const known = knownWorkspaceProjects({ resolve });
   const roles = new Map(store.workspaceMemberships(memberId).filter(row => directory.workspaces.some(workspace => workspace.id === row.workspaceId)).map(row => [row.workspaceId, row.role]));
   const active = member?.status === "active";
   const owner = active && member.role === "owner";
   const manager = active && [...roles.values()].includes("manager");
+  const assigned = new Set(directory.workspaces.flatMap(workspace => workspace.projects));
+  const allowed = new Set(directory.workspaces.filter(workspace => roles.has(workspace.id)).flatMap(workspace => workspace.projects));
+  if (manager) for (const project of known) if (!assigned.has(project)) allowed.add(project);
   return {
     memberId,
     owner,
     manager,
     projectFilter: {
-      allowUnassigned: Boolean(manager),
-      allowed: directory.workspaces.filter(workspace => roles.has(workspace.id)).flatMap(workspace => workspace.projects).sort(),
-      assigned: directory.workspaces.flatMap(workspace => workspace.projects).sort(),
+      allowed: [...allowed].sort(),
     },
     workspaces: directory.workspaces.filter(workspace => owner || (active && roles.has(workspace.id))),
     role(workspaceId: string): WorkspaceAccess {
@@ -33,12 +37,15 @@ export function workspaceScope(store: TeamStore, memberId: string) {
       const workspaceId = project ? directory.workspaceOf(project) : null;
       return Boolean(workspaceId && roles.has(workspaceId));
     },
+    canReadFile(project: string | null | undefined): boolean {
+      return Boolean(active && (owner || (project && known.has(resolve(project)) && allowed.has(resolve(project)))));
+    },
     access(project: string | null | undefined): WorkspaceAccess {
       if (!active) return "none";
       if (owner) return "owner";
       if (!project || project === "project_unresolved") return "none";
       const workspaceId = directory.workspaceOf(project);
-      return workspaceId ? roles.get(workspaceId) ?? "none" : manager ? "manager" : "none";
+      return workspaceId ? roles.get(workspaceId) ?? "none" : manager && known.has(resolve(project)) ? "manager" : "none";
     },
   };
 }
@@ -65,11 +72,9 @@ export function inviteWorkspace(store: TeamStore, actor: Member, workspaceId: un
 }
 
 export interface WorkspaceProjectFilter {
-  allowUnassigned: boolean;
   allowed: readonly string[];
-  assigned: readonly string[];
 }
 
 export function projectInWorkspaceFilter(filter: WorkspaceProjectFilter, project: string | null): boolean {
-  return Boolean(project && project !== "project_unresolved" && (filter.allowed.includes(project) || (filter.allowUnassigned && !filter.assigned.includes(project))));
+  return Boolean(project && project !== "project_unresolved" && filter.allowed.includes(project));
 }

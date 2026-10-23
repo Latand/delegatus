@@ -89,6 +89,11 @@ async function targetProjects(route: string, request: Request, ctx?: Context): P
       projects.push(projectForCwd(value));
     }
     if (["taskId", "parentTaskId", "sourceTaskId"].includes(key)) projects.push(await taskProject(value));
+    if (route === "/api/orchestrator/ghost" && ["askId", "retryAskId", "clientRequestId"].includes(key)) {
+      const { readDeputies } = await import("@/lib/orchestrator/deputies");
+      const row = readDeputies().find(row => key === "clientRequestId" ? row.clientRequestId === value.trim().slice(0, 128) : row.askId === value);
+      if (row || key !== "clientRequestId") projects.push(row?.project ?? null);
+    }
     if (["pipelineId", "sourcePipelineId"].includes(key)) projects.push(await pipelineProject(value));
     if (["launchId", "retryOfLaunchId", "sourceLaunchId"].includes(key)) {
       const { agentRegistry } = await import("@/lib/agent/registry");
@@ -113,10 +118,13 @@ async function targetProjects(route: string, request: Request, ctx?: Context): P
       const { dirname } = await import("node:path");
       const { resolveLocal } = await import("@/lib/artifact/localFile");
       const { projectForCwd } = await import("@/lib/scanner/describe");
-      try { projects.push(projectForCwd(dirname(await realpath(resolveLocal(value))))); } catch { projects.push(null); }
+      try {
+        const project = projectForCwd(dirname(await realpath(resolveLocal(value))));
+        projects.push(requestWorkspaceScope(request)?.canReadFile(project) ? project : null);
+      } catch { projects.push(null); }
       return;
     }
-    if (["conversationId", "sourceConversationId", "parentConversationId", "parent", "supersedes", "reviews", "launcherConversationId", "path", "paths", "src", "srcPath", "transcriptPath", "voiceFor"].includes(key)) projects.push(await workspaceConversationProject(value));
+    if (["conversationId", "sourceConversationId", "seatConversationId", "parentConversationId", "parent", "supersedes", "reviews", "launcherConversationId", "path", "paths", "src", "srcPath", "transcriptPath", "voiceFor"].includes(key)) projects.push(await workspaceConversationProject(value));
   };
   for (const [key, value] of url.searchParams) await check(key, value);
   if (!["GET", "HEAD"].includes(request.method)) {
@@ -138,7 +146,7 @@ async function targetProjects(route: string, request: Request, ctx?: Context): P
     for (const id of (url.searchParams.get("ids") ?? "").split(",").filter(Boolean)) projects.push(await taskProject(id));
   }
   const supplied = (key: string) => typeof input[key] === "string" && Boolean((input[key] as string).trim()) || Boolean(url.searchParams.get(key)?.trim());
-  if ((route.startsWith("/api/projects/") || route.startsWith("/api/orchestrator/") || route === "/api/board" || route === "/api/timeline" || (route === "/api/tasks/curator" && request.method === "GET") || route === "/api/log/project-delete") && !supplied("project")) return [null];
+  if ((route.startsWith("/api/projects/") || route.startsWith("/api/orchestrator/") || route === "/api/board" || route === "/api/timeline" || (route === "/api/tasks/curator" && request.method === "GET") || route === "/api/log/project-delete") && !supplied("project") && !(route === "/api/orchestrator/ghost" && (supplied("askId") || supplied("retryAskId")))) return [null];
   if ((route === "/api/spawn" || route === "/api/spawn/validate") && request.method === "POST" && !supplied("cwd")) return [null];
   if (route === "/api/pipelines" && request.method === "POST" && (!supplied("project") || !supplied("repoDir"))) return [null];
   if (route === "/api/pipelines/preflight" && !supplied("repoDir")) return [null];

@@ -2,7 +2,7 @@ import { projectDisplayName } from "@/lib/displayNames";
 import { operatorLocale } from "@/lib/operator/settings";
 import { projectAliasResolver } from "@/lib/projects/aliases";
 import { projectCurationSnapshot } from "@/lib/projects/curation";
-import { conversationCatalogReady, conversationCatalogSnapshot } from "@/lib/scanner/conversationCatalog";
+import { conversationCatalogProjectsSnapshot, conversationCatalogReady, conversationCatalogSnapshot } from "@/lib/scanner/conversationCatalog";
 
 import {
   cleanWorkspaceName,
@@ -257,7 +257,7 @@ export function placeProject(store: TeamStore, actor: Member, project: unknown, 
       const manages = (id: string) => roles.some(row => row.workspaceId === id && row.role === "manager");
       const directory = workspaceDirectory(store, { ...options, resolve });
       const source = directory.workspaceOf(canonical);
-      if (!directory.workspaces.some(workspace => manages(workspace.id)) || (target && !manages(target)) || (source && !manages(source))) {
+      if (!knownWorkspaceProjects({ resolve }).has(canonical) || !directory.workspaces.some(workspace => manages(workspace.id)) || (target && !manages(target)) || (source && !manages(source))) {
         throw new TeamError("workspace_forbidden", "workspace access denied", 403);
       }
     }
@@ -305,4 +305,13 @@ export function workspaceCatalog(options: { resolve?: ProjectResolver } = {}): {
   }));
   projects.sort((a, b) => b.smt - a.smt || compareCodeUnits(a.project, b.project));
   return { ready: conversationCatalogReady(), projects };
+}
+
+/** Catalog membership is affirmative authority; deriving a key from a path is not. */
+export function knownWorkspaceProjects(options: { resolve?: ProjectResolver } = {}): ReadonlySet<string> {
+  const resolve = options.resolve ?? projectAliasResolver();
+  return new Set([
+    ...conversationCatalogProjectsSnapshot(),
+    ...projectCurationSnapshot().manualProjects.map(row => row.project),
+  ].map(resolve));
 }

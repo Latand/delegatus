@@ -152,9 +152,8 @@ export async function activityTokensResponse(search: URLSearchParams, viewer: Ac
       if (viewer.workspaceProjects) {
         const filter = viewer.workspaceProjects;
         const expression = projectExpression("project");
-        clauses.push(`(${expression} IN (SELECT value FROM json_each(?))${filter.allowUnassigned ? ` OR (${expression} != '' AND ${expression} != 'project_unresolved' AND ${expression} NOT IN (SELECT value FROM json_each(?)))` : ""})`);
+        clauses.push(`${expression} IN (SELECT value FROM json_each(?))`);
         binds.push(JSON.stringify(filter.allowed));
-        if (filter.allowUnassigned) binds.push(JSON.stringify(filter.assigned));
       }
       if (member && member !== "all") { clauses.push("member = ?"); binds.push(member); }
       for (const [field, value] of Object.entries(filters)) { clauses.push(`${field} = ?`); binds.push(value); }

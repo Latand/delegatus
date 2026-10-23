@@ -9,6 +9,11 @@ import { createInvite, redeemJoin, TeamError } from "./members";
 import { MEMBER_COOKIE, mintSession } from "./sessions";
 import { resetTeamStoreForTests, teamStore, type TeamStore } from "./store";
 import { workspaceScope } from "./workspaceAccess";
+import { projectForCwd } from "@/lib/scanner/describe";
+import { beginDeputy, readDeputies } from "@/lib/orchestrator/deputies";
+import { GET as artifactGET } from "@/app/api/artifact/route";
+import { GET as imageGET } from "@/app/api/image/route";
+import { GET as ghostGET, POST as ghostPOST } from "@/app/api/orchestrator/ghost/route";
 import { workspaceRoute } from "./workspaceRoute";
 import { teamGate } from "./gate";
 import { createWorkspace, placeProject } from "./workspaces";
@@ -16,9 +21,9 @@ import { GET as tasksGET, POST as tasksPOST } from "@/app/api/tasks/route";
 import { PATCH as taskPATCH, DELETE as taskDELETE } from "@/app/api/tasks/[id]/route";
 import { loadTasksForList, saveTasks } from "@/lib/tasks/store";
 import { agentRegistry, AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
-import { runtimeScope, type RuntimeEvent } from "@/lib/runtime/contracts";
-import { workspaceRuntimeEvent, workspaceFiles } from "./workspaceProjection";
-import { catalogEntryToFileEntry } from "@/lib/scanner/conversationCatalog";
+import { runtimeScope, type RuntimeEvent, type RuntimeSnapshot } from "@/lib/runtime/contracts";
+import { workspaceRuntime, workspaceRuntimeEvent, workspaceFiles } from "./workspaceProjection";
+import { conversationCatalogSnapshot, replaceConversationCatalog, catalogEntryToFileEntry } from "@/lib/scanner/conversationCatalog";
 import type { FilesResponse } from "@/lib/types";
 import { WORKSPACE_ROUTES } from "./workspaceRoutes";
 import { GET as inviteGET, POST as invitePOST } from "@/app/api/team/invites/route";
@@ -36,6 +41,7 @@ const fixtureSessionId = (suffix: number) => ["00000000", "0000", "4000", "8000"
 const device = { surface: "desktop" as const, browser: "chrome" as const };
 let store: TeamStore;
 let root: string;
+let priorCatalog: ReturnType<typeof conversationCatalogSnapshot>;
 let now: number;
 let owner: Member;
 let manager: Member;
@@ -59,6 +65,8 @@ beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), "workspace-access-"));
   process.env.LLV_STATE_DIR = root;
   resetTeamStoreForTests();
+  priorCatalog = conversationCatalogSnapshot();
+  replaceConversationCatalog([{ path: "catalog-new.jsonl", root: "codex-sessions", name: "new", project: "repo-new", title: "new", firstPrompt: "", engine: "codex", kind: "session", fmt: "codex", mtime: 0, size: 0 }]);
   cookies.clear();
   now = Date.now();
   store = teamStore();
@@ -75,6 +83,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  replaceConversationCatalog([...priorCatalog]);
   setAgentRegistryForTests(null);
   resetTeamStoreForTests();
   if (previous === undefined) delete process.env.LLV_STATE_DIR;
@@ -83,6 +92,84 @@ afterEach(() => {
 });
 
 describe("workspace authority", () => {
+  test("a manager reads only catalog files and cannot place an undiscovered key", async () => {
+    const previousHome = process.env.HOME;
+    process.env.HOME = root;
+    try {
+      const privateDir = path.join(root, ".codex");
+      const projectDir = path.join(root, "project");
+      fs.mkdirSync(privateDir);
+      fs.mkdirSync(projectDir);
+      fs.writeFileSync(path.join(privateDir, "auth.json"), JSON.stringify({ fixture: true }));
+      fs.writeFileSync(path.join(projectDir, "README.md"), "catalog project");
+      fs.symlinkSync(path.join(privateDir, "auth.json"), path.join(projectDir, "linked.json"));
+      const project = projectForCwd(projectDir)!;
+      replaceConversationCatalog([{ ...conversationCatalogSnapshot()[0]!, project }]);
+      const undiscovered = projectForCwd(privateDir);
+      for (const actor of [manager, member, outsider]) {
+        for (const [route, handler] of [["artifact", artifactGET], ["image", imageGET]] as const) {
+          for (const file of ["~/.codex/auth.json", path.join(projectDir, "linked.json")]) {
+            const response = await handler(request(`/api/${route}?path=${encodeURIComponent(file)}`, actor));
+            expect(response.status).toBe(403);
+            expect(await response.json()).toEqual({ error: "workspace access denied", code: "workspace_forbidden" });
+          }
+        }
+      }
+      const placement = await placementPUT(request("/api/team/workspace-projects", manager, "PUT", { project: undiscovered, workspaceId: W1 }));
+      expect(placement.status).toBe(403);
+      expect(store.workspaceProjectRows().some(row => row.project === undiscovered)).toBe(false);
+      // Older arbitrary placements confer no file authority either.
+      placeProject(store, owner, undiscovered, W1);
+      for (const actor of [manager, member]) expect((await artifactGET(request("/api/artifact?path=~/.codex/auth.json", actor))).status).toBe(403);
+      const file = `/api/artifact?path=${encodeURIComponent(path.join(projectDir, "README.md"))}`;
+      const real = await artifactGET(request(file, manager));
+      expect(real.status).toBe(200);
+      expect(await real.text()).toBe("catalog project");
+      expect((await artifactGET(request(file, member))).status).toBe(403);
+      const privateRead = await artifactGET(request("/api/artifact?path=~/.codex/auth.json", owner));
+      expect(privateRead.status).toBe(200);
+      await privateRead.body?.cancel();
+      expect((await placementPUT(request("/api/team/workspace-projects", manager, "PUT", { project, workspaceId: W1 }))).status).toBe(200);
+      const placed = await artifactGET(request(file, member));
+      expect(placed.status).toBe(200);
+      await placed.body?.cancel();
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+    }
+  });
+
+  test("deputy reads, retries and request replays resolve stored projects before a forged hint", async () => {
+    const askId = "deputy-foreign";
+    beginDeputy({ project: "repo-beta", seatConversationId: "conversation_foreign", seatEpoch: 1, seatPath: null, askId, clientRequestId: "foreign-request", ask: { text: "foreign question", images: 0, sender: null }, now: new Date(now) });
+    const before = readDeputies();
+    for (const actor of [member, manager]) {
+      for (const body of [
+        { retryAskId: askId, clientRequestId: "retry" },
+        { retryAskId: "missing", clientRequestId: "retry" },
+        { clientRequestId: "foreign-request", text: "forged" },
+        { seatConversationId: "conversation_foreign", clientRequestId: "new-request", text: "forged" },
+      ]) {
+        const denied = await ghostPOST(request("/api/orchestrator/ghost", actor, "POST", { project: "repo-alpha", ...body }));
+        expect(denied.status).toBe(403);
+        expect(await denied.json()).toEqual({ error: "workspace access denied", code: "workspace_forbidden" });
+      }
+      const read = await ghostGET(request(`/api/orchestrator/ghost?project=repo-alpha&askId=${askId}`, actor));
+      expect(read.status).toBe(403);
+    }
+    expect(readDeputies()).toEqual(before);
+    let ran = false;
+    const allowed = workspaceRoute("/api/orchestrator/ghost", (received: Request) => { ran = true; return Response.json({ ok: true, url: received.url }); });
+    expect((await allowed(request(`/api/orchestrator/ghost?askId=${askId}`, owner))).status).toBe(200);
+    beginDeputy({ project: "repo-alpha", seatConversationId: "conversation_own", seatEpoch: 1, seatPath: null, askId: "deputy-own", clientRequestId: "own-request", ask: { text: "own question", images: 0, sender: null }, now: new Date(now) });
+    ran = false;
+    expect((await allowed(request("/api/orchestrator/ghost?askId=deputy-own", member))).status).toBe(200);
+    expect(ran).toBe(true);
+    const ownRead = await ghostGET(request("/api/orchestrator/ghost?askId=deputy-own", member));
+    expect(ownRead.status).toBe(200);
+    expect(await ownRead.json()).toEqual({ askId: "deputy-own", lines: [], missing: true });
+  });
+
   test("pipeline ids are resolved independently of a forged project hint", async () => {
     const rows = ["alpha", "beta"].map(name => buildPipeline({ id: `pipeline-${name}`, project: `repo-${name}`, task: name, repoDir: root, taskIds: [], srcPath: null, srcConversationId: null, now: new Date(now).toISOString(), stages: [{ id: "run", kind: "run", prompt: "work", next: null, effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } }] }));
     savePipelines(rows);
@@ -118,6 +205,21 @@ describe("workspace authority", () => {
       store.removeWorkspaceMember(W1, member.id);
       return workspaceScope(store, member.id);
     })).toBe(false);
+  });
+
+  test("runtime snapshot ownership is filtered in one batch and rechecks membership after resolving", async () => {
+    const registry = agentRegistry();
+    const ids = ["alpha", "beta"].map((project, index) => {
+      const receipt = registry.beginSpawn("codex", root, { project: `repo-${project}`, title: project });
+      registry.completeSpawn(receipt.launchId, { key: { engine: "codex", sessionId: fixtureSessionId(index + 10) }, artifactPath: `${root}/${project}.jsonl`, cwd: root, accountId: null, status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: "spawn" });
+      return receipt.conversationId;
+    });
+    const source: RuntimeSnapshot = { schemaVersion: 1, snapshotSeq: 1, retentionFloorSeq: 0, serverTime: new Date(now).toISOString(), runtime: { hostEpoch: 1, health: "healthy" }, filesRevision: 1, sessions: ids.map(conversationId => ({ conversationId })) as RuntimeSnapshot["sessions"], attentions: [], recentOperations: [], edges: [], tasks: [], flows: [], workflows: [], deployments: [] };
+    const scope = workspaceScope(store, member.id);
+    expect((await workspaceRuntime(scope, source)).sessions.map(row => row.conversationId)).toEqual([ids[0]!]);
+    const revoked = await workspaceRuntime(scope, source, () => { store.removeWorkspaceMember(W1, member.id); return workspaceScope(store, member.id); });
+    expect(revoked.sessions).toEqual([]);
+    expect(await workspaceRuntime(workspaceScope(store, owner.id), source)).toBe(source);
   });
 
   test("the board projection removes foreign rows, aliases, names and navigation maps", () => {
