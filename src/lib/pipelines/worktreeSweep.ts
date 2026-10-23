@@ -20,6 +20,7 @@ import type { WorktreeSweepCache } from "./worktreeSweepCache";
 
 import { pipelineActivitySettled, type Pipeline } from "./types";
 import { pipelineLiteralGitEnv } from "./git";
+import { readWorktreeProvenance } from "./worktreeProvenance";
 
 /**
  * Removes the worktrees whose work is merged (#2202), and finished ones whose
@@ -37,16 +38,26 @@ import { pipelineLiteralGitEnv } from "./git";
  * yielding, and retaining that ref does not retain the checkout's disk bulk.
  *
  * Registered repositories are the ones a pipeline ran in and the ones the
- * operator created a project from; every linked worktree git lists for them is
- * a candidate, whatever its layout (`.worktrees/<name>`, `worktrees/<name>`,
+ * operator created a project from; git lists their linked worktrees, whatever
+ * the layout (`.worktrees/<name>`, `worktrees/<name>`,
  * `.claude/worktrees/<name>`, a sibling `git worktree add ../<name>`). The main
- * checkout never is.
+ * checkout is never a candidate. By default only a checkout Delegatus itself
+ * created is one (security audit of 1.15.0, finding 3): a pipeline whose
+ * record names it as its `worktreeDir` (archived ones included), merge-batch
+ * state that names it as its batch or resolution checkout, or the creation
+ * record a pipeline, a workflow or the merge batch writes into its Git
+ * registration when it adds it (`worktreeProvenance.ts`). Nothing is inferred
+ * from a name, an age or a path layout. Every other checkout is kept as
+ * `not-created-by-delegatus`, until the operator opts in with
+ * `LLV_WORKTREE_SWEEP_FOREIGN=1`; the rules below then apply to it as well.
  *
  * Each of these keeps a worktree, and the report names which one did:
  *
  * - `open-pipeline` — a pipeline that is not completed or closed, or whose
  *   close teardown or delivery has not settled, owns it, runs inside it, or
  *   runs its git in it.
+ * - `not-created-by-delegatus` — no record shows Delegatus created it, and
+ *   `LLV_WORKTREE_SWEEP_FOREIGN` is not on.
  * - `no-merged-pr` — no merged pull request has its branch as head (or is the
  *   one its pipeline delivered), and no pipeline or owned role layout makes it a
  *   finished lane: a checkout the operator made by hand stays.
@@ -146,6 +157,14 @@ export const FINISHED_WORKTREE_RETENTION_MS = 4 * 24 * HOUR_MS;
 export const PUSHED_WORKTREE_RETENTION_MS = HOUR_MS;
 /** Writes this recent hold a checkout no shorter retention applies to. */
 const QUIET_FLOOR_MS = 24 * HOUR_MS;
+/** `LLV_WORKTREE_SWEEP_FOREIGN`: `1`/`on`/`true` lets the sweep remove linked
+    worktrees no record shows Delegatus created, under the same guards and
+    proofs. Anything else, unset included, keeps them. */
+export function worktreeSweepForeign(env: Readonly<Record<string, string | undefined>> = process.env): boolean {
+  const raw = env.LLV_WORKTREE_SWEEP_FOREIGN?.trim().toLowerCase();
+  return raw === "1" || raw === "on" || raw === "true";
+}
+
 export const WORKTREE_SWEEP_INTERVAL_MS = HOUR_MS;
 /** Boot is busy enough; the first sweep waits for it to settle. */
 const FIRST_SWEEP_DELAY_MS = 10 * 60_000;
@@ -158,6 +177,7 @@ const PENDING_CONVERSATION_MS = 24 * HOUR_MS;
 
 export type WorktreeKeptReason =
   | "open-pipeline"
+  | "not-created-by-delegatus"
   | "no-merged-pr"
   | "in-use"
   | "live-conversation"
@@ -185,6 +205,7 @@ const RETRIED_REASONS: ReadonlySet<WorktreeKeptReason> = new Set<WorktreeKeptRea
 /** A retry with no deadline earlier than the next hourly sweep. */
 const NEXT_SWEEP = Number.POSITIVE_INFINITY;
 const HEAD_UNREADABLE = "HEAD unreadable";
+const NOT_CREATED_DETAIL = "not created by Delegatus: no pipeline, merge batch or creation record names it; LLV_WORKTREE_SWEEP_FOREIGN=1 lets the sweep consider it";
 
 export type MergedPullRequest = { number: number; url: string; headRefName: string; headRefOid: string };
 
@@ -231,6 +252,9 @@ export type SweptPipeline = Pick<Pipeline, "id" | "state" | "repoDir" | "worktre
 
 export type WorktreeSweepPorts = {
   mode: WorktreeSweepMode;
+  /** Also consider worktrees no record shows Delegatus created
+      (`LLV_WORKTREE_SWEEP_FOREIGN`). Off by default. */
+  foreign?: boolean;
   /** Advisory inventories owned by the off-thread production worker. */
   cache?: WorktreeSweepCache;
   inspect?: typeof inspectTree;
@@ -728,13 +752,16 @@ function networkRemote(url: string): boolean {
     merged batch PR alone cannot release this ownership. Read it again with
     every guard check, including through the host namespace in Docker. */
 function mergeBatchOwnership(directory: string, branch: string | null, scan: ProcessScan,
-  accessible: (directory: string) => string): { owned: boolean; hold: string | null } {
+  accessible: (directory: string) => string): { owned: boolean; hold: string | null; recorded: boolean } {
   const parent = path.dirname(directory);
   const checkout = path.basename(directory) === "checkout" && /^merge-(?:batch|resolution)-[^/]+$/.test(path.basename(parent));
   const privacy = /^privacy-main-[^/]+$/.test(path.basename(directory));
   const runDirectory = checkout ? path.dirname(parent) : privacy ? parent : null;
   const batchLayout = checkout && path.basename(parent).startsWith("merge-batch-");
   let owned = batchLayout && /^merge-batch\/[a-f0-9-]{36}$/.test(branch ?? "");
+  /* Only state naming this checkout records that the merge batch made it;
+     the layout and branch name above prove nothing about who created it. */
+  let recorded = false;
   const processes = scan.processes.map(process => ({ pid: process.pid,
     paths: process.paths.map(target => path.resolve(target.replace(/ \(deleted\)$/, ""))) }));
   const samePath = (left: string, right: string) => {
@@ -755,7 +782,7 @@ function mergeBatchOwnership(directory: string, branch: string | null, scan: Pro
     const holderDetail = holder ? `pid ${holder.pid} holds merge batch ${holder.paths.some(target => samePath(target, file)) ? "state" : "run"}` : null;
     // An open descriptor survives unlink/atomic replacement. The process
     // still owns this run even when the path no longer has a readable file.
-    if (knownLayout && holder) return { owned, hold: holderDetail };
+    if (knownLayout && holder) return { owned, hold: holderDetail, recorded };
     let state: { version?: unknown; work?: unknown; branch?: unknown; landed?: unknown;
       resolving?: { work?: unknown }; rows?: { status?: unknown; detail?: unknown }[] };
     try {
@@ -766,19 +793,20 @@ function mergeBatchOwnership(directory: string, branch: string | null, scan: Pro
         || !/^merge-batch\/[a-f0-9-]{36}$/.test(state.branch) || !Array.isArray(state.rows)) throw new Error("invalid batch state");
     } catch (error) {
       if (knownLayout && (locked || (error as NodeJS.ErrnoException).code !== "ENOENT"))
-        return { owned, hold: "merge batch ownership is unreadable or locked" };
+        return { owned, hold: "merge batch ownership is unreadable or locked", recorded };
       continue;
     }
-    if (!samePath(state.work as string, directory)
-      && (typeof state.resolving?.work !== "string" || !samePath(state.resolving.work, directory))
-      && !(privacy && knownLayout)) continue;
+    const named = samePath(state.work as string, directory)
+      || typeof state.resolving?.work === "string" && samePath(state.resolving.work, directory);
+    if (!named && !(privacy && knownLayout)) continue;
     owned = true;
+    if (named) recorded = true;
     const settled = state.landed === true && !state.resolving && state.rows!.every(row => row
       && (row.status === "needs-review" || row.status === "head-moved" || row.status === "culprit"
         || row.status === "merged" && (row.detail === "closed" || row.detail === "head moved after landing; original kept open")));
-    if (!settled || locked || holder) return { owned, hold: holder ? holderDetail : "merge batch still owns checkout" };
+    if (!settled || locked || holder) return { owned, hold: holder ? holderDetail : "merge batch still owns checkout", recorded };
   }
-  return { owned, hold: null };
+  return { owned, hold: null, recorded };
 }
 
 /** Git's linked-checkout registration is local metadata. Read it without
@@ -1267,6 +1295,12 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
       const busy = heldBy(initial, worktree, entry.branch);
       if (busy) {
         keep({ ...busy, ...base });
+        continue;
+      }
+      /* By default only a checkout with a record of Delegatus creating it. */
+      if (!ports.foreign && owners.length === 0 && !batch.recorded
+        && !readWorktreeProvenance(worktree, { commonDir: path.join(root, ".git"), accessible })) {
+        keep({ ...base, reason: "not-created-by-delegatus", detail: NOT_CREATED_DETAIL });
         continue;
       }
       /* A lane past its hour is screened against the advertised refs. */
@@ -1856,6 +1890,7 @@ export async function productionWorktreeSweepPorts(
   const access = hostTempWorktreeAccess(temp);
   return {
     mode,
+    foreign: worktreeSweepForeign(),
     close: view.close,
     previous: readWorktreeSweepReport(),
     ...access,

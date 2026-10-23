@@ -25,6 +25,7 @@ import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifa
 import { publicationDeadlineOnly } from "./publication";
 import type { Pipeline, PipelinePublicationFailure, PipelinePublicationResult } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
+import { recordWorktreeProvenance } from "./worktreeProvenance";
 import { CpuContainmentUnavailable, wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
 import { cpuPriorityEnv } from "@/lib/runtime/cpuPriority";
 import { instanceCpuPrioritySource } from "@/lib/runtime/cpuAdmissionScope";
@@ -206,6 +207,7 @@ export async function provisionPipelineWorktree(pipeline: Pipeline, exec: ExecPo
   const base = (await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir));
   if (base.code !== 0 || !base.stdout.trim()) return failure("resolving the pipeline base ref", base);
   if (base.stdout.trim() !== pipeline.baseRef) return { ok: false, error: "the pipeline worktree does not match its persisted base" };
+  recordWorktreeProvenance(pipeline.worktreeDir, { creator: "pipeline", id: pipeline.id });
   if (fs.existsSync(path.join(pipeline.repoDir, "package.json"))) {
     const ignored = await exec("git", ["check-ignore", "--quiet", "node_modules/"], pipeline.worktreeDir);
     if (ignored.code !== 0 && ignored.code !== 1) return failure("checking ignored worktree dependencies", ignored);
@@ -439,6 +441,9 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
     const unlock = await exec("git", ["worktree", "unlock", pipeline.worktreeDir], pipeline.repoDir, signal);
     if (unlock.code !== 0) return failure("unlocking the finished pipeline checkout", unlock);
   }
+  // The worktree sweep removes only checkouts with a record of who made them.
+  // The pipeline's own record names this path too, so a failed write keeps it sweepable.
+  recordWorktreeProvenance(pipeline.worktreeDir, { creator: "pipeline", id: pipeline.id });
   try {
     if (fs.existsSync(path.join(pipeline.repoDir, "package.json"))) {
       const ignored = await exec("git", ["check-ignore", "--quiet", "node_modules/"], pipeline.worktreeDir, signal);

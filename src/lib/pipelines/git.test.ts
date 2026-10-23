@@ -9,6 +9,7 @@ import path from "node:path";
 import { Database } from "bun:sqlite";
 import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 
+import { readWorktreeProvenance } from "./worktreeProvenance";
 import { commitPipelineStage, currentPipelineRemoteBranchHead, mapReplayPatchLocation, pipelineWorktreeChanges, provisionPipelineWorktree, provisionPipelineWorktreeAsync, realProvisionExec, resolveDeliveryRemote, resolvePipelineBaseAsync, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
 import type { Pipeline } from "./types";
@@ -230,6 +231,8 @@ test("a real stale dirty checkout provisions from the freshly fetched origin/mai
 
     expect((await provisionPipelineWorktree(subject, realExec))).toEqual({ ok: true, sha: currentMain, baseBranch: "main" });
     expect((await git(subject.worktreeDir, "rev-parse", "HEAD"))).toBe(currentMain);
+    // The worktree sweep's proof that Delegatus made this checkout.
+    expect(readWorktreeProvenance(subject.worktreeDir, { commonDir: path.join(source, ".git") })).toMatchObject({ creator: "pipeline", id: subject.id });
     expect((await git(source, "rev-parse", "HEAD"))).toBe(staleHead);
     expect((await git(source, "status", "--porcelain"))).toBe("?? dirty.txt");
   } finally {

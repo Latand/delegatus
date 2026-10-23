@@ -7,6 +7,7 @@ import path from "node:path";
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-wf-prov-test-"));
 const { buildWorkflow, normalizeTemplate, setupStdoutPath, workflowArtifactsDir } = await import("./store");
 const { finishMerge, finishPr, provisionWorktree, prTitle, realExec, runFinish, setupStatus, startSetup } = await import("./provision");
+const { readWorktreeProvenance } = await import("@/lib/pipelines/worktreeProvenance");
 
 type Workflow = import("./types").Workflow;
 type ExecResult = import("./provision").ExecResult;
@@ -336,6 +337,7 @@ test("integration: provision + commit + local merge against a throwaway repo", a
   wf = { ...wf, baseBranch: res.baseBranch, baseRef: res.baseRef };
   expect(res.baseBranch).toBe("main");
   expect(fs.existsSync(path.join(wf.worktreeDir, "README.md"))).toBe(true);
+  expect(readWorktreeProvenance(wf.worktreeDir)).toMatchObject({ creator: "workflow", id: wf.id });
 
   /* The detached setup command runs in the worktree and reports done. */
   const setup = startSetup(wf);
