@@ -11,7 +11,7 @@ import { readImportCandidates } from "../importStore";
 let importCollection: typeof import("../importStore").importCollection;
 let candidateById: typeof import("../importCuration").candidateById;
 let candidateState: typeof import("../importCuration").candidateState;
-import { roleMemoryCollection, projectView } from "../roleStore";
+import { roleMemoryCollection, projectView, deleteRule, restoreRule } from "../roleStore";
 import { IMPORT_AT, IMPORT_ID, IMPORT_PROJECT, importCandidate, seedImport } from "../fixtures/import";
 import type { ImportCandidate } from "../importTypes";
 import type { RoleMemoryRule } from "../roleTypes";
@@ -112,6 +112,31 @@ test("one occurrence can be adopted and another dropped; explicit defer permits 
   expect(candidateState(candidateById(IMPORT_ID, a.id)!).state).toBe("adopted");
   applyCuration(p, scopeInput({ machine: [] }, { drop: [drop(b)] }), new Date(NOW + 1).toISOString());
   expect(candidateState(candidateById(IMPORT_ID, b.id)!).state).toBe("dropped");
+});
+
+test("§6.2: a problem drop is a drop and never an adopted rule archived; an adopted rule that left memory counts once, restored or not", async () => {
+  const { windowReport } = await import("../weeklyMetrics");
+  const problem = importCandidate(1), adopted = importCandidate(2);
+  await seedImport([problem, adopted]);
+  const p = pass(); await readCuration(p, "imports");
+  const ruleId = applyCuration(p, scopeInput({ [adopted.suggestedScope]: [`adopt:${adopted.id}:0`] }, { adopt: [adopt(adopted)], problem: [{
+    id: problem.id, statement: "A concrete import issue needs review.", evidence: "The retained source records the incomplete transfer.", note: "Keep this occurrence visible for follow-up.",
+  }] }), IMPORT_AT).placeholders[`adopt:${adopted.id}:0`];
+  patchPass(p.id, { state: "succeeded", endedAt: new Date(NOW + 1).toISOString() });
+  const week = { from: new Date(NOW - 3600_000).toISOString(), to: new Date(NOW + 7 * 86400_000).toISOString() };
+  const report = () => windowReport({ pipelines: [], memory: roleMemoryCollection()!.snapshot() as never, imports: importCollection()!.snapshot() as never, deliveries: [] }, week).imports;
+  expect(report()).toEqual({ adopted: 1, dropped: { problem: 1 }, adoptedArchived: 0 });
+  // The agenda row brought back and removed again is still no adopted rule.
+  const agenda = (roleMemoryCollection()!.snapshot().find(row => row.kind === "rule" && row.reason === "problem") as RoleMemoryRule).id;
+  restoreRule(agenda, new Date(NOW + 3600_000).toISOString());
+  deleteRule(agenda, new Date(NOW + 2 * 3600_000).toISOString());
+  expect(report()).toEqual({ adopted: 1, dropped: { problem: 1 }, adoptedArchived: 0 });
+  // The adopted rule leaves memory inside the week, then comes back after it: the week keeps its one.
+  deleteRule(ruleId, new Date(NOW + 3 * 3600_000).toISOString());
+  expect(report()).toEqual({ adopted: 1, dropped: { problem: 1 }, adoptedArchived: 1 });
+  restoreRule(ruleId, new Date(NOW + 8 * 86400_000).toISOString());
+  expect(rule(ruleId).state).toBe("active");
+  expect(report()).toEqual({ adopted: 1, dropped: { problem: 1 }, adoptedArchived: 1 });
 });
 
 test("problem transfer dispositions only pending occurrences and undo preserves an earlier adoption", async () => {

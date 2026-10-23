@@ -416,7 +416,9 @@ export function TelegramBotSection({ state }: { state: TelegramBotState }) {
           <p className="text-[10.5px] leading-snug text-muted">{t("telegram.bot.connectHint")}</p>
           <TokenForm busy={busy} onConnect={(token) => void state.connect(token)} />
         </>
-      ) : (
+      ) : null}
+
+      {connected ? (
         <>
           <div className="flex min-w-0 items-center gap-2">
             <span
@@ -451,26 +453,6 @@ export function TelegramBotSection({ state }: { state: TelegramBotState }) {
             </details>
           ) : null}
 
-          <div className="flex min-w-0 items-baseline justify-between gap-2 pr-1">
-            <h4 className="text-[10.5px] font-bold uppercase tracking-wide text-muted">{t("telegram.bot.chats")}</h4>
-            {active.length ? <span className="min-w-0 truncate text-[9.5px] font-semibold text-muted">{t("telegram.bot.mayPost")}</span> : null}
-          </div>
-          {active.length === 0 ? (
-            <p className="text-[10.5px] leading-snug text-muted">{t("telegram.bot.noChats", { username: status?.bot?.username ?? "bot" })}</p>
-          ) : (
-            <ul className="flex flex-col gap-1">
-              {active.map((chat) => <ChatRow key={chat.chatId} chat={chat} botSeesAll={botSeesAll} busy={busy || Boolean(state.pending?.has(chat.chatId))} onSave={save} onAssign={(id, bot) => void state.assignBot?.(id, bot)} />)}
-            </ul>
-          )}
-          {inactive.length ? (
-            <details className="text-[10.5px]">
-              <summary className="flex min-h-[44px] cursor-pointer items-center font-semibold text-muted sm:min-h-[28px]">{t("telegram.bot.inactive", { count: inactive.length })}</summary>
-              <ul className="mt-1 flex flex-col gap-1">
-                {inactive.map((chat) => <ChatRow key={chat.chatId} chat={chat} botSeesAll={botSeesAll} busy={busy || Boolean(state.pending?.has(chat.chatId))} onSave={save} onAssign={(id, bot) => void state.assignBot?.(id, bot)} />)}
-              </ul>
-            </details>
-          ) : null}
-
           <div className="flex flex-col gap-1.5 border-t border-border pt-2">
             <h4 className="text-[10.5px] font-bold uppercase tracking-wide text-muted">{t("telegram.bot.addTitle")}</h4>
             <AddChatForm state={state} />
@@ -483,7 +465,29 @@ export function TelegramBotSection({ state }: { state: TelegramBotState }) {
             <ProjectReportsOverview bot={state} />
           </div>
         </>
+      ) : null}
+
+      <div className="flex min-w-0 items-baseline justify-between gap-2 pr-1">
+        <h4 className="text-[10.5px] font-bold uppercase tracking-wide text-muted">{t("telegram.bot.chats")}</h4>
+        {active.length ? <span className="min-w-0 truncate text-[9.5px] font-semibold text-muted">{t("telegram.bot.mayPost")}</span> : null}
+      </div>
+      {active.length === 0 ? (
+        <p className="text-[10.5px] leading-snug text-muted">{connected
+          ? t("telegram.bot.noChats", { username: status?.bot?.username ?? "bot" })
+          : t("telegram.bot.noCloneChats")}</p>
+      ) : (
+        <ul className="flex flex-col gap-1">
+          {active.map((chat) => <ChatRow key={chat.chatId} chat={chat} botSeesAll={botSeesAll} busy={busy || Boolean(state.pending?.has(chat.chatId))} onSave={save} onAssign={(id, bot) => void state.assignBot?.(id, bot)} />)}
+        </ul>
       )}
+      {inactive.length ? (
+        <details className="text-[10.5px]">
+          <summary className="flex min-h-[44px] cursor-pointer items-center font-semibold text-muted sm:min-h-[28px]">{t("telegram.bot.inactive", { count: inactive.length })}</summary>
+          <ul className="mt-1 flex flex-col gap-1">
+            {inactive.map((chat) => <ChatRow key={chat.chatId} chat={chat} botSeesAll={botSeesAll} busy={busy || Boolean(state.pending?.has(chat.chatId))} onSave={save} onAssign={(id, bot) => void state.assignBot?.(id, bot)} />)}
+          </ul>
+        </details>
+      ) : null}
 
       <details className="text-[10.5px]">
         <summary className="flex min-h-[44px] cursor-pointer items-center font-semibold text-muted sm:min-h-[28px]">{t("telegram.bot.limitsTitle")}</summary>

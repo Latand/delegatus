@@ -737,9 +737,22 @@ export type PipelineStageAttempt = {
       close may terminalize this attempt, however dead the registry row looks;
       the record is cleared once every one is proven gone. */
   unresolvedTermination?: PipelineUnresolvedTermination;
+  /** Automatic stops this attempt, still waiting to launch, sent to a settled
+      earlier stage agent whose recorded processes still run in the worktree.
+      Bounded: the lane parks once the tries are spent. */
+  priorWriterStop?: PipelinePriorWriterStop;
   /** Tool permission requests this attempt's agent raised and nobody could
       answer, each denied so the turn went on (#2215). Bounded, oldest first. */
   permissionDenials?: PipelinePermissionDenial[];
+};
+
+export type PipelinePriorWriterStop = {
+  /** The earlier stage conversation the stops were sent to. */
+  conversationId: string;
+  tries: number;
+  lastAt: string;
+  /** What the last stop answered, verbatim. */
+  error: string | null;
 };
 
 export type PipelinePermissionDenial = {
