@@ -54,7 +54,7 @@ test("real worker reuses unchanged inventories, invalidates deep writes, and rev
   expect(JSON.parse(fs.readFileSync(path.join(root,"cache.json"),"utf8")).version).toBe(1);
 },30_000);
 
-for (const flag of ["--malformed", "--wrong-kind", "--exit", "--oversize", "--hang"]) test(`worker refuses ${flag} and its contained process ends`, async () => {
+for (const flag of ["--malformed", "--wrong-kind", "--exit", "--oversize", "--hang", "--invalid-phase"]) test(`worker refuses ${flag} and its contained process ends`, async () => {
   const { root, worker } = fixture(flag, 2_000);
   await worker.run("dry-run"); // explicit readiness before inducing failure
   await expect(worker.run("on")).rejects.toThrow();
@@ -240,6 +240,20 @@ test("production readers never scan processes or probe volumes on the calling lo
   } finally { scan.mockRestore(); probe.mockRestore(); }
 }, 30_000);
 
+
+test("the worker accepts coalesced phase frames before its bounded report", async () => {
+  const { worker } = fixture("--phases");
+  const { viewerLoopMonitor } = await import("@/lib/viewerLoopMonitor");
+  const { spyOn } = await import("bun:test");
+  const operations = spyOn(viewerLoopMonitor, "run");
+  try {
+    expect((await worker.run("dry-run")).errors).toEqual([]);
+    const names = operations.mock.calls.map(call => call[0]);
+    expect(names).toContain("worktrees.discovery");
+    expect(names).toContain("worktrees.candidate");
+    expect(names).toContain("worktrees.accounting");
+  } finally { operations.mockRestore(); }
+});
 test("attempt retirement coalesces through the owned worker", async () => {
   const { root, worker } = fixture();
   const request = worker.attemptTemp();

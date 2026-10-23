@@ -149,7 +149,7 @@ import { isReviewGate, launchSizingRefusal, reviewGateRefusal, type Briefer, typ
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import { normalizeStageOutputPath } from "./stageAccess";
 import { settlePendingStageProvenance, stageProvenanceFence } from "./stageProvenance";
-import { commitAndAdoptStageBranch, observeStageBranchProtection, stageBranchOwnershipFence, type StageBranchProtection } from "./stageBranch";
+import { commitAndAdoptStageBranch, observeStageBranchProtection, stageBranchOwnershipReader, type StageBranchProtection } from "./stageBranch";
 import { graphDigest, stageDigest } from "./stageDigest";
 import { matchesShortId, resolveShortId, shortId } from "@/lib/shortIds";
 import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRuntimeProfile } from "./stageSandbox";
@@ -157,7 +157,7 @@ import { pipelineValidationError, type PipelineValidationViolation } from "./val
 import { firstRunsElsewhere, TASK_RUNS_ELSEWHERE } from "@/lib/links/linked";
 import { pipelineHostHasLiveWork } from "./hostRetirement";
 import { pipelineRecordRevalidator } from "./revalidation";
-import { controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, controllerUnclaimedPublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines as selectAllControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation as withAllPipelineControllerMutation, withPipelineMutation } from "./store";
+import { controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, controllerUnclaimedPublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines as selectAllControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, controllerPipelineVersionNow, pipelineRecordReader, cloneControllerPipeline, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation as withAllPipelineControllerMutation, withPipelineMutation } from "./store";
 import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQueue";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { mergeOnReviewEnabled } from "@/lib/projects/settings";
@@ -11191,12 +11191,19 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
     const flow = stage.kind === "review-loop" && attempt.flowId ? ports.getFlow(attempt.flowId) : null;
     const approved = stage.kind === "review-loop" && flow?.state === "approved";
     if (preview.cursor?.state !== "committing" && !approved) continue;
-    let fingerprint = JSON.stringify(preview);
+    let fingerprint = controllerTickFingerprint(preview);
     const flowFingerprint = JSON.stringify(flow);
-    const ownershipFence = performanceSpans.sync("controller.ownership", () => stageBranchOwnershipFence(loadPipelinesForList(), preview.id));
-    const matches = (current: Pipeline | null) => performanceSpans.sync("controller.ownership", () => JSON.stringify(current) === fingerprint
-      && (!attempt.flowId || JSON.stringify(ports.getFlow(attempt.flowId)) === flowFingerprint)
-      && stageBranchOwnershipFence(loadPipelinesForList(), preview.id) === ownershipFence);
+    const reader = pipelineRecordReader(preview.id);
+    const version = () => `${reader.version()}:${controllerPipelineVersionNow(preview.id)}`;
+    let rowVersion = version();
+    const ownership = stageBranchOwnershipReader(preview.id);
+    const ownershipFence = await ownership.read();
+    // Selection preceded the asynchronous evidence read. Recheck both inputs
+    // before acquiring or dispatching any work for that selection.
+    if (version() !== rowVersion || controllerTickFingerprint(reader.read()!) !== fingerprint) continue;
+    const matches = (current: Pipeline | null) => current !== null && version() === rowVersion
+      && ownership.current() && controllerTickFingerprint(current) === fingerprint
+      && (!attempt.flowId || JSON.stringify(ports.getFlow(attempt.flowId)) === flowFingerprint);
     const lock = path.join(pipelineArtifactsDir(preview.id), "remote-action.lock");
     let descriptor: number | null;
     try {
@@ -11215,14 +11222,21 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
     }
     if (descriptor === null) { ports.scheduleTick?.(250); continue; }
     const abort = new AbortController();
-    const revalidate = () => withViewerOperation("pipelines.revalidate", () => { if (!matches(findPipelineRecord(preview.id))) abort.abort(); });
-    const watch = setInterval(revalidate, 50);
+    let validation: Promise<void> | undefined;
+    const revalidate = () => validation ??= withViewerOperation("pipelines.revalidate", async () => {
+      try {
+        if (version() !== rowVersion || await ownership.read() !== ownershipFence
+          || version() !== rowVersion
+          || (attempt.flowId && JSON.stringify(ports.getFlow(attempt.flowId)) !== flowFingerprint)) abort.abort();
+      } catch { abort.abort(); }
+    }).finally(() => { validation = undefined; });
+    const watch = setInterval(() => { void revalidate(); }, 50);
     const exec: ExecPort = async (command, args, cwd, env, options) => {
-      revalidate();
+      await revalidate();
       if (abort.signal.aborted) return { code: null, stdout: "", stderr: "stage settlement superseded" };
       return await performanceSpans.wait("controller.git-wait", async () => await ports.exec(command, args, cwd, env, { ...options, signal: abort.signal, inheritFd: descriptor, timeoutMs: command === "timeout" ? 5_000 : options?.timeoutMs ?? 60_000 }));
     };
-    const candidate = performanceSpans.sync("pipeline.copy", () => structuredClone(preview));
+    const candidate = cloneControllerPipeline(preview);
     const effects: Array<() => Promise<void>> = [];
     stageSettlementEffects.set(candidate, effects);
     const candidateStage = currentStage(candidate)!;
@@ -11277,13 +11291,15 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
         }
         if (candidate.publicationRecovery) current.publicationRecovery = structuredClone(candidate.publicationRecovery);
         await persist([current]);
-        fingerprint = JSON.stringify(current);
+        fingerprint = controllerTickFingerprint(current);
+        rowVersion = version();
         changed = true;
       });
+      await revalidate();
       if (abort.signal.aborted) throw new Error("stage settlement superseded before recording its intent");
     };
     try {
-      revalidate();
+      await revalidate();
       if (abort.signal.aborted) continue;
       if (["passed", "skipped"].includes(candidateAttempt.state)) await retryTerminalStagePublication(candidate, candidateStage, candidateAttempt, outside, persistIntent);
       else if (candidateStage.kind !== "review-loop" || await approvedReviewHeadHolds(candidate, candidateAttempt, outside)) {
@@ -11295,8 +11311,8 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
         }
         await commitPassedStage(candidate, candidateStage, candidateAttempt, outside, persistIntent);
       }
-      revalidate();
-      if (!abort.signal.aborted && JSON.stringify(candidate) !== fingerprint) await withPipelineMutation(async (pipelines, persist) => {
+      await revalidate();
+      if (!abort.signal.aborted && controllerTickFingerprint(candidate) !== fingerprint) await withPipelineMutation(async (pipelines, persist) => {
         const current = pipelines.find((pipeline) => pipeline.id === preview.id);
         if (!current || !matches(current)) return;
         Object.assign(current, candidate);
@@ -11305,7 +11321,7 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
         changed = true;
         settledIds?.add(current.id);
       });
-    } finally { stageSettlementEffects.delete(candidate); clearInterval(watch); releasePublicationFileLock(descriptor); }
+    } finally { stageSettlementEffects.delete(candidate); clearInterval(watch); await validation; releasePublicationFileLock(descriptor); }
   }
   return changed;
 }
