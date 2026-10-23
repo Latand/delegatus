@@ -28,8 +28,10 @@ machine corrections the same way. The stored rule and its view carry `operatorCo
 preserves this marker on the survivor and keeps the incoming lesson's provenance
 in its merged record. A correction changed since its last curation is never
 archived to free budget, even when it duplicates a curated rule; the scope
-waits over its bound until the curator reviews it, as uncurated lessons do. The
-pass agenda also counts an unreviewed correction that already left by budget.
+waits over its bound until the curator reviews it, as uncurated lessons do.
+A project succession that joins two copies of one rule keeps an unreviewed
+correction on either side unreviewed on the survivor. The pass agenda also
+counts an unreviewed correction that already left by budget.
 The curator reads pending correction scopes and lessons
 first, then decides integrate, rewrite or drop through the existing operations,
 notes and reversible scope history. Scheduling and operator deletions retain

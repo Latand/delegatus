@@ -2,7 +2,8 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { leaveLessons, projectView, recordLessonRequest, roleMemoryCollection, roleScope, newRuleId } from "../roleStore";
+import { joinMovedScopes, leaveLessons, projectView, recordLessonRequest, roleMemoryCollection, roleScope, newRuleId } from "../roleStore";
+import { persistProjectAliases } from "@/lib/projects/aliases";
 import type { StageRuleSource as RuleSource, RoleMemoryRule } from "../roleTypes";
 import { applyCuration, revertCuratorPass, type CurationApply } from "./apply";
 import { claimPass, patchPass } from "./store";
@@ -197,6 +198,71 @@ test("an unreviewed correction that already left by budget still leads the agend
   const page = await readCuration(pass, scope());
   if (!("rules" in page)) throw Error("scope page expected");
   expect(page.rules[0]).toMatchObject({ id, kind: "left", reason: "budget", operatorCorrection: true, awaitingCuration: true });
+});
+
+test("a project succession keeps a duplicate's unreviewed correction leading the agenda and safe from the budget", async () => {
+  const OLD = `${PROJECT}-old`;
+  const current = leave("current", "task-current");
+  const firstPass = claimPass({ project: PROJECT, repoDir: root, now: NOW + 10 })!;
+  applyCuration(firstPass, input({ [scope()]: [current] }), at(20));
+  patchPass(firstPass.id, { state: "succeeded", endedAt: at(30) });
+  const oldSource = (lane: string) => {
+    const source = { project: OLD, pipelineId: lane, stageId: "fix", attempt: 1, roleId: "builder", fixRound: true, conversationId: `conversation_${lane}` };
+    recordLessonRequest({ ...source, taskId: `task-${lane}`, at: at() });
+    return source;
+  };
+  const first = oldSource("old-first");
+  const old = leaveLessons({ request: first, source: first, lessons: [{ scope: "role", rule: RULE, why: WHY }], none: null, now: at(40) }).left[0].id;
+  const oldPass = claimPass({ project: OLD, repoDir: root, now: NOW + 50 })!;
+  applyCuration(oldPass, input({ [roleScope(OLD, "builder")]: [old] }), at(60));
+  patchPass(oldPass.id, { state: "succeeded", endedAt: at(70) });
+  const again = oldSource("old-correction");
+  leaveLessons({ request: again, source: again, lessons: [{ scope: "role", rule: RULE, why: WHY }], correction: true, none: null, now: at(80) });
+  expect(projectView(OLD).scopes.flatMap(entry => entry.active).find(rule => rule.id === old)).toMatchObject({ operatorCorrection: true, awaitingCuration: true });
+  expect(persistProjectAliases([{ source: OLD, target: PROJECT, displayName: "Succession fixture" }])).toBe(true);
+  joinMovedScopes(at(90));
+  const survivor = active().find(rule => rule.rule === RULE)!;
+  expect(survivor).toMatchObject({ operatorCorrection: true, awaitingCuration: true });
+  const orchestrator = request("orchestrator", "task-orchestrator", "orchestrator");
+  leaveLessons({ request: orchestrator, source: orchestrator, lessons: [{ scope: "role", rule: "Before relaying a stage result, read the stage's own conclusion and quote its verdict.", why: WHY }], none: null, now: at(100) });
+  for (let lane = 0; lane < 32; lane++) {
+    const source = request(`ordinary-${lane}`, `task-ordinary-${lane}`);
+    const rule = `For change ${lane} in the settings area, list each control the change adds or moves, render it at every supported width, theme and language, and compare the frames with the previous release before review; a control that moved needs its own frame with focus visible and the label read back from the page, never from source.`;
+    leaveLessons({ request: source, source, lessons: [{ scope: "role", rule, why: WHY }], none: null, now: at(110 + lane) });
+  }
+  expect(row(survivor.id)).toMatchObject({ state: "active", operatorCorrection: true });
+  const pass = claimPass({ project: PROJECT, repoDir: root, now: NOW + 7 * 60 * 60_000 })!;
+  const agenda = await readCuration(pass);
+  expect(agenda.scopes.map(entry => entry.scope)).toContain(roleScope(PROJECT, "orchestrator"));
+  expect(agenda.scopes[0]).toMatchObject({ scope: scope(), corrections: 1 });
+  const page = await readCuration(pass, scope());
+  if (!("rules" in page)) throw Error("scope page expected");
+  expect(page.rules[0]).toMatchObject({ id: survivor.id, kind: "active", operatorCorrection: true, newSincePass: true });
+  const held = roleMemoryCollection()!.get(`s:${scope()}`);
+  if (held?.kind !== "scope") throw Error("scope missing");
+  const kept = held.active.slice(-10);
+  expect(kept).toContain(survivor.id);
+  applyCuration(pass, input({ [scope()]: kept }, { archive: held.active.filter(id => !kept.includes(id)).map(id => ({ id, reason: "task-specific" as const, note: "One change's settings area alone." })) }), at(200));
+  patchPass(pass.id, { state: "succeeded", endedAt: at(210) });
+  const reviewed = await readCuration(claimPass({ project: PROJECT, repoDir: root, now: NOW + 14 * 60 * 60_000 })!);
+  expect(reviewed.scopes.find(entry => entry.scope === scope())).toMatchObject({ corrections: 0 });
+  expect(row(survivor.id)).toMatchObject({ state: "active", operatorCorrection: true });
+});
+
+test("a project succession keeps an unreviewed correction pending when its duplicate was curated later", async () => {
+  const OLD = `${PROJECT}-old`;
+  const source = { project: OLD, pipelineId: "old-correction", stageId: "fix", attempt: 1, roleId: "builder", fixRound: true, conversationId: "conversation_old-correction" };
+  recordLessonRequest({ ...source, taskId: "task-old-correction", at: at() });
+  const correction = leaveLessons({ request: source, source, lessons: [{ scope: "role", rule: RULE, why: WHY }], correction: true, none: null, now: at(10) }).left[0].id;
+  const current = leave("current", "task-current");
+  const firstPass = claimPass({ project: PROJECT, repoDir: root, now: NOW + 20 })!;
+  applyCuration(firstPass, input({ [scope()]: [current] }), at(30));
+  patchPass(firstPass.id, { state: "succeeded", endedAt: at(40) });
+  expect(persistProjectAliases([{ source: OLD, target: PROJECT, displayName: "Succession fixture" }])).toBe(true);
+  joinMovedScopes(at(50));
+  expect(active().filter(rule => rule.rule === RULE)).toEqual([expect.objectContaining({ id: correction, operatorCorrection: true, curatedAt: at(30), awaitingCuration: true })]);
+  const agenda = await readCuration(claimPass({ project: PROJECT, repoDir: root, now: NOW + 7 * 60 * 60_000 })!);
+  expect(agenda.scopes[0]).toMatchObject({ scope: scope(), corrections: 1 });
 });
 
 for (const decision of ["integrate", "rewrite", "drop"] as const) test(`a correction's ${decision} decision uses reversible curation history`, () => {

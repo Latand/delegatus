@@ -51,7 +51,12 @@ current scaffolds carry the instruction once. Capped overrides preserve it.
 Budget retention never archives a correction changed since its last curation,
 so a correction that repeats a curated rule stays active and leads the agenda
 until a curator pass reviews it; an unreviewed correction that left by budget
-under an earlier build still counts in the agenda.
+under an earlier build still counts in the agenda. When a project succession
+joins a duplicate (`joinMovedScopes` in `src/lib/memory/roleStore.ts`), an
+unreviewed correction on either side marks the survivor changed at the join,
+and the rule view reports any correction changed since its last curation as
+awaiting curation, so agenda counting, scope order and budget retention all
+read the same pending state.
 
 ## Verification procedure
 
@@ -67,8 +72,10 @@ no test uses the serving installation.
 Focused checks cover current and retained mandates, all thirteen roles and
 stored scaffold overrides (including capped orchestrator overrides), correction admission and refusal, replay, repeated
 corrections without spending the closing answer, clean reviewers, registered
-non-pipeline roles, duplicate priority across scope reads, and integrate / rewrite /
-drop decisions with reversible history. The seat mandate advances to v59;
+non-pipeline roles, duplicate priority across scope reads, project succession of
+a correction duplicate in both orders (agenda lead, budget retention through 32
+later lessons, cleared after curation), and integrate / rewrite / drop decisions
+with reversible history. The seat mandate advances to v59;
 its new instruction uses 250 bytes of the reserved rotation-history room while
 remaining inside the existing structured message limit. Pending seat-intent
 replays retain their original bytes.

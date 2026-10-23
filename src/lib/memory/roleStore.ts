@@ -12,7 +12,7 @@ import { databaseFileIdentity } from "@/lib/state/currentDatabase";
 import { effectiveCurationSetting, readSeatTickSettings, seatTickSettingsPath } from "@/lib/monitor/seatTickSettings";
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized, stateDatabaseSignature, StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 
-import { appendRule, archivedRule, lessonPatternSource, retainRules, sameRule, scopeChars } from "./roleConsolidate";
+import { appendRule, archivedRule, lessonPatternSource, pendingCorrection, retainRules, sameRule, scopeChars } from "./roleConsolidate";
 import { roleMemoryEnabled } from "./settings";
 import { engineMemoryOff } from "./source";
 import { curationRevision, curationView } from "./curation/store";
@@ -157,9 +157,11 @@ export function joinMovedScopes(now = new Date().toISOString()): void {
       for (const rule of [...uncurated, ...candidates.filter(rule => rule.curatedAt || rule.keptByOperatorAt)]) {
         const earlier = joined.find((kept) => sameRule(kept.rule, rule.rule));
         if (!earlier) { joined.push(rule); continue; }
-        // A duplicate carries the strongest retention decision across a rename.
+        // A duplicate carries the strongest retention decision across a rename,
+        // and an unreviewed correction on either side stays unreviewed.
         if (rule.curatedAt || rule.keptByOperatorAt || rule.operatorCorrection) {
-          const kept = { ...earlier, ...(rule.operatorCorrection ? { operatorCorrection: true as const } : {}), curatedAt: rule.curatedAt ?? earlier.curatedAt, keptByOperatorAt: rule.keptByOperatorAt ?? earlier.keptByOperatorAt };
+          const kept = { ...earlier, ...(rule.operatorCorrection ? { operatorCorrection: true as const } : {}), curatedAt: rule.curatedAt ?? earlier.curatedAt, keptByOperatorAt: rule.keptByOperatorAt ?? earlier.keptByOperatorAt,
+            ...(pendingCorrection(rule) || pendingCorrection(earlier) ? { changedAt: now } : {}) };
           joined.splice(joined.indexOf(earlier), 1);
           joined.push(kept);
           tx.put(kept);
@@ -528,7 +530,7 @@ function view(row: RoleMemoryRule, now: number, byId: ReadonlyMap<string, RoleMe
     .reduce((latest, change) => Math.max(latest, change.revision), 0);
   const curatorRevision = history.filter(change => change.by === "curator" && !change.revertedAt)
     .reduce((latest, change) => Math.max(latest, change.revision), 0);
-  const awaitingCuration = !row.curatedAt || (agentRevision && curatorRevision ? agentRevision > curatorRevision
+  const awaitingCuration = !row.curatedAt || pendingCorrection(row) || (agentRevision && curatorRevision ? agentRevision > curatorRevision
     : row.revisedBy?.by === "agent" && row.revisedBy.at > row.curatedAt);
   /* A text equal to the one in force is not an earlier text: returning to it would change nothing. */
   const earlier = (row.versions ?? []).flatMap(id => {
