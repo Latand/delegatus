@@ -71,6 +71,7 @@ import { WorkspacePage } from "@/components/team/WorkspacePage";
 import { FIXTURE_WORKSPACE_IDS, workspacesFixture } from "@/components/team/workspacesEvidence.fixture";
 import { WORKSPACE_STORAGE_KEY } from "@/components/team/workspacesClient";
 import { pushSoundCaption } from "@/lib/audio/captions";
+import { readObstacles } from "@/components/soundCaptionPlacement";
 
 /*
  * The real Viewer on the kanban face (#1695), over invented content equivalent
@@ -455,7 +456,8 @@ const REVIEW_STOPS = SCENARIO === "review-stops";
 const AUTO_REFRESH = SCENARIO === "auto-refresh";
 const MERGE_STATES = SCENARIO === "merge-states" || AUTO_REFRESH;
 /* Sound captions (docs/design/sound-captions.md §6): the default board plus one lane whose visual critic is running.
-   The page exposes `soundCaptionsFixture`: `push` puts a caption on the stack directly (the layout states), and
+   The page exposes `soundCaptionsFixture`: `push` puts a caption on the stack directly (the layout states),
+   `obstacles` reads what the stack's placement sees on the page, and
    `passStage` turns the critic's attempt to `passed`, which the next files poll carries to the real planner and
    from there through the real cue player. */
 const SOUND_CAPTIONS = SCENARIO === "sound-captions";
@@ -630,6 +632,8 @@ const soundCaptionPipelines: Pipeline[] = SOUND_CAPTIONS ? [
 if (SOUND_CAPTIONS) {
   Object.assign(window, { soundCaptionsFixture: {
     push: pushSoundCaption,
+    /** What the stack's placement reads from the page, for the column's own right edge. */
+    obstacles: () => readObstacles(document.querySelector("[data-sound-captions]"), 16),
     passStage() {
       const critic = (soundCaptionPipelines[0]!.runs as unknown as Array<{ stageId: string; attempts: Array<{ state: string; completedAt: string | null }> }>).find((run) => run.stageId === "visual-critic")!;
       critic.attempts[0]!.state = "passed";

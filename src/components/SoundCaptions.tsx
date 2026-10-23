@@ -17,13 +17,16 @@ import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
 import type { PipelineStage } from "@/lib/pipelines/types";
 
 import { stageDisplayName } from "./pipelines/pipelineModel";
+import { placeStack, readObstacles, WIDE_WINDOW } from "./soundCaptionPlacement";
 import { SOUND_CAPTION_CSS } from "./soundCaptionStyles";
 
 /**
  * The stack of sound captions (docs/design/sound-captions.md §4–§5): a short
  * toast for each event sound that plays, on the right of the desktop view where
  * «Потрібні ви» shows. Fixed to the viewport at the toast layer, so an opened
- * task, a scroll or a view switch leaves it where it is.
+ * task, a scroll or a view switch leaves it where it is. It stands on the first
+ * place under the question toast that covers no line of text and no control
+ * (`soundCaptionPlacement.ts`), folding its oldest toasts where none holds all.
  */
 
 /** A caption's line 1 for one event, by what it announced. */
@@ -175,16 +178,36 @@ function SoundCaptionStack({ right, hidden, suppressPath, titleOf, onOpen }: Omi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   });
 
-  const [top, setTop] = useState(DEFAULT_TOP);
+  /*
+   * Where the column stands: the first free place from the bottom of the question toast down. Reading the page's
+   * text is the costly part, so it runs when the toasts, their sizes, the window or the first line change, and
+   * never while a held stack sits still under a feed that scrolls.
+   */
+  const [place, setPlace] = useState({ top: DEFAULT_TOP, fold: 0, free: true });
   const live = shown.length > 0;
-  const place = useCallback(() => setTop((current) => {
-    const next = measureTop();
-    return next === current ? current : next;
-  }), []);
+  const column = useRef<HTMLDivElement | null>(null);
+  const placedFor = useRef("");
+  const settle = useCallback(() => {
+    const element = column.current;
+    if (!element) return;
+    const minTop = measureTop();
+    const sizes = shown.map((item) => {
+      const toast = element.querySelector<HTMLElement>(`[data-caption-id="${item.id}"]`);
+      return { width: toast?.offsetWidth ?? 0, height: toast?.offsetHeight ?? 0 };
+    });
+    const viewport = { width: document.documentElement.clientWidth, height: window.innerHeight };
+    const key = JSON.stringify([shown.map((item) => item.id), sizes, right, viewport, minTop]);
+    if (key === placedFor.current) return;
+    placedFor.current = key;
+    const next = placeStack({ viewport, right, minTop, toasts: sizes, obstacles: readObstacles(element, right), keep: viewport.width >= WIDE_WINDOW ? 2 : 1 });
+    setPlace((current) => (current.top === next.top && current.fold === next.fold && current.free === next.free ? current : next));
+  }, [shown, right]);
+  const settleRef = useRef(settle);
   useLayoutEffect(() => {
-    /* eslint-disable-next-line react-hooks/set-state-in-effect -- measures the island, the question toast and an open window after layout */
-    if (live) place();
-  }, [live, shown, right, place]);
+    settleRef.current = settle;
+    if (live) settle();
+    else placedFor.current = "";
+  });
   useEffect(() => {
     if (!live) return;
     /* The question toast and an agent window arrive on their own clock. */
@@ -193,7 +216,7 @@ function SoundCaptionStack({ right, hidden, suppressPath, titleOf, onOpen }: Omi
       if (frame) return;
       frame = window.requestAnimationFrame(() => {
         frame = 0;
-        place();
+        settleRef.current();
       });
     };
     const observer = new MutationObserver(schedule);
@@ -204,7 +227,7 @@ function SoundCaptionStack({ right, hidden, suppressPath, titleOf, onOpen }: Omi
       window.removeEventListener("resize", schedule);
       if (frame) window.cancelAnimationFrame(frame);
     };
-  }, [live, place]);
+  }, [live]);
 
   /*
    * A toast removed while it holds the focus (clicked away, or evicted by a
@@ -212,7 +235,6 @@ function SoundCaptionStack({ right, hidden, suppressPath, titleOf, onOpen }: Omi
    * blur: release the focus hold whenever the column no longer holds the
    * focus. Releasing an unset hold is a no-op.
    */
-  const column = useRef<HTMLDivElement | null>(null);
   useLayoutEffect(() => {
     if (!column.current?.contains(document.activeElement)) holdSoundCaptions(false, "focus");
   });
@@ -243,6 +265,8 @@ function SoundCaptionStack({ right, hidden, suppressPath, titleOf, onOpen }: Omi
   }, []);
 
   if (hidden || (!live && !leaving.length)) return null;
+  /* The oldest `fold` toasts stay in the DOM, out of the column, so their sizes can be read and they leave on their own clock. */
+  const folded = new Set(shown.slice(0, Math.min(place.fold, shown.length - 1)).map((item) => item.id));
   const rows = [...shown.map((item) => ({ item, leaving: false })), ...leaving.filter((item) => !shown.includes(item)).map((item) => ({ item, leaving: true }))]
     .sort((a, b) => a.item.id - b.item.id);
 
@@ -253,8 +277,9 @@ function SoundCaptionStack({ right, hidden, suppressPath, titleOf, onOpen }: Omi
         ref={column}
         className="sc-column"
         data-sound-captions=""
+        data-placement={place.free ? "free" : "covers"}
         aria-live="polite"
-        style={{ top, right }}
+        style={{ top: place.top, right }}
         onPointerEnter={() => holdSoundCaptions(true, "pointer")}
         onPointerLeave={() => holdSoundCaptions(false, "pointer")}
         onFocus={() => holdSoundCaptions(true, "focus")}
@@ -276,7 +301,7 @@ function SoundCaptionStack({ right, hidden, suppressPath, titleOf, onOpen }: Omi
               {text.subject ? <span className="sc-subject" title={text.subject}>{text.subject}</span> : null}
             </>
           );
-          const common = { className: "sc-toast", "data-sound-caption": item.sound, "data-caption-what": item.captions[0]?.what ?? "generic", ...(gone ? { "data-leaving": "" } : {}) };
+          const common = { className: "sc-toast", "data-sound-caption": item.sound, "data-caption-what": item.captions[0]?.what ?? "generic", "data-caption-id": item.id, ...(gone ? { "data-leaving": "" } : {}), ...(folded.has(item.id) ? { "data-folded": "" } : {}) };
           if (!text.target || gone) return <div key={item.id} {...common} aria-hidden={gone || undefined}>{body}</div>;
           const target = text.target;
           return (

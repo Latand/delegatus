@@ -36219,8 +36219,11 @@ describe("sound captions", () => {
    * box and the island or the question toast intersect, when the stack is not
    * bounded to four with the newest last, when a toast outlives 2 s with no
    * pointer, when a hover does not hold it, when a click does not reach its
-   * lane, when a muted stage still captions, when an opened task covers it, when
-   * the docked panel does not move it, or when the phone draws any.
+   * lane, when a muted stage still captions, when an opened task has a line of its
+   * conversation, a control or an icon under a toast, when a stack on a free place
+   * has text, a control or an icon under it, when a stack with no free place shows
+   * more toasts than the width keeps or covers a control, when the docked panel does
+   * not move it, or when the phone draws any.
    *
    * Frames go to `LLV_SOUND_CAPTIONS_OUT` (default `.artifacts/sound-captions/`,
    * never committed), the readings to `evidence/sound-captions/rendered.json`.
@@ -36235,13 +36238,15 @@ describe("sound captions", () => {
   const AUTOPLAY = { ...LAUNCH, args: [...(LAUNCH.args ?? []), "--autoplay-policy=no-user-gesture-required"], ignoreDefaultArgs: ["--hide-scrollbars"] };
 
   type Stack = {
-    column: { right: number } | null;
+    column: { right: number; placement: string } | null;
     island: number[] | null;
     questionToast: number[] | null;
     header: number[] | null;
     toasts: Array<{
       sound: string; what: string; tag: string; line: string; who: string | null; subject: string | null; subjectTitle: string | null;
-      rect: number[]; leaving: boolean; lineHeight: number; subjectLines: number; lineWhole: boolean; subjectWhole: boolean; covered: boolean;
+      rect: number[]; leaving: boolean; folded: boolean; lineHeight: number; subjectLines: number; lineWhole: boolean; subjectWhole: boolean; covered: boolean;
+      /** Lines of page text a person can see under the toast, and the controls (a sample of each). */
+      textUnder: string[]; controlsUnder: string[];
     }>;
     viewport: { width: number; height: number };
   };
@@ -36260,8 +36265,43 @@ describe("sound captions", () => {
         const rects = [...range.getClientRects()].filter((rect) => rect.width > 0);
         return { rects, box: range.getBoundingClientRect() };
       };
+      /* What the page shows under a toast, apart from the column: the first thing at the middle of the overlap that is not a toast. */
+      const shownAt = (element: Element, overlap: { left: number; right: number; top: number; bottom: number }) => {
+        const hit = document.elementsFromPoint((overlap.left + overlap.right) / 2, (overlap.top + overlap.bottom) / 2).find((candidate) => !column?.contains(candidate));
+        return Boolean(hit) && (element.contains(hit!) || hit!.contains(element));
+      };
+      const underToast = (box: DOMRect) => {
+        const cut = (rect: { left: number; right: number; top: number; bottom: number }) => ({ left: Math.max(rect.left, box.left), right: Math.min(rect.right, box.right), top: Math.max(rect.top, box.top), bottom: Math.min(rect.bottom, box.bottom) });
+        const textUnder: string[] = [];
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        const range = document.createRange();
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const parent = node.parentElement;
+          if (!parent || !node.nodeValue?.trim() || column?.contains(parent) || parent.tagName === "STYLE" || parent.tagName === "SCRIPT") continue;
+          range.selectNodeContents(node);
+          for (const line of range.getClientRects()) {
+            const overlap = cut(line);
+            if (overlap.right - overlap.left >= 1 && overlap.bottom - overlap.top >= 1 && shownAt(parent, overlap)) textUnder.push((node.nodeValue ?? "").trim().slice(0, 40));
+          }
+        }
+        /* An icon-size control, or an icon inside a wider one: a row's blank part may sit under a toast, what it shows may not. */
+        const controlsUnder: string[] = [];
+        for (const control of document.querySelectorAll<HTMLElement>("a[href], button, input, select, textarea, summary, [role='button'], [role='tab'], [role='menuitem']")) {
+          if (column?.contains(control) || getComputedStyle(control).pointerEvents === "none") continue;
+          const own = control.getBoundingClientRect();
+          const parts: Array<{ element: Element; rect: DOMRect }> = own.width * own.height <= 6000 ? [{ element: control, rect: own }]
+            : [...control.querySelectorAll("svg, img")].filter((icon) => !icon.parentElement?.closest("svg")).map((icon) => ({ element: icon, rect: icon.getBoundingClientRect() }));
+          for (const part of parts) {
+            const overlap = cut(part.rect);
+            if (overlap.right - overlap.left >= 1 && overlap.bottom - overlap.top >= 1 && shownAt(part.element, overlap)) controlsUnder.push((control.getAttribute("aria-label") ?? control.textContent ?? control.tagName).trim().slice(0, 40));
+          }
+        }
+        return { textUnder, controlsUnder };
+      };
       const toasts = [...document.querySelectorAll<HTMLElement>(".sc-toast")].map((toast) => {
         const box = toast.getBoundingClientRect();
+        const folded = toast.hasAttribute("data-folded");
+        const under = folded ? { textUnder: [], controlsUnder: [] } : underToast(box);
         const line = toast.querySelector<HTMLElement>(".sc-line")!;
         const subject = toast.querySelector<HTMLElement>(".sc-subject");
         const lineText = textRange(line);
@@ -36273,7 +36313,7 @@ describe("sound captions", () => {
           sound: toast.dataset.soundCaption ?? "", what: toast.dataset.captionWhat ?? "", tag: toast.tagName,
           line: line.textContent ?? "", who: toast.querySelector(".sc-who")?.textContent ?? null,
           subject: subject?.textContent ?? null, subjectTitle: subject?.title ?? null,
-          rect: round(box), leaving: toast.hasAttribute("data-leaving"),
+          rect: round(box), leaving: toast.hasAttribute("data-leaving"), folded, ...under,
           lineHeight: Math.round(parseFloat(getComputedStyle(line).lineHeight) * 10) / 10,
           subjectLines: subjectText ? new Set(subjectText.rects.map((rect) => Math.round(rect.top))).size : 0,
           lineWhole: lineText.rects.every(inside), subjectWhole: subjectText ? subjectText.rects.every((rect) => rect.top >= box.top - 0.5 && rect.bottom <= box.bottom + 0.5) : true,
@@ -36281,14 +36321,17 @@ describe("sound captions", () => {
         };
       });
       return {
-        column: column ? { right: Math.round((document.documentElement.clientWidth - column.getBoundingClientRect().right) * 10) / 10 } : null,
+        column: column ? { right: Math.round((document.documentElement.clientWidth - column.getBoundingClientRect().right) * 10) / 10, placement: column.dataset.placement ?? "" } : null,
         island: island ? round(island) : null, questionToast: questionToast ? round(questionToast) : null, header: header ? round(header) : null,
         toasts, viewport: { width: innerWidth, height: innerHeight },
       };
     });
   }
 
-  const live = (stack: Stack) => stack.toasts.filter((toast) => !toast.leaving);
+  /** The toasts a person sees. */
+  const live = (stack: Stack) => stack.toasts.filter((toast) => !toast.leaving && !toast.folded);
+  /** The toasts in the stack, folded ones too: what the store holds. */
+  const held = (stack: Stack) => stack.toasts.filter((toast) => !toast.leaving);
   const intersects = (a: number[], b: number[]) => a[0]! < b[2]! - 0.5 && b[0]! < a[2]! - 0.5 && a[1]! < b[3]! - 0.5 && b[1]! < a[3]! - 0.5;
   const push = (page: Page, sound: string, batch: number, captions: unknown[]) =>
     page.evaluate((payload) => (window as unknown as { soundCaptionsFixture: { push(p: unknown): void } }).soundCaptionsFixture.push(payload), { sound, batch, captions });
@@ -36299,9 +36342,14 @@ describe("sound captions", () => {
   const CRITIC = { id: "visual-critic", kind: "run", role: { roleId: "visual-critic" } };
 
   /** What a stack must satisfy whatever its content: whole, inside the window, apart from each other and from the island and the question toast. */
-  function layoutFailures(tag: string, stack: Stack): string[] {
+  function layoutFailures(tag: string, stack: Stack, strict = false): string[] {
     const failures: string[] = [];
     const toasts = live(stack);
+    /* A free place covers nothing at all. A page with none (a dense board at a narrow window) leaves the newest toast alone, over the least. */
+    const free = stack.column?.placement === "free";
+    if (strict && !free && toasts.length) failures.push(`${tag}: the stack found no free place, it covers text or controls`);
+    const keep = stack.viewport.width >= 1100 ? 2 : 1;
+    if (!free && toasts.length > keep) failures.push(`${tag}: ${toasts.length} toasts stand on a place that covers text, expected at most ${keep}`);
     for (const [index, toast] of toasts.entries()) {
       const [left, top, right, bottom] = toast.rect as [number, number, number, number];
       if (left < 0 || top < 0 || right > stack.viewport.width || bottom > stack.viewport.height) failures.push(`${tag}: toast ${index} ${toast.rect} leaves the ${stack.viewport.width}×${stack.viewport.height} window`);
@@ -36310,6 +36358,8 @@ describe("sound captions", () => {
       if (!toast.subjectWhole) failures.push(`${tag}: toast ${index} subject is cut`);
       if (toast.subjectLines > 1) failures.push(`${tag}: toast ${index} subject wraps to ${toast.subjectLines} lines`);
       if (toast.covered) failures.push(`${tag}: toast ${index} is covered by another element`);
+      if (free && toast.textUnder.length) failures.push(`${tag}: toast ${index} covers ${toast.textUnder.length} lines of text: «${toast.textUnder.slice(0, 3).join("» «")}»`);
+      if (toast.controlsUnder.length) failures.push(`${tag}: toast ${index} covers controls: «${toast.controlsUnder.slice(0, 3).join("» «")}»`);
       if (toast.lineHeight < 20 - 0.5) failures.push(`${tag}: toast ${index} line is ${toast.lineHeight}px tall, under the 20px leading`);
       for (const [other, rest] of toasts.entries()) if (other > index && intersects(toast.rect, rest.rect)) failures.push(`${tag}: toasts ${index} and ${other} overlap`);
       for (const [name, rect] of [["island", stack.island], ["question toast", stack.questionToast], ["agent window header", stack.header]] as const) {
@@ -36352,9 +36402,12 @@ describe("sound captions", () => {
           }
           await page.waitForTimeout(200);
           const stacked = await readStack(page);
-          const shown = live(stacked);
+          /* The store holds four; the page folds the oldest where no free place holds them all, newest kept. */
+          const shown = held(stacked);
           if (shown.length !== 4) failures.push(`${tag}: ${shown.length} toasts after five pushes, expected 4`);
           if (shown.map((toast) => toast.sound).join() !== "step,landed,your-move,fault") failures.push(`${tag}: order ${shown.map((toast) => toast.sound)}`);
+          if (!live(stacked).length) failures.push(`${tag}: every toast is folded`);
+          if (live(stacked).at(-1)?.sound !== "fault") failures.push(`${tag}: the newest toast is not the one on show`);
           failures.push(...layoutFailures(`${tag} stacked`, stacked));
           if (stacked.column && stacked.column.right !== 16) failures.push(`${tag}: stack right edge is ${stacked.column.right}px from the window, expected 16`);
           const expectedStep = translate(lang, "soundCaption.step", { stage: translate(lang, "roleCopy.visual-critic.name") });
@@ -36382,12 +36435,12 @@ describe("sound captions", () => {
           await push(page, "reply", 1, [{ what: "reply", subject: "Fix the board", target: null }]);
           await page.waitForTimeout(350);
           const opened = await readStack(page);
-          failures.push(...layoutFailures(`${tag} task open`, opened));
+          failures.push(...layoutFailures(`${tag} task open`, opened, true));
           const first = live(opened)[0];
           if (!opened.header) failures.push(`${tag}: no agent window header to measure against`);
           else if (!first) failures.push(`${tag}: no toast with a task open`);
           else if (first.rect[1]! < opened.header[3]! + 7.5) failures.push(`${tag}: the toast starts at ${first.rect[1]}, under ${opened.header[3]}+8 of the window header`);
-          readings.push({ tag, ...viewport, lang, theme, stacked: shown.map((toast) => ({ sound: toast.sound, line: toast.line, rect: toast.rect })), single: live(single).map((toast) => toast.rect), island: single.island, taskOpen: { header: opened.header, toast: first?.rect ?? null } });
+          readings.push({ tag, ...viewport, lang, theme, stacked: shown.map((toast) => ({ sound: toast.sound, line: toast.line, rect: toast.rect, folded: toast.folded, textUnder: toast.textUnder.length })), placement: stacked.column?.placement ?? null, single: live(single).map((toast) => toast.rect), singlePlacement: single.column?.placement ?? null, island: single.island, taskOpen: { header: opened.header, toast: first?.rect ?? null } });
           await page.screenshot({ path: path.join(OUT, `task-open-${viewport.width}-${lang}-${theme}.png`) });
           if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join(" | ")}`);
         } catch (error) {
@@ -36590,7 +36643,7 @@ describe("sound captions", () => {
 
   function writeEvidence(part: string, readings: unknown[], failures: string[]) {
     fs.mkdirSync("evidence/sound-captions", { recursive: true });
-    const sources = ["src/components/SoundCaptions.tsx", "src/components/soundCaptionStyles.ts", "src/lib/audio/captions.ts", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts"];
+    const sources = ["src/components/SoundCaptions.tsx", "src/components/soundCaptionPlacement.ts", "src/components/soundCaptionStyles.ts", "src/lib/audio/captions.ts", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts"];
     fs.writeFileSync(`evidence/sound-captions/rendered-${part}.json`, JSON.stringify({
       capturedAt: new Date().toISOString(),
       command: "CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t \"sound captions\" (isolated roots, scripts/gate-slot.sh)",

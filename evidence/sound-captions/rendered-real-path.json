@@ -1,9 +1,10 @@
 {
-  "capturedAt": "2026-10-23T03:47:36.240Z",
+  "capturedAt": "2026-10-23T05:05:56.939Z",
   "command": "CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t \"sound captions\" (isolated roots, scripts/gate-slot.sh)",
   "sourceDigests": {
-    "src/components/SoundCaptions.tsx": "becd4e6bdb4cab65437bbc50f882f0bb64473e84ca55567eb778e6a6be7e7713",
-    "src/components/soundCaptionStyles.ts": "ef11b7e4d27255e4621f823b805d6e175e8b726a00888dca4a7b12de783c6090",
+    "src/components/SoundCaptions.tsx": "a627805b9031890884f9b3941bac8f8da330cab96ccbc728bd2d5391576de6bf",
+    "src/components/soundCaptionPlacement.ts": "9abe01db66fd905c6ea41ede119770f7653d74840b0cd9104d7de75514ef6cbf",
+    "src/components/soundCaptionStyles.ts": "1a7c3674f640de9699c331e82ccb004fd7926680e0cae4ff18932af04160c454",
     "src/lib/audio/captions.ts": "aa34bd96d37b4e26a5d80a4aa0a9df9f451f17806fa21e564491876ecde47889",
     "src/lib/i18n/en.ts": "c7504d33ca1839397b185a1185186fa675da8461a353a88e8394dec5597fd60c",
     "src/lib/i18n/uk.ts": "5fc068997fe4d5469dd40f20681c37d93eb4c751316f4a73a476334ab94cf1d3"
@@ -15,9 +16,9 @@
       "subject": "Підписи до звуків: що означає кожен",
       "rect": [
         1194.4,
-        126,
+        134,
         1424,
-        182
+        190
       ]
     },
     {
@@ -26,9 +27,9 @@
       "subject": "Sound captions: say what each sound means",
       "rect": [
         1156.5,
-        126,
+        134,
         1424,
-        182
+        190
       ]
     },
     {

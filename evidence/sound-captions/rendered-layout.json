@@ -1,9 +1,10 @@
 {
-  "capturedAt": "2026-10-23T03:45:57.141Z",
+  "capturedAt": "2026-10-23T05:04:16.555Z",
   "command": "CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t \"sound captions\" (isolated roots, scripts/gate-slot.sh)",
   "sourceDigests": {
-    "src/components/SoundCaptions.tsx": "becd4e6bdb4cab65437bbc50f882f0bb64473e84ca55567eb778e6a6be7e7713",
-    "src/components/soundCaptionStyles.ts": "ef11b7e4d27255e4621f823b805d6e175e8b726a00888dca4a7b12de783c6090",
+    "src/components/SoundCaptions.tsx": "a627805b9031890884f9b3941bac8f8da330cab96ccbc728bd2d5391576de6bf",
+    "src/components/soundCaptionPlacement.ts": "9abe01db66fd905c6ea41ede119770f7653d74840b0cd9104d7de75514ef6cbf",
+    "src/components/soundCaptionStyles.ts": "1a7c3674f640de9699c331e82ccb004fd7926680e0cae4ff18932af04160c454",
     "src/lib/audio/captions.ts": "aa34bd96d37b4e26a5d80a4aa0a9df9f451f17806fa21e564491876ecde47889",
     "src/lib/i18n/en.ts": "c7504d33ca1839397b185a1185186fa675da8461a353a88e8394dec5597fd60c",
     "src/lib/i18n/uk.ts": "5fc068997fe4d5469dd40f20681c37d93eb4c751316f4a73a476334ab94cf1d3"
@@ -20,51 +21,61 @@
           "sound": "step",
           "line": "Visual critic passed",
           "rect": [
-            1156.5,
-            126,
-            1424,
-            182
-          ]
+            -10000,
+            0,
+            -9732.5,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "landed",
           "line": "Merged · PR #3218",
           "rect": [
-            1124,
-            190,
-            1424,
-            246
-          ]
+            -10000,
+            0,
+            -9700,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "your-move",
           "line": "An agent asks you",
           "rect": [
             1189.2,
-            254,
+            134,
             1424,
-            310
-          ]
+            190
+          ],
+          "folded": false,
+          "textUnder": 0
         },
         {
           "sound": "fault",
           "line": "An agent was stopped: out of memory",
           "rect": [
             1124,
-            318,
+            198,
             1424,
-            374
-          ]
+            254
+          ],
+          "folded": false,
+          "textUnder": 6
         }
       ],
+      "placement": "covers",
       "single": [
         [
           1274.3,
-          126,
+          130,
           1424,
-          182
+          186
         ]
       ],
+      "singlePlacement": "free",
       "island": [
         1311.6,
         7.5,
@@ -80,9 +91,9 @@
         ],
         "toast": [
           1288.3,
-          126,
+          178,
           1424,
-          182
+          234
         ]
       }
     },
@@ -97,51 +108,61 @@
           "sound": "step",
           "line": "Visual critic passed",
           "rect": [
-            716.5,
-            126,
-            984,
-            182
-          ]
+            -10000,
+            0,
+            -9760,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "landed",
           "line": "Merged · PR #3218",
           "rect": [
-            684,
-            190,
-            984,
-            246
-          ]
+            -10000,
+            0,
+            -9760,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "your-move",
           "line": "An agent asks you",
           "rect": [
-            749.2,
-            254,
-            984,
-            310
-          ]
+            -10000,
+            0,
+            -9765.2,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "fault",
           "line": "An agent was stopped: out of memory",
           "rect": [
-            684,
-            318,
+            744,
+            258,
             984,
-            374
-          ]
+            334
+          ],
+          "folded": false,
+          "textUnder": 0
         }
       ],
+      "placement": "free",
       "single": [
         [
           834.3,
-          126,
+          258,
           984,
-          182
+          314
         ]
       ],
+      "singlePlacement": "free",
       "island": [
         875.6,
         7.5,
@@ -157,9 +178,9 @@
         ],
         "toast": [
           848.3,
-          126,
+          282,
           984,
-          182
+          338
         ]
       }
     },
@@ -174,51 +195,61 @@
           "sound": "step",
           "line": "Visual critic passed",
           "rect": [
-            341.5,
-            126,
-            609,
-            182
-          ]
+            -10000,
+            0,
+            -9760,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "landed",
           "line": "Merged · PR #3218",
           "rect": [
-            309,
-            190,
-            609,
-            246
-          ]
+            -10000,
+            0,
+            -9760,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "your-move",
           "line": "An agent asks you",
           "rect": [
-            374.2,
-            254,
-            609,
-            310
-          ]
+            -10000,
+            0,
+            -9765.2,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "fault",
           "line": "An agent was stopped: out of memory",
           "rect": [
-            309,
+            369,
             318,
             609,
-            374
-          ]
+            394
+          ],
+          "folded": false,
+          "textUnder": 3
         }
       ],
+      "placement": "covers",
       "single": [
         [
           459.3,
-          126,
+          342,
           609,
-          182
+          398
         ]
       ],
+      "singlePlacement": "free",
       "island": [
         608.7,
         7.5,
@@ -234,9 +265,9 @@
         ],
         "toast": [
           473.3,
-          126,
+          318,
           609,
-          182
+          374
         ]
       }
     },
@@ -251,51 +282,61 @@
           "sound": "step",
           "line": "Visual critic passed",
           "rect": [
-            1156.5,
-            126,
-            1424,
-            182
-          ]
+            -10000,
+            0,
+            -9732.5,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "landed",
           "line": "Merged · PR #3218",
           "rect": [
-            1124,
-            190,
-            1424,
-            246
-          ]
+            -10000,
+            0,
+            -9700,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "your-move",
           "line": "An agent asks you",
           "rect": [
             1189.2,
-            254,
+            134,
             1424,
-            310
-          ]
+            190
+          ],
+          "folded": false,
+          "textUnder": 0
         },
         {
           "sound": "fault",
           "line": "An agent was stopped: out of memory",
           "rect": [
             1124,
-            318,
+            198,
             1424,
-            374
-          ]
+            254
+          ],
+          "folded": false,
+          "textUnder": 6
         }
       ],
+      "placement": "covers",
       "single": [
         [
           1274.3,
-          126,
+          130,
           1424,
-          182
+          186
         ]
       ],
+      "singlePlacement": "free",
       "island": [
         1311.6,
         7.5,
@@ -311,9 +352,9 @@
         ],
         "toast": [
           1288.3,
-          126,
+          178,
           1424,
-          182
+          234
         ]
       }
     },
@@ -328,51 +369,61 @@
           "sound": "step",
           "line": "Visual critic passed",
           "rect": [
-            716.5,
-            126,
-            984,
-            182
-          ]
+            -10000,
+            0,
+            -9760,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "landed",
           "line": "Merged · PR #3218",
           "rect": [
-            684,
-            190,
-            984,
-            246
-          ]
+            -10000,
+            0,
+            -9760,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "your-move",
           "line": "An agent asks you",
           "rect": [
-            749.2,
-            254,
-            984,
-            310
-          ]
+            -10000,
+            0,
+            -9765.2,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "fault",
           "line": "An agent was stopped: out of memory",
           "rect": [
-            684,
-            318,
+            744,
+            258,
             984,
-            374
-          ]
+            334
+          ],
+          "folded": false,
+          "textUnder": 0
         }
       ],
+      "placement": "free",
       "single": [
         [
           834.3,
-          126,
+          258,
           984,
-          182
+          314
         ]
       ],
+      "singlePlacement": "free",
       "island": [
         875.6,
         7.5,
@@ -388,9 +439,9 @@
         ],
         "toast": [
           848.3,
-          126,
+          282,
           984,
-          182
+          338
         ]
       }
     },
@@ -405,51 +456,61 @@
           "sound": "step",
           "line": "Visual critic passed",
           "rect": [
-            341.5,
-            126,
-            609,
-            182
-          ]
+            -10000,
+            0,
+            -9760,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "landed",
           "line": "Merged · PR #3218",
           "rect": [
-            309,
-            190,
-            609,
-            246
-          ]
+            -10000,
+            0,
+            -9760,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "your-move",
           "line": "An agent asks you",
           "rect": [
-            374.2,
-            254,
-            609,
-            310
-          ]
+            -10000,
+            0,
+            -9765.2,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "fault",
           "line": "An agent was stopped: out of memory",
           "rect": [
-            309,
+            369,
             318,
             609,
-            374
-          ]
+            394
+          ],
+          "folded": false,
+          "textUnder": 3
         }
       ],
+      "placement": "covers",
       "single": [
         [
           459.3,
-          126,
+          342,
           609,
-          182
+          398
         ]
       ],
+      "singlePlacement": "free",
       "island": [
         608.7,
         7.5,
@@ -465,9 +526,9 @@
         ],
         "toast": [
           473.3,
-          126,
+          318,
           609,
-          182
+          374
         ]
       }
     },
@@ -482,51 +543,61 @@
           "sound": "step",
           "line": "Критик вигляду — пройдено",
           "rect": [
-            1156.5,
-            126,
-            1424,
-            182
-          ]
+            -10000,
+            0,
+            -9732.5,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "landed",
           "line": "Злито · PR #3218",
           "rect": [
-            1124,
-            190,
-            1424,
-            246
-          ]
+            -10000,
+            0,
+            -9700,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "your-move",
           "line": "Агент питає вас",
           "rect": [
             1189.2,
-            254,
+            134,
             1424,
-            310
-          ]
+            190
+          ],
+          "folded": false,
+          "textUnder": 0
         },
         {
           "sound": "fault",
           "line": "Агента зупинено: забракло пам'яті",
           "rect": [
             1124,
-            318,
+            198,
             1424,
-            374
-          ]
+            254
+          ],
+          "folded": false,
+          "textUnder": 6
         }
       ],
+      "placement": "covers",
       "single": [
         [
           1287.8,
-          126,
+          130,
           1424,
-          182
+          186
         ]
       ],
+      "singlePlacement": "free",
       "island": [
         1304,
         7.5,
@@ -542,9 +613,9 @@
         ],
         "toast": [
           1295.6,
-          126,
+          178,
           1424,
-          182
+          234
         ]
       }
     },
@@ -559,51 +630,61 @@
           "sound": "step",
           "line": "Критик вигляду — пройдено",
           "rect": [
-            716.5,
-            126,
-            984,
-            182
-          ]
+            -10000,
+            0,
+            -9760,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "landed",
           "line": "Злито · PR #3218",
           "rect": [
-            684,
-            190,
-            984,
-            246
-          ]
+            -10000,
+            0,
+            -9760,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "your-move",
           "line": "Агент питає вас",
           "rect": [
-            749.2,
-            254,
-            984,
-            310
-          ]
+            -10000,
+            0,
+            -9765.2,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "fault",
           "line": "Агента зупинено: забракло пам'яті",
           "rect": [
-            684,
-            318,
+            744,
+            258,
             984,
-            374
-          ]
+            334
+          ],
+          "folded": false,
+          "textUnder": 0
         }
       ],
+      "placement": "free",
       "single": [
         [
           847.8,
-          126,
+          258,
           984,
-          182
+          314
         ]
       ],
+      "singlePlacement": "free",
       "island": [
         868,
         7.5,
@@ -619,9 +700,9 @@
         ],
         "toast": [
           855.6,
-          126,
+          282,
           984,
-          182
+          338
         ]
       }
     },
@@ -636,51 +717,61 @@
           "sound": "step",
           "line": "Критик вигляду — пройдено",
           "rect": [
-            341.5,
-            126,
-            609,
-            182
-          ]
+            -10000,
+            0,
+            -9760,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "landed",
           "line": "Злито · PR #3218",
           "rect": [
-            309,
-            190,
-            609,
-            246
-          ]
+            -10000,
+            0,
+            -9760,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "your-move",
           "line": "Агент питає вас",
           "rect": [
-            374.2,
-            254,
-            609,
-            310
-          ]
+            -10000,
+            0,
+            -9765.2,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "fault",
           "line": "Агента зупинено: забракло пам'яті",
           "rect": [
-            309,
+            369,
             318,
             609,
-            374
-          ]
+            394
+          ],
+          "folded": false,
+          "textUnder": 3
         }
       ],
+      "placement": "covers",
       "single": [
         [
           472.8,
-          126,
+          342,
           609,
-          182
+          398
         ]
       ],
+      "singlePlacement": "free",
       "island": [
         608.7,
         7.5,
@@ -696,9 +787,9 @@
         ],
         "toast": [
           480.6,
-          126,
+          318,
           609,
-          182
+          374
         ]
       }
     },
@@ -713,51 +804,61 @@
           "sound": "step",
           "line": "Критик вигляду — пройдено",
           "rect": [
-            1156.5,
-            126,
-            1424,
-            182
-          ]
+            -10000,
+            0,
+            -9732.5,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "landed",
           "line": "Злито · PR #3218",
           "rect": [
-            1124,
-            190,
-            1424,
-            246
-          ]
+            -10000,
+            0,
+            -9700,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "your-move",
           "line": "Агент питає вас",
           "rect": [
             1189.2,
-            254,
+            134,
             1424,
-            310
-          ]
+            190
+          ],
+          "folded": false,
+          "textUnder": 0
         },
         {
           "sound": "fault",
           "line": "Агента зупинено: забракло пам'яті",
           "rect": [
             1124,
-            318,
+            198,
             1424,
-            374
-          ]
+            254
+          ],
+          "folded": false,
+          "textUnder": 6
         }
       ],
+      "placement": "covers",
       "single": [
         [
           1287.8,
-          126,
+          130,
           1424,
-          182
+          186
         ]
       ],
+      "singlePlacement": "free",
       "island": [
         1304,
         7.5,
@@ -773,9 +874,9 @@
         ],
         "toast": [
           1295.6,
-          126,
+          178,
           1424,
-          182
+          234
         ]
       }
     },
@@ -790,51 +891,61 @@
           "sound": "step",
           "line": "Критик вигляду — пройдено",
           "rect": [
-            716.5,
-            126,
-            984,
-            182
-          ]
+            -10000,
+            0,
+            -9760,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "landed",
           "line": "Злито · PR #3218",
           "rect": [
-            684,
-            190,
-            984,
-            246
-          ]
+            -10000,
+            0,
+            -9760,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "your-move",
           "line": "Агент питає вас",
           "rect": [
-            749.2,
-            254,
-            984,
-            310
-          ]
+            -10000,
+            0,
+            -9765.2,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "fault",
           "line": "Агента зупинено: забракло пам'яті",
           "rect": [
-            684,
-            318,
+            744,
+            258,
             984,
-            374
-          ]
+            334
+          ],
+          "folded": false,
+          "textUnder": 0
         }
       ],
+      "placement": "free",
       "single": [
         [
           847.8,
-          126,
+          258,
           984,
-          182
+          314
         ]
       ],
+      "singlePlacement": "free",
       "island": [
         868,
         7.5,
@@ -850,9 +961,9 @@
         ],
         "toast": [
           855.6,
-          126,
+          282,
           984,
-          182
+          338
         ]
       }
     },
@@ -867,51 +978,61 @@
           "sound": "step",
           "line": "Критик вигляду — пройдено",
           "rect": [
-            341.5,
-            126,
-            609,
-            182
-          ]
+            -10000,
+            0,
+            -9760,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "landed",
           "line": "Злито · PR #3218",
           "rect": [
-            309,
-            190,
-            609,
-            246
-          ]
+            -10000,
+            0,
+            -9760,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "your-move",
           "line": "Агент питає вас",
           "rect": [
-            374.2,
-            254,
-            609,
-            310
-          ]
+            -10000,
+            0,
+            -9765.2,
+            56
+          ],
+          "folded": true,
+          "textUnder": 0
         },
         {
           "sound": "fault",
           "line": "Агента зупинено: забракло пам'яті",
           "rect": [
-            309,
+            369,
             318,
             609,
-            374
-          ]
+            394
+          ],
+          "folded": false,
+          "textUnder": 3
         }
       ],
+      "placement": "covers",
       "single": [
         [
           472.8,
-          126,
+          342,
           609,
-          182
+          398
         ]
       ],
+      "singlePlacement": "free",
       "island": [
         608.7,
         7.5,
@@ -927,9 +1048,9 @@
         ],
         "toast": [
           480.6,
-          126,
+          318,
           609,
-          182
+          374
         ]
       }
     }

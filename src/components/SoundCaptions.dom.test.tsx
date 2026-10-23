@@ -24,6 +24,9 @@ Object.assign(globalThis, {
   Event: dom.Event,
   localStorage: dom.localStorage,
   MutationObserver: dom.MutationObserver,
+  getComputedStyle: dom.getComputedStyle.bind(dom),
+  innerWidth: dom.innerWidth,
+  innerHeight: dom.innerHeight,
   requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
   cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom),
 });
@@ -280,6 +283,33 @@ describe("the stack", () => {
       await advance(300);
     }
     expect(view.toasts().map((toast) => toast.querySelector(".sc-subject")!.textContent)).toEqual(["b", "c", "d", "e"]);
+  });
+
+  test("toasts that do not fit the window fold the oldest, keep the newest, and still count down", async () => {
+    /* A window has no layout here: each toast is given 300 px of height, so four need over the 768 px window. */
+    const proto = dom.HTMLElement.prototype as unknown as Record<string, unknown>;
+    const had = Object.getOwnPropertyDescriptor(proto, "offsetHeight");
+    Object.defineProperty(proto, "offsetHeight", { configurable: true, get: () => 300 });
+    Object.defineProperty(proto, "offsetWidth", { configurable: true, get: () => 200 });
+    try {
+      const view = await mount();
+      for (const name of ["a", "b", "c", "d"]) {
+        await push([{ what: "reply", subject: name, target: null }]);
+        await advance(100);
+      }
+      const all = [...document.querySelectorAll<HTMLElement>("[data-sound-caption]")];
+      expect(all.map((toast) => toast.querySelector(".sc-subject")!.textContent)).toEqual(["a", "b", "c", "d"]);
+      /* Two 300 px toasts need 608 px under the first line at 56: a third does not fit in 768. */
+      expect(all.filter((toast) => toast.hasAttribute("data-folded")).map((toast) => toast.querySelector(".sc-subject")!.textContent)).toEqual(["a", "b"]);
+      expect(view.column()!.getAttribute("data-placement")).toBe("free");
+      /* The folded toasts leave on their own clock (2 s after each push), and the two that were on show stay. */
+      await advance(1750);
+      expect([...document.querySelectorAll<HTMLElement>("[data-sound-caption]:not([data-leaving])")].map((toast) => toast.querySelector(".sc-subject")!.textContent)).toEqual(["c", "d"]);
+      expect(document.querySelectorAll("[data-folded]")).toHaveLength(0);
+    } finally {
+      if (had) Object.defineProperty(proto, "offsetHeight", had); else delete proto.offsetHeight;
+      delete proto.offsetWidth;
+    }
   });
 
   test("a hold released while no toast is left does not leave the next one held", async () => {

@@ -27,6 +27,10 @@ export const SOUND_CAPTION_CSS = `
 button.sc-toast { cursor: pointer; }
 .sc-toast:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 .sc-toast[data-leaving] { pointer-events: none; animation: sc-out 140ms linear both; }
+.sc-toast[data-folded] { position: fixed; top: 0; left: -10000px; visibility: hidden; pointer-events: none; animation: none; }
+@media (max-width: 1099px) {
+  .sc-toast { max-width: 240px; }
+}
 .sc-line { display: block; font-size: 14px; line-height: 20px; font-weight: 600; text-wrap: pretty; }
 .sc-who { font-weight: 700; }
 .sc-subject { display: block; margin-top: 2px; font-size: 12px; line-height: 16px; font-weight: 400; color: var(--color-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
