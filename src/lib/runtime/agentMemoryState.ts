@@ -1,6 +1,7 @@
+import { normalizeAgentMemoryCap, type AgentMemoryCap } from "./agentMemoryConfig";
 export const GIB = 2 ** 30;
 export type AgentMemoryKill = { at: string; limitBytes: number; limit: "agent" | "shared" | "system"; fatal: boolean; process: string | null };
-export type HostMemoryState = { mechanism: "scope" | "watchdog"; limitBytes: number; unit: string | null; kills: number; lastKill: AgentMemoryKill | null };
+export type HostMemoryState = { mechanism: "scope" | "watchdog"; limitBytes: number; unit: string | null; kills: number; lastKill: AgentMemoryKill | null; cap?: AgentMemoryCap };
 
 export function normalizeHostMemory(value: unknown): HostMemoryState | null {
   if (!value || typeof value !== "object") return null;
@@ -10,7 +11,9 @@ export function normalizeHostMemory(value: unknown): HostMemoryState | null {
   const kill = state.lastKill;
   if (kill !== null && (!kill || typeof kill.at !== "string" || !Number.isFinite(Date.parse(kill.at)) || !Number.isSafeInteger(kill.limitBytes) || kill.limitBytes <= 0
     || !["agent", "shared", "system"].includes(kill.limit) || typeof kill.fatal !== "boolean" || (kill.process !== null && typeof kill.process !== "string"))) return null;
+  const cap = normalizeAgentMemoryCap(state.cap);
   return { mechanism: state.mechanism, limitBytes: state.limitBytes, unit: state.unit, kills: state.kills,
+    ...(cap ? { cap } : {}),
     lastKill: kill ? { at: kill.at, limitBytes: kill.limitBytes, limit: kill.limit, fatal: kill.fatal, process: kill.process } : null };
 }
 

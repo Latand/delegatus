@@ -147,6 +147,7 @@ for (const appDir of APP_DIRS) describe(`an entry point that owns the operator's
     ["scripts/bootstrap-runtime-host.ts", ["--not-a-mode"], "unsupported option --not-a-mode"],
     ["scripts/export-human-input.ts", [], "--host is required"],
     ["scripts/rebuild-http.ts", [], "Deployment HTTP request failed"],
+    ["scripts/codex-update.ts", [], "Usage: codex-update.ts rollback"],
   ] as const) {
     test(`${script} reaches its own body`, () => {
       const result = runEntryPoint([script, ...argv]);

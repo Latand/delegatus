@@ -557,12 +557,53 @@ function accountIdForLabel(label: string, existing: Set<string>): string {
   }
 }
 
-export function createManagedCodexAccount(label: string): CodexAccount {
+/** An install transfer's reservation (docs/design/install-memory-transfer.md
+    §4.7): an id the import commits its bindings to before the account exists,
+    held by an empty home directory, which every id choice skips. The account
+    is made later by `createManagedCodexAccount(label, { id })`. */
+export function reserveManagedCodexAccountId(label: string, taken: ReadonlySet<string> = new Set()): { id: string; home: string } {
   const cleanLabel = label.trim();
   if (!cleanLabel || cleanLabel.length > 80 || /[\u0000-\u001f\u007f]/.test(cleanLabel)) throw new InvalidAccountLabelError();
   return withRegistryLock(() => {
     const registry = mutableRegistry();
-    const id = accountIdForLabel(cleanLabel, new Set([...listCodexAccounts().map((account) => account.id), ...registry.retired.map((account) => account.id)]));
+    const id = accountIdForLabel(cleanLabel, new Set([...listCodexAccounts().map((account) => account.id), ...registry.retired.map((account) => account.id), ...taken]));
+    const home = managedHome(id);
+    fs.mkdirSync(path.dirname(home), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(home, { recursive: false, mode: 0o700 });
+    fs.chmodSync(home, 0o700);
+    return { id, home };
+  }, false);
+}
+
+/** Gives back a reservation no account took: its home goes only while it is still empty. */
+export function releaseManagedCodexAccountReservation(id: string): void {
+  if (!ACCOUNT_ID.test(id) || id === DEFAULT_ID) return;
+  withRegistryLock(() => {
+    if (mutableRegistry().accounts.some((account) => account.id === id)) return;
+    try { fs.rmdirSync(managedHome(id)); } catch { /* gone, or no longer empty: kept */ }
+  }, false);
+}
+
+export function createManagedCodexAccount(label: string, options: { id?: string } = {}): CodexAccount {
+  const cleanLabel = label.trim();
+  if (!cleanLabel || cleanLabel.length > 80 || /[\u0000-\u001f\u007f]/.test(cleanLabel)) throw new InvalidAccountLabelError();
+  return withRegistryLock(() => {
+    const registry = mutableRegistry();
+    if (options.id !== undefined) {
+      /* A reserved id: made once. A second call (a recovery after a stop)
+         answers with the account the first made, and an empty home the first
+         left behind is taken over; anything else in it refuses. */
+      const reserved = options.id;
+      if (!ACCOUNT_ID.test(reserved) || reserved === DEFAULT_ID || registry.retired.some((account) => account.id === reserved)) throw new UnsafeCodexHomeError();
+      const made = registry.accounts.find((account) => account.id === reserved);
+      if (made) { if (made.label !== cleanLabel) throw new UnsafeCodexHomeError(); return asAccount(made); }
+      const home = managedHome(reserved);
+      if (fs.existsSync(home)) {
+        if (fs.readdirSync(home).length === 0) fs.rmdirSync(home);
+        else if (!removeHistoryFreeAccountHome("codex", reserved, home)) throw new UnsafeCodexHomeError();
+      }
+    }
+    const id = options.id ?? accountIdForLabel(cleanLabel, new Set([...listCodexAccounts().map((account) => account.id), ...registry.retired.map((account) => account.id)]));
     const home = managedHome(id);
     let createdHome = false;
     try {
@@ -588,6 +629,8 @@ export function createManagedCodexAccount(label: string): CodexAccount {
           console.warn("[codex accounts] preserving failed-account home after history cleanup refusal");
           if (cleanupError instanceof AccountHistoryInventoryBlockedError) throw cleanupError;
         }
+        /* A reserved id stays reserved: bindings already name it. */
+        if (options.id !== undefined) { try { fs.mkdirSync(home, { mode: 0o700 }); } catch { /* still there */ } }
       }
       throw error;
     }
