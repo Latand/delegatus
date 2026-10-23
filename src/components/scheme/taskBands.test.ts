@@ -672,7 +672,7 @@ test.each([false, true])("a direct-review deck stays with its primary subject ba
   const flow: import("../flows/reviewGroup").DirectReviewGroup = {
     id: "direct-review::fixture", kind: "direct-review", project: "fixture", cwd: "/repo",
     implementerPath: anchor.path, implementerConversationId: anchor.conversationId!,
-    roles: { implementer: { engine: "codex" }, reviewer: { engine: "codex" } },
+    roles: { implementer: { engine: "codex", model: null, effort: null }, reviewer: { engine: "codex", model: null, effort: null } },
     state: "done_comment", stateDetail: null, rounds: [], createdAt: "2026-01-01T00:00:00Z", closedAt: null,
   };
   const deckKey = "deck::" + flow.id;
