@@ -1,4 +1,5 @@
 import { REPOSITORY_IDENTITY, repositoryPublicationSource } from "@/lib/git/repositoryCommitIdentity";
+import { agentMemoryScopes } from "@/lib/runtime/agentMemorySettings";
 import { signalDomain, signalAgentDomain, spawnHeadlessSignalSandbox, headlessFixtureTransport } from "@/lib/runtime/agentSignalSandbox";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { pipeline } from "node:stream/promises";
@@ -304,6 +305,8 @@ export function scanEventStream(stdout: string): { sessionId: string | null; las
 }
 
 export interface BuiltHeadlessCommand {
+  agentMemoryRole?: "reviewer";
+  agentMemoryMaxBytes?: number | null;
   command: string;
   args: string[];
   env: NodeJS.ProcessEnv;
@@ -381,6 +384,8 @@ export function reviewerCommand(
     args.push("--settings", settings);
     const baseEnv = claudeAccount?.managed ? claudeManagedEnvironment(claudeAccount.home) : process.env;
     return { ...claudeProviderCommand(claudeAccount?.home ?? "", provider, args),
+      agentMemoryRole: "reviewer",
+      agentMemoryMaxBytes: role.agentMemoryMaxBytes,
       env: { ...reviewerEnvironment(baseEnv, spawnCapability), ...(HEADLESS_CLEAN_MEMORY ? CLAUDE_CLEAN_MEMORY_ENV : {}) }, stdin: null, outputPath: null, sessionId,
       reviewerPath: claudeTranscriptPath(cwd, sessionId, claudeAccount?.projectsDir) };
   }
@@ -402,6 +407,8 @@ export function reviewerCommand(
   if (role.serviceTier) args.push("-c", `service_tier=${role.serviceTier === "standard" ? "default" : role.serviceTier}`);
   return {
     command: binary,
+    agentMemoryRole: "reviewer",
+    agentMemoryMaxBytes: role.agentMemoryMaxBytes,
     codexPublication: true,
     args,
     env: reviewerEnvironment(baseEnv, spawnCapability),
@@ -432,14 +439,15 @@ export function launchDetached(input: {
   runtime?: HeadlessReviewRuntime;
   onTimeout?: () => void;
   onExit: (run: LiveRun) => void;
-}): { pid: number | null; identity: string | null } | null {
+}): { pid: number | null; identity: string | null; handle: ChildProcess } | null {
   if (headlessRuns.has(input.key)) return null;
   const stdoutFd = fs.openSync(input.stdoutPath, "w");
   const stderrFd = fs.openSync(input.stderrPath, "w");
   let child: ChildProcess;
   try {
     // Reviews, relays and digests run unattended: they are work.
-    const plan = planAgentMemory({ engine: "headless", sessionKey: input.key, liveAgents: agentRegistry().liveStructuredHostCount() + 1, cpu: planAgentCpu("work") });
+    const plan = planAgentMemory({ engine: "headless", sessionKey: input.key, liveAgents: agentRegistry().liveStructuredHostCount() + 1, cpu: planAgentCpu("work"), memoryScopes: { ...agentMemoryScopes({ cwd: input.cwd, role: input.built.agentMemoryRole }),
+      ...(input.built.agentMemoryMaxBytes != null ? { role: input.built.agentMemoryMaxBytes } : {}) } });
     const memoryCell = plan ? new AgentMemoryCell(plan) : null;
     const fixture = headlessFixtureTransport();
     const start = ((command: string, args: string[], options: Parameters<typeof spawn>[2]) => {
@@ -500,7 +508,7 @@ export function launchDetached(input: {
     killOwnedRun(run);
     input.onExit(run);
   });
-  return { pid: child.pid ?? null, identity };
+  return { pid: child.pid ?? null, identity, handle: child };
 }
 
 export interface HeadlessCodexRunRequest {
@@ -547,60 +555,50 @@ export async function runHeadlessCodexOnce(request: HeadlessCodexRunRequest): Pr
     { sandbox: request.sandbox },
   ), request.cwd);
   let timedOut = false;
-  return await new Promise<HeadlessRunResult>((resolve) => {
-    const settle = (run: LiveRun): void => {
-      headlessRuns.delete(request.key);
-      const stdout = readOptional(stdoutPath);
-      const stderr = readOptional(stderrPath);
-      const artifactOutput = readOptional(outputPath).trim();
-      const scanned = scanEventStream(stdout);
-      const finalOutput = artifactOutput || scanned.lastAgentMessage;
-      const exit = run.exit;
-      /* THE EXIT OUTRANKS THE ARTIFACT. Codex writes `last-message.md` when
-         its turn completes, but a child that wrote it and then died — hung
-         until the timer killed its group, exited non-zero, or was signalled —
-         did NOT finish: the artifact is whatever it had flushed at the moment
-         it went away. Reading that as `done` hands the caller a half-written
-         answer and — for the orchestrator handoff digest (issue #1067) —
-         silently denies it the deterministic fallback it is entitled to. So a
-         clean exit is REQUIRED for `done`, and a timeout keeps its own reason
-         because the caller distinguishes the two. */
-      const exitedCleanly = exit !== null && exit.code === 0 && exit.signal === null;
-      const status: HeadlessRunResult["status"] = timedOut
-        ? "timeout"
-        : exitedCleanly && (artifactOutput || scanned.lastAgentMessage)
-          ? "done"
-          : "failed";
-      resolve({
-        status,
-        stdout,
-        stderr,
-        finalOutput,
-        sessionId: scanned.sessionId,
-        processIdentity: run.identity,
-        code: exit?.code ?? null,
-        signal: exit?.signal ?? null,
-      });
-    };
-    if (request.autonomousAdmissionHeld?.()) {
-      resolve({ status: "failed", stdout: "", stderr: "", finalOutput: "", sessionId: null, processIdentity: null, code: null, signal: null });
-      return;
-    }
-    const launched = launchDetached({
-      key: request.key,
-      built,
-      cwd: request.cwd,
-      stdoutPath,
-      stderrPath,
-      timeoutMs: request.timeoutMs,
-      runtime: request.runtime,
-      onTimeout: () => { timedOut = true; },
-      onExit: settle,
-    });
-    if (!launched) {
-      resolve({ status: "failed", stdout: "", stderr: "", finalOutput: "", sessionId: null, processIdentity: null, code: null, signal: null });
+  let resolveRun!: (result: HeadlessRunResult) => void;
+  const completed = new Promise<HeadlessRunResult>(resolve => { resolveRun = resolve; });
+  const settle = (run: LiveRun): void => {
+    headlessRuns.delete(request.key);
+    const stdout = readOptional(stdoutPath);
+    const stderr = readOptional(stderrPath);
+    const artifactOutput = readOptional(outputPath).trim();
+    const scanned = scanEventStream(stdout);
+    const finalOutput = artifactOutput || scanned.lastAgentMessage;
+    const exit = run.exit;
+    /* THE EXIT OUTRANKS THE ARTIFACT. Codex writes `last-message.md` when
+       its turn completes, but a child that wrote it and then died — hung
+       until the timer killed its group, exited non-zero, or was signalled —
+       did NOT finish: the artifact is whatever it had flushed at the moment
+       it went away. Reading that as `done` hands the caller a half-written
+       answer and — for the orchestrator handoff digest (issue #1067) —
+       silently denies it the deterministic fallback it is entitled to. So a
+       clean exit is REQUIRED for `done`, and a timeout keeps its own reason
+       because the caller distinguishes the two. */
+    const exitedCleanly = exit !== null && exit.code === 0 && exit.signal === null;
+    const status: HeadlessRunResult["status"] = timedOut
+      ? "timeout"
+      : exitedCleanly && (artifactOutput || scanned.lastAgentMessage)
+        ? "done"
+        : "failed";
+    resolveRun({ status, stdout, stderr, finalOutput, sessionId: scanned.sessionId,
+      processIdentity: run.identity, code: exit?.code ?? null, signal: exit?.signal ?? null });
+  };
+  if (request.autonomousAdmissionHeld?.()) return { status: "failed", stdout: "", stderr: "", finalOutput: "", sessionId: null, processIdentity: null, code: null, signal: null };
+  const { waitForCodexProcess, withCodexCliLaunch } = await import("@/lib/codexUpdate/installation");
+  const launched = await withCodexCliLaunch(request.runtime?.command ?? built.command, async () => launchDetached({
+    key: request.key, built, cwd: request.cwd, stdoutPath, stderrPath, timeoutMs: request.timeoutMs,
+    runtime: request.runtime, onTimeout: () => { timedOut = true; }, onExit: settle,
+  }), async result => {
+    if (!result?.pid) return;
+    try { await waitForCodexProcess(result.handle); }
+    catch (error) {
+      const run = headlessRuns.get(request.key);
+      if (run) await terminateHeadlessReviewerGroupAndWait(result.pid, run.identity, { ownedByLiveHandle: true, graceMs: 0, killWaitMs: 1_000 });
+      throw error;
     }
   });
+  if (!launched) return { status: "failed", stdout: "", stderr: "", finalOutput: "", sessionId: null, processIdentity: null, code: null, signal: null };
+  return await completed;
 }
 
 export function readOptional(filePath: string | null): string {

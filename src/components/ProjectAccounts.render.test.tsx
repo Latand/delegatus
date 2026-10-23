@@ -77,6 +77,14 @@ test("a malformed payload parses to nothing rather than throwing", () => {
   });
 });
 
+test("the project view parser preserves a present next-choice id", () => {
+  const parsed = parseProjectAccountsView({
+    project: ATLAS,
+    engines: { claude: { nextChosenAccountId: "acct-next", restricted: true, allowed: [], carrying: [] } },
+  });
+  expect(parsed?.engines[0]?.nextChosenAccountId).toBe("acct-next");
+});
+
 test("an account chosen outside the pool stays collapsed at rest", () => {
   const html = render(view({
     outsidePool: [{ accountId: "acct-outside", label: "Outside", at: "2026-08-30T09:00:00.000Z", actor: "operator" }],

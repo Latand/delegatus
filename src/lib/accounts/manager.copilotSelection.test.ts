@@ -120,5 +120,8 @@ test("Copilot capacity flows from transcript probe through the registry into hea
   expect(observations[capacity.id]?.observedAt).toBe(new Date(capacityAt).toISOString());
   expect(observations[exhausted.id]?.limits?.weekly?.usedPercent).toBe(100);
   expect(observations[capacity.id]?.limits?.weekly?.usedPercent).toBe(10);
-  expect(accountManager.resolveHeadlessSpawn("copilot", null, [], null)).toMatchObject({ account: { accountId: capacity.id } });
+  // Compare the accounts this case probed. Earlier cases retain eligible
+  // readings with sooner resets, which now legitimately win automatic picks.
+  const unavailableIds = listCopilotAccounts().filter(account => account.id !== exhausted.id && account.id !== capacity.id).map(account => account.id);
+  expect(accountManager.resolveHeadlessSpawn("copilot", null, [], null, undefined, unavailableIds)).toMatchObject({ account: { accountId: capacity.id } });
 });

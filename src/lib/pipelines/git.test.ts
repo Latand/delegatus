@@ -51,7 +51,9 @@ test("an unpinned base without origin resolves local main without fetching", asy
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "local-base-"));
   try {
     await git(root, "init", "-q", "-b", "main");
-    await git(root, "-c", "user.name=Fixture", "-c", "user.email=" + ["noreply", "example.invalid"].join("@"), "commit", "-q", "--allow-empty", "-m", "base");
+    await git(root, "config", "user.name", "Fixture");
+    await git(root, "config", "user.email", ["noreply", "example.invalid"].join("@"));
+    await git(root, "commit", "-q", "--allow-empty", "-m", "base");
     const head = await git(root, "rev-parse", "HEAD");
     const calls: string[] = [];
     const result = await resolvePipelineBaseAsync(root, {}, (command, args, cwd, signal) => {

@@ -146,15 +146,20 @@ test.each([
       expect((await commitPipelineStage(box.subject, "study", false, box.exec, ["evidence/draft"], box.subject.lastPassedCommit, receipt)).ok).toBe(true);
     }
     if (toolchain === "interrupted" || toolchain === "recovered") {
-      // The state left by a controller exit during the hook, or after Git
-      // committed but before the controller released its borrowed toolchain.
+      // Model a source-owned link left by an older controller, including
+      // recovery after a successful commit already prepared private tools.
+      if (toolchain === "recovered") fs.rmSync(path.join(worktree, "node_modules"), { recursive: true, force: true });
       fs.symlinkSync(path.resolve(box.repo, "node_modules"), path.join(worktree, "node_modules"), "dir");
       if (toolchain === "interrupted") await box.exec("git", ["add", "evidence/draft/output.ts"], worktree);
     }
     const committed = await commitPipelineStage(box.subject, "study", false, box.exec, ["evidence/draft"], box.subject.lastPassedCommit, receipt);
     expect(committed).toMatchObject({ ok: true });
-    expect(fs.existsSync(path.join(worktree, "node_modules"))).toBe(false);
-    expect(() => fs.lstatSync(path.join(worktree, "node_modules"))).toThrow();
+    const localTools = path.join(worktree, "node_modules");
+    if (toolchain === "recovered") expect(fs.lstatSync(localTools, { throwIfNoEntry: false })).toBeUndefined();
+    else {
+      expect(fs.lstatSync(localTools).isDirectory()).toBe(true);
+      expect(fs.realpathSync(localTools)).not.toBe(fs.realpathSync(path.join(box.repo, "node_modules")));
+    }
     expect(fs.readlinkSync(path.join(box.repo, "node_modules"))).toBe(path.resolve("node_modules"));
     const head = await box.exec("git", ["show", "--format=", "--name-only", "HEAD"], worktree);
     expect(head.stdout.trim()).toBe("evidence/draft/output.ts");
@@ -163,7 +168,7 @@ test.each([
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
-test.each(["local", "unrelated", "dangling", "dangling-parent", "unignored"] as const)("settlement preserves %s dependency paths and commits only declared outputs", async (mode) => {
+test.each(["local", "unrelated", "dangling", "dangling-parent", "unignored"] as const)("settlement handles %s dependency paths and commits only declared outputs", async (mode) => {
   const box = hookedRepo();
   try {
     fs.writeFileSync(path.join(box.repo, ".gitignore"), mode === "unignored" ? "" : "node_modules\n");
@@ -190,7 +195,7 @@ test.each(["local", "unrelated", "dangling", "dangling-parent", "unignored"] as 
     if (mode === "local") expect(fs.readFileSync(path.join(local, "owned.txt"), "utf8")).toBe("local install\n");
     else if (mode === "unrelated") expect(fs.readlinkSync(local)).toBe(path.resolve("node_modules"));
     else if (mode === "dangling") expect(fs.readlinkSync(local)).toBe("missing-install");
-    else if (mode === "dangling-parent") expect(fs.readlinkSync(local)).toBe(path.resolve(box.repo, "node_modules"));
+    else if (mode === "dangling-parent") expect(fs.lstatSync(local, { throwIfNoEntry: false })).toBeUndefined();
     else expect(fs.existsSync(local)).toBe(false);
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });

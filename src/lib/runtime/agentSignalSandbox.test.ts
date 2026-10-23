@@ -488,6 +488,7 @@ test.skipIf(process.platform !== "linux")("a structured host records the boundar
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-host-off-"));
   const bin = path.join(root, "bin"); fs.mkdirSync(bin);
   fs.symlinkSync(Bun.which("python3")!, path.join(bin, "python3"));
+  fs.symlinkSync(Bun.which("git")!, path.join(bin, "git"));
   const binary = path.join(root, "copilot-fixture");
   fs.writeFileSync(binary, `#!${Bun.which("python3")}\nimport json,sys\n` + String.raw`
 for line in sys.stdin:

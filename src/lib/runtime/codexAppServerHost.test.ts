@@ -115,6 +115,20 @@ class MemoryEventStore implements RuntimeEventStore {
   }
 }
 
+test("mocked structured host keeps launch admission out of the installed CLI prefix", async () => {
+  const original = fs.mkdirSync, updaterDirectories: string[] = [];
+  const mkdir = spyOn(fs, "mkdirSync").mockImplementation((directory, options) => {
+    if (path.basename(String(directory)) === ".delegatus-codex") updaterDirectories.push(String(directory));
+    return original(directory, options);
+  });
+  const server = new FakeAppServer("private-launch-binary");
+  try {
+    const host = await CodexAppServerHost.start({ cwd: "/repo", readProtocolVersion: () => "0.162.1", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+    await host.release();
+    expect(updaterDirectories).toEqual([]);
+  } finally { mkdir.mockRestore(); }
+});
+
 test("rejects a command approval with the wrong decision before writing to Codex", async () => {
   const server = new FakeAppServer("typed-approval");
   const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });

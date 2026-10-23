@@ -19,6 +19,7 @@ import {
   type ViewerMcpServerEntry,
 } from "@/lib/agent/spawnPolicy";
 import { grantedMcpServers } from "@/lib/agent/mcpAllowlist";
+import { mcpHttpAccessToken, MCP_HTTP_ACCESS_HEADER } from "@/lib/mcp/httpAccess";
 import { procBackend } from "@/lib/proc";
 import { signalDetachedProcessGroup, type ProcessSignal } from "@/lib/processGroup";
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
@@ -182,13 +183,16 @@ export function copilotChildEnv(
 }
 
 /** A stdio launcher, or the Viewer's shared HTTP endpoint. */
-export type CopilotViewerMcpServer = ViewerMcpServerEntry | { url: string };
+export type CopilotViewerMcpServer = ViewerMcpServerEntry | { url: string; headers?: Record<string, string> };
 
 /** The Viewer server for one launch, from the environment its agent runs
     with: the shared endpoint when `viewerMcpTransportForLaunch` admits HTTP,
     the resolved stdio launcher otherwise. */
 export function copilotViewerMcpServer(launchEnv: Readonly<Record<string, string | undefined>>): CopilotViewerMcpServer {
-  return viewerMcpTransportForLaunch(launchEnv) === "http" ? { url: viewerMcpHttpUrl() } : viewerMcpServerEntry();
+  const access = mcpHttpAccessToken();
+  return viewerMcpTransportForLaunch(launchEnv) === "http"
+    ? { url: viewerMcpHttpUrl(), ...(access ? { headers: { [MCP_HTTP_ACCESS_HEADER]: access } } : {}) }
+    : viewerMcpServerEntry();
 }
 
 /** The `--additional-mcp-config` document. ACP `session/new` rejects stdio
@@ -228,7 +232,7 @@ export function copilotMcpConfig(
     ? {
         type: "http",
         url: viewer.url,
-        headers: capability ? { [VIEWER_SPAWN_CAPABILITY_HEADER]: capability } : {},
+        headers: { ...viewer.headers, ...(capability ? { [VIEWER_SPAWN_CAPABILITY_HEADER]: capability } : {}) },
         tools: ["*"],
       }
     : {
