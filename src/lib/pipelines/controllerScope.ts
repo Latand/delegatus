@@ -105,6 +105,16 @@ export function controllerTickFingerprint(pipeline: Pipeline): string {
 }
 
 export function withControllerPipelineScope<T>(keys: readonly string[], run: () => Promise<T>, attempts?: ReadonlySet<string>, references?: Scope["references"]): Promise<T> {
+  const parent = scope.getStore();
+  // Jobs are async descendants of the selected pass. Retain its exact window
+  // when narrowing to a lane; unrelated/global work still starts unscoped.
+  if (!references && parent?.references && keys.every(key => parent.keys.includes(key))) {
+    references = new Map(keys.flatMap(key => {
+      const refs = parent.references!.get(key);
+      return refs ? [[key, refs] as const] : [];
+    }));
+    attempts ??= parent.attempts;
+  }
   return scope.run({ keys, attempts, references, closes: new Map() }, run);
 }
 

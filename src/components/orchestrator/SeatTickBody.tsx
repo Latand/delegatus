@@ -12,6 +12,7 @@ import { operatorInstructionText, seatTickInstructionLines } from "@/lib/monitor
 import type { SeatTickSettingsAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
 
 import { autonomyActive, type AutonomySetting } from "@/lib/monitor/autonomy";
+import { TurboCaption, TurboDialog, TurboStatus, TurboSwitch, TurboSwitchDetails, useTurboControl, type TurboControl } from "./SeatTickTurbo";
 const AUTONOMY_HOURS = [8, 12, 24, Infinity];
 type AutonomyView = { state: "off" | "timed" | "unlimited"; until: string | null; startedAt: string | null; episode: AutonomySetting | null };
 function autonomyView(record: SeatTickSettingsAnswer | null): AutonomyView {
@@ -373,7 +374,9 @@ export function SeatTickActions({ read, state, surface }: {
 }) {
   const { t } = useLocale();
   const phone = surface === "mobile";
-  if (!state.dirty && !read.error) return null;
+  /* Turbo shows its own refusal under its control. */
+  const saveError = read.errorScope === "turbo" ? null : read.error;
+  if (!state.dirty && !saveError) return null;
   const overLimit = read.error?.match(/^instructions \(reason\) are (\d+) characters; the limit is 500\. Nothing was stored — shorten the instructions and send them again$/);
   const instructionsRequired = read.error === "instructions (reason) are required when the tick is disabled or its wake interval changes. Write what the seat should do and when it should stop; a quiet tick without instructions is indistinguishable from a broken one";
   const error = overLimit
@@ -388,7 +391,7 @@ export function SeatTickActions({ read, state, surface }: {
     : "inline-flex h-7 items-center justify-center gap-1.5 rounded-control px-3 text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50";
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-2">
-      {read.error ? (
+      {saveError ? (
         <p role="alert" data-seat-tick-error className="rounded-control border border-danger/40 bg-danger/10 px-2 py-1.5 text-ui leading-4 text-danger">
           {error}
         </p>
@@ -529,6 +532,7 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
     + (draft.reason && protectedLines.length ? 1 : 0);
   const phone = surface === "mobile";
   const reasonRef = useRef<HTMLTextAreaElement>(null);
+  const turbo = useTurboControl(read, now);
 
   /* The field can contain a standing instruction. Grow it on every draft
      change, and when a saved value is loaded, so reopening the panel shows
@@ -592,12 +596,18 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
           <p role="status" data-seat-tick-journal-unreadable className="pl-3 text-caption leading-4 text-warning">{t("seatTick.journalUnreadable")}</p>
         ) : null}
         {state.storedAutonomy.state !== "off" ? <AutonomyStatus stored={state.storedAutonomy} now={now} locale={locale} /> : null}
+        <TurboStatus control={turbo} now={now} locale={locale} />
         {maintenanceView ? (
           <StatusLine tone={maintenanceView.tone} headline={maintenanceView.status.headline} attr={{ "data-seat-tick-maintenance-summary": "", "data-seat-tick-maintenance-state": maintenanceView.state }}>
             <Segments segments={maintenanceView.status.segments} phone={phone} onOpened={onOpenedCard} />
           </StatusLine>
         ) : null}
       </div>
+
+      {/* FULL AUTONOMY, then Turbo on its own row (docs/design/turbo-mode.md §6): right
+          under the status, so both stay inside the popover's 70vh on a laptop. */}
+      {record ? <SeatTickAutonomy state={state} turbo={turbo} row={row} phone={phone} now={now} locale={locale} wakesOn={record?.settings.enabled === true} /> : null}
+      <TurboDialog control={turbo} phone={phone} locale={locale} />
 
       {/* ORCHESTRATOR WAKES — the tick's own switch and the fields its draft needs. */}
       <div className="flex min-w-0 flex-col gap-2 border-t border-border pt-2.5">
@@ -748,8 +758,6 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
         ) : null}
       </div>
 
-      {/* FULL AUTONOMY — under the wakes it rides on. */}
-      {record ? <SeatTickAutonomy state={state} row={row} phone={phone} now={now} locale={locale} wakesOn={record?.settings.enabled === true} /> : null}
 
       {/* BOARD MAINTENANCE — its own switch, interval and agent, saved with the rest. */}
       {record && maintenance && maintenanceView ? (
@@ -808,8 +816,9 @@ function AutonomyStatus({ stored, now, locale }: { stored: AutonomyView; now: nu
     from the panel's own Toggle, Select and caption. Turning it on turns the
     wakes on in the same draft, because the mode works through them; the hint
     that says so shows only while the stored wakes are off. */
-function SeatTickAutonomy({ state, row, phone, now, locale, wakesOn }: { state: SeatTickDraftState; row: string; phone: boolean; now: number; locale: string; wakesOn: boolean }) {
+function SeatTickAutonomy({ state, turbo, row, phone, now, locale, wakesOn }: { state: SeatTickDraftState; turbo: TurboControl; row: string; phone: boolean; now: number; locale: string; wakesOn: boolean }) {
   const { t } = useLocale();
+  const turboCaptionId = `turbo-about-${phone ? "mobile" : "desktop"}`;
   const { autonomy: draft, setAutonomy: setDraft, storedAutonomy: stored } = state;
   const unlimited = stored.state === "unlimited";
   const storedEnd = stored.state === "off" ? null : unlimited ? t("seatTick.autonomy.unlimited") : t("seatTick.autonomy.keep", { time: seatTickLocalTime(stored.until, now, locale) ?? t("seatTick.unknown") });
@@ -825,6 +834,11 @@ function SeatTickAutonomy({ state, row, phone, now, locale, wakesOn }: { state: 
         }} />
     </div>
     <p data-seat-tick-autonomy-about className="text-caption leading-4 text-secondary">{t("seatTick.autonomy.about")}</p>
+    <div data-turbo-row className={`flex min-w-0 items-center gap-2 ${row}`}>
+      <p data-turbo-head className="min-w-0 flex-1 text-label font-semibold uppercase tracking-wide text-muted">{t("seatTick.turbo.head")}</p>
+      <TurboSwitch control={turbo} phone={phone} describedBy={turboCaptionId} />
+    </div>
+    <TurboCaption control={turbo} id={turboCaptionId} />
     {draft.enabled ? <label className="flex min-w-0 flex-col gap-1">
       <span className="text-ui text-primary">{t("seatTick.autonomy.durationLabel")}</span>
       <Select roomy={phone} data-seat-tick-autonomy-duration value={draft.hours} disabled={state.saving}
@@ -1204,6 +1218,7 @@ function SeatTickDetails({ record, autonomy, lastDelivery, now, locale, phone }:
         {t("seatTick.details")}
       </summary>
       <div className="flex min-w-0 flex-col gap-2 pt-2">
+        <TurboSwitchDetails answer={record.turbo} />
         <p data-seat-tick-last-delivery className="min-w-0 break-words text-caption leading-4 text-muted">
           {t("seatTick.lastDeliveryLine", { value: lastDelivery })}
         </p>
