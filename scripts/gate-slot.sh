@@ -94,6 +94,31 @@ reuse_code=0
 "${LLV_GATE_BUN:-bun}" "$admission" --reuse-slot || reuse_code=$?
 if [[ $reuse_code == 0 ]]; then run "$@"; fi
 if [[ $reuse_code != 75 ]]; then exit "$reuse_code"; fi
+# A top-level heavy command may run on the gate runner instead
+# (docs/design/remote-gate-runner.md §8.3). The runner file sits under the
+# passwd home, which agents' private HOME and XDG_CONFIG_HOME do not hide. The
+# client either exits with the remote verdict or writes "here", and the command
+# is then admitted and run on this machine as before.
+runner_client="$(dirname "${BASH_SOURCE[0]}")/gate-runner/client.ts"
+if [[ ${LLV_GATE_RUNNER:-} != off && ${NODE_ENV:-} != test && -f $runner_client && $(uname -s 2>/dev/null) == Linux ]] \
+  && [[ -n ${LLV_GATE_RUNNER:-} || -n ${LLV_GATE_RUNNER_CONFIG:-} || -f "$(getent passwd "$(id -u)" | cut -d: -f6)/.config/delegatus/gate-runner.json" ]]; then
+  runner_decision=$(mktemp "${TMPDIR:-/tmp}/gate-runner-decision.XXXXXXXX")
+  # The client runs as a job so a TERM or INT sent to this shell reaches it:
+  # it stops the remote run and confirms the stop before it exits.
+  LLV_GATE_RUNNER_DECISION=$runner_decision "${LLV_GATE_BUN:-bun}" "$runner_client" "$@" <&0 &
+  runner_pid=$!
+  trap 'kill -TERM "$runner_pid" 2>/dev/null || true' TERM
+  trap 'kill -INT "$runner_pid" 2>/dev/null || true' INT
+  runner_code=0
+  while :; do
+    runner_code=0; wait "$runner_pid" || runner_code=$?
+    kill -0 "$runner_pid" 2>/dev/null || break
+  done
+  trap - TERM INT
+  runner_here=$(<"$runner_decision"); rm -f -- "$runner_decision"
+  if [[ $runner_here != here ]]; then exit "$runner_code"; fi
+  export LLV_GATE_RUNNER=off
+fi
 # MSYS/Cygwin shell PIDs differ from the Windows PIDs the native Bun helper
 # probes. The shell's virtual proc file supplies its native PID.
 owner_pid=$$

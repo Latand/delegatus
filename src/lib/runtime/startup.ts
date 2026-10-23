@@ -6,6 +6,7 @@ import { waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
 import { learnedRulesForLaunchProfile, memoryStartIdentity, roleMemoryProfileForIdentity } from "@/lib/memory/roleLaunch";
+import { storedOperatorRoot } from "@/lib/memory/operatorMemory";
 import { codexNativeMemoryEnabled } from "@/lib/agent/codexSpawnPolicy";
 import fs from "node:fs";
 
@@ -2381,6 +2382,7 @@ async function adoptStructuredHostsPass(
           memoryRole,
           memoryProject,
           Boolean(seatMembership && seatMembership.containerId === memoryProject),
+          storedOperatorRoot(conversation, conversation ? startupSnapshot(registry).memberships[conversation.id] : undefined),
         ) ?? undefined;
         const owner = resolveCodexOwner(entry);
         // The surviving process retains its original MCP capability and launch
@@ -2454,6 +2456,7 @@ async function adoptStructuredHostsPass(
           memoryRole,
           memoryProject,
           Boolean(seatMembership && seatMembership.containerId === memoryProject),
+          storedOperatorRoot(conversation, conversation ? startupSnapshot(registry).memberships[conversation.id] : undefined),
         ) ?? undefined;
         const options = {
           ...await claudeStartupHostOptions(

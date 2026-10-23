@@ -2,6 +2,7 @@ import { worktreeMapStore, projectCurationStore, readProjectDocument, projectSto
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { systemScheduler, type DeadlineScheduler } from "@/lib/deadline";
 
 import { readWorktreeRecoveries } from "@/lib/projects/worktreeRecoveryStore";
 
@@ -227,24 +228,24 @@ export function claudeMemoryDirectoryProofCurrent(proof: ClaudeMemoryDirectoryPr
   catch { return false; }
 }
 
-export async function claudeMemoryScopeProof(slug: string, deadline: number): Promise<{ project: string | null; directories: ClaudeMemoryDirectoryProof }> {
+export async function claudeMemoryScopeProof(slug: string, deadline: number, scheduler: DeadlineScheduler = systemScheduler): Promise<{ project: string | null; directories: ClaudeMemoryDirectoryProof }> {
   const directories: ClaudeMemoryDirectoryProof = [];
-  const proof = await uniqueClaudeMemoryPath(slug, deadline, directories);
+  const proof = await uniqueClaudeMemoryPath(slug, deadline, directories, scheduler);
   return { project: proof.cwd ? cachedProjectInfoFromCwd(proof.cwd)?.project ?? null : null, directories };
 }
 
-async function uniqueClaudeMemoryPath(slug: string, deadline = Infinity, directories?: ClaudeMemoryDirectoryProof): Promise<{ cwd: string | null; absent: boolean }> {
+async function uniqueClaudeMemoryPath(slug: string, deadline = Infinity, directories?: ClaudeMemoryDirectoryProof, scheduler: DeadlineScheduler = systemScheduler): Promise<{ cwd: string | null; absent: boolean }> {
   const unresolved = { cwd: null, absent: false };
   const drive = process.platform === "win32" ? /^([A-Za-z])--/.exec(slug)?.[1] : undefined;
   if (!slug.startsWith("-") && !drive) return unresolved;
   async function read<T>(operation: Promise<T>): Promise<T> {
     if (!Number.isFinite(deadline)) return operation;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timer: unknown;
     try {
       return await Promise.race([operation, new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(Error("slug identity deadline")), Math.max(0, Math.ceil(deadline - performance.now())));
+        timer = scheduler.setTimeout(() => reject(Error("slug identity deadline")), Math.max(0, Math.ceil(deadline - performance.now())));
       })]);
-    } finally { clearTimeout(timer); }
+    } finally { scheduler.clearTimeout(timer); }
   }
   const matches: string[] = [];
   let frontier = [{ pathname: drive ? `${drive}:${path.sep}` : path.parse(path.resolve(path.sep)).root, encoded: drive ? `${drive}-` : "" }];

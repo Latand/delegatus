@@ -13,30 +13,30 @@
       "top": {
         "panel": {
           "left": 0,
-          "top": 405.5,
+          "top": 359.3125,
           "width": 390,
-          "height": 438.5,
-          "scrollHeight": 438
+          "height": 484.6875,
+          "scrollHeight": 484
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 217.125,
+        "botSectionHeight": 263.3125,
         "controls": 5,
-        "textLeaves": 9,
+        "textLeaves": 11,
         "overlaps": 0,
         "failures": []
       },
       "end": {
         "panel": {
           "left": 0,
-          "top": 278,
+          "top": 231.8125,
           "width": 390,
-          "height": 566,
-          "scrollHeight": 565
+          "height": 612.1875,
+          "scrollHeight": 611
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 344.625,
+        "botSectionHeight": 390.8125,
         "controls": 5,
-        "textLeaves": 12,
+        "textLeaves": 14,
         "overlaps": 0,
         "failures": []
       }
@@ -59,12 +59,12 @@
           "top": 101.28125,
           "width": 390,
           "height": 742.71875,
-          "scrollHeight": 761
+          "scrollHeight": 1549
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 540.125,
-        "controls": 10,
-        "textLeaves": 26,
+        "botSectionHeight": 1328.3125,
+        "controls": 20,
+        "textLeaves": 37,
         "overlaps": 0,
         "failures": []
       },
@@ -74,12 +74,12 @@
           "top": 101.28125,
           "width": 390,
           "height": 742.71875,
-          "scrollHeight": 960
+          "scrollHeight": 1910
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 740.0625,
-        "controls": 10,
-        "textLeaves": 32,
+        "botSectionHeight": 1690,
+        "controls": 24,
+        "textLeaves": 45,
         "overlaps": 0,
         "failures": []
       }
@@ -102,12 +102,12 @@
           "top": 101.28125,
           "width": 390,
           "height": 742.71875,
-          "scrollHeight": 783
+          "scrollHeight": 1586
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 562.5625,
-        "controls": 10,
-        "textLeaves": 26,
+        "botSectionHeight": 1365.1875,
+        "controls": 20,
+        "textLeaves": 37,
         "overlaps": 0,
         "failures": []
       },
@@ -117,12 +117,96 @@
           "top": 101.28125,
           "width": 390,
           "height": 742.71875,
-          "scrollHeight": 983
+          "scrollHeight": 1947
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 762.5,
-        "controls": 10,
-        "textLeaves": 32,
+        "botSectionHeight": 1726.875,
+        "controls": 24,
+        "textLeaves": 45,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-390-light-clone",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scheme": "light",
+      "lang": "en",
+      "scene": "clone",
+      "reportsLine": [
+        "Orchestrator reports: Atlas"
+      ],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 101.28125,
+          "width": 390,
+          "height": 742.71875,
+          "scrollHeight": 1550
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1329.5625,
+        "controls": 20,
+        "textLeaves": 40,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 101.28125,
+          "width": 390,
+          "height": 742.71875,
+          "scrollHeight": 1912
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1691.25,
+        "controls": 24,
+        "textLeaves": 48,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-390-light-pairing",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scheme": "light",
+      "lang": "en",
+      "scene": "pairing",
+      "reportsLine": [],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 304.75,
+          "width": 390,
+          "height": 539.25,
+          "scrollHeight": 538
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 317.875,
+        "controls": 6,
+        "textLeaves": 17,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 129.25,
+          "width": 390,
+          "height": 714.75,
+          "scrollHeight": 714
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 493.375,
+        "controls": 7,
+        "textLeaves": 21,
         "overlaps": 0,
         "failures": []
       }
@@ -140,30 +224,30 @@
       "top": {
         "panel": {
           "left": 0,
-          "top": 405.5,
+          "top": 359.3125,
           "width": 390,
-          "height": 438.5,
-          "scrollHeight": 438
+          "height": 484.6875,
+          "scrollHeight": 484
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 217.125,
+        "botSectionHeight": 263.3125,
         "controls": 5,
-        "textLeaves": 9,
+        "textLeaves": 11,
         "overlaps": 0,
         "failures": []
       },
       "end": {
         "panel": {
           "left": 0,
-          "top": 278,
+          "top": 231.8125,
           "width": 390,
-          "height": 566,
-          "scrollHeight": 565
+          "height": 612.1875,
+          "scrollHeight": 611
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 344.625,
+        "botSectionHeight": 390.8125,
         "controls": 5,
-        "textLeaves": 12,
+        "textLeaves": 14,
         "overlaps": 0,
         "failures": []
       }
@@ -186,12 +270,12 @@
           "top": 101.28125,
           "width": 390,
           "height": 742.71875,
-          "scrollHeight": 761
+          "scrollHeight": 1549
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 540.125,
-        "controls": 10,
-        "textLeaves": 26,
+        "botSectionHeight": 1328.3125,
+        "controls": 20,
+        "textLeaves": 37,
         "overlaps": 0,
         "failures": []
       },
@@ -201,12 +285,12 @@
           "top": 101.28125,
           "width": 390,
           "height": 742.71875,
-          "scrollHeight": 960
+          "scrollHeight": 1910
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 740.0625,
-        "controls": 10,
-        "textLeaves": 32,
+        "botSectionHeight": 1690,
+        "controls": 24,
+        "textLeaves": 45,
         "overlaps": 0,
         "failures": []
       }
@@ -229,12 +313,12 @@
           "top": 101.28125,
           "width": 390,
           "height": 742.71875,
-          "scrollHeight": 783
+          "scrollHeight": 1586
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 562.5625,
-        "controls": 10,
-        "textLeaves": 26,
+        "botSectionHeight": 1365.1875,
+        "controls": 20,
+        "textLeaves": 37,
         "overlaps": 0,
         "failures": []
       },
@@ -244,12 +328,96 @@
           "top": 101.28125,
           "width": 390,
           "height": 742.71875,
-          "scrollHeight": 983
+          "scrollHeight": 1947
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 762.5,
-        "controls": 10,
-        "textLeaves": 32,
+        "botSectionHeight": 1726.875,
+        "controls": 24,
+        "textLeaves": 45,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-390-dark-clone",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scheme": "dark",
+      "lang": "en",
+      "scene": "clone",
+      "reportsLine": [
+        "Orchestrator reports: Atlas"
+      ],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 101.28125,
+          "width": 390,
+          "height": 742.71875,
+          "scrollHeight": 1550
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1329.5625,
+        "controls": 20,
+        "textLeaves": 40,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 101.28125,
+          "width": 390,
+          "height": 742.71875,
+          "scrollHeight": 1912
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1691.25,
+        "controls": 24,
+        "textLeaves": 48,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-390-dark-pairing",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scheme": "dark",
+      "lang": "en",
+      "scene": "pairing",
+      "reportsLine": [],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 304.75,
+          "width": 390,
+          "height": 539.25,
+          "scrollHeight": 538
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 317.875,
+        "controls": 6,
+        "textLeaves": 17,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 129.25,
+          "width": 390,
+          "height": 714.75,
+          "scrollHeight": 714
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 493.375,
+        "controls": 7,
+        "textLeaves": 21,
         "overlaps": 0,
         "failures": []
       }
@@ -267,30 +435,30 @@
       "top": {
         "panel": {
           "left": 0,
-          "top": 493.5,
+          "top": 447.3125,
           "width": 430,
-          "height": 438.5,
-          "scrollHeight": 438
+          "height": 484.6875,
+          "scrollHeight": 484
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 217.125,
+        "botSectionHeight": 263.3125,
         "controls": 5,
-        "textLeaves": 9,
+        "textLeaves": 11,
         "overlaps": 0,
         "failures": []
       },
       "end": {
         "panel": {
           "left": 0,
-          "top": 380.4375,
+          "top": 334.25,
           "width": 430,
-          "height": 551.5625,
-          "scrollHeight": 551
+          "height": 597.75,
+          "scrollHeight": 597
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 330.1875,
+        "botSectionHeight": 376.375,
         "controls": 5,
-        "textLeaves": 12,
+        "textLeaves": 14,
         "overlaps": 0,
         "failures": []
       }
@@ -310,15 +478,15 @@
       "top": {
         "panel": {
           "left": 0,
-          "top": 183.5625,
+          "top": 111.84375,
           "width": 430,
-          "height": 748.4375,
-          "scrollHeight": 747
+          "height": 820.15625,
+          "scrollHeight": 1536
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 527.0625,
-        "controls": 10,
-        "textLeaves": 26,
+        "botSectionHeight": 1315.25,
+        "controls": 20,
+        "textLeaves": 37,
         "overlaps": 0,
         "failures": []
       },
@@ -328,12 +496,12 @@
           "top": 111.84375,
           "width": 430,
           "height": 820.15625,
-          "scrollHeight": 933
+          "scrollHeight": 1883
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 712.5625,
-        "controls": 10,
-        "textLeaves": 32,
+        "botSectionHeight": 1662.5,
+        "controls": 24,
+        "textLeaves": 45,
         "overlaps": 0,
         "failures": []
       }
@@ -353,15 +521,15 @@
       "top": {
         "panel": {
           "left": 0,
-          "top": 161.125,
+          "top": 111.84375,
           "width": 430,
-          "height": 770.875,
-          "scrollHeight": 770
+          "height": 820.15625,
+          "scrollHeight": 1558
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 549.5,
-        "controls": 10,
-        "textLeaves": 26,
+        "botSectionHeight": 1337.6875,
+        "controls": 20,
+        "textLeaves": 37,
         "overlaps": 0,
         "failures": []
       },
@@ -371,12 +539,96 @@
           "top": 111.84375,
           "width": 430,
           "height": 820.15625,
-          "scrollHeight": 955
+          "scrollHeight": 1905
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 735,
-        "controls": 10,
-        "textLeaves": 32,
+        "botSectionHeight": 1684.9375,
+        "controls": 24,
+        "textLeaves": 45,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-430-light-clone",
+      "viewport": {
+        "width": 430,
+        "height": 932
+      },
+      "scheme": "light",
+      "lang": "en",
+      "scene": "clone",
+      "reportsLine": [
+        "Orchestrator reports: Atlas"
+      ],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 111.84375,
+          "width": 430,
+          "height": 820.15625,
+          "scrollHeight": 1537
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1316.5,
+        "controls": 20,
+        "textLeaves": 40,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 111.84375,
+          "width": 430,
+          "height": 820.15625,
+          "scrollHeight": 1884
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1663.75,
+        "controls": 24,
+        "textLeaves": 48,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-430-light-pairing",
+      "viewport": {
+        "width": 430,
+        "height": 932
+      },
+      "scheme": "light",
+      "lang": "en",
+      "scene": "pairing",
+      "reportsLine": [],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 392.75,
+          "width": 430,
+          "height": 539.25,
+          "scrollHeight": 538
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 317.875,
+        "controls": 6,
+        "textLeaves": 17,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 231.6875,
+          "width": 430,
+          "height": 700.3125,
+          "scrollHeight": 699
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 478.9375,
+        "controls": 7,
+        "textLeaves": 21,
         "overlaps": 0,
         "failures": []
       }
@@ -394,30 +646,30 @@
       "top": {
         "panel": {
           "left": 0,
-          "top": 493.5,
+          "top": 447.3125,
           "width": 430,
-          "height": 438.5,
-          "scrollHeight": 438
+          "height": 484.6875,
+          "scrollHeight": 484
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 217.125,
+        "botSectionHeight": 263.3125,
         "controls": 5,
-        "textLeaves": 9,
+        "textLeaves": 11,
         "overlaps": 0,
         "failures": []
       },
       "end": {
         "panel": {
           "left": 0,
-          "top": 380.4375,
+          "top": 334.25,
           "width": 430,
-          "height": 551.5625,
-          "scrollHeight": 551
+          "height": 597.75,
+          "scrollHeight": 597
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 330.1875,
+        "botSectionHeight": 376.375,
         "controls": 5,
-        "textLeaves": 12,
+        "textLeaves": 14,
         "overlaps": 0,
         "failures": []
       }
@@ -437,15 +689,15 @@
       "top": {
         "panel": {
           "left": 0,
-          "top": 183.5625,
+          "top": 111.84375,
           "width": 430,
-          "height": 748.4375,
-          "scrollHeight": 747
+          "height": 820.15625,
+          "scrollHeight": 1536
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 527.0625,
-        "controls": 10,
-        "textLeaves": 26,
+        "botSectionHeight": 1315.25,
+        "controls": 20,
+        "textLeaves": 37,
         "overlaps": 0,
         "failures": []
       },
@@ -455,12 +707,12 @@
           "top": 111.84375,
           "width": 430,
           "height": 820.15625,
-          "scrollHeight": 933
+          "scrollHeight": 1883
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 712.5625,
-        "controls": 10,
-        "textLeaves": 32,
+        "botSectionHeight": 1662.5,
+        "controls": 24,
+        "textLeaves": 45,
         "overlaps": 0,
         "failures": []
       }
@@ -480,15 +732,15 @@
       "top": {
         "panel": {
           "left": 0,
-          "top": 161.125,
+          "top": 111.84375,
           "width": 430,
-          "height": 770.875,
-          "scrollHeight": 770
+          "height": 820.15625,
+          "scrollHeight": 1558
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 549.5,
-        "controls": 10,
-        "textLeaves": 26,
+        "botSectionHeight": 1337.6875,
+        "controls": 20,
+        "textLeaves": 37,
         "overlaps": 0,
         "failures": []
       },
@@ -498,12 +750,96 @@
           "top": 111.84375,
           "width": 430,
           "height": 820.15625,
-          "scrollHeight": 955
+          "scrollHeight": 1905
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 735,
-        "controls": 10,
-        "textLeaves": 32,
+        "botSectionHeight": 1684.9375,
+        "controls": 24,
+        "textLeaves": 45,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-430-dark-clone",
+      "viewport": {
+        "width": 430,
+        "height": 932
+      },
+      "scheme": "dark",
+      "lang": "en",
+      "scene": "clone",
+      "reportsLine": [
+        "Orchestrator reports: Atlas"
+      ],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 111.84375,
+          "width": 430,
+          "height": 820.15625,
+          "scrollHeight": 1537
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1316.5,
+        "controls": 20,
+        "textLeaves": 40,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 111.84375,
+          "width": 430,
+          "height": 820.15625,
+          "scrollHeight": 1884
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1663.75,
+        "controls": 24,
+        "textLeaves": 48,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-430-dark-pairing",
+      "viewport": {
+        "width": 430,
+        "height": 932
+      },
+      "scheme": "dark",
+      "lang": "en",
+      "scene": "pairing",
+      "reportsLine": [],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 392.75,
+          "width": 430,
+          "height": 539.25,
+          "scrollHeight": 538
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 317.875,
+        "controls": 6,
+        "textLeaves": 17,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 231.6875,
+          "width": 430,
+          "height": 700.3125,
+          "scrollHeight": 699
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 478.9375,
+        "controls": 7,
+        "textLeaves": 21,
         "overlaps": 0,
         "failures": []
       }
@@ -521,30 +857,30 @@
       "top": {
         "panel": {
           "left": 255,
-          "top": 534.5,
+          "top": 482.3125,
           "width": 320,
-          "height": 361.5,
-          "scrollHeight": 360
+          "height": 407.6875,
+          "scrollHeight": 406
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 177.125,
+        "botSectionHeight": 223.3125,
         "controls": 5,
-        "textLeaves": 9,
+        "textLeaves": 11,
         "overlaps": 0,
         "failures": []
       },
       "end": {
         "panel": {
           "left": 255,
-          "top": 378.125,
+          "top": 330,
           "width": 320,
-          "height": 517.875,
-          "scrollHeight": 516
+          "height": 560,
+          "scrollHeight": 562
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 333.5,
+        "botSectionHeight": 379.6875,
         "controls": 5,
-        "textLeaves": 12,
+        "textLeaves": 14,
         "overlaps": 0,
         "failures": []
       }
@@ -564,30 +900,30 @@
       "top": {
         "panel": {
           "left": 255,
-          "top": 336,
+          "top": 330,
           "width": 320,
           "height": 560,
-          "scrollHeight": 615
+          "scrollHeight": 1320
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 432.125,
-        "controls": 10,
-        "textLeaves": 26,
+        "botSectionHeight": 1137.625,
+        "controls": 20,
+        "textLeaves": 37,
         "overlaps": 0,
         "failures": []
       },
       "end": {
         "panel": {
           "left": 255,
-          "top": 336,
+          "top": 330,
           "width": 320,
           "height": 560,
-          "scrollHeight": 842
+          "scrollHeight": 1673
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 659.375,
-        "controls": 10,
-        "textLeaves": 32,
+        "botSectionHeight": 1490.625,
+        "controls": 24,
+        "textLeaves": 45,
         "overlaps": 0,
         "failures": []
       }
@@ -607,30 +943,114 @@
       "top": {
         "panel": {
           "left": 255,
-          "top": 336,
+          "top": 330,
           "width": 320,
           "height": 560,
-          "scrollHeight": 651
+          "scrollHeight": 1357
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 469,
-        "controls": 10,
-        "textLeaves": 26,
+        "botSectionHeight": 1174.5,
+        "controls": 20,
+        "textLeaves": 37,
         "overlaps": 0,
         "failures": []
       },
       "end": {
         "panel": {
           "left": 255,
-          "top": 336,
+          "top": 330,
           "width": 320,
           "height": 560,
-          "scrollHeight": 879
+          "scrollHeight": 1710
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 696.25,
-        "controls": 10,
-        "textLeaves": 32,
+        "botSectionHeight": 1527.5,
+        "controls": 24,
+        "textLeaves": 45,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "desktop-1440-light-clone",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "scheme": "light",
+      "lang": "en",
+      "scene": "clone",
+      "reportsLine": [
+        "Orchestrator reports: Atlas"
+      ],
+      "top": {
+        "panel": {
+          "left": 255,
+          "top": 330,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1340
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1157.875,
+        "controls": 20,
+        "textLeaves": 40,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 255,
+          "top": 330,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1693
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1510.875,
+        "controls": 24,
+        "textLeaves": 48,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "desktop-1440-light-pairing",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "scheme": "light",
+      "lang": "en",
+      "scene": "pairing",
+      "reportsLine": [],
+      "top": {
+        "panel": {
+          "left": 255,
+          "top": 424.75,
+          "width": 320,
+          "height": 465.25,
+          "scrollHeight": 463
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 280.875,
+        "controls": 6,
+        "textLeaves": 17,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 255,
+          "top": 330,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 656
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 473.25,
+        "controls": 7,
+        "textLeaves": 21,
         "overlaps": 0,
         "failures": []
       }
@@ -648,30 +1068,30 @@
       "top": {
         "panel": {
           "left": 255,
-          "top": 534.5,
+          "top": 482.3125,
           "width": 320,
-          "height": 361.5,
-          "scrollHeight": 360
+          "height": 407.6875,
+          "scrollHeight": 406
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 177.125,
+        "botSectionHeight": 223.3125,
         "controls": 5,
-        "textLeaves": 9,
+        "textLeaves": 11,
         "overlaps": 0,
         "failures": []
       },
       "end": {
         "panel": {
           "left": 255,
-          "top": 378.125,
+          "top": 330,
           "width": 320,
-          "height": 517.875,
-          "scrollHeight": 516
+          "height": 560,
+          "scrollHeight": 562
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 333.5,
+        "botSectionHeight": 379.6875,
         "controls": 5,
-        "textLeaves": 12,
+        "textLeaves": 14,
         "overlaps": 0,
         "failures": []
       }
@@ -691,30 +1111,30 @@
       "top": {
         "panel": {
           "left": 255,
-          "top": 336,
+          "top": 330,
           "width": 320,
           "height": 560,
-          "scrollHeight": 615
+          "scrollHeight": 1320
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 432.125,
-        "controls": 10,
-        "textLeaves": 26,
+        "botSectionHeight": 1137.625,
+        "controls": 20,
+        "textLeaves": 37,
         "overlaps": 0,
         "failures": []
       },
       "end": {
         "panel": {
           "left": 255,
-          "top": 336,
+          "top": 330,
           "width": 320,
           "height": 560,
-          "scrollHeight": 842
+          "scrollHeight": 1673
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 659.375,
-        "controls": 10,
-        "textLeaves": 32,
+        "botSectionHeight": 1490.625,
+        "controls": 24,
+        "textLeaves": 45,
         "overlaps": 0,
         "failures": []
       }
@@ -734,30 +1154,114 @@
       "top": {
         "panel": {
           "left": 255,
-          "top": 336,
+          "top": 330,
           "width": 320,
           "height": 560,
-          "scrollHeight": 651
+          "scrollHeight": 1357
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 469,
-        "controls": 10,
-        "textLeaves": 26,
+        "botSectionHeight": 1174.5,
+        "controls": 20,
+        "textLeaves": 37,
         "overlaps": 0,
         "failures": []
       },
       "end": {
         "panel": {
           "left": 255,
-          "top": 336,
+          "top": 330,
           "width": 320,
           "height": 560,
-          "scrollHeight": 879
+          "scrollHeight": 1710
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 696.25,
-        "controls": 10,
-        "textLeaves": 32,
+        "botSectionHeight": 1527.5,
+        "controls": 24,
+        "textLeaves": 45,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "desktop-1440-dark-clone",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "scheme": "dark",
+      "lang": "en",
+      "scene": "clone",
+      "reportsLine": [
+        "Orchestrator reports: Atlas"
+      ],
+      "top": {
+        "panel": {
+          "left": 255,
+          "top": 330,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1340
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1157.875,
+        "controls": 20,
+        "textLeaves": 40,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 255,
+          "top": 330,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1693
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1510.875,
+        "controls": 24,
+        "textLeaves": 48,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "desktop-1440-dark-pairing",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "scheme": "dark",
+      "lang": "en",
+      "scene": "pairing",
+      "reportsLine": [],
+      "top": {
+        "panel": {
+          "left": 255,
+          "top": 424.75,
+          "width": 320,
+          "height": 465.25,
+          "scrollHeight": 463
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 280.875,
+        "controls": 6,
+        "textLeaves": 17,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 255,
+          "top": 330,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 656
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 473.25,
+        "controls": 7,
+        "textLeaves": 21,
         "overlaps": 0,
         "failures": []
       }
@@ -780,12 +1284,12 @@
           "top": 101.28125,
           "width": 390,
           "height": 742.71875,
-          "scrollHeight": 761
+          "scrollHeight": 1578
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 540.125,
-        "controls": 10,
-        "textLeaves": 26,
+        "botSectionHeight": 1357.1875,
+        "controls": 20,
+        "textLeaves": 37,
         "overlaps": 0,
         "failures": []
       },
@@ -795,12 +1299,12 @@
           "top": 101.28125,
           "width": 390,
           "height": 742.71875,
-          "scrollHeight": 975
+          "scrollHeight": 1954
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 754.5,
-        "controls": 10,
-        "textLeaves": 32,
+        "botSectionHeight": 1733.3125,
+        "controls": 24,
+        "textLeaves": 45,
         "overlaps": 0,
         "failures": []
       }
@@ -820,15 +1324,15 @@
       "top": {
         "panel": {
           "left": 0,
-          "top": 116.75,
+          "top": 101.28125,
           "width": 390,
-          "height": 727.25,
-          "scrollHeight": 726
+          "height": 742.71875,
+          "scrollHeight": 1557
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 505.875,
-        "controls": 9,
-        "textLeaves": 25,
+        "botSectionHeight": 1336.6875,
+        "controls": 19,
+        "textLeaves": 36,
         "overlaps": 0,
         "failures": []
       },
@@ -838,12 +1342,12 @@
           "top": 101.28125,
           "width": 390,
           "height": 742.71875,
-          "scrollHeight": 941
+          "scrollHeight": 1933
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 720.25,
-        "controls": 9,
-        "textLeaves": 31,
+        "botSectionHeight": 1712.8125,
+        "controls": 23,
+        "textLeaves": 44,
         "overlaps": 0,
         "failures": []
       }
@@ -863,30 +1367,30 @@
       "top": {
         "panel": {
           "left": 255,
-          "top": 236,
+          "top": 230,
           "width": 320,
           "height": 560,
-          "scrollHeight": 615
+          "scrollHeight": 1320
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 432.125,
-        "controls": 10,
-        "textLeaves": 26,
+        "botSectionHeight": 1137.625,
+        "controls": 20,
+        "textLeaves": 37,
         "overlaps": 0,
         "failures": []
       },
       "end": {
         "panel": {
           "left": 255,
-          "top": 236,
+          "top": 230,
           "width": 320,
           "height": 560,
-          "scrollHeight": 856
+          "scrollHeight": 1703
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 673.8125,
-        "controls": 10,
-        "textLeaves": 32,
+        "botSectionHeight": 1520.8125,
+        "controls": 24,
+        "textLeaves": 45,
         "overlaps": 0,
         "failures": []
       }
@@ -906,30 +1410,1374 @@
       "top": {
         "panel": {
           "left": 255,
-          "top": 236,
+          "top": 230,
           "width": 320,
           "height": 560,
-          "scrollHeight": 606
+          "scrollHeight": 1312
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 423.625,
-        "controls": 9,
-        "textLeaves": 25,
+        "botSectionHeight": 1129.125,
+        "controls": 19,
+        "textLeaves": 36,
         "overlaps": 0,
         "failures": []
       },
       "end": {
         "panel": {
           "left": 255,
-          "top": 236,
+          "top": 230,
           "width": 320,
           "height": 560,
-          "scrollHeight": 848
+          "scrollHeight": 1695
         },
         "scrim": "oklab(0 0 0 / 0.4)",
-        "botSectionHeight": 665.3125,
-        "controls": 9,
-        "textLeaves": 31,
+        "botSectionHeight": 1512.3125,
+        "controls": 23,
+        "textLeaves": 44,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-390-light-clone",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scheme": "light",
+      "lang": "en",
+      "scene": "clone",
+      "reportsLine": [
+        "Orchestrator reports: Atlas"
+      ],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 101.28125,
+          "width": 390,
+          "height": 742.71875,
+          "scrollHeight": 1550
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1329.5625,
+        "controls": 20,
+        "textLeaves": 40,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 101.28125,
+          "width": 390,
+          "height": 742.71875,
+          "scrollHeight": 1912
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1691.25,
+        "controls": 24,
+        "textLeaves": 48,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-390-light-pairing",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scheme": "light",
+      "lang": "en",
+      "scene": "pairing",
+      "reportsLine": [],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 304.75,
+          "width": 390,
+          "height": 539.25,
+          "scrollHeight": 538
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 317.875,
+        "controls": 6,
+        "textLeaves": 17,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 129.25,
+          "width": 390,
+          "height": 714.75,
+          "scrollHeight": 714
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 493.375,
+        "controls": 7,
+        "textLeaves": 21,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-390-light-clone-uk",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scheme": "light",
+      "lang": "uk",
+      "scene": "clone",
+      "reportsLine": [
+        "Звіти оркестратора: Atlas"
+      ],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 101.28125,
+          "width": 390,
+          "height": 742.71875,
+          "scrollHeight": 1579
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1358.4375,
+        "controls": 20,
+        "textLeaves": 40,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 101.28125,
+          "width": 390,
+          "height": 742.71875,
+          "scrollHeight": 1955
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1734.5625,
+        "controls": 24,
+        "textLeaves": 48,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-390-light-pairing-uk",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scheme": "light",
+      "lang": "uk",
+      "scene": "pairing",
+      "reportsLine": [],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 304.75,
+          "width": 390,
+          "height": 539.25,
+          "scrollHeight": 538
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 317.875,
+        "controls": 6,
+        "textLeaves": 17,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 129.25,
+          "width": 390,
+          "height": 714.75,
+          "scrollHeight": 714
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 493.375,
+        "controls": 7,
+        "textLeaves": 21,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-390-dark-clone",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scheme": "dark",
+      "lang": "en",
+      "scene": "clone",
+      "reportsLine": [
+        "Orchestrator reports: Atlas"
+      ],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 101.28125,
+          "width": 390,
+          "height": 742.71875,
+          "scrollHeight": 1550
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1329.5625,
+        "controls": 20,
+        "textLeaves": 40,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 101.28125,
+          "width": 390,
+          "height": 742.71875,
+          "scrollHeight": 1912
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1691.25,
+        "controls": 24,
+        "textLeaves": 48,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-390-dark-pairing",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scheme": "dark",
+      "lang": "en",
+      "scene": "pairing",
+      "reportsLine": [],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 304.75,
+          "width": 390,
+          "height": 539.25,
+          "scrollHeight": 538
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 317.875,
+        "controls": 6,
+        "textLeaves": 17,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 129.25,
+          "width": 390,
+          "height": 714.75,
+          "scrollHeight": 714
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 493.375,
+        "controls": 7,
+        "textLeaves": 21,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-390-dark-clone-uk",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scheme": "dark",
+      "lang": "uk",
+      "scene": "clone",
+      "reportsLine": [
+        "Звіти оркестратора: Atlas"
+      ],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 101.28125,
+          "width": 390,
+          "height": 742.71875,
+          "scrollHeight": 1579
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1358.4375,
+        "controls": 20,
+        "textLeaves": 40,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 101.28125,
+          "width": 390,
+          "height": 742.71875,
+          "scrollHeight": 1955
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1734.5625,
+        "controls": 24,
+        "textLeaves": 48,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-390-dark-pairing-uk",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scheme": "dark",
+      "lang": "uk",
+      "scene": "pairing",
+      "reportsLine": [],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 304.75,
+          "width": 390,
+          "height": 539.25,
+          "scrollHeight": 538
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 317.875,
+        "controls": 6,
+        "textLeaves": 17,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 129.25,
+          "width": 390,
+          "height": 714.75,
+          "scrollHeight": 714
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 493.375,
+        "controls": 7,
+        "textLeaves": 21,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-410-light-clone",
+      "viewport": {
+        "width": 410,
+        "height": 880
+      },
+      "scheme": "light",
+      "lang": "en",
+      "scene": "clone",
+      "reportsLine": [
+        "Orchestrator reports: Atlas"
+      ],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 105.609375,
+          "width": 410,
+          "height": 774.390625,
+          "scrollHeight": 1537
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1316.5,
+        "controls": 20,
+        "textLeaves": 40,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 105.609375,
+          "width": 410,
+          "height": 774.390625,
+          "scrollHeight": 1899
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1678.1875,
+        "controls": 24,
+        "textLeaves": 48,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-410-light-pairing",
+      "viewport": {
+        "width": 410,
+        "height": 880
+      },
+      "scheme": "light",
+      "lang": "en",
+      "scene": "pairing",
+      "reportsLine": [],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 340.75,
+          "width": 410,
+          "height": 539.25,
+          "scrollHeight": 538
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 317.875,
+        "controls": 6,
+        "textLeaves": 17,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 165.25,
+          "width": 410,
+          "height": 714.75,
+          "scrollHeight": 714
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 493.375,
+        "controls": 7,
+        "textLeaves": 21,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-410-light-clone-uk",
+      "viewport": {
+        "width": 410,
+        "height": 880
+      },
+      "scheme": "light",
+      "lang": "uk",
+      "scene": "clone",
+      "reportsLine": [
+        "Звіти оркестратора: Atlas"
+      ],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 105.609375,
+          "width": 410,
+          "height": 774.390625,
+          "scrollHeight": 1550
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1329.5625,
+        "controls": 20,
+        "textLeaves": 40,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 105.609375,
+          "width": 410,
+          "height": 774.390625,
+          "scrollHeight": 1926
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1705.6875,
+        "controls": 24,
+        "textLeaves": 48,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-410-light-pairing-uk",
+      "viewport": {
+        "width": 410,
+        "height": 880
+      },
+      "scheme": "light",
+      "lang": "uk",
+      "scene": "pairing",
+      "reportsLine": [],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 340.75,
+          "width": 410,
+          "height": 539.25,
+          "scrollHeight": 538
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 317.875,
+        "controls": 6,
+        "textLeaves": 17,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 165.25,
+          "width": 410,
+          "height": 714.75,
+          "scrollHeight": 714
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 493.375,
+        "controls": 7,
+        "textLeaves": 21,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-410-dark-clone",
+      "viewport": {
+        "width": 410,
+        "height": 880
+      },
+      "scheme": "dark",
+      "lang": "en",
+      "scene": "clone",
+      "reportsLine": [
+        "Orchestrator reports: Atlas"
+      ],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 105.609375,
+          "width": 410,
+          "height": 774.390625,
+          "scrollHeight": 1537
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1316.5,
+        "controls": 20,
+        "textLeaves": 40,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 105.609375,
+          "width": 410,
+          "height": 774.390625,
+          "scrollHeight": 1899
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1678.1875,
+        "controls": 24,
+        "textLeaves": 48,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-410-dark-pairing",
+      "viewport": {
+        "width": 410,
+        "height": 880
+      },
+      "scheme": "dark",
+      "lang": "en",
+      "scene": "pairing",
+      "reportsLine": [],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 340.75,
+          "width": 410,
+          "height": 539.25,
+          "scrollHeight": 538
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 317.875,
+        "controls": 6,
+        "textLeaves": 17,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 165.25,
+          "width": 410,
+          "height": 714.75,
+          "scrollHeight": 714
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 493.375,
+        "controls": 7,
+        "textLeaves": 21,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-410-dark-clone-uk",
+      "viewport": {
+        "width": 410,
+        "height": 880
+      },
+      "scheme": "dark",
+      "lang": "uk",
+      "scene": "clone",
+      "reportsLine": [
+        "Звіти оркестратора: Atlas"
+      ],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 105.609375,
+          "width": 410,
+          "height": 774.390625,
+          "scrollHeight": 1550
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1329.5625,
+        "controls": 20,
+        "textLeaves": 40,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 105.609375,
+          "width": 410,
+          "height": 774.390625,
+          "scrollHeight": 1926
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1705.6875,
+        "controls": 24,
+        "textLeaves": 48,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-410-dark-pairing-uk",
+      "viewport": {
+        "width": 410,
+        "height": 880
+      },
+      "scheme": "dark",
+      "lang": "uk",
+      "scene": "pairing",
+      "reportsLine": [],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 340.75,
+          "width": 410,
+          "height": 539.25,
+          "scrollHeight": 538
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 317.875,
+        "controls": 6,
+        "textLeaves": 17,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 165.25,
+          "width": 410,
+          "height": 714.75,
+          "scrollHeight": 714
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 493.375,
+        "controls": 7,
+        "textLeaves": 21,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-430-light-clone",
+      "viewport": {
+        "width": 430,
+        "height": 932
+      },
+      "scheme": "light",
+      "lang": "en",
+      "scene": "clone",
+      "reportsLine": [
+        "Orchestrator reports: Atlas"
+      ],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 111.84375,
+          "width": 430,
+          "height": 820.15625,
+          "scrollHeight": 1537
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1316.5,
+        "controls": 20,
+        "textLeaves": 40,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 111.84375,
+          "width": 430,
+          "height": 820.15625,
+          "scrollHeight": 1884
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1663.75,
+        "controls": 24,
+        "textLeaves": 48,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-430-light-pairing",
+      "viewport": {
+        "width": 430,
+        "height": 932
+      },
+      "scheme": "light",
+      "lang": "en",
+      "scene": "pairing",
+      "reportsLine": [],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 392.75,
+          "width": 430,
+          "height": 539.25,
+          "scrollHeight": 538
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 317.875,
+        "controls": 6,
+        "textLeaves": 17,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 231.6875,
+          "width": 430,
+          "height": 700.3125,
+          "scrollHeight": 699
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 478.9375,
+        "controls": 7,
+        "textLeaves": 21,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-430-light-clone-uk",
+      "viewport": {
+        "width": 430,
+        "height": 932
+      },
+      "scheme": "light",
+      "lang": "uk",
+      "scene": "clone",
+      "reportsLine": [
+        "Звіти оркестратора: Atlas"
+      ],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 111.84375,
+          "width": 430,
+          "height": 820.15625,
+          "scrollHeight": 1550
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1329.5625,
+        "controls": 20,
+        "textLeaves": 40,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 111.84375,
+          "width": 430,
+          "height": 820.15625,
+          "scrollHeight": 1926
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1705.6875,
+        "controls": 24,
+        "textLeaves": 48,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-430-light-pairing-uk",
+      "viewport": {
+        "width": 430,
+        "height": 932
+      },
+      "scheme": "light",
+      "lang": "uk",
+      "scene": "pairing",
+      "reportsLine": [],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 392.75,
+          "width": 430,
+          "height": 539.25,
+          "scrollHeight": 538
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 317.875,
+        "controls": 6,
+        "textLeaves": 17,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 217.25,
+          "width": 430,
+          "height": 714.75,
+          "scrollHeight": 714
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 493.375,
+        "controls": 7,
+        "textLeaves": 21,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-430-dark-clone",
+      "viewport": {
+        "width": 430,
+        "height": 932
+      },
+      "scheme": "dark",
+      "lang": "en",
+      "scene": "clone",
+      "reportsLine": [
+        "Orchestrator reports: Atlas"
+      ],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 111.84375,
+          "width": 430,
+          "height": 820.15625,
+          "scrollHeight": 1537
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1316.5,
+        "controls": 20,
+        "textLeaves": 40,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 111.84375,
+          "width": 430,
+          "height": 820.15625,
+          "scrollHeight": 1884
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1663.75,
+        "controls": 24,
+        "textLeaves": 48,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-430-dark-pairing",
+      "viewport": {
+        "width": 430,
+        "height": 932
+      },
+      "scheme": "dark",
+      "lang": "en",
+      "scene": "pairing",
+      "reportsLine": [],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 392.75,
+          "width": 430,
+          "height": 539.25,
+          "scrollHeight": 538
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 317.875,
+        "controls": 6,
+        "textLeaves": 17,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 231.6875,
+          "width": 430,
+          "height": 700.3125,
+          "scrollHeight": 699
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 478.9375,
+        "controls": 7,
+        "textLeaves": 21,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-430-dark-clone-uk",
+      "viewport": {
+        "width": 430,
+        "height": 932
+      },
+      "scheme": "dark",
+      "lang": "uk",
+      "scene": "clone",
+      "reportsLine": [
+        "Звіти оркестратора: Atlas"
+      ],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 111.84375,
+          "width": 430,
+          "height": 820.15625,
+          "scrollHeight": 1550
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1329.5625,
+        "controls": 20,
+        "textLeaves": 40,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 111.84375,
+          "width": 430,
+          "height": 820.15625,
+          "scrollHeight": 1926
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1705.6875,
+        "controls": 24,
+        "textLeaves": 48,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "phone-430-dark-pairing-uk",
+      "viewport": {
+        "width": 430,
+        "height": 932
+      },
+      "scheme": "dark",
+      "lang": "uk",
+      "scene": "pairing",
+      "reportsLine": [],
+      "top": {
+        "panel": {
+          "left": 0,
+          "top": 392.75,
+          "width": 430,
+          "height": 539.25,
+          "scrollHeight": 538
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 317.875,
+        "controls": 6,
+        "textLeaves": 17,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 0,
+          "top": 217.25,
+          "width": 430,
+          "height": 714.75,
+          "scrollHeight": 714
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 493.375,
+        "controls": 7,
+        "textLeaves": 21,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "desktop-1280-light-clone",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "scheme": "light",
+      "lang": "en",
+      "scene": "clone",
+      "reportsLine": [
+        "Orchestrator reports: Atlas"
+      ],
+      "top": {
+        "panel": {
+          "left": 255,
+          "top": 230,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1340
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1157.875,
+        "controls": 20,
+        "textLeaves": 40,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 255,
+          "top": 230,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1693
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1510.875,
+        "controls": 24,
+        "textLeaves": 48,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "desktop-1280-light-pairing",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "scheme": "light",
+      "lang": "en",
+      "scene": "pairing",
+      "reportsLine": [],
+      "top": {
+        "panel": {
+          "left": 255,
+          "top": 324.75,
+          "width": 320,
+          "height": 465.25,
+          "scrollHeight": 463
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 280.875,
+        "controls": 6,
+        "textLeaves": 17,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 255,
+          "top": 230,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 656
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 473.25,
+        "controls": 7,
+        "textLeaves": 21,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "desktop-1280-light-clone-uk",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "scheme": "light",
+      "lang": "uk",
+      "scene": "clone",
+      "reportsLine": [
+        "Звіти оркестратора: Atlas"
+      ],
+      "top": {
+        "panel": {
+          "left": 255,
+          "top": 230,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1340
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1157.875,
+        "controls": 20,
+        "textLeaves": 40,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 255,
+          "top": 230,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1723
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1541.0625,
+        "controls": 24,
+        "textLeaves": 48,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "desktop-1280-light-pairing-uk",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "scheme": "light",
+      "lang": "uk",
+      "scene": "pairing",
+      "reportsLine": [],
+      "top": {
+        "panel": {
+          "left": 255,
+          "top": 310.3125,
+          "width": 320,
+          "height": 479.6875,
+          "scrollHeight": 478
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 295.3125,
+        "controls": 6,
+        "textLeaves": 17,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 255,
+          "top": 230,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 685
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 502.125,
+        "controls": 7,
+        "textLeaves": 21,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "desktop-1280-dark-clone",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "scheme": "dark",
+      "lang": "en",
+      "scene": "clone",
+      "reportsLine": [
+        "Orchestrator reports: Atlas"
+      ],
+      "top": {
+        "panel": {
+          "left": 255,
+          "top": 230,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1340
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1157.875,
+        "controls": 20,
+        "textLeaves": 40,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 255,
+          "top": 230,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1693
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1510.875,
+        "controls": 24,
+        "textLeaves": 48,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "desktop-1280-dark-pairing",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "scheme": "dark",
+      "lang": "en",
+      "scene": "pairing",
+      "reportsLine": [],
+      "top": {
+        "panel": {
+          "left": 255,
+          "top": 324.75,
+          "width": 320,
+          "height": 465.25,
+          "scrollHeight": 463
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 280.875,
+        "controls": 6,
+        "textLeaves": 17,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 255,
+          "top": 230,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 656
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 473.25,
+        "controls": 7,
+        "textLeaves": 21,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "desktop-1280-dark-clone-uk",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "scheme": "dark",
+      "lang": "uk",
+      "scene": "clone",
+      "reportsLine": [
+        "Звіти оркестратора: Atlas"
+      ],
+      "top": {
+        "panel": {
+          "left": 255,
+          "top": 230,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1340
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1157.875,
+        "controls": 20,
+        "textLeaves": 40,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 255,
+          "top": 230,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 1723
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 1541.0625,
+        "controls": 24,
+        "textLeaves": 48,
+        "overlaps": 0,
+        "failures": []
+      }
+    },
+    {
+      "key": "desktop-1280-dark-pairing-uk",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "scheme": "dark",
+      "lang": "uk",
+      "scene": "pairing",
+      "reportsLine": [],
+      "top": {
+        "panel": {
+          "left": 255,
+          "top": 310.3125,
+          "width": 320,
+          "height": 479.6875,
+          "scrollHeight": 478
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 295.3125,
+        "controls": 6,
+        "textLeaves": 17,
+        "overlaps": 0,
+        "failures": []
+      },
+      "end": {
+        "panel": {
+          "left": 255,
+          "top": 230,
+          "width": 320,
+          "height": 560,
+          "scrollHeight": 685
+        },
+        "scrim": "oklab(0 0 0 / 0.4)",
+        "botSectionHeight": 502.125,
+        "controls": 7,
+        "textLeaves": 21,
         "overlaps": 0,
         "failures": []
       }

@@ -45,3 +45,20 @@ test.each([
 test("an ordinary touched-test exit has no capacity evidence", () => {
   expect(publicationDeadlineOnly("pre-push: touched tests: failed (1)")).toBe(false);
 });
+
+// The remote gate runner lost a started run (scripts/gate-runner/client.ts).
+test("a gate runner without a verdict is retryable unless a refusal accompanies it", () => {
+  const lost = "pre-push: CPU admission for publication checks\ngate-runner: no verdict: the connection to the runner was lost after 41 s; nothing was judged";
+  expect(publicationDeadlineOnly(lost)).toBe(true);
+  expect(publicationDeadlineOnly(`${lost}\nNEW src/work.test.ts: named assertion`)).toBe(false);
+  expect(publicationDeadlineOnly(`PRIVACY GATE: FAIL\n${lost}`)).toBe(false);
+  expect(publicationDeadlineOnly("gate-runner: running here: the runner is unavailable: ssh exited 255")).toBe(false);
+});
+
+test("a publication stopped by the gate runner names the runner", async () => {
+  const { publicationFailureCause, publicationInterruptionCause } = await import("./git");
+  const failure = { step: "publishing the pipeline branch", code: 75, signal: null, durationMs: 41_000,
+    outputTail: "pre-push: CPU admission for publication checks\ngate-runner: no verdict: the connection to the runner was lost after 41 s; nothing was judged" };
+  expect(publicationInterruptionCause(failure)).toBe("the gate runner returned no verdict for the hook's checks (the connection to the runner was lost after 41 s; nothing was judged), and the push did not reach the remote");
+  expect(publicationFailureCause(failure)).toContain("the gate runner returned no verdict: the connection to the runner was lost after 41 s");
+});
