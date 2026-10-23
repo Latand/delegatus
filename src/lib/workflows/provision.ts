@@ -11,6 +11,7 @@ import { cpuBudgetTimer, cpuWaitBudget } from "@/lib/runtime/cpuAdmissionBudget"
 
 import { setupExitPath, setupStderrPath, setupStdoutPath } from "./store";
 import type { Workflow } from "./types";
+import { recordWorktreeProvenance } from "@/lib/pipelines/worktreeProvenance";
 
 /**
  * Git/gh/setup actions of a workflow, over an injectable exec port so the
@@ -117,6 +118,8 @@ export async function provisionWorktree(wf: Workflow, exec: ExecPort): Promise<P
   if (base.code !== 0) return failure("resolving the workflow base ref", base);
   const baseRef = base.stdout.trim();
   if (!baseRef) return { ok: false, error: "git returned an empty base ref" };
+  // The worktree sweep removes only checkouts with a record of who made them.
+  recordWorktreeProvenance(wf.worktreeDir, { creator: "workflow", id: wf.id });
   return { ok: true, baseBranch, baseRef };
 }
 
