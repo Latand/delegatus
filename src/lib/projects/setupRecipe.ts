@@ -109,7 +109,8 @@ export async function reviewSetupRecipe(root: string, value: unknown): Promise<R
   if (install) {
     const manifest = JSON.parse(files["package.json"]!.toString("utf8"));
     if (Object.hasOwn(manifest, "workspaces")) throw new Error("workspace setup installs are unsupported; review a direct setup script instead");
-    for (const key of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]) {
+    if (Object.hasOwn(manifest, "patchedDependencies")) throw new Error("patched dependency setup installs are unsupported; review a direct setup script instead");
+    for (const key of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies", "overrides", "resolutions"]) {
       if (manifest[key] && Object.values(manifest[key]).some(value => typeof value === "string" && /^(?:file:|link:|workspace:|[./])/u.test(value))) {
         throw new Error("local dependency setup installs are unsupported; review a direct setup script instead");
       }

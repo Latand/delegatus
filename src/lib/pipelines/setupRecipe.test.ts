@@ -205,8 +205,20 @@ test("approval refuses a PATH interpreter outside mounted system trees", async (
 test("frozen install refuses local dependency manifests outside its reviewed inputs", async () => {
   const directory = fs.mkdtempSync(path.join(root, "local-dependency-"));
   fs.writeFileSync(path.join(directory, "bun.lock"), "{}");
-  for (const value of ["file:pkg/a", "link:pkg/a", "workspace:*", "./pkg/a"]) {
-    fs.writeFileSync(path.join(directory, "package.json"), JSON.stringify({ dependencies: { fixture: value } }));
-    await expect(reviewSetupRecipe(directory, { command: ["bun", "install", "--frozen-lockfile"], cwd: "." })).rejects.toThrow("local dependency setup installs are unsupported");
+  for (const group of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies", "overrides", "resolutions"]) {
+    for (const value of ["file:pkg/a", "link:pkg/a", "workspace:*", "./pkg/a"]) {
+      fs.writeFileSync(path.join(directory, "package.json"), JSON.stringify({ [group]: { fixture: value } }));
+      await expect(reviewSetupRecipe(directory, { command: ["bun", "install", "--frozen-lockfile"], cwd: "." })).rejects.toThrow("local dependency setup installs are unsupported");
+    }
+  }
+});
+
+test("frozen install refuses unreviewed dependency patches", async () => {
+  const directory = fs.mkdtempSync(path.join(root, "patched-dependency-"));
+  fs.writeFileSync(path.join(directory, "bun.lock"), "{}");
+  fs.writeFileSync(path.join(directory, "package.json"), JSON.stringify({ patchedDependencies: { fixture: "fixture.patch" } }));
+  for (const content of ["reviewed patch", "changed patch"]) {
+    fs.writeFileSync(path.join(directory, "fixture.patch"), content);
+    await expect(reviewSetupRecipe(directory, { command: ["bun", "install", "--frozen-lockfile"], cwd: "." })).rejects.toThrow("patched dependency setup installs are unsupported");
   }
 });

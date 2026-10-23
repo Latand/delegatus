@@ -20,8 +20,9 @@ are refused. Script and file arguments must be regular files of at most 1 MiB.
 The command, working directory, resolved interpreter location and contents of
 its file arguments are hashed together. A frozen Bun install also pins its manifest, lockfile and
 `.npmrc` (including an absent configuration). Installs require the repository
-root; workspace and local dependency installs are refused in this slice. Use a
-reviewed direct script for those.
+root; workspace, patched dependency and local dependency installs (including
+local overrides and resolutions) are refused in this slice. Use a reviewed
+direct script for those.
 Python runs in isolated mode, which excludes checkout module shadows. Bun runs
 with an empty explicit configuration and automatic `.env` loading disabled,
 so checkout preloads cannot execute.
