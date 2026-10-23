@@ -227,6 +227,9 @@ interface StructuredStartupSignals {
 }
 
 const TRANSCRIPT_REFRESH_CONCURRENCY = 16;
+/** A batched startup demotion releases the pipeline lease once its hold
+    reaches this; the lease budget warns at 100 ms. */
+const STARTUP_DEMOTION_HOLD_MS = 40;
 /** Owed continuations older than this are retired unsent: a turn cut that
     long ago has been looked at by someone, and a paid turn resuming it now
     would act on a stale picture. */
@@ -2737,39 +2740,51 @@ async function adoptStructuredHostsPass(
     const existingCodexContinuations = client
       ? await interruptedCodexContinuations(registry, client, candidateCodexHosts)
       : new Map<string, RuntimeOperationResult>();
-    await demoteSkippedStructuredRegistryHosts(registry, shouldRetainCandidateOrAdopt, (entry, mutation) =>
-      admitState(async (available) => {
+    const demoteAdmitted = async <T>(available: boolean, entry: AgentRegistryEntry, mutation: () => T): Promise<T | undefined> => {
+      assertActive();
+      const evidence = await (available ? readEvidence(entry) : pipelineStartupEvidence(registry, false, entry));
+      if (evidence.changed) {
+        skippedHostKeys.add(sessionKeyId(entry.key));
+        deferredHostKeys.add(sessionKeyId(entry.key));
+        return;
+      }
+      const conversation = registry.conversationForPath(entry.artifactPath);
+      if (conversation && evidence.deferred.has(registry.canonicalConversationId(conversation.id))) {
+        deferredHostKeys.add(sessionKeyId(entry.key));
+        skippedHostKeys.add(sessionKeyId(entry.key));
+        return;
+      }
+      /* Before the claim and before the write that retires the row. */
+      const current = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
+      if (current && evidenceMoved(current)) {
+        skippedHostKeys.add(sessionKeyId(entry.key));
+        return;
+      }
+      return registry.deliveryWriteOrBusy({ label: "registry.startup-demote" }, () => {
         assertActive();
-        const evidence = await (available ? readEvidence(entry) : pipelineStartupEvidence(registry, false, entry));
-        if (evidence.changed) {
-          skippedHostKeys.add(sessionKeyId(entry.key));
+        if (evidence.membershipIdentity !== undefined && evidence.membershipIdentity !== startupMembershipIdentity(pipelineStartupMemberships(registry, entry))) {
           deferredHostKeys.add(sessionKeyId(entry.key));
           return;
         }
-        const conversation = registry.conversationForPath(entry.artifactPath);
-        if (conversation && evidence.deferred.has(registry.canonicalConversationId(conversation.id))) {
-          deferredHostKeys.add(sessionKeyId(entry.key));
-          skippedHostKeys.add(sessionKeyId(entry.key));
-          return;
-        }
-        /* Before the claim and before the write that retires the row. */
-        const current = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
-        if (current && evidenceMoved(current)) {
-          skippedHostKeys.add(sessionKeyId(entry.key));
-          return;
-        }
-        return registry.deliveryWriteOrBusy({ label: "registry.startup-demote" }, () => {
-          assertActive();
-          if (evidence.membershipIdentity !== undefined && evidence.membershipIdentity !== startupMembershipIdentity(pipelineStartupMemberships(registry, entry))) {
-            deferredHostKeys.add(sessionKeyId(entry.key));
-            return;
-          }
-          assertActive();
-          const latest = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
-          if (!latest || evidenceMoved(latest)) return undefined;
-          return mutation();
-        });
-      }, "reconciling structured hosts"), undefined, assertActive);
+        assertActive();
+        const latest = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
+        if (!latest || evidenceMoved(latest)) return undefined;
+        return mutation();
+      });
+    };
+    await demoteSkippedStructuredRegistryHosts(registry, shouldRetainCandidateOrAdopt, (entry, mutation) =>
+      admitState(available => demoteAdmitted(available, entry, mutation), "reconciling structured hosts"),
+    undefined, assertActive, rows => admitState(async (available) => {
+      /* One lease answers consecutive rows until its hold nears the lease
+         budget; each row still reads its own evidence and writes alone. */
+      const began = performance.now();
+      const answered: Array<boolean | undefined> = [];
+      for (const row of rows) {
+        if (answered.length > 0 && performance.now() - began >= STARTUP_DEMOTION_HOLD_MS) break;
+        answered.push(await demoteAdmitted(available, row.entry, row.mutation));
+      }
+      return answered;
+    }, "reconciling structured hosts"));
     const publicationSnapshot = await preparedStartupSnapshot(registry);
     orchestratorHostKeys = currentOrchestratorRestartRecoveryHostKeys(
       registry,

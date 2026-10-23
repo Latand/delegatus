@@ -255,6 +255,43 @@ test("a host with no recorded process skips the empty dead-process admission", a
 });
 
 
+test("dead-process reconciles go through the batch admission in bounded prefixes, and a refused row is claimed in order", async () => {
+  const process_={pid:990002,startIdentity:"fixture",bootEpoch:"fixture"};
+  const entries=Array.from({length:40},(_,n)=>({ key:{engine:"codex",sessionId:`batched-${n}`},artifactPath:`/fixture/batched-${n}.jsonl`,status:"idle",claimOwner:null,claimEpoch:0,
+    structuredHost:{kind:"codex-app-server",process:{...process_},endpoint:"stdio:waiting",writerClaimEpoch:0,activeTurnRef:null,pendingAttention:[],activeFlags:[]} }) as unknown as RegistryFile["entries"][string]);
+  const file=normalizeRegistry({version:2,entries:Object.fromEntries(entries.map(entry=>[`codex:${entry.key.sessionId}`,entry])),receipts:{}});
+  const events:string[]=[];
+  const registry={structuredHostEntries:()=>entries,readOnlySnapshot:()=>file,
+    conversationForPath:(artifactPath:string)=>({id:`conversation_${path.basename(artifactPath,".jsonl")}`}),
+    terminateInactiveStructuredHost:(_conversation:string,key:{sessionId:string})=>{
+      if(key.sessionId==="batched-9")return null;
+      events.push(`reconciled ${key.sessionId}`);return {};
+    },
+    withOperationLock:async (_key:unknown,_owner:unknown,run:()=>Promise<void>)=>run(),
+    claimStructuredHost:(key:{sessionId:string})=>{events.push(`claimed ${key.sessionId}`);const entry=file.entries[`codex:${key.sessionId}`]!;entry.claimOwner="owned";entry.claimEpoch++;return entry;},
+    setStructuredHostClaimed:(key:{sessionId:string})=>{events.push(`demoted ${key.sessionId}`);return file.entries[`codex:${key.sessionId}`]!;},
+  } as unknown as AgentRegistry;
+  const offered:number[]=[];let single=0;
+  await demoteSkippedStructuredRegistryHosts(registry,()=>false,async (_entry,mutation)=>{single++;return mutation();},undefined,undefined,async rows=>{
+    offered.push(rows.length);
+    // A hold that ends after seven rows; the rest are offered again.
+    return rows.slice(0,7).map(row=>row.mutation());
+  });
+  expect(offered.every(size=>size>=1&&size<=16)).toBe(true);
+  expect(offered.length).toBeLessThan(40);
+  // Only the refused row takes the single-row claim path: claim and demote.
+  expect(single).toBe(2);
+  const refused=events.indexOf("claimed batched-9");
+  expect(events.slice(refused,refused+2)).toEqual(["claimed batched-9","demoted batched-9"]);
+  expect(events.filter(event=>event.startsWith("reconciled")).length).toBe(39);
+  // The refused row settles before any row of a later batch is offered.
+  expect(events.indexOf("reconciled batched-8")).toBeLessThan(refused);
+  expect(events.indexOf("reconciled batched-16")).toBeGreaterThan(refused);
+  await expect(demoteSkippedStructuredRegistryHosts(registry,()=>false,undefined,undefined,undefined,async ()=>[]))
+    .rejects.toThrow("answered no prefix");
+});
+
+
 test("a synchronous startup visitor refusal joins the work already started", async () => {
   const { forEachStartupBatch } = await import("./startupWork");
   const release=Promise.withResolvers<void>();let settled=false;

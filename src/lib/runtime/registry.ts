@@ -777,6 +777,12 @@ export async function reapSeveredStructuredHost(
   return { reaped: await terminateVerifiedProcess(structuredProcess), reason: liveness.reason };
 }
 
+/** Admits consecutive dead-process reconciles in one hold. It answers a
+    non-empty prefix of the rows, in order; the caller offers the rest again. */
+export type StructuredDemotionBatchAdmission = (
+  rows: ReadonlyArray<{ entry: AgentRegistryEntry; mutation: () => boolean | undefined }>,
+) => Promise<Array<boolean | undefined>>;
+
 /** Reconciles claimable structured ownership for rows excluded by startup adoption. */
 export async function demoteSkippedStructuredRegistryHosts(
   registry: AgentRegistry,
@@ -784,6 +790,7 @@ export async function demoteSkippedStructuredRegistryHosts(
   admit: <T>(entry: AgentRegistryEntry, mutation: () => T) => Promise<T | undefined> = async (_entry, mutation) => registry.deliveryWriteOrBusy({ label: "registry.startup-demote" }, mutation),
   orphanStop: StructuredOrphanStopDependencies = {},
   assertActive: () => void = () => {},
+  admitBatch?: StructuredDemotionBatchAdmission,
 ): Promise<void> {
   const prepared = typeof registry.prepareReadOnlySnapshot === "function" ? await registry.prepareReadOnlySnapshot() : undefined;
   const rows: AgentRegistryEntry[] = [];
@@ -793,6 +800,22 @@ export async function demoteSkippedStructuredRegistryHosts(
       if (entry.structuredHost && !shouldAdopt(entry)) rows.push(entry);
     });
   }, { batchSize: 16, timeBudgetMs: 8 }));
+  /* A row whose recorded process is gone settles in one write. A startup
+     with a thousand such rows admitted each alone, paying a lease and a
+     loop turn per row; a batch admission answers them in bounded holds. A
+     refused reconcile falls through to the claim path, in row order. */
+  const pending: Array<{ entry: AgentRegistryEntry; mutation: () => boolean | undefined }> = [];
+  const batchLimit = admitBatch ? 16 : 1;
+  const flush = async () => {
+    while (pending.length > 0) {
+      const answered = admitBatch ? await admitBatch(pending) : [await admit(pending[0]!.entry, pending[0]!.mutation)];
+      if (answered.length === 0 || answered.length > pending.length) throw new Error("structured demotion admission answered no prefix of its rows");
+      const done = pending.splice(0, answered.length);
+      for (const [index, reconciled] of answered.entries()) {
+        if (reconciled === false) await demoteClaimedRow(done[index]!.entry);
+      }
+    }
+  };
   let slice = performance.now();
   for (const [index, entry] of rows.entries()) {
     if (index > 0 && (index % 16 === 0 || performance.now() - slice >= 8)) {
@@ -810,12 +833,19 @@ export async function demoteSkippedStructuredRegistryHosts(
     if (alreadyDead) continue;
     const conversation = registry.conversationForPath(entry.artifactPath);
     if (conversation && host.process) {
-      const reconciled = await admit(entry, () => {
+      pending.push({ entry, mutation: () => {
         const latest = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
         return latest && !shouldAdopt(latest) ? reconcileDeadStructuredRegistryHost(registry, conversation.id, entry.key) : undefined;
-      });
-      if (reconciled === undefined || reconciled) continue;
+      } });
+      if (pending.length >= batchLimit) await flush();
+      continue;
     }
+    await flush();
+    await demoteClaimedRow(entry);
+  }
+  await flush();
+
+  async function demoteClaimedRow(entry: AgentRegistryEntry): Promise<void> {
     const owner = captureProcessIdentity(process.pid);
     try {
       await registry.withOperationLock(entry.key, owner, async () => {
