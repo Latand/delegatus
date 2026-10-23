@@ -116,6 +116,9 @@ test("orchestrator and maintainer rules have named tabs and rows in both languag
     for (const locale of ["en", "uk"] as const) {
       await act(() => setLocale(locale));
       await act(async () => { root.render(<RulesWindow project="seat-window" onClose={() => {}} />); await new Promise(resolve => setTimeout(resolve, 0)); });
+      // The window opens on Profile; exercise its real navigation to the rules.
+      const allRules = [...dom.document.querySelectorAll("button")].find(button => button.textContent === translate(locale, "memoryProfile.allRules"))!;
+      await act(() => allRules.click());
       const names = locale === "en" ? ["Orchestrator", "Maintainer"] : ["Оркестратор", "Доглядач дошки"];
       for (const [index, role] of roles.entries()) {
         const tab = dom.document.querySelector(`[data-rules-role="${role}"]`)!;
@@ -130,6 +133,19 @@ test("orchestrator and maintainer rules have named tabs and rows in both languag
     for (const [key, value] of prior) if (value) Object.defineProperty(globalThis, key, value); else Reflect.deleteProperty(globalThis, key);
     await dom.happyDOM.close();
   }
+});
+
+test("the swarm scope follows role-wide guidance and offers no local mutation controls", () => {
+  const rule: RuleView = { id: "r_public", rule: "Read the project instruction files before changing code.", why: "", state: "active", hints: [], roleId: "builder", fixRound: false, stageId: "", fresh: false, createdAt: "2026-10-23", changedAt: "2026-10-23" };
+  const swarm: ScopeView = { ...scope(80), scope: "swarm:builder", kind: "swarm", roleId: "builder", bound: 4000, active: [rule] };
+  setLocale("en");
+  const markup = renderToStaticMarkup(<RuleSection kind="role" title="Role" scope={null} additionalScope={{ ...scope(0), scope: "role:*:builder", kind: "role", roleId: "builder" }} swarm={swarm} focusRule={rule.id} onDelete={() => { throw Error("public rule mutation"); }} onRestore={() => {}} />);
+  expect(markup.indexOf("data-rules-every-project")).toBeLessThan(markup.indexOf("data-rules-swarm"));
+  expect(markup).toContain("Swarm rules · Builder on every install");
+  expect(markup).toContain("Read only");
+  expect(markup).toContain(rule.rule);
+  expect(markup).not.toContain("data-learned-rule-delete");
+  expect(markup).not.toContain("data-rule-revert");
 });
 
 /* Audit B26: delete leaves at once, a refusal puts the rule back with the

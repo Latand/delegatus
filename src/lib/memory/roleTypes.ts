@@ -32,7 +32,7 @@ export function lessonTextLength(value: string): number {
   return [...lessonText(value)].length;
 }
 
-export type ScopeKind = "role" | "project" | "machine";
+export type ScopeKind = "role" | "swarm" | "project" | "machine";
 
 export type RuleState = "active" | "merged" | "archived";
 export type CuratorReason = "task-specific" | "stale" | "in-code" | "in-instructions" | "no-reader" | "contradicted" | "duplicate" | "problem";
@@ -156,8 +156,9 @@ export interface ScopeHistoryEntry {
   revisionScope?: string;
   at: string;
   /** Who changed the scope: a stage agent's lesson, the operator in the rules
-      window, a curator, or the join of a scope stored under a project key that moved. */
-  by: "agent" | "operator" | "succession" | "curator";
+      window, a curator, the join of a scope stored under a project key that
+      moved, or an install transfer that brought rules from another install. */
+  by: "agent" | "operator" | "succession" | "curator" | "transfer";
   pass?: string;
   counts?: CuratorPassView["counts"];
   before?: string[];
@@ -215,7 +216,7 @@ export interface LessonRequestRow {
 export type RoleMemoryRow = RoleMemoryRule | RoleMemoryScopeRow | LessonRequestRow;
 
 export interface LessonInput {
-  scope: ScopeKind;
+  scope: Exclude<ScopeKind, "swarm">;
   /** With scope role: the role the rule is for, when it is not the writer's own. */
   role?: string;
   rule: string;

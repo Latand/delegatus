@@ -40,6 +40,8 @@ export interface StubSettings {
   remoteEnv?: Record<string, string>;
   /** Directories prepended to the runner's PATH (stub systemctl and friends). */
   remotePath?: string[];
+  /** Keep the remote session outside a local caller's cgroup, as SSH does. */
+  sessionScope?: boolean;
 }
 
 export interface Harness {
@@ -69,7 +71,12 @@ const env = { HOME: runnerHome, USER: process.env.USER, LANG: "C.UTF-8",
   PATH: [...(settings.remotePath ?? []), "/usr/local/bin", "/usr/bin", "/bin"].join(":"),
   XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS, ...(settings.remoteEnv ?? {}) };
 for (const key of Object.keys(env)) if (env[key] === undefined) delete env[key];
-const child = spawn("/bin/bash", ["-c", command], { cwd: runnerHome, env, detached: true, stdio: ["pipe", "pipe", "pipe"] });
+// setsid alone stays in the caller's cgroup. A local gate stopping that
+// cgroup must close the transport while the remote session handles its EOF.
+const scope = settings.sessionScope && command.includes("serve.ts run");
+const child = spawn(scope ? "systemd-run" : "/bin/bash", scope
+  ? ["--user", "--scope", "--quiet", "--collect", "--unit=gate-session-fixture-" + require("node:crypto").randomUUID(), "--", "/bin/bash", "-c", command]
+  : ["-c", command], { cwd: runnerHome, env, detached: true, stdio: ["pipe", "pipe", "pipe"] });
 // The remote side outlives a killed session, as on a real runner; the
 // harness stops each of these groups when the test ends.
 fs.appendFileSync(groupsFile, child.pid + "\\n");
@@ -135,7 +142,10 @@ export function makeHarness(options: { mirrorMain?: "base" | "behind" | "ahead" 
   fs.writeFileSync(groups, "");
   fs.writeFileSync(stub, `#!${process.execPath}\n${STUB.replace("__CONFIG__", JSON.stringify([settingsFile, log, runnerHome, groups]))}`, { mode: 0o755 });
   const nodeModules = fs.realpathSync(path.join(REPOSITORY, "node_modules"));
-  const settings = (value: StubSettings) => fs.writeFileSync(settingsFile, JSON.stringify({ ...value, remoteEnv: { LLV_GATE_RUNNER_NODE_MODULES: nodeModules, ...value.remoteEnv } }));
+  const settings = (value: StubSettings) => {
+    if (value.sessionScope && process.env.LLV_SIGNAL_SANDBOX) throw new Error("the mock session scope requires the gate host's native PID namespace");
+    fs.writeFileSync(settingsFile, JSON.stringify({ ...value, remoteEnv: { LLV_GATE_RUNNER_NODE_MODULES: nodeModules, ...value.remoteEnv } }));
+  };
   settings({});
   const cache = path.join(root, "cache");
   const config = path.join(root, "gate-runner.json");

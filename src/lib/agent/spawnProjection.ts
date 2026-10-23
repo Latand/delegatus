@@ -166,6 +166,7 @@ function cardState(
      #1397): it is what "working…" counts from while no transcript turn exists. */
   const admittedAt = Date.parse(receipt.createdAt);
   return {
+    ...(receipt.memoryCap ? { memoryCap: receipt.memoryCap } : {}),
     launchId: receipt.launchId,
     clientAttemptId: receipt.clientAttemptId,
     accountId: receipt.accountId,

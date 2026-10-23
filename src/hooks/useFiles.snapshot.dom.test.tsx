@@ -116,6 +116,51 @@ test("a changed catalog replaces the snapshot with the full answer", async () =>
   expect(after.cached).toBeFalsy();
 });
 
+test("a server bootstrap stays provisional through incomplete replies until a current generation arrives", async () => {
+  for (const status of [200, 304]) {
+    let phase = 0;
+    const { fetcher } = recordingFetcher(() => {
+      const headers = { ETag: ETAG, "x-llv-files-generation": phase === 2 ? "1" : "0", "x-llv-files-target-generation": "1",
+        "x-llv-files-projection-cache": phase === 0 ? "bootstrap" : phase === 1 ? "stale" : "hit" };
+      return phase === 0 || status === 200
+        ? new Response(JSON.stringify(BODY), { headers })
+        : new Response(null, { status: 304, headers });
+    });
+    const cache = createFilesClientCache(fetcher);
+    try {
+      for (phase = 0; phase < 2; phase++) {
+        const data = await cache.revalidate();
+        expect(data.files.map(file => [file.path, file.project, file.title])).toEqual(BODY.files.map(file => [file.path, file.project, file.title]));
+        expect(data.cached).toBe(true);
+        expect(data.loaded).toBe(false);
+        expect(data.scopeCertified).toBe(false);
+        expect(cache.readScope("/sessions/other.jsonl").scopeCertified).toBe(false);
+        expect(cache.certifiedGlobal()).toBeNull();
+      }
+      const current = await cache.revalidate();
+      expect(current.cached).not.toBe(true);
+      expect(current.loaded).toBe(true);
+      expect(current.scopeCertified).toBe(true);
+      expect(cache.certifiedGlobal()?.etag).toBe(ETAG);
+    } finally { cache.dispose(); }
+  }
+});
+
+test("a server refusal discards a provisional bootstrap", async () => {
+  let refused = false;
+  const { fetcher } = recordingFetcher(() => refused
+    ? new Response(null, { status: 403 })
+    : new Response(JSON.stringify(BODY), { headers: { ETag: ETAG, "x-llv-files-projection-cache": "bootstrap", "x-llv-files-generation": "0", "x-llv-files-target-generation": "1" } }));
+  const cache = createFilesClientCache(fetcher);
+  try {
+    await cache.revalidate();
+    refused = true;
+    await expect(cache.revalidate()).rejects.toThrow("files request failed: 403");
+    expect(cache.read().files).toEqual([]);
+    expect(cache.read().cached).toBeUndefined();
+  } finally { cache.dispose(); }
+});
+
 test("a refused browser drops what it stored and stops painting the restored answer", async () => {
   for (const status of [401, 403]) {
     const accessDenied = mock(() => {});

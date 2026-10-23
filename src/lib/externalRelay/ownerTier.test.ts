@@ -246,6 +246,34 @@ function start(ports: OwnerRunPorts, hardCapMs = 1000, onConversation = (_id: st
 }
 const launch = async () => ({ status: 202, body: { conversationId: "conversation_owner" } });
 
+test("owner failure stays pending through refused stop receipts and retries until confirmed", async () => {
+  const requestId = request().request_id;
+  reserveRun({ requestId, relayId: "relay_fixture", targetId: target.id, leaseId: "lease_fixture",
+    ownerTurn: { clientAttemptId: `relay-owner-${requestId}` }, ownerPid: process.pid, ownerIdentity: "fixture",
+    childPid: null, childIdentity: null, runDir: "", startedAt: "2026-01-01T00:00:00Z" }, 1);
+  let reached!: () => void;
+  const refused = new Promise<void>(r => { reached = r; });
+  let stops = 0, recovered = false, finished = false;
+  const run = start({ launch,
+    observe: async () => ({ state: "failed", failure: { kind: "launch-failed", detail: "fixture first failure" } }),
+    stop: async () => { if (++stops === 3) reached(); if (!recovered) throw Error("secondary stop refusal"); }, stopRetryMs: 1 });
+  void run.done.then(() => { finished = true; });
+  try {
+    await refused;
+    // Drain the third control attempt and its observation without a timing window.
+    await new Promise<void>(r => setImmediate(r));
+    expect(finished).toBe(false);
+    expect(readRunLedger().runs.find(r => r.requestId === requestId)?.ownerTurn?.confirmed).not.toBe(true);
+    const reread = Bun.spawnSync([process.execPath, "-e", `import { readRunLedger } from './src/lib/externalRelay/store.ts'; console.log(JSON.stringify(readRunLedger().runs.find(r => r.requestId === 'rq_1')));`], { env: { ...process.env } });
+    expect(reread.exitCode).toBe(0);
+    expect(JSON.parse(reread.stdout.toString())).toMatchObject({ ownerTurn: { cancel: "interrupt", diagnostic: { message: "launch-failed: fixture first failure" } } });
+    recovered = true;
+    expect(await run.done).toMatchObject({ status: "failed", diagnostic: { message: "launch-failed: fixture first failure" } });
+    expect(stops).toBeGreaterThan(3);
+    expect(readRunLedger().runs.find(r => r.requestId === requestId)?.ownerTurn?.confirmed).toBe(true);
+  } finally { recovered = true; await run.done; dropRun(requestId); }
+});
+
 test("normal spawn fields and final turn are used without a child or progress stream", async () => {
   const bodies: Record<string, unknown>[] = [], bound: string[] = [];
   const run = start({ launch: async body => { bodies.push(body); return launch(); },
@@ -290,8 +318,8 @@ test("cancel before admission retains custody and kills the late conversation", 
   let release!: (result: Awaited<ReturnType<typeof launch>>) => void;
   const stops: string[] = [];
   const run = start({ launch: () => new Promise(r => { release = r; }), observe: async () => ({ state: "running" }), stop: async (id, action) => { stops.push(id + ":" + action); } });
-  run.cancel(); expect(await run.done).toMatchObject({ status: "cancelled" });
-  release(await launch()); await new Promise(r => setTimeout(r, 5));
+  run.cancel();
+  release(await launch()); expect(await run.done).toMatchObject({ status: "cancelled" });
   expect(stops).toEqual(["conversation_owner:kill"]);
 });
 
@@ -310,7 +338,7 @@ test("queued first message is observed through the same receipt and can answer w
     onConversation: () => {}, onProgress: value => progress.push(value), deadline: relayRequestDeadline({}, Date.now()) });
   expect(await run.done).toMatchObject({ status: "done", answer: { text: "Done" } });
   expect(observations).toBe(3); expect(stops).toEqual([]); expect(progress).toContainEqual({ queued: true });
-  expect(await start({ ...ports, launch: async () => ({ status: 503, body: {} }) }).done).toMatchObject({ status: "failed" });
+  expect(await start({ ...ports, launch: async () => ({ status: 503, body: {} }), observe: async () => ({ state: "failed" }) }).done).toMatchObject({ status: "failed" });
 });
 
 for (const phase of ["launch", "queued", "observation"] as const) test(`unconfirmed owner ${phase} is killed at the shared admission bound`, async () => {
@@ -321,9 +349,10 @@ for (const phase of ["launch", "queued", "observation"] as const) test(`unconfir
     observe: async () => { if (phase === "observation") await gate; return { state: "running", firstMessagePending: true }; },
     stop: async (_id, action) => { stops.push(action); }, pollMs: 5 };
   const deadline = relayRequestDeadline({ claimed_at: "2026-10-13T12:00:00Z", deadline_at: new Date(Date.now() + 10100).toISOString() });
-  const started = performance.now(); const run = start(ports, 1000, () => {}, deadline);
+  const started = performance.now(); const run = runOwnerAgent({ request: request(), owner: instruction(), target, accountId: "answer", hardCapMs: 1000,
+    ports, deadline, rawDeadlineAt: new Date(deadline.at).toISOString(), onConversation: () => {}, onDiagnostic: () => release() });
   try {
-    expect(await run.done).toMatchObject({ status: "failed" });
+    expect(await run.done).toMatchObject({ status: "failed", diagnostic: { source: "admission-deadline", rawDeadlineAt: new Date(deadline.at).toISOString(), deadlineAt: new Date(deadline.at).toISOString(), cutoffAt: new Date(deadline.declineAt).toISOString(), deadlineSource: "deadline_at", deadlineFallback: null } });
     expect(performance.now() - started).toBeGreaterThanOrEqual(80);
     expect(performance.now() - started).toBeLessThan(500);
     release(); await Bun.sleep(20); expect(stops).toEqual(["kill"]);
