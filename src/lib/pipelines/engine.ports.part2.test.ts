@@ -1243,7 +1243,7 @@ test("attempt Git custody refuses an unproved detached push and fails the stage 
     expect(f.h.spawnInputs).toHaveLength(2);
     const repair = loadPipelines().find(pipeline => pipeline.id === f.id)!.runs[0]!.attempts[1]!;
     expect(repair).toMatchObject({ n: 2, state: "running", decisionAnswerId: "native-custody-repair" });
-    const guard = await prepareStageGitGuard(repair.launchId!, f.worktree, realExec, repair.startedAt!);
+    const guard = await prepareStageGitGuard(repair.launchId!, f.worktree, realExec, repair.startedAt!, async () => {});
     Object.assign(f.env, guard, agentPublicationIdentityEnv({ ...f.env, ...guard }));
     expect(await f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.base);
     fs.writeFileSync(path.join(f.worktree, "repair.txt"), "valid custody repair output\n");

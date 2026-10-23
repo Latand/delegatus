@@ -555,7 +555,7 @@ async function fixture(prelaunchPrefix?: "unrecorded" | "hooks-off" | "foreign",
         expect(pushed.code, pushed.stderr).toBe(0);
         expect(await git(remote, "rev-parse", current().delivery!.target.branch)).toBe(prefix);
       }
-      const guard = await prepareStageGitGuard(launchId, lane, execute, h.ports.now());
+      const guard = await prepareStageGitGuard(launchId, lane, execute, h.ports.now(), async () => {});
       agentEnv = { ...clean, ...guard, ...agentPublicationIdentityEnv({ ...process.env, ...clean, ...guard }) };
     });
     return { ...result, launchId, paneId: null };

@@ -8,7 +8,7 @@ export function stageGitReceiptDirectory(launchId: string): string {
   return statePath("pipeline-git-attempts", crypto.createHash("sha256").update(launchId).digest("hex"));
 }
 
-export async function prepareStageGitGuard(launchId: string, worktree: string, exec: ExecPort, now: string): Promise<Record<string, string>> {
+export async function prepareStageGitGuard(launchId: string, worktree: string, exec: ExecPort, now: string, assertActivation: () => void | Promise<void>): Promise<Record<string, string>> {
   const directory = stageGitReceiptDirectory(launchId);
   const gitDirectory = await exec("git", ["rev-parse", "--absolute-git-dir"], worktree);
   if (gitDirectory.code !== 0 || !path.isAbsolute(gitDirectory.stdout.trim())) throw new Error("stage Git guard cannot read the worktree Git directory");
@@ -19,6 +19,9 @@ export async function prepareStageGitGuard(launchId: string, worktree: string, e
     try { return await fs.readFile(ownerFile, "utf8"); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
   };
+  // The Git-directory lookup can outlive the activation that authorized this
+  // preparation. Never adopt a successor as our expected predecessor.
+  await assertActivation();
   const previousOwner = await readOwner();
   const head = await exec("git", ["rev-parse", "HEAD"], worktree);
   if (head.code !== 0 || !/^[0-9a-f]{40}$/.test(head.stdout.trim())) throw new Error("stage Git guard cannot read the starting head");
@@ -40,6 +43,9 @@ export async function prepareStageGitGuard(launchId: string, worktree: string, e
   const handle = await fs.open(lock, "wx", 0o600);
   let handedOver = false;
   try {
+    // Recheck durable activation under the exclusive claim lock, before any
+    // owner mutation. The saved predecessor also fences interrupted replays.
+    await assertActivation();
     const current = await readOwner();
     if (current !== directory && current !== (start.previousOwner ?? null)) throw new Error("stage Git guard was superseded by another attempt");
     await fs.writeFile(path.join(directory, "owner"), ownerFile, { mode: 0o600 });

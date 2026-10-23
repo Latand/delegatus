@@ -12,7 +12,7 @@ entry points and regressions.
 | 6. Findings held by a quota-exhausted flow implementer | **done-before** | S5 retired flow execution in #3181. `assertFlowExecution` refuses the legacy relay, recovery and persistence entry points; native pipelines own new fix stages. Restoring an alternative-engine legacy relay would restore retired execution. |
 | 11. Phone link labels split inside words | **done-now** | Shared markdown anchors prefer word boundaries and allow emergency wrapping for unbroken URLs and paths. The existing phone driver checks readable labels, bare URLs, full URL labels and file links at 360, 390 and 430 px, en/uk, light/dark. |
 | 13. Expanded reviewer-note cap and manual flow verdict adoption | **done-before** | `FLOW_RETIRED` and `STAGE_KIND_RETIRED` refuse new execution, restart, graph-copy and manual-action paths. Historical verdicts remain archive data. Native run stages carry their own reports and preserve oversized prompts through private prompt files; they do not use the legacy 2,000-character note transport. |
-| 14. Old implementer publishes after approval | **done-now** | Stage preparation atomically transfers a worktree's Git ownership fence to its successor, including review stages. Old bindings refuse branch updates and pushes, including commits with `--no-verify`. Ownership is checked again after repository hooks. A fresh fix stage receives a new binding; the pipeline's review graph still controls its review. |
+| 14. Old implementer publishes after approval | **done-now** | Stage preparation atomically transfers a worktree's Git ownership fence to its successor, including review stages. Old bindings refuse branch updates and pushes, including commits with `--no-verify`. Ownership is checked again on every successful hook exit, including when no repository hook runs. A fresh fix stage receives a new binding; the pipeline's review graph still controls its review. |
 
 **left:** tags, releases, package publication and deployment require their own
 publication stage. The broader finished-host retirement work in #3268 and the
@@ -22,7 +22,10 @@ remaining flow UI/engine removal stay with their existing lanes.
 
 `prepareStageGitGuard` is the writer. Its existing two environment bindings
 continue to identify the attempt receipt and worktree. `start.json` additionally
-records the previous owner, so replay can finish an interrupted claim but
+records the previous owner. Preparation requires a callback that revalidates
+the durable activation after the initial Git-directory lookup and under the
+claim lock before handoff. This prevents a delayed preparation from adopting
+a successor as its predecessor. Replay can finish an interrupted claim but
 cannot reclaim a superseded one. Receipt settlement reads the existing fields
 and ignores the additional field.
 
@@ -34,8 +37,8 @@ shared-resource wait or performance gain is introduced.
 
 The generated `stageAttemptGuardScript` reads the receipt's owner binding for
 lane mutations. `agentHistoryGuardEnv` retains the existing environment-copy
-contract and rechecks the fence after the repository hook while preserving
-its arguments, input and refusal. Unrelated repositories keep their own hooks.
+contract and rechecks the fence on every successful mutation exit while
+preserving its arguments, input and refusal. Unrelated repositories keep their own hooks.
 Controller publication uses `pipelinePublicationHookEnv`, which removes stage
 bindings, and continues to publish the accepted commit through its own gate.
 The real-Git publication and recovery suites cover those consumers, including
@@ -75,9 +78,13 @@ selected throughout. The stage report records each command and exit code.
 - The final guard refuses stale mutations before effects, preserves repository
   hook input and arguments, and allows an explicitly admitted successor.
 - Disk-exhaustion probes at binding write and owner publication retain the
-  previous owner and permit retry. A successor admitted during the starting
-  head read retains ownership. Re-preparation is also checked in a fresh process.
-- Every direct markdown and stage-guard importer test file is selected, along
-  with Git-hook forwarding and flow-retirement regressions.
+  previous owner and permit retry. A successor admitted during either the
+  Git-directory lookup or starting-head read retains commit and push authority.
+  Re-preparation is also checked in a fresh process.
+- Direct importer test files cover the guard and pipeline activation wiring,
+  along with Git-hook forwarding and flow-retirement regressions.
+- Real-Git probes transfer ownership during the guard’s own commit and push
+  work, with absent, self-forwarding and already-chained repository hooks.
+  Each stale command refuses before either ref changes.
 - TypeScript, touched-file ESLint, whitespace and the repository privacy gate
   are required before the hooks-enabled stage commit.
