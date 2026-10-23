@@ -11,6 +11,9 @@ export type AgentMemoryScopeInput = {
   profile?: Pick<LaunchProfile, "agentMemoryMaxBytes" | "agentMemoryRoleParams"> | null;
 };
 
+/** A pipeline stage that names no role launches with Builder's cap; previews and OOM recovery use the same default. */
+export const PIPELINE_MEMORY_DEFAULT_ROLE = "builder";
+
 /** Re-read scoped defaults at the process launch boundary, including resumes. */
 export function agentMemoryScopes(input: AgentMemoryScopeInput): AgentMemoryScopes {
   const project = input.project ?? projectForCwd(input.cwd);

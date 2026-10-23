@@ -27,7 +27,7 @@ import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { waitForStateLock, stateDatabaseBusy, stateLockDeferral } from "@/lib/state/lockWait";
 import { validAgentMemoryMax, type AgentMemoryCap } from "@/lib/runtime/agentMemoryConfig";
 import { agentMemoryHeadroom, memoryKillText, type AgentMemoryKill } from "@/lib/runtime/agentMemory";
-import { agentMemoryScopes, type AgentMemoryScopeInput } from "@/lib/runtime/agentMemorySettings";
+import { agentMemoryScopes, PIPELINE_MEMORY_DEFAULT_ROLE, type AgentMemoryScopeInput } from "@/lib/runtime/agentMemorySettings";
 import { claudeHostEndText } from "@/lib/runtime/hostEndCause";
 import { cpuPriorityEnv, type CpuPrioritySource } from "@/lib/runtime/cpuPriority";
 import { CPU_PRESSURE_DETAIL_PREFIXES, cpuPressureHoldDetail, machineCpuPressureGate, machineCpuPressurePollMs, type CpuPressureHold } from "@/lib/runtime/cpuPressure";
@@ -5685,7 +5685,7 @@ async function waitForMemory(pipeline: Pipeline, stage: PipelineStage, attempt: 
   const kill = attempts[attempts.indexOf(attempt) - 1]?.outOfMemory;
   if (!kill) { delete attempt.memoryWait; return false; }
   const headroom = ports.memoryHeadroom?.(kill.limitBytes, { cwd: pipeline.worktreeDir, project: pipeline.project,
-    role: attempt.effectiveRole.roleId ?? null, profile: pipelineStageRuntimeProfile(attemptStage(stage, attempt)) });
+    role: attempt.effectiveRole.roleId ?? PIPELINE_MEMORY_DEFAULT_ROLE, profile: pipelineStageRuntimeProfile(attemptStage(stage, attempt)) });
   if (!headroom || headroom.availableBytes >= headroom.requiredBytes) { delete attempt.memoryWait; pipeline.stateDetail = null; return false; }
   const next = nextBoundedWait(wait, wait.startedAt, now, MEMORY_WAIT_BUDGET);
   if (!next) { await park(pipeline, `${memoryKillText(kill)}; memory did not recover within 30 minutes`, attempt); return true; }

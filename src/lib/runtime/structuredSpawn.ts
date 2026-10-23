@@ -3,7 +3,7 @@ import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import { assertSpawnMemoryAvailable } from "@/lib/agent/spawnMemory";
 import { spawnDiagnosticErrorFor } from "@/lib/agent/spawnDiagnostics";
 import { AgentMemoryCell, planAgentMemory } from "./agentMemory";
-import { agentMemoryScopes, agentMemoryCapForPlan } from "./agentMemorySettings";
+import { agentMemoryScopes, agentMemoryCapForPlan, PIPELINE_MEMORY_DEFAULT_ROLE } from "./agentMemorySettings";
 import { planAgentCpu, workloadForMemberships } from "./cpuPlacement";
 import fs from "node:fs";
 import os from "node:os";
@@ -2110,7 +2110,7 @@ export function structuredHostCell(registry: AgentRegistry, engine: string, sess
   const conversation = conversationId ? snapshot.conversations[registry.canonicalConversationId(conversationId)] : null;
   const profile = receipt?.launchProfile ?? conversation?.generations.at(-1)?.launchProfile;
   const scopes = agentMemoryScopes({ cwd: receipt?.cwd ?? profile?.cwd ?? "", project: receipt?.explicitProject ?? conversation?.projectOwnership?.project ?? profile?.project,
-    role: receipt?.agentRole ?? conversation?.agentRole ?? (conversationId && snapshot.memberships[registry.canonicalConversationId(conversationId)]?.some(row => row.kind === "pipeline") ? "builder" : null), profile });
+    role: receipt?.agentRole ?? conversation?.agentRole ?? (conversationId && snapshot.memberships[registry.canonicalConversationId(conversationId)]?.some(row => row.kind === "pipeline") ? PIPELINE_MEMORY_DEFAULT_ROLE : null), profile });
   const plan = planAgentMemory({ engine, sessionKey, liveAgents, cpu, memoryScopes: scopes });
   return plan ? new AgentMemoryCell(plan) : null;
 }

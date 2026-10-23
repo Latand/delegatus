@@ -1,4 +1,4 @@
-import { previewAgentMemoryCap } from "@/lib/runtime/agentMemorySettings";
+import { previewAgentMemoryCap, PIPELINE_MEMORY_DEFAULT_ROLE } from "@/lib/runtime/agentMemorySettings";
 import { readSelf } from "@/lib/links/self";
 import { readFileConfirmationLink } from "@/lib/telegram/bot/fileConfirmationContract";
 import { FLOW_ARCHIVE, FLOW_RETIREMENT, STAGE_RETIREMENT, FlowRetiredError } from "@/lib/flows/retirement";
@@ -2330,7 +2330,7 @@ function pipelineMemoryCaps(pipeline: Pipeline) {
   const liveAgents = agentRegistry().liveStructuredHostCount() + 1;
   return pipeline.stages.map(stage => ({ stageId: stage.id, preview: true,
     ...previewAgentMemoryCap({ cwd: pipeline.worktreeDir ?? pipeline.repoDir, project: pipeline.project,
-      role: stage.effectiveRole.roleId ?? "builder", profile: { agentMemoryMaxBytes: stage.agentMemoryMaxBytes,
+      role: stage.effectiveRole.roleId ?? PIPELINE_MEMORY_DEFAULT_ROLE, profile: { agentMemoryMaxBytes: stage.agentMemoryMaxBytes,
         agentMemoryRoleParams: stage.role?.params } }, liveAgents) }));
 }
 

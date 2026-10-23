@@ -1,5 +1,10 @@
 import { expect, test, spawn, makeStructuredAttempt, pinStageHead, AccountAuthenticationRequiredError, ProjectAccountRefusedError, selectProjectAccount, IDLE_TURN_QUIET_MS, tickPipelines, createPipelineFromRequest, loadPipelines, savePipelines, patchPipeline, entry, harness, create, structuredLatest, runningStructuredStage, LIMITED_ACCOUNT, SPARE_ACCOUNT, stageTranscript, readFixtures, providerQuotaRecord, SILENT_RUN, stageWhoseStopMovesTheTranscript, recoveryReport, providerRecoveryHarness, parkedAccountCases, parkedAccountHarness } from "./engine.fixture";
 import type { DurableQuotaObservation, PipelinePorts, StageTurnEvidence } from "./engine.fixture";
+import { AgentRegistry, defaultPipelinePorts, path } from "./engine.fixture";
+import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
+import { saveRoleOverrides } from "@/lib/roles/store";
+import { setAgentMemoryPortsForTests } from "@/lib/runtime/agentMemory";
+import { structuredHostCell } from "@/lib/runtime/structuredSpawn";
 
 test("a stop of ours whose replacement waited for a later tick still names the stop, even across a service restart", async () => {
   const h = harness();
@@ -203,6 +208,60 @@ test("#3054: an OOM retry asks for the headroom of its own scoped launch, and wa
   /* The retry launched with the same profile its headroom was measured for. */
   expect(h.spawnInputs.at(-1)!.runtimeProfile).toEqual(launches.at(-1)!.profile as typeof h.spawnInputs[number]["runtimeProfile"]);
   expect(h.spawnInputs.at(-1)!.project).toBe(pipeline.project);
+});
+
+test.skipIf(process.platform === "win32")("#3054: a roleless stage's OOM retry waits for the Builder cap its launch gets, through the real planner and headroom port", async () => {
+  const GIB = 2 ** 30;
+  const memoryEnv = { DELEGATUS_AGENT_MEMORY: "watchdog", DELEGATUS_AGENT_MEMORY_MAX: "3G", DELEGATUS_AGENT_MEMORY_RESERVE: "4G" } as const;
+  const previousEnv = Object.fromEntries(Object.keys(memoryEnv).map((key) => [key, process.env[key]]));
+  const memory = { totalBytes: 16 * GIB, availableBytes: 8 * GIB, probe: () => null, runner: () => "" };
+  Object.assign(process.env, memoryEnv);
+  saveRoleOverrides({ builder: { config: { agentMemoryMaxBytes: 8 * GIB } } });
+  setAgentMemoryPortsForTests(memory);
+  try {
+    const h = harness();
+    await create(h.ports, [
+      { id: "build", kind: "run", engine: "codex", access: "read-write", prompt: "Build {{task}}", next: null },
+    ] as never);
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    makeStructuredAttempt();
+    pinStageHead(h);
+    let pipeline = loadPipelines()[0]!;
+    expect(pipeline.runs[0]!.attempts[0]!.effectiveRole.roleId ?? null).toBeNull();
+    /* The launch cap, as a stage launch builds it: no receipt role, a pipeline membership. */
+    const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "roleless-memory-registry.json"), undefined, undefined, { sqliteMode: "off" });
+    const begun = registry.beginSpawnRequest({ engine: "codex", cwd: pipeline.worktreeDir!, transport: "structured", role: null,
+      launchProfile: emptyLaunchProfile({ cwd: pipeline.worktreeDir!, title: "Measure the roleless stage launch cap" }),
+      memberships: [{ kind: "pipeline", containerId: pipeline.id, role: "agent", slot: "build:2", stageId: "build", stageOrder: 0, round: 2, parentConversationId: null }] });
+    if (begun.kind !== "created") throw new Error("expected a fresh receipt");
+    const launchCap = structuredHostCell(registry, "codex", begun.receipt.launchId, begun.receipt.conversationId, begun.receipt)!.plan.cap!.limitBytes;
+    expect(launchCap).toBe(8 * GIB);
+    h.setConversationActive(false);
+    const at = h.ports.now();
+    h.ports.conversationOutOfMemory = async () => ({ at, limitBytes: 8 * GIB, limit: "agent", fatal: true, process: null });
+    h.ports.memoryHeadroom = defaultPipelinePorts().memoryHeadroom;
+    await tickPipelines([], h.ports);
+    const spawnsBefore = h.spawnInputs.length;
+    h.advanceWallClock(60_001);
+    await tickPipelines([], h.ports);
+    pipeline = loadPipelines()[0]!;
+    /* 8 GiB available less the 4 GiB reserve leaves 4 GiB, short of the 8 GiB launch cap. */
+    expect(pipeline.stateDetail).toContain("waiting for memory: 4.0 of 8.0 GB free");
+    expect(h.spawnInputs).toHaveLength(spawnsBefore);
+    memory.availableBytes = 12 * GIB;
+    h.advanceWallClock(5 * 60_000);
+    h.setConversationActive(true);
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    pipeline = loadPipelines()[0]!;
+    expect(pipeline.runs[0]!.attempts[1]!.state).toBe("running");
+    expect(h.spawnInputs).toHaveLength(spawnsBefore + 1);
+  } finally {
+    setAgentMemoryPortsForTests(null);
+    saveRoleOverrides({});
+    for (const [key, value] of Object.entries(previousEnv)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
+  }
 });
 
 test("an OOM recovery wait that never gets headroom parks after its bounded budget", async () => {
