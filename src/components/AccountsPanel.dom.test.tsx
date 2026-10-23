@@ -6,7 +6,7 @@ import { flushSync } from "react-dom";
 import { createEngineAccountsStore, type AccountRemovalRefusal, type AccountRemovalSummary, type ClaudeLoginView, type EngineAccountsState } from "@/hooks/useEngineAccounts";
 import { getLocale, setLocale, translate } from "@/lib/i18n";
 
-import { AccountsPanel } from "./AccountsPanel";
+import { AccountsPanel, type ProjectAccountContext } from "./AccountsPanel";
 import { formatQuotaAsOf, formatResetClock, formatResetEta } from "./rateLimit";
 
 /** An archive under an invented home, composed so the `~` fold is exercised
@@ -65,12 +65,12 @@ function state(currentLogin: ClaudeLoginView, over: Partial<EngineAccountsState>
   };
 }
 
-async function mount(initial: EngineAccountsState, placement: "footer" | "header" = "footer"): Promise<{ host: HTMLDivElement; rerender(next: EngineAccountsState): Promise<void>; unmount(): Promise<void> }> {
+async function mount(initial: EngineAccountsState, placement: "footer" | "header" = "footer", projectContext?: ProjectAccountContext): Promise<{ host: HTMLDivElement; rerender(next: EngineAccountsState): Promise<void>; unmount(): Promise<void> }> {
   const host = document.createElement("div");
   document.body.append(host);
   const root: Root = createRoot(host);
   const render = async (next: EngineAccountsState) => {
-    flushSync(() => { root.render(<AccountsPanel state={next} onClose={() => {}} placement={placement} />); });
+    flushSync(() => { root.render(<AccountsPanel state={next} onClose={() => {}} placement={placement} projectContext={projectContext} />); });
     await Promise.resolve();
   };
   await render(initial);
@@ -123,6 +123,25 @@ test.each(["en", "uk"] as const)("Claude and Codex account rows show their own s
       expect(block.textContent).toContain(translate(locale, "accounts.limitsChecked"));
       expect(block.querySelectorAll('[data-account-refresh-limits]')).toHaveLength(1);
     }
+  } finally { setLocale(previous); }
+});
+
+test.each(["en", "uk"] as const)("desktop panel marks and leads with the reset-aware next choice in %s", async (locale) => {
+  const previous = getLocale();
+  setLocale(locale);
+  try {
+    const accounts = [
+      { id: "a", label: "Account A", authPresent: true, authHealth: "authenticated" as const, loginPending: false, loginState: "authenticated" as const, deviceAuth: null },
+      { id: "b", label: "Account B", authPresent: true, authHealth: "authenticated" as const, loginPending: false, loginState: "authenticated" as const, deviceAuth: null },
+    ];
+    const projectContext: ProjectAccountContext = { project: "project-fixture", nextChosenAccountId: "b", restricted: true, allowed: [], carrying: [], outsidePool: [] };
+    const view = await mount(state(login(), { accounts, active: "a" }), "footer", projectContext);
+    mounted.push(view);
+    const rows = [...view.host.querySelectorAll("[data-account-row]")];
+    expect(rows.map((row) => row.getAttribute("data-account-row"))).toEqual(["b", "a"]);
+    expect(rows[0]?.getAttribute("data-account-next-chosen")).toBe("true");
+    expect(rows[0]?.textContent).toContain(translate(locale, "accounts.nextForUnpinned"));
+    expect(rows[1]?.querySelector("button")?.getAttribute("aria-current")).toBe("true");
   } finally { setLocale(previous); }
 });
 
@@ -860,9 +879,13 @@ test("a hidden Main is shown again from account setup after the summary is close
     }
     return new Response("{}", { status: 404 });
   };
-  const settle = async (store: ReturnType<typeof createEngineAccountsStore>) => {
-    for (let turn = 0; turn < 50 && store.getSnapshot().mutation !== null; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
-  };
+  const mutationSettled = (store: ReturnType<typeof createEngineAccountsStore>) => new Promise<void>((resolve) => {
+    let started = false;
+    const unsubscribe = store.subscribe(() => {
+      if (store.getSnapshot().mutation !== null) started = true;
+      else if (started) { unsubscribe(); resolve(); }
+    });
+  });
 
   const first = createEngineAccountsStore("claude", { fetcher });
   await first.refresh();
@@ -885,8 +908,9 @@ test("a hidden Main is shown again from account setup after the summary is close
   expect(view.host.querySelector('[data-account-remove="default"]')).toBeNull();
   const offer = view.host.querySelector('[data-account-restore="default"]') as HTMLButtonElement;
   expect(offer.textContent).toBe("Show Main again");
+  const restoreSettled = mutationSettled(reloaded);
   flushSync(() => { offer.click(); });
-  await settle(reloaded);
+  await restoreSettled;
   await view.rerender(reloaded);
 
   expect(calls).toContain('POST /api/accounts/claude {"action":"restore","id":"default"}');
@@ -939,23 +963,30 @@ test("a held provider save closes the editor and shows the new name at once, and
   const draws: unknown[] = [];
   let undone = 0;
   let view: Awaited<ReturnType<typeof mount>> | null = null;
+  let optimisticResolve = () => {};
+  const optimisticRendered = new Promise<void>((resolve) => { optimisticResolve = resolve; });
+  let undoResolve = () => {};
+  const undoRendered = new Promise<void>((resolve) => { undoResolve = resolve; });
   const base = state(login(), { accounts: [account], active: "provider" });
   const withDraw = (accounts: typeof base.accounts): EngineAccountsState => ({
     ...base,
     accounts,
     drawAccount: (id, patch) => {
       draws.push({ id, ...patch });
-      queueMicrotask(() => void view!.rerender(withDraw([{ ...account, ...patch }])));
-      return () => { undone += 1; queueMicrotask(() => void view!.rerender(withDraw([account]))); };
+      void view!.rerender(withDraw([{ ...account, ...patch }])).then(optimisticResolve);
+      return () => { undone += 1; void view!.rerender(withDraw([account])).then(undoResolve); };
     },
   });
   view = await mount(withDraw([account]));
   mounted.push(view);
   const patches: unknown[] = [];
   let refuse: () => void = () => {};
+  let patchStartedResolve = () => {};
+  const patchStarted = new Promise<void>((resolve) => { patchStartedResolve = resolve; });
   const saved = globalThis.fetch;
   globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     patches.push({ method: init?.method, body: JSON.parse(String(init?.body)) });
+    patchStartedResolve();
     await new Promise<void>((resolve) => { refuse = resolve; });
     return new Response(JSON.stringify({ error: "The provider URL must use https" }), { status: 400, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
@@ -971,14 +1002,22 @@ test("a held provider save closes the editor and shows the new name at once, and
     type(field("Display name")!, "Gateway");
     type(field("Provider token")!, "typed-fixture-value");
     flushSync(() => dispatch(button("Save provider"), new dom.MouseEvent("click", { bubbles: true })));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await patchStarted;
+    await optimisticRendered;
     expect(field("Display name")).toBeNull();
     expect(draws).toEqual([{ id: "provider", label: "Gateway", provider: { ...provider } }]);
     expect(view.host.querySelector('[data-account-row="provider"]')!.textContent).toContain("Gateway");
     expect(patches).toHaveLength(1);
     expect(patches[0]).toMatchObject({ method: "PATCH", body: { id: "provider", label: "Gateway", provider: { token: "typed-fixture-value" } } });
+    const refusalVisible = new Promise<void>((resolve) => {
+      const observer = new dom.MutationObserver(() => {
+        if (editor().querySelector('[role="alert"]')) { observer.disconnect(); resolve(); }
+      });
+      observer.observe(dom.document.body, { childList: true, subtree: true, attributes: true, characterData: true });
+    });
     refuse();
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await undoRendered;
+    await refusalVisible;
     expect(undone).toBe(1);
     expect(view.host.querySelector('[data-account-row="provider"]')!.textContent).not.toContain("Gateway");
     expect(field("Display name")!.value).toBe("Gateway");

@@ -9,6 +9,7 @@ import { EngineAccountSwitch, type EngineAccountSwitchAppearance } from "./Engin
 /** One engine's block of the project view served by /api/account-project-bindings. */
 export interface ProjectAccountsEngineView {
   engine: "claude" | "codex";
+  nextChosenAccountId?: string | null;
   restricted: boolean;
   allowed: { accountId: string; label: string }[];
   carrying: { accountId: string; label: string }[];
@@ -56,6 +57,7 @@ export function parseProjectAccountsView(body: unknown): ProjectAccountsView | n
       : [];
     return [{
       engine,
+      nextChosenAccountId: typeof view.nextChosenAccountId === "string" ? view.nextChosenAccountId : null,
       restricted: view.restricted === true,
       allowed: accounts(view.allowed),
       carrying: accounts(view.carrying),
@@ -123,6 +125,7 @@ export function ProjectAccountsStrip({ view, appearance }: { view: ProjectAccoun
           appearance={appearance}
           projectContext={{
             project: view.project,
+            nextChosenAccountId: engine.nextChosenAccountId,
             restricted: engine.restricted,
             allowed: engine.allowed,
             carrying: engine.carrying,

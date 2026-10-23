@@ -812,6 +812,8 @@ export const en = {
   "accounts.title": "Codex accounts",
   "accounts.trigger": "Accounts",
   "accounts.active": "active",
+  "accounts.nextForUnpinned": "Next for unpinned work",
+  "accounts.nextForUnpinnedShort": "Next pick",
   "accounts.needsLogin": "needs sign-in",
   "accounts.pendingLogin": "signing in…",
   "accounts.auth.authenticated": "Authenticated",

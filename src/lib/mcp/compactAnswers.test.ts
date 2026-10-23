@@ -442,6 +442,7 @@ test("account_limits answers each account's windows and tiers, narrowed by engin
     engine: "claude",
     accountId: "claude-a",
     active: true,
+    nextChosen: true,
     fresh: true,
     plan: "max",
     session: { usedPercent: 12, resetsAt: "2026-09-19T10:00:00.000Z" },
@@ -464,6 +465,36 @@ test("account_limits answers each account's windows and tiers, narrowed by engin
   const one = await bindings.account_limits({ clientRequestId: "limits-one", accountId: "claude-b" }) as { accounts: Array<{ accountId: string }> };
   expect(one.accounts.map((account) => account.accountId)).toEqual(["claude-b"]);
   await expect(bindings.account_limits({ clientRequestId: "limits-missing", accountId: "nobody" })).rejects.toThrow("no claude, codex or copilot account has the id nobody");
+
+  const selectedBindings = viewerMcpBindings(undefined, undefined, {
+    accountLimitsSource: () => ({
+      accounts: { claude: [{ accountId: "a", authPresent: true }, { accountId: "b", authPresent: true }], codex: [], copilot: [] },
+      active: { claude: "a", codex: null, copilot: null },
+      project: "project-fixture",
+      bindings: [
+        { engine: "claude", accountId: "a", project: "project-fixture", createdAt: "2026-09-01T00:00:00.000Z" },
+        { engine: "claude", accountId: "b", project: "project-fixture", createdAt: "2026-09-01T00:00:00.000Z" },
+      ],
+      observations: {
+        claude: {
+          a: {
+            ...observation("claude", "a", 10, 10),
+            limits: { ...observation("claude", "a", 10, 10).limits, weekly: { usedPercent: 10, resetsAt: now / 1000 + 2 * 86_400, windowMinutes: 10_080 } },
+          },
+          b: {
+            ...observation("claude", "b", 50, 50),
+            limits: { ...observation("claude", "b", 50, 50).limits, weekly: { usedPercent: 50, resetsAt: now / 1000 + 86_400, windowMinutes: 10_080 } },
+          },
+        }, codex: {}, copilot: {},
+      },
+      now,
+    }),
+  } as never);
+  const selected = await selectedBindings.account_limits({ clientRequestId: "limits-next-choice", engine: "claude" }) as { accounts: Array<{ accountId: string; active: boolean; nextChosen?: boolean }> };
+  expect(selected.accounts).toEqual([
+    expect.objectContaining({ accountId: "a", active: true, nextChosen: false }),
+    expect.objectContaining({ accountId: "b", active: false, nextChosen: true }),
+  ]);
 });
 
 test("runtimeLine shows a role tier and the actual fallback after launch", async () => {

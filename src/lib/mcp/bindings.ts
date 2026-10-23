@@ -5329,10 +5329,11 @@ async function accountProjectBindingTool(args: McpToolArgs, dependencies: Viewer
 /** The same records `GET /api/accounts` projects its limit rows from. */
 function productionAccountLimitsSource(): Omit<AccountLimitsInput, "engine" | "accountId"> {
   const snapshot = agentRegistry().readOnlySnapshot();
+  const project = productionCallerProject();
   return {
     accounts: {
-      claude: listClaudeAccounts().map((account) => ({ accountId: account.id })),
-      codex: listCodexAccounts().map((account) => ({ accountId: account.id })),
+      claude: listClaudeAccounts().map((account) => ({ accountId: account.id, authPresent: account.authPresent })),
+      codex: listCodexAccounts().map((account) => ({ accountId: account.id, authPresent: account.authPresent })),
       copilot: listCopilotAccounts().map((account) => ({ accountId: account.id })),
     },
     active: {
@@ -5341,6 +5342,8 @@ function productionAccountLimitsSource(): Omit<AccountLimitsInput, "engine" | "a
       copilot: snapshot.engineRouting.copilot.activeAccountId ?? activeCopilotAccountId(),
     },
     observations: snapshot.quotaObservations,
+    project,
+    bindings: project ? accountProjectBindings() : [],
     now: Date.now(),
   };
 }

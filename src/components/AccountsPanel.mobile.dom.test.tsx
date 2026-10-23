@@ -199,6 +199,21 @@ test.each(["en", "uk"] as const)("phone reset rows show Claude beside Codex in %
   } finally { setLocale(previous); }
 });
 
+test.each(["en", "uk"] as const)("phone panel marks and leads with the reset-aware next choice in %s", async (locale) => {
+  const previous = getLocale();
+  setLocale(locale);
+  try {
+    const a = account({ id: "a", label: "Account A" });
+    const b = account({ id: "b", label: "Account B", nextChosen: true });
+    const view = await mount([engineState("claude", [a, b], "a")]);
+    const rows = [...view.host.querySelectorAll('[data-mobile2-account]')];
+    expect(rows.map((row) => row.getAttribute("data-mobile2-account"))).toEqual(["b", "a"]);
+    expect(rows[0]?.textContent).toContain(translate(locale, "accounts.nextForUnpinnedShort"));
+    expect(rows[0]?.getAttribute("data-mobile2-account-state")).toBe("ready");
+    expect(rows[1]?.getAttribute("data-mobile2-account-state")).toBe("active");
+  } finally { setLocale(previous); }
+});
+
 const text = (element: Element | null | undefined) => (element?.textContent ?? "").replace(/\s+/g, " ").trim();
 
 test("every meter on the active card fills with what remains, and the corner names its weekly window", async () => {
