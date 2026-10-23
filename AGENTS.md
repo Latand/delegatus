@@ -97,7 +97,9 @@ Touched tests run the branch first, up to eight explicit head files at once, eac
 with fresh state, HOME and TMPDIR under the OS temp root. Only files failing on
 the branch are sampled on the merge base with `origin/main`, filtered to the
 failing assertions; runner errors require the full file. A green branch needs
-no baseline checkout. No baseline results are cached. Only new failures block;
+no baseline checkout. Only complete baseline assertion samples with two matching
+fresh observations are cached for 24 hours; diagnostics and confirmation rounds
+always run fresh. Only new failures block;
 output retains pre-existing failures, describe ancestry, test names and
 between-tests errors. An incomplete baseline for a red branch blocks unless
 both sides are broken the same way, which lists as pre-existing.

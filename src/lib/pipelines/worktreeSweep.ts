@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { yieldToRuntime } from "@/lib/cooperative";
 import { statePath } from "@/lib/configDir";
 import { structuredClaimIdentity, type AgentRegistryEntry } from "@/lib/agent/registry";
 import type { ForgeCacheFile } from "@/lib/forge/cache";
@@ -54,8 +55,7 @@ import { pipelineLiteralGitEnv } from "./git";
  *   lane not yet settled for `PUSHED_WORKTREE_RETENTION_MS` whose every commit
  *   a remote advertises.
  * - `local-only-commits` — past retention, without a merged PR containing its
- *   HEAD, and some commit of it is in no ref a remote advertises right now and
- *   HEAD is not its pipeline's base. Work that exists only here stays.
+ *   HEAD, and some commit of it is in no ref a remote advertises right now. Work that exists only here stays.
  * - `self-update-release` — a release checkout self-update owns and prunes
  *   itself, keeping the serving and rollback releases.
  * - `in-use` — an unfinished merge-batch state still owns it, or a live
@@ -101,8 +101,7 @@ import { pipelineLiteralGitEnv } from "./git";
  * every commit a remote advertises waits one hour instead (operator decision,
  * 2026-10-21), and so does its quiet floor; one advertised-ref read per
  * repository and pass screens these lanes, and the proof before removal reads
- * the remote again. Its
- * HEAD must equal its pipeline's base, or every commit of it must be reachable
+ * the remote again. Every commit of HEAD must be reachable
  * from a ref one of the repository's remotes advertises at that moment
  * (`git ls-remote`; a remote-tracking ref can outlive the branch it tracked).
  * Every other guard above applies unchanged, and ordinary removal never forces Git.
@@ -178,6 +177,15 @@ export type WorktreeKeptReason =
   | "self-update-release"
   | "recent-writes" | "mount-boundary" | "entry-limit" | "unreadable-tree" | "changed-during-inspection" | "interrupted-removal";
 
+/** Kept rows whose verdict can change with no registration change and no
+    other deadline: live holders, an unanswered forge, and failed reads or
+    removals. Each is rechecked by the next hourly sweep. */
+const RETRIED_REASONS: ReadonlySet<WorktreeKeptReason> = new Set<WorktreeKeptReason>(["in-use", "live-conversation",
+  "forge-unavailable", "unreadable-tree", "changed-during-inspection", "map-write-failed", "remove-failed"]);
+/** A retry with no deadline earlier than the next hourly sweep. */
+const NEXT_SWEEP = Number.POSITIVE_INFINITY;
+const HEAD_UNREADABLE = "HEAD unreadable";
+
 export type MergedPullRequest = { number: number; url: string; headRefName: string; headRefOid: string };
 
 export type WorktreeRemoval = {
@@ -195,6 +203,12 @@ export type WorktreeKept = { path: string; reason: WorktreeKeptReason; detail?: 
 
 export type WorktreeSweepReport = {
   at: string;
+  /** Advisory discovery state only; never authorizes an effect. */
+  progress?: { cursor: string; repositoryCursor?: string; cursors?: Record<string, string>; pending: string[]; fingerprints: Record<string, string>;
+    /** Epoch ms at which a kept path's verdict can change with time alone
+        (retention ends, recent writes age past the floor, a live holder is
+        rechecked); a later slice enqueues it then. */
+    due?: Record<string, number>; visited: number; complete: boolean };
   mode: WorktreeSweepMode;
   repositories: string[];
   /** In a dry run, what the sweep would have removed. */
@@ -247,6 +261,11 @@ export type WorktreeSweepPorts = {
   accessiblePath?: (directory: string) => string;
   now?: () => number;
   maxRemovals?: number;
+  maxCandidates?: number;
+  timeBudgetMs?: number;
+  monotonicNow?: () => number;
+  accountingEntryLimit?: number;
+  phase?: (phase: "discovery" | "candidate" | "accounting", directory?: string) => void;
   /** The previous report, whose `firstSettledAt` carries a retention clock
       started by observation across sweeps. */
   previous?: WorktreeSweepReport | null;
@@ -471,7 +490,7 @@ export function allocatedBytes(directory: string, excludedDirectories: readonly 
   return measureDirectory(directory, excludedDirectories, seenEntries, false);
 }
 
-async function measureDirectory(directory: string, excludedDirectories: readonly string[], seenEntries: Set<string>, singleLinksOnly: boolean): Promise<number> {
+async function measureDirectory(directory: string, excludedDirectories: readonly string[], seenEntries: Set<string>, singleLinksOnly: boolean, entryLimit = MEASURE_ENTRY_LIMIT): Promise<number> {
   const excluded = new Set<string>();
   for (const excludedDirectory of excludedDirectories) {
     try { const stat = fs.statSync(excludedDirectory); excluded.add(`${stat.dev}:${stat.ino}`); }
@@ -487,7 +506,7 @@ async function measureDirectory(directory: string, excludedDirectories: readonly
   let bytes = 0;
   let visited = 0;
   const pending = [directory];
-  while (pending.length > 0 && visited < MEASURE_ENTRY_LIMIT) {
+  while (pending.length > 0 && visited < entryLimit) {
     const current = pending.pop()!;
     let entries: fs.Dirent[];
     try {
@@ -496,6 +515,7 @@ async function measureDirectory(directory: string, excludedDirectories: readonly
       continue;
     }
     for (const entry of entries) {
+      if (visited >= entryLimit) break;
       visited += 1;
       const child = path.join(current, entry.name);
       try {
@@ -962,6 +982,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
     try {
       const result = (ports.inspect ?? inspectTree)(accessible(directory), { git, threshold: now() - quietMs,
         mounts: (ports.mountPoints ? ports.mountPoints(directory) : mountPointsUnder(accessible(directory))), ignoreRootCtime: afterQuarantine });
+      recentWritesDue = result.newestMs + quietMs;
       return (result.hold === "git-checkout" ? "ignored-files" : result.hold) ?? (now() - result.newestMs < quietMs ? "recent-writes" : null);
     } catch { return "unreadable-tree"; }
   };
@@ -987,7 +1008,19 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
     errors: [],
   };
   if (!dryRun) recoverCheckoutHeadLocks(accessible, report.errors);
-  const keep = (kept: WorktreeKept) => {
+  /** When each path visited in this slice should be visited again even with
+      no registration change. Advisory scheduling only; never proof. */
+  const dueAt = new Map<string, number>();
+  let recentWritesDue: number | undefined;
+  /** `retryBy`: a failed read or a transient refusal. The next hourly sweep
+      rechecks the row, or the earlier time its verdict can change. */
+  const keep = (kept: WorktreeKept, retryBy?: number) => {
+    if (kept.reason === "recent-writes" && recentWritesDue !== undefined) dueAt.set(kept.path, recentWritesDue);
+    // Live holders leave no registration trace; the next hourly sweep rechecks
+    // them so the retention clock starts when they let go.
+    else if (retryBy !== undefined || RETRIED_REASONS.has(kept.reason))
+      dueAt.set(kept.path, Math.min(now() + WORKTREE_SWEEP_INTERVAL_MS, retryBy ?? NEXT_SWEEP));
+    else if (kept.reason !== "retention") dueAt.delete(kept.path);
     /* Activity restarts the retention clock. */
     if (BUSY_REASONS.has(kept.reason)
       && !(kept.reason === "live-conversation" && kept.detail === "owner proof deferred by per-pass budget"))
@@ -998,7 +1031,14 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
   const previouslyKept = new Map((ports.previous?.kept ?? []).map(kept => [kept.path, kept] as const));
   const tempRoots = (ports.tempRoots ?? []).filter(Boolean).map((root) => path.resolve(root));
   const resolve = (entry: string) => path.resolve(entry);
-  const physical = (entry: string) => resolvePhysicalPath(accessible(entry));
+  const physicalPaths = new Map<string, string>();
+  const physical = (entry: string) => {
+    let result = physicalPaths.get(entry);
+    if (result === undefined) { result = resolvePhysicalPath(accessible(entry)); physicalPaths.set(entry, result); }
+    return result;
+  };
+  // Fresh guard reads must resolve aliases again after asynchronous work.
+  const freshPaths = () => physicalPaths.clear();
   const paths = (entries: readonly string[]) => [...new Set([...new Set(entries)].flatMap(entry => [resolve(entry), physical(entry)]))];
   const currentPipelines = ports.currentPipelines ?? (() => ports.pipelines);
   // The live list omits archived lanes. Preserve their settled ownership,
@@ -1007,6 +1047,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
   /** What a live pipeline, process or conversation holds right now. An open
       pipeline needs its own checkout and the repository it runs git in. */
   const readGuards = () => {
+    freshPaths();
     const scan = ports.scan();
     const conversationStatus = ports.conversationCwds();
     const conversationCwds = isConversationCwdStatus(conversationStatus) ? conversationStatus.held : conversationStatus;
@@ -1036,22 +1077,51 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
   /* The first read skips what is plainly busy; each removal reads them again. */
   const initial = readGuards();
   const ownersAtStart = ownershipPipelines();
+  const ownerIndexes = new WeakMap<readonly SweptPipeline[], Map<string, SweptPipeline[]>>();
   const ownersOf = (pipelines: readonly SweptPipeline[], worktree: string) => {
-    const target = physical(worktree);
-    return pipelines.filter(pipeline => pipeline.worktreeDir && (resolve(pipeline.worktreeDir) === worktree
-      || physical(pipeline.worktreeDir) === target));
+    let index = ownerIndexes.get(pipelines);
+    if (!index) {
+      index = new Map();
+      for (const pipeline of pipelines) if (pipeline.worktreeDir) {
+        for (const key of new Set([resolve(pipeline.worktreeDir), physical(pipeline.worktreeDir)])) {
+          const rows = index.get(key) ?? []; rows.push(pipeline); index.set(key, rows);
+        }
+      }
+      ownerIndexes.set(pipelines, index);
+    }
+    return [...new Set([...(index.get(resolve(worktree)) ?? []), ...(index.get(physical(worktree)) ?? [])])];
   };
+  const budgetClock = ports.monotonicNow ?? (() => performance.now());
+  const candidateLimit = Math.max(1, ports.maxCandidates ?? 16);
+  const timeBudget = Math.max(1, ports.timeBudgetMs ?? 1000);
+  /* The selection budget starts at the first candidate, so a slow discovery
+     (a cold forge cache, gh, a loaded host) still advances at least one. */
+  let started: number | undefined;
+  const spent = () => started !== undefined && budgetClock() - started >= timeBudget;
+  const priorProgress = ports.previous?.progress;
+  const progress: NonNullable<WorktreeSweepReport["progress"]> = { cursor: priorProgress?.cursor ?? "", pending: [] as string[],
+    cursors: { ...priorProgress?.cursors }, repositoryCursor: priorProgress?.repositoryCursor,
+    fingerprints: {} as Record<string, string>, visited: 0, complete: true };
+  report.progress = progress;
+  const pending = new Set(priorProgress?.pending ?? []);
+  const visited = new Set<string>();
+  const discovered = new Set<string>();
+  const selected = new Set<string>();
+  ports.phase?.("discovery");
 
   /* A project registered at a linked checkout, or inside one, is its root. */
   const projectRoots = paths((ports.repositories ?? []).filter(Boolean));
   const roots = new Map<string, string>();
-  for (const candidate of [...ports.pipelines.map((pipeline) => pipeline.repoDir), ...(ports.repositories ?? [])]) {
+  for (const candidate of new Set([...ports.pipelines.map((pipeline) => pipeline.repoDir), ...(ports.repositories ?? [])])) {
     if (!candidate || !fs.existsSync(candidate)) continue;
     const root = await mainRoot(ports.git, candidate);
     if (root && !roots.has(root)) roots.set(root, root);
   }
 
-  for (const root of [...roots.keys()].sort()) {
+  const sortedRoots = [...roots.keys()].sort();
+  const rootCursor = priorProgress?.repositoryCursor ?? "";
+  const rootOrder = sortedRoots.filter(root => root > rootCursor).concat(sortedRoots.filter(root => root <= rootCursor));
+  for (const root of rootOrder) {
     report.repositories.push(root);
     const listing = await ports.git(["worktree", "list", "--porcelain", "-z"], root);
     if (listing.code !== 0) {
@@ -1062,17 +1132,6 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
     const [main, ...linked] = listed;
     if (!main || linked.length === 0) continue;
     const mainPath = resolve(main.path);
-    const remote = await ports.git(["remote", "get-url", "origin"], root);
-    const repository = remote.code === 0 ? githubRepositoryOfRemote(remote.stdout.trim()) : null;
-    const merged = repository ? await ports.mergedPullRequests(repository) : [];
-    const byHead = new Map<string, MergedPullRequest[]>();
-    const byNumber = new Map<number, MergedPullRequest>();
-    for (const pr of merged ?? []) {
-      byNumber.set(pr.number, pr);
-      const list = byHead.get(pr.headRefName) ?? [];
-      list.push(pr);
-      byHead.set(pr.headRefName, list);
-    }
     /** The commits this repository's remotes advertise as branch and tag tips,
         read afresh for each preservation proof; null
         when no remote answered. */
@@ -1111,6 +1170,50 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
     const remaining = new Set(linked.map((entry) => resolve(entry.path)));
     const ordered = [...linked].sort((a, b) => b.path.length - a.path.length || a.path.localeCompare(b.path));
     for (const entry of ordered) {
+      const directory = resolve(entry.path);
+      discovered.add(directory);
+      const owners = ownersOf(ownersAtStart, directory);
+      const fingerprint = JSON.stringify([entry.head, entry.branch, entry.locked, entry.prunable,
+        owners.map(owner => [owner.id, owner.state, pipelineHoldsCheckout(owner), latestTerminalTime([owner])])]);
+      progress.fingerprints[directory] = fingerprint;
+      const due = priorProgress?.due?.[directory];
+      if (priorProgress?.fingerprints?.[directory] !== fingerprint || (typeof due === "number" && due <= now())) pending.add(directory);
+    }
+    // Once the slice is spent, later repositories are only fingerprinted:
+    // their merged pull requests (possibly a gh call) wait for their turn.
+    if (progress.visited >= candidateLimit || spent()) continue;
+    const remote = await ports.git(["remote", "get-url", "origin"], root);
+    const repository = remote.code === 0 ? githubRepositoryOfRemote(remote.stdout.trim()) : null;
+    const merged = repository ? await ports.mergedPullRequests(repository) : [];
+    const byHead = new Map<string, MergedPullRequest[]>();
+    const byNumber = new Map<number, MergedPullRequest>();
+    for (const pr of merged ?? []) {
+      byNumber.set(pr.number, pr);
+      const list = byHead.get(pr.headRefName) ?? [];
+      list.push(pr);
+      byHead.set(pr.headRefName, list);
+    }
+    // Half the slice serves dirty paths; the fair cursor cannot starve under
+    // continuous writes. Nested registrations remain guards even when deferred.
+    const fairPool = [...ordered].sort((left, right) => resolve(left.path) < resolve(right.path) ? -1 : resolve(left.path) === resolve(right.path) ? 0 : 1);
+    const fairCursor = progress.cursors?.[root] ?? "";
+    const fair = fairPool.filter(entry => resolve(entry.path) > fairCursor)
+      .concat(fairPool.filter(entry => resolve(entry.path) <= fairCursor));
+    const dirty = ordered.filter(entry => pending.has(resolve(entry.path))).slice(0, Math.ceil(candidateLimit / 2));
+    const candidates = [...new Set([...dirty, ...fair])];
+    for (const entry of candidates) {
+      if (progress.visited >= candidateLimit || spent()) break;
+      started ??= budgetClock();
+      progress.visited++;
+      const directory = resolve(entry.path);
+      progress.repositoryCursor = root;
+      if (!dirty.includes(entry)) {
+        progress.cursor = directory;
+        progress.cursors![root] = directory;
+      }
+      visited.add(directory); selected.add(directory); pending.delete(directory); dueAt.delete(directory);
+      ports.phase?.("candidate", directory);
+      await yieldToRuntime();
       const worktree = resolve(entry.path);
       const owners = ownersOf(ownersAtStart, worktree);
       const batch = mergeBatchOwnership(worktree, entry.branch, initial.scan, accessible);
@@ -1138,11 +1241,14 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
       const hourLane = finished && owners.length > 0 && !batch.owned;
       const base = { path: worktree, ...(pipelineId ? { pipelineId } : {}), ...(firstSettledAt ? { firstSettledAt } : {}) };
       const iso = (at: number) => new Date(at).toISOString();
-      const retentionDetail = (settled: number, why?: string) => why
-        ? `eligible after ${iso(settled + FINISHED_WORKTREE_RETENTION_MS)}; ${why}`
-        : hourLane && now() - settled < PUSHED_WORKTREE_RETENTION_MS
-          ? `eligible after ${iso(settled + PUSHED_WORKTREE_RETENTION_MS)} when clean with every commit on a remote, otherwise after ${iso(settled + FINISHED_WORKTREE_RETENTION_MS)}`
-          : `eligible after ${iso(settled + FINISHED_WORKTREE_RETENTION_MS)}`;
+      const retentionDetail = (settled: number, why?: string) => {
+        const hour = !why && hourLane && now() - settled < PUSHED_WORKTREE_RETENTION_MS;
+        // The earliest time this retention row can change verdict.
+        dueAt.set(worktree, settled + (hour ? PUSHED_WORKTREE_RETENTION_MS : FINISHED_WORKTREE_RETENTION_MS));
+        return why ? `eligible after ${iso(settled + FINISHED_WORKTREE_RETENTION_MS)}; ${why}`
+          : hour ? `eligible after ${iso(settled + PUSHED_WORKTREE_RETENTION_MS)} when clean with every commit on a remote, otherwise after ${iso(settled + FINISHED_WORKTREE_RETENTION_MS)}`
+            : `eligible after ${iso(settled + FINISHED_WORKTREE_RETENTION_MS)}`;
+      };
       const unproven = (remote: boolean | null) => remote === null ? "no remote of the repository answered" : "a commit of HEAD is in no ref a remote advertises";
       if (initial.open.some((open) => inside(open, worktree))) {
         keep({ ...base, reason: "open-pipeline" });
@@ -1169,7 +1275,11 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
       const pushed = screened === true;
       /* Past retention the remote proof stands without the forge. */
       if (repository && merged === null && !retained && !pushed) {
-        keep({ ...base, reason: "forge-unavailable", detail: `${repository}: neither the forge cache nor gh listed its merged pull requests` });
+        // The forge can answer again, and the remote proof stands without it
+        // once the lane's hour (or four days) ends.
+        const retentionEnd = !finished ? NEXT_SWEEP
+          : settledSince + (hourLane && now() - settledSince < PUSHED_WORKTREE_RETENTION_MS ? PUSHED_WORKTREE_RETENTION_MS : FINISHED_WORKTREE_RETENTION_MS);
+        keep({ ...base, reason: "forge-unavailable", detail: `${repository}: neither the forge cache nor gh listed its merged pull requests` }, retentionEnd);
         continue;
       }
       const candidates = pipelinePrCandidates(owners);
@@ -1196,7 +1306,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
       const resume = readIntent(worktree);
       const status = await ports.git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], worktree);
       if (status.code !== 0) {
-        keep({ ...base, reason: "uncommitted", detail: `git status failed: ${(status.stderr || "").trim()}` });
+        keep({ ...base, reason: "uncommitted", detail: `git status failed: ${(status.stderr || "").trim()}` }, NEXT_SWEEP);
         continue;
       }
       const classified = classifyStatus(status.stdout, true);
@@ -1216,16 +1326,15 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         keep({ ...base, reason: "ignored-files", detail: ignored.slice(0, 5).join(", ") + (ignored.length > 5 ? `, … ${ignored.length - 5} more` : "") });
         continue;
       }
-      type Preservation = "merged-pr" | "remote-ref" | "base";
+      type Preservation = "merged-pr" | "remote-ref";
       /** How long the lane must have been settled for this preservation. */
-      const retentionFor = (preservation: Preservation) => preservation === "base" ? FINISHED_WORKTREE_RETENTION_MS
-        : preservation === "remote-ref" ? hourLane ? PUSHED_WORKTREE_RETENTION_MS : FINISHED_WORKTREE_RETENTION_MS
+      const retentionFor = (preservation: Preservation) => preservation === "remote-ref" ? hourLane ? PUSHED_WORKTREE_RETENTION_MS : FINISHED_WORKTREE_RETENTION_MS
         : pushed ? PUSHED_WORKTREE_RETENTION_MS : retained ? FINISHED_WORKTREE_RETENTION_MS : 0;
       /** The merged PR whose head contains what the checkout has checked out
           now, or why none does. `fresh` reads the advertised refs again. */
       const prove = async (fresh: boolean): Promise<{ pr: MergedPullRequest | null; head: string; preservation: Preservation; branch: string | null } | WorktreeKept> => {
         const current = await checkedOut(ports.git, worktree);
-        if (!current) return { ...base, reason: "unmerged-commits", detail: "HEAD unreadable" };
+        if (!current) return { ...base, reason: "unmerged-commits", detail: HEAD_UNREADABLE };
         const freshOwners = ownersOf(ownershipPipelines(), worktree);
         const aged = retained || pushed;
         if (aged && freshOwners.some(pipelineHoldsCheckout)) return { ...base, reason: "open-pipeline" };
@@ -1246,17 +1355,16 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         if (aged) {
           const remote = await onRemote(current.head, fresh);
           if (remote) return proven("remote-ref", null);
-          if (retained && freshOwners.some((owner) => owner.baseRef === current.head)) return proven("base", null);
           if (!settledFor(FINISHED_WORKTREE_RETENTION_MS) && (retained || prs.size === 0)) return held(unproven(remote));
           if (retained) return { ...base, reason: "local-only-commits", detail: remote === null
             ? "no remote of the repository answered, so its commits are not proven kept elsewhere"
-            : "a commit of HEAD is in no ref a remote advertises, and HEAD is not its pipeline's base" };
+            : "a commit of HEAD is in no ref a remote advertises, so preservation is unproven" };
         }
         return { ...base, reason: known ? "unmerged-commits" : "pr-head-unknown", detail: [...prs.keys()].map((n) => `#${n}`).join(", ") };
       };
       let proof = await prove(false);
       if ("reason" in proof) {
-        keep(proof);
+        keep(proof, proof.detail === HEAD_UNREADABLE ? NEXT_SWEEP : undefined);
         continue;
       }
       if (report.removed.length >= maxRemovals) {
@@ -1278,18 +1386,18 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         continue;
       }
       const releaseHead = dryRun ? () => {} : lockCheckoutHead(worktree, accessible, report.errors);
-      if (!releaseHead) { keep({ ...base, reason: "locked", detail: "HEAD could not be held through removal" }); continue; }
+      if (!releaseHead) { keep({ ...base, reason: "locked", detail: "HEAD could not be held through removal" }, NEXT_SWEEP); continue; }
       try {
         /* A commit made since the status read leaves the checkout clean, so the
            removal below would not refuse it: HEAD is proven again last. */
         proof = await prove(true);
         if ("reason" in proof) {
-          keep(proof);
+          keep(proof, proof.detail === HEAD_UNREADABLE ? NEXT_SWEEP : undefined);
           continue;
         }
         removal = { ...removal, pr: proof.pr ? { number: proof.pr.number, url: proof.pr.url } : null, preservation: proof.preservation, branch: proof.branch };
         const finalListing = await ports.git(["worktree", "list", "--porcelain", "-z"], root);
-        if (finalListing.code !== 0) { keep({ ...base, reason: "uncommitted", detail: "worktree registration could not be refreshed" }); continue; }
+        if (finalListing.code !== 0) { keep({ ...base, reason: "uncommitted", detail: "worktree registration could not be refreshed" }, NEXT_SWEEP); continue; }
         const finalWorktrees = parseWorktreeList(finalListing.stdout);
         const finalEntry = finalWorktrees.find(other => resolve(other.path) === worktree);
         if (!finalEntry || finalEntry.prunable) { keep({ ...base, reason: "missing" }); continue; }
@@ -1298,23 +1406,23 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         if (finalNested) { keep({ ...base, reason: "holds-worktree", detail: finalNested.path }); continue; }
         const trackedBefore = await ports.git(["ls-files", "-z"], worktree);
         let originalTracked = trackedBefore.code === 0 ? trackedSnapshot(accessible(worktree), trackedBefore.stdout, resuming) : null;
-        if (originalTracked === null) { keep({ ...base, reason: "uncommitted", detail: "tracked contents could not be inspected" }); continue; }
+        if (originalTracked === null) { keep({ ...base, reason: "uncommitted", detail: "tracked contents could not be inspected" }, NEXT_SWEEP); continue; }
         let finalStatus = await ports.git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], worktree);
         let finalClass = classifyStatus(finalStatus.stdout, true);
-        if (finalStatus.code !== 0 || (finalClass.changed.length && !(resuming && onlyDeletions(finalStatus.stdout)))) { keep({ ...base, reason: "uncommitted" }); continue; }
+        if (finalStatus.code !== 0 || (finalClass.changed.length && !(resuming && onlyDeletions(finalStatus.stdout)))) { keep({ ...base, reason: "uncommitted" }, finalStatus.code !== 0 ? NEXT_SWEEP : undefined); continue; }
         if (resuming && finalClass.changed.length) {
           const missing = await ports.git(["ls-files", "--deleted", "-z"], worktree);
           const paths = missing.stdout.split("\0").filter(Boolean);
-          if (missing.code !== 0 || !paths.length) { keep({ ...base, reason: "uncommitted", detail: "interrupted removal's missing files could not be identified" }); continue; }
+          if (missing.code !== 0 || !paths.length) { keep({ ...base, reason: "uncommitted", detail: "interrupted removal's missing files could not be identified" }, NEXT_SWEEP); continue; }
           // No --force: checkout-index fills absent paths and refuses to
           // replace a file another process created after ls-files --deleted.
           const restored = await ports.git(["checkout-index", "--", ...paths], worktree);
-          if (restored.code !== 0) { keep({ ...base, reason: "uncommitted", detail: "interrupted removal's missing files could not be restored" }); continue; }
+          if (restored.code !== 0) { keep({ ...base, reason: "uncommitted", detail: "interrupted removal's missing files could not be restored" }, NEXT_SWEEP); continue; }
           finalStatus = await ports.git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], worktree);
           finalClass = classifyStatus(finalStatus.stdout, true);
-          if (finalStatus.code !== 0 || finalClass.changed.length) { keep({ ...base, reason: "uncommitted" }); continue; }
+          if (finalStatus.code !== 0 || finalClass.changed.length) { keep({ ...base, reason: "uncommitted" }, finalStatus.code !== 0 ? NEXT_SWEEP : undefined); continue; }
           originalTracked = trackedSnapshot(accessible(worktree), trackedBefore.stdout);
-          if (originalTracked === null) { keep({ ...base, reason: "uncommitted", detail: "restored tracked contents could not be inspected" }); continue; }
+          if (originalTracked === null) { keep({ ...base, reason: "uncommitted", detail: "restored tracked contents could not be inspected" }, NEXT_SWEEP); continue; }
         }
         const finalHead = await ports.git(["rev-parse", "--verify", "HEAD"], worktree);
         if (finalHead.code !== 0 || finalHead.stdout.trim() !== proof.head) {
@@ -1323,7 +1431,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         }
         const finalIgnored = keptIgnored(accessible(worktree), finalClass.ignored);
         const trackedNow = await ports.git(["ls-files", "--cached", "-v", "-z"], worktree);
-        if (trackedNow.code !== 0) { keep({ ...base, reason: "uncommitted" }); continue; }
+        if (trackedNow.code !== 0) { keep({ ...base, reason: "uncommitted" }, NEXT_SWEEP); continue; }
         const tagged = trackedNow.stdout.split("\0").filter(Boolean);
         // Git status and worktree removal trust these index flags. They cannot
         // establish that a tracked file contains no unique local edits.
@@ -1378,7 +1486,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
     // the evidence drivers' fixture-only bundles, keeping protected contents.
     for (const entry of ordered) {
       const worktree = resolve(entry.path);
-      if (!remaining.has(worktree) || entry.locked || entry.prunable
+      if (!selected.has(worktree) || spent() || !remaining.has(worktree) || entry.locked || entry.prunable
         || worktree === mainPath || roots.has(worktree)
         || projectRoots.some((project) => inside(project, worktree))) continue;
       const owners = ownersOf(ownersAtStart, worktree);
@@ -1386,7 +1494,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         const source = resolve(pipeline.repoDir);
         return worktree === path.join(path.dirname(source), `${path.basename(source)}-pipeline-${pipeline.id}`);
       });
-      if (!owner || owners.some(pipelineHoldsCheckout) || heldBy(readGuards(), worktree)) continue;
+      if (!owner || owners.some(pipelineHoldsCheckout) || heldBy(initial, worktree)) continue;
       if (!dryRun) {
         // Only journals written for this settled lane authorize trash replay.
         const trashDir = statePath("worktree-sweep-trash");
@@ -1436,6 +1544,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
       const clock = `${entry.head}:${entry.branch}:${owner.id}:${owner.state}:${latestTerminalTime(owners)}:${previouslyKept.get(worktree)?.firstSettledAt ?? ""}`;
       const candidates = ports.cache?.candidates(accessible(worktree), clock, discover) ?? discover();
       for (const next of candidates) {
+        if (report.trimmed.length >= maxRemovals || spent()) break;
         const relative = path.relative(worktree, next);
         const artifact = relative.split(path.sep).includes(".artifacts");
         if (!artifact) {
@@ -1509,26 +1618,44 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
       }
     }
   }
+  for (const directory of pending) if (!discovered.has(directory)) pending.delete(directory);
+  // Unvisited rows retain their advisory display/retention state. They do not
+  // count as fresh proof and cannot enter the removal path in this slice.
+  for (const directory of discovered) if (!visited.has(directory)) {
+    const previous = previouslyKept.get(directory);
+    keep(previous ? { ...previous } : { path: directory, reason: "deferred" });
+  }
+  for (const root of Object.keys(progress.cursors ?? {})) if (!roots.has(root)) delete progress.cursors![root];
+  const due: Record<string, number> = {};
+  for (const directory of discovered) {
+    const at = visited.has(directory) ? dueAt.get(directory) : priorProgress?.due?.[directory];
+    // A visited path due already would only re-enter the next slice.
+    if (typeof at === "number" && Number.isFinite(at) && (!visited.has(directory) || at > now())) due[directory] = at;
+  }
+  progress.due = due;
+  progress.pending = [...pending];
+  progress.complete = pending.size === 0;
   const seenKept = new Set<string>();
-  for (const kept of [...report.kept].sort((a, b) => b.path.split(path.sep).length - a.path.split(path.sep).length)) {
-    const nested = report.kept.filter(other => other !== kept && inside(other.path, kept.path) && other.path !== kept.path);
-    const reached = accessible(kept.path);
-    let rootBytes = 0;
-    // Parent walks exclude nested roots. Attribute their directory blocks to
-    // the nested decision too, once, along with its files.
-    if (report.kept.some(other => other.path !== kept.path && inside(kept.path, other.path))) {
-      try {
-        const stat = fs.statSync(reached);
-        if (!seenKept.has(`${stat.dev}:${stat.ino}`)) rootBytes = stat.blocks * 512;
-      } catch { /* Unavailable directories contribute no measured blocks. */ }
-    }
-    const excluded = nested.map(row => accessible(row.path));
-    const measureKept = () => allocatedBytes(reached, excluded, seenKept);
-    const clock = `${kept.reason}:${kept.firstSettledAt ?? ""}:${nested.map(row => row.path).join("\0")}`;
-    kept.bytes = kept.reason === "mount-boundary" ? 0 : rootBytes + (ports.cache
-      ? await ports.cache.allocation(reached, clock, excluded, seenKept, measureKept) : await measureKept());
+  ports.phase?.("accounting");
+  for (const kept of report.kept) {
+    // Accounting is advisory and bounded independently of retirement. A cache
+    // eviction never schedules a full walk of every retained tree.
+    const measured = visited.has(kept.path) && !spent();
+    if (measured && kept.reason !== "mount-boundary") {
+      const nested = report.kept.filter(other => other.path !== kept.path && inside(other.path, kept.path));
+      let rootBytes = 0;
+      if (report.kept.some(other => other.path !== kept.path && inside(kept.path, other.path))) {
+        try {
+          const stat = fs.statSync(accessible(kept.path));
+          if (!seenKept.has(`${stat.dev}:${stat.ino}`)) rootBytes = stat.blocks * 512;
+        } catch { /* Missing entries contribute no allocated blocks. */ }
+      }
+      kept.bytes = rootBytes + await measureDirectory(accessible(kept.path), nested.map(row => accessible(row.path)), seenKept, false,
+        ports.accountingEntryLimit ?? 4096);
+    } else kept.bytes = previouslyKept.get(kept.path)?.bytes ?? 0;
     report.keptBytes[kept.reason] = (report.keptBytes[kept.reason] ?? 0) + kept.bytes;
   }
+
   return report;
 }
 
@@ -1547,7 +1674,8 @@ export function summarizeWorktreeSweep(report: WorktreeSweepReport): string {
   const verb = report.mode === "dry-run" ? "would remove" : "removed";
   const kept = Object.entries(report.keptCounts).map(([reason, count]) => `${count} ${reason} (${gigabytes(report.keptBytes?.[reason as WorktreeKeptReason] ?? 0)})`).join(", ");
   return `[worktree sweep] ${verb} ${report.removed.length} worktree(s) (${gigabytes(report.removedBytes)}) across ${report.repositories.length} repositor${report.repositories.length === 1 ? "y" : "ies"};`
-    + ` ${report.mode === "dry-run" ? "would trim" : "trimmed"} ${report.trimmed?.length ?? 0} build cache(s) (${gigabytes(report.trimmedBytes ?? 0)}); kept ${report.kept.length}${kept ? ` (${kept})` : ""}; ${report.errors.length} error(s)`;
+    + ` ${report.mode === "dry-run" ? "would trim" : "trimmed"} ${report.trimmed?.length ?? 0} build cache(s) (${gigabytes(report.trimmedBytes ?? 0)}); kept ${report.kept.length}${kept ? ` (${kept})` : ""}; ${report.errors.length} error(s)`
+    + (report.progress ? `; checked ${report.progress.visited}; queued ${report.progress.pending.length}` : "");
 }
 
 /** Kept reasons that wait for someone: the sweep will not free them by itself. */
@@ -1714,14 +1842,14 @@ export async function productionWorktreeSweepPorts(
   mode: WorktreeSweepMode,
   run: GithubRunner = githubRunner(os.tmpdir(), GH_TIMEOUT_MS),
 ): Promise<WorktreeSweepPorts> {
-  const [{ loadArchivedPipelines, loadPipelinesForList }, { projectCurationSnapshot }, { agentRegistry }, { recordWorktreeResolution }, { readForgeCache }] = await Promise.all([
+  const [{ loadArchivedPipelinesForListAsync, loadPipelinesForListAsync, loadPipelinesForList }, { projectCurationSnapshot }, { agentRegistry }, { recordWorktreeResolution }, { readForgeCache }] = await Promise.all([
     import("@/lib/pipelines/store"),
     import("@/lib/projects/curation"),
     import("@/lib/agent/registry"),
     import("@/lib/scanner/describe"),
     import("@/lib/forge/cache"),
   ]);
-  const pipelines = withArchived(loadPipelinesForList(), loadArchivedPipelines());
+  const pipelines = withArchived(await loadPipelinesForListAsync(), await loadArchivedPipelinesForListAsync());
   const repositories = projectCurationSnapshot().manualProjects.map((project) => project.root);
   const view = await openHostTempRoots(sweepRoots(scanProcesses(), [...ownTempRoots(), statePath("scratch")]));
   const temp = view.roots;
@@ -1798,10 +1926,16 @@ export function startWorktreeSweep(ports: {
   const sweep = ports.sweep ?? (() => runWorktreeSweep());
   const arm = (delayMs: number) => {
     const timer = schedule(() => {
-      void sweep()
+      let continuation = false;
+      void sweep().then(result => {
+        const progress = result && typeof result === "object" && "progress" in result ? (result as WorktreeSweepReport).progress : undefined;
+        // A slice that visited nothing (discovery alone outlasted its budget)
+        // waits the normal interval instead of repeating discovery every 5 s.
+        continuation = progress?.complete === false && (progress.visited ?? 0) > 0;
+      })
         .catch((error) => console.error("[worktree sweep] failed", error instanceof Error ? error.message : String(error)))
         .finally(() => {
-          if (sweepHost.__llvWorktreeSweepTimer === timer) arm(ports.intervalMs ?? WORKTREE_SWEEP_INTERVAL_MS);
+          if (sweepHost.__llvWorktreeSweepTimer === timer) arm(continuation ? 5000 : ports.intervalMs ?? WORKTREE_SWEEP_INTERVAL_MS);
         });
     }, delayMs);
     timer.unref?.();
