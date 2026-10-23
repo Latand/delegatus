@@ -3,6 +3,8 @@
 This page lists the `delegatus` command and its options, where Delegatus keeps
 its data, the interface language and the environment variables. Memory and CPU
 limits for agents are in [Keeping Delegatus running](operations.md#agent-memory-and-cpu).
+Optional preparation before a pipeline's first builder is described in
+[Project setup recipes](project-setup.md).
 
 ## The command
 

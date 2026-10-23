@@ -398,6 +398,14 @@ export type PipelineRuntimeSwitch = {
 export type PipelineAccountHold = { accountId: string; resetsAt: number | null; observedAt: string | null };
 
 export type PipelineStageAttempt = {
+  /** Setup evidence stays with this attempt across failures and explicit retries. */
+  setup?: {
+    /** Resolved execution cwd; the approved recipe keeps its relative cwd. */
+    command: string[]; cwd: string; hash: string;
+    state: "running" | "passed" | "failed";
+    startedAt: string; completedAt: string | null; code: number | null;
+    stdout: string; stderr: string;
+  };
   n: number;
   /** Stop custody for pause or account evacuation. A replacement keeps this checkout. */
   suspension?: { reason: "pause" | "account"; detail: string; requestedAt: string; stoppedAt?: string; stopRevision?: number; operatorStoppedAt?: string;

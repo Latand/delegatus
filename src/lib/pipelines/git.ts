@@ -1,4 +1,5 @@
 import { shortId } from "@/lib/shortIds";
+export { preparePipelineSetup } from "./setupRecipe";
 import { publicationFailurePhase } from "./publicationHistory";
 export { publicationFailurePhase } from "./publicationHistory";
 import crypto from "node:crypto";
