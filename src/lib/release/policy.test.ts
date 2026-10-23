@@ -83,3 +83,12 @@ test("a late merge after publication does not restart the twelve-hour tag gap", 
   input.settled = { cut: "earlier", at: input.now - hour, outcome: "published" };
   expect((await releaseState(input)).state).toBe("due");
 });
+
+
+test.each(["completed", "superseded"] as const)("settling an old %s run keeps eligibility on the real tag clock", async outcome => {
+  const input = ready();
+  input.settled = { cut: "earlier", at: input.now, outcome };
+  expect((await releaseState(input)).state).toBe("due");
+  input.lastTag.at = input.now - hour;
+  expect((await releaseState(input)).reason).toBe("gap");
+});

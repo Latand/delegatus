@@ -1,3 +1,4 @@
+export type ReleaseOutcome = "published" | "failed" | "declined" | "completed" | "superseded";
 export interface ReleaseDeployment { revision: string; at: number }
 export interface ReleaseChange { subject: string; files: string[] }
 export interface ReleaseInput {
@@ -7,7 +8,7 @@ export interface ReleaseInput {
   draining: boolean; deploying: boolean; tools: string[]; minChanges: number; minGapHours: number;
   changes: ReleaseChange[]; deployments: ReleaseDeployment[];
   isAncestor: (a: string, b: string) => boolean | Promise<boolean>;
-  settled?: { cut: string; at: number; outcome: "published" | "failed" | "declined" } | null;
+  settled?: { cut: string; at: number; outcome: ReleaseOutcome } | null;
   /** Exact cut whose durable release request is being recovered. */
   frozenCut?: string;
 }
@@ -36,7 +37,7 @@ export async function releaseCut(deployments: ReleaseDeployment[], isAncestor: R
   return null;
 }
 export function releaseGapStart(lastTagAt: number, settled?: ReleaseInput["settled"]): number {
-  return Math.max(lastTagAt, settled && settled.outcome !== "published" ? settled.at : 0);
+  return Math.max(lastTagAt, settled && (settled.outcome === "failed" || settled.outcome === "declined") ? settled.at : 0);
 }
 export async function releaseState(input: ReleaseInput): Promise<ReleaseDecision> {
   const count = input.changes.filter(c => classifyPaths(c.files, c.subject) === "visible").length;
