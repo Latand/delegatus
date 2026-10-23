@@ -1,3 +1,4 @@
+import { MAINTENANCE_WINDOW_SEARCH_MS, nextMaintenanceWindowTime, maintenanceWindowOpen, type MaintenanceWindow } from "./window";
 import type { EffectiveSeatTickSettings, SeatTickSettingsActor } from "@/lib/monitor/seatTickSettings";
 import { seatTickPolicy } from "@/lib/monitor/seatTick";
 import { peekSeatTickState } from "@/lib/monitor/seatTickState";
@@ -19,6 +20,8 @@ export interface BoardMaintenanceRunSummary {
   attentionCount: number;
 }
 export interface BoardMaintenanceAnswer {
+  window?: MaintenanceWindow | null;
+  missedWindowPolicy?: "skip-and-coalesce";
   enabled: boolean;
   intervalHours: number;
   defaultIntervalHours: 3;
@@ -30,7 +33,7 @@ export interface BoardMaintenanceAnswer {
   lastRun: BoardMaintenanceRunSummary | null;
   nextEligibleAt: string | null;
   nextRunAt: string | null;
-  waitingOn: "off" | "wakes-off" | "live-run" | "interval" | "deployment" | "no-seat" | null;
+  waitingOn: "window" | "off" | "wakes-off" | "live-run" | "interval" | "deployment" | "no-seat" | null;
   pauseReason: "paused while wakes are off" | null;
   lastRunLog?: MaintenanceRunLog;
   runsError: string | null;
@@ -63,6 +66,7 @@ export function boardMaintenanceAnswer(project: string, settings: EffectiveSeatT
     if (!(ports.seat ?? (key => !!orchestratorSeatFor(key).active))(project)) waitingOn = "no-seat";
     else { try { if ((ports.deploying ?? (() => { const d = latestLedgerDeployment(); return d.state === "ok" && !!d.value && !d.value.terminal; }))()) waitingOn = "deployment"; } catch { /* standalone installation */ } }
   }
+  if (!waitingOn && !maintenanceWindowOpen(m.window, now)) waitingOn = "window";
   let interval: number | null = ports.checkIntervalMs ?? null;
   let check = ports.lastCheckAt;
   try {
@@ -70,7 +74,21 @@ export function boardMaintenanceAnswer(project: string, settings: EffectiveSeatT
     if (check === undefined) check = peekSeatTickState(project).lastCheckAt;
   } catch { interval = null; }
   const anchor = check ? Date.parse(check) : now;
-  const next = !runsError && (waitingOn === null || waitingOn === "interval") && eligible !== null && interval ? anchor + Math.max(1, Math.ceil((Math.max(now, eligible) - anchor) / interval)) * interval : null;
-  return { enabled: m.enabled, intervalHours: m.intervalHours, defaultIntervalHours: 3, minIntervalHours: 1, maxIntervalHours: 168, updatedAt: settings.maintenanceSetting?.updatedAt ?? null, setBy: settings.maintenanceSetting?.setBy ?? null,
+  let next = !runsError && (waitingOn === null || waitingOn === "interval" || waitingOn === "window") && eligible !== null && interval ? anchor + Math.max(1, Math.ceil((Math.max(now, eligible) - anchor) / interval)) * interval : null;
+  if (next !== null) {
+    // Align each opening to an actual controller check; a narrow window may
+    // have no check within it, in which case continue to the next opening.
+    const limit = next + MAINTENANCE_WINDOW_SEARCH_MS;
+    while (!maintenanceWindowOpen(m.window, next)) {
+      const opening = nextMaintenanceWindowTime(m.window, next);
+      if (opening === null || !interval) { next = null; break; }
+      next = anchor + Math.ceil((opening - anchor) / interval) * interval;
+      if (next > limit) { next = null; break; }
+    }
+  }
+  // Unrestricted compact MCP reads keep their established byte budget. HTTP
+  // and verbose reads expose the explicit null; configured windows always show.
+  const windowFields = ports.verbose === false && !m.window ? {} : { window: m.window ?? null, missedWindowPolicy: "skip-and-coalesce" as const };
+  return { ...windowFields, enabled: m.enabled, intervalHours: m.intervalHours, defaultIntervalHours: 3, minIntervalHours: 1, maxIntervalHours: 168, updatedAt: settings.maintenanceSetting?.updatedAt ?? null, setBy: settings.maintenanceSetting?.setBy ?? null,
     live: live ? summary(live) : null, lastRun: last ? summary(last) : null, nextEligibleAt: eligible === null ? null : new Date(eligible).toISOString(), nextRunAt: next === null ? null : new Date(next).toISOString(), waitingOn, pauseReason: paused ? "paused while wakes are off" : null, ...(ports.verbose && last ? { lastRunLog: last.log } : {}), runsError };
 }
