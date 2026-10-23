@@ -1136,12 +1136,23 @@ function publicationRange(repository: string, requestedBase: string): Publicatio
   }
   const shallow = git(["rev-parse", "--is-shallow-repository"]);
   if (shallow.exitCode !== 0) return unreadable("cannot determine candidate history completeness");
-  if (shallow.stdout.toString().trim() === "true") {
+  const shallowState = shallow.stdout.toString().trim();
+  if (shallowState !== "true" && shallowState !== "false") {
+    return unreadable("cannot determine candidate history completeness");
+  }
+  if (shallowState === "true") {
     // A readable merge base alone cannot prove a shallow branch's complete
     // commit set. Recover both sides before any message or identity read.
     const fetched = git(["fetch", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head",
       "--unshallow", "origin", base, head], true);
     if (fetched.exitCode !== 0) return unreadable("candidate history unavailable after fetch from origin");
+    const recoveredShallow = git(["rev-parse", "--is-shallow-repository"]);
+    if (recoveredShallow.exitCode !== 0) return unreadable("cannot verify candidate history completeness after fetch from origin");
+    const recoveredState = recoveredShallow.stdout.toString().trim();
+    if (recoveredState === "true") {
+      return unreadable("candidate history remains shallow after fetch from origin");
+    }
+    if (recoveredState !== "false") return unreadable("cannot verify candidate history completeness after fetch from origin");
   }
   const result = git(["merge-base", "--all", base, head]);
   const bases = result.stdout.toString().trim().split("\n");
@@ -2806,12 +2817,15 @@ if (import.meta.main) {
   const notices: string[] = [...range.notices];
   const pathFindings = inspectPaths(
     selection.paths,
-    selection.error || repositoryError || range.error,
+    false,
     arguments_.includes("--require-known-values"),
     inspectionRoot,
     trustedBase,
     notices,
   );
+  if (selection.error || repositoryError || range.error) {
+    pathFindings.set("inspection_error", (pathFindings.get("inspection_error") ?? 0) + 1);
+  }
   if (arguments_.includes("--check-commits")) {
     for (const [finding, count] of commitMessageFindings(inspectionRoot, trustedBase, notices)) {
       pathFindings.set(finding, (pathFindings.get(finding) ?? 0) + count);

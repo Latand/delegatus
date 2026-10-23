@@ -4567,6 +4567,52 @@ describe("publication range resolution", () => {
     expect(await git(candidate, "rev-parse", "--is-shallow-repository")).toBe("false");
   }, 15000);
 
+  test("fails closed when a successful unshallow fetch leaves a shallow origin boundary", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llv-privacy-shallow-origin-"));
+    temporaryDirectories.push(root);
+    const source = join(root, "source");
+    const origin = join(root, "origin");
+    const candidate = join(root, "candidate");
+    mkdirSync(source);
+    await git(source, "init", "--quiet", "-b", "protected");
+    await git(source, "commit", "--allow-empty", "--quiet", "-m", "fork");
+    const fork = await git(source, "rev-parse", "HEAD");
+    await git(source, "commit", "--allow-empty", "--quiet", "-m", "protected advance");
+    const base = await git(source, "rev-parse", "HEAD");
+    await git(source, "checkout", "--quiet", "--orphan", "feature");
+    const address = ["hidden", "personal.dev"].join("@");
+    await git(source, "commit", "--allow-empty", "--quiet", "-m", `hidden ${address}`);
+    await git(source, "commit", "--allow-empty", "--quiet", "-m", "synthetic protected marker");
+    await git(source, "commit", "--allow-empty", "--quiet", "-m", "feature work");
+    await git(source, "merge", "--quiet", "--no-ff", "--allow-unrelated-histories", "-m", "merge protected fork", fork);
+    const head = await git(source, "rev-parse", "HEAD");
+
+    const completeCandidate = join(root, "complete-candidate");
+    await git(source, "clone", "--quiet", "--single-branch", "--branch", "feature", pathToFileURL(source).href, completeCandidate);
+    const complete = await inspect(completeCandidate, base);
+    expect(complete.exitCode).toBe(1);
+    expect(complete.stdout.toString()).toContain("known_value: 1\n");
+    expect(complete.stdout.toString()).toContain("email_address: 1\n");
+    expect(complete.stdout.toString()).not.toContain(address);
+
+    await git(source, "clone", "--quiet", "--no-single-branch", "--depth=2", pathToFileURL(source).href, origin);
+    await git(origin, "symbolic-ref", "HEAD", "refs/heads/feature");
+    await git(source, "clone", "--quiet", "--single-branch", "--branch", "feature", "--depth=1",
+      pathToFileURL(origin).href, candidate);
+    expect(await git(origin, "rev-parse", "--is-shallow-repository")).toBe("true");
+    expect(await git(candidate, "rev-parse", "--is-shallow-repository")).toBe("true");
+
+    const result = await inspect(candidate, base);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout.toString()).toContain("publication_range: unreadable: candidate history remains shallow after fetch from origin\n");
+    expect(result.stdout.toString()).toContain("inspection_error: 1\n");
+    expect(result.stdout.toString()).not.toContain("configuration_error:");
+    expect(result.stdout.toString()).not.toContain("known_value:");
+    expect(result.stdout.toString()).not.toContain(address);
+    expect(await git(candidate, "rev-parse", "--is-shallow-repository")).toBe("true");
+    expect(await git(candidate, "rev-parse", "HEAD")).toBe(head);
+  }, 15000);
+
   test("fails closed when shallow candidate history cannot be fetched", async () => {
     const { candidate, fork } = await fixture(true);
     await git(candidate, "remote", "set-url", "origin", join(candidate, "missing-origin"));
