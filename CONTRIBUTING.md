@@ -467,14 +467,18 @@ refuses with exit 69 unless `DELEGATUS_AGENT_CPU=off`
 (`LLV_OWNED_RUN_TIMEOUT_MS`, default fifteen minutes) and a kernel watchdog. A recorded caller start
 identity detects a hard-killed wrapper; detached descendants stay owned by the
 service. Surviving children fail the command before the manager reaps them.
-Linux requires a reachable user systemd manager. A stage agent in a signal
+When no user systemd manager is reachable (including a container with a
+read-only cgroup mount), Linux uses the identity-bound portable guardian and
+announces that fallback on stderr. It preserves private test state, the spawn
+ledger, bounded cleanup and the final identity check, but a descendant that
+detaches between guardian polls can escape. A stage agent in a signal
 domain gets the same service and limits: the service runs its command inside
 the agent's own namespaces. Only without a reachable manager does such a gate
 run in a leaf of the agent's scope, under the agent's memory cap, and it says
-so on stderr. macOS and Windows use an
+so on stderr. Portable runs use an
 independent identity-bound guardian with best-effort execution and one warning
-per owning run; a detached child can escape between guardian polls. The strong
-lifetime guarantee applies to Linux native containment, as recorded in
+per owning run; a detached child can escape between guardian polls. The stronger
+kernel lifetime guarantee applies only to Linux native containment, as recorded in
 `docs/verification/test-child-lifetime.md`.
 An existing `NODE_OPTIONS` is preserved. Production builds cap page-data
 workers at two to fit the gate's three-CPU quota. The Viewer build and its
