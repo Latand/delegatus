@@ -4,7 +4,7 @@ import path from "node:path";
 import { spawn, type SpawnOptionsWithoutStdio } from "node:child_process";
 import { AgentMemoryCell, planAgentMemory } from "@/lib/runtime/agentMemory";
 import { planAgentCpu } from "@/lib/runtime/cpuPlacement";
-import type { ReviewedSetupRecipe } from "@/lib/projects/setupRecipe";
+import { setupInterpreter, type ReviewedSetupRecipe } from "@/lib/projects/setupRecipe";
 import type { ExecResult } from "@/lib/workflows/provision";
 import type { PipelineSandbox } from "./types";
 
@@ -15,10 +15,20 @@ export type SetupExecution = (root: string, recipe: ReviewedSetupRecipe, sandbox
 // PID namespace, including detached work, even if the Viewer cannot run finally.
 const parentDeath = "import ctypes,os,signal,sys\np=int(sys.argv[1])\nif os.getppid()!=p: sys.exit(69)\nif ctypes.CDLL(None).prctl(1,signal.SIGKILL,0,0,0)!=0: sys.exit('setup parent-death isolation is unavailable')\nif os.getppid()!=p: sys.exit(69)\nos.execvp(sys.argv[2],sys.argv[2:])";
 
+export type SetupExecutionPorts = {
+  planMemory: typeof planAgentMemory;
+  planCpu: typeof planAgentCpu;
+};
+
 /** Setup gets no account credentials. Only its checkout and scratch are
  * writable. PID isolation reaps detached children when the command ends.
  * Unsupported hosts refuse before executing repository code. */
-export const executeSetupRecipe: SetupExecution = async (root, recipe, sandbox, signal, authorize) => {
+export const executeSetupRecipe: SetupExecution = (root, recipe, sandbox, signal, authorize) =>
+  runSetupRecipe(root, recipe, sandbox, signal, authorize);
+
+export async function runSetupRecipe(root: string, recipe: ReviewedSetupRecipe, sandbox: PipelineSandbox,
+  signal?: AbortSignal, authorize?: () => void,
+  ports: SetupExecutionPorts = { planMemory: planAgentMemory, planCpu: planAgentCpu }): Promise<ExecResult> {
   if (signal?.aborted) return { code: null, stdout: "", stderr: "setup cancelled" };
   if (process.platform !== "linux") throw new Error("project setup requires Linux filesystem isolation; no command was run");
   const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "delegatus-setup-"));
@@ -40,17 +50,21 @@ export const executeSetupRecipe: SetupExecution = async (root, recipe, sandbox, 
       await fs.writeFile(snapshot, bytes, { mode: 0o400 });
       args.push("--ro-bind", snapshot, path.join(root, name));
     }
-    const interpreter = recipe.command[0] === "bun" ? process.execPath : `/usr/bin/${recipe.command[0]}`;
+    const interpreter = await setupInterpreter(recipe.command[0]!);
+    const emptyConfig = path.join(scratch, "empty-bunfig.toml");
+    await fs.writeFile(emptyConfig, "", { mode: 0o400 });
+    const flags = recipe.command[0] === "python3" ? ["-I"]
+      : recipe.command[0] === "bun" ? ["--no-env-file", `--config=${emptyConfig}`] : [];
     args.push("--ro-bind", interpreter, path.join(scratch, "interpreter"));
     args.push("--ro-bind", process.execPath, path.join(scratch, "bin/bun"));
     const env = { PATH: `${scratch}/bin:/usr/bin:/bin`, HOME: privateHome, XDG_CONFIG_HOME: path.join(privateHome, "config"),
       LLV_STATE_DIR: path.join(privateHome, "state"), TMPDIR: scratch, LANG: "C.UTF-8" };
     args.push("--clearenv", ...Object.entries(env).flatMap(([key, value]) => ["--setenv", key, value]),
-      "--chdir", path.resolve(root, recipe.cwd), "--", path.join(scratch, "interpreter"), ...recipe.command.slice(1));
+      "--chdir", path.resolve(root, recipe.cwd), "--", path.join(scratch, "interpreter"), ...flags, ...recipe.command.slice(1));
     const { agentRegistry } = await import("@/lib/agent/registry");
     const liveAgents = Object.values(agentRegistry().readOnlySnapshot().entries)
       .filter(entry => entry.structuredHost && entry.status !== "dead" && entry.status !== "unhosted").length + 1;
-    const plan = planAgentMemory({ engine: "setup", sessionKey: root, liveAgents, cpu: planAgentCpu("work") });
+    const plan = ports.planMemory({ engine: "setup", sessionKey: root, liveAgents, cpu: ports.planCpu("work") });
     memory = plan ? new AgentMemoryCell(plan) : null;
     authorize?.();
     if (signal?.aborted) return { code: null, stdout: "", stderr: "setup cancelled" };
@@ -82,4 +96,4 @@ export const executeSetupRecipe: SetupExecution = async (root, recipe, sandbox, 
       });
     });
   } finally { memory?.close(); await fs.rm(scratch, { recursive: true, force: true }); }
-};
+}

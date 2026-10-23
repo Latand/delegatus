@@ -10,6 +10,23 @@ export type SetupRecipe = { command: string[]; cwd: string };
 export type ApprovedSetupRecipe = SetupRecipe & { hash: string; approvedAt: string };
 export type ReviewedSetupRecipe = SetupRecipe & { hash: string; files: Record<string, Buffer> };
 
+/** Resolve only system trees mounted read-only by the setup sandbox. */
+export async function setupInterpreter(executable: string): Promise<string> {
+  const candidates = executable === "bun" ? [process.execPath]
+    : (process.env.PATH ?? "").split(path.delimiter).filter(Boolean).map(directory => path.resolve(directory, executable));
+  for (const candidate of candidates) {
+    try {
+      const resolved = await fs.realpath(candidate);
+      if (executable !== "bun" && !["/usr/", "/bin/"].some(prefix => resolved.startsWith(prefix))) continue;
+      await fs.access(resolved, syncFs.constants.X_OK);
+      if ((await fs.stat(resolved)).isFile()) return resolved;
+    } catch (error) {
+      if (!["ENOENT", "ENOTDIR", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+    }
+  }
+  throw new Error("setup interpreter is unavailable in the sandbox's system trees");
+}
+
 const digest = (value: string | Buffer) => crypto.createHash("sha256").update(value).digest("hex");
 
 function relative(value: string): boolean {
@@ -64,6 +81,9 @@ async function captureFile(file: string): Promise<Buffer> {
  * Script bytes are captured once and mounted read-only at execution. */
 export async function reviewSetupRecipe(root: string, value: unknown): Promise<ReviewedSetupRecipe> {
   const recipe = setupRecipeOf(value);
+  const interpreter = await setupInterpreter(recipe.command[0]!);
+  const install = recipe.command[1] === "install";
+  if (install && recipe.cwd !== ".") throw new Error("frozen setup installs require the repository root");
   const cwd = await setupPath(root, recipe.cwd);
   if (!(await fs.stat(cwd)).isDirectory()) throw new Error("setup cwd must be a directory");
   const files: Record<string, Buffer> = {};
@@ -84,9 +104,25 @@ export async function reviewSetupRecipe(root: string, value: unknown): Promise<R
       if (arg === recipe.command[1] || arg.includes("/") || /\.(?:sh|[cm]?[jt]sx?|py)$/u.test(arg)) throw new Error("a setup script or file argument is missing");
     }
   }
-  if (recipe.command[1] === "install" && (!files[path.posix.join(recipe.cwd, "package.json")]
+  if (install && (!files[path.posix.join(recipe.cwd, "package.json")]
     || !["bun.lock", "bun.lockb"].some(name => files[path.posix.join(recipe.cwd, name)]))) throw new Error("frozen setup requires a manifest and Bun lockfile");
-  const hash = digest(JSON.stringify({ ...recipe, files: Object.keys(files).sort().map(name => [name, digest(files[name]!)]) }));
+  if (install) {
+    const manifest = JSON.parse(files["package.json"]!.toString("utf8"));
+    if (Object.hasOwn(manifest, "workspaces")) throw new Error("workspace setup installs are unsupported; review a direct setup script instead");
+    for (const key of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]) {
+      if (manifest[key] && Object.values(manifest[key]).some(value => typeof value === "string" && /^(?:file:|link:|workspace:|[./])/u.test(value))) {
+        throw new Error("local dependency setup installs are unsupported; review a direct setup script instead");
+      }
+    }
+    // npm configuration may redirect execution/install inputs. Its absence is
+    // pinned as empty bytes too, and mounted over any later replacement.
+    try { files[".npmrc"] = await captureFile(await setupPath(root, ".npmrc")); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      files[".npmrc"] = Buffer.alloc(0);
+    }
+  }
+  const hash = digest(JSON.stringify({ ...recipe, interpreter, files: Object.keys(files).sort().map(name => [name, digest(files[name]!)]) }));
   return { ...recipe, hash, files };
 }
 

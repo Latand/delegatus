@@ -1,6 +1,9 @@
 import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
+import net from "node:net";
+import { AgentMemoryCell } from "@/lib/runtime/agentMemory";
+import type { AgentCpuPlan } from "@/lib/runtime/cpuPlacement";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
@@ -8,7 +11,7 @@ import { procBackend } from "@/lib/proc";
 import { descendantPids } from "@/lib/proc/memory";
 import { ownFixtureTree, stopFixtureIdentity, stopFixtureTree } from "@/lib/testing/fixtureProcess";
 import { reviewSetupRecipe } from "@/lib/projects/setupRecipe";
-import { executeSetupRecipe } from "./setupExecution";
+import { executeSetupRecipe, runSetupRecipe } from "./setupExecution";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "setup-execution-"));
 const checkout = path.join(root, "checkout"); fs.mkdirSync(checkout);
@@ -41,7 +44,7 @@ printf reviewed
       return;
     }
     const result = await executeSetupRecipe(checkout, recipe, "restricted");
-    if (process.env.SETUP_REQUIRE_ISOLATION === "1") expect(result.code).toBe(0);
+    if (process.env.SETUP_REQUIRE_ISOLATION === "1") expect(result.code, result.stderr).toBe(0);
     if (result.code === 0) {
       expect(result.stdout).toBe("reviewed");
       expect(fs.readFileSync(path.join(checkout, "setup-created"), "utf8")).toBe("ready");
@@ -69,7 +72,7 @@ test.skipIf(process.platform !== "linux")("losing the real setup owner ends its 
   const marker = path.join(checkout, "owner-ready");
   fs.writeFileSync(path.join(checkout, "owner.sh"), "setsid sleep 30 &\nprintf ready > owner-ready\nwait\n");
   const source = `import { reviewSetupRecipe } from ${JSON.stringify(path.resolve("src/lib/projects/setupRecipe.ts"))};
-    import { executeSetupRecipe } from ${JSON.stringify(path.resolve("src/lib/pipelines/setupExecution.ts"))};
+    import { executeSetupRecipe, runSetupRecipe } from ${JSON.stringify(path.resolve("src/lib/pipelines/setupExecution.ts"))};
     const root=process.env.SETUP_CHECKOUT;
     const recipe=await reviewSetupRecipe(root,{command:['sh','owner.sh'],cwd:'.'});
     console.log(JSON.stringify(await executeSetupRecipe(root,recipe,'restricted')));`;
@@ -99,4 +102,92 @@ test.skipIf(process.platform !== "linux")("losing the real setup owner ends its 
     await stopFixtureTree(child);
     for (const identity of owned) await stopFixtureIdentity(identity);
   }
+});
+
+function requireExecution(result: { code: number | null; stderr: string }) {
+  if (process.env.SETUP_REQUIRE_ISOLATION === "1") expect(result.code, result.stderr).toBe(0);
+  if (result.code !== 0) { expect(result.stderr).toMatch(isolationRefusal); return false; }
+  return true;
+}
+
+test.skipIf(process.platform !== "linux")("Python ignores adjacent module shadows after approval", async () => {
+  const directory = fs.mkdtempSync(path.join(root, "python-"));
+  fs.mkdirSync(path.join(directory, "scripts"));
+  fs.writeFileSync(path.join(directory, "scripts/setup.py"), 'import json\nprint("reviewed", json.dumps(1))\n');
+  const input = { command: ["python3", "scripts/setup.py"], cwd: "." };
+  const approved = await reviewSetupRecipe(directory, input);
+  fs.writeFileSync(path.join(directory, "scripts/json.py"), 'open("injected", "w").write("wrong")\n');
+  expect((await reviewSetupRecipe(directory, input)).hash).toBe(approved.hash);
+  const result = await executeSetupRecipe(directory, approved, "restricted");
+  if (requireExecution(result)) expect(result.stdout.trim()).toBe("reviewed 1");
+  expect(fs.existsSync(path.join(directory, "injected"))).toBe(false);
+});
+
+test.skipIf(process.platform !== "linux")("Bun ignores checkout preload config added after approval", async () => {
+  const directory = fs.mkdtempSync(path.join(root, "bun-"));
+  fs.writeFileSync(path.join(directory, "setup.ts"), 'if (process.env.SETUP_DOTENV) throw new Error("unreviewed environment"); console.log("reviewed")');
+  const input = { command: ["bun", "setup.ts"], cwd: "." };
+  const approved = await reviewSetupRecipe(directory, input);
+  fs.writeFileSync(path.join(directory, "bunfig.toml"), 'preload=["./evil.ts"]');
+  fs.writeFileSync(path.join(directory, ".env"), "SETUP_DOTENV=1\n");
+  fs.writeFileSync(path.join(directory, "evil.ts"), 'await Bun.write("injected", "wrong"); console.log("preloaded")');
+  expect((await reviewSetupRecipe(directory, input)).hash).toBe(approved.hash);
+  const result = await executeSetupRecipe(directory, approved, "restricted");
+  if (requireExecution(result)) expect(result.stdout.trim()).toBe("reviewed");
+  expect(fs.existsSync(path.join(directory, "injected"))).toBe(false);
+});
+
+test.skipIf(process.platform !== "linux")("restricted setup cannot reach an owned loopback listener while full setup can", async () => {
+  let connections = 0;
+  const server = net.createServer(socket => { connections++; socket.end("owned"); });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const port = (server.address() as net.AddressInfo).port;
+    const directory = fs.mkdtempSync(path.join(root, "network-"));
+    fs.writeFileSync(path.join(directory, "setup.py"), `import socket\ntry:\n s=socket.create_connection(("127.0.0.1", ${port}), timeout=1)\n print(s.recv(32).decode())\n s.close()\nexcept OSError:\n print("isolated")\n`);
+    const recipe = await reviewSetupRecipe(directory, { command: ["python3", "setup.py"], cwd: "." });
+    const restricted = await executeSetupRecipe(directory, recipe, "restricted");
+    if (!requireExecution(restricted)) return;
+    expect(restricted.stdout.trim()).toBe("isolated"); expect(connections).toBe(0);
+    const full = await executeSetupRecipe(directory, recipe, "full");
+    expect(full.code).toBe(0); expect(full.stdout.trim()).toBe("owned"); expect(connections).toBe(1);
+  } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
+});
+
+test.skipIf(process.platform !== "linux")("setup launches through the memory cell with the work CPU plan", async () => {
+  const directory = fs.mkdtempSync(path.join(root, "scope-"));
+  fs.writeFileSync(path.join(directory, "setup.sh"), "printf scoped");
+  const recipe = await reviewSetupRecipe(directory, { command: ["sh", "setup.sh"], cwd: "." });
+  const cpu: AgentCpuPlan = { workload: "work", slice: "delegatus-agents-work.slice", weight: 100, quotaPercent: 300, periodMs: 20, systemdVersion: 255 };
+  const original = AgentMemoryCell.prototype.wrapSpawn;
+  let wrapped = 0, launched = 0;
+  // Keep real process and sandbox coverage while observing the cell boundary.
+  // Scope command generation is covered by agentMemory's own tests.
+  AgentMemoryCell.prototype.wrapSpawn = function(base) {
+    wrapped++; expect(this.plan.mechanism).toBe("scope"); expect(this.plan.cpu).toBe(cpu); expect(this.plan.limitBytes).toBe(512 * 1024 * 1024);
+    return (command, args, options) => { launched++; return base!(command, args, options); };
+  };
+  try {
+    const result = await runSetupRecipe(directory, recipe, "restricted", undefined, undefined, {
+      planCpu: workload => { expect(workload).toBe("work"); return cpu; },
+      planMemory: input => {
+        expect(input.cpu).toBe(cpu); expect(input.engine).toBe("setup"); expect(input.sessionKey).toBe(directory);
+        return { mechanism: "scope", mode: "scope", platform: "linux", limitBytes: 512 * 1024 * 1024, budgetBytes: 1024 ** 3,
+          reserveBytes: 0, totalBytes: 2 * 1024 ** 3, score: 500, unit: "setup-fixture.scope", slice: "delegatus-agents.slice", viewerUnit: null, systemdVersion: 255, cpu: input.cpu };
+      },
+    });
+    expect(wrapped).toBe(1); expect(launched).toBe(1);
+    if (requireExecution(result)) expect(result.stdout).toBe("scoped");
+  } finally { AgentMemoryCell.prototype.wrapSpawn = original; }
+});
+
+test.skipIf(process.platform !== "linux")("node is resolved from PATH including system locations outside usr bin", async () => {
+  const directory = fs.mkdtempSync(path.join(root, "node-"));
+  fs.writeFileSync(path.join(directory, "setup.js"), 'console.log("resolved node")');
+  let recipe;
+  try { recipe = await reviewSetupRecipe(directory, { command: ["node", "setup.js"], cwd: "." }); }
+  catch (error) { expect(String(error)).toContain("setup interpreter is unavailable"); return; }
+  const result = await executeSetupRecipe(directory, recipe, "restricted");
+  expect(result.stderr).not.toContain("Can't find source path");
+  if (requireExecution(result)) expect(result.stdout.trim()).toBe("resolved node");
 });

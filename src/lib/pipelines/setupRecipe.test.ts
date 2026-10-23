@@ -168,3 +168,45 @@ test("adopted historical builders and their setup results cannot mark a new chec
   expect(calls).toBe(1);
   expect(current.setup?.stdout).toBe("new output");
 });
+
+test("workspace install manifests are refused before approval, including later lifecycle edits", async () => {
+  const directory = fs.mkdtempSync(path.join(root, "workspace-"));
+  fs.mkdirSync(path.join(directory, "pkg/a"), { recursive: true });
+  fs.writeFileSync(path.join(directory, "package.json"), JSON.stringify({ name: "fixture", workspaces: ["pkg/*"] }));
+  fs.writeFileSync(path.join(directory, "bun.lock"), "{}");
+  const childManifest = path.join(directory, "pkg/a/package.json");
+  for (const scripts of [{}, { postinstall: "echo injected" }]) {
+    fs.writeFileSync(childManifest, JSON.stringify({ name: "fixture-child", scripts }));
+    await expect(reviewSetupRecipe(directory, { command: ["bun", "install", "--frozen-lockfile"], cwd: "." })).rejects.toThrow("workspace setup installs are unsupported");
+  }
+});
+
+test("frozen install pins npm configuration and refuses nested install roots", async () => {
+  const directory = fs.mkdtempSync(path.join(root, "install-"));
+  fs.writeFileSync(path.join(directory, "package.json"), JSON.stringify({ name: "fixture" }));
+  fs.writeFileSync(path.join(directory, "bun.lock"), "{}");
+  const input = { command: ["bun", "install", "--frozen-lockfile"], cwd: "." };
+  const before = await reviewSetupRecipe(directory, input);
+  expect(before.files[".npmrc"]?.length).toBe(0);
+  fs.writeFileSync(path.join(directory, ".npmrc"), "ignore-scripts=true\n");
+  expect((await reviewSetupRecipe(directory, input)).hash).not.toBe(before.hash);
+  await expect(reviewSetupRecipe(directory, { ...input, cwd: "pkg" })).rejects.toThrow("require the repository root");
+});
+
+test("approval refuses a PATH interpreter outside mounted system trees", async () => {
+  const directory = fs.mkdtempSync(path.join(root, "unmounted-interpreter-"));
+  fs.writeFileSync(path.join(directory, "node"), "#!/bin/sh\necho unreviewed\n", { mode: 0o755 });
+  const prior = process.env.PATH;
+  process.env.PATH = directory;
+  try { await expect(reviewSetupRecipe(root, { command: ["node", "setup.sh"], cwd: "." })).rejects.toThrow("setup interpreter is unavailable"); }
+  finally { if (prior === undefined) delete process.env.PATH; else process.env.PATH = prior; }
+});
+
+test("frozen install refuses local dependency manifests outside its reviewed inputs", async () => {
+  const directory = fs.mkdtempSync(path.join(root, "local-dependency-"));
+  fs.writeFileSync(path.join(directory, "bun.lock"), "{}");
+  for (const value of ["file:pkg/a", "link:pkg/a", "workspace:*", "./pkg/a"]) {
+    fs.writeFileSync(path.join(directory, "package.json"), JSON.stringify({ dependencies: { fixture: value } }));
+    await expect(reviewSetupRecipe(directory, { command: ["bun", "install", "--frozen-lockfile"], cwd: "." })).rejects.toThrow("local dependency setup installs are unsupported");
+  }
+});

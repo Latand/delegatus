@@ -17,8 +17,16 @@ direct repository script with `sh`, `bash`, `node`, `python3` or `bun`, or
 Put shell expressions in the reviewed script. Package-manager script aliases,
 inline shell expressions, absolute file arguments, traversal and symbolic links
 are refused. Script and file arguments must be regular files of at most 1 MiB.
-The command, working directory and contents of its file arguments
-are hashed together. A frozen Bun install also pins its manifest and lockfile.
+The command, working directory, resolved interpreter location and contents of
+its file arguments are hashed together. A frozen Bun install also pins its manifest, lockfile and
+`.npmrc` (including an absent configuration). Installs require the repository
+root; workspace and local dependency installs are refused in this slice. Use a
+reviewed direct script for those.
+Python runs in isolated mode, which excludes checkout module shadows. Bun runs
+with an empty explicit configuration and automatic `.env` loading disabled,
+so checkout preloads cannot execute.
+Interpreters resolve on the Viewer's PATH in the read-only system trees; an
+unavailable interpreter refuses approval.
 Approval covers those direct inputs; programs, downloads and scripts invoked
 inside a script remain the operator's responsibility to review.
 
@@ -32,7 +40,9 @@ inside a script remain the operator's responsibility to review.
    and `recipe: null` disables it.
 
 The pipeline reads this setting before its first builder, after the stage's CPU
-admission and outside the controller mutation lease. Setup uses the work CPU
+admission and outside the controller mutation lease. The existing bounded
+controller jobs own setup by activation, so a running setup leaves controller
+ticks and other lanes free to advance. Setup uses the work CPU
 scope and the agent memory policy. It runs in the new pipeline checkout, with
 private HOME, configuration, state and temporary directories. It receives no
 account credentials. System tools are read-only; only the checkout and private
@@ -47,7 +57,8 @@ The scope launcher dies with its parent; Bubblewrap ends detached descendants
 with its PID namespace. Success, exit code, working directory and redacted output
 are retained on the stage attempt. Each output stream is displayed up to 16,000
 characters, with an ellipsis when shortened. Expand **Project setup** on the
-stage or phone pipeline screen to inspect it.
+stage or phone pipeline screen to inspect it. Each entry names its stage and
+attempt, retaining a failed setup beside its successful retry.
 
 A failure parks the stage before the builder starts. Inspect the output, repair
 the environment, then use the existing **Retry stage** action. The failed

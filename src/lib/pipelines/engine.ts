@@ -1,5 +1,6 @@
 import { FLOW_ARCHIVE, STAGE_RETIREMENT, hasRetiredStage } from "@/lib/flows/retirement";
 import { preparePipelineSetup } from "./git";
+import { projectSetupRecipe } from "@/lib/projects/setupRecipe";
 import { ensureStagePullRequest, stagePullRequestProducer, type StagePullRequestResult } from "./stagePullRequest";
 import { pipelinePauseInputSchema } from "./pauseMetadata";
 import { stageAttemptPushRefusal, settleStageAttemptPush } from "./stageAttemptPush";
@@ -6641,157 +6642,174 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
         && reservation.owner?.startIdentity === owner.startIdentity && reservation.owner?.bootEpoch === owner.bootEpoch;
       if (reservation.owner && !sameProcess && processIdentityStatus(reservation.owner) !== "dead") continue;
       activeActivations.add(reservation.id);
-      try {
-        const claimed = await withPipelineMutation(async (pipelines, persist) => {
-          const pipeline = pipelines.find((item) => item.id === snapshot.id);
-          const attempt = pipeline && runFor(pipeline, run.stageId)?.attempts.find((item) => item.n === original.n);
-          if (!pipeline || hasRetiredStage(pipeline.stages) || !attempt?.activation || JSON.stringify(attempt.activation) !== JSON.stringify(reservation)) return null;
-          // The mutation lease may have waited while update admission closed.
-          if (ports.drainHold?.() && activationAwaitingAdmission(attempt)) {
-            holdActivationAdmission(attempt);
-            await persist([pipeline]);
-            return null;
-          }
-          attempt.activation.owner = owner;
-          if (reservation.phase !== "reserved") attempt.activation.replay = true;
-          await persist([pipeline]);
-          return structuredClone(pipeline);
-        });
-        if (!claimed) continue;
-        const stage = claimed.stages.find((item) => item.id === run.stageId);
-        const attempt = runFor(claimed, run.stageId)!.attempts.find((item) => item.n === original.n)!;
-        const activation = attempt.activation!;
-        let expectedAttempt = JSON.stringify(attempt);
-        let dispatched = activation.phase === "dispatching" || activation.phase === "settled";
-        const checkpoint = async () => {
-          await withPipelineMutation(async (pipelines, persist) => {
-            const live = pipelines.find((item) => item.id === claimed.id);
-            const current = live && runFor(live, run.stageId)?.attempts.find((item) => item.n === attempt.n);
-            if (!live || hasRetiredStage(live.stages) || !current || activationFence(live) !== activation.fence
-              || JSON.stringify(current) !== expectedAttempt) throw new ActivationSuperseded();
-            live.state = claimed.state;
-            live.stateDetail = claimed.stateDetail;
-            live.cursor = structuredClone(claimed.cursor);
-            activation.fence = activationFence(live);
-            for (const key of Object.keys(current)) if (!(key in attempt)) Reflect.deleteProperty(current, key);
-            Object.assign(current, structuredClone(attempt));
-            adoptPipelineFallbackTask(live, tasksForBinding());
-            await persist([live]);
-            expectedAttempt = JSON.stringify(current);
-            if (activation.phase === "dispatching") dispatched = true;
-          });
-        };
-        let finished = false;
-        let admissionHeld = false;
+      const executeActivation = async () => {
         try {
-          if (activation.phase === "settled") {
-            finished = true;
-          } else if (activation.phase === "dispatching") {
-            // A crash after the dispatch permit can never authorize a second call.
-            const receipt = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
-            if (!receipt || !["completed", "failed", "conflicted", "path-pending"].includes(receipt.state)) continue;
-            Object.assign(attempt, { sessionId: receipt.sessionId, agentPath: receipt.transcript,
-              paneId: receipt.paneId, conversationId: receipt.conversationId });
-            attempt.state = receipt.state === "completed" ? "running" : "spawning";
-            if (claimed.cursor?.stageId === run.stageId) claimed.cursor.state = attempt.state;
-            finished = true;
-          } else {
-            if (!stage || activation.cancelRequested || activationFence(claimed) !== activation.fence) throw new ActivationSuperseded();
-            spawnsThisProcess.add(attemptKey(claimed, stage, attempt));
-            await spawnRunStage(claimed, stage, attempt, activation.input, activation.startedAt, ports, checkpoint);
-            finished = true;
-          }
-        } catch (error) {
-          // No receipt was admitted. Retain the checkpoint and its original
-          // downstream key so release can recover it without another attempt.
-          if (error instanceof PipelineAdmissionHeld) { admissionHeld = true; continue; }
-          if (!(error instanceof ActivationSuperseded)) throw error;
-          // The callback has not granted a permit when its fresh-state CAS fails.
-          finished = true;
-        } finally {
-          let close = false;
-          await withPipelineMutation(async (pipelines, persist) => {
-            const live = pipelines.find((item) => item.id === claimed.id);
-            const current = live && runFor(live, run.stageId)?.attempts.find((item) => item.n === attempt.n);
-            if (!live || hasRetiredStage(live.stages) || current?.activation?.id !== activation.id) return;
-            if (!finished) {
-              // Leave uncertain dispatch in custody, readable by every generation.
-              if (admissionHeld) holdActivationAdmission(current);
-              else delete current.activation.owner;
-              await persist([live]);
-              return;
+          const claimed = await withPipelineMutation(async (pipelines, persist) => {
+            const pipeline = pipelines.find((item) => item.id === snapshot.id);
+            const attempt = pipeline && runFor(pipeline, run.stageId)?.attempts.find((item) => item.n === original.n);
+            if (!pipeline || hasRetiredStage(pipeline.stages) || !attempt?.activation || JSON.stringify(attempt.activation) !== JSON.stringify(reservation)) return null;
+            // The mutation lease may have waited while update admission closed.
+            if (ports.drainHold?.() && activationAwaitingAdmission(attempt)) {
+              holdActivationAdmission(attempt);
+              await persist([pipeline]);
+              return null;
             }
-            close = current.activation.closeRequested === true;
-            if (close) live.activationCloseRequested = true;
-            const unchanged = activationFence(live) === activation.fence && JSON.stringify(current) === expectedAttempt;
-            if (unchanged) {
-              for (const key of Object.keys(current)) if (!(key in attempt)) Reflect.deleteProperty(current, key);
-              Object.assign(current, structuredClone(attempt));
+            attempt.activation.owner = owner;
+            if (reservation.phase !== "reserved") attempt.activation.replay = true;
+            await persist([pipeline]);
+            return structuredClone(pipeline);
+          });
+          if (!claimed) return;
+          const stage = claimed.stages.find((item) => item.id === run.stageId);
+          const attempt = runFor(claimed, run.stageId)!.attempts.find((item) => item.n === original.n)!;
+          const activation = attempt.activation!;
+          let expectedAttempt = JSON.stringify(attempt);
+          let dispatched = activation.phase === "dispatching" || activation.phase === "settled";
+          const checkpoint = async () => {
+            await withPipelineMutation(async (pipelines, persist) => {
+              const live = pipelines.find((item) => item.id === claimed.id);
+              const current = live && runFor(live, run.stageId)?.attempts.find((item) => item.n === attempt.n);
+              if (!live || hasRetiredStage(live.stages) || !current || activationFence(live) !== activation.fence
+                || JSON.stringify(current) !== expectedAttempt) throw new ActivationSuperseded();
               live.state = claimed.state;
               live.stateDetail = claimed.stateDetail;
               live.cursor = structuredClone(claimed.cursor);
-            } else if (dispatched) {
-              // Evidence belongs to this attempt even when control or graph state moved.
-              // Do not restore a borrowed cursor, verdict, graph or pipeline state.
-              Object.assign(current, { launchId: attempt.launchId, conversationId: attempt.conversationId,
-                sessionId: attempt.sessionId, agentPath: attempt.agentPath, paneId: attempt.paneId,
-                accountId: attempt.accountId });
-              if (!current.completedAt && !current.verdict) current.state = attempt.state;
+              activation.fence = activationFence(live);
+              for (const key of Object.keys(current)) if (!(key in attempt)) Reflect.deleteProperty(current, key);
+              Object.assign(current, structuredClone(attempt));
+              adoptPipelineFallbackTask(live, tasksForBinding());
+              await persist([live]);
+              expectedAttempt = JSON.stringify(current);
+              if (activation.phase === "dispatching") dispatched = true;
+            });
+          };
+          let finished = false;
+          let admissionHeld = false;
+          try {
+            if (activation.phase === "settled") {
+              finished = true;
+            } else if (activation.phase === "dispatching") {
+              // A crash after the dispatch permit can never authorize a second call.
+              const receipt = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
+              if (!receipt || !["completed", "failed", "conflicted", "path-pending"].includes(receipt.state)) return;
+              Object.assign(attempt, { sessionId: receipt.sessionId, agentPath: receipt.transcript,
+                paneId: receipt.paneId, conversationId: receipt.conversationId });
+              attempt.state = receipt.state === "completed" ? "running" : "spawning";
+              if (claimed.cursor?.stageId === run.stageId) claimed.cursor.state = attempt.state;
+              finished = true;
             } else {
-              // A cancelled callback can follow registry admission. Bind its
-              // receipt before dropping activation custody, or the next tick
-              // could reserve another launch under a fresh handshake key.
-              const receipt = current.activation.phase === "reserving"
-                ? agentRegistry().spawnReceiptForClientAttempt(current.activation.clientAttemptId) : null;
-              if (receipt && (receipt.engine !== current.activation.input.role.engine || receipt.cwd !== current.activation.input.cwd
-                || receipt.transport !== "structured" || !agentRegistry().conversationMemberships(receipt.conversationId).some(member =>
-                  member.kind === "pipeline" && member.containerId === live.id && member.stageId === run.stageId
-                  && member.slot === `${run.stageId}:${current.n}` && member.round === current.n
-                  && member.role === current.activation!.input.membership.role))) {
-                // A client key alone cannot adopt another operation's host.
-                delete current.activation.owner;
-                live.stateDetail = "stage spawn deferred: waiting for the original stage membership, runtime and worktree to reconcile; original activation retained";
+              if (!stage || activation.cancelRequested || activationFence(claimed) !== activation.fence) throw new ActivationSuperseded();
+              spawnsThisProcess.add(attemptKey(claimed, stage, attempt));
+              await spawnRunStage(claimed, stage, attempt, activation.input, activation.startedAt, ports, checkpoint);
+              finished = true;
+            }
+          } catch (error) {
+            // No receipt was admitted. Retain the checkpoint and its original
+            // downstream key so release can recover it without another attempt.
+            if (error instanceof PipelineAdmissionHeld) { admissionHeld = true; return; }
+            if (!(error instanceof ActivationSuperseded)) throw error;
+            // The callback has not granted a permit when its fresh-state CAS fails.
+            finished = true;
+          } finally {
+            let close = false;
+            await withPipelineMutation(async (pipelines, persist) => {
+              const live = pipelines.find((item) => item.id === claimed.id);
+              const current = live && runFor(live, run.stageId)?.attempts.find((item) => item.n === attempt.n);
+              if (!live || hasRetiredStage(live.stages) || current?.activation?.id !== activation.id) return;
+              if (!finished) {
+                // Leave uncertain dispatch in custody, readable by every generation.
+                if (admissionHeld) holdActivationAdmission(current);
+                else delete current.activation.owner;
                 await persist([live]);
                 return;
               }
-              const controlsCursor = live.cursor?.stageId === run.stageId && currentAttempt(live, run.stageId)?.n === current.n;
-              const settled = !!(current.completedAt || current.verdict || current.report)
-                || ["passed", "failed", "needs_decision", "skipped"].includes(current.state);
-              if (receipt) {
-                Object.assign(current, { launchId: receipt.launchId, conversationId: receipt.conversationId,
-                  accountId: receipt.accountId ?? current.accountId ?? null });
-                if (!settled) { current.state = "spawning"; current.startedAt ??= activation.startedAt; }
-                if (controlsCursor && !settled) live.cursor!.state = "spawning";
-                if (live.state === "running") live.stateDetail = "stage spawn deferred: reconciling the original launch receipt";
-                if (!controlsCursor || settled) {
-                  // An earlier attempt's uncertain launch still fences the
-                  // replacement. Only receipt settlement releases this key.
-                  current.activation.phase = "dispatching";
+              close = current.activation.closeRequested === true;
+              if (close) live.activationCloseRequested = true;
+              const unchanged = activationFence(live) === activation.fence && JSON.stringify(current) === expectedAttempt;
+              if (unchanged) {
+                for (const key of Object.keys(current)) if (!(key in attempt)) Reflect.deleteProperty(current, key);
+                Object.assign(current, structuredClone(attempt));
+                live.state = claimed.state;
+                live.stateDetail = claimed.stateDetail;
+                live.cursor = structuredClone(claimed.cursor);
+              } else if (dispatched) {
+                // Evidence belongs to this attempt even when control or graph state moved.
+                // Do not restore a borrowed cursor, verdict, graph or pipeline state.
+                Object.assign(current, { launchId: attempt.launchId, conversationId: attempt.conversationId,
+                  sessionId: attempt.sessionId, agentPath: attempt.agentPath, paneId: attempt.paneId,
+                  accountId: attempt.accountId });
+                if (!current.completedAt && !current.verdict) current.state = attempt.state;
+              } else {
+                // A cancelled callback can follow registry admission. Bind its
+                // receipt before dropping activation custody, or the next tick
+                // could reserve another launch under a fresh handshake key.
+                const receipt = current.activation.phase === "reserving"
+                  ? agentRegistry().spawnReceiptForClientAttempt(current.activation.clientAttemptId) : null;
+                if (receipt && (receipt.engine !== current.activation.input.role.engine || receipt.cwd !== current.activation.input.cwd
+                  || receipt.transport !== "structured" || !agentRegistry().conversationMemberships(receipt.conversationId).some(member =>
+                    member.kind === "pipeline" && member.containerId === live.id && member.stageId === run.stageId
+                    && member.slot === `${run.stageId}:${current.n}` && member.round === current.n
+                    && member.role === current.activation!.input.membership.role))) {
+                  // A client key alone cannot adopt another operation's host.
                   delete current.activation.owner;
+                  live.stateDetail = "stage spawn deferred: waiting for the original stage membership, runtime and worktree to reconcile; original activation retained";
                   await persist([live]);
                   return;
                 }
-              } else if (!settled) {
-                current.state = "pending";
-                current.startedAt = null;
-                current.definition = null;
-                if (controlsCursor) live.cursor!.state = "pending";
+                const controlsCursor = live.cursor?.stageId === run.stageId && currentAttempt(live, run.stageId)?.n === current.n;
+                const settled = !!(current.completedAt || current.verdict || current.report)
+                  || ["passed", "failed", "needs_decision", "skipped"].includes(current.state);
+                if (receipt) {
+                  Object.assign(current, { launchId: receipt.launchId, conversationId: receipt.conversationId,
+                    accountId: receipt.accountId ?? current.accountId ?? null });
+                  if (!settled) { current.state = "spawning"; current.startedAt ??= activation.startedAt; }
+                  if (controlsCursor && !settled) live.cursor!.state = "spawning";
+                  if (live.state === "running") live.stateDetail = "stage spawn deferred: reconciling the original launch receipt";
+                  if (!controlsCursor || settled) {
+                    // An earlier attempt's uncertain launch still fences the
+                    // replacement. Only receipt settlement releases this key.
+                    current.activation.phase = "dispatching";
+                    delete current.activation.owner;
+                    await persist([live]);
+                    return;
+                  }
+                } else if (!settled) {
+                  current.state = "pending";
+                  current.startedAt = null;
+                  current.definition = null;
+                  if (controlsCursor) live.cursor!.state = "pending";
+                }
               }
-            }
-            // The activation's captured cursor may still say spawning after a
-            // privacy retry was checkpointed. Without launch evidence, keep
-            // that durable wait eligible for the next controller tick.
-            if (current.roleMemoryWait && !current.completedAt && !current.verdict && !current.report
-              && !["passed", "failed", "needs_decision", "skipped"].includes(current.state)
-              && !current.launchId && !current.conversationId && !current.agentPath && !current.paneId) {
-              current.state = "pending";
-              if (live.cursor?.stageId === run.stageId && currentAttempt(live, run.stageId)?.n === current.n) live.cursor.state = "pending";
-            }
-            delete current.activation;
-            await persist([live]);
-          });
+              // The activation's captured cursor may still say spawning after a
+              // privacy retry was checkpointed. Without launch evidence, keep
+              // that durable wait eligible for the next controller tick.
+              if (current.roleMemoryWait && !current.completedAt && !current.verdict && !current.report
+                && !["passed", "failed", "needs_decision", "skipped"].includes(current.state)
+                && !current.launchId && !current.conversationId && !current.agentPath && !current.paneId) {
+                current.state = "pending";
+                if (live.cursor?.stageId === run.stageId && currentAttempt(live, run.stageId)?.n === current.n) live.cursor.state = "pending";
+              }
+              delete current.activation;
+              await persist([live]);
+            });
+          }
+        } finally { activeActivations.delete(reservation.id); }
+      };
+      // Setup may own a three-minute command. The existing bounded controller
+      // jobs own it independently of this drain and its admission polling.
+      let background = !!original.setup;
+      if (!background && [null, "builder"].includes(original.effectiveRole.roleId)) {
+        try { background = !!projectSetupRecipe(snapshot.project); }
+        catch { /* The ordinary activation parks unreadable approvals. */ }
+      }
+      if (background) {
+        if (!startPipelineControllerJob(snapshot.id, executeActivation, () => controllerPipelineVersion(snapshot.id).catch(error => {
+          activeActivations.delete(reservation.id);
+          throw error;
+        }))) {
+          activeActivations.delete(reservation.id);
         }
-      } finally { activeActivations.delete(reservation.id); }
+      } else await executeActivation();
     }
   }
   for (const pipeline of await selectControllerPipelines("activation-close")) {
