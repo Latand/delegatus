@@ -1076,8 +1076,8 @@ port 22 from this machine only.
 | Driver outputs refused or not returned | 75 | `gate-runner: no verdict: outputs were not returned (<reason>)` |
 | End record with code 0, and the runner did not confirm the run's removal (§8.9) | 75 | `gate-runner: no verdict: the run passed, but its cleanup on the runner was not confirmed (<cause>)` |
 | End record with code N ≠ 0, and the removal not confirmed | N | `gate-runner: cleanup on the runner was not confirmed (<cause>); run <id> stays there until the runner's sweep removes it` |
-| Cancelled and stop confirmed | 143 (`SIGTERM`) or 130 (`SIGINT`) | — |
-| Cancelled and stop not confirmed within 15 s | 75 | `gate-runner: no verdict: cancellation was not confirmed on the runner` |
+| Cancelled and the run's removal confirmed (§8.9) | 143 (`SIGTERM`) or 130 (`SIGINT`) | — |
+| Cancelled and the removal not confirmed within 60 s | 75 | `gate-runner: no verdict: cancellation was not confirmed on the runner` |
 
 - **No pass without an end record.** A run that started and lost its end
   record is not rerun here in the same invocation: part of its budget is
