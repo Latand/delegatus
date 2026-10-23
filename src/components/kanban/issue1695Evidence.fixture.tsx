@@ -1,3 +1,15 @@
+import type { Flow as ArchivedReview } from "@/lib/reviewHistory/types";
+import { BulkActionBar } from "@/components/scheme/BulkActionBar";
+import { SchemeBoard } from "@/components/scheme/SchemeBoard";
+import type { SchemeNode } from "@/components/scheme/layout";
+import { deckDisclosureMarker } from "@/components/flows/reviewDeckDisclosure";
+import { RoundDeck } from "@/components/flows/RoundDeck";
+import { directReviewFlows } from "@/components/flows/directReviewGroups";
+import { ReviewHistoryHost } from "@/components/flows/ReviewHistory";
+import { PipelineStrip } from "@/components/pipelines/PipelineStrip";
+import { TaskWorkflowPanel } from "@/components/tasks/TaskWorkflowPanel";
+import { projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
+import { PipelineEditor } from "@/components/pipelines/PipelineEditor";
 import { RelayChatsView } from "@/components/externalRelay/RelayChats";
 import type { RelayChatsPayload } from "@/lib/externalRelay/relayChats";
 import { PipelineTemplatePicker } from "@/components/pipelines/PipelineTemplatePicker";
@@ -160,7 +172,7 @@ const REPORT_PREVIEW_TITLE = REPORT_PREVIEW === "long"
 /* The decision form the seat asks after reading the preview back: the tool's own approval form. */
 const REPORT_FORM_ID = `pr_${"f".repeat(32)}`;
 const reportPreviewLanguage = () => (localStorage.getItem("llv_lang") === "uk" ? "uk" : "en");
-const STAGES = SCENARIO === "stages" || ACCOUNTS || AGENT_REPORT;
+const STAGES = SCENARIO === "retired-review" || SCENARIO === "stages" || ACCOUNTS || AGENT_REPORT;
 /* The pipeline block in variant B (#2072 slice 3, docs/design/desktop-flat-cards.md §9):
    the variant renders' cards, with Ukrainian content when the page is uk. */
 const FLAT = SCENARIO === "pipeline-block";
@@ -4018,7 +4030,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const answered = await WORKSPACES.answer(url, init);
     if (answered) return answered;
   }
-  if (PIPELINE_INIT && url.pathname === "/api/pipelines/preflight") return PIPELINE_INIT === "refused"
+  if ((PIPELINE_INIT || SCENARIO === "retired-review") && url.pathname === "/api/pipelines/preflight") return PIPELINE_INIT === "refused"
     ? new Response(JSON.stringify({ error: "initialization refused for the Delegatus state directory", code: "initialization_refused", path: "/project" }), { status: 403 })
     : json({ ok: true, repoDir: "/project", gitCommonDir: "/project/.git", worktreeParent: "/" });
   if (WORKER_SCENE && url.pathname === "/api/operator/settings") {
@@ -4284,7 +4296,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
            folder it had before Confirm, since a seat read keyed on another folder answers from its own older cache. */
         ...(TELEGRAM_STEP || FM_SEAT ? { projectCwds: { [PROJECT]: "/repo/atlas" } } : {}),
       };
-    const body = JSON.stringify({ ...scoped, ...((DECISIONS || REPORT_PREVIEW) && seatDecisionNotices().length ? { seatDecisions: seatDecisionNotices() } : {}), workflows: [], systemHealth: { tmux: { status: "healthy" }, ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) }, ...(workLinks ? { workLinks } : {}) });
+    const retiredBoard = SCENARIO === "retired-review" && params.get("surface") === "direct-board"
+      ? { files: directFiles, flows: [], pipelines: [], tasks: [], conversationAliases: { "old-direct-subject": "direct-subject" },
+        projectCatalog: [{ project: PROJECT, conversations: directFiles.length, smt: now }] } : {};
+    const body = JSON.stringify({ ...scoped, ...retiredBoard, ...((DECISIONS || REPORT_PREVIEW) && seatDecisionNotices().length ? { seatDecisions: seatDecisionNotices() } : {}), workflows: [], systemHealth: { tmux: { status: "healthy" }, ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) }, ...(workLinks ? { workLinks } : {}) });
     if (COLD_BOARD) {
       const headers = new Headers(init?.headers);
       const required = headers.get("x-llv-files-generation");
@@ -5084,6 +5099,71 @@ function CodexCallbacksScene() {
   </main>;
 }
 
+/* S6 uses production entry controls and the shared grouping/deck, over the same
+   request double as the Viewer. No browser case dispatches archive events here. */
+const retainedBuilder = { ...searchImpl2, projectRoot: "/repo", cwd: "/repo", renamable: true };
+const retainedArchive = reviewFlow("retained-review", retainedBuilder, searchRev, ["REQUEST_CHANGES", "APPROVE"], 60 * MIN) as unknown as ArchivedReview;
+retainedArchive.state = "paused";
+const retainedFlows = flows as unknown as ArchivedReview[];
+const directBuilder = { ...searchImpl1, conversationId: "direct-subject", path: "/direct-subject.jsonl" };
+const directFiles = [directBuilder, ...[1, 2].map(n => ({ ...searchRev, path: `/direct-review-${n}.jsonl`,
+  conversationId: `direct-review-${n}`, mtime: now - (3 - n) * 60,
+  durableLineage: { ...searchRev.durableLineage, role: "reviewer", reviewsConversationId: "old-direct-subject", memberships: [] },
+  review: { ...searchRev.review, verdict: n === 1 ? "REQUEST_CHANGES" : "APPROVE", findingsCount: 1, observedAt: "2026-09-20T00:00:00Z" },
+}))] as FileEntry[];
+directFiles.push({ ...directFiles[2]!, path: "/old-direct-review-2.jsonl", migratedTo: "/direct-review-2.jsonl", mtime: now - 1000 });
+const directGroup = directReviewFlows({ files: directFiles, flows: [], nowMs: now * 1000,
+  conversationAliases: { "old-direct-subject": "direct-subject" }, idleMs: null })[0]!;
+if (SCENARIO === "retired-review" && params.get("surface") === "direct-board") {
+  board.prefs.manual = [directBuilder.path];
+  board.prefs.expanded = [directBuilder.path];
+  board.prefs.favorites = [directBuilder.conversationId!];
+  board.prefs.desktopBoard = "scheme";
+}
+if (SCENARIO === "retired-review" && params.get("surface") === "direct-layout") {
+  localStorage.setItem(`llvReviewDeckCollapsed:${directGroup.id}`, JSON.stringify({ v: "expanded", at: deckDisclosureMarker(directGroup) }));
+}
+function RetiredReviewScene() {
+  const mode = new URLSearchParams(location.search).get("surface");
+  if (mode === "bulk") return <div className="relative h-full"><Viewer />
+    <BulkActionBar project={PROJECT} nodes={[retainedBuilder, directBuilder].map(file => ({ file }) as SchemeNode)}
+      flowsByImpl={new Map()} onRemove={() => {}} onFit={() => {}} onExit={() => {}} /></div>;
+  if (mode === "single" || mode === "direct-layout") {
+    const root = mode === "single" ? retainedBuilder : directBuilder;
+    const groups = mode === "single" ? [] : [directGroup];
+    return <div className="flex h-full"><SchemeBoard project={PROJECT} files={mode === "single" ? [root] : directFiles} groups={[]}
+      manual={[root]} isolatedManualPaths={new Set([root.path])} favorites={new Set([root.conversationId!])}
+      flows={[]} reviewGroups={groups} tasks={[]} drafts={[]} now={now} focus={mode === "single" ? root.path : `deck::${directGroup.id}`} onSelect={() => {}} onClose={() => {}}
+      onDraftClose={() => {}} onDraftSpawned={() => {}} /><ReviewHistoryHost /></div>;
+  }
+  if (mode === "verdict") {
+    const pipeline = pipelines.find(p => p.id === "p-upload")!;
+    const recorded = { ...pipeline, runs: pipeline.runs.map(run => run.stageId === "review-api" ? { ...run,
+      attempts: run.attempts.map(attempt => ({ ...attempt, reviewHeadSha: "a".repeat(40), verdict: { status: "pass" as const, confidence: 0.93,
+        findings: Array.from({ length: 12 }, (_, n) => `${n + 1}. ${L("Recorded finding with a long explanation about retained evidence.", "Збережене зауваження з довгим поясненням щодо матеріалів рев’ю.")}`) } })) } : run) };
+    return <div className="h-full bg-canvas p-2 pt-16 text-primary">
+    <ReviewHistoryHost />
+    <PipelineStrip pipeline={recorded} flows={retainedFlows} files={files}
+      mobile={innerWidth < 640 || innerHeight < 600} />
+  </div>;
+  }
+  if (mode === "task-history") return <div className="relative h-full bg-canvas text-primary">
+    <ReviewHistoryHost />
+    <TaskWorkflowPanel model={projectTaskWorkflows(tasks, pipelines, retainedFlows, files, PROJECT)} initialTaskId="t-upload"
+      onOpen={() => {}} onClose={() => {}} />
+  </div>;
+  if (mode === "conversion") return <PipelineEditor pipeline={{ ...pipelines.find(p => p.id === "p-search")!, state: "draft" }} label="Retained draft" onClose={() => {}} />;
+  if (mode === "decks") return <div className="h-full overflow-auto bg-canvas p-2 text-primary">
+    <ReviewHistoryHost files={[searchRev, ...directFiles]} />
+    {[retainedArchive, directGroup].map((flow, index) => <div key={flow.id} data-retained-deck={index === 0 ? "archive" : "direct"}
+      className="mx-auto mb-8 h-[min(660px,calc(100dvh-32px))] w-full max-w-[600px]">
+      <RoundDeck flow={flow} focusRound={null} rounds={flow.rounds.map(round => ({ key: `r${round.n}`, round,
+        file: index === 0 ? { ...searchRev, proc: null, pid: null, spawn: undefined, renamable: true, waitingInput: { target: "pane", since: (now - 60) * 1000, screenTail: "Retained prompt", menu: null } } : directFiles.find(file => file.path === round.reviewerPath)! }))} />
+    </div>)}
+  </div>;
+  return <Viewer />;
+}
+
 /* The team view is read once the fetch double above answers it. */
 if (WORKSPACES) void refreshTeamView();
 if (HEADER_MENU && new URLSearchParams(location.search).has("member")) void refreshTeamView();
@@ -5094,7 +5174,7 @@ if (dockWidth === "440" || dockWidth === "360") localStorage.setItem(`llvOrchest
 const relayChainEvidence: RelayChatsPayload = { relays: [{ id: "fixture-relay", name: "Example relay", origin: "https://relay.example" }], chats:
   (["member", "admin", "owner"] as const).map((authority, i) => ({ id: `chain-${i}`, relayId: "fixture-relay", relayName: "Example relay", targetId: "fixture-target", targetName: "Support bot", chatKey: "fixture-chat-chain-key", authority,
     engine: "claude", turns: 3, compactions: 0, createdAt: "2026-10-17T10:00:00Z", lastTurnAt: "2026-10-17T10:00:00Z", state: "idle", file: { ...files[0]!, path: `fixture-chain-${i}`, title: `Chain ${i}` } })) };
-createRoot(document.getElementById("root")!).render(SCENARIO === "workspaces-team" ? <TeamPage initialTab="workspaces" initialCreate={WORKSPACE_PARAMS.has("create")} />
+createRoot(document.getElementById("root")!).render(SCENARIO === "retired-review" && new URLSearchParams(location.search).has("surface") ? <RetiredReviewScene /> : SCENARIO === "workspaces-team" ? <TeamPage initialTab="workspaces" initialCreate={WORKSPACE_PARAMS.has("create")} />
   : SCENARIO === "workspaces-page" ? <WorkspacePage id={FIXTURE_WORKSPACE_IDS[(WORKSPACE_PARAMS.get("page") ?? "client") as keyof typeof FIXTURE_WORKSPACE_IDS]} />
   : PIPELINE_INIT ? <PipelineTemplatePicker repoDir="/project" onCreate={async () => ({})} onCreated={() => {}} onClose={() => {}} /> : SCENARIO === "relay-chain-list" ? <RelayChatsView relayId="fixture-relay" payload={relayChainEvidence} /> : dockWidth === "440" || dockWidth === "360" ? (
   <div className="flex h-full min-h-0">
