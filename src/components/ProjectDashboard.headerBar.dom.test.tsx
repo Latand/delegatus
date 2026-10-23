@@ -586,13 +586,23 @@ test("what a short row gave up is a row of ⋯ that does the same: Orchestrator,
   expect(text(menu.querySelector("[data-bar-more-orchestrator]"))).toContain(en["orchPanel.toggleAria"]);
   expect(text(menu.querySelector('[data-bar-menu-head="seat"]'))).toContain(en["dash.menu.seat"]);
 
-  /* Recent agents: ⋯ closes and the list opens under the row, from the segment's own anchor. */
+  /* Recent agents: ⋯ closes and the list opens under the row, from the segment's own anchor. Its
+     icon is folded away, so the list takes the focus, and Escape hands it back to ⋯. */
   click(menu.querySelector("[data-bar-more-recent]"));
   expect(await waitFor(() => host.querySelector("[data-bar-recent-list]") !== null)).toBe(true);
   expect(host.querySelector("[data-bar-more-menu]")).toBeNull();
   expect(host.querySelector("[data-bar-recent-list]")!.closest('[data-bar-group="panels"]')).not.toBeNull();
-  click(host.querySelector("[data-bar-recent-toggle]"));
+  const doc = host.ownerDocument;
+  expect(await waitFor(() => Boolean(doc.activeElement?.closest("[data-bar-recent-list]")))).toBe(true);
+  flushSync(() => doc.activeElement!.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }) as never));
   expect(await waitFor(() => host.querySelector("[data-bar-recent-list]") === null)).toBe(true);
+  expect(doc.activeElement?.hasAttribute("data-bar-more")).toBe(true);
+  /* Its ✕ does the same. */
+  click(openMore(host).querySelector("[data-bar-more-recent]"));
+  expect(await waitFor(() => Boolean(doc.activeElement?.closest("[data-bar-recent-list]")))).toBe(true);
+  click(host.querySelector("[data-bar-recent-close]"));
+  expect(await waitFor(() => host.querySelector("[data-bar-recent-list]") === null)).toBe(true);
+  expect(doc.activeElement?.hasAttribute("data-bar-more")).toBe(true);
 
   /* Orchestrator: the seat's own toggle, through the row, and its pressed state follows. */
   menu = openMore(host);
@@ -621,6 +631,15 @@ test("with room, ⋯ carries no row for what the row still holds", async () => {
   expect(bar(host).getAttribute("data-fit")).toBe("");
   const menu = openMore(host);
   expect(menu.querySelector("[data-bar-more-create], [data-bar-more-recent], [data-bar-more-orchestrator]")).toBeNull();
+  /* The list opened from its own icon leaves the focus where the operator is, and Escape returns it to the icon. */
+  click(host.querySelector("[data-bar-recent-toggle]"));
+  expect(await waitFor(() => host.querySelector("[data-bar-recent-list]") !== null)).toBe(true);
+  await settle();
+  const doc = host.ownerDocument;
+  expect(doc.activeElement?.closest("[data-bar-recent-list]")).toBeFalsy();
+  flushSync(() => host.querySelector("[data-bar-recent-list]")!.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }) as never));
+  expect(await waitFor(() => host.querySelector("[data-bar-recent-list]") === null)).toBe(true);
+  expect(doc.activeElement?.hasAttribute("data-bar-recent-toggle")).toBe(true);
 });
 
 test("Undo and Redo are gone from the header, its ⋯ and Ctrl+Z, even with a close in the log (#1856)", async () => {
@@ -795,10 +814,8 @@ test("a menu opened from the row marks the board, so the toast steps aside while
   expect(await waitFor(() => !board.hasAttribute("data-bar-menu"))).toBe(true);
 });
 
-test("a project with nothing in it draws the same bar: its two ends, the message search, no board controls", async () => {
-  barWidth = 1032;
-  /* Short by what the accounts and the labels give back, as a 1280 px window is. */
-  rowNeeds = 1032 + 300 + 1;
+/* The bar of a project with nothing in it, the leaf the board does not draw. */
+async function mountEmptyProject(): Promise<HTMLElement> {
   const host = dom.document.createElement("div");
   dom.document.body.appendChild(host);
   const root = createRoot(host as unknown as Element);
@@ -811,11 +828,19 @@ test("a project with nothing in it draws the same bar: its two ends, the message
   const page = host as unknown as HTMLElement;
   expect(await waitFor(() => page.querySelector("[data-project-bar]") !== null)).toBe(true);
   await settle();
+  return page;
+}
+
+test("a project with nothing in it draws the same bar: its two ends, the message search, no board controls", async () => {
+  /* A 1280 px window: under the 1700 px the labels and the accounts need, with room for the rest. */
+  barWidth = 1032;
+  rowNeeds = 0;
+  const page = await mountEmptyProject();
 
   const leaf = page.querySelector("[data-project-bar]") as HTMLElement;
   expect(page.querySelectorAll("header.bar, [data-project-bar]")).toHaveLength(1);
   expect(leaf.querySelector("[data-project-view-tabs], [data-bar-create-reserve], [data-bar-create], [data-bar-recent]")).toBeNull();
-  /* Narrow, it takes the steps its row asks for, by the board's rule: the accounts in ⋯, the toggles as icons. */
+  /* Narrow, it is in the two steps its width asks for: the accounts in ⋯, the toggles as icons. */
   expect(leaf.getAttribute("data-fit")).toBe("accounts labels");
   /* The steps choose the find slot's words: the full wording while the row has labels, «Search» after. */
   const find = leaf.querySelector('[data-testid="dash-search"]') as HTMLElement;
@@ -830,6 +855,22 @@ test("a project with nothing in it draws the same bar: its two ends, the message
   /* The island is this bar's last item too, in the row. */
   expect(leaf.querySelector("[data-bar-island-slot] [data-test-island]")).not.toBeNull();
   expect(leaf.className).not.toContain("236");
+});
+
+test("the bar of a project with nothing in it keeps its labels and accounts from 1700 px, and a short row takes the board's further steps", async () => {
+  /* A normal wide desktop window: labelled, the account switches in the row, nothing given up. */
+  barWidth = 1800;
+  rowNeeds = 0;
+  let leaf = (await mountEmptyProject()).querySelector("[data-project-bar]") as HTMLElement;
+  expect(leaf.getAttribute("data-fit")).toBe("");
+  for (const root of roots.splice(0)) flushSync(() => root.unmount());
+  dom.document.body.replaceChildren();
+
+  /* A 640 px window: past its two width steps the row gives way by the board's rule. */
+  barWidth = 392;
+  rowNeeds = 392 + 300 + 150 + 90 + 40 + 1;
+  leaf = (await mountEmptyProject()).querySelector("[data-project-bar]") as HTMLElement;
+  expect(leaf.getAttribute("data-fit")).toBe("accounts labels chip tight panels");
 });
 
 test("the attention island is the row's last item, so Tab reaches it right after ⋯", async () => {

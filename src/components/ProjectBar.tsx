@@ -80,6 +80,11 @@ export function BarNeedsFilterProvider({ value, children }: { value: BarNeedsFil
   return <BarNeedsFilterContext.Provider value={value}>{children}</BarNeedsFilterContext.Provider>;
 }
 
+/** At or above this width a bar that holds no board (the skeleton, the empty project) carries its
+    labels and the account switches; below it they are icons and the accounts move into ⋯, and a
+    shorter row takes the further steps by the board's rule. */
+export const BAR_WIDE_MIN = 1700;
+
 /**
  * What the board's bar gives up, in order, when the row is short. Each step is
  * a token the bar carries in `data-fit` once it is reached, and the bar's CSS
@@ -109,16 +114,17 @@ function barFits(bar: HTMLElement): boolean {
  * name is whole. The attribute is set here, never by React, so a render never
  * resets it between two measurements; the returned steps let React move what
  * lives outside the row (the accounts' rows in ⋯). `deps` name what changes the
- * row's width without changing its content or its box.
+ * row's width without changing its content or its box. `least` names how many
+ * steps the bar takes whatever room it has, read from the bar on each measure.
  */
-export function useBarFit(ref: RefObject<HTMLElement | null>, deps: readonly unknown[]): readonly BarFitStep[] {
+export function useBarFit(ref: RefObject<HTMLElement | null>, deps: readonly unknown[], least?: (bar: HTMLElement) => number): readonly BarFitStep[] {
   const [reached, setReached] = useState<readonly BarFitStep[]>([]);
   useLayoutEffect(() => {
     const bar = ref.current;
     if (!bar) return;
     let frame = 0;
     const fit = () => {
-      let count = 0;
+      let count = least?.(bar) ?? 0;
       for (; count <= BAR_FIT_STEPS.length; count += 1) {
         bar.setAttribute("data-fit", BAR_FIT_STEPS.slice(0, count).join(" "));
         if (barFits(bar)) break;
@@ -273,11 +279,16 @@ export function BarFilterMenu({ reasons, active, onPick, needs: needsRow }: {
   );
 }
 
+/** The bar whose row has folded the panel group into ⋯, around `element`, if it has. */
+const foldedRow = (element: HTMLElement | null) => element?.closest<HTMLElement>('[data-fit~="panels"]') ?? null;
+
 /**
  * The recent agents: the last segment of the panel group, an icon with the
  * list under it. The list is every agent of the project, the newest first, so
  * the operator reaches it without leaving the board. `open` is the board's, so
- * a card's link to more conversations opens the same list.
+ * a card's link to more conversations opens the same list. On a short row the
+ * icon is folded into ⋯ (`panels`): the list then takes the focus as it opens,
+ * and Escape or its ✕ hands it back to ⋯, the control the operator came from.
  */
 export function BarRecentAgents({ open, onOpenChange, list }: {
   open: boolean;
@@ -288,11 +299,20 @@ export function BarRecentAgents({ open, onOpenChange, list }: {
   const { t } = useLocale();
   const container = useRef<HTMLSpanElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
+  const dismiss = useRef<HTMLButtonElement>(null);
   const [countSlot, setCountSlot] = useState<HTMLElement | null>(null);
   const close = useCallback(() => onOpenChange(false), [onOpenChange]);
   useOutsidePress(open, container, close);
+  const closeToTrigger = () => {
+    const row = foldedRow(container.current);
+    close();
+    (row ? row.querySelector<HTMLElement>("[data-bar-more]") : trigger.current)?.focus();
+  };
+  useEffect(() => {
+    if (open && foldedRow(container.current)) dismiss.current?.focus({ preventScroll: true });
+  }, [open]);
   return (
-    <span ref={container} className="bar-slot relative inline-flex shrink-0" data-bar-recent="" onKeyDown={open ? (event) => { handleOverlayEscape(event, () => { close(); trigger.current?.focus(); }); } : undefined}>
+    <span ref={container} className="bar-slot relative inline-flex shrink-0" data-bar-recent="" onKeyDown={open ? (event) => { handleOverlayEscape(event, closeToTrigger); } : undefined}>
       <button
         ref={trigger}
         type="button"
@@ -319,7 +339,7 @@ export function BarRecentAgents({ open, onOpenChange, list }: {
             <span className="min-w-0 truncate text-[12px] font-bold">{t("dash.recentAgents")}</span>
             <span ref={setCountSlot} className="inline-flex shrink-0" />
             <span aria-hidden className="min-w-0 flex-1" />
-            <button type="button" className="inline-flex shrink-0 items-center rounded-[8px] border border-border bg-canvas px-1.5 py-0.5 text-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" aria-label={t("common.close")} title={t("common.close")} onClick={close}>
+            <button ref={dismiss} type="button" data-bar-recent-close="" className="inline-flex shrink-0 items-center rounded-[8px] border border-border bg-canvas px-1.5 py-0.5 text-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" aria-label={t("common.close")} title={t("common.close")} onClick={closeToTrigger}>
               <X className="h-3 w-3" aria-hidden />
             </button>
           </div>
@@ -524,9 +544,13 @@ export function BarMenuSection({ id, title, icon, page = false, children }: { id
 /**
  * The same bar on the leaves the kanban board does not draw (the empty project,
  * the loading skeleton): the project's two ends around this leaf's status line
- * and its one search. It gives way by the board's rule (`useBarFit`), so it
- * fits the same windows; it has no `+`, so that step gives nothing back here.
+ * and its one search. Under `BAR_WIDE_MIN` the accounts are in ⋯ and the
+ * panel toggles are icons, as they always were on a normal desktop window; a
+ * shorter row then gives way by the board's rule (`useBarFit`), so it fits the
+ * same windows. It has no `+`, so that step gives nothing back here.
  */
+const barLeast = (bar: HTMLElement) => (bar.getBoundingClientRect().width >= BAR_WIDE_MIN ? 0 : BAR_FIT_STEPS.indexOf("labels") + 1);
+
 export function DashboardBar({ lead, status, find, trail }: {
   lead: () => ReactNode;
   status: ReactNode;
@@ -536,7 +560,7 @@ export function DashboardBar({ lead, status, find, trail }: {
 }) {
   const { locale } = useLocale();
   const ref = useRef<HTMLDivElement>(null);
-  const fit = useBarFit(ref, [locale]);
+  const fit = useBarFit(ref, [locale], barLeast);
   return (
     <div
       ref={ref}

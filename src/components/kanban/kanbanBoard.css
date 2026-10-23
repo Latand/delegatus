@@ -165,10 +165,11 @@
 :is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="tight"] [data-bar-group="trail"] { gap: 8px; }
 :is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="tight"] [data-bar-spacer] { display: none; }
 /* A 640–700 px window (#1698): the panel group's segments leave for rows of ⋯. The recent agents'
-   segment stays as an empty anchor beside ⋯, so its list still opens under the row, and the group
-   takes back the gap it would leave. */
+   segment stays as an empty anchor beside ⋯, as tall as the control it held, so its list still
+   opens under the row's controls and clear of the name; the group takes back the gap it would leave. */
 :is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="panels"] [data-bar-group="panels"] { margin-right: -8px; }
 :is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="panels"] [data-bar-group="panels"] :is([data-orchestrator-toggle], [data-bar-recent-toggle]) { display: none; }
+:is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="panels"] [data-bar-recent] { height: 32px; }
 /* Then `+` leaves for its two rows of ⋯. */
 .kb .bar[data-bar="project"][data-fit~="create"] .bar-slot:has(> [data-bar-group="create"]) { display: none; }
 /* The last step, on a window narrower than the board is made for: the field may go under its

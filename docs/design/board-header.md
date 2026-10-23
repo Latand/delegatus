@@ -199,7 +199,7 @@ Two steps now come between `tight` and `find`, in this order:
 
 | Step | The row gives up | Where it goes |
 |---|---|---|
-| `panels` | Orchestrator and the recent agents' segment | the first rows of ⋯ after `+`'s: «Orchestrator panel», the toggle's own name apart from the seat's section «Orchestrator» (pressed while the seat is open, with the collapsed seat's state word) and «Recent agents». The list still hangs under its segment, which stays as an empty anchor beside ⋯. |
+| `panels` | Orchestrator and the recent agents' segment | the first rows of ⋯ after `+`'s: «Orchestrator panel», the toggle's own name apart from the seat's section «Orchestrator» (pressed while the seat is open, with the collapsed seat's state word) and «Recent agents». The list still hangs under its segment, which stays as an empty anchor beside ⋯, as tall as the control it held, so the list opens under the row's controls. Opened from ⋯ it takes the focus (its ✕ first, then its agents by Tab), and Escape or ✕ hands the focus back to ⋯. |
 | `create` | `+` | two rows of ⋯ at its top, the `+` menu's own: New task, New agent |
 
 `tight` also drops the spacer, whose width is zero by then, and with it two
@@ -213,9 +213,11 @@ whole texts beside the name (`data-bar-whole`): a step is taken before they are
 cut, and past the last step they end with an ellipsis, the line in the tooltip.
 
 The bar of a leaf without a board (the loading skeleton, the empty project)
-gives way by the same rule (`useBarFit`) instead of its fixed two steps at
-1700 px; it has no `+`. Its find slot shows «Search your messages», «Search»
-after `labels`, the icon alone at `find`.
+keeps its width policy: under 1700 px it takes `accounts` and `labels` whatever
+room it has, so a normal desktop window draws it as before. A shorter row then
+gives way by the board's rule (`useBarFit`) through the further steps; it has no
+`+`. Its find slot shows «Search your messages», «Search» after `labels`, the
+icon alone at `find`.
 
 That bar also stopped saying «N branches running · N trees» (#1954): the desktop
 has one view, so that line only ever showed for a moment before the board drew,

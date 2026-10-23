@@ -4929,6 +4929,17 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   return json({}, 404);
 }) as typeof fetch;
 
+/* `&replydelay=MS` answers every read and write MS later, so a driver can show that what it measures
+   waits for the state it needs and never for a guessed time (the header's narrow-window case). */
+const REPLY_DELAY = Number(params.get("replydelay")) || 0;
+if (REPLY_DELAY > 0) {
+  const answer = window.fetch;
+  window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    await new Promise((resolve) => setTimeout(resolve, REPLY_DELAY));
+    return answer(input, init);
+  }) as typeof fetch;
+}
+
 /* #1820's scenarios ARE the Overview, which is the view with no project
    selected; every other scenario opens on `atlas`'s own board. */
 const OVERVIEW_VIEW = OVERVIEW_SCOPE || OVERVIEW_EMPTY || OVERVIEW_PERFORMANCE || new URLSearchParams(location.search).get("railview") === "overview";

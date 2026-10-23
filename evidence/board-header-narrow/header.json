@@ -117,7 +117,7 @@
         ],
         "recent": {
           "x": 102,
-          "y": 28,
+          "y": 44,
           "w": 440,
           "h": 560,
           "scrollEdge": [
@@ -127,6 +127,28 @@
             "2",
             "kB"
           ]
+        },
+        "keyboard": {
+          "tabsToRow": 4,
+          "onOpen": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Close"
+          },
+          "afterTab": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Open Keep the old index serving until th"
+          },
+          "escapeCloses": true,
+          "afterEscape": {
+            "more": true,
+            "row": false,
+            "inList": false,
+            "label": "More actions"
+          }
         },
         "orchestrator": {
           "before": "false",
@@ -336,7 +358,7 @@
         ],
         "recent": {
           "x": 102,
-          "y": 28,
+          "y": 44,
           "w": 440,
           "h": 560,
           "scrollEdge": [
@@ -346,6 +368,28 @@
             "2",
             "kB"
           ]
+        },
+        "keyboard": {
+          "tabsToRow": 4,
+          "onOpen": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Close"
+          },
+          "afterTab": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Open Keep the old index serving until th"
+          },
+          "escapeCloses": true,
+          "afterEscape": {
+            "more": true,
+            "row": false,
+            "inList": false,
+            "label": "More actions"
+          }
         },
         "orchestrator": {
           "before": "false",
@@ -555,7 +599,7 @@
         ],
         "recent": {
           "x": 102,
-          "y": 28,
+          "y": 44,
           "w": 440,
           "h": 560,
           "scrollEdge": [
@@ -565,6 +609,28 @@
             "2",
             "кБ"
           ]
+        },
+        "keyboard": {
+          "tabsToRow": 4,
+          "onOpen": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Закрити"
+          },
+          "afterTab": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Відкрити Keep the old index serving unti"
+          },
+          "escapeCloses": true,
+          "afterEscape": {
+            "more": true,
+            "row": false,
+            "inList": false,
+            "label": "Більше дій"
+          }
         },
         "orchestrator": {
           "before": "false",
@@ -774,7 +840,7 @@
         ],
         "recent": {
           "x": 102,
-          "y": 28,
+          "y": 44,
           "w": 440,
           "h": 560,
           "scrollEdge": [
@@ -784,6 +850,28 @@
             "2",
             "кБ"
           ]
+        },
+        "keyboard": {
+          "tabsToRow": 4,
+          "onOpen": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Закрити"
+          },
+          "afterTab": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Відкрити Keep the old index serving unti"
+          },
+          "escapeCloses": true,
+          "afterEscape": {
+            "more": true,
+            "row": false,
+            "inList": false,
+            "label": "Більше дій"
+          }
         },
         "orchestrator": {
           "before": "false",
@@ -975,10 +1063,10 @@
       "scrollEdge": [],
       "menus": {
         "create": {
-          "x": 338,
-          "y": 44,
-          "w": 224,
-          "h": 77,
+          "x": 337,
+          "y": 46,
+          "w": 227,
+          "h": 78,
           "scrollEdge": []
         },
         "filter": {
@@ -1007,7 +1095,7 @@
         ],
         "recent": {
           "x": 132,
-          "y": 28,
+          "y": 44,
           "w": 440,
           "h": 560,
           "scrollEdge": [
@@ -1017,6 +1105,28 @@
             "2",
             "kB"
           ]
+        },
+        "keyboard": {
+          "tabsToRow": 2,
+          "onOpen": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Close"
+          },
+          "afterTab": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Open Keep the old index serving until th"
+          },
+          "escapeCloses": true,
+          "afterEscape": {
+            "more": true,
+            "row": false,
+            "inList": false,
+            "label": "More actions"
+          }
         },
         "orchestrator": {
           "before": "false",
@@ -1205,10 +1315,10 @@
       "scrollEdge": [],
       "menus": {
         "create": {
-          "x": 338,
-          "y": 44,
-          "w": 224,
-          "h": 77,
+          "x": 337,
+          "y": 46,
+          "w": 227,
+          "h": 78,
           "scrollEdge": []
         },
         "filter": {
@@ -1237,7 +1347,7 @@
         ],
         "recent": {
           "x": 132,
-          "y": 28,
+          "y": 44,
           "w": 440,
           "h": 560,
           "scrollEdge": [
@@ -1247,6 +1357,28 @@
             "2",
             "kB"
           ]
+        },
+        "keyboard": {
+          "tabsToRow": 2,
+          "onOpen": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Close"
+          },
+          "afterTab": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Open Keep the old index serving until th"
+          },
+          "escapeCloses": true,
+          "afterEscape": {
+            "more": true,
+            "row": false,
+            "inList": false,
+            "label": "More actions"
+          }
         },
         "orchestrator": {
           "before": "false",
@@ -1435,9 +1567,9 @@
       "scrollEdge": [],
       "menus": {
         "create": {
-          "x": 365,
-          "y": 45,
-          "w": 199,
+          "x": 364,
+          "y": 46,
+          "w": 200,
           "h": 78,
           "scrollEdge": []
         },
@@ -1467,7 +1599,7 @@
         ],
         "recent": {
           "x": 132,
-          "y": 28,
+          "y": 44,
           "w": 440,
           "h": 560,
           "scrollEdge": [
@@ -1477,6 +1609,28 @@
             "2",
             "кБ"
           ]
+        },
+        "keyboard": {
+          "tabsToRow": 2,
+          "onOpen": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Закрити"
+          },
+          "afterTab": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Відкрити Keep the old index serving unti"
+          },
+          "escapeCloses": true,
+          "afterEscape": {
+            "more": true,
+            "row": false,
+            "inList": false,
+            "label": "Більше дій"
+          }
         },
         "orchestrator": {
           "before": "false",
@@ -1697,7 +1851,7 @@
         ],
         "recent": {
           "x": 132,
-          "y": 28,
+          "y": 44,
           "w": 440,
           "h": 560,
           "scrollEdge": [
@@ -1707,6 +1861,28 @@
             "2",
             "кБ"
           ]
+        },
+        "keyboard": {
+          "tabsToRow": 2,
+          "onOpen": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Закрити"
+          },
+          "afterTab": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Відкрити Keep the old index serving unti"
+          },
+          "escapeCloses": true,
+          "afterEscape": {
+            "more": true,
+            "row": false,
+            "inList": false,
+            "label": "Більше дій"
+          }
         },
         "orchestrator": {
           "before": "false",
@@ -1895,10 +2071,10 @@
       "scrollEdge": [],
       "menus": {
         "create": {
-          "x": 368,
-          "y": 44,
-          "w": 224,
-          "h": 77,
+          "x": 367,
+          "y": 46,
+          "w": 227,
+          "h": 78,
           "scrollEdge": []
         },
         "filter": {
@@ -1927,7 +2103,7 @@
         ],
         "recent": {
           "x": 162,
-          "y": 28,
+          "y": 44,
           "w": 440,
           "h": 560,
           "scrollEdge": [
@@ -1937,6 +2113,28 @@
             "2",
             "kB"
           ]
+        },
+        "keyboard": {
+          "tabsToRow": 2,
+          "onOpen": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Close"
+          },
+          "afterTab": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Open Keep the old index serving until th"
+          },
+          "escapeCloses": true,
+          "afterEscape": {
+            "more": true,
+            "row": false,
+            "inList": false,
+            "label": "More actions"
+          }
         },
         "orchestrator": {
           "before": "false",
@@ -2126,8 +2324,8 @@
       "menus": {
         "create": {
           "x": 367,
-          "y": 45,
-          "w": 226,
+          "y": 46,
+          "w": 227,
           "h": 78,
           "scrollEdge": []
         },
@@ -2157,7 +2355,7 @@
         ],
         "recent": {
           "x": 162,
-          "y": 28,
+          "y": 44,
           "w": 440,
           "h": 560,
           "scrollEdge": [
@@ -2167,6 +2365,28 @@
             "2",
             "kB"
           ]
+        },
+        "keyboard": {
+          "tabsToRow": 2,
+          "onOpen": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Close"
+          },
+          "afterTab": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Open Keep the old index serving until th"
+          },
+          "escapeCloses": true,
+          "afterEscape": {
+            "more": true,
+            "row": false,
+            "inList": false,
+            "label": "More actions"
+          }
         },
         "orchestrator": {
           "before": "false",
@@ -2355,10 +2575,10 @@
       "scrollEdge": [],
       "menus": {
         "create": {
-          "x": 395,
-          "y": 45,
-          "w": 198,
-          "h": 77,
+          "x": 394,
+          "y": 46,
+          "w": 200,
+          "h": 78,
           "scrollEdge": []
         },
         "filter": {
@@ -2387,7 +2607,7 @@
         ],
         "recent": {
           "x": 162,
-          "y": 28,
+          "y": 44,
           "w": 440,
           "h": 560,
           "scrollEdge": [
@@ -2397,6 +2617,28 @@
             "2",
             "кБ"
           ]
+        },
+        "keyboard": {
+          "tabsToRow": 2,
+          "onOpen": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Закрити"
+          },
+          "afterTab": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Відкрити Keep the old index serving unti"
+          },
+          "escapeCloses": true,
+          "afterEscape": {
+            "more": true,
+            "row": false,
+            "inList": false,
+            "label": "Більше дій"
+          }
         },
         "orchestrator": {
           "before": "false",
@@ -2585,9 +2827,9 @@
       "scrollEdge": [],
       "menus": {
         "create": {
-          "x": 395,
-          "y": 45,
-          "w": 199,
+          "x": 394,
+          "y": 46,
+          "w": 200,
           "h": 78,
           "scrollEdge": []
         },
@@ -2617,7 +2859,7 @@
         ],
         "recent": {
           "x": 162,
-          "y": 28,
+          "y": 44,
           "w": 440,
           "h": 560,
           "scrollEdge": [
@@ -2627,6 +2869,28 @@
             "2",
             "кБ"
           ]
+        },
+        "keyboard": {
+          "tabsToRow": 2,
+          "onOpen": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Закрити"
+          },
+          "afterTab": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Відкрити Keep the old index serving unti"
+          },
+          "escapeCloses": true,
+          "afterEscape": {
+            "more": true,
+            "row": false,
+            "inList": false,
+            "label": "Більше дій"
+          }
         },
         "orchestrator": {
           "before": "false",
@@ -2843,8 +3107,8 @@
       "menus": {
         "create": {
           "x": 853,
-          "y": 45,
-          "w": 226,
+          "y": 46,
+          "w": 227,
           "h": 78,
           "scrollEdge": []
         },
@@ -2893,7 +3157,7 @@
         "h": 48,
         "scrollWidth": 1192,
         "clientWidth": 1192,
-        "fit": ""
+        "fit": "accounts labels"
       },
       "controls": [
         {
@@ -2906,18 +3170,9 @@
           }
         },
         {
-          "label": "Claude accounts — switch or add — Account A",
-          "box": {
-            "x": 320,
-            "y": 7.5,
-            "w": 149.6,
-            "h": 32
-          }
-        },
-        {
           "label": "Loading…",
           "box": {
-            "x": 485.6,
+            "x": 328,
             "y": 14.5,
             "w": 54.7,
             "h": 18
@@ -2926,18 +3181,18 @@
         {
           "label": "Search your messages (/)",
           "box": {
-            "x": 722.1,
+            "x": 778.6,
             "y": 7.5,
-            "w": 389.8,
+            "w": 420,
             "h": 32
           }
         },
         {
           "label": "Orchestrator panel",
           "box": {
-            "x": 1127.9,
+            "x": 1214.6,
             "y": 7.5,
-            "w": 119.7,
+            "w": 33,
             "h": 32
           }
         },
@@ -2975,7 +3230,7 @@
         "x": 1040,
         "y": 44,
         "w": 256,
-        "h": 192,
+        "h": 226,
         "scrollEdge": []
       }
     },
@@ -3105,10 +3360,10 @@
       "scrollEdge": [],
       "menus": {
         "create": {
-          "x": 855,
-          "y": 43,
-          "w": 223,
-          "h": 77,
+          "x": 853,
+          "y": 46,
+          "w": 227,
+          "h": 78,
           "scrollEdge": []
         },
         "filter": {
@@ -3156,7 +3411,7 @@
         "h": 48,
         "scrollWidth": 1192,
         "clientWidth": 1192,
-        "fit": ""
+        "fit": "accounts labels"
       },
       "controls": [
         {
@@ -3169,18 +3424,9 @@
           }
         },
         {
-          "label": "Claude accounts — switch or add — Account A",
-          "box": {
-            "x": 320,
-            "y": 7.5,
-            "w": 149.6,
-            "h": 32
-          }
-        },
-        {
           "label": "Loading…",
           "box": {
-            "x": 485.6,
+            "x": 328,
             "y": 14.5,
             "w": 54.7,
             "h": 18
@@ -3189,18 +3435,18 @@
         {
           "label": "Search your messages (/)",
           "box": {
-            "x": 722.1,
+            "x": 778.6,
             "y": 7.5,
-            "w": 389.8,
+            "w": 420,
             "h": 32
           }
         },
         {
           "label": "Orchestrator panel",
           "box": {
-            "x": 1127.9,
+            "x": 1214.6,
             "y": 7.5,
-            "w": 119.7,
+            "w": 33,
             "h": 32
           }
         },
@@ -3238,7 +3484,7 @@
         "x": 1040,
         "y": 44,
         "w": 256,
-        "h": 192,
+        "h": 226,
         "scrollEdge": []
       }
     },
@@ -3368,10 +3614,10 @@
       "scrollEdge": [],
       "menus": {
         "create": {
-          "x": 870,
-          "y": 44,
-          "w": 198,
-          "h": 77,
+          "x": 869,
+          "y": 46,
+          "w": 200,
+          "h": 78,
           "scrollEdge": []
         },
         "filter": {
@@ -3419,7 +3665,7 @@
         "h": 48,
         "scrollWidth": 1192,
         "clientWidth": 1192,
-        "fit": ""
+        "fit": "accounts labels"
       },
       "controls": [
         {
@@ -3432,18 +3678,9 @@
           }
         },
         {
-          "label": "Акаунти Claude — змінити або додати — Account A",
-          "box": {
-            "x": 320,
-            "y": 7.5,
-            "w": 149.6,
-            "h": 32
-          }
-        },
-        {
           "label": "Завантаження…",
           "box": {
-            "x": 485.6,
+            "x": 328,
             "y": 14.5,
             "w": 92,
             "h": 18
@@ -3452,18 +3689,18 @@
         {
           "label": "Пошук моїх повідомлень (/)",
           "box": {
-            "x": 735.2,
+            "x": 771,
             "y": 7.5,
-            "w": 365.7,
+            "w": 420,
             "h": 32
           }
         },
         {
           "label": "Панель оркестратора",
           "box": {
-            "x": 1116.9,
+            "x": 1207,
             "y": 7.5,
-            "w": 123.1,
+            "w": 33,
             "h": 32
           }
         },
@@ -3501,7 +3738,7 @@
         "x": 1032,
         "y": 44,
         "w": 256,
-        "h": 192,
+        "h": 226,
         "scrollEdge": []
       }
     },
@@ -3631,10 +3868,10 @@
       "scrollEdge": [],
       "menus": {
         "create": {
-          "x": 870,
-          "y": 45,
-          "w": 198,
-          "h": 77,
+          "x": 869,
+          "y": 46,
+          "w": 200,
+          "h": 78,
           "scrollEdge": []
         },
         "filter": {
@@ -3682,7 +3919,7 @@
         "h": 48,
         "scrollWidth": 1192,
         "clientWidth": 1192,
-        "fit": ""
+        "fit": "accounts labels"
       },
       "controls": [
         {
@@ -3695,18 +3932,9 @@
           }
         },
         {
-          "label": "Акаунти Claude — змінити або додати — Account A",
-          "box": {
-            "x": 320,
-            "y": 7.5,
-            "w": 149.6,
-            "h": 32
-          }
-        },
-        {
           "label": "Завантаження…",
           "box": {
-            "x": 485.6,
+            "x": 328,
             "y": 14.5,
             "w": 92,
             "h": 18
@@ -3715,18 +3943,18 @@
         {
           "label": "Пошук моїх повідомлень (/)",
           "box": {
-            "x": 735.2,
+            "x": 771,
             "y": 7.5,
-            "w": 365.7,
+            "w": 420,
             "h": 32
           }
         },
         {
           "label": "Панель оркестратора",
           "box": {
-            "x": 1116.9,
+            "x": 1207,
             "y": 7.5,
-            "w": 123.1,
+            "w": 33,
             "h": 32
           }
         },
@@ -3764,7 +3992,7 @@
         "x": 1032,
         "y": 44,
         "w": 256,
-        "h": 192,
+        "h": 226,
         "scrollEdge": []
       }
     }
