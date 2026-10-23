@@ -238,6 +238,11 @@ export interface BoardTask {
   pos?: { x: number; y: number };
   /** ISO-8601 UTC instant of the optional deadline. */
   dueAt?: string;
+  dueHistory?: {
+    firstAt: string;
+    slips: number;
+    last?: { at: string; from: string; to: string; by: "operator" | "agent"; reason?: string; conversationId?: string };
+  };
   /** IANA zone captured when `dueAt` was set/last edited: display and
       re-editing happen in this zone; overdue derives at render from `dueAt`. */
   dueTz?: string;
