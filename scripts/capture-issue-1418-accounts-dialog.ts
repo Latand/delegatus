@@ -36,10 +36,10 @@
  * action is reachable by scrolling, unclipped and uncovered; the phone screen
  * carries the same checklist, every action reachable at 44 px. The Copilot
  * list in the rail's footer is checked at 1280×860, 1024×640 and 707×744 as
- * it opens, before anything scrolls (heading, «Check all» and the first
- * action whole in the viewport and the list's box), then by wheel turns over
- * the list alone, which must reach every row and control while nothing else
- * scrolls. Shots land in
+ * it opens, before any input (its top, the heading, «Check all» and the first
+ * action whole in the viewport cut by every clipping ancestor), then by wheel
+ * turns over the list, which must reach every row and control while only a
+ * scroller moves, never a hidden-overflow ancestor or the page. Shots land in
  * <tmp>/llv-issue-1418-latest/out/1418-<surface>-<engine>.png and are never
  * committed: the privacy gate refuses rasters.
  */
@@ -444,70 +444,93 @@ async function reachability(page: Page, container: string, closeControl: string 
 
 /**
  * The Copilot list as it opens in the rail's footer, then as the operator
- * scrolls it with the wheel. At the opening, before anything scrolls: the
- * list lies wholly in the viewport, and the checklist heading, «Check all» and
- * the first row's text sit wholly inside the viewport and the list's own clip
- * box. Then every checklist row, every action and the list's last control are
- * reached by wheel turns over the list alone: each lies inside both boxes, is
- * hit at its centre, and nothing but the list itself has scrolled (no
- * programmatic scrollIntoView, which would scroll the whole page instead).
+ * scrolls it with the wheel. Every box is measured against the viewport cut by
+ * every ancestor that clips (the footer's own scroller among them). At the
+ * opening, before any input: the list's top, the checklist heading, «Check
+ * all» and the first row's first action have their text wholly inside that
+ * box. Then wheel turns over the list reach every checklist row and every
+ * control of the list, each wholly inside the box and hit at its centre. Only
+ * an ancestor that is a scroller (overflow-y auto or scroll) may have moved:
+ * one whose overflow is hidden, or the page itself, scrolled only by script,
+ * which is what an unreachable control looks like from the inside.
  */
 async function copilotReachability(page: Page, list: string): Promise<string[]> {
-  const opening = await page.evaluate((selector) => {
+  const TARGETS = "[data-transfer-checklist] [data-transfer-account], button, input";
+  /* Shared by every measurement below, installed once on the page: the clip
+     box of an element (the viewport cut by every clipping ancestor), an
+     element's text box, and whether a box lies outside a clip. */
+  await page.evaluate(() => {
+    const host = window as unknown as Record<string, unknown>;
+    host.__copilotClip = (element: Element) => {
+      let box = { top: 0, bottom: window.innerHeight };
+      for (let node = element.parentElement; node; node = node.parentElement) {
+        if (!/(auto|scroll|hidden|clip)/.test(getComputedStyle(node).overflowY)) continue;
+        const rect = node.getBoundingClientRect();
+        box = { top: Math.max(box.top, rect.top), bottom: Math.min(box.bottom, rect.bottom) };
+      }
+      return box;
+    };
+    host.__copilotText = (element: Element) => { const range = document.createRange(); range.selectNodeContents(element); return range.getBoundingClientRect(); };
+  });
+  const opening = await page.evaluate(({ selector }) => {
+    const host = window as unknown as { __copilotClip: (element: Element) => { top: number; bottom: number }; __copilotText: (element: Element) => DOMRect };
+    const clipOf = host.__copilotClip, textBox = host.__copilotText;
+    const outside = (rect: { top: number; bottom: number }, clip: { top: number; bottom: number }) => rect.top < clip.top - 0.5 || rect.bottom > clip.bottom + 0.5;
+    const span = (rect: { top: number; bottom: number }, clip: { top: number; bottom: number }) => `${rect.top.toFixed(2)}..${rect.bottom.toFixed(2)} outside ${clip.top.toFixed(2)}..${clip.bottom.toFixed(2)}`;
     const problems: string[] = [];
     const panel = document.querySelector(`${selector} [data-copilot-panel]`) as HTMLElement | null;
     if (!panel) return ["no Copilot list opened"];
-    const viewport = { top: 0, bottom: window.innerHeight };
-    const box = panel.getBoundingClientRect();
-    if (box.top < -0.5 || box.bottom > viewport.bottom + 0.5) problems.push(`the list spans ${Math.round(box.top)}..${Math.round(box.bottom)} in a ${window.innerHeight}px viewport`);
-    const style = getComputedStyle(panel);
-    if (!/(auto|scroll)/.test(style.overflowY)) problems.push(`the list does not scroll (overflow-y ${style.overflowY})`);
-    const textBox = (element: Element) => { const range = document.createRange(); range.selectNodeContents(element); return range.getBoundingClientRect(); };
+    const top = panel.getBoundingClientRect();
+    if (outside({ top: top.top, bottom: top.top + 1 }, clipOf(panel))) problems.push(`the list's top is at ${span({ top: top.top, bottom: top.top + 1 }, clipOf(panel))} at the opening`);
     const whole = (element: Element | null | undefined, name: string) => {
       if (!element) { problems.push(`no ${name}`); return; }
-      const text = textBox(element);
-      const top = Math.max(viewport.top, box.top), bottom = Math.min(viewport.bottom, box.bottom);
-      if (text.top < top - 0.5 || text.bottom > bottom + 0.5) problems.push(`${name} text is at ${text.top.toFixed(2)}..${text.bottom.toFixed(2)}, outside ${top.toFixed(2)}..${bottom.toFixed(2)} at the opening`);
+      const text = textBox(element), clip = clipOf(element);
+      if (outside(text, clip)) problems.push(`${name} text is at ${span(text, clip)} at the opening`);
     };
     const checklist = panel.querySelector("[data-transfer-checklist]");
     whole(checklist?.querySelector("h3"), "the checklist heading");
     whole(checklist?.querySelector("h3")?.parentElement?.querySelector("button"), "«Check all»");
     whole(checklist?.querySelector("[data-transfer-account] button"), "the first row's first action");
     return problems;
-  }, list);
-  const panel = page.locator(`${list} [data-copilot-panel]`);
-  const box = await panel.boundingBox();
+  }, { selector: list });
+  const box = await page.locator(`${list} [data-copilot-panel]`).boundingBox();
   if (!box) return [...opening, "the Copilot list has no box"];
-  await page.mouse.move(box.x + box.width / 2, box.y + Math.min(box.height / 2, 40));
-  /* Every checklist row and every control of the list, in document order. */
-  const TARGETS = "[data-transfer-checklist] [data-transfer-account], button, input";
+  const visible = await page.evaluate(({ selector }) => {
+    const clipOf = (window as unknown as { __copilotClip: (element: Element) => { top: number; bottom: number } }).__copilotClip;
+    const panel = document.querySelector(`${selector} [data-copilot-panel]`)!;
+    const rect = panel.getBoundingClientRect(), clip = clipOf(panel);
+    return { top: Math.max(rect.top, clip.top), bottom: Math.min(rect.bottom, clip.bottom) };
+  }, { selector: list });
+  await page.mouse.move(box.x + box.width / 2, (visible.top + visible.bottom) / 2);
   const targets = await page.evaluate(({ selector, targets }) => document.querySelector(`${selector} [data-copilot-panel]`)!.querySelectorAll(targets).length, { selector: list, targets: TARGETS });
   const problems = [...opening];
   for (let index = 0; index < targets; index += 1) {
     for (let turn = 0; turn < 40; turn += 1) {
       const where = await page.evaluate(({ selector, index, targets }) => {
-        const panel = document.querySelector(`${selector} [data-copilot-panel]`) as HTMLElement;
-        const target = panel.querySelectorAll(targets)[index]!;
-        const rect = target.getBoundingClientRect(), clip = panel.getBoundingClientRect();
-        return rect.top < Math.max(0, clip.top) - 0.5 ? -1 : rect.bottom > Math.min(window.innerHeight, clip.bottom) + 0.5 ? 1 : 0;
+        const clipOf = (window as unknown as { __copilotClip: (element: Element) => { top: number; bottom: number } }).__copilotClip;
+        const target = document.querySelector(`${selector} [data-copilot-panel]`)!.querySelectorAll(targets)[index]!;
+        const rect = target.getBoundingClientRect(), clip = clipOf(target);
+        return rect.top < clip.top - 0.5 ? -1 : rect.bottom > clip.bottom + 0.5 ? 1 : 0;
       }, { selector: list, index, targets: TARGETS });
       if (where === 0) break;
       await page.mouse.wheel(0, where * 60);
       await page.waitForTimeout(30);
     }
     problems.push(...await page.evaluate(({ selector, index, targets }) => {
+      const clipOf = (window as unknown as { __copilotClip: (element: Element) => { top: number; bottom: number } }).__copilotClip;
+      const outside = (rect: { top: number; bottom: number }, clip: { top: number; bottom: number }) => rect.top < clip.top - 0.5 || rect.bottom > clip.bottom + 0.5;
       const found: string[] = [];
       const panel = document.querySelector(`${selector} [data-copilot-panel]`) as HTMLElement;
       const target = panel.querySelectorAll(targets)[index]! as HTMLElement;
-      const name = `${target.tagName === "BUTTON" ? `«${(target.textContent ?? "").trim()}»` : target.tagName === "INPUT" ? "the label field" : `row ${target.getAttribute("data-transfer-account")}`}`;
-      const rect = target.getBoundingClientRect(), clip = panel.getBoundingClientRect();
-      if (rect.top < Math.max(0, clip.top) - 0.5 || rect.bottom > Math.min(window.innerHeight, clip.bottom) + 0.5) found.push(`${name} is cut at ${Math.round(rect.top)}..${Math.round(rect.bottom)} after scrolling the list`);
+      const name = target.tagName === "BUTTON" ? `«${(target.textContent ?? "").trim()}»` : target.tagName === "INPUT" ? "the label field" : `row ${target.getAttribute("data-transfer-account")}`;
+      const rect = target.getBoundingClientRect();
+      if (outside(rect, clipOf(target))) found.push(`${name} is cut at ${Math.round(rect.top)}..${Math.round(rect.bottom)} after scrolling with the wheel`);
       else {
         const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
         if (!hit || !(hit === target || target.contains(hit))) found.push(`${name} is covered at its centre`);
       }
-      for (let node: HTMLElement | null = panel.parentElement; node; node = node.parentElement) {
-        if (node.scrollTop !== 0) found.push(`${node.tagName.toLowerCase()} scrolled by ${node.scrollTop}px: only the list may`);
+      for (let node: HTMLElement | null = target.parentElement; node; node = node.parentElement) {
+        if (node.scrollTop !== 0 && !/(auto|scroll)/.test(getComputedStyle(node).overflowY)) found.push(`${node.tagName.toLowerCase()} (overflow ${getComputedStyle(node).overflowY}) scrolled by ${node.scrollTop}px`);
       }
       if ((document.scrollingElement?.scrollTop ?? 0) !== 0) found.push("the page scrolled");
       return found;

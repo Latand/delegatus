@@ -323,9 +323,40 @@ export function CopilotFooterRow({ limits, limitsAccountId, now, onChanged, dens
   const { t, locale } = useLocale();
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const tint = engineTintOf("copilot");
   const accounts = useCopilotAccounts({ polling: open, onChanged });
   const { body, load } = accounts;
+  const shown = open && !!body;
+
+  /* The list opens at the foot of the rail's footer, which scrolls when the
+     window is short: brought into view in that scroller (never the page,
+     whose overflow is hidden), its top first, and again as it fills in (the
+     accounts, an import's checklist) until the operator scrolls it. */
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!shown || !panel) return;
+    let scroller: HTMLElement | null = panel.parentElement;
+    while (scroller && !/(auto|scroll)/.test(getComputedStyle(scroller).overflowY)) scroller = scroller.parentElement;
+    if (!scroller) return;
+    const frame = scroller;
+    let held = true;
+    const reveal = () => {
+      if (!held) return;
+      const box = panel.getBoundingClientRect(), bounds = frame.getBoundingClientRect();
+      const below = box.bottom - bounds.bottom;
+      if (below > 0) frame.scrollTop += Math.min(below, box.top - bounds.top);
+    };
+    const release = () => { held = false; };
+    reveal();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(reveal);
+    observer?.observe(panel);
+    for (const name of ["wheel", "touchstart", "keydown", "pointerdown"] as const) frame.addEventListener(name, release, { passive: true });
+    return () => {
+      observer?.disconnect();
+      for (const name of ["wheel", "touchstart", "keydown", "pointerdown"] as const) frame.removeEventListener(name, release);
+    };
+  }, [shown]);
 
   /* A launch preflight on a signed-out Copilot account (#2170) opens this
      row's switcher, where the account's Sign in is. */
@@ -379,11 +410,7 @@ export function CopilotFooterRow({ limits, limitsAccountId, now, onChanged, dens
         </div>
       ) : null}
       {open ? (
-        /* Bounded with a scroller of its own: it opens in the rail's footer,
-           which sits at the window's lower edge, so an unbounded list (an
-           import's checklist above the accounts) ran under the edge of a short
-           window, where nothing scrolls. */
-        <div role="dialog" aria-label={t("copilot.accounts.title")} data-copilot-panel="" className="flex max-h-[min(40vh,20rem)] flex-col gap-2 overflow-y-auto overscroll-contain border-t border-border bg-sunken px-3.5 py-2.5 text-[11.5px] [&>*]:shrink-0">
+        <div ref={panelRef} role="dialog" aria-label={t("copilot.accounts.title")} data-copilot-panel="" className="flex flex-col gap-2 border-t border-border bg-sunken px-3.5 py-2.5 text-[11.5px]">
           <CopilotAccountList accounts={accounts} />
         </div>
       ) : null}

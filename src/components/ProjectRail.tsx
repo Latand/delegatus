@@ -728,9 +728,12 @@ function RailFooter() {
   const [detail, toggleDetail] = useStoredChoice(RAIL_FOOTER_DETAIL_STORAGE_KEY, "full", "line");
   const density = detail ? "detail" : "line";
   return (
-    <div className="shrink-0" data-rail-footer={folded ? "folded" : "open"}>
+    /* Shrinks under the project list when the window is too short for every
+       reading (many accounts, an open account list), and its body scrolls:
+       nothing in it runs under the window's lower edge, where nothing scrolls. */
+    <div className="flex min-h-0 flex-col" data-rail-footer={folded ? "folded" : "open"}>
       {/* A span, so the block's only <div> child is the readings: folded, no subtree is left under it. */}
-      <span className="flex items-center border-t border-border">
+      <span className="flex shrink-0 items-center border-t border-border">
         <button
           type="button"
           data-rail-footer-toggle=""
@@ -758,7 +761,7 @@ function RailFooter() {
         )}
       </span>
       {folded ? null : (
-        <div data-rail-footer-body={density} className="pb-1">
+        <div data-rail-footer-body={density} className="min-h-0 overflow-y-auto pb-1">
           <ResourcesFooter density={density} />
           <LimitsFooter density={density} />
         </div>
