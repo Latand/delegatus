@@ -1,0 +1,49 @@
+{
+  "capturedAt": "2026-10-23T05:05:56.939Z",
+  "command": "CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t \"sound captions\" (isolated roots, scripts/gate-slot.sh)",
+  "sourceDigests": {
+    "src/components/SoundCaptions.tsx": "a627805b9031890884f9b3941bac8f8da330cab96ccbc728bd2d5391576de6bf",
+    "src/components/soundCaptionPlacement.ts": "9abe01db66fd905c6ea41ede119770f7653d74840b0cd9104d7de75514ef6cbf",
+    "src/components/soundCaptionStyles.ts": "1a7c3674f640de9699c331e82ccb004fd7926680e0cae4ff18932af04160c454",
+    "src/lib/audio/captions.ts": "aa34bd96d37b4e26a5d80a4aa0a9df9f451f17806fa21e564491876ecde47889",
+    "src/lib/i18n/en.ts": "c7504d33ca1839397b185a1185186fa675da8461a353a88e8394dec5597fd60c",
+    "src/lib/i18n/uk.ts": "5fc068997fe4d5469dd40f20681c37d93eb4c751316f4a73a476334ab94cf1d3"
+  },
+  "readings": [
+    {
+      "tag": "real path uk",
+      "line": "Критик вигляду — пройдено",
+      "subject": "Підписи до звуків: що означає кожен",
+      "rect": [
+        1194.4,
+        134,
+        1424,
+        190
+      ]
+    },
+    {
+      "tag": "real path en",
+      "line": "Visual critic passed",
+      "subject": "Sound captions: say what each sound means",
+      "rect": [
+        1156.5,
+        134,
+        1424,
+        190
+      ]
+    },
+    {
+      "tag": "muted en",
+      "toastsAfterMutedStage": 0
+    },
+    {
+      "tag": "phone 390×844 en",
+      "captionElements": 0
+    },
+    {
+      "tag": "phone 390×844 uk",
+      "captionElements": 0
+    }
+  ],
+  "failures": []
+}
