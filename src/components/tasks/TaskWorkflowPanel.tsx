@@ -40,11 +40,11 @@ export const TaskWorkflowPanel = memo(function TaskWorkflowPanel({ model, onOpen
     aria-label={t("taskHistory.title")} onPointerDown={event => event.stopPropagation()} onWheel={event => event.stopPropagation()}>
     <header className="flex items-center justify-between border-b border-border px-4 py-3">
       <strong>{t("taskHistory.title")}</strong>
-      <button className="flex h-9 w-9 items-center justify-center" onClick={onClose} aria-label={t("taskHistory.close")}><X size={18} /></button>
+      <button className="flex h-9 w-9 items-center justify-center pointer-coarse:h-11 pointer-coarse:w-11" onClick={onClose} aria-label={t("taskHistory.close")}><X size={18} /></button>
     </header>
     <div className="min-h-0 flex-1 overflow-y-auto p-4">
       <label className="mb-4 block text-xs text-muted">{t("taskHistory.task")}
-        <select className="mt-2 block w-full rounded border border-border bg-canvas p-2 text-sm text-primary" value={selected ?? ""} onChange={event => choose(event.target.value || null)}>
+        <select className="mt-2 block w-full rounded border border-border bg-canvas p-2 text-sm text-primary pointer-coarse:min-h-11" value={selected ?? ""} onChange={event => choose(event.target.value || null)}>
           <option value="">{t("taskHistory.unlinked")} · {model.unlinkedWorkers.length}</option>
           {model.tasks.map(item => <option key={item.task.id} value={item.task.id}>{taskTitle(item.task.text)} · {item.workers.length}</option>)}
         </select>
@@ -59,7 +59,7 @@ export const TaskWorkflowPanel = memo(function TaskWorkflowPanel({ model, onOpen
           {execution.pipeline.stateDetail && <p className="mt-1 text-danger">{execution.pipeline.stateDetail}</p>}
           <p className="mt-1">{execution.pipeline.publishedCommit ? t("taskHistory.published", { sha: execution.pipeline.publishedCommit.slice(0, 12) }) : t("taskHistory.unpublished")}</p>
         </section>)}
-        {task.flows.map(flow => <button key={flow.id} className="mb-2 flex w-full items-center justify-between text-left text-xs hover:text-accent" onClick={() => openReviewHistory(flow.id)}>{t("reviewHistory.open")} · {t(`flowState.${flow.state}`)}<ArrowUpRight size={14} /></button>)}
+        {task.flows.map(flow => <button key={flow.id} className="mb-2 flex min-h-6 w-full items-center justify-between text-left text-xs hover:text-accent pointer-coarse:min-h-11" onClick={() => openReviewHistory(flow.id)}>{t("reviewHistory.open")} · {t(`flowState.${flow.state}`)}<ArrowUpRight size={14} /></button>)}
         {task.flows.filter(flow => flow.mergeEvidence).map(flow => <p key={flow.id} className="my-2 text-xs">
           {flow.mergeEvidence?.mergedAt ? t("taskHistory.merged") : t("taskHistory.mergeUnrecorded")}
           {flow.mergeEvidence?.headSha ? ` · ${flow.mergeEvidence.headSha.slice(0, 12)}` : ""}
@@ -70,12 +70,12 @@ export const TaskWorkflowPanel = memo(function TaskWorkflowPanel({ model, onOpen
         {model.unlinkedPipelines.map(pipeline => <details key={pipeline.id} className="mb-2 text-xs"><summary>{pipeline.task} · {pipeline.state}</summary><p className="mt-2">{pipeline.stateDetail ?? t("taskHistory.associationUnrecorded")}</p></details>)}
         {model.unlinkedFlows.map(flow => <button key={flow.id} className="mb-2 block min-h-11 text-xs text-accent" onClick={() => openReviewHistory(flow.id)}>{t("reviewHistory.open")} · {t(`flowState.${flow.state}`)} · {flow.rounds.length}</button>)}
       </>}
-      <label className="mb-3 flex items-center gap-2 rounded border border-border bg-canvas px-2"><Search size={15} /><input className="min-w-0 flex-1 bg-transparent py-2 text-sm outline-none" aria-label={t("taskHistory.search")} placeholder={t("taskHistory.search")} value={query} onChange={event => { setQuery(event.target.value); setPage(0); }} /></label>
+      <label className="mb-3 flex items-center gap-2 rounded border border-border bg-canvas px-2"><Search size={15} /><input className="min-w-0 flex-1 bg-transparent py-2 text-sm outline-none pointer-coarse:min-h-11" aria-label={t("taskHistory.search")} placeholder={t("taskHistory.search")} value={query} onChange={event => { setQuery(event.target.value); setPage(0); }} /></label>
       <p className="mb-2 text-xs text-muted">{t("taskHistory.records", { count: matching.length })}</p>
       <div data-task-history-rows>
         {matching.length === 0 && <p className="py-4 text-sm text-muted">{t("taskHistory.empty")}</p>}
         {matching.slice(currentPage * PAGE, (currentPage + 1) * PAGE).map(row => <section key={row.key} className="border-t border-border py-3 text-xs" data-work-reference={row.key}>
-          {row.file ? <button data-conversation-path={row.file.path} className="flex min-h-9 w-full items-center justify-between gap-2 text-left text-sm font-semibold hover:text-accent" onClick={() => { onClose(); onOpen(row.file!); }}>
+          {row.file ? <button data-conversation-path={row.file.path} className="flex min-h-9 w-full items-center justify-between gap-2 pointer-coarse:min-h-11 text-left text-sm font-semibold hover:text-accent" onClick={() => { onClose(); onOpen(row.file!); }}>
             {cleanTitle(row.file.title)}<ArrowUpRight size={15} className="shrink-0" />
           </button> : <strong className="block text-sm">{row.kind === "planned" ? t("taskHistory.planned") : row.path ? t("taskHistory.unavailable") : t("taskHistory.unresolved")}</strong>}
           <p className="mt-1 text-muted">{row.role} · {row.kind === "assignment" ? t("taskHistory.assignmentState", { state: row.state }) : row.state}{row.stageId ? ` · ${row.stageId}` : ""}{row.attempt ? ` · ${t("taskHistory.attempt", { count: row.attempt })}` : ""}</p>
@@ -87,9 +87,9 @@ export const TaskWorkflowPanel = memo(function TaskWorkflowPanel({ model, onOpen
       </div>
     </div>
     <footer className="flex items-center justify-between border-t border-border px-4 py-2 text-xs">
-      <button disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)} className="flex h-9 items-center gap-1 disabled:opacity-30"><ChevronLeft size={16} />{t("taskHistory.previous")}</button>
+      <button disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)} className="flex h-9 items-center gap-1 disabled:opacity-30 pointer-coarse:h-11"><ChevronLeft size={16} />{t("taskHistory.previous")}</button>
       <span>{currentPage + 1} / {lastPage + 1}</span>
-      <button disabled={currentPage === lastPage} onClick={() => setPage(currentPage + 1)} className="flex h-9 items-center gap-1 disabled:opacity-30">{t("taskHistory.next")}<ChevronRight size={16} /></button>
+      <button disabled={currentPage === lastPage} onClick={() => setPage(currentPage + 1)} className="flex h-9 items-center gap-1 disabled:opacity-30 pointer-coarse:h-11">{t("taskHistory.next")}<ChevronRight size={16} /></button>
     </footer>
   </aside>;
 });

@@ -687,20 +687,27 @@ function PastAttemptsSection({ pipeline, flows, flowsById, files, names, nowMs, 
   const [open, setOpen] = useMobileScreenState({ kind: "pipeline", id: pipeline.id }, "past", false);
   const nameOf = (stageId: string) => names.get(stageId) ?? stageId;
   const history = pastAttempts([pipeline], flowsById);
+  const archiveByStage = new Map<string, Map<number, string>>();
+  for (const run of pipeline.runs) {
+    const byAttempt = new Map<number, string>();
+    for (const attempt of run.attempts) if (attempt.flowId) byAttempt.set(attempt.n, attempt.flowId);
+    archiveByStage.set(run.stageId, byAttempt);
+  }
   const listed = new Set(history.flatMap((row) => (row.conversation.path ? [row.conversation.path] : [])));
   const rows: PastRow[] = [
     ...history.map((row) => {
       const archiveId = row.kind === "round" && row.attempt != null
-        ? stageAttempts(pipeline, row.stageId).find(attempt => attempt.n === row.attempt)?.flowId : null;
+        ? archiveByStage.get(row.stageId)?.get(row.attempt) : null;
       return {
-      archive: archiveId ? { id: archiveId, round: row.n } : undefined,
-      key: row.key,
-      label: pastAttemptLabel(t, row, nameOf(row.stageId)),
-      state: pastAttemptState(t, row),
-      tone: pastAttemptTone(row),
-      atMs: row.atMs,
-      file: resolveStageNavFile({ conversationId: row.conversation.conversationId, agentPath: row.conversation.path }, files),
-    }; }),
+        archive: archiveId ? { id: archiveId, round: row.n } : undefined,
+        key: row.key,
+        label: pastAttemptLabel(t, row, nameOf(row.stageId)),
+        state: pastAttemptState(t, row),
+        tone: pastAttemptTone(row),
+        atMs: row.atMs,
+        file: resolveStageNavFile({ conversationId: row.conversation.conversationId, agentPath: row.conversation.path }, files),
+      };
+    }),
     ...pipeline.stages.flatMap((stage) => reviewTranscripts(pipeline, stage, flows, files)
       .filter((transcript) => !listed.has(transcript.path))
       .map((transcript) => ({

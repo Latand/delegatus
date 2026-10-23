@@ -58,7 +58,7 @@ const dom = new Window({ url: "http://localhost/", width: 390, height: 844 });
 const G = globalThis as Record<string, unknown>;
 const OVERRIDES: Record<string, unknown> = {
   window: dom, document: dom.document, navigator: dom.navigator, Node: dom.Node, HTMLElement: dom.HTMLElement,
-  Event: dom.Event, KeyboardEvent: dom.KeyboardEvent, MouseEvent: dom.MouseEvent, PointerEvent: dom.PointerEvent,
+  Event: dom.Event, CustomEvent: dom.CustomEvent, KeyboardEvent: dom.KeyboardEvent, MouseEvent: dom.MouseEvent, PointerEvent: dom.PointerEvent,
   sessionStorage: dom.sessionStorage, localStorage: dom.localStorage,
   requestAnimationFrame: (cb: (t: number) => void) => setTimeout(() => cb(0), 0) as unknown as number,
   cancelAnimationFrame: (id: number) => clearTimeout(id),
