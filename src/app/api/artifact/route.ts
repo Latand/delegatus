@@ -1,3 +1,5 @@
+import { workspaceRoute, requestWorkspaceScope, workspaceDenied } from "@/lib/team/workspaceRoute";
+import { projectForCwd } from "@/lib/scanner/describe";
 import type { promises as fsp } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -87,7 +89,7 @@ function baseHeaders(mime: string, etag: string, name: string, download: boolean
   return headers;
 }
 
-export async function GET(req: NextRequest): Promise<NextResponse<FailBody> | NextResponse> {
+async function workspaceGET(req: NextRequest): Promise<NextResponse<FailBody> | NextResponse> {
   /* Same gate as every other loopback route: a drive-by page or DNS rebind
      must not pull local file bytes out of this service. */
   const rejection = rejectCrossOrigin(req);
@@ -116,6 +118,8 @@ export async function GET(req: NextRequest): Promise<NextResponse<FailBody> | Ne
   }
   if (!realpathAdmitted(admission, real, await realAllowedRoots())) return fail("access-denied", "path is outside the allowed roots");
 
+  const workspace = requestWorkspaceScope(req);
+  if (workspace && workspace.access(projectForCwd(path.dirname(real))) === "none") return workspaceDenied();
   /* realpath resolved every link above; a link appearing at the final
      component or at any directory above it between then and now is a race,
      refused. A FIFO does not wedge the open — its fstat below rejects it. */
@@ -197,3 +201,5 @@ export async function GET(req: NextRequest): Promise<NextResponse<FailBody> | Ne
     throw error;
   }
 }
+
+export const GET = workspaceRoute("/api/artifact", workspaceGET);

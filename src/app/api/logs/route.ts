@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
 import { feedPathAllowed } from "@/lib/externalRelay/feedAccess";
@@ -41,7 +42,7 @@ function parseReqs(body: unknown): BatchReq[] {
  * instead of one HTTP round-trip per pane per tick. Same chunk semantics as
  * GET /api/log; history (`before`) reads stay on the single-file route.
  */
-export async function POST(req: NextRequest): Promise<NextResponse<{ chunks: Record<string, LogChunk | ApiError> }>> {
+async function workspacePOST(req: NextRequest): Promise<NextResponse<{ chunks: Record<string, LogChunk | ApiError> }>> {
   let body: unknown = null;
   try {
     body = await req.json();
@@ -64,3 +65,5 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ chunks: Rec
   }
   return NextResponse.json({ chunks });
 }
+
+export const POST = workspaceRoute("/api/logs", workspacePOST);

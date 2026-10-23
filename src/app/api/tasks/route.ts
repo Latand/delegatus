@@ -1,3 +1,4 @@
+import { requestWorkspaceScope, filterWorkspaceRows, workspaceRoute, assertWorkspaceProject } from "@/lib/team/workspaceRoute";
 import fs from "node:fs";
 
 import { NextRequest, NextResponse } from "next/server";
@@ -33,7 +34,7 @@ const TASK_STATUSES = new Set<string>(["inbox", "assigned", "blocked", "done"]);
  * answered all 1.7 MB of every project's tasks rather than nothing. A
  * parameter this route does not read, or a status that is none, is refused.
  */
-export async function GET(req: NextRequest): Promise<NextResponse<{ tasks: TaskPipelineReadModel[] } | ApiError>> {
+async function workspaceGET(req: NextRequest): Promise<NextResponse<{ tasks: TaskPipelineReadModel[] } | ApiError>> {
   const params = req.nextUrl.searchParams;
   const unknown = [...new Set(params.keys())].filter((key) => !LIST_PARAMETERS.has(key));
   if (unknown.length > 0) {
@@ -55,7 +56,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<{ tasks: TaskP
        Both reads are the shared list caches, never a copy of every stored row:
        the projection below copies each task it returns and only reads the
        pipelines. */
-    const tasks = loadTasksForList().filter((task) => (projects.size === 0 || projects.has(task.project))
+    const tasks = filterWorkspaceRows(requestWorkspaceScope(req), loadTasksForList()).filter((task) => (projects.size === 0 || projects.has(task.project))
       && (statuses.size === 0 || statuses.has(task.status)));
     const projected = withPrototypeReviewSummaries(projectTaskPipelineIds(tasks, loadPipelinesForList()));
     // Agents read prototype contents through the project-scoped review tool.
@@ -66,7 +67,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<{ tasks: TaskP
   }
 }
 
-export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; task: BoardTask; matched?: boolean; notes?: string[] } | ApiError>> {
+async function workspacePOST(req: NextRequest): Promise<NextResponse<{ ok: true; task: BoardTask; matched?: boolean; notes?: string[] } | ApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
 
@@ -83,12 +84,14 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; t
   }
 
   const result = mutateTasksFile<CreateTaskResult>((state) => {
+    assertWorkspaceProject(req, typeof body.project === "string" ? body.project : null);
     const outcome = createTask(state.tasks, body, state.recentCreates, {
       /* An attachment ref only becomes task-owned once its bytes are actually
          in the store — a stale/forged ref is rejected loudly, never dangling. */
       attachmentExists: (att) => fs.existsSync(attachmentPath(att)),
       explicit: true, seatHolding: taskSeatHoldingSnapshot(), statusActor: OPERATOR_PAUSE_RESUME_ACTOR,
     });
+    if (outcome.ok) assertWorkspaceProject(req, outcome.task.project);
     /* Persist only a fresh create; a validation failure or a replay (which left
        the list and receipts untouched) skips the rewrite. */
     const persist = outcome.ok && !outcome.replay ? { tasks: outcome.tasks, recentCreates: outcome.recentCreates } : undefined;
@@ -119,3 +122,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; t
      clamped to none, and says so (#2102). */
   return NextResponse.json({ ok: true, task: taskForResponse(req, result.task), ...(result.matched !== undefined ? { matched: result.matched } : {}), ...(result.notes ? { notes: result.notes } : {}) });
 }
+
+export const GET = workspaceRoute("/api/tasks", workspaceGET, true);
+
+export const POST = workspaceRoute("/api/tasks", workspacePOST);

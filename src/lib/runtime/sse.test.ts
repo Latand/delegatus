@@ -133,3 +133,23 @@ test("SSE forwards every session's tool items, a session this tab never opened i
   expect(asked).toEqual([[0, expect.any(Number)]]);
   expect(forwarded.map((e) => [e.kind, e.scope.id])).toEqual([["item", "conv-on-screen"], ["item", "conv-never-opened"]]);
 });
+
+test("SSE omits refused events while advancing the replay cursor past them", async () => {
+  const afters: number[] = [];
+  const client = {
+    waitEvents: async (after: number) => {
+      afters.push(after);
+      return { reset: false, floorSeq: 0, events: after === 0 ? [event(1), event(2), event(3)] : [event(4)] };
+    },
+  } as unknown as RuntimeHostClient;
+  const abort = new AbortController();
+  const reader = runtimeEventStream(client, 0, abort.signal, async row => row.seq !== 2).getReader();
+  try {
+    const first = new TextDecoder().decode((await reader.read()).value);
+    expect(first).toContain("id: 1\n");
+    expect(first).not.toContain("id: 2\n");
+    expect(first).toContain("id: 3\n");
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain("id: 4\n");
+    expect(afters).toEqual([0, 3]);
+  } finally { abort.abort(); await reader.cancel(); }
+});

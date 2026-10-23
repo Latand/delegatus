@@ -102,7 +102,7 @@ export async function activityTokensResponse(search: URLSearchParams, viewer: Ac
     const meta = store ? usageMeta(store.db) : null;
     const storeId = store?.db.query<{ store_id: string }, []>("SELECT store_id FROM activity_meta WHERE singleton=1").get()?.store_id ?? null;
     const key = JSON.stringify([file, storeId, meta, range.from, range.to, range.tz, range.preset, bucket, stack, list, filters, scoped, member,
-      search.get("compare") === "previous", listLimit, aliases, canChoose, viewer.memberId]);
+      search.get("compare") === "previous", listLimit, aliases, canChoose, viewer.memberId, viewer.workspaceProjects]);
     const cached = cache.get(key);
     if (cached && now - cached.at >= 0 && now - cached.at < CACHE_TTL_MS) {
       cache.delete(key); cache.set(key, cached);
@@ -110,7 +110,7 @@ export async function activityTokensResponse(search: URLSearchParams, viewer: Ac
     }
     const projectExpression = (column: string) => Object.keys(aliases).length ? `CASE ${column} ${Object.keys(aliases).sort().map(from => `WHEN ${sqlString(from)} THEN ${sqlString(deps.canonical(from))}`).join(" ")} ELSE COALESCE(${column}, '') END` : `COALESCE(${column}, '')`;
     const dimension = (dim: TokenDimension) => dim === "kind" ? "'all'" : dim === "project" ? projectExpression("project") : dim;
-    const summaryRead=!hourlyAvailable&&!scoped&&(!member||member==="all")&&Object.keys(filters).length===0;
+    const summaryRead=!viewer.workspaceProjects&&!hourlyAvailable&&!scoped&&(!member||member==="all")&&Object.keys(filters).length===0;
     const query = <T>(name: "totals" | "series" | "list" | "previous", sql: string, bindings: SQLQueryBindings[]): T[] => {
       const cpu=deps.measured?process.cpuUsage():null;
       const switches=deps.measured?process.resourceUsage().involuntaryContextSwitches:0;
@@ -148,6 +148,13 @@ export async function activityTokensResponse(search: URLSearchParams, viewer: Ac
       if (scoped) {
         const raw = [...new Set([scoped, ...Object.keys(aliases).filter(p => deps.canonical(p) === scoped)])];
         clauses.push(`project IN (${raw.map(() => "?").join(",")})`); binds.push(...raw);
+      }
+      if (viewer.workspaceProjects) {
+        const filter = viewer.workspaceProjects;
+        const expression = projectExpression("project");
+        clauses.push(`(${expression} IN (SELECT value FROM json_each(?))${filter.allowUnassigned ? ` OR (${expression} != '' AND ${expression} != 'project_unresolved' AND ${expression} NOT IN (SELECT value FROM json_each(?)))` : ""})`);
+        binds.push(JSON.stringify(filter.allowed));
+        if (filter.allowUnassigned) binds.push(JSON.stringify(filter.assigned));
       }
       if (member && member !== "all") { clauses.push("member = ?"); binds.push(member); }
       for (const [field, value] of Object.entries(filters)) { clauses.push(`${field} = ?`); binds.push(value); }

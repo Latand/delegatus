@@ -1,3 +1,4 @@
+import { requestWorkspaceScope, filterWorkspaceRows, workspaceRoute } from "@/lib/team/workspaceRoute";
 import { scopeConversationCatalog, catalogEntryToFileEntry, conversationCatalogReady, conversationCatalogSnapshot, ExpiredConversationCatalogCursorError, loadConversationCatalogPage } from "@/lib/scanner/conversationCatalog";
 import { conversationSearchProjection } from "@/lib/scanner/conversationSearchProjection";
 import { searchTextForTranscript } from "@/lib/scanner/describe";
@@ -17,7 +18,7 @@ function pageLimit(value: string | null): number | undefined {
   return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
-export async function GET(request: Request): Promise<Response> {
+async function workspaceGET(request: Request): Promise<Response> {
   const url = new URL(request.url);
   if (!conversationCatalogReady()) await refreshConversationCatalog();
   // Cursor pages keep their frozen ordering. New reads reconcile membership
@@ -32,7 +33,7 @@ export async function GET(request: Request): Promise<Response> {
   const deputies = deputyConversationRefs();
   const hiddenPaths = new Set(deputies?.paths ?? []);
   const hiddenIds = new Set(deputies?.conversationIds ?? []);
-  const source = conversationCatalogSnapshot().filter((entry) => !hiddenPaths.has(entry.path));
+  const source = filterWorkspaceRows(requestWorkspaceScope(request), conversationCatalogSnapshot()).filter((entry) => !hiddenPaths.has(entry.path));
   const hydrateSearchText = (entry: (typeof source)[number]) => {
     const text = searchTextForTranscript(entry.path, entry.size, entry.engine);
     return {
@@ -41,7 +42,9 @@ export async function GET(request: Request): Promise<Response> {
       firstPrompt: text.firstPrompt ?? "",
     };
   };
+  const scope = requestWorkspaceScope(request);
   const options = {
+    authorityScope: scope ? JSON.stringify([scope.memberId, scope.projectFilter]) : "",
     project: url.searchParams.get("project")?.trim() || undefined,
     query,
     cursor: url.searchParams.get("cursor"),
@@ -81,7 +84,7 @@ export async function GET(request: Request): Promise<Response> {
     /* A cursor page reads the ordering frozen at its first page, and a row
        can be addressed by another path than the one the record holds: its
        conversation id catches both. */
-    const shown = page.items.filter((item) => !hiddenPaths.has(item.path) && !(item.conversationId && hiddenIds.has(item.conversationId)));
+    const shown = filterWorkspaceRows(requestWorkspaceScope(request), page.items).filter((item) => !hiddenPaths.has(item.path) && !(item.conversationId && hiddenIds.has(item.conversationId)));
     if (shown.length !== page.items.length) page = { ...page, items: shown, total: Math.max(0, page.total - (page.items.length - shown.length)) };
     return Response.json(page);
   } catch (error) {
@@ -91,3 +94,5 @@ export async function GET(request: Request): Promise<Response> {
     throw error;
   }
 }
+
+export const GET = workspaceRoute("/api/conversations", workspaceGET, true);
