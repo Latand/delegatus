@@ -1162,7 +1162,7 @@ const BUILD_ONLY = [{ id: "build", kind: "run", role: { roleId: "builder" }, eng
 
 /* --- #729: the orchestrator publishes the head the review layer fences on --- */
 
-function publishHarness(h: ReturnType<typeof harness>, options: { origin?: boolean; pushFails?: boolean; remoteReadFails?: boolean } = {}) {
+function publishHarness(h: ReturnType<typeof harness>, options: { origin?: boolean; pushFails?: boolean; privacyRejects?: boolean; remoteReadFails?: boolean } = {}) {
   const passedSha = "7".repeat(40);
   const order: string[] = [];
   /* Oldest first. `merge-base --is-ancestor` is answered from this, so the
@@ -1210,6 +1210,12 @@ function publishHarness(h: ReturnType<typeof harness>, options: { origin?: boole
       return { code: 0, stdout: remoteBranch ? `${remoteBranch}\trefs/heads/${branch}\n` : "", stderr: "" };
     }
     if (args[0] === "push") {
+      if (options.privacyRejects) {
+        const accepted = loadPipelines()[0]?.lastPassedCommit;
+        const pushed = args.find((arg) => /^[0-9a-f]{40}:/i.test(arg))?.split(":", 1)[0] ?? "missing";
+        order.push(`privacy:${accepted ?? "unaccepted"}:${pushed}`);
+        return { code: 1, stdout: "", stderr: "pre-push: privacy\nPRIVACY GATE: FAIL: accepted head fixture\npre-push: bun failed (1); gate failed" };
+      }
       if (options.pushFails || pushFails) {
         order.push("push-rejected");
         return { code: 1, stdout: "", stderr: "! [remote rejected] (shallow update not allowed)" };
