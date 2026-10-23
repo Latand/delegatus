@@ -4297,8 +4297,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         ...(TELEGRAM_STEP || FM_SEAT ? { projectCwds: { [PROJECT]: "/repo/atlas" } } : {}),
       };
     const retiredBoard = SCENARIO === "retired-review" && params.get("surface") === "direct-board"
-      ? { files: directFiles, flows: [], pipelines: [], tasks: [], conversationAliases: { "old-direct-subject": "direct-subject" },
-        projectCatalog: [{ project: PROJECT, conversations: directFiles.length, smt: now }] } : {};
+      ? { files: [orchestrator, ...directFiles], flows: [], pipelines: [], tasks: [], conversationAliases: { "old-direct-subject": "direct-subject" },
+        projectCatalog: [{ project: PROJECT, conversations: directFiles.length + 1, smt: now }] } : {};
     const body = JSON.stringify({ ...scoped, ...retiredBoard, ...((DECISIONS || REPORT_PREVIEW) && seatDecisionNotices().length ? { seatDecisions: seatDecisionNotices() } : {}), workflows: [], systemHealth: { tmux: { status: "healthy" }, ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) }, ...(workLinks ? { workLinks } : {}) });
     if (COLD_BOARD) {
       const headers = new Headers(init?.headers);
@@ -5158,7 +5158,7 @@ function RetiredReviewScene() {
     {[retainedArchive, directGroup].map((flow, index) => <div key={flow.id} data-retained-deck={index === 0 ? "archive" : "direct"}
       className="mx-auto mb-8 h-[min(660px,calc(100dvh-32px))] w-full max-w-[600px]">
       <RoundDeck flow={flow} focusRound={null} rounds={flow.rounds.map(round => ({ key: `r${round.n}`, round,
-        file: index === 0 ? { ...searchRev, proc: null, pid: null, spawn: undefined, renamable: true, waitingInput: { target: "pane", since: (now - 60) * 1000, screenTail: "Retained prompt", menu: null } } : directFiles.find(file => file.path === round.reviewerPath)! }))} />
+        file: index === 0 ? { ...searchRev, proc: null, pid: null, spawn: undefined, renamable: true, waitingInput: { target: "pane", since: now - 60, screenTail: "Retained prompt", menu: null } } : directFiles.find(file => file.path === round.reviewerPath)! }))} />
     </div>)}
   </div>;
   return <Viewer />;

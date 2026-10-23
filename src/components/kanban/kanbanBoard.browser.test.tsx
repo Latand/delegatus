@@ -23316,7 +23316,7 @@ describe("floating voice companion", () => {
       }
       if (rect.right - rect.left < 1 || rect.bottom - rect.top < 1) continue;
       const style = getComputedStyle(node);
-      if (style.visibility === "hidden" || style.display === "none" || style.opacity === "0" || style.pointerEvents === "none") continue;
+      if (style.visibility === "hidden" || style.display === "none" || style.pointerEvents === "none") continue;
       controls.push({ rect, name: `${node.tagName.toLowerCase()}.${String(node.getAttribute("class") ?? "").split(" ")[0]}` });
     }
     let overlapArea = 0;
@@ -37003,7 +37003,7 @@ describe("retired review history", () => {
               await page.goto(`${server.base}?scenario=retired-review&surface=direct-board`);
               const board = page.locator("[data-kanban-board]");
               await board.waitFor();
-              await board.locator(".card[data-id]").first().waitFor();
+              await board.locator(".card[data-id]").first().scrollIntoViewIfNeeded();
               expect(await board.locator('.card[data-id*="direct-review-1"], .card[data-id*="direct-review-2"], .card[data-id*="old-direct-review-2"]').count()).toBe(0);
               await capture(page, tag + "-direct-viewer", "[data-kanban-board]");
               // The shared layout still hosts the deck used by retained
