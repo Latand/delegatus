@@ -57,7 +57,7 @@ export function parseProjectAccountsView(body: unknown): ProjectAccountsView | n
       : [];
     return [{
       engine,
-      nextChosenAccountId: typeof view.nextChosenAccountId === "string" ? view.nextChosenAccountId : null,
+      ...(typeof view.nextChosenAccountId === "string" ? { nextChosenAccountId: view.nextChosenAccountId } : {}),
       restricted: view.restricted === true,
       allowed: accounts(view.allowed),
       carrying: accounts(view.carrying),
