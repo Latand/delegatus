@@ -1,4 +1,5 @@
 "use client";
+import { StageSetupResult } from "@/components/pipelines/StageSetupResult";
 
 import { Boxes, Check, CircleX, Eye, GitMerge, Pause, Play, RotateCcw, SkipForward, Undo2 } from "lucide-react";
 
@@ -476,9 +477,7 @@ export function MobilePipelineScreen({
   /* The ⋯ sheet opens on the lane's own actions; its «Board menu» row turns
      it into the board's menu, and closing it resets the face. */
   const [menuFace, setMenuFace] = useState<"pipeline" | "board">("pipeline");
-  useEffect(() => {
-    if (navState.sheet !== "menu") setMenuFace("pipeline");
-  }, [navState.sheet]);
+  if (navState.sheet !== "menu" && menuFace !== "pipeline") setMenuFace("pipeline");
 
   const held = lane.held(pipeline);
   const acting = lane.acting(pipeline);
@@ -622,6 +621,8 @@ export function MobilePipelineScreen({
           }}
           onWorkLinks={() => nav.openSheet("links")}
         />
+        {pipeline.runs.flatMap(run => run.attempts.filter(attempt => attempt.setup).map(attempt =>
+          <StageSetupResult key={`${run.stageId}:${attempt.n}`} setup={attempt.setup} />))}
         {linked.length ? (
           <section data-mobile2-section="tasks" className="flex shrink-0 flex-col gap-1.5">
             <h3 className="flex min-h-[30px] items-center gap-1.5 text-ui font-semibold text-secondary">

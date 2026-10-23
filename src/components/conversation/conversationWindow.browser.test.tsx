@@ -1,4 +1,5 @@
 import { fileConfirmationText } from "@/lib/telegram/bot/fileConfirmationContract";
+import { createHash } from "node:crypto";
 import { describe, expect } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -34,6 +35,58 @@ const LAUNCH: LaunchOptions = {
   ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}),
 };
 const FIXTURE = "src/components/conversation/conversationWindowEvidence.fixture.tsx";
+
+describe("project setup result", () => {
+  browserTest("the command, cwd, output and settled result fit both languages, themes and widths", async () => {
+    const out = path.resolve(".artifacts/project-setup");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const)
+        for (const width of [390, 1440]) for (const state of ["running", "passed", "failed"] as const) {
+          const { context, page, pageErrors } = await openFixture(browser,
+            `${served.base}?case=project-setup&setupState=${state}&lang=${lang}`, { width, height: 900 }, theme, lang, "reduce", width === 390);
+          try {
+            const detail = page.locator("[data-stage-setup]");
+            await detail.waitFor();
+            expect(await detail.locator("summary").innerText()).toBe(`${translate(lang, "projectSetup.title")} · ${translate(lang, `projectSetup.${state}`)}`);
+            expect(await detail.getAttribute("open")).toBeNull();
+            await detail.locator("summary").click();
+            expect(await detail.innerText()).toContain("scripts/setup.sh");
+            expect(await detail.innerText()).toContain("Workspace ready");
+            if (state === "failed") expect(await detail.innerText()).toContain("Dependency unavailable");
+            const geometry = await detail.evaluate(element => {
+              const box = element.getBoundingClientRect();
+              const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+              const clipped: string[] = [];
+              while (walker.nextNode()) {
+                const text = walker.currentNode;
+                if (!text.textContent?.trim()) continue;
+                const range = document.createRange(); range.selectNodeContents(text);
+                for (const rect of range.getClientRects()) if (rect.left < box.left || rect.right > box.right
+                  || rect.top < box.top || rect.bottom > box.bottom) clipped.push(text.textContent);
+              }
+              return { left: box.left, right: box.right, bottom: box.bottom, clipped, scroll: window.scrollY };
+            });
+            expect(geometry.clipped).toEqual([]);
+            expect(geometry.left).toBeGreaterThanOrEqual(0); expect(geometry.right).toBeLessThanOrEqual(width);
+            expect(geometry.bottom).toBeLessThanOrEqual(900); expect(geometry.scroll).toBe(0);
+            const frame = `${lang}-${theme}-${width}-${state}.png`;
+            await page.locator("[data-setup-fixture]").screenshot({ path: path.join(out, frame) });
+            readings.push({ lang, theme, width, state, frame, geometry });
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+      fs.mkdirSync("evidence/project-setup", { recursive: true });
+      const sourceDigests = Object.fromEntries([FIXTURE, "src/components/pipelines/StageSetupResult.tsx",
+        "src/components/conversation/conversationWindow.browser.test.tsx"].map(file =>
+        [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")]));
+      fs.writeFileSync("evidence/project-setup/rendered.json", JSON.stringify({ capturedAt: new Date().toISOString(), sourceDigests, readings }, null, 2) + "\n");
+    } finally { await browser.close(); served.stop(); }
+  });
+});
 
 describe("#1793 launch-prompt bubble", () => {
   /*

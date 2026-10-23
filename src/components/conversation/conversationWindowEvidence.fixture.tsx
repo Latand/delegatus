@@ -1,6 +1,7 @@
 "use client";
 
 import { TelegramFileConfirmation } from "@/components/telegram/TelegramFileConfirmation";
+import { StageSetupResult } from "@/components/pipelines/StageSetupResult";
 import type { FileConfirmationView } from "@/lib/telegram/bot/fileConfirmationContract";
 import { DeputyBlock } from "./DeputyBlock";
 import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
@@ -99,6 +100,7 @@ const MANDATE = [
 const ECHO = `You are the Orchestrator. Drive work through the production Viewer MCP tools.\n\n${MANDATE}\n\n## Handoff\nSupersedes the predecessor seat.`;
 
 export type ConversationWindowCase =
+  | "project-setup"
   | "file-confirmation"
   | "seat-inbox"
   | "parallel-failure"
@@ -1856,6 +1858,15 @@ const requested = (params.get("case") as ConversationWindowCase | null) ?? "rece
    composer and a fake host behind them — so it takes over the root rather than
    rendering one arranged frame. */
 if (root && requested === "file-confirmation") mountFileConfirmation(root);
+else if (root && requested === "project-setup") {
+  const state = params.get("setupState") as "running" | "passed" | "failed";
+  createRoot(root).render(<main data-setup-fixture className="m-4 max-w-xl bg-canvas p-4 text-primary">
+    <StageSetupResult setup={{ command: ["sh", "scripts/setup.sh"], cwd: "pipeline-checkout/web", hash: "a".repeat(64), state,
+      startedAt: "2026-10-23T10:00:00.000Z", completedAt: state === "running" ? null : "2026-10-23T10:00:01.000Z",
+      code: state === "running" ? null : state === "passed" ? 0 : 7,
+      stdout: "Preparing dependencies\nWorkspace ready", stderr: state === "failed" ? "Dependency unavailable" : "" }} />
+  </main>);
+}
 else if (root && requested === "seat-inbox") createRoot(root).render(<InboxFixture />);
 else if (root && requested === "attention-answer") mountAttentionAnswer(root);
 else if (root && requested === "parallel-failure") createRoot(root).render(<ParallelFailureFixture />);

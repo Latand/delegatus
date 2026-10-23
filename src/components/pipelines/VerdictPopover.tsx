@@ -1,6 +1,7 @@
 "use client";
 
 import { shortId } from "@/lib/shortIds";
+import { StageSetupResult } from "./StageSetupResult";
 import { RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
@@ -174,6 +175,7 @@ export function VerdictPopover({
         {busy ? <RefreshCw className="ml-auto h-3 w-3 animate-spin text-muted" aria-hidden /> : null}
       </div>
 
+      <StageSetupResult setup={attempt.setup} />
       {verdict && typeof verdict.confidence === "number" ? (
         <div className="flex items-center gap-1.5">
           <span className="shrink-0 text-label font-semibold text-secondary">{t("pipelineVerdict.confidence")}</span>
@@ -202,13 +204,16 @@ export function VerdictPopover({
           <div className="flex max-h-24 flex-col gap-0.5 overflow-y-auto">
             {priorAttempts.map((prior) => {
               const line = t("pipelineVerdict.attemptLine", { n: prior.n, status: prior.verdict ? verdictStatusLabel(t, prior.verdict.status) : attemptStateLabel(t, prior.state) });
-              return prior.agentPath && onOpenPath && pathAvailable(prior.agentPath) ? (
-                <button key={prior.n} type="button" aria-label={t("pipelineVerdict.openAttemptTranscript", { n: prior.n })} onClick={() => onOpenPath(prior.agentPath!)} className={`rounded-control px-1 text-left font-mono text-[9.5px] text-muted hover:bg-canvas hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${mobileTarget}`}>
+              return <div key={prior.n}>
+                {prior.agentPath && onOpenPath && pathAvailable(prior.agentPath) ? (
+                <button type="button" aria-label={t("pipelineVerdict.openAttemptTranscript", { n: prior.n })} onClick={() => onOpenPath(prior.agentPath!)} className={`rounded-control px-1 text-left font-mono text-[9.5px] text-muted hover:bg-canvas hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${mobileTarget}`}>
                   {line}
                 </button>
               ) : (
-                <span key={prior.n} className="font-mono text-[9.5px] text-muted">{line}</span>
-              );
+                <span className="font-mono text-[9.5px] text-muted">{line}</span>
+              )}
+                <StageSetupResult setup={prior.setup} />
+              </div>;
             })}
           </div>
         </div>

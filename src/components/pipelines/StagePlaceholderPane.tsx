@@ -2,6 +2,7 @@
 
 import { Check, ChevronLeft, ChevronRight, Loader2, SlidersHorizontal } from "lucide-react";
 import { useState } from "react";
+import { StageSetupResult } from "./StageSetupResult";
 
 import { RuntimeControlsView, type RuntimeApplyState, type RuntimeDraft } from "@/components/AgentRuntimeControls";
 import { effortTierLabel } from "@/components/builderCopy";
@@ -22,6 +23,7 @@ import {
   PIPELINE_ROLE_OPTIONS,
   STAGE_TONES,
   buildStagePrompt,
+  latestAttempt,
   optimisticRemoveStage,
   optimisticReorderStage,
   patchPipeline,
@@ -340,6 +342,8 @@ export function StagePlaceholderPane({ slot, interactive }: { slot: StageSlot; i
           </button>
         ) : null}
       </header>
+
+      <StageSetupResult setup={latestAttempt(pipeline, stage.id)?.setup} />
 
       {interactive && configOpen ? (
         <RoleSection

@@ -1,4 +1,5 @@
 import { FLOW_ARCHIVE, STAGE_RETIREMENT, hasRetiredStage } from "@/lib/flows/retirement";
+import { preparePipelineSetup } from "./git";
 import { ensureStagePullRequest, stagePullRequestProducer, type StagePullRequestResult } from "./stagePullRequest";
 import { pipelinePauseInputSchema } from "./pauseMetadata";
 import { stageAttemptPushRefusal, settleStageAttemptPush } from "./stageAttemptPush";
@@ -268,6 +269,7 @@ export type PipelineSpawnReceipt = PipelineStageSpawn & {
 export type StageInterruption = Pick<InterruptionObligation, "state" | "recordedAt" | "resolvedAt">;
 
 export interface PipelinePorts {
+  executeProjectSetup?: import("./setupExecution").SetupExecution;
   exec: ExecPort;
   /** Why a new worktree must wait for disk space, or null. Defaults to the
       volumes' free space against `DISK_CRITICAL_BYTES`. */
@@ -6830,6 +6832,20 @@ async function spawnRunStage(
   const recoveringReservation = attempt.activation?.replay === true;
   let roleMemoryWaitReady = false;
   try {
+    const setupAbort = new AbortController();
+    const assertSetupCurrent = () => {
+      if (!attempt.activation) return;
+      const current = findPipelineRecord(pipeline.id);
+      const currentAttempt = current?.runs.find(run => run.stageId === stage.id)?.attempts.find(item => item.n === attempt.n);
+      if (!current || activationFence(current) !== attempt.activation.fence
+        || currentAttempt?.activation?.id !== attempt.activation.id) throw new ActivationSuperseded();
+    };
+    const setupWatch = attempt.activation ? setInterval(() => {
+      try { assertSetupCurrent(); } catch { setupAbort.abort(); }
+    }, 100) : null;
+    try {
+      await preparePipelineSetup(pipeline, stage, attempt, ports.now, persist, ports.executeProjectSetup, setupAbort.signal, assertSetupCurrent);
+    } finally { if (setupWatch) clearInterval(setupWatch); }
     if (attempt.roleMemoryWait) {
       if (attempt.roleMemoryWait.ready === true) {
         roleMemoryWaitReady = true;

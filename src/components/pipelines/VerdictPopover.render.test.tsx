@@ -7,6 +7,16 @@ import type { FileEntry } from "@/lib/types";
 
 import { VerdictPopover } from "./VerdictPopover";
 
+test("setup output remains visible on a stage without a launch or verdict", () => {
+  const current = attempt(1, { agentPath: null, verdict: null, setup: {
+    command: ["sh", "setup.sh"], cwd: ".", hash: "a".repeat(64), state: "failed",
+    startedAt: "2026-10-23T10:00:00.000Z", completedAt: "2026-10-23T10:00:01.000Z",
+    code: 7, stdout: "preparing", stderr: "dependency unavailable",
+  } });
+  const html = renderToStaticMarkup(<VerdictPopover pipeline={pipeline([current])} stage={stage} attempt={current} onClose={() => {}} />);
+  for (const text of ["Project setup", "setup.sh", "Working directory", "Exit code", "preparing", "dependency unavailable"]) expect(html).toContain(text);
+});
+
 function attempt(n: number, over: Partial<PipelineStageAttempt> = {}): PipelineStageAttempt {
   return {
     n,

@@ -297,11 +297,26 @@ function isTerminalOutputPublication(value: unknown): boolean {
     && /^[0-9a-f]{40}$/i.test(publication[key] as string));
 }
 
+function isSetupResult(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const setup = value as Record<string, unknown>;
+  return Array.isArray(setup.command) && setup.command.length > 0 && setup.command.length <= 32
+    && setup.command.every(arg => typeof arg === "string" && arg.length <= 2048)
+    && typeof setup.cwd === "string" && typeof setup.hash === "string" && /^[a-f0-9]{64}$/.test(setup.hash)
+    && ["running", "passed", "failed"].includes(String(setup.state))
+    && typeof setup.startedAt === "string" && Number.isFinite(Date.parse(setup.startedAt))
+    && isNullableString(setup.completedAt) && (setup.code === null || Number.isInteger(setup.code))
+    && (setup.state !== "passed" || setup.code === 0 && typeof setup.completedAt === "string")
+    && typeof setup.stdout === "string" && setup.stdout.length <= 16_000
+    && typeof setup.stderr === "string" && setup.stderr.length <= 16_000;
+}
+
 function isAttempt(value: unknown, index: number): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const attempt = value as Record<string, unknown>;
   return (
-    attempt.n === index + 1 &&
+    attempt.n === index + 1 && isSetupResult(attempt.setup) &&
     (attempt.decisionAnswerId === undefined || (typeof attempt.decisionAnswerId === "string" && attempt.decisionAnswerId.length > 0 && attempt.decisionAnswerId.length <= 200)) &&
     (attempt.historical === undefined || typeof attempt.historical === "boolean") &&
     (attempt.legacyReview === undefined || (attempt.legacyReview === true && attempt.historical === true)) &&
@@ -1503,6 +1518,7 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
       attempts: Array.isArray(run.attempts)
         ? run.attempts.map((attempt) => ({
             ...attempt,
+            ...(attempt.setup ? { setup: { ...attempt.setup, command: [...attempt.setup.command] } } : {}),
             ...(attempt.suspension ? { suspension: { ...attempt.suspension } } : {}),
             ...(attempt.accountHolds ? { accountHolds: attempt.accountHolds.map((hold) => ({ ...hold })) } : {}),
             ...(attempt.runtimeSwitches ? { runtimeSwitches: structuredClone(attempt.runtimeSwitches) } : {}),
