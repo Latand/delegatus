@@ -132,6 +132,7 @@ interface ViewerRuntimeActivationSteps {
   publishHotStateActivation: () => void;
   publishViewerReleaseReady: () => void;
   prepareBoard?: () => Promise<void>;
+  refineBoard?: () => Promise<unknown>;
 }
 
 export { viewerReleaseOwnsTraffic };
@@ -281,6 +282,21 @@ export async function activateViewerRuntimeWhenCurrent(
     void start().catch((error) => log("[viewer release] deferred runtime activation failed", error));
   };
   schedule(poll, pollMs).unref?.();
+}
+
+/** An install transfer the previous Viewer left between its first write and
+    its cleanup is settled before any later startup step: finished when it
+    committed, undone when not (docs/design/install-memory-transfer.md §4.7).
+    A failure refuses activation, because the install would otherwise admit
+    launches against a half-applied import; the journal stays, and the next
+    start settles the same one. */
+export async function settleInterruptedTransfers(
+  recover: () => Promise<unknown> = async () => (await import("@/lib/transfer/importer")).recoverTransferImportsAtStartup(),
+): Promise<void> {
+  try { await recover(); }
+  catch (error) {
+    throw new Error(`activation refused: an interrupted install transfer could not be settled (${error instanceof Error ? error.message : String(error)})`, { cause: error });
+  }
 }
 
 export function accountControllerDelayMs(env: Readonly<Record<string, string | undefined>> = process.env): number {
@@ -855,6 +871,11 @@ export async function completeViewerRuntimeActivation(
   await steps.prepareBoard?.();
   await steps.startControllers();
   steps.publishViewerReleaseReady();
+  // A saved summary already makes the board readable. Fresh attention facts
+  // refine it afterwards; their scan must not delay the first document.
+  void steps.refineBoard?.().catch(error => {
+    console.error("[attention reconcile] startup refinement failed", error instanceof Error ? error.name : "unknown");
+  });
 }
 
 /** Check every state database before a store opens one (#1870 slice 10):
@@ -1012,6 +1033,7 @@ export async function registerViewerRuntime(): Promise<void> {
     const authority = await initializeHotStateStoresAtStartup(boundary, { signal: startupAbort.signal });
     const { ensureLegacyCollectionsImported } = await import("@/lib/state/legacyCollections");
     await ensureLegacyCollectionsImported();
+    await startupBarrier.run(() => settleInterruptedTransfers());
     const { agentRegistry } = await import("@/lib/agent/registry");
     await startupBarrier.run(() => viewerLoopMonitor.run("registry.prepare", () => agentRegistry().prepareReadOnlySnapshot(startupAbort.signal)));
     assertStartupActive();
@@ -1053,11 +1075,14 @@ export async function registerViewerRuntime(): Promise<void> {
       prepareBoard: async () => {
         assertStartupActive();
         await startupBarrier.run(() => prepareBoardSummary(true));
-        const { reconcileAttentionOnce } = await import("@/lib/attention/reconcileController");
-        assertStartupActive();
-        await startupBarrier.run(() => reconcileAttentionOnce(undefined, assertStartupActive));
         assertStartupActive();
       },
+      refineBoard: () => startupBarrier.run(() => viewerLoopMonitor.run("attention.reconcile", async () => {
+        const { reconcileAttentionOnce } = await import("@/lib/attention/reconcileController");
+        assertStartupActive();
+        await reconcileAttentionOnce(undefined, assertStartupActive);
+        assertStartupActive();
+      })),
       startControllers: startCurrentReleaseControllers,
       publishHotStateActivation: () => {
         if (authority) activatedAuthority = markHotStateActivationReady(hotStateDirectory, authority);

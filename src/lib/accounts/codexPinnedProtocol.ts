@@ -222,13 +222,54 @@ function nearestOlderPin(version: string): typeof pins[number] | undefined {
 function runGenerator(binary: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number, label: string): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const fail = (reason: string) => new CodexAppServerProtocolError(`${label} failed (${reason})`);
-    let settled = false;
+    let settled = false, failure: Error | undefined;
     const settle = (error?: Error) => { if (settled) return; settled = true; clearTimeout(timer); if (error) reject(error); else resolve(); };
     const child = spawn(binary, args, { env, detached: true, stdio: "ignore" });
-    const timer = setTimeout(() => { signalDetachedProcessGroup(child, "SIGKILL"); settle(fail("timed out")); }, timeoutMs);
-    child.once("error", error => settle(fail(`exit ${String((error as NodeJS.ErrnoException).code ?? "unknown")}`)));
-    child.once("exit", (code, signal) => settle(code === 0 ? undefined : fail(`exit ${String(code ?? signal ?? "unknown")}`)));
+    const abort = (error: Error) => { failure ??= error; signalDetachedProcessGroup(child, "SIGKILL"); };
+    const timer = setTimeout(() => abort(fail("timed out")), timeoutMs);
+    child.once("error", error => { failure ??= fail(`exit ${String((error as NodeJS.ErrnoException).code ?? "unknown")}`); });
+    child.once("close", async (code, signal) => {
+      clearTimeout(timer);
+      if (!failure && code === 0) { settle(); return; }
+      failure ??= fail(`exit ${String(code ?? signal ?? "unknown")}`);
+      if (child.pid) {
+        signalDetachedProcessGroup(child, "SIGKILL");
+        const deadline = Date.now() + 5_000;
+        for (;;) {
+          const running = generatorGroupAlive(child.pid);
+          if (running === false) break;
+          if (Date.now() >= deadline) { settle(fail(`${failure.message}; process group cleanup could not be verified`)); return; }
+          await new Promise<void>(resolve => setTimeout(resolve, 25));
+        }
+      }
+      settle(failure);
+    });
   });
+}
+
+function generatorGroupAlive(groupId: number): boolean | null {
+  if (process.platform === "linux") {
+    let entries: string[];
+    try { entries = fs.readdirSync("/proc"); } catch { return null; }
+    let uncertain = false;
+    for (const entry of entries) {
+      if (!/^\d+$/.test(entry)) continue;
+      try {
+        const stat = fs.readFileSync(`/proc/${entry}/stat`, "utf8");
+        const fields = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/);
+        if (Number(fields[2]) === groupId && !["Z", "X", "x"].includes(fields[0]!)) return true;
+      } catch (error) {
+        if (!["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "")) uncertain = true;
+      }
+    }
+    return uncertain ? null : false;
+  }
+  if (process.platform === "win32") return null;
+  try { process.kill(-groupId, 0); return true; }
+  catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ESRCH" ? false
+      : (error as NodeJS.ErrnoException).code === "EPERM" ? true : null;
+  }
 }
 
 export const generateCodexSchemas = async (binary: string, env: NodeJS.ProcessEnv, options: { timeoutMs?: number } = {}): Promise<{ stable: string; experimental: string }> => {

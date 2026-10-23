@@ -144,8 +144,7 @@ export async function resolveHealthySpawnAccount(
     bindings,
     preferredId: routing ?? null,
     model,
-    /* An unbound project keeps the engine's active account with no capacity
-       arithmetic in front of it, which is what this seam has always done. */
+    /* Both historical launch hints now share reset-aware capacity ranking. */
     unbound: "engine-default" as const,
   };
   /* The pick nobody named: the pool, then capacity, in that order. Computed
@@ -318,10 +317,8 @@ export class ProjectAccountRefusedError extends Error {
  * the same work already ran on.
  *
  * `resolveSpawn` answers with the engine's active account when nothing is
- * named, which is a choice made without consulting anything; this is the same
- * call with the project's pool in front of it. An unbound project keeps that
- * exact behaviour — `selectProjectAccount` answers with the preferred account
- * and `contextForSpawn` resolves it, byte for byte what the caller did before.
+ * named; this call ranks the project's permitted accounts by fresh capacity
+ * and binding reset, including every account when the project is unbound.
  * A bound project draws from its allowed set only, reports when every allowed
  * account is out of capacity, and refuses when the binding record cannot be
  * read (that read throws from here, and a caller that cannot see the boundary
@@ -428,8 +425,8 @@ export function resolveContinuityAccount(
  *   project's pool first, capacity second, an exhausted pool reported and an
  *   unreadable record refused before any spec is built.
  *
- * An UNBOUND project answers `null` — no preference is offered and the spec
- * builder's own fallback stands, byte for byte what it always did.
+ * A project with no binding uses the same capacity ranking across all listed
+ * accounts. A recorded account above keeps continuity without reranking.
  */
 export function resolveResumeAccountId(
   engine: "claude" | "codex",
@@ -451,10 +448,7 @@ export function resolveResumeAccountId(
     accounts,
     observations: registry.quotaObservations(engine),
     bindings,
-    /* Offered only where it can order a candidate set. An unbound project has
-       none, and handing its routing account back here would replace the spec
-       builder's fallback with a different one on projects that opted into
-       nothing. */
+    /* Keep the historical routing tie-break only for a bound resume. */
     preferredId: allowed === null ? null : routedAccountId(engine),
     unbound: "engine-default",
   });
