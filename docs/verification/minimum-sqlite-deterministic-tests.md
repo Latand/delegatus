@@ -166,3 +166,14 @@ All test processes use private home, config, state and temporary roots, with Vie
 The repeated run extracts the `Run the state stores on it` shell body verbatim from `.github/workflows/platform-tests.yml`. It executes that body ten consecutive times, giving each repetition its own runner temporary root and retaining the workflow's per-file isolation and 60-second test timeout. One owned CPU worker runs `while True: sum(range(100000))` continuously during the repetitions and is stopped by its recorded process handle afterward.
 
 A two-worker exploratory sequence exhausted the unchanged activity-ingest fixture's explicit 30-second watchdog. The identical focused case fails on both base and head with two workers and passes on both with one worker. The final sequence uses one worker. An SSH interruption also stopped an earlier sequence before any result was recorded.
+
+### Result of the repeated sequence
+
+At `9661392dd`, the last commit that changes any code here, the sequence passed
+**10 of 10 runs** with no failure: each run executed all 45 file selections of
+the job body (62 lines, digest `9a10ae3e`) and reported 844 passing tests and
+0 failures. Runs took 268 to 318 seconds; the one-minute load average moved
+between 3.9 and 27.2 across the sequence, the owned worker running throughout
+(2026-10-23, 01:59Z to 02:46Z, Bun 1.4.0, 16 cores).
+
+Only this note changed afterwards.
