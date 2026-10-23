@@ -1,5 +1,5 @@
 import { curationAnswer, type CurationAnswer } from "@/lib/memory/curation/answer";
-import { autonomyActive, type AutonomySetting } from "./autonomy";
+import { autonomyActive, proactiveActive, type AutonomySetting } from "./autonomy";
 import { viewerOwnProjectKeys } from "./seatTickSources";
 import { releaseStatus, type ReleaseStatus } from "@/lib/release/answer";
 import { RELEASE_DEFAULTS, type ReleaseSetting } from "@/lib/release/settings";
@@ -90,7 +90,9 @@ export interface SeatTickLastRun {
 }
 
 export interface SeatTickSettingsAnswer {
-  autonomy?: { active: boolean; until: string | null; startedAt: string | null; episode: AutonomySetting | null };
+  autonomy?: { active: boolean; until: string | null; startedAt: string | null; episode: AutonomySetting | null; proactive?: { enabled: boolean } };
+  /** Added by the settings route (docs/design/turbo-mode.md §2.1). */
+  turbo?: import("./turboRuntime").TurboAnswer;
   release?: Partial<ReleaseSetting> & typeof RELEASE_DEFAULTS & { available: boolean; status: ReleaseStatus };
   autoRotate?: { enabled: boolean; thresholdPercent: number; defaultPercent: number; minPercent: number; maxPercent: number;
     windowKnown: boolean | null; lastAttempt: (AutoRotationAttempt & { nextAttemptAt: string }) | null;
@@ -267,7 +269,7 @@ export function seatTickSettingsAnswer(
   const active = orchestratorSeatForCurrentProject(project).active;
   const conversation = active?.conversationId ? agentRegistry().conversation(active.conversationId as never) : null;
   return {
-    autonomy: { active: autonomyActive(settings.autonomy, now), until: settings.autonomy?.until ?? null, startedAt: settings.autonomy?.startedAt ?? null, episode: effective.autonomy ?? null },
+    autonomy: { active: autonomyActive(settings.autonomy, now), until: settings.autonomy?.until ?? null, startedAt: settings.autonomy?.startedAt ?? null, episode: effective.autonomy ?? null, proactive: { enabled: effective.enabled && proactiveActive(effective.autonomy, now) } },
     release: { ...RELEASE_DEFAULTS, ...settings.release, available: viewerOwnProjectKeys().includes(project), status: releaseStatus(project) },
     autoRotate: { enabled: settings.autoRotate?.enabled ?? false, thresholdPercent: settings.autoRotate?.thresholdPercent ?? AUTO_ROTATE_DEFAULT_PERCENT,
       defaultPercent: AUTO_ROTATE_DEFAULT_PERCENT, minPercent: 50, maxPercent: 90,

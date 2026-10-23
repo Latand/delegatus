@@ -54,6 +54,17 @@ transcript.
   removes it and ends a live call; **Show voice** in the ⋯ menu brings it
   back.
 
+### What a call did
+
+A tap on the character (on a phone, **Conversation** in the head's menu)
+opens the call's transcript, also after a page reload or a Delegatus restart.
+When more than one call is kept, a list at the top of the transcript opens any
+of them; each entry shows the call's time, project and number of actions. Each
+request to the orchestrator shows whether it was delivered, queued, refused or
+failed, and why nothing was sent when it was not. An opened request links to the
+orchestrator conversation it went to. Delegatus keeps your last 50 calls, each
+for up to 30 days.
+
 ### Call memory
 
 After each call Claude Haiku, on one of your Claude subscription accounts,
@@ -62,3 +73,18 @@ is still open. The next call starts with up to five summaries from the last
 week. The summaries stay on this machine, outside agent memory. The voice
 settings list them with **Forget** and **Forget all**, and a switch there
 turns remembering off.
+
+### When the connection drops
+
+A call that drops keeps what was said: a lost network, a provider session that
+ends mid-call, a page reload and a Delegatus restart all leave the call's
+record on this machine. The character says the connection dropped and offers
+**Reconnect** (on a phone, in the head's menu) for 30 minutes, also after a
+reload. Reconnect continues the same call: the voice starts with the
+conversation so far, as much of it as fits the call-memory budget, newest lines
+first and with a note of how many older lines it left out, and does not ask
+again for what you already said. The call's transcript shows every part of the call,
+with a line where the connection dropped, and the list of kept calls shows it as
+one call with the actions of every part. **Talk** starts a new call instead.
+A part of a call that read a private Telegram group is not carried into the
+reconnected call.

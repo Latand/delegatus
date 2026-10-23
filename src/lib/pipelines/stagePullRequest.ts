@@ -16,8 +16,12 @@ import type { Pipeline, PipelineStageAttempt } from "./types";
 export type PullRequestTextRefusal = { part: "title" | "body" | "title/body"; check: string; kind: string; line?: number };
 export type StagePullRequestResult = { ok: true } | { ok: false; error: string; privacy?: PullRequestTextRefusal };
 
+function isFinalBudgetFix(attempt: PipelineStageAttempt): boolean {
+  return attempt.activatedBy?.edge === "fail" && attempt.activatedBy.budgetSpent === true;
+}
+
 export function stagePullRequestProducer(pipeline: Pipeline, attempt: PipelineStageAttempt): PipelineStageAttempt {
-  return attempt.effectiveRole.access !== "read-only" ? attempt : pipeline.runs.flatMap(run => run.attempts)
+  return isFinalBudgetFix(attempt) || attempt.effectiveRole.access !== "read-only" ? attempt : pipeline.runs.flatMap(run => run.attempts)
     .filter(a => !a.historical && a.effectiveRole.access !== "read-only" && (a.report?.summary || a.output))
     .sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? ""))[0] ?? attempt;
 }
@@ -76,6 +80,7 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
   const repository = githubRepositoryOfRemote(delivery.target.remote);
   if (!repository) return { ok: false, error: "the delivery remote has no supported pull request service" };
   const branch = delivery.target.branch.replace(/^refs\/heads\//, "");
+  const refresh = isFinalBudgetFix(attempt);
   // Only this attempt's accepted publication can explain a temporarily stale
   // PR head. Review checks and older publication receipts keep refusing at once.
   const operation = delivery.operation;
@@ -83,10 +88,10 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
     && operation.epoch === delivery.epoch && operation.state === "settled" && operation.passedStage === true
     && operation.requestKey === `pass:${pipeline.cursor?.stageId}:${attempt.n}`
     && operation.result?.ok === true && operation.result.remote === "published";
-  type Found = { ok: true; number: number | null } | (Extract<StagePullRequestResult, { ok: false }> & { retryHead?: true });
+  type Found = { ok: true; number: number | null; body?: string; title?: string } | (Extract<StagePullRequestResult, { ok: false }> & { retryHead?: true });
   const readOnce = async (timeoutMs: number): Promise<Found> => {
     const linked = delivery.target.pr;
-    const fields = "number,headRefName,baseRefName,state,headRefOid,isCrossRepository";
+    const fields = "number,headRefName,baseRefName,state,headRefOid,isCrossRepository" + (refresh ? ",body,title" : "");
     const args = linked !== undefined
       ? ["pr", "view", String(linked), "--repo", repository, "--json", fields]
       : ["pr", "list", "--repo", repository, "--head", branch, "--base", pipeline.baseBranch,
@@ -109,7 +114,9 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
     ].filter(Boolean);
     if (mismatches.length) return { ok: false, error: `the delivery pull request differs in ${mismatches.join(", ")}`,
       ...(mismatches.length === 1 && mismatches[0] === "headRefOid" ? { retryHead: true } : {}) };
-    return { ok: true, number: pr.number };
+    if (refresh && (typeof pr.body !== "string" || typeof pr.title !== "string"))
+      return { ok: false, error: "the delivery pull request body refresh could not read its existing text" };
+    return { ok: true, number: pr.number, body: pr.body, title: pr.title };
   };
   const find = async (): Promise<Found> => {
     let found = await readOnce(30_000);
@@ -134,10 +141,19 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
     const found = await find();
     if (!found.ok) return { ok: false, error: found.error };
     let number = found.number;
-    if (number === null) {
+    if (number === null || refresh) {
       const producer = stagePullRequestProducer(pipeline, attempt);
-      const body = producer.report?.summary?.trim() || producer.output?.trim() || "";
-      const title = pipeline.task.split("\n").map(line => line.trim()).find(Boolean)?.slice(0, 120) ?? "";
+      const summary = producer.report?.summary?.trim() || producer.output?.trim() || "";
+      const update = `## Latest pipeline result\n\nHead: \`${acceptedHead}\`\n\n**Last fix was not re-reviewed: review budget spent.**\n\n`
+        + `Fix stage report (supersedes earlier head, checks and review-status statements):\n\n${summary}\n\n---\n\n`;
+      // Preserve the producer's description and attribution footer byte for
+      // byte. The exact prefix also recovers a lost edit acknowledgement.
+      if (refresh && number !== null && found.body!.startsWith(update)) {
+        delivery.target.pr = number;
+        return { ok: true };
+      }
+      const body = refresh ? update + (number === null ? "" : found.body!) : summary;
+      const title = found.title ?? pipeline.task.split("\n").map(line => line.trim()).find(Boolean)?.slice(0, 120) ?? "";
       for (const [part, value] of [["title", title], ["body", body]] as const) {
         const inspected = await inspectPullRequestText(part, value);
         if (!inspected.ok) return inspected;
@@ -164,18 +180,26 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
             if (checked.code !== 0) return repositoryRefusal(part, checked.stdout);
           }
         }
-        const created = await exec("gh", ["pr", "create", "--repo", repository, "--title", title, "--body-file", bodyFile,
-          "--base", pipeline.baseBranch, "--head", branch], pipeline.worktreeDir, engineForgeWriteEnv(), { timeoutMs: 60_000 });
-        // A timeout/status is no proof of whether creation landed. Read the
-        // branch again before either acceptance or a future create retry.
+        const creating = number === null;
+        const written = await exec("gh", creating
+          ? ["pr", "create", "--repo", repository, "--title", title, "--body-file", bodyFile,
+            "--base", pipeline.baseBranch, "--head", branch]
+          : ["api", "-X", "PATCH", `repos/${repository}/pulls/${number}`, "-F", `body=@${bodyFile}`],
+        pipeline.worktreeDir, engineForgeWriteEnv(), { timeoutMs: 60_000 });
+        // A timeout/status is no proof of whether a write landed. Read the
+        // branch and, for a refresh, the body before accepting or retrying.
         const recovered = await find();
         if (!recovered.ok) return { ok: false, error: recovered.error };
         number = recovered.number;
-        if (number === null) return { ok: false, error: created.code === 0
+        if (number === null) return { ok: false, error: written.code === 0
           ? "the forge answered without a linked delivery pull request" : "the delivery pull request could not be opened" };
+        if (refresh && recovered.body !== body)
+          return { ok: false, error: "the delivery pull request body refresh could not be verified; the stage cannot pass without it" };
       } finally { await fs.rm(directory, { recursive: true, force: true }); }
     }
     delivery.target.pr = number;
     return { ok: true };
-  } catch { return { ok: false, error: "the delivery pull request could not be verified; the stage cannot pass without it" }; }
+  } catch { return { ok: false, error: refresh
+    ? "the delivery pull request body refresh could not be verified; the stage cannot pass without it"
+    : "the delivery pull request could not be verified; the stage cannot pass without it" }; }
 }

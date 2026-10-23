@@ -6,6 +6,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProp
 import { useLocale } from "@/lib/i18n";
 
 import { autonomyActive } from "@/lib/monitor/autonomy";
+import { TurboMark } from "./SeatTickTurbo";
 import { SeatTickDot } from "./SeatTickBody";
 import {
   SEAT_TICK_DRAG_SPRING,
@@ -410,8 +411,15 @@ export function SeatTickSwitch({ read, reading, now, surface, open, onOpen, onRe
   const autonomyTime = autonomy?.until ? seatTickLocalTime(autonomy.until, now, locale) : null;
   const autonomyWords = !autonomyOn ? null
     : autonomyTime ? t("seatTick.autonomy.chip", { time: autonomyTime }) : t("seatTick.autonomy.chipUnlimited");
-  const spoken = autonomyWords ? `${autonomyWords}. ${valueText}` : valueText;
-  const line = autonomyWords ? `${autonomyWords}\n${reading.line}` : reading.line;
+  /* Turbo's mark beside the health dot, and its words in the spoken value (§2.3). */
+  const turbo = read.answer?.turbo;
+  const turboOn = turbo?.active === true && !!turbo.episode;
+  const turboTime = turboOn && turbo!.episode!.until ? seatTickLocalTime(turbo!.episode!.until, now, locale) : null;
+  const turboWords = !turboOn ? null
+    : turboTime ? t(turbo!.episode!.credits.approved ? "seatTick.turbo.chipPaid" : "seatTick.turbo.chipFree", { time: turboTime }) : t("seatTick.turbo.chipUnlimited");
+  const marks = [autonomyWords, turboWords].filter((words): words is string => !!words);
+  const spoken = marks.length ? `${marks.join(". ")}. ${valueText}` : valueText;
+  const line = marks.length ? `${marks.join("\n")}\n${reading.line}` : reading.line;
 
   const phone = surface === "mobile";
   const thumb = geometry.thumb + Math.max(0, word.length - 6) * geometry.perChar;
@@ -480,6 +488,7 @@ export function SeatTickSwitch({ read, reading, now, surface, open, onOpen, onRe
         {autonomyOn ? <AutonomyRing /> : null}
       </span>
       {until ? <Hourglass data-seat-tick-until aria-hidden className={`${phone ? "h-3.5 w-3.5" : "h-3 w-3"} shrink-0 text-secondary`} /> : null}
+      {turboOn ? <TurboMark attr={{ "data-seat-tick-turbo-mark": turbo!.episode!.credits.approved ? "credits" : "free" }} /> : null}
       <SeatTickDot tone={reading.tone} />
     </div>
   );

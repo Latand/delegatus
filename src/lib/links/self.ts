@@ -10,6 +10,7 @@ import net from "node:net";
 import { statePath } from "@/lib/configDir";
 import { publicEntry } from "@/lib/links/publicEntry";
 import { LOOPBACK_PROBE_HOSTS } from "@/runtime-host/deploymentProxy";
+import { pendingSelfProbes as pending } from "./selfProbe";
 
 export type CheckCode = "ok" | "needs-access-key" | "needs-remote-entry" | "http-public" | "open-to-internet" | "host-rewritten" | "tls-failure" | "unverified";
 /** The request line a self-check probe arrived with, as this server's own route read it. */
@@ -167,9 +168,6 @@ export async function saveAddress(input: string, label?: string): Promise<{ self
   return { self };
 }
 
-type PendingProbe = { expiry: number; seen: SeenRequest | null; arrivedHost: string | null };
-const shared = globalThis as typeof globalThis & { __delegatusSelfProbes?: Map<string, PendingProbe> };
-const pending = shared.__delegatusSelfProbes ??= new Map<string, PendingProbe>();
 /** The longest Host that can name an address: 253 characters of name, a
  * trailing dot, a colon and five digits of port. */
 const HOST_LIMIT = 260;
@@ -196,20 +194,20 @@ export function hostNamesAddress(host: string | null, url: URL): boolean {
   return match[2] === undefined || Number(match[2]) === Number(url.port || (url.protocol === "https:" ? 443 : 80));
 }
 
-function newNonce(): string {
+function newNonce(host: string): string {
   if (pending.size >= 32) {
     for (const [key, probe] of pending) if (probe.expiry < Date.now()) pending.delete(key);
     if (pending.size >= 32) pending.delete(pending.keys().next().value!);
   }
   const nonce = randomBytes(32).toString("base64url");
-  pending.set(nonce, { expiry: Date.now() + 30_000, seen: null, arrivedHost: null });
+  pending.set(nonce, { expiry: Date.now() + 30_000, seen: null, arrivedHost: null, host });
   return nonce;
 }
 
 /** `seen` and `arrivedHost` are read from this process's own record of the probe. */
 export type Probe = { status: number; host?: string; vouched?: boolean; seen: SeenRequest | null; arrivedHost: string | null };
 export function probeSelfAddress(url: URL, host: string, options: { certificateAuthority?: string; connectionHost?: string } = {}): Promise<Probe> {
-  const nonce = newNonce();
+  const nonce = newNonce(host);
   const name = url.hostname.replace(/^\[|\]$/g, "");
   return new Promise<Probe>((resolve, reject) => {
     let timer: ReturnType<typeof setTimeout>;

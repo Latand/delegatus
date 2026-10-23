@@ -30,7 +30,7 @@ import { RulesWindow } from "@/components/roleMemory/LearnedRules";
 import type { AttentionDismissalMark, DismissalTarget } from "@/lib/attention/dismissalTypes";
 import { COMPANION_PROTECT, COMPANION_ROWS, companionReserved, companionShellReady } from "@/components/voiceCompanion/hostSurfaces";
 import { VoiceCompanion } from "@/components/voiceCompanion/VoiceCompanion";
-import { sampleTranscript, sampleOrchestratorMessage } from "@/components/voiceCompanion/transcriptSample.fixture";
+import { sampleCallHistory, sampleTranscript, sampleOrchestratorMessage } from "@/components/voiceCompanion/transcriptSample.fixture";
 import type { CompanionEvent, CompanionPlan } from "@/lib/voiceCompanion/contract";
 import { DEMO_IDS, SCENARIO_PLAYBACK_PAUSE, demoAnswer, demoInstruction, isScenario, scenarioScript } from "@/lib/voiceCompanion/scenarios";
 import { createSimulatedCompanion, realClock } from "@/lib/voiceCompanion/simulator";
@@ -227,14 +227,17 @@ const voiceSettings = {
    «ask before acting» off and on), `rejected` and `disabled` (a proposal the operator rejected, and an approved
    server they turned off), `long` (every operator-visible field at its schema maximum), and two whose next
    press is refused: `approved-refused` (the switch's change and re-approval meet the selection bound) and
-   `dry-run-busy` (the hub already runs eight dry runs). */
+   `dry-run-busy` (the hub already runs eight dry runs), plus `sign-in-required`,
+   `destination-refused` and `destination-result`. */
 const VOICE_TOOLS = new URLSearchParams(location.search).get("voicetools");
 type FixtureVoiceTool = Record<string, unknown> & { state: string; digest: string; askBeforeActing: boolean; tools: Record<string, { enabled: boolean; acts: boolean }>;
   missingSecrets: string[]; secretRefs: string[]; catalog: { digest: string; fetchedAt: string; tools: Array<{ name: string; description: string; annotations?: { readOnlyHint?: boolean } }> } | null;
   lastDryRun: { code: string; at: string; digest: string } | null };
 const voiceToolsState = { revision: 7, servers: {} as Record<string, FixtureVoiceTool> };
 /* One refusal per action, answered before the record changes, as the route answers a refused mutation. */
-const voiceToolsRefuse: Record<string, string> = VOICE_TOOLS === "approved-refused" ? { configure: "SELECTION_BOUNDS" } : VOICE_TOOLS === "dry-run-busy" ? { "dry-run": "BUSY" } : {};
+const voiceToolsRefuse: Record<string, string> = VOICE_TOOLS === "approved-refused" ? { configure: "SELECTION_BOUNDS" }
+  : VOICE_TOOLS === "dry-run-busy" ? { "dry-run": "BUSY" }
+    : VOICE_TOOLS === "destination-refused" ? { approve: "SECRET_DESTINATION" } : {};
 const voiceToolDigest = (seed: number) => `sha256:${seed.toString(16).padStart(64, "0")}`;
 const voiceToolAt = (minutesAgo: number) => new Date((VOICE_LOADED - minutesAgo * 60) * 1000).toISOString();
 const spotifyCatalog = () => ({ digest: voiceToolDigest(901), fetchedAt: voiceToolAt(4), tools: [
@@ -251,12 +254,14 @@ function seedVoiceTools() {
       envValues: { SPOTIFY_REDIRECT_URI: "http://127.0.0.1:8888/callback" } },
     entryFile: null, private: false, askBeforeActing: false, callTimeoutMs: 15_000, generation: 6, owner: "installation", audience: ["voice"], state: "pending",
     proposedBy: { kind: "conversation", conversationId: "conv_fixture_orchestrator", at: voiceToolAt(12) }, approval: null, tools: {}, catalog: null, lastDryRun: null,
-    digest: voiceToolDigest(1), missingSecrets: [], secretRefs: ["spotify-client-id"], ...over,
+    digest: voiceToolDigest(1), secretRecipient: `stdio:spotify:sha256:${"a".repeat(64)}`, missingSecrets: [], secretRefs: ["spotify-client-id"], secretDestinations: { "spotify-client-id": [`stdio:spotify:sha256:${"a".repeat(64)}`] }, ...over,
   });
   const chosen = { search: { enabled: true, acts: false }, now_playing: { enabled: true, acts: false }, play: { enabled: true, acts: true }, pause: { enabled: false, acts: true }, skip: { enabled: false, acts: true } };
   const ok = { code: "OK", at: voiceToolAt(4), digest: voiceToolDigest(501) };
-  if (VOICE_TOOLS === "pending") voiceToolsState.servers.spotify = spotify({ missingSecrets: ["spotify-client-id"] });
+  if (VOICE_TOOLS === "pending") voiceToolsState.servers.spotify = spotify({ missingSecrets: ["spotify-client-id"], secretDestinations: { "spotify-client-id": [] } });
   if (VOICE_TOOLS === "review") voiceToolsState.servers.spotify = spotify({ catalog: spotifyCatalog(), lastDryRun: ok, tools: { ...chosen, play: { enabled: false, acts: true } } });
+  if (VOICE_TOOLS === "destination-refused") voiceToolsState.servers.spotify = spotify({ catalog: spotifyCatalog(), lastDryRun: ok, tools: { ...chosen, play: { enabled: false, acts: true } } });
+  if (VOICE_TOOLS === "destination-result") voiceToolsState.servers.spotify = spotify({ lastDryRun: { code: "SECRET_DESTINATION", at: voiceToolAt(1), digest: voiceToolDigest(503) } });
   if (VOICE_TOOLS === "dry-run-busy") voiceToolsState.servers.spotify = spotify({});
   if (VOICE_TOOLS === "rejected") voiceToolsState.servers.spotify = spotify({ state: "rejected" });
   if (VOICE_TOOLS === "disabled") voiceToolsState.servers.spotify = spotify({ state: "disabled", catalog: spotifyCatalog(), lastDryRun: ok, tools: chosen });
@@ -4693,15 +4698,19 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   /* The Tools section's route, as `/api/voice-tools` answers: the view on a read and after each write, and a fixed
      code on a refusal. A dry run of the timed-out script times out again; the Spotify server's passes. */
   if (VOICE && url.pathname === "/api/voice-tools") {
+    if (VOICE_TOOLS === "sign-in-required" && method === "GET") return json({ code: "OPERATOR_REQUIRED" }, 401);
     if (method === "POST") {
-      const body = JSON.parse(String(init?.body ?? "{}")) as { action: string; name?: string; digest?: string; tools?: FixtureVoiceTool["tools"]; askBeforeActing?: boolean; reapprove?: true; secrets?: Record<string, string> };
+      const body = JSON.parse(String(init?.body ?? "{}")) as { action: string; name?: string; digest?: string; tools?: FixtureVoiceTool["tools"]; askBeforeActing?: boolean; reapprove?: true; secrets?: Record<string, { value?: string; destinations: string[] }> };
       const server = body.name ? voiceToolsState.servers[body.name] : undefined;
       const refused = voiceToolsRefuse[body.action];
       if (refused) { delete voiceToolsRefuse[body.action]; return json({ code: refused }, 409); }
       voiceToolsState.revision += 1;
       const next = voiceToolDigest(voiceToolsState.revision * 10);
       if (body.action === "secrets") {
-        for (const entry of Object.values(voiceToolsState.servers)) entry.missingSecrets = entry.missingSecrets.filter(ref => !Object.hasOwn(body.secrets ?? {}, ref));
+        for (const entry of Object.values(voiceToolsState.servers)) {
+          entry.missingSecrets = entry.missingSecrets.filter(ref => !Object.hasOwn(body.secrets ?? {}, ref));
+          entry.secretDestinations = { ...(entry.secretDestinations as Record<string, string[]> ?? {}), ...Object.fromEntries(Object.entries(body.secrets ?? {}).filter(([ref]) => entry.secretRefs.includes(ref)).map(([ref, secret]) => [ref, secret.destinations])) };
+        }
       } else if (!server) return json({ code: "SERVER_NOT_FOUND" }, 409);
       else if (server.digest !== body.digest) return json({ code: "STALE_APPROVAL" }, 409);
       else if (body.action === "dry-run") {
@@ -4917,6 +4926,9 @@ function voiceCompanionScene() {
   const script = params.get("script");
   const failure = params.get("failure");
   const readsTranscript = params.get("transcript") === "1";
+  /* `history=1`: the page opens after a reload, with no call of its own; the operator's retained calls are
+     `sampleCallHistory`'s three, which the character opens from the conversation panel's picker. */
+  const history = params.get("history") === "1" ? sampleCallHistory(UK ? "uk" : "en", PROJECT) : null;
   const clock = realClock();
   let pauseFrame = false;
   const adapter = createSimulatedCompanion({
@@ -4962,7 +4974,12 @@ function voiceCompanionScene() {
       if (sendLost && command.type === "confirmation" && command.decision === "send") { sendLost = false; throw new Error("COMPANION_UNAVAILABLE"); }
       return adapter.command(command);
     },
-    ...(readsTranscript ? { transcript: async () => {
+    ...(history ? {
+      calls: async () => history.calls, transcript: async (sessionId?: string) => {
+        const record = history.records[sessionId ?? history.calls[0]!.sessionId];
+        return record ? { ...record, usage: { callUsd: 0.19, callFinal: true, callIncomplete: false, month: "2026-10", monthUsd: 0.51, monthCapUsd: 20 } } : null;
+      },
+    } : readsTranscript ? { transcript: async () => {
       const record = sampleTranscript(UK ? "uk" : "en", PROJECT);
       record.entries.push({ id: "standalone-report", kind: "report", atMs: 90_000, order: 100,
         data: { project: PROJECT, projectName: "Atlas", status: "result", text: UK ? "Усі перевірки завершено. Звіт збережено після завершення розмови." : "All checks completed. This report remains saved after the call ended." } });
