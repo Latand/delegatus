@@ -3519,6 +3519,70 @@ for (const worker of [false, true]) test(`owner ${seam} failure keeps its runtim
   }
 });
 
+for (const failure of ["exception", "refusal"] as const)
+for (const worker of [false, true]) test(`owner admission registry ${failure} releases capacity before the next claim (worker=${worker})`, async () => {
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+  const { ownerAttemptHasNoExecution } = await import("./ownerRun");
+  const { relayClaimBody } = await import("./poller");
+  const { relayCall } = await import("./client");
+  const reason = "transcript registry changed during admission";
+  const next = { ...contextRequest, answer: { ...contextRequest.answer, max_chars: 4000 }, request_id: `registry-${failure}-next-${worker}`,
+    input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } };
+  const claims: unknown[] = [], completions: unknown[] = [], journal: unknown[][] = [];
+  const service = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/claim")) {
+      claims.push(body);
+      return { body: { request: next } };
+    }
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  paired.targets[0]!.fallback = "none";
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const cwd = fs.mkdtempSync(path.join(root, "owner-registry-refusal-"));
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const requestId = `registry-${failure}-${worker}`;
+  let launches = 0, stops = 0;
+  const ports: import("./ownerRun").OwnerRunPorts = {
+    launch: async () => {
+      expect(advertisedSlots(paired)[0]!.free).toBe(0);
+      if (++launches > 1) return { status: 202, body: { conversationId: "conversation_next_request" } };
+      const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd, transport: "structured", clientAttemptId: `relay-owner-${requestId}` });
+      if (begun.kind !== "created") throw Error("owner receipt fixture unavailable");
+      registry.failSpawn(begun.receipt.launchId, reason);
+      expect(registry.releaseStructuredSpawnAdmissionOwner(begun.receipt.launchId, begun.receipt.admissionOwner!).released).toBe(true);
+      expect(registry.conversation(begun.receipt.conversationId)).toBeNull();
+      if (failure === "exception") throw Error(reason);
+      return { status: 409, body: { conversationId: begun.receipt.conversationId, error: reason } };
+    },
+    observe: async () => ({ state: "ended", finalText: "Next request completed" }),
+    noExecution: async run => ownerAttemptHasNoExecution(run, registry),
+    stop: async () => { stops++; throw Error("unregistered conversation cannot be stopped"); },
+  };
+  const logging = spyOn(console, "error").mockImplementation((...args) => { journal.push(args); });
+  try {
+    const failed = await runClaimedRequestWithLeaseWorker(paired, { ...next, request_id: requestId }, undefined, { leaseWorker: worker, ownerPorts: ports });
+    expect(failed).toMatchObject({ outcome: "answered", answer: { action: "reply", text: expect.stringContaining(reason) } });
+    expect(readAnswerRecord(paired.id, "target_1", requestId)).toMatchObject({ diagnostic: { source: failure === "exception" ? "exception" : "launch", message: expect.stringContaining(reason) } });
+    expect(stops).toBe(0);
+    // No sweep or elapsed stop bound: the very next wire claim has capacity.
+    expect(advertisedSlots(paired)[0]!.free).toBe(1);
+    const claimed = await relayCall<{ request: unknown }>(paired.api_base, "/requests/claim", "POST", relayClaimBody(paired), paired.credential);
+    expect(claims).toEqual([expect.objectContaining({ slots: [{ target_id: "target_1", free: 1 }] })]);
+    expect(claimed.body?.request).toEqual(next);
+    expect(await runClaimedRequestWithLeaseWorker(paired, claimed.body?.request, undefined, { leaseWorker: worker, ownerPorts: ports }))
+      .toMatchObject({ outcome: "answered", answer: { text: "Next request completed" } });
+    expect(launches).toBe(2); expect(completions).toHaveLength(2);
+    expect(JSON.stringify(journal)).toContain(reason);
+    expect(JSON.stringify(journal)).not.toContain("stop remains pending");
+  } finally {
+    logging.mockRestore(); dropRun(requestId); dropRun(next.request_id); registry.close();
+    fs.rmSync(cwd, { recursive: true, force: true }); await service.close();
+  }
+}, 15_000);
+
 test("owner stop custody with no registered execution releases the target on the next sweep and keeps its record", async () => {
   const { AgentRegistry } = await import("@/lib/agent/registry");
   const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
