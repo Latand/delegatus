@@ -375,7 +375,7 @@ function ReportEntry({ entry, question, current, touch, onResolve, refusal, gith
         ) : null}
         <time dateTime={entry.at} className="tabular-nums text-muted">{entryTime(entry.at, locale, now)}</time>
         <span className={`font-semibold ${resolved ? "text-muted" : CLASS_TONE[entry.class] ?? "text-muted"}`} data-report-class-label="">{classLabel}</span>
-        {authorLabel ? <span className="break-words text-secondary [overflow-wrap:anywhere]" data-report-author="">{authorLabel}</span> : null}
+        {authorLabel ? <span className="min-w-0 max-w-full text-secondary [overflow-wrap:anywhere]" data-report-author="">{authorLabel}</span> : null}
         {resolved ? (
           <span className="inline-flex items-center gap-0.5 text-success" data-report-resolved-mark="">
             <Check className="h-3 w-3" aria-hidden />

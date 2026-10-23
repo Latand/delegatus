@@ -13762,23 +13762,31 @@ describe("group chat adapted to report authors", () => {
     const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
     const readings: unknown[] = [];
     try {
-      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 390]) {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 915, 390]) for (const kind of ["manager", "long-role"] as const) {
         const phone = width === 390;
-        const { context, page, pageErrors } = await openFixture(browser, server.base, { width, height: 900 }, theme, lang, "reduce", phone);
+        const conversation = kind === "manager" ? "conversation_orchestrator" : "conversation_builder";
+        const label = kind === "manager" ? translate(lang, "render.senderRoleOrchestrator") : "LongCustomRole".repeat(12);
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?report-author=${kind}`, { width, height: 900 }, theme, lang, "reduce", phone);
         try {
           if (phone) {
             await page.locator("[data-mobile2-seat-open]").click();
             await page.locator('[data-mobile2-open="reports"]').click();
+          } else {
+            const toggle = page.locator("[data-kanban-seat] [data-report-log-toggle]");
+            await toggle.waitFor();
+            if (await toggle.getAttribute("data-report-log-toggle") === "closed") await toggle.click();
           }
           const row = page.locator("[data-report-entry]").first();
           await row.waitFor();
           await row.scrollIntoViewIfNeeded();
           const author = row.locator('[data-report-link="author"]');
           await author.waitFor();
-          expect(await row.locator("[data-report-author]").innerText()).toBe(translate(lang, "render.senderRoleOrchestrator"));
-          expect(await author.getAttribute("href")).toBe("#c=conversation_orchestrator");
+          expect(await row.locator("[data-report-author]").innerText()).toBe(label);
+          expect(await author.getAttribute("href")).toBe(`#c=${conversation}`);
           const geometry = await row.evaluate(element => {
             const problems: string[] = [];
+            const rowBox = element.getBoundingClientRect();
+            if (element.scrollWidth > element.clientWidth + 1) problems.push("row horizontal overflow");
             const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
             for (let node = walker.nextNode(); node; node = walker.nextNode()) {
               if (!node.textContent?.trim()) continue;
@@ -13786,6 +13794,7 @@ describe("group chat adapted to report authors", () => {
               const range = document.createRange(); range.selectNodeContents(node);
               for (const rect of range.getClientRects()) {
                 if (!rect.width || !rect.height) continue;
+                if (rect.left < rowBox.left - 1 || rect.right > rowBox.right + 1) problems.push("text outside row");
                 if (rect.left < 0 || rect.right > innerWidth || rect.top < 0 || rect.bottom > innerHeight) problems.push("viewport");
                 for (let ancestor: HTMLElement | null = parent; ancestor; ancestor = ancestor.parentElement) {
                   const style = getComputedStyle(ancestor), box = ancestor.getBoundingClientRect();
@@ -13800,17 +13809,17 @@ describe("group chat adapted to report authors", () => {
           });
           expect(geometry.problems).toEqual([]);
           if (phone) expect((await author.boundingBox())!.height).toBeGreaterThanOrEqual(44);
-          const frame = `${lang}-${theme}-${width}.png`;
+          const frame = `${lang}-${theme}-${width}-${kind}.png`;
           await row.screenshot({ path: path.join(out, frame) });
           await author.click();
-          await page.waitForFunction(() => location.hash === "#c=conversation_orchestrator");
+          await page.waitForFunction(id => location.hash === `#c=${id}`, conversation);
           expect(pageErrors).toEqual([]);
-          readings.push({ lang, theme, width, frame, ...geometry });
+          readings.push({ lang, theme, width, kind, frame, ...geometry });
         } finally { await context.close(); }
       }
       fs.writeFileSync(path.join(out, "rendered.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2));
     } finally { await browser.close(); server.stop(); }
-  }, 180_000);
+  }, 300_000);
 });
 
 describe("the report log opens beside the seat's chat only where the chat keeps its width", () => {
