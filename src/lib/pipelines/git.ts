@@ -84,7 +84,46 @@ export async function resolveDeliveryRemote(repoDir: string, requested: string |
   if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(remote) && !/^[^/]+:/.test(remote)) remote = path.resolve(repoDir, remote);
   const repository = projectIdentityFromRemote(remote, repoDir)?.project;
   if (!repository) return { ok: false, error: "invalid delivery remote", status: 400 };
+  /* Publication pushes to a stored literal as written, and Git applies this
+     checkout's URL rewrites to it on the way, so a literal is accepted only
+     when every URL Git would use for it names the repository it names. */
+  if (alias.code === 2) {
+    const effective = await literalRemoteUrls(repoDir, remote, exec);
+    if (!effective) return { ok: false, error: "could not read the repository's remotes; retry the request", status: 409 };
+    const elsewhere = [...effective.fetch, ...effective.push].find((url) => projectIdentityFromRemote(url, repoDir)?.project !== repository);
+    if (elsewhere !== undefined) {
+      return { ok: false, status: 400, error: `this checkout's Git url insteadOf or pushInsteadOf settings rewrite the delivery remote ${remote} to another repository; remove the rewrite or deliver through a configured remote` };
+    }
+  }
   return { ok: true, remote, repository };
+}
+
+/**
+ * The fetch and push URLs Git itself uses for a literal remote `url` in the
+ * checkout at `repoDir`, with its `insteadOf` and `pushInsteadOf` rewrites
+ * applied; null when Git cannot answer. Read through a remote that exists
+ * only on one command line, under a name no configured remote has, so
+ * nothing is written. `names` are the configured remotes when the caller
+ * already read them.
+ */
+export async function literalRemoteUrls(repoDir: string, url: string, exec: ExecPort, names?: readonly string[]): Promise<{ fetch: string[]; push: string[] } | null> {
+  if (!url || url.startsWith("-") || /[\r\n\0]/.test(url)) return null;
+  let taken = names;
+  if (!taken) {
+    const listed = await exec("git", ["remote"], repoDir, undefined, { timeoutMs: 10_000 });
+    if (listed.code !== 0) return null;
+    taken = listed.stdout.split("\n").map((line) => line.trim()).filter(Boolean);
+  }
+  let probe = "delegatus-literal-probe";
+  for (let suffix = 1; taken.includes(probe); suffix++) probe = `delegatus-literal-probe-${suffix}`;
+  const listed = await exec("git", ["-c", `remote.${probe}.url=${url}`, "remote", "-v"], repoDir, undefined, { timeoutMs: 10_000 });
+  if (listed.code !== 0) return null;
+  const urls = { fetch: [] as string[], push: [] as string[] };
+  for (const line of listed.stdout.split("\n")) {
+    const match = /^([^\t]+)\t(.*) \((fetch|push)\)$/.exec(line);
+    if (match?.[1] === probe) urls[match[3] as "fetch" | "push"].push(match[2]!);
+  }
+  return urls.fetch.length && urls.push.length ? urls : null;
 }
 
 async function stageCommitRefusal(staged: readonly string[] | null, exec: ExecPort, cwd: string): Promise<StageCommitRefusal> {

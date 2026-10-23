@@ -2877,6 +2877,9 @@ function linkSourceAnswer(link: string): Response {
     kind: "issue", repository: "example/atlas", number: 7, url: "https://github.com/example/atlas/issues/7", title: "Start work from an issue link", state: "open",
     base: { branch: "main" }, head: null, tasks: [], request: { task: "Issue #7", spec: "", baseBranch: "main" }, attachLink: "example/atlas#7",
   } });
+  /* The checkout's Git URL rewrites send the fork's URL elsewhere: the longest refusal the picker shows. */
+  if (link.includes("/pull/43")) return json({ ok: false, code: "remote_rewritten", params: { repository: "contributor/atlas" },
+    error: "this checkout's Git url insteadOf or pushInsteadOf settings send https://github.com/contributor/atlas.git to another repository than contributor/atlas" }, 409);
   return json({ ok: false, code: "merged", error: "PR #9 in example/atlas is already merged", params: { repository: "example/atlas", number: 9 } }, 409);
 }
 const linkDraft = {

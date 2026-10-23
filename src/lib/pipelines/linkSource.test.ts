@@ -1,13 +1,20 @@
 import { expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
-import { EMPTY_FORGE_CACHE, resolvePipelineLinks, resolveTaskLinks } from "@/lib/forge/workLinks";
+import { forgeViewOf } from "@/lib/forge/cache";
+import { taskWorkLinks } from "@/lib/forge/resolve";
+import { EMPTY_FORGE_CACHE, resolvePipelineLinks, resolveTaskLinks, type ForgeCacheView } from "@/lib/forge/workLinks";
 import type { BoardTask } from "@/lib/tasks/types";
+import { realExec } from "@/lib/workflows/provision";
 
 import { resolvePipelineLink, type PipelineLinkPorts } from "./linkSource";
 import type { Pipeline } from "./types";
 
 /* The pasted-link resolver (docs/research/competitors-2026-10.md rank 4).
-   Every forge answer is a fixed fixture; nothing reaches GitHub or Git. */
+   Every forge answer is a fixed fixture; nothing reaches GitHub, and only the
+   URL-rewrite cases read a real Git checkout. */
 
 const REPO_DIR = "/work/project";
 const PROJECT = "repo-project";
@@ -37,6 +44,7 @@ type Remotes = Record<string, { url: string[]; push?: string[] }>;
 
 function ports(options: {
   answers?: Answers; remotes?: Remotes; remotesCode?: number; tasks?: BoardTask[]; pipelines?: Pipeline[]; project?: string | null;
+  cache?: ForgeCacheView;
 } = {}): PipelineLinkPorts & { ghCalls: string[][] } {
   const ghCalls: string[][] = [];
   const answers = options.answers ?? {};
@@ -53,6 +61,13 @@ function ports(options: {
       expect(command).toBe("git");
       const remotes = options.remotes ?? { origin: { url: [ORIGIN_URL] } };
       if (args.length === 1 && args[0] === "remote") return { code: options.remotesCode ?? 0, stdout: Object.keys(remotes).map((name) => `${name}\n`).join(""), stderr: "" };
+      /* A literal URL's effective URLs, read through a command-line remote: no rewrites here. */
+      if (args[0] === "-c") {
+        const [, probe, url] = /^remote\.([^=]+)\.url=(.*)$/.exec(args[1]!)!;
+        expect(args.slice(2)).toEqual(["remote", "-v"]);
+        expect(Object.keys(remotes)).not.toContain(probe);
+        return { code: 0, stdout: `${probe}\t${url} (fetch)\n${probe}\t${url} (push)\n`, stderr: "" };
+      }
       const name = args.at(-1)!;
       expect(args).toEqual(["remote", "get-url", ...(args.includes("--push") ? ["--push"] : []), "--all", name]);
       const remote = remotes[name]!;
@@ -62,10 +77,13 @@ function ports(options: {
     pipelines: () => options.pipelines ?? [],
     projectForCwd: (cwd) => (cwd === REPO_DIR ? options.project === undefined ? PROJECT : options.project : null),
     /* The board's own join, against an empty forge cache and a known repository. */
-    taskLinks: (entry, pipelines) => resolveTaskLinks(entry,
-      pipelines.filter((pipeline) => pipeline.taskIds?.includes(entry.id)).map((pipeline) => resolvePipelineLinks(pipeline, "owner/project", EMPTY_FORGE_CACHE)),
-      EMPTY_FORGE_CACHE, "owner/project").links,
-    cache: EMPTY_FORGE_CACHE,
+    taskLinks: options.cache
+      /* The production join the source route uses, over the given cache. */
+      ? (entry, pipelines) => taskWorkLinks(entry, pipelines, options.cache).links
+      : (entry, pipelines) => resolveTaskLinks(entry,
+        pipelines.filter((pipeline) => pipeline.taskIds?.includes(entry.id)).map((pipeline) => resolvePipelineLinks(pipeline, "owner/project", EMPTY_FORGE_CACHE)),
+        EMPTY_FORGE_CACHE, "owner/project").links,
+    cache: options.cache ?? EMPTY_FORGE_CACHE,
   };
 }
 
@@ -114,6 +132,76 @@ test("a fork no remote names is delivered to by URL, and a locked fork says so",
   if (!result.ok) throw new Error(result.error);
   expect(result.source.head).toMatchObject({ remote: "https://github.com/someone/project.git", fork: true, maintainerCanModify: false });
   expect(result.source.request.delivery).toEqual({ branch: "refs/heads/fix", remote: "https://github.com/someone/project.git", pr: 41, prRepository: "owner/project" });
+});
+
+/** Real Git in a temporary checkout: an origin on the upstream and a
+    `contributor` remote on the fork, plus a bare repository a rewrite can
+    send the fork's URL to. */
+async function withCheckout(run: (checkout: string, other: string, git: (...args: string[]) => Promise<void>) => Promise<void>): Promise<void> {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "link-source-"));
+  const checkout = path.join(root, "checkout");
+  const other = path.join(root, "other.git");
+  const git = async (...args: string[]) => {
+    const result = await realExec("git", args, checkout);
+    if (result.code !== 0) throw new Error(result.stderr || result.stdout);
+  };
+  try {
+    fs.mkdirSync(checkout);
+    await git("init", "-q", "-b", "main");
+    await git("init", "-q", "--bare", other);
+    await git("remote", "add", "origin", ORIGIN_URL);
+    await git("remote", "add", "contributor", "https://github.com/contributor/project.git");
+    await run(checkout, other, git);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}
+
+test("a fork URL that this checkout's Git rewrites send to another repository is refused, through a real checkout", async () => {
+  const answers = { "repos/owner/project/pulls/41": prJson({ head: { ref: "fix", sha: HEAD_SHA, repo: { full_name: "Contributor/Project" } } }) };
+  const resolve = (checkout: string) => resolvePipelineLink("https://github.com/owner/project/pull/41", checkout, { ...ports({ answers }), exec: realExec });
+  await withCheckout(async (checkout, other, git) => {
+    expect(await resolve(checkout)).toMatchObject({ ok: true, source: { request: { delivery: { remote: "contributor", prRepository: "owner/project" } } } });
+    /* A rewrite of every https remote to ssh keeps each on its repository. */
+    await git("config", "url.ssh://github.com/.insteadOf", "https://github.com/");
+    expect(await resolve(checkout)).toMatchObject({ ok: true, source: { request: { delivery: { remote: "contributor" } } } });
+    await git("config", "--unset", "url.ssh://github.com/.insteadOf");
+    for (const key of ["pushInsteadOf", "insteadOf"]) {
+      /* The rewrite takes the contributor remote and the fork's own URL alike, so nothing can deliver to the fork. */
+      await git("config", `url.${other}.${key}`, "https://github.com/contributor/project.git");
+      const refused = await resolve(checkout);
+      expect(refused).toMatchObject({ ok: false, code: "remote_rewritten", params: { repository: "contributor/project" } });
+      if (!refused.ok) expect(refused.error).toContain("https://github.com/contributor/project.git to another repository than contributor/project");
+      await git("config", "--unset", `url.${other}.${key}`);
+    }
+    /* With the rewrite on the contributor remote alone, the fork's own URL still reaches the fork. */
+    await git("remote", "set-url", "--push", "contributor", other);
+    expect(await resolve(checkout)).toMatchObject({ ok: true, source: { request: { delivery: { remote: "https://github.com/contributor/project.git" } } } });
+  });
+});
+
+test("a fork PR's task is found by its own number only, never by another fork's PR on the same head name", async () => {
+  /* Two forks each open a PR from their `main`; the upstream's cache holds both under one head name. */
+  const cache = forgeViewOf({ schemaVersion: 1, repositories: { "owner/project": {
+    canonical: null, completeSince: "2026-10-01T00:00:00Z", lastSweepAt: null, lastAttemptAt: null, lastError: null, issues: {},
+    prs: {
+      "41": { url: "https://github.com/owner/project/pull/41", headRefName: "main", createdAt: "2026-10-02T00:00:00Z", state: "open", closes: [], checkedAt: "2026-10-03T00:00:00Z" },
+      "42": { url: "https://github.com/owner/project/pull/42", headRefName: "main", createdAt: "2026-10-04T00:00:00Z", state: "open", closes: [], checkedAt: "2026-10-05T00:00:00Z" },
+    },
+  } } });
+  const laneA = { id: "laneA", project: PROJECT, taskIds: ["task-a"], branch: "pipeline/fork-a-laneA", createdAt: "2026-10-03T00:00:00Z", runs: [],
+    delivery: { target: { repository: "repo-fork-a", remote: "https://github.com/fork-a/project.git", branch: "refs/heads/main", pr: 41, prRepository: "owner/project" } },
+  } as unknown as Pipeline;
+  const forkPr = (number: number, fork: string) => prJson({ number, html_url: `https://github.com/owner/project/pull/${number}`, head: { ref: "main", sha: HEAD_SHA, repo: { full_name: fork } } });
+  const answers = { "repos/owner/project/pulls/41": forkPr(41, "fork-a/project"), "repos/owner/project/pulls/42": forkPr(42, "fork-b/project") };
+  const p = ports({ answers, tasks: [task("task-a")], pipelines: [laneA], cache });
+  const tasksOf = async (number: number) => {
+    const result = await resolvePipelineLink(`https://github.com/owner/project/pull/${number}`, REPO_DIR, p);
+    if (!result.ok) throw new Error(result.error);
+    return result.source.tasks.map((entry) => entry.id);
+  };
+  expect(await tasksOf(41)).toEqual(["task-a"]);
+  expect(await tasksOf(42)).toEqual([]);
+  /* The lane's card carries its own PR, in the upstream, and not the other fork's. */
+  expect(taskWorkLinks(task("task-a"), [laneA], cache).links.map((link) => `${link.repository}#${link.number}`)).toEqual(["owner/project#41"]);
 });
 
 test("a remote is chosen only when every fetch and push URL names the head repository", async () => {

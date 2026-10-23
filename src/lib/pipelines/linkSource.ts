@@ -9,6 +9,7 @@ import {
 import type { BoardTask } from "@/lib/tasks/types";
 import type { ExecPort } from "@/lib/workflows/provision";
 
+import { literalRemoteUrls } from "./git";
 import { MAX_TASK_LENGTH } from "./limits";
 import type { CreatePipelineRequest, Pipeline } from "./types";
 
@@ -28,6 +29,7 @@ export type PipelineLinkRefusalCode =
   | "head_deleted"
   | "no_origin"
   | "repository_mismatch"
+  | "remote_rewritten"
   | "forge_unavailable";
 
 export type PipelineLinkTask = { id: string; text: string; updatedAt: string };
@@ -49,7 +51,8 @@ export type PipelineLinkSource = {
     /** `<owner>/<repo>` holding the head branch. */
     repository: string;
     /** The configured remote whose fetch and push URLs all name the head
-        repository, or the head repository's URL when none does. */
+        repository, or the head repository's URL when none does and this
+        checkout's URL rewrites keep that URL on the head repository. */
     remote: string;
     fork: boolean;
     /** Forks only: false when GitHub refuses pushes from the base's maintainers. */
@@ -199,11 +202,21 @@ export async function resolvePipelineLink(link: string, repoDir: string, ports: 
     const headCanonical = canonical(headRepository);
     const fork = headCanonical !== repository;
     /* The configured remote that reads and pushes the head repository, origin
-       first; else the head repository's own URL, which no configuration of
-       this checkout can redirect. */
-    const remote = [...remotes].sort((a, b) => Number(b.name === "origin") - Number(a.name === "origin"))
-      .find((candidate) => remoteNames(candidate, headCanonical, canonical))?.name
-      ?? `https://github.com/${headRepository}.git`;
+       first; else the head repository's own URL. Publication pushes to that
+       URL as written and Git applies this checkout's `insteadOf` and
+       `pushInsteadOf` rewrites to it, so it stands only when every URL Git
+       would use for it still names the head repository. */
+    let remote = [...remotes].sort((a, b) => Number(b.name === "origin") - Number(a.name === "origin"))
+      .find((candidate) => remoteNames(candidate, headCanonical, canonical))?.name ?? null;
+    if (!remote) {
+      remote = `https://github.com/${headRepository}.git`;
+      const effective = await literalRemoteUrls(repoDir, remote, ports.exec, remotes.map((entry) => entry.name));
+      if (!effective) return refuse("forge_unavailable", "could not read this checkout's remotes; retry");
+      if (!remoteNames({ name: remote, fetch: effective.fetch.map(githubRepositoryOfRemote), push: effective.push.map(githubRepositoryOfRemote) }, headCanonical, canonical)) {
+        return refuse("remote_rewritten", `this checkout's Git url insteadOf or pushInsteadOf settings send ${remote} to another repository than ${headRepository}; add a remote that reads and pushes ${headRepository}, or remove the rewrite`,
+          { repository: headRepository });
+      }
+    }
     const title = str(pr.title);
     const url = str(pr.html_url) || workLinkUrl(repository, number, "pr");
     return { ok: true, source: {

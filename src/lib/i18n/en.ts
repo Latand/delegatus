@@ -3101,6 +3101,7 @@ export const en = {
   "pipelineLink.refused.head_deleted": "The head branch or repository of PR #{number} no longer exists.",
   "pipelineLink.refused.no_origin": "This checkout has no GitHub origin, so a lane cannot start from the link.",
   "pipelineLink.refused.repository_mismatch": "The link is in {repository}, and this checkout's origin is {origin}. Choose a checkout of {repository}.",
+  "pipelineLink.refused.remote_rewritten": "This checkout's Git URL rewrites point {repository} at another repository. Add a remote that reads and pushes {repository}, or remove the rewrite.",
   "pipelineLink.refused.forge_unavailable": "GitHub could not be read. Check the GitHub sign-in on this machine and retry.",
   "pipelineLink.refused.repository": "The repository directory is not ready.",
   "groupOverride.source": "Source",

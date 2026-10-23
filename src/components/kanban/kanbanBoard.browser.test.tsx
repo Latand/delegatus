@@ -35191,6 +35191,7 @@ describe("pipeline from a PR or issue link", () => {
       { name: "fork", link: "https://github.com/example/atlas/pull/42", state: "resolved" },
       { name: "issue", link: "https://github.com/example/atlas/issues/7", state: "resolved" },
       { name: "refused", link: "https://github.com/example/atlas/pull/9", state: "refused" },
+      { name: "rewritten", link: "https://github.com/example/atlas/pull/43", state: "refused" },
       { name: "attach", link: "https://github.com/example/atlas/issues/7", state: "resolved" },
       { name: "editor", link: "", state: "" },
     ] as const;
@@ -35233,6 +35234,7 @@ describe("pipeline from a PR or issue link", () => {
               expect(await page.locator("[data-pipeline-link-input]").isDisabled()).toBe(true);
             }
             if (entry.name === "refused") expect(preview).toBe(translate(lang, "pipelineLink.refused.merged", { repository: "example/atlas", number: 9 }));
+            if (entry.name === "rewritten") expect(preview).toBe(translate(lang, "pipelineLink.refused.remote_rewritten", { repository: "contributor/atlas" }));
             /* A resolved link enables the templates; a refused one keeps them off. */
             const blank = page.locator("button", { hasText: translate(lang, "pipelineTemplates.blank") });
             expect(await blank.isEnabled()).toBe(entry.state === "resolved" && entry.name !== "attach");

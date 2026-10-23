@@ -47,6 +47,33 @@ test("delivery remote resolution distinguishes absence, read failures and relati
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test("a literal delivery remote that this checkout's URL rewrites send to another repository is refused", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-rewrite-"));
+  try {
+    const checkout = path.join(root, "checkout");
+    const other = path.join(root, "other.git");
+    await git(root, "init", "-q", "--bare", other);
+    await git(root, "init", "-q", "-b", "main", checkout);
+    const fork = "https://github.com/contributor/project.git";
+    expect(await resolveDeliveryRemote(checkout, fork, realExec, { allowLiteral: true })).toMatchObject({ ok: true, remote: fork });
+    /* A rewrite that keeps the repository (https to ssh) is the same delivery. */
+    await git(checkout, "config", "url.ssh://github.com/.insteadOf", "https://github.com/");
+    expect(await resolveDeliveryRemote(checkout, fork, realExec, { allowLiteral: true })).toMatchObject({ ok: true, remote: fork });
+    await git(checkout, "config", "--unset", "url.ssh://github.com/.insteadOf");
+    for (const key of ["pushInsteadOf", "insteadOf"]) {
+      await git(checkout, "config", `url.${other}.${key}`, fork);
+      const refused = await resolveDeliveryRemote(checkout, fork, realExec, { allowLiteral: true });
+      expect(refused).toMatchObject({ ok: false, status: 400, error: expect.stringContaining("to another repository") });
+      await git(checkout, "config", "--unset", `url.${other}.${key}`);
+    }
+    /* The probe remote is never written, and a configured remote of its name does not hide a rewrite. */
+    await git(checkout, "remote", "add", "delegatus-literal-probe", fork);
+    await git(checkout, "config", `url.${other}.pushInsteadOf`, fork);
+    expect(await resolveDeliveryRemote(checkout, fork, realExec, { allowLiteral: true })).toMatchObject({ ok: false, status: 400 });
+    expect((await git(checkout, "remote")).split("\n")).toEqual(["delegatus-literal-probe"]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test("an unpinned base without origin resolves local main without fetching", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "local-base-"));
   try {

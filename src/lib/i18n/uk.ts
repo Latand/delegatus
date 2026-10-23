@@ -3058,6 +3058,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "pipelineLink.refused.head_deleted": "Гілки або репозиторію PR #{number} більше не існує.",
   "pipelineLink.refused.no_origin": "У цієї копії немає origin на GitHub, тож пайплайн не може стартувати з посилання.",
   "pipelineLink.refused.repository_mismatch": "Посилання веде в {repository}, а origin цієї копії — {origin}. Обери копію {repository}.",
+  "pipelineLink.refused.remote_rewritten": "Правила переписування URL у Git цієї копії ведуть {repository} в інший репозиторій. Додай remote, що читає та пушить {repository}, або прибери це правило.",
   "pipelineLink.refused.forge_unavailable": "Не вдалося прочитати GitHub. Перевір вхід у GitHub на цій машині та повтори.",
   "pipelineLink.refused.repository": "Каталог репозиторію ще не готовий.",
   "groupOverride.source": "Джерело",
