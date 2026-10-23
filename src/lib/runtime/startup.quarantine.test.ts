@@ -4,7 +4,7 @@ import net from "node:net";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { FakeEngineHost, createFakeDeliveryLedger } from "./fixtures/fakeEngineHost";
 import path from "node:path";
-import { expect, spyOn, test } from "bun:test";
+import { expect, setSystemTime, spyOn, test } from "bun:test";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry, type AgentRegistryEntry } from "@/lib/agent/registry";
@@ -101,6 +101,60 @@ test("one blocked row completes boot and sixty subsequent admissions reuse it", 
     expect(refreshes).toBe(1);
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null }); journal.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a missing rollout is retired once without blocking an unrelated startup adoption", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-missing-rollout-isolation-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  setSystemTime(new Date("2026-10-19T00:00:00Z"));
+  try {
+    const missingId = "25300000-0000-0000-0000-000000000080";
+    const healthyId = "25300000-0000-0000-0000-000000000081";
+    passedOverRow(registry, directory, missingId, "unhosted", "handoff");
+    passedOverRow(registry, directory, healthyId, "unhosted", "handoff");
+    const missingKey = `codex:${missingId}`;
+    fs.unlinkSync(registry.readOnlySnapshot().entries[missingKey]!.artifactPath);
+    for (const id of [missingId, healthyId]) {
+      const key = `codex:${id}`;
+      const entry = registry.readOnlySnapshot().entries[key]!;
+      registry.upsert({ ...entry, claimOwner: null });
+    }
+    const attempts = new Map<string, number>();
+    const ledger = createFakeDeliveryLedger();
+    const host = Object.assign(new FakeEngineHost(ledger), {
+      setWriterFence: () => {}, onEvent: () => () => {}, onStateChange: () => () => {},
+    });
+    const dependencies: StructuredStartupDependencies = {
+      registry, client: runtimeJournalClient(journal), orchestratorSeats: () => [],
+      refreshTranscriptState: async () => {}, resolveCodexOwner: () => null,
+      resolveClaudeOwner: () => null, adoptClaude: async () => [],
+      pipelineEvidence: () => ({ settled: new Set(), deferred: new Set() }),
+      schedule: () => ({ unref() {} }),
+      adoptCodexHost: async id => {
+        attempts.set(id, (attempts.get(id) ?? 0) + 1);
+        if (id === missingId) throw new Error("no rollout found for thread id fixture");
+        return host as never;
+      },
+    };
+    await adoptStructuredHostsAtStartup(dependencies);
+    await adoptStructuredHostsAtStartup(dependencies);
+
+    expect(attempts.get(missingId)).toBe(1);
+    expect(attempts.get(healthyId)).toBe(1);
+    expect(registry.readOnlySnapshot().entries[missingKey]).toMatchObject({
+      status: "unhosted", pendingAction: "handoff", claimOwner: null,
+      structuredHost: { process: null, ended: { reason: "missing-rollout" } },
+    });
+    expect(fs.existsSync(`${registry.filename}.startup-retries`)
+      ? fs.readdirSync(`${registry.filename}.startup-retries`).filter(file => file.endsWith(".json"))
+      : []).toEqual([]);
+  } finally {
+    setSystemTime();
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close(); registry.close();
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
