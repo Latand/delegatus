@@ -10,7 +10,7 @@ import type { ProfilePartView } from "@/lib/memory/profileTypes";
 import { useMemoryProfile } from "./useMemoryProfile";
 
 const BUTTON = "min-h-8 rounded-lg px-3 text-[12px] font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [@media(pointer:coarse)]:min-h-11";
-const TONE = { role: "border-t-accent", project: "border-t-info", machine: "border-t-warning" };
+const TONE = { role: "border-t-accent", swarm: "border-t-info", project: "border-t-info", machine: "border-t-warning" };
 
 const SOLID = "bg-accent text-white disabled:opacity-60";
 const OUTLINE = "border border-border text-accent hover:bg-sunken disabled:opacity-60";
@@ -33,7 +33,7 @@ export function MemoryProfile({ rules, renderRules, onDrill }: { rules: RoleMemo
   const [selection, setSelection] = useState<{ scopes: ScopeView[]; ids?: string[]; topic?: string } | null>(null);
   const label = (scope: ScopeView) => scope.kind === "role"
     ? `${roleNameById(t, scope.roleId ?? "")} · ${t(isCrossProjectRoleScope(scope.scope) ? "memoryProfile.everyProject" : "memoryProfile.thisProject")}`
-    : t(scope.kind === "project" ? "roleMemory.projectSection" : "roleMemory.machineSection");
+    : scope.kind === "swarm" ? t("roleMemory.swarm", { role: roleNameById(t, scope.roleId ?? "") }) : t(scope.kind === "project" ? "roleMemory.projectSection" : "roleMemory.machineSection");
   const drilled = selection !== null;
   useEffect(() => {
     onDrill?.(drilled);
@@ -41,7 +41,7 @@ export function MemoryProfile({ rules, renderRules, onDrill }: { rules: RoleMemo
   }, [drilled, onDrill]);
   /* The level cards follow the All rules page: each role's own project first, then its every-project rules, then project and machine. */
   const ordered = (() => {
-    const kinds = { role: 0, project: 1, machine: 2 };
+    const kinds = { role: 0, swarm: 1, project: 2, machine: 3 };
     const first = (scope: ScopeView) => rules.scopes.findIndex(candidate => candidate.kind === scope.kind && candidate.roleId === scope.roleId);
     const cross = (scope: ScopeView) => scope.kind === "role" && isCrossProjectRoleScope(scope.scope) ? 1 : 0;
     return rules.scopes.map((scope, index) => ({ scope, index })).sort((a, b) => kinds[a.scope.kind] - kinds[b.scope.kind] || first(a.scope) - first(b.scope) || cross(a.scope) - cross(b.scope) || a.index - b.index).map(item => item.scope);

@@ -54,6 +54,22 @@ export function roleScopeKeys(): string[] {
   return roleMemoryCollection() ? keys("s:").map(key => key.slice(2)) : [];
 }
 
+/** Curator-only evidence, restricted to the requested rule ids. Usage is
+ * attached to lesson requests even when that attempt left no new lesson. */
+export function ruleUsageCounts(ids: readonly string[]): Record<string, { applied: number; misled: number }> {
+  if (!ids.length || !roleMemoryCollection()) return {};
+  const result: Record<string, { applied: number; misled: number }> = {};
+  for (const field of ["applied", "misled"] as const) {
+    const counts = reader().query<{ id: string; count: number }, [string]>(`
+      SELECT u.value AS id, COUNT(*) AS count FROM state_rows s, json_each(s.value_json, '$.${field}') u
+      WHERE s.collection='role_memory' AND s.row_key > 'q:' AND s.row_key < 'q;'
+        AND u.value IN (SELECT value FROM json_each(?)) GROUP BY u.value
+    `).all(JSON.stringify(ids));
+    for (const row of counts) (result[row.id] ??= { applied: 0, misled: 0 })[field] = row.count;
+  }
+  return result;
+}
+
 async function projectedScopeRowsCooperatively(rowKeys: readonly string[]): Promise<RoleMemoryScopeRow[]> {
   if (!rowKeys.length) return [];
   const db = reader();
