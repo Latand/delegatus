@@ -184,3 +184,123 @@ The evidence document itself is not a test input.
 | `scripts/gate-slot.sh` | `64dbbbe91bb82a30ee80135afd59596a1043809ab0c5eab2daef24608c9cb2ad` |
 | `scripts/gate-slot.queue.test.ts` | `c24c1f9b740416c3dbc0c1c3f25fd141f25998ad40b550f4634a909e1b1bc73c` |
 | `src/lib/runtime/cpuAdmission.ts` | `6dbcfb29707eaeed106cb65b228148d87d3ea9dfc6989af1fd81c6b6b5a53ba9` |
+
+
+## Review fixes and revalidation
+
+Recorded 2026-10-23T23:57:07+00:00. This section supersedes the earlier lock-test source
+hash and adds the review-fix observations; the original run remains above.
+The pinned Codex Cloud result 28 checksum was rechecked and matches.
+
+`Dockerfile:269` now copies `scripts/cpu-admission-lock.ts` with its importing
+helper. `scripts/cpu-admission-lock.test.ts:38` reads the runtime stage's
+actual gate-script COPY list, constructs that layout with the shipped source,
+bin tree, aliases and dependencies, and requires `--reuse-slot` to exit 75
+with empty output when no lease exists.
+
+`scripts/cpu-admission-lock.test.ts:78` starts the real helper in a subprocess
+against an independent SQLite writer. IPC barriers release the opening lock
+after 80 controlled milliseconds, then acquire another writer lock before a
+later check. The helper must refuse at the original 120 ms deadline. An earlier
+queue ticket keeps the helper polling on systems without flock. Only the
+monotonic clock and asynchronous sleep are controlled; both contention episodes
+use real SQLite operations. An external five-second watchdog bounds the child,
+and cleanup awaits its exit before releasing the writer.
+
+The compared main revision is `fd7a0a14e75725b8d612237bf5a4413b0081e9a3`.
+The branch export starts at `8c6a6d4cdefcc43674bb52024a90a157b3308904`
+with the two source changes identified by the final hashes below. Main later
+advanced through unrelated account credential handling and native compaction
+test changes. Rechecking through `97bdb94ea9dfe32dff8a7bf022eeb2f83d8f02b7`
+found no changes to this task's source or test files. The earlier remote-runner
+shell comment remains separate from this change. Workflows are unchanged.
+
+Both batches ran through the prescribed stage wrapper and `gate-remote`, one
+at a time. Each file ran sequentially with setsid, stdin from the null device,
+an external timeout, and fresh private HOME, XDG_CONFIG_HOME, LLV_STATE_DIR and
+TMPDIR directories. The Viewer control endpoint was a closed loopback port;
+the test preload retained its owned-process supervision. The native runner
+installed frozen dependencies and used Bun 1.4.0.
+
+Inside the admitted batch, each test command was:
+
+```sh
+setsid timeout --signal=TERM --kill-after=15s "$BUDGET" \
+  bun run test "./$FILE" </dev/null
+```
+
+The initial batch completed 50 commands: 23 branch files, 22 existing main
+files, types, lint, shell syntax and two mutation probes. Its run counts were
+reconciled against the explicit file manifest. The final batch completed seven
+commands: the full lock suite, both runner integration files, types, lint and
+both mutations. It kept all logs outside the export tree until tests ended.
+The table uses the final observations for files repeated in that batch.
+
+| Test file | Main exit | Branch exit |
+| --- | --- | --- |
+| `scripts/cpu-admission-lock.test.ts` | absent | 0 |
+| `src/lib/runtime/cpuAdmission.test.ts` | 0 | 0 |
+| `scripts/gate-slot.queue.test.ts` | 0 | 0 |
+| `scripts/local-gate.cpuQueue.test.ts` | 0 | 0 |
+| `src/lib/runtime/cpuAdmissionScope.test.ts` | 0 | 0 |
+| `src/lib/runtime/cpuPressure.test.ts` | 0 | 0 |
+| `scripts/local-gate-tests.cpuQueue.test.ts` | 0 | 0 |
+| `src/lib/pipelines/engine.cpuAdmissionPolling.test.ts` | 0 | 0 |
+| `src/lib/pipelines/engine.cpuQueue.test.ts` | 0 | 0 |
+| `src/lib/workflows/engine.cpuAdmission.test.ts` | 0 | 0 |
+| `scripts/gate-slot.test.ts` | 0 | 0 |
+| `scripts/gate-runner/client.test.ts` | 1 | 1 |
+| `scripts/local-gate-tests.test.ts` | 0 | 0 |
+| `src/lib/state/declaredIndexes.test.ts` | 0 | 0 |
+| `src/lib/pipelines/testGuidance.test.ts` | 0 | 0 |
+| `src/lib/runtime/cpuAdmissionBudget.test.ts` | 0 | 0 |
+| `scripts/dockerfile-permissions.test.ts` | 0 | 0 |
+| `scripts/docker-image-scope.test.ts` | 1 | 1 |
+| `scripts/gate-runner/remote.test.ts` | 0 | 0 |
+| `scripts/gate-runner/remoteLifecycle.test.ts` | 0 | 0 |
+| `scripts/gate-slot.namespace.integration.test.ts` | 0 | 0 |
+| `scripts/owned-runner.integration.test.ts` | 0 | 0 |
+| `src/lib/runtime/sandboxGateRunner.integration.test.ts` | 0 | 0 |
+
+The four required branch suites pass 74 tests in total: 22 lock tests,
+39 admission tests, 11 shell queue tests and two local queue tests. Main has
+no lock-test file. Existing retired and opt-in skips remain: 32 workflow
+cases, five pipeline cases, two index cases, five namespace cases and seven
+sandbox gate cases.
+
+The two exit-1 rows are outside this fix and reproduce on both complete files:
+`scripts/gate-runner/client.test.ts:129` lacks environment classifications for
+`LLV_SOUND_CAPTIONS_OUT` and `LLV_VOICE_DEVICES_OUT`;
+`scripts/docker-image-scope.test.ts:78` lacks an image-input classification for
+`scripts/privacy-known-value-fingerprints.json`.
+
+The first branch runner integration observations (exit 1 and timeout 124)
+were invalidated because generated logs inside the disposable export were
+captured by its privacy scan. Recorded processes from the timeout were checked
+to have exited. Both files were rerun with logs outside the tree and passed;
+the complete main files also passed. These initial observations are retained
+as setup failures and are not attributed to the source change.
+
+| Final check | Exit |
+| --- | --- |
+| `bun x tsc --noEmit --incremental false` | 0 |
+| `bun x eslint scripts/cpu-admission.ts scripts/cpu-admission-lock.ts scripts/cpu-admission-lock.test.ts scripts/gate-slot.queue.test.ts src/lib/runtime/cpuAdmission.ts` | 0 |
+| `bash -n scripts/gate-slot.sh` (unchanged shell bytes) | 0 |
+| Publication privacy for all eight changed files and branch messages, with committed fingerprints | 0 |
+| Omit the lock helper from Docker COPY, run the runtime-layout test | 1, expected |
+| Reset the waiter for every queue check, run the second-contention test | 1, expected |
+
+The missing-copy mutation fails with a module import error instead of exit 75.
+The per-check deadline mutation produces an extra retry at 120 ms, so the
+exact IPC sequence assertion fails. Both mutations were restored, and the
+final batch verified unchanged source hashes before returning its run count.
+
+| Final source input | SHA-256 |
+| --- | --- |
+| `Dockerfile` | `28e488a355aacdd16d76b3cb07a0ca4d4b76d3fb5cd8a3f8ecf33fc83a9cf050` |
+| `scripts/cpu-admission-lock.test.ts` | `93ff43ae3b8d462834ccc62d4f7de1364667397ffc223ce18ff4540901e61698` |
+| `scripts/cpu-admission.ts` | `82b3aad518de2b64b57aae84327a973bea1b802100ad7fb0a07dc2b9081b058e` |
+| `scripts/cpu-admission-lock.ts` | `649f5bc29ee06a99d6540fc62a2991c6dd6b2dc24a98734690660f53c1de2f64` |
+| `scripts/gate-slot.sh` | `64dbbbe91bb82a30ee80135afd59596a1043809ab0c5eab2daef24608c9cb2ad` |
+| `src/lib/runtime/cpuAdmission.ts` | `6dbcfb29707eaeed106cb65b228148d87d3ea9dfc6989af1fd81c6b6b5a53ba9` |
+| `scripts/gate-slot.queue.test.ts` | `c24c1f9b740416c3dbc0c1c3f25fd141f25998ad40b550f4634a909e1b1bc73c` |

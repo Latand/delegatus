@@ -35,6 +35,107 @@ async function readOutput(stream: ReadableStream<Uint8Array>, receive: (text: st
   } finally { reader.releaseLock(); }
 }
 
+test("the runtime image's copied gate helper loads and refuses an absent slot lease", async () => {
+  const root = path.resolve(import.meta.dir, "..");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "admission-runtime-"));
+  try {
+    const runtime = fs.readFileSync(path.join(root, "Dockerfile"), "utf8")
+      .split(/^FROM runtime-system AS runtime$/m)[1].split(/^FROM /m)[0];
+    const gateCopy = runtime.split("\n").find(line => line.startsWith("COPY --from=build ") && line.includes("/app/scripts/cpu-admission.ts "))!;
+    expect(gateCopy).toBeDefined();
+    const sources = gateCopy.split(/\s+/).slice(2, -1);
+    const destination = gateCopy.split(/\s+/).at(-1)!;
+    fs.mkdirSync(path.join(dir, destination), { recursive: true });
+    for (const source of sources) {
+      fs.copyFileSync(path.join(root, source.slice("/app/".length)), path.join(dir, destination, path.basename(source)));
+    }
+    // These are the source tree, aliases and dependencies shipped beside the
+    // helper. No other scripts may leak in from the developer checkout.
+    for (const name of ["src", "bin", "tsconfig.json"]) {
+      expect(runtime).toContain(`COPY --from=build /app/${name} ./${name}`);
+      fs.cpSync(path.join(root, name), path.join(dir, name), { recursive: true });
+    }
+    expect(runtime).toContain("COPY --from=build /app/node_modules ./node_modules");
+    fs.symlinkSync(path.join(root, "node_modules"), path.join(dir, "node_modules"), "dir");
+    const child = Bun.spawn([process.execPath, "scripts/cpu-admission.ts", "--reuse-slot"], {
+      cwd: dir, env: { ...process.env, LLV_GATE_SLOT_LEASE: "", LLV_GATE_LOCK_DIR: dir }, stdout: "pipe", stderr: "pipe",
+    });
+    const stdout = new Response(child.stdout).text(), stderr = new Response(child.stderr).text();
+    const watchdog = setTimeout(() => child.kill("SIGKILL"), 5000);
+    try {
+      expect(await child.exited, await stderr).toBe(75);
+      expect(await stdout).toBe("");
+      expect(await stderr).toBe("");
+    } finally {
+      clearTimeout(watchdog);
+      if (child.exitCode === null) child.kill("SIGKILL");
+      await child.exited;
+      await Promise.all([stdout, stderr]);
+    }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}, 15_000);
+
+test("the helper retains its opening deadline through a second real writer contention", async () => {
+  const f = fixture();
+  // Keep the helper queued after opening, including on systems without flock.
+  const ahead = f.open();
+  try { ahead.check("stage:ahead", false, undefined, false); }
+  finally { ahead.close(); }
+  // Only time and sleep are controlled. The entry point, retry closure and
+  // SQLite calls are real; this process owns an independent writer connection.
+  const preload = path.join(f.dir, "clock.ts");
+  fs.writeFileSync(preload, `
+    let now = 0, resume;
+    Object.defineProperty(performance, "now", { value: () => now });
+    process.on("message", value => { now = value; const next = resume; resume = undefined; next(); });
+    process.channel?.unref();
+    Bun.sleep = ms => new Promise(resolve => { resume = resolve; process.send({ sleep: ms, now }); });
+  `);
+  f.writer.exec("BEGIN IMMEDIATE");
+  let held = true, expired = false;
+  const episodes: { sleep: number; now: number }[] = [];
+  const child = Bun.spawn([process.execPath, "--preload", preload, "scripts/cpu-admission.ts", "--wait", "command:two-locks", String(process.pid)], {
+    env: { ...process.env, LLV_GATE_LOCK_DIR: f.dir, LLV_CPU_ADMISSION_LOCK_TIMEOUT_MS: "120",
+      DELEGATUS_CPU_PRESSURE: "off", LLV_GATE_CPU_PRIORITY_SOURCE: "", LLV_GATE_POLL_SECONDS: "0.123" },
+    stdout: "ignore", stderr: "pipe",
+    ipc(message, subprocess) {
+      episodes.push(message);
+      if (episodes.length === 1) {
+        f.writer.exec("COMMIT"); held = false;
+        subprocess.send(80); // Opening recovers after consuming 80 of 120 ms.
+      } else if (episodes.length === 2) {
+        f.writer.exec("BEGIN IMMEDIATE"); held = true;
+        subprocess.send(100); // The first check completed; block the next one.
+      } else if (episodes.length === 3) {
+        subprocess.send(120); // Original deadline, before any fresh budget.
+      } else {
+        // A reset deadline would retry the still-held writer again.
+        subprocess.kill("SIGKILL");
+      }
+    },
+  });
+  const output = new Response(child.stderr).text();
+  const watchdog = setTimeout(() => { expired = true; child.kill("SIGKILL"); }, 5000);
+  try {
+    const code = await child.exited, stderr = await output;
+    expect(expired, stderr).toBe(false);
+    expect(episodes).toEqual([{ sleep: 20, now: 0 }, { sleep: 123, now: 80 }, { sleep: 20, now: 100 }]);
+    expect(code, stderr).toBe(1);
+    expect(stderr.match(/waiting for CPU admission queue SQLite lock/g)).toHaveLength(2);
+    expect(stderr.match(/lock acquired after/g)).toHaveLength(1);
+    expect(stderr).toContain("lock acquired after 80 ms");
+    expect(stderr).toContain("lock deadline exceeded after 120 ms");
+    expect(f.writer.query("SELECT key FROM tickets ORDER BY seq").all()).toEqual([{ key: "stage:ahead" }, { key: "command:two-locks" }]);
+  } finally {
+    clearTimeout(watchdog);
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await child.exited;
+    await output;
+    if (held) f.writer.exec("ROLLBACK");
+    f.close();
+  }
+}, 15_000);
+
 test("an uncontended operation returns without waiting or logging", async () => {
   const time = clock(), lines: string[] = [];
   expect(await admissionLockWait(120, line => lines.push(line), time)(() => "ready")).toBe("ready");
