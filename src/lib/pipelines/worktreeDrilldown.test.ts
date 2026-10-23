@@ -37,6 +37,35 @@ function rejects(cursor: string | null, status: number, code: string) {
   expect(caught).toMatchObject({ status, code });
 }
 
+test("the projection and sweep load under Node without SQLite or state writes", async () => {
+  const build = await Bun.build({
+    entrypoints: [path.join(import.meta.dir, "worktreeDrilldown.ts"), path.join(import.meta.dir, "worktreeSweep.ts")],
+    outdir: path.join(root, "bundle"), target: "node", format: "cjs", external: ["next/*", "bun:*"],
+  });
+  expect(build.success).toBe(true);
+  const node = process.env.LLV_TEST_NODE_BIN || Bun.which("node");
+  if (!node) throw new Error("projection import check requires Node on PATH");
+  const state = path.join(root, "state");
+  const probe = Bun.spawn([node, "-e", `
+    for (const file of process.argv.slice(1)) {
+      const module = require(file);
+      if (typeof module.readWorktreePage === "function") {
+        try { module.readWorktreePage(null); throw new Error("SQLite unexpectedly available"); }
+        catch (error) {
+          if (!(error instanceof module.WorktreePageError) || error.status !== 503 || error.code !== "unavailable") throw error;
+        }
+      }
+    }
+  `, ...build.outputs.map(output => output.path)], {
+    env: { ...process.env, NODE_PATH: path.resolve("node_modules"), NODE_ENV: "production",
+      HOME: root, XDG_CONFIG_HOME: path.join(root, "config"), LLV_STATE_DIR: state, TMPDIR: root },
+    stdout: "pipe", stderr: "pipe",
+  });
+  const [exit, error] = await Promise.all([probe.exited, new Response(probe.stderr).text()]);
+  expect({ exit, error }).toEqual({ exit: 0, error: "" });
+  expect(fs.existsSync(state)).toBe(false);
+});
+
 test("the sweep producer persists all rows, task and original observation time; primary-key pages survive restart without the full report", () => {
   recordWorktreeSweep(report(), owners());
   fs.unlinkSync(path.join(root, "worktree-sweep-report.json"));

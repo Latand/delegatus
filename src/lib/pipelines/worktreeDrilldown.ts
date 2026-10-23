@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -31,6 +31,13 @@ type Meta = { generation: string; at: string; mode: WorktreeSweepReport["mode"];
 const file = () => statePath("worktree-drilldown.sqlite");
 const CURSOR = /^([0-9a-f-]{36}):([0-9]{1,10})$/;
 const timestamp = (value: unknown): value is string => typeof value === "string" && value.length <= 40 && Number.isFinite(Date.parse(value));
+// Sweep imports also reach routes that Next collects under Node.
+function sqliteDatabase(): typeof import("bun:sqlite").Database {
+  const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
+  if (!sqlite) throw new Error("The worktree drilldown requires the Bun runtime");
+  return sqlite.Database;
+}
+
 function validRow(row: RetainedWorktree): boolean {
   return !!row && typeof row.checkout === "string" && !path.isAbsolute(row.checkout)
     && typeof row.reason === "string" && /^[a-z-]{1,64}$/.test(row.reason)
@@ -60,6 +67,7 @@ export function recordWorktreeDrilldown(report: WorktreeSweepReport, pipelines: 
   const snapshot = path.join(temporary, "snapshot.sqlite");
   let db: Database | undefined;
   try {
+    const Database = sqliteDatabase();
     db = new Database(snapshot, { create: true });
     const source = db;
     db.exec("PRAGMA busy_timeout = 0");
@@ -106,6 +114,7 @@ export function readWorktreePage(cursor: string | null): WorktreePage {
     throw new WorktreePageError(400, "invalid_cursor");
   let db: Database | undefined;
   try {
+    const Database = sqliteDatabase();
     db = new Database(file(), { readonly: true });
     db.exec("PRAGMA busy_timeout = 0");
     const source = db;
