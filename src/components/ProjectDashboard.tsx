@@ -41,7 +41,7 @@ import { compactPipelineArtifactPaths, compactPipelineLayoutFlows, createDraftPi
 import { PipelineTemplatePicker } from "./pipelines/PipelineTemplatePicker";
 import { createProjectDashboardDerivation } from "./projectDashboardDerivation";
 import { buildSubagentTrays, subagentTraySignature } from "./scheme/subagentTray";
-import type { SubagentTrayApi } from "./scheme/SubagentTrayView";
+import type { SubagentTrayApi } from "./scheme/subagentTray";
 import { conversationIdentity, currentConversationFile, formatConversationHash, isLaunchPlaceholder } from "@/lib/accounts/identity";
 import { recordFocusNavigation } from "@/lib/navigation/focusHistory";
 import { collapsibleWorkerFiles, conversationSeenKey, finishedLaneOutcomePaths, pipelineCursorStagePaths, protectedReviewerNodes } from "./scheme/workerCollapse";

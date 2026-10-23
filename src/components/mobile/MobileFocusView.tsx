@@ -46,7 +46,7 @@ import { deckKey } from "@/components/scheme/agentLinks";
 import { buildFocusFrameIndex, stageAnchorAliases } from "@/components/scheme/focusFrames";
 import { buildSchemeLayout } from "@/components/scheme/layout";
 import { subagentsOf } from "@/components/scheme/subagentBadgeModel";
-import type { SubagentTrayApi } from "@/components/scheme/SubagentTrayView";
+import type { SubagentTrayApi } from "@/components/scheme/subagentTray";
 
 import { WakeupChip, wakeupChipKey } from "@/components/WakeupChip";
 
