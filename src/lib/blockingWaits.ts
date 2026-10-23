@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { startupDiagnostic } from "./startupDiagnostics";
 
 /**
  * Measured waits on shared state, with who waited and on whose behalf.
@@ -83,7 +84,8 @@ const LONGEST_LIMIT = 20;
 
 const correlation = new AsyncLocalStorage<BlockingWaitCorrelation>();
 const samples: BlockingWaitSample[] = [];
-let logSink: (line: string) => void = (line) => console.warn(line);
+const defaultLogSink = (line: string) => startupDiagnostic("warn", line);
+let logSink: (line: string) => void = defaultLogSink;
 
 // One process owns a bounded window. Operation ids deliberately do not split
 // groups: a busy caller can issue a fresh id on every retry.
@@ -250,5 +252,5 @@ export function resetBlockingWaitsForTests(sink?: (line: string) => void): void 
   deferralTimer = undefined;
   deferrals.clear();
   samples.length = 0;
-  logSink = sink ?? ((line) => console.warn(line));
+  logSink = sink ?? defaultLogSink;
 }

@@ -108,6 +108,7 @@ Options:
     bannerOpened: (url) => `  Opened:    ${url}`,
     bannerOpening: (url) => `  Opening:   ${url}`,
     bannerOpenUrl: (url) => `  Open ${url} in your browser.`,
+    bannerSetup: () => "  Sign in through the setup guide to run agents.",
     bannerReads: () => "  Reads logs from ~/.claude/projects, ~/.codex/sessions, ~/.copilot/session-state.",
     bannerDebug: () => "  DELEGATUS_DEBUG=1 — show startup diagnostics.",
     bannerStop: () => "  Ctrl+C — stop.  --tailscale — access from your phone.",
@@ -159,6 +160,7 @@ Options:
     bannerOpened: (url) => `  Відкрито:  ${url}`,
     bannerOpening: (url) => `  Відкриваю: ${url}`,
     bannerOpenUrl: (url) => `  Відкрийте ${url} у браузері.`,
+    bannerSetup: () => "  Увійдіть в обліковий запис у майстрі налаштування, щоб запускати агентів.",
     bannerReads: () => "  Читає логи з ~/.claude/projects, ~/.codex/sessions, ~/.copilot/session-state.",
     bannerDebug: () => "  DELEGATUS_DEBUG=1 — показати діагностику запуску.",
     bannerStop: () => "  Ctrl+C — зупинити.  --tailscale — доступ з телефона.",
@@ -849,10 +851,14 @@ function localUrl(options, runtime) {
 
 /* `browser` is what `openBrowser` found out: the banner says "Opened" only
    when an opener reported success. */
-function printBanner(version, options, runtime, browser, debug) {
+function printBanner(version, options, runtime, browser, debug, minimal) {
   const url = localUrl(options, runtime);
-  console.log(`  ✳ Delegatus v${version}`);
+  if (!minimal) console.log(`  ✳ Delegatus v${version}`);
   console.log(browser === "opened" ? m.bannerOpened(url) : browser === "opening" ? m.bannerOpening(url) : m.bannerOpenUrl(url));
+  if (minimal) {
+    console.log(m.bannerSetup());
+    return;
+  }
   if (debug) console.log(m.bannerReads());
   console.log(agentStartupMessage(LANG));
   console.log(m.bannerStop());
@@ -1123,10 +1129,10 @@ async function main() {
   /* Everything started below inherits the choice (#2168). */
   const debug = process.env.LLV_DEBUG === "1";
   startupOutput.setDebug(debug);
-  // Pipes/files keep service diagnostics, and journal metadata takes precedence
-  // even when a service gives the launcher a terminal. Clear an inherited quiet
-  // choice too: a shell or a previous launcher must not silence the service.
-  const quiet = !debug && process.stdout.isTTY === true && process.env.JOURNAL_STREAM === undefined;
+  // Package launches stay quiet through pipes too. Journal metadata takes
+  // precedence even when a service gives the launcher a terminal. Clear an
+  // inherited quiet choice so a previous launcher cannot silence the service.
+  const quiet = !debug && (!checkout || process.stdout.isTTY === true) && process.env.JOURNAL_STREAM === undefined;
   if (quiet) process.env[QUIET_DIAGNOSTICS_ENV] = "1";
   else delete process.env[QUIET_DIAGNOSTICS_ENV];
 
@@ -1478,7 +1484,7 @@ async function main() {
   const browser = !options.noOpen && process.stdout.isTTY
     ? await openBrowser(localUrl(options, runtime))
     : "not-opened";
-  printBanner(version, options, runtime, browser, debug);
+  printBanner(version, options, runtime, browser, debug, !checkout && quiet);
   if (options.tailscale) {
     await printTailscaleBanner(runtime);
   }

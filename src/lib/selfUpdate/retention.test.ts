@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -139,6 +139,48 @@ function fixture(count = 8) {
   return { root, dirs, shas, record, inputs, ports, commands, locked, now, run: () => retainReleases(record, inputs, ports) };
 }
 const exists = fs.existsSync;
+
+test.each([false, true])("a fresh package with no release cache completes retention (quiet=%s)", async quiet => {
+  const h = fixture(0);
+  h.record.checkout = null;
+  fs.rmdirSync(h.record.releasesDir);
+  const previous = process.env.LLV_QUIET_DIAGNOSTICS;
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  try {
+    process.env.LLV_QUIET_DIAGNOSTICS = quiet ? "1" : "0";
+    const report = await h.run();
+    expect(report.errors).toEqual([]);
+    expect(report.removed).toEqual([]);
+    expect(exists(h.record.releasesDir)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(h.ports.reportFile!, "utf8")).errors).toEqual([]);
+    expect(log.mock.calls).toEqual(quiet ? [] : [["[self-update] retention removed 0; reclaimed 0 cache bytes; 0 error(s)"]]);
+  } finally {
+    log.mockRestore();
+    if (previous === undefined) delete process.env.LLV_QUIET_DIAGNOSTICS;
+    else process.env.LLV_QUIET_DIAGNOSTICS = previous;
+  }
+});
+
+test.each(["file", "dangling-alias"])("an invalid release cache (%s) still reports an error", async kind => {
+  const h = fixture(0);
+  h.record.checkout = null;
+  fs.rmdirSync(h.record.releasesDir);
+  if (kind === "file") fs.writeFileSync(h.record.releasesDir, "invalid cache");
+  else fs.symlinkSync(path.join(h.root, "missing"), h.record.releasesDir);
+  const previous = process.env.LLV_QUIET_DIAGNOSTICS;
+  const error = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    process.env.LLV_QUIET_DIAGNOSTICS = "1";
+    const report = await h.run();
+    expect(report.errors).toHaveLength(1);
+    expect(report.removed).toEqual([]);
+    expect(error).toHaveBeenCalledWith("[self-update] retention removed 0; reclaimed 0 cache bytes; 1 error(s)", ...report.errors);
+  } finally {
+    error.mockRestore();
+    if (previous === undefined) delete process.env.LLV_QUIET_DIAGNOSTICS;
+    else process.env.LLV_QUIET_DIAGNOSTICS = previous;
+  }
+});
 
 test("a scoped partial scan protects only its affected release, including caches", async () => {
   const h = fixture();

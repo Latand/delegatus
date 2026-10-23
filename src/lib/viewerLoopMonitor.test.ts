@@ -3,7 +3,7 @@ import { createViewerLoopMonitor } from "./viewerLoopMonitor";
 import { performanceProcess, createPerformanceSpans } from "./performanceSpans";
 import { createLoopHeapSignals } from "./loopHeapSignals";
 
-test.each(["viewer", "runtime-host"])("the default %s loop sink retains gap and summary diagnostics in quiet mode", async role => {
+test.each(["viewer", "runtime-host"])("the default %s loop sink quiets package diagnostics and retains service evidence", async role => {
   const previous = process.env.LLV_QUIET_DIAGNOSTICS;
   const previousOwner = process.env.LLV_STATE_OWNER;
   const lines: string[] = [];
@@ -17,14 +17,12 @@ test.each(["viewer", "runtime-host"])("the default %s loop sink retains gap and 
     process.env.LLV_QUIET_DIAGNOSTICS = "1";
     process.env.LLV_STATE_OWNER = role;
     at = 61_000; monitor.tick(); await drain();
+    expect(lines).toHaveLength(0);
+    delete process.env.LLV_QUIET_DIAGNOSTICS;
+    at = 122_000; monitor.tick(); await drain();
     expect(lines).toHaveLength(2);
     expect(JSON.parse(lines[0]!.slice("[viewer loop-gap] ".length))).toMatchObject({ role, gapMs: 60_990 });
     expect(JSON.parse(lines[1]!.slice("[performance summary] ".length))).toMatchObject({ role });
-    delete process.env.LLV_QUIET_DIAGNOSTICS;
-    at = 122_000; monitor.tick(); await drain();
-    expect(lines).toHaveLength(4);
-    expect(lines[2]).toStartWith("[viewer loop-gap] ");
-    expect(lines[3]).toStartWith("[performance summary] ");
   } finally {
     monitor.stop(); write.mockRestore();
     if (previousOwner === undefined) delete process.env.LLV_STATE_OWNER;
