@@ -307,6 +307,33 @@ for (const parked of [false, true]) {
   });
 }
 
+test("a settled stage report outranks exhausted spawn recovery and follows the pass edge", async () => {
+  const h = harness();
+  await runningStructuredStage(h);
+  h.setConversationActive(false);
+  const pipeline = loadPipelines()[0]!;
+  const attempt = pipeline.runs[0]!.attempts[0]!;
+  attempt.report = recoveryReport(h.ports.now());
+  pipeline.state = "needs_decision";
+  pipeline.stateDetail = "stage spawn recovery stopped: runtime host recovery exhausted after 2 checks; original launch and first-message operation inspected; last result: first message delivered; transcript publication pending; original launch retained";
+  pipeline.cursor!.state = "spawning";
+  savePipelines([pipeline]);
+
+  let recoveryCalls = 0;
+  h.ports.recoverStagedLaunch = async () => { recoveryCalls += 1; };
+  await tickPipelines([], h.ports);
+
+  const settled = loadPipelines()[0]!;
+  expect(recoveryCalls).toBe(0);
+  expect(settled.runs[0]!.attempts[0]).toMatchObject({
+    state: "passed",
+    verdict: { status: "pass" },
+    report: { summary: "Finished work" },
+  });
+  expect(settled.state).toBe("running");
+  expect(settled.cursor).toMatchObject({ stageId: "build", state: "pending" });
+  expect(settled.stateDetail).toBeNull();
+});
 
 for (const engine of ["claude", "codex"] as const) {
   test(`${engine} provider cut waits and continues once with a stable key`, async () => {

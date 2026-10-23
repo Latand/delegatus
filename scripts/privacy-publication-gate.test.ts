@@ -2582,6 +2582,36 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       { name: "percent decoded", text: [...value].map((c) => `%${c.charCodeAt(0).toString(16)}`).join(""), contiguous: true },
       { name: "entity decoded", text: [...value].map((c) => `&#${c.charCodeAt(0)};`).join(""), contiguous: true },
     ];
+
+    test("the committed catalog distinguishes open-source prose from its configured value", async () => {
+      const directory = mkdtempSync(join(tmpdir(), "llv-privacy-open-source-"));
+      temporaryDirectories.push(directory);
+      const publication = "publication.md";
+      const catalog = join(import.meta.dir, "privacy-known-value-fingerprints.json");
+      const environment = {
+        LLV_PRIVACY_KNOWN_VALUES: "",
+        LLV_PRIVACY_KNOWN_VALUES_FILE: "",
+        LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: catalog,
+      };
+      await runGit(directory, ["init", "--quiet"]);
+      await runGit(directory, ["config", "user.name", "Fixture Tool"]);
+      await runGit(directory, ["config", "user.email", "noreply@example.invalid"]);
+      await runGit(directory, ["commit", "--quiet", "--allow-empty", "-m", "base"]);
+      writeFileSync(join(directory, publication), "Free and open source. Free and open-source.\n");
+      await runGit(directory, ["add", publication]);
+      await runGit(directory, ["commit", "--quiet", "-m", "Describe free and open source and open-source software"]);
+
+      const proseFile = await runGateArguments(["--repository", directory, "--paths", publication], environment, directory);
+      expect(proseFile.exitCode, proseFile.stdout.toString()).toBe(0);
+      const proseCommit = await runGateArguments(["--base", "HEAD~1", "--check-commits"], environment, directory);
+      expect(proseCommit.exitCode, proseCommit.stdout.toString()).toBe(0);
+
+      writeFileSync(join(directory, publication), `${["open", "source"].join("")}\n`);
+      const configuredValue = await runGateArguments(["--repository", directory, "--paths", publication], environment, directory);
+      expect(configuredValue.exitCode).toBe(1);
+      expect(configuredValue.stdout.toString()).toContain("known_value: 1\n");
+    }, 15000);
+
     for (const source of ["fingerprint", "raw file", "environment"] as const) {
       for (const exactOnly of [true, false]) {
         for (const spelling of spellings) {
