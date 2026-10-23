@@ -3,6 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fetchClaudeLimits, adoptClaudeLimitsSnapshot } from "./limits";
+import * as headlessCli from "./agent/claudeHeadless";
+import { claudeQuotaObservation, durableQuotaObservation } from "./accounts/migration/quotaController";
+import { accountProjection } from "./accounts/accountProjection";
+import { AgentRegistry } from "./agent/registry";
+import { accountLimitRows } from "./mcp/compactAnswers";
 import { subscriptionApiConsent } from "./accounts/subscriptionApiConsent";
 import type { ClaudeHeadlessResult } from "./agent/claudeHeadless";
 
@@ -46,6 +51,56 @@ test("structured CLI rows win even when direct API consent is on", async () => {
     expect(result).toMatchObject({ source: "live", data: { session: { usedPercent: 23 }, weekly: { usedPercent: 42 }, tiers: [{ tier: "opus", usedPercent: 71 }] } });
     expect(calls).toBe(0);
   } finally { request.mockRestore(); }
+});
+
+test("Claude CLI usage becomes durable fresh windows and a failed refresh retains their original time", async () => {
+  const file = isolated(false);
+  const now = 1_800_000_000_000;
+  const sessionReset = new Date(now + 3_600_000).toISOString();
+  const weeklyReset = new Date(now + 3 * 86_400_000).toISOString();
+  const tierReset = new Date(now + 2 * 86_400_000).toISOString();
+  const account = { id: "cli-window-fixture", home: path.dirname(file), authPresent: true };
+  const cli = spyOn(headlessCli, "runHeadlessClaudeOnce").mockResolvedValue({ status: "done", records: [
+    { type: "assistant", usage_report: { rate_limits: { limits: [
+      { kind: "session", percent: 23, resets_at: sessionReset },
+      { kind: "weekly_all", percent: 42, resets_at: weeklyReset },
+      { kind: "weekly_scoped", percent: 61, resets_at: tierReset, scope: { model: { display_name: "Opus" } } },
+    ] } } },
+    { type: "result", subtype: "success", is_error: false, local_command: "usage", num_turns: 0 },
+  ] });
+  const request = spyOn(globalThis, "fetch").mockImplementation((async () => { throw Error("unexpected provider call"); }) as unknown as typeof fetch);
+  try {
+    const observation = await claudeQuotaObservation(account, now, { authStatus: async () => ({ loggedIn: true }) });
+    const expected = { session: { usedPercent: 23, resetsAt: Date.parse(sessionReset) / 1000 },
+      weekly: { usedPercent: 42, resetsAt: Date.parse(weeklyReset) / 1000 },
+      tiers: [{ tier: "opus", usedPercent: 61, resetsAt: Date.parse(tierReset) / 1000 }] };
+    expect(observation).toMatchObject({ authenticated: true, observedAt: now, provenance: { source: "live" }, limits: expected });
+    const registryFile = path.join(path.dirname(file), "quota-registry.json");
+    new AgentRegistry(registryFile).recordQuotaObservation(durableQuotaObservation(observation, "fixture-boot"));
+    const saved = new AgentRegistry(registryFile).quotaObservations("claude")[0]!;
+    expect(accountProjection(saved, true, now)).toMatchObject({ limits: { state: "fresh", ...expected } });
+    const compact = (row: typeof saved, at: number) => accountLimitRows({
+      engine: "claude", accounts: { claude: [{ accountId: account.id }], codex: [], copilot: [] },
+      active: { claude: account.id, codex: null, copilot: null },
+      observations: { claude: { [account.id]: row }, codex: {}, copilot: {} }, now: at,
+    })[0];
+    expect(compact(saved, now)).toMatchObject({ fresh: true, session: { resetsAt: sessionReset },
+      weekly: { resetsAt: weeklyReset }, tiers: [{ tier: "opus", resetsAt: tierReset }] });
+    expect((await claudeQuotaObservation(account, now + 1_000, { authStatus: async () => ({ loggedIn: true }) })).observedAt).toBe(now);
+    expect(cli).toHaveBeenCalledTimes(1);
+    expect(cli.mock.calls[0]![0]).toMatchObject({ prompt: "/usage", account: { home: account.home } });
+    cli.mockResolvedValue({ status: "failed", records: [] });
+    const failed = await claudeQuotaObservation(account, now + 60_000, { authStatus: async () => ({ loggedIn: true }) });
+    expect(failed).toMatchObject({ observedAt: now, provenance: { source: "cache" }, limits: expected });
+    expect(accountProjection(durableQuotaObservation(failed, "fixture-boot"), true, now + 60_000).limits.state).toBe("stale");
+    expect(compact(durableQuotaObservation(failed, "fixture-boot"), now + 60_000)?.fresh).toBe(false);
+    expect(request).not.toHaveBeenCalled();
+    expect(cli).toHaveBeenCalledTimes(2);
+  } finally {
+    cli.mockRestore(); request.mockRestore();
+    delete (globalThis as { __llvLimitsCache?: unknown }).__llvLimitsCache;
+    delete (globalThis as { __llvLimitsInflight?: unknown }).__llvLimitsInflight;
+  }
 });
 test("explicit consent permits the direct fallback, and revocation before dispatch stops it", async () => {
   const file = isolated(true); let calls = 0;

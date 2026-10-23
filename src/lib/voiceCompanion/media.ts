@@ -1,3 +1,4 @@
+import { attachVoiceOutput, openVoiceMicrophone } from "@/lib/audio/voiceDevices";
 import { DISPLAY_PAUSE_MS } from "./liveTranscript";
 
 export interface MediaCallbacks {
@@ -21,6 +22,8 @@ export class BrowserCompanionMedia implements CompanionMedia {
   private channel: RTCDataChannel | null = null;
   private microphone: MediaStream | null = null;
   private audio: HTMLAudioElement | null = null;
+  private releaseMicrophone: (() => void) | null = null;
+  private detachOutput: (() => void) | null = null;
   private context: AudioContext | null = null;
   private outputAnalyser: AnalyserNode | null = null;
   private frame: number | null = null;
@@ -35,9 +38,10 @@ export class BrowserCompanionMedia implements CompanionMedia {
 
   async open(): Promise<string> {
     try {
-      const microphone = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-      if (this.disposed) { microphone.getTracks().forEach(track => track.stop()); throw new Error("SESSION_CLOSED"); }
+      const { stream: microphone, release } = await openVoiceMicrophone({ echoCancellation: true, noiseSuppression: true, autoGainControl: true });
+      if (this.disposed) { microphone.getTracks().forEach(track => track.stop()); release(); throw new Error("SESSION_CLOSED"); }
       this.microphone = microphone;
+      this.releaseMicrophone = release;
     } catch (error) { throw new Error(error instanceof Error && error.message === "SESSION_CLOSED" ? "SESSION_CLOSED" : "MICROPHONE_REFUSED"); }
     try {
       const peer = this.peer = new RTCPeerConnection();
@@ -45,6 +49,7 @@ export class BrowserCompanionMedia implements CompanionMedia {
       await context.resume();
       if (this.disposed) throw new Error("SESSION_CLOSED");
       const audio = this.audio = new Audio(); audio.autoplay = true;
+      this.detachOutput = attachVoiceOutput(audio);
       peer.addEventListener("track", event => {
         if (this.disposed || event.track.kind !== "audio") return;
         const stream = new MediaStream([event.track]);
@@ -119,6 +124,8 @@ export class BrowserCompanionMedia implements CompanionMedia {
     if (this.frame !== null) cancelAnimationFrame(this.frame);
     this.frame = null;
     this.microphone?.getTracks().forEach(track => track.stop()); this.microphone = null;
+    this.releaseMicrophone?.(); this.releaseMicrophone = null;
+    this.detachOutput?.(); this.detachOutput = null;
     this.channel?.close(); this.channel = null;
     this.peer?.close(); this.peer = null;
     if (this.audio) { this.audio.pause(); this.audio.srcObject = null; this.audio = null; }
