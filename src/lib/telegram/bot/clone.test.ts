@@ -9,6 +9,7 @@ import { startTestRelay } from "@/lib/externalRelay/testRelay";
 import { TelegramBotService, productionTelegramBotDependencies } from "./service";
 import { FakeBotTransport, fakeBotToken, ok } from "./fakeTransport";
 import { outboundState } from "./outbound";
+import { telegramBotTokenPath } from "./transport";
 import type { ClonePostingPort } from "./clone";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "clone-bot-")), prior = process.env.LLV_STATE_DIR;
@@ -64,6 +65,24 @@ test("removed bot's group sends through the clone once, with a published journal
   expect(store.sendRow("text:fixture-writer", "fixture-send")?.botId).toBe(`clone:${relay.id}:fixture-clone`);
   expect(await outboundState(store.filename, false, db => db.query("SELECT state FROM relay_outbound").all())).toEqual([{ state: "published" }]);
   expect(await outboundState(store.filename, false, db => db.query("SELECT * FROM relay_outbound_handoffs").all())).toEqual([]);
+});
+test("pairing-only clone discovery, allowlisting and idempotent send work without a stored bot token", async () => {
+  fs.rmSync(telegramBotTokenPath(), { force: true });
+  const calls: string[] = [];
+  const deps = productionTelegramBotDependencies();
+  service = new TelegramBotService({ ...deps, clones: port, openStore: () => store,
+    withStoredToken: () => null, transportFor: () => { calls.push("bot-api"); return bot; },
+    now: () => new Date(now), documentEnvironment: () => ({ home: root, stateDir: process.env.LLV_STATE_DIR! }) });
+
+  const listed = service.listChats();
+  expect(listed).toMatchObject({ bot: { connected: false }, chats: [expect.objectContaining({ chat: "reports", bots: [expect.objectContaining({ name: "Report clone", canPost: true })] })] });
+  service.setChat(String(group.id), "reports", false);
+  service.setChat(String(group.id), "reports", true);
+  expect(await send()).toMatchObject({ messageIds: [101], sentBy: { name: "Report clone", username: null } });
+  expect(await send()).toMatchObject({ alreadySent: true });
+  expect(sends).toHaveLength(1);
+  expect(calls).toEqual([]);
+  expect(fs.existsSync(telegramBotTokenPath())).toBe(false);
 });
 test("unused-key refusal records the clone before bot fallback", async () => {
   answer = () => ({ status: 409, body: { error: { code: "clone_not_in_chat" } } });
