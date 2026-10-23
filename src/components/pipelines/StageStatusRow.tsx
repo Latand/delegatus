@@ -1,6 +1,7 @@
 "use client";
 
 import { ChevronRight } from "lucide-react";
+import { AgentMemoryCapNote } from "@/components/AgentMemoryCapNote";
 
 import type { StageSlot } from "@/components/scheme/layout";
 import { useLocale } from "@/lib/i18n";
@@ -88,6 +89,7 @@ export function StageStatusRow({
           </button>
         ) : null}
       </div>
+      <AgentMemoryCapNote cap={(attempt ?? latestAttempt(pipeline, stage.id))?.memoryCap} />
       {/* The explanation the row exists for: a full sentence over two lines
           rather than a truncated fragment. */}
       <p

@@ -4,6 +4,10 @@ import type { Dictionary } from "./core";
    Plural entries use Intl.LDMLPluralRule forms; {name} placeholders are
    filled from t()'s params. uk.ts must mirror this key set. */
 export const en = {
+  "agentMemory.cap": "Memory cap: {size} GiB.",
+  "agentMemory.clamped": "Requested {size} GiB; clamped to the shared machine budget.",
+  "agentMemory.unenforced": "Memory cap: containment is off or unavailable.",
+
   "workers.title": "Worker limit",
   "workers.face": "workers {running} / {limit}",
   "workers.phoneFace": "Workers {running} / {limit}",

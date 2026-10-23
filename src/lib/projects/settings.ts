@@ -7,6 +7,7 @@ import { isOpaqueProjectKey, projectDisplayName } from "@/lib/displayNames";
 import { translate, type Locale } from "@/lib/i18n/core";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { canonicalProject, projectAliasSnapshot, recordedProjectRemote } from "@/lib/projects/aliases";
+import { assertAgentMemoryMax, validAgentMemoryMax } from "@/lib/runtime/agentMemoryConfig";
 
 /*
  * Per-project settings (#2187 §4.1, docs/design/merge-policy-and-task-finishing.md).
@@ -73,6 +74,7 @@ export interface EffectiveReportTelegram {
 }
 
 interface ProjectSettingsEntry {
+  agentMemoryMaxBytes?: number | null;
   mergeOnReview?: StoredSwitch;
   /** #2146: whether the project's orchestrator files bridge reports and the
       voice relay delivers them. Absent reads as on. */
@@ -122,6 +124,8 @@ function reportTelegramOf(value: unknown): ReportTelegramChoice | null {
 function entryOf(value: unknown): ProjectSettingsEntry | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const entry: ProjectSettingsEntry = {};
+  const memory = (value as Record<string, unknown>).agentMemoryMaxBytes;
+  if (validAgentMemoryMax(memory) && memory !== undefined) entry.agentMemoryMaxBytes = memory;
   for (const name of Object.keys(DEFAULTS) as ProjectSwitchName[]) {
     const stored = switchOf((value as Record<string, unknown>)[name]);
     if (stored) entry[name] = stored;
@@ -313,4 +317,19 @@ export function reportHeaderName(project: string, locale: Locale = "en"): string
 
 export function resetProjectSettingsForTests(): void {
   cache = null;
+}
+
+/** Null inherits the installation cap. Writes use the canonical project key. */
+export function projectAgentMemoryMax(project: string): number | null {
+  const projects = readProjects();
+  return (projects[canonicalProject(project.trim())] ?? projects[project.trim()])?.agentMemoryMaxBytes ?? null;
+}
+
+export function setProjectAgentMemoryMax(project: string, value: number | null): boolean {
+  assertAgentMemoryMax(value);
+  const key = canonicalProject(project.trim());
+  if (!key) return false;
+  const projects = { ...readProjects() };
+  projects[key] = { ...projects[key], agentMemoryMaxBytes: value };
+  return writeProjects(projects);
 }

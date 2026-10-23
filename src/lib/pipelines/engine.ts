@@ -25,7 +25,9 @@ import { isAccountMutationContention } from "@/lib/accounts/contentionMessage";
 import { AccountCommitBusyError } from "@/lib/accounts/accountMutationContext";
 import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { waitForStateLock, stateDatabaseBusy, stateLockDeferral } from "@/lib/state/lockWait";
+import { validAgentMemoryMax, type AgentMemoryCap } from "@/lib/runtime/agentMemoryConfig";
 import { agentMemoryHeadroom, memoryKillText, type AgentMemoryKill } from "@/lib/runtime/agentMemory";
+import { agentMemoryScopes, PIPELINE_MEMORY_DEFAULT_ROLE, type AgentMemoryScopeInput } from "@/lib/runtime/agentMemorySettings";
 import { claudeHostEndText } from "@/lib/runtime/hostEndCause";
 import { cpuPriorityEnv, type CpuPrioritySource } from "@/lib/runtime/cpuPriority";
 import { CPU_PRESSURE_DETAIL_PREFIXES, cpuPressureHoldDetail, machineCpuPressureGate, machineCpuPressurePollMs, type CpuPressureHold } from "@/lib/runtime/cpuPressure";
@@ -204,6 +206,7 @@ import { PIPELINE_FAIL_EDGE_EXHAUSTIONS } from "./types";
 import { fencedBlocks, MAX_OUTPUT_CHARS, normalizeStageCompletion, parseStageVerdict, stageVerdictProse, stageVerdictRejectionReason, verdictRoutesAsFail, type ParsedStageVerdict, type StageCompletionInput } from "./verdict";
 
 export type PipelineStageSpawn = {
+  memoryCap?: AgentMemoryCap;
   launchId: string;
   conversationId: string;
   sessionId: string | null;
@@ -392,8 +395,10 @@ export interface PipelinePorts {
   conversationRuntime?(conversationId: string): LaunchRuntime | null;
   /** Fatal memory evidence from the latest terminal host generation. */
   conversationOutOfMemory?(conversationId: string): Promise<AgentMemoryKill | null>;
-  /** Null means the memory mechanism cannot measure headroom. */
-  memoryHeadroom?(priorLimitBytes: number): { availableBytes: number; requiredBytes: number } | null;
+  /** Null means the memory mechanism cannot measure headroom. `launch` names
+      the retry's project, role and stage profile, so the required headroom is
+      the scoped cap that retry will launch with. */
+  memoryHeadroom?(priorLimitBytes: number, launch?: AgentMemoryScopeInput): { availableBytes: number; requiredBytes: number } | null;
   /** Null means hosted, a timestamp means dead/absent since then, and undefined
       means the registry cannot provide authoritative host evidence. */
   conversationHostUnavailableSince?(conversationId: string): Promise<string | null | undefined>;
@@ -779,6 +784,9 @@ async function spawnPipelineAgent(
     sandbox,
     parentConversationId: parent.conversationId,
     title: input.title,
+    project: input.project,
+    ...(input.runtimeProfile.agentMemoryRoleParams ? { agentMemoryRoleParams: input.runtimeProfile.agentMemoryRoleParams } : {}),
+    ...(input.runtimeProfile.agentMemoryMaxBytes !== undefined ? { agentMemoryMaxBytes: input.runtimeProfile.agentMemoryMaxBytes } : {}),
     ...(input.cleanMemory ? { cleanMemory: true } : {}),
     ...(input.learnedRules ? { learnedRules: input.learnedRules } : {}),
   });
@@ -858,6 +866,7 @@ async function spawnPipelineAgent(
     const identityPublished = identityMaterializationFence(registry.readOnlySnapshot()).allowsReceipt(begun.receipt);
     return {
       launchId: begun.receipt.launchId,
+      memoryCap: begun.receipt.memoryCap,
       conversationId: begun.receipt.conversationId,
       sessionId: identityPublished ? begun.receipt.key?.sessionId ?? null : null,
       "transcript": identityPublished ? begun.receipt.artifactPath : null,
@@ -925,6 +934,7 @@ async function spawnPipelineAgent(
     paneId: null,
     accountId: begun.receipt.accountId ?? account.accountId,
     serviceTier,
+    ...(response.memoryCap ? { memoryCap: response.memoryCap } : {}),
   };
 }
 
@@ -1800,6 +1810,7 @@ export function defaultPipelinePorts(
       const identityPublished = identityFence().allowsReceipt(receipt, { structured: evidence.structured });
       return {
         state: receipt.state,
+        memoryCap: receipt.memoryCap,
         launchId: receipt.launchId,
         conversationId: receipt.conversationId,
         sessionId: identityPublished ? receipt.key?.sessionId ?? null : null,
@@ -2154,7 +2165,7 @@ export function defaultPipelinePorts(
     conversationRegistered: (conversationId) => conversationId.startsWith("conversation_")
       && Boolean(snapshot().conversations[conversationId as ViewerConversationId]),
     conversationRuntime: (conversationId) => conversationRuntime(snapshot(), conversationId),
-    memoryHeadroom: (priorLimitBytes) => agentMemoryHeadroom(Object.values(snapshot().entries).filter((entry) => entry.structuredHost && entry.status !== "dead" && entry.status !== "unhosted").length + 1, priorLimitBytes),
+    memoryHeadroom: (priorLimitBytes, launch) => agentMemoryHeadroom(Object.values(snapshot().entries).filter((entry) => entry.structuredHost && entry.status !== "dead" && entry.status !== "unhosted").length + 1, priorLimitBytes, launch ? agentMemoryScopes(launch) : undefined),
     conversationOutOfMemory: async (conversationId) => {
       const current = snapshot();
       const conversation = current.conversations[conversationId as ViewerConversationId];
@@ -3542,6 +3553,7 @@ function bindAttemptDefinition(stage: PipelineStage, attempt: PipelineStageAttem
   attempt.definition = {
     boundAt: ports.now(),
     stageDigest: stageDigest(stage),
+    ...(stage.agentMemoryMaxBytes !== undefined ? { agentMemoryMaxBytes: stage.agentMemoryMaxBytes } : {}),
     "prompt": stage.prompt,
     account: stage.account?.trim() || null,
     role: stage.role ? structuredClone(stage.role) : null,
@@ -3556,12 +3568,13 @@ function bindAttemptDefinition(stage: PipelineStage, attempt: PipelineStageAttem
 function attemptStage(stage: PipelineStage, attempt: PipelineStageAttempt | null | undefined): PipelineStage {
   const definition = attempt?.definition;
   if (!attempt || !definition) return stage;
-  const { account: _account, role: _role, sandbox: _sandbox, outputs: _outputs, ...identity } = stage;
+  const { account: _account, role: _role, sandbox: _sandbox, outputs: _outputs, agentMemoryMaxBytes: _memory, ...identity } = stage;
   return {
     ...identity,
     "prompt": definition.prompt,
     ...(definition.account ? { account: definition.account } : {}),
     ...(definition.role ? { role: definition.role } : {}),
+    ...(definition.agentMemoryMaxBytes !== undefined ? { agentMemoryMaxBytes: definition.agentMemoryMaxBytes } : {}),
     ...(definition.sandbox ? { sandbox: definition.sandbox } : {}),
     ...(definition.outputs ? { outputs: definition.outputs } : {}),
     effectiveRole: attempt.effectiveRole,
@@ -5838,7 +5851,8 @@ async function waitForMemory(pipeline: Pipeline, stage: PipelineStage, attempt: 
   const attempts = runFor(pipeline, stage.id)!.attempts;
   const kill = attempts[attempts.indexOf(attempt) - 1]?.outOfMemory;
   if (!kill) { delete attempt.memoryWait; return false; }
-  const headroom = ports.memoryHeadroom?.(kill.limitBytes);
+  const headroom = ports.memoryHeadroom?.(kill.limitBytes, { cwd: pipeline.worktreeDir, project: pipeline.project,
+    role: attempt.effectiveRole.roleId ?? PIPELINE_MEMORY_DEFAULT_ROLE, profile: pipelineStageRuntimeProfile(attemptStage(stage, attempt)) });
   if (!headroom || headroom.availableBytes >= headroom.requiredBytes) { delete attempt.memoryWait; pipeline.stateDetail = null; return false; }
   const next = nextBoundedWait(wait, wait.startedAt, now, MEMORY_WAIT_BUDGET);
   if (!next) { await park(pipeline, `${memoryKillText(kill)}; memory did not recover within 30 minutes`, attempt); return true; }
@@ -7144,6 +7158,7 @@ async function spawnRunStage(
     delete attempt.verdictRequest;
     delete attempt.backgroundWait;
     delete attempt.controllerWait;
+    if (spawned.memoryCap) attempt.memoryCap = spawned.memoryCap;
     attempt.launchId = spawned.launchId;
     attempt.conversationId = spawned.conversationId;
     attempt.sessionId = spawned.sessionId;
@@ -9578,6 +9593,7 @@ function reconcilePipelineEmbeddedFlows(pipeline: Pipeline, ports: PipelinePorts
 function clearStagedLaunchWait(pipeline: Pipeline, attempt: PipelineStageAttempt, receipt: PipelineSpawnReceipt): void {
   if (receipt.state !== "completed" || receipt.launchId !== attempt.launchId
     || receipt.conversationId !== attempt.conversationId) return;
+  if (receipt.memoryCap) attempt.memoryCap = structuredClone(receipt.memoryCap);
   const waiting = pipeline.stateDetail?.startsWith("waiting for the runtime host, attempt ");
   const parked = pipeline.state === "needs_decision" && isStructuredSpawnPark(pipeline, attempt);
   if (!waiting && !parked) return;
@@ -12201,6 +12217,9 @@ export function normalizeStages(
     if (stage.serviceTier !== undefined && stage.serviceTier !== null && typeof stage.serviceTier !== "string") {
       violations.push({ field: at("serviceTier"), message: "serviceTier must be a string or null", expected: "Codex catalog tier id, null to inherit" });
     }
+    if (!validAgentMemoryMax(stage.agentMemoryMaxBytes)) {
+      violations.push({ field: at("agentMemoryMaxBytes"), message: "agentMemoryMaxBytes must be null or integer bytes from 1 GiB through 1 TiB", expected: "integer bytes from 1 GiB through 1 TiB, null to inherit" });
+    }
     if (stage.sandbox !== undefined && stage.sandbox !== "full" && stage.sandbox !== "restricted") {
       violations.push({ field: at("sandbox"), message: `stage ${id} sandbox must be full or restricted`, expected: STAGE_SANDBOX_SHAPE });
     }
@@ -12259,6 +12278,7 @@ export function normalizeStages(
       ...(stage.model !== undefined ? { model: typeof stage.model === "string" ? stage.model.trim() || null : null } : {}),
       ...(stage.effort !== undefined ? { effort: typeof stage.effort === "string" ? stage.effort.trim() || null : null } : {}),
       ...(stage.serviceTier !== undefined ? { serviceTier: stage.serviceTier } : {}),
+      ...(stage.agentMemoryMaxBytes !== undefined ? { agentMemoryMaxBytes: stage.agentMemoryMaxBytes } : {}),
       ...(stage.access !== undefined ? { access: stage.access } : {}),
       ...(stage.sandbox !== undefined ? { sandbox: stage.sandbox } : {}),
       ...(outputs !== undefined ? { outputs } : {}),
@@ -12347,6 +12367,7 @@ function draftStageInputs(stages: PipelineStage[]): PipelineStageInput[] {
     ...(stage.model !== undefined ? { model: stage.model } : {}),
     ...(stage.effort !== undefined ? { effort: stage.effort } : {}),
     ...(stage.serviceTier !== undefined ? { serviceTier: stage.serviceTier } : {}),
+    ...(stage.agentMemoryMaxBytes !== undefined ? { agentMemoryMaxBytes: stage.agentMemoryMaxBytes } : {}),
     ...(stage.access !== undefined ? { access: stage.access } : {}),
     ...(stage.sandbox !== undefined ? { sandbox: stage.sandbox } : {}),
     ...(stage.outputs !== undefined ? { outputs: [...stage.outputs] } : {}),
@@ -15047,7 +15068,7 @@ export async function patchPipeline(
         if (!seenAttempt || !seenConversation) {
           return { error: "the stage's running attempt changed since this runtime was chosen; read the stage again before choosing", status: 409, code: "STAGE_CHANGED", field: seenAttempt ? "expectedConversationId" : "expectedAttempt" };
         }
-        if (req.role !== undefined || req.prompt !== undefined || req.access !== undefined) return { error: "role, prompt and access apply from the next attempt; send a separate override-stage", status: 400 };
+        if (req.role !== undefined || req.prompt !== undefined || req.access !== undefined || req.agentMemoryMaxBytes !== undefined) return { error: "role, prompt, access and memory cap apply from the next attempt; send a separate override-stage", status: 400 };
         if (req.applyNowCut !== undefined && req.applyNowCut !== "boundary" && req.applyNowCut !== "none") return { error: "applyNowCut must be boundary or none", status: 400 };
         const parkedSource = pipeline.state === "needs_decision" && live?.state === "needs_decision" && !live.report
           && (pendingRuntimeSwitchRetry(live) || live.providerWait?.condition.kind === "usage_limit" || !!live.conversationId && (ports.runtimeSwitchSourceUnavailable?.(live.conversationId)
@@ -15057,7 +15078,7 @@ export async function patchPipeline(
       }
       const reach = stageEditReach(pipeline, target.id);
       const changesRoleOrRuntime = req.role !== undefined || req.engine !== undefined || req.model !== undefined || req.effort !== undefined || req.serviceTier !== undefined;
-      if (!req.applyNow && !changesRoleOrRuntime && req.prompt === undefined && req.account === undefined) return { error: "override-stage needs at least one field to change", status: 400 };
+      if (!req.applyNow && !changesRoleOrRuntime && req.prompt === undefined && req.account === undefined && req.agentMemoryMaxBytes === undefined) return { error: "override-stage needs at least one field to change", status: 400 };
       /* Validate the runtime types up front: resolvePipelineRole treats a
          non-string, non-null model/effort as absent and silently uses the
          fallback, so a raw `model: 123` / `effort: false` would 200 with the old
@@ -15065,6 +15086,7 @@ export async function patchPipeline(
       if (req.engine !== undefined && req.engine !== "claude" && req.engine !== "codex") return { error: "engine must be claude or codex", status: 400 };
       if (req.model !== undefined && req.model !== null && typeof req.model !== "string") return { error: "model must be a string or null", status: 400 };
       if (req.effort !== undefined && req.effort !== null && typeof req.effort !== "string") return { error: "effort must be a string or null", status: 400 };
+      if (!validAgentMemoryMax(req.agentMemoryMaxBytes)) return { error: "agentMemoryMaxBytes must be null or integer bytes from 1 GiB through 1 TiB", status: 400 };
       if (req.serviceTier != null && typeof req.serviceTier !== "string") return { error: "serviceTier must be a string or null", status: 400 };
 
       /* Resolve the role/runtime combination through the same path creation uses
@@ -15127,6 +15149,7 @@ export async function patchPipeline(
         if (overrideSizingRefusal) return { error: overrideSizingRefusal.error, status: 400 };
       }
 
+      if (req.agentMemoryMaxBytes !== undefined) target.agentMemoryMaxBytes = req.agentMemoryMaxBytes;
       if (req.prompt !== undefined) {
         if (typeof req.prompt !== "string" || !req.prompt.trim()) return { error: "prompt must be a non-empty string", status: 400 };
         const prompt = req.prompt.trim();
@@ -15259,6 +15282,7 @@ export async function patchPipeline(
         req.model !== undefined ? "model" : null,
         req.effort !== undefined ? "effort" : null,
         req.serviceTier !== undefined ? "service tier" : null,
+        req.agentMemoryMaxBytes !== undefined ? "memory cap" : null,
         req.prompt !== undefined ? "prompt" : null,
         req.account !== undefined ? "account" : null,
       ].filter((field): field is string => field !== null);

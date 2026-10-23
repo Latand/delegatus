@@ -3878,7 +3878,11 @@ const snapshotScopeSchema = z.discriminatedUnion("kind", [
    object stays open (`passthrough`) and the semantic rules — id uniqueness,
    edge targets, review-loop reachability, role parameter values — stay with the
    engine, which now answers with all of them at once. */
+const agentMemoryMaxSchema = z.number().int().min(2 ** 30).max(2 ** 40).nullable().optional()
+  .describe("Agent memory cap in bytes, 1 GiB through 1 TiB; null inherits. Launch clamps to the shared machine budget.");
+
 const pipelineStageSchema = z.object({
+  agentMemoryMaxBytes: agentMemoryMaxSchema,
   /* Bounds here stay exactly as wide as the engine's: it trims before it
      checks, so a padded id it accepts must not be refused at the door. */
   id: z.string().regex(/^\s*[A-Za-z0-9_-]{1,64}\s*$/u)
@@ -4200,6 +4204,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     engine: pipelineStageSchema.shape.engine.describe("override-stage: runtime engine."),
     model: pipelineStageSchema.shape.model.describe("override-stage: runtime model, or null to inherit."),
     effort: pipelineStageSchema.shape.effort.describe("override-stage: reasoning effort, or null to inherit."),
+    agentMemoryMaxBytes: agentMemoryMaxSchema,
     serviceTier: pipelineStageSchema.shape.serviceTier.describe("override-stage: Codex tier, null to inherit; default or standard opts out."),
     access: pipelineStageSchema.shape.access.describe("override-stage: repository mutation policy."),
     account: pipelineStageSchema.shape.account.describe("override-stage: account pin, or null to clear it."),
@@ -4732,9 +4737,9 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     clientRequestId: clientRequestIdSchema,
     workerLimit: z.object({ value: z.number().int().min(1).max(64).nullable(), project: z.string().trim().min(1).optional(), reason: z.string().trim().min(1).max(300) }).optional(),
     overrides: z.record(z.string(), z.object({
-      config: z.object({ engine: z.string(), model: z.string(), effort: z.string(), serviceTier: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional() }).nullable().optional()
+      config: z.object({ agentMemoryMaxBytes: agentMemoryMaxSchema, engine: z.string(), model: z.string(), effort: z.string(), serviceTier: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional() }).nullable().optional()
         .describe("A full { engine, model, effort } sets the role's row; null resets it to the shipped default."),
-      variants: z.record(z.string(), z.object({ engine: z.string(), model: z.string(), effort: z.string(), serviceTier: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional() }).nullable()).optional()
+      variants: z.record(z.string(), z.object({ agentMemoryMaxBytes: agentMemoryMaxSchema, engine: z.string(), model: z.string(), effort: z.string(), serviceTier: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional() }).nullable()).optional()
         .describe("Builder and reviewer only, keyed by variant (trivial, frontend, docs, apply-fixes, frontend-fixes, docs-fixes; reviewer: trivial). A full config sets the variant, null resets it."),
       promptScaffold: z.null().optional().describe("null restores the shipped prompt text. A scaffold cannot be set from here."),
     }).passthrough()).optional()
