@@ -200,9 +200,10 @@ slice 3 is dropped. What the build settled differently from the text below:
   row waiting, and nothing becomes active, until a read answers or the
   operator confirms the account. The checklist is in the desktop accounts
   dialog (inside its bounded account list; the dialog itself is bounded to the
-  window), on the phone's accounts screen and in the Copilot list, which is
-  bounded with a scroller of its own because it opens in the rail's footer
-  at the window's lower edge. Copilot
+  window), on the phone's accounts screen and in the Copilot list, which
+  opens as the Claude and Codex account lists do, a flyout beside the rail
+  bounded by the room above its row and scrolling inside: opened inline in
+  the rail's footer it ran under the lower edge of a short window. Copilot
   rows count as usable when the CLI config shows a signed-in user; no limit
   read exists for them (§11), and the Copilot checklist says so.
 - Measured apply window for the learned rules of §1.10's shape (2,898 rules,

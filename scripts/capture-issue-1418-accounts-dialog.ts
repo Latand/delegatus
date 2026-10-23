@@ -445,7 +445,7 @@ async function reachability(page: Page, container: string, closeControl: string 
 /**
  * The Copilot list as it opens in the rail's footer, then as the operator
  * scrolls it with the wheel. Every box is measured against the viewport cut by
- * every ancestor that clips (the footer's own scroller among them). At the
+ * every ancestor that clips (the list's own scroller among them). At the
  * opening, before any input: the list's top, the checklist heading, «Check
  * all» and the first row's first action have their text wholly inside that
  * box. Then wheel turns over the list reach every checklist row and every

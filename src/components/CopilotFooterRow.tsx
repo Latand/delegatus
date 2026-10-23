@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { hiddenAccountsOf, removalRefusalOf, type AccountRemovalRefusal as Refusal, type HiddenAccount } from "@/hooks/useEngineAccounts";
 import { consumePendingAccountPanel, onAccountPanelRequest } from "@/lib/accounts/openPanel";
@@ -8,6 +8,7 @@ import { useLocale } from "@/lib/i18n";
 import type { EngineLimits } from "@/lib/types";
 
 import { AccountRemovalRefusal } from "./AccountRemovalRefusal";
+import { Z } from "./layers";
 import { TransferAccountsChecklist, useImportedAccounts } from "./TransferAccountsChecklist";
 import { HiddenAccountOffer } from "./AccountRemovalSummary";
 import { engineTintOf } from "./utils";
@@ -329,33 +330,20 @@ export function CopilotFooterRow({ limits, limitsAccountId, now, onChanged, dens
   const { body, load } = accounts;
   const shown = open && !!body;
 
-  /* The list opens at the foot of the rail's footer, which scrolls when the
-     window is short: brought into view in that scroller (never the page,
-     whose overflow is hidden), its top first, and again as it fills in (the
-     accounts, an import's checklist) until the operator scrolls it. */
-  useEffect(() => {
-    const panel = panelRef.current;
-    if (!shown || !panel) return;
-    let scroller: HTMLElement | null = panel.parentElement;
-    while (scroller && !/(auto|scroll)/.test(getComputedStyle(scroller).overflowY)) scroller = scroller.parentElement;
-    if (!scroller) return;
-    const frame = scroller;
-    let held = true;
-    const reveal = () => {
-      if (!held) return;
-      const box = panel.getBoundingClientRect(), bounds = frame.getBoundingClientRect();
-      const below = box.bottom - bounds.bottom;
-      if (below > 0) frame.scrollTop += Math.min(below, box.top - bounds.top);
+  /* Bounded as the Claude and Codex account flyouts are: anchored by its
+     bottom beside this row, so its height is the room above it, and anything
+     past that scrolls inside the list. */
+  const [maxHeight, setMaxHeight] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    if (!shown) return;
+    const fit = () => {
+      const node = panelRef.current;
+      if (!node) return;
+      setMaxHeight(Math.max(160, Math.floor(node.getBoundingClientRect().bottom - 8)));
     };
-    const release = () => { held = false; };
-    reveal();
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(reveal);
-    observer?.observe(panel);
-    for (const name of ["wheel", "touchstart", "keydown", "pointerdown"] as const) frame.addEventListener(name, release, { passive: true });
-    return () => {
-      observer?.disconnect();
-      for (const name of ["wheel", "touchstart", "keydown", "pointerdown"] as const) frame.removeEventListener(name, release);
-    };
+    fit();
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
   }, [shown]);
 
   /* A launch preflight on a signed-out Copilot account (#2170) opens this
@@ -410,7 +398,18 @@ export function CopilotFooterRow({ limits, limitsAccountId, now, onChanged, dens
         </div>
       ) : null}
       {open ? (
-        <div ref={panelRef} role="dialog" aria-label={t("copilot.accounts.title")} data-copilot-panel="" className="flex flex-col gap-2 border-t border-border bg-sunken px-3.5 py-2.5 text-[11.5px]">
+        /* A flyout beside the rail, as the Claude and Codex account lists open:
+           inline under this row it grew down past the lower edge of a short
+           window, where nothing scrolls. */
+        <div
+          ref={panelRef}
+          role="dialog"
+          aria-label={t("copilot.accounts.title")}
+          data-copilot-panel=""
+          style={maxHeight === null ? undefined : { maxHeight }}
+          onKeyDown={(event) => { if (event.key === "Escape") setOpen(false); }}
+          className={`absolute bottom-1 left-full ml-2 ${Z.modal} flex w-[min(360px,calc(100vw-264px))] flex-col gap-2 overflow-y-auto overscroll-contain rounded-[14px] border border-border bg-card px-3.5 py-2.5 text-[11.5px] shadow-2 [&>*]:shrink-0`}
+        >
           <CopilotAccountList accounts={accounts} />
         </div>
       ) : null}
