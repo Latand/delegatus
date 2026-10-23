@@ -1,0 +1,2086 @@
+{
+  "testedSource": {
+    "revision": "f4a0b6cbe073a940dae82ef5a656304e611cee97",
+    "base": "a63e8b717cab60192caf7bb6ad05d1bdc352d481",
+    "startedAt": "2026-10-23T19:15:23.803Z",
+    "completedAt": "2026-10-23T20:03:28.195Z",
+    "runtime": "1.4.0",
+    "sourceDigests": {
+      "src/app/api/projects/setup/route.ts": "534ca79c9be645d8b736eae6eef3b51177a60349fe2895246e4687f53c3c0462",
+      "src/components/mobile/MobilePipelineScreen.tsx": "84d191293e37f40d15c68e61c42196017d869f6a6c4cc1f1feca3d622602fbb4",
+      "src/components/pipelines/StagePlaceholderPane.tsx": "104570955e150a74a3827f6b3e5c1d96f1494607ceb7ad76fa0e5834a50a8175",
+      "src/components/pipelines/StageSetupResult.tsx": "fdcca3b5dcaf6bd21295ae2b85646b37c36b10dbec39a45dfaf3b6b7d30054e2",
+      "src/components/pipelines/VerdictPopover.tsx": "ebaf5764633df2a389255702ab969070b0ea6441ae327e66ba74430ad400a99d",
+      "src/lib/pipelines/engine.ts": "dee3ae81fab95dfb6f366bee9c9553f7f78334fa4a99f8728a1e6f5c6e50dba6",
+      "src/lib/pipelines/git.ts": "5f569818b3adf0708aa1281accb30529a7c2dc103fe1c56077c5d515544437a5",
+      "src/lib/pipelines/setupExecution.ts": "20b526141e5810e5332800dcb6fc24d5e35d857e3923933c5f120b7e6faf9b05",
+      "src/lib/pipelines/setupRecipe.ts": "8567b48e3c5d887a1a982e70e0d8c52a7f27b44540915a0e6b09b0931d90b8ce",
+      "src/lib/pipelines/store.ts": "95930e0553a8c5ce3084a4633fbba5d583d15840e23b6c5308d773393bfc40bd",
+      "src/lib/pipelines/types.ts": "4ead10be8c692bdeeb0239475ad7edc9bd98ede0781de2471b1f1a50e83f976a",
+      "src/lib/projects/setupRecipe.ts": "1f0683913fe429d676728115614c707a9a7ab9f97db6f66060c3adfc7355298c",
+      "src/lib/pipelines/setupExecution.test.ts": "aa4d158788d4edccb926e27b83a30d1e6a2e8dc8405b484ac042018dca63f625",
+      "src/lib/pipelines/setupRecipe.test.ts": "2ed1733da1905518e7807f4bd0d3e7bf1e7cf711aabfb6d58b329b11369d0791",
+      "src/lib/pipelines/engine.setupRecipe.test.ts": "9df989483c30694e8763a7cfc9602866674471bf350e8d1f043e114837156470",
+      "docs/guide/project-setup.md": "69ffe313337dcc83a873281cd4bd3b5b2504b1eb6dfcc7a56604dfb14b9062da"
+    }
+  },
+  "isolation": {
+    "privateEnvironment": [
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "TMPDIR",
+      "LLV_STATE_DIR"
+    ],
+    "controllerUrl": "closed loopback endpoint",
+    "state": "disposable export only",
+    "heavyCommands": "serial outer gate admission; consumer files use the project owned-runner and isolated runFiles implementation"
+  },
+  "commands": [
+    {
+      "command": "gate-remote -- bun x tsc --noEmit",
+      "exitCode": 0
+    },
+    {
+      "command": "gate-remote -- bun scripts/local-gate.ts pre-push",
+      "exitCode": 0,
+      "checks": {
+        "privacy": 0,
+        "types": 0,
+        "eslint": 0,
+        "touchedTests": 0,
+        "linuxBackend": 0,
+        "linuxTests": 0
+      },
+      "touchedTests": {
+        "introduced": 0,
+        "preexisting": 7,
+        "filteredRerunFlakyLabels": 5,
+        "note": "Whole-file engine.activation samples fail on both revisions. The filtered rerun labels do not establish whole-file intermittency."
+      }
+    },
+    {
+      "command": "gate-remote -- env LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx --timeout=180000 --test-name-pattern=project setup stage hosts",
+      "exitCode": 0
+    },
+    {
+      "command": "gate-remote -- env LLV_SWIPE_BROWSER_TEST=1 bun test src/components/mobile/issue1671Evidence.browser.test.tsx --timeout=180000 --test-name-pattern=project setup phone host",
+      "exitCode": 0
+    },
+    {
+      "command": "controller-provided gate-slot.sh env SETUP_REQUIRE_ISOLATION=1 bun test src/lib/pipelines/setupExecution.test.ts --timeout=60000",
+      "exitCode": 0,
+      "passed": 17,
+      "failed": 0
+    }
+  ],
+  "consumerComparison": {
+    "exitCode": 0,
+    "selection": "Direct static and dynamic relative/alias imports (including types); engine fixture consumers; changed tests and same-stem project selection; prior consumer manifest union.",
+    "modules": [
+      "src/app/api/projects/setup/route.ts",
+      "src/components/mobile/MobilePipelineScreen.tsx",
+      "src/components/pipelines/StagePlaceholderPane.tsx",
+      "src/components/pipelines/StageSetupResult.tsx",
+      "src/components/pipelines/VerdictPopover.tsx",
+      "src/lib/pipelines/engine.ts",
+      "src/lib/pipelines/git.ts",
+      "src/lib/pipelines/setupExecution.ts",
+      "src/lib/pipelines/setupRecipe.ts",
+      "src/lib/pipelines/store.ts",
+      "src/lib/pipelines/types.ts",
+      "src/lib/projects/setupRecipe.ts"
+    ],
+    "execution": "Project scripts/local-gate-tests.ts runFiles, exposed unchanged in a disposable export; added only raw observation recording. Every file runs through owned-runner.ts: bun test ./<file> --timeout=60000 --reporter=junit --reporter-outfile=<private-report>.",
+    "budgets": {
+      "fileMs": 900000,
+      "runMs": 3600000
+    },
+    "workers": 8,
+    "confirmationWorkers": 3,
+    "confirmation": "Canonical confirmFailures with whole-file reruns on both revisions; no assertion filters.",
+    "expectedHeadFiles": 343,
+    "completedHeadFiles": 343,
+    "expectedBaseFiles": 339,
+    "completedBaseFiles": 339,
+    "introduced": 0,
+    "preexisting": 273,
+    "intermittent": 5,
+    "baseOnlyObservations": 3,
+    "absent": 0,
+    "resultColumns": [
+      "file",
+      "headExitCode",
+      "baseExitCode"
+    ],
+    "fileResults": [
+      [
+        "bin/server-runtime.test.ts",
+        0,
+        0
+      ],
+      [
+        "scripts/gate-cache.test.ts",
+        0,
+        0
+      ],
+      [
+        "scripts/harness-ledger.test.ts",
+        0,
+        0
+      ],
+      [
+        "scripts/local-gate.receipts.test.ts",
+        0,
+        0
+      ],
+      [
+        "scripts/local-gate.test.ts",
+        0,
+        0
+      ],
+      [
+        "scripts/memory-selection.test.ts",
+        0,
+        0
+      ],
+      [
+        "scripts/runtime-host-viewer-adapter.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/app/api/files/route.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/app/api/pipelines/[id]/route.lifecycle.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/app/api/pipelines/[id]/route.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/app/api/pipelines/preflight/route.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/app/api/pipelines/route.admission.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/app/api/pipelines/route.busy.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/app/api/pipelines/route.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/app/api/projects/setup/route.test.ts",
+        0,
+        null
+      ],
+      [
+        "src/app/api/spawn/route.stageTasks.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/app/api/tasks/[id]/assignment/route.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/app/api/tasks/[id]/spawn/route.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/app/api/tasks/route.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/BoardSearchEntry.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/BootShell.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/BranchPane.spawn.dom.test.tsx",
+        1,
+        1
+      ],
+      [
+        "src/components/OverviewBoard.catalog.render.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/OverviewBoard.firstRun.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/OverviewBoard.kanban.dom.test.tsx",
+        1,
+        1
+      ],
+      [
+        "src/components/OverviewBoard.loading.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/OverviewBoard.render.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/ProjectDashboard.catalogFailure.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/ProjectDashboard.empty.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/ProjectDashboard.headerBar.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/ProjectDashboard.loadingStates.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/ProjectDashboard.looseReader.dom.test.tsx",
+        1,
+        1
+      ],
+      [
+        "src/components/ProjectDashboard.pipelineNavigation.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/ProjectDashboard.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/ProjectRail.firstRun.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/RuntimePill.stageSwitch.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/TaskHeader.killConfirm.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/Viewer.catalogFailure.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/Viewer.deepLink.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/Viewer.mobileSwipe.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/Viewer.needsYou.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/Viewer.overviewPhone.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/Viewer.switching.dom.test.tsx",
+        1,
+        1
+      ],
+      [
+        "src/components/attention/AttentionHost.dom.test.tsx",
+        1,
+        1
+      ],
+      [
+        "src/components/attention/AttentionPanel.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/attention/MobileAttentionSheet.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/attention/PermissionActions.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/attention/attentionQueue.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/attention/decision.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/attention/dismissalOverlay.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/attention/needsYouPanel.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/attention/operatorAsk.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/feed/FeedItem.mobile.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/feed/QuestionCard.delivery.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/feed/QuestionCard.dismiss.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/feed/QuestionCard.mobile.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/feed/processingError.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/kanban/KanbanAccounts.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/kanban/KanbanAccountsRuntime.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/kanban/KanbanDismiss.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/kanban/KanbanOpenAgents.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/kanban/KanbanPipelines.dom.test.tsx",
+        1,
+        1
+      ],
+      [
+        "src/components/kanban/KanbanReaders.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/kanban/KanbanStages.dom.test.tsx",
+        1,
+        1
+      ],
+      [
+        "src/components/kanban/accountChoice.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/kanban/cardState.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/kanban/kanbanModel.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/kanban/laneAnswerMenu.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/kanban/orchestratorArrows.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/kanban/overviewBands.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/kanban/pipelineGraph.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/kanban/pipelinePorts.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/kanban/stageDisplayName.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/kanban/stageIdentity.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/kanban/stagesModel.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/kanban/taskChronologyModel.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/mobile/MobileBoard.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/mobile/MobileFocusView.conversation.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/mobile/MobileFocusView.reviewDeckRole.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/mobile/MobileFocusView.viewport.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/mobile/MobileKanban.dom.test.tsx",
+        1,
+        1
+      ],
+      [
+        "src/components/mobile/MobilePipelineScreen.actions.dom.test.tsx",
+        1,
+        1
+      ],
+      [
+        "src/components/mobile/MobilePipelineScreen.dom.test.tsx",
+        1,
+        1
+      ],
+      [
+        "src/components/mobile/MobilePipelinesScreen.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/mobile/MobileTaskScreen.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/mobile/MobileTaskScreen.entry.dom.test.tsx",
+        1,
+        1
+      ],
+      [
+        "src/components/mobile/directReviewDeck.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/mobile/mobileBoardModel.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/mobile/mobileChatState.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/mobile/overviewPhone.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/mobile/phoneKanbanModel.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/overlay/useAttentionOffers.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/pipelines/PipelineBlock.dom.test.tsx",
+        0,
+        1
+      ],
+      [
+        "src/components/pipelines/PipelineEditor.legacyReview.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/pipelines/PipelineHub.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/pipelines/PipelineStrip.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/pipelines/PipelineStrip.render.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/pipelines/PipelineTemplatePicker.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/pipelines/StageEdgeControls.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/pipelines/StagePlaceholderPane.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/pipelines/VerdictPopover.render.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/pipelines/pipelineBlockModel.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/pipelines/pipelineModel.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/pipelines/pipelinePlaceholderStages.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/pipelines/remoteLaneSummary.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/pipelines/stageCardAria.render.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/projectDashboardDerivation.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/resources/AttachControls.render.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/runtime/AttentionCard.dismiss.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/runtime/ConversationAttention.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/scheme/AgentLinksLayer.render.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/scheme/GroupOverridePanel.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/scheme/GroupOverridePanel.render.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/scheme/GroupsLayer.render.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/scheme/SchemeBoard.bands.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/scheme/SchemeBoard.builderReveal.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/scheme/SchemeBoard.camera.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/scheme/SchemeBoard.catalogFocus.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/scheme/SchemeBoard.pipelineComposition.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/scheme/SchemeBoard.pipelineRegions.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/scheme/SchemeBoard.stageOverlay.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/scheme/TaskCard.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/scheme/agentLinks.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/scheme/focusFrames.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/scheme/layout.lineage.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/scheme/layout.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/scheme/nodes.stageRow.dom.test.tsx",
+        1,
+        1
+      ],
+      [
+        "src/components/scheme/pipelineAnchor.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/scheme/pipelineRegionGeometry.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/scheme/pipelineStageSurfaces.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/scheme/placementHorizon.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/scheme/taskBands.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/scheme/workerCollapse.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/skeletons.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/taskAlbum/TaskAlbum.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/tasks/taskWorkflowModel.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/components/workLinks/workLinks.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/components/workingAgents.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/hooks/serverReach.dom.test.tsx",
+        0,
+        0
+      ],
+      [
+        "src/hooks/useFiles.forwardOnly.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/agent/cli.integration.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/attention/dismissals.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/attention/finishedWork.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/attention/finishedWorkCleanup.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/attention/landing.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/attention/needsYouRead.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/attention/reconcile.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/attention/routing.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/attention/seatAgenda.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/attention/service.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/audio/workCues.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/delivery.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/done/project.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/filesReadSummary.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/flows/decisions.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/flows/retirement.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/forge/autoMerge.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/forge/autoMergeStore.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/forge/autoRefresh.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/forge/sweep.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/forge/taskFinish.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/forge/workLinks.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/i18n/i18n.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/i18n/serverBoundary.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/i18n/spawnCopy.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/lifecycle/liveness.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/lifecycle/projector.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/links/laneFeed.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/mcp/answerSizes.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/mcp/bindings.test.ts",
+        1,
+        0
+      ],
+      [
+        "src/lib/mcp/callCost.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/mcp/compactAnswers.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/mcp/dismissAttention.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/mcp/inputLimits.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/mcp/leaveLesson.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/mcp/leaveLessonOperator.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/mcp/pipelineBusyAdmission.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/mcp/pipelineRoleFence.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/mcp/pullRequestReads.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/mcp/retryStageLaunch.integration.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/mcp/seatAnswerBudgets.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/mcp/server.test.ts",
+        1,
+        0
+      ],
+      [
+        "src/lib/mcp/shortIds.answers.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/memory/context.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/memory/curation/curation.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/memory/curation/curator.eval.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/memory/roleLane.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/memory/roleLaunch.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/memory/roleSelection.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/memory/roleSelectionRetention.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/memory/selection.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/monitor/ruleReports.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/monitor/seatHostRecovery.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/monitor/seatTickSources.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/onboarding/healthCheck.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/onboarding/healthRoute.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/orchestrator/boardReportRun.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/orchestrator/seatProjectIdentity.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/adoptionHistory.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/autoRefreshStore.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/backgroundTaskSettlement.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/pipelines/controllerArtifacts.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/controllerLease.reproduction.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/controllerLease.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/decisionAuthority.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/deputyLineage.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.accountGuard.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.activation.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/pipelines/engine.containment.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.controllerPass.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/pipelines/engine.controllerSnapshot.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/pipelines/engine.cpuQueue.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.creation.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.fencedMessage.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.pauseMetadata.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.ports.part2.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.ports.part3.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.ports.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/pipelines/engine.providerBudget.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.providerBudgetChains.part2.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.providerBudgetChains.part3.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.providerBudgetChains.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.providerBudgetKinds.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.providerBudgetOutput.part2.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.providerBudgetOutput.part3.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.providerBudgetOutput.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.providerBudgetPoolOutput.part2.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.providerBudgetPoolOutput.part3.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.providerBudgetPoolOutput.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.providerChains.part2.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.providerChains.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.providerReset.part2.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.providerReset.part3.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.providerReset.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.providerSignals.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.provisioning.test.ts",
+        0,
+        1
+      ],
+      [
+        "src/lib/pipelines/engine.publication.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.recoveredPending.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.recovery.part2.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.recovery.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.recoveryAdmission.part2.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.recoveryAdmission.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.recoveryAuthority.part2.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.recoveryAuthority.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.rolePrivacy.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.routing.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/pipelines/engine.settlement.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.setupRecipe.test.ts",
+        0,
+        null
+      ],
+      [
+        "src/lib/pipelines/engine.spawnSilence.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.succession.part2.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.succession.part3.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.succession.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engine.watchdogRegression.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/engineConnectionRefusal.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/pipelines/failEdgeBudget.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/git.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/graphEdits.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/handLaunch.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/hostRetirement.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/pipelines/laneStop.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/legacyReviewConversion.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/legacyReviewDefinition.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/legacyReviewStore.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/listProjection.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/materializationHistory.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/parkedPublication.test.ts",
+        0,
+        1
+      ],
+      [
+        "src/lib/pipelines/preflight.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/prompts.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/publication.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/publicationRecovery.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/registryCompatibility.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/remoteActions.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/pipelines/repositoryInitialization.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/resolveDecision.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/retirementEvidence.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/revalidation.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/runtimeReads.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/runtimeSwitch.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/setupExecution.test.ts",
+        0,
+        null
+      ],
+      [
+        "src/lib/pipelines/setupRecipe.test.ts",
+        0,
+        null
+      ],
+      [
+        "src/lib/pipelines/severedStageRetry.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/pipelines/severedTurnResume.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/pipelines/spawnRestartRecovery.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/stageAccountBinding.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/stageAttemptPush.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/stageCommitRepair.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/pipelines/stageCompletion.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/pipelines/stageDigest.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/stageHostGenerationClose.integration.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/pipelines/stageHostLiveness.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/stageHostTeardown.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/pipelines/stageInput.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/pipelines/stagePublicationRepair.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/pipelines/stagePullRequest.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/stageSizing.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/pipelines/stageVerdictRequest.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/pipelines/startupResponsiveness.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/store.reads.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/store.test.ts",
+        1,
+        0
+      ],
+      [
+        "src/lib/pipelines/taskBinding.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/taskFinish.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/taskStatusNote.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/pipelines/terminalReap.test.ts",
+        1,
+        0
+      ],
+      [
+        "src/lib/pipelines/verdict.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/visibility.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/pipelines/worktreeSweep.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/projects/durableMigration.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/projects/succession.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/prototypeReview/http.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/prototypeReview/mcpReceipts.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/release/stages.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/runtime/agentMemorySettings.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/runtime/attemptTempProduction.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/runtime/claudeStreamBrokerHost.integration.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/runtime/codexAppServerHost.integration.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/runtime/codexSubagentDetection.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/runtime/nativeQueueHost.integration.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/runtime/permissionGuard.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/runtime/pipelineStageHostAccess.integration.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/runtime/releaseInterruption.test.ts",
+        1,
+        0
+      ],
+      [
+        "src/lib/runtime/startup.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/runtime/startupFinalization.integration.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/runtime/structuredDeliveryQueue.progress.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/runtime/structuredDeliveryQueue.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/runtime/structuredRecovery.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/scanner/filesResponseWorker.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/scanner/taskExtractionRetirement.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/selfUpdate/quietFallback.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/selfUpdate/workEvidence.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/state/historyProjection.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/state/hotStateStores.benchmark.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/state/hotStateStores.sqlite.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/state/registryRecords.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/state/sqliteStateStore.bounded.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/taskAlbum/album.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/tasks/launchMembership.registry.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/tasks/membership.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/tasks/seatRecoveryCleanup.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/tasks/taskColorGroupHide.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/lib/voiceCompanion/readPaths.test.ts",
+        1,
+        1
+      ],
+      [
+        "src/lib/workflows/engine.cpuAdmission.test.ts",
+        0,
+        0
+      ],
+      [
+        "src/runtime-host/candidateStateDataset.test.ts",
+        0,
+        0
+      ]
+    ],
+    "baseMissingNewFiles": [
+      "src/app/api/projects/setup/route.test.ts",
+      "src/lib/pipelines/engine.setupRecipe.test.ts",
+      "src/lib/pipelines/setupExecution.test.ts",
+      "src/lib/pipelines/setupRecipe.test.ts"
+    ]
+  },
+  "storeRepetitions": {
+    "command": "gate-remote -- bun test src/lib/pipelines/store.test.ts (whole file; isolated state each observation)",
+    "exitCode": 0,
+    "order": "head/base, base/head, head/base",
+    "samples": [
+      {
+        "side": "head",
+        "round": 1,
+        "completed": 1,
+        "failures": 1,
+        "passed": 55
+      },
+      {
+        "side": "base",
+        "round": 1,
+        "completed": 1,
+        "failures": 0,
+        "passed": 56
+      },
+      {
+        "side": "head",
+        "round": 2,
+        "completed": 1,
+        "failures": 0,
+        "passed": 56
+      },
+      {
+        "side": "base",
+        "round": 2,
+        "completed": 1,
+        "failures": 0,
+        "passed": 56
+      },
+      {
+        "side": "head",
+        "round": 3,
+        "completed": 1,
+        "failures": 0,
+        "passed": 56
+      },
+      {
+        "side": "base",
+        "round": 3,
+        "completed": 1,
+        "failures": 0,
+        "passed": 56
+      }
+    ],
+    "introduced": 0,
+    "intermittent": 1,
+    "confirmation": "An additional full-file sample on each revision passed. The rare delivery restart assertion is retained as intermittent."
+  },
+  "realIsolation": {
+    "runtime": "1.4.0",
+    "requiredIsolation": true,
+    "sourceDigests": {
+      "src/lib/pipelines/setupExecution.ts": "20b526141e5810e5332800dcb6fc24d5e35d857e3923933c5f120b7e6faf9b05",
+      "src/lib/pipelines/setupRecipe.ts": "8567b48e3c5d887a1a982e70e0d8c52a7f27b44540915a0e6b09b0931d90b8ce",
+      "src/lib/pipelines/setupExecution.test.ts": "aa4d158788d4edccb926e27b83a30d1e6a2e8dc8405b484ac042018dca63f625",
+      "src/lib/pipelines/setupRecipe.test.ts": "2ed1733da1905518e7807f4bd0d3e7bf1e7cf711aabfb6d58b329b11369d0791",
+      "src/lib/projects/setupRecipe.ts": "1f0683913fe429d676728115614c707a9a7ab9f97db6f66060c3adfc7355298c",
+      "docs/guide/project-setup.md": "69ffe313337dcc83a873281cd4bd3b5b2504b1eb6dfcc7a56604dfb14b9062da"
+    },
+    "passed": 17,
+    "failed": 0,
+    "implicitInputProbes": [
+      {
+        "mode": "alias",
+        "hashUnchanged": true,
+        "beforeCode": 0,
+        "afterCode": 0,
+        "beforeStdout": "reviewed\n",
+        "afterStdout": "reviewed\n",
+        "injected": false
+      },
+      {
+        "mode": "paths",
+        "hashUnchanged": true,
+        "beforeCode": 0,
+        "afterCode": 0,
+        "beforeStdout": "reviewed\n",
+        "afterStdout": "reviewed\n",
+        "injected": false
+      },
+      {
+        "mode": "jsx",
+        "hashUnchanged": true,
+        "beforeCode": 0,
+        "afterCode": 0,
+        "beforeStdout": "div\n",
+        "afterStdout": "div\n",
+        "injected": false
+      },
+      {
+        "mode": "builtin",
+        "hashUnchanged": true,
+        "beforeCode": 0,
+        "afterCode": 0,
+        "beforeStdout": "reviewed\n",
+        "afterStdout": "reviewed\n",
+        "injected": false
+      }
+    ],
+    "negativeControls": [
+      {
+        "name": "network protection mutation",
+        "command": "controller-provided gate-slot.sh env SETUP_REQUIRE_ISOLATION=1 bun test src/lib/pipelines/setupExecution.test.ts --timeout=60000 --test-name-pattern=restricted setup cannot reach",
+        "expectedExitCode": 1,
+        "actualExitCode": 1,
+        "failingTests": 1
+      },
+      {
+        "name": "memory protection mutation",
+        "command": "controller-provided gate-slot.sh env SETUP_REQUIRE_ISOLATION=1 bun test src/lib/pipelines/setupExecution.test.ts --timeout=60000 --test-name-pattern=setup launches through the memory cell",
+        "expectedExitCode": 1,
+        "actualExitCode": 1,
+        "failingTests": 1
+      },
+      {
+        "name": "compiler and native dispatch negative control",
+        "command": "controller-provided gate-slot.sh env SETUP_REQUIRE_ISOLATION=1 bun test src/lib/pipelines/setupExecution.test.ts --timeout=60000 --test-name-pattern=compiler configuration|name is a native command",
+        "expectedExitCode": 1,
+        "actualExitCode": 1,
+        "failingTests": 3
+      },
+      {
+        "name": "prototype snapshot negative control",
+        "command": "controller-provided gate-slot.sh env SETUP_REQUIRE_ISOLATION=1 bun test src/lib/pipelines/setupRecipe.test.ts src/lib/pipelines/setupExecution.test.ts --timeout=60000 --test-name-pattern=prototype-named scripts",
+        "expectedExitCode": 1,
+        "actualExitCode": 1,
+        "failingTests": 2
+      },
+      {
+        "name": "pre-sandbox helper lookup negative control",
+        "command": "controller-provided gate-slot.sh env SETUP_REQUIRE_ISOLATION=1 bun test src/lib/pipelines/setupExecution.test.ts --timeout=60000 --test-name-pattern=supervisor ignores checkout helper shadows",
+        "expectedExitCode": 1,
+        "actualExitCode": 1,
+        "failingTests": 2
+      }
+    ],
+    "note": "Direct Bun probes preserved a nonfatal directory-mismatch compiler diagnostic with exit zero and no injected effects."
+  },
+  "rendered": {
+    "records": [
+      "evidence/project-setup/rendered.json",
+      "evidence/project-setup/mobile.json"
+    ],
+    "hosts": [
+      "StagePlaceholderPane",
+      "VerdictPopover",
+      "MobilePipelineScreen"
+    ],
+    "desktopFrames": 32,
+    "phoneFrames": 16,
+    "languages": [
+      "en",
+      "uk"
+    ],
+    "themes": [
+      "light",
+      "dark"
+    ],
+    "widths": [
+      390,
+      1440
+    ],
+    "attempts": {
+      "1": "failed",
+      "2": "passed"
+    },
+    "visuallyInspectedFrames": [
+      "placeholder-en-light-390-attempt-1.png",
+      "placeholder-en-light-390-attempt-2.png",
+      "placeholder-en-light-1440-attempt-1.png",
+      "placeholder-en-light-1440-attempt-2.png",
+      "placeholder-en-dark-390-attempt-1.png",
+      "placeholder-en-dark-390-attempt-2.png",
+      "placeholder-en-dark-1440-attempt-1.png",
+      "placeholder-en-dark-1440-attempt-2.png",
+      "placeholder-uk-light-390-attempt-1.png",
+      "placeholder-uk-light-390-attempt-2.png",
+      "placeholder-uk-light-1440-attempt-1.png",
+      "placeholder-uk-light-1440-attempt-2.png",
+      "placeholder-uk-dark-390-attempt-1.png",
+      "placeholder-uk-dark-390-attempt-2.png",
+      "placeholder-uk-dark-1440-attempt-1.png",
+      "placeholder-uk-dark-1440-attempt-2.png",
+      "verdict-en-light-390-attempt-2.png",
+      "verdict-en-light-390-attempt-1.png",
+      "verdict-en-light-1440-attempt-2.png",
+      "verdict-en-light-1440-attempt-1.png",
+      "verdict-en-dark-390-attempt-2.png",
+      "verdict-en-dark-390-attempt-1.png",
+      "verdict-en-dark-1440-attempt-2.png",
+      "verdict-en-dark-1440-attempt-1.png",
+      "verdict-uk-light-390-attempt-2.png",
+      "verdict-uk-light-390-attempt-1.png",
+      "verdict-uk-light-1440-attempt-2.png",
+      "verdict-uk-light-1440-attempt-1.png",
+      "verdict-uk-dark-390-attempt-2.png",
+      "verdict-uk-dark-390-attempt-1.png",
+      "verdict-uk-dark-1440-attempt-2.png",
+      "verdict-uk-dark-1440-attempt-1.png",
+      "mobile-en-light-390-attempt-1.png",
+      "mobile-en-light-390-attempt-2.png",
+      "mobile-en-light-1440-attempt-1.png",
+      "mobile-en-light-1440-attempt-2.png",
+      "mobile-en-dark-390-attempt-1.png",
+      "mobile-en-dark-390-attempt-2.png",
+      "mobile-en-dark-1440-attempt-1.png",
+      "mobile-en-dark-1440-attempt-2.png",
+      "mobile-uk-light-390-attempt-1.png",
+      "mobile-uk-light-390-attempt-2.png",
+      "mobile-uk-light-1440-attempt-1.png",
+      "mobile-uk-light-1440-attempt-2.png",
+      "mobile-uk-dark-390-attempt-1.png",
+      "mobile-uk-dark-390-attempt-2.png",
+      "mobile-uk-dark-1440-attempt-1.png",
+      "mobile-uk-dark-1440-attempt-2.png"
+    ],
+    "clipped": 0,
+    "covered": 0,
+    "documentOverflow": false,
+    "pageErrors": 0
+  },
+  "earlierAttempts": {
+    "consumerComparisonGuardExit": 124,
+    "reason": "The initial two-hour outer guard ended during the last baseline repetition. The final complete run above replaces that incomplete sample.",
+    "recoveryWrapperExit": 1,
+    "reasonDetail": "An extra store repetition failed after the gate and focused comparison passed. Final full-file head/base repetitions and confirmation are recorded above."
+  },
+  "baseRecheck": {
+    "observedMain": "f348d75bd0012871867ebc63908a69b7b9e65b1c",
+    "verifiedMainCut": "a63e8b717cab60192caf7bb6ad05d1bdc352d481",
+    "laterChanges": [
+      "docs/verification/cloud-regression-batch-a.md",
+      "scripts/privacy-publication-gate.test.ts",
+      "src/app/api/voice-companion/calls/route.test.ts",
+      "src/lib/pipelines/engine.recovery.test.ts",
+      "src/lib/pipelines/engine.recoveryAdmission.test.ts",
+      "src/lib/pipelines/stageAttemptPush.test.ts",
+      "src/lib/pipelines/startupResponsiveness.test.ts",
+      "src/lib/voiceCompanion/liveSession.test.ts",
+      "src/lib/voiceCompanion/ownerHistoryRead.test.ts"
+    ],
+    "note": "The later main commit adds regression tests and verification prose. No production source changed beyond the merged and verified cut."
+  }
+}
