@@ -23,7 +23,6 @@ import {
   PIPELINE_ROLE_OPTIONS,
   STAGE_TONES,
   buildStagePrompt,
-  latestAttempt,
   optimisticRemoveStage,
   optimisticReorderStage,
   patchPipeline,
@@ -343,7 +342,10 @@ export function StagePlaceholderPane({ slot, interactive }: { slot: StageSlot; i
         ) : null}
       </header>
 
-      <StageSetupResult setup={latestAttempt(pipeline, stage.id)?.setup} />
+      <div className="max-h-[50vh] shrink-0 space-y-2 overflow-y-auto">
+        {pipeline.runs.find(run => run.stageId === stage.id)?.attempts.filter(attempt => attempt.setup).map(attempt =>
+          <StageSetupResult key={attempt.n} setup={attempt.setup} stageId={stage.id} attempt={attempt.n} />)}
+      </div>
 
       {interactive && configOpen ? (
         <RoleSection

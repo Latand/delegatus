@@ -622,7 +622,7 @@ export function MobilePipelineScreen({
           onWorkLinks={() => nav.openSheet("links")}
         />
         {pipeline.runs.flatMap(run => run.attempts.filter(attempt => attempt.setup).map(attempt =>
-          <StageSetupResult key={`${run.stageId}:${attempt.n}`} setup={attempt.setup} />))}
+          <StageSetupResult key={`${run.stageId}:${attempt.n}`} setup={attempt.setup} stageId={run.stageId} attempt={attempt.n} />))}
         {linked.length ? (
           <section data-mobile2-section="tasks" className="flex shrink-0 flex-col gap-1.5">
             <h3 className="flex min-h-[30px] items-center gap-1.5 text-ui font-semibold text-secondary">

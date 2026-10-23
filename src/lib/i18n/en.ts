@@ -4,6 +4,7 @@ import type { Dictionary } from "./core";
    Plural entries use Intl.LDMLPluralRule forms; {name} placeholders are
    filled from t()'s params. uk.ts must mirror this key set. */
 export const en = {
+  "projectSetup.attempt": "Stage {stage} · attempt {n}",
   "projectSetup.title": "Project setup",
   "projectSetup.running": "Running",
   "projectSetup.passed": "Ready",

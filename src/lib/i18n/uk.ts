@@ -4,6 +4,7 @@ import type { en } from "./en";
 /* Ukrainian mirror of en.ts. The `Record<keyof typeof en, …>` annotation fails
    the build if a key is missing or extra, keeping both locales in lockstep. */
 export const uk: Record<keyof typeof en, Message> = {
+  "projectSetup.attempt": "Етап {stage} · спроба {n}",
   "projectSetup.title": "Підготовка проєкту",
   "projectSetup.running": "Виконується",
   "projectSetup.passed": "Готово",

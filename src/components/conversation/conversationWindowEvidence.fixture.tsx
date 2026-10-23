@@ -1,7 +1,11 @@
 "use client";
 
 import { TelegramFileConfirmation } from "@/components/telegram/TelegramFileConfirmation";
-import { StageSetupResult } from "@/components/pipelines/StageSetupResult";
+import { StagePlaceholderPane } from "@/components/pipelines/StagePlaceholderPane";
+import { VerdictPopover } from "@/components/pipelines/VerdictPopover";
+import { MobilePipelineScreen } from "@/components/mobile/MobilePipelineScreen";
+import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
+import type { StageSlot } from "@/components/scheme/layout";
 import type { FileConfirmationView } from "@/lib/telegram/bot/fileConfirmationContract";
 import { DeputyBlock } from "./DeputyBlock";
 import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
@@ -1859,12 +1863,31 @@ const requested = (params.get("case") as ConversationWindowCase | null) ?? "rece
    rendering one arranged frame. */
 if (root && requested === "file-confirmation") mountFileConfirmation(root);
 else if (root && requested === "project-setup") {
-  const state = params.get("setupState") as "running" | "passed" | "failed";
-  createRoot(root).render(<main data-setup-fixture className="m-4 max-w-xl bg-canvas p-4 text-primary">
-    <StageSetupResult setup={{ command: ["sh", "scripts/setup.sh"], cwd: "pipeline-checkout/web", hash: "a".repeat(64), state,
-      startedAt: "2026-10-23T10:00:00.000Z", completedAt: state === "running" ? null : "2026-10-23T10:00:01.000Z",
-      code: state === "running" ? null : state === "passed" ? 0 : 7,
-      stdout: "Preparing dependencies\nWorkspace ready", stderr: state === "failed" ? "Dependency unavailable" : "" }} />
+  const role = { roleId: "builder", engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
+  const attempts = (["failed", "passed"] as const).map((state, index) => ({
+    n: index + 1, state: state === "failed" ? "needs_decision" : "spawning", effectiveRole: role,
+    launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+    startedAt: "2026-10-23T10:00:00.000Z", completedAt: null, input: null, activatedBy: null, output: null,
+    verdict: null, error: null,
+    setup: { command: ["sh", "scripts/setup.sh"], cwd: "pipeline-checkout/web", hash: "a".repeat(64), state,
+      startedAt: "2026-10-23T10:00:00.000Z", completedAt: "2026-10-23T10:00:01.000Z",
+      code: state === "passed" ? 0 : 7, stdout: "Preparing dependencies\nWorkspace ready",
+      stderr: state === "failed" ? "Dependency unavailable" : "" },
+  })) as PipelineStageAttempt[];
+  const pipeline = { id: "setup-lane", task: "Prepare the project checkout", project: "atlas", repoDir: "/repo",
+    worktreeDir: "/repo-lane", branch: "pipeline/setup", baseBranch: "main", baseRef: "a".repeat(40), lastPassedCommit: "a".repeat(40),
+    stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, effectiveRole: role, prompt: "Build the project", next: null }],
+    runs: [{ stageId: "build", attempts }], cursor: { stageId: "build", state: "spawning", input: null, activatedBy: null },
+    state: "running", pausedState: null, stateDetail: null, srcPath: null, srcConversationId: null,
+    createdAt: "2026-10-23T10:00:00.000Z", closedAt: null } as Pipeline;
+  const stage = pipeline.stages[0]!;
+  const host = params.get("host");
+  const slot = { key: "setup-slot", pipeline, stage, index: 0, total: 1, presentation: "placeholder",
+    x: 0, y: 0, w: 720, h: 760 } as StageSlot;
+  createRoot(root).render(<main data-setup-fixture data-setup-host={host} className="h-full min-h-0 min-w-0 bg-canvas text-primary">
+    {host === "mobile" ? <MobilePipelineScreen pipeline={pipeline} files={[]} now={Date.parse("2026-10-23T10:01:00Z") / 1000} onOpenConversation={() => {}} />
+      : host === "verdict" ? <div className="p-4"><VerdictPopover pipeline={pipeline} stage={stage} attempt={attempts[1]!} onClose={() => {}} /></div>
+      : <div className="h-[800px] max-w-3xl p-4"><StagePlaceholderPane slot={slot} interactive={false} /></div>}
   </main>);
 }
 else if (root && requested === "seat-inbox") createRoot(root).render(<InboxFixture />);

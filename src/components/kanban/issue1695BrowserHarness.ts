@@ -7,6 +7,8 @@ import { chromium, type Browser, type ConnectOptions, type Page } from "playwrig
 import postcss from "postcss";
 import sharp from "sharp";
 
+import { translate } from "@/lib/i18n";
+import { createHash } from "node:crypto";
 import { taskIconNodes } from "@/lib/tasks/taskIconNodes";
 
 /* The rendered-evidence harness shared by the browser drivers: a fixture
@@ -1457,4 +1459,66 @@ export async function captureTelegramMultiBot(browser: Browser, base: string, ou
     }
   }
   return readings;
+}
+
+/** Production setup hosts, including the failed attempt and its successful retry. */
+export async function captureProjectSetupHosts(browser: Browser, base: string, out: string,
+  hosts: readonly ("placeholder" | "verdict" | "mobile")[], widths: readonly number[]) {
+  const readings: unknown[] = [];
+  for (const host of hosts) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of widths) {
+    const { context, page, pageErrors } = await openFixture(browser,
+      `${base}?case=project-setup&host=${host}&lang=${lang}`, { width, height: 900 }, theme, lang, "reduce", host === "mobile");
+    try {
+      const results = page.locator("[data-stage-setup]");
+      await results.first().waitFor();
+      if (await results.count() !== 2) throw new Error(`${host}: expected failed setup and passed retry`);
+      // Each host opens at its ordinary initial scroll, with results collapsed.
+      for (let index = 0; index < 2; index++) {
+        const result = results.nth(index);
+        if (await result.getAttribute("open") !== null) throw new Error("setup unexpectedly opens expanded");
+        const text = await result.locator("summary").innerText();
+        const n = host === "verdict" ? 2 - index : index + 1;
+        if (!text.includes(translate(lang, "projectSetup.attempt", { stage: "build", n }))) throw new Error("missing stage/attempt label");
+        const state = n === 1 ? "failed" : "passed";
+        if (!text.includes(translate(lang, `projectSetup.${state}`))) throw new Error("wrong setup state");
+        await result.locator("summary").click();
+        await result.scrollIntoViewIfNeeded();
+        const shown = await result.innerText();
+        for (const value of ["scripts/setup.sh", "pipeline-checkout/web", "Workspace ready", n === 1 ? "Dependency unavailable" : "Preparing dependencies"])
+          if (!shown.includes(value)) throw new Error(`${host}: missing output ${value}`);
+        const geometry = await result.evaluate(element => {
+          const clipped: string[] = [], covered: string[] = [];
+          const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+          while (walker.nextNode()) {
+            const node = walker.currentNode;
+            if (!node.textContent?.trim()) continue;
+            const range = document.createRange(); range.selectNodeContents(node);
+            for (const rect of range.getClientRects()) {
+              let left = 0, top = 0, right = innerWidth, bottom = innerHeight;
+              for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+                const style = getComputedStyle(parent), box = parent.getBoundingClientRect();
+                if (/hidden|auto|scroll|clip/.test(style.overflowX)) { left = Math.max(left, box.left); right = Math.min(right, box.right); }
+                if (/hidden|auto|scroll|clip/.test(style.overflowY)) { top = Math.max(top, box.top); bottom = Math.min(bottom, box.bottom); }
+              }
+              if (rect.left < left - 1 || rect.right > right + 1 || rect.top < top - 1 || rect.bottom > bottom + 1) clipped.push(node.textContent!);
+              const hit = document.elementFromPoint((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2);
+              if (!hit || !element.contains(hit)) covered.push(node.textContent!);
+            }
+          }
+          return { clipped, covered, documentOverflow: document.documentElement.scrollWidth > innerWidth, scroll: window.scrollY, focus: document.activeElement?.tagName };
+        });
+        if (geometry.clipped.length || geometry.covered.length || geometry.documentOverflow) throw new Error(`${host}/${lang}/${theme}/${width}/${n}: ${JSON.stringify(geometry)}`);
+        const frame = `${host}-${lang}-${theme}-${width}-attempt-${n}.png`;
+        await page.screenshot({ path: path.join(out, frame) });
+        readings.push({ host, lang, theme, width, attempt: n, state, frame, geometry, pageErrors });
+        await result.locator("summary").click();
+        if (pageErrors.length) throw new Error(JSON.stringify(pageErrors));
+      }
+    } finally { await context.close(); }
+  }
+  const sources = ["src/components/kanban/kanbanBoard.browser.test.tsx", "src/components/mobile/issue1671Evidence.browser.test.tsx", "src/components/conversation/conversationWindowEvidence.fixture.tsx", "src/components/kanban/issue1695BrowserHarness.ts",
+    "src/components/pipelines/StageSetupResult.tsx", "src/components/pipelines/StagePlaceholderPane.tsx", "src/components/pipelines/VerdictPopover.tsx",
+    "src/components/mobile/MobilePipelineScreen.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts"];
+  return { capturedAt: new Date().toISOString(), sourceDigests: Object.fromEntries(sources.map(file =>
+    [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")])), readings };
 }

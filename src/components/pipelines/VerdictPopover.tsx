@@ -175,7 +175,9 @@ export function VerdictPopover({
         {busy ? <RefreshCw className="ml-auto h-3 w-3 animate-spin text-muted" aria-hidden /> : null}
       </div>
 
-      <StageSetupResult setup={attempt.setup} />
+      <StageSetupResult setup={attempt.setup} stageId={stage.id} attempt={attempt.n} />
+      {priorAttempts.filter(prior => prior.setup).map(prior =>
+        <StageSetupResult key={prior.n} setup={prior.setup} stageId={stage.id} attempt={prior.n} />)}
       {verdict && typeof verdict.confidence === "number" ? (
         <div className="flex items-center gap-1.5">
           <span className="shrink-0 text-label font-semibold text-secondary">{t("pipelineVerdict.confidence")}</span>
@@ -212,7 +214,6 @@ export function VerdictPopover({
               ) : (
                 <span className="font-mono text-[9.5px] text-muted">{line}</span>
               )}
-                <StageSetupResult setup={prior.setup} />
               </div>;
             })}
           </div>

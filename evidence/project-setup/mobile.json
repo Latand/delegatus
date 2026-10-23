@@ -1,0 +1,289 @@
+{
+  "capturedAt": "2026-10-23T12:13:54.620Z",
+  "sourceDigests": {
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "745ea5c2c7e1496be2a2612828cdeb24dba7939eeba9ef314bb530f4d0aea96c",
+    "src/components/mobile/issue1671Evidence.browser.test.tsx": "7fd96c393566db84fdd4bc0399a303fe5c1ab2b388d820471fc87ebb4539f7bf",
+    "src/components/conversation/conversationWindowEvidence.fixture.tsx": "04c8a804ebb825fdac90379fb65aeb5e0e5f2a45c0a8f0aadf4bdcb5a49a06f8",
+    "src/components/kanban/issue1695BrowserHarness.ts": "84fa08a05197b9b4238ed0d265d4982617bc6188f18bef0fabe0b95aa0ffaf70",
+    "src/components/pipelines/StageSetupResult.tsx": "fdcca3b5dcaf6bd21295ae2b85646b37c36b10dbec39a45dfaf3b6b7d30054e2",
+    "src/components/pipelines/StagePlaceholderPane.tsx": "92a180f5e49f95b5a6a9d4e0f1165e4cd314f3a92a6cfe7cbd3176cc136b7626",
+    "src/components/pipelines/VerdictPopover.tsx": "ebaf5764633df2a389255702ab969070b0ea6441ae327e66ba74430ad400a99d",
+    "src/components/mobile/MobilePipelineScreen.tsx": "84d191293e37f40d15c68e61c42196017d869f6a6c4cc1f1feca3d622602fbb4",
+    "src/lib/i18n/en.ts": "e15484b87dfd8e5346247c52c389a2b17d20fcce0a4548b8c32410615c5126e6",
+    "src/lib/i18n/uk.ts": "e28ffb8fed63d60e2da12610f80f173ddc6011bbe4d65243f6eba0fc3b11b106"
+  },
+  "readings": [
+    {
+      "host": "mobile",
+      "lang": "en",
+      "theme": "light",
+      "width": 390,
+      "attempt": 1,
+      "state": "failed",
+      "frame": "mobile-en-light-390-attempt-1.png",
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "documentOverflow": false,
+        "scroll": 0,
+        "focus": "SUMMARY"
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "mobile",
+      "lang": "en",
+      "theme": "light",
+      "width": 390,
+      "attempt": 2,
+      "state": "passed",
+      "frame": "mobile-en-light-390-attempt-2.png",
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "documentOverflow": false,
+        "scroll": 0,
+        "focus": "SUMMARY"
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "mobile",
+      "lang": "en",
+      "theme": "light",
+      "width": 1440,
+      "attempt": 1,
+      "state": "failed",
+      "frame": "mobile-en-light-1440-attempt-1.png",
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "documentOverflow": false,
+        "scroll": 0,
+        "focus": "SUMMARY"
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "mobile",
+      "lang": "en",
+      "theme": "light",
+      "width": 1440,
+      "attempt": 2,
+      "state": "passed",
+      "frame": "mobile-en-light-1440-attempt-2.png",
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "documentOverflow": false,
+        "scroll": 0,
+        "focus": "SUMMARY"
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "mobile",
+      "lang": "en",
+      "theme": "dark",
+      "width": 390,
+      "attempt": 1,
+      "state": "failed",
+      "frame": "mobile-en-dark-390-attempt-1.png",
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "documentOverflow": false,
+        "scroll": 0,
+        "focus": "SUMMARY"
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "mobile",
+      "lang": "en",
+      "theme": "dark",
+      "width": 390,
+      "attempt": 2,
+      "state": "passed",
+      "frame": "mobile-en-dark-390-attempt-2.png",
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "documentOverflow": false,
+        "scroll": 0,
+        "focus": "SUMMARY"
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "mobile",
+      "lang": "en",
+      "theme": "dark",
+      "width": 1440,
+      "attempt": 1,
+      "state": "failed",
+      "frame": "mobile-en-dark-1440-attempt-1.png",
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "documentOverflow": false,
+        "scroll": 0,
+        "focus": "SUMMARY"
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "mobile",
+      "lang": "en",
+      "theme": "dark",
+      "width": 1440,
+      "attempt": 2,
+      "state": "passed",
+      "frame": "mobile-en-dark-1440-attempt-2.png",
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "documentOverflow": false,
+        "scroll": 0,
+        "focus": "SUMMARY"
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "mobile",
+      "lang": "uk",
+      "theme": "light",
+      "width": 390,
+      "attempt": 1,
+      "state": "failed",
+      "frame": "mobile-uk-light-390-attempt-1.png",
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "documentOverflow": false,
+        "scroll": 0,
+        "focus": "SUMMARY"
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "mobile",
+      "lang": "uk",
+      "theme": "light",
+      "width": 390,
+      "attempt": 2,
+      "state": "passed",
+      "frame": "mobile-uk-light-390-attempt-2.png",
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "documentOverflow": false,
+        "scroll": 0,
+        "focus": "SUMMARY"
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "mobile",
+      "lang": "uk",
+      "theme": "light",
+      "width": 1440,
+      "attempt": 1,
+      "state": "failed",
+      "frame": "mobile-uk-light-1440-attempt-1.png",
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "documentOverflow": false,
+        "scroll": 0,
+        "focus": "SUMMARY"
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "mobile",
+      "lang": "uk",
+      "theme": "light",
+      "width": 1440,
+      "attempt": 2,
+      "state": "passed",
+      "frame": "mobile-uk-light-1440-attempt-2.png",
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "documentOverflow": false,
+        "scroll": 0,
+        "focus": "SUMMARY"
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "mobile",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 390,
+      "attempt": 1,
+      "state": "failed",
+      "frame": "mobile-uk-dark-390-attempt-1.png",
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "documentOverflow": false,
+        "scroll": 0,
+        "focus": "SUMMARY"
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "mobile",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 390,
+      "attempt": 2,
+      "state": "passed",
+      "frame": "mobile-uk-dark-390-attempt-2.png",
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "documentOverflow": false,
+        "scroll": 0,
+        "focus": "SUMMARY"
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "mobile",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1440,
+      "attempt": 1,
+      "state": "failed",
+      "frame": "mobile-uk-dark-1440-attempt-1.png",
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "documentOverflow": false,
+        "scroll": 0,
+        "focus": "SUMMARY"
+      },
+      "pageErrors": []
+    },
+    {
+      "host": "mobile",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1440,
+      "attempt": 2,
+      "state": "passed",
+      "frame": "mobile-uk-dark-1440-attempt-2.png",
+      "geometry": {
+        "clipped": [],
+        "covered": [],
+        "documentOverflow": false,
+        "scroll": 0,
+        "focus": "SUMMARY"
+      },
+      "pageErrors": []
+    }
+  ]
+}
