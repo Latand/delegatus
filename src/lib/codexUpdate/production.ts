@@ -48,17 +48,26 @@ async function stopAndVerifyGroup(child: ReturnType<typeof spawn>): Promise<void
   }
 }
 
-export function runUpdateCommand(binary: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number, cwd?: string): Promise<string> {
+export function runUpdateCommand(binary: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number, cwd?: string,
+  beforeDeadline?: (pid: number) => Promise<void>): Promise<string> {
+  if (beforeDeadline && process.env.NODE_ENV !== "test") throw new Error("command readiness seam is test-only");
   return new Promise((resolve, reject) => {
     const child = spawn(binary, args, { env, cwd, detached: true, stdio: ["ignore", "pipe", "pipe"] });
-    let output = "", diagnostic = "", bytes = 0, failure: Error | undefined;
+    let output = "", diagnostic = "", bytes = 0, failure: Error | undefined, closed = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const stop = () => { failure ??= new Error("command deadline or output bound"); signalDetachedProcessGroup(child, "SIGKILL"); };
-    const timer = setTimeout(stop, timeoutMs);
+    if (beforeDeadline && child.pid) {
+      void beforeDeadline(child.pid).then(() => { if (!failure && !closed) timer = setTimeout(stop, timeoutMs); }, error => {
+        failure ??= error instanceof Error ? error : new Error(String(error));
+        signalDetachedProcessGroup(child, "SIGKILL");
+      });
+    } else timer = setTimeout(stop, timeoutMs);
     child.stdout.on("data", (chunk: Buffer) => { bytes += chunk.length; if (bytes > 16 * 1024 * 1024) stop(); else output += chunk.toString(); });
     child.stderr.on("data", (chunk: Buffer) => { bytes += chunk.length; diagnostic = (diagnostic + chunk.toString()).slice(-16 * 1024); if (bytes > 16 * 1024 * 1024) stop(); });
     child.once("error", () => { failure ??= new Error("command could not start"); });
     child.once("close", async code => {
-      clearTimeout(timer);
+      closed = true;
+      if (timer) clearTimeout(timer);
       if (failure || code !== 0) {
         try { await stopAndVerifyGroup(child); }
         catch (error) { reject(new UpdateCommandFailure(`${failure?.message ?? `command exit ${code}`}; ${error instanceof Error ? error.message : "group cleanup failed"}`, diagnostic)); return; }

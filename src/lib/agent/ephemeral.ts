@@ -439,7 +439,7 @@ export async function runEphemeralAgent(
       const { waitForCodexProcess, withCodexCliLaunch } = await import("@/lib/codexUpdate/installation");
       launched = await withCodexCliLaunch(request.runtime?.command ?? built.command, async () => launch(), async result => {
         if (!result?.pid) return;
-        try { await waitForCodexProcess(result.pid); }
+        try { await waitForCodexProcess(result.handle); }
         catch (error) {
           const run = headlessRuns.get(request.key);
           if (run) await terminateHeadlessReviewerGroupAndWait(result.pid, run.identity, { ownedByLiveHandle: true, graceMs: 0, killWaitMs: 1_000 });

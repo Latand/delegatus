@@ -3,12 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { updateCodex, CHECK_INTERVAL_MS, newer, type UpdateNotice, type UpdatePorts } from "./update";
-import { installedTarget, updateDirectory, withCliSwitch, withCodexCliLaunch } from "./installation";
+import { installedTarget, updateDirectory, waitForCodexProcess, withCliSwitch, withCodexCliLaunch } from "./installation";
 import { codexProcessesPresent, runUpdateCommand } from "./production";
 import { isTerminalHighSignalEvent } from "@/lib/lifecycle/vocabulary";
 import { runHeadlessCodexOnce } from "@/lib/agent/headless";
 import { headlessFixtureTransport, setHeadlessSpawnForTests } from "@/lib/runtime/agentSignalSandbox";
 import { spawn } from "node:child_process";
+import { procBackend } from "@/lib/proc";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -313,6 +314,30 @@ test("process inventory includes native, wrappers and subagents; unknown invento
   expect(codexProcessesPresent("S bash bash -c echo codex\nR ps ps -A\nZ codex [codex] <defunct>")).toBeFalse();
   expect(() => codexProcessesPresent("")).toThrow();
   expect(() => codexProcessesPresent("unreadable")).toThrow();
+});
+
+test("a monitor wrapper is visible through its live Codex descendant", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-monitor-test-")); roots.push(root);
+  const engine = path.join(root, "codex"), monitor = path.join(root, "monitor.js"), pidFile = path.join(root, "engine.pid");
+  let enginePid: number | undefined;
+  fs.writeFileSync(engine, `#!${process.execPath}\nsetInterval(()=>{},1000);\n`, { mode: 0o700 });
+  fs.writeFileSync(monitor, `const {spawn}=require('node:child_process'),fs=require('node:fs');const child=spawn(process.argv[2],[],{stdio:'ignore'});child.unref();fs.writeFileSync(${JSON.stringify(pidFile)},String(child.pid));setInterval(()=>{},1000);`);
+  const wrapper = spawn(process.execPath, [monitor, engine], { detached: true, stdio: "ignore" });
+  try {
+    const deadline = Date.now() + 5_000;
+    while (!fs.existsSync(pidFile) && Date.now() < deadline) await Bun.sleep(5);
+    expect(fs.existsSync(pidFile)).toBeTrue();
+    await waitForCodexProcess(wrapper, 1_000);
+    enginePid = Number(fs.readFileSync(pidFile, "utf8"));
+    expect(procBackend.pidAlive(enginePid) && !procBackend.processExited(enginePid)).toBeTrue();
+  } finally {
+    try { process.kill(-wrapper.pid!, "SIGKILL"); } catch { /* the owned process group already exited */ }
+    const deadline = Date.now() + 5_000;
+    while ((procBackend.pidAlive(wrapper.pid!) && !procBackend.processExited(wrapper.pid!)
+      || enginePid !== undefined && procBackend.pidAlive(enginePid) && !procBackend.processExited(enginePid)) && Date.now() < deadline) await Bun.sleep(10);
+    expect(procBackend.pidAlive(wrapper.pid!) && !procBackend.processExited(wrapper.pid!)).toBeFalse();
+    if (enginePid !== undefined) expect(procBackend.pidAlive(enginePid) && !procBackend.processExited(enginePid)).toBeFalse();
+  }
 });
 test("the bounded command runner handles success and refusal without inherited credentials", async () => {
   expect(await runUpdateCommand(process.execPath, ["-e", "process.stdout.write('ok')"], { NODE_ENV: "test" }, 5000)).toBe("ok");

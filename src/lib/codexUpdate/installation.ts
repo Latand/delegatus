@@ -3,6 +3,7 @@ import path from "node:path";
 import { withFileTransaction } from "@/lib/state/fileTransaction";
 import { procBackend } from "@/lib/proc";
 import { findAgentBinary } from "../../../bin/agent-binaries.mjs";
+import { agentSignalDomainAlive, signalDomain } from "@/lib/runtime/agentSignalSandbox";
 
 export function updateDirectory(binary: string): string {
   return path.join(path.dirname(binary), ".delegatus-codex");
@@ -28,14 +29,35 @@ export function withCliSwitch<T>(binary: string, operation: () => T | Promise<T>
 
 /** Agents and account/voice clients share the updater's cross-process lock.
  * Hold it through initialization, including delayed namespace execs. */
-export async function waitForCodexProcess(pid: number, timeoutMs = 15_000): Promise<void> {
+export async function waitForCodexProcess(handle: number | { pid?: number }, timeoutMs = 15_000): Promise<void> {
+  const pid = typeof handle === "number" ? handle : handle.pid;
+  if (!pid) return;
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     if (!procBackend.pidAlive(pid) || procBackend.processExited(pid)) return;
-    const argv = procBackend.readArgv(pid).slice(0, 3).map(argument => path.basename(argument).toLowerCase());
-    if (argv.some(argument => argument === "codex" || argument === "codex.exe" || argument === "codex.js")) return;
+    // Signal-sandbox receipts authenticate the native engine behind the
+    // persistent Python monitor. Other supported wrappers are resolved by
+    // walking only descendants of the process we launched.
+    try {
+      const domain = signalDomain(typeof handle === "number" ? { pid } : handle);
+      if (domain && agentSignalDomainAlive(domain)) return;
+    } catch { /* malformed receipts remain unobservable */ }
+    const parents = procBackend.ppidMap();
+    const descendants: Set<number> = new Set([pid]);
+    for (;;) {
+      let changed = false;
+      for (const [child, parent] of parents) if (descendants.has(parent) && !descendants.has(child)) {
+        descendants.add(child); changed = true;
+      }
+      if (!changed) break;
+    }
+    for (const candidatePid of Array.from(descendants) as number[]) {
+      if (candidatePid !== pid && (!procBackend.pidAlive(candidatePid) || procBackend.processExited(candidatePid))) continue;
+      const argv = procBackend.readArgv(candidatePid).map(argument => path.basename(argument).toLowerCase());
+      if (argv.some(argument => /^codex(?:$|[.-])/.test(argument))) return;
+    }
     if (Date.now() >= deadline) throw new Error("Codex process did not become observable after launch");
-    await new Promise<void>(resolve => setTimeout(resolve, 10));
+    await new Promise<void>(resolve => setTimeout(resolve, 100));
   }
 }
 

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { productionUpdatePorts, runUpdateCommand, UpdateCommandFailure } from "./production";
 import { procBackend } from "@/lib/proc";
+import { generateCodexSchemas } from "@/lib/accounts/codexPinnedProtocol";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -52,6 +53,34 @@ test("probe reports the exact failed boundary", async () => {
   await expect(ports.probe("0.163.0", stub)).rejects.toMatchObject({ check: "native queue fixture" });
 });
 
+test("schema generation waits for failed descendants to stop before rejecting", async () => {
+  const root = directory(), pidFile = path.join(root, "schema-descendant.pid"), stub = path.join(root, "codex");
+  fs.writeFileSync(stub, `#!${process.execPath}
+const {spawn}=require('node:child_process'),fs=require('node:fs');const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});child.unref();fs.writeFileSync(${JSON.stringify(pidFile)},String(child.pid));process.exit(23);
+`, { mode: 0o700 });
+  try {
+    await expect(generateCodexSchemas(stub, { NODE_ENV: "test" }, { timeoutMs: 5_000 })).rejects.toThrow("failed (exit 23)");
+    const pid = Number(fs.readFileSync(pidFile, "utf8"));
+    expect(procBackend.pidAlive(pid) && !procBackend.processExited(pid)).toBeFalse();
+  } finally {
+    if (fs.existsSync(pidFile)) { const pid = Number(fs.readFileSync(pidFile, "utf8")); try { process.kill(pid, "SIGKILL"); } catch { /* already stopped */ } }
+  }
+});
+
+test("schema generation deadline waits for descendant cleanup before rejecting", async () => {
+  const root = directory(), pidFile = path.join(root, "schema-timeout-descendant.pid"), stub = path.join(root, "codex");
+  fs.writeFileSync(stub, `#!${process.execPath}
+const {spawn}=require('node:child_process'),fs=require('node:fs');const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});child.unref();fs.writeFileSync(${JSON.stringify(pidFile)},String(child.pid));setInterval(()=>{},1000);
+`, { mode: 0o700 });
+  try {
+    await expect(generateCodexSchemas(stub, { NODE_ENV: "test" }, { timeoutMs: 200 })).rejects.toThrow("failed (timed out)");
+    const pid = Number(fs.readFileSync(pidFile, "utf8"));
+    expect(procBackend.pidAlive(pid) && !procBackend.processExited(pid)).toBeFalse();
+  } finally {
+    if (fs.existsSync(pidFile)) { const pid = Number(fs.readFileSync(pidFile, "utf8")); try { process.kill(pid, "SIGKILL"); } catch { /* already stopped */ } }
+  }
+});
+
 test("a failed command kills and verifies an unrefed descendant before rejecting", async () => {
   const root = directory(), pidFile = path.join(root, "descendant.pid");
   const source = `const {spawn}=require('node:child_process');const fs=require('node:fs');const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});child.unref();fs.writeFileSync(${JSON.stringify(pidFile)},String(child.pid));process.exit(23);`;
@@ -63,7 +92,11 @@ test("a failed command kills and verifies an unrefed descendant before rejecting
 test("a timed out command kills and verifies an unrefed descendant before rejecting", async () => {
   const root = directory(), pidFile = path.join(root, "timeout-descendant.pid");
   const source = `const {spawn}=require('node:child_process');const fs=require('node:fs');const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});child.unref();fs.writeFileSync(${JSON.stringify(pidFile)},String(child.pid));setInterval(()=>{},1000);`;
-  await expect(runUpdateCommand(process.execPath, ["-e", source], { NODE_ENV: "test" }, 200)).rejects.toThrow("deadline or output bound");
+  await expect(runUpdateCommand(process.execPath, ["-e", source], { NODE_ENV: "test" }, 200, undefined, async () => {
+    const deadline = Date.now() + 5_000;
+    while (!fs.existsSync(pidFile) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
+    if (!fs.existsSync(pidFile)) throw new Error("timeout fixture did not become ready");
+  })).rejects.toThrow("deadline or output bound");
   const pid = Number(fs.readFileSync(pidFile, "utf8"));
   expect(procBackend.pidAlive(pid) && !procBackend.processExited(pid)).toBeFalse();
 });

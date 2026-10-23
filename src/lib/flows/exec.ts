@@ -62,7 +62,7 @@ export async function startHeadlessReview(
       key, built, cwd, stdoutPath: stdoutPathFor(flowId, round), stderrPath: stderrPathFor(flowId, round), timeoutMs, runtime, onExit: signalCompletion,
     }), async result => {
       if (!result?.pid) return;
-      try { await waitForCodexProcess(result.pid); }
+      try { await waitForCodexProcess(result.handle); }
       catch (error) {
         const run = runs.get(key);
         if (run) await terminateHeadlessReviewerGroupAndWait(result.pid, run.identity, { ownedByLiveHandle: true, graceMs: 0, killWaitMs: 1_000 });

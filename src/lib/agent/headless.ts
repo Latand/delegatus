@@ -417,7 +417,7 @@ export function launchDetached(input: {
   runtime?: HeadlessReviewRuntime;
   onTimeout?: () => void;
   onExit: (run: LiveRun) => void;
-}): { pid: number | null; identity: string | null } | null {
+}): { pid: number | null; identity: string | null; handle: ChildProcess } | null {
   if (headlessRuns.has(input.key)) return null;
   const stdoutFd = fs.openSync(input.stdoutPath, "w");
   const stderrFd = fs.openSync(input.stderrPath, "w");
@@ -485,7 +485,7 @@ export function launchDetached(input: {
     killOwnedRun(run);
     input.onExit(run);
   });
-  return { pid: child.pid ?? null, identity };
+  return { pid: child.pid ?? null, identity, handle: child };
 }
 
 export interface HeadlessCodexRunRequest {
@@ -567,7 +567,7 @@ export async function runHeadlessCodexOnce(request: HeadlessCodexRunRequest): Pr
     runtime: request.runtime, onTimeout: () => { timedOut = true; }, onExit: settle,
   }), async result => {
     if (!result?.pid) return;
-    try { await waitForCodexProcess(result.pid); }
+    try { await waitForCodexProcess(result.handle); }
     catch (error) {
       const run = headlessRuns.get(request.key);
       if (run) await terminateHeadlessReviewerGroupAndWait(result.pid, run.identity, { ownedByLiveHandle: true, graceMs: 0, killWaitMs: 1_000 });
