@@ -78,12 +78,21 @@ function fixture(engine: "codex" | "claude" = "codex") {
   let pipelineReads = 0;
   const deps = {
     ...retirement, runtimeIdleKillMatches, sameRecordedProcessIdentity, blockingHostActivityFlags, registryRowsMatching,
-    stopped: false, state, queue,
+    stopped: false, state, queue, CONTROLLER_STOP_SOURCE: "controller-stop",
     client: { readSession: async () => session, operationStatus: async () => ({ receipt: { status: "delivering", retirementClaim: claim } }) },
     registry: { readOnlySnapshot: () => snapshot, conversation: () => conversation,
       deliveryWriteOrBusy: async (_context: unknown, write: () => unknown) => write(),
       terminateInactiveStructuredHost: () => false,
       recordStructuredTerminationSurvivors: (_key: unknown, _ref: unknown, identities: unknown[]) => { entry.structuredTerminationSurvivors = identities; return true; },
+      captureStructuredTerminationSurvivors: (_key: unknown, _ref: unknown, identities: unknown[]) => {
+        const previous = entry.structuredTerminationSurvivors;
+        entry.structuredTerminationSurvivors = identities;
+        return { previous };
+      },
+      withdrawStructuredTerminationSurvivors: (_key: unknown, _ref: unknown, capture: { previous: unknown[] }) => {
+        entry.structuredTerminationSurvivors = capture.previous;
+        return true;
+      },
       terminateStructuredHost: () => true },
     findPipelineRecord: () => { pipelineReads++; return pipeline; },
     conversationIdsResolvingTo: (_snapshot: unknown, id: string) => [id],
