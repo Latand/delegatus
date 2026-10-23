@@ -135,11 +135,12 @@ export function McpCallCard({
   event: ToolEvent;
   availableConversationIds?: ReadonlySet<string>;
 }) {
+  const { t } = useLocale();
   const mcp = event.mcp;
   const result = mcp?.result;
   const description = useMemo(
-    () => describeMcpCall(mcp?.toolName ?? event.tool, mcp?.args ?? {}, result),
-    [event.tool, mcp?.args, mcp?.toolName, result],
+    () => describeMcpCall(mcp?.toolName ?? event.tool, mcp?.args ?? {}, result, t),
+    [event.tool, mcp?.args, mcp?.toolName, result, t],
   );
   const conversationAvailability = useConversationAvailability(availableConversationIds);
   const state = event.status === "run" ? "pending" : event.status === "err" ? "error" : "success";

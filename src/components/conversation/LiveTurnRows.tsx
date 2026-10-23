@@ -289,8 +289,8 @@ function LiveMcpRow({
   const { t } = useLocale();
   const availability = useConversationAvailability();
   const description = useMemo(
-    () => describeMcpCall(identity.toolName, tool.args),
-    [identity.toolName, tool.args],
+    () => describeMcpCall(identity.toolName, tool.args, undefined, t),
+    [identity.toolName, tool.args, t],
   );
   const state = liveCallState(tool.status);
   const tone = liveStateTone(state);

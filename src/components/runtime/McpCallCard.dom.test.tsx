@@ -196,3 +196,26 @@ test("shows no token number while the call runs or when the transcript gave none
   expect(render(toolEvent(), new Set()).querySelector("[data-context-tokens]")).toBeNull();
   expect(render(toolEvent({ status: "ok" }), new Set()).querySelector("[data-context-tokens]")).toBeNull();
 });
+
+test("the title and the pending verb follow the interface language, and switch with it (#2250)", () => {
+  const event = toolEvent({
+    tool: "create_task",
+    mcp: { serverName: "viewer", toolName: "create_task", args: { project: "viewer", text: "Audit MCP cards" }, result: null },
+  });
+  const container = render(event, new Set());
+  const title = () => container.querySelector<HTMLElement>("[data-mcp-title]")!;
+  const pending = () => container.querySelector<HTMLElement>("[role=status]")!;
+  expect(title().textContent).toBe("Creating task: Audit MCP cards");
+  expect(pending().getAttribute("aria-label")).toBe("Creating…");
+  setLocale("uk");
+  try {
+    flushSync(() => root!.render(<McpCallCard event={event} availableConversationIds={new Set()} />));
+    expect(title().textContent).toBe("Створення задачі: Audit MCP cards");
+    expect(title().getAttribute("title")).toBe("Створення задачі: Audit MCP cards");
+    expect(pending().getAttribute("aria-label")).toBe("Створення…");
+  } finally {
+    setLocale("en");
+  }
+  flushSync(() => root!.render(<McpCallCard event={event} availableConversationIds={new Set()} />));
+  expect(title().textContent).toBe("Creating task: Audit MCP cards");
+});

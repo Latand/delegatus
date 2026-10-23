@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
+import { translate, type TFunction } from "@/lib/i18n/core";
+
 import { describeMcpCall, isViewerMcpServer } from "./presentation";
+
+const uk: TFunction = (key, params) => translate("uk", key, params);
 
 describe("describeMcpCall", () => {
   test("describes a spawned reviewer and links its durable conversation", () => {
@@ -67,7 +71,37 @@ describe("describeMcpCall", () => {
       expect(description.icon).toBe(icon);
       expect(description.title.startsWith(prefix)).toBe(true);
       expect(description.verb.length).toBeGreaterThan(0);
+      /* The Ukrainian interface gets its own sentence and verb, never the English one (#2250). */
+      const localized = describeMcpCall(tool, args, undefined, uk);
+      expect(localized.icon).toBe(icon);
+      expect(localized.title.startsWith(prefix)).toBe(false);
+      expect(localized.title).not.toMatch(/\b(Creating|Sending|Updating|Listing|Reading|Opening|Linking|Asking|Clearing|Flagging|Searching|Deploying|Checking|Polling|Interrupting|Resuming|Pausing|Rolling)\b/);
+      expect(localized.verb).not.toBe(description.verb);
+      expect(localized.links).toEqual(description.links);
     }
+  });
+
+  test("writes the issue's rows in Ukrainian, ids and the operator's own text kept as written", () => {
+    expect(describeMcpCall("create_task", { project: "viewer", text: "Audit MCP cards" }, { taskId: "task-431" }, uk)).toMatchObject({
+      verb: "Створення",
+      title: "Створення задачі: Audit MCP cards",
+    });
+    expect(describeMcpCall("link_task_to_pipeline", { taskId: "task-a", pipelineId: "pipe-a" }, undefined, uk).title).toBe("Прив’язка задачі до пайплайна: task-a → pipe-a");
+    expect(describeMcpCall("link_task_to_pipeline", {}, undefined, uk).title).toBe("Прив’язка задачі до пайплайна: задача → пайплайн");
+    expect(describeMcpCall("list_pipelines", {}, undefined, uk)).toMatchObject({ verb: "Список", title: "Список пайплайнів" });
+    expect(describeMcpCall("list_pipelines", { project: "viewer" }, undefined, uk).title).toBe("Список пайплайнів: viewer");
+    expect(describeMcpCall("pipeline_action", { pipelineId: "pipe-a", action: "resume" }, undefined, uk).title).toBe("Відновлення пайплайна pipe-a");
+    expect(describeMcpCall("update_task", { taskId: "task-a", status: "done" }, undefined, uk).title).toBe("Оновлення задачі task-a: готово");
+    expect(describeMcpCall("request_attention", { target: { kind: "task", taskId: "task-a" }, intent: "open" }, undefined, uk).title).toBe("Прохання відкрити: задача");
+    expect(describeMcpCall("seat_tick_settings", { project: "viewer", wakeIntervalMinutes: 15 }, { changed: true }, uk).title).toBe("Налаштування тікера для viewer: одне пробудження на 15 хв");
+    expect(describeMcpCall("conversation_migration", { conversationId: "conversation_a", action: "rollback" }, undefined, uk).title).toBe("Відкат міграції розмови для conversation_a");
+    expect(describeMcpCall("future_tool", {}, undefined, uk)).toEqual({
+      icon: "tool",
+      verb: "Виконання",
+      title: "Виконання інструмента MCP: future_tool",
+      subtitle: "",
+      links: [],
+    });
   });
 
   test("unknown tools use a stable generic fallback", () => {
