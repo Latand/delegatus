@@ -7,7 +7,9 @@
  * terminal launch unless `DELEGATUS_DEBUG=1` asks for diagnostics. Journal and
  * non-TTY launches clear that choice. Other entry points (`bun dev`, Docker)
  * print diagnostics by default. Loop-gap and performance-summary evidence
- * always bypasses quiet mode. Errors never go through here.
+ * always bypasses quiet mode; on a packaged install its volume is bounded
+ * instead (`LLV_LOOP_DIAGNOSTICS`, src/lib/viewerLoopMonitor.ts). Errors never
+ * go through here.
  */
 export const QUIET_DIAGNOSTICS_ENV = "LLV_QUIET_DIAGNOSTICS";
 

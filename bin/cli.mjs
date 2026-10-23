@@ -93,7 +93,11 @@ Options:
       --new-token      Create a new access key
       --new-operator-token  Rotate the operator spawn capability
   -v, --version        Show the version
-  -h, --help           Show this help`,
+  -h, --help           Show this help
+
+Commands:
+  stop --all           Stop the Viewer, the runtime host and every agent
+                       host Delegatus started`,
     badPort: (value) => `Invalid port: ${value}`,
     flagNeedsValue: (flag) => `Option ${flag} requires a value.`,
     hostnameNeedsValue: () => "Option --hostname requires a value.",
@@ -144,7 +148,11 @@ Options:
       --new-token      Створити новий ключ доступу
       --new-operator-token  Оновити операторський ключ запуску агентів
   -v, --version        Показати версію
-  -h, --help           Показати довідку`,
+  -h, --help           Показати довідку
+
+Команди:
+  stop --all           Зупинити Viewer, runtime host і кожен хост агента,
+                       який запустив Delegatus`,
     badPort: (value) => `Некоректний порт: ${value}`,
     flagNeedsValue: (flag) => `Опція ${flag} потребує значення.`,
     hostnameNeedsValue: () => "Опція --hostname потребує значення.",
@@ -197,6 +205,8 @@ const NEXT_STARTUP_LINE = /^\s*(?:▲ Next\.js |- (?:Local|Network|Environments|
 const HELD_OUTPUT_LIMIT_BYTES = 1024 * 1024;
 /* The name `src/lib/startupDiagnostics.ts` reads. */
 const QUIET_DIAGNOSTICS_ENV = "LLV_QUIET_DIAGNOSTICS";
+/* The name `src/lib/viewerLoopMonitor.ts` reads. */
+const LOOP_DIAGNOSTICS_ENV = "LLV_LOOP_DIAGNOSTICS";
 
 function withoutNextStartupLines(text) {
   return text
@@ -1044,6 +1054,18 @@ async function main() {
     });
     return;
   }
+  /* `delegatus stop --all`: stops every recorded launcher on this state
+     directory, the Viewer and runtime host each started, and every agent host
+     the registry records, each by its recorded identity (bin/stop-all.mjs).
+     It starts nothing. */
+  if (process.argv[2] === "stop") {
+    const { runStopCommand } = await import("./stop-all.mjs");
+    process.exitCode = await runStopCommand(process.argv.slice(3), {
+      stateDirectory: cliRuntimeHostConfig(launcherCheckout || findPackageRoot(cliDir)).stateDirectory,
+      lang: LANG,
+    });
+    return;
+  }
   const options = parseArgs(process.argv.slice(2));
   /* Phone access turned on from the setup guide is remembered as a file; its
      presence stands for --tailscale. */
@@ -1129,6 +1151,13 @@ async function main() {
   const quiet = !debug && process.stdout.isTTY === true && process.env.JOURNAL_STREAM === undefined;
   if (quiet) process.env[QUIET_DIAGNOSTICS_ENV] = "1";
   else delete process.env[QUIET_DIAGNOSTICS_ENV];
+  /* A packaged install's diagnostics go wherever the person who started it
+     sends them, often a file nothing rotates: its children bound the
+     loop-gap and performance-summary volume (src/lib/viewerLoopMonitor.ts).
+     A checkout, which is how a service runs from its repository, keeps every
+     line in its journal as before, and so does DELEGATUS_DEBUG=1. */
+  if (!checkout && !debug) process.env[LOOP_DIAGNOSTICS_ENV] = "bounded";
+  else delete process.env[LOOP_DIAGNOSTICS_ENV];
 
   /* Before anything can fail on a port the old unit still holds. */
   const legacyNotice = legacySystemdNotice(findLegacySystemdUnits(), LANG);
@@ -1567,7 +1596,7 @@ function handOffLauncher({ checkout, entry, record }) {
       if (child.pid) {
         try { recorded = JSON.parse(readFileSync(record, "utf8"))?.launcher?.pid === child.pid; } catch { /* no record */ }
       }
-      const oneShot = process.argv[2] === "team" || process.argv.slice(2).some((arg) => ["-v", "--version", "-h", "--help"].includes(arg));
+      const oneShot = ["team", "stop"].includes(process.argv[2]) || process.argv.slice(2).some((arg) => ["-v", "--version", "-h", "--help"].includes(arg));
       if (!recorded && !forwarded && !oneShot) {
         console.error(`[self-update] installed launcher could not start (${spawnError?.message || `exit ${status}`}); using the checkout launcher.`);
         done(false);
@@ -1629,7 +1658,7 @@ try {
   const custodyModule = join(cliDir, "launcher-credentials.mjs");
   if (existsSync(custodyModule)) {
     const { restoreLauncherCredentials } = await import("./launcher-credentials.mjs");
-    const oneShot = process.argv[2] === "team" || process.argv.slice(2).some((arg) => ["-v", "--version", "-h", "--help"].includes(arg));
+    const oneShot = ["team", "stop"].includes(process.argv[2]) || process.argv.slice(2).some((arg) => ["-v", "--version", "-h", "--help"].includes(arg));
     restoreLauncherCredentials(launcherCheckout || findPackageRoot(cliDir), process.env, { launch: !oneShot });
   } else if (process.env.LLV_LAUNCHER_CREDENTIAL_HANDOFF === "1") throw new Error("This launcher cannot read protected handoff credentials; keep the current launcher running.");
   const selectedLauncher = releaseLauncher();

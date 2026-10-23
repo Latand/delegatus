@@ -2,7 +2,7 @@
 
 import {
   Activity, AudioLines, Bell, Brain, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleArrowUp, Compass, KeyRound, Languages, LifeBuoy, Link2,
-  ListChecks, LogOut, MessagesSquare, Mic, QrCode, Route, Settings, ShieldCheck, SlidersHorizontal, Users, type LucideIcon,
+  ListChecks, LogOut, MessagesSquare, Mic, Power, QrCode, Route, Settings, ShieldCheck, SlidersHorizontal, Users, type LucideIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
@@ -29,7 +29,7 @@ import { useTeamView } from "@/components/team/teamClient";
 import { openTelemetrySettings } from "@/components/telemetry/TelemetrySettings";
 import { showPhoneVoice, usePhoneVoice } from "@/components/voiceCompanion/phoneVoiceStore";
 import { openVoiceCompanionSettings } from "@/components/voiceCompanion/VoiceCompanionSetting";
-import { useLocale } from "@/lib/i18n";
+import { useLocale, type MessageKey } from "@/lib/i18n";
 import type { KeyId } from "@/lib/keys/shared";
 import { WorkerLimitSettingsRow } from "@/components/orchestrator/WorkerLimitChip";
 
@@ -46,8 +46,10 @@ import { HEADER_LAYOUTS, type HeaderItem } from "./headerMenuModel";
 type View = "rest" | "settings" | "memory" | "keys" | "keysImport";
 /** The page a back row returns to. */
 const PARENT: Record<Exclude<View, "rest">, View> = { settings: "rest", memory: "settings", keys: "settings", keysImport: "keys" };
-type PhoneView = View | "help" | "rules";
-const PHONE_PARENT: Record<Exclude<PhoneView, "rest">, PhoneView> = { ...PARENT, help: "rest", rules: "rest" };
+type PhoneView = View | "help" | "rules" | "stop";
+/* The phone's «Stop Delegatus» asks on a page of its own: under its row the
+   question would make the Settings page scroll. */
+const PHONE_PARENT: Record<Exclude<PhoneView, "rest">, PhoneView> = { ...PARENT, help: "rest", rules: "rest", stop: "settings" };
 
 /** Ends this browser's member session and goes to the sign-in page. */
 async function signOutMember(): Promise<void> {
@@ -74,6 +76,78 @@ const TwoLines = ({ title, state }: { title: string; state: ReactNode }) => (
     {state}
   </span>
 );
+
+type StopPhase = { phase: "confirm" | "sending" | "started" } | { phase: "refused"; message: MessageKey };
+
+const STOP_REFUSALS: Record<string, MessageKey> = {
+  "no-launcher": "headerMenu.stopAll.noLauncher",
+  unavailable: "headerMenu.stopAll.unavailable",
+  owner_required: "headerMenu.stopAll.ownerOnly",
+};
+
+/** «Stop Delegatus» (`delegatus stop --all`, src/lib/stopAll.ts) is the owner's alone on a team install. */
+function useMayStop(): boolean {
+  const team = useTeamView({ load: false });
+  return team?.mode !== "team" || team.me?.role === "owner";
+}
+
+/** The question and, once asked, the answer, which stays in place: the page
+    that asked stops answering soon after. */
+function StopAllQuestion({ phone = false, onCancel, onPhase }: { phone?: boolean; onCancel: () => void; onPhase?: (phase: StopPhase["phase"]) => void }) {
+  const { t, locale } = useLocale();
+  const [state, setState] = useState<StopPhase>({ phase: "confirm" });
+  useEffect(() => { onPhase?.(state.phase); }, [state.phase, onPhase]);
+  const stop = async () => {
+    setState({ phase: "sending" });
+    try {
+      const response = await fetch("/api/stop-all", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ confirm: true, lang: locale }) });
+      if (response.status === 202) { setState({ phase: "started" }); return; }
+      const body = await response.json().catch(() => ({})) as { code?: unknown };
+      setState({ phase: "refused", message: (typeof body.code === "string" && STOP_REFUSALS[body.code]) || "headerMenu.stopAll.failed" });
+    } catch {
+      setState({ phase: "refused", message: "headerMenu.stopAll.failed" });
+    }
+  };
+  const asking = state.phase === "confirm" || state.phase === "sending";
+  const text = asking ? t("headerMenu.stopAll.confirm") : state.phase === "started" ? t("headerMenu.stopAll.started") : state.phase === "refused" ? t(state.message) : "";
+  const button = phone
+    ? "inline-flex min-h-11 items-center justify-center rounded-control px-3 text-body font-semibold disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+    : `inline-flex min-h-[28px] items-center rounded-[6px] px-2 py-0.5 text-[12px] font-semibold disabled:opacity-60 ${FOCUS}`;
+  return (
+    <div data-stop-all-phase={state.phase} className={phone ? "px-4 py-3" : `${WITHIN} ml-2 px-2 pb-1.5`}>
+      <p data-stop-all-text="" role={asking ? undefined : "status"} className={`${phone ? "text-body" : "text-[12px]"} font-normal leading-snug text-secondary`}>{text}</p>
+      {asking ? (
+        <div className="mt-1.5 flex flex-wrap gap-1.5">
+          <button type="button" data-stop-all-go="" disabled={state.phase === "sending"} className={`${button} bg-danger text-white hover:opacity-90`} onClick={() => void stop()}>
+            {state.phase === "sending" ? t("headerMenu.stopAll.stopping") : t("headerMenu.stopAll.go")}
+          </button>
+          <button type="button" data-stop-all-cancel="" disabled={state.phase === "sending"} className={`${button} text-primary hover:bg-sunken`} onClick={onCancel}>
+            {t("headerMenu.stopAll.cancel")}
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** The desktop row: the question opens under it. A stop once asked keeps its answer there. */
+function StopAllRow() {
+  const { t } = useLocale();
+  const mayStop = useMayStop();
+  const [open, setOpen] = useState(false);
+  const [held, setHeld] = useState(false);
+  const onPhase = useCallback((phase: StopPhase["phase"]) => setHeld(phase === "sending" || phase === "started"), []);
+  if (!mayStop) return null;
+  return (
+    <div data-header-menu-stop-all="">
+      <button type="button" data-rail-menu-stop-all="" aria-expanded={open} className={ROW} onClick={() => { if (!held) setOpen((was) => !was); }}>
+        <Icon icon={Power} />
+        <Title>{t("headerMenu.stopAll")}</Title>
+      </button>
+      {open ? <StopAllQuestion onCancel={() => setOpen(false)} onPhase={onPhase} /> : null}
+    </div>
+  );
+}
 
 /** The desktop panel's contents; the trigger and the dismissal stay with the rail's header. */
 export function HeaderMenuPanel({ project, onClose }: { project: string | null; onClose: () => void }) {
@@ -237,6 +311,7 @@ export function HeaderMenuPanel({ project, onClose }: { project: string | null; 
                 <button type="button" data-rail-menu-interface-walk="" className={`${ROW} ${WITHIN}`} onClick={act(startInterfaceWalk)}><Icon icon={Route} /><Title>{t("onboarding.menu.walk")}</Title></button>
               </div>
             ) : null}
+            <StopAllRow />
             {teamMe ? (
               <button type="button" data-rail-menu-sign-out="" className={`${ROW} text-secondary hover:text-primary`} onClick={act(() => void signOutMember())}>
                 <Icon icon={LogOut} />
@@ -299,15 +374,16 @@ function PhoneMenu({ title, project, nav, create = [], board, rules = [], onClos
     if (focus) document.querySelector<HTMLElement>(`[data-mobile2-sheet='menu'] [data-mobile2-menu-row='${focus}']`)?.focus();
   }, [view, focus]);
   const go = (next: Exclude<PhoneView, "rest">) => { setFocusKey(null); setPlace({ view: next, focus: "back" }); };
-  const back = () => { if (view !== "rest") setPlace({ view: PHONE_PARENT[view], focus: view === "keysImport" ? "back" : view }); };
+  const back = () => { if (view !== "rest") setPlace({ view: PHONE_PARENT[view], focus: view === "keysImport" ? "back" : view === "stop" ? "stop-all" : view }); };
   const close = onClose;
   /* The rows the phone has always had for these entries, with their handlers, icons and test ids. */
   const [guide, walk, mapping, dictation] = onboardingMobileMenuEntries(t, close);
   const activity = activityMobileMenuEntry(t, nav);
   const team = teamMobileMenuEntry(t, nav);
   const update = selfUpdateMobileMenuEntry(t, close);
+  const mayStop = useMayStop();
   const settingsItems = HEADER_LAYOUTS.phone.rows.flatMap((row) => (row.kind === "page" && row.id === "settings" ? row.items : []))
-    .filter((item) => (item !== "memory" || project) && (item !== "awake" || keepAwake));
+    .filter((item) => (item !== "memory" || project) && (item !== "awake" || keepAwake) && (item !== "stop" || mayStop));
   const helpItems = [guide, walk].filter((entry): entry is Extract<MobileMenuEntry, { kind: "row" }> => entry?.kind === "row");
 
   const backRow = (label: string): MobileMenuEntry => ({
@@ -359,6 +435,8 @@ function PhoneMenu({ title, project, nav, create = [], board, rules = [], onClos
         return row("external-relay", MessagesSquare, t("headerMenu.relay"), () => { close(); openExternalRelaySettings(); });
       case "ping":
         return row("ping", ShieldCheck, t("headerMenu.ping"), () => { close(); openTelemetrySettings(); });
+      case "stop":
+        return row("stop-all", Power, t("headerMenu.stopAll"), () => go("stop"), chevron);
       default:
         return null;
     }
@@ -371,6 +449,7 @@ function PhoneMenu({ title, project, nav, create = [], board, rules = [], onClos
   else if (view === "keysImport") entries = [backRow(t("keys.import")), { kind: "custom", key: "keys-import-page", node: <KeysImportPage size="sheet" /> }];
   else if (view === "help") entries = [backRow(t("headerMenu.help")), ...helpItems];
   else if (view === "rules") entries = [backRow(t("headerMenu.rules")), ...rules];
+  else if (view === "stop") entries = [backRow(t("headerMenu.stopAll")), { kind: "custom", key: "stop-all-page", node: <StopAllQuestion phone onCancel={back} /> }];
   else {
     /* A row of the sheet drawn as a cell: its icon over a short caption, its full label for a screen reader. */
     const cell = (entry: MobileMenuEntry | undefined, caption?: string) => entry?.kind === "row" ? (
