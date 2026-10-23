@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { checkEnvironment, environmentFingerprint, GateCache, installedFingerprint, workingInputsFingerprint } from "./gate-cache";
+import { checkEnvironment, environmentFingerprint, GateCache, gateToolFiles, installedFingerprint, workingInputsFingerprint } from "./gate-cache";
 import { agentEnvironments } from "./local-gate.fixture";
 import { pipelinePublicationHookEnv } from "../src/lib/pipelines/git";
 import { systemBootEpoch } from "../src/lib/processIdentity";
@@ -112,6 +112,41 @@ test("an installed tool edit invalidates the fingerprint without a version or lo
   const before = installedFingerprint(root);
   writeFileSync(script, "export const result = false;");
   expect(installedFingerprint(root)).not.toBe(before);
+});
+
+test("JSON and interpreter lines stay bound without being parsed as module code", () => {
+  const root = fixture();
+  mkdirSync(path.join(root, "scripts"));
+  writeFileSync(path.join(root, "scripts", "local-gate.ts"), 'import "./child";');
+  const child = path.join(root, "scripts", "child.ts");
+  const contents = 'import "../policy.json"; export const value = true;';
+  writeFileSync(child, `#!/usr/bin/env bun\n${contents}`);
+  const policy = path.join(root, "policy.json");
+  writeFileSync(policy, '{"enabled":true,"limits":[1,2]}');
+  const inputs = gateToolFiles(root);
+  expect(inputs).toContain("policy.json");
+  expect(inputs).toContain(path.join("scripts", "child.ts"));
+  expect(inputs.map(file => path.win32.normalize(file))).toContain(path.win32.join("scripts", "child.ts"));
+  const modulePath = path.join(import.meta.dir, "gate-cache.ts");
+  const run = (body: string) => {
+    const source = `import path from "node:path";
+      import { GateCache, gateToolFiles, fileFingerprint, fingerprint } from ${JSON.stringify(modulePath)};
+      const root = ${JSON.stringify(root)};
+      const key = fingerprint(gateToolFiles(root).map(file => [file, fileFingerprint(path.join(root, file))]));
+      const cache = new GateCache(path.join(root, "receipts"), value => value?.passed === true);
+      ${body}`;
+    const result = Bun.spawnSync([process.execPath, "-e", source], { stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 15_000 });
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    return result.stdout.toString().trim();
+  };
+  expect(run('cache.write(key, { passed: true }); console.log(cache.read(key)?.passed);')).toBe("true");
+  writeFileSync(policy, '{"enabled":false,"limits":[1,2]}');
+  expect(run("console.log(cache.read(key));")).toBe("undefined");
+  expect(run('cache.write(key, { passed: true }); console.log(cache.read(key)?.passed);')).toBe("true");
+  writeFileSync(child, `#!/usr/bin/env node\n${contents}`);
+  expect(run("console.log(cache.read(key));")).toBe("undefined");
+  writeFileSync(child, "export const broken = ;");
+  expect(() => gateToolFiles(root)).toThrow();
 });
 
 test("a shared install flipping group or other bits keeps the fingerprint; the owner's execute bit changes it", () => {

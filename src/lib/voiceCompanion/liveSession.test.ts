@@ -2283,6 +2283,22 @@ test("a report due during dictation waits for the request's tool and answer befo
   } finally { release(); await f.service.drain(s.sessionId); await f.service.close(s.sessionId); }
 });
 
+test("an unfinished operator utterance keeps a newly due report unhanded", async () => {
+  const f = fixture("synthetic-credential", undefined, () => Date.parse("2026-10-11T12:05:00Z"));
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  try {
+    f.provider.replay(s.providerId, said("Ask the orchestrator", 100));
+    await f.service.drain(s.sessionId);
+    f.reports.push({ id: "operator-still-speaking", seq: 1, project: "fixture", at: "2026-10-11T12:00:00Z", class: "completed", body: "DO_NOT_INTERRUPT",
+      origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+
+    await f.service.events(s.sessionId, 0);
+
+    expect(spoken(f)).toEqual([]);
+    expect(f.admission.reportSpeech(s.sessionId)).toMatchObject([{ reportId: "operator-still-speaking", handed: 0 }]);
+  } finally { await f.service.close(s.sessionId); }
+});
+
 test("barge-in during a backend await keeps reports held when the older request finishes", async () => {
   const f = fixture("synthetic-credential", undefined, () => Date.parse("2026-10-11T12:05:00Z"));
   const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
