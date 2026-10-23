@@ -222,7 +222,7 @@ test("a blocked optional report read cannot hold up a settled deploy wake", asyn
   rig.deps.sources!.reports = { log: () => { reportReads++; return new Promise(() => {}); }, enabled: () => true, operatorLocale: () => "en" } as never;
   const result = await runSeatTickCheck(PROJECT, rig.deps);
   expect(result).toMatchObject({ verdict: "wake", reasons: ["deploy-settled"], delivery: { outcome: "delivered" } });
-  expect(reportReads).toBe(0);
+  expect(reportReads).toBeGreaterThan(0);
   expect(rig.sent).toHaveLength(1);
 });
 

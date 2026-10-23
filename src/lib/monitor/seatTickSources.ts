@@ -837,6 +837,24 @@ async function reportsInput(project: string, sources: SeatTickSources): Promise<
   }
 }
 
+/* Report history is useful on a deploy wake, but its production reader shares
+   a serial worker with unrelated projects. Give an already-fast read a chance
+   to enrich the message; a queued or slow read must never hold the deploy
+   obligation behind that worker. The worker owns its own eventual timeout. */
+const DEPLOY_WAKE_REPORTS_BUDGET_MS = 50;
+
+async function deployWakeReportsInput(project: string, sources: SeatTickSources): Promise<SeatTickReportsInput | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      reportsInput(project, sources),
+      new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), DEPLOY_WAKE_REPORTS_BUDGET_MS); }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 /**
  * A lane the seat could still act on.
  *
@@ -2966,9 +2984,10 @@ export async function gatherSeatTickDeployInput(project: string, state: SeatTick
   if (!settledDeploys.length) return null;
   const seat = await seatInput(project, policy, sources);
   if (!seat || seat.conversationId !== identity.conversationId || seat.seatEpoch !== identity.seatEpoch) return null;
-  /* Reports enrich a deploy wake, but they are optional and share a serial
-     worker with unrelated projects. Keep the critical settlement path clear. */
-  const observedReports = reports ?? undefined;
+  /* Reports enrich a deploy wake, but they share a serial worker with unrelated
+     projects. Accept a fast read and fall back immediately when that worker is
+     occupied, so optional evidence cannot consume the settlement deadline. */
+  const observedReports = reports === undefined ? await deployWakeReportsInput(project, sources) : reports ?? undefined;
   assertSeatTickWork();
   const current = sources.seatFor(project).active;
   if (current?.conversationId !== seat.conversationId || current?.seatEpoch !== seat.seatEpoch) return null;
