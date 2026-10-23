@@ -872,11 +872,19 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       title: requestProfileTitle,
       ...(explicitProject ? { project: explicitProject } : {}),
     });
+    const beginAccountSpawnRequest = async (request: SpawnRequest, guard?: () => void) => {
+      try { return await registry.beginSpawnRequestAsync(request, guard); }
+      catch (error) {
+        // Keep the spawn admission response shared by seat and task callers.
+        if (error instanceof RegistryWriterBusyError) throw new AccountMutationBusyError();
+        throw error;
+      }
+    };
     const terminalizePinnedAccountFailure = async (failure: unknown): Promise<NextResponse<SpawnResponse | ApiError>> => {
       if (isAccountAdmissionRetryable(failure)) throw failure;
       const accountId = requestedAccount as string;
       const reason = (failure instanceof Error ? failure.message : String(failure)).slice(0, 240);
-      const begun = await registry.beginSpawnRequestAsync(canonicalSpawnRequest(
+      const begun = await beginAccountSpawnRequest(canonicalSpawnRequest(
         accountId,
         preflightLaunchProfile,
         /* The digest binds this terminal preflight to the same canonical public
@@ -1060,7 +1068,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     const commitAccountAdmission = existingAttempt ? undefined : await dependencies.prepareAccountAdmission?.(account.accountId);
     // Retry deferred membership without holding the registry writer. Keeping
     // the original reservation result also keeps responsibility for dispatch.
-    const begun = await registry.beginSpawnRequestAsync(canonicalSpawnRequest(
+    const begun = await beginAccountSpawnRequest(canonicalSpawnRequest(
       receiptAccountId,
       spec.launchProfile,
       digest,
@@ -1495,7 +1503,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     if (error instanceof SpawnChildLimitError) return NextResponse.json({ error: error.message }, { status: 429 });
     if (error instanceof RuntimeImageStorageError) return NextResponse.json({ error: error.message }, { status: 503 });
     if (error instanceof UnknownAccountError || error instanceof UnknownClaudeAccountError) return NextResponse.json({ error: error.message }, { status: 400 });
-    const accountError = spawnAccountErrorResponse(error instanceof RegistryWriterBusyError ? new AccountMutationBusyError() : error);
+    const accountError = spawnAccountErrorResponse(error);
     if (accountError) return accountError;
     if (receipt?.pane) {
       if (receipt.state === "prompt-delivered" || receipt.state === "host-verified") (await registry.deliveryWriteOrBusy({ label: "registry.markSpawnPathPending" }, registry.markSpawnPathPending.bind(registry, receipt.launchId)));

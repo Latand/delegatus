@@ -275,6 +275,29 @@ test("exhausted spawn reservation admission preserves the retryable response and
   } finally { busy.mockRestore(); }
 });
 
+test("a later registry failure preserves its response after spawn admission", async () => {
+  const { RegistryWriterBusyError } = await import("./registry");
+  const cwd = statePath("post-admission-refusal");
+  fs.mkdirSync(cwd, { recursive: true });
+  const attempt = "post_admission_refusal";
+  const registry = agentRegistry();
+  const dependencies = structuredRouteDependencies(cwd);
+  const deferred: Array<() => Promise<void>> = [];
+  dependencies.defer = work => { deferred.push(work); };
+  dependencies.runtimeHostClient = () => { throw new RegistryWriterBusyError("fixture runtime preparation"); };
+  const response = await executeSpawnRequest(new NextRequest("http://127.0.0.1/api/spawn", {
+    method: "POST", headers: { origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", host: "127.0.0.1", "content-type": "application/json" },
+    body: JSON.stringify({ clientAttemptId: attempt, title: "Post admission fixture", engine: "claude", cwd, prompt: "Inspect fixture runtime", mcpServers: [] }),
+  }), dependencies);
+  expect(response.status).toBe(500);
+  const body = await response.json();
+  expect(body.code).toBeUndefined();
+  expect(body.retrySafe).toBeUndefined();
+  expect(body.retryable).toBeUndefined();
+  expect(registry.spawnReceiptForClientAttempt(attempt)?.state).toBe("failed");
+  expect(deferred).toHaveLength(0);
+});
+
 test.each(["replay", "replaced-owner"] as const)("a failed admission preserves another dispatcher's custody: %s", async seam => {
   const { AgentRegistry } = await import("./registry");
   const { AccountAdmissionChangedError } = await import("@/lib/accounts/accountMutation");
