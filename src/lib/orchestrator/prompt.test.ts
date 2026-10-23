@@ -8,7 +8,7 @@ import { expect, test } from "bun:test";
 
 import { FOCUS_TARGET_KINDS } from "@/lib/attention/targets";
 import { BRIDGE_REPORT_CLASSES } from "@/lib/bridge/types";
-import { PROCESS_CLEANUP_MARKER, ROLE_DEFAULTS, WORKING_RULES, WORKING_RULES_SHORT } from "@/lib/roles/defaults";
+import { OPERATOR_CORRECTION_RULE, PROCESS_CLEANUP_MARKER, ROLE_DEFAULTS, WORKING_RULES, WORKING_RULES_SHORT } from "@/lib/roles/defaults";
 import { launchOverheadBytes } from "./handoffDigest";
 import { loadRoleDefinitionsOrDefaults, loadRoleRegistrySnapshot, saveRoleMapping } from "@/lib/roles/store";
 import { resolveSpawnRole, roleSpawnPrompt } from "@/lib/roles/registry";
@@ -84,8 +84,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 59, and a v58 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(59);
+test("the default mandate is at version 60, and a v59 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(60);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -163,7 +163,8 @@ test("the default mandate is at version 59, and a v58 seat reads as stale", () =
   expect(orchestratorMandateStale(56)).toBe(true);
   expect(orchestratorMandateStale(57)).toBe(true);
   expect(orchestratorMandateStale(58)).toBe(true);
-  expect(orchestratorMandateStale(59)).toBe(false);
+  expect(orchestratorMandateStale(59)).toBe(true);
+  expect(orchestratorMandateStale(60)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("gives the shape, the outcome rule and what");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
@@ -246,6 +247,8 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   58: "632ee54064e12e71db96a1ed427d0fc6f59566d6983d4b659429056ca7f4fb38",
   // v59 requires a lesson in the same turn as an operator correction.
   59: "ed78e7ff8d5027b1f42a2dafcfe04a1fe17574b955bb473da5930c54f34d0732",
+  // v60 shortens rule 13 to preserve rotation history alongside the correction duty.
+  60: "d424c6e968bb1c646b975e88e3827eff2d13513abaedaafb81ee242f69d32175",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -1272,4 +1275,11 @@ test("default and retained seat mandates require same-turn correction lessons on
     expect(delivered).toContain(instruction);
     expect(orchestratorMandateForDelivery(delivered).split(instruction)).toHaveLength(2);
   }
+});
+
+test("a retained v59 rule 13 upgrades to the compact current rule once", () => {
+  const previous = `13. Read the newest answer first: it replaces only the decision it names; recheck answers since the brief before you publish or ask, and never re-ask a settled question. ${OPERATOR_CORRECTION_RULE}`;
+  const current = WORKING_RULES_SHORT.split("\n").find((line) => line.startsWith("13. "))!;
+  expect(orchestratorMandateUpgraded(previous)).toBe(current);
+  expect(orchestratorMandateUpgraded(current)).toBe(current);
 });

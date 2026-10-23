@@ -76,7 +76,45 @@ corrections without spending the closing answer, clean reviewers, registered
 non-pipeline roles, duplicate priority across scope reads, project succession of
 a correction duplicate in both orders (agenda lead, budget retention through 32
 later lessons, cleared after curation), and integrate / rewrite / drop decisions
-with reversible history. The seat mandate advances to v59;
-its new instruction uses 250 bytes of the reserved rotation-history room while
-remaining inside the existing structured message limit. Pending seat-intent
+with reversible history. The seat mandate advances to v60. Rule 13 keeps the correction duty and
+shortens its preceding answer-handling sentence. Compared with v58, the
+combined rule uses 126 additional bytes and retains the existing 500-byte
+rotation-history case inside the structured message limit. Pending seat-intent
 replays retain their original bytes.
+
+
+## Main integration repair
+
+The initial comparison used main `3e570adf` and the merge commit
+`b4a5a38a4`, on Bun 1.4.0 with equivalent isolated state. Main passed 288 of
+289 focused tests; the branch passed 287 of 292. Four branch-only failures
+reproduced the merge-train report:
+
+- The 500-byte history was dropped because the correction sentence enlarged
+  the mandate. Shortening rule 13's preceding sentence recovers 99 bytes while
+  retaining every correction instruction. The history assertion stays unchanged.
+- Three seat-command assertions expected the caller's text alone in durable
+  mandates. New intents deliberately store the correction duty before delivery,
+  so these assertions now expect the caller's text followed by that duty.
+  Status delivery, activation, single delivery and pending-replay checks remain.
+
+The additional empty-mandate probe found that upgrading before validation
+could make a missing mandate nonempty. Validation now checks the raw caller
+value before adding mandatory text. Missing, empty and whitespace-only cases
+assert the precise refusal and absence of launches, deliveries and seat records.
+An initial guard inside the upgrade helper also changed the empty-text cost
+used by envelope sizing; its boundary test failed. Moving the check to the
+request validator restores identical sizing for empty and nonempty baselines.
+
+One assertion already fails on main: the invalid-model error's expected
+catalog omits two supported model IDs. This repair leaves that assertion
+unchanged because the correction-lesson feature does not change that text.
+
+Shared paths checked before the repair: shared full and short working rules
+feed role defaults; the registry renders spawn scaffolds; pipeline lookup caps
+and stores scaffolds; pipeline delivery upgrades retained scaffolds. Seat
+creation and adoption validate, upgrade and preflight a mandate before storing
+a new intent; rotation measures the same delivery transform; pending retries
+render the saved mandate and table. The repair changes the short rule and new
+intent validation, preserves the correction sentence, upgrades retained rule 13
+by exact match, and keeps pending replay outside that upgrade.

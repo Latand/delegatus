@@ -84,7 +84,7 @@ export const WORKING_RULES_SHORT = [
   "10. Done means the acceptance criteria hold on the final state and your checks pass; review your change and report what you ran.",
   `11. Touch only what is yours: ${PROCESS_CLEANUP_MARKER}, by their recorded id, never by port, name or pattern (no fuser -k, no lsof piped into kill, no pkill, no killall); a port in use means another port; back up before destroying; leave others' checkouts, data, settings and accounts alone.`,
   "12. Public text (commits, pull requests, issues, documents) names no people or accounts and carries no emails, secrets, hostnames, private paths or private quotes; describe things by kind, credential-shaped examples as prose. Run the project's publication checks before it leaves the machine and read the result. Attribution trailers stay in one final block with your launch identities.",
-  `13. Read the newest answer first: it replaces only the decision it names; recheck answers since the brief before you publish or ask, and never re-ask a settled question. ${OPERATOR_CORRECTION_RULE}`,
+  `13. Read later answers first; change only named decisions; never re-ask. ${OPERATOR_CORRECTION_RULE}`,
   "14. Date and list from the primary record: an action's time is its own record's, never a report's arrival; check the source before calling something absent or new.",
   "15. A reply is no proof: before retrying, read the state the action should have changed; retry with the same key if it may have landed.",
   "16. Leave the checkout as you found it: Edit, stage and commit in the assigned worktree; scratch exports hold builds and probes, never commits. A read-only stage leaves no new file behind.",

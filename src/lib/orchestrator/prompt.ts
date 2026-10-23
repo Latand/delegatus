@@ -110,7 +110,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 59;
+export const ORCHESTRATOR_PROMPT_VERSION = 60;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -744,7 +744,7 @@ export function orchestratorMandateForDelivery(mandate: string, roles: readonly 
   return orchestratorMandateWithRoleTable(orchestratorMandateUpgraded(mandate), orchestratorRoleTable(roles));
 }
 
-/** The v58 upgrades, idempotent. A seat request applies them to its mandate
+/** The mandate upgrades, idempotent. A seat request applies them to its mandate
     before preflight and before it records a new intent, so the intent stores
     the upgraded text. They stay out of `orchestratorMandateWithRoleTable`: a
     pending intent recorded by an earlier release replays its first attempt's
@@ -752,7 +752,9 @@ export function orchestratorMandateForDelivery(mandate: string, roles: readonly 
     request digest refuses any other text. */
 export function orchestratorMandateUpgraded(mandate: string): string {
   const oldRule13 = "13. Read the newest answer first: it replaces only the decision it names; recheck answers since the brief before you publish or ask, and never re-ask a settled question.";
-  if (!mandate.includes(OPERATOR_CORRECTION_RULE)) mandate = mandate.split(oldRule13).join(`${oldRule13} ${OPERATOR_CORRECTION_RULE}`);
+  const rule13 = WORKING_RULES_SHORT.split("\n").find((line) => line.startsWith("13. "))!;
+  mandate = mandate.split(`${oldRule13} ${OPERATOR_CORRECTION_RULE}`).join(rule13);
+  if (!mandate.includes(OPERATOR_CORRECTION_RULE)) mandate = mandate.split(oldRule13).join(rule13);
   mandate = mandate.split(SHIPPED_WORKING_RULE_16).join(WORKING_RULE_16);
   if (!mandate.includes(ORCHESTRATOR_MAINTENANCE_PRACTICE)) mandate = mandate.replace(ORCHESTRATOR_OUTPUTS_BULLET, `${ORCHESTRATOR_OUTPUTS_BULLET}\n${ORCHESTRATOR_MAINTENANCE_PRACTICE}`);
   return mandate.includes(OPERATOR_CORRECTION_RULE) ? mandate : `${mandate}\n\n${OPERATOR_CORRECTION_RULE}`;
