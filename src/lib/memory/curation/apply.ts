@@ -275,7 +275,7 @@ export function revertCuratorPass(id: string, now = new Date().toISOString(), op
         const later = sameRevisionLineage ? change.revision > revision : change.at > at;
         return later && (
         change.by === "curator" && row.state === "active" || change.prior?.some(prior => prior.id === rule) || change.created?.includes(rule)
-        || change.by !== "succession" && change.added.includes(rule) || change.merged.some(merge => merge.from === rule || merge.into === rule) || change.archived.includes(rule)
+        || change.by !== "succession" && change.by !== "transfer" && change.added.includes(rule) || change.merged.some(merge => merge.from === rule || merge.into === rule) || change.archived.includes(rule)
         || change.restored?.includes(rule) || change.rewritten?.some(rewrite => rewrite.id === rule)
         || change.moved?.some(move => move.id === rule) || change.split?.some(split => split.id === rule || split.parts.includes(rule)));
       });

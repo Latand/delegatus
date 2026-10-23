@@ -26,8 +26,20 @@
  * block per engine — the active account's card — with Refresh, the reset
  * control only on Codex and enabled only while that card holds a credit, every
  * meter filled with what REMAINS (its value equals the row's own «n% left»),
- * the corner naming one of the card's own windows and carrying the tightest of
- * them, 44px targets and no horizontal scroll. Shots land in
+ * no corner number repeating the week the card lists, 44px targets and no
+ * horizontal scroll. Transfer checklist (install transfer slice 2): an
+ * import brought eight Codex accounts in every checklist state, two Claude
+ * accounts (one a provider account that could not be made) and one Copilot
+ * account. In en/light and uk/dark, at 1280×860 and at a short 1024×640, each
+ * dialog stays wholly on screen with its header and close control, the
+ * checklist heading is whole at the top when it opens, and every row and
+ * action is reachable by scrolling, unclipped and uncovered; the phone screen
+ * carries the same checklist, every action reachable at 44 px. The Copilot
+ * list in the rail's footer is checked at 1280×860, 1024×640 and 707×744 as
+ * it opens, before any input (its top, the heading, «Check all» and the first
+ * action whole in the viewport cut by every clipping ancestor), then by wheel
+ * turns over the list, which must reach every row and control while only a
+ * scroller moves, never a hidden-overflow ancestor or the page. Shots land in
  * <tmp>/llv-issue-1418-latest/out/1418-<surface>-<engine>.png and are never
  * committed: the privacy gate refuses rasters.
  */
@@ -53,6 +65,9 @@ const STATE = path.join(CONFIG, "agent-log-viewer", "state");
 const OUT_DIR = path.join(BASE, "out");
 const CODEX_STUB = path.join(BASE, "bin", "codex");
 const DESKTOP = { width: 1280, height: 860 };
+const INTERMEDIATE = { width: 1024, height: 640 };
+/** A narrow desktop window the rail still shows in, where the Copilot list once ran under the lower edge. */
+const NARROW = { width: 707, height: 744 };
 const PHONE = { width: 390, height: 844 };
 const DAY = 86_400;
 
@@ -74,6 +89,7 @@ function seedEnvironment(): void {
   process.env.LLV_STATE_DIR = STATE;
   process.env.LLV_CLAUDE_HOME = path.join(HOME, ".claude");
   process.env.LLV_CODEX_HOME = path.join(HOME, ".codex");
+  process.env.COPILOT_HOME = path.join(HOME, ".copilot");
 }
 
 /* One invented project with one transcript: the phone's Accounts & limits
@@ -97,6 +113,11 @@ async function seedHome(): Promise<void> {
   fs.mkdirSync(path.join(BASE, "tmp", `claude-${process.getuid?.() ?? 1000}`), { recursive: true });
   fs.mkdirSync(path.join(BASE, "tmux"), { recursive: true });
   fs.mkdirSync(STATE, { recursive: true });
+  /* The setup guide opens by itself on a home with no Viewer state and covers
+     the account buttons; this home stands for an install already set up. */
+  fs.writeFileSync(path.join(STATE, "onboarding.json"), JSON.stringify({
+    schemaVersion: 1, completedAt: null, dismissedAt: new Date().toISOString(), reason: "existing-install", steps: {}, lastHealth: null, walk: "skipped",
+  }));
   fs.mkdirSync(path.join(HOME, ".codex", "sessions"), { recursive: true });
   fs.mkdirSync(path.join(HOME, ".claude", "projects"), { recursive: true });
   seedProject();
@@ -119,6 +140,8 @@ async function seedHome(): Promise<void> {
   setActiveCodexAccount(codexA.id);
   const claudeB = createManagedClaudeAccount("Account B");
   fs.writeFileSync(path.join(claudeB.home, ".credentials.json"), "{}", { mode: 0o600 });
+
+  await seedImportedAccounts();
 
   const now = new Date();
   const nowS = Math.floor(now.getTime() / 1000);
@@ -167,6 +190,50 @@ async function seedHome(): Promise<void> {
   });
 }
 
+/* An install transfer brought these accounts (install-memory-transfer §3.4):
+   made signed out through the account setup, their checklist rows in every
+   state a row can show. The rows are written into the transfer's own
+   collection, as an import's commit writes them. */
+const IMPORTED_CODEX: { label: string; state: string; detail?: string; activeOnSource?: boolean; made?: false; retry?: true }[] = [
+  { label: "Team 1", state: "signed_out", activeOnSource: true },
+  { label: "Team 2", state: "signed_out" },
+  { label: "Team 3", state: "different_account" },
+  { label: "Team 4", state: "read_failed", detail: "identity-unreadable" },
+  { label: "Team 5", state: "read_failed", detail: "quota probe timed out" },
+  { label: "Team 6", state: "signed_out" },
+  { label: "Team 7", state: "not_created", detail: "create-failed", made: false, retry: true },
+  { label: "Team 8", state: "signed_out" },
+];
+
+async function seedImportedAccounts(): Promise<void> {
+  const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
+  const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
+  const { createManagedCopilotAccount } = await import("@/lib/accounts/copilot");
+  const { TRANSFER_ACCOUNTS_SEED } = await import("@/lib/transfer/accounts");
+  const { initializeStateCollections, SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
+  const row = (engine: string, sourceId: string, targetId: string | null, label: string, state: string, extra: Record<string, unknown> = {}) => ({
+    kind: "account", importId: "capture-import", exportId: "capture-export", engine, sourceId, targetId, label, sourceKind: "managed",
+    activeOnSource: false, identity: null, bindings: [], state, ...extra,
+  });
+  const rows: Record<string, unknown>[] = [];
+  for (const [index, entry] of IMPORTED_CODEX.entries()) {
+    const targetId = entry.made === false ? `team-${index + 1}` : createManagedCodexAccount(entry.label).id;
+    rows.push(row("codex", `team-${index + 1}`, targetId, entry.label, entry.state, {
+      ...(entry.detail ? { detail: entry.detail } : {}), ...(entry.activeOnSource ? { activeOnSource: true } : {}), ...(entry.retry ? { pendingCreate: true } : {}),
+    }));
+  }
+  rows.push(row("claude", "research", createManagedClaudeAccount("Research").id, "Research", "signed_out"));
+  rows.push(row("claude", "gateway", null, "Gateway", "not_created", { detail: "provider-account" }));
+  rows.push(row("copilot", "github-work", createManagedCopilotAccount("GitHub work").id, "GitHub work", "signed_out"));
+  const database = path.join(STATE, "state.sqlite");
+  initializeStateCollections(database, [TRANSFER_ACCOUNTS_SEED]);
+  const collection = new SqliteStateCollection<Record<string, unknown>>(database, {
+    collection: TRANSFER_ACCOUNTS_SEED.collection, schemaVersion: 1, busyMessage: "transfer accounts busy",
+    key: (value) => TRANSFER_ACCOUNTS_SEED.key(value as never), decode: (value) => value as Record<string, unknown>, clone: structuredClone,
+  });
+  try { collection.patchSync(() => ({ records: rows })); } finally { collection.close(); }
+}
+
 function serverEnvironment(port: number): NodeJS.ProcessEnv {
   return {
     NODE_ENV: "production",
@@ -180,6 +247,7 @@ function serverEnvironment(port: number): NodeJS.ProcessEnv {
     LLV_STATE_DIR: STATE,
     LLV_CLAUDE_HOME: path.join(HOME, ".claude"),
     LLV_CODEX_HOME: path.join(HOME, ".codex"),
+    COPILOT_HOME: path.join(HOME, ".copilot"),
     LLV_CODEX_BINARY: CODEX_STUB,
     LLV_ACCOUNT_CONTROLLER_DISABLED: "1",
     LLV_REAPER_ENABLED: "0",
@@ -227,7 +295,7 @@ async function dialogFacts(page: Page, engine: "Codex" | "Claude"): Promise<Dial
       refreshButtons: dialog.querySelectorAll("[data-account-refresh-limits]").length,
       resetButtons: dialog.querySelectorAll("[data-account-use-reset]").length,
       resetEnabled: [...dialog.querySelectorAll<HTMLButtonElement>("[data-account-use-reset]")].filter((button) => !button.disabled).map((button) => button.getAttribute("data-account-use-reset")!),
-      flagshipRows: [...dialog.querySelectorAll("[data-limit-row='flagship']")].map((row) => row.closest("[data-account-limits]")!.getAttribute("data-account-limits")!),
+      flagshipRows: [...dialog.querySelectorAll("[data-limit-row^='tier:']")].map((row) => row.closest("[data-account-limits]")!.getAttribute("data-account-limits")!),
       bottom: Math.round(dialog.getBoundingClientRect().bottom),
       viewport: window.innerHeight,
       scrollWidth: document.documentElement.scrollWidth,
@@ -253,6 +321,222 @@ function checkDialog(engine: "Codex" | "Claude", facts: DialogFacts): void {
   }
   if (facts.scrollWidth > facts.innerWidth) throw new Error(`${where}: the document scrolls to ${facts.scrollWidth}px at ${facts.innerWidth}px`);
   if (facts.bottom > facts.viewport) throw new Error(`${where}: the dialog ends at ${facts.bottom}px, past the ${facts.viewport}px viewport`);
+}
+
+interface ChecklistFacts {
+  rows: { label: string; state: string; buttons: string[]; overflow: boolean }[];
+  title: string | null;
+}
+
+/** The open accounts dialog that carries the transfer checklist, in any language. */
+const CHECKLIST_DIALOG = '[role="dialog"]:has([data-transfer-checklist])';
+
+/** The transfer checklist inside a container, read off the DOM. */
+async function checklistFacts(page: Page, container: string): Promise<ChecklistFacts> {
+  return page.evaluate((selector) => {
+    const section = document.querySelector(selector)!.querySelector("[data-transfer-checklist]");
+    return {
+      title: section?.querySelector("h3")?.textContent ?? null,
+      rows: [...(section?.querySelectorAll("[data-transfer-account]") ?? [])].map((row) => {
+        const spans = row.querySelectorAll("span");
+        return {
+          label: spans[0]?.textContent ?? "",
+          state: spans[1]?.textContent ?? "",
+          buttons: [...row.querySelectorAll<HTMLButtonElement>("button")].filter((button) => !button.disabled).map((button) => (button.textContent ?? "").trim()),
+          overflow: [...row.querySelectorAll<HTMLElement>("*")].some((element) => element.scrollWidth > element.clientWidth + 1 && !element.classList.contains("truncate")),
+        };
+      }),
+    };
+  }, container);
+}
+
+const WORDS = {
+  en: { title: "Accounts from your other install", signIn: "Sign in", again: "Sign in again", confirm: "This is the right account", retry: "Try again", skip: "Not needed here",
+    signedOut: "Signed out", different: "Different account", readFailed: "Limits not read", notCreated: "Not created" },
+  uk: { title: "Акаунти з вашої іншої інсталяції", signIn: "Увійти", again: "Увійти знову", confirm: "Це правильний акаунт", retry: "Спробувати ще раз", skip: "Тут не потрібен",
+    signedOut: "Не ввійдено", different: "Інший акаунт", readFailed: "Ліміти не прочитано", notCreated: "Не створено" },
+} as const;
+
+/** What each imported row must say and offer, per engine and language. */
+function expectedRows(engine: "codex" | "claude" | "copilot", locale: "en" | "uk"): { label: string; state: string; buttons: string[] }[] {
+  const w = WORDS[locale];
+  if (engine === "claude") return [
+    { label: "Research", state: w.signedOut, buttons: [w.signIn, w.skip] },
+    { label: "Gateway", state: w.notCreated, buttons: [w.skip] },
+  ];
+  if (engine === "copilot") return [{ label: "GitHub work", state: w.signedOut, buttons: [w.signIn, w.skip] }];
+  return IMPORTED_CODEX.map((entry) => entry.state === "signed_out" ? { label: entry.label, state: w.signedOut, buttons: [w.signIn, w.skip] }
+    : entry.state === "different_account" ? { label: entry.label, state: w.different, buttons: [w.again, w.confirm, w.skip] }
+      : entry.state === "read_failed" ? { label: entry.label, state: w.readFailed, buttons: entry.detail === "identity-unreadable" ? [w.again, w.confirm, w.skip] : [w.again, w.skip] }
+        : { label: entry.label, state: w.notCreated, buttons: [w.retry, w.skip] });
+}
+
+function checkChecklist(where: string, engine: "codex" | "claude" | "copilot", locale: "en" | "uk", facts: ChecklistFacts): void {
+  if (facts.title !== WORDS[locale].title) throw new Error(`${where}: the title reads «${facts.title}»`);
+  const expected = expectedRows(engine, locale);
+  const got = facts.rows.map((row) => ({ label: row.label, state: row.state, buttons: row.buttons }));
+  if (JSON.stringify(got) !== JSON.stringify(expected)) throw new Error(`${where}: rows are ${JSON.stringify(got)}, expected ${JSON.stringify(expected)}`);
+  if (facts.rows.some((row) => row.overflow)) throw new Error(`${where}: text in a row overflows its box`);
+}
+
+/**
+ * Whether everything the checklist offers can be reached in `container`: the
+ * container lies wholly inside the viewport, its close control too; the
+ * checklist heading's text is whole at the opening scroll position; and every
+ * row and every action, once scrolled to, lies wholly inside the viewport and
+ * every scrolling ancestor, with nothing (a sticky header, fixed chrome) drawn
+ * over its centre. Measured from the elements and the heading's text range.
+ */
+async function reachability(page: Page, container: string, closeControl: string | null): Promise<string[]> {
+  return page.evaluate(async ({ selector, close }) => {
+    const problems: string[] = [];
+    const root = document.querySelector(selector) as HTMLElement;
+    const frame = () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    const viewport = { top: 0, left: 0, bottom: window.innerHeight, right: window.innerWidth };
+    type Box = { top: number; left: number; bottom: number; right: number };
+    const round = (box: Box) => `${Math.round(box.top)}..${Math.round(box.bottom)}`;
+    const inside = (box: Box, bound: Box) => box.top >= bound.top - 0.5 && box.bottom <= bound.bottom + 0.5 && box.left >= bound.left - 0.5 && box.right <= bound.right + 0.5;
+    const clip = (element: Element): Box => {
+      let box: Box = { ...viewport };
+      for (let node = element.parentElement; node; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        if (!/(auto|scroll|hidden)/.test(style.overflowY + style.overflowX)) continue;
+        const rect = node.getBoundingClientRect();
+        box = { top: Math.max(box.top, rect.top), left: Math.max(box.left, rect.left), bottom: Math.min(box.bottom, rect.bottom), right: Math.min(box.right, rect.right) };
+      }
+      return box;
+    };
+    const uncovered = (element: Element) => {
+      const rect = element.getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      return !!hit && (hit === element || element.contains(hit));
+    };
+    if (root.getAttribute("role") === "dialog" && !inside(root.getBoundingClientRect(), viewport)) problems.push(`the dialog spans ${round(root.getBoundingClientRect())} in a ${window.innerHeight}px viewport`);
+    if (close) {
+      const control = root.querySelector(close);
+      if (!control || !inside(control.getBoundingClientRect(), viewport) || !uncovered(control)) problems.push("the close control is not wholly on screen");
+    }
+    const heading = root.querySelector("[data-transfer-checklist] h3");
+    if (!heading) return [...problems, "no checklist heading"];
+    if (root.getAttribute("role") === "dialog") {
+      const range = document.createRange();
+      range.selectNodeContents(heading);
+      const text = range.getBoundingClientRect();
+      if (!inside(text, clip(heading))) problems.push(`the checklist heading's text is cut at opening (${round(text)} in ${round(clip(heading))})`);
+    }
+    const targets = [...root.querySelectorAll("[data-transfer-checklist] [data-transfer-account]")].flatMap((row) => [row, ...row.querySelectorAll("button")]);
+    for (const target of targets) {
+      target.scrollIntoView({ block: "nearest", inline: "nearest" });
+      await frame();
+      const name = `${target.closest("[data-transfer-account]")?.getAttribute("data-transfer-account")} ${target.tagName === "BUTTON" ? `«${(target.textContent ?? "").trim()}»` : "row"}`;
+      const rect = target.getBoundingClientRect();
+      if (!inside(rect, clip(target))) problems.push(`${name} is cut by a scroll edge (${round(rect)} in ${round(clip(target))})`);
+      else if (!uncovered(target)) problems.push(`${name} is covered at its centre`);
+      if (target.tagName === "BUTTON" && root.closest("[data-mobile2-screen]") && rect.height < 44) problems.push(`${name} is ${Math.round(rect.height)}px tall, under 44px`);
+    }
+    if (close) {
+      const control = root.querySelector(close);
+      if (!control || !inside(control.getBoundingClientRect(), viewport) || !uncovered(control)) problems.push("the close control left the screen while scrolling");
+    }
+    return problems;
+  }, { selector: container, close: closeControl });
+}
+
+/**
+ * The Copilot list as it opens in the rail's footer, then as the operator
+ * scrolls it with the wheel. Every box is measured against the viewport cut by
+ * every ancestor that clips (the list's own scroller among them). At the
+ * opening, before any input: the list's top, the checklist heading, «Check
+ * all» and the first row's first action have their text wholly inside that
+ * box. Then wheel turns over the list reach every checklist row and every
+ * control of the list, each wholly inside the box and hit at its centre. Only
+ * an ancestor that is a scroller (overflow-y auto or scroll) may have moved:
+ * one whose overflow is hidden, or the page itself, scrolled only by script,
+ * which is what an unreachable control looks like from the inside.
+ */
+async function copilotReachability(page: Page, list: string): Promise<string[]> {
+  const TARGETS = "[data-transfer-checklist] [data-transfer-account], button, input";
+  /* Shared by every measurement below, installed once on the page: the clip
+     box of an element (the viewport cut by every clipping ancestor), an
+     element's text box, and whether a box lies outside a clip. */
+  await page.evaluate(() => {
+    const host = window as unknown as Record<string, unknown>;
+    host.__copilotClip = (element: Element) => {
+      let box = { top: 0, bottom: window.innerHeight };
+      for (let node = element.parentElement; node; node = node.parentElement) {
+        if (!/(auto|scroll|hidden|clip)/.test(getComputedStyle(node).overflowY)) continue;
+        const rect = node.getBoundingClientRect();
+        box = { top: Math.max(box.top, rect.top), bottom: Math.min(box.bottom, rect.bottom) };
+      }
+      return box;
+    };
+    host.__copilotText = (element: Element) => { const range = document.createRange(); range.selectNodeContents(element); return range.getBoundingClientRect(); };
+  });
+  const opening = await page.evaluate(({ selector }) => {
+    const host = window as unknown as { __copilotClip: (element: Element) => { top: number; bottom: number }; __copilotText: (element: Element) => DOMRect };
+    const clipOf = host.__copilotClip, textBox = host.__copilotText;
+    const outside = (rect: { top: number; bottom: number }, clip: { top: number; bottom: number }) => rect.top < clip.top - 0.5 || rect.bottom > clip.bottom + 0.5;
+    const span = (rect: { top: number; bottom: number }, clip: { top: number; bottom: number }) => `${rect.top.toFixed(2)}..${rect.bottom.toFixed(2)} outside ${clip.top.toFixed(2)}..${clip.bottom.toFixed(2)}`;
+    const problems: string[] = [];
+    const panel = document.querySelector(`${selector} [data-copilot-panel]`) as HTMLElement | null;
+    if (!panel) return ["no Copilot list opened"];
+    const top = panel.getBoundingClientRect();
+    if (outside({ top: top.top, bottom: top.top + 1 }, clipOf(panel))) problems.push(`the list's top is at ${span({ top: top.top, bottom: top.top + 1 }, clipOf(panel))} at the opening`);
+    const whole = (element: Element | null | undefined, name: string) => {
+      if (!element) { problems.push(`no ${name}`); return; }
+      const text = textBox(element), clip = clipOf(element);
+      if (outside(text, clip)) problems.push(`${name} text is at ${span(text, clip)} at the opening`);
+    };
+    const checklist = panel.querySelector("[data-transfer-checklist]");
+    whole(checklist?.querySelector("h3"), "the checklist heading");
+    whole(checklist?.querySelector("h3")?.parentElement?.querySelector("button"), "«Check all»");
+    whole(checklist?.querySelector("[data-transfer-account] button"), "the first row's first action");
+    return problems;
+  }, { selector: list });
+  const box = await page.locator(`${list} [data-copilot-panel]`).boundingBox();
+  if (!box) return [...opening, "the Copilot list has no box"];
+  const visible = await page.evaluate(({ selector }) => {
+    const clipOf = (window as unknown as { __copilotClip: (element: Element) => { top: number; bottom: number } }).__copilotClip;
+    const panel = document.querySelector(`${selector} [data-copilot-panel]`)!;
+    const rect = panel.getBoundingClientRect(), clip = clipOf(panel);
+    return { top: Math.max(rect.top, clip.top), bottom: Math.min(rect.bottom, clip.bottom) };
+  }, { selector: list });
+  await page.mouse.move(box.x + box.width / 2, (visible.top + visible.bottom) / 2);
+  const targets = await page.evaluate(({ selector, targets }) => document.querySelector(`${selector} [data-copilot-panel]`)!.querySelectorAll(targets).length, { selector: list, targets: TARGETS });
+  const problems = [...opening];
+  for (let index = 0; index < targets; index += 1) {
+    for (let turn = 0; turn < 40; turn += 1) {
+      const where = await page.evaluate(({ selector, index, targets }) => {
+        const clipOf = (window as unknown as { __copilotClip: (element: Element) => { top: number; bottom: number } }).__copilotClip;
+        const target = document.querySelector(`${selector} [data-copilot-panel]`)!.querySelectorAll(targets)[index]!;
+        const rect = target.getBoundingClientRect(), clip = clipOf(target);
+        return rect.top < clip.top - 0.5 ? -1 : rect.bottom > clip.bottom + 0.5 ? 1 : 0;
+      }, { selector: list, index, targets: TARGETS });
+      if (where === 0) break;
+      await page.mouse.wheel(0, where * 60);
+      await page.waitForTimeout(30);
+    }
+    problems.push(...await page.evaluate(({ selector, index, targets }) => {
+      const clipOf = (window as unknown as { __copilotClip: (element: Element) => { top: number; bottom: number } }).__copilotClip;
+      const outside = (rect: { top: number; bottom: number }, clip: { top: number; bottom: number }) => rect.top < clip.top - 0.5 || rect.bottom > clip.bottom + 0.5;
+      const found: string[] = [];
+      const panel = document.querySelector(`${selector} [data-copilot-panel]`) as HTMLElement;
+      const target = panel.querySelectorAll(targets)[index]! as HTMLElement;
+      const name = target.tagName === "BUTTON" ? `«${(target.textContent ?? "").trim()}»` : target.tagName === "INPUT" ? "the label field" : `row ${target.getAttribute("data-transfer-account")}`;
+      const rect = target.getBoundingClientRect();
+      if (outside(rect, clipOf(target))) found.push(`${name} is cut at ${Math.round(rect.top)}..${Math.round(rect.bottom)} after scrolling with the wheel`);
+      else {
+        const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        if (!hit || !(hit === target || target.contains(hit))) found.push(`${name} is covered at its centre`);
+      }
+      for (let node: HTMLElement | null = target.parentElement; node; node = node.parentElement) {
+        if (node.scrollTop !== 0 && !/(auto|scroll)/.test(getComputedStyle(node).overflowY)) found.push(`${node.tagName.toLowerCase()} (overflow ${getComputedStyle(node).overflowY}) scrolled by ${node.scrollTop}px`);
+      }
+      if ((document.scrollingElement?.scrollTop ?? 0) !== 0) found.push("the page scrolled");
+      return found;
+    }, { selector: list, index, targets: TARGETS }));
+  }
+  return [...new Set(problems)];
 }
 
 interface EngineFacts {
@@ -298,7 +582,7 @@ async function screenFacts(page: Page): Promise<ScreenFacts> {
           refreshButtons: section.querySelectorAll("[data-account-refresh-limits]").length,
           resetButtons: section.querySelectorAll("[data-account-use-reset]").length,
           resetEnabled: [...section.querySelectorAll<HTMLButtonElement>("[data-account-use-reset]")].filter((button) => !button.disabled).map((button) => button.getAttribute("data-account-use-reset")!),
-          flagshipRows: [...section.querySelectorAll("[data-limit-row='flagship']")].map((row) => row.closest("[data-account-limits]")!.getAttribute("data-account-limits")!),
+          flagshipRows: [...section.querySelectorAll("[data-limit-row^='tier:']")].map((row) => row.closest("[data-account-limits]")!.getAttribute("data-account-limits")!),
           rows: [...section.querySelectorAll("[data-limit-row]")].map((row) => ({
             row: row.getAttribute("data-limit-row")!,
             /* The row reads «<window> <meter> n% left», then its reset line
@@ -347,11 +631,9 @@ function checkScreen(facts: ScreenFacts): void {
       /* One meaning per meter: the fill IS what the row says is left. */
       if (row.printed !== row.meter) throw new Error(`${at}: the ${row.row} meter is at ${row.meter}% while its row reads ${row.printed}% left`);
     }
-    const corner = engine.corner;
-    if (!corner) throw new Error(`${at}: the active card has no corner number`);
-    if (!corner.windows.includes(corner.window)) throw new Error(`${at}: the corner names «${corner.window}», which is none of the card's windows [${corner.windows.join(", ")}]`);
-    const tightest = Math.min(...engine.rows.map((row) => row.printed));
-    if (corner.left !== tightest) throw new Error(`${at}: the corner reads ${corner.left}% left, the tightest window has ${tightest}%`);
+    /* Since #2776 the active card lists its week right below its head, so the
+       head carries no corner number that would say it twice. */
+    if (engine.corner) throw new Error(`${at}: the active card repeats its week in a corner number («${engine.corner.window}»)`);
   }
   if (facts.minTarget < 44) throw new Error(`${where}: a control is ${facts.minTarget}px tall, under the 44px floor`);
   if (facts.scrollWidth > facts.innerWidth) throw new Error(`${where}: the document scrolls to ${facts.scrollWidth}px at ${facts.innerWidth}px`);
@@ -359,12 +641,13 @@ function checkScreen(facts: ScreenFacts): void {
 
 /** Board ▸ ⋯ ▸ Accounts & limits — the phone's one route to its accounts. */
 async function openAccountsScreen(page: Page, baseUrl: string, projectId: string): Promise<void> {
-  await page.goto(`${baseUrl}/#p=${encodeURIComponent(projectId)}`, { waitUntil: "networkidle" });
+  await page.goto(`${baseUrl}/#p=${encodeURIComponent(projectId)}`, { waitUntil: "load" });
   await page.waitForSelector('[data-mobile2-screen="board"]', { timeout: 20_000 });
   await page.click('[data-mobile2-open="menu"]');
   await page.waitForSelector('[data-mobile2-sheet="menu"]');
   await page.click('[data-mobile2-go="accounts"]');
   await page.waitForSelector(PHONE_SCREEN, { timeout: 20_000 });
+  await page.waitForSelector(`${PHONE_SCREEN} [data-limit-row]`, { timeout: 30_000 });
   await page.waitForTimeout(400);
 }
 
@@ -377,7 +660,11 @@ async function seededProject(baseUrl: string): Promise<string> {
 }
 
 async function openDialog(page: Page, engine: "Codex" | "Claude"): Promise<void> {
-  await page.click(engine === "Codex" ? codexTrigger : claudeTrigger);
+  const trigger = engine === "Codex" ? codexTrigger : claudeTrigger;
+  /* The page counts as loaded before the limits read lands; the trigger names
+     the active account's tightest window once it has. */
+  await page.waitForFunction((selector) => !document.querySelector(selector)?.getAttribute("title")?.includes("Loading"), trigger, { timeout: 30_000 });
+  await page.click(trigger);
   await page.waitForSelector(dialogFor(engine));
   await page.waitForTimeout(250);
 }
@@ -420,7 +707,7 @@ async function main(): Promise<void> {
     console.log(`screenshots: ${OUT_DIR}`);
 
     const desktop = await browser.newPage({ viewport: DESKTOP });
-    await desktop.goto(baseUrl, { waitUntil: "networkidle" });
+    await desktop.goto(baseUrl, { waitUntil: "load" });
     await desktop.waitForSelector(codexTrigger);
     for (const engine of ["Codex", "Claude"] as const) {
       await openDialog(desktop, engine);
@@ -439,6 +726,71 @@ async function main(): Promise<void> {
       await closeDialog(desktop, engine);
     }
     await desktop.close();
+
+    /* The transfer checklist in both languages and both schemes, at a full
+       desktop and at a short window, then on the phone and in the Copilot list. */
+    const TRIGGER = { en: (engine: string) => `button[aria-label="${engine} accounts — switch or add"]`, uk: (engine: string) => `button[aria-label="Акаунти ${engine} — змінити або додати"]` };
+    const CLOSE = { en: 'header button[aria-label="Close"]', uk: 'header button[aria-label="Закрити"]' };
+    const COPILOT_ROW = { en: 'button[aria-label="GitHub Copilot accounts"]', uk: 'button[aria-label="Акаунти GitHub Copilot"]' };
+    const problems: string[] = [];
+    for (const [locale, colorScheme] of [["en", "light"], ["uk", "dark"]] as const) {
+      const write = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale, source: "chosen" }) });
+      if (!write.ok) throw new Error(`the interface language write answered ${write.status}`);
+      for (const [size, viewport] of [["desktop", DESKTOP], ["short", INTERMEDIATE], ["narrow", NARROW]] as const) {
+        const context = await browser.newContext({ viewport, colorScheme, reducedMotion: "reduce" });
+        await context.addInitScript((lang: string) => { localStorage.setItem("llv_lang", lang); }, locale);
+        const page = await context.newPage();
+        await page.goto(baseUrl, { waitUntil: "load" });
+        /* The first-run install-ping notice sits over the dialog's lower edge. */
+        const notice = page.locator("[data-telemetry-notice] button", { hasText: locale === "en" ? "Got it" : "Зрозуміло" });
+        if (await notice.waitFor({ state: "visible", timeout: 5_000 }).then(() => true, () => false)) await notice.click();
+        for (const engine of size === "narrow" ? [] : ["Codex", "Claude"] as const) {
+          await page.click(TRIGGER[locale](engine));
+          await page.waitForSelector(CHECKLIST_DIALOG);
+          await page.waitForSelector(`${CHECKLIST_DIALOG} [data-account-limits]`, { timeout: 30_000 });
+          await page.waitForTimeout(250);
+          const where = `${size} ${engine} transfer checklist (${locale}, ${colorScheme})`;
+          checkChecklist(where, engine === "Codex" ? "codex" : "claude", locale, await checklistFacts(page, CHECKLIST_DIALOG));
+          const base = `1418-${size}-${engine.toLowerCase()}-transfer-${locale}-${colorScheme}`;
+          await page.screenshot({ path: path.join(OUT_DIR, `${base}-open.png`) });
+          problems.push(...(await reachability(page, CHECKLIST_DIALOG, CLOSE[locale])).map((problem) => `${where}: ${problem}`));
+          await page.screenshot({ path: path.join(OUT_DIR, `${base}-scrolled.png`) });
+          console.log(`  ${base}-open.png, ${base}-scrolled.png`);
+          await page.keyboard.press("Escape");
+          await page.waitForSelector(CHECKLIST_DIALOG, { state: "detached" });
+        }
+        {
+          await page.click(COPILOT_ROW[locale]);
+          const list = '[data-engine-limits="copilot"]';
+          await page.waitForSelector(`${list} [data-transfer-checklist="copilot"]`, { timeout: 30_000 });
+          await page.waitForTimeout(250);
+          const where = `${size} Copilot list transfer checklist (${locale}, ${colorScheme})`;
+          checkChecklist(where, "copilot", locale, await checklistFacts(page, list));
+          const base = `1418-${size}-copilot-transfer-${locale}-${colorScheme}`;
+          await page.screenshot({ path: path.join(OUT_DIR, `${base}-open.png`) });
+          problems.push(...(await copilotReachability(page, list)).map((problem) => `${where}: ${problem}`));
+          await page.screenshot({ path: path.join(OUT_DIR, `${base}-scrolled.png`) });
+          console.log(`  ${base}-open.png, ${base}-scrolled.png`);
+        }
+        await context.close();
+      }
+      const phoneContext = await browser.newContext({ viewport: PHONE, isMobile: true, hasTouch: true, deviceScaleFactor: 2, colorScheme, reducedMotion: "reduce" });
+      await phoneContext.addInitScript((lang: string) => { localStorage.setItem("llv_lang", lang); }, locale);
+      const phonePage = await phoneContext.newPage();
+      await openAccountsScreen(phonePage, baseUrl, await seededProject(baseUrl));
+      await phonePage.screenshot({ path: path.join(OUT_DIR, `1418-phone-transfer-${locale}-${colorScheme}-open.png`) });
+      for (const engine of ["claude", "codex"] as const) {
+        const section = `${PHONE_SCREEN} [data-mobile2-accounts-engine="${engine}"]`;
+        const where = `phone ${engine} transfer checklist (${locale}, ${colorScheme})`;
+        checkChecklist(where, engine, locale, await checklistFacts(phonePage, section));
+        problems.push(...(await reachability(phonePage, section, null)).map((problem) => `${where}: ${problem}`));
+        await phonePage.screenshot({ path: path.join(OUT_DIR, `1418-phone-transfer-${locale}-${colorScheme}-${engine}.png`) });
+      }
+      console.log(`  1418-phone-transfer-${locale}-${colorScheme}-{open,claude,codex}.png`);
+      await phoneContext.close();
+    }
+    await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale: "en", source: "chosen" }) });
+    if (problems.length) throw new Error(`the transfer checklist is not wholly reachable:\n${problems.join("\n")}`);
 
     /* The phone (mobile v2 lane 9): one screen holds both engines, so there is
        one shot and one set of checks, reached the way the operator reaches it. */

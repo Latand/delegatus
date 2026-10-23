@@ -22,6 +22,8 @@ import type { TranscriptEntry } from "@/lib/voiceCompanion/transcriptRecord";
 import { captureProjectSetupHosts, captureAttentionRing, captureWorkerLimitFrames, capturePrototypeQuestions, captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
 import { playPath, recordDrag } from "@/components/kanban/dragFrameMeter";
 import { measureStageChain, stageChainFailures, type StageChainLane } from "@/components/pipelines/stageChainMeasure";
+import { stubVoiceDevices } from "@/test-helpers/voiceDevicesStub";
+import { companionErrorMessage } from "@/lib/voiceCompanion/errors";
 import { translate } from "@/lib/i18n";
 import { FAKE_SAFETY_COMMAND, FAKE_SAFETY_REASON } from "@/lib/runtime/fixtures/fakeClaudePermissionCli";
 import { suggestTaskIcon } from "@/lib/tasks/taskIconSuggest";
@@ -10792,6 +10794,10 @@ describe("phone voice head", () => {
    *   product     a reload while hidden, «Показати голос» in the ⋯ menu, the head back, a drag to the other corner
    *   navigation  a call kept from project A's board through a task screen to project B's board (the Overview's projects)
    *   navigation-product  the same with no call: the same head node and no session request
+   *   devices     a call whose chosen microphone is gone (`&dev=callgone`, docs/design/voice-device-picker.md): the head says the
+   *               system default was taken, and its menu names the microphone the call listens to
+   *   speakers    a call whose chosen speakers are gone (`&dev=callspkgone`): the head says the sound plays through the default
+   *   nextcall    another microphone chosen in the settings during a call (`&dev=callnext`): the row says it is used from the next call
    *
    *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=<chrome> LLV_PHONE_VOICE_GROUPS=call,product \
    *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "phone voice head"
@@ -10808,6 +10814,9 @@ describe("phone voice head", () => {
     product: ["menu-hidden", "restored", "drag"],
     navigation: ["navigation"],
     "navigation-product": ["navigation-product"],
+    devices: ["mic-fallback", "mic-line"],
+    speakers: ["speakers-fallback"],
+    nextcall: ["next-call"],
   } as const;
   type Group = keyof typeof GROUPS;
   const LABELS: Record<string, { uk: string; en: string }> = {
@@ -10822,6 +10831,10 @@ describe("phone voice head", () => {
     drag: { uk: "перетягування в лівий кут", en: "dragging to the left corner" },
     navigation: { uk: "розмова триває на дошці проєкту B", en: "the call goes on on project B's board" },
     "navigation-product": { uk: "на дошці проєкту B без розмови", en: "on project B's board, no call" },
+    "mic-fallback": { uk: "мікрофона немає, взято системний", en: "mic gone, default taken" },
+    "mic-line": { uk: "меню голови: мікрофон розмови", en: "head menu: the call's microphone" },
+    "next-call": { uk: "мікрофон зміниться з наступної", en: "mic changes next call" },
+    "speakers-fallback": { uk: "динаміків немає, взято системні", en: "speakers gone, default taken" },
     "navigation-column-end": { uk: "кінець колонки, картки видно", en: "column end, last card clear" },
     "navigation-product-column-end": { uk: "кінець колонки без розмови", en: "column end, no call" },
   };
@@ -11006,6 +11019,8 @@ describe("phone voice head", () => {
           if (!browser.isConnected()) throw new Error("the browser is gone");
           const context = await browser.newContext({ viewport: size, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme });
           await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+          /* `&dev=<state>` stubs the browser's audio devices; without it the script does nothing. */
+          await context.addInitScript(stubVoiceDevices);
           return context;
         };
         const openPage = async (context: BrowserContext, query: string) => {
@@ -11053,7 +11068,7 @@ describe("phone voice head", () => {
 
         for (const group of groups) {
           const context = await newContext();
-          const { page, pageErrors, cdp } = await openPage(context, group === "call" ? `voice=sim&${CHAT}` : group === "product" ? `voice=product&${CHAT}` : `voice=${group === "navigation" ? "sim" : "product"}&overview=1`);
+          const { page, pageErrors, cdp } = await openPage(context, group === "call" ? `voice=sim&${CHAT}` : group === "devices" ? `voice=sim&dev=callgone&${CHAT}` : group === "speakers" ? `voice=sim&dev=callspkgone&${CHAT}` : group === "nextcall" ? `voice=sim&dev=callnext&${CHAT}` : group === "product" ? `voice=product&${CHAT}` : `voice=${group === "navigation" ? "sim" : "product"}&overview=1`);
           const fail = (scene: string, text: string) => failures.push(`${combo} ${scene}: ${text}`);
           /* The step under way, named in a failure that a wait throws. */
           let step = "open";
@@ -11163,6 +11178,84 @@ describe("phone voice head", () => {
               if (!hidden.stored || JSON.parse(hidden.stored).hidden !== true) fail("hidden", `the stored choice reads ${hidden.stored}`);
               if (before.feedBand === null || hidden.feedBand === null || before.feedBand < 60 || hidden.feedBand !== 0) fail("hidden", `the band did not go with the head: ${before.feedBand} then ${hidden.feedBand}`);
               if (hidden.record.starts.length !== 1) fail("hidden", `${hidden.record.starts.length} calls were started`);
+            } else if (group === "devices") {
+              await page.waitForSelector("[data-mobile-message=agent]", { timeout: 30_000 });
+              await pause(page, 900);
+              step = "talk tap";
+              await headRow("talk");
+              await page.waitForSelector("[data-phone-voice-bubble]", { timeout: 20_000 });
+              await pause(page, 400);
+              const said = await shot("mic-fallback");
+              const normal = (text: string | null) => (text ?? "").replace(/[\s\u200b\u00a0]+/gu, " ").trim();
+              if (normal(said.words) !== companionErrorMessage("MICROPHONE_FALLBACK", lang)) fail("mic-fallback", `the head says ${JSON.stringify(said.words)}`);
+              if (said.wordsCut) fail("mic-fallback", "the notice is cut");
+
+              await tapAt(HEAD);
+              await page.waitForSelector("[data-phone-voice-pop] [data-phone-voice-mic]", { timeout: 5_000 });
+              const line = await shot("mic-line");
+              const mic = await page.evaluate(() => {
+                const pop = document.querySelector<HTMLElement>("[data-phone-voice-pop]")!.getBoundingClientRect();
+                const row = document.querySelector<HTMLElement>("[data-phone-voice-mic]")!;
+                const name = row.querySelector<HTMLElement>(".pvc-mic-name")!;
+                const box = row.getBoundingClientRect();
+                const range = document.createRange(); range.selectNodeContents(name);
+                const text = range.getBoundingClientRect();
+                return { text: name.textContent, cut: name.scrollWidth > name.clientWidth + 0.5, inPop: box.left >= pop.left - 0.5 && box.right <= pop.right + 0.5 && box.top >= pop.top - 0.5 && box.bottom <= pop.bottom + 0.5,
+                  textInPop: text.left >= pop.left - 0.5 && text.right <= pop.right + 0.5, lineHeight: Math.round(box.height), popWidth: Math.round(pop.width) };
+              });
+              readings.push({ group, combo, scene: "mic-line-box", reading: mic });
+              if (mic.text !== translate(lang, "voiceCompanion.micInUse", { name: "Microphone Array (Realtek(R) Audio)" })) fail("mic-line", `the line reads ${JSON.stringify(mic.text)}`);
+              if (!mic.inPop || !mic.textInPop) fail("mic-line", `the line leaves the popover: ${JSON.stringify(mic)}`);
+              if (mic.cut) fail("mic-line", `the line is cut by its box without room (${mic.popWidth}px popover)`);
+              if (line.popRows.map((row) => row.key).join() !== "mute,end,settings,hide") fail("mic-line", `the rows are ${JSON.stringify(line.popRows.map((row) => row.key))}`);
+              if (line.popRows.some((row) => row.height < 44 || row.cut)) fail("mic-line", `a row is under 44 px or cut: ${JSON.stringify(line.popRows)}`);
+              await tapAt(HEAD);
+              await headRow("end");
+              await pause(page, 400);
+              await tapAt(HEAD);
+              if (await page.locator("[data-phone-voice-mic]").count()) fail("mic-line", "the microphone line stays after the call ended");
+            } else if (group === "speakers") {
+              await page.waitForSelector("[data-mobile-message=agent]", { timeout: 30_000 });
+              await pause(page, 900);
+              step = "talk tap";
+              await headRow("talk");
+              await page.waitForSelector("[data-phone-voice-bubble]", { timeout: 20_000 });
+              await pause(page, 400);
+              const said = await shot("speakers-fallback");
+              const normal = (text: string | null) => (text ?? "").replace(/[\s\u200b\u00a0]+/gu, " ").trim();
+              if (normal(said.words) !== companionErrorMessage("SPEAKERS_FALLBACK", lang)) fail("speakers-fallback", `the head says ${JSON.stringify(said.words)}`);
+              if (said.wordsCut) fail("speakers-fallback", "the notice is cut");
+            } else if (group === "nextcall") {
+              await page.waitForSelector("[data-mobile-message=agent]", { timeout: 30_000 });
+              await pause(page, 900);
+              step = "talk tap";
+              await headRow("talk");
+              await page.waitForSelector("[data-phone-voice-bubble]", { timeout: 20_000 });
+              await pause(page, 400);
+              step = "open the settings";
+              await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-voice-companion-settings")));
+              step = "choose another microphone";
+              const microphone = page.locator("[data-voice-device='input'] select");
+              await microphone.waitFor({ timeout: 10_000 });
+              await page.waitForFunction(() => document.querySelectorAll("[data-voice-device='input'] option").length >= 4);
+              await microphone.selectOption("mic-array");
+              await page.waitForSelector("[data-voice-device-hint='input']", { timeout: 10_000 });
+              await page.evaluate(() => document.querySelector("[data-voice-device='input']")!.scrollIntoView({ block: "center" }));
+              await pause(page, 300);
+              const next = await page.evaluate(() => {
+                const row = document.querySelector<HTMLElement>("[data-voice-device='input']")!;
+                const dialog = row.closest<HTMLElement>("[role=dialog]")!.getBoundingClientRect();
+                const hint = row.querySelector<HTMLElement>("[data-voice-device-hint]")!;
+                const range = document.createRange(); range.selectNodeContents(hint);
+                const lines = [...range.getClientRects()].filter((line) => line.width >= 1);
+                return { hint: hint.textContent?.replace(/\s+/g, " ").trim(), lines: lines.length,
+                  inside: lines.every((line) => line.left >= dialog.left - 0.5 && line.right <= dialog.right + 0.5 && line.top >= dialog.top - 0.5 && line.bottom <= dialog.bottom + 0.5 && line.bottom <= innerHeight + 0.5 && line.right <= innerWidth + 0.5) };
+              });
+              readings.push({ group, combo, scene: "next-call-box", reading: next });
+              await stamp(size, await page.screenshot(), band("next-call", false), path.join(out, `next-call-${combo}.png`));
+              if (pageErrors.length) fail("next-call", `page errors: ${pageErrors.join(" | ")}`);
+              if (!next.hint?.endsWith(translate(lang, "voiceCompanion.devices.nextCall"))) fail("next-call", `the row says ${JSON.stringify(next.hint)}`);
+              if (!next.lines || !next.inside) fail("next-call", `the line is cut or leaves the dialog: ${JSON.stringify(next)}`);
             } else if (group === "product") {
               /* The stored choice says hidden, as a reload after «Сховати» finds it. The row stands in the ⋯ menu that holds
                  «Налаштування»: the board's (and the Overview's); a conversation's own ⋯ has no settings. */

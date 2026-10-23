@@ -19,6 +19,7 @@ import { projectAliasSnapshot } from "@/lib/projects/aliases";
 import { accountProjection, currentObservation, liveFreshObservation } from "@/lib/accounts/accountProjection";
 import { AUTO_BALANCE_THRESHOLD } from "@/lib/accounts/migration/quotaPolicy";
 import type { MigrationEngine } from "@/lib/accounts/migration/contracts";
+import { selectProjectAccount } from "@/lib/accounts/projectSelection";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -146,6 +147,22 @@ export async function GET() {
   }
   const projectDisplayNames = projectAliasSnapshot().displayNames;
   const codexAccountList = listCodexAccounts();
+  const selectNext = (engine: "claude" | "codex", accounts: readonly { id: string; authPresent: boolean }[]) => {
+    if (!bindings) return null;
+    const selected = selectProjectAccount({
+      project: null,
+      engine,
+      accounts,
+      observations: Object.values(snapshot.quotaObservations[engine]),
+      bindings,
+      preferredId: snapshot.engineRouting[engine].activeAccountId ?? (engine === "claude" ? activeClaudeAccountId() : activeCodexAccountId()),
+      now,
+    });
+    return selected.kind === "available" ? selected.accountId : null;
+  };
+  const codexNextChosen = selectNext("codex", codexAccountList);
+  const claudeAccountList = listClaudeAccounts();
+  const claudeNextChosen = selectNext("claude", claudeAccountList);
   const codexLogins = managedCodexRuntime().peekLogins(codexAccountList);
   const codexAccounts = codexAccountList.map((account) => {
     const authenticated = liveFreshObservation(codexObservations[account.id], now);
@@ -154,6 +171,7 @@ export async function GET() {
     return {
       id: account.id,
       label: account.label,
+      ...(codexNextChosen ? { nextChosen: codexNextChosen === account.id } : {}),
       kind: account.kind,
       authPresent: account.authPresent,
       loginPending: compatibilityPending || login.state === "pending",
@@ -164,7 +182,6 @@ export async function GET() {
       ...accountProjection(codexObservations[account.id], account.authPresent, now),
     };
   });
-  const claudeAccountList = listClaudeAccounts();
   const claudeLogins = claudeLoginSupervisor.forAccounts(claudeAccountList.map((account) => account.id));
   const claudeAccounts = claudeAccountList.map((account) => {
     const login = claudeLogins.get(account.id) ?? null;
@@ -182,6 +199,7 @@ export async function GET() {
     return {
       id: account.id,
       label: account.label,
+      ...(claudeNextChosen ? { nextChosen: claudeNextChosen === account.id } : {}),
       kind: account.kind,
       ...(account.provider ? { provider: account.provider } : {}),
       authPresent: account.authPresent,

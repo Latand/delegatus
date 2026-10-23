@@ -7,7 +7,12 @@ import { MobilePipelineScreen } from "@/components/mobile/MobilePipelineScreen";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
 import type { StageSlot } from "@/components/scheme/layout";
 import type { FileConfirmationView } from "@/lib/telegram/bot/fileConfirmationContract";
+
+
 import { DeputyBlock } from "./DeputyBlock";
+import { StageStatusRow } from "@/components/pipelines/StageStatusRow";
+import { SLOT_ROW_H } from "@/components/scheme/layout";
+import { StageCompletedCard } from "@/components/pipelines/StageCompletedCard";
 import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
 
 /**
@@ -132,7 +137,8 @@ export type ConversationWindowCase =
   | "agent-images"
   | "image-viewers"
   | "own-message-steps"
-  | "payload-notice";
+  | "payload-notice"
+  | "memory-cap";
 
 /* #1846 recurrence: a first turn that died unauthorized produced no assistant
    message at all, so the row the parser makes out of the turn-end record is
@@ -1861,7 +1867,24 @@ const requested = (params.get("case") as ConversationWindowCase | null) ?? "rece
 /* The lifecycle case mounts the production window itself — the feed, the
    composer and a fake host behind them — so it takes over the root rather than
    rendering one arranged frame. */
-if (root && requested === "file-confirmation") mountFileConfirmation(root);
+if (root && requested === "memory-cap") {
+  const role = { roleId: "builder", engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null };
+  const stage = { id: "build", kind: "run", next: null, prompt: "Implement the scoped memory cap.", effectiveRole: role };
+  const unenforced = params.get("mode") === "unenforced";
+  const attempt = { n: 1, state: "passed", verdict: null, effectiveRole: role, memoryCap: {
+    limitBytes: unenforced ? null : 8 * 2 ** 30, requestedBytes: unenforced ? null : 12 * 2 ** 30,
+    source: "stage", clamped: !unenforced, enforced: !unenforced,
+  } };
+  const pipeline = { id: "memory-demo", task: "Scoped agent memory", project: "demo", state: "completed", stages: [stage],
+    runs: [{ stageId: "build", attempts: [attempt] }], cursor: null };
+  const slot = { key: "memory-demo", pipeline, stage, attempt, index: 0, total: 1, presentation: "completed" } as unknown as StageSlot;
+  createRoot(root).render(<main className="min-h-dvh w-full overflow-y-auto bg-canvas p-3 text-primary"><div className="mx-auto flex max-w-2xl flex-col gap-3">
+    <div data-memory-surface="completed" className="h-[250px] shrink-0"><StageCompletedCard slot={slot} /></div>
+    <div data-memory-surface="placeholder" className="h-[350px] shrink-0"><StagePlaceholderPane slot={slot} interactive={false} /></div>
+    <div data-memory-surface="row" className="shrink-0" style={{ height: SLOT_ROW_H + 72 }}><StageStatusRow slot={slot} expanded={false} /></div>
+  </div></main>);
+}
+else if (root && requested === "file-confirmation") mountFileConfirmation(root);
 else if (root && requested === "project-setup") {
   const role = { roleId: "builder", engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
   const attempts = (["failed", "passed"] as const).map((state, index) => ({
