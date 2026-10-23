@@ -13,11 +13,12 @@ async function memberGET(req: NextRequest): Promise<Response> {
   const initial = requestWorkspaceScope(req);
   const resolve = await workspaceConversationResolver();
   const feedAllowed = feedPathAllowed(req);
-  const allowed = (path: string) => {
-    const scope = requestWorkspaceScope(req);
-    return feedAllowed(path) && (initial && !initial.owner ? Boolean(scope && scope.access(resolve(path)) !== "none") : true);
+  const allowed = (path: string) => feedAllowed(path) && (!initial || initial.access(resolve(path)) !== "none");
+  const authorizeBatch = () => {
+    const scope = initial ? requestWorkspaceScope(req) : null;
+    return (path: string) => !initial || Boolean(scope && scope.access(resolve(path)) !== "none");
   };
-  const stream = sessionBoundStream(req, req.signal, (signal) => createLogTailEventStream(subs, signal, allowed));
+  const stream = sessionBoundStream(req, req.signal, (signal) => createLogTailEventStream(subs, signal, allowed, authorizeBatch));
   return new Response(stream, {
     headers: {
       "content-type": "text/event-stream",

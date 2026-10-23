@@ -1,5 +1,4 @@
-import { workspaceRoute, requestWorkspaceScope } from "@/lib/team/workspaceRoute";
-import { workspaceRuntimeEvent } from "@/lib/team/workspaceProjection";
+import { workspaceRoute, requestWorkspaceScope, workspaceConversationResolver } from "@/lib/team/workspaceRoute";
 import type { NextRequest } from "next/server";
 
 import { runtimeHostClient } from "@/lib/runtime/client";
@@ -25,10 +24,10 @@ async function memberGET(request: NextRequest): Promise<Response> {
     return Response.json({ error: error instanceof Error ? error.message : "runtime cursor is invalid" }, { status: 400 });
   }
   const initial = requestWorkspaceScope(request);
-  const restricted = Boolean(initial && !initial.owner);
-  return new Response(sessionBoundStream(request, request.signal, (signal) => runtimeEventStream(client, after, signal, async event => {
-    const scope = requestWorkspaceScope(request);
-    return restricted ? Boolean(scope && await workspaceRuntimeEvent(scope, event, () => requestWorkspaceScope(request))) : true;
+  const resolve = await workspaceConversationResolver();
+  return new Response(sessionBoundStream(request, request.signal, (signal) => runtimeEventStream(client, after, signal, () => {
+    const scope = initial ? requestWorkspaceScope(request) : null;
+    return event => !initial || Boolean(scope && (scope.owner || (event.scope.type === "session" && scope.access(resolve(event.scope.id)) !== "none")));
   })), {
     headers: {
       "content-type": "text/event-stream; charset=utf-8",

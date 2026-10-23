@@ -110,6 +110,7 @@ describe("workspace authority", () => {
         for (const [route, handler] of [["artifact", artifactGET], ["image", imageGET]] as const) {
           for (const file of ["~/.codex/auth.json", path.join(projectDir, "linked.json")]) {
             const response = await handler(request(`/api/${route}?path=${encodeURIComponent(file)}`, actor));
+            if (response.status !== 403) await response.body?.cancel();
             expect(response.status).toBe(403);
             expect(await response.json()).toEqual({ error: "workspace access denied", code: "workspace_forbidden" });
           }
@@ -164,6 +165,9 @@ describe("workspace authority", () => {
     beginDeputy({ project: "repo-alpha", seatConversationId: "conversation_own", seatEpoch: 1, seatPath: null, askId: "deputy-own", clientRequestId: "own-request", ask: { text: "own question", images: 0, sender: null }, now: new Date(now) });
     ran = false;
     expect((await allowed(request("/api/orchestrator/ghost?askId=deputy-own", member))).status).toBe(200);
+    expect(ran).toBe(true);
+    ran = false;
+    expect((await allowed(request("/api/orchestrator/ghost", member, "POST", { retryAskId: "deputy-own", clientRequestId: "own-retry" }))).status).toBe(200);
     expect(ran).toBe(true);
     const ownRead = await ghostGET(request("/api/orchestrator/ghost?askId=deputy-own", member));
     expect(ownRead.status).toBe(200);

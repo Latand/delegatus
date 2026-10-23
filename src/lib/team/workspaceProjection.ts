@@ -1,6 +1,6 @@
 import type { FilesResponse } from "@/lib/types";
 import type { RuntimeEvent, RuntimeSnapshot } from "@/lib/runtime/contracts";
-import { workspaceConversationProject } from "./workspaceRoute";
+import { workspaceConversationProject, workspaceConversationResolver } from "./workspaceRoute";
 import type { workspaceScope } from "./workspaceAccess";
 
 type Scope = ReturnType<typeof workspaceScope>;
@@ -40,9 +40,8 @@ export async function workspaceRuntime(scope: Scope, snapshot: RuntimeSnapshot, 
   if (scope.owner) return snapshot;
   const projects = new Map<string, string | null>();
   const admitted = new Set<string>();
-  for (const session of snapshot.sessions) {
-    projects.set(session.conversationId, await workspaceConversationProject(session.conversationId));
-  }
+  const resolve = await workspaceConversationResolver();
+  for (const session of snapshot.sessions) projects.set(session.conversationId, resolve(session.conversationId));
   const latest = refresh ? refresh() : scope;
   for (const [id, project] of projects) if (latest?.access(project) !== "none" && latest) admitted.add(id);
   scope = latest ?? { ...scope, access: () => "none" };

@@ -10,13 +10,20 @@ the MCP workspace fence belongs to slice (c).
 
 The owner retains all reads and writes, including on installations with no
 workspaces. Members read and act inside their workspaces. Managers also read
-Unassigned projects and can place them into a workspace they manage; other
-writes require workspace membership. A person with no workspace opens the
-Team page and its own sign-in/session surface. Foreign project requests return
+Unassigned catalog projects and can place them into a workspace they manage;
+unknown keys cannot be placed by managers. Local file routes require both
+catalog membership and project access, including when an older placement
+already names an undiscovered key. Other writes require workspace membership.
+A person with no workspace opens the Team page and its own sign-in/session surface. Foreign project requests return
 403 `workspace_forbidden`; aggregate reads filter their source rows. Scoped
-board responses use private, uncached JSON and cannot reuse owner ETags or
-deltas. Conversation cursors bind the member and their permission snapshot.
-Streams recheck project membership while sending and retain session revocation.
+board responses use private validators scoped to the member and their current
+permissions. The route translates these to an operator validator internally;
+an unchanged source returns 304 without decoding or re-encoding its JSON.
+Full member responses support gzip; operator deltas remain private.
+Conversation cursors bind the member and their permission snapshot.
+Streams refresh project authority once per replay or log batch, after awaited
+reads and before emitting bytes, and retain session revocation. Runtime
+snapshots load one ownership resolver for the whole batch.
 
 ## Shared records and writers
 
@@ -24,8 +31,8 @@ Streams recheck project membership while sending and retain session revocation.
 |---|---|---|
 | `workspace_members` | Owner or workspace manager through `PUT /api/team/workspaces/[id]/members`; invite redemption inserts role `member` in the redemption transaction. No implicit membership for a plain invite. | Workspace gates, directory, Activity, board/runtime projection and streams. Workspace deletion removes its rows; member status is checked on each request. Reopening the store retains membership. |
 | Invite challenge `payload.workspaceId` | Owner may omit it; a manager must name a workspace they manage. Uses the existing durable challenge payload; no secret is published. | Redemption rechecks the active inviter and workspace authority before consuming the challenge, creating the person, membership and session in one transaction. List/withdraw checks the same workspace permission. A missing/deleted workspace refuses redemption. |
-| Project placement | Existing canonical project rows; manager may move Unassigned or their own managed project into a workspace they manage, or return their own project to Unassigned. Owner keeps all placements. | The existing alias resolver determines the workspace on every lookup. Task ids, pipeline ids and persisted conversation ownership take precedence over submitted hints; the cwd is checked independently at launch. |
-| Activity scope | Server supplies canonical allowed/assigned project keys and Unassigned visibility. | Human and agent inputs are filtered before time aggregation. Token queries apply the same restriction to totals, series, lists and comparisons; the permission snapshot participates in the cache key. |
+| Project placement | Existing canonical project rows; manager may move Unassigned or their own managed project into a workspace they manage, or return their own project to Unassigned. Owner keeps all placements. | The existing alias resolver determines the workspace on every lookup. Task ids, pipeline ids and persisted conversation ownership take precedence over submitted hints; the cwd is checked independently at launch. Deputy ask ids, retry ids, seat ids and saved request replays are checked against stored ownership. |
+| Activity scope | Server supplies canonical readable keys, including discovered Unassigned projects for managers. | Human and agent inputs are filtered before time aggregation. Token queries apply the same restriction to totals, series, lists and comparisons; the permission snapshot participates in the cache key. |
 
 ## Decisions
 
@@ -297,155 +304,49 @@ served API route has no declared decision or a project handler loses its gate.
 
 ## Verification
 
-Heavy checks ran through the admitted gate wrapper and `gate-remote`, with
-private HOME, configuration, temp and state roots and a closed control URL.
-The remote test command had an owned runner. Test files ran in ten bounded
-batches, with fresh per-file state and comparison against `c2d19d9d`.
-
-| Check | Exit | Result |
-|---|---|---|
-| TypeScript: `bunx tsc --noEmit` | 0 | Whole project. |
-| ESLint on all 97 changed TypeScript source/test files | 0 | Two existing warnings in the Activity report; no errors. |
-| Final registry/message fixture checks: typecheck, ESLint and the two explicit test files | 0 each | `src/lib/team/workspaceAccess.test.ts` and `src/app/api/tmux/route.test.ts` checked again after the final fixture edit. |
-| Touched-test comparison, batches 1–10 | 0 each | 57 explicit files; zero introduced failures; 55 pre-existing sites retained by the project's comparator. |
-| Original workspace suite on the starting revision | 0 | 18 cases passed before the schema assertion was extended for membership. |
-| Privacy publication gate with committed fingerprints | 0 | Source and documentation passed. |
-| Pinned design byte comparison | 0 | `docs/design/workspaces.md` matches the specified design commit. |
-| Whitespace: `git diff --check` | 0 | No whitespace errors. |
-| Workflow-file comparison with the starting revision | 0 | No workflow changes. |
-
-The pre-existing sites occur in the needs-you, catalogue, files, report log,
-pipeline read/busy, project-settings, spawn and task-spawn binding suites.
-They were sampled on both revisions with the same isolation; the report-log
-setup error is incomplete on both sides and is classified as pre-existing by
-the project gate. There is no performance-gain claim. No component or layout
-changed, so no new rendered frames are included.
-
-The final source/test set is listed below. Each test-batch command uses
-`bun scripts/local-gate-tests.ts --base c2d19d9d` with the explicit paths shown;
-the enclosing gate and owned-runner invocation are the same for all batches.
-
-### Test batch 1 — exit 0
+Checks run through `gate-remote` and the admitted gate wrapper, with private
+HOME, config, TMPDIR and state roots. The focused test comparison against
+`d8c9778dc` completed all 13 selected files with zero new failures. Twelve files
+passed completely. The existing files-projection suite retained the same ten
+failing assertions on both revisions; the comparator classified all ten as
+pre-existing, with no skipped assertions or flaky classifications.
 
 ```sh
-bun scripts/local-gate-tests.ts --base c2d19d9d \
-  'src/app/api/activity/route.test.ts' \
-  'src/app/api/activity/tokens/route.test.ts' \
-  'src/app/api/answer/route.test.ts' \
-  'src/app/api/artifact/route.test.ts' \
-  'src/app/api/attention/done/route.test.ts' \
-  'src/app/api/attention/needs-you/route.test.ts'
+bash scripts/gate-slot.sh bun scripts/local-gate-tests.ts --base d8c9778dc \
+  src/lib/team/workspaceAccess.test.ts \
+  src/lib/team/workspaceRoutes.test.ts \
+  src/lib/team/workspaces.test.ts \
+  src/lib/team/workspaceFilesResponse.test.ts \
+  src/proxy.team.test.ts \
+  src/app/api/team/workspaces.routes.test.ts \
+  src/lib/runtime/sse.test.ts \
+  src/lib/logTailStream.test.ts \
+  src/app/api/artifact/route.test.ts \
+  src/app/api/image/route.test.ts \
+  src/app/api/runtime/snapshot/route.test.ts \
+  src/lib/activity/tokenReport.test.ts \
+  src/app/api/files/route.test.ts
 ```
 
-### Test batch 2 — exit 0
+Whole-project `bunx tsc --noEmit` and ESLint on the 19 source/test files
+changed by the fix both exited 0. Publication privacy checks use the committed
+fingerprints, and both added commits run the repository hooks.
 
-```sh
-bun scripts/local-gate-tests.ts --base c2d19d9d \
-  'src/app/api/board/route.test.ts' \
-  'src/app/api/conversation-host/route.test.ts' \
-  'src/app/api/conversations/[conversationId]/migration/route.test.ts' \
-  'src/app/api/conversations/route.test.ts' \
-  'src/app/api/files/route.pin.rideAlong.test.ts' \
-  'src/app/api/files/route.test.ts'
-```
+The authorization cases cover private home files through both file routes,
+symlinks, unknown placements, catalog-file success, and deputy reads, retries
+and saved-request replays. Projection cases cover scoped 304/gzip responses,
+overlapping refresh/eviction, scope changes and revocation during awaited reads. Stream cases
+cover batch admission, revocation and unavailable authorization.
 
-### Test batch 3 — exit 0
-
-```sh
-bun scripts/local-gate-tests.ts --base c2d19d9d \
-  'src/app/api/image/route.test.ts' \
-  'src/app/api/log/project-delete/route.test.ts' \
-  'src/app/api/log/route.test.ts' \
-  'src/app/api/orchestrator/ghost/route.test.ts' \
-  'src/app/api/orchestrator/reports/route.test.ts' \
-  'src/app/api/orchestrator/seat/route.test.ts'
-```
-
-### Test batch 4 — exit 0
-
-```sh
-bun scripts/local-gate-tests.ts --base c2d19d9d \
-  'src/app/api/pipelines/[id]/route.lifecycle.test.ts' \
-  'src/app/api/pipelines/[id]/route.test.ts' \
-  'src/app/api/pipelines/preflight/route.test.ts' \
-  'src/app/api/pipelines/route.admission.test.ts' \
-  'src/app/api/pipelines/route.busy.test.ts' \
-  'src/app/api/pipelines/route.test.ts'
-```
-
-### Test batch 5 — exit 0
-
-```sh
-bun scripts/local-gate-tests.ts --base c2d19d9d \
-  'src/app/api/projects/settings/route.test.ts' \
-  'src/app/api/routeExports.test.ts' \
-  'src/app/api/runtime/snapshot/route.test.ts' \
-  'src/app/api/session/title/route.test.ts' \
-  'src/app/api/spawn/route.admission.test.ts' \
-  'src/app/api/spawn/route.binding.test.ts'
-```
-
-### Test batch 6 — exit 0
-
-```sh
-bun scripts/local-gate-tests.ts --base c2d19d9d \
-  'src/app/api/spawn/route.engineKeys.test.ts' \
-  'src/app/api/spawn/route.launcher.test.ts' \
-  'src/app/api/spawn/route.stageTasks.test.ts' \
-  'src/app/api/spawn/route.test.ts' \
-  'src/app/api/spawn/validate/route.test.ts' \
-  'src/app/api/task-spend/route.test.ts'
-```
-
-### Test batch 7 — exit 0
-
-```sh
-bun scripts/local-gate-tests.ts --base c2d19d9d \
-  'src/app/api/tasks/[id]/assignment/route.test.ts' \
-  'src/app/api/tasks/[id]/send/route.test.ts' \
-  'src/app/api/tasks/[id]/spawn/route.binding.test.ts' \
-  'src/app/api/tasks/[id]/spawn/route.test.ts' \
-  'src/app/api/tasks/curator/route.test.ts' \
-  'src/app/api/tasks/route.test.ts'
-```
-
-### Test batch 8 — exit 0
-
-```sh
-bun scripts/local-gate-tests.ts --base c2d19d9d \
-  'src/app/api/team/routes.test.ts' \
-  'src/app/api/team/workspaces.routes.test.ts' \
-  'src/app/api/tmux/route.test.ts' \
-  'src/app/api/tmux/targets/route.test.ts' \
-  'src/lib/activity/report.test.ts' \
-  'src/lib/activity/tokenReport.test.ts'
-```
-
-### Test batch 9 — exit 0
-
-```sh
-bun scripts/local-gate-tests.ts --base c2d19d9d \
-  'src/lib/runtime/http.team.test.ts' \
-  'src/lib/runtime/nativeQueueHttp.team.test.ts' \
-  'src/lib/runtime/sse.test.ts' \
-  'src/lib/scanner/conversationCatalog.test.ts' \
-  'src/lib/team/team.test.ts' \
-  'src/lib/team/workspaceAccess.test.ts'
-```
-
-### Test batch 10 — exit 0
-
-```sh
-bun scripts/local-gate-tests.ts --base c2d19d9d \
-  'src/lib/team/workspaceRoutes.test.ts' \
-  'src/lib/team/workspaces.test.ts' \
-  'src/proxy.team.test.ts'
-```
+`docs/design/workspaces.md` matches the complete base copy at `c2d19d9d`;
+`git diff c2d19d9d..HEAD -- docs/design/workspaces.md` is empty. No workflow or
+UI files changed in the fix, so no new rendered frames are included.
 
 ## Changed files
 
-- `docs/design/workspaces.md`
 - `docs/workspace-human-routes.md`
+- `evidence/workspaces/member-projection-performance.json`
+- `scripts/benchmark-workspace-projection.ts`
 - `src/app/api/activity/route.test.ts`
 - `src/app/api/activity/route.ts`
 - `src/app/api/activity/tokens/route.ts`
@@ -526,7 +427,10 @@ bun scripts/local-gate-tests.ts --base c2d19d9d \
 - `src/app/api/tmux/route.ts`
 - `src/app/api/tmux/targets/route.ts`
 - `src/lib/activity/report.ts`
+- `src/lib/activity/tokenReport.test.ts`
 - `src/lib/activity/tokenReport.ts`
+- `src/lib/logTailStream.test.ts`
+- `src/lib/logTailStream.ts`
 - `src/lib/runtime/sse.test.ts`
 - `src/lib/runtime/sse.ts`
 - `src/lib/scanner/conversationCatalog.test.ts`
@@ -536,6 +440,8 @@ bun scripts/local-gate-tests.ts --base c2d19d9d \
 - `src/lib/team/store.ts`
 - `src/lib/team/workspaceAccess.test.ts`
 - `src/lib/team/workspaceAccess.ts`
+- `src/lib/team/workspaceFilesResponse.test.ts`
+- `src/lib/team/workspaceFilesResponse.ts`
 - `src/lib/team/workspaceProjection.ts`
 - `src/lib/team/workspaceRoute.ts`
 - `src/lib/team/workspaceRoutes.test.ts`
@@ -543,3 +449,53 @@ bun scripts/local-gate-tests.ts --base c2d19d9d \
 - `src/lib/team/workspaces.test.ts`
 - `src/lib/team/workspaces.ts`
 - `src/proxy.team.test.ts`
+
+## Projection measurement
+
+`scripts/benchmark-workspace-projection.ts` compares the member serialization
+path with the reviewed implementation at `d8c9778dc`. Run in a scratch export
+through the gate with private HOME, config, TMPDIR and state roots:
+
+```sh
+git show d8c9778dc:src/lib/team/workspaceProjection.ts > src/lib/team/.workspaceProjection.before.ts
+bash scripts/gate-slot.sh bun scripts/benchmark-workspace-projection.ts src/lib/team/.workspaceProjection.before.ts
+```
+
+The harness creates 53,299 catalog rows across 64 projects and eight
+workspaces, plus 256 registered conversations. One member belongs to one
+workspace. Both sides use the same data in one process, with one warm-up and
+five alternating samples of five operations each. It reports wall time and
+process CPU time. Both sides use the corrected authorization scope, so the
+comparison isolates projection and batching costs. The board source is an already encoded, unchanged operator
+projection; HTTP admission, scanner work, runtime-host transport, file I/O
+and browser/network latency are excluded. The snapshot case measures ownership
+filtering. Runtime events use two 128-event replay pages. The log predicate
+case checks 64 candidate paths, including foreign ownership, independently of
+subscription admission.
+
+The Linux runner used Bun 1.4.0. Raw samples and source hashes are in
+`evidence/workspaces/member-projection-performance.json`. The final run used
+19,359,284 source bytes and 2,415,021 scoped bytes; each unchanged scoped
+response was a 304 with no body. Median milliseconds per operation:
+
+| Operation | Wall before | Wall after | CPU before | CPU after |
+|---|---:|---:|---:|---:|
+| unchanged member poll | 59.33 | 0.77 | 76.79 | 1.26 |
+| snapshot ownership, 256 sessions | 13.20 | 10.47 | 17.76 | 14.41 |
+| runtime replay, 2 x 128 events | 152.39 | 11.37 | 181.55 | 11.79 |
+| log batch, 64 paths | 20.37 | 3.79 | 21.13 | 4.93 |
+
+The gate shared the runner with other work; the alternating samples record
+that variation. These figures describe this projection harness only. A cold
+scope or a changed operator body still needs a full decode and filter; the
+poll timings cover an unchanged source.
+
+The member response cache belongs to the route module and retains at most
+16 scopes and 32 MiB, evicting the least recently used entries. Oversized
+responses are served without retaining them. Every request revalidates the
+member and placement scope, and each source response revalidates the cached
+body. Permission changes during source reads or compression refuse the response.
+
+Owner-only surfaces remain owner-only, including roles, flows, composer
+uploads, transcription, limits, `/api/streams` and view/presence. A workspace
+manager can appoint or remove co-managers in their own workspace.

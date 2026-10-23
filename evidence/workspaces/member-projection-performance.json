@@ -1,0 +1,223 @@
+{
+  "measuredAt": "2026-10-23T09:56:32.445Z",
+  "runtime": "1.4.0",
+  "platform": "linux",
+  "baselineProjection": "d8c9778dc",
+  "sourceHashes": {
+    "scripts/benchmark-workspace-projection.ts": "9704b85c07f78c6fed4894952123ec8203b19518e7fee8a8f453cbdc73a05d0a",
+    "src/lib/team/workspaceAccess.ts": "6777b979b131a49b0939294bdfdd14fb4346461331e5f8689676f9c57487e2a4",
+    "src/lib/team/workspaceRoute.ts": "b0e3a64e44598bae12ffcd27dc704c00f2c6d8117f636d5ac7906c360189d732",
+    "src/lib/team/workspaceProjection.ts": "335bffc50a605f809f2eab609edeafc0bf44f23fcdef56b40fb2c2012f9a7fba",
+    "src/lib/team/workspaceFilesResponse.ts": "8f62fbee6ee66f9b89eea5fef5905a40cd1805cf7a263625b5cd1df082e7b4bc",
+    "src/lib/logTailStream.ts": "251093605e820a52718bc7c0de40c75360918d15783484226cf79cf0af2d9c28",
+    "src/lib/runtime/sse.ts": "85fee6a0f2977ae9728f72753cbf25a6199e43d5c38009bfe19a15eabfc4c4d1",
+    "src/app/api/logs/stream/route.ts": "03d4d383d6ce18bead4fff6756ec41038f9c4721501b8ccb2f00edd6f58d159b",
+    "src/app/api/runtime/stream/route.ts": "a38f4ec80933c14697fceedffee3feb89e9e02205b09a68a991509c1cf03b941"
+  },
+  "rows": 53299,
+  "projects": 64,
+  "workspaces": 8,
+  "sessions": 256,
+  "sourceBytes": 19359284,
+  "scopedBytes": 2415021,
+  "samples": 5,
+  "iterations": 5,
+  "results": [
+    {
+      "name": "unchanged member poll",
+      "samples": {
+        "before": [
+          {
+            "wallMs": 56.46437440000009,
+            "cpuMs": 73.7284
+          },
+          {
+            "wallMs": 60.98550560000003,
+            "cpuMs": 83.0514
+          },
+          {
+            "wallMs": 61.32267999999967,
+            "cpuMs": 80.8538
+          },
+          {
+            "wallMs": 59.3272273999999,
+            "cpuMs": 76.7942
+          },
+          {
+            "wallMs": 55.775571599999964,
+            "cpuMs": 71.3774
+          }
+        ],
+        "after": [
+          {
+            "wallMs": 0.8402861999999004,
+            "cpuMs": 1.7318
+          },
+          {
+            "wallMs": 0.6492749999997613,
+            "cpuMs": 2.0358
+          },
+          {
+            "wallMs": 0.9214576000002126,
+            "cpuMs": 1.2588
+          },
+          {
+            "wallMs": 0.5853714000000764,
+            "cpuMs": 0.8468
+          },
+          {
+            "wallMs": 0.7714105999999447,
+            "cpuMs": 1.1792
+          }
+        ]
+      }
+    },
+    {
+      "name": "snapshot ownership, 256 sessions",
+      "samples": {
+        "before": [
+          {
+            "wallMs": 13.002749799999947,
+            "cpuMs": 19.7914
+          },
+          {
+            "wallMs": 13.174674999999842,
+            "cpuMs": 17.7638
+          },
+          {
+            "wallMs": 13.198018799999772,
+            "cpuMs": 27.3354
+          },
+          {
+            "wallMs": 15.13451559999994,
+            "cpuMs": 15.7364
+          },
+          {
+            "wallMs": 14.547250599999824,
+            "cpuMs": 16.3332
+          }
+        ],
+        "after": [
+          {
+            "wallMs": 10.315290199999799,
+            "cpuMs": 13.6378
+          },
+          {
+            "wallMs": 11.843343200000163,
+            "cpuMs": 17.6708
+          },
+          {
+            "wallMs": 10.61184080000021,
+            "cpuMs": 20.082
+          },
+          {
+            "wallMs": 10.235806800000137,
+            "cpuMs": 14.413
+          },
+          {
+            "wallMs": 10.46996560000007,
+            "cpuMs": 12.1304
+          }
+        ]
+      }
+    },
+    {
+      "name": "runtime replay, 2 x 128 events",
+      "samples": {
+        "before": [
+          {
+            "wallMs": 167.87073860000018,
+            "cpuMs": 204.4736
+          },
+          {
+            "wallMs": 154.70773760000012,
+            "cpuMs": 177.8044
+          },
+          {
+            "wallMs": 149.95101140000043,
+            "cpuMs": 181.5542
+          },
+          {
+            "wallMs": 148.19301159999958,
+            "cpuMs": 191.4198
+          },
+          {
+            "wallMs": 152.38536039999963,
+            "cpuMs": 160.657
+          }
+        ],
+        "after": [
+          {
+            "wallMs": 13.064283399999841,
+            "cpuMs": 13.3304
+          },
+          {
+            "wallMs": 11.05223879999976,
+            "cpuMs": 13.914
+          },
+          {
+            "wallMs": 11.365553399999772,
+            "cpuMs": 11.635
+          },
+          {
+            "wallMs": 11.472564799999963,
+            "cpuMs": 11.7946
+          },
+          {
+            "wallMs": 11.199467999999616,
+            "cpuMs": 11.394
+          }
+        ]
+      }
+    },
+    {
+      "name": "log batch, 64 paths",
+      "samples": {
+        "before": [
+          {
+            "wallMs": 21.61909799999994,
+            "cpuMs": 23.2212
+          },
+          {
+            "wallMs": 20.369761599999766,
+            "cpuMs": 21.1258
+          },
+          {
+            "wallMs": 21.589190000000237,
+            "cpuMs": 22.4726
+          },
+          {
+            "wallMs": 20.029963200000203,
+            "cpuMs": 20.7738
+          },
+          {
+            "wallMs": 19.534365600000456,
+            "cpuMs": 19.8948
+          }
+        ],
+        "after": [
+          {
+            "wallMs": 3.9346017999996548,
+            "cpuMs": 5.4404
+          },
+          {
+            "wallMs": 3.7384665999998106,
+            "cpuMs": 5.4878
+          },
+          {
+            "wallMs": 3.617815400000109,
+            "cpuMs": 3.69
+          },
+          {
+            "wallMs": 3.7903663999997663,
+            "cpuMs": 4.0366
+          },
+          {
+            "wallMs": 4.483385000000271,
+            "cpuMs": 4.9266
+          }
+        ]
+      }
+    }
+  ]
+}
