@@ -187,7 +187,7 @@ const testHostTargetFetch: HostTargetFetcher = async (input) => {
 
 const { NodesLayer } = await import("./scheme/nodes");
 const { MobileFocusView } = await import("./mobile/MobileFocusView");
-const { storageKey } = await import("./runtimeProfile");
+const { storageKey, phaseKey } = await import("./runtimeProfile");
 
 const realFetch = globalThis.fetch;
 
@@ -225,10 +225,9 @@ function schemeLayout(nodes: SchemeNode[]): SchemeLayout {
   } as unknown as SchemeLayout;
 }
 
-/* The real desktop board owner: keys every pane host by transcript path and
-   renders live BranchPanes across the canvas. `dormant` only pauses the feed
-   poll; the composer textarea mounts on every surface. */
-function renderNodesLayer(root: Root, nodes: SchemeNode[], dormant = true): void {
+/* The real desktop board owner renders live panes across the canvas. A cold
+   dormant node intentionally has no composer; these typing fixtures stay active. */
+function renderNodesLayer(root: Root, nodes: SchemeNode[], dormant = false): void {
   flushSync(() => root.render(
     <NodesLayer
       layout={schemeLayout(nodes)}
@@ -410,12 +409,13 @@ for (const mobile of [false, true]) {
     sessionStorage.setItem(`llvDraft:${conversationId}`, draft);
     /* A committed model/reasoning choice the refresh must not revert (issue
        #499 fixed a persist-on-render that reverted it during resolution). It is
-       a VALID, non-default catalog selection — `gpt-5.6-terra` (the default is
-       `gpt-5.6-sol`) at `high` (the default is `low`) — so the pill actually
+       a pending reconfigure to the non-default model `gpt-5.6-terra`
+       at `high` (the default effort is `low`) — so the pill actually
        hydrates and renders it; an unsupported id would be dropped to defaults on
        read and the rendered-face assertion below would have no teeth. */
     const runtimeKey = storageKey(fileFor({ path: "/refresh.jsonl", conversationId }));
     localStorage.setItem(runtimeKey, JSON.stringify({ model: "gpt-5.6-terra", effort: "high" }));
+    localStorage.setItem(phaseKey(fileFor({ path: "/refresh.jsonl", conversationId })), "pending");
     const entry = (mtime: number, activity: FileEntry["activity"]) =>
       fileFor({ path: "/refresh.jsonl", conversationId, mtime, activity });
 
@@ -457,7 +457,7 @@ for (const mobile of [false, true]) {
     /* The runtime model/reasoning choice rode the resolution untouched — the
        RENDERED accessible face, not just the storage record. Reverting EITHER
        axis makes this RED: a model reversion drops "GPT-5.6-Terra" (→ the
-       "GPT-5.6-Sol" default) and a reasoning reversion drops the chosen tier
+       "GPT-6.1-Sol" default) and a reasoning reversion drops the chosen tier
        (→ the lowest one). One vocabulary per surface (mobile v2 §7 Q5): the
        phone says the tier id the operator says, the desktop keeps its friendly
        label, and each is checked in its own words. */
@@ -466,7 +466,7 @@ for (const mobile of [false, true]) {
     const label = runtimePillLabel(host);
     expect(label).toContain("GPT-5.6-Terra");
     expect(label).toContain(tier);
-    expect(label).not.toContain("GPT-5.6-Sol");
+    expect(label).not.toContain("GPT-6.1-Sol");
     expect(label).not.toContain(revertedTier);
     expect(JSON.parse(localStorage.getItem(runtimeKey)!)).toEqual({ model: "gpt-5.6-terra", effort: "high" });
   });
@@ -521,7 +521,9 @@ test("[negative control] the reenacted historical remount mutation turns the ide
   fireInput(before);
   expect(document.activeElement).toBe(before);
 
-  /* Same conversation, refreshed under a rekeyed path → NodesLayer remounts. */
+  /* A changed transcript path retains the conversation identity today. Force
+     the old unmount explicitly to keep this negative control meaningful. */
+  flushSync(() => root.render(null));
   renderNodesLayer(root, [schemeNode(fileFor({ path: "/rekeyed.jsonl", conversationId }), 100)]);
   const after = textareaIn(host);
   /* RED: the identity assertion the green tests make (`after === before`) now

@@ -66,6 +66,7 @@ const structuredView: RuntimeSessionView = {
 } as unknown as RuntimeSessionView;
 
 import { TmuxComposer } from "./TmuxComposer";
+import { setComposerAdmissionTimingForTests } from "./composerAdmissionDeadline";
 import { readOutbox, resetOutboxForTests, retryOutbox } from "./conversation/outbox";
 
 const realFetch = globalThis.fetch;
@@ -75,6 +76,7 @@ const subscribeRuntime = (listener: () => void) => {runtimeListeners.add(listene
 function useReceipts() {return useSyncExternalStore(subscribeRuntime,()=>structuredView.receipts,()=>structuredView.receipts);}
 
 beforeEach(() => {
+  setComposerAdmissionTimingForTests({ admissionDeadlineMs: 100, receiptReconciliationMs: 20, receiptPollIntervalMs: 5 });
   structuredView.receipts = [];
   installTmuxComposerRuntimeForTests({
     useRuntimeView: (candidate) => {useReceipts();return candidate.conversationId === "conv-stale-key" ? structuredView : null;},
@@ -84,6 +86,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setComposerAdmissionTimingForTests(null);
   resetTmuxComposerRuntimeForTests();
   setLocale("en");
   globalThis.fetch = realFetch;
@@ -110,6 +113,12 @@ function mockWire(sends: SendBody[], respond: Array<(body: SendBody) => { status
   globalThis.fetch = (async (input: string | URL | Request, init?: { body?: string }) => {
     const url = String(input);
     if (url === "/api/tmux/targets") return { ok: true, status: 200, json: async () => ({ targets: {} }) } as Response;
+    if (url.startsWith("/api/runtime/send?")) {
+      const query = new URL(url, "http://fixture.invalid").searchParams;
+      expect(query.get("conversationId")).toBe("conv-stale-key");
+      expect(sends.some(send => send.idempotencyKey === query.get("clientMessageId"))).toBe(true);
+      return Response.json({ outcome: "unknown" });
+    }
     if (url !== "/api/runtime/send") throw new Error(`unexpected request: ${url}`);
     const body = JSON.parse(init?.body ?? "{}") as SendBody;
     sends.push(body);
@@ -194,6 +203,9 @@ test("a remount cannot stamp a stale unresolved generation's key onto the operat
     await new Promise((r) => setTimeout(r, 0));
   });
 
+  // Exhaust the bounded observation window without fabricating a terminal receipt.
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 40)); });
+
   /* The operator types a genuinely NEW message. It must leave under a FRESH
      key carrying ITS OWN text — never the stale generation's key or bytes. */
   await settle(() => composerControls(host).type("a brand new message"));
@@ -201,7 +213,7 @@ test("a remount cannot stamp a stale unresolved generation's key onto the operat
   /* The stale generation no longer holds this browser's wire: no receipt can be
      made to arrive for a request that may never have been admitted, so waiting
      on it would mute the conversation permanently (outbox `holdsLocalWireFence`).
-     The new message therefore leaves at once — and what matters here is that it
+     After that bounded observation the new message leaves — and what matters here is that it
      leaves as ITSELF, under a fresh key with its own text. */
   expect(sends).toHaveLength(2);
   expect(sends[1]!.text).toBe("a brand new message");

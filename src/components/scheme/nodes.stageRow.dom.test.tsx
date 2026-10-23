@@ -28,6 +28,8 @@ class InertResizeObserver {
 function bindDomGlobals() {
   Object.assign(globalThis, {
     window: dom,
+    requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
+    cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom),
     document: dom.document,
     navigator: dom.navigator,
     Node: dom.Node,

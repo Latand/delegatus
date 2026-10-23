@@ -29,6 +29,8 @@ class TestResizeObserver {
 function bindDomGlobals() {
   Object.assign(globalThis, {
     window: dom, document: dom.document, navigator: dom.navigator,
+    requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
+    cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom),
     Node: dom.Node, HTMLElement: dom.HTMLElement, HTMLButtonElement: dom.HTMLButtonElement,
     HTMLInputElement: dom.HTMLInputElement, Event: dom.Event, CustomEvent: dom.CustomEvent, MouseEvent: dom.MouseEvent,
     sessionStorage: dom.sessionStorage, localStorage: dom.localStorage,
@@ -149,7 +151,7 @@ test("a scheme node classifies a scanner-shaped subagent from its live structure
   const host = render([node(root, 100), node(subagent, 700)]);
   expect(surfaceOf(host, "/child.jsonl")).toBe("structured-subagent");
   // the root-agent Stop note is rendered on the child's strip
-  expect(host.querySelector('[data-scheme-node="/child.jsonl"]')?.textContent).toContain("interrupts the root agent");
+  expect(host.querySelector('[data-scheme-node="/child.jsonl"] [aria-label*="interrupts the root agent"]')).not.toBeNull();
 });
 
 test("dormant far-zoom scheme nodes render no control strip; active nodes restore it", () => {

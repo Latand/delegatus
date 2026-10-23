@@ -400,6 +400,8 @@ test("a shelf takes the wide share, one at a time, and gives it back when work r
   expect(localStorage.getItem("llv:kanban-wide:v1")).toBe("done");
   flushSync(() => host.querySelector<HTMLElement>('.card[data-id="task:a"]')!.dispatchEvent(new dom.PointerEvent("pointerdown", { bubbles: true }) as unknown as Event));
   expect(wideColumns(host)).toEqual(["done"]);
+  // Complete the pointer gesture before remounting; a held pointer suppresses later clicks.
+  flushSync(() => document.dispatchEvent(new dom.PointerEvent("pointerup", { bubbles: true }) as unknown as Event));
 
   const again = mount(tasks, NO_PORTS);
   expect(wideColumns(again.host)).toEqual(["done"]);

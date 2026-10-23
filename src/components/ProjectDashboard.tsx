@@ -73,6 +73,7 @@ import { topScreen, useMobileNav, useMobileNavStore, type MobileScreen, type Mob
 import { TaskSheet, type TaskSheetView } from "./tasks/TaskSheet";
 import { Badge } from "@/components/ui/Badge";
 import { navigateToFragment } from "@/lib/navigation/fragmentNavigation";
+import { useStableCallback } from "./kanban/useStableCallback";
 import { KanbanBoard, type BarTrailExtra } from "./kanban/KanbanBoard";
 import { KanbanSeat } from "./kanban/KanbanSeat";
 import { useKanbanSeat, useSeatSignal } from "./kanban/kanbanSeatStore";
@@ -1467,6 +1468,7 @@ function ProjectDashboardView({
     if (closed) markConversationSeen(closed);
     applyClose(path);
   };
+  const closeConversation = useStableCallback((file: FileEntry) => closeNode(file.path));
 
   /* Latest manual list behind a ref so the convergence effect below reads
      current board state without re-running on every prefs change. */
@@ -2522,7 +2524,7 @@ function ProjectDashboardView({
                 onDraftSpawned={draftSpawned}
                 onHandoff={addHandoffDraft}
                 onSpawnRetry={retryLaunch}
-                onCloseConversation={(file) => closeNode(file.path)}
+                onCloseConversation={closeConversation}
                 barLead={barLead}
                 barTrail={(accountsInMenu, extra) => barTrail(accountsInMenu, true, extra)}
                 recentAgents={(close, countSlot) => (

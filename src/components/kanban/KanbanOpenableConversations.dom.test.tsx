@@ -222,7 +222,8 @@ test("a failed launch shows at once with its error, opens its launch view, and c
   expect(opened).toEqual(["spawn:launch-failed"]);
   /* The launch view it opens carries the error and a working Retry. */
   const launchView = host.querySelector('[data-launch-state="failed"]') as HTMLElement | null;
-  expect(launchView?.textContent).toContain("account limit reached");
+  expect(launchView?.textContent).toContain("The launch ended with an error.");
+  expect(launchView?.textContent).toContain("First message: failed");
   flushSync(() => (launchView!.querySelector("[data-launch-retry]") as HTMLElement).click());
   expect(retried).toEqual(["spawn:launch-failed"]);
 });
