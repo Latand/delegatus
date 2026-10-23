@@ -910,7 +910,10 @@ export class SqliteAgentRegistryStore {
   /** One prepared snapshot owner, on its own read connection. The writer's
       keyed transactions remain available while it yields. */
   private preparedReader: SqliteAgentRegistryStore | null = null;
-  private preparingReader: Promise<SqliteRegistrySnapshot> | null = null;
+  /** The one shared preparation. Each caller waits under its own signal; the
+      work itself stops only after every caller waiting on it has stopped, so
+      an expired background reader cannot cancel startup's unexpired one. */
+  private preparingReader: { run: Promise<SqliteRegistrySnapshot>; abort: AbortController; waiters: number } | null = null;
   private closed = false;
   /** Used while the wrapper retires a replaced inode, letting issued cold
       snapshots finish against their still-open reader connection. */
@@ -1662,7 +1665,38 @@ export class SqliteAgentRegistryStore {
         return Promise.resolve(cached);
       }
     }
-    if (this.preparingReader) return this.preparingReader;
+    const shared = this.preparingReader ?? this.startReaderPreparation();
+    return this.awaitReaderPreparation(shared, signal);
+  }
+
+  /** Attach one caller to the shared preparation. A caller without a signal
+      keeps it alive to its end; a signalled caller leaves at its own abort,
+      and the last one to leave stops the work and waits for its bounded
+      cleanup (slice boundary, lock wait, reader close) before refusing. */
+  private awaitReaderPreparation(shared: NonNullable<SqliteAgentRegistryStore["preparingReader"]>,
+    signal?: AbortSignal): Promise<SqliteRegistrySnapshot> {
+    shared.waiters++;
+    if (!signal) return shared.run;
+    return new Promise<SqliteRegistrySnapshot>((resolve, reject) => {
+      const leave = () => {
+        if (--shared.waiters > 0) { reject(signal.reason); return; }
+        // Later callers start their own preparation instead of joining one
+        // that is stopping; the stopped one never publishes.
+        if (this.preparingReader === shared) this.preparingReader = null;
+        shared.abort.abort(signal.reason);
+        shared.run.then(() => reject(signal.reason), () => reject(signal.reason));
+      };
+      signal.addEventListener("abort", leave, { once: true });
+      shared.run.then(
+        value => { signal.removeEventListener("abort", leave); resolve(value); },
+        error => { signal.removeEventListener("abort", leave); reject(error); },
+      );
+    });
+  }
+
+  private startReaderPreparation(): NonNullable<SqliteAgentRegistryStore["preparingReader"]> {
+    const abort = new AbortController();
+    const signal = abort.signal;
     const run = (async () => {
       // Let the tick after constructor/schema work run before opening and
       // materializing the read connection in the next bounded slice.
@@ -1749,9 +1783,12 @@ export class SqliteAgentRegistryStore {
         }
         throw new Error("registry database replaced during three preparation attempts");
       } catch (error) { reader.close(); throw error; }
-    })().finally(() => { this.preparingReader = null; });
-    this.preparingReader = run;
-    return run;
+    })().finally(() => { if (this.preparingReader === shared) this.preparingReader = null; });
+    const shared = { run, abort, waiters: 0 };
+    // Every caller may have left before the work settles.
+    run.catch(() => {});
+    this.preparingReader = shared;
+    return shared;
   }
 
   private recoveryIndexesSignature: string | null = null;

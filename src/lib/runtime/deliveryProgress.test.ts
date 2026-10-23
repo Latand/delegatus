@@ -2,7 +2,7 @@ import { withoutWriterWait } from "@/lib/agent/registryLockHolderFixture";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
 import { DELIVERY_PHASE_HISTORY_LIMIT, DELIVERY_PROGRESS_TERMINAL_RETENTION_MS, DeliveryProgressStore, readDeliveryProgress, type DeliveryProgressRecord } from "./deliveryProgress";
@@ -718,6 +718,53 @@ test("asynchronous restoration prepares both its selection and freshness check w
     reader.prepareReadOnlySnapshot = async () => ++preparations === 1 ? snapshot : { ...snapshot };
     expect(await restoreMissingRecordsAsync(reader, store, 1000)).toBe(false);
   } finally { store.close(); registry.close(); }
+});
+
+
+/* Restoration's private deadline joins the registry preparation startup also
+   waits on. When restoration started it and its deadline passes first, only
+   restoration is refused: the unsignalled reader still receives the view
+   from the same, uninterrupted preparation. */
+test("an expired restoration deadline cannot refuse another reader of the shared registry preparation", async () => {
+  const { restoreMissingRecordsAsync } = await import("./recordWait");
+  const directory = fs.mkdtempSync(path.join(root, "shared-preparation-"));
+  const { normalizeRegistry } = await import("@/lib/agent/registry");
+  const { SqliteAgentRegistryStore } = await import("@/lib/agent/sqliteRegistryStore");
+  const sqliteFilename = path.join(directory, "agent-registry.sqlite");
+  const seed = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "sqlite", sqliteFilename });
+  const template = seed.beginSpawn("codex", "/repo/bulk", { title: "Bulk" }).launchId;
+  seed.close();
+  /* 512 receipts keep the shared preparation in flight across several slices. */
+  const launches = Array.from({ length: 512 }, (_, index) => `bulk-${index}`);
+  const bulk = new SqliteAgentRegistryStore(sqliteFilename, {
+    normalize: normalizeRegistry, initialSnapshot: () => { throw new Error("seeded registry required"); },
+  });
+  bulk.mutate(file => {
+    for (const launchId of launches) file.receipts[launchId] = { ...file.receipts[template]!, launchId };
+  }, false);
+  bulk.close();
+  let loads = 0, armed = false;
+  let started!: () => void;
+  const loadStarted = new Promise<void>(resolve => { started = resolve; });
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, {
+    sqliteMode: "sqlite", sqliteFilename,
+    onSqliteSnapshotLoad: () => { if (!armed) return; loads++; started(); },
+  });
+  const store = new DeliveryProgressStore(path.join(directory, "delivery-progress.sqlite"), () => 1000, noTimer);
+  const restoration = new AbortController();
+  const timeout = spyOn(AbortSignal, "timeout").mockImplementation(() => restoration.signal);
+  try {
+    armed = true;
+    const restoring = restoreMissingRecordsAsync(registry, store, 1000);
+    await loadStarted;
+    const reading = registry.prepareReadOnlySnapshot();
+    for (let turn = 0; turn < 3; turn++) await Promise.resolve();
+    restoration.abort(new Error("restoration owner expired"));
+    await expect(restoring).rejects.toThrow("restoration owner expired");
+    const file = await reading;
+    expect(launches.every(launchId => file.receipts[launchId]?.launchId === launchId)).toBe(true);
+    expect(loads).toBe(1);
+  } finally { timeout.mockRestore(); store.close(); registry.close(); }
 });
 
 

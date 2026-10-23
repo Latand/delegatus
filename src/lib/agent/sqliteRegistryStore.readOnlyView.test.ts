@@ -33,8 +33,8 @@ function fixture() {
   const initial = seed.snapshot();
   seed.close();
   const filename = path.join(directory, "agent-registry.sqlite");
-  const open = () => {
-    const store = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry });
+  const open = (options: { onSnapshotLoad?: () => void } = {}) => {
+    const store = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry, ...options });
     stores.push(store);
     return store;
   };
@@ -341,6 +341,74 @@ test("an aborted preparation leaves keyed reads and the next preparation usable"
   await expect(store.prepareReadOnlySnapshot(controller.signal)).rejects.toThrow("retired preparation");
   expect(store.read(file => file.receipts[kept]?.launchId)).toBe(kept);
   expect((await store.prepareReadOnlySnapshot()).file.receipts[kept]?.launchId).toBe(kept);
+});
+
+/* Startup, restoration and settlement share one preparation, each under its
+   own deadline. A background reader whose deadline passes leaves it; the work
+   stops only once every reader waiting on it has left. 512 receipts keep the
+   shared work in flight across several yielded slices. */
+async function sharedPreparationFixture() {
+  const { open, kept } = fixture();
+  const seed = open();
+  seed.mutate(file => {
+    for (let index = 0; index < 512; index++) {
+      file.receipts[`bulk-${index}`] = { ...file.receipts[kept]!, launchId: `bulk-${index}` };
+    }
+  }, false);
+  let loads = 0;
+  let started!: () => void;
+  const loadStarted = new Promise<void>(resolve => { started = resolve; });
+  const store = open({ onSnapshotLoad: () => { loads++; started(); } });
+  loads = 0;
+  const drainMicrotasks = async () => { for (let turn = 0; turn < 3; turn++) await Promise.resolve(); };
+  return { store, loadStarted, loads: () => loads, drainMicrotasks };
+}
+
+for (const order of ["expired reader started first", "expired reader joined second"] as const) {
+  test(`an expired reader leaves the shared preparation and the unexpired reader completes it (${order})`, async () => {
+    const { store, loadStarted, loads, drainMicrotasks } = await sharedPreparationFixture();
+    const expired = new AbortController();
+    const unexpired = new AbortController();
+    const prepare = (signal: AbortSignal) => store.prepareReadOnlySnapshot(signal, { recoveryIndexes: false });
+    let expiredRead: Promise<unknown>, unexpiredRead: Promise<Awaited<ReturnType<typeof prepare>>>;
+    if (order === "expired reader started first") {
+      expiredRead = prepare(expired.signal);
+      await loadStarted;
+      unexpiredRead = prepare(unexpired.signal);
+    } else {
+      unexpiredRead = prepare(unexpired.signal);
+      await loadStarted;
+      expiredRead = prepare(expired.signal);
+    }
+    let unexpiredSettled = false;
+    void unexpiredRead.then(() => { unexpiredSettled = true; }, () => { unexpiredSettled = true; });
+    await drainMicrotasks();
+    expired.abort(new Error("restoration owner expired"));
+    await expect(expiredRead).rejects.toThrow("restoration owner expired");
+    // The expired reader left while the shared work was still in flight.
+    expect(unexpiredSettled).toBe(false);
+    const prepared = await unexpiredRead;
+    expect(prepared.file.receipts["bulk-511"]?.launchId).toBe("bulk-511");
+    expect(loads()).toBe(1);
+  });
+}
+
+test("when every reader of a shared preparation expires, the work stops unpublished and the next reader prepares afresh", async () => {
+  const { store, loadStarted, loads, drainMicrotasks } = await sharedPreparationFixture();
+  const first = new AbortController();
+  const second = new AbortController();
+  const firstRead = store.prepareReadOnlySnapshot(first.signal, { recoveryIndexes: false });
+  await loadStarted;
+  const secondRead = store.prepareReadOnlySnapshot(second.signal, { recoveryIndexes: false });
+  await drainMicrotasks();
+  second.abort(new Error("second reader expired"));
+  await expect(secondRead).rejects.toThrow("second reader expired");
+  first.abort(new Error("first reader expired"));
+  await expect(firstRead).rejects.toThrow("first reader expired");
+  expect(loads()).toBe(1);
+  const fresh = await store.prepareReadOnlySnapshot(undefined, { recoveryIndexes: false });
+  expect(fresh.file.receipts["bulk-0"]?.launchId).toBe("bulk-0");
+  expect(loads()).toBe(2);
 });
 
 test("closing the owner during asynchronous preparation refuses publication", async () => {
