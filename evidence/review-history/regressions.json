@@ -622,21 +622,6 @@
   "absent": [],
   "flaky": [
     {
-      "file": "src/components/flows/RoundDeck.dom.test.tsx",
-      "suite": "",
-      "name": "a manual expand of the TERMINAL group is durable across remounts until a new round starts",
-      "kind": "test",
-      "occurrence": 0,
-      "base": {
-        "pass": 2,
-        "fail": 0
-      },
-      "head": {
-        "pass": 1,
-        "fail": 1
-      }
-    },
-    {
       "file": "src/components/kanban/KanbanBoard.dom.test.tsx",
       "suite": "",
       "name": "the mouse resting in a narrow column widens it after the dwell, with the cue on the way; a menu or a pin holds it",
@@ -655,6 +640,21 @@
       "file": "src/components/kanban/KanbanBoard.dom.test.tsx",
       "suite": "",
       "name": "on a large screen a project board balances its columns; narrow, scroll, tabs and the Overview keep theirs",
+      "kind": "test",
+      "occurrence": 0,
+      "base": {
+        "pass": 2,
+        "fail": 0
+      },
+      "head": {
+        "pass": 1,
+        "fail": 1
+      }
+    },
+    {
+      "file": "src/components/kanban/RemoteCard.dom.test.tsx",
+      "suite": "",
+      "name": "host sync metadata reaches the card with distinct fresh, stale, failing and waiting cues in both languages",
       "kind": "test",
       "occurrence": 0,
       "base": {

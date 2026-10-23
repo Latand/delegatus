@@ -4,7 +4,7 @@ This slice implements `docs/design/retire-flows.md` §6 and S6. S7–S9 remain s
 
 New work enters the existing pipeline draft editor. Built-in review templates use native reviewer and fixer run stages with a finite fail edge. Historical conversations require explicit task selection in the draft.
 
-Recorded reviews open through `src/components/flows/ReviewHistory.tsx`. Project menus, legacy stage links, verdict details, task history and archive decks share that reader. It follows the archive cursor, exposes every round, resolves reviewer aliases and generations, and reads findings or reports missing artifacts. Recorded approval retains its reviewed commit; an unavailable current commit is labelled unknown. Uncertain delivery remains visibly unresolved.
+Recorded reviews open through `src/components/flows/ReviewHistory.tsx`. Project menus, legacy stage links, verdict details, task history and archive decks share that reader. Legacy flow-round open requests reach the reader independently of board placement and camera support. It follows the archive cursor, exposes every round, resolves reviewer aliases and generations, and reads findings or reports missing artifacts. Recorded approval retains its reviewed commit; an unavailable current commit is labelled unknown. Uncertain delivery remains visibly unresolved.
 
 `src/components/flows/reviewGroup.ts` separates independent reviewer groups from executable flow configuration. Existing membership, disclosure, geometry and activity ordering remain in their existing selectors. Archived decks suppress the composer and agent controls. Cached flow actions return a local retirement refusal. The server retirement fence from S5 remains authoritative.
 

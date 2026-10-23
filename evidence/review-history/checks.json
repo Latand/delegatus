@@ -13,7 +13,8 @@
     "src/components/ProjectDashboard.tsx": "119b4959e8dc2625ccf69343a79b11d34780ebdb42ac2a508d609b56822c2cae",
     "src/components/Switchboard.tsx": "2cf394816e7258feb0901daeaaae104989fd61d0278bccf4d6bd8edba87ae7b4",
     "src/components/Viewer.tsx": "de6f52e7022784d75851f3b02afce66dafa80f60e9e0b1904900e2f5d1d55108",
-    "src/components/attention/navigate.ts": "f59ea30d286a6c70e62cd183bf59570a0dafcb429ef5c534f29c8d10ca2b6e73",
+    "src/components/attention/navigate.test.ts": "5f95bb73c057d268656cc8d05d0c7355ed9abafb3fffe9ce706788f3c3481137",
+    "src/components/attention/navigate.ts": "790bf98dddc8bc22eaebc234cdcb31b84b5c5f1bfc4c44f86e4656fa494c77be",
     "src/components/flows/FlowDialog.dom.test.tsx": "5eab263acd6ab199c07ff9c58cdedcbd7b12a87f8481a83598b40e3b5dc246a5",
     "src/components/flows/FlowDialog.tsx": "942f6c93ec2035cb102fa8643b20c276d2e50af84d77267fda9d9b75abbaa3c4",
     "src/components/flows/FlowHub.tsx": "0224f37f3dab34041e194a40cc219ef06eea5f022c4634de7f9df82eae182faf",
@@ -77,133 +78,6 @@
     "src/lib/i18n/uk.ts": "ace02978522f3d4192da4acc3adc9fa22db70225af8823f9d78bb13cf4e881ee"
   },
   "checks": [
-    {
-      "check": "focused:src/components/flows/ReviewHistory.dom.test.tsx",
-      "command": [
-        "bun",
-        "test",
-        "--timeout=60000",
-        "src/components/flows/ReviewHistory.dom.test.tsx"
-      ],
-      "exitCode": 0
-    },
-    {
-      "check": "focused:src/components/flows/RoundDeck.strip.dom.test.tsx",
-      "command": [
-        "bun",
-        "test",
-        "--timeout=60000",
-        "src/components/flows/RoundDeck.strip.dom.test.tsx"
-      ],
-      "exitCode": 0
-    },
-    {
-      "check": "focused:src/components/pipelines/pipelineModel.test.ts",
-      "command": [
-        "bun",
-        "test",
-        "--timeout=60000",
-        "src/components/pipelines/pipelineModel.test.ts"
-      ],
-      "exitCode": 0
-    },
-    {
-      "check": "typecheck",
-      "command": [
-        "bunx",
-        "tsc",
-        "--noEmit",
-        "--incremental",
-        "false"
-      ],
-      "exitCode": 0
-    },
-    {
-      "check": "touched-file-eslint",
-      "command": [
-        "bun",
-        "scripts/eslint-changes.ts",
-        "--base",
-        "134a29c6",
-        "src/components/OverviewBoard.tsx",
-        "src/components/OverviewKanban.tsx",
-        "src/components/ProjectDashboard.tsx",
-        "src/components/Switchboard.tsx",
-        "src/components/Viewer.tsx",
-        "src/components/attention/navigate.ts",
-        "src/components/flows/FlowDialog.dom.test.tsx",
-        "src/components/flows/FlowDialog.tsx",
-        "src/components/flows/FlowHub.tsx",
-        "src/components/flows/FlowStrip.tsx",
-        "src/components/flows/ReviewHistory.dom.test.tsx",
-        "src/components/flows/ReviewHistory.tsx",
-        "src/components/flows/RoundDeck.strip.dom.test.tsx",
-        "src/components/flows/RoundDeck.tsx",
-        "src/components/flows/directReviewGroups.test.ts",
-        "src/components/flows/directReviewGroups.ts",
-        "src/components/flows/flowModel.test.ts",
-        "src/components/flows/flowModel.ts",
-        "src/components/flows/reviewDeckDisclosure.ts",
-        "src/components/flows/reviewGroup.ts",
-        "src/components/flows/useEffectiveFlows.ts",
-        "src/components/kanban/KanbanBoard.tsx",
-        "src/components/kanban/StagesSheet.tsx",
-        "src/components/kanban/kanbanBoard.browser.test.tsx",
-        "src/components/kanban/kanbanModel.ts",
-        "src/components/kanban/overviewBands.ts",
-        "src/components/kanban/pipelineGraph.ts",
-        "src/components/kanban/pipelineSummary.ts",
-        "src/components/kanban/useBands.ts",
-        "src/components/mobile/MobileBoard.tsx",
-        "src/components/mobile/MobileFocusView.tsx",
-        "src/components/mobile/MobilePipelineCard.tsx",
-        "src/components/mobile/MobilePipelineScreen.tsx",
-        "src/components/mobile/MobilePipelinesScreen.tsx",
-        "src/components/pipelines/PipelineStrip.tsx",
-        "src/components/pipelines/PipelineTemplatePicker.dom.test.tsx",
-        "src/components/pipelines/VerdictPopover.render.test.tsx",
-        "src/components/pipelines/VerdictPopover.tsx",
-        "src/components/pipelines/createDraftPipeline.dom.test.tsx",
-        "src/components/pipelines/pipelineModel.test.ts",
-        "src/components/pipelines/pipelineModel.ts",
-        "src/components/reviewerAutoClose.test.ts",
-        "src/components/reviewerAutoClose.ts",
-        "src/components/scheme/BulkActionBar.tsx",
-        "src/components/scheme/GroupOverridePanel.dom.test.tsx",
-        "src/components/scheme/GroupOverridePanel.render.test.tsx",
-        "src/components/scheme/GroupOverridePanel.tsx",
-        "src/components/scheme/SchemeBoard.tsx",
-        "src/components/scheme/agentLinks.test.ts",
-        "src/components/scheme/agentLinks.ts",
-        "src/components/scheme/boardPresentation.ts",
-        "src/components/scheme/bulkActions.test.ts",
-        "src/components/scheme/bulkActions.ts",
-        "src/components/scheme/layout.test.ts",
-        "src/components/scheme/layout.ts",
-        "src/components/scheme/nodes.tsx",
-        "src/components/scheme/placementHorizon.ts",
-        "src/components/scheme/taskBands.ts",
-        "src/components/scheme/taskGeometry.ts",
-        "src/components/scheme/workerCollapse.ts",
-        "src/components/tasks/TaskWorkflowPanel.tsx",
-        "src/components/tasks/taskWorkflowModel.ts",
-        "src/hooks/useSwitchboardData.ts",
-        "src/lib/attention/targets.ts",
-        "src/lib/attention/types.ts",
-        "src/lib/i18n/en.ts",
-        "src/lib/i18n/uk.ts"
-      ],
-      "exitCode": 0
-    },
-    {
-      "check": "direct-import-regressions",
-      "command": [
-        "bun",
-        "--eval",
-        "import { touchedTests } from \"./scripts/local-gate-tests.ts\"; const result = await touchedTests(process.cwd(), \"134a29c6\", [\"scripts/memory-selection.test.ts\", \"src/components/BoardSearchEntry.dom.test.tsx\", \"src/components/BootShell.dom.test.tsx\", \"src/components/EffortPills.slot.dom.test.tsx\", \"src/components/OverviewBoard.catalog.render.test.tsx\", \"src/components/OverviewBoard.firstRun.dom.test.tsx\", \"src/components/OverviewBoard.kanban.dom.test.tsx\", \"src/components/OverviewBoard.loading.dom.test.tsx\", \"src/components/OverviewBoard.render.test.tsx\", \"src/components/ProjectDashboard.backgroundTaskDock.dom.test.tsx\", \"src/components/ProjectDashboard.catalogFailure.dom.test.tsx\", \"src/components/ProjectDashboard.empty.dom.test.tsx\", \"src/components/ProjectDashboard.flash.dom.test.tsx\", \"src/components/ProjectDashboard.headerBar.dom.test.tsx\", \"src/components/ProjectDashboard.inlineCatalog.dom.test.tsx\", \"src/components/ProjectDashboard.launchClaim.dom.test.tsx\", \"src/components/ProjectDashboard.loadingStates.dom.test.tsx\", \"src/components/ProjectDashboard.looseReader.dom.test.tsx\", \"src/components/ProjectDashboard.mobileLaunchFocus.dom.test.tsx\", \"src/components/ProjectDashboard.pipelineNavigation.dom.test.tsx\", \"src/components/ProjectDashboard.searchLanding.dom.test.tsx\", \"src/components/ProjectDashboard.seatTasks.dom.test.tsx\", \"src/components/ProjectDashboard.selection.dom.test.tsx\", \"src/components/ProjectDashboard.shelf.dom.test.tsx\", \"src/components/ProjectDashboard.test.ts\", \"src/components/ProjectDashboard.unownedConversations.dom.test.tsx\", \"src/components/ProjectDashboard.viewSwitch.dom.test.tsx\", \"src/components/ProjectRail.firstRun.dom.test.tsx\", \"src/components/TaskHeader.killConfirm.dom.test.tsx\", \"src/components/TmuxComposer.liveRefreshFocus.dom.test.tsx\", \"src/components/Viewer.catalogFailure.dom.test.tsx\", \"src/components/Viewer.deepLink.dom.test.tsx\", \"src/components/Viewer.mobileSwipe.dom.test.tsx\", \"src/components/Viewer.needsYou.dom.test.tsx\", \"src/components/Viewer.orchestratorDock.dom.test.tsx\", \"src/components/Viewer.overviewPhone.dom.test.tsx\", \"src/components/Viewer.railHidden.dom.test.tsx\", \"src/components/Viewer.switching.dom.test.tsx\", \"src/components/Viewer.test.ts\", \"src/components/attention/AttentionHost.dom.test.tsx\", \"src/components/attention/AttentionHost.phoneNotice.dom.test.tsx\", \"src/components/attention/PermissionActions.dom.test.tsx\", \"src/components/attention/arrivalPulse.dom.test.tsx\", \"src/components/attention/navigate.test.ts\", \"src/components/feed/FeedItem.mobile.dom.test.tsx\", \"src/components/feed/QuestionCard.delivery.dom.test.tsx\", \"src/components/feed/QuestionCard.dismiss.dom.test.tsx\", \"src/components/feed/QuestionCard.mobile.dom.test.tsx\", \"src/components/feed/processingError.test.ts\", \"src/components/flows/FlowDialog.dom.test.tsx\", \"src/components/flows/ReviewHistory.dom.test.tsx\", \"src/components/flows/RoundDeck.dom.test.tsx\", \"src/components/flows/RoundDeck.strip.dom.test.tsx\", \"src/components/flows/directReviewGroups.test.ts\", \"src/components/flows/flowModel.test.ts\", \"src/components/flows/reviewDeckDisclosure.test.ts\", \"src/components/kanban/KanbanAccounts.dom.test.tsx\", \"src/components/kanban/KanbanAccountsRuntime.dom.test.tsx\", \"src/components/kanban/KanbanAskOrchestrator.dom.test.tsx\", \"src/components/kanban/KanbanBoard.dom.test.tsx\", \"src/components/kanban/KanbanBoard.renders.dom.test.tsx\", \"src/components/kanban/KanbanCardDrag.dom.test.tsx\", \"src/components/kanban/KanbanDetails.dom.test.tsx\", \"src/components/kanban/KanbanDismiss.dom.test.tsx\", \"src/components/kanban/KanbanDrafts.dom.test.tsx\", \"src/components/kanban/KanbanEditing.dom.test.tsx\", \"src/components/kanban/KanbanNeedsFilter.dom.test.tsx\", \"src/components/kanban/KanbanOpenAgents.dom.test.tsx\", \"src/components/kanban/KanbanOpenableConversations.dom.test.tsx\", \"src/components/kanban/KanbanPipelines.dom.test.tsx\", \"src/components/kanban/KanbanPresence.dom.test.tsx\", \"src/components/kanban/KanbanReaders.dom.test.tsx\", \"src/components/kanban/KanbanStages.dom.test.tsx\", \"src/components/kanban/KanbanTickNotice.dom.test.tsx\", \"src/components/kanban/KanbanUndo.dom.test.tsx\", \"src/components/kanban/RemoteCard.dom.test.tsx\", \"src/components/kanban/cardState.test.ts\", \"src/components/kanban/kanbanModel.test.ts\", \"src/components/kanban/overviewBands.test.ts\", \"src/components/kanban/pipelineGraph.test.ts\", \"src/components/kanban/reuseKanbanModel.test.ts\", \"src/components/kanban/seatAgentWindow.dom.test.tsx\", \"src/components/kanban/stageDisplayName.test.ts\", \"src/components/kanban/stagesModel.test.ts\", \"src/components/kanban/taskChronologyModel.test.ts\", \"src/components/mobile/MobileBoard.dom.test.tsx\", \"src/components/mobile/MobileFocusView.badges.dom.test.tsx\", \"src/components/mobile/MobileFocusView.conversation.dom.test.tsx\", \"src/components/mobile/MobileFocusView.keyboardInset.dom.test.tsx\", \"src/components/mobile/MobileFocusView.reviewDeckRole.dom.test.tsx\", \"src/components/mobile/MobileFocusView.seen.dom.test.tsx\", \"src/components/mobile/MobileFocusView.strip.dom.test.tsx\", \"src/components/mobile/MobileFocusView.superseded.dom.test.tsx\", \"src/components/mobile/MobileFocusView.viewport.dom.test.tsx\", \"src/components/mobile/MobileKanban.dom.test.tsx\", \"src/components/mobile/MobilePipelineScreen.actions.dom.test.tsx\", \"src/components/mobile/MobilePipelineScreen.dom.test.tsx\", \"src/components/mobile/MobilePipelinesScreen.dom.test.tsx\", \"src/components/mobile/MobileRemoteTask.dom.test.tsx\", \"src/components/mobile/MobileShell.board.dom.test.tsx\", \"src/components/mobile/MobileTaskScreen.dom.test.tsx\", \"src/components/mobile/MobileTaskScreen.entry.dom.test.tsx\", \"src/components/mobile/directReviewDeck.dom.test.tsx\", \"src/components/mobile/mobileHeaderFit.dom.test.tsx\", \"src/components/mobile/mobileOrchestratorControls.dom.test.tsx\", \"src/components/mobile/mobileOrchestratorLeaves.dom.test.tsx\", \"src/components/mobile/mobileSeatCard.dom.test.tsx\", \"src/components/mobile/phoneKanbanModel.test.ts\", \"src/components/orchestrator/dockOpenState.dom.test.tsx\", \"src/components/orchestrator/seatComposerHoist.dom.test.tsx\", \"src/components/overlay/useAttentionOffers.dom.test.tsx\", \"src/components/pipelines/PipelineBlock.dom.test.tsx\", \"src/components/pipelines/PipelineEditor.legacyReview.dom.test.tsx\", \"src/components/pipelines/PipelineHub.dom.test.tsx\", \"src/components/pipelines/PipelineStrip.dom.test.tsx\", \"src/components/pipelines/PipelineStrip.render.test.tsx\", \"src/components/pipelines/PipelineStrip.test.ts\", \"src/components/pipelines/PipelineTemplatePicker.dom.test.tsx\", \"src/components/pipelines/StagePlaceholderPane.dom.test.tsx\", \"src/components/pipelines/VerdictPopover.render.test.tsx\", \"src/components/pipelines/cpuQueue.test.ts\", \"src/components/pipelines/createDraftPipeline.dom.test.tsx\", \"src/components/pipelines/pipelineBlockModel.test.ts\", \"src/components/pipelines/pipelineModel.test.ts\", \"src/components/pipelines/pipelinePlaceholderStages.test.ts\", \"src/components/pipelines/remoteLaneSummary.dom.test.tsx\", \"src/components/pipelines/stageCardAria.render.test.tsx\", \"src/components/projectDashboardDerivation.test.ts\", \"src/components/resources/AttachControls.render.test.tsx\", \"src/components/reviewerAutoClose.test.ts\", \"src/components/runtime/AttentionCard.dismiss.dom.test.tsx\", \"src/components/runtime/ConversationAttention.dom.test.tsx\", \"src/components/scheme/AgentLinksLayer.render.test.tsx\", \"src/components/scheme/GroupOverridePanel.dom.test.tsx\", \"src/components/scheme/GroupOverridePanel.render.test.tsx\", \"src/components/scheme/GroupsLayer.render.test.tsx\", \"src/components/scheme/Minimap.render.test.tsx\", \"src/components/scheme/SchemeBoard.bands.dom.test.tsx\", \"src/components/scheme/SchemeBoard.builderReveal.dom.test.tsx\", \"src/components/scheme/SchemeBoard.camera.dom.test.tsx\", \"src/components/scheme/SchemeBoard.catalogFocus.dom.test.tsx\", \"src/components/scheme/SchemeBoard.lineage.dom.test.tsx\", \"src/components/scheme/SchemeBoard.mapFraming.dom.test.tsx\", \"src/components/scheme/SchemeBoard.mapStacks.dom.test.tsx\", \"src/components/scheme/SchemeBoard.pipelineComposition.dom.test.tsx\", \"src/components/scheme/SchemeBoard.pipelineRegions.dom.test.tsx\", \"src/components/scheme/SchemeBoard.selection.dom.test.tsx\", \"src/components/scheme/SchemeBoard.stageOverlay.dom.test.tsx\", \"src/components/scheme/SubagentBadgeAnchors.render.test.tsx\", \"src/components/scheme/TaskCard.dom.test.tsx\", \"src/components/scheme/agentLinks.test.ts\", \"src/components/scheme/bulkActions.test.ts\", \"src/components/scheme/currentWork.test.ts\", \"src/components/scheme/directReviewBoardComposition.test.ts\", \"src/components/scheme/findFreeSlot.test.ts\", \"src/components/scheme/focusFrames.test.ts\", \"src/components/scheme/lasso.test.ts\", \"src/components/scheme/layout.lineage.test.ts\", \"src/components/scheme/layout.test.ts\", \"src/components/scheme/nodes.anatomy.render.test.tsx\", \"src/components/scheme/nodes.dom.test.tsx\", \"src/components/scheme/nodes.stageRow.dom.test.tsx\", \"src/components/scheme/nodes.strip.dom.test.tsx\", \"src/components/scheme/offscreenClusters.test.ts\", \"src/components/scheme/pipelineRegionGeometry.test.ts\", \"src/components/scheme/pipelineStageSurfaces.test.ts\", \"src/components/scheme/placementHorizon.test.ts\", \"src/components/scheme/spatialNav.test.ts\", \"src/components/scheme/taskBands.test.ts\", \"src/components/scheme/taskGeometry.test.ts\", \"src/components/scheme/taskPlacement.test.ts\", \"src/components/scheme/useSchemeCamera.focus.dom.test.tsx\", \"src/components/scheme/useSchemeCamera.test.ts\", \"src/components/scheme/useSpatialNav.test.ts\", \"src/components/scheme/workerCollapse.test.ts\", \"src/components/session/SessionTitle.mobile.dom.test.tsx\", \"src/components/skeletons.dom.test.tsx\", \"src/components/tasks/TaskWorkflowPanel.dom.test.tsx\", \"src/components/tasks/taskWorkflowModel.test.ts\", \"src/components/workLinks/workLinks.dom.test.tsx\", \"src/components/workflows/legacyDraftPurge.dom.test.tsx\", \"src/components/workingAgents.test.ts\", \"src/hooks/serverReach.dom.test.tsx\", \"src/hooks/useFiles.dom.test.tsx\", \"src/hooks/useSwitchboardData.dom.test.tsx\", \"src/hooks/viewPresenceBus.test.ts\", \"src/lib/attention/landing.test.ts\", \"src/lib/attention/machine.test.ts\", \"src/lib/attention/readerArrival.test.ts\", \"src/lib/attention/resolve.test.ts\", \"src/lib/attention/service.test.ts\", \"src/lib/attention/store.sqlite.test.ts\", \"src/lib/attention/store.test.ts\", \"src/lib/i18n/i18n.test.ts\", \"src/lib/i18n/spawnCopy.test.ts\", \"src/lib/links/laneFeed.test.ts\", \"src/lib/mcp/requestAttention.immediate.test.ts\", \"src/lib/mcp/requestAttention.targets.test.ts\", \"src/lib/mcp/schemaParity.test.ts\", \"src/lib/memory/context.test.ts\", \"src/lib/memory/selection.test.ts\", \"src/lib/orchestrator/prompt.test.ts\", \"src/lib/pipelines/engine.routing.test.ts\", \"src/lib/pipelines/stageCompletion.test.ts\", \"src/lib/pipelines/visibility.test.ts\", \"src/lib/reviewHistory/reader.test.ts\", \"src/lib/reviewHistory/redaction.test.ts\", \"src/lib/runtime/structuredDeliveryQueue.progress.test.ts\", \"src/lib/scanner/settledTurnProjection.test.ts\", \"src/lib/tasks/systemRun.test.ts\", \"src/lib/telegram/reportRunner.test.ts\"]); await Bun.write(\"evidence/review-history/regressions.json\", JSON.stringify(result,null,2)+\"\\n\"); process.exitCode=result.introduced.length?1:0;"
-      ],
-      "exitCode": 0
-    },
     {
       "check": "whole-file-board-head-1",
       "command": [
@@ -395,15 +269,157 @@
         "retired review history"
       ],
       "exitCode": 0
+    },
+    {
+      "check": "focused:src/components/attention/navigate.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/components/attention/navigate.test.ts"
+      ],
+      "exitCode": 0
+    },
+    {
+      "check": "focused:src/components/flows/ReviewHistory.dom.test.tsx",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/components/flows/ReviewHistory.dom.test.tsx"
+      ],
+      "exitCode": 0
+    },
+    {
+      "check": "focused:src/components/flows/RoundDeck.strip.dom.test.tsx",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/components/flows/RoundDeck.strip.dom.test.tsx"
+      ],
+      "exitCode": 0
+    },
+    {
+      "check": "focused:src/components/pipelines/pipelineModel.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/components/pipelines/pipelineModel.test.ts"
+      ],
+      "exitCode": 0
+    },
+    {
+      "check": "typecheck",
+      "command": [
+        "bunx",
+        "tsc",
+        "--noEmit",
+        "--incremental",
+        "false"
+      ],
+      "exitCode": 0
+    },
+    {
+      "check": "touched-file-eslint",
+      "command": [
+        "bun",
+        "scripts/eslint-changes.ts",
+        "--base",
+        "134a29c6",
+        "src/components/OverviewBoard.tsx",
+        "src/components/OverviewKanban.tsx",
+        "src/components/ProjectDashboard.tsx",
+        "src/components/Switchboard.tsx",
+        "src/components/Viewer.tsx",
+        "src/components/attention/navigate.test.ts",
+        "src/components/attention/navigate.ts",
+        "src/components/flows/FlowDialog.dom.test.tsx",
+        "src/components/flows/FlowDialog.tsx",
+        "src/components/flows/FlowHub.tsx",
+        "src/components/flows/FlowStrip.tsx",
+        "src/components/flows/ReviewHistory.dom.test.tsx",
+        "src/components/flows/ReviewHistory.tsx",
+        "src/components/flows/RoundDeck.strip.dom.test.tsx",
+        "src/components/flows/RoundDeck.tsx",
+        "src/components/flows/directReviewGroups.test.ts",
+        "src/components/flows/directReviewGroups.ts",
+        "src/components/flows/flowModel.test.ts",
+        "src/components/flows/flowModel.ts",
+        "src/components/flows/reviewDeckDisclosure.ts",
+        "src/components/flows/reviewGroup.ts",
+        "src/components/flows/useEffectiveFlows.ts",
+        "src/components/kanban/KanbanBoard.tsx",
+        "src/components/kanban/StagesSheet.tsx",
+        "src/components/kanban/kanbanBoard.browser.test.tsx",
+        "src/components/kanban/kanbanModel.ts",
+        "src/components/kanban/overviewBands.ts",
+        "src/components/kanban/pipelineGraph.ts",
+        "src/components/kanban/pipelineSummary.ts",
+        "src/components/kanban/useBands.ts",
+        "src/components/mobile/MobileBoard.tsx",
+        "src/components/mobile/MobileFocusView.tsx",
+        "src/components/mobile/MobilePipelineCard.tsx",
+        "src/components/mobile/MobilePipelineScreen.tsx",
+        "src/components/mobile/MobilePipelinesScreen.tsx",
+        "src/components/pipelines/PipelineStrip.tsx",
+        "src/components/pipelines/PipelineTemplatePicker.dom.test.tsx",
+        "src/components/pipelines/VerdictPopover.render.test.tsx",
+        "src/components/pipelines/VerdictPopover.tsx",
+        "src/components/pipelines/createDraftPipeline.dom.test.tsx",
+        "src/components/pipelines/pipelineModel.test.ts",
+        "src/components/pipelines/pipelineModel.ts",
+        "src/components/reviewerAutoClose.test.ts",
+        "src/components/reviewerAutoClose.ts",
+        "src/components/scheme/BulkActionBar.tsx",
+        "src/components/scheme/GroupOverridePanel.dom.test.tsx",
+        "src/components/scheme/GroupOverridePanel.render.test.tsx",
+        "src/components/scheme/GroupOverridePanel.tsx",
+        "src/components/scheme/SchemeBoard.tsx",
+        "src/components/scheme/agentLinks.test.ts",
+        "src/components/scheme/agentLinks.ts",
+        "src/components/scheme/boardPresentation.ts",
+        "src/components/scheme/bulkActions.test.ts",
+        "src/components/scheme/bulkActions.ts",
+        "src/components/scheme/layout.test.ts",
+        "src/components/scheme/layout.ts",
+        "src/components/scheme/nodes.tsx",
+        "src/components/scheme/placementHorizon.ts",
+        "src/components/scheme/taskBands.ts",
+        "src/components/scheme/taskGeometry.ts",
+        "src/components/scheme/workerCollapse.ts",
+        "src/components/tasks/TaskWorkflowPanel.tsx",
+        "src/components/tasks/taskWorkflowModel.ts",
+        "src/hooks/useSwitchboardData.ts",
+        "src/lib/attention/targets.ts",
+        "src/lib/attention/types.ts",
+        "src/lib/i18n/en.ts",
+        "src/lib/i18n/uk.ts"
+      ],
+      "exitCode": 0
+    },
+    {
+      "check": "direct-import-regressions",
+      "command": [
+        "bun",
+        "--eval",
+        "import { touchedTests } from \"./scripts/local-gate-tests.ts\"; const result = await touchedTests(process.cwd(), \"134a29c6\", [\"scripts/memory-selection.test.ts\", \"src/components/BoardSearchEntry.dom.test.tsx\", \"src/components/BootShell.dom.test.tsx\", \"src/components/EffortPills.slot.dom.test.tsx\", \"src/components/OverviewBoard.catalog.render.test.tsx\", \"src/components/OverviewBoard.firstRun.dom.test.tsx\", \"src/components/OverviewBoard.kanban.dom.test.tsx\", \"src/components/OverviewBoard.loading.dom.test.tsx\", \"src/components/OverviewBoard.render.test.tsx\", \"src/components/ProjectDashboard.backgroundTaskDock.dom.test.tsx\", \"src/components/ProjectDashboard.catalogFailure.dom.test.tsx\", \"src/components/ProjectDashboard.empty.dom.test.tsx\", \"src/components/ProjectDashboard.flash.dom.test.tsx\", \"src/components/ProjectDashboard.headerBar.dom.test.tsx\", \"src/components/ProjectDashboard.inlineCatalog.dom.test.tsx\", \"src/components/ProjectDashboard.launchClaim.dom.test.tsx\", \"src/components/ProjectDashboard.loadingStates.dom.test.tsx\", \"src/components/ProjectDashboard.looseReader.dom.test.tsx\", \"src/components/ProjectDashboard.mobileLaunchFocus.dom.test.tsx\", \"src/components/ProjectDashboard.pipelineNavigation.dom.test.tsx\", \"src/components/ProjectDashboard.searchLanding.dom.test.tsx\", \"src/components/ProjectDashboard.seatTasks.dom.test.tsx\", \"src/components/ProjectDashboard.selection.dom.test.tsx\", \"src/components/ProjectDashboard.shelf.dom.test.tsx\", \"src/components/ProjectDashboard.test.ts\", \"src/components/ProjectDashboard.unownedConversations.dom.test.tsx\", \"src/components/ProjectDashboard.viewSwitch.dom.test.tsx\", \"src/components/ProjectRail.firstRun.dom.test.tsx\", \"src/components/TaskHeader.killConfirm.dom.test.tsx\", \"src/components/TmuxComposer.liveRefreshFocus.dom.test.tsx\", \"src/components/Viewer.catalogFailure.dom.test.tsx\", \"src/components/Viewer.deepLink.dom.test.tsx\", \"src/components/Viewer.mobileSwipe.dom.test.tsx\", \"src/components/Viewer.needsYou.dom.test.tsx\", \"src/components/Viewer.orchestratorDock.dom.test.tsx\", \"src/components/Viewer.overviewPhone.dom.test.tsx\", \"src/components/Viewer.railHidden.dom.test.tsx\", \"src/components/Viewer.switching.dom.test.tsx\", \"src/components/Viewer.test.ts\", \"src/components/attention/AttentionHost.dom.test.tsx\", \"src/components/attention/AttentionHost.phoneNotice.dom.test.tsx\", \"src/components/attention/PermissionActions.dom.test.tsx\", \"src/components/attention/arrivalPulse.dom.test.tsx\", \"src/components/attention/navigate.test.ts\", \"src/components/feed/FeedItem.mobile.dom.test.tsx\", \"src/components/feed/QuestionCard.delivery.dom.test.tsx\", \"src/components/feed/QuestionCard.dismiss.dom.test.tsx\", \"src/components/feed/QuestionCard.mobile.dom.test.tsx\", \"src/components/feed/processingError.test.ts\", \"src/components/flows/FlowDialog.dom.test.tsx\", \"src/components/flows/ReviewHistory.dom.test.tsx\", \"src/components/flows/RoundDeck.dom.test.tsx\", \"src/components/flows/RoundDeck.strip.dom.test.tsx\", \"src/components/flows/directReviewGroups.test.ts\", \"src/components/flows/flowModel.test.ts\", \"src/components/flows/reviewDeckDisclosure.test.ts\", \"src/components/kanban/KanbanAccounts.dom.test.tsx\", \"src/components/kanban/KanbanAccountsRuntime.dom.test.tsx\", \"src/components/kanban/KanbanAskOrchestrator.dom.test.tsx\", \"src/components/kanban/KanbanBoard.dom.test.tsx\", \"src/components/kanban/KanbanBoard.renders.dom.test.tsx\", \"src/components/kanban/KanbanCardDrag.dom.test.tsx\", \"src/components/kanban/KanbanDetails.dom.test.tsx\", \"src/components/kanban/KanbanDismiss.dom.test.tsx\", \"src/components/kanban/KanbanDrafts.dom.test.tsx\", \"src/components/kanban/KanbanEditing.dom.test.tsx\", \"src/components/kanban/KanbanNeedsFilter.dom.test.tsx\", \"src/components/kanban/KanbanOpenAgents.dom.test.tsx\", \"src/components/kanban/KanbanOpenableConversations.dom.test.tsx\", \"src/components/kanban/KanbanPipelines.dom.test.tsx\", \"src/components/kanban/KanbanPresence.dom.test.tsx\", \"src/components/kanban/KanbanReaders.dom.test.tsx\", \"src/components/kanban/KanbanStages.dom.test.tsx\", \"src/components/kanban/KanbanTickNotice.dom.test.tsx\", \"src/components/kanban/KanbanUndo.dom.test.tsx\", \"src/components/kanban/RemoteCard.dom.test.tsx\", \"src/components/kanban/cardState.test.ts\", \"src/components/kanban/kanbanModel.test.ts\", \"src/components/kanban/overviewBands.test.ts\", \"src/components/kanban/pipelineGraph.test.ts\", \"src/components/kanban/reuseKanbanModel.test.ts\", \"src/components/kanban/seatAgentWindow.dom.test.tsx\", \"src/components/kanban/stageDisplayName.test.ts\", \"src/components/kanban/stagesModel.test.ts\", \"src/components/kanban/taskChronologyModel.test.ts\", \"src/components/mobile/MobileBoard.dom.test.tsx\", \"src/components/mobile/MobileFocusView.badges.dom.test.tsx\", \"src/components/mobile/MobileFocusView.conversation.dom.test.tsx\", \"src/components/mobile/MobileFocusView.keyboardInset.dom.test.tsx\", \"src/components/mobile/MobileFocusView.reviewDeckRole.dom.test.tsx\", \"src/components/mobile/MobileFocusView.seen.dom.test.tsx\", \"src/components/mobile/MobileFocusView.strip.dom.test.tsx\", \"src/components/mobile/MobileFocusView.superseded.dom.test.tsx\", \"src/components/mobile/MobileFocusView.viewport.dom.test.tsx\", \"src/components/mobile/MobileKanban.dom.test.tsx\", \"src/components/mobile/MobilePipelineScreen.actions.dom.test.tsx\", \"src/components/mobile/MobilePipelineScreen.dom.test.tsx\", \"src/components/mobile/MobilePipelinesScreen.dom.test.tsx\", \"src/components/mobile/MobileRemoteTask.dom.test.tsx\", \"src/components/mobile/MobileShell.board.dom.test.tsx\", \"src/components/mobile/MobileTaskScreen.dom.test.tsx\", \"src/components/mobile/MobileTaskScreen.entry.dom.test.tsx\", \"src/components/mobile/directReviewDeck.dom.test.tsx\", \"src/components/mobile/mobileHeaderFit.dom.test.tsx\", \"src/components/mobile/mobileOrchestratorControls.dom.test.tsx\", \"src/components/mobile/mobileOrchestratorLeaves.dom.test.tsx\", \"src/components/mobile/mobileSeatCard.dom.test.tsx\", \"src/components/mobile/phoneKanbanModel.test.ts\", \"src/components/orchestrator/dockOpenState.dom.test.tsx\", \"src/components/orchestrator/seatComposerHoist.dom.test.tsx\", \"src/components/overlay/useAttentionOffers.dom.test.tsx\", \"src/components/pipelines/PipelineBlock.dom.test.tsx\", \"src/components/pipelines/PipelineEditor.legacyReview.dom.test.tsx\", \"src/components/pipelines/PipelineHub.dom.test.tsx\", \"src/components/pipelines/PipelineStrip.dom.test.tsx\", \"src/components/pipelines/PipelineStrip.render.test.tsx\", \"src/components/pipelines/PipelineStrip.test.ts\", \"src/components/pipelines/PipelineTemplatePicker.dom.test.tsx\", \"src/components/pipelines/StagePlaceholderPane.dom.test.tsx\", \"src/components/pipelines/VerdictPopover.render.test.tsx\", \"src/components/pipelines/cpuQueue.test.ts\", \"src/components/pipelines/createDraftPipeline.dom.test.tsx\", \"src/components/pipelines/pipelineBlockModel.test.ts\", \"src/components/pipelines/pipelineModel.test.ts\", \"src/components/pipelines/pipelinePlaceholderStages.test.ts\", \"src/components/pipelines/remoteLaneSummary.dom.test.tsx\", \"src/components/pipelines/stageCardAria.render.test.tsx\", \"src/components/projectDashboardDerivation.test.ts\", \"src/components/resources/AttachControls.render.test.tsx\", \"src/components/reviewerAutoClose.test.ts\", \"src/components/runtime/AttentionCard.dismiss.dom.test.tsx\", \"src/components/runtime/ConversationAttention.dom.test.tsx\", \"src/components/scheme/AgentLinksLayer.render.test.tsx\", \"src/components/scheme/GroupOverridePanel.dom.test.tsx\", \"src/components/scheme/GroupOverridePanel.render.test.tsx\", \"src/components/scheme/GroupsLayer.render.test.tsx\", \"src/components/scheme/Minimap.render.test.tsx\", \"src/components/scheme/SchemeBoard.bands.dom.test.tsx\", \"src/components/scheme/SchemeBoard.builderReveal.dom.test.tsx\", \"src/components/scheme/SchemeBoard.camera.dom.test.tsx\", \"src/components/scheme/SchemeBoard.catalogFocus.dom.test.tsx\", \"src/components/scheme/SchemeBoard.lineage.dom.test.tsx\", \"src/components/scheme/SchemeBoard.mapFraming.dom.test.tsx\", \"src/components/scheme/SchemeBoard.mapStacks.dom.test.tsx\", \"src/components/scheme/SchemeBoard.pipelineComposition.dom.test.tsx\", \"src/components/scheme/SchemeBoard.pipelineRegions.dom.test.tsx\", \"src/components/scheme/SchemeBoard.selection.dom.test.tsx\", \"src/components/scheme/SchemeBoard.stageOverlay.dom.test.tsx\", \"src/components/scheme/SubagentBadgeAnchors.render.test.tsx\", \"src/components/scheme/TaskCard.dom.test.tsx\", \"src/components/scheme/agentLinks.test.ts\", \"src/components/scheme/bulkActions.test.ts\", \"src/components/scheme/currentWork.test.ts\", \"src/components/scheme/directReviewBoardComposition.test.ts\", \"src/components/scheme/findFreeSlot.test.ts\", \"src/components/scheme/focusFrames.test.ts\", \"src/components/scheme/lasso.test.ts\", \"src/components/scheme/layout.lineage.test.ts\", \"src/components/scheme/layout.test.ts\", \"src/components/scheme/nodes.anatomy.render.test.tsx\", \"src/components/scheme/nodes.dom.test.tsx\", \"src/components/scheme/nodes.stageRow.dom.test.tsx\", \"src/components/scheme/nodes.strip.dom.test.tsx\", \"src/components/scheme/offscreenClusters.test.ts\", \"src/components/scheme/pipelineRegionGeometry.test.ts\", \"src/components/scheme/pipelineStageSurfaces.test.ts\", \"src/components/scheme/placementHorizon.test.ts\", \"src/components/scheme/spatialNav.test.ts\", \"src/components/scheme/taskBands.test.ts\", \"src/components/scheme/taskGeometry.test.ts\", \"src/components/scheme/taskPlacement.test.ts\", \"src/components/scheme/useSchemeCamera.focus.dom.test.tsx\", \"src/components/scheme/useSchemeCamera.test.ts\", \"src/components/scheme/useSpatialNav.test.ts\", \"src/components/scheme/workerCollapse.test.ts\", \"src/components/session/SessionTitle.mobile.dom.test.tsx\", \"src/components/skeletons.dom.test.tsx\", \"src/components/tasks/TaskWorkflowPanel.dom.test.tsx\", \"src/components/tasks/taskWorkflowModel.test.ts\", \"src/components/workLinks/workLinks.dom.test.tsx\", \"src/components/workflows/legacyDraftPurge.dom.test.tsx\", \"src/components/workingAgents.test.ts\", \"src/hooks/serverReach.dom.test.tsx\", \"src/hooks/useFiles.dom.test.tsx\", \"src/hooks/useSwitchboardData.dom.test.tsx\", \"src/hooks/viewPresenceBus.test.ts\", \"src/lib/attention/landing.test.ts\", \"src/lib/attention/machine.test.ts\", \"src/lib/attention/readerArrival.test.ts\", \"src/lib/attention/resolve.test.ts\", \"src/lib/attention/service.test.ts\", \"src/lib/attention/store.sqlite.test.ts\", \"src/lib/attention/store.test.ts\", \"src/lib/i18n/i18n.test.ts\", \"src/lib/i18n/spawnCopy.test.ts\", \"src/lib/links/laneFeed.test.ts\", \"src/lib/mcp/requestAttention.immediate.test.ts\", \"src/lib/mcp/requestAttention.targets.test.ts\", \"src/lib/mcp/schemaParity.test.ts\", \"src/lib/memory/context.test.ts\", \"src/lib/memory/selection.test.ts\", \"src/lib/orchestrator/prompt.test.ts\", \"src/lib/pipelines/engine.routing.test.ts\", \"src/lib/pipelines/stageCompletion.test.ts\", \"src/lib/pipelines/visibility.test.ts\", \"src/lib/reviewHistory/reader.test.ts\", \"src/lib/reviewHistory/redaction.test.ts\", \"src/lib/runtime/structuredDeliveryQueue.progress.test.ts\", \"src/lib/scanner/settledTurnProjection.test.ts\", \"src/lib/tasks/systemRun.test.ts\", \"src/lib/telegram/reportRunner.test.ts\"]); await Bun.write(\"evidence/review-history/regressions.json\", JSON.stringify(result,null,2)+\"\\n\"); process.exitCode=result.introduced.length?1:0;"
+      ],
+      "exitCode": 0
     }
   ],
   "notes": [
-    "The importer comparison completed all 211 head files: zero introduced failures, 87 pre-existing failures, one fixed diagnostic, three assertions classified as flaky by filtered reruns.",
+    "The final importer comparison completed all 211 head files: 0 introduced failures, 87 pre-existing failures, 1 fixed diagnostic, 3 assertions classified as flaky by filtered reruns.",
     "The board whole-file controls fail with the same two assertions in all three head and all three base runs. These are pre-existing ordering failures.",
     "The template picker whole-file controls pass three times on each side. A create-time localization assertion failed once during an earlier campaign and recovered in filtered reruns.",
     "The legacy phone browser file exits 1 on head and base before rendering because the clean export has no production CSS build. The S6 case compiles the production stylesheet through the existing kanban harness.",
     "Touched-file ESLint exits 0 with zero introduced errors and 117 existing diagnostics.",
     "The expanded-deck diagnostic exits 0 on the corrected test setup and 1 on the unchanged base, which lacks requestAnimationFrame. The focused and full final runs pass the corrected file.",
-    "The RoundDeck whole-file controls pass three times on head and three times on base; the transient filtered-rerun failure did not reproduce in these whole-file samples. See extra-checks.json."
-  ]
+    "The RoundDeck whole-file controls pass three times on head and three times on base; the transient filtered-rerun failure did not reproduce in these whole-file samples. See extra-checks.json.",
+    "Navigation correction opens archived round details before board resolution: placed, unplaced and camera-less open requests reach the reader, while show-only requests keep their framing behavior. Negative controls fail on the preceding implementation (2 failures) and original base (3 failures); see navigation-checks.json.",
+    "The rendered archive inputs are byte-identical after the navigation-only correction; existing rendered.json and visual-review.json remain valid.",
+    "The remote-card whole-file controls pass three times on head and three times on base. Their metadata collection exited 1 after the tests; the record was recovered from complete transferred logs. See remote-card-checks.json."
+  ],
+  "recordWrittenAt": "2026-10-23T15:02:03.405912+00:00"
 }

@@ -208,5 +208,6 @@
     "Archive controls and recorded text fit each viewport in both locales and themes.",
     "Long findings scroll inside the dialog; the header remains visible at the short landscape viewport.",
     "The later approval retains its reviewed commit, unknown current commit and missing-findings message."
-  ]
+  ],
+  "recordWrittenAt": "2026-10-23T14:24:44.411130+00:00"
 }
