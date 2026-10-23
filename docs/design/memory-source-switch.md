@@ -690,7 +690,10 @@ occurrence whose normalized content hash, part, anchor and applicability
 (project, type, writer kind and role) equal an occurrence that already has a
 disposition, in this import or an earlier one and not re-pended by an undo
 (4.7), inherits that disposition and is never offered to the curator. Only new
-content becomes pending.
+content becomes pending. The lookup runs inside the transaction that writes the
+candidate rows, so a curator outcome committed while the run was scanning
+covers the new copy too. An inherited copy keeps the original's pass, time and
+reason, and names the candidate whose outcome it repeats (`inheritedFrom`).
 
 **Budget.** At most 200 files are hashed per run (the prefilter skips
 unchanged files before that count); the rest wait for the next run, which is
@@ -893,7 +896,10 @@ neither, and so is any lane with an attempt on a legacy generation (4.6). Review
 Every writer that archives a rule appends `{ at, reason, curated }` to the
 rule's `departures` (`roleConsolidate.ts` `archivedRule`), and nothing removes
 an entry: a later restore, curation or re-archive leaves a closed week's
-evictions and adopted-archive count unchanged. An archive the log cannot
+evictions and adopted-archive count unchanged. A curator `problem` on a
+candidate writes its agenda row already archived; that row was never an
+adopted rule and is not counted as one. Import outcomes count each curator
+disposition once: a copy a later sync or import inherited (4.9) is skipped. An archive the log cannot
 account for (a rule archived in the window with no matching departure, a scope
 history entry naming one, or a scope history that no longer reaches back over
 the window) makes the window unverified, never clean.

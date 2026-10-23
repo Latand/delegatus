@@ -49,7 +49,8 @@ export interface ImportCandidate {
   readBy?: string[];
   /** Durable pass-level acknowledgement that these occurrences were explicitly deferred. */
   deferred?: { pass: string; occurrences: string[] }[];
-  dispositions: { at: string; pass: string; kind: "adopt" | "drop"; ruleIds: string[]; reason?: CuratorReason; note: string; occurrences: string[]; forRoom?: boolean }[];
+  /** `inheritedFrom` marks a copy of another candidate's curator outcome (§4.9), which names that candidate. */
+  dispositions: { at: string; pass: string; kind: "adopt" | "drop"; ruleIds: string[]; reason?: CuratorReason; note: string; occurrences: string[]; forRoom?: boolean; inheritedFrom?: string }[];
 }
 export interface ImportRecord {
   kind: "import";

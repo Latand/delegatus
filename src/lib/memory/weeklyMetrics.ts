@@ -272,7 +272,7 @@ function concurrency(intervals: readonly [number, number][], window: MetricsWind
   let covered = 0;
   for (const [start, end] of intervals) {
     const a = Math.max(start, from), b = Math.min(end, to);
-    if (b <= a) continue;
+    if (!(b > a)) continue; // also an unreadable time
     covered += b - a;
     events.push([a, 1], [b, -1]);
   }
@@ -297,7 +297,10 @@ export function windowDepartures(memory: MetricsInput["memory"], window: Metrics
     logged.set(row.id, log);
     const left = log.filter(departure => inside(departure.at, window));
     for (const departure of left) if (departure.reason === "budget") { if (departure.curated) evictions.curated += 1; else evictions.neverCurated += 1; }
-    if (left.length && (row.source as { origin?: string } | undefined)?.origin === "import") adoptedArchived += 1;
+    // A curator `problem` on a candidate writes its agenda row already archived (curation/importApply.ts):
+    // no adopted rule entered memory, so only an import rule that was ever in memory counts.
+    const bornArchived = log[0]?.reason === "problem" && log[0].at === row.createdAt;
+    if (left.length && !bornArchived && (row.source as { origin?: string } | undefined)?.origin === "import") adoptedArchived += 1;
     if (row.state === "archived" && inside(row.changedAt as string, window) && !log.some(departure => departure.at === row.changedAt)) complete = false;
   }
   for (const row of memory) {
@@ -356,8 +359,9 @@ export function windowReport(input: MetricsInput, window: MetricsWindow, baselin
   const imports: WindowReport["imports"] = { adopted: 0, dropped: {}, adoptedArchived };
   for (const row of input.imports) {
     if (row.kind !== "candidate" || !Array.isArray(row.dispositions)) continue;
-    for (const disposition of row.dispositions as { at: string; kind: string; reason?: string }[]) {
-      if (!inside(disposition.at, window)) continue;
+    for (const disposition of row.dispositions as { at: string; kind: string; reason?: string; inheritedFrom?: string }[]) {
+      // An inherited copy repeats another candidate's outcome with its time (importHistory.ts); count the original once.
+      if (disposition.inheritedFrom || !inside(disposition.at, window)) continue;
       if (disposition.kind === "adopt") imports.adopted += 1;
       else count(imports.dropped, disposition.reason ?? "unstated");
     }
@@ -370,7 +374,9 @@ export function windowReport(input: MetricsInput, window: MetricsWindow, baselin
       if (!attempt.historical && inside(attempt.startedAt, window)) started.push({ pipeline, stage: stages.get(run.stageId), attempt });
     }
   }
-  const flow = concurrency(started.flatMap(({ attempt }) => attempt.startedAt && attempt.completedAt ? [[ms(attempt.startedAt), ms(attempt.completedAt)] as [number, number]] : []), window);
+  // Concurrency clips every completed attempt that overlaps the window, including one started before it.
+  const flow = concurrency(input.pipelines.flatMap(pipeline => pipeline.runs.flatMap(run => run.attempts.flatMap(attempt =>
+    !attempt.historical && attempt.startedAt && attempt.completedAt ? [[ms(attempt.startedAt), ms(attempt.completedAt)] as [number, number]] : []))), window);
   const load: WindowReport["load"] = {
     attemptsStarted: started.length, nonClean: 0, byEngine: {}, byModel: {}, byProject: {},
     meanConcurrent: Math.round(flow.mean * 100) / 100, peakConcurrent: flow.peak,

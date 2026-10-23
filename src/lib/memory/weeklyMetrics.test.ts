@@ -149,6 +149,30 @@ test("load records attempts, clean share, engines, models, concurrency, limits, 
   expect(report.valid).toBe(true);
 });
 
+test("§6.4: attempts crossing either window edge add their overlap to concurrency, never to the starts", () => {
+  const span = (id: string, from: number, to: number) => lane(id, [builder(1, at(TRIAL, from), { completedAt: at(TRIAL, to) })], []);
+  // Running from a day before the window to a day into it, beside one started at the window's start.
+  const left = [span("left", -24, 24), span("start", 0, 24)];
+  expect(windowReport(input(left), TRIAL).load).toMatchObject({ attemptsStarted: 1, meanConcurrent: 0.29, peakConcurrent: 2 });
+  // Crossing the right edge (18 h inside), spanning the whole window, and one wholly before it.
+  const report = windowReport(input([...left, span("right", 150, 200), span("whole", -10, 200), span("before", -48, -24)]), TRIAL);
+  expect(report.load).toMatchObject({ attemptsStarted: 2, meanConcurrent: Math.round((24 + 24 + 18 + 168) / 168 * 100) / 100, peakConcurrent: 3 });
+});
+
+test("§6.2: a disposition inherited by a later sync or re-import repeats its original and is counted once", () => {
+  const drop = { at: at(TRIAL, 1), pass: "p1", kind: "drop", reason: "task-specific", ruleIds: [], occurrences: ["o1"] };
+  const adopt = { at: at(TRIAL, 2), pass: "p1", kind: "adopt", ruleIds: ["r1"], occurrences: ["o3"] };
+  const imports = [
+    { kind: "candidate", id: "c1", dispositions: [drop, { ...drop, occurrences: ["o2"], inheritedFrom: "c1" }] },
+    { kind: "candidate", id: "c2", dispositions: [adopt] },
+    // A later import and a second copy of the same content inherit both outcomes.
+    { kind: "candidate", id: "c3", dispositions: [{ ...drop, occurrences: ["o4"], inheritedFrom: "c1" }, { ...adopt, occurrences: ["o5"], inheritedFrom: "c2" }] },
+    // A distinct curator outcome in the same pass still counts.
+    { kind: "candidate", id: "c4", dispositions: [{ ...drop, occurrences: ["o6"] }] },
+  ];
+  expect(windowReport(input(trialSet(), { imports }), TRIAL).imports).toEqual({ adopted: 1, dropped: { "task-specific": 2 }, adoptedArchived: 0 });
+});
+
 test("guards: an engine memory hash, a held-still change, a scaffold change and a load swing invalidate a window", () => {
   const pipelines = trialSet();
   expect(windowReport(input(pipelines, { deliveries: [...LEDGER, { at: at(TRIAL, 1), engineMemory: [{ hash: "h" }] }, { at: at(TRIAL, 2), engineMemory: [] }] }), TRIAL).invalidBecause).toEqual(["engine-memory-loaded"]);

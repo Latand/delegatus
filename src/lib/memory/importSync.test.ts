@@ -124,6 +124,55 @@ test("content an earlier pass dispositioned inherits that disposition and is nev
   expect(pending()).toEqual([]);
 });
 
+test("a curator drop committed between the history lookup and the candidate write covers the equivalent new copy", async () => {
+  const body = "Inspect current ownership before changing a running worker.\n";
+  await fs.writeFile(path.join(memory, "topic.md"), body);
+  await fs.writeFile(path.join(memory, "MEMORY.md"), "- [topic.md](topic.md)\n");
+  await runMemoryImportWork({ importId: ID, previous: null, roots, at: AT }, ports());
+  await toEngines();
+  const rows = pending();
+  expect(rows).toHaveLength(1);
+  const pass = claimPass({ project: PROJECT, repoDir: null, now: NOW + 1, importOnly: true })!;
+  await readCuration(pass, "imports");
+  const revision = (await readCuration(pass)).scopes.find(scope => scope.scope === "machine")?.revision ?? 0;
+  await fs.writeFile(path.join(memory, "copy.md"), body.replace("current", "current  "));
+  let applied = 0;
+  const record = await runMemoryImportWork({ importId: ID, previous: null, roots, at: at(HOUR), sync: true }, { ...ports(), beforeCandidateBatch: index => {
+    if (index) return;
+    // The curator's pass lands after the sync read the history and before it writes.
+    applyCuration(pass, { scopes: [{ scope: "machine", revision, order: [] }],
+      drop: rows.map(c => ({ candidate: c.id, occurrences: c.occurrences.map(o => o.id), reason: "task-specific" as const, note: "This note narrates a finished task." })) }, at(HOUR));
+    patchPass(pass.id, { state: "succeeded", endedAt: at(HOUR + 1) });
+    applied += 1;
+  } });
+  expect(applied).toBe(1);
+  expect(record.sync).toEqual({ lastAt: at(HOUR), result: "ok", added: 0 });
+  expect(pending()).toEqual([]);
+  const copy = allCandidates().filter(c => c.occurrences.some(o => o.file.endsWith("copy.md")));
+  expect(copy.map(c => candidateState(c).state)).toEqual(["dropped"]);
+  const inherited = copy[0].dispositions.filter(d => d.occurrences.some(id => copy[0].occurrences.find(o => o.id === id)?.file.endsWith("copy.md")));
+  expect(inherited).toMatchObject([{ kind: "drop", reason: "task-specific", pass: pass.id, inheritedFrom: rows[0].id }]);
+});
+
+test("a later deduplicated sync leaves a closed week's import counts unchanged (§6.2)", async () => {
+  const { windowReport } = await import("./weeklyMetrics");
+  await importedThenEngines();
+  const week = { from: at(-HOUR), to: at(7 * 24 * HOUR) };
+  const report = () => windowReport({ pipelines: [], memory: [], imports: allCandidates() as never, deliveries: [] }, week).imports;
+  expect(report()).toEqual({ adopted: 0, dropped: { "task-specific": 1 }, adoptedArchived: 0 });
+  await fs.writeFile(path.join(memory, "copy.md"), "Inspect   current ownership before changing a running worker.\n");
+  expect((await syncRun(8 * 24 * HOUR)).sync).toMatchObject({ result: "ok", added: 0 });
+  expect(pending()).toEqual([]);
+  expect(allCandidates().flatMap(c => c.occurrences)).toHaveLength(2);
+  expect(report()).toEqual({ adopted: 0, dropped: { "task-specific": 1 }, adoptedArchived: 0 });
+  // A distinct curator outcome after the week is counted in its own week.
+  await fs.writeFile(path.join(memory, "late.md"), "Check the account's remaining limit before starting a long run.\n");
+  await syncRun(9 * 24 * HOUR);
+  await dropPending(9 * 24 * HOUR + 1);
+  expect(report()).toEqual({ adopted: 0, dropped: { "task-specific": 1 }, adoptedArchived: 0 });
+  expect(windowReport({ pipelines: [], memory: [], imports: allCandidates() as never, deliveries: [] }, { from: at(9 * 24 * HOUR), to: at(10 * 24 * HOUR) }).imports.dropped).toEqual({ "task-specific": 1 });
+});
+
 test("a run over the cap leaves the rest for the next run, which is due at once", async () => {
   await importedThenEngines();
   const count = MEMORY_SYNC_MAX_FILES + 5;
