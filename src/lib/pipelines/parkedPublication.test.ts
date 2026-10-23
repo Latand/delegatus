@@ -658,6 +658,37 @@ test("failed publication retains the hook tail, exit status and duration in lane
   } finally { h.cleanup(); }
 });
 
+test.each(["repaired", "unrepaired"])("skip-stage retries a settled publication failure (%s hook)", async hookState => {
+  const repaired = hookState === "repaired";
+  const h = fixture();
+  h.ports.now = () => "2026-10-22T12:00:00.000Z";
+  h.lane.runs[0]!.attempts[0]!.startedAt = "2026-10-22T11:00:00.000Z";
+  try {
+    h.lane.lastPassedCommit = h.head;
+    h.lane.state = "running";
+    h.lane.stateDetail = null;
+    savePipelines([h.lane]);
+    fs.writeFileSync(h.hook, "#!/bin/sh\necho pre-push: privacy >&2\nexit 1\n", { mode: 0o700 });
+
+    expect((await patchPipeline(h.lane.id, { action: "publish" }, h.ports)).error).toBeUndefined();
+    await h.tick();
+    expect(h.current()).toMatchObject({ state: "needs_decision", publishedCommit: null,
+      delivery: { operation: { state: "settled", result: { ok: false } } } });
+    const failedOperation = h.current().delivery!.operation!.id;
+    expect(h.pushes()).toBe(1);
+
+    if (repaired) fs.writeFileSync(h.hook, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    expect((await patchPipeline(h.lane.id, { action: "skip-stage", expectedStageId: "build", expectedAttempt: 1 }, h.ports)).error).toBeUndefined();
+    await h.tick();
+
+    expect(h.current()).toMatchObject(repaired
+      ? { state: "completed", publishedCommit: h.head }
+      : { state: "needs_decision", publishedCommit: null, delivery: { operation: { state: "settled", result: { ok: false } } } });
+    expect(h.current().delivery!.operation!.id).not.toBe(failedOperation);
+    expect(h.pushes()).toBe(2);
+  } finally { h.cleanup(); }
+});
+
 /** A lane cut from an older main whose stage left `files` behind (none for a
     read-only stage), with main moved on by `behind` commits since. */
 function trailingLane(h: ReturnType<typeof fixture>, behind: number, files: Record<string, string> = {}): string {
