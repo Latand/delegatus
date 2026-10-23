@@ -1,6 +1,6 @@
 import * as headlessCli from "@/lib/agent/claudeHeadless";
 import { setSubscriptionApiConsent } from "@/lib/accounts/subscriptionApiConsent";
-import { afterAll, expect, spyOn, test } from "bun:test";
+import { afterAll, expect, setSystemTime, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -1387,7 +1387,11 @@ test("concurrent Claude refreshes share one provider request at each retry bound
   }
 });
 
-test("a weekly-only Codex account charts its weekly window and names the missing 5h one", async () => {
+test.each([
+  "2026-10-23T06:15:13.499Z",
+  "2026-10-25T23:59:59.499Z",
+  "2026-10-26T00:00:00.501Z",
+])("a weekly-only Codex account charts its weekly window and names the missing 5h one (%s)", async (instant) => {
   // The production shape behind issue #606: the provider reports a single
   // 10080-minute window in the primary slot. The weekly chart must draw from
   // the transcript backfill plus the live value, and the 5h tab must say the
@@ -1395,7 +1399,8 @@ test("a weekly-only Codex account charts its weekly window and names the missing
   resetLimitsCache();
   const account = createManagedCodexAccount("Weekly burndown");
   setActiveCodexAccount(account.id);
-  const nowS = Math.round(Date.now() / 1000);
+  const now = Date.parse(instant);
+  const nowS = Math.round(now / 1000);
   const resetsAt = nowS + 2 * 86_400;
   const event = (agoS: number, usedPercent: number) => JSON.stringify({
     timestamp: new Date((nowS - agoS) * 1000).toISOString(),
@@ -1408,6 +1413,9 @@ test("a weekly-only Codex account charts its weekly window and names the missing
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async () => new Response(null, { status: 503 })) as unknown as typeof fetch;
   try {
+    // The poll history and chart's live point must share a rounded second.
+    // Freeze the whole read at a UTC instant, including Sunday/Monday rollover.
+    setSystemTime(new Date(now));
     const burndown = await readBurndown({
       codexLiveReader: async () => ({
         primary: { usedPercent: 52, resetsAt, windowDurationMins: 10_080 },
@@ -1418,6 +1426,7 @@ test("a weekly-only Codex account charts its weekly window and names the missing
     expect(burndown.codexAccountId).toBe(account.id);
     const weekly = burndown.codex!.weekly;
     expect(weekly.samples.map((sample) => sample.remaining)).toEqual([70, 55, 48]);
+    expect(weekly.samples.map((sample) => sample.t)).toEqual([nowS - 7_200, nowS - 3_600, nowS]);
     expect(weekly.windowSeconds).toBe(10_080 * 60);
     expect(weekly.resetsAt).toBe(resetsAt);
     expect(weekly.windowUnreported).toBeFalsy();
@@ -1426,6 +1435,7 @@ test("a weekly-only Codex account charts its weekly window and names the missing
     expect(session.samples).toEqual([]);
     expect(session.windowUnreported).toBeTrue();
   } finally {
+    setSystemTime();
     globalThis.fetch = realFetch;
   }
 });
