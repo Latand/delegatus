@@ -1,6 +1,7 @@
 import { expect, test, spawn, makeStructuredAttempt, pinStageHead, AccountAuthenticationRequiredError, ProjectAccountRefusedError, selectProjectAccount, IDLE_TURN_QUIET_MS, tickPipelines, createPipelineFromRequest, loadPipelines, savePipelines, patchPipeline, entry, harness, create, structuredLatest, runningStructuredStage, LIMITED_ACCOUNT, SPARE_ACCOUNT, stageTranscript, readFixtures, providerQuotaRecord, SILENT_RUN, stageWhoseStopMovesTheTranscript, recoveryReport, providerRecoveryHarness, parkedAccountCases, parkedAccountHarness } from "./engine.fixture";
 import type { DurableQuotaObservation, PipelinePorts, StageTurnEvidence } from "./engine.fixture";
-import { AgentRegistry, defaultPipelinePorts, path } from "./engine.fixture";
+import { AgentRegistry, defaultPipelinePorts, path, spyOn } from "./engine.fixture";
+import { procBackend } from "@/lib/proc";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { saveRoleOverrides } from "@/lib/roles/store";
 import { setAgentMemoryPortsForTests } from "@/lib/runtime/agentMemory";
@@ -218,6 +219,8 @@ test.skipIf(process.platform === "win32")("#3054: a roleless stage's OOM retry w
   Object.assign(process.env, memoryEnv);
   saveRoleOverrides({ builder: { config: { agentMemoryMaxBytes: 8 * GIB } } });
   setAgentMemoryPortsForTests(memory);
+  /* The launch floor reads system memory directly; the gate host's own RAM must not decide this case. */
+  const systemMemory = spyOn(procBackend, "systemMemory").mockImplementation(() => ({ ramTotal: memory.totalBytes, ramAvailable: memory.availableBytes, swapTotal: 0, swapUsed: 0 }));
   try {
     const h = harness();
     await create(h.ports, [
@@ -258,6 +261,7 @@ test.skipIf(process.platform === "win32")("#3054: a roleless stage's OOM retry w
     expect(pipeline.runs[0]!.attempts[1]!.state).toBe("running");
     expect(h.spawnInputs).toHaveLength(spawnsBefore + 1);
   } finally {
+    systemMemory.mockRestore();
     setAgentMemoryPortsForTests(null);
     saveRoleOverrides({});
     for (const [key, value] of Object.entries(previousEnv)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
