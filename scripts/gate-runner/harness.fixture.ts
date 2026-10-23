@@ -28,6 +28,8 @@ export interface StubSettings {
   failProbe?: boolean;
   /** Kill the ssh session once the run's output contains this text. */
   killOn?: string;
+  /** Kill the ssh session of a run once this file exists, as a lost connection does. */
+  killWhen?: string;
   /** A command containing this text exits 255 without running, as a lost connection does. */
   failOn?: string;
   /** A command containing this text never answers, as a hung connection does. */
@@ -77,6 +79,7 @@ const watch = chunk => {
   output += chunk.toString();
   if (output.includes(settings.killOn)) { settings.killOn = undefined; flush(); process.kill(process.pid, "SIGKILL"); }
 };
+if (settings.killWhen && command.includes("serve.ts run")) setInterval(() => { if (fs.existsSync(settings.killWhen)) { flush(); process.kill(process.pid, "SIGKILL"); } }, 50);
 process.stdin.on("data", chunk => { if (record.stdin < 200) record.head += chunk.toString("latin1").slice(0, 200 - record.stdin); record.stdin += chunk.length; child.stdin.write(chunk); });
 process.stdin.on("end", () => child.stdin.end());
 child.stdin.on("error", () => {});
@@ -158,7 +161,7 @@ export function makeHarness(options: { mirrorMain?: "base" | "behind" | "ahead" 
       return { code: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
     },
     cleanup: () => {
-      for (const id of fs.readdirSync(path.join(runnerHome, "runs"))) spawnSync("systemctl", ["--user", "stop", `gate-run-${id}`], { stdio: "ignore" });
+      for (const id of fs.readdirSync(path.join(runnerHome, "runs"))) for (const unit of [`gate-setup-${id}`, `gate-run-${id}`]) spawnSync("systemctl", ["--user", "stop", unit], { stdio: "ignore" });
       // Only the process groups the stub recorded at their start.
       const alive = (group: number) => { try { process.kill(-group, 0); return true; } catch { return false; } };
       const recorded = fs.readFileSync(groups, "utf8").split("\n").map(Number).filter(group => Number.isInteger(group) && group > 1);

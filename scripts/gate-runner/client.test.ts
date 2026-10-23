@@ -4,7 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isolatedEnvironment } from "../local-gate";
-import { applyReturn, configFile, Demux, health, mapArguments, markUnhealthy, parseControl, parseProbe, readUstar, redact, remoteEnvironment, resolveTarget, returnPlan, scanBudgetMs, shapeOf, sshFailure, UNHEALTHY_MS, type Control, type Tree } from "./client";
+import { applyReturn, configFile, Demux, health, mapArguments, markUnhealthy, outputConflict, parseControl, parseProbe, readUstar, redact, remoteEnvironment, resolveTarget, returnPlan, scanBudgetMs, shapeOf, ship, sshFailure, UNHEALTHY_MS, type Control, type Tree } from "./client";
+import { git } from "./harness.fixture";
 import { envClass } from "./env-classes";
 import { completion, ISOLATED_KEYS, PERSISTENT_KEYS, ustarEntry } from "./serve";
 
@@ -253,6 +254,66 @@ test("entries that conflict with each other, and output directories that overlap
     expect(remoteEnvironment(outputs, root, root)).toHaveProperty("reason");
     expect(snapshot([root, out, other])).toEqual(before);
   }
+});
+
+// §8.8: a missing output directory is where its nearest existing ancestor really is.
+test("a missing output directory beneath a link to the checkout, or to another output, writes nothing", () => {
+  const root = scratch(), out = scratch(), other = scratch();
+  const end = Buffer.alloc(1024);
+  const alias = path.join(other, "alias"), outAlias = path.join(other, "out-alias");
+  fs.symlinkSync(root, alias);
+  fs.symlinkSync(out, outAlias);
+  fs.symlinkSync(path.join(other, "nowhere"), path.join(other, "dangling"));
+  const before = snapshot([root, out, other]);
+  const maps: Record<string, string>[] = [
+    { PD_OUT: path.join(alias, "new-source") },
+    { PD_OUT: path.join(alias, "new", "deeper") },
+    { PD_OUT: path.join(out, "fresh"), SEND_PAINT_OUT: path.join(outAlias, "fresh", "inner") },
+    { PD_OUT: path.join(out, "a"), SEND_PAINT_OUT: path.join(outAlias, "a") },
+    { PD_OUT: path.join(other, "dangling", "x") },
+  ];
+  for (const outputs of maps) {
+    const archive = Buffer.concat([ustarEntry("out/PD_OUT/injected.ts", Buffer.from("x")), ...(outputs.SEND_PAINT_OUT ? [ustarEntry("out/SEND_PAINT_OUT/injected.ts", Buffer.from("y"))] : []), end]);
+    expect(outputConflict(root, outputs)).not.toBeNull();
+    expect(() => returnPlan(readUstar(archive), root, outputs)).toThrow("refused");
+    expect(remoteEnvironment(outputs, root, root)).toHaveProperty("reason");
+    expect(snapshot([root, out, other])).toEqual(before);
+  }
+  // A missing directory beneath a link elsewhere is accepted and written at the real place.
+  const plan = returnPlan(readUstar(Buffer.concat([ustarEntry("out/PD_OUT/f.txt", Buffer.from("ok")), end])), root, { PD_OUT: path.join(outAlias, "made", "here") });
+  expect(plan.map(entry => entry.target)).toEqual([path.join(out, "made", "here", "f.txt")]);
+  applyReturn(plan);
+  expect(fs.readFileSync(path.join(out, "made", "here", "f.txt"), "utf8")).toBe("ok");
+  expect(fs.existsSync(path.join(root, "made"))).toBeFalse();
+});
+
+// T4: the shipped mode is the file's, whatever the checkout's core.fileMode or core.symlinks.
+test("capture records the executable bit and a link replaced by a file as they are on disk, and leaves the caller's index and config", () => {
+  const repo = scratch();
+  git(repo, "init", "--quiet");
+  fs.writeFileSync(path.join(repo, "check.sh"), "#!/bin/sh\necho one\n", { mode: 0o644 });
+  fs.writeFileSync(path.join(repo, "run.sh"), "#!/bin/sh\necho two\n", { mode: 0o755 });
+  fs.symlinkSync("check.sh", path.join(repo, "link"));
+  git(repo, "add", "-A");
+  git(repo, "-c", "user.name=t", "-c", "user.email=noreply@example.invalid", "commit", "--quiet", "--no-verify", "-m", "base");
+  git(repo, "update-ref", "refs/remotes/origin/main", "HEAD");
+  git(repo, "config", "core.fileMode", "false");
+  git(repo, "config", "core.symlinks", "false");
+  fs.chmodSync(path.join(repo, "check.sh"), 0o755);
+  fs.chmodSync(path.join(repo, "run.sh"), 0o644);
+  fs.rmSync(path.join(repo, "link"));
+  fs.writeFileSync(path.join(repo, "link"), "now a file\n");
+  const index = path.join(repo, ".git", "index"), config = path.join(repo, ".git", "config");
+  const before = { index: fs.readFileSync(index), config: fs.readFileSync(config, "utf8"), staged: git(repo, "ls-files", "-s") };
+  const work = scratch();
+  const shipment = ship({ kind: "git", root: repo }, work, undefined);
+  const modes = Object.fromEntries(git(work, "--git-dir", shipment.gitDir, "ls-tree", shipment.commit).split("\n").map(line => { const [meta, name] = line.split("\t"); return [name, meta!.split(" ")[0]]; }));
+  expect(modes).toEqual({ "check.sh": "100755", "run.sh": "100644", link: "100644" });
+  expect(fs.statSync(path.join(repo, "check.sh")).mode & 0o111).not.toBe(0);
+  expect(fs.statSync(path.join(repo, "run.sh")).mode & 0o111).toBe(0);
+  expect(fs.readFileSync(index)).toEqual(before.index);
+  expect(fs.readFileSync(config, "utf8")).toBe(before.config);
+  expect(git(repo, "ls-files", "-s")).toBe(before.staged);
 });
 
 test("a write that fails part-way leaves every original file and no staged file behind", () => {

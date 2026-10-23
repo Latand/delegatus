@@ -2,11 +2,12 @@
 // The client uploads this file with every run, so both ends speak the same
 // protocol; it uses Node built-ins only because it runs before the tree exists.
 //
-//   serve.ts run <dir>           materialize, verify, contain, run, report
+//   serve.ts run <dir>           own the run, set it up, run it, report
+//   serve.ts setup <dir>         inside the gate-setup-<id> unit: materialize, install, verify, contain
 //   serve.ts exec <dir>          inside the gate-run-<id> unit: the command
 //   serve.ts pack-outputs <dir>  a ustar stream of the declared outputs
-//   serve.ts remove <dir>        stop the unit and delete the run directory
-import { spawn, spawnSync, type SpawnSyncOptions } from "node:child_process";
+//   serve.ts remove <dir>        stop the session and both units, then delete the run directory
+import { spawn, spawnSync, type ChildProcess, type SpawnSyncOptions } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -18,6 +19,12 @@ export const RUN_ID = /^[0-9a-f]{12}$/;
 export const ISOLATED_KEYS = ["HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "LLV_STATE_DIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"];
 export const PERSISTENT_KEYS = ["XDG_CACHE_HOME", "TMPDIR"];
 const LEASE_STALE_MS = 30 * 60_000;
+/** How long `remove` waits for a signalled session process to stop its units and exit. */
+const OWNER_STOP_MS = 40_000;
+/** Setup (clone, install, checks) is ended by systemd after this long. */
+const SETUP_MAX_SECONDS = 3600;
+/** Both units a run can own; nothing else of it outlives `serve.ts run`. */
+const units = (id: string) => [`gate-setup-${id}`, `gate-run-${id}`];
 
 export interface Manifest {
   version: 1; id: string;
@@ -42,17 +49,53 @@ export function runDirectory(argument: string | undefined): string {
 }
 
 /** "unknown" when the user manager gives no answer: nothing is removed then. */
-export function unitState(id: string): "active" | "inactive" | "unknown" {
-  const result = spawnSync("systemctl", ["--user", "is-active", `gate-run-${id}`], { encoding: "utf8", timeout: 10_000 });
+export function unitState(unit: string): "active" | "inactive" | "unknown" {
+  const result = spawnSync("systemctl", ["--user", "is-active", unit], { encoding: "utf8", timeout: 10_000 });
   const state = String(result.stdout ?? "").trim();
   if (state === "inactive" || state === "failed") return "inactive";
   if (/^(?:active|activating|deactivating|reloading|refreshing)$/.test(state)) return "active";
   return "unknown";
 }
 
+/** The process that runs `serve.ts run` records itself before anything
+ * else, so `remove` and the sweep can tell a live session from a dead one. */
+interface Owner { pid: number; start: string }
+function processStart(pid: number | "self"): string | null {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] ?? null;
+  } catch { return null; }
+}
+function writeOwner(dir: string): void {
+  const start = processStart("self");
+  fs.writeFileSync(path.join(dir, "owner"), `${process.pid} ${start ?? "-"}\n`, { flag: "wx" });
+}
+function readOwner(dir: string): Owner | null {
+  try {
+    const match = /^(\d+) (\d+|-)\n$/.exec(fs.readFileSync(path.join(dir, "owner"), "utf8"));
+    return match ? { pid: Number(match[1]), start: match[2]! } : null;
+  } catch { return null; }
+}
+/** Alive while the same process (same start time) has any task that is not a
+ * zombie: a leader that exited leaves the process running in its threads. */
+export function ownerAlive(owner: Owner | null): boolean {
+  if (!owner) return false;
+  if (processStart(owner.pid) !== owner.start) return false;
+  let tasks: string[] = [];
+  try { tasks = fs.readdirSync(`/proc/${owner.pid}/task`); } catch { return false; }
+  return tasks.some(task => {
+    try {
+      const stat = fs.readFileSync(`/proc/${owner.pid}/task/${task}/stat`, "utf8");
+      const state = stat.slice(stat.lastIndexOf(")") + 2, stat.lastIndexOf(")") + 3);
+      return state !== "Z" && state !== "X";
+    } catch { return false; }
+  });
+}
+const sleepSync = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
 /** Removes run directories of this protocol whose lease stopped being touched
- * 30 minutes ago and whose unit is gone. Other names under ~/runs belong to
- * someone else and stay. */
+ * 30 minutes ago, whose session process is gone and whose units are both
+ * inactive. Other names under ~/runs belong to someone else and stay. */
 export function sweep(except: string, now = Date.now()): string[] {
   const removed: string[] = [];
   let names: string[] = [];
@@ -63,7 +106,7 @@ export function sweep(except: string, now = Date.now()): string[] {
     let touched: number;
     try { touched = fs.statSync(path.join(dir, "lease")).mtimeMs; }
     catch { try { touched = fs.statSync(dir).mtimeMs; } catch { continue; } }
-    if (now - touched < LEASE_STALE_MS || unitState(name) !== "inactive") continue;
+    if (now - touched < LEASE_STALE_MS || ownerAlive(readOwner(dir)) || units(name).some(unit => unitState(unit) !== "inactive")) continue;
     fs.rmSync(dir, { recursive: true, force: true });
     removed.push(name);
   }
@@ -206,7 +249,7 @@ function install(tree: string, log: number): void {
 /** Hashes the files as they are; write-tree alone would only serialize the
  * index read-tree wrote, whatever the files hold. */
 function verify(tree: string, gitEnv: NodeJS.ProcessEnv, expected: string, log: number): void {
-  sh(log, "tree check", ["git", "-c", "core.hooksPath=/dev/null", "add", "-A"], { cwd: tree, env: gitEnv });
+  sh(log, "tree check", ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fileMode=true", "-c", "core.symlinks=true", "add", "-A"], { cwd: tree, env: gitEnv });
   const actual = sh(log, "tree check", ["git", "write-tree"], { cwd: tree, env: gitEnv });
   if (actual !== expected) throw new SetupFailed("tree check", `the runner checked out tree ${actual} for ${expected}`);
 }
@@ -250,23 +293,95 @@ async function readNonce(timeoutMs: number): Promise<{ nonce: string; remainingM
 
 async function run(dir: string): Promise<number> {
   const id = path.basename(dir);
+  // First, so no unit of this run can exist without a recorded owner.
+  writeOwner(dir);
   sweep(id);
   const lease = path.join(dir, "lease");
   fs.writeFileSync(lease, "");
   const touch = setInterval(() => { try { const now = new Date(); fs.utimesSync(lease, now, now); } catch { /* removed */ } }, 30_000);
+  // Every process this run starts lives in one of its two units; while one
+  // runs, `active` is the systemd-run that waits for it.
+  let active: ChildProcess | null = null, stopRequested = false, again: ReturnType<typeof setInterval> | null = null;
+  const stopUnits = () => { for (const unit of units(id)) spawnSync("systemctl", ["--user", "stop", unit], { stdio: "ignore", timeout: 30_000 }); };
+  const requestStop = () => {
+    if (stopRequested) return;
+    stopRequested = true;
+    stopUnits();
+    if (!active) { clearInterval(touch); process.exit(0); }
+    // A stop that reached systemd before the unit was loaded stops nothing:
+    // ask again until the waiting systemd-run has seen its unit end.
+    again = setInterval(stopUnits, 1000);
+  };
+  for (const signal of ["SIGTERM", "SIGHUP", "SIGINT"] as const) process.on(signal, requestStop);
   let nonce: string, ended: Promise<void>, remainingMs: number | undefined, receivedAt: number;
   try { ({ nonce, ended, remainingMs, receivedAt } = await readNonce(10_000)); }
   catch (error) { clearInterval(touch); process.stderr.write(`gate-runner serve: ${(error as Error).message}\n`); return 2; }
+  void ended.then(requestStop);
   const record = (text: string) => process.stderr.write(`\n${nonce} ${text.replace(/[\r\n]+/g, " ")}\n`);
-  const log = fs.openSync(path.join(dir, "setup.log"), "a");
   const manifest = JSON.parse(fs.readFileSync(path.join(dir, "manifest.json"), "utf8")) as Manifest;
-  let stopRequested = false;
-  const stopUnit = () => { spawnSync("systemctl", ["--user", "stop", `gate-run-${id}`], { stdio: "ignore", timeout: 30_000 }); };
-  void ended.then(() => { stopRequested = true; stopUnit(); });
-  for (const signal of ["SIGTERM", "SIGHUP", "SIGINT"] as const) process.on(signal, () => { stopRequested = true; stopUnit(); });
-  let env: Record<string, string>;
-  let cwd: string;
+  const bus = busEnvironment(process.env);
+  const inUnit = (unit: string, verb: string, properties: string[], stdio: ("ignore" | "inherit" | number)[]) => new Promise<number | null>(resolve => {
+    const child = spawn("systemd-run", ["--user", "--quiet", "--collect", "--wait", "--pipe", `--unit=${unit}`, "-p", "TimeoutStopSec=15s", ...properties, `--setenv=HOME=${home()}`,
+      "--", process.execPath, path.join(dir, "serve.ts"), verb, dir], { stdio: stdio as never, env: bus });
+    active = child;
+    child.on("error", () => { active = null; resolve(null); });
+    child.on("exit", code => { active = null; resolve(code); });
+  });
+
+  // Setup runs in its own unit from its first process on, so a stop, a lost
+  // session or `remove` reaches every clone and install it started.
+  fs.writeFileSync(path.join(dir, "setup-env.json"), JSON.stringify({ env: process.env, remainingMs, receivedAt }), { mode: 0o600 });
+  const log = fs.openSync(path.join(dir, "setup.log"), "a");
+  const setupCode = await inUnit(`gate-setup-${id}`, "setup", ["-p", `RuntimeMaxSec=${SETUP_MAX_SECONDS}`], ["ignore", log, log]);
+  fs.closeSync(log);
+  if (stopRequested) { clearInterval(touch); if (again) clearInterval(again); return 0; }
+  const setup = readSetupResult(dir);
+  if (!setup?.ok) {
+    clearInterval(touch);
+    record(setup ? `setup-failed ${setup.step} ${setup.detail.slice(0, 400)}` : `setup-failed setup the setup unit left no result (systemd-run exited ${setupCode ?? "without a code"})`);
+    return 0;
+  }
+  record("started");
+  const unitCode = await inUnit(`gate-run-${id}`, "exec", [], ["ignore", "inherit", "inherit"]);
+  clearInterval(touch);
+  if (stopRequested) { if (again) clearInterval(again); return 0; }
+  const verdict = completion(unitCode, readExitRecord(dir));
+  record("code" in verdict ? `end ${verdict.code} ${manifest.tree}` : `no-verdict ${verdict.reason}`);
+  return 0;
+}
+
+/** What systemd-run needs to reach the user manager. */
+function busEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env = { ...source };
+  if (!env.XDG_RUNTIME_DIR && typeof process.getuid === "function") env.XDG_RUNTIME_DIR = `/run/user/${process.getuid()}`;
+  return env;
+}
+
+type SetupResult = { ok: true } | { ok: false; step: string; detail: string };
+function readSetupResult(dir: string): SetupResult | null {
   try {
+    const value = JSON.parse(fs.readFileSync(path.join(dir, "setup-result.json"), "utf8")) as SetupResult;
+    if (value.ok === true) return value;
+    if (value.ok === false && typeof value.step === "string" && typeof value.detail === "string") return value;
+  } catch { /* none */ }
+  return null;
+}
+
+/** Inside the gate-setup-<id> unit. The unit starts with the user manager's
+ * environment, so the session's own comes through a file only its account
+ * reads, removed once read. The nonce is never in it. */
+function setup(dir: string): number {
+  const result = path.join(dir, "setup-result.json");
+  const answer = (value: SetupResult) => { fs.rmSync(result, { force: true }); fs.writeFileSync(result, JSON.stringify(value), { flag: "wx" }); };
+  try {
+    const id = path.basename(dir);
+    const file = path.join(dir, "setup-env.json");
+    const handed = JSON.parse(fs.readFileSync(file, "utf8")) as { env: Record<string, string>; remainingMs?: number; receivedAt: number };
+    fs.rmSync(file, { force: true });
+    for (const key of Object.keys(process.env)) delete process.env[key];
+    Object.assign(process.env, handed.env);
+    const log = fs.openSync(path.join(dir, "setup.log"), "a");
+    const manifest = JSON.parse(fs.readFileSync(path.join(dir, "manifest.json"), "utf8")) as Manifest;
     if (manifest.id !== id || manifest.version !== 1) throw new SetupFailed("manifest", "the manifest names another run or protocol");
     const free = fs.statfsSync(home());
     if (free.bavail * free.bsize < 2 * 1024 ** 3) throw new SetupFailed("disk", "under 2 GB free on the runner");
@@ -274,27 +389,17 @@ async function run(dir: string): Promise<number> {
     install(tree.cwd, log);
     if (process.env.LLV_GATE_RUNNER_TEST_AFTER_INSTALL) spawnSync("/bin/bash", ["-c", process.env.LLV_GATE_RUNNER_TEST_AFTER_INSTALL], { cwd: tree.cwd, stdio: "ignore" });
     verify(tree.cwd, tree.env, manifest.tree, log);
-    env = commandEnvironment(dir, manifest, process.env, { remainingMs, receivedAt });
-    cwd = path.resolve(tree.cwd, manifest.cwd);
+    const env = commandEnvironment(dir, manifest, process.env, { remainingMs: handed.remainingMs, receivedAt: handed.receivedAt });
+    const cwd = path.resolve(tree.cwd, manifest.cwd);
     if (path.relative(tree.cwd, cwd).startsWith("..")) throw new SetupFailed("manifest", "the working directory leaves the tree");
     containment(tree.cwd, env, log);
     fs.writeFileSync(path.join(dir, "command.json"), JSON.stringify({ argv: manifest.argv.map((arg, index) => index === 0 && (arg === "bun" || arg === "bunx") ? bunBin(arg) : arg), cwd, env }), { mode: 0o600 });
-  } catch (error) {
-    clearInterval(touch);
-    const step = error instanceof SetupFailed ? error.step : "setup";
-    record(`setup-failed ${step} ${(error as Error).message.slice(0, 400)}`);
+    answer({ ok: true });
     return 0;
+  } catch (error) {
+    try { answer({ ok: false, step: error instanceof SetupFailed ? error.step : "setup", detail: (error as Error).message.slice(0, 400) }); } catch { /* the run directory is gone */ }
+    return 1;
   }
-  if (stopRequested) { clearInterval(touch); return 0; }
-  record("started");
-  const unit = spawn("systemd-run", ["--user", "--quiet", "--collect", "--wait", "--pipe", `--unit=gate-run-${id}`, "-p", "TimeoutStopSec=15s", `--setenv=HOME=${home()}`,
-    "--", process.execPath, path.join(dir, "serve.ts"), "exec", dir], { stdio: ["ignore", "inherit", "inherit"], env: { ...process.env, ...pick(env, ["XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"]) } });
-  const unitCode = await new Promise<number | null>(resolve => unit.on("exit", code => resolve(code)));
-  clearInterval(touch);
-  if (stopRequested) return 0;
-  const verdict = completion(unitCode, readExitRecord(dir));
-  record("code" in verdict ? `end ${verdict.code} ${manifest.tree}` : `no-verdict ${verdict.reason}`);
-  return 0;
 }
 
 function readExitRecord(dir: string): string | null {
@@ -314,10 +419,6 @@ export function completion(unitCode: number | null, record: string | null): { co
   if (!recorded) return { reason: `the run's command left no completion record (unit exit ${unitCode})` };
   if (Number(recorded[1]) !== unitCode) return { reason: `the run's completion record disagrees with its unit (unit exit ${unitCode})` };
   return { code: unitCode };
-}
-
-function pick(source: Record<string, string>, keys: string[]): Record<string, string> {
-  return Object.fromEntries(keys.filter(key => source[key]).map(key => [key, source[key]!]));
 }
 
 async function exec(dir: string): Promise<number> {
@@ -404,22 +505,36 @@ async function packOutputs(dir: string): Promise<number> {
   return 0;
 }
 
-/** Deletes the run only once its unit is proven stopped; otherwise the
- * directory and its lease stay for a retry or the sweep. */
+/** Deletes the run only once its session process has exited and both its
+ * units are proven stopped; otherwise the directory, its owner record and its
+ * lease stay for a retry or the sweep. */
 function remove(dir: string): number {
   const id = path.basename(dir);
-  let state = unitState(id);
-  if (state === "active") {
-    const stop = spawnSync("systemctl", ["--user", "stop", `gate-run-${id}`], { stdio: "ignore", timeout: 30_000 });
-    state = unitState(id);
-    if (stop.status !== 0 && state !== "inactive") {
-      process.stderr.write(`gate-runner serve: stopping the run's unit failed (systemctl exited ${stop.status ?? "on timeout"})\n`);
+  const owner = readOwner(dir);
+  if (ownerAlive(owner)) {
+    // `serve.ts run` stops its units on SIGTERM and exits once they ended.
+    try { process.kill(owner!.pid, "SIGTERM"); } catch { /* gone */ }
+    const until = Date.now() + OWNER_STOP_MS;
+    while (ownerAlive(owner) && Date.now() < until) sleepSync(100);
+    if (ownerAlive(owner)) {
+      process.stderr.write("gate-runner serve: the run's session process did not exit; the run directory stays\n");
       return 3;
     }
   }
-  if (state !== "inactive") {
-    process.stderr.write(`gate-runner serve: the run's unit is ${state}; the run directory stays\n`);
-    return 3;
+  for (const unit of units(id)) {
+    let state = unitState(unit);
+    if (state === "active") {
+      const stop = spawnSync("systemctl", ["--user", "stop", unit], { stdio: "ignore", timeout: 30_000 });
+      state = unitState(unit);
+      if (stop.status !== 0 && state !== "inactive") {
+        process.stderr.write(`gate-runner serve: stopping the run's unit failed (systemctl exited ${stop.status ?? "on timeout"})\n`);
+        return 3;
+      }
+    }
+    if (state !== "inactive") {
+      process.stderr.write(`gate-runner serve: the run's unit is ${state}; the run directory stays\n`);
+      return 3;
+    }
   }
   fs.rmSync(dir, { recursive: true, force: true });
   return 0;
@@ -429,7 +544,7 @@ if (import.meta.main) {
   const [verb, argument] = process.argv.slice(2);
   try {
     const dir = runDirectory(argument);
-    const code = verb === "run" ? await run(dir) : verb === "exec" ? await exec(dir)
+    const code = verb === "run" ? await run(dir) : verb === "setup" ? setup(dir) : verb === "exec" ? await exec(dir)
       : verb === "pack-outputs" ? await packOutputs(dir) : verb === "remove" ? remove(dir) : (() => { throw new Error(`unknown verb ${verb}`); })();
     process.exit(code);
   } catch (error) {

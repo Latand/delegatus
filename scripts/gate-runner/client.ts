@@ -323,9 +323,10 @@ export function ship(tree: Tree, scratch: string, mirrorMain: string | undefined
   return { tree: treeId, commit, parent, bundle, changed, gitDir: ship, objects, prerequisite: parent };
 }
 
-/** Settings under which `add -A` would keep an entry's recorded blob without
- * reading the file. */
-const STAT_TRUSTING_OFF = ["-c", "core.fsmonitor=false", "-c", "core.ignoreStat=false", "-c", "core.checkStat=default", "-c", "gc.auto=0"];
+/** Settings under which `add -A` would keep an entry's recorded blob or mode
+ * without reading the file: with core.fileMode or core.symlinks off, an
+ * executable bit or a link replaced by a file keeps the index's mode. */
+const STAT_TRUSTING_OFF = ["-c", "core.fsmonitor=false", "-c", "core.ignoreStat=false", "-c", "core.checkStat=default", "-c", "core.fileMode=true", "-c", "core.symlinks=true", "-c", "gc.auto=0"];
 
 /** An assume-unchanged entry keeps its recorded blob whatever the file holds,
  * so the flag is cleared in the capture's own index copy. A skip-worktree
@@ -590,26 +591,53 @@ export function readUstar(data: Buffer): TarEntry[] {
 
 /** Two output roots overlap when one is the other or lies inside it. */
 const overlaps = (a: string, b: string) => inside(a, b) || inside(b, a);
-const realOrResolved = (target: string) => { try { return fs.realpathSync(target); } catch { return path.resolve(target); } };
+/** Where `target` really is: its nearest existing ancestor resolved through
+ * every link, with the missing rest appended. A missing directory beneath a
+ * link to the checkout is the checkout's. Null when an existing entry on the
+ * way cannot be resolved (a dangling link, a loop, no permission). */
+function realOutputPath(target: string): string | null {
+  const missing: string[] = [];
+  for (let dir = path.resolve(target); ; dir = path.dirname(dir)) {
+    try { return path.join(fs.realpathSync(dir), ...missing); }
+    catch {
+      if (fs.lstatSync(dir, { throwIfNoEntry: false }) || path.dirname(dir) === dir) return null;
+      missing.unshift(path.basename(dir));
+    }
+  }
+}
 
 /** Output directories that coincide, nest, or reach the checkout would let one
- * returned entry land under another root. */
-export function outputConflict(root: string, outputs: Record<string, string>): string | null {
-  const realRoot = realOrResolved(root);
+ * returned entry land under another root. On success, every root resolved. */
+function resolveOutputs(root: string, outputs: Record<string, string>): { conflict: string } | { root: string; outputs: Record<string, string> } {
+  const realRoot = realOutputPath(root);
+  if (!realRoot) return { conflict: "the checkout cannot be resolved" };
   const names = Object.keys(outputs).sort();
-  for (const [index, name] of names.entries()) {
-    const real = realOrResolved(outputs[name]!);
-    if (overlaps(real, realRoot)) return `${name} overlaps the checkout`;
-    for (const other of names.slice(index + 1)) if (overlaps(real, realOrResolved(outputs[other]!))) return `${name} and ${other} name overlapping directories`;
+  const real: Record<string, string> = {};
+  for (const name of names) {
+    const resolved = realOutputPath(outputs[name]!);
+    if (!resolved) return { conflict: `${name} names a directory that cannot be resolved` };
+    real[name] = resolved;
   }
-  return null;
+  for (const [index, name] of names.entries()) {
+    if (overlaps(real[name]!, realRoot)) return { conflict: `${name} overlaps the checkout` };
+    for (const other of names.slice(index + 1)) if (overlaps(real[name]!, real[other]!)) return { conflict: `${name} and ${other} name overlapping directories` };
+  }
+  return { root: realRoot, outputs: real };
+}
+
+export function outputConflict(root: string, outputs: Record<string, string>): string | null {
+  const resolved = resolveOutputs(root, outputs);
+  return "conflict" in resolved ? resolved.conflict : null;
 }
 
 /** Where each entry lands here, after every path and parent has been checked,
  * against this machine's files and against every other entry of the return. */
-export function returnPlan(entries: TarEntry[], root: string, outputs: Record<string, string>): { target: string; body: Buffer }[] {
-  const conflict = outputConflict(root, outputs);
-  if (conflict) throw new Error(`refused: ${conflict}`);
+export function returnPlan(entries: TarEntry[], checkout: string, declared: Record<string, string>): { target: string; body: Buffer }[] {
+  // Every destination is planned under the resolved roots, so a link on the
+  // way to a root cannot carry a write past the overlap check.
+  const resolved = resolveOutputs(checkout, declared);
+  if ("conflict" in resolved) throw new Error(`refused: ${resolved.conflict}`);
+  const { root, outputs } = resolved;
   const plan: { target: string; body: Buffer; base: string }[] = [];
   for (const entry of entries) {
     const segments = entry.name.split("/");
@@ -632,7 +660,7 @@ export function returnPlan(entries: TarEntry[], root: string, outputs: Record<st
       if (stat && !stat.isDirectory()) throw new Error(`refused: ${path.relative(base, dir)} exists here as something other than a directory`);
     }
     const stat = fs.lstatSync(base, { throwIfNoEntry: false });
-    if (stat && !stat.isDirectory() && !(stat.isSymbolicLink() && base !== root)) throw new Error("refused: an output root is not a directory");
+    if (stat && !stat.isDirectory()) throw new Error("refused: an output root is not a directory");
     const existing = fs.lstatSync(target, { throwIfNoEntry: false });
     if (existing && !existing.isFile()) throw new Error(`refused: ${path.basename(target)} exists here as something other than a file`);
   }
@@ -790,15 +818,19 @@ async function main(argv: string[]): Promise<number> {
     cancelled = signal;
     const code = signal === "SIGINT" ? 130 : 143;
     if (phase === "run" && session) {
+      // The session's end makes `serve.ts run` stop both units; `remove`
+      // confirms that session process has exited and both units are
+      // inactive, whether the run was in setup or in its command.
       session.stdin?.end();
-      const stop = sshSync(env, target.alias, `systemctl --user stop gate-run-${id}`, 15_000);
       session.kill("SIGTERM");
-      if (stop.status !== 0) {
+      const cleanup = remove();
+      fs.rmSync(scratch, { recursive: true, force: true });
+      if (cleanup) {
         say("gate-runner: no verdict: cancellation was not confirmed on the runner");
         markUnhealthy(env, "cancellation was not confirmed");
-        remove(); fs.rmSync(scratch, { recursive: true, force: true });
         settle?.(75); return;
       }
+      settle?.(code); return;
     }
     remove(); fs.rmSync(scratch, { recursive: true, force: true });
     settle?.(code);
