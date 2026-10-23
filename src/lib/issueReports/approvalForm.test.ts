@@ -62,6 +62,13 @@ test("only a person's explicit choice of the approving option approves", () => {
   expect(issueReportDecisionApproves(decision({ decidedBy: { kind: "member", memberId: "member-a" } }))).toBe(true);
   /* A comment beside the explicit choice does not withdraw it. */
   expect(issueReportDecisionApproves(decision({ comment: "Thanks" }))).toBe(true);
+  /* Delivery text is out of band from the structured choice. A focused-card
+     prelude and an engine interruption marker cannot change that choice. */
+  expect(issueReportDecisionApproves(decision({ comment: [
+    "[viewer context — the operator is looking at: project example; focused conversation transcripts/seat.jsonl]",
+    "[Request interrupted by user]",
+    issueReportApprovalReplies(PREVIEW.digest).en,
+  ].join("\n") }))).toBe(true);
 
   expect(issueReportDecisionApproves(undefined)).toBe(false);
   expect(issueReportDecisionApproves(decision({ decidedBy: { kind: "agent", conversationId: "conversation_seat" } }))).toBe(false);
@@ -84,5 +91,22 @@ test("consent for one preview never approves another sharing its display prefix"
     const form = issueReportApprovalForm(PREVIEW, language);
     expect(issueReportFormLanguage(round(form), other)).toBeNull();
     expect(issueReportFormLanguage(round(form), PREVIEW)).toBe(language);
+  }
+});
+
+test.each(["en", "uk"] as const)("viewer-context delivery text preserves the structured approval in %s (#2791)", language => {
+  const form = issueReportApprovalForm(PREVIEW, language);
+  const reply = issueReportApprovalReplies(PREVIEW.digest)[language];
+  for (const marker of ["", "[Request interrupted by user]\n"]) {
+    const text = `[viewer context — the operator is looking at: project example; focused conversation transcripts/seat.jsonl]\n${marker}${reply}`;
+    const answer = decision({ comment: text,
+      delivery: { state: "sent", conversationId: "conversation_seat", clientMessageId: "prototype-decision:context", text } });
+    expect(issueReportFormLanguage(round(form), PREVIEW)).toBe(language);
+    expect(issueReportDecisionApproves(answer)).toBe(true);
+    // The same delivery text cannot turn a refusal or an agent's answer
+    // into consent, or bind the form to a different preview.
+    expect(issueReportDecisionApproves({ ...answer, answers: [{ questionId: ISSUE_REPORT_QUESTION_ID, options: [2] }] })).toBe(false);
+    expect(issueReportDecisionApproves({ ...answer, decidedBy: { kind: "agent", conversationId: "conversation_seat" } })).toBe(false);
+    expect(issueReportFormLanguage(round(form), OTHER)).toBeNull();
   }
 });
