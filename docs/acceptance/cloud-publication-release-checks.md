@@ -2,7 +2,7 @@
 
 The first draft came from Codex Cloud.
 
-The baseline is `95d52f4db9803e9a06d835fb5dbe37bbbd4d2b79`. A final fetch observed main at `3dffc54e1`; the four source/test targets and the two release workflows were unchanged from the pinned baseline. Production changes are in `28462191d`; the publication test wrapper budget is in `0cc3f96b6`.
+The baseline is `95d52f4db9803e9a06d835fb5dbe37bbbd4d2b79`. An earlier fetch observed main at `3dffc54e1` with the target files unchanged. The final recheck at `800a26ebc` adds memory-limit and producer-repair changes in `src/lib/pipelines/engine.ts`; its publication queue and skipped-stage functions remain byte-for-byte equal to the pinned base. `git merge-tree` merges the lane and that main cleanly. Executable checks in this report use the pinned baseline plus these fixes. Production changes are in `28462191d`; the publication test wrapper budget is in `0cc3f96b6`.
 
 | Issue | Fix and regression coverage | Reverted-fix result |
 | --- | --- | --- |
@@ -159,6 +159,8 @@ The final paired whole-file confirmations used the same Bun commands, fresh stat
 | Trusted-fingerprint privacy check on all changed source files | 0. |
 | Plain hooks-enabled source commit | 0; staged whitespace, privacy and ESLint passed. |
 | Plain hooks-enabled publication-wrapper budget commit | 0; staged whitespace, privacy and ESLint passed. |
-| `git fetch origin main` and comparison of the six relevant paths | 0; target files unchanged on newer main. |
+| `git fetch origin main` and comparison of the six relevant paths — earlier and final observations | 0, 0; final engine changes are described above. The other five target paths are unchanged. |
+| Byte comparison of the publication queue and skipped-stage functions against final main | 0; both unchanged. |
+| `git merge-tree --write-tree --messages HEAD origin/main` | 0; clean integration tree, with execution coverage scoped to the pinned baseline. |
 
 The reverted production files and copied regression detectors existed only in disposable verification clones. No revert was committed. No external push, deployment, issue comment or workflow edit was made.
