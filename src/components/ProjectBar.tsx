@@ -289,10 +289,14 @@ const foldedRow = (element: HTMLElement | null) => element?.closest<HTMLElement>
  * a card's link to more conversations opens the same list. On a short row the
  * icon is folded into ⋯ (`panels`): the list then takes the focus as it opens,
  * and Escape or its ✕ hands it back to ⋯, the control the operator came from.
+ * A row that folds while the list is open hides the icon under the focus, so
+ * the focus moves to the list's ✕ and Escape still reaches the list.
  */
-export function BarRecentAgents({ open, onOpenChange, list }: {
+export function BarRecentAgents({ open, onOpenChange, list, folded = false }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** The row has taken the `panels` step (`useBarFit`): the icon is hidden in ⋯. */
+  folded?: boolean;
   /** `countSlot` is the place in the list's head for how many agents there are. */
   list: (close: () => void, countSlot: HTMLElement | null) => ReactNode;
 }) {
@@ -311,6 +315,11 @@ export function BarRecentAgents({ open, onOpenChange, list }: {
   useEffect(() => {
     if (open && foldedRow(container.current)) dismiss.current?.focus({ preventScroll: true });
   }, [open]);
+  useEffect(() => {
+    if (!open || !folded) return;
+    const active = document.activeElement;
+    if (!active || active === document.body || active === trigger.current) dismiss.current?.focus({ preventScroll: true });
+  }, [open, folded]);
   return (
     <span ref={container} className="bar-slot relative inline-flex shrink-0" data-bar-recent="" onKeyDown={open ? (event) => { handleOverlayEscape(event, closeToTrigger); } : undefined}>
       <button

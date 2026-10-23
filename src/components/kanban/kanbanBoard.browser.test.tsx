@@ -36828,7 +36828,8 @@ describe("the board header fits a narrow 640–700 px window", () => {
    *     the row's texts and controls, and what a short row gave up is a row of ⋯ that works:
    *     Orchestrator, the recent agents' list, New task;
    *   - the recent agents' list reached from ⋯ by the keyboard takes the focus, keeps Tab inside it,
-   *     and Escape closes it and hands the focus back to ⋯;
+   *     and Escape closes it and hands the focus back to ⋯; so does the list opened from its icon at
+   *     1440 px when the window then narrows under it and the row folds the icon into ⋯;
    *   - the needs-you toast hanging under the row stays inside the window.
    *
    * No fixed sleep stands for readiness: each reading waits for what the fixture gives the bar (the
@@ -37171,6 +37172,41 @@ describe("the board header fits a narrow 640–700 px window", () => {
                   }
                 }
                 folded.keyboard = keyboard;
+                await closeMenus(page, viewport, BOARD_BAR);
+
+                /* The list opened by the keyboard from its icon on a desktop window, then the window
+                   narrows under it: the row folds the icon that held the focus into ⋯, the focus moves
+                   to the list's ✕, and Escape closes the list onto ⋯. */
+                const wide = VIEWPORTS[VIEWPORTS.length - 1];
+                const resize: Record<string, unknown> = { from: wide.width };
+                await page.setViewportSize(wide);
+                await page.waitForFunction((bar) => !document.querySelector(bar)?.matches('[data-fit~="panels"]'), BOARD_BAR, { timeout: 10_000 });
+                await stillAt(page, BOARD_BAR);
+                await page.focus(`${BOARD_BAR} [data-bar-recent-toggle]`);
+                await page.keyboard.press("Enter");
+                const shown = await page.locator("[data-bar-recent-list]").waitFor({ state: "visible", timeout: 5_000 }).then(() => true, () => false);
+                if (!shown) failures.push(`${tag}: Enter on the recent agents' icon at ${wide.width} px opened no list`);
+                else {
+                  await page.setViewportSize(viewport);
+                  await page.waitForFunction((bar) => Boolean(document.querySelector(bar)?.matches('[data-fit~="panels"]')), BOARD_BAR, { timeout: 10_000 });
+                  await stillAt(page, BOARD_BAR);
+                  resize.kept = await page.locator("[data-bar-recent-list]").count() > 0;
+                  await page.waitForFunction(() => Boolean(document.activeElement?.closest("[data-bar-recent-list]")), undefined, { timeout: 5_000 }).catch(() => undefined);
+                  resize.onFold = await active();
+                  if (resize.kept && !(resize.onFold as { inList: boolean }).inList) failures.push(`${tag}: narrowing from ${wide.width} px under the open recent agents' list left the focus on «${(resize.onFold as { label: string }).label}»`);
+                  if (resize.kept) {
+                    resize.list = await gateMenu(page, tag, "recent agents (kept over a narrowing)", "[data-bar-recent-list]", BOARD_BAR, viewport, failures);
+                    await page.screenshot({ path: path.join(OUT, `${name}-resize-recent.png`) });
+                    /* Escape at once, from where the fold left the focus: Tab from the ✕ is the case above. */
+                    await page.keyboard.press("Escape");
+                    const gone = await page.locator("[data-bar-recent-list]").waitFor({ state: "detached", timeout: 5_000 }).then(() => true, () => false);
+                    resize.escapeCloses = gone;
+                    if (!gone) failures.push(`${tag}: Escape does not close the recent agents' list kept over a narrowing`);
+                  }
+                  resize.afterEscape = await active();
+                  if (!(resize.afterEscape as { more: boolean }).more) failures.push(`${tag}: after a narrowing under the recent agents' list the focus is on «${(resize.afterEscape as { label: string }).label}», not ⋯`);
+                }
+                folded.resize = resize;
                 await closeMenus(page, viewport, BOARD_BAR);
 
                 const pressed = async () => {

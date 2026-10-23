@@ -75,6 +75,9 @@ Object.defineProperty(dom.HTMLElement.prototype, "scrollWidth", {
   },
 });
 const G = globalThis as Record<string, unknown>;
+/* What observes a box for its size, and the box. A case that changed the bar's widths tells the bar's observers. */
+const resizeWatchers = new Map<(entries: { target: Element }[]) => void, Element>();
+const barResized = () => { for (const [callback, target] of [...resizeWatchers]) if (isBoardBar(target as HTMLElement)) callback([{ target }]); };
 
 /* Switchable surface: the same selection has to be published by the desktop
    board and by the phone's focus view, so the tests flip this between mounts. */
@@ -139,7 +142,13 @@ const OVERRIDES: Record<string, unknown> = {
   matchMedia: matchMediaFor,
   requestAnimationFrame: (cb: (t: number) => void) => setTimeout(() => cb(0), 0) as unknown as number,
   cancelAnimationFrame: (id: number) => clearTimeout(id),
-  ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
+  /* Nothing resizes by itself here; a case that narrows the window calls `barResized()`. */
+  ResizeObserver: class {
+    constructor(private readonly callback: (entries: { target: Element }[]) => void) {}
+    observe(target: Element) { resizeWatchers.set(this.callback, target); }
+    unobserve() {}
+    disconnect() { resizeWatchers.delete(this.callback); }
+  },
   IntersectionObserver: class { observe() {} unobserve() {} disconnect() {} takeRecords() { return []; } },
   fetch: (async (input: string | URL | Request, init?: RequestInit) => {
     if (String(input) === "/api/links/shared") return Response.json({ shared: { v: 1, all: false, projects: [] }, known: [] });
@@ -640,6 +649,32 @@ test("with room, ⋯ carries no row for what the row still holds", async () => {
   flushSync(() => host.querySelector("[data-bar-recent-list]")!.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }) as never));
   expect(await waitFor(() => host.querySelector("[data-bar-recent-list]") === null)).toBe(true);
   expect(doc.activeElement?.hasAttribute("data-bar-recent-toggle")).toBe(true);
+});
+
+test("a row that folds the recent agents' icon under its open list moves the focus into the list, and Escape hands it to ⋯", async () => {
+  barWidth = 1000;
+  rowNeeds = 1000;
+  const host = mount();
+  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+  await settle();
+  expect(bar(host).getAttribute("data-fit")).toBe("");
+  const doc = host.ownerDocument;
+  const toggle = host.querySelector<HTMLElement>("[data-bar-recent-toggle]")!;
+  toggle.focus();
+  expect(doc.activeElement).toBe(toggle);
+  click(toggle);
+  expect(await waitFor(() => host.querySelector("[data-bar-recent-list]") !== null)).toBe(true);
+  await settle();
+  expect(doc.activeElement).toBe(toggle);
+  /* The window narrows under the open list: the row now needs what every step up to `panels` gives back. */
+  rowNeeds = 1000 + 300 + 150 + 90 + 40 + 60;
+  barResized();
+  expect(await waitFor(() => bar(host).getAttribute("data-fit") === "accounts labels chip tight panels")).toBe(true);
+  expect(await waitFor(() => Boolean(doc.activeElement?.closest("[data-bar-recent-list]")))).toBe(true);
+  expect(doc.activeElement?.hasAttribute("data-bar-recent-close")).toBe(true);
+  flushSync(() => doc.activeElement!.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }) as never));
+  expect(await waitFor(() => host.querySelector("[data-bar-recent-list]") === null)).toBe(true);
+  expect(doc.activeElement?.hasAttribute("data-bar-more")).toBe(true);
 });
 
 test("Undo and Redo are gone from the header, its ⋯ and Ctrl+Z, even with a close in the log (#1856)", async () => {

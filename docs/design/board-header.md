@@ -199,7 +199,7 @@ Two steps now come between `tight` and `find`, in this order:
 
 | Step | The row gives up | Where it goes |
 |---|---|---|
-| `panels` | Orchestrator and the recent agents' segment | the first rows of ⋯ after `+`'s: «Orchestrator panel», the toggle's own name apart from the seat's section «Orchestrator» (pressed while the seat is open, with the collapsed seat's state word) and «Recent agents». The list still hangs under its segment, which stays as an empty anchor beside ⋯, as tall as the control it held, so the list opens under the row's controls. Opened from ⋯ it takes the focus (its ✕ first, then its agents by Tab), and Escape or ✕ hands the focus back to ⋯. |
+| `panels` | Orchestrator and the recent agents' segment | the first rows of ⋯ after `+`'s: «Orchestrator panel», the toggle's own name apart from the seat's section «Orchestrator» (pressed while the seat is open, with the collapsed seat's state word) and «Recent agents». The list still hangs under its segment, which stays as an empty anchor beside ⋯, as tall as the control it held, so the list opens under the row's controls. Opened from ⋯ it takes the focus (its ✕ first, then its agents by Tab), and Escape or ✕ hands the focus back to ⋯. A list open while the window narrows past this step stays open, and the focus its folded icon held moves to its ✕. |
 | `create` | `+` | two rows of ⋯ at its top, the `+` menu's own: New task, New agent |
 
 `tight` also drops the spacer, whose width is zero by then, and with it two

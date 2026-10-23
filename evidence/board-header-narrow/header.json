@@ -150,6 +150,36 @@
             "label": "More actions"
           }
         },
+        "resize": {
+          "from": 1440,
+          "kept": true,
+          "onFold": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Close"
+          },
+          "list": {
+            "x": 102,
+            "y": 44,
+            "w": 440,
+            "h": 560,
+            "scrollEdge": [
+              "Claude",
+              "Retry on another account, or wait for the reset?",
+              "3d ago",
+              "2",
+              "kB"
+            ]
+          },
+          "escapeCloses": true,
+          "afterEscape": {
+            "more": true,
+            "row": false,
+            "inList": false,
+            "label": "More actions"
+          }
+        },
         "orchestrator": {
           "before": "false",
           "after": "true",
@@ -382,6 +412,36 @@
             "row": false,
             "inList": true,
             "label": "Open Keep the old index serving until th"
+          },
+          "escapeCloses": true,
+          "afterEscape": {
+            "more": true,
+            "row": false,
+            "inList": false,
+            "label": "More actions"
+          }
+        },
+        "resize": {
+          "from": 1440,
+          "kept": true,
+          "onFold": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Close"
+          },
+          "list": {
+            "x": 102,
+            "y": 44,
+            "w": 440,
+            "h": 560,
+            "scrollEdge": [
+              "Claude",
+              "Retry on another account, or wait for the reset?",
+              "3d ago",
+              "2",
+              "kB"
+            ]
           },
           "escapeCloses": true,
           "afterEscape": {
@@ -632,6 +692,36 @@
             "label": "Більше дій"
           }
         },
+        "resize": {
+          "from": 1440,
+          "kept": true,
+          "onFold": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Закрити"
+          },
+          "list": {
+            "x": 102,
+            "y": 44,
+            "w": 440,
+            "h": 560,
+            "scrollEdge": [
+              "Claude",
+              "Retry on another account, or wait for the reset?",
+              "3 д тому",
+              "2",
+              "кБ"
+            ]
+          },
+          "escapeCloses": true,
+          "afterEscape": {
+            "more": true,
+            "row": false,
+            "inList": false,
+            "label": "Більше дій"
+          }
+        },
         "orchestrator": {
           "before": "false",
           "after": "true",
@@ -864,6 +954,36 @@
             "row": false,
             "inList": true,
             "label": "Відкрити Keep the old index serving unti"
+          },
+          "escapeCloses": true,
+          "afterEscape": {
+            "more": true,
+            "row": false,
+            "inList": false,
+            "label": "Більше дій"
+          }
+        },
+        "resize": {
+          "from": 1440,
+          "kept": true,
+          "onFold": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Закрити"
+          },
+          "list": {
+            "x": 102,
+            "y": 44,
+            "w": 440,
+            "h": 560,
+            "scrollEdge": [
+              "Claude",
+              "Retry on another account, or wait for the reset?",
+              "3 д тому",
+              "2",
+              "кБ"
+            ]
           },
           "escapeCloses": true,
           "afterEscape": {
@@ -1128,6 +1248,36 @@
             "label": "More actions"
           }
         },
+        "resize": {
+          "from": 1440,
+          "kept": true,
+          "onFold": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Close"
+          },
+          "list": {
+            "x": 132,
+            "y": 44,
+            "w": 440,
+            "h": 560,
+            "scrollEdge": [
+              "Claude",
+              "Retry on another account, or wait for the reset?",
+              "3d ago",
+              "2",
+              "kB"
+            ]
+          },
+          "escapeCloses": true,
+          "afterEscape": {
+            "more": true,
+            "row": false,
+            "inList": false,
+            "label": "More actions"
+          }
+        },
         "orchestrator": {
           "before": "false",
           "after": "true",
@@ -1371,6 +1521,36 @@
             "row": false,
             "inList": true,
             "label": "Open Keep the old index serving until th"
+          },
+          "escapeCloses": true,
+          "afterEscape": {
+            "more": true,
+            "row": false,
+            "inList": false,
+            "label": "More actions"
+          }
+        },
+        "resize": {
+          "from": 1440,
+          "kept": true,
+          "onFold": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Close"
+          },
+          "list": {
+            "x": 132,
+            "y": 44,
+            "w": 440,
+            "h": 560,
+            "scrollEdge": [
+              "Claude",
+              "Retry on another account, or wait for the reset?",
+              "3d ago",
+              "2",
+              "kB"
+            ]
           },
           "escapeCloses": true,
           "afterEscape": {
@@ -1632,6 +1812,36 @@
             "label": "Більше дій"
           }
         },
+        "resize": {
+          "from": 1440,
+          "kept": true,
+          "onFold": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Закрити"
+          },
+          "list": {
+            "x": 132,
+            "y": 44,
+            "w": 440,
+            "h": 560,
+            "scrollEdge": [
+              "Claude",
+              "Retry on another account, or wait for the reset?",
+              "3 д тому",
+              "2",
+              "кБ"
+            ]
+          },
+          "escapeCloses": true,
+          "afterEscape": {
+            "more": true,
+            "row": false,
+            "inList": false,
+            "label": "Більше дій"
+          }
+        },
         "orchestrator": {
           "before": "false",
           "after": "true",
@@ -1875,6 +2085,36 @@
             "row": false,
             "inList": true,
             "label": "Відкрити Keep the old index serving unti"
+          },
+          "escapeCloses": true,
+          "afterEscape": {
+            "more": true,
+            "row": false,
+            "inList": false,
+            "label": "Більше дій"
+          }
+        },
+        "resize": {
+          "from": 1440,
+          "kept": true,
+          "onFold": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Закрити"
+          },
+          "list": {
+            "x": 132,
+            "y": 44,
+            "w": 440,
+            "h": 560,
+            "scrollEdge": [
+              "Claude",
+              "Retry on another account, or wait for the reset?",
+              "3 д тому",
+              "2",
+              "кБ"
+            ]
           },
           "escapeCloses": true,
           "afterEscape": {
@@ -2136,6 +2376,36 @@
             "label": "More actions"
           }
         },
+        "resize": {
+          "from": 1440,
+          "kept": true,
+          "onFold": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Close"
+          },
+          "list": {
+            "x": 162,
+            "y": 44,
+            "w": 440,
+            "h": 560,
+            "scrollEdge": [
+              "Claude",
+              "Retry on another account, or wait for the reset?",
+              "3d ago",
+              "2",
+              "kB"
+            ]
+          },
+          "escapeCloses": true,
+          "afterEscape": {
+            "more": true,
+            "row": false,
+            "inList": false,
+            "label": "More actions"
+          }
+        },
         "orchestrator": {
           "before": "false",
           "after": "true",
@@ -2379,6 +2649,36 @@
             "row": false,
             "inList": true,
             "label": "Open Keep the old index serving until th"
+          },
+          "escapeCloses": true,
+          "afterEscape": {
+            "more": true,
+            "row": false,
+            "inList": false,
+            "label": "More actions"
+          }
+        },
+        "resize": {
+          "from": 1440,
+          "kept": true,
+          "onFold": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Close"
+          },
+          "list": {
+            "x": 162,
+            "y": 44,
+            "w": 440,
+            "h": 560,
+            "scrollEdge": [
+              "Claude",
+              "Retry on another account, or wait for the reset?",
+              "3d ago",
+              "2",
+              "kB"
+            ]
           },
           "escapeCloses": true,
           "afterEscape": {
@@ -2640,6 +2940,36 @@
             "label": "Більше дій"
           }
         },
+        "resize": {
+          "from": 1440,
+          "kept": true,
+          "onFold": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Закрити"
+          },
+          "list": {
+            "x": 162,
+            "y": 44,
+            "w": 440,
+            "h": 560,
+            "scrollEdge": [
+              "Claude",
+              "Retry on another account, or wait for the reset?",
+              "3 д тому",
+              "2",
+              "кБ"
+            ]
+          },
+          "escapeCloses": true,
+          "afterEscape": {
+            "more": true,
+            "row": false,
+            "inList": false,
+            "label": "Більше дій"
+          }
+        },
         "orchestrator": {
           "before": "false",
           "after": "true",
@@ -2883,6 +3213,36 @@
             "row": false,
             "inList": true,
             "label": "Відкрити Keep the old index serving unti"
+          },
+          "escapeCloses": true,
+          "afterEscape": {
+            "more": true,
+            "row": false,
+            "inList": false,
+            "label": "Більше дій"
+          }
+        },
+        "resize": {
+          "from": 1440,
+          "kept": true,
+          "onFold": {
+            "more": false,
+            "row": false,
+            "inList": true,
+            "label": "Закрити"
+          },
+          "list": {
+            "x": 162,
+            "y": 44,
+            "w": 440,
+            "h": 560,
+            "scrollEdge": [
+              "Claude",
+              "Retry on another account, or wait for the reset?",
+              "3 д тому",
+              "2",
+              "кБ"
+            ]
           },
           "escapeCloses": true,
           "afterEscape": {

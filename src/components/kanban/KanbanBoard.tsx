@@ -2931,7 +2931,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         <span className="font-normal tabular-nums text-muted">{hiddenCount}</span>
       </button>
     ) : null,
-    panelsTail: props.recentAgents ? <BarRecentAgents open={recentOpen} onOpenChange={setRecentOpen} list={props.recentAgents} /> : null,
+    panelsTail: props.recentAgents ? <BarRecentAgents open={recentOpen} onOpenChange={setRecentOpen} list={props.recentAgents} folded={barFit.includes("panels")} /> : null,
     /* The list still hangs under its own segment, which the row keeps as an empty anchor beside ⋯. */
     recentRow: props.recentAgents ? (close) => (
       <button type="button" className={BAR_MENU_ROW} data-bar-more-recent="" aria-haspopup="dialog" onClick={() => { close(); queueMicrotask(() => setRecentOpen(true)); }}>
