@@ -36,3 +36,6 @@ independent project deadlines, alarm-source retry, late transport answers and
 recovery in a new process. `seatTickSources.test.ts` covers unrelated publication
 churn and replacement of this project's evidence. These tests establish
 scheduling and accounting behavior; they provide no production speed measurement.
+
+The final file inventory, baseline comparison and repeated samples are recorded in
+[the verification report](seat-tick-project-deadlines-verification.md).
