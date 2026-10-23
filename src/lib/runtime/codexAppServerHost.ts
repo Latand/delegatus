@@ -1488,6 +1488,20 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   }
 
   private static async open(options: CodexAppServerHostOptions, threadId: string | null): Promise<CodexAppServerHost> {
+    const { withCodexCliLaunch } = await import("@/lib/codexUpdate/installation");
+    let entered = false;
+    try {
+      return await withCodexCliLaunch(options.binary ?? process.env.LLV_CODEX_BINARY ?? "codex", () => {
+        entered = true;
+        return this.openWithCliGuard(options, threadId);
+      });
+    } catch (error) {
+      if (!entered) options.releaseCleanup?.();
+      throw error;
+    }
+  }
+
+  private static async openWithCliGuard(options: CodexAppServerHostOptions, threadId: string | null): Promise<CodexAppServerHost> {
     let memoryHook: ReturnType<typeof installCodexMemoryHook> = null;
     try { if (!options.socketOwner && options.codexHome && !options.cleanMemory) memoryHook = installCodexMemoryHook(options.codexHome, options.env ?? process.env); }
     catch { /* optional memory must never stop a launch */ }

@@ -35,7 +35,7 @@ export type ViewerOperation = "state.index-repair" | "temp.sweep" | "resources.r
   | "seat-tick.prepare" | "seat-tick.liveness" | "seat-tick.children" | "seat-tick.reports" | "seat-tick.worker-asks" | "seat-tick.rule-reports" | "seat-tick.check" | "seat-tick.payload" | "seat-tick.audit"
   | "state.document" | "tasks.proactive.admission"
   | "memory.search" | "memory.open"
-  | "codex.protocol-admission" | "mcp.page-cursors"
+  | "codex.protocol-admission" | "codex.cli-update" | "mcp.page-cursors"
   | "worktrees.discovery" | "worktrees.candidate" | "worktrees.accounting"
   | "pipelines.controller-job" | "pipelines.controller-lane" | "pipelines.controller-schedule" | "pipelines.publication-recovery"
   | "pipelines.controller-artifacts"

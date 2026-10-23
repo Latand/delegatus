@@ -293,6 +293,11 @@ export class CodexAppServerClient {
   }
 
   static async start(options: CodexAppServerOptions): Promise<CodexAppServerClient> {
+    const { withCodexCliLaunch } = await import("@/lib/codexUpdate/installation");
+    return withCodexCliLaunch(codexAccountBinary(), () => this.startWithCliGuard(options));
+  }
+
+  private static async startWithCliGuard(options: CodexAppServerOptions): Promise<CodexAppServerClient> {
     const binary = codexAccountBinary();
     const protocol = await resolveCodexProtocol((options.readProtocolVersion ?? installedCodexVersion)(binary, process.env), binary, process.env, options.generateProtocolSchemas);
     const capabilities = options.protocolProfile === "thread-control"
