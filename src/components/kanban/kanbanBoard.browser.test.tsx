@@ -36816,5 +36816,5 @@ describe("new task default deadline", () => {
     const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"], ignoreDefaultArgs: ["--hide-scrollbars"] });
     try { await captureTaskDueFrames(browser, server.base, out, false); }
     finally { await browser.close(); server.stop(); }
-  }, 120_000);
+  }, 900_000);
 });

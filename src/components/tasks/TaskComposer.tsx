@@ -1,6 +1,6 @@
 "use client";
 
-import { CalendarClock, X } from "lucide-react";
+import { CalendarClock, RotateCcw, X } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { ComposerBar } from "@/components/ComposerBar";
@@ -22,13 +22,14 @@ function DueChip({ draft }: { draft: UseTaskDraftReturn }) {
   return (
     <span data-task-due={dueAt ? "picked" : "default"} className="inline-flex items-center gap-1">
       <label
-        className={`relative inline-flex items-center gap-1 rounded-full font-semibold ${
+        className={`relative inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full font-semibold ${
           isMobile ? "min-h-11 px-3 text-[12px]" : "px-1.5 py-1 text-[9.5px]"
-        } ${dueAt ? (overdue ? "bg-danger-soft text-danger" : "bg-sunken text-secondary") : "bg-sunken text-secondary hover:text-accent"}`}
+        } ${dueAt ? (overdue ? "bg-danger-soft text-danger" : "bg-sunken text-secondary") : "border border-muted bg-sunken text-secondary hover:text-accent"}`}
         title={t(dueAt ? "tasks.dueTitle" : "tasks.defaultDueTitle", { zone: shownZone })}
       >
         <CalendarClock className={isMobile ? "h-4 w-4" : "h-3 w-3"} aria-hidden />
-        {formatDue(shownAt, shownZone, getLocale())}
+        {dueAt ? null : <span data-task-due-default>{t("tasks.defaultDueWord")} ·</span>}
+        <span>{formatDue(shownAt, shownZone, getLocale())}</span>
         <input
           type="datetime-local"
           aria-label={t("tasks.addDue")}
@@ -48,11 +49,12 @@ function DueChip({ draft }: { draft: UseTaskDraftReturn }) {
           type="button"
           aria-label={t("tasks.resetDue")}
           onClick={clearDue}
-          className={`inline-flex items-center justify-center rounded-full text-muted hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
-            isMobile ? "h-11 w-11" : "h-4 w-4"
+          title={t("tasks.resetDue")}
+          className={`inline-flex shrink-0 items-center justify-center rounded-full text-muted hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+            isMobile ? "h-11 w-11" : "h-6 w-6"
           }`}
         >
-          <X className={isMobile ? "h-4 w-4" : "h-2.5 w-2.5"} aria-hidden />
+          <RotateCcw className={isMobile ? "h-4 w-4" : "h-3 w-3"} aria-hidden />
         </button>
       ) : null}
     </span>

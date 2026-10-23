@@ -3879,6 +3879,7 @@ export const en = {
   "tasks.newTask": "new task",
   "tasks.panelCreate": "Create the task",
   "tasks.addDue": "deadline",
+  "tasks.defaultDueWord": "default",
   "tasks.resetDue": "Reset to the default deadline",
   "tasks.defaultDueTitle": "Default deadline: 72 hours from creation, rounded up to the hour (zone: {zone})",
   "tasks.clearDue": "Clear the deadline",

@@ -1,30 +1,38 @@
 {
-  "capturedAt": "2026-10-23T10:44:19.437Z",
+  "capturedAt": "2026-10-23T16:24:16.629Z",
   "clock": "2026-10-23T10:12:34.567Z",
   "sourceDigests": {
-    "src/components/tasks/TaskComposer.tsx": "e366acd70a334861e0395ade157d40219a112689d6392ce81b2d8ab065e66753",
+    "src/components/tasks/TaskComposer.tsx": "4a42a532e44da60b3731beb1f04a72850f04d3d6d003db280179ff075b1456a5",
+    "src/components/tasks/TaskSheet.tsx": "f29b4fba3d795ea72f2b8deb2a748d86b73d5ff8ac2b738bd481391985cda2c7",
     "src/hooks/useTaskDraft.ts": "a4085d1d1be0e69fa5493d15f4939dc6f27f8614411439560f8ca33db268d2e8",
     "src/lib/tasks/helpers.ts": "a80d1be79cf2d5083c9be1486e902295719ee2a0c12b93e4d471b52f0a1217c7",
-    "src/lib/i18n/en.ts": "663a6317aa034a1f4b9a5aaf1dbf4204b7ec7f669146df1242e1d9878c803592",
-    "src/lib/i18n/uk.ts": "0016f089691db775f3b5941888276316c0509bd333e0d939886725680db9dbe2",
-    "src/components/kanban/issue1695BrowserHarness.ts": "30ddb989bf45c708712b2d369452e571c8926a86e1ef8ef7193b02b82c6d6a23",
-    "src/components/mobile/issue1671Evidence.browser.test.tsx": "b8c8d90cd959436bf1ab1abf8b69daef6d4a6d14593c6b844249b8b5988d4f53"
+    "src/lib/i18n/en.ts": "fa6f1800effab3dde9c887074afeaa970916a11976cff13bd02e174c7036c4fc",
+    "src/lib/i18n/uk.ts": "62390bb8f021e7fe51ae3cd0cfb62850210c7b67e4e18a5d29292eabff3e55c4",
+    "src/components/kanban/issue1695BrowserHarness.ts": "568d2edf9bae5ac013b6904997e2fdbcff15c4e00d523f816ba66ec03a7a4104",
+    "src/components/mobile/issue1671Evidence.browser.test.tsx": "f608ada1affaf1442385666f1bc8c84aef83fe2f9fe486d1ec1c9cf12014aea3"
   },
   "readings": [
     {
       "lang": "en",
       "theme": "light",
       "phone": true,
+      "width": 390,
       "state": "default",
-      "file": "phone-en-light-default.png",
+      "file": "phone-390-en-light-default.png",
       "geometry": {
         "x": 21,
         "y": 106,
-        "width": 118.046875,
+        "width": 170.734375,
         "height": 44,
         "visible": true,
         "unobscured": true,
-        "focus": "BUTTON"
+        "focus": "BUTTON",
+        "oneLine": true,
+        "reset": null,
+        "border": "1px",
+        "borderColor": "rgb(108, 108, 121)",
+        "fill": "rgb(248, 245, 240)",
+        "edgeContrast": 4.757748884316032
       },
       "shownAt": "2026-10-26T11:00:00.000Z"
     },
@@ -32,16 +40,26 @@
       "lang": "en",
       "theme": "light",
       "phone": true,
+      "width": 390,
       "state": "picked",
-      "file": "phone-en-light-picked.png",
+      "file": "phone-390-en-light-picked.png",
       "geometry": {
         "x": 21,
         "y": 106,
-        "width": 156.640625,
+        "width": 166.046875,
         "height": 44,
         "visible": true,
         "unobscured": true,
-        "focus": "INPUT"
+        "focus": "INPUT",
+        "oneLine": true,
+        "reset": {
+          "width": 44,
+          "height": 44,
+          "title": "Reset to the default deadline"
+        },
+        "border": "0px",
+        "borderColor": "rgb(85, 85, 95)",
+        "fill": "rgb(248, 245, 240)"
       },
       "shownAt": "2026-10-30T13:00:00.000Z"
     },
@@ -49,16 +67,23 @@
       "lang": "en",
       "theme": "light",
       "phone": true,
+      "width": 390,
       "state": "reset",
-      "file": "phone-en-light-reset.png",
+      "file": "phone-390-en-light-reset.png",
       "geometry": {
         "x": 21,
         "y": 106,
-        "width": 118.046875,
+        "width": 170.734375,
         "height": 44,
         "visible": true,
         "unobscured": true,
-        "focus": "BODY"
+        "focus": "BODY",
+        "oneLine": true,
+        "reset": null,
+        "border": "1px",
+        "borderColor": "rgb(108, 108, 121)",
+        "fill": "rgb(248, 245, 240)",
+        "edgeContrast": 4.757748884316032
       },
       "shownAt": "2026-10-26T11:00:00.000Z"
     },
@@ -66,16 +91,23 @@
       "lang": "en",
       "theme": "dark",
       "phone": true,
+      "width": 390,
       "state": "default",
-      "file": "phone-en-dark-default.png",
+      "file": "phone-390-en-dark-default.png",
       "geometry": {
         "x": 21,
         "y": 106,
-        "width": 118.046875,
+        "width": 170.734375,
         "height": 44,
         "visible": true,
         "unobscured": true,
-        "focus": "BUTTON"
+        "focus": "BUTTON",
+        "oneLine": true,
+        "reset": null,
+        "border": "1px",
+        "borderColor": "rgb(139, 139, 152)",
+        "fill": "rgb(20, 21, 27)",
+        "edgeContrast": 5.416412419077169
       },
       "shownAt": "2026-10-26T11:00:00.000Z"
     },
@@ -83,16 +115,26 @@
       "lang": "en",
       "theme": "dark",
       "phone": true,
+      "width": 390,
       "state": "picked",
-      "file": "phone-en-dark-picked.png",
+      "file": "phone-390-en-dark-picked.png",
       "geometry": {
         "x": 21,
         "y": 106,
-        "width": 156.640625,
+        "width": 166.046875,
         "height": 44,
         "visible": true,
         "unobscured": true,
-        "focus": "INPUT"
+        "focus": "INPUT",
+        "oneLine": true,
+        "reset": {
+          "width": 44,
+          "height": 44,
+          "title": "Reset to the default deadline"
+        },
+        "border": "0px",
+        "borderColor": "rgb(162, 162, 174)",
+        "fill": "rgb(20, 21, 27)"
       },
       "shownAt": "2026-10-30T13:00:00.000Z"
     },
@@ -100,16 +142,23 @@
       "lang": "en",
       "theme": "dark",
       "phone": true,
+      "width": 390,
       "state": "reset",
-      "file": "phone-en-dark-reset.png",
+      "file": "phone-390-en-dark-reset.png",
       "geometry": {
         "x": 21,
         "y": 106,
-        "width": 118.046875,
+        "width": 170.734375,
         "height": 44,
         "visible": true,
         "unobscured": true,
-        "focus": "BODY"
+        "focus": "BODY",
+        "oneLine": true,
+        "reset": null,
+        "border": "1px",
+        "borderColor": "rgb(139, 139, 152)",
+        "fill": "rgb(20, 21, 27)",
+        "edgeContrast": 5.416412419077169
       },
       "shownAt": "2026-10-26T11:00:00.000Z"
     },
@@ -117,16 +166,23 @@
       "lang": "uk",
       "theme": "light",
       "phone": true,
+      "width": 390,
       "state": "default",
-      "file": "phone-uk-light-default.png",
+      "file": "phone-390-uk-light-default.png",
       "geometry": {
         "x": 21,
         "y": 106,
-        "width": 128.96875,
+        "width": 184.703125,
         "height": 44,
         "visible": true,
         "unobscured": true,
-        "focus": "BUTTON"
+        "focus": "BUTTON",
+        "oneLine": true,
+        "reset": null,
+        "border": "1px",
+        "borderColor": "rgb(108, 108, 121)",
+        "fill": "rgb(248, 245, 240)",
+        "edgeContrast": 4.757748884316032
       },
       "shownAt": "2026-10-26T11:00:00.000Z"
     },
@@ -134,16 +190,26 @@
       "lang": "uk",
       "theme": "light",
       "phone": true,
+      "width": 390,
       "state": "picked",
-      "file": "phone-uk-light-picked.png",
+      "file": "phone-390-uk-light-picked.png",
       "geometry": {
         "x": 21,
         "y": 106,
-        "width": 148.640625,
+        "width": 176.96875,
         "height": 44,
         "visible": true,
         "unobscured": true,
-        "focus": "INPUT"
+        "focus": "INPUT",
+        "oneLine": true,
+        "reset": {
+          "width": 44,
+          "height": 44,
+          "title": "Повернути типовий термін"
+        },
+        "border": "0px",
+        "borderColor": "rgb(85, 85, 95)",
+        "fill": "rgb(248, 245, 240)"
       },
       "shownAt": "2026-10-30T13:00:00.000Z"
     },
@@ -151,16 +217,23 @@
       "lang": "uk",
       "theme": "light",
       "phone": true,
+      "width": 390,
       "state": "reset",
-      "file": "phone-uk-light-reset.png",
+      "file": "phone-390-uk-light-reset.png",
       "geometry": {
         "x": 21,
         "y": 106,
-        "width": 128.96875,
+        "width": 184.703125,
         "height": 44,
         "visible": true,
         "unobscured": true,
-        "focus": "BODY"
+        "focus": "BODY",
+        "oneLine": true,
+        "reset": null,
+        "border": "1px",
+        "borderColor": "rgb(108, 108, 121)",
+        "fill": "rgb(248, 245, 240)",
+        "edgeContrast": 4.757748884316032
       },
       "shownAt": "2026-10-26T11:00:00.000Z"
     },
@@ -168,16 +241,23 @@
       "lang": "uk",
       "theme": "dark",
       "phone": true,
+      "width": 390,
       "state": "default",
-      "file": "phone-uk-dark-default.png",
+      "file": "phone-390-uk-dark-default.png",
       "geometry": {
         "x": 21,
         "y": 106,
-        "width": 128.96875,
+        "width": 184.703125,
         "height": 44,
         "visible": true,
         "unobscured": true,
-        "focus": "BUTTON"
+        "focus": "BUTTON",
+        "oneLine": true,
+        "reset": null,
+        "border": "1px",
+        "borderColor": "rgb(139, 139, 152)",
+        "fill": "rgb(20, 21, 27)",
+        "edgeContrast": 5.416412419077169
       },
       "shownAt": "2026-10-26T11:00:00.000Z"
     },
@@ -185,16 +265,26 @@
       "lang": "uk",
       "theme": "dark",
       "phone": true,
+      "width": 390,
       "state": "picked",
-      "file": "phone-uk-dark-picked.png",
+      "file": "phone-390-uk-dark-picked.png",
       "geometry": {
         "x": 21,
         "y": 106,
-        "width": 148.640625,
+        "width": 176.96875,
         "height": 44,
         "visible": true,
         "unobscured": true,
-        "focus": "INPUT"
+        "focus": "INPUT",
+        "oneLine": true,
+        "reset": {
+          "width": 44,
+          "height": 44,
+          "title": "Повернути типовий термін"
+        },
+        "border": "0px",
+        "borderColor": "rgb(162, 162, 174)",
+        "fill": "rgb(20, 21, 27)"
       },
       "shownAt": "2026-10-30T13:00:00.000Z"
     },
@@ -202,16 +292,23 @@
       "lang": "uk",
       "theme": "dark",
       "phone": true,
+      "width": 390,
       "state": "reset",
-      "file": "phone-uk-dark-reset.png",
+      "file": "phone-390-uk-dark-reset.png",
       "geometry": {
         "x": 21,
         "y": 106,
-        "width": 128.96875,
+        "width": 184.703125,
         "height": 44,
         "visible": true,
         "unobscured": true,
-        "focus": "BODY"
+        "focus": "BODY",
+        "oneLine": true,
+        "reset": null,
+        "border": "1px",
+        "borderColor": "rgb(139, 139, 152)",
+        "fill": "rgb(20, 21, 27)",
+        "edgeContrast": 5.416412419077169
       },
       "shownAt": "2026-10-26T11:00:00.000Z"
     }

@@ -1467,8 +1467,9 @@ export async function captureTaskDueFrames(browser: Browser, base: string, out: 
   const { translate } = await import("@/lib/i18n");
   const readings: unknown[] = [];
   const now = new Date("2026-10-23T10:12:34.567Z");
-  for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
-    const viewport = { width: phone ? 390 : 1440, height: phone ? 844 : 900 };
+  const widths = phone ? [390] : [1440, 1220, 1000, 700];
+  for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of widths) {
+    const viewport = { width, height: phone ? 844 : width === 700 ? 700 : width === 1000 ? 700 : width === 1220 ? 800 : 900 };
     const context = await browser.newContext({ viewport, colorScheme: theme, reducedMotion: "reduce", timezoneId: "Europe/Kyiv", ...(phone ? { isMobile: true, hasTouch: true } : {}) });
     await context.addInitScript(({ lang, theme }) => { localStorage.setItem("llv_lang", lang); localStorage.setItem("llv-theme", theme); }, { lang, theme });
     const page = await context.newPage();
@@ -1502,27 +1503,74 @@ export async function captureTaskDueFrames(browser: Browser, base: string, out: 
       const chip = page.locator("[data-task-due]");
       const field = chip.locator("input");
       const expected = defaultTaskDue(now.getTime(), "Europe/Kyiv");
+      const defaultWord = translate(lang, "tasks.defaultDueWord");
       const frame = async (state: string, at: string) => {
-        expect(await chip.innerText()).toBe(formatDue(at, "Europe/Kyiv", lang));
+        const isDefault = state !== "picked";
+        expect((await chip.innerText()).replace(/\s+/g, " ").trim()).toBe(isDefault ? `${defaultWord} · ${formatDue(at, "Europe/Kyiv", lang)}` : formatDue(at, "Europe/Kyiv", lang));
         const geometry = await chip.evaluate(el => {
           const box = el.getBoundingClientRect();
           const range = document.createRange(); range.selectNodeContents(el.querySelector("label")!);
           const lines = [...range.getClientRects()].filter(r => r.width > 0 && r.height > 0);
           const visible = lines.every(r => r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight);
           const label = el.querySelector("label")!;
-          const textNode = [...label.childNodes].find(n => n.nodeType === Node.TEXT_NODE && n.textContent?.trim());
-          const text = document.createRange(); if (textNode) text.selectNodeContents(textNode);
-          const textRects = [...text.getClientRects()];
+          const textRects: DOMRect[] = [];
+          const textWalker = document.createTreeWalker(label, NodeFilter.SHOW_TEXT);
+          for (let t = textWalker.nextNode(); t; t = textWalker.nextNode()) {
+            if (!t.textContent?.trim()) continue;
+            const text = document.createRange(); text.selectNodeContents(t);
+            textRects.push(...text.getClientRects());
+          }
           const unobscured = textRects.length > 0 && textRects.every(r => {
             const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
             return !!hit && el.contains(hit);
           });
-          return { x: box.x, y: box.y, width: box.width, height: box.height, visible, unobscured, focus: document.activeElement?.tagName };
+          /* The label and the row's other text each stay on one line. */
+          const oneLine = (node: Element) => {
+            const tops = new Set<number>();
+            const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+            for (let t = walker.nextNode(); t; t = walker.nextNode()) {
+              if (!t.textContent?.trim()) continue;
+              const r = document.createRange(); r.selectNodeContents(t);
+              for (const q of r.getClientRects()) if (q.width > 0) tops.add(Math.round(q.top));
+            }
+            return tops.size <= 1;
+          };
+          const row = el.closest("[data-mobile2-tools-settings], [data-testid='composer-options-row']") ?? el.parentElement!;
+          const rowLines = [...row.querySelectorAll("span")].filter(n => !n.querySelector("span") && n.textContent?.trim()).map(oneLine);
+          const reset = el.querySelector("button");
+          const resetBox = reset?.getBoundingClientRect();
+          const style = getComputedStyle(label);
+          return {
+            x: box.x, y: box.y, width: box.width, height: box.height, visible, unobscured, focus: document.activeElement?.tagName,
+            oneLine: oneLine(label) && rowLines.every(Boolean), reset: resetBox ? { width: resetBox.width, height: resetBox.height, title: reset!.title } : null,
+            border: style.borderTopWidth, borderColor: style.borderTopColor, fill: style.backgroundColor,
+          };
         });
-        expect(geometry.visible).toBe(true); expect(geometry.unobscured).toBe(true);
-        const file = `${phone ? "phone" : "desktop"}-${lang}-${theme}-${state}.png`;
+        expect(geometry.visible).toBe(true); expect(geometry.unobscured).toBe(true); expect(geometry.oneLine).toBe(true);
+        if (state === "picked") {
+          expect(geometry.reset!.width).toBeGreaterThanOrEqual(phone ? 44 : 24); expect(geometry.reset!.height).toBeGreaterThanOrEqual(phone ? 44 : 24);
+          expect(geometry.reset!.title).toBe(translate(lang, "tasks.resetDue"));
+        } else {
+          expect(geometry.reset).toBeNull();
+          expect(parseFloat(geometry.border)).toBeGreaterThan(0);
+          const card = await page.evaluate(() => {
+            for (let n: Element | null = document.querySelector("[data-task-due]")!.parentElement; n; n = n.parentElement) {
+              const c = getComputedStyle(n).backgroundColor;
+              if (c !== "rgba(0, 0, 0, 0)" && c !== "transparent") return c;
+            }
+            return "rgb(255, 255, 255)";
+          });
+          const contrast = await page.evaluate(([a, b]) => {
+            const probe = document.createElement("canvas").getContext("2d")!;
+            const lum = (c: string) => { probe.fillStyle = "#000"; probe.fillStyle = c; probe.fillRect(0, 0, 1, 1); const [r, g, bl] = probe.getImageData(0, 0, 1, 1).data; const f = (v: number) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; }; return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(bl); };
+            const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05);
+          }, [geometry.borderColor, card] as [string, string]);
+          expect(contrast).toBeGreaterThanOrEqual(3);
+          (geometry as Record<string, unknown>).edgeContrast = contrast;
+        }
+        const file = `${phone ? "phone" : "desktop"}-${width}-${lang}-${theme}-${state}.png`;
         await page.screenshot({ path: path.join(out, file) });
-        readings.push({ lang, theme, phone, state, file, geometry, shownAt: at });
+        readings.push({ lang, theme, phone, width, state, file, geometry, shownAt: at });
       };
       expect(await chip.getAttribute("data-task-due")).toBe("default");
       expect(await field.inputValue()).toBe("2026-10-26T13:00");
@@ -1541,6 +1589,7 @@ export async function captureTaskDueFrames(browser: Browser, base: string, out: 
       await page.evaluate(() => window.dispatchEvent(new Event("focus")));
       await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[data-task-due] input')?.value === "2026-11-02T13:00");
       expect(await chip.getAttribute("data-task-due")).toBe("default");
+      if (width !== widths[0]) continue;
       const form = chip.locator("xpath=ancestor::form[1]");
       await form.locator("textarea").fill("A dated outcome");
       // Submit through the same form as the visible create control.
@@ -1553,7 +1602,7 @@ export async function captureTaskDueFrames(browser: Browser, base: string, out: 
     } finally { await context.close(); }
   }
   const sourceDigests = Object.fromEntries([
-    "src/components/tasks/TaskComposer.tsx", "src/hooks/useTaskDraft.ts", "src/lib/tasks/helpers.ts",
+    "src/components/tasks/TaskComposer.tsx", "src/components/tasks/TaskSheet.tsx", "src/hooks/useTaskDraft.ts", "src/lib/tasks/helpers.ts",
     "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts", "src/components/kanban/issue1695BrowserHarness.ts",
     phone ? "src/components/mobile/issue1671Evidence.browser.test.tsx" : "src/components/kanban/kanbanBoard.browser.test.tsx",
   ].map(file => [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")]));
