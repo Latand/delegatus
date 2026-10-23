@@ -14,6 +14,10 @@ Unassigned catalog projects and can place them into a workspace they manage;
 unknown keys cannot be placed by managers. Local file routes require both
 catalog membership and project access, including when an older placement
 already names an undiscovered key. Other writes require workspace membership.
+Project-settings reads allow members; `PUT /api/projects/settings` requires
+the project's workspace manager or the owner. Resource-panel pane targets
+and the `kill-target` action on `/api/conversation-host` and `/api/tmux`
+require the owner, including beside an authorized conversation identity.
 A person with no workspace opens the Team page and its own sign-in/session surface. Foreign project requests return
 403 `workspace_forbidden`; aggregate reads filter their source rows. Scoped
 board responses use private validators scoped to the member and their current
@@ -341,6 +345,40 @@ cover batch admission, revocation and unavailable authorization.
 `docs/design/workspaces.md` matches the complete base copy at `c2d19d9d`;
 `git diff c2d19d9d..HEAD -- docs/design/workspaces.md` is empty. No workflow or
 UI files changed in the fix, so no new rendered frames are included.
+
+### Authorization review follow-up
+
+`src/lib/team/workspaceAccess.test.ts` covers resource-pane kill and attach on
+both mounts with an authorized conversation beside the pane target. Refusals
+preserve the allowlist and invoke no pane effects; owner attach and kill still
+succeed. Settings cases cover each switch and clearing the report destination,
+unchanged persisted settings on refusal, manager and owner success, and a
+manager downgraded while target resolution is awaiting its parameters.
+The first two regression cases both failed on the reviewed code (200 instead
+of 403); all 24 workspace-access tests pass with the fixes.
+
+An isolated eight-file comparison against `d4eed38dd` reports zero new
+failures, zero skipped assertions and zero flaky classifications. Its one
+pre-existing failure is the Telegram topic-link discovery assertion in
+`src/app/api/projects/settings/route.test.ts`. The selected files are:
+
+```sh
+bash scripts/gate-slot.sh gate-remote -- bun scripts/local-gate-tests.ts --base d4eed38dd \
+  src/lib/team/workspaceAccess.test.ts \
+  src/lib/team/workspaceRoutes.test.ts \
+  src/app/api/projects/settings/route.test.ts \
+  src/app/api/conversation-host/route.test.ts \
+  src/app/api/tmux/route.test.ts \
+  src/app/api/conversation-host/longText.test.ts \
+  src/proxy.team.test.ts \
+  src/proxy.test.ts
+```
+
+Whole-project `bunx tsc --noEmit --incremental false` and ESLint on the two
+changed TypeScript files pass through `gate-remote`. The workspace-access
+suite also passes locally in a private scratch export (24/24), matching the
+remote outcomes. Publication privacy scans the complete three changed files.
+No performance gain is claimed.
 
 ## Changed files
 

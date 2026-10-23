@@ -71,6 +71,13 @@ async function targetProjects(route: string, request: Request, ctx?: Context): P
   const projects: (string | null)[] = [];
   let input: Record<string, unknown> = {};
   const check = async (key: string, value: unknown): Promise<void> => {
+    // Resource-panel panes belong to the owner's installation-wide snapshot.
+    // A conversation supplied beside one does not grant access to that pane.
+    if (["/api/conversation-host", "/api/tmux"].includes(route)
+      && (key === "target" || (key === "action" && value === "kill-target"))) {
+      projects.push(null);
+      return;
+    }
     if (Array.isArray(value)) {
       for (const item of value) await check(key, item);
       return;
@@ -179,7 +186,9 @@ export function workspaceRoute<F extends (...args: never[]) => unknown>(route: s
     return (async () => {
       let projects: (string | null)[];
       const read = ["GET", "HEAD"].includes(request.method) || ["/api/logs", "/api/conversation-host/targets", "/api/tmux/targets", "/api/attention/needs-you", "/api/prototype-reviews/read", "/api/spawn/validate"].includes(route);
-      const permitted = (project: string | null) => read ? scope!.access(project) !== "none" : scope!.canAct(project);
+      const managerWrite = route === "/api/projects/settings" && request.method === "PUT";
+      const permitted = (project: string | null) => read ? scope!.access(project) !== "none"
+        : scope!.canAct(project) && (!managerWrite || ["owner", "manager"].includes(scope!.access(project)));
       try {
         projects = await targetProjects(route, request, args[0] as Context | undefined);
         if (projects.some(project => !permitted(project)) || (!projects.length && !collection)) return workspaceDenied();

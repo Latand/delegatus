@@ -34,6 +34,11 @@ import { PUT as placementPUT } from "@/app/api/team/workspace-projects/route";
 import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
 import { GET as pipelinesGET } from "@/app/api/pipelines/route";
 import { PATCH as pipelinePATCH } from "@/app/api/pipelines/[id]/route";
+import { setConversationHostDependenciesForTests } from "@/app/api/conversation-host/dependencies";
+import { allowedKillTarget, lastResourceTargetRefs, noteSessionTargets } from "@/lib/resources";
+import { GET as settingsGET, PUT as settingsPUT } from "@/app/api/projects/settings/route";
+import { setBridgeReports, setMergeOnReview, setReportTelegram } from "@/lib/projects/settings";
+import { registerPipelineTick } from "@/lib/pipelines/controllerSignal";
 
 const W1 = `w_${"a".repeat(32)}`;
 const W2 = `w_${"b".repeat(32)}`;
@@ -92,6 +97,110 @@ afterEach(() => {
 });
 
 describe("workspace authority", () => {
+  test("resource pane targets stay owner-only beside an authorized conversation on both mounts", async () => {
+    const registry = agentRegistry();
+    const receipt = registry.beginSpawn("codex", root, { project: "repo-alpha", title: "Own conversation" });
+    const artifactPath = path.join(root, "own.jsonl");
+    registry.completeSpawn(receipt.launchId, { key: { engine: "codex", sessionId: fixtureSessionId(3) }, artifactPath, cwd: root, accountId: null, status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: "spawn" });
+    const target = "beta-agent:1.0";
+    const ref = { paneId: "%42", panePid: 4242, tmuxServerPid: 4200, tmuxServerStartIdentity: null, paneStartIdentity: null };
+    const endpoint = { kind: "tmux-tmpdir" as const, tmuxTmpdir: root, socketName: "default" as const, socketPath: path.join(root, "tmux.sock") };
+    const identities: Record<string, string>[] = [{ path: artifactPath }, { conversationId: receipt.conversationId }];
+    const previousTargets = lastResourceTargetRefs();
+    const killed: string[] = [];
+    let attaches = 0;
+    setConversationHostDependenciesForTests({
+      panePidOf: async () => ref.panePid,
+      killPane: async pane => { killed.push(pane); },
+      tmuxEndpointDescriptor: () => endpoint,
+      resolveTmuxAttach: async (reference, requestedEndpoint = endpoint) => {
+        expect(reference).toEqual(ref);
+        attaches++;
+        return { ok: true, target, endpoint: requestedEndpoint, command: "fixture attach", readOnlyCommand: "fixture read only" };
+      },
+    });
+    try {
+      for (const route of ["conversation-host", "tmux"]) {
+        const { GET, POST } = await import(`../../app/api/${route}/route.ts`);
+        noteSessionTargets([{ target, ref }]);
+        for (const actor of [member, manager, outsider]) {
+          for (const identity of identities) {
+            const calls = [
+              () => POST(request(`/api/${route}`, actor, "POST", { action: "kill-target", target, ...identity })),
+              () => GET(request(`/api/${route}?attach=1&target=${encodeURIComponent(target)}&${new URLSearchParams(identity)}`, actor)),
+              () => POST(request(`/api/${route}?target=${encodeURIComponent(target)}`, actor, "POST", { action: "interrupt", ...identity })),
+              () => POST(request(`/api/${route}`, actor, "POST", { action: "kill-target", ...identity })),
+            ];
+            for (const call of calls) {
+              const denied = await call();
+              expect(denied.status).toBe(403);
+              expect(await denied.json()).toEqual({ error: "workspace access denied", code: "workspace_forbidden" });
+              expect(allowedKillTarget(target)).toEqual(ref);
+              expect(killed).toEqual([]);
+              expect(attaches).toBe(0);
+            }
+          }
+        }
+        const attached = await GET(request(`/api/${route}?attach=1&target=${encodeURIComponent(target)}&conversationId=${receipt.conversationId}`, owner));
+        expect(attached.status).toBe(200);
+        expect((await attached.json()).attach.target).toBe(target);
+        expect(attaches).toBe(1);
+        expect(allowedKillTarget(target)).toEqual(ref);
+        const killedResponse = await POST(request(`/api/${route}`, owner, "POST", { action: "kill-target", target, path: artifactPath }));
+        expect(killedResponse.status).toBe(200);
+        expect(killed).toEqual([ref.paneId]);
+        expect(allowedKillTarget(target)).toBeNull();
+        killed.length = 0;
+        attaches = 0;
+      }
+    } finally {
+      setConversationHostDependenciesForTests(null);
+      noteSessionTargets(previousTargets);
+    }
+  });
+
+  test("project settings reads allow members; writes require that workspace's manager or owner", async () => {
+    const restoreTick = registerPipelineTick(async () => {});
+    const settings = async (actor: Member, project = "repo-alpha") => {
+      const response = await settingsGET(request(`/api/projects/settings?project=${project}`, actor));
+      expect(response.status).toBe(200);
+      return response.json();
+    };
+    const seed = () => {
+      const stamp = new Date(now).toISOString();
+      setMergeOnReview("repo-alpha", false, "fixture", stamp);
+      setBridgeReports("repo-alpha", true, "fixture", stamp);
+      setReportTelegram("repo-alpha", { chat: "fixture-reports", name: "Alpha" }, "fixture", stamp);
+    };
+    try {
+      seed();
+      const before = await settings(owner);
+      expect(await settings(member)).toEqual(before);
+      for (const actor of [member, outsider]) {
+        for (const change of [{ mergeOnReview: true }, { bridgeReports: false }, { reportTelegram: null }, { mergeOnReview: true, bridgeReports: false, reportTelegram: null }]) {
+          const denied = await settingsPUT(request("/api/projects/settings", actor, "PUT", { project: "repo-alpha", ...change }));
+          expect(denied.status).toBe(403);
+          expect(await denied.json()).toEqual({ error: "workspace access denied", code: "workspace_forbidden" });
+          expect(await settings(owner)).toEqual(before);
+        }
+      }
+      for (const actor of [manager, owner]) {
+        seed();
+        const response = await settingsPUT(request("/api/projects/settings", actor, "PUT", { project: "repo-alpha", mergeOnReview: true, bridgeReports: false, reportTelegram: null }));
+        expect(response.status).toBe(200);
+        expect(await settings(member)).toMatchObject({ mergeOnReview: { enabled: true }, bridgeReports: { enabled: false }, reportTelegram: { chat: null } });
+      }
+      for (const project of ["repo-beta", "repo-new"]) {
+        const before = await settings(owner, project);
+        const denied = await settingsPUT(request("/api/projects/settings", manager, "PUT", { project, mergeOnReview: true }));
+        expect(denied.status).toBe(403);
+        expect(await settings(owner, project)).toEqual(before);
+      }
+    } finally {
+      restoreTick();
+    }
+  });
+
   test("a manager reads only catalog files and cannot place an undiscovered key", async () => {
     const previousHome = process.env.HOME;
     process.env.HOME = root;
@@ -296,6 +405,21 @@ describe("workspace authority", () => {
       return { id: "task-alpha" };
     }) });
     expect(response.status).toBe(403);
+    expect(ran).toBe(false);
+  });
+
+  test("settings writes recheck the manager role after target resolution", async () => {
+    let ran = false;
+    const route = workspaceRoute("/api/projects/settings", async (received: Request, ctx: { params: Promise<Record<string, string>> }) => {
+      ran = true;
+      return Response.json({ url: received.url, target: await ctx.params });
+    });
+    const response = await route(request("/api/projects/settings", manager, "PUT", { project: "repo-alpha", mergeOnReview: true }), { params: Promise.resolve().then(() => {
+      store.putWorkspaceMember(W1, manager.id, "member", owner.id, new Date(now).toISOString());
+      return {};
+    }) });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: "workspace access denied", code: "workspace_forbidden" });
     expect(ran).toBe(false);
   });
 
