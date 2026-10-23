@@ -14,6 +14,7 @@ afterEach(() => {
 
 function keyed() {
   process.env.LLV_TOKEN = crypto.randomBytes(32).toString("base64url");
+  process.env.HOSTNAME = "127.0.0.1";
   process.env.LLV_PUBLIC_HOST = "phone.example.test";
   return mcpHttpAccessToken()!;
 }
@@ -32,10 +33,6 @@ test("the issued credential admits only local MCP and confers no browser cookie"
     expect(accepted.headers.get("x-middleware-next")).toBe("1");
     expect(accepted.headers.get("set-cookie")).toBeNull();
   }
-  const wildcardBind = new NextRequest("http://0.0.0.0:8898/api/mcp", {
-    method: "POST", headers: { host: "127.0.0.1:8898", [MCP_HTTP_ACCESS_HEADER]: access, "x-forwarded-for": "127.0.0.1" },
-  });
-  expect(proxy(wildcardBind).headers.get("x-middleware-next")).toBe("1");
   for (const pathname of ["/api/files", "/api/mcp/", "/api/spawn", "/api/runtime/send"]) {
     expect(proxy(request(access, {}, pathname)).status).toBe(403);
   }
@@ -45,6 +42,47 @@ test("the issued credential admits only local MCP and confers no browser cookie"
   const rotated = keyed();
   expect(proxy(request(access)).status).toBe(403);
   expect(proxy(request(rotated)).headers.get("x-middleware-next")).toBe("1");
+});
+
+test("a non-loopback listener refuses the local credential despite spoofed loopback headers", async () => {
+  const access = keyed();
+  for (const hostname of ["0.0.0.0", "[::]", "192.0.2.10"]) {
+    for (const headers of [{}, {
+      "x-forwarded-for": "127.0.0.1",
+      "x-forwarded-host": "127.0.0.1:8898",
+      "x-forwarded-proto": "http",
+      origin: "http://127.0.0.1:8898",
+    }] as Record<string, string>[]) {
+      // Next constructs this URL from the listener hostname, independently
+      // of the caller's Host and forwarding headers.
+      const incoming = (extraHeaders: Record<string, string> = {}) => new NextRequest(`http://${hostname}:8898/api/mcp`, {
+        method: "POST", headers: { host: "127.0.0.1:8898", [MCP_HTTP_ACCESS_HEADER]: access, ...headers, ...extraHeaders },
+      });
+      const response = proxy(incoming());
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({ error: "access denied: key required" });
+      expect(proxy(incoming({ authorization: `Bearer ${process.env.LLV_TOKEN}` })).headers.get("x-middleware-next")).toBe("1");
+    }
+  }
+  delete process.env.LLV_TOKEN;
+  expect(proxy(new NextRequest("http://0.0.0.0:8898/api/mcp", {
+    method: "POST", headers: { host: "127.0.0.1:8898", "x-forwarded-for": "127.0.0.1" },
+  })).headers.get("x-middleware-next")).toBe("1");
+});
+
+test("Next's localhost URL fallback cannot vouch for an unknown or network bind", async () => {
+  const access = keyed();
+  for (const hostname of [undefined, "", "0.0.0.0", "::", "192.0.2.10"]) {
+    if (hostname === undefined) delete process.env.HOSTNAME;
+    else process.env.HOSTNAME = hostname;
+    const response = proxy(request(access, { "x-forwarded-for": "127.0.0.1" }));
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: "access denied: key required" });
+  }
+  for (const hostname of ["127.0.0.1", "localhost", "::1"]) {
+    process.env.HOSTNAME = hostname;
+    expect(proxy(request(access)).headers.get("x-middleware-next")).toBe("1");
+  }
 });
 
 for (const headers of [

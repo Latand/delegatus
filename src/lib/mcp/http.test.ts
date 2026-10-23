@@ -42,6 +42,7 @@ for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_STATE_DIR",
   fs.mkdirSync(process.env[key]!, { recursive: true });
 }
 process.env.TMPDIR = sandbox;
+process.env.HOSTNAME = "127.0.0.1";
 fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "project-aliases.json"), JSON.stringify({
   schemaVersion: 1, aliases: {}, displayNames: { viewer: "Fixture Viewer" },
 }));

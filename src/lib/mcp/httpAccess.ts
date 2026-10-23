@@ -24,15 +24,17 @@ function loopbackUrl(value: string): boolean {
   } catch { return false; }
 }
 
-/** The global Host perimeter runs before this narrower gate. Forwarded remote
- * traffic and remote browser origins cannot use the local MCP credential.
- * Next adds x-forwarded-for for direct connections; every address in a proxy
- * chain must be literal loopback. Other forwarding formats fail closed.
+/** The global Host perimeter runs before this narrower gate. Next constructs
+ * the proxy request URL from its listener hostname (next-server runMiddleware),
+ * and the launcher pins HOSTNAME to the same explicit bind address. Require
+ * both: Next falls back to a localhost URL when no hostname was supplied,
+ * even though that listener can bind to all interfaces. Host and forwarded
+ * headers remain additional checks for proxied traffic and browsers.
  */
 export function admitsMcpHttpAccess(request: NextRequest): boolean {
   if (request.nextUrl.pathname !== "/api/mcp" || request.method !== "POST") return false;
-  // Next constructs request.url from its bind address, which can be a wildcard
-  // even for a loopback connection. Use the checked HTTP authority here.
+  if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(process.env.HOSTNAME ?? "")) return false;
+  if (!loopbackUrl(request.url)) return false;
   if (!loopbackUrl(`http://${request.headers.get("host") ?? ""}`)) return false;
   const origin = request.headers.get("origin");
   if (origin !== null && !loopbackUrl(origin)) return false;

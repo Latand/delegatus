@@ -12,8 +12,15 @@ out of agent environments, command arguments and generated HTTP definitions.
 The credential remains valid across Viewer process restarts; rotating the
 installation key revokes it. There is no credential cache or extra durable key.
 
-`src/proxy.ts` accepts the credential only for POST to the MCP endpoint, with a
-loopback Host, a local or absent Origin, and no remote forwarding address.
+`src/proxy.ts` accepts the credential only for POST to the MCP endpoint on a
+loopback-bound Viewer. Next constructs the proxy request URL from the configured
+listener hostname, and the launcher pins `HOSTNAME` to that explicit bind.
+Both must name loopback: Next's fallback URL alone cannot prove a local bind.
+A wildcard, network or unknown bind refuses the credential even with
+caller-supplied loopback Host and forwarding headers. Tailscale mode binds the
+Viewer to loopback. Network-bound Viewers retain the existing access-key rules.
+A loopback Host, a local or absent Origin, and no remote forwarding address are
+also required.
 The global Host allowlist runs first. Other paths and remote callers retain
 the existing access-key, cookie and team rules. MCP access supplies no operator
 identity: the team gate and MCP handler still verify the launch capability,
@@ -52,7 +59,8 @@ gate-remote -- bun run test src/lib/runtime/copilotAcpHost.test.ts
 The HTTP regression spawns a separate SDK client from the actual generated
 Claude definition, then calls a production Delegatus tool through the proxy and
 exported route, using the real registry and tool service. It covers key on and
-key off. Negative cases cover foreign Hosts and Origins, remote forwarding,
+key off. Negative cases cover wildcard and network binds with spoofed loopback
+headers, foreign Hosts and Origins, remote forwarding,
 unrelated routes and methods, malformed native proofs, missing and rotated
 capabilities, and key rotation. Separate processes verify that a Viewer restart
 does not lose the credential. Team cases verify that the credential cannot

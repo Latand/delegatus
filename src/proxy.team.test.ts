@@ -29,18 +29,21 @@ import { mcpHttpAccessToken, MCP_HTTP_ACCESS_HEADER } from "@/lib/mcp/httpAccess
 
 const TOKEN = "t".repeat(43);
 const DESKTOP = { surface: "desktop" as const, browser: "chrome" as const };
-const previous = { token: process.env.LLV_TOKEN, state: process.env.LLV_STATE_DIR, host: process.env.LLV_TS_HOST };
+const previous = { token: process.env.LLV_TOKEN, state: process.env.LLV_STATE_DIR, host: process.env.LLV_TS_HOST, bind: process.env.HOSTNAME };
 let stateDir = "";
 
 beforeEach(() => {
   stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-proxy-team-"));
   process.env.LLV_STATE_DIR = stateDir;
   process.env.LLV_TOKEN = TOKEN;
+  process.env.HOSTNAME = "127.0.0.1";
   process.env.LLV_TS_HOST = "dev.example.net";
   resetTeamStoreForTests();
 });
 
 afterEach(() => {
+  if (previous.bind === undefined) delete process.env.HOSTNAME;
+  else process.env.HOSTNAME = previous.bind;
   if (previous.host === undefined) delete process.env.LLV_TS_HOST;
   else process.env.LLV_TS_HOST = previous.host;
   resetTeamStoreForTests();
