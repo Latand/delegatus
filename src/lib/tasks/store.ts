@@ -394,6 +394,15 @@ function parseLegacyBody(raw: unknown): LegacyTasksBody {
   return { ...body, migrations, mirrorOf };
 }
 
+/** Only atomic admission creates invention provenance: a mirror row cannot add
+    it to a task that never carried it. */
+function withoutAddedProvenance(row: TaskStateRow, held: TaskStateRow | undefined): TaskStateRow {
+  if (!taskRowKey(row).startsWith("t:") || row.proactive === undefined || held?.proactive !== undefined) return row;
+  const rest = { ...row };
+  delete rest.proactive;
+  return rest;
+}
+
 /** Merge a `tasks.json` that changed after the import (a rollback release wrote
     it, or an older writer raced a fence). Who changed a row is read from row
     revisions: a SQLite row not rewritten since `baseline` is the one the file
@@ -420,7 +429,7 @@ function mergeLegacyTasks(filePath: string, body: LegacyTasksBody, baseline: Sta
       const key = taskRowKey(row);
       const held = current.get(key);
       if (!held) {
-        records.push(row);
+        records.push(withoutAddedProvenance(row, undefined));
         summary.added += 1;
         summary.keys.push(key);
         continue;
@@ -441,7 +450,7 @@ function mergeLegacyTasks(filePath: string, body: LegacyTasksBody, baseline: Sta
         retainProactiveScope(incomingTask, previousTask);
         records.push(incomingTask as unknown as TaskStateRow);
       } else {
-        records.push(row);
+        records.push(withoutAddedProvenance(row, held));
       }
       summary.replaced += 1;
       summary.keys.push(key);

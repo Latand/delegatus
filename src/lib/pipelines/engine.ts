@@ -19,7 +19,7 @@ import { FENCED_MESSAGE_RETRY_DELAYS_MS, fencedFirstMessageRetrySafe } from "./f
 import { stageRepairDelivery } from "./repairDelivery";
 import { PUBLICATION_RETRY_DELAYS_MS, publicationInterrupted, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
 import type { RuntimeSwitchDelivery } from "./runtimeSwitch";
-import type { PipelineRuntimeSwitch } from "./types";
+import type { PipelineAccountHold, PipelineRuntimeSwitch } from "./types";
 import { launchServiceTier } from "@/lib/runtime/codexTurnProfile";
 import { isAccountMutationContention } from "@/lib/accounts/contentionMessage";
 import { AccountCommitBusyError } from "@/lib/accounts/accountMutationContext";
@@ -45,7 +45,7 @@ import { accountManager, AccountAuthenticationRequiredError, ProjectAccountRefus
 import { validateMigrationTargetRoot } from "@/lib/accounts/migration/targetRoot";
 import { sanitizeProviderError } from "@/lib/accounts/migration/safeHistoryCopy";
 import type { AccountContext, ProjectSpawnResolution } from "@/lib/accounts/contracts";
-import { selectHeadlessAccount } from "@/lib/accounts/headlessSelection";
+import { accountQuotaVerdict, selectHeadlessAccount } from "@/lib/accounts/headlessSelection";
 import { AccountProjectBindingsUnreadableError, allowedAccountIdsForProject } from "@/lib/accounts/projectBindings";
 import {
   ENGINE_NOT_CONNECTED,
@@ -542,6 +542,8 @@ export interface PipelinePorts {
   accountLabel?(engine: FlowEngine, accountId: string): string;
   /** The same capacity classifier used for admission, including the paid-credit guard. */
   accountExhausted?(engine: FlowEngine, accountId: string, model: string | null): boolean;
+  /** The same classifier's verdict with the reading behind it, for a guard hold. */
+  accountQuota?(engine: FlowEngine, accountId: string, model: string | null): ReturnType<typeof accountQuotaVerdict>;
   now(): string;
 }
 
@@ -1735,6 +1737,7 @@ export function defaultPipelinePorts(
     resolveProjectSpawn: (engine, request) => accountManager.resolveProjectSpawn(engine, request),
     accountExhausted: (engine, accountId, model) => selectHeadlessAccount([{ id: accountId, authPresent: true }],
       registry.quotaObservations(engine), accountId, [], Date.now(), model).kind === "exhausted",
+    accountQuota: (engine, accountId, model) => accountQuotaVerdict(registry.quotaObservations(engine), accountId, Date.now(), model),
     accountForTranscript: (engine, transcriptPath) => {
       const owner = accountManager.resolveTranscriptOwner(engine, transcriptPath);
       if (!owner) return null;
@@ -7623,14 +7626,92 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
   return changed;
 }
 
+const USAGE_GUARD_DETAIL = "the stage account reached its usage or paid-credit guard";
+
+function stageAccountId(attempt: PipelineStageAttempt, ports: PipelinePorts): string | null {
+  const engine = attempt.effectiveRole.engine;
+  return attempt.accountId ?? attempt.providerWait?.accountId ?? (attempt.agentPath ? ports.accountForTranscript?.(engine, attempt.agentPath)?.accountId ?? null : null);
+}
+
 function stageAccountBlocked(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts): string | null {
   const engine = attempt.effectiveRole.engine;
-  const accountId = attempt.accountId ?? attempt.providerWait?.accountId ?? (attempt.agentPath ? ports.accountForTranscript?.(engine, attempt.agentPath)?.accountId : null);
+  const accountId = stageAccountId(attempt, ports);
   if (!accountId) return null;
-  if (ports.accountExhausted?.(engine, accountId, attempt.effectiveRole.model)) return "the stage account reached its usage or paid-credit guard";
+  if (ports.accountExhausted?.(engine, accountId, attempt.effectiveRole.model)) return USAGE_GUARD_DETAIL;
   const pool = ports.allowedAccountIds?.(pipeline.project, engine);
   if (pool && !pool.includes(accountId)) return "the stage account left the project binding";
   return null;
+}
+
+/** Whether a hold has ended: its known reset passed, or a reading newer than
+    the one that confirmed it shows capacity. */
+function accountHoldEnded(hold: PipelineAccountHold, quota: ReturnType<typeof accountQuotaVerdict>, ports: PipelinePorts): boolean {
+  if (hold.resetsAt !== null && unixMs(ports.now()) >= hold.resetsAt * 1_000) return true;
+  return quota.capacity === "available" && quota.observedAt !== null
+    && (hold.observedAt === null || unixMs(quota.observedAt) > unixMs(hold.observedAt));
+}
+
+/** Records or refreshes the confirmed exhaustion behind an account suspension
+    (issue #3158). Only a reading newer than the one behind the hold refreshes
+    it; a later read that has only aged, or the same reading after its reset
+    passed, leaves the confirmed reset in place, and the hold ends there. */
+function recordAccountHold(attempt: PipelineStageAttempt, blocked: string | null, ports: PipelinePorts): void {
+  const suspension = attempt.suspension!;
+  if (suspension.reason !== "account" || !ports.accountQuota) return;
+  let quota: ReturnType<typeof accountQuotaVerdict>;
+  let accountId: string | null;
+  try {
+    accountId = suspension.hold?.accountId ?? stageAccountId(attempt, ports);
+    if (!accountId) return;
+    quota = ports.accountQuota(attempt.effectiveRole.engine, accountId, attempt.effectiveRole.model);
+  } catch { return; } // An unreadable reading neither confirms nor ends a hold.
+  const prior = suspension.hold;
+  if (blocked === USAGE_GUARD_DETAIL && quota.capacity === "exhausted" && (!prior || quota.observedAt !== null
+    && (prior.observedAt === null || unixMs(quota.observedAt) > unixMs(prior.observedAt)))) {
+    suspension.hold = { accountId, resetsAt: quota.resetsAt, observedAt: quota.observedAt };
+  }
+  if (suspension.hold && accountHoldEnded(suspension.hold, quota, ports)) delete suspension.hold;
+}
+
+/** Reads the hold's account quota for this attempt; an unreadable reading
+    neither confirms nor ends a hold. */
+function accountHoldEndedNow(attempt: PipelineStageAttempt, hold: PipelineAccountHold, ports: PipelinePorts): boolean {
+  try {
+    return !!ports.accountQuota && accountHoldEnded(hold, ports.accountQuota(attempt.effectiveRole.engine, hold.accountId,
+      attempt.effectiveRole.model), ports);
+  } catch { return false; }
+}
+
+/** Every hold in this stage's attempts that still stands. A replacement
+    inherits its predecessors' holds, and carries a copy of them, so it never
+    returns to an account an earlier attempt left at its confirmed limit
+    before that account's reset. A hold seen ended is removed from every
+    attempt that carries it, so the reading that ended it can age without
+    bringing it back; only a new exhaustion establishes another hold. Callers
+    persist the pipeline. */
+function standingAccountHolds(pipeline: Pipeline, stage: PipelineStage, ports: PipelinePorts): PipelineAccountHold[] {
+  const holds = new Map<string, PipelineAccountHold>();
+  for (const attempt of runFor(pipeline, stage.id)?.attempts ?? []) {
+    const own = attempt.suspension?.reason === "account" ? attempt.suspension.hold : undefined;
+    for (const hold of [...attempt.accountHolds ?? [], ...own ? [own] : []]) {
+      if (accountHoldEndedNow(attempt, hold, ports)) {
+        if (hold === own) delete attempt.suspension!.hold;
+        else {
+          const kept = attempt.accountHolds!.filter(item => item !== hold);
+          if (kept.length) attempt.accountHolds = kept; else delete attempt.accountHolds;
+        }
+        continue;
+      }
+      holds.set(hold.accountId, hold); // A later attempt's hold rests on a newer reading.
+    }
+  }
+  return [...holds.values()];
+}
+
+function accountHoldDetail(attempt: PipelineStageAttempt, hold: PipelineAccountHold, ports: PipelinePorts): string {
+  const label = ports.accountLabel?.(attempt.effectiveRole.engine, hold.accountId) ?? hold.accountId;
+  return `${attempt.suspension!.detail}; host stopped; waiting for account ${label}${hold.resetsAt !== null
+    ? ` to reset at ${new Date(hold.resetsAt * 1_000).toISOString()}` : " until a new reading shows capacity"}; keeping the current worktree`;
 }
 
 function suspensionStopKey(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): string {
@@ -7696,8 +7777,19 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   let blocked: string | null;
   try { blocked = stageAccountBlocked(pipeline, attempt, ports); }
   catch { return !!attempt.suspension; } // An unreadable binding cannot authorize a successor.
-  if (!attempt.suspension && !blocked) return false;
+  if (!attempt.suspension && !blocked) {
+    // Headroom seen while a healthy replacement runs ends its predecessors'
+    // holds now; a later tick may see only that reading aged (issue #3158).
+    // The replacement's own copies are read each tick; retained history is
+    // walked only to retire a hold that ended.
+    if (attempt.accountHolds?.some(hold => accountHoldEndedNow(attempt, hold, ports))) {
+      standingAccountHolds(pipeline, stage, ports);
+      await persist();
+    }
+    return false;
+  }
   attempt.suspension ??= { reason: "account", detail: blocked!, requestedAt: ports.now() };
+  recordAccountHold(attempt, blocked, ports);
   if (!await stopSuspendedStage(pipeline, stage, attempt, ports, persist)) return true;
   if (pipeline.state === "paused" || attempt.report) return true;
   if (attempt.conversationId && ports.conversationOperatorStopped) {
@@ -7722,10 +7814,14 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
     if (parsed) { await settleStageVerdict(pipeline, stage, attempt, parsed, ports, persist); return true; }
   }
   let resolution: ProjectSpawnResolution;
+  // Every standing hold in this stage's attempts leaves selection, so another
+  // allowed account with capacity takes the stage once and the stage never
+  // returns to a held account before its reset.
+  const holds = standingAccountHolds(pipeline, stage, ports);
   try {
     resolution = (ports.resolveProjectSpawn ?? accountManager.resolveProjectSpawn.bind(accountManager))(attempt.effectiveRole.engine,
       { project: pipeline.project, model: attempt.effectiveRole.model, preferredId: attempt.accountId,
-        unavailableIds: blocked && attempt.accountId ? [attempt.accountId] : [] });
+        unavailableIds: [...new Set([...blocked && attempt.accountId ? [attempt.accountId] : [], ...holds.map(hold => hold.accountId)])] });
   } catch (error) {
     pipeline.stateDetail = `${attempt.suspension.detail}; waiting for account selection: ${redactBounded(String(error), 300)}`;
     await persist(); ports.scheduleTick?.(30_000); return true;
@@ -7734,9 +7830,16 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   let targetBlocked = true;
   try { targetBlocked = !target || Boolean(stageAccountBlocked(pipeline, { ...attempt, accountId: target }, ports)); }
   catch { /* Retain stop custody until the binding can be read. */ }
-  if (!target || targetBlocked) {
-    pipeline.stateDetail = `${attempt.suspension.detail}; host stopped; waiting for an allowed account with capacity`;
-    await persist(); ports.scheduleTick?.(30_000); return true;
+  // Aged readings of a confirmed exhaustion are no evidence of capacity.
+  const targetHold = holds.find(hold => hold.accountId === target);
+  if (!target || targetBlocked || targetHold) {
+    const hold = targetHold ?? attempt.suspension.hold ?? holds[0];
+    pipeline.stateDetail = hold ? accountHoldDetail(attempt, hold, ports)
+      : `${attempt.suspension.detail}; host stopped; waiting for an allowed account with capacity`;
+    await persist();
+    ports.scheduleTick?.(!targetHold ? 30_000 : targetHold.resetsAt === null ? 60_000
+      : Math.min(5 * 60_000, Math.max(30_000, targetHold.resetsAt * 1_000 - unixMs(ports.now()))));
+    return true;
   }
   const oldDefinition = attemptStage(stage, attempt);
   // Transcript and operator-evidence reads above yielded custody. Reconfirm
@@ -7745,6 +7848,23 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   try {
     if (stageAccountBlocked(pipeline, { ...attempt, accountId: target }, ports)) return true;
   } catch { return true; }
+  if (!attempt.launchId && !attempt.conversationId && !attempt.agentPath && !attempt.paneId) {
+    // Nothing ran for this attempt (its launch was refused before a
+    // reservation), so it launches again itself: a replacement edge whose
+    // parent never launched carries no creation receipts (issue #3158). Its
+    // standing holds stay, so it never returns to a held account.
+    const kept = [...attempt.accountHolds ?? [], ...attempt.suspension.hold ? [attempt.suspension.hold] : []]
+      .filter(hold => hold.accountId !== target && holds.includes(hold));
+    if (kept.length) attempt.accountHolds = kept; else delete attempt.accountHolds;
+    delete attempt.suspension;
+    attempt.state = "pending"; attempt.completedAt = null; attempt.error = null;
+    attempt.accountId = target;
+    if (attempt.definition) attempt.definition.account = target;
+    resetStageForRetry(pipeline, stage);
+    pipeline.stateDetail = "launching the stopped stage on an allowed account; keeping the current worktree";
+    await persist(); ports.scheduleTick?.(0);
+    return true;
+  }
   attempt.state = "failed"; attempt.completedAt = ports.now(); attempt.error = attempt.suspension.detail;
   resetStageForRetry(pipeline, stage);
   const next = (await newAttempt(pipeline, stage))!;
@@ -7752,6 +7872,7 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   next.activatedBy = attempt.activatedBy ? { ...attempt.activatedBy } : null;
   next.restartContext = { previousAttempt: attempt.n, transcriptPath: attempt.agentPath };
   next.accountId = target;
+  if (holds.length) next.accountHolds = holds.map(hold => ({ ...hold }));
   bindAttemptDefinition({ ...oldDefinition, account: target }, next, ports);
   pipeline.stateDetail = "continuing the stopped stage on an allowed account; keeping the current worktree";
   await persist(); ports.scheduleTick?.(0);

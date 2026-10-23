@@ -4474,7 +4474,7 @@ test("task placement bindings require atomic guards and classify field refusals 
   `], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
   const output = await new Response(child.stdout).text();
   const error = await new Response(child.stderr).text();
-  expect([await child.exited, error]).toEqual([0, ""]);
+  assertStateChildSuccess(await child.exited, error);
   const result = JSON.parse(output);
   expect(result.missing).toMatchObject({ ok: false, code: "TASK_INVALID_FIELD", retryable: false, details: { field: "expectedProject" } });
   for (const invalid of result.invalid) {
