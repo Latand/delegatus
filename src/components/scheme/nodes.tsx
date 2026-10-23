@@ -1246,7 +1246,7 @@ const NodeChrome = memo(function NodeChrome({
         <PipelineTemplatePicker
           repoDir={node.file.projectRoot?.trim() || node.file.cwd?.trim() || ""}
           onClose={() => setPipelineOpen(false)}
-          onCreate={(template, repoDir) => createDraftPipeline(node.file.project, repoDir, template ?? undefined, node.file.path)}
+          onCreate={(template, repoDir, from) => createDraftPipeline(node.file.project, repoDir, template ?? undefined, node.file.path, from)}
           onCreated={(created) => {
             setPipelineOpen(false);
             onPipelineCreated?.(created);

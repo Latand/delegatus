@@ -517,15 +517,15 @@ test("an invalid create answers with every violated constraint at once", async (
     "stages[0].role",
     "stages[1].prompt",
     "stages[1].role",
-    "baseRef",
   ]);
   for (const violation of rejected.violations ?? []) expect(violation.expected).not.toBe("");
   /* One response, and it reads as one: the count, then field, message and
-     expected shape for each violated constraint. */
-  expect(rejected.error).toStartWith("6 validation errors — ");
+     expected shape for each violated constraint. A draft's baseBranch with no
+     baseRef is no longer one: such a draft follows its branch. */
+  expect(rejected.error).toStartWith("5 validation errors — ");
   expect(rejected.error).toContain('stages[0].kind: stage kind must be run or review-loop (expected "run" | "review-loop")');
   expect(rejected.error).toContain("place runtime overrides on the stage");
-  expect(rejected.error).toContain("baseRef: a draft baseBranch requires an explicit baseRef");
+  expect(rejected.error).not.toContain("baseRef");
   expect(loadPipelines()).toEqual([]);
 });
 
@@ -2350,6 +2350,94 @@ test("an explicit draft base remains pinned when the draft starts", async () => 
     lastPassedCommit: ORIGIN_MAIN_SHA,
   });
   expect(h.calls.slice(callsBeforeStart)).toEqual([]);
+});
+
+test("a draft from a PR follows its base branch, and Start begins from the PR head as it is then", async () => {
+  savePipelines([]);
+  const { root, repo, git, realExec } = await realProvisioningRepo("pr-draft");
+  try {
+    const origin = path.join(root, "origin.git");
+    const contributor = path.join(root, "contributor");
+    (await git(root, "init", "--bare", "--initial-branch=main", origin));
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "base\n");
+    (await git(repo, "add", "."));
+    (await git(repo, "commit", "-m", "base"));
+    (await git(repo, "branch", "release"));
+    (await git(repo, "remote", "add", "origin", origin));
+    (await git(repo, "push", "origin", "main", "release"));
+    (await git(root, "clone", "--quiet", origin, contributor));
+    for (const [key, value] of [["user.name", "Fixture"], ["user.email", "noreply@example.com"], ["commit.gpgSign", "false"]]) (await git(contributor, "config", key!, value!));
+    const commitOn = async (branch: string, file: string) => {
+      (await git(contributor, "checkout", "--quiet", branch));
+      fs.writeFileSync(path.join(contributor, file), `${file}\n`);
+      (await git(contributor, "add", file));
+      (await git(contributor, "commit", "--quiet", "-m", file));
+      (await git(contributor, "push", "--quiet", "origin", branch));
+      return git(contributor, "rev-parse", "HEAD");
+    };
+    (await git(contributor, "checkout", "--quiet", "-b", "feature/links", "origin/release"));
+    (await commitOn("feature/links", "pr-1.txt"));
+    (await git(repo, "fetch", "--quiet", "origin"));
+    const releaseAtDraft = (await git(repo, "rev-parse", "refs/remotes/origin/release"));
+    const h = harness();
+    const { realProvisionExec } = await import("./git");
+    h.ports.exec = realExec;
+    h.ports.provisionExec = realProvisionExec;
+
+    const created = await createPipelineFromRequest({
+      task: "PR #41: Teach the picker links", repoDir: repo, baseBranch: "release",
+      delivery: { branch: "refs/heads/feature/links", remote: "origin", pr: 41 },
+      stages: RUN_STAGES as never, autoStart: false,
+    }, h.ports);
+    expect(created.error).toBeUndefined();
+    expect(created.pipeline).toMatchObject({
+      state: "draft", baseBranch: "release", baseRef: releaseAtDraft, lastPassedCommit: releaseAtDraft, baseRefPinned: false,
+      delivery: { target: { branch: "refs/heads/feature/links", pr: 41 } },
+    });
+
+    /* Both branches move while the draft waits for review. */
+    const releaseAtStart = (await commitOn("release", "release-2.txt"));
+    const headAtStart = (await commitOn("feature/links", "pr-2.txt"));
+    const started = await patchPipeline(created.pipeline!.id, { action: "start" }, h.ports);
+    expect(started.pipeline).toMatchObject({ state: "provisioning", baseBranch: "release", baseRef: "", lastPassedCommit: "" });
+
+    await tickPipelines([], h.ports);
+    const lane = loadPipelines()[0]!;
+    expect(lane).toMatchObject({ state: "running", baseBranch: "release", baseRef: releaseAtStart, baseRefPinned: false });
+    expect((await git(lane.worktreeDir, "rev-parse", "HEAD"))).toBe(headAtStart);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}, 20_000);
+
+test("a draft that follows a base branch this checkout has not fetched is refused by name", async () => {
+  const h = harness();
+  savePipelines([]);
+  const baseExec = h.ports.exec;
+  h.ports.exec = (command, args, cwd, env, options) => args.includes("refs/remotes/origin/nightly^{commit}")
+    ? { code: 128, stdout: "", stderr: "fatal: Needed a single revision" }
+    : baseExec(command, args, cwd, env, options);
+  const refused = await createPipelineFromRequest({ task: "Nightly", repoDir: "/repo", baseBranch: "nightly", stages: RUN_STAGES as never, autoStart: false }, h.ports);
+  expect(refused.pipeline).toBeUndefined();
+  expect(refused.status).toBe(409);
+  expect(refused.error).toContain("resolving pipeline base refs/remotes/origin/nightly");
+  expect(refused.error).toContain("fetch origin nightly in this checkout and create the draft again");
+  expect(loadPipelines()).toEqual([]);
+});
+
+test("a followed base in a checkout with no origin is its local branch, and an explicit base stays pinned", async () => {
+  const h = harness();
+  savePipelines([]);
+  const baseExec = h.ports.exec;
+  h.ports.exec = (command, args, cwd, env, options) => args[0] === "remote" && args[1] === "get-url"
+    ? { code: 2, stdout: "", stderr: "error: No such remote 'origin'" }
+    : baseExec(command, args, cwd, env, options);
+  const followed = await createPipelineFromRequest({ task: "Local follow", repoDir: "/repo", baseBranch: "release", stages: RUN_STAGES as never, autoStart: false }, h.ports);
+  expect(followed.pipeline).toMatchObject({ state: "draft", baseBranch: "release", baseRef: ORIGIN_MAIN_SHA, baseRefPinned: false });
+  expect(h.calls).toContain("git rev-parse --verify --end-of-options refs/heads/release^{commit}");
+  expect(h.calls.some((call) => / fetch /.test(call))).toBe(false);
+  const pinned = await createPipelineFromRequest({ task: "Local pin", repoDir: "/repo", baseBranch: "release", baseRef: "v1", stages: RUN_STAGES as never, autoStart: false }, h.ports);
+  expect(pinned.pipeline).toMatchObject({ baseRefPinned: true });
+  const started = await patchPipeline(followed.pipeline!.id, { action: "start" }, h.ports);
+  expect(started.pipeline).toMatchObject({ state: "provisioning", baseBranch: "release", baseRef: "", lastPassedCommit: "" });
 });
 
 test("starting a draft enters the existing provision and stage-spawn path", async () => {

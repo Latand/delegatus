@@ -12835,13 +12835,11 @@ export async function createPipelineFromRequest(
      non-string baseRef reaches here, so the trims must not assume a string. */
   const explicitBaseRef = typeof req.baseRef === "string" ? req.baseRef.trim() : undefined;
   const requestedBaseBranch = typeof req.baseBranch === "string" ? req.baseBranch.trim() : "";
-  if (req.autoStart === false && requestedBaseBranch && !explicitBaseRef) {
-    violations.push({
-      field: "baseRef",
-      message: "a draft baseBranch requires an explicit baseRef",
-      expected: "commit SHA the draft is pinned to, resolved by the caller (a draft is not provisioned, so the viewer cannot resolve the branch itself)",
-    });
-  }
+  /* A draft that names its base branch without a commit follows the branch:
+     it is stored at the checkout's current origin/<baseBranch>, unpinned, and
+     Start resolves the branch again. A draft delivering to a PR therefore
+     starts from the PR head as it is at Start. */
+  const followsBaseBranch = req.autoStart === false && !!requestedBaseBranch && !explicitBaseRef;
   if (violations.length || !normalized.stages || !creator.lineage) {
     return { error: pipelineValidationError(violations), violations, status: 400 };
   }
@@ -12878,10 +12876,16 @@ export async function createPipelineFromRequest(
      base unresolved and the controller fetches it — which is what makes the
      call answer at once, and what keeps the 60-second fetch bound off the
      lease every other writer waits on. */
-  const base = explicitBaseRef
-    ? (await resolvePipelineBase(repoDir, { baseBranch: req.baseBranch, baseRef: explicitBaseRef }, ports.exec))
+  /* Local reads only: a followed branch is read from its remote-tracking ref,
+     or the local branch in a checkout with no origin, never fetched. */
+  let followedRef = `refs/remotes/origin/${requestedBaseBranch}`;
+  if (followsBaseBranch && (await ports.exec("git", ["remote", "get-url", "origin"], repoDir)).code === 2) followedRef = `refs/heads/${requestedBaseBranch}`;
+  const base = explicitBaseRef || followsBaseBranch
+    ? (await resolvePipelineBase(repoDir, { baseBranch: req.baseBranch, baseRef: explicitBaseRef || followedRef }, ports.exec))
     : null;
-  if (base && !base.ok) return { error: base.error, status: 409 };
+  if (base && !base.ok) {
+    return { error: followsBaseBranch ? `${base.error}; fetch origin ${requestedBaseBranch} in this checkout and create the draft again` : base.error, status: 409 };
+  }
   const pipeline = buildPipeline({
     id: crypto.randomUUID().slice(0, 8),
     task,
@@ -12902,7 +12906,7 @@ export async function createPipelineFromRequest(
   if (base?.ok) {
     pipeline.baseBranch = base.baseBranch;
     pipeline.baseRef = base.baseRef;
-    pipeline.baseRefPinned = true;
+    pipeline.baseRefPinned = !followsBaseBranch;
     pipeline.lastPassedCommit = base.baseRef;
   } else if (pipeline.state === "provisioning") {
     /* The branch the controller must fetch travels on the record: without it
@@ -14359,6 +14363,12 @@ export async function patchPipeline(
          pipeline mutation — a sixty-second network bound held across the lock
          every other writer waits on. The controller resolves it instead, the
          same way it does for a lane created without `baseRef`. */
+      /* A draft that follows its base branch drops the base it was stored at;
+         the controller fetches the branch again at provisioning. */
+      if (pipeline.baseRefPinned === false && pipeline.baseBranch) {
+        pipeline.baseRef = "";
+        pipeline.lastPassedCommit = "";
+      }
       const unresolved = !pipeline.baseBranch || !pipeline.baseRef || !pipeline.lastPassedCommit;
       // Before the pin marker existed, only an explicit base resolved a draft.
       if (!unresolved && pipeline.baseRefPinned === undefined) pipeline.baseRefPinned = true;

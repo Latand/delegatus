@@ -277,3 +277,154 @@ test("initialization refusal keeps the server's concrete reason visible", async 
   expect(host.textContent).toContain(reason);
   expect(host.querySelector("[data-pipeline-picker-state]")?.getAttribute("data-pipeline-picker-state")).toBe("blocked");
 });
+
+/* A pasted PR or issue link (docs/research/competitors-2026-10.md rank 4). */
+const PR_SOURCE = {
+  kind: "pr", repository: "owner/project", number: 41, url: "https://github.com/owner/project/pull/41",
+  title: "Teach the picker links", state: "open", base: { branch: "release" },
+  head: { branch: "feature/links", sha: "a".repeat(40), repository: "contributor/project", remote: "contributor", fork: true, maintainerCanModify: false },
+  tasks: [
+    { id: "task-new", text: "Newest linked task", updatedAt: "2026-10-22T09:00:00Z" },
+    { id: "task-old", text: "Older linked task", updatedAt: "2026-10-20T09:00:00Z" },
+  ],
+  request: { task: "PR #41: Teach the picker links", spec: "Source: https://github.com/owner/project/pull/41", baseBranch: "release",
+    delivery: { branch: "refs/heads/feature/links", remote: "contributor", pr: 41 } },
+  attachLink: null,
+};
+
+function paste(input: HTMLInputElement, value: string): void {
+  flushSync(() => {
+    input.dispatchEvent(new dom.Event("paste", { bubbles: true }) as unknown as Event);
+    Object.getOwnPropertyDescriptor(dom.HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input.dispatchEvent(new dom.Event("input", { bubbles: true }) as unknown as Event);
+  });
+}
+
+/** The link is read in a passive effect and a timer: wait for its state, bounded. */
+async function linkState(host: HTMLElement, phase: string): Promise<Element> {
+  for (let round = 0; round < 20; round += 1) {
+    const found = host.querySelector(`[data-pipeline-link-state='${phase}']`);
+    if (found) return found;
+    await settle();
+  }
+  throw new Error(`link state ${phase} never rendered: ${host.querySelector("[data-pipeline-link-state]")?.getAttribute("data-pipeline-link-state") ?? "none"}`);
+}
+
+function linkFetch(answer: (link: string) => { status: number; body: unknown }, seen: Array<{ url: string; body: unknown }>, hold?: Promise<void>) {
+  return (async (url: string, init?: RequestInit) => {
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    seen.push({ url, body });
+    if (url === "/api/pipelines/preflight") return new Response(JSON.stringify({ ok: true, repoDir: "/canonical/repo", gitCommonDir: "/canonical/repo/.git", worktreeParent: "/canonical" }));
+    await hold;
+    const { status, body: json } = answer(body.link);
+    return new Response(JSON.stringify(json), { status });
+  }) as unknown as typeof fetch;
+}
+
+test("a pasted PR resolves against the admitted checkout, shows base, head and fork, and drafts on the chosen task", async () => {
+  const seen: Array<{ url: string; body: unknown }> = [];
+  let release = () => {};
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  globalThis.fetch = linkFetch(() => ({ status: 200, body: { ok: true, repoDir: "/canonical/repo", source: PR_SOURCE } }), seen, held);
+  const created: unknown[][] = [];
+  const host = mount(
+    <PipelineTemplatePicker repoDir="/alias/repo" onCreate={async (...args) => { created.push(args); return { pipeline }; }} onCreated={() => undefined} onClose={() => undefined} />,
+  );
+  await settle();
+  paste(host.querySelector<HTMLInputElement>("[data-pipeline-link-input]")!, "https://github.com/owner/project/pull/41");
+  const blank = [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Blank canvas"))!;
+  /* While the link is read, no plain draft can be made by accident. */
+  await linkState(host, "resolving");
+  expect(blank.disabled).toBe(true);
+  release();
+  const preview = await linkState(host, "resolved");
+
+  expect(seen.map((entry) => entry.url)).toEqual(["/api/pipelines/preflight", "/api/pipelines/source"]);
+  expect(seen[1]!.body).toEqual({ link: "https://github.com/owner/project/pull/41", repoDir: "/canonical/repo" });
+  expect(preview.textContent).toContain("PR #41");
+  expect(preview.textContent).toContain("Teach the picker links");
+  expect(preview.textContent).toContain("owner/project");
+  expect(preview.textContent).toContain("release");
+  expect(preview.textContent).toContain("feature/links · aaaaaaa");
+  expect(host.querySelector("[data-pipeline-link-fork]")?.textContent).toBe("fork contributor/project · contributor");
+  expect(host.querySelector("[data-pipeline-link-warning]")?.textContent).toContain("does not allow maintainer edits");
+  const radios = [...host.querySelectorAll<HTMLInputElement>("[data-pipeline-link-task] input[type='radio']")];
+  expect(radios.map((radio) => radio.value)).toEqual(["task-new", "task-old", ""]);
+  expect(radios.map((radio) => radio.checked)).toEqual([true, false, false]);
+  expect(host.querySelector("[data-pipeline-link-task]")?.textContent).toContain("Older linked task");
+  flushSync(() => radios[1]!.click());
+  expect(radios.map((radio) => radio.checked)).toEqual([false, true, false]);
+  expect(blank.disabled).toBe(false);
+  flushSync(() => blank.click());
+  await settle();
+  expect(created).toEqual([[null, "/canonical/repo", { source: PR_SOURCE, taskId: "task-old" }]]);
+});
+
+test("a refused link keeps templates disabled with the reason in the operator's language, until the link is cleared", async () => {
+  setLocale("uk");
+  const seen: Array<{ url: string; body: unknown }> = [];
+  globalThis.fetch = linkFetch(() => ({ status: 409, body: { ok: false, code: "merged", error: "PR #41 in owner/project is already merged", params: { repository: "owner/project", number: 41 } } }), seen);
+  const created: unknown[][] = [];
+  const host = mount(
+    <PipelineTemplatePicker repoDir="/alias/repo" onCreate={async (...args) => { created.push(args); return { pipeline }; }} onCreated={() => undefined} onClose={() => undefined} />,
+  );
+  await settle();
+  const input = host.querySelector<HTMLInputElement>("[data-pipeline-link-input]")!;
+  paste(input, "https://github.com/owner/project/pull/41");
+  const refusal = await linkState(host, "refused");
+  expect(refusal.getAttribute("role")).toBe("alert");
+  expect(refusal.textContent).toBe(translate("uk", "pipelineLink.refused.merged", { repository: "owner/project", number: 41 }));
+  expect(refusal.textContent).toContain("уже злито");
+  const blank = [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes(translate("uk", "pipelineTemplates.blank")))!;
+  expect(blank.disabled).toBe(true);
+
+  paste(input, "");
+  for (let round = 0; round < 20 && host.querySelector("[data-pipeline-link-state]"); round += 1) await settle();
+  expect(host.querySelector("[data-pipeline-link-state]")).toBeNull();
+  expect(blank.disabled).toBe(false);
+  flushSync(() => blank.click());
+  await settle();
+  /* Cleared: an ordinary draft, with no link source. */
+  expect(created).toEqual([[null, "/canonical/repo"]]);
+  expect(seen.filter((entry) => entry.url === "/api/pipelines/source")).toHaveLength(1);
+});
+
+test("an issue with no linked task says the draft gets its own task and a new branch", async () => {
+  const issue = { ...PR_SOURCE, kind: "issue", number: 7, title: "Links should start work", head: null, tasks: [], attachLink: "owner/project#7",
+    request: { task: "Issue #7: Links should start work", spec: "Source: x", baseBranch: "trunk" }, base: { branch: "trunk" } };
+  globalThis.fetch = linkFetch(() => ({ status: 200, body: { ok: true, repoDir: "/canonical/repo", source: issue } }), []);
+  const host = mount(<PipelineTemplatePicker repoDir="/alias/repo" onCreate={async () => ({ pipeline })} onCreated={() => undefined} onClose={() => undefined} />);
+  await settle();
+  paste(host.querySelector<HTMLInputElement>("[data-pipeline-link-input]")!, "https://github.com/owner/project/issues/7");
+  const preview = await linkState(host, "resolved");
+  expect(preview.getAttribute("data-pipeline-link-source")).toBe("issue");
+  expect(preview.textContent).toContain("Issue #7");
+  expect(preview.textContent).toContain("a new pipeline branch");
+  expect(host.querySelector("[data-pipeline-link-task]")).toBeNull();
+  expect(host.querySelector("[data-pipeline-link-no-task]")?.textContent).toContain("the draft gets its own task");
+});
+
+test("a late answer for an earlier link cannot replace the answer for the link now in the field", async () => {
+  const pending = new Map<string, () => void>();
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    if (url === "/api/pipelines/preflight") return new Response(JSON.stringify({ ok: true, repoDir: "/canonical/repo", gitCommonDir: "/canonical/repo/.git", worktreeParent: "/canonical" }));
+    const { link } = JSON.parse(String(init?.body)) as { link: string };
+    await new Promise<void>((resolve) => pending.set(link, resolve));
+    const number = Number(link.split("/").at(-1));
+    return new Response(JSON.stringify({ ok: true, repoDir: "/canonical/repo", source: { ...PR_SOURCE, number, title: `Title ${number}` } }));
+  }) as unknown as typeof fetch;
+  const host = mount(<PipelineTemplatePicker repoDir="/alias/repo" onCreate={async () => ({ pipeline })} onCreated={() => undefined} onClose={() => undefined} />);
+  await settle();
+  const input = host.querySelector<HTMLInputElement>("[data-pipeline-link-input]")!;
+  paste(input, "https://github.com/owner/project/pull/1");
+  for (let round = 0; round < 20 && !pending.has("https://github.com/owner/project/pull/1"); round += 1) await settle();
+  paste(input, "https://github.com/owner/project/pull/2");
+  for (let round = 0; round < 20 && !pending.has("https://github.com/owner/project/pull/2"); round += 1) await settle();
+  pending.get("https://github.com/owner/project/pull/2")!();
+  expect((await linkState(host, "resolved")).textContent).toContain("Title 2");
+  pending.get("https://github.com/owner/project/pull/1")!();
+  for (let round = 0; round < 5; round += 1) await settle();
+  const shown = host.querySelector("[data-pipeline-link-state='resolved']")!.textContent;
+  expect(shown).toContain("Title 2");
+  expect(shown).not.toContain("Title 1");
+});
