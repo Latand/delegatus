@@ -217,6 +217,22 @@ test("lifecycle: one child per server shared by calls, 60 s after the last call 
   expect(await sessions.call("call_b", snapshot, "s0__echo", { text: "again" })).toMatchObject({ status: "done" });
 }, 60_000);
 
+test.skipIf(!process.env.LLV_VOICE_TOOLS_BUILT_ROOT)("the production worker bundle serves a session", async () => {
+  const { store, hub, sessions, root } = await setup();
+  const server = fakeServer();
+  await fs.symlink(path.join(process.env.LLV_VOICE_TOOLS_BUILT_ROOT!, ".next"), path.join(root, ".next"), "dir");
+  const previous = process.cwd();
+  try {
+    // An installed checkout has the compiled entry and no TypeScript source.
+    process.chdir(root);
+    await approve(store, hub, http("music", server.url), both);
+    const snapshot = sessions.snapshot(operator);
+    sessions.open("call_a", snapshot);
+    expect(await sessions.call("call_a", snapshot, "music__echo", { text: "built" })).toEqual({ status: "done", content: "echo:built", speech: "Music answered." });
+    expect(await sessions.call("call_a", snapshot, "music__echo", { text: 1 })).toMatchObject({ code: "INVALID_TOOL_ARGUMENTS" });
+  } finally { process.chdir(previous); }
+}, 30_000);
+
 test("idle time never runs out under a call in flight", async () => {
   const { store, hub, sessions, clock } = await setup();
   let release!: () => void;
