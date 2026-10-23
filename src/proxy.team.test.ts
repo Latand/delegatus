@@ -21,6 +21,7 @@ import { POST as handoffRoute } from "@/app/api/team/session/handoff/route";
 import { probeHeadersFrom } from "../bin/internalService.mjs";
 
 import { proxy } from "./proxy";
+import { mcpHttpAccessToken, MCP_HTTP_ACCESS_HEADER } from "@/lib/mcp/httpAccess";
 
 /* The two layers of sign-in-and-team D1 through the real proxy: the access
    key decides who reaches the Viewer at all, and only then, on a team
@@ -214,6 +215,21 @@ describe("team install: first-party callers name themselves and are checked", ()
   test("a capability the registry issued still passes, for writes too", () => {
     const response = proxy(get("/api/pipelines", { ...KEY, "x-llv-spawn-capability": REAL_CAPABILITY }, "POST"));
     expect(response.headers.get("x-middleware-next")).toBe("1");
+  });
+
+  test("local MCP access still requires verified agent identity on a team install", async () => {
+    const access = mcpHttpAccessToken()!;
+    const local = (headers: Record<string, string>) => new NextRequest("http://127.0.0.1:8898/api/mcp", {
+      method: "POST", headers: { host: "127.0.0.1:8898", [MCP_HTTP_ACCESS_HEADER]: access, ...headers },
+    });
+    for (const headers of [{}, FORGED_CAPABILITY, FORGED_SERVICE]) {
+      const denied = proxy(local(headers));
+      expect(denied.status).toBe(401);
+      expect(await denied.json()).toMatchObject({ code: "member_required" });
+    }
+    expect(proxy(local({ "x-llv-spawn-capability": REAL_CAPABILITY })).headers.get("x-middleware-next")).toBe("1");
+    installSpawnCapabilityResolver(null);
+    expect(proxy(local({ "x-llv-spawn-capability": REAL_CAPABILITY })).status).toBe(401);
   });
 
   test("the runtime host's pipeline tick passes, with the key and without one", async () => {

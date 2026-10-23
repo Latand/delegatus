@@ -17,6 +17,7 @@ import {
   type CopilotAcpHostOptions,
 } from "./copilotAcpHost";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
+import { mcpHttpAccessToken, MCP_HTTP_ACCESS_HEADER } from "@/lib/mcp/httpAccess";
 
 import type { RuntimeEventStore } from "./eventStore";
 import type { RuntimeEvent } from "./engineHost";
@@ -344,6 +345,16 @@ describe("CopilotAcpHost", () => {
       tools: ["*"],
     });
     expect(viewer).not.toHaveProperty("command");
+  });
+
+  test("a keyed installation puts local MCP access only in Copilot's server definition", async () => {
+    const key = crypto.randomBytes(32).toString("base64url");
+    const viewer = await writtenViewerConfig({ ...dockerShape(), env: { LLV_MCP_TRANSPORT: "http", LLV_TOKEN: key } });
+    const headers = viewer.headers as Record<string, string>;
+    expect(headers[MCP_HTTP_ACCESS_HEADER] === mcpHttpAccessToken({ LLV_TOKEN: key })).toBe(true);
+    expect(headers[VIEWER_SPAWN_CAPABILITY_HEADER]).toBe("c".repeat(43));
+    expect(JSON.stringify(viewer).includes(key)).toBe(false);
+    expect(viewer).not.toHaveProperty("env");
   });
 
   test("allowSubagents keeps the native sub-agent tools; a non-bypass profile omits --allow-all", async () => {

@@ -7,6 +7,7 @@ import os from "node:os";
 import { viewerMcpHttpCodexEntry, viewerMcpServerEntry, viewerMcpServerEnv } from "./agent/spawnPolicy";
 import { codexViewerOverHttp, headlessCodexThreadConfig } from "./codexHeadlessConfig";
 import { telegramMcpUrl } from "./telegram/packaging";
+import { mcpHttpAccessToken, MCP_HTTP_ACCESS_HEADER } from "./mcp/httpAccess";
 
 test("denied Codex threads override model-default delegation and unknown features", () => {
   const config = headlessCodexThreadConfig({ config: { mcp_servers: {}, approvals_reviewer: "auto_review", agents: { enabled: true }, features: { multi_agent: true, multi_agent_v2: true, future_worker: true, memory_tool: true, telepathy: true, connectors: true, unlisted_worker: true } } }, false,
@@ -281,6 +282,22 @@ test("over HTTP, a thread with no registered Viewer reaches the shared endpoint 
     url: "http://127.0.0.1:8898/api/mcp",
     env_http_headers: { "x-llv-spawn-capability": "LLV_SPAWN_CAPABILITY" },
   });
+});
+
+test("a keyed Codex HTTP thread receives MCP access in its definition while registered stdio stays intact", () => {
+  const previous = process.env.LLV_TOKEN;
+  process.env.LLV_TOKEN = crypto.randomBytes(32).toString("base64url");
+  try {
+    const config = headlessCodexThreadConfig({ config: { mcp_servers: {} } }, false, undefined, undefined, "http") as {
+      mcp_servers: { viewer: { http_headers: Record<string, string> } };
+    };
+    expect(config.mcp_servers.viewer.http_headers[MCP_HTTP_ACCESS_HEADER] === mcpHttpAccessToken()).toBe(true);
+    expect(JSON.stringify(config).includes(process.env.LLV_TOKEN)).toBe(false);
+    const registered = headlessCodexThreadConfig({ config: { mcp_servers: { viewer: { command: "bun", args: [] } } } }, false, undefined, undefined, "http");
+    expect((registered.mcp_servers as Record<string, unknown>).viewer).not.toHaveProperty("http_headers");
+  } finally {
+    if (previous === undefined) delete process.env.LLV_TOKEN; else process.env.LLV_TOKEN = previous;
+  }
 });
 
 test("over HTTP, an account that registers the Viewer over HTTP is pointed at the shared endpoint and given no env", () => {

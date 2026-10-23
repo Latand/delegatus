@@ -45,6 +45,7 @@ fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "project-aliases.json"), 
 
 const { agentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
 const route = await import("@/app/api/mcp/route");
+const { proxy } = await import("@/proxy");
 const { createMcpToolService, createViewerMcpServer, MemoryMcpReceiptStore, SqliteMcpReceiptStore, withMcpDispatchTurns } = await import("./server");
 const { productionViewerControlDependencies, sendDownstreamKey, viewerMcpBindings, viewerMcpRecoverableTools, viewerMcpToolPolicy } = await import("./bindings");
 
@@ -143,6 +144,8 @@ function serveViewer(listenPort: number): ReturnType<typeof Bun.serve> {
           signal: request.signal,
           ...(request.method === "POST" ? { body: await request.text() } : {}),
         });
+        const perimeter = proxy(next);
+        if (perimeter.headers.get("x-middleware-next") !== "1") return perimeter;
         const answer = request.method === "POST"
           ? await route.POST(next)
           : request.method === "DELETE" ? route.DELETE() : route.GET();
@@ -232,6 +235,66 @@ for (const engine of ["codex-mcp-client", "claude-code"]) test(`${engine} receiv
 function agentClient(agent: Agent): Promise<Client> {
   return httpClient({ "x-llv-spawn-capability": agent.capability });
 }
+
+for (const keyed of [false, true]) test(`spawned MCP client calls Delegatus over HTTP with access key=${keyed}`, async () => {
+  const { applyClaudeSpawnPolicy, viewerMcpTransportForLaunch } = await import("@/lib/agent/spawnPolicy");
+  const previous = { ...process.env };
+  try {
+    if (keyed) process.env.LLV_TOKEN = crypto.randomBytes(32).toString("base64url");
+    else delete process.env.LLV_TOKEN;
+    process.env.LLV_VIEWER_PORT = String(port);
+    const launchEnv: NodeJS.ProcessEnv = { ...process.env, LLV_SPAWN_CAPABILITY: alice.capability };
+    delete launchEnv.LLV_TOKEN;
+    if (keyed) {
+      const bare = await fetch(`${origin}/api/mcp`, { method: "POST", headers: { "x-llv-spawn-capability": alice.capability }, body: "{}" });
+      expect(bare.status).toBe(403);
+      expect(await bare.json()).toEqual({ error: "access denied: key required" });
+    }
+    const transport = viewerMcpTransportForLaunch(launchEnv);
+    expect(transport).toBe("http");
+    const config = applyClaudeSpawnPolicy(path.join(sandbox, `keyed-${keyed}`), {
+      profileId: "access", cwd: sandbox, viewerTransport: transport, cleanMemory: true,
+    });
+    const child = ownFixtureChild(Bun.spawn([process.execPath, path.join(import.meta.dir, "httpSpawnClient.fixture.ts"), config.mcpConfigPath], {
+      env: launchEnv, stdout: "pipe", stderr: "pipe",
+    }));
+    const [code, output, error] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect({ code, output, error }).toEqual({ code: 0, output: "MCP tool call succeeded\n", error: "" });
+  } finally {
+    for (const name of Object.keys(process.env)) if (!(name in previous)) delete process.env[name];
+    Object.assign(process.env, previous);
+  }
+});
+
+test("local MCP access never substitutes for current launch identity or native peer proof", async () => {
+  const { mcpHttpAccessToken, MCP_HTTP_ACCESS_HEADER } = await import("./httpAccess");
+  const previous = process.env.LLV_TOKEN;
+  process.env.LLV_TOKEN = crypto.randomBytes(32).toString("base64url");
+  const agent = launchAgent("Access rotation fixture");
+  const oldCapability = agent.capability;
+  agent.capability = agentRegistry().rotateSpawnCapabilityForReceipt(agent.launchId);
+  try {
+    const access = mcpHttpAccessToken()!;
+    for (const [headers, message] of [
+      [{}, "requires the x-llv-spawn-capability header"],
+      [{ "x-llv-spawn-capability": "a".repeat(43) }, "unknown or was rotated"],
+      [{ "x-llv-spawn-capability": oldCapability }, "unknown or was rotated"],
+      [{ "x-delegatus-mcp-peer": "invalid" }, "native MCP peer could not be authenticated"],
+      [{ "x-delegatus-mcp-unattributed": "1" }, "requires the x-llv-spawn-capability header"],
+    ] as Array<[Record<string, string>, string]>) {
+      const response = await fetch(`${origin}/api/mcp`, { method: "POST", headers: {
+        [MCP_HTTP_ACCESS_HEADER]: access, ...headers, "content-type": "application/json",
+      }, body: "{}" });
+      expect(response.status).toBe(403);
+      expect((await response.json() as { error: { message: string } }).error.message).toContain(message);
+    }
+    const client = await httpClient({ [MCP_HTTP_ACCESS_HEADER]: access, "x-llv-spawn-capability": agent.capability });
+    try { expect((await client.listTools()).tools.some(tool => tool.name === "list_tasks")).toBe(true); }
+    finally { await client.close(); }
+  } finally {
+    if (previous === undefined) delete process.env.LLV_TOKEN; else process.env.LLV_TOKEN = previous;
+  }
+});
 
 function payloadOf(result: Awaited<ReturnType<Client["callTool"]>>): Record<string, unknown> {
   return (result.structuredContent ?? {}) as Record<string, unknown>;
