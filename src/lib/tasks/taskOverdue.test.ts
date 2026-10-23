@@ -90,15 +90,16 @@ import sqlite3, sys, json
 conn = sqlite3.connect(sys.argv[1])
 query, now = sys.argv[2], int(sys.argv[3])
 counts = {}
-for case in ['eligible', 'held', 'remote', 'eligible-sweep', 'held-sweep', 'remote-sweep']:
+for case in ['eligible', 'held', 'remote', 'eligible-sweep', 'held-sweep', 'remote-sweep', 'eligible-deep', 'eligible-peer']:
     mode = case.split('-')[0]
-    cursor = json.dumps([0, 1792627200000, 't:eligible-030']) if case.endswith('-sweep') else 'null'
+    cursor = json.dumps([0, 1792627200000, 't:eligible-030']) if case.endswith(('-sweep','-deep')) else json.dumps([0, 1790812800000, 't:prefix-zzzz']) if case.endswith('-peer') else 'null'
     observed = []
     for size in [1000, 10000]:
         conn.execute("DELETE FROM state_rows WHERE collection='tasks'")
         rows = []
         for n in range(size):
             row = dict(id=f'prefix-{n:05}', project='fixture', status='inbox', dueAt='2026-10-01T00:00:00Z')
+            if case.endswith(('-deep','-peer')): row['priority'] = 'high'
             if mode == 'held': row['hold'] = dict(until='2026-12-01T00:00:00Z')
             if mode == 'remote': row['machine'] = 'elsewhere'
             rows.append(('tasks', 't:'+row['id'], json.dumps(row), n, 1, 0))
@@ -121,7 +122,8 @@ for case in ['eligible', 'held', 'remote', 'eligible-sweep', 'held-sweep', 'remo
             keys = conn.execute(query, params).fetchall()
             conn.set_progress_handler(None, 0)
             assert len(keys) == 51
-            assert all(key[0].startswith('t:eligible-') for key in keys)
+            if case.endswith(('-deep','-peer')): assert sum(key[0].startswith('t:eligible-') for key in keys) == 26
+            else: assert all(key[0].startswith('t:eligible-') for key in keys)
             repeats.append(steps[0])
         observed.append(repeats)
     counts[case] = observed

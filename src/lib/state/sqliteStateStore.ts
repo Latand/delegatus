@@ -1250,14 +1250,14 @@ function sharedStateReadonlyDatabase(filename: string): Database {
 export type OverdueTaskCursor = readonly [priority: number, eligibleAt: number, rowKey: string];
 type OverdueTaskRow = { row_key: string; priority: number; eligible_at: number; advance: number | null };
 
-/** Bounded head and sweep pages share the eligibility index. The fixed head
- * notices urgent arrivals; the sweep advances beyond daily repeats. */
+/** Bounded head and sweep pages share the eligibility index. Separate equal-time
+ * and later-time seeks let SQLite use the cursor's full index prefix. */
 export const OVERDUE_TASK_KEYS_SQL = `
   WITH scopes AS (
-    SELECT DISTINCT p.value AS project, m.value AS machine, q.value AS priority, pass.value AS pass
-    FROM json_each(?1) p, json_each(?2) m, json_each('[0,1,2]') q, json_each('[0,1]') pass
+    SELECT DISTINCT p.value AS project, m.value AS machine, q.value AS priority
+    FROM json_each(?1) p, json_each(?2) m, json_each('[0,1,2]') q
   ), pages AS MATERIALIZED (
-    SELECT priority, pass, (
+    SELECT priority, (
       SELECT json_group_array(json_object('key', row_key, 'due', due, 'eligible', eligible)) FROM (
         SELECT row_key, round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) AS due,
           max(round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000),
@@ -1269,24 +1269,64 @@ export const OVERDUE_TASK_KEYS_SQL = `
           AND json_extract(value_json,'$.project')=scopes.project
           AND coalesce(json_extract(value_json,'$.machine'),'')=scopes.machine
           AND CASE json_extract(value_json,'$.priority') WHEN 'high' THEN 0 WHEN 'low' THEN 2 ELSE 1 END=scopes.priority
-          AND (scopes.pass=0 OR scopes.priority >= coalesce(json_extract(?6,'$[0]'), -1))
-          AND (max(round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000),
-            coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0)), row_key) > (
-              CASE WHEN scopes.pass=1 AND scopes.priority=json_extract(?6,'$[0]') THEN json_extract(?6,'$[1]') ELSE -9007199254740991 END,
-              CASE WHEN scopes.pass=1 AND scopes.priority=json_extract(?6,'$[0]') THEN json_extract(?6,'$[2]') ELSE '' END)
           AND max(round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000),
             coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0)) <= ?3
-          AND row_key || ':' || CAST(round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) AS INTEGER)
-            NOT IN (SELECT value FROM json_each(CASE scopes.pass WHEN 1 THEN ?4 ELSE '[]' END))
         ORDER BY max(round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000),
-          coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0)), row_key
-        LIMIT 51
+            coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0)), row_key LIMIT 51
       )
-    ) AS rows FROM scopes
+    ) AS head_rows,
+    (
+      SELECT json_group_array(json_object('key', row_key, 'due', due, 'eligible', eligible)) FROM (
+        SELECT row_key, round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) AS due,
+          max(round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000),
+            coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0)) AS eligible
+        FROM state_rows INDEXED BY state_rows_task_due
+        WHERE collection='tasks' AND json_valid(value_json)
+          AND json_type(value_json,'$.dueAt')='text' AND json_type(value_json,'$.status')='text'
+          AND json_extract(value_json,'$.status') <> 'done'
+          AND json_extract(value_json,'$.project')=scopes.project
+          AND coalesce(json_extract(value_json,'$.machine'),'')=scopes.machine
+          AND CASE json_extract(value_json,'$.priority') WHEN 'high' THEN 0 WHEN 'low' THEN 2 ELSE 1 END=scopes.priority
+          AND max(round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000),
+            coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0)) <= ?3
+          AND scopes.priority=json_extract(?6,'$[0]')
+          AND max(round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000),
+            coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0))=json_extract(?6,'$[1]')
+          AND row_key>json_extract(?6,'$[2]')
+          AND row_key || ':' || CAST(round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) AS INTEGER)
+            NOT IN (SELECT value FROM json_each(?4))
+        ORDER BY max(round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000),
+            coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0)), row_key LIMIT 51
+      )
+    ) AS same_rows,
+    (
+      SELECT json_group_array(json_object('key', row_key, 'due', due, 'eligible', eligible)) FROM (
+        SELECT row_key, round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) AS due,
+          max(round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000),
+            coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0)) AS eligible
+        FROM state_rows INDEXED BY state_rows_task_due
+        WHERE collection='tasks' AND json_valid(value_json)
+          AND json_type(value_json,'$.dueAt')='text' AND json_type(value_json,'$.status')='text'
+          AND json_extract(value_json,'$.status') <> 'done'
+          AND json_extract(value_json,'$.project')=scopes.project
+          AND coalesce(json_extract(value_json,'$.machine'),'')=scopes.machine
+          AND CASE json_extract(value_json,'$.priority') WHEN 'high' THEN 0 WHEN 'low' THEN 2 ELSE 1 END=scopes.priority
+          AND max(round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000),
+            coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0)) <= ?3
+          AND scopes.priority >= coalesce(json_extract(?6,'$[0]'), -1)
+          AND max(round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000),
+            coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0))>CASE WHEN scopes.priority=json_extract(?6,'$[0]') THEN json_extract(?6,'$[1]') ELSE -9007199254740991 END
+          AND row_key || ':' || CAST(round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) AS INTEGER)
+            NOT IN (SELECT value FROM json_each(?4))
+        ORDER BY max(round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000),
+            coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0)), row_key LIMIT 51
+      )
+    ) AS later_rows FROM scopes
   ), expanded AS MATERIALIZED (
-    SELECT priority, pass, json_extract(item.value,'$.key') AS row_key,
+    SELECT priority, CASE batch.key WHEN 0 THEN 0 ELSE 1 END AS pass,
+      json_extract(item.value,'$.key') AS row_key,
       json_extract(item.value,'$.due') AS due, json_extract(item.value,'$.eligible') AS eligible_at
-    FROM pages, json_each(pages.rows) item
+    FROM pages, json_each(json_array(head_rows, same_rows, later_rows)) batch, json_each(batch.value) item
   ), head AS MATERIALIZED (
     SELECT row_key, priority, due, eligible_at FROM expanded WHERE pass=0 ORDER BY priority, eligible_at, row_key LIMIT 25
   ), sweep AS MATERIALIZED (
