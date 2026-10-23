@@ -19,7 +19,7 @@ import type { AccountReportRow } from "@/lib/transfer/types";
 type Row = AccountReportRow;
 type Fetcher = (input: string, init?: RequestInit) => Promise<Response>;
 type Engine = "claude" | "codex" | "copilot";
-export type TransferAccountAction = { action: "verify" | "retry" | "not_needed" | "confirm_identity"; engine: Engine; sourceId?: string };
+export type TransferAccountAction = { action: "verify" | "retry" | "not_needed" | "confirm_identity"; engine: Engine; sourceId?: string; targetId?: string | null };
 
 const STATE_TONE: Record<Row["state"], string> = {
   signed_out: "text-warning",
@@ -32,7 +32,7 @@ const STATE_TONE: Record<Row["state"], string> = {
 };
 
 /** Causes the transfer names by code; anything else is the provider's own redacted detail. */
-const DETAIL_CODES = ["provider-account", "identity-unreadable", "no-limit-windows", "account-missing", "create-failed"] as const;
+const DETAIL_CODES = ["provider-account", "identity-unreadable", "no-limit-windows", "limits-not-live", "limits-stale", "no-plan", "account-missing", "create-failed"] as const;
 type DetailCode = (typeof DETAIL_CODES)[number];
 const isDetailCode = (detail: string): detail is DetailCode => (DETAIL_CODES as readonly string[]).includes(detail);
 
@@ -117,8 +117,11 @@ export function TransferAccountsChecklist({ engine, rows, onSignIn, onAction, va
           const signIn = (row.state === "signed_out" || row.state === "different_account" || row.state === "read_failed") && row.targetId;
           const confirm = row.state === "different_account" || (row.state === "read_failed" && row.detail === "identity-unreadable");
           const retry = row.state === "not_created" && row.retry;
+          /* One source id can map to two accounts here (two imports), so a row is named by both. */
+          const id = `${row.sourceId}:${row.targetId ?? "-"}`;
+          const address = { engine, sourceId: row.sourceId, targetId: row.targetId };
           return (
-            <li key={row.sourceId} data-transfer-account={row.sourceId} className="rounded-[8px] border border-border bg-card px-2 py-1.5">
+            <li key={id} data-transfer-account={row.sourceId} className="rounded-[8px] border border-border bg-card px-2 py-1.5">
               <div className="flex min-w-0 items-baseline gap-2">
                 <span className={`min-w-0 truncate font-semibold ${phone ? "text-ui" : "text-[11.5px]"}`}>{row.label}</span>
                 <span className={`shrink-0 font-semibold ${phone ? "text-label" : "text-[10.5px]"} ${STATE_TONE[row.state]}`}>{t(`transfer.accounts.state.${row.state}`)}</span>
@@ -130,21 +133,21 @@ export function TransferAccountsChecklist({ engine, rows, onSignIn, onAction, va
               {row.state !== "usable" && row.state !== "not_needed" ? (
                 <div className="mt-1 flex flex-wrap gap-1.5">
                   {signIn ? (
-                    <button type="button" disabled={busy !== null} onClick={() => void run(`sign-in:${row.sourceId}`, () => onSignIn(row.targetId!))} className={button}>
+                    <button type="button" disabled={busy !== null} onClick={() => void run(`sign-in:${id}`, () => onSignIn(row.targetId!))} className={button}>
                       {row.state === "signed_out" ? t("transfer.accounts.signIn") : t("transfer.accounts.signInAgain")}
                     </button>
                   ) : null}
                   {retry ? (
-                    <button type="button" disabled={busy !== null} onClick={() => void run(`retry:${row.sourceId}`, () => onAction({ action: "retry", engine, sourceId: row.sourceId }))} className={button}>
+                    <button type="button" disabled={busy !== null} onClick={() => void run(`retry:${id}`, () => onAction({ action: "retry", ...address }))} className={button}>
                       {t("transfer.accounts.retry")}
                     </button>
                   ) : null}
                   {confirm ? (
-                    <button type="button" disabled={busy !== null} onClick={() => void run(`confirm:${row.sourceId}`, () => onAction({ action: "confirm_identity", engine, sourceId: row.sourceId }))} className={button}>
+                    <button type="button" disabled={busy !== null} onClick={() => void run(`confirm:${id}`, () => onAction({ action: "confirm_identity", ...address }))} className={button}>
                       {t("transfer.accounts.confirm")}
                     </button>
                   ) : null}
-                  <button type="button" disabled={busy !== null} onClick={() => void run(`skip:${row.sourceId}`, () => onAction({ action: "not_needed", engine, sourceId: row.sourceId }))} className={link}>
+                  <button type="button" disabled={busy !== null} onClick={() => void run(`skip:${id}`, () => onAction({ action: "not_needed", ...address }))} className={link}>
                     {t("transfer.accounts.notNeeded")}
                   </button>
                 </div>

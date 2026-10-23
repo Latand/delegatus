@@ -136,9 +136,30 @@ export function targetRoot(root: "state" | "config"): string {
   return root === "state" ? stateDir() : appConfigDir();
 }
 
-/** The target's file as text, or null when absent. */
-export function readTargetText(root: "state" | "config", relative: string): string | null {
-  return readText(path.join(targetRoot(root), relative));
+/** A target file as the import may read it. `unsupported` is a file that is
+    there and that the import never reads or replaces: a link, something other
+    than a regular file, or one past the size bound. Read as absent, it would be
+    planned as new and overwritten with a fresh skeleton. */
+export type TargetText =
+  | { kind: "absent" }
+  | { kind: "text"; text: string }
+  | { kind: "unsupported"; reason: "link" | "not-a-file" | "too-large" };
+
+export function readTargetText(root: "state" | "config", relative: string, limit = MAX_SETTINGS_FILE_BYTES): TargetText {
+  const file = path.join(targetRoot(root), relative);
+  let stat: fs.Stats;
+  try { stat = fs.lstatSync(file); }
+  catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return { kind: "absent" };
+    /* A parent that is a file: nothing can be written beneath it. */
+    if (code === "ENOTDIR") return { kind: "unsupported", reason: "not-a-file" };
+    throw error;
+  }
+  if (stat.isSymbolicLink()) return { kind: "unsupported", reason: "link" };
+  if (!stat.isFile()) return { kind: "unsupported", reason: "not-a-file" };
+  if (stat.size > limit) return { kind: "unsupported", reason: "too-large" };
+  return { kind: "text", text: fs.readFileSync(file, "utf8") };
 }
 
 /** A file's revision for the dry run: absent, or a hash of its bytes. A hash
@@ -147,6 +168,42 @@ export function readTargetText(root: "state" | "config", relative: string): stri
 export function fileRevision(root: "state" | "config", relative: string): string {
   try { return crypto.createHash("sha256").update(fs.readFileSync(path.join(targetRoot(root), relative))).digest("hex"); }
   catch { return "absent"; }
+}
+
+/** What is at a target path, without reading it. */
+export function targetFileKind(root: "state" | "config", relative: string): "absent" | "file" | "unsupported" {
+  try {
+    const stat = fs.lstatSync(path.join(targetRoot(root), relative));
+    return stat.isFile() ? "file" : "unsupported";
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return "absent";
+    if (code === "ENOTDIR") return "unsupported";
+    throw error;
+  }
+}
+
+/** Create a file that must not exist yet, whole or not at all: written aside,
+    then linked into place, which fails with EEXIST when anything holds the
+    name by then. A file system that refuses links gets an exclusive create
+    instead, which is exclusive too though a reader may see it partly written. */
+export function createFileExclusive(target: string, text: string): void {
+  fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+  const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${crypto.randomUUID()}.transfer.tmp`);
+  try {
+    fs.writeFileSync(temporary, text, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    fsyncPath(temporary);
+    try { fs.linkSync(temporary, target); }
+    catch (error) {
+      if (!["EPERM", "ENOTSUP", "EOPNOTSUPP", "EMLINK"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+      const descriptor = fs.openSync(target, "wx", 0o600);
+      try { fs.writeFileSync(descriptor, text, "utf8"); fs.fsyncSync(descriptor); }
+      finally { fs.closeSync(descriptor); }
+    }
+    fsyncPath(path.dirname(target));
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
 }
 
 /** Write through a temporary file and a rename, owner-only, then fsync the file and its directory. */

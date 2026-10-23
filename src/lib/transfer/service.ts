@@ -11,10 +11,14 @@ import type { TransferWorkerRequest, TransferWorkerResponse } from "./workerProt
 
 /* The serving Viewer's side of the transfer (docs/design/install-memory-transfer.md
    §4.1): every step runs in a worker process of its own under a helper lease,
-   attributed to a loop-monitor operation. The apply worker holds the account
-   mutation lock, which spawn admission also takes, so no launch is admitted
-   against a half-imported account set. A worker that dies mid-apply is recovered here
-   at once: committed imports are finished, uncommitted ones restored. */
+   attributed to a loop-monitor operation. For an apply the Viewer takes the
+   account mutation lock, which spawn admission also takes, and lends that
+   hold to its worker; it keeps the hold until the import is settled, so no
+   launch is admitted against a half-imported account set, not even in the
+   moment after a worker dies. A worker that dies mid-apply is recovered here
+   at once: committed imports are finished, uncommitted ones restored. A
+   recovery that fails keeps the hold and is tried again until it settles;
+   launches and further imports wait meanwhile. */
 
 const WORKER_TIMEOUT_MS = 15 * 60_000;
 
@@ -36,12 +40,11 @@ export interface ServiceOptions {
   env?: Record<string, string>;
   /** The recovery the Viewer runs after a failed apply; tests inject account deps. */
   recover?: () => Promise<RecoveryOutcome[]>;
+  /** Waits between attempts of a recovery that failed; the last repeats. */
+  recoveryRetryMs?: readonly number[];
 }
 
-async function recoverUnderAccountLock(recover: () => Promise<RecoveryOutcome[]> = () => recoverTransferImports()): Promise<RecoveryOutcome[]> {
-  const { withAccountMutationLockAsync } = await import("@/lib/accounts/accountMutation");
-  return withAccountMutationLockAsync(recover, { holder: "install transfer recovery" });
-}
+const RECOVERY_RETRY_MS = [5_000, 30_000, 120_000, 600_000] as const;
 
 async function runWorker(request: TransferWorkerRequest, options: ServiceOptions): Promise<{ response: TransferWorkerResponse | null; exit: string | null }> {
   const launch = options.launch ?? transferWorkerLaunch();
@@ -111,23 +114,50 @@ export async function previewBundle(bytes: Uint8Array, input: { mappings?: Recor
   });
 }
 
+type ApplyAnswer = TransferWorkerResponse & { recovered?: RecoveryOutcome[] };
+
+/** The apply in progress, with the recovery after it: set until both settled. */
 let applying: Promise<unknown> | null = null;
 
-export async function applyBundle(request: TransferImportRequest, options: ServiceOptions = {}): Promise<TransferWorkerResponse & { recovered?: RecoveryOutcome[] }> {
-  if (applying) return { ok: false, error: { code: "busy", message: "another import is being applied; wait for its report" } };
-  const run = viewerLoopMonitor.run("transfer.apply", async () => {
-    const { response, exit } = await runWorker({ operation: "apply", request }, options);
+export async function applyBundle(request: TransferImportRequest, options: ServiceOptions = {}): Promise<ApplyAnswer> {
+  if (applying) return { ok: false, error: { code: "busy", message: "another import is being applied or undone; wait for its report" } };
+  /* Answered once the hold is given back, or earlier when an undo fails and
+     the hold stays for its retries. */
+  let answer!: (value: ApplyAnswer) => void;
+  const answered = new Promise<ApplyAnswer>(resolve => { answer = resolve; });
+  const { withAccountMutationLeaseAsync } = await import("@/lib/accounts/accountMutation");
+  const run = viewerLoopMonitor.run("transfer.apply", () => withAccountMutationLeaseAsync(async (lease): Promise<ApplyAnswer> => {
+    const { response, exit } = await runWorker({ operation: "apply", request, lease }, options);
     if (response?.ok) return response;
     /* Whatever stopped the apply — the worker's death, or an error it
-       answered with after its commit — is settled now, under the lock spawn
-       admission takes, before any launch can be admitted against it:
-       uncommitted writes undone, committed work finished. */
-    const recovered = await viewerLoopMonitor.run("transfer.recover", () => recoverUnderAccountLock(options.recover));
-    return response ? { ...response, recovered } : stopped(exit!, recovered);
-  });
+       answered with after its commit — is settled now, still under the hold
+       spawn admission waits on: uncommitted writes undone, committed work finished. */
+    return settleUnderHold(response ?? stopped(exit!), answer, options);
+  }, { holder: "install transfer" }));
   applying = run;
-  try { return await run; }
-  finally { applying = null; }
+  void run.then(
+    final => { applying = null; answer(final); },
+    (error: unknown) => { applying = null; answer({ ok: false, error: { code: "failed", message: error instanceof Error ? error.message : String(error) } }); },
+  );
+  return answered;
+}
+
+/** Recovery under the hold the apply took, tried until it settles. A failed
+    attempt answers the caller at once with `recovery_pending`, and the hold
+    stays, so launches and further imports keep waiting. */
+async function settleUnderHold(failed: TransferWorkerResponse, early: (value: ApplyAnswer) => void, options: ServiceOptions): Promise<ApplyAnswer> {
+  const waits = options.recoveryRetryMs?.length ? options.recoveryRetryMs : RECOVERY_RETRY_MS;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      const recovered = await viewerLoopMonitor.run("transfer.recover", () => (options.recover ?? (() => recoverTransferImports()))());
+      return { ...failed, recovered };
+    } catch (error) {
+      const cause = error instanceof Error ? error.message : String(error);
+      console.error(`[transfer] the interrupted import could not be undone yet (attempt ${attempt + 1}); launches wait until it is: ${cause}`);
+      early({ ok: false, error: { code: "recovery_pending", message: `${failed.ok ? "the import" : failed.error.message}; undoing it failed (${cause}) and is retried, and no launch is admitted until it settles` } });
+      await new Promise(resolve => setTimeout(resolve, waits[Math.min(attempt, waits.length - 1)]));
+    }
+  }
 }
 
 export async function importReport(importId: string | undefined, options: ServiceOptions = {}): Promise<TransferWorkerResponse> {

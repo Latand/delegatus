@@ -34,8 +34,12 @@
  * dialog stays wholly on screen with its header and close control, the
  * checklist heading is whole at the top when it opens, and every row and
  * action is reachable by scrolling, unclipped and uncovered; the phone screen
- * and the Copilot list carry the same checklist, every action reachable at
- * 44 px. Shots land in
+ * carries the same checklist, every action reachable at 44 px. The Copilot
+ * list in the rail's footer is checked at 1280×860, 1024×640 and 707×744 as
+ * it opens, before anything scrolls (heading, «Check all» and the first
+ * action whole in the viewport and the list's box), then by wheel turns over
+ * the list alone, which must reach every row and control while nothing else
+ * scrolls. Shots land in
  * <tmp>/llv-issue-1418-latest/out/1418-<surface>-<engine>.png and are never
  * committed: the privacy gate refuses rasters.
  */
@@ -62,6 +66,8 @@ const OUT_DIR = path.join(BASE, "out");
 const CODEX_STUB = path.join(BASE, "bin", "codex");
 const DESKTOP = { width: 1280, height: 860 };
 const INTERMEDIATE = { width: 1024, height: 640 };
+/** A narrow desktop window the rail still shows in, where the Copilot list once ran under the lower edge. */
+const NARROW = { width: 707, height: 744 };
 const PHONE = { width: 390, height: 844 };
 const DAY = 86_400;
 
@@ -223,7 +229,7 @@ async function seedImportedAccounts(): Promise<void> {
   initializeStateCollections(database, [TRANSFER_ACCOUNTS_SEED]);
   const collection = new SqliteStateCollection<Record<string, unknown>>(database, {
     collection: TRANSFER_ACCOUNTS_SEED.collection, schemaVersion: 1, busyMessage: "transfer accounts busy",
-    key: (value) => `${String(value.engine)}:${String(value.sourceId)}`, decode: (value) => value as Record<string, unknown>, clone: structuredClone,
+    key: (value) => TRANSFER_ACCOUNTS_SEED.key(value as never), decode: (value) => value as Record<string, unknown>, clone: structuredClone,
   });
   try { collection.patchSync(() => ({ records: rows })); } finally { collection.close(); }
 }
@@ -436,6 +442,80 @@ async function reachability(page: Page, container: string, closeControl: string 
   }, { selector: container, close: closeControl });
 }
 
+/**
+ * The Copilot list as it opens in the rail's footer, then as the operator
+ * scrolls it with the wheel. At the opening, before anything scrolls: the
+ * list lies wholly in the viewport, and the checklist heading, «Check all» and
+ * the first row's text sit wholly inside the viewport and the list's own clip
+ * box. Then every checklist row, every action and the list's last control are
+ * reached by wheel turns over the list alone: each lies inside both boxes, is
+ * hit at its centre, and nothing but the list itself has scrolled (no
+ * programmatic scrollIntoView, which would scroll the whole page instead).
+ */
+async function copilotReachability(page: Page, list: string): Promise<string[]> {
+  const opening = await page.evaluate((selector) => {
+    const problems: string[] = [];
+    const panel = document.querySelector(`${selector} [data-copilot-panel]`) as HTMLElement | null;
+    if (!panel) return ["no Copilot list opened"];
+    const viewport = { top: 0, bottom: window.innerHeight };
+    const box = panel.getBoundingClientRect();
+    if (box.top < -0.5 || box.bottom > viewport.bottom + 0.5) problems.push(`the list spans ${Math.round(box.top)}..${Math.round(box.bottom)} in a ${window.innerHeight}px viewport`);
+    const style = getComputedStyle(panel);
+    if (!/(auto|scroll)/.test(style.overflowY)) problems.push(`the list does not scroll (overflow-y ${style.overflowY})`);
+    const textBox = (element: Element) => { const range = document.createRange(); range.selectNodeContents(element); return range.getBoundingClientRect(); };
+    const whole = (element: Element | null | undefined, name: string) => {
+      if (!element) { problems.push(`no ${name}`); return; }
+      const text = textBox(element);
+      const top = Math.max(viewport.top, box.top), bottom = Math.min(viewport.bottom, box.bottom);
+      if (text.top < top - 0.5 || text.bottom > bottom + 0.5) problems.push(`${name} text is at ${text.top.toFixed(2)}..${text.bottom.toFixed(2)}, outside ${top.toFixed(2)}..${bottom.toFixed(2)} at the opening`);
+    };
+    const checklist = panel.querySelector("[data-transfer-checklist]");
+    whole(checklist?.querySelector("h3"), "the checklist heading");
+    whole(checklist?.querySelector("h3")?.parentElement?.querySelector("button"), "«Check all»");
+    whole(checklist?.querySelector("[data-transfer-account] button"), "the first row's first action");
+    return problems;
+  }, list);
+  const panel = page.locator(`${list} [data-copilot-panel]`);
+  const box = await panel.boundingBox();
+  if (!box) return [...opening, "the Copilot list has no box"];
+  await page.mouse.move(box.x + box.width / 2, box.y + Math.min(box.height / 2, 40));
+  /* Every checklist row and every control of the list, in document order. */
+  const TARGETS = "[data-transfer-checklist] [data-transfer-account], button, input";
+  const targets = await page.evaluate(({ selector, targets }) => document.querySelector(`${selector} [data-copilot-panel]`)!.querySelectorAll(targets).length, { selector: list, targets: TARGETS });
+  const problems = [...opening];
+  for (let index = 0; index < targets; index += 1) {
+    for (let turn = 0; turn < 40; turn += 1) {
+      const where = await page.evaluate(({ selector, index, targets }) => {
+        const panel = document.querySelector(`${selector} [data-copilot-panel]`) as HTMLElement;
+        const target = panel.querySelectorAll(targets)[index]!;
+        const rect = target.getBoundingClientRect(), clip = panel.getBoundingClientRect();
+        return rect.top < Math.max(0, clip.top) - 0.5 ? -1 : rect.bottom > Math.min(window.innerHeight, clip.bottom) + 0.5 ? 1 : 0;
+      }, { selector: list, index, targets: TARGETS });
+      if (where === 0) break;
+      await page.mouse.wheel(0, where * 60);
+      await page.waitForTimeout(30);
+    }
+    problems.push(...await page.evaluate(({ selector, index, targets }) => {
+      const found: string[] = [];
+      const panel = document.querySelector(`${selector} [data-copilot-panel]`) as HTMLElement;
+      const target = panel.querySelectorAll(targets)[index]! as HTMLElement;
+      const name = `${target.tagName === "BUTTON" ? `«${(target.textContent ?? "").trim()}»` : target.tagName === "INPUT" ? "the label field" : `row ${target.getAttribute("data-transfer-account")}`}`;
+      const rect = target.getBoundingClientRect(), clip = panel.getBoundingClientRect();
+      if (rect.top < Math.max(0, clip.top) - 0.5 || rect.bottom > Math.min(window.innerHeight, clip.bottom) + 0.5) found.push(`${name} is cut at ${Math.round(rect.top)}..${Math.round(rect.bottom)} after scrolling the list`);
+      else {
+        const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        if (!hit || !(hit === target || target.contains(hit))) found.push(`${name} is covered at its centre`);
+      }
+      for (let node: HTMLElement | null = panel.parentElement; node; node = node.parentElement) {
+        if (node.scrollTop !== 0) found.push(`${node.tagName.toLowerCase()} scrolled by ${node.scrollTop}px: only the list may`);
+      }
+      if ((document.scrollingElement?.scrollTop ?? 0) !== 0) found.push("the page scrolled");
+      return found;
+    }, { selector: list, index, targets: TARGETS }));
+  }
+  return [...new Set(problems)];
+}
+
 interface EngineFacts {
   engine: string;
   cards: number;
@@ -633,7 +713,7 @@ async function main(): Promise<void> {
     for (const [locale, colorScheme] of [["en", "light"], ["uk", "dark"]] as const) {
       const write = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale, source: "chosen" }) });
       if (!write.ok) throw new Error(`the interface language write answered ${write.status}`);
-      for (const [size, viewport] of [["desktop", DESKTOP], ["short", INTERMEDIATE]] as const) {
+      for (const [size, viewport] of [["desktop", DESKTOP], ["short", INTERMEDIATE], ["narrow", NARROW]] as const) {
         const context = await browser.newContext({ viewport, colorScheme, reducedMotion: "reduce" });
         await context.addInitScript((lang: string) => { localStorage.setItem("llv_lang", lang); }, locale);
         const page = await context.newPage();
@@ -641,7 +721,7 @@ async function main(): Promise<void> {
         /* The first-run install-ping notice sits over the dialog's lower edge. */
         const notice = page.locator("[data-telemetry-notice] button", { hasText: locale === "en" ? "Got it" : "Зрозуміло" });
         if (await notice.waitFor({ state: "visible", timeout: 5_000 }).then(() => true, () => false)) await notice.click();
-        for (const engine of ["Codex", "Claude"] as const) {
+        for (const engine of size === "narrow" ? [] : ["Codex", "Claude"] as const) {
           await page.click(TRIGGER[locale](engine));
           await page.waitForSelector(CHECKLIST_DIALOG);
           await page.waitForSelector(`${CHECKLIST_DIALOG} [data-account-limits]`, { timeout: 30_000 });
@@ -656,16 +736,18 @@ async function main(): Promise<void> {
           await page.keyboard.press("Escape");
           await page.waitForSelector(CHECKLIST_DIALOG, { state: "detached" });
         }
-        if (size === "desktop") {
+        {
           await page.click(COPILOT_ROW[locale]);
           const list = '[data-engine-limits="copilot"]';
           await page.waitForSelector(`${list} [data-transfer-checklist="copilot"]`, { timeout: 30_000 });
-          const where = `Copilot list transfer checklist (${locale}, ${colorScheme})`;
+          await page.waitForTimeout(250);
+          const where = `${size} Copilot list transfer checklist (${locale}, ${colorScheme})`;
           checkChecklist(where, "copilot", locale, await checklistFacts(page, list));
-          problems.push(...(await reachability(page, list, null)).map((problem) => `${where}: ${problem}`));
-          const file = `1418-desktop-copilot-transfer-${locale}-${colorScheme}.png`;
-          await page.screenshot({ path: path.join(OUT_DIR, file) });
-          console.log(`  ${file}`);
+          const base = `1418-${size}-copilot-transfer-${locale}-${colorScheme}`;
+          await page.screenshot({ path: path.join(OUT_DIR, `${base}-open.png`) });
+          problems.push(...(await copilotReachability(page, list)).map((problem) => `${where}: ${problem}`));
+          await page.screenshot({ path: path.join(OUT_DIR, `${base}-scrolled.png`) });
+          console.log(`  ${base}-open.png, ${base}-scrolled.png`);
         }
         await context.close();
       }

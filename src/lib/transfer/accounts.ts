@@ -130,7 +130,11 @@ export interface ImportedAccountRow {
 }
 
 export const TRANSFER_ACCOUNTS_COLLECTION = "transfer_accounts";
-export const TRANSFER_ACCOUNTS_SEED = { collection: TRANSFER_ACCOUNTS_COLLECTION, schemaVersion: 1, migrationId: "transfer-accounts-v1", key: (row: ImportedAccountRow) => `${row.engine}:${row.sourceId}`, loadRecords: (): ImportedAccountRow[] => [] };
+/** One row per account here and the source account it stands for: a source id
+    seen again in a later import maps to the same row only when it maps to the
+    same account here, so an earlier row is never answered for another login. */
+export const transferAccountKey = (row: Pick<ImportedAccountRow, "engine" | "sourceId" | "targetId">) => `${row.engine}:${row.sourceId}:${row.targetId ?? "-"}`;
+export const TRANSFER_ACCOUNTS_SEED = { collection: TRANSFER_ACCOUNTS_COLLECTION, schemaVersion: 1, migrationId: "transfer-accounts-v1", key: transferAccountKey, loadRecords: (): ImportedAccountRow[] => [] };
 const SEED = TRANSFER_ACCOUNTS_SEED;
 
 function collection(create: boolean): SqliteStateCollection<ImportedAccountRow> | null {
@@ -222,14 +226,19 @@ export function unavailableAccountId(sourceId: string): string {
 
 /** What apply will do with each account, against this install now. Read-only.
     A target account stands in for a source account only when it is proven to
-    be the same: one an earlier import of this source made, or the same id
-    signed into the same identity. Anything else gets an account of its own. */
+    be the same: the account an import of this very export made (the same
+    bundle again), or one signed in here into the identity this export
+    reports. A row an earlier import left is no proof by itself: the same
+    source id can name another login on another install, or after the source
+    signed in again, and each export salts its identity hash anew, so an
+    earlier hash cannot be compared with this one. Anything else gets an
+    account of its own. */
 export async function planAccounts(records: readonly StoredRow[], exportId: string, deps: AccountTargetDeps = {}): Promise<AccountPlan[]> {
   const list = deps.list ?? listTarget;
   const identity = deps.identity ?? productionIdentityReader;
   const accounts = records.filter(row => row.key.startsWith("account:")).map(row => row.value as AccountRecordValue);
   const bindings = records.filter(row => row.key.startsWith("binding:")).map(row => row.value as BindingRecordValue);
-  const previous = new Map(importedAccountRows().map(row => [`${row.engine}:${row.sourceId}`, row] as const));
+  const previous = importedAccountRows();
   const sameIdentity = async (account: AccountRecordValue, candidate: TargetAccount) =>
     !!account.identity && candidate.signedIn && identityHash(exportId, await identity(account.engine, candidate)) === account.identity;
   const plans: AccountPlan[] = [];
@@ -237,13 +246,18 @@ export async function planAccounts(records: readonly StoredRow[], exportId: stri
     const here = await list(account.engine);
     const bound = bindings.filter(binding => binding.engine === account.engine && binding.accountId === account.id).map(binding => binding.project);
     const base = { engine: account.engine, sourceId: account.id, label: account.label, kind: account.kind, sourceActive: account.active, bindings: bound };
-    const earlier = previous.get(`${account.engine}:${account.id}`);
-    if (earlier?.targetId && here.some(candidate => candidate.id === earlier.targetId)) {
-      plans.push({ ...base, action: "existing", plannedId: earlier.targetId });
-      continue;
+    const earlier = previous.filter(row => row.engine === account.engine && row.sourceId === account.id && row.targetId);
+    /* This export again: the account its earlier import made, or the reservation it has not made yet. */
+    const replay = earlier.find(row => row.exportId === exportId && row.identity === account.identity);
+    if (replay && here.some(candidate => candidate.id === replay.targetId)) { plans.push({ ...base, action: "existing", plannedId: replay.targetId }); continue; }
+    if (replay?.pendingCreate) { plans.push({ ...base, action: "create", plannedId: replay.targetId }); continue; }
+    /* Another export: an account an earlier import made stands in only when it is signed into this export's identity. */
+    let proven: string | null = null;
+    for (const row of earlier) {
+      const candidate = here.find(entry => entry.id === row.targetId);
+      if (candidate && await sameIdentity(account, candidate)) { proven = candidate.id; break; }
     }
-    /* An earlier import reserved an id and has not made the account yet: the same reservation. */
-    if (earlier?.pendingCreate && earlier.targetId) { plans.push({ ...base, action: "create", plannedId: earlier.targetId }); continue; }
+    if (proven) { plans.push({ ...base, action: "existing", plannedId: proven }); continue; }
     if (account.engine === "claude" && account.provider) {
       plans.push({ ...base, action: "skip", plannedId: null, reason: "provider-account" });
       continue;
@@ -289,28 +303,32 @@ export async function releaseReservation(engine: TransferEngine, id: string, dep
     reservations, so no binding ever falls back to a source id. */
 export async function accountCommitRows(importId: string, exportId: string, records: readonly StoredRow[], plans: readonly AccountPlan[], options: { now: string; canonical: (project: string) => string; deps?: AccountTargetDeps }): Promise<{ rows: ImportedAccountRow[]; bindings: { engine: "claude" | "codex"; accountId: string; project: string; createdAt: string }[] }> {
   const list = options.deps?.list ?? listTarget;
-  const previous = new Map(importedAccountRows().map(row => [`${row.engine}:${row.sourceId}`, row] as const));
+  const previous = importedAccountRows();
   const accounts = new Map(records.filter(row => row.key.startsWith("account:")).map(row => [row.key, row.value as AccountRecordValue] as const));
   const mapped = new Map<string, string>();
   const rows: ImportedAccountRow[] = [];
   for (const plan of plans) {
     const source = accounts.get(`account:${plan.engine}:${plan.sourceId}`)!;
-    const earlier = previous.get(`${plan.engine}:${plan.sourceId}`);
     const targetId = plan.action === "skip" ? null : plan.plannedId;
+    /* Only this same export may keep what a check settled: its identity hash is
+       the one that check compared. Any other export is checked anew, and a
+       confirmation given for one login never carries to another. */
+    const earlier = targetId === null ? undefined : previous.find(row => row.engine === plan.engine && row.sourceId === plan.sourceId && row.targetId === targetId
+      && row.exportId === exportId && row.identity === source.identity);
     let state: ImportedAccountRow["state"] = "signed_out";
     let detail: string | undefined = plan.action === "skip" ? plan.reason : undefined;
     if (plan.action === "skip") state = "not_created";
     else if (plan.action !== "create") {
-      /* A signed-in account waits for its live read; a re-import keeps the state a check already settled. */
+      /* A signed-in account waits for its live read. */
       const signedIn = (await list(plan.engine)).find(candidate => candidate.id === targetId)?.signedIn ?? false;
-      if (earlier?.targetId === targetId && earlier.state !== "not_created") { state = earlier.state; detail = earlier.detail; }
+      if (earlier && earlier.state !== "not_created") { state = earlier.state; detail = earlier.detail; }
       else if (signedIn) state = "unchecked";
     }
     mapped.set(`${plan.engine}:${plan.sourceId}`, targetId ?? unavailableAccountId(plan.sourceId));
     rows.push({ kind: "account", importId, exportId, engine: plan.engine, sourceId: plan.sourceId, targetId, label: plan.label, sourceKind: plan.kind,
       activeOnSource: plan.sourceActive, identity: source.identity, bindings: plan.bindings, state, ...(detail ? { detail } : {}),
       ...(plan.action === "create" ? { pendingCreate: true } : {}),
-      ...(earlier?.targetId === targetId && earlier.confirmedDifferent ? { confirmedDifferent: true } : {}) });
+      ...(earlier?.confirmedDifferent ? { confirmedDifferent: true } : {}) });
   }
   const bindings = records.filter(row => row.key.startsWith("binding:")).map(row => row.value as BindingRecordValue).map(binding => ({
     engine: binding.engine,
@@ -324,9 +342,22 @@ export async function accountCommitRows(importId: string, exportId: string, reco
 /** After the commit, and again at recovery: make every reserved account of
     this import. A failed setup leaves its row «Not created» with the cause and
     its reservation, which «Try again» and the next recovery take up. */
-export async function finishAccountCreation(filter: { importId?: string; engine?: TransferEngine; sourceId?: string }, deps: AccountTargetDeps = {}): Promise<ImportedAccountRow[]> {
+/** Which checklist rows an action names: an engine, a source id, and the account here it maps to. */
+export interface AccountRowFilter { engine?: TransferEngine; sourceId?: string; targetId?: string | null }
+
+const matches = (row: ImportedAccountRow, filter: AccountRowFilter) => (!filter.engine || row.engine === filter.engine)
+  && (!filter.sourceId || row.sourceId === filter.sourceId) && (filter.targetId === undefined || row.targetId === filter.targetId);
+
+/** The one row an action on one account names; null when none, or when a
+    source id alone names more than one (two imports mapped it to two accounts). */
+function oneRow(filter: AccountRowFilter): ImportedAccountRow | null {
+  const found = importedAccountRows().filter(row => matches(row, filter));
+  return found.length === 1 ? found[0]! : null;
+}
+
+export async function finishAccountCreation(filter: AccountRowFilter & { importId?: string }, deps: AccountTargetDeps = {}): Promise<ImportedAccountRow[]> {
   const pending = importedAccountRows().filter(row => row.pendingCreate && row.targetId
-    && (!filter.importId || row.importId === filter.importId) && (!filter.engine || row.engine === filter.engine) && (!filter.sourceId || row.sourceId === filter.sourceId));
+    && (!filter.importId || row.importId === filter.importId) && matches(row, filter));
   const done: ImportedAccountRow[] = [];
   for (const row of pending) {
     try {
@@ -345,23 +376,60 @@ export async function finishAccountCreation(filter: { importId?: string; engine?
 
 /* ── Verification ────────────────────────────────────────────────────── */
 
+/** What one limit read observed, as the verification judges it (§5.2). */
+export interface LimitsEvidence {
+  authenticated: boolean;
+  /** Where the numbers came from: only `live` is the provider's answer to this read. */
+  source: string;
+  staleSince: string | null;
+  observedAt: string;
+  plan: string | null;
+  windows: boolean;
+}
+
+export type LimitsRead = { ok: true; evidence: LimitsEvidence } | { ok: false; detail: string };
+
 export interface VerifyDeps {
   list?: (engine: TransferEngine) => Promise<TargetAccount[]>;
   identity?: IdentityReader;
-  /** The live limit read; production is `refreshAccountLimits` with phase `transfer-verify`. */
-  readLimits?: (engine: "claude" | "codex", accountId: string) => Promise<{ ok: true; windows: boolean; authenticated: boolean } | { ok: false; detail: string }>;
+  /** The live limit read; production is {@link transferLimitsReader}. */
+  readLimits?: (engine: "claude" | "codex", accountId: string) => Promise<LimitsRead>;
   select?: (engine: TransferEngine, accountId: string) => Promise<void>;
   now?: () => Date;
 }
 
-async function readLimitsLive(engine: "claude" | "codex", accountId: string) {
-  const { refreshAccountLimits } = await import("@/lib/accounts/liveLimits");
-  const result = await refreshAccountLimits(engine, accountId, { phase: "transfer-verify" });
-  if (result.kind === "refreshed") {
-    const limits = result.observation.limits as { session?: unknown; weekly?: unknown } | null;
-    return { ok: true as const, authenticated: result.observation.authenticated, windows: !!limits && !!(limits.session || limits.weekly) };
-  }
-  return { ok: false as const, detail: result.kind === "unknown_account" ? "unknown account" : result.detail };
+/** How old the observation a verification read may be: it is taken by that read. */
+export const VERIFY_OBSERVATION_MAX_AGE_MS = 2 * 60_000;
+
+/** The production read: `refreshAccountLimits` with phase `transfer-verify`,
+    its observation handed on whole, so a reading the provider did not give
+    now (a cached or carried one, one without a plan) cannot pass for one. */
+export function transferLimitsReader(liveDeps: import("@/lib/accounts/liveLimits").LiveLimitsDeps = {}) {
+  return async (engine: "claude" | "codex", accountId: string): Promise<LimitsRead> => {
+    const { refreshAccountLimits } = await import("@/lib/accounts/liveLimits");
+    const result = await refreshAccountLimits(engine, accountId, { ...liveDeps, phase: "transfer-verify" });
+    if (result.kind !== "refreshed") return { ok: false, detail: result.kind === "unknown_account" ? "unknown account" : result.detail };
+    const { observation } = result;
+    const limits = observation.limits;
+    return { ok: true, evidence: {
+      authenticated: observation.authenticated,
+      source: observation.provenance.source,
+      staleSince: observation.provenance.staleSince,
+      observedAt: observation.observedAt,
+      plan: limits?.plan ?? null,
+      windows: !!limits && !!(limits.session || limits.weekly),
+    } };
+  };
+}
+
+/** Why a read is no evidence that the account works here, or null when it is. */
+function limitsRefusal(evidence: LimitsEvidence, now: number): string | null {
+  if (evidence.source !== "live" || evidence.staleSince !== null) return "limits-not-live";
+  const age = now - Date.parse(evidence.observedAt);
+  if (!Number.isFinite(age) || age > VERIFY_OBSERVATION_MAX_AGE_MS || age < -VERIFY_OBSERVATION_MAX_AGE_MS) return "limits-stale";
+  if (!evidence.plan?.trim()) return "no-plan";
+  if (!evidence.windows) return "no-limit-windows";
+  return null;
 }
 
 async function selectLive(engine: TransferEngine, accountId: string) {
@@ -371,16 +439,19 @@ async function selectLive(engine: TransferEngine, accountId: string) {
 
 /** One account's §5.2 check: signed in, its limits read live with a plan and windows, its identity the source's. */
 export async function verifyImportedAccount(row: ImportedAccountRow, deps: VerifyDeps = {}): Promise<ImportedAccountRow> {
-  const now = (deps.now ?? (() => new Date()))().toISOString();
+  const clock = (deps.now ?? (() => new Date()))();
+  const now = clock.toISOString();
   if (row.state === "not_needed" || row.state === "not_created" || !row.targetId) return row;
   const account = (await (deps.list ?? listTarget)(row.engine)).find(candidate => candidate.id === row.targetId);
   if (!account) return { ...row, state: "not_created", detail: "account-missing", checkedAt: now };
   if (!account.signedIn) return { ...row, state: "signed_out", detail: undefined, checkedAt: now };
   if (row.engine !== "copilot") {
-    const read = await (deps.readLimits ?? readLimitsLive)(row.engine, row.targetId);
+    const read = await (deps.readLimits ?? transferLimitsReader())(row.engine, row.targetId);
     if (!read.ok) return { ...row, state: "read_failed", detail: read.detail, checkedAt: now };
-    if (!read.authenticated) return { ...row, state: "signed_out", detail: undefined, checkedAt: now };
-    if (!read.windows) return { ...row, state: "read_failed", detail: "no-limit-windows", checkedAt: now };
+    if (!read.evidence.authenticated) return { ...row, state: "signed_out", detail: undefined, checkedAt: now };
+    /* §5.2: usable means this read returned a fresh observation with a plan and windows. */
+    const refusal = limitsRefusal(read.evidence, clock.getTime());
+    if (refusal) return { ...row, state: "read_failed", detail: refusal, checkedAt: now };
   }
   /* The source reported an identity: this account is the same one only when
      the provider says so here too. An identity this install cannot read is no
@@ -397,8 +468,8 @@ export async function verifyImportedAccount(row: ImportedAccountRow, deps: Verif
   return usable;
 }
 
-export async function verifyImportedAccounts(filter: { engine?: TransferEngine; sourceId?: string } = {}, deps: VerifyDeps = {}): Promise<ImportedAccountRow[]> {
-  const rows = importedAccountRows().filter(row => (!filter.engine || row.engine === filter.engine) && (!filter.sourceId || row.sourceId === filter.sourceId));
+export async function verifyImportedAccounts(filter: AccountRowFilter = {}, deps: VerifyDeps = {}): Promise<ImportedAccountRow[]> {
+  const rows = importedAccountRows().filter(row => matches(row, filter));
   const checked: ImportedAccountRow[] = [];
   for (const row of rows) checked.push(await verifyImportedAccount(row, deps));
   putRows(checked);
@@ -406,8 +477,8 @@ export async function verifyImportedAccounts(filter: { engine?: TransferEngine; 
 }
 
 /** The operator's two answers on a row: «not needed here», and «this is the right account» for a different identity. */
-export function markImportedAccount(engine: TransferEngine, sourceId: string, mark: "not_needed" | "confirm_identity"): ImportedAccountRow | null {
-  const row = importedAccountRows().find(candidate => candidate.engine === engine && candidate.sourceId === sourceId);
+export function markImportedAccount(engine: TransferEngine, sourceId: string, mark: "not_needed" | "confirm_identity", targetId?: string | null): ImportedAccountRow | null {
+  const row = oneRow({ engine, sourceId, targetId });
   if (!row) return null;
   /* «Not needed here» also stops the account from being made later; its reservation and bindings stay, so its projects still park. */
   const next: ImportedAccountRow = mark === "not_needed" ? { ...row, state: "not_needed" } : { ...row, confirmedDifferent: true };
@@ -417,20 +488,21 @@ export function markImportedAccount(engine: TransferEngine, sourceId: string, ma
 }
 
 /** «Try again» on a row whose account could not be made: the same reserved id. */
-export async function retryImportedAccount(engine: TransferEngine, sourceId: string, deps: AccountTargetDeps = {}): Promise<ImportedAccountRow | null> {
-  const row = importedAccountRows().find(candidate => candidate.engine === engine && candidate.sourceId === sourceId);
+export async function retryImportedAccount(engine: TransferEngine, sourceId: string, deps: AccountTargetDeps = {}, targetId?: string | null): Promise<ImportedAccountRow | null> {
+  const row = oneRow({ engine, sourceId, targetId });
   if (!row) return null;
   if (!row.pendingCreate) return row;
   const { withAccountMutationLockAsync } = await import("@/lib/accounts/accountMutation");
-  const [done] = await withAccountMutationLockAsync(() => finishAccountCreation({ engine, sourceId }, deps), { holder: "install transfer account retry" });
+  const [done] = await withAccountMutationLockAsync(() => finishAccountCreation({ engine, sourceId, targetId: row.targetId }, deps), { holder: "install transfer account retry" });
   return done ?? row;
 }
 
 /** A signed-in account settles its checklist row at once (called after a login's own live read). */
 export async function settleImportedAccountSignIn(engine: TransferEngine, targetId: string, deps: VerifyDeps = {}): Promise<void> {
-  const row = importedAccountRows().find(candidate => candidate.engine === engine && candidate.targetId === targetId);
-  if (!row || row.state === "not_needed") return;
-  putRows([await verifyImportedAccount(row, deps)]);
+  const rows = importedAccountRows().filter(candidate => candidate.engine === engine && candidate.targetId === targetId && candidate.state !== "not_needed");
+  const checked: ImportedAccountRow[] = [];
+  for (const row of rows) checked.push(await verifyImportedAccount(row, deps));
+  putRows(checked);
 }
 
 export function accountReportRows(rows: readonly ImportedAccountRow[] = importedAccountRows()): AccountReportRow[] {

@@ -16,13 +16,13 @@ import { assertStateStartupMutation } from "@/lib/stateOwnership";
 
 import {
   accountCommitRows, accountReportRows, accountsReady, finishAccountCreation, importedAccountRows, initializeImportedAccountRows, planAccounts, releaseReservation,
-  reserveAccounts, TRANSFER_ACCOUNTS_COLLECTION, validAccountRecord, type AccountTargetDeps, type TransferEngine,
+  reserveAccounts, TRANSFER_ACCOUNTS_COLLECTION, transferAccountKey, validAccountRecord, type AccountTargetDeps, type TransferEngine,
 } from "./accounts";
 import { decodeBundle, splitRecordKey } from "./bundle";
 import { remapText, resolveAliasChain } from "./projectKeys";
 import { planRoleMemory, scopeFigures, validRoleRecord } from "./roleMemory";
 import { partById, PARTS, type MapPart, type Part, type RowsPart } from "./sections";
-import { fileRevision, legacyStoreImported, readTargetRows, readTargetText, targetRoot, writeFileAtomic, type StoredRow } from "./stores";
+import { createFileExclusive, fileRevision, legacyStoreImported, readTargetRows, readTargetText, targetFileKind, targetRoot, writeFileAtomic, type StoredRow } from "./stores";
 import {
   isSectionName,
   type AccountPlan, type BundleProject, type DecodedBundle, type ProjectPlan, type RedoItem, type ScopeFigures,
@@ -38,7 +38,7 @@ import {
    it leaves this install as it was. */
 
 export class TransferImportError extends Error {
-  constructor(readonly code: "not_staged" | "target_changed" | "bad_mapping" | "unknown_import" | "target_unreadable", message: string) {
+  constructor(readonly code: "not_staged" | "target_changed" | "bad_mapping" | "unknown_import" | "target_unreadable" | "recovery_unreadable", message: string) {
     super(message);
     this.name = "TransferImportError";
   }
@@ -63,6 +63,36 @@ function allocate(): void {
 function writeAtomic(target: string, text: string): void {
   allocate();
   writeFileAtomic(target, text);
+}
+
+/** `LLV_TRANSFER_TEST_SPLIT_ROOTS=1`: the state and config roots behave as two
+    file systems, so a link or rename from one into the other fails as it does
+    there (EXDEV). */
+function crossesRoots(from: string, to: string): boolean {
+  if (process.env.NODE_ENV !== "test" || process.env.LLV_TRANSFER_TEST_SPLIT_ROOTS !== "1") return false;
+  const rootOf = (file: string) => {
+    const state = stateDir();
+    return file === state || file.startsWith(`${state}${path.sep}`) ? "state" : "config";
+  };
+  return rootOf(from) !== rootOf(to);
+}
+function crossDevice(): never {
+  throw Object.assign(new Error("EXDEV: cross-device link not permitted (injected)"), { code: "EXDEV" });
+}
+function linkFile(from: string, to: string): void {
+  if (crossesRoots(from, to)) crossDevice();
+  fs.linkSync(from, to);
+}
+function moveFile(from: string, to: string): void {
+  if (crossesRoots(from, to)) crossDevice();
+  fs.renameSync(from, to);
+}
+
+/** `LLV_TRANSFER_TEST_READ_FAULT`: the recovery metadata read fails as an I/O error does. */
+function readFault(what: "journal" | "imports"): void {
+  if (process.env.NODE_ENV === "test" && process.env.LLV_TRANSFER_TEST_READ_FAULT === what) {
+    throw Object.assign(new Error("EIO: i/o error (injected)"), { code: "EIO" });
+  }
 }
 
 function dieForTest(): never {
@@ -90,6 +120,11 @@ export interface LedgerRow {
   pending: { part: string; key: string; value: unknown }[];
   /** Fresh rule version id → the source's rule id. */
   versions: Record<string, string>;
+  /** The bundle records this import did not apply, by record id: skipped, or
+      a conflict where this install kept its own value. It applied every other
+      record of the bundle. A later import of the same bundle plans only the
+      records no earlier import of it applied (§4.8). */
+  unapplied?: string[];
   /** The source's history of every scope merged into one this install already had. */
   scopeHistories: Record<string, unknown[]>;
   accounts: AccountPlan[];
@@ -237,6 +272,9 @@ export type FileChange =
 
 interface PlannedFile { root: "state" | "config"; relative: string; text: string; changes: FileChange[] | null }
 
+/** A record on its way to the target: its key and value remapped, its id as the bundle holds it. */
+type PlanRow = StoredRow & { rid: string };
+
 interface PlannedWrites {
   rows: Map<string, { part: RowsPart | null; records: { key: string; value: unknown }[] }>;
   files: Map<string, PlannedFile>;
@@ -252,7 +290,9 @@ interface PlannedWrites {
   /** The source's history of each scope merged into an existing one, kept in the import record. */
   scopeHistories: Record<string, unknown[]>;
   /** Account and binding records, project keys remapped, applied after the commit. */
-  accountRecords: StoredRow[];
+  accountRecords: PlanRow[];
+  /** Scopes whose record an earlier import of this bundle applied (§4.8): checked then. */
+  scopesImportedBefore: Set<string>;
 }
 
 interface Built {
@@ -265,8 +305,26 @@ function emptySectionPlan(name: string, records: number, replace: boolean): Sect
   return { name, records, new: 0, same: 0, conflict: 0, skipped: 0, skippedReasons: {}, conflicts: [], pending: 0, replace };
 }
 
+/** The bundle records each section plan does not apply, by record id
+    (`<section>|<part>|<key>` as the bundle holds it): the ones it skips, and
+    the conflicts where this install keeps its own value, so nothing of the
+    record is written. A later import of the same bundle may still apply
+    these, a section's «take the source's» included; every other record of
+    it has arrived. */
+const unappliedRecords = new WeakMap<SectionPlan, Set<string>>();
+
+function unapplied(plan: SectionPlan, rid: string): void {
+  const held = unappliedRecords.get(plan) ?? new Set<string>();
+  held.add(rid);
+  unappliedRecords.set(plan, held);
+}
+
+/** A bundle record's id, before any project key is remapped. */
+const recordId = (record: { s: string; k: string }) => `${record.s}|${record.k}`;
+
 function count(plan: SectionPlan, outcome: "new" | "same" | "conflict" | "skipped", key: string, detail?: string, action?: SectionPlan["conflicts"][number]["action"]) {
   plan[outcome] += 1;
+  if (outcome === "skipped") unapplied(plan, key);
   if (outcome === "skipped") plan.skippedReasons[detail ?? "skipped"] = (plan.skippedReasons[detail ?? "skipped"] ?? 0) + 1;
   if (outcome === "conflict") plan.conflicts.push({ key, action: action ?? "kept-target" });
 }
@@ -295,26 +353,41 @@ export function buildPlan(decoded: DecodedBundle, request: { mappings?: Record<s
   const projectTarget = new Map(projectPlans.map(project => [project.key, project.target ?? project.key] as const));
   const remap = (text: string) => remapText(text, key => projectTarget.get(key) ?? key);
   const revisions: Record<string, string> = {};
-  const writes: PlannedWrites = { rows: new Map(), files: new Map(), pending: [], versions: {}, aliases: [], roleRowsAfter: [], sourceActive: new Map(), keptAsVersion: new Set(), scopeHistories: {}, accountRecords: [] };
+  const writes: PlannedWrites = { rows: new Map(), files: new Map(), pending: [], versions: {}, aliases: [], roleRowsAfter: [], sourceActive: new Map(), keptAsVersion: new Set(), scopeHistories: {}, accountRecords: [], scopesImportedBefore: new Set() };
   const sectionPlans = new Map<string, SectionPlan>();
   const unknownSections = decoded.header.sections.filter(section => !isSectionName(section.name) || section.schema !== 1).map(section => section.name);
   for (const section of decoded.header.sections) sectionPlans.set(section.name, emptySectionPlan(section.name, section.records, replace.has(section.name as never)));
 
-  const byPart = new Map<string, { section: string; rows: StoredRow[] }>();
+  /* §4.8: importing the same bundle again applies only what no earlier import
+     of it applied. A record one of them applied (new, same, or a conflict
+     whose rule wrote something of it: a rule text kept as a version, a merged
+     scope or setting) is left as this install now holds it, whatever happened
+     to it since; it is counted skipped as already imported. */
+  const earlier = ledger.filter(row => row.bundleSha256 === decoded.sha256);
+  const earlierUnapplied = earlier.map(row => new Set(row.unapplied ?? []));
+  const importedBefore = (rid: string) => earlier.some((row, index) => row.unapplied !== undefined && !earlierUnapplied[index]!.has(rid));
+
+  const byPart = new Map<string, { section: string; rows: PlanRow[] }>();
   for (const record of decoded.records) {
     const sectionPlan = sectionPlans.get(record.s)!;
-    if (unknownSections.includes(record.s)) { count(sectionPlan, "skipped", record.k, "needs-newer-delegatus"); continue; }
+    const rid = recordId(record);
+    if (unknownSections.includes(record.s)) { count(sectionPlan, "skipped", rid, "needs-newer-delegatus"); continue; }
     const { part, key } = splitRecordKey(record.k);
-    const row = { key: remap(key), value: JSON.parse(remap(JSON.stringify(record.v))) as unknown };
+    const row: PlanRow = { key: remap(key), value: JSON.parse(remap(JSON.stringify(record.v))) as unknown, rid };
+    if (importedBefore(rid)) {
+      if (part === "rows:role_memory" && row.key.startsWith("s:") && isRecordObject(row.value) && typeof row.value.scope === "string") writes.scopesImportedBefore.add(row.value.scope);
+      count(sectionPlan, "skipped", rid, "already-imported");
+      continue;
+    }
     if (record.s === "accounts") {
       /* Counted new here; the account plan, which reads this install's
          accounts, settles which already exist (§3). */
-      if (part !== "accounts" || !validAccountRecord(row.key, row.value)) { count(sectionPlan, "skipped", record.k, "invalid-record"); continue; }
+      if (part !== "accounts" || !validAccountRecord(row.key, row.value)) { count(sectionPlan, "skipped", rid, "invalid-record"); continue; }
       writes.accountRecords.push(row);
-      count(sectionPlan, "new", record.k);
+      count(sectionPlan, "new", rid);
       continue;
     }
-    if (!partById.has(part) || partById.get(part)!.section !== record.s) { count(sectionPlan, "skipped", record.k, "unknown-part"); continue; }
+    if (!partById.has(part) || partById.get(part)!.section !== record.s) { count(sectionPlan, "skipped", rid, "unknown-part"); continue; }
     const entry = byPart.get(part) ?? { section: record.s, rows: [] };
     entry.rows.push(row);
     byPart.set(part, entry);
@@ -326,14 +399,15 @@ export function buildPlan(decoded: DecodedBundle, request: { mappings?: Record<s
     const id = `${root}:${relative}`;
     let state = fileState.get(id);
     if (!state) {
-      const text = readTargetText(root, relative);
+      const read = readTargetText(root, relative);
       let object: Record<string, unknown> | unknown[] | string | null = null;
       /* A file that is there and does not parse is never replaced: its store
-         reports it damaged, and the operator repairs it. */
-      let unreadable = false;
-      if (text !== null) {
-        if (parse === "text") object = text;
-        else { try { object = JSON.parse(text) as Record<string, unknown>; } catch { unreadable = true; } }
+         reports it damaged, and the operator repairs it. So is one the import
+         does not read at all (a link, an oversized file): it is not absent. */
+      let unreadable = read.kind === "unsupported";
+      if (read.kind === "text") {
+        if (parse === "text") object = read.text;
+        else { try { object = JSON.parse(read.text) as Record<string, unknown>; } catch { unreadable = true; } }
       }
       state = { root, relative, object, original: structuredClone(object), unreadable, changed: false, changes: parse === "json" ? [] : null };
       fileState.set(id, state);
@@ -350,7 +424,7 @@ export function buildPlan(decoded: DecodedBundle, request: { mappings?: Record<s
     switch (part.kind) {
       case "pending":
         for (const row of entry.rows) {
-          count(plan, "skipped", `${part.id}|${row.key}`, `pending:${part.reason}`);
+          count(plan, "skipped", row.rid, `pending:${part.reason}`);
           plan.pending += 1;
           writes.pending.push({ part: part.id, key: row.key, value: row.value });
         }
@@ -361,14 +435,14 @@ export function buildPlan(decoded: DecodedBundle, request: { mappings?: Record<s
       case "map": {
         const file = fileFor(part.root, part.file, "json");
         if (file.unreadable || (file.object !== null && !isRecordObject(file.object))) {
-          for (const row of entry.rows) count(plan, "skipped", `${part.id}|${row.key}`, "target-file-unreadable");
+          for (const row of entry.rows) count(plan, "skipped", row.rid, "target-file-unreadable");
           break;
         }
         /* What the target held before this import: an absent file holds
            nothing, whatever defaults its skeleton writes. */
         const original = file.original === null ? undefined : at(file.original, part.path);
         for (const row of entry.rows) {
-          if (!part.accept?.(row.key, row.value)) { count(plan, "skipped", `${part.id}|${row.key}`, "invalid-record"); continue; }
+          if (!part.accept?.(row.key, row.value)) { count(plan, "skipped", row.rid, "invalid-record"); continue; }
           const container = mapContainer(file, part);
           const held = isRecordObject(original) ? original[row.key] : undefined;
           if (part.fields && isRecordObject(held) && isRecordObject(row.value)) {
@@ -386,11 +460,13 @@ export function buildPlan(decoded: DecodedBundle, request: { mappings?: Record<s
             }
             if (!added && !differing) { count(plan, "same", `${part.id}|${row.key}`); continue; }
             count(plan, "conflict", `${part.id}|${row.key}`, undefined, differing && take ? "took-source" : added ? "merged" : "kept-target");
+            if (differing && !take) unapplied(plan, row.rid);
             if (added || take) { container[row.key] = next; file.changed = true; }
             continue;
           }
           const outcome = planValue(held, row.value, part.merge, take);
           count(plan, outcome.outcome, `${part.id}|${row.key}`, undefined, outcome.action);
+          if (outcome.action === "kept-target") unapplied(plan, row.rid);
           if (outcome.write) {
             container[row.key] = row.value;
             file.changed = true;
@@ -402,12 +478,12 @@ export function buildPlan(decoded: DecodedBundle, request: { mappings?: Record<s
       case "set": {
         const file = fileFor(part.root, part.file, "json");
         if (file.unreadable || (file.object !== null && !Array.isArray(file.object))) {
-          for (const row of entry.rows) count(plan, "skipped", `${part.id}|${row.key}`, "target-file-unreadable");
+          for (const row of entry.rows) count(plan, "skipped", row.rid, "target-file-unreadable");
           break;
         }
         const list = (file.object ??= []) as unknown[];
         for (const row of entry.rows) {
-          if (typeof row.value !== "string" || !part.accept?.(row.key, row.value)) { count(plan, "skipped", `${part.id}|${row.key}`, "invalid-record"); continue; }
+          if (typeof row.value !== "string" || !part.accept?.(row.key, row.value)) { count(plan, "skipped", row.rid, "invalid-record"); continue; }
           if (list.includes(row.value)) count(plan, "same", row.key);
           else { list.push(row.value); file.changed = true; file.changes!.push({ kind: "append", item: row.value }); count(plan, "new", row.key); }
         }
@@ -417,16 +493,24 @@ export function buildPlan(decoded: DecodedBundle, request: { mappings?: Record<s
         for (const row of entry.rows) {
           const relative = part.fileOf(row.key);
           if (typeof row.value !== "string" || !part.accept?.(row.key, row.value) || row.key.includes("..") || path.isAbsolute(row.key) || path.normalize(relative) !== relative) {
-            count(plan, "skipped", `${part.id}|${row.key}`, "invalid-record");
+            count(plan, "skipped", row.rid, "invalid-record");
             continue;
           }
           const file = fileFor(part.root, relative, "text");
+          if (file.unreadable) { count(plan, "skipped", row.rid, "target-file-unreadable"); continue; }
           const outcome = planValue(file.object === null ? undefined : file.object, row.value, part.merge, take);
           count(plan, outcome.outcome, `${part.id}|${row.key}`, undefined, outcome.action);
+          if (outcome.action === "kept-target") unapplied(plan, row.rid);
           if (outcome.write) { file.object = row.value; file.changed = true; }
         }
         break;
     }
+  }
+
+  /* With no role record left to plan (all imported before), the figures are this install's own rows. */
+  if (!byPart.has("rows:role_memory")) {
+    writes.roleRowsAfter = [...(readTargetRows("role_memory")?.rows ?? new Map<string, string>())]
+      .filter(([key]) => key.startsWith("r:") || key.startsWith("s:")).map(([, json]) => JSON.parse(json) as RoleMemoryRow);
   }
 
   for (const state of fileState.values()) {
@@ -495,11 +579,11 @@ function planValue(held: unknown, incoming: unknown, merge: Part extends never ?
 }
 
 function planRows(
-  part: RowsPart, rows: readonly StoredRow[], plan: SectionPlan, take: boolean, writes: PlannedWrites,
+  part: RowsPart, rows: readonly PlanRow[], plan: SectionPlan, take: boolean, writes: PlannedWrites,
   revisions: Record<string, string>, folders: ReadonlyMap<string, string>, now: string,
 ) {
   if (part.legacyDocument && !legacyStoreImported(part.collection)) {
-    for (const row of rows) count(plan, "skipped", `${part.id}|${row.key}`, "target-store-not-migrated");
+    for (const row of rows) count(plan, "skipped", row.rid, "target-store-not-migrated");
     return;
   }
   const target = readTargetRows(part.collection);
@@ -510,7 +594,7 @@ function planRows(
   const valid = rows.filter(row => {
     const ok = part.collection === "role_memory" ? validRoleRecord(row.key, row.value)
       : part.accept ? part.accept(row.key, row.value) : false;
-    if (!ok) count(plan, "skipped", `${part.id}|${row.key}`, "invalid-record");
+    if (!ok) count(plan, "skipped", row.rid, "invalid-record");
     return ok;
   });
   if (part.merge === "role-memory") {
@@ -536,7 +620,7 @@ function planRows(
     if (part.collection === "project_curation" && row.key.startsWith("manual:")) {
       const document = value as { key: string; value: { entry: { project: string; root: string }; order: number } };
       const folder = folders.get(document.value.entry.project);
-      if (!folder) { count(plan, "skipped", `${part.id}|${row.key}`, "manual-project-without-folder"); continue; }
+      if (!folder) { count(plan, "skipped", row.rid, "manual-project-without-folder"); continue; }
       value = { ...document, value: { ...document.value, entry: { ...document.value.entry, root: folder } } };
     }
     const current = held.get(row.key);
@@ -546,10 +630,12 @@ function planRows(
       const later = typeof value.lastAt === "string" && (typeof currentValue.lastAt !== "string" || value.lastAt > currentValue.lastAt);
       if (later) out.records.push({ key: row.key, value: { ...currentValue, lastAt: value.lastAt } });
       count(plan, "conflict", `${part.id}|${row.key}`, undefined, later ? "merged" : "kept-target");
+      if (!later) unapplied(plan, row.rid);
       continue;
     }
     const outcome = planValue(currentValue, value, part.merge === "absent-only" ? "absent-only" : "default", take);
     count(plan, outcome.outcome, `${part.id}|${row.key}`, undefined, outcome.action);
+    if (outcome.action === "kept-target") unapplied(plan, row.rid);
     if (outcome.write) out.records.push({ key: row.key, value });
   }
 }
@@ -591,7 +677,7 @@ async function withAccountPlan(built: Built, deps: AccountTargetDeps | undefined
   for (const account of plans) {
     if (!section) break;
     if (account.action === "existing") { section.new -= 1; section.same += 1; }
-    else if (account.action === "skip") { section.new -= 1; count(section, "skipped", `accounts|account:${account.engine}:${account.sourceId}`, account.reason ?? "skipped"); }
+    else if (account.action === "skip") { section.new -= 1; count(section, "skipped", `accounts|accounts|account:${account.engine}:${account.sourceId}`, account.reason ?? "skipped"); }
   }
   built.plan.accounts = plans;
   return built;
@@ -615,10 +701,12 @@ interface JournalFile {
   before: string | null;
   /** SHA-256 of what the import writes. */
   written: string;
-  /** The original under `checkpoint/`: a hard link to the same bytes, so
-      putting it back is a rename that needs no free space, or a copy where
-      the file system refuses links. */
-  backup: { name: string; kind: "link" | "copy" } | null;
+  /** The original, kept beside the file under a name of this import (same
+      root, same directory): a hard link to the same bytes, or a copy where the
+      file system refuses links. Putting it back is a rename inside one
+      directory, so it needs no free space and never crosses a file system,
+      wherever the state and config roots live. */
+  backup: { relative: string } | null;
   changes: FileChange[] | null;
 }
 
@@ -642,12 +730,43 @@ function writeJournal(directory: string, journal: Journal): void {
   writeAtomic(path.join(directory, "journal.json"), `${JSON.stringify(journal)}\n`);
 }
 
+const isJournalFile = (value: unknown): value is JournalFile => {
+  if (!isRecordObject(value)) return false;
+  const backup = value.backup;
+  return (value.root === "state" || value.root === "config") && typeof value.relative === "string" && !!value.relative
+    && (value.before === null || typeof value.before === "string") && typeof value.written === "string"
+    && (backup === null || (isRecordObject(backup) && typeof backup.relative === "string" && !!backup.relative))
+    && (value.changes === null || Array.isArray(value.changes));
+};
+
+/** The journal of one import directory. Null only when it was never written:
+    apply writes it before any file, reservation or row, so a directory
+    without one holds nothing to settle. Anything else that cannot be read or
+    does not decode refuses, and the directory stays for the next attempt: a
+    journal read as absent would let the Viewer admit work over an import
+    that is still half applied. */
 function readJournal(directory: string): Journal | null {
+  const file = path.join(directory, "journal.json");
+  let text: string;
   try {
-    const journal = JSON.parse(fs.readFileSync(path.join(directory, "journal.json"), "utf8")) as Journal;
-    return Array.isArray(journal.files) && Array.isArray(journal.reservations) ? journal : null;
-  } catch { return null; }
+    readFault("journal");
+    text = fs.readFileSync(file, "utf8");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return null;
+    throw new TransferImportError("recovery_unreadable", `the journal of import ${path.basename(directory)} cannot be read (${code ?? "error"}); it is kept for the next attempt`);
+  }
+  let journal: unknown;
+  try { journal = JSON.parse(text); } catch { journal = null; }
+  const valid = isRecordObject(journal) && typeof journal.importId === "string" && ["writing", "done", "rolled-back"].includes(journal.state as string)
+    && Array.isArray(journal.files) && journal.files.every(isJournalFile)
+    && Array.isArray(journal.reservations) && journal.reservations.every(item => isRecordObject(item) && typeof item.engine === "string" && typeof item.id === "string");
+  if (!valid) throw new TransferImportError("recovery_unreadable", `the journal of import ${path.basename(directory)} is damaged; it is kept for the next attempt`);
+  return journal as unknown as Journal;
 }
+
+/** Where an import keeps the original of a file it replaces: beside it. */
+const backupRelative = (relative: string, importId: string) => path.join(path.dirname(relative), `.${path.basename(relative)}.${importId}.transfer-original`);
 
 /** Runs `operation` holding the shared write lock of every file the import
     touches, taken in path order: a store writer that takes its file's lock
@@ -717,13 +836,10 @@ function restoreFiles(directory: string, journal: Journal, wrote?: ReadonlySet<n
     if (!(wrote ? wrote.has(index) : fs.existsSync(writingMarker(directory, index)))) continue;
     if (now === entry.written) {
       if (entry.before === null) { fs.rmSync(target, { force: true }); fsyncPath(path.dirname(target)); continue; }
-      const backup = entry.backup ? path.join(directory, "checkpoint", entry.backup.name) : null;
+      const backup = entry.backup ? path.join(targetRoot(entry.root), entry.backup.relative) : null;
       if (!backup || !fs.existsSync(backup)) throw new Error(`the checkpoint copy of ${entry.relative} is missing; the import cannot be undone`);
-      try { fs.renameSync(backup, target); }
-      catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
-        writeAtomic(target, fs.readFileSync(backup, "utf8"));
-      }
+      /* One directory: a rename, which allocates nothing and cannot cross a file system. */
+      moveFile(backup, target);
       fsyncPath(path.dirname(target));
       continue;
     }
@@ -738,6 +854,8 @@ function restoreFiles(directory: string, journal: Journal, wrote?: ReadonlySet<n
     `writing`, and the next recovery finds nothing left to restore. */
 function settleJournal(directory: string, journal: Journal, state: "done" | "rolled-back"): void {
   try { writeJournal(directory, { ...journal, state }); } catch { /* the next recovery settles it */ }
+  /* Originals a rollback put back are gone already; the rest are this import's own names. */
+  for (const entry of journal.files) if (entry.backup) fs.rmSync(path.join(targetRoot(entry.root), entry.backup.relative), { force: true });
   fs.rmSync(path.join(directory, "checkpoint"), { recursive: true, force: true });
 }
 
@@ -818,6 +936,8 @@ export interface ApplyOptions {
   afterCommit?: (ledger: LedgerRow) => Promise<void> | void;
   /** Test seam: runs inside the files' locks after each file this import writes. */
   afterFileWrite?: (index: number) => void;
+  /** Test seam: runs inside the files' locks after a file's last check, just before it is written. */
+  beforeFileWrite?: (index: number) => void;
 }
 
 function hangForTest(directory: string): never {
@@ -855,6 +975,9 @@ export async function applyTransferImport(request: TransferImportRequest, option
        this install's rule, and nothing was lost from the active count. */
     const activeHere = new Set(built.writes.roleRowsAfter.find((row): row is Extract<RoleMemoryRow, { kind: "scope" }> => row.kind === "scope" && row.scope === scope)?.active ?? []);
     const everyActive = (built.writes.sourceActive.get(scope) ?? []).every(id => activeHere.has(id) || built.writes.keptAsVersion.has(id));
+    /* A scope an earlier import of this bundle brought was checked then; what
+       curation did to it since is this install's own. */
+    if (built.writes.scopesImportedBefore.has(scope)) return { scope, source, target, ok: true, overBudget: target.codePoints > 10_000 };
     return { scope, source, target, ok: everyActive && target.active >= source.active, overBudget: target.codePoints > 10_000 };
   });
   const report: Omit<TransferReport, "accounts" | "accountsReady"> = {
@@ -867,6 +990,7 @@ export async function applyTransferImport(request: TransferImportRequest, option
     kind: "import", importId, bundleSha256: decoded.sha256, exportId: decoded.header.exportId, sourceProduct: decoded.header.product,
     appliedAt: now, mappings: request.mappings ?? {}, aliases: built.writes.aliases, pending: built.writes.pending,
     versions: built.writes.versions, scopeHistories: built.writes.scopeHistories, accounts: built.plan.accounts, report,
+    unapplied: built.plan.sections.flatMap(section => [...unappliedRecords.get(section) ?? []]).sort(),
     followUp: { knownValues, accounts: built.plan.accounts.some(account => account.action === "create") },
   };
 
@@ -896,7 +1020,7 @@ export async function applyTransferImport(request: TransferImportRequest, option
       }
       if (accountRows.length) built.writes.rows.set("accounts", { part: null, records: accountRows });
       committedBindings = bindings;
-      built.writes.rows.set(TRANSFER_ACCOUNTS_COLLECTION, { part: null, records: rows.map(row => ({ key: `${row.engine}:${row.sourceId}`, value: row })) });
+      built.writes.rows.set(TRANSFER_ACCOUNTS_COLLECTION, { part: null, records: rows.map(row => ({ key: transferAccountKey(row), value: row })) });
     }
 
     const files = [...built.writes.files.values()];
@@ -905,35 +1029,50 @@ export async function applyTransferImport(request: TransferImportRequest, option
         /* Every file still holds what the dry run read, checked under its lock
            before the first byte is written, so a writer that came between
            refuses the import with nothing written. */
+        const asPlanned = (file: PlannedFile) => fileRevision(file.root, file.relative) === built.plan.revisions[`file:${file.root}:${file.relative}`]
+          && targetFileKind(file.root, file.relative) !== "unsupported";
         for (const file of files) {
-          if (fileRevision(file.root, file.relative) !== built.plan.revisions[`file:${file.root}:${file.relative}`]) {
-            throw new TransferImportError("target_changed", "this install changed since the preview; preview again");
-          }
+          if (!asPlanned(file)) throw new TransferImportError("target_changed", "this install changed since the preview; preview again");
         }
-        for (const [index, file] of files.entries()) {
-          const target = path.join(targetRoot(file.root), file.relative);
-          const before = currentHash(target);
-          let backup: JournalFile["backup"] = null;
-          if (before !== null) {
-            const name = `${index}`;
-            const copy = path.join(directory, "checkpoint", name);
-            try { fs.linkSync(target, copy); backup = { name, kind: "link" }; }
-            catch { allocate(); fs.copyFileSync(target, copy); fsyncPath(copy); backup = { name, kind: "copy" }; }
-          }
-          journal.files.push({ root: file.root, relative: file.relative, before, written: sha256Of(file.text), backup, changes: file.changes });
+        /* The journal names every original before the first is made, so a stop
+           in between leaves no name recovery does not know to remove. */
+        for (const file of files) {
+          const before = currentHash(path.join(targetRoot(file.root), file.relative));
+          journal.files.push({ root: file.root, relative: file.relative, before, written: sha256Of(file.text), backup: before === null ? null : { relative: backupRelative(file.relative, importId) }, changes: file.changes });
         }
-        fsyncPath(path.join(directory, "checkpoint"));
         writeJournal(directory, journal);
+        for (const entry of journal.files) {
+          if (!entry.backup) continue;
+          const target = journalTarget(entry);
+          const copy = path.join(targetRoot(entry.root), entry.backup.relative);
+          try { linkFile(target, copy); }
+          catch { allocate(); fs.copyFileSync(target, copy, fs.constants.COPYFILE_EXCL); fsyncPath(copy); }
+        }
+        for (const directoryOfBackup of new Set(journal.files.filter(entry => entry.backup).map(entry => path.dirname(journalTarget(entry))))) fsyncPath(directoryOfBackup);
         if (fault === "die-after-checkpoint") dieForTest();
         for (const [index, file] of files.entries()) {
           /* Again just before the write: a writer that skips the lock and came
-             in since refuses the import, and keeps what it wrote. */
-          if (fileRevision(file.root, file.relative) !== built.plan.revisions[`file:${file.root}:${file.relative}`]) {
-            throw new TransferImportError("target_changed", "this install changed since the preview; preview again");
-          }
+             in since refuses the import, and keeps what it wrote. Every writer
+             of these files in this product takes the same lock, so none can
+             come in between this check and the rename. */
+          if (!asPlanned(file)) throw new TransferImportError("target_changed", "this install changed since the preview; preview again");
+          options.beforeFileWrite?.(index);
           fs.writeFileSync(writingMarker(directory, index), "", { flag: "wx", mode: 0o600 });
-          wrote.add(index);
-          writeAtomic(path.join(targetRoot(file.root), file.relative), file.text);
+          const target = path.join(targetRoot(file.root), file.relative);
+          if (journal.files[index]!.before === null) {
+            /* A file the dry run found absent is created only if it still is:
+               a writer that made it since, lock or no lock, keeps it. */
+            try { allocate(); createFileExclusive(target, file.text); }
+            catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== "EEXIST") { wrote.add(index); throw error; }
+              fs.rmSync(writingMarker(directory, index), { force: true });
+              throw new TransferImportError("target_changed", "this install changed since the preview; preview again");
+            }
+            wrote.add(index);
+          } else {
+            wrote.add(index);
+            writeAtomic(target, file.text);
+          }
           if (index === 0 && fault === "file-step") throw new Error("injected file step failure");
           if (index === 0 && fault === "disk-full") diskFull = true;
           options.afterFileWrite?.(index);
@@ -1018,8 +1157,15 @@ export interface RecoveryOutcome { importId: string; outcome: "finished" | "roll
     throws, and the journal stays for the next attempt. */
 export async function recoverTransferImports(deps?: AccountTargetDeps): Promise<RecoveryOutcome[]> {
   const root = path.join(transferRoot(), "imports");
-  let names: string[] = [];
-  try { names = fs.readdirSync(root).sort(); } catch { names = []; }
+  let names: string[];
+  try {
+    readFault("imports");
+    names = fs.readdirSync(root).sort();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") throw new TransferImportError("recovery_unreadable", `the list of interrupted imports cannot be read (${code ?? "error"})`);
+    names = [];
+  }
   const outcomes: RecoveryOutcome[] = [];
   for (const name of names) {
     const directory = path.join(root, name);

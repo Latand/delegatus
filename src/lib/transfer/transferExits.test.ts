@@ -4,11 +4,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { AccountMutationBusyError, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { ensureLegacyCollectionsImported } from "@/lib/state/legacyCollections";
+import { writeTranscribeBackend } from "@/lib/transcribeBackend";
+import { writeTtsBackend } from "@/lib/ttsBackend";
 import { settleInterruptedTransfers } from "@/lib/viewerInstrumentation";
 
 import { exportTransferBundle } from "./exporter";
-import { applyTransferImport, previewTransferImport, readImportRecords, recoverTransferImportsAtStartup, TransferImportError } from "./importer";
+import { applyTransferImport, previewTransferImport, readImportRecords, recoverTransferImports, recoverTransferImportsAtStartup, TransferImportError } from "./importer";
 import { applyBundle } from "./service";
 import { installEnv, makeInstall, NOW, REPOSITORY, seedSource, treeDigest, within, type Install } from "./transfer.fixture";
 import type { TransferPlan } from "./types";
@@ -21,6 +24,7 @@ import type { TransferWorkerResponse } from "./workerProtocol";
    startup step and by the Viewer's own handler when its worker dies. */
 
 const WORKER = path.join(import.meta.dir, "transfer.worker.ts");
+const REPO = path.resolve(import.meta.dir, "../../..");
 let parent: string;
 let source: Install;
 let bundle: Buffer;
@@ -48,9 +52,9 @@ function snapshot(install: Install) {
   return { files, rows: sqliteRows(install) };
 }
 
-async function runWorker(install: Install, request: unknown, fault?: string): Promise<{ code: number | null; signal: string | null; response: TransferWorkerResponse | null }> {
+async function runWorker(install: Install, request: unknown, fault?: string, extra: Record<string, string> = {}): Promise<{ code: number | null; signal: string | null; response: TransferWorkerResponse | null }> {
   const child = Bun.spawn([process.execPath, WORKER], {
-    env: { ...process.env, ...installEnv(install), HOME: install.home, NODE_ENV: "test", ...(fault ? { LLV_TRANSFER_TEST_FAULT: fault } : {}) },
+    env: { ...process.env, ...installEnv(install), HOME: install.home, NODE_ENV: "test", ...(fault ? { LLV_TRANSFER_TEST_FAULT: fault } : {}), ...extra },
     stdin: "pipe", stdout: "pipe", stderr: "inherit",
   });
   child.stdin.write(JSON.stringify(request));
@@ -70,7 +74,7 @@ async function prepared(name: string, setup: (target: Install) => void = () => {
   return { target, plan, mappings: {} };
 }
 
-function journals(target: Install): { directory: string; journal: { state: string; files: { relative: string; before: string | null; backup: { name: string } | null }[] } }[] {
+function journals(target: Install): { directory: string; journal: { state: string; files: { root: string; relative: string; before: string | null; backup: { relative: string } | null }[] } }[] {
   const root = path.join(target.state, "transfer", "imports");
   if (!fs.existsSync(root)) return [];
   return fs.readdirSync(root).map(name => ({ directory: path.join(root, name), journal: JSON.parse(fs.readFileSync(path.join(root, name, "journal.json"), "utf8")) }));
@@ -241,9 +245,10 @@ describe("apply exits", () => {
     const { target, plan } = await prepared("startup-refused");
     const before = snapshot(target);
     expect((await runWorker(target, { operation: "apply", request: { bundleSha256: plan.bundleSha256, revisions: plan.revisions } }, "die-after-files")).signal).toBe("SIGKILL");
-    const [{ directory, journal }] = journals(target);
+    const [{ journal }] = journals(target);
     const replaced = journal.files.find(entry => entry.backup)!;
-    const backup = path.join(directory, "checkpoint", replaced.backup!.name);
+    expect(replaced.root).toBe("state");
+    const backup = path.join(target.state, replaced.backup!.relative);
     const aside = path.join(target.root, "aside");
     fs.renameSync(backup, aside);
     await expect(within(target, () => settleInterruptedTransfers())).rejects.toThrow(/activation refused: .*checkpoint copy of operator-settings\.json is missing/);
@@ -253,6 +258,153 @@ describe("apply exits", () => {
     expect(journalStates(target)).toEqual(["rolled-back"]);
     expect(snapshot(target)).toEqual(before);
   }, 60_000);
+
+  test("a real writer of a file the import writes waits for the import, and keeps its value after a successful apply and after a rollback", async () => {
+    const other = `repo-${"e".repeat(32)}`;
+    /* The product's own writer in a process of its own, as the Viewer is to the apply worker. */
+    const writer = (target: Install) => Bun.spawn([process.execPath, "-e",
+      `import(${JSON.stringify(path.join(REPO, "src/lib/memory/settings.ts"))}).then(({ setSharedMemoryEnabled }) => setSharedMemoryEnabled(${JSON.stringify(other)}, true)).catch(error => { console.error(error); process.exit(1); });`], {
+      cwd: REPO, env: { ...process.env, ...installEnv(target), HOME: target.home, LLV_TRANSFER_TEST_FAULT: "" }, stdout: "inherit", stderr: "inherit",
+    });
+    const sharedFile = (target: Install) => path.join(target.state, "shared-memory-settings.json");
+    /* Waits, inside the import's hold, until the writer queued on the file's lock: then it can only run after the import. */
+    const startWriterInside = (target: Install, started: ReturnType<typeof writer>[]) => (index: number) => {
+      if (index !== 0) return;
+      started.push(writer(target));
+      const queue = `${sharedFile(target)}.write-locks`;
+      const deadline = Date.now() + 60_000;
+      while ((fs.existsSync(queue) ? fs.readdirSync(queue).filter(name => name.endsWith(".json")).length : 0) < 2) {
+        if (Date.now() > deadline) throw new Error("the writer never queued on the file's lock");
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+      }
+    };
+
+    // The import commits: the writer's value is added to what the import wrote.
+    const applied = await prepared("real-writer-applied", target => writeRaw(target, "shared-memory-settings.json", "{}\n"));
+    const startedApplied: ReturnType<typeof writer>[] = [];
+    const { report } = await within(applied.target, () => applyTransferImport({ bundleSha256: applied.plan.bundleSha256, revisions: applied.plan.revisions }, { beforeFileWrite: startWriterInside(applied.target, startedApplied) }));
+    expect(report.complete).toBe(true);
+    expect(await startedApplied[0]!.exited).toBe(0);
+    expect(JSON.parse(fs.readFileSync(sharedFile(applied.target), "utf8"))).toEqual({ [REPOSITORY]: true, [other]: true });
+
+    // The import rolls back: the writer's value is added to the original.
+    const rolled = await prepared("real-writer-rolled", target => writeRaw(target, "shared-memory-settings.json", "{}\n"));
+    const startedRolled: ReturnType<typeof writer>[] = [];
+    process.env.LLV_TRANSFER_TEST_FAULT = "file-step";
+    try {
+      const failure = await within(rolled.target, () => applyTransferImport({ bundleSha256: rolled.plan.bundleSha256, revisions: rolled.plan.revisions }, { beforeFileWrite: startWriterInside(rolled.target, startedRolled) }))
+        .then(() => null, (error: unknown) => error as Error);
+      expect(failure?.message).toBe("injected file step failure");
+    } finally { delete process.env.LLV_TRANSFER_TEST_FAULT; }
+    expect(await startedRolled[0]!.exited).toBe(0);
+    expect(JSON.parse(fs.readFileSync(sharedFile(rolled.target), "utf8"))).toEqual({ [other]: true });
+    expect(await within(rolled.target, () => readImportRecords())).toEqual([]);
+  }, 180_000);
+
+  test("with state and config on two file systems, a disk that fills after a config file's write puts the original back by a rename", async () => {
+    const voice = (await within(source, () => exportTransferBundle({ now: new Date(NOW), exportId: "export-voice", product: "test", env: {}, sections: ["settings.voice"] }))).bytes;
+    const target = makeInstall(parent, "split-roots");
+    await within(target, () => ensureLegacyCollectionsImported(() => {}));
+    // Voice settings as the source has them, so the first file written is a config file.
+    fs.writeFileSync(path.join(target.state, "voice-companion.json"), JSON.stringify({ version: 1, settings: { enabled: true, monthlyCapUsd: 12, backend: "codex" }, charges: {}, sessions: {} }));
+    await within(target, () => { writeTranscribeBackend("local"); writeTtsBackend("openai"); });
+    const plan = await within(target, () => previewTransferImport(voice, { replace: ["settings.voice"] }));
+    expect(plan.sections[0]!.conflicts.map(conflict => conflict.key)).toEqual(["text:voice-choices|transcribe-backend", "text:voice-choices|tts-backend"]);
+    const before = snapshot(target);
+    const result = await runWorker(target, { operation: "apply", request: { bundleSha256: plan.bundleSha256, revisions: plan.revisions, replace: ["settings.voice"] } }, "disk-full", { LLV_TRANSFER_TEST_SPLIT_ROOTS: "1" });
+    expect(result.response).toMatchObject({ ok: false, error: { code: "failed" } });
+    const message = String((result.response as { error: { message: string } }).error.message);
+    expect(message).toContain("ENOSPC");
+    expect(message).not.toContain("could not be undone");
+    expect(snapshot(target)).toEqual(before);
+    const [{ journal }] = journals(target);
+    expect(journal.files.map(entry => [entry.root, entry.relative])).toEqual([["config", "transcribe-backend"], ["config", "tts-backend"]]);
+    expect(await within(target, () => readImportRecords())).toEqual([]);
+    expect((await runWorker(target, { operation: "recover" }, undefined, { LLV_TRANSFER_TEST_SPLIT_ROOTS: "1" })).response).toMatchObject({ ok: true, result: [{ outcome: "rolled-back" }] });
+    expect(snapshot(target)).toEqual(before);
+  }, 60_000);
+
+  test("recovery metadata that cannot be read refuses activation and is kept, however it fails, until it reads", async () => {
+    const { target, plan } = await prepared("unreadable-metadata");
+    const before = snapshot(target);
+    expect((await runWorker(target, { operation: "apply", request: { bundleSha256: plan.bundleSha256, revisions: plan.revisions } }, "die-after-files")).signal).toBe("SIGKILL");
+    const imported = snapshot(target);
+    expect(imported.files).not.toEqual(before.files);
+    const [{ directory }] = journals(target);
+    const journalFile = path.join(directory, "journal.json");
+    /** `deny`: makes a path unreadable for the attempt, and gives it back after. */
+    const refusedWith = async (pattern: RegExp, deny?: { file: string; mode: number }) => {
+      const held = fs.readFileSync(journalFile);
+      if (deny) fs.chmodSync(deny.file, 0o000);
+      try { await expect(within(target, () => settleInterruptedTransfers())).rejects.toThrow(pattern); }
+      finally { if (deny) fs.chmodSync(deny.file, deny.mode); }
+      // Nothing undone, nothing settled: the next attempt finds the same journal.
+      expect(fs.readFileSync(journalFile)).toEqual(held);
+      expect(snapshot(target).files).toEqual(imported.files);
+    };
+    for (const [fault, pattern] of [["journal", /activation refused: .*journal of import .* cannot be read \(EIO\)/], ["imports", /activation refused: .*list of interrupted imports cannot be read \(EIO\)/]] as const) {
+      process.env.LLV_TRANSFER_TEST_READ_FAULT = fault;
+      try { await refusedWith(pattern); } finally { delete process.env.LLV_TRANSFER_TEST_READ_FAULT; }
+    }
+    const original = fs.readFileSync(journalFile);
+    for (const damaged of ["{ half a journal", JSON.stringify({ importId: "x", state: "writing", files: [{ relative: 7 }], reservations: [] })]) {
+      fs.writeFileSync(journalFile, damaged);
+      await refusedWith(/activation refused: .*journal of import .* is damaged/);
+    }
+    fs.writeFileSync(journalFile, original);
+    /* Permissions refuse reads only to a process that is not root. */
+    if (process.getuid?.() !== 0) {
+      await refusedWith(/activation refused: .*journal of import .* cannot be read \(EACCES\)/, { file: journalFile, mode: 0o600 });
+      await refusedWith(/activation refused: .*list of interrupted imports cannot be read \(EACCES\)/, { file: path.dirname(directory), mode: 0o700 });
+    }
+    await within(target, () => settleInterruptedTransfers());
+    expect(journalStates(target)).toEqual(["rolled-back"]);
+    expect(snapshot(target)).toEqual(before);
+  }, 120_000);
+
+  test("a recovery that fails in a serving Viewer keeps launches and further imports waiting until it settles", async () => {
+    const { target, plan } = await prepared("viewer-recovery-fails");
+    const before = snapshot(target);
+    const created = path.join(target.state, "project-settings.json");
+    expect(fs.existsSync(created)).toBe(false);
+    await within(target, async () => {
+      const launch = { executable: process.execPath, workerPath: WORKER };
+      const env = { HOME: target.home, NODE_ENV: "test", LLV_TRANSFER_TEST_FAULT: "die-after-files" };
+      let failing = true;
+      let attempts = 0;
+      const recover = async () => {
+        attempts += 1;
+        if (failing) throw new Error("the undo is held for the test");
+        return recoverTransferImports();
+      };
+      const answer = applyBundle({ bundleSha256: plan.bundleSha256, revisions: plan.revisions }, { launch, env, recover, recoveryRetryMs: [20] });
+      // A launch admission queued once the Viewer holds the lock for the apply.
+      const lock = path.join(target.state, "account-selection.lock");
+      const holder = () => { try { return (JSON.parse(fs.readFileSync(lock, "utf8")) as { holder?: string }).holder ?? null; } catch { return null; } };
+      for (let waited = 0; holder() !== "install transfer"; waited += 1) {
+        if (waited > 3_000) throw new Error("the Viewer never took the account lock for the apply");
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      const queued = withAccountMutationLockAsync(() => ({ attempts, journals: journalStates(target), created: fs.existsSync(created) }), { holder: "a queued launch", waitMs: 120_000 });
+
+      const first = await answer;
+      expect(first).toMatchObject({ ok: false, error: { code: "recovery_pending" } });
+      // The worker died after its writes and the undo failed: the import's file is there, and nothing is admitted.
+      expect(fs.existsSync(created)).toBe(true);
+      await expect(withAccountMutationLockAsync(() => "admitted", { holder: "a launch", waitMs: 50 })).rejects.toBeInstanceOf(AccountMutationBusyError);
+      expect(await applyBundle({ bundleSha256: plan.bundleSha256, revisions: plan.revisions }, { launch, env: { HOME: target.home, NODE_ENV: "test" } })).toMatchObject({ ok: false, error: { code: "busy" } });
+      const failedSoFar = attempts;
+      expect(failedSoFar).toBeGreaterThanOrEqual(1);
+
+      failing = false;
+      const seen = await queued;
+      // The queued launch ran only once the import was undone.
+      expect(seen.journals).toEqual(["rolled-back"]);
+      expect(seen.created).toBe(false);
+      expect(seen.attempts).toBeGreaterThan(failedSoFar);
+    });
+    expect(snapshot(target)).toEqual(before);
+  }, 120_000);
 
   test("the Viewer recovers at once when its apply worker dies, and a clean apply then succeeds", async () => {
     const { target, plan } = await prepared("viewer-handler");

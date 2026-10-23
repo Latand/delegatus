@@ -119,9 +119,9 @@ test("each row offers what its state allows and the actions name the account", a
   await press([...host.querySelectorAll("button")].find(button => button.textContent === "Check all"));
   expect(signIns).toEqual(["team-2"]);
   expect(actions).toEqual([
-    { action: "confirm_identity", engine: "codex", sourceId: "work" },
-    { action: "retry", engine: "codex", sourceId: "broken" },
-    { action: "not_needed", engine: "codex", sourceId: "old" },
+    { action: "confirm_identity", engine: "codex", sourceId: "work", targetId: "work" },
+    { action: "retry", engine: "codex", sourceId: "broken", targetId: "broken" },
+    { action: "not_needed", engine: "codex", sourceId: "old", targetId: null },
     { action: "verify", engine: "codex" },
   ]);
 });

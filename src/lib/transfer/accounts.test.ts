@@ -10,7 +10,10 @@ import { CODEX_ACCOUNTS_SOURCE, readAccountSource, writeAccountSource } from "@/
 import { accountProjectBindings, allowedAccountIdsForProject, bindAccountToProject } from "@/lib/accounts/projectBindings";
 import { ensureLegacyCollectionsImported } from "@/lib/state/legacyCollections";
 
-import { accountExporter, accountReportRows, accountsReady, importedAccountRows, markImportedAccount, retryImportedAccount, settleImportedAccountSignIn, unavailableAccountId, verifyImportedAccounts, type IdentityReader, type TransferEngine } from "./accounts";
+import {
+  accountExporter, accountReportRows, accountsReady, identityHash, importedAccountRows, markImportedAccount, retryImportedAccount, settleImportedAccountSignIn, transferLimitsReader,
+  unavailableAccountId, verifyImportedAccount, verifyImportedAccounts, type IdentityReader, type ImportedAccountRow, type LimitsEvidence, type TransferEngine,
+} from "./accounts";
 import { decodeBundle, encodeBundle } from "./bundle";
 import { exportTransferBundle } from "./exporter";
 import { applyTransferImport, previewTransferImport, readImportRecords, recoverTransferImports } from "./importer";
@@ -94,7 +97,11 @@ async function target(name: string): Promise<Install> {
   return install;
 }
 
-const limitsRead = async () => ({ ok: true as const, windows: true, authenticated: true });
+/** The verification's clock, and a live read it takes: fresh, with a plan and windows. */
+const CHECK_AT = new Date("2026-10-23T12:00:00.000Z");
+const checkClock = () => CHECK_AT;
+const evidence = (over: Partial<LimitsEvidence> = {}): LimitsEvidence => ({ authenticated: true, source: "live", staleSince: null, observedAt: CHECK_AT.toISOString(), plan: "pro", windows: true, ...over });
+const limitsRead = async () => ({ ok: true as const, evidence: evidence() });
 
 describe("accounts in the bundle", () => {
   test("carry the accounts in use with an identity hash and their bindings, and no credential", async () => {
@@ -146,7 +153,7 @@ describe("accounts on the new install", () => {
 
     // Signing in and a live limit read make the account usable, and the source's active one active.
     const selected: [TransferEngine, string][] = [];
-    const deps = { identity, readLimits: limitsRead, select: async (engine: TransferEngine, id: string) => { selected.push([engine, id]); } };
+    const deps = { identity, readLimits: limitsRead, now: checkClock, select: async (engine: TransferEngine, id: string) => { selected.push([engine, id]); } };
     await within(here, () => signIn("codex", path.join(here.config, "delegatus", "accounts", "codex", teamHere)));
     const team = await within(here, () => verifyImportedAccounts({ engine: "codex" }, deps));
     expect(team.map(row => row.state)).toEqual(["usable"]);
@@ -170,9 +177,10 @@ describe("accounts on the new install", () => {
     expect((await within(here, () => importedAccountRows())).map(row => row.state).sort()).toEqual(["not_needed", "usable", "usable"]);
     expect(await within(here, () => activeClaudeAccountId())).toBe("default");
 
-    // The same bundle again makes no second account.
+    // The same bundle again: every account record arrived already, so it plans no account and makes none (§4.8).
     const again = await within(here, () => previewTransferImport(bundle, {}, { accounts: { identity } }));
-    expect(again.accounts.map(account => account.action)).toEqual(["existing", "existing", "existing"]);
+    expect(again.accounts).toEqual([]);
+    expect(again.sections.find(candidate => candidate.name === "accounts")?.skippedReasons).toEqual({ "already-imported": section.records });
     await within(here, () => applyTransferImport({ bundleSha256: again.bundleSha256, revisions: again.revisions }, { accounts: { identity } }));
     expect(await within(here, () => listCodexAccounts().length)).toBe(2);
     // …and keeps what the checks settled.
@@ -198,15 +206,15 @@ describe("accounts on the new install", () => {
     const teamHere = (await within(here, () => importedAccountRows())).find(row => row.sourceId === sourceIds.team)!.targetId!;
     const selected: string[] = [];
     // The login's own read runs first; this is what the login completion calls next.
-    await within(here, () => settleImportedAccountSignIn("codex", teamHere, { identity, readLimits: limitsRead, select: async (_engine, id) => { selected.push(id); } }));
+    await within(here, () => settleImportedAccountSignIn("codex", teamHere, { identity, readLimits: limitsRead, now: checkClock, select: async (_engine, id) => { selected.push(id); } }));
     expect((await within(here, () => importedAccountRows())).find(row => row.sourceId === sourceIds.team)?.state).toBe("signed_out");
     expect(selected).toEqual([]);
     await within(here, () => signIn("codex", path.join(here.config, "delegatus", "accounts", "codex", teamHere)));
-    await within(here, () => settleImportedAccountSignIn("codex", teamHere, { identity, readLimits: limitsRead, select: async (_engine, id) => { selected.push(id); } }));
+    await within(here, () => settleImportedAccountSignIn("codex", teamHere, { identity, readLimits: limitsRead, now: checkClock, select: async (_engine, id) => { selected.push(id); } }));
     expect((await within(here, () => importedAccountRows())).find(row => row.sourceId === sourceIds.team)?.state).toBe("usable");
     expect(selected).toEqual([teamHere]);
     // An account no import brought is left alone.
-    await within(here, () => settleImportedAccountSignIn("codex", "default", { identity, readLimits: limitsRead, select: async (_engine, id) => { selected.push(id); } }));
+    await within(here, () => settleImportedAccountSignIn("codex", "default", { identity, readLimits: limitsRead, now: checkClock, select: async (_engine, id) => { selected.push(id); } }));
     expect(selected).toEqual([teamHere]);
   }, 60_000);
 
@@ -322,7 +330,7 @@ describe("accounts on the new install", () => {
     await within(here, () => signIn("codex", home));
     byHome.set(home, null);
     const selected: string[] = [];
-    const deps = { identity, readLimits: limitsRead, select: async (_engine: TransferEngine, id: string) => { selected.push(id); } };
+    const deps = { identity, readLimits: limitsRead, now: checkClock, select: async (_engine: TransferEngine, id: string) => { selected.push(id); } };
     try {
       const waiting = await within(here, () => verifyImportedAccounts({ engine: "codex" }, deps));
       expect(waiting.map(row => [row.state, row.detail])).toEqual([["read_failed", "identity-unreadable"]]);
@@ -377,4 +385,129 @@ describe("accounts on the new install", () => {
     await within(here, () => applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions }, { accounts: { identity } }));
     expect(await within(here, () => listClaudeAccounts().length)).toBe(1);
   }, 60_000);
+});
+
+describe("a later import naming the same source account", () => {
+  /** An install where this bundle's Codex account is signed in, checked usable, and confirmed after a different-login answer. */
+  async function settledTarget(name: string): Promise<{ here: Install; teamHere: string }> {
+    const here = await target(name);
+    const plan = await within(here, () => previewTransferImport(bundle, {}, { accounts: { identity } }));
+    await within(here, () => applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions }, { accounts: { identity } }));
+    const teamHere = (await within(here, () => importedAccountRows())).find(row => row.sourceId === sourceIds.team)!.targetId!;
+    await within(here, () => signIn("codex", accountHome(here, "codex", teamHere)));
+    await within(here, () => markImportedAccount("codex", sourceIds.team, "confirm_identity"));
+    const checked = await within(here, () => verifyImportedAccounts({ engine: "codex" }, { identity, readLimits: limitsRead, now: checkClock, select: async () => {} }));
+    expect(checked.map(row => [row.state, row.confirmedDifferent])).toEqual([["usable", true]]);
+    return { here, teamHere };
+  }
+
+  /** A bundle with one Codex account under the source id this bundle uses, signed into `login`. */
+  const codexBundle = (exportId: string, login: string | null) => encodeBundle({ exportId, createdAt: NOW, product: "test", projects: [], accounts: [], environment: [], notices: [], sections: [
+    { name: "accounts", schema: 1, summary: {}, records: [
+      { k: `accounts|account:codex:${sourceIds.team}`, v: { engine: "codex", id: sourceIds.team, label: "Team", kind: "managed", active: true, identity: identityHash(exportId, login) } },
+      { k: `accounts|binding:codex:${sourceIds.team}:${REPOSITORY}`, v: { engine: "codex", accountId: sourceIds.team, project: REPOSITORY } },
+    ] },
+  ] });
+
+  async function importInto(here: Install, bytes: Buffer) {
+    const plan = await within(here, () => previewTransferImport(bytes, {}, { accounts: { identity } }));
+    const { report } = await within(here, () => applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions }, { accounts: { identity } }));
+    return { plan, report };
+  }
+
+  for (const [label, login] of [["another install's account under the same id", "stranger@example.test"], ["the source account signed into another login since", "team-new@example.test"]] as const) {
+    test(`${label} gets an account of its own, checked anew; the earlier row keeps its own`, async () => {
+      const { here, teamHere } = await settledTarget(`later-${login.split("@")[0]}`);
+      const { plan, report } = await importInto(here, codexBundle(`export-${login}`, login));
+      const fresh = plan.accounts[0]!;
+      expect([fresh.action, fresh.plannedId === teamHere]).toEqual(["create", false]);
+      const row = report.accounts.find(entry => entry.targetId !== teamHere)!;
+      expect([row.sourceId, row.state]).toEqual([sourceIds.team, "signed_out"]);
+      expect(report.accountsReady).toBe(false);
+      const rows = await within(here, () => importedAccountRows().filter(entry => entry.sourceId === sourceIds.team));
+      // The confirmation was for the earlier login: the new row carries none; the earlier row is still the earlier one's.
+      expect(rows.map(entry => [entry.targetId === teamHere, entry.state, entry.confirmedDifferent ?? false]).sort()).toEqual([[false, "signed_out", false], [true, "usable", true]]);
+      // Signed into the earlier account's login, the new account is a different account and is not made active.
+      const newHere = row.targetId!;
+      await within(here, () => signIn("codex", accountHome(here, "codex", newHere)));
+      byHome.set(accountHome(here, "codex", newHere), "team@example.test");
+      const selected: string[] = [];
+      try {
+        const checked = await within(here, () => verifyImportedAccounts({ engine: "codex", sourceId: sourceIds.team, targetId: newHere }, { identity, readLimits: limitsRead, now: checkClock, select: async (_engine, id) => { selected.push(id); } }));
+        expect(checked.map(entry => entry.state)).toEqual(["different_account"]);
+        expect(selected).toEqual([]);
+      } finally { byHome.delete(accountHome(here, "codex", newHere)); }
+    }, 120_000);
+  }
+
+  test("a new export of the same login stands in for the account signed in here, which is read again before it is ready", async () => {
+    const { here, teamHere } = await settledTarget("later-same-login");
+    const { plan, report } = await importInto(here, codexBundle("export-same-login", "team@example.test"));
+    expect([plan.accounts[0]?.action, plan.accounts[0]?.plannedId]).toEqual(["existing", teamHere]);
+    expect(report.accounts.map(entry => [entry.targetId, entry.state])).toEqual([[teamHere, "unchecked"]]);
+    expect(report.accountsReady).toBe(false);
+    const row = (await within(here, () => importedAccountRows())).find(entry => entry.targetId === teamHere)!;
+    expect([row.exportId, row.confirmedDifferent]).toEqual(["export-same-login", undefined]);
+    expect(await within(here, () => listCodexAccounts().length)).toBe(2);
+  }, 120_000);
+
+  test("a replay while the account here is still signed out: the same bundle changes nothing, a new export proves nothing", async () => {
+    const here = await target("later-signed-out");
+    const first = await importInto(here, codexBundle("export-signed-out", "team@example.test"));
+    const teamHere = first.report.accounts[0]!.targetId!;
+    const replay = await importInto(here, codexBundle("export-signed-out", "team@example.test"));
+    expect(replay.plan.accounts).toEqual([]);
+    expect(await within(here, () => importedAccountRows().map(entry => [entry.targetId, entry.state]))).toEqual([[teamHere, "signed_out"]]);
+    // Signed out, the account here holds no login to compare: a new export gets its own.
+    const later = await importInto(here, codexBundle("export-signed-out-2", "team@example.test"));
+    expect(later.plan.accounts[0]?.action).toBe("create");
+    expect(later.report.accounts[0]?.targetId).not.toBe(teamHere);
+    expect(later.report.accountsReady).toBe(false);
+  }, 120_000);
+});
+
+describe("the transfer-verify read through the production adapter", () => {
+  /** One Claude account here, signed in, the source's active one; its identity is not checked (none travelled). */
+  const ROW: ImportedAccountRow = {
+    kind: "account", importId: "import-verify", exportId: "export-verify", engine: "claude", sourceId: "work", targetId: "work-here", label: "Work",
+    sourceKind: "managed", activeOnSource: true, identity: null, bindings: [], state: "signed_out",
+  };
+  const window = { usedPercent: 10, resetsAt: Math.floor(CHECK_AT.getTime() / 1000) + 3_600, windowMinutes: 300 };
+  const observation = (over: Record<string, unknown> = {}) => ({
+    engine: "claude", accountId: "work-here", authenticated: true, observedAt: CHECK_AT.getTime(),
+    limits: { session: window, weekly: window, plan: "max", capturedAt: Math.floor(CHECK_AT.getTime() / 1000) },
+    provenance: { source: "live", reason: null, staleSince: null }, ...over,
+  });
+
+  let installs = 0;
+  async function verifyWith(observed: Record<string, unknown>): Promise<{ row: ImportedAccountRow; selected: string[] }> {
+    installs += 1;
+    const here = await target(`adapter-${installs}`);
+    const home = path.join(here.root, "work-home");
+    const account = { id: "work-here", label: "Work", kind: "managed" as const, home, signedIn: true };
+    const probe = { list: () => [account], active: () => "default", probe: async () => observed } as never;
+    const registry = { recordQuotaObservation: () => {}, quotaObservations: () => [] } as never;
+    const selected: string[] = [];
+    const row = await within(here, () => verifyImportedAccount(ROW, {
+      list: async () => [account], identity, now: checkClock, readLimits: transferLimitsReader({ probe, registry, now: CHECK_AT.getTime() }),
+      select: async (_engine, id) => { selected.push(id); },
+    }));
+    return { row, selected };
+  }
+
+  test("a fresh live read with a plan and windows makes the account usable and active", async () => {
+    const { row, selected } = await verifyWith(observation());
+    expect([row.state, selected]).toEqual(["usable", ["work-here"]]);
+  }, 60_000);
+
+  for (const [name, observed, detail] of [
+    ["a read the provider refused, answered from cache", observation({ provenance: { source: "cache", reason: "quota-probe-failed", staleSince: "2026-10-23T11:00:00.000Z" }, observedAt: CHECK_AT.getTime() - 3_600_000 }), "limits-not-live"],
+    ["a live read that names no plan", observation({ limits: { session: window, weekly: window, plan: null, capturedAt: null } }), "no-plan"],
+    ["a live read taken long before this check", observation({ observedAt: CHECK_AT.getTime() - 3_600_000 }), "limits-stale"],
+  ] as const) {
+    test(`${name} stays read_failed and switches no active account`, async () => {
+      const { row, selected } = await verifyWith(observed);
+      expect([row.state, row.detail, selected]).toEqual(["read_failed", detail, []]);
+    }, 60_000);
+  }
 });

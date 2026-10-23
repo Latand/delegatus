@@ -66,6 +66,11 @@ export interface BundleEnvironmentEntry {
 export interface BundleNotice {
   code: "engine_memory_not_imported";
   files: number;
+  /** `import`: this install already uses Delegatus memory, and these files are
+      not among what its import from the engines took in (added or changed
+      since, or the choice arrived by an earlier transfer). Absent: it never
+      switched. Either way the memory source import takes them in. */
+  since?: "import";
 }
 
 export interface BundleHeader {

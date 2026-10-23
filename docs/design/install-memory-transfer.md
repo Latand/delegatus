@@ -119,28 +119,70 @@ slice 3 is dropped. What the build settled differently from the text below:
   call's journal and one no closed call cites stay on the source.
 - The secret guard also covers the finished header: environment values,
   project names and remotes, account labels and notices.
+- The engine memory notice compares, on an install that already switched to
+  Delegatus memory, each engine memory file's content with the manifest of
+  the import that switch ran: a file added or changed since is named, with
+  the action that imports it (switch to the engines' memory and back). An
+  install that never switched names every engine memory file. Engine memory
+  is never read into the bundle.
 - `delegatus export` needs the running Viewer, like `import`; an export of an
   install whose Viewer does not start is deferred.
 - File revisions in the dry run are content hashes, so a file restored by a
   rolled-back import still matches its preview.
 - Apply holds the shared write lock of every file it writes from the revision
   check through its commit or rollback, and checks each file again just before
-  writing it. The checkpoint is a hard link to each replaced file (a copy where
-  links are refused), so putting it back is a rename that needs no free space;
-  a full disk during the writes leaves the originals in place. A rollback puts
+  writing it. Every product writer of those files takes the same lock for its
+  read-modify-write (shared memory, project, operator and «asks you»
+  settings, relay switches, the voice choices; worker limits, the memory
+  source and the voice companion store already did), so a setting changed
+  during an apply waits and lands on top of the import, or of the original
+  after a rollback. A file the dry run found absent is created only if it
+  still is (written aside, then linked into place), so a writer that made it
+  meanwhile keeps it, lock or no lock. A target file that is a link, not a
+  regular file, or over 64 MiB is never read or replaced: its records are
+  skipped as `target-file-unreadable`.
+- The checkpoint is a hard link to each replaced file (a copy where links are
+  refused), kept beside the file under a name of the import, so putting it
+  back is a rename inside one directory that needs no free space and never
+  crosses a file system, wherever the state and config roots live; a full
+  disk during the writes leaves the originals in place. A rollback puts
   back only what is still the import's: a file holding the import's bytes gets
   its original back, a file a later writer rewrote keeps that writer's values
   and loses only the import's own, and a file the import never reached is left
   alone. The work after the commit (lesson known values, accounts) is recorded
   in the import record and finished by recovery. A recovery that cannot settle
-  refuses the Viewer's activation; the journal stays for the next start. After
-  a failed apply the Viewer runs recovery at once, under the account lock.
+  refuses the Viewer's activation; the journal stays for the next start. A
+  journal or an import listing that exists and cannot be read or decoded
+  (an I/O error, permissions, a damaged journal) is such a refusal, never read
+  as absent; only an import directory whose journal was never written holds
+  nothing to settle.
+- For an apply the serving Viewer takes the account mutation lock itself and
+  lends that hold to its worker, so the lock never passes to a waiting launch
+  between a worker's death and the recovery. After a failed apply the Viewer
+  runs recovery at once under that hold; a recovery that fails keeps the hold
+  and is retried (after 5 s, 30 s, 2 min, then every 10 min) until it settles,
+  answering the caller `recovery_pending` meanwhile, so launches and further
+  imports wait.
+- Each import record lists the bundle records it did not apply: those it
+  skipped, and conflicts where this install kept its own value. Importing the
+  same bundle again plans only the records no earlier import of it applied
+  (§4.8), so a newly mapped folder or «take the source's» still works, and a
+  record that arrived is left as this install now holds it: a rule edited
+  here since gets no second stored version. Such records count as skipped,
+  `already-imported`.
 - Accounts (slice 2, `src/lib/transfer/accounts.ts`): an account travels
   when it is signed in or bound to a project. Its identity hash is salted
   with the export id. On the target an account stands in for a source account
-  only when it is proven the same: one an earlier import of this source made,
-  the target's own engine home while signed out or signed into the same
-  identity, or the same id signed into the same identity. Every other account
+  only when it is proven the same: the account an import of the same export
+  made, an account here signed into the identity this export reports (an
+  earlier import's account included), the target's own engine home while
+  signed out or signed into the same identity, or the same id signed into
+  the same identity. A row an earlier import left proves nothing by itself:
+  another install, or the source after a new login, can use the same id, and
+  each export salts its identity hash anew. A checklist row is keyed by the
+  source account and the account here, so a later import never inherits an
+  earlier row's state or confirmation; only the same export keeps them, and
+  an account proven by its login is read again before it is ready. Every other account
   gets a fresh id, reserved before the commit by an empty home that every
   account setup skips. The bindings and the checklist rows commit in the
   import's own transaction, so a project is fenced to its accounts before any
@@ -151,11 +193,16 @@ slice 3 is dropped. What the build settled differently from the text below:
   an id no account can have, so its projects park. The checklist rows live in
   the `transfer_accounts` collection; `POST /api/transfer/accounts` verifies
   them with the `transfer-verify` live read, and a completed sign-in settles
-  its row at once. A source identity that this install cannot read keeps the
+  its row at once. Usable needs that read's own observation: provenance
+  `live` with no stale mark, taken within two minutes of the check, naming a
+  plan and at least one window. A cached or carried reading, or one without
+  a plan, stays `read_failed` and switches no active account. A source identity that this install cannot read keeps the
   row waiting, and nothing becomes active, until a read answers or the
   operator confirms the account. The checklist is in the desktop accounts
   dialog (inside its bounded account list; the dialog itself is bounded to the
-  window), on the phone's accounts screen and in the Copilot list. Copilot
+  window), on the phone's accounts screen and in the Copilot list, which is
+  bounded with a scroller of its own because it opens in the rail's footer
+  at the window's lower edge. Copilot
   rows count as usable when the CLI config shows a signed-in user; no limit
   read exists for them (§11), and the Copilot checklist says so.
 - Measured apply window for the learned rules of §1.10's shape (2,898 rules,

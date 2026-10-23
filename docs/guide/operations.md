@@ -89,8 +89,9 @@ settings, voice choices, the App repository declaration and relay switches.
 No login, key, token or pairing is ever in it. Engine memory (Claude project
 memory, Codex memories) is not carried: switch the install to Delegatus memory
 first, which imports it ([memory source switch](../design/memory-source-switch.md)),
-and the export says so when some was never imported. That choice itself
-travels to an install that never made it, without importing anything there.
+and the export says so when some was never imported, files an engine wrote
+after the switch included. That choice itself travels to an install that
+never made it, without importing anything there.
 
 ```
 delegatus export                         # sealed; the passphrase is shown once
@@ -105,7 +106,12 @@ it is not running. The dry run lists, per section, what is new, already
 there, in conflict (this install's value stays unless `--replace` names the
 section) or skipped, and every folder that needs a folder here. Apply writes
 nothing when this install changed since the dry run, and leaves the install
-as it was when it fails or stops partway. The report compares each learned
+as it was when it fails or stops partway; a setting changed here meanwhile
+waits for the import and keeps its value. Importing the same bundle again
+leaves what arrived alone and plans only what was skipped then (such as a
+project whose folder is mapped now) or where this install kept its own
+value. A settings file that is a link, or larger than 64 MiB, is never
+read or replaced. The report compares each learned
 rule scope with the source and lists what still has to be done here: API
 keys through Keys → Import, the relay pairing, the GitHub App credential, and
 the environment variables the source used.

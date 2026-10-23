@@ -142,18 +142,20 @@ export async function postAccounts(req: NextRequest): Promise<Response> {
   catch { return transferJson({ error: "the body is not JSON", code: "bad_request" }, 400); }
   const engine = typeof input.engine === "string" && ENGINES.has(input.engine) ? input.engine as "claude" | "codex" | "copilot" : undefined;
   const sourceId = typeof input.sourceId === "string" ? input.sourceId : undefined;
+  /* The account here the row maps to: two imports can map one source id to two accounts. */
+  const targetId = typeof input.targetId === "string" || input.targetId === null ? input.targetId as string | null : undefined;
   const accounts = await import("./accounts");
   if (input.action === "verify") {
     const { viewerLoopMonitor } = await import("@/lib/viewerLoopMonitor");
-    const rows = await viewerLoopMonitor.run("transfer.verify", () => accounts.verifyImportedAccounts({ engine, sourceId }));
+    const rows = await viewerLoopMonitor.run("transfer.verify", () => accounts.verifyImportedAccounts({ engine, sourceId, targetId }));
     return transferJson({ ok: true, result: accounts.accountReportRows(rows) });
   }
   if (input.action === "retry" && engine && sourceId) {
-    const row = await accounts.retryImportedAccount(engine, sourceId);
+    const row = await accounts.retryImportedAccount(engine, sourceId, {}, targetId);
     return row ? transferJson({ ok: true, result: accounts.accountReportRows([row])[0] }) : transferJson({ ok: false, error: { code: "unknown_account", message: "no imported account with that id" } }, 404);
   }
   if ((input.action === "not_needed" || input.action === "confirm_identity") && engine && sourceId) {
-    const row = accounts.markImportedAccount(engine, sourceId, input.action);
+    const row = accounts.markImportedAccount(engine, sourceId, input.action, targetId);
     return row ? transferJson({ ok: true, result: accounts.accountReportRows([row])[0] }) : transferJson({ ok: false, error: { code: "unknown_account", message: "no imported account with that id" } }, 404);
   }
   return transferJson({ error: "action must be verify, retry, not_needed or confirm_identity", code: "bad_request" }, 400);

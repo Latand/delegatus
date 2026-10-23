@@ -53,13 +53,14 @@ const TEXT = {
     passphrase: (value) => `Passphrase (shown once, not stored anywhere): ${value}`,
     wrote: (file, bytes) => `Wrote ${file} (${bytes} bytes).`,
     engineMemory: (files) => `Note: ${files} engine memory files on this install were never imported into Delegatus memory, so they are not in this bundle. Switch this install to Delegatus memory first, which imports them (the memory source switch: PUT /api/memory/source with {"source":"delegatus"}), then export again.`,
+    engineMemorySince: (files) => `Note: ${files} engine memory files on this install are not in its Delegatus memory (added or changed after its import from the engines), so they are not in this bundle. To import them, switch the memory source to the engines' memory and back to Delegatus memory, which runs the import again (PUT /api/memory/source with {"source":"engines"}, then {"source":"delegatus"}), then export again.`,
     askPassphrase: "Passphrase of the sealed bundle: ",
     needPassphrase: "This bundle is sealed: pass --passphrase-file FILE, or run in a terminal to type the passphrase.",
     badPassphrase: "The passphrase is wrong or the bundle is damaged.",
     askFolder: (name, key) => `Folder on this install for «${name}» (${key}); empty leaves it unmapped: `,
     askApply: "Apply this import? [y/N] ",
     cancelled: "Nothing was applied.",
-    previous: (id, at) => `This bundle was imported here before (${id}, ${at}); only what was skipped then is applied.`,
+    previous: (id, at) => `This bundle was imported here before (${id}, ${at}); only what it skipped then, or where this install kept its own value, is planned again.`,
     sectionLine: (s) => `  ${s.name.padEnd(18)} ${String(s.records).padStart(6)} records: ${s.new} new, ${s.same} same, ${s.conflict} conflict, ${s.skipped} skipped${s.pending ? ` (${s.pending} wait for their target)` : ""}`,
     unmapped: (names) => `Folders not mapped (their records arrive under the source key and match nothing): ${names}`,
     redo: "Still to do on this install:",
@@ -87,13 +88,14 @@ const TEXT = {
     passphrase: (value) => `Пароль (показується один раз і ніде не зберігається): ${value}`,
     wrote: (file, bytes) => `Записано ${file} (${bytes} байтів).`,
     engineMemory: (files) => `Увага: ${files} файлів пам'яті рушіїв на цій інсталяції ніколи не імпортовано в пам'ять Delegatus, тож їх немає в пакеті. Спершу перемкніть цю інсталяцію на пам'ять Delegatus, що імпортує їх (перемикач джерела пам'яті: PUT /api/memory/source з {"source":"delegatus"}), потім експортуйте знову.`,
+    engineMemorySince: (files) => `Увага: ${files} файлів пам'яті рушіїв на цій інсталяції немає в її пам'яті Delegatus (додані або змінені після її імпорту з рушіїв), тож їх немає в пакеті. Щоб імпортувати їх, перемкніть джерело пам'яті на пам'ять рушіїв і назад на пам'ять Delegatus, що запускає імпорт знову (PUT /api/memory/source з {"source":"engines"}, потім {"source":"delegatus"}), потім експортуйте знову.`,
     askPassphrase: "Пароль запечатаного пакета: ",
     needPassphrase: "Пакет запечатано: передайте --passphrase-file ФАЙЛ або запустіть у терміналі, щоб ввести пароль.",
     badPassphrase: "Пароль неправильний або пакет пошкоджено.",
     askFolder: (name, key) => `Тека на цій інсталяції для «${name}» (${key}); порожньо — не зіставляти: `,
     askApply: "Застосувати цей імпорт? [y/N] ",
     cancelled: "Нічого не застосовано.",
-    previous: (id, at) => `Цей пакет уже імпортували тут (${id}, ${at}); застосується лише те, що тоді пропустили.`,
+    previous: (id, at) => `Цей пакет уже імпортували тут (${id}, ${at}); знову плануються лише записи, які тоді пропустили або де ця інсталяція лишила своє значення.`,
     sectionLine: (s) => `  ${s.name.padEnd(18)} ${String(s.records).padStart(6)} записів: ${s.new} нових, ${s.same} однакових, ${s.conflict} конфліктів, ${s.skipped} пропущено${s.pending ? ` (${s.pending} чекають на свою ціль)` : ""}`,
     unmapped: (names) => `Не зіставлені теки (їхні записи прийдуть під ключем джерела й ні з чим не збіжуться): ${names}`,
     redo: "Ще треба зробити на цій інсталяції:",
@@ -255,8 +257,12 @@ function printPlan(context, plan) {
   for (const section of plan.sections) log(text.sectionLine(section));
   const unmapped = plan.projects.filter((project) => project.state === "unmapped");
   if (unmapped.length) log(text.unmapped(unmapped.map((project) => `${project.displayName} (${project.key})`).join(", ")));
-  if (plan.notices?.length) for (const notice of plan.notices) if (notice.code === "engine_memory_not_imported") log(text.engineMemory(notice.files));
+  if (plan.notices?.length) for (const notice of plan.notices) if (notice.code === "engine_memory_not_imported") log(engineMemoryNote(text, notice));
   printRedo(context, plan.redo);
+}
+
+function engineMemoryNote(text, notice) {
+  return notice.since === "import" ? text.engineMemorySince(notice.files) : text.engineMemory(notice.files);
 }
 
 function printRedo(context, redo) {
@@ -302,7 +308,7 @@ async function runExport(args, context) {
     context.err(context.text.wrote(out, bytes.length));
   }
   if (passphrase) context.err(context.text.passphrase(passphrase));
-  for (const notice of summary.notices ?? []) if (notice.code === "engine_memory_not_imported") context.err(context.text.engineMemory(notice.files));
+  for (const notice of summary.notices ?? []) if (notice.code === "engine_memory_not_imported") context.err(engineMemoryNote(context.text, notice));
   return 0;
 }
 

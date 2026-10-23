@@ -55,7 +55,7 @@ export interface ExportOptions {
   env?: Readonly<Record<string, string | undefined>>;
   projects?: ProjectDirectory;
   /** Engine memory files present and never imported into Delegatus memory (the export's notice). */
-  engineMemoryNotImported?: () => Promise<number>;
+  engineMemoryNotImported?: () => Promise<BundleNotice | null>;
   /** Slice 2: the accounts section and the header's account list. */
   accounts?: (source: SourceSnapshot) => Promise<{ header: BundleAccount[]; records: StoredRow[] }>;
   snapshot?: () => SourceSnapshot;
@@ -187,8 +187,8 @@ export async function exportTransferBundle(options: ExportOptions): Promise<Expo
     }
     const keys = sections.flatMap(section => section.records.flatMap(record => [...projectKeysIn(record.k), ...projectKeysIn(JSON.stringify(record.v))]));
     const notices: BundleNotice[] = [];
-    const engineFiles = await (options.engineMemoryNotImported?.() ?? Promise.resolve(0));
-    if (engineFiles > 0) notices.push({ code: "engine_memory_not_imported", files: engineFiles });
+    const engineMemory = await (options.engineMemoryNotImported?.() ?? Promise.resolve(null));
+    if (engineMemory && engineMemory.files > 0) notices.push(engineMemory);
     const header = {
       exportId,
       createdAt: now.toISOString(),

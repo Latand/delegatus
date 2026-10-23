@@ -379,7 +379,11 @@ export function CopilotFooterRow({ limits, limitsAccountId, now, onChanged, dens
         </div>
       ) : null}
       {open ? (
-        <div role="dialog" aria-label={t("copilot.accounts.title")} className="flex flex-col gap-2 border-t border-border bg-sunken px-3.5 py-2.5 text-[11.5px]">
+        /* Bounded with a scroller of its own: it opens in the rail's footer,
+           which sits at the window's lower edge, so an unbounded list (an
+           import's checklist above the accounts) ran under the edge of a short
+           window, where nothing scrolls. */
+        <div role="dialog" aria-label={t("copilot.accounts.title")} data-copilot-panel="" className="flex max-h-[min(40vh,20rem)] flex-col gap-2 overflow-y-auto overscroll-contain border-t border-border bg-sunken px-3.5 py-2.5 text-[11.5px] [&>*]:shrink-0">
           <CopilotAccountList accounts={accounts} />
         </div>
       ) : null}

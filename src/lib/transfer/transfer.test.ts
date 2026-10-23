@@ -3,8 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
+import crypto from "node:crypto";
 
-import { leaveSeatLessons } from "@/lib/memory/roleStore";
+import { leaveSeatLessons, roleMemoryCollection } from "@/lib/memory/roleStore";
+import { readOperatorSettings } from "@/lib/operator/settings";
 import { importCollection } from "@/lib/memory/importStore";
 import { memorySource } from "@/lib/memory/source";
 import { bridgeReportsEnabled, mergeOnReviewEnabled, setBridgeReports, setMergeOnReview } from "@/lib/projects/settings";
@@ -14,6 +16,7 @@ import { decodeBundle, encodeBundle } from "./bundle";
 import { exportTransferBundle, TransferSecretError } from "./exporter";
 import { applyTransferImport, previewTransferImport, readImportRecords, TransferImportError } from "./importer";
 import type { BundleProject } from "./types";
+import { engineMemoryNotImported } from "./workerProtocol";
 import { installEnv, makeInstall, MOVED_FROM, NOW, readInstall, RELAY_CREDENTIAL, REPOSITORY, SECRET_SHAPED_VALUE, seedSource, treeDigest, within, type Install } from "./transfer.fixture";
 
 /* The round trip between two isolated installs (docs/design/install-memory-transfer.md
@@ -34,7 +37,7 @@ const exportFrom = (install: Install, options: Parameters<typeof exportTransferB
     now: new Date(NOW), exportId: "export-1", product: "test",
     env: { LLV_LANG: "uk", LLV_TOKEN: "access-key-value-never-exported", DELEGATUS_AGENT_CPU: "2-5", LLV_STATE_OWNER: "viewer", PATH: "/bin" },
     projects: { aliases: aliases.aliases, displayNames: aliases.displayNames, remotes: recordedProjectRemotes() },
-    engineMemoryNotImported: async () => 3,
+    engineMemoryNotImported: async () => ({ code: "engine_memory_not_imported" as const, files: 3 }),
     ...options,
   });
 });
@@ -91,6 +94,40 @@ describe("export", () => {
     expect((failure as Error).message).not.toContain(SECRET_SHAPED_VALUE);
     // Leaving the section out exports the rest.
     expect((await exportFrom(other, { sections: ["settings.operator"] })).sections).toEqual([{ name: "settings.operator", records: 6 }]);
+  }, 60_000);
+
+  test("names engine memory never imported, and after the switch to Delegatus memory the files added since; carries neither", async () => {
+    const other = makeInstall(parent, "engine-memory");
+    await within(other, () => ensureLegacyCollectionsImported(() => {}));
+    const memories = path.join(other.home, ".codex", "memories");
+    fs.mkdirSync(memories, { recursive: true });
+    const summary = "A summary the import took in.\n";
+    fs.writeFileSync(path.join(memories, "memory_summary.md"), summary);
+    // Never switched: every engine memory file is outside Delegatus memory.
+    expect(await within(other, () => engineMemoryNotImported())).toEqual({ code: "engine_memory_not_imported", files: 1 });
+
+    // Switched and settled: the import's manifest holds the summary's bytes, so nothing is missing.
+    const importId = "import_transfer-test";
+    const backup = path.join(other.state, "backups", "engine-memory", importId);
+    fs.mkdirSync(backup, { recursive: true });
+    const sha256 = crypto.createHash("sha256").update(summary).digest("hex");
+    fs.writeFileSync(path.join(backup, "manifest.json"), JSON.stringify({ schemaVersion: 1, importId, createdAt: NOW, files: [
+      { file: ".codex/memories/memory_summary.md", copy: "stores/x/memory_summary.md", engine: "codex", kind: "codex_summary", size: summary.length, modifiedAt: NOW, sha256, home: path.join(other.home, ".codex"), project: null, loadedAtStart: true },
+    ] }));
+    await within(other, () => importCollection(true)!.boundedPatch(2, tx => tx.put({ kind: "import", id: importId, state: "ready", at: NOW, previous: null, backup, files: 1, candidates: 0, parts: 0 } as never)));
+    fs.writeFileSync(path.join(other.state, "memory-source.json"), JSON.stringify({ schemaVersion: 1, source: "delegatus", phase: "active", changedAt: NOW, importId, importStartedAt: NOW, flippedAt: NOW, drainedAt: NOW }));
+    expect(await within(other, () => engineMemoryNotImported())).toBeNull();
+
+    // An engine writes a new memory file after the switch: it is named, with the action that imports it.
+    const later = "A note an engine wrote after the switch.\n";
+    fs.writeFileSync(path.join(memories, "MEMORY.md"), later);
+    expect(await within(other, () => engineMemoryNotImported())).toEqual({ code: "engine_memory_not_imported", files: 1, since: "import" });
+    const exported = await exportFrom(other, { sections: ["memory.settings"], exportId: "engine-memory", engineMemoryNotImported });
+    const decoded = await decodeBundle(exported.bytes);
+    expect(decoded.header.notices).toEqual([{ code: "engine_memory_not_imported", files: 1, since: "import" }]);
+    const plain = zlib.gunzipSync(exported.bytes).toString("utf8");
+    expect(plain).not.toContain(later.trim());
+    expect(plain).not.toContain(summary.trim());
   }, 60_000);
 });
 
@@ -158,6 +195,41 @@ describe("round trip into an empty install", () => {
     const remembered = again.projects.find(project => project.key === seeded.folderKey)!;
     expect([remembered.state, remembered.target]).toEqual(["remembered", targetFolderKey]);
     for (const section of again.sections) expect(section.new).toBe(0);
+  }, 120_000);
+});
+
+describe("the same bundle again", () => {
+  test("leaves every record that arrived as this install now holds it, and applies what was skipped before", async () => {
+    const target = await freshTarget("replay-target");
+    // First without the folder mapping: the hand-made project waits for its folder.
+    const first = await within(target, () => previewTransferImport(bundle, {}));
+    expect(first.sections.find(section => section.name === "settings.projects")!.skippedReasons["manual-project-without-folder"]).toBe(1);
+    await within(target, () => applyTransferImport({ bundleSha256: first.bundleSha256, revisions: first.revisions }));
+    // This install edits a rule that arrived.
+    await within(target, () => leaveSeatLessons({ source: { origin: "seat", project: REPOSITORY, roleId: "orchestrator", fixRound: false, conversationId: "c-here" }, now: "2026-10-23T00:00:00.000Z",
+      lessons: [], rewrite: { id: seeded.ruleIds[0]!, rule: "Run every heavy check through the shared slot wrapper.", why: "The agent scope has a memory cap." } }));
+    const rows = () => within(target, () => {
+      const collection = roleMemoryCollection()!;
+      return { count: collection.snapshot().length, rule: collection.get(`r:${seeded.ruleIds[0]}`) };
+    });
+    const edited = await rows();
+
+    for (const round of [1, 2]) {
+      const again = await within(target, () => previewTransferImport(bundle, { mappings: mappingFor(target) }));
+      const role = again.sections.find(section => section.name === "memory.role")!;
+      expect([role.new, role.same, role.conflict, role.skipped === role.records]).toEqual([0, 0, 0, true]);
+      expect(role.skippedReasons).toEqual({ "already-imported": role.records });
+      const projects = again.sections.find(section => section.name === "settings.projects")!;
+      // The hand-made project that waited is planned now that its folder is mapped, once.
+      expect(projects.new).toBe(round === 1 ? 1 : 0);
+      const { report } = await within(target, () => applyTransferImport({ bundleSha256: again.bundleSha256, revisions: again.revisions, mappings: mappingFor(target) }));
+      expect(report.complete).toBe(true);
+      const after = await rows();
+      expect(after.count).toBe(edited.count);
+      expect(after.rule).toEqual(edited.rule);
+    }
+    const mapped = (await within(target, () => previewTransferImport(bundle, { mappings: mappingFor(target) }))).projects.find(project => project.key === seeded.folderKey)!.target!;
+    expect((await readInstall(target, seeded)).manual).toEqual([{ project: mapped, displayName: "beta" }]);
   }, 120_000);
 });
 
@@ -233,6 +305,30 @@ describe("apply refusals", () => {
     await within(target, () => applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions, mappings: mappingFor(target) }));
     expect(fs.readFileSync(damaged, "utf8")).toBe("{ half a file");
   }, 60_000);
+
+  test("never takes an oversized or linked settings file for an absent one: their bytes and choices stay", async () => {
+    const target = await freshTarget("unsupported-target");
+    // Over the 64 MiB read bound, holding a chosen language.
+    const oversized = path.join(target.state, "operator-settings.json");
+    const chosen = { schemaVersion: 1, locale: { value: "en", source: "chosen", changedAt: NOW } };
+    const body = JSON.stringify(chosen);
+    fs.writeFileSync(oversized, `${body.slice(0, -1)},"padding":"${" ".repeat(64 * 1024 * 1024)}"}`);
+    // A link to a file elsewhere.
+    const elsewhere = path.join(target.root, "elsewhere-asks.json");
+    fs.writeFileSync(elsewhere, JSON.stringify({ schemaVersion: 1, enabled: false, capUsd: 7 }));
+    fs.symlinkSync(elsewhere, path.join(target.state, "asks-you-settings.json"));
+    const hash = (file: string) => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+    const before = { oversized: hash(oversized), elsewhere: hash(elsewhere) };
+
+    const plan = await within(target, () => previewTransferImport(bundle, { mappings: mappingFor(target), replace: ["settings.operator"] }));
+    const operator = plan.sections.find(section => section.name === "settings.operator")!;
+    expect([operator.new, operator.skippedReasons["target-file-unreadable"]]).toEqual([0, 5]);
+    const { report } = await within(target, () => applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions, mappings: mappingFor(target), replace: ["settings.operator"] }));
+    expect(report.sections.find(section => section.name === "settings.operator")!.balanced).toBe(true);
+    expect({ oversized: hash(oversized), elsewhere: hash(elsewhere) }).toEqual(before);
+    expect(fs.lstatSync(path.join(target.state, "asks-you-settings.json")).isSymbolicLink()).toBe(true);
+    expect(await within(target, () => readOperatorSettings().locale?.value)).toBe("en");
+  }, 120_000);
 
   test("refuses a bundle that was never previewed here and a mapping to a missing folder", async () => {
     const target = await freshTarget("unstaged-target");
