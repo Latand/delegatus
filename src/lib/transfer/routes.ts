@@ -39,6 +39,8 @@ const statusOf = (response: TransferWorkerResponse) => {
     case "target_changed": case "busy": return 409;
     case "not_staged": case "unknown_import": return 404;
     case "worker_stopped": case "failed": return 500;
+    /* The import is not settled yet: launches and imports wait for it. */
+    case "recovery_pending": case "recovery_unreadable": return 503;
     default: return 422;
   }
 };

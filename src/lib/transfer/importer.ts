@@ -758,9 +758,10 @@ function readJournal(directory: string): Journal | null {
   }
   let journal: unknown;
   try { journal = JSON.parse(text); } catch { journal = null; }
+  /* A settled journal is never acted on; an unsettled one must decode whole, since recovery acts on every entry. */
   const valid = isRecordObject(journal) && typeof journal.importId === "string" && ["writing", "done", "rolled-back"].includes(journal.state as string)
-    && Array.isArray(journal.files) && journal.files.every(isJournalFile)
-    && Array.isArray(journal.reservations) && journal.reservations.every(item => isRecordObject(item) && typeof item.engine === "string" && typeof item.id === "string");
+    && (journal.state !== "writing" || (Array.isArray(journal.files) && journal.files.every(isJournalFile)
+      && Array.isArray(journal.reservations) && journal.reservations.every(item => isRecordObject(item) && typeof item.engine === "string" && typeof item.id === "string")));
   if (!valid) throw new TransferImportError("recovery_unreadable", `the journal of import ${path.basename(directory)} is damaged; it is kept for the next attempt`);
   return journal as unknown as Journal;
 }
