@@ -6,7 +6,7 @@ export class TelegramBotError extends Error {
   constructor(
     readonly code: TelegramBotErrorCode,
     message: string,
-    readonly extra: { retryAfterSeconds?: number; sentMessageIds?: number[]; secretClass?: string; refusals?: TelegramBotRefusal[] } = {},
+    readonly extra: { retryAfterSeconds?: number; sentMessageIds?: number[]; secretClass?: string; confirmation?: { id: string; url: string; expiresAt: string }; refusals?: TelegramBotRefusal[] } = {},
   ) {
     super(message);
     this.name = "TelegramBotError";
@@ -19,6 +19,11 @@ export class TelegramBotError extends Error {
 
 /** Telegram's refusal of a send, as one of our codes. */
 export function sendFailure(result: Extract<BotCallResult, { ok: false }>, chat: ChatRow): TelegramBotError {
+  if (result.classified) return new TelegramBotError(result.classified.code,
+    result.classified.code === "rate_limited" ? `Celestia is rate-limiting sends; retry after ${result.retryAfterSeconds ?? 1} s`
+      : result.classified.code === "send_uncertain" ? "Celestia could not confirm the send; keep the same send key to avoid a duplicate"
+        : `Celestia refused the clone send (${result.classified.code})`,
+    result.retryAfterSeconds === null ? {} : { retryAfterSeconds: result.retryAfterSeconds });
   // Keep the cause ahead of titles and advice in bounded bridge diagnostics.
   const detail = result.description ? `Telegram: ${result.description}; ` : "";
   if (result.kind === "unreachable") return new TelegramBotError("network_failed", "Telegram could not be reached, so nothing was sent");

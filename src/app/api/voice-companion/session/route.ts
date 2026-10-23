@@ -21,11 +21,14 @@ export async function POST(req: NextRequest) {
       companionSessionOwner(req, session);
     };
     if (body.action === "start") {
-      if (typeof body.project !== "string" || !["en", "uk"].includes(body.locale as string) || typeof body.sdp !== "string" || !id(body.requestId)) throw new Error("INVALID_REQUEST");
+      if (typeof body.project !== "string" || !["en", "uk"].includes(body.locale as string) || typeof body.sdp !== "string" || !id(body.requestId)
+        || (body.resume !== undefined && !id(body.resume))) throw new Error("INVALID_REQUEST");
       const previous = Object.values(service.storage.read().sessions).find(session => session.mintRequestId === body.requestId);
       if (previous) companionSessionOwner(req, previous);
+      /* A reconnect continues only the caller's own call. */
+      if (typeof body.resume === "string") owns(body.resume);
       return NextResponse.json(await service.start({ project: body.project, locale: body.locale as "en" | "uk", sdp: body.sdp, requestId: body.requestId,
-        startedBy: companionStarter(req) }), { status: 201, headers });
+        startedBy: companionStarter(req), ...(typeof body.resume === "string" ? { resume: body.resume } : {}) }), { status: 201, headers });
     }
     if (body.action === "close" && id(body.requestId) && body.sessionId === undefined) {
       const session = Object.values(service.storage.read().sessions).find(row => row.mintRequestId === body.requestId);
@@ -34,7 +37,11 @@ export async function POST(req: NextRequest) {
     }
     if (!id(body.sessionId)) throw new Error("INVALID_REQUEST");
     owns(body.sessionId);
-    if (body.action === "close") await service.close(body.sessionId);
+    if (body.action === "close") {
+      /* A browser whose media or network failed says so: the call dropped, and it is offered back. */
+      if (body.reason !== undefined && body.reason !== "transport") throw new Error("INVALID_REQUEST");
+      await service.close(body.sessionId, body.reason === "transport" ? "transport" : "operator");
+    }
     else if (body.action === "context") {
       if (body.project !== null && (typeof body.project !== "string" || !body.project.trim() || body.project.length > 200)) throw new Error("INVALID_REQUEST");
       await service.context(body.sessionId, body.project as string | null);
@@ -61,14 +68,18 @@ export async function GET(req: NextRequest) {
     const after = Number(req.nextUrl.searchParams.get("after") ?? 0);
     if (!id(sessionId) || !Number.isSafeInteger(after) || after < 0) throw new Error("INVALID_REQUEST");
     const service = companionSessions();
-    const session = service.storage.read().sessions[sessionId];
+    const view = req.nextUrl.searchParams.get("view");
+    const stored = service.storage.read().sessions[sessionId];
+    /* A retained call whose state row is gone opens from its journal, under the owner the journal recorded. */
+    const session = stored ?? (view === "transcript" ? service.admission.records.journalSession(sessionId) : null);
     if (!session) throw new Error("SESSION_UNAVAILABLE");
     companionSessionOwner(req, session);
-    if (req.nextUrl.searchParams.get("view") === "transcript") {
+    if (view === "transcript") {
+      if (!stored) return NextResponse.json({ sessionId, ...service.transcriptRecord(sessionId, true) }, { headers });
       // Opening an ended call is also its bounded report reconciliation path.
       // The shared event path speaks only while the provider call is active.
       await service.events(sessionId, after);
-      return NextResponse.json({ ...service.transcriptRecord(sessionId), usage: service.storage.usageFor(sessionId) }, { headers });
+      return NextResponse.json({ sessionId, ...service.transcriptRecord(sessionId), usage: service.storage.usageFor(sessionId) }, { headers });
     }
     return NextResponse.json({ events: await service.events(sessionId, after), usage: service.storage.usageFor(sessionId) }, { headers });
   } catch (error) { return companionFailure(error); }

@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
-import type { Flow } from "@/lib/flows/types";
 
 setDefaultTimeout(30_000);
 
@@ -31,6 +30,7 @@ const { defaultPipelinePorts, patchPipeline, tickPipelines } = await import("./e
 const { realExec } = await import("@/lib/workflows/provision");
 const { prepareStageGitGuard, stageGitReceiptDirectory } = await import("@/lib/git/stageAttemptGuard");
 const { agentPublicationIdentityEnv } = await import("@/lib/git/agentPublicationIdentity");
+const { projectIdentityFromRemote } = await import("@/lib/projects/identity");
 const { registerPipelineTick } = await import("./controllerSignal");
 let restore = registerPipelineTick(async () => {});
 afterAll(() => {
@@ -101,7 +101,7 @@ function fixture() {
   const attempt = lane.runs[0]!.attempts[0]!;
   attempt.state = "passed"; attempt.verdict = { status: "pass", findings: [] };
   attempt.agentPath = null; attempt.conversationId = null; attempt.launchId = null; attempt.paneId = null;
-  lane.delivery = { target: { repository: `fixture-${lane.id}`, remote: deliveryRemote, branch: `refs/heads/${lane.branch}` },
+  lane.delivery = { target: { repository: projectIdentityFromRemote(deliveryRemote, checkout)!.project, remote: deliveryRemote, branch: `refs/heads/${lane.branch}` },
     disposition: "owner", publish: "enabled", ownerId: lane.id, epoch: 1, active: true, journal: [] };
   savePipelines([lane]);
   let pushes = 0;
@@ -299,11 +299,13 @@ test("publication refuses stale and ambiguous short heads without changing accep
 function terminalReview(h: ReturnType<typeof fixture>) {
   const builder = h.lane.stages[0]!;
   builder.next = "review";
-  h.lane.stages.push(pipelineCorpus(2, 1)[1]!.stages[1]!);
+  // Keep the shared corpus unchanged: publication exercises current run stages.
+  h.lane.stages.push({ ...pipelineCorpus(2, 1)[1]!.stages[1]!, kind: "run" });
   const attempt = structuredClone(h.lane.runs[0]!.attempts[0]!);
   attempt.effectiveRole = h.lane.stages[1]!.effectiveRole!;
-  attempt.flowId = "approved-flow";
-  attempt.reviewHeadSha = h.passed; attempt.expectedReviewHeadSha = h.passed;
+  attempt.flowId = null;
+  attempt.reviewHeadSha = null; attempt.expectedReviewHeadSha = null;
+  attempt.reviewedHead = h.passed;
   h.lane.runs.push({ ...h.lane.runs[0]!, stageId: "review", attempts: [attempt] });
   h.lane.cursor = { stageId: "review", state: "committing", input: null, activatedBy: { stageId: "build", attempt: 1, edge: "pass" } };
   savePipelines([h.lane]);
@@ -315,9 +317,9 @@ function terminalReview(h: ReturnType<typeof fixture>) {
 function terminalBudgetPark(h: ReturnType<typeof fixture>) {
   terminalReview(h);
   const stage = h.lane.stages[1]!;
-  stage.kind = "run"; stage.onFail = { to: "build", maxRounds: 1, onExhausted: "park" };
+  stage.onFail = { to: "build", maxRounds: 1, onExhausted: "park" };
   const attempt = h.lane.runs[1]!.attempts[0]!;
-  attempt.flowId = null; attempt.state = "failed";
+  attempt.state = "failed";
   attempt.verdict = { status: "fail", findings: ["P1 retained defect"] };
   attempt.completedAt = new Date().toISOString();
   attempt.activatedBy = { stageId: "build", attempt: 1, edge: "pass", budgetRecheck: true };
@@ -346,7 +348,7 @@ for (const timing of ["before execution", "during Git verification", "after fina
         review.state = "needs_decision"; review.verdict = null; review.completedAt = null;
         review.conversationId = "conversation_fixture_review";
         review.error = "host unavailable before terminal verdict settlement";
-        review.reviewHeadSha = h.head; review.expectedReviewHeadSha = h.head;
+        review.reviewedHead = h.head;
         review.report = { seq: 1, at: new Date().toISOString(),
           actor: { kind: "agent", conversationId: review.conversationId, role: "worker" },
           verdict: { status: lateVerdict, findings: ["P1 late review defect"] },
@@ -525,7 +527,7 @@ for (const kind of ["linear work", "extra merge content", "foreign side branch"]
     await h.tick();
     expect(h.current()).toMatchObject({ state: "needs_decision", lastPassedCommit: h.passed, publishedCommit: null });
     expect(h.current().runs[1]!.attempts).toHaveLength(1);
-    expect(h.current().runs[1]!.attempts[0]).toMatchObject({ reviewHeadSha: h.passed, expectedReviewHeadSha: h.passed, verdict: { status: "pass" } });
+    expect(h.current().runs[1]!.attempts[0]).toMatchObject({ reviewedHead: h.passed, verdict: { status: "pass" } });
     expect(h.current().delivery!.operation).toBeUndefined(); expect(h.pushes()).toBe(0);
   } finally { h.cleanup(); }
 });
@@ -539,36 +541,9 @@ for (const alreadyRemote of [false, true]) test(`terminal review accepts only cl
     await h.tick();
     expect(h.current()).toMatchObject({ state: "completed", lastPassedCommit: h.head, publishedCommit: h.head });
     expect(h.current().runs[1]!.attempts).toHaveLength(1);
-    expect(h.current().runs[1]!.attempts[0]).toMatchObject({ reviewHeadSha: h.passed, expectedReviewHeadSha: h.passed,
+    expect(h.current().runs[1]!.attempts[0]).toMatchObject({ reviewedHead: h.passed,
       publicationIntegration: { passedSha: h.passed, acceptedSha: h.head, mainSha: h.git("rev-parse", "origin/main") }, verdict: { status: "pass" } });
     expect(h.pushes()).toBe(alreadyRemote ? 0 : 1);
-  } finally { h.cleanup(); }
-});
-
-test("moved-head admission refuses a review envelope synchronized during its off-lease proof", async () => {
-  const h = fixture();
-  const { reconcileEmbeddedReviewFlows } = await import("./engine");
-  try {
-    terminalReview(h);
-    let synchronized = false;
-    const ports = { ...h.ports, exec: async (...args: Parameters<typeof realExec>) => {
-      const result = await h.ports.exec(...args);
-      if (!synchronized && args[0] === "git" && args[1][0] === "rev-list") {
-        synchronized = true;
-        const lane = h.current();
-        const flow = { id: "approved-flow", state: "approved", stateDetail: null, createdAt: new Date().toISOString(), closedAt: null,
-          targetSha: h.passed, rounds: [{ n: 1, reviewHeadSha: h.head, verdict: "APPROVE" }] } as unknown as Parameters<typeof reconcileEmbeddedReviewFlows>[1][number];
-        expect(reconcileEmbeddedReviewFlows([lane], [flow])).toBe(true);
-        savePipelines([lane]);
-      }
-      return result;
-    } };
-    const result = await patchPipeline(h.lane.id, { action: "publish", acceptedSha: h.head }, ports);
-    expect(synchronized).toBe(true); expect(result.status).toBe(409); expect(result.error).toContain("changed");
-    expect(h.current()).toMatchObject({ state: "needs_decision", lastPassedCommit: h.passed, publishedCommit: null });
-    expect(h.current().runs[1]!.attempts[0]).toMatchObject({ state: "passed", reviewHeadSha: h.head, expectedReviewHeadSha: h.head, verdict: { status: "pass" } });
-    expect(h.current().runs[1]!.attempts[0]!.publicationIntegration).toBeUndefined();
-    expect(h.current().delivery!.operation).toBeUndefined(); expect(h.pushes()).toBe(0);
   } finally { h.cleanup(); }
 });
 
@@ -1097,7 +1072,7 @@ for (const action of ["publish", "retry-stage"] as const) test(`next explicit ${
   } finally { h.cleanup(); }
 });
 
-for (const action of ["publish", "retry-stage"] as const) for (const legacy of [false, true]) test(`terminal review ${action} retries a hook failure while preserving the approved flow and pass (legacy attempt: ${legacy})`, async () => {
+for (const action of ["publish", "retry-stage"] as const) for (const legacy of [false, true]) test(`terminal review ${action} retries a hook failure while preserving the passed review (legacy attempt: ${legacy})`, async () => {
   const h = fixture();
   const { reconcilePipelinePublication } = await import("./git");
   try {
@@ -1123,7 +1098,7 @@ for (const action of ["publish", "retry-stage"] as const) for (const legacy of [
     await h.tick();
     expect(h.current()).toMatchObject({ state: "completed", lastPassedCommit: h.head, publishedCommit: h.head, delivery: { epoch: 1, ownerId: h.lane.id } });
     expect(h.current().runs[1]!.attempts).toHaveLength(1);
-    expect(h.current().runs[1]!.attempts[0]).toMatchObject({ flowId: "approved-flow", reviewHeadSha: h.passed, expectedReviewHeadSha: h.passed, verdict: { status: "pass" } });
+    expect(h.current().runs[1]!.attempts[0]).toMatchObject({ flowId: null, reviewedHead: h.passed, verdict: { status: "pass" } });
     expect(h.pushes()).toBe(2);
   } finally { h.cleanup(); }
 });
@@ -1359,12 +1334,7 @@ for (const action of ["publish", "retry-stage"] as const) for (const alreadyRemo
   try {
     await legacyPublication(h);
     if (alreadyRemote) h.git("push", "-q", "origin", `${h.passed}:refs/heads/${h.lane.branch}`);
-    const flow = { id: "approved-flow", state: "approved", stateDetail: null, targetSha: h.passed,
-      createdAt: new Date().toISOString(), closedAt: null,
-      rounds: [{ n: 1, reviewHeadSha: h.passed, verdict: "APPROVE" }] } as Flow;
-    const effects: string[] = [];
-    const ports = { ...h.ports, remoteActionSupported: () => false, getFlow: () => flow,
-      patchFlow: () => { effects.push("patch"); return {}; }, closeFlow: async () => { effects.push("close"); } };
+    const ports = { ...h.ports, remoteActionSupported: () => false };
     expect(await reconcilePipelinePublication(h.lane.id, 1, realExec, null)).toBeNull();
     expect(h.current().delivery!.operation).toMatchObject({ state: "settled", passedStage: true, sha: h.passed, epoch: 1 });
     expect(h.current().runs[1]!.attempts[0]!.state).toBe("passed");
@@ -1374,10 +1344,8 @@ for (const action of ["publish", "retry-stage"] as const) for (const alreadyRemo
     expect(h.current()).toMatchObject({ state: "completed", lastPassedCommit: h.passed, publishedCommit: h.passed,
       delivery: { epoch: 1, ownerId: h.lane.id } });
     expect(h.current().runs[1]!.attempts).toHaveLength(1);
-    expect(h.current().runs[1]!.attempts[0]).toMatchObject({ n: 1, flowId: "approved-flow", reviewHeadSha: h.passed,
-      expectedReviewHeadSha: h.passed, verdict: { status: "pass" } });
+    expect(h.current().runs[1]!.attempts[0]).toMatchObject({ n: 1, flowId: null, reviewedHead: h.passed, verdict: { status: "pass" } });
     expect(h.pushes()).toBe(alreadyRemote ? 0 : 1);
-    expect(flow.state).toBe("approved"); expect(effects).toEqual([]);
   } finally { h.cleanup(); }
 });
 

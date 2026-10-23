@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { BotSelector, botRows, publicRefusals, type PostingBot } from "./multiBot";
+import { productionClonePosting, type ClonePostingPort } from "./clone";
 import { TelegramBotError, sendFailure } from "./errors";
 export { TelegramBotError } from "./errors";
 import path from "node:path";
@@ -41,7 +42,9 @@ import {
   type TelegramBotSendAnswer,
   type TelegramBotStatusPayload,
 } from "./contracts";
-import { checkPhotoBytes, defaultDocumentRoots, DocumentRefusal, loadDocument, normalizeDocumentRoots, readUnderRoots, type DocumentEnvironment } from "./documents";
+import { checkPhotoBytes, defaultDocumentRoots, DocumentRefusal, loadDocument, normalizeDocumentRoots, readUnderRoots, type DocumentEnvironment, type DocumentWarning } from "./documents";
+import { FileSendConfirmations, fileSendDigest, type FileSendApproval } from "./fileConfirmations";
+import type { FileConfirmationView, FileSendOptions } from "./fileConfirmationContract";
 import { TelegramBotStore, type BotRow, type ChatRow, type TgChat, type TgUpdate, type TgUser } from "./store";
 import { admitReportReplies, drainReportReplies, productionReportReplyPorts, type ReportReplyPorts } from "./reportReplies";
 import { outboundPostingAllowed, recordOutbound, outboundState, type OutboundMessage, type PublicationTarget } from "./outbound";
@@ -77,6 +80,7 @@ export interface TelegramRichMessage {
 }
 
 export interface TelegramBotDependencies {
+  clones?: ClonePostingPort;
   transportFor(token: string): BotTransport;
   openStore(): TelegramBotStore;
   removeStoreFiles(): void;
@@ -88,6 +92,7 @@ export interface TelegramBotDependencies {
   removeSendingToken?(botId: string): void;
   removeSendingTokens?(): void;
   now(): Date;
+  fileConfirmationId?(): string;
   sleep(ms: number, signal: AbortSignal): Promise<void>;
   conversationTitle(conversationId: string): string | null;
   /** The Viewer host's home (for the default document root) and the state
@@ -103,6 +108,18 @@ export interface TelegramBotDependencies {
 
 export type PollStep = { next: "continue"; delayMs: number } | { next: "stop" };
 
+export interface TelegramFileSendInput {
+  conversationId: string | null;
+  clientRequestId: unknown;
+  chat: unknown;
+  document?: unknown;
+  images?: unknown;
+  format?: unknown;
+  replyToMessageId?: unknown;
+  topicId?: unknown;
+  silent?: unknown;
+}
+
 const GET_UPDATES_TIMEOUT_S = 50;
 const REPLY_RETRY_TIMEOUT_S = 5;
 const PHOTO_MAX_BYTES = 10_000_000;
@@ -115,11 +132,12 @@ const PHOTO_CAPTION_MAX_CHARS = 1024;
  * in the state directory, a cached QR code in a dot-directory) would be one
  * call from a chat.
  */
-async function photoBlob(filename: string, index: number, roots: readonly string[], environment: DocumentEnvironment): Promise<Blob> {
+async function photoBlob(filename: string, index: number, roots: readonly string[], environment: DocumentEnvironment, warnings?: DocumentWarning[]): Promise<{ blob: Blob; sha256: string; resolvedPath: string }> {
   if (!path.isAbsolute(filename)) throw new TelegramBotError("photo_invalid", `photo ${index + 1} needs an absolute local path`);
   let bytes: Buffer;
+  let resolvedPath: string;
   try {
-    bytes = readUnderRoots(filename, roots, environment, PHOTO_MAX_BYTES).bytes;
+    ({ bytes, real: resolvedPath } = readUnderRoots(filename, roots, environment, PHOTO_MAX_BYTES, undefined, warnings));
   } catch (error) {
     if (error instanceof DocumentRefusal && (error.code === "document_outside_roots" || error.code === "document_forbidden_path")) {
       throw new TelegramBotError(error.code, `photo ${index + 1}: ${error.message}`);
@@ -130,7 +148,7 @@ async function photoBlob(filename: string, index: number, roots: readonly string
     // The existing dimension rule admits at most 25M pixels (5000²).
     // Relay uploads apply their narrower 20M cap at their own call site.
     const type = await checkPhotoBytes(bytes, 25_000_000);
-    return new Blob([Uint8Array.from(bytes)], { type });
+    return { resolvedPath, blob: new Blob([Uint8Array.from(bytes)], { type }), sha256: createHash("sha256").update(bytes).digest("hex") };
   } catch {
     throw new TelegramBotError("photo_invalid", `photo ${index + 1} must be a decodable JPEG or PNG within Telegram's photo dimensions`);
   }
@@ -295,7 +313,44 @@ export class TelegramBotService {
   private offset: number | null = null;
   private backoffMs = NETWORK_BACKOFF_MIN_MS;
 
-  constructor(private readonly deps: TelegramBotDependencies) {}
+  private readonly fileConfirmations: FileSendConfirmations;
+  constructor(private readonly deps: TelegramBotDependencies) {
+    this.fileConfirmations = new FileSendConfirmations(() => this.connectedStore(), () => deps.now(), deps.fileConfirmationId);
+  }
+  fileConfirmation(id: string): FileConfirmationView { return this.fileConfirmations.read(id); }
+  /** Only the owner route calls this, with a live authorization recheck. No send input accepts a grant. */
+  decideFileConfirmation(id: string, digest: string, approve: boolean, authorize: () => void) {
+    return this.fileConfirmations.decide(id, digest, approve, authorize, (kind, input, approval) =>
+      kind === "document" ? this.sendDocumentChecked(input, approval) : this.sendMediaChecked(input, approval));
+  }
+  private fileOptions(input: TelegramFileSendInput, chat: ChatRow): FileSendOptions {
+    const positive = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
+    return { conversationId: input.conversationId, clientRequestId: String(input.clientRequestId).trim(), chat: chat.chatId,
+      topicId: positive(input.topicId), replyToMessageId: positive(input.replyToMessageId), format: input.format === "html" ? "html" : "plain", silent: input.silent === true };
+  }
+  private fileApprovalCheck(chat: ChatRow, approval: FileSendApproval | undefined): (() => void) | undefined {
+    if (!approval) return undefined;
+    const botId = this.storedBotId();
+    return () => {
+      approval.authorize();
+      const current = this.connectedStore().chat(chat.chatId);
+      if (Date.parse(approval.expiresAt) <= this.deps.now().getTime() || !botId || this.storedBotId() !== botId)
+        throw new TelegramBotError("confirmation_invalid", "This confirmation expired or the connected bot changed.");
+      const refusal = current ? postRefusal(current) : null;
+      if (!current || refusal) throw new TelegramBotError(refusal?.code ?? "chat_not_allowed", refusal?.reason ?? "The destination is no longer available.");
+    };
+  }
+  private admitFileSend(kind: "document" | "media", chat: ChatRow, options: FileSendOptions, files: FileConfirmationView["files"], reasons: DocumentWarning[], approval?: FileSendApproval): void {
+    const snapshot = { kind, chatId: chat.chatId, chatTitle: chat.title, topicId: options.topicId, options, files, reasons, botId: this.storedBotId()! };
+    if (approval) {
+      if (fileSendDigest(snapshot) !== approval.digest) throw new TelegramBotError("confirmation_invalid", "The file or destination changed after this confirmation was requested.");
+      this.fileApprovalCheck(chat, approval)!();
+    } else if (reasons.length) {
+      const confirmation = this.fileConfirmations.request(snapshot);
+      const first = reasons[0]!;
+      throw new TelegramBotError(first.code, `${first.reason} The owner can confirm this exact send in Delegatus: ${confirmation.url}`, { secretClass: reasons.find(reason => reason.secretClass)?.secretClass, confirmation });
+    }
+  }
 
   private publication: OutboundPublication | null = null;
   private publicationMetadata(botId: string | null, origin: OutboundMessage["origin"], sendKey: string,
@@ -316,7 +371,7 @@ export class TelegramBotService {
       throw new TelegramBotError("send_uncertain", "Telegram confirmed the send but its local receipt could not be committed; keep the same send key to avoid a duplicate");
     }
     if (metadata.target) this.ensurePublication().wake();
-    else {
+    else if (!botId.startsWith("clone:")) {
       // Injected observers also see unrouted sends. Production refuses them.
       try { void Promise.resolve(this.deps.publishMessage?.(receipt)).catch(() => {
         console.warn("Telegram relay publication unconfirmed");
@@ -370,7 +425,7 @@ export class TelegramBotService {
       })];
   }
   private selector(): BotSelector {
-    return this.selectorCache ??= new BotSelector(this.store(), () => this.deps.now(), () => this.postingBots());
+    return this.selectorCache ??= new BotSelector(this.store(), () => this.deps.now(), () => this.postingBots(), this.deps.clones);
   }
   private postingView(chat: ChatRow, bots = this.postingBots()) {
     return this.store().postingState(db => this.selector().view(db, chat, bots));
@@ -473,21 +528,23 @@ export class TelegramBotService {
   /* ---- the operator surface -------------------------------------------- */
 
   status(): TelegramBotStatusPayload {
-    if (this.storedBotId() === null) return { ...DISCONNECTED_BOT_STATUS };
+    const connected = this.storedBotId() !== null;
     const store = this.store();
-    const bot = store.bot();
-    const bots = this.postingBots();
+    const bot = connected ? store.bot() : null;
+    const bots = connected ? this.postingBots() : [];
+    const receiving = connected ? this.receiving(bot) : "stopped";
     return {
-      connected: true,
-      bots: bots.map(({ name, username, receiving, tokenState }) => ({ name, username, receiving, tokenState })),
+      connected,
+      ...(connected ? { bots: bots.map(({ name, username, receiving, tokenState }) => ({ name, username, receiving, tokenState })) } : {}),
       bot: bot ? { name: bot.name, username: bot.username, canReadAllGroupMessages: bot.canReadAllGroupMessages, canJoinGroups: bot.canJoinGroups } : null,
-      receiving: this.receiving(bot),
+      receiving,
       lastUpdateAt: bot?.lastUpdateAt ?? null,
       lastCheckedAt: bot?.lastCheckedAt ?? null,
-      chats: store.chats().map((chat) => {
+      chats: store.chats().flatMap((chat) => {
         const visibility = chatVisibility(chat, bot);
         const posting = this.postingView(chat, bots);
-        return {
+        if (!connected && !posting.bots.some(candidate => candidate.member !== false)) return [];
+        return [{
           ...posting,
           chatId: chat.chatId,
           title: chat.title,
@@ -504,13 +561,25 @@ export class TelegramBotService {
           lastPostAt: chat.lastPostAt,
           lastPostBy: this.lastPostBy(chat),
           storedMessages: chat.storedMessages,
-        };
+        }];
       }),
-      documents: this.documentRoots(store),
-      reportReplies: !this.deps.reportReplies?.operatorId() ? "operator_unlinked"
-        : this.receiving(bot) !== "polling" ? "receiving_unavailable" : "ready",
+      ...(connected ? { documents: this.documentRoots(store),
+        reportReplies: !this.deps.reportReplies?.operatorId() ? "operator_unlinked" as const
+          : receiving !== "polling" ? "receiving_unavailable" as const : "ready" as const } : {}),
       limits: TELEGRAM_BOT_LIMITS,
     };
+  }
+
+  /** Refresh paired-clone discovery and register verified groups as off by default. */
+  async discoverCloneChats(): Promise<void> {
+    const discovered = await this.deps.clones?.discoverChats?.() ?? [];
+    const store = this.store();
+    const now = this.deps.now();
+    for (const chat of discovered) {
+      const id = validTelegramChatId(chat.chatId);
+      if (id === null || !id.startsWith("-")) continue;
+      store.recordLookedUpChat({ id: Number(id), type: "supergroup", title: chat.title }, null, now);
+    }
   }
 
   /** The operator's document roots, or the default while none are set. */
@@ -647,7 +716,7 @@ export class TelegramBotService {
   }
 
   setChat(chatId: unknown, alias: unknown, postAllowed: unknown): TelegramBotStatusPayload {
-    const store = this.connectedStore();
+    const store = this.store();
     const id = validTelegramChatId(chatId);
     if (id === null) throw new TelegramBotError("chat_unknown", "no such chat");
     const outcome = store.setChatSettings(id, {
@@ -764,6 +833,7 @@ export class TelegramBotService {
   async remove(): Promise<TelegramBotStatusPayload> {
     await this.stopPoller();
     await this.stopPublications();
+    this.fileConfirmations.clear();
     this.storeCache?.close();
     this.storeCache = null;
     this.selectorCache = null;
@@ -942,34 +1012,23 @@ export class TelegramBotService {
   }
 
   listChats(options: { includeInactive?: boolean } = {}): TelegramBotChatsAnswer {
-    if (this.storedBotId() === null) {
-      return {
-        bot: { connected: false, name: null, username: null, receiving: "stopped", receivingNote: RECEIVING_NOTES.stopped, lastUpdateAt: null },
-        chats: [],
-        note: "No Telegram bot is connected. The operator connects one in Delegatus: footer → Telegram → Bot.",
-        limits: TELEGRAM_BOT_LIMITS,
-      };
-    }
+    const connected = this.storedBotId() !== null;
     const status = this.status();
     const store = this.store();
-    const bot = store.bot();
+    const bot = connected ? store.bot() : null;
     const all = store.chats().filter((chat) => options.includeInactive || this.postingView(chat).bots.some(b => b.member !== false));
     const chats = all.slice(0, BOT_CHATS_CAP).map((chat) => this.agentChat(chat, bot));
     return {
-      bot: {
-        connected: true,
-        name: bot?.name ?? null,
-        username: bot?.username ?? null,
-        receiving: status.receiving,
-        receivingNote: RECEIVING_NOTES[status.receiving],
-        lastUpdateAt: bot?.lastUpdateAt ?? null,
-      },
+      bot: connected ? {
+        connected: true, name: bot?.name ?? null, username: bot?.username ?? null,
+        receiving: status.receiving, receivingNote: RECEIVING_NOTES[status.receiving], lastUpdateAt: bot?.lastUpdateAt ?? null,
+      } : { connected: false, name: null, username: null, receiving: "stopped", receivingNote: RECEIVING_NOTES.stopped, lastUpdateAt: null },
       chats,
-      bots: status.bots,
+      ...(connected && status.bots ? { bots: status.bots } : {}),
       ...(all.length > chats.length ? { truncated: all.length - chats.length } : {}),
-      ...(chats.length === 0
-        ? { note: "The bot has not seen any chat yet. A chat appears once the bot is added to it or receives a message there; in a group with privacy mode on, mention the bot once (for example /start@botname)." }
-        : {}),
+      ...(chats.length === 0 ? { note: connected
+        ? "The bot has not seen any chat yet. A chat appears once the bot is added to it or receives a message there; in a group with privacy mode on, mention the bot once (for example /start@botname)."
+        : "No Telegram bot is connected. Paired clone chats appear here after discovery." } : {}),
       limits: TELEGRAM_BOT_LIMITS,
     };
   }
@@ -1024,10 +1083,17 @@ export class TelegramBotService {
     topicId?: unknown;
     silent?: unknown;
   }): Promise<TelegramBotSendAnswer> {
-    const store = this.connectedStore();
+    const connected = this.storedBotId() !== null;
+    const store = this.store();
+    if (!connected && (typeof input.chat !== "string" || !store.resolveChat(input.chat))) {
+      throw new TelegramBotError("bot_not_connected", "no Telegram bot is connected");
+    }
     const chat = this.resolveChat(store, input.chat);
     const refusal = postRefusal(chat);
     if (refusal) throw new TelegramBotError(refusal.code, refusal.reason);
+    if (!connected && !await this.deps.clones?.route(chat.chatId)) {
+      throw new TelegramBotError("bot_not_connected", "no Telegram bot is connected");
+    }
     if (typeof input.clientRequestId !== "string" || input.clientRequestId.trim() === "") {
       throw new TelegramBotError("bad_request", "clientRequestId is required");
     }
@@ -1080,13 +1146,13 @@ export class TelegramBotService {
         ...(topicId !== null ? { message_thread_id: topicId } : {}),
         ...(input.silent === true ? { disable_notification: true } : {}),
       };
-      let result = await transport.call<TgSent>("sendMessage", params);
+      let result = await transport.call<TgSent>("sendMessage", params, { partIndex: index });
       if (!result.ok && result.migrateToChatId && !migrated) {
         migrated = true;
         store.migrateChat(chatId, result.migrateToChatId);
         chatId = result.migrateToChatId;
         selection.migrate(chatId);
-        result = await transport.call<TgSent>("sendMessage", { ...params, chat_id: Number(chatId) });
+        result = await transport.call<TgSent>("sendMessage", { ...params, chat_id: Number(chatId) }, { partIndex: index });
       }
       if (!result.ok) {
         const error = sendFailure(result, chat);
@@ -1272,16 +1338,8 @@ export class TelegramBotService {
 
   /** One photo or one atomic Telegram album, using the text send's claim and
       outgoing-message journal. Every image is loaded before transport starts. */
-  async sendMedia(input: {
-    conversationId: string | null;
-    clientRequestId: unknown;
-    chat: unknown;
-    images: unknown;
-    format?: unknown;
-    replyToMessageId?: unknown;
-    topicId?: unknown;
-    silent?: unknown;
-  }): Promise<TelegramBotSendAnswer> {
+  sendMedia(input: TelegramFileSendInput): Promise<TelegramBotSendAnswer> { return this.sendMediaChecked(input); }
+  private async sendMediaChecked(input: TelegramFileSendInput, approval?: FileSendApproval): Promise<TelegramBotSendAnswer> {
     const store = this.connectedStore();
     const chat = this.resolveChat(store, input.chat);
     const refusal = postRefusal(chat);
@@ -1292,11 +1350,12 @@ export class TelegramBotService {
     const legacyClientRequestId = `media:${clientRequestId}`;
     const legacyRow = store.sendRow(callerKey, legacyClientRequestId);
     const legacyKind = legacyRow ? store.sendKind(callerKey, legacyClientRequestId) : null;
-    const sendCallerKey = legacyRow && legacyKind !== "text" ? callerKey : `media:${callerKey}`;
+    const sendCallerKey = approval ? `confirmed-media:${callerKey}` : legacyRow && legacyKind !== "text" ? callerKey : `media:${callerKey}`;
     const attributedTo: TelegramBotAttribution = input.conversationId ? { conversationId: input.conversationId } : { unidentified: true };
     const claim = store.claimSend(sendCallerKey, sendCallerKey === callerKey ? legacyClientRequestId : clientRequestId, chat.chatId, this.deps.now());
     const sendRequestId = sendCallerKey === callerKey ? legacyClientRequestId : clientRequestId;
     if (!claim.claimed) {
+      if (approval) throw new TelegramBotError("confirmation_invalid", "This confirmation already has a send claim; it cannot be replayed.");
       if (claim.row.state === "sent") {
         const current = store.chat(claim.row.chatId);
         return { chat: current?.alias ?? claim.row.chatId, chatId: claim.row.chatId, messageIds: claim.row.messageIds, sentAt: claim.row.sentAt ?? this.deps.now().toISOString(), attributedTo, parts: claim.row.parts, ...this.receiptFields(claim.row), alreadySent: true };
@@ -1304,7 +1363,8 @@ export class TelegramBotService {
       throw new TelegramBotError("send_uncertain", "an earlier media send under this clientRequestId never finished, so it may already be posted; use a new clientRequestId only if a duplicate is acceptable", { refusals: publicRefusals(claim.row.attempts) });
     }
 
-    let images: Array<TelegramBotMediaInput & { blob: Blob }>;
+    let images: Array<TelegramBotMediaInput & { blob: Blob; sha256: string; resolvedPath: string }>;
+    const reasons: DocumentWarning[] = [];
     try {
       const roots = this.documentRoots(store).roots;
       const environment = this.deps.documentEnvironment();
@@ -1316,14 +1376,16 @@ export class TelegramBotService {
         }
         const { path: filename, caption } = image as TelegramBotMediaInput;
         if (caption.length > PHOTO_CAPTION_MAX_CHARS) throw new TelegramBotError("text_too_long", `photo ${index + 1} caption exceeds 1024 characters`);
-        images.push({ path: filename, caption, blob: await photoBlob(filename, index, roots, environment) });
+        images.push({ path: filename, caption, ...await photoBlob(filename, index, roots, environment, reasons) });
       }
+      this.admitFileSend("media", chat, { ...this.fileOptions(input, chat), images: images.map(image => ({ path: image.path, caption: image.caption })) },
+        images.map(image => ({ path: image.path, resolvedPath: image.resolvedPath, filename: path.basename(image.path), sha256: image.sha256, bytes: image.blob.size })), reasons, approval);
     } catch (error) {
       store.failSend(sendCallerKey, sendRequestId, error instanceof TelegramBotError ? error.code : "photo_invalid", []);
       throw error;
     }
 
-    const selection = this.selection(chat, sendCallerKey, sendRequestId, "canSendPhotos");
+    const selection = this.selection(chat, sendCallerKey, sendRequestId, "canSendPhotos", this.fileApprovalCheck(chat, approval));
     const transport = selection.transport;
     const replyTo = typeof input.replyToMessageId === "number" && Number.isSafeInteger(input.replyToMessageId) && input.replyToMessageId > 0 ? input.replyToMessageId : null;
     const topicId = typeof input.topicId === "number" && Number.isSafeInteger(input.topicId) && input.topicId > 0 ? input.topicId : null;
@@ -1347,6 +1409,7 @@ export class TelegramBotService {
     const publication = this.publicationMetadata(null, "agent", `${sendCallerKey}:${sendRequestId}`, input.conversationId, replyTo);
     let result = await transport.call<TgSent | TgSent[]>(method, params);
     if (!result.ok && result.migrateToChatId) {
+      if (approval) throw new TelegramBotError("confirmation_invalid", "Telegram changed the destination; request confirmation for the new chat.");
       store.migrateChat(chatId, result.migrateToChatId);
       chatId = result.migrateToChatId;
       selection.migrate(chatId);
@@ -1379,16 +1442,8 @@ export class TelegramBotService {
       document roots, its type, its size and the secret scan, and loaded,
       before Telegram is called; any refusal settles the claim as failed with
       nothing posted, so a corrected retry under the same key may send. */
-  async sendDocument(input: {
-    conversationId: string | null;
-    clientRequestId: unknown;
-    chat: unknown;
-    document: unknown;
-    format?: unknown;
-    replyToMessageId?: unknown;
-    topicId?: unknown;
-    silent?: unknown;
-  }): Promise<TelegramBotSendAnswer> {
+  sendDocument(input: TelegramFileSendInput): Promise<TelegramBotSendAnswer> { return this.sendDocumentChecked(input); }
+  private async sendDocumentChecked(input: TelegramFileSendInput, approval?: FileSendApproval): Promise<TelegramBotSendAnswer> {
     const store = this.connectedStore();
     const chat = this.resolveChat(store, input.chat);
     const refusal = postRefusal(chat);
@@ -1396,11 +1451,12 @@ export class TelegramBotService {
     if (typeof input.clientRequestId !== "string" || !input.clientRequestId.trim()) throw new TelegramBotError("bad_request", "clientRequestId is required");
     /* Documents have no legacy receipts, so they claim only in their own
        namespace, beside the `text:` and `media:` ones. */
-    const callerKey = `document:${input.conversationId ?? "unidentified"}`;
+    const callerKey = `${approval ? "confirmed-document" : "document"}:${input.conversationId ?? "unidentified"}`;
     const clientRequestId = input.clientRequestId.trim();
     const attributedTo: TelegramBotAttribution = input.conversationId ? { conversationId: input.conversationId } : { unidentified: true };
     const claim = store.claimSend(callerKey, clientRequestId, chat.chatId, this.deps.now());
     if (!claim.claimed) {
+      if (approval) throw new TelegramBotError("confirmation_invalid", "This confirmation already has a send claim; it cannot be replayed.");
       if (claim.row.state === "sent") {
         const current = store.chat(claim.row.chatId);
         return { chat: current?.alias ?? claim.row.chatId, chatId: claim.row.chatId, messageIds: claim.row.messageIds, sentAt: claim.row.sentAt ?? this.deps.now().toISOString(), attributedTo, parts: claim.row.parts, ...this.receiptFields(claim.row), alreadySent: true };
@@ -1409,17 +1465,21 @@ export class TelegramBotService {
     }
 
     let document: ReturnType<typeof loadDocument>;
+    const reasons: DocumentWarning[] = [];
     try {
-      document = loadDocument(input.document, this.documentRoots(store).roots, this.deps.documentEnvironment());
+      document = loadDocument(input.document, this.documentRoots(store).roots, this.deps.documentEnvironment(), reasons);
+      const filename = (input.document as { path: string }).path;
+      this.admitFileSend("document", chat, { ...this.fileOptions(input, chat), document: { path: filename, filename: document.filename, caption: document.caption } },
+        [{ path: filename, resolvedPath: document.real, filename: document.filename, sha256: document.sha256, bytes: document.bytes }], reasons, approval);
     } catch (error) {
-      const refused = error instanceof DocumentRefusal
+      const refused = error instanceof TelegramBotError ? error : error instanceof DocumentRefusal
         ? new TelegramBotError(error.code, error.message, error.secretClass ? { secretClass: error.secretClass } : {})
         : new TelegramBotError("document_invalid", "the document could not be checked on the Viewer host");
       store.failSend(callerKey, clientRequestId, refused.code, []);
       throw refused;
     }
 
-    const selection = this.selection(chat, callerKey, clientRequestId, "canSendDocuments");
+    const selection = this.selection(chat, callerKey, clientRequestId, "canSendDocuments", this.fileApprovalCheck(chat, approval));
     const transport = selection.transport;
     const replyTo = typeof input.replyToMessageId === "number" && Number.isSafeInteger(input.replyToMessageId) && input.replyToMessageId > 0 ? input.replyToMessageId : null;
     const topicId = typeof input.topicId === "number" && Number.isSafeInteger(input.topicId) && input.topicId > 0 ? input.topicId : null;
@@ -1435,6 +1495,7 @@ export class TelegramBotService {
     const publication = this.publicationMetadata(null, "agent", `${callerKey}:${clientRequestId}`, input.conversationId, replyTo);
     let result = await transport.call<TgSent>("sendDocument", params);
     if (!result.ok && result.migrateToChatId) {
+      if (approval) throw new TelegramBotError("confirmation_invalid", "Telegram changed the destination; request confirmation for the new chat.");
       store.migrateChat(chatId, result.migrateToChatId);
       chatId = result.migrateToChatId;
       selection.migrate(chatId);
@@ -1468,6 +1529,7 @@ const STORE_FILE = "bot.sqlite";
     the sleep, and keep the rest. */
 export function productionTelegramBotDependencies(): TelegramBotDependencies {
   return {
+    clones: productionClonePosting,
     publicationTarget: telegramPublicationTarget,
     publishMessage: (receipt, authorize) => authorize ? publishDurableTelegramMessage(receipt, authorize) : "skipped",
     transportFor: (token) => createBotApiTransport(token),

@@ -28,8 +28,10 @@ import { FIXTURE_WORKSPACE_IDS, workspacesFixture } from "@/components/team/work
 import { WORKSPACE_STORAGE_KEY } from "@/components/team/workspacesClient";
 import { setVoiceCompanionAdapterForTests } from "@/components/voiceCompanion/VoiceCompanionHost";
 import type { VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
+import { sampleCallHistory } from "@/components/voiceCompanion/transcriptSample.fixture";
 import { scenarioScript } from "@/lib/voiceCompanion/scenarios";
 import { createSimulatedCompanion, realClock } from "@/lib/voiceCompanion/simulator";
+import { OfficialVoiceCompanionAdapter } from "@/lib/voiceCompanion/liveAdapter";
 import { getRuntimeBus } from "@/hooks/runtimeBus";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -174,12 +176,13 @@ const MENU_STATE = new URLSearchParams(location.search).get("menu-state");
    shell's own host mounts the phone's voice head. `product` keeps the real voice, whose session route is never to
    be asked; `sim` hands the host a simulator that speaks the long scenario and records each start, each project it
    is told and each close on `window.phoneVoice`. `&voice-long=1` fills the seat's conversation past the screen, so
-   what the head and its words cover is measured over real rows. */
+   what the head and its words cover is measured over real rows. `history` opens as after a reload, with no call of
+   its own and `sampleCallHistory`'s three retained calls, which the conversation panel's picker opens (GitHub #2975). */
 const VOICE_SCENE = new URLSearchParams(location.search).get("voice");
 const VOICE_LONG = new URLSearchParams(location.search).has("voice-long");
 const phoneVoice = { starts: [] as string[], projects: [] as Array<string | null>, closes: 0, sessionRequests: 0 };
 Object.assign(window, { phoneVoice });
-if (VOICE_SCENE === "sim" || VOICE_SCENE === "reads") {
+if (VOICE_SCENE === "sim" || VOICE_SCENE === "reads" || VOICE_SCENE === "history") {
   const uk = localStorage.getItem("llv_lang") === "uk";
   setVoiceCompanionAdapterForTests((): VoiceCompanionAdapter => {
     const simulated = createSimulatedCompanion({
@@ -194,8 +197,26 @@ if (VOICE_SCENE === "sim" || VOICE_SCENE === "reads") {
       command: (command) => simulated.command(command),
       close: () => { phoneVoice.closes += 1; return simulated.close(); },
       ...(VOICE_SCENE === "reads" ? { transcript: async () => (await serverFetch("/evidence/voice-transcript")).json() } : {}),
+      ...(VOICE_SCENE === "history" ? (() => {
+        /* The requests went to the fixture's own running orchestrator, so its link opens a conversation the phone knows. */
+        const history = sampleCallHistory(uk ? "uk" : "en", "atlas", "conversation_running");
+        return { calls: async () => history.calls, transcript: async (sessionId?: string) => history.records[sessionId ?? history.calls[0]!.sessionId] ?? null };
+      })() : {}),
     };
   });
+}
+/* `?voice=drop`: the product's own adapter, its session and resume routes answered by the driver over the network
+   (`serverFetch`, so `page.route` sees them), with a stand-in for the microphone and the peer connection.
+   `window.phoneVoice.lose()` fails that connection, as a lost network does. */
+if (VOICE_SCENE === "drop") {
+  setVoiceCompanionAdapterForTests((): VoiceCompanionAdapter => new OfficialVoiceCompanionAdapter({
+    fetch: ((input: RequestInfo | URL, init?: RequestInit) => serverFetch(input, init)) as typeof fetch,
+    media: (callbacks) => {
+      Object.assign(phoneVoice, { lose: () => callbacks.lost("PROVIDER_ERROR") });
+      return { open: async () => "v=0\r\n", answer: async () => {}, mute: () => {}, interrupt: () => {}, close: async () => {} };
+    },
+    cues: { prepare: () => {}, connect: () => {}, disconnect: () => {}, dispose: () => {} },
+  }));
 }
 function voiceFeed(feed: string): string {
   if (!VOICE_LONG) return feed;
@@ -1236,7 +1257,17 @@ const botChat = (over: Record<string, unknown>) => ({
   lastMessageAt: iso(600), lastPostAt: null, lastPostBy: null, storedMessages: 12, ...over,
 });
 /* `typed`: one group whose title suggests no alias, so the field shows. */
-const telegramBot = BOT_SCENE === "typed"
+const telegramBot = BOT_SCENE === "pairing"
+  ? {
+    connected: false,
+    bot: null,
+    receiving: "stopped",
+    lastUpdateAt: null,
+    lastCheckedAt: null,
+    chats: [botChat({ alias: null, postAllowed: false, postable: false, lastMessageAt: null, storedMessages: 0 })],
+    limits: [],
+  }
+  : BOT_SCENE === "typed"
   ? {
     connected: true,
     bot: { name: "Atlas Reports", username: "atlas_reports_bot", canReadAllGroupMessages: false, canJoinGroups: true },
@@ -1246,7 +1277,7 @@ const telegramBot = BOT_SCENE === "typed"
     chats: [botChat({ chatId: "-1000000000505", title: "Реліз", type: "group" })],
     limits: [],
   }
-  : BOT_SCENE === "chats" || BOT_SCENE === "webhook" || BOT_SCENE === "refused"
+  : BOT_SCENE === "chats" || BOT_SCENE === "webhook" || BOT_SCENE === "refused" || BOT_SCENE === "clone"
   ? {
     connected: true,
     bot: { name: "Atlas Reports", username: "atlas_reports_bot", canReadAllGroupMessages: false, canJoinGroups: true },
@@ -1292,6 +1323,24 @@ const multiBots = [
   { name: "Atlas Reports", username: "atlas_reports_bot", receiving: true, tokenState: "ok" },
   { name: "Release Helper", username: "release_fixture_bot", receiving: false, tokenState: "ok" },
 ];
+if (BOT_SCENE === "clone") {
+  const chats = telegramBot.chats;
+  Object.assign(chats[0]!, { seesAllMessages: false, member: true, postable: true, assignedBot: null,
+    bots: [
+      { name: "Report clone", username: null, assigned: false, member: true, status: null, canPost: true,
+        canSendPhotos: false, canSendDocuments: false, canManageTopics: false, reason: null, checkedAt: null },
+      { name: "Atlas Reports", username: "atlas_reports_bot", assigned: false, member: false, status: "kicked", canPost: false,
+        canSendPhotos: false, canSendDocuments: false, canManageTopics: false, reason: "bot_not_in_chat", checkedAt: "2026-10-20T12:00:00Z" },
+    ] });
+}
+if (BOT_SCENE === "pairing") {
+  Object.assign(telegramBot.chats[0]!, { bots: [
+    { name: "Report clone", username: null, assigned: false, member: true, status: null, canPost: true,
+      canSendPhotos: false, canSendDocuments: false, canManageTopics: false, reason: null, checkedAt: null },
+    { name: "Atlas Reports", username: "atlas_reports_bot", assigned: false, member: false, status: "kicked", canPost: false,
+      canSendPhotos: false, canSendDocuments: false, canManageTopics: false, reason: "bot_not_in_chat", checkedAt: null },
+  ] });
+}
 if (BOT_SCENE?.startsWith("multi-")) {
   const bots = BOT_SCENE === "multi-one" ? multiBots.slice(0, 1) : multiBots;
   const refused = BOT_SCENE === "multi-refused";

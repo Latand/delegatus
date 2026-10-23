@@ -92,6 +92,12 @@ export const VOICE_COMPANION_CSS = `
   box-shadow: var(--shadow-1); transition: transform 120ms ease-out;
 }
 .vc-talk:active { transform: scale(0.96); }
+/* While a dropped call is offered, Reconnect carries the fill and Talk, which starts a new call, steps back to an outline. */
+:root:root .vc-talk[data-quiet], :root:root .vc-talk[data-quiet]:hover, :root:root .vc-talk[data-quiet]:active {
+  background: var(--color-raised); color: var(--color-primary); box-shadow: inset 0 0 0 1px var(--color-border);
+}
+:root:root .vc-talk[data-quiet] svg { color: var(--color-secondary); }
+:root:root .vc-talk[data-quiet]:hover { background: var(--color-sunken); }
 
 .vc-char { display: block; overflow: visible; }
 .vc-char-body { transform-box: fill-box; transform-origin: 50% 100%; animation: vc-breathe 3800ms ease-in-out infinite; }
@@ -230,6 +236,7 @@ export const VOICE_COMPANION_CSS = `
 .vc-notice-text { flex: 1 1 180px; min-width: 0; overflow-wrap: break-word; user-select: text; }
 .vc-notice[data-tone="note"] { background: var(--color-raised); border-color: var(--color-border); }
 .vc-notice[data-tone="note"] .vc-notice-icon { color: var(--color-secondary); background: var(--color-sunken); }
+.vc-notice[data-code="CONNECTION_RESTORED"] .vc-notice-icon { color: var(--color-success); background: color-mix(in srgb, var(--color-success) 14%, transparent); }
 .vc-notice .vc-act { height: 26px; margin-left: auto; }
 
 /* The delegation: a call of its own, in the delegation's teal */

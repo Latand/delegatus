@@ -48,6 +48,12 @@ export class WorktreeSweepCache {
     } catch { /* Rebuild a missing, old or corrupt diagnostic cache. */ }
   }
 
+  /** Discovery slices retain only the small candidate inventory. Old full
+   * allocation snapshots would otherwise be serialized again on every slice. */
+  discardAllocations(): void {
+    for (const [directory, row] of this.rows) this.retireAllocation(directory, row);
+  }
+
   private forget(directory: string) {
     this.entries -= this.rows.get(directory)?.allocation?.length ?? 0;
     this.rows.delete(directory);

@@ -58,6 +58,15 @@ The edge's `onExhausted` decides (`src/lib/pipelines/types.ts`). With
   pipeline parks in `needs_decision` at the reviewer before any further fix
   and waits for you. A third review that passes follows the pass edge.
 
+Before handing on the last budget fix, the controller refreshes the delivery
+PR body with its accepted head and the fix stage's reported checks. A visible
+line says the last fix was not re-reviewed. The current result precedes the
+original description, preserving the producer's text and attribution footer;
+it supersedes earlier head, checks and review-status statements. The refreshed
+text passes the publication privacy gates and is read back from the forge.
+A failed refresh is reported on the lane. This adds no review round and keeps
+the configured merge policy.
+
 ## Defining one
 
 A two-stage loop beside the build stage, from the example in

@@ -1,0 +1,28 @@
+import type { AutonomySetting } from "@/lib/monitor/autonomy";
+export const NOW = Date.parse("2026-10-22T00:00:00.000Z");
+export const context = (startedAt = new Date(NOW).toISOString()) => ({ project: "atlas", startedAt, conversationId: "seat", seatEpoch: 1 });
+export const candidate = (candidateKey: string) => ({ project: "atlas", text: "Keep the useful filter", details: "Preserve the filter after opening a task. Check by opening and closing a task.", candidateKey, sources: ["correction: current filter resets"], score: [2, 2, 2, 2] });
+export const authority = (now = NOW, startedAt = new Date(NOW).toISOString()) => ({
+  now: () => now,
+  settings: () => ({ enabled: true, autonomy: { enabled: true, startedAt, until: null, proactive: { enabled: true } } as AutonomySetting }),
+  seat: () => ({ conversationId: "seat", epoch: 1 }),
+});
+if (import.meta.main) {
+  const { admitProactiveTask, readProactiveAllowance, rejectProactiveCandidate } = await import("./proactive");
+  const [file, key, action, project = "atlas", startedAt = context().startedAt] = process.argv.slice(2);
+  const now = Date.parse(startedAt);
+  try {
+    let result: unknown;
+    if (action === "alias") {
+      const { persistProjectAliases } = await import("@/lib/projects/aliases");
+      if (!persistProjectAliases([{ source: project, target: key!, displayName: "Atlas" }])) throw new Error("alias refused");
+      result = {};
+    } else if (action === "allowance") result = readProactiveAllowance(project, startedAt, now, file!);
+    else if (action === "reject") { await rejectProactiveCandidate(project, key!, file!); result = {}; }
+    else {
+      const admitted = await admitProactiveTask({ ...candidate(key!), project }, { ...context(startedAt), project }, file!, authority(now, startedAt));
+      result = { id: admitted.task.id, replay: admitted.replay };
+    }
+    process.stdout.write(`\nRESULT ${JSON.stringify(result)}\n`);
+  } catch (error) { process.stdout.write(`\nRESULT ${JSON.stringify({ error: (error as Error).message })}\n`); }
+}

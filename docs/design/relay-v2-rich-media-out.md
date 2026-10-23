@@ -220,7 +220,7 @@ Outcome the brief pins for this install, in its own five parts:
 | Owner caller check | agent, no deputy, conversation named by a live owner run | `src/lib/mcp/bindings.ts:7437-7440`; `src/lib/externalRelay/ownerAuthority.ts:15-29` |
 | File sending rules | operator document roots (default `<home>/handoff`), no dot-directory, no state directory, descriptor re-check, regular file, one link, size bound, signature, text secret scan | `src/lib/telegram/bot/documents.ts:82-84`, `:373-431`, `:437-499`; photo decode `src/lib/telegram/bot/service.ts:124-152` |
 | Test service | `startTestRelay` JSON-parses every request body | `src/lib/externalRelay/testRelay.ts:25-26` |
-| Request window | 120 s, or the service's `deadline_at` | `src/lib/externalRelay/deadline.ts:5`, `:15-31` |
+| Request window | 600 s fallback, or the service's authoritative `deadline_at` | `src/lib/externalRelay/deadline.ts:5`, `:15-31` |
 
 The brief places the image flag at `ephemeral.ts:220`; at this commit
 `--disable` is line 222 and `image_generation` line 223.

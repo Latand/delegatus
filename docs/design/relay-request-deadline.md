@@ -1,5 +1,11 @@
 # Relay request deadline and the busy hold
 
+The [2026-10-22 owner request window amendment](relay-request-window.md)
+supersedes the two-minute receipt fallback and owner execution exemption in
+this historical design. The current fallback is ten minutes; valid service
+deadlines remain authoritative. Busy holds retain a ten-second delivery
+reserve, and ready answers are sent immediately. Individual call limits stay.
+
 ## Originating requirement
 
 Operator, 2026-10-13 about 12:05 UTC, in Ukrainian, relayed by the paired
@@ -140,7 +146,7 @@ The install reads the absolute timestamp from the raw request through
 `z.object`; optional deadline metadata cannot produce `invalid_request`.
 
 **Fallback.** An absent or unparseable field produces one fixed deadline at
-receipt + 120 s and the request is served normally. A timestamp at or before
+receipt + 600 s and the request is served normally. A timestamp at or before
 receipt also uses that fixed fallback budget for delivery, but the runner
 sends `declined` / `busy` immediately, without holding or starting work.
 The comparison uses the receipt clock, and never adds claim transit time to a
@@ -198,8 +204,8 @@ install does not know the chat's language.
 
 ### G4. The window value itself
 
-The 120 s window is not in `liveness`. The install keeps it as a constant
-(`RELAY_REQUEST_WINDOW_MS = 120_000`, the operator's number) for the fallback
+The receipt fallback is not in `liveness`. The install keeps it as a constant
+(`RELAY_REQUEST_WINDOW_MS = 600_000`, amended on 2026-10-22) for the fallback
 only, and uses a valid `deadline_at` whenever one is present. No other field
 is needed: `declined` / `busy` and its `chat busy` detail already exist.
 
@@ -212,7 +218,7 @@ A new module `src/lib/externalRelay/deadline.ts`:
 ```ts
 /** Optional request field negotiated by the request_deadline feature. */
 export const RELAY_DEADLINE_PATH = ["deadline_at"] as const;
-export const RELAY_REQUEST_WINDOW_MS = 120_000;
+export const RELAY_REQUEST_WINDOW_MS = 600_000;
 export const RELAY_BUSY_DECLINE_MARGIN_MS = 10_000;
 export type RelayRequestDeadline = Readonly<{
   receivedAt: number;          // Date.now() when the claim body reached runClaimedRequest
@@ -239,9 +245,9 @@ throws. It compares the absolute UTC timestamp against receipt time:
 
 | Value at the path | Deadline | `fallback` | Runner behavior |
 |---|---|---|---|
-| missing, or the object has no such path | `receivedAt + 120 s` | `absent` | serve normally, including older peers |
-| not a string, or not an RFC 3339 UTC time ending in `Z` | `receivedAt + 120 s` | `unparseable` | serve normally |
-| at or before `receivedAt` | `receivedAt + 120 s` | `past` | immediately complete `declined` / `busy`, without a hold |
+| missing, or the object has no such path | `receivedAt + 600 s` | `absent` | serve normally, including older peers |
+| not a string, or not an RFC 3339 UTC time ending in `Z` | `receivedAt + 600 s` | `unparseable` | serve normally |
+| at or before `receivedAt` | `receivedAt + 600 s` | `past` | immediately complete `declined` / `busy`, without a hold |
 | otherwise | `Date.parse(deadline_at)` | `null` | serve inside the remaining original budget |
 
 - A valid deadline is never translated through `claimed_at`. Claim transit
@@ -607,7 +613,7 @@ against its lane.
 | Owner launch whose first message was not confirmed in 30 s | `failed` / `agent_error` about 30 s after launch | step `queued` while unconfirmed; a normal answer if it lands and the turn ends; else `failed` / `agent_error` at `declineAt` |
 | Completion delivery | heartbeats stop; retries until 45 s (or the stall window) after the last acknowledgement | heartbeats continue until delivery settles; retries stop at the request's deadline; a result ready afterward gets one best-effort attempt and no retry allowance |
 | Invalid compact claim | `declined` / `invalid_request`, retried without end on transient errors | the same body; retries stop at the request's deadline |
-| `declineAt` | — | `max(receivedAt, deadline_at − 10 s)` for valid future UTC deadlines; absent or malformed fields use receipt + 110 s; past fields send `declined` / `busy` immediately |
+| `declineAt` | — | `max(receivedAt, deadline_at − 10 s)` for valid future UTC deadlines; absent or malformed fields use receipt + 590 s; past fields send `declined` / `busy` immediately |
 | New wire values | — | the step id `queued` (shown once the service adds it to `RelayStep` and its `relay-step` text); the install accepts `claim_window_s` of any positive value and `stall_window_s` from 1 to 600, and announces `request_deadline` and reads optional `request.deadline_at` ending in `Z`; the service sends shrinking stall windows floored at 10 s |
 
 Unchanged: every completion outcome and reason enum, `member_limit` and
@@ -762,7 +768,7 @@ not touched. `src/lib/viewerInstrumentation.ts` gains one awaited call in
 2. Claim negotiation announces `request_deadline`. Answer requests may carry
    optional `request.deadline_at`, original `created_at` + 120 s, RFC 3339 UTC
    ending in `Z`; compact claims omit it. Absent and malformed values use
-   receipt + 120 s. A past value also gives delivery that fixed fallback
+   receipt + 600 s. A past value also gives delivery that fixed fallback
    budget, and the install sends `declined` / `busy` immediately. Stall
    handling uses the supplied `max(10, ceil(remaining seconds))` duration.
 3. Add `queued` to `RelayStep` and a «у черзі» variant to `relay-step`; until

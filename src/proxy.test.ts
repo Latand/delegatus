@@ -13,7 +13,7 @@ test("automatic handoff defers new write requests while reads remain available",
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, JSON.stringify({ id: "handoff", until: Date.now() + 60_000 }));
   try {
-    const request = (method: string) => new NextRequest("http://localhost/api/pipelines", { method });
+    const request = (method: string) => new NextRequest("http://localhost/api/pipelines", { method, headers: { host: "localhost" } });
     expect(proxy(request("POST")).status).toBe(503);
     expect(proxy(request("GET")).headers.get("x-middleware-next")).toBe("1");
   } finally { rmSync(file, { force: true }); }
@@ -26,7 +26,7 @@ test("automatic handoff keeps authenticated presence writable and rejects other 
   process.env.LLV_TOKEN = "operator-key";
   try {
     const request = (path: string, authorized: boolean) => {
-      const headers = new Headers();
+      const headers = new Headers({ host: "localhost" });
       if (authorized) headers.set("authorization", `Bearer ${process.env.LLV_TOKEN}`);
       return new NextRequest(`http://localhost${path}`, { method: "POST", headers });
     };
@@ -37,7 +37,10 @@ test("automatic handoff keeps authenticated presence writable and rejects other 
 });
 
 const originalToken = process.env.LLV_TOKEN;
+const originalPublicHost = process.env.LLV_PUBLIC_HOST;
 afterEach(() => {
+  if (originalPublicHost === undefined) delete process.env.LLV_PUBLIC_HOST;
+  else process.env.LLV_PUBLIC_HOST = originalPublicHost;
   if (originalToken === undefined) delete process.env.LLV_TOKEN;
   else process.env.LLV_TOKEN = originalToken;
 });
@@ -46,17 +49,17 @@ function remote(authorization: string): NextRequest {
   return new NextRequest("http://viewer.example/api/agent/snapshot", { headers: { host: "viewer.example", "x-forwarded-for": "203.0.113.10", authorization } });
 }
 
-test("the whole peer namespace reaches its own guard without the Viewer key", () => {
+test("the whole peer namespace on an allowed Host reaches its own guard without the Viewer key", () => {
   process.env.LLV_TOKEN = "viewer-token";
   for (const pathname of ["/api/peer", "/api/peer/v1/self-check", "/api/peer/v1/unknown"]) {
     for (const authorization of [undefined, "Bearer viewer-token"]) {
       const request = new NextRequest(`http://localhost${pathname}`, { headers: {
-        host: "board.example.test", ...(authorization ? { authorization } : {}),
+        host: "localhost", ...(authorization ? { authorization } : {}),
       } });
       expect(proxy(request).headers.get("x-middleware-next")).toBe("1");
     }
   }
-  expect(proxy(new NextRequest("http://localhost/api/peers", { headers: { host: "board.example.test" } })).status).toBe(403);
+  expect(proxy(new NextRequest("http://localhost/api/peers", { headers: { host: "localhost" } })).status).toBe(403);
 });
 
 function nonLoopbackIpv4Address(): string {
@@ -130,12 +133,14 @@ test("a configured access token protects loopback and non-loopback peers despite
 
 test("remote agent access accepts the exact Bearer LLV_TOKEN", () => {
   process.env.LLV_TOKEN = "viewer-token";
+  process.env.LLV_PUBLIC_HOST = "viewer.example";
   expect(proxy(remote("Bearer viewer-token")).headers.get("x-middleware-next")).toBe("1");
   expect(proxy(remote("Bearer wrong-token")).status).toBe(403);
 });
 
 test("remote access accepts the existing llv_auth cookie", () => {
   process.env.LLV_TOKEN = "viewer-token";
+  process.env.LLV_PUBLIC_HOST = "viewer.example";
   const request = new NextRequest("http://viewer.example/api/agent/snapshot", {
     headers: { host: "viewer.example", "x-forwarded-for": "203.0.113.10", cookie: "llv_auth=viewer-token" },
   });
@@ -145,6 +150,7 @@ test("remote access accepts the existing llv_auth cookie", () => {
 
 test("only the report frame passes without the cookie; the route checks its signed scope", () => {
   process.env.LLV_TOKEN = "viewer-token";
+  process.env.LLV_PUBLIC_HOST = "viewer.example";
   const bare = (pathname: string) =>
     new NextRequest(`http://viewer.example${pathname}`, { headers: { host: "viewer.example", "sec-fetch-site": "cross-site" } });
   expect(proxy(bare("/api/artifact/frame/scope/index.html")).headers.get("x-middleware-next")).toBe("1");

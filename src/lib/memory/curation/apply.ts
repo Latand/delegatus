@@ -6,7 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { ROLE_IDS } from "@/lib/roles/types";
 import { roleIsClean } from "../eligibility";
-import { lettersAndDigits, scopeChars } from "../roleConsolidate";
+import { archivedRule, lettersAndDigits, scopeChars } from "../roleConsolidate";
 import { taskIdentifier } from "../roleStage";
 import { assertGenericRule, problemInput } from "../roleProblems";
 import { canonicalScope, joinMovedScopes, newRuleId, refreshLessonKnownValues, roleMemoryCollection, RoleMemoryRefusal, versionedRule, rulePrivacyHints } from "../roleStore";
@@ -136,7 +136,8 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
         else {
           const id = newRuleId({ get: key => created.has(key.slice(2)) ? created.get(key.slice(2))! : tx.get(key) });
           const row: RoleMemoryRule = { ...rule, ...fields, id, scope: part.to, createdAt: now, changedAt: now, versions: [], splitFrom: rule.id, splitAt: now, note: item.note };
-          delete row.keptByOperatorAt; delete row.versionOf;
+          // A new part has left nothing yet: the source's departures stay the source's.
+          delete row.keptByOperatorAt; delete row.versionOf; delete row.departures;
           created.set(id, row); work.set(id, row); placeholders[`split:${item.id}:${index}`] = id;
         }
       });
@@ -166,13 +167,13 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
       note(item.note);
       if (item.reason === "in-code" || item.reason === "in-instructions" || item.where) evidence(pass.repoDir, item.where);
       if ((item.reason === "contradicted" || item.reason === "duplicate") && !item.against) refuse("CURATE_INVALID", "contradiction or duplicate needs an active counterpart");
-      work.set(item.id, { ...rule, state: "archived", reason: item.reason, note: item.note, where: item.where, against: item.against });
+      work.set(item.id, { ...archivedRule(rule, now, item.reason, true), note: item.note, where: item.where, against: item.against });
     }
     for (const item of input.problem ?? []) {
       if (fresh.importBatch?.candidates.includes(item.id)) continue;
       const rule = dispose(item.id, true);
       if (moved.has(item.id) || mergedTargets.has(item.id) || (input.rewrite ?? []).some(edit => edit.id === item.id)) refuse("CURATE_PARTITION", "problem needs one source disposition");
-      work.set(item.id, { ...rule, state: "archived", reason: "problem", problem: problemInput(item), problemEpisode: `${pass.id}:${now}`, problemDeliveredAt: undefined, note: note(item.note), where: undefined, against: undefined });
+      work.set(item.id, { ...archivedRule(rule, now, "problem", true), problem: problemInput(item), problemEpisode: `${pass.id}:${now}`, problemDeliveredAt: undefined, note: note(item.note), where: undefined, against: undefined });
     }
     const orders = new Map<string, string[]>();
     const ordered = new Set<string>();
@@ -285,10 +286,14 @@ export function revertCuratorPass(id: string, now = new Date().toISOString(), op
         const row = tx.get(`r:${prior.id}`), version = prior.version ? tx.get(`r:${prior.version}`) : row;
         if (row?.kind !== "rule" || version?.kind !== "rule") refuse("CURATE_INVALID", "pass version is unavailable");
         const updated = prior.version ? versionedRule(tx, row, version, { by: "operator", at: now, revertedTo: version.id }).updated : row;
-        tx.put({ ...prior.fields, rule: version.rule, why: version.why, hints: version.hints, versions: updated.versions, revisedBy: { by: "operator", at: now, ...(prior.version ? { revertedTo: version.id } : {}) }, changedAt: now });
+        /* The departure log is append-only: an undo restores the fields and never
+           erases a departure; undoing a restore records the rule leaving again. */
+        const leaves = prior.fields.state === "archived" && row.state !== "archived";
+        const departures = leaves ? [...row.departures ?? [], { at: now, reason: prior.fields.reason ?? "undone", curated: !!row.curatedAt }] : row.departures;
+        tx.put({ ...prior.fields, ...(departures ? { departures } : {}), rule: version.rule, why: version.why, hints: version.hints, versions: updated.versions, revisedBy: { by: "operator", at: now, ...(prior.version ? { revertedTo: version.id } : {}) }, changedAt: now });
       }
       for (const rule of history.created ?? []) if (eligible.has(rule)) {
-        const row = tx.get(`r:${rule}`); if (row?.kind === "rule") tx.put({ ...row, state: "archived", reason: "undone", changedAt: now });
+        const row = tx.get(`r:${rule}`); if (row?.kind === "rule") tx.put(archivedRule(row, now, "undone"));
       }
       const row = tx.get(`s:${scope}`); if (row?.kind !== "scope") continue;
       const before = (history.before ?? []).filter(rule => !last.has(rule) || eligible.has(rule));

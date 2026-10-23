@@ -923,6 +923,146 @@ test.each(["health-failure", "deadline", "durable-read-loss", "claim-read-failur
   }
 }, 10_000);
 
+/* Lane 376bce9c, 2026-10-20: an idle-host retirement captured the host's
+   tree onto its row, then lost its durable authority before the first signal.
+   It sent nothing, as it must, and left the capture behind: the live idle
+   host read as "processes captured from its stopped host may still be
+   running", and the next stage of its lane waited on them for an hour. A
+   retirement refused before its first effect takes its capture back.
+   Only its own: when another stop captured the same tree in between and
+   began signalling it, that stop owns the identities, and withdrawing the
+   refused capture must leave them on the row while the process may run. */
+test.each([
+  ["withdraws the capture", false],
+  ["keeps a later partial stop capture", true],
+] as const)("an idle retirement refused after its tree capture and before its first signal %s", async (_name, laterStop) => {
+  const { terminateStructuredHostTree } = await import("./structuredHostControl");
+  const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+  const { setAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const { captureProcessIdentity, processIdentityStatus } = await import("@/lib/processIdentity");
+  const { RuntimeHost } = await import("@/runtime-host/host");
+  const { serveRuntimeHost } = await import("@/runtime-host/socket");
+  const { runtimeHostClient } = await import("./client");
+  type Queue = import("./structuredDeliveryQueue").StructuredDeliveryQueue;
+  const root = fs.mkdtempSync(path.join(isolated, "retirement-withdraw-"));
+  const child = Bun.spawn(["sleep", "300"], { stdout: "ignore", stderr: "ignore" });
+  const recordedPid = child.pid;
+  const originalKill = process.kill;
+  const oldSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
+  const oldStructured = process.env.LLV_STRUCTURED_HOSTS;
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(root, "journal.sqlite"), { structuredHosts: true });
+  const runtime = new RuntimeHost(journal, undefined, undefined, true);
+  const socket = path.join(root, "runtime.sock");
+  const server = serveRuntimeHost(socket, { handle: (request, options) => runtime.handle(request, options) });
+  const signals: Array<[number, NodeJS.Signals | number]> = [];
+  let drain: Promise<void> | null = null;
+  try {
+    await new Promise<void>(resolve => server.once("listening", resolve));
+    const key: SessionKey = { engine: "codex", sessionId: crypto.randomUUID() };
+    const transcript = path.join(root, key.sessionId + ".jsonl");
+    fs.writeFileSync(transcript, "");
+    const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: root, transport: "structured", accountId: "account-a" });
+    if (begun.kind !== "created") throw new Error("fixture launch refused");
+    const conversationId = begun.receipt.conversationId;
+    const identity = captureProcessIdentity(recordedPid);
+    expect(registry.settleSpawn(begun.receipt.launchId, {
+      key, artifactPath: transcript, cwd: root, accountId: "account-a", status: "idle", host: null,
+      structuredHost: { kind: "codex-app-server", endpoint: "stdio", process: identity,
+        eventCursor: 1, protocolVersion: "v2", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+      claimEpoch: 1, claimOwner: "structured-host:fixture", pendingAction: null,
+    }).kind).toBe("settled");
+    setAgentRegistryForTests(registry);
+    process.env.LLV_RUNTIME_HOST_SOCKET = socket;
+    process.env.LLV_STRUCTURED_HOSTS = "1";
+    const client = runtimeHostClient()!;
+    /* Once the tree is captured, every read of the claimed operation is
+       lost: the durable authority the ladder asks again after the capture and
+       before its first signal. */
+    let lostReads = 0;
+    let laterOutcome: Awaited<ReturnType<typeof terminateStructuredHostTree>> | null = null;
+    const lossy = Object.create(client) as RuntimeHostClient;
+    lossy.operationStatus = async (operationId: string) => {
+      const result = await client.operationStatus(operationId);
+      const captured = (registry.readOnlySnapshot().entries[`${key.engine}:${key.sessionId}`]?.structuredTerminationSurvivors?.length ?? 0) > 0;
+      if (operationId === "withdraw-retire" && result?.receipt.status === "delivering" && captured) {
+        if (laterStop && !laterOutcome) {
+          /* A second stop of the same recorded tree captures it again and
+             signals it; every signal is refused, so the process survives
+             and that stop keeps it captured as a partial kill. */
+          laterOutcome = await terminateStructuredHostTree({
+            kind: "structured", pid: identity.pid, startIdentity: identity.startIdentity!, bootEpoch: identity.bootEpoch!,
+            engine: key.engine, sessionId: key.sessionId, conversationId: null, seat: null, turnBusy: null, owned: false, lastActiveAt: null,
+          }, {
+            retainedSurvivors: [identity],
+            authorize: () => null,
+            terminateOwnedHost: async () => false,
+            persistCapturedTree: identities => registry.captureStructuredTerminationSurvivors(key, identity, identities, "later-stop") !== null,
+            signal: () => { throw Object.assign(new Error("operation not permitted"), { code: "EPERM" }); },
+            sleep: async () => {},
+            graceMs: 0,
+            deadlineMs: 20,
+          });
+          if (!laterOutcome.ok && laterOutcome.terminationStarted && laterOutcome.survivors.length > 0) {
+            registry.recordStructuredTerminationSurvivors(key, identity, laterOutcome.survivors);
+          }
+        }
+        lostReads += 1;
+        return null;
+      }
+      return result;
+    };
+    await bindStructuredDeliveryQueue([], { registry, client: lossy, recover: async () => null });
+    journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+      conversationId, sessionKey: key, hostKind: "codex-app-server", host: "hosted", turn: "idle", activeTurnId: null,
+      attentionIds: [], provenance: "structured", artifactPath: transcript, writerClaim: "structured-host:fixture:1",
+      capabilities: { steer: true, structuredAttention: true },
+    } });
+    const session = journal.readSession({ conversationId })!;
+    await client.command({ kind: "kill", operationId: "withdraw-retire", idempotencyKey: "withdraw-retire",
+      conversationId, sessionKey: key, onlyIfIdle: { revision: session.revision, writerClaim: session.writerClaim! } });
+    process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
+      if (signal !== 0 && signal !== undefined) signals.push([pid, signal]);
+      return originalKill.call(process, pid, signal);
+    }) as typeof process.kill;
+    const queue = (process as typeof process & { __llvStructuredDeliveryController: { activeQueue: Queue } }).__llvStructuredDeliveryController.activeQueue;
+    drain = queue.drain();
+    await drain.catch(() => {});
+    expect(lostReads).toBeGreaterThan(0);
+    expect(signals).toEqual([]);
+    expect(processIdentityStatus(identity)).toBe("alive");
+    const row = registry.readOnlySnapshot().entries[`${key.engine}:${key.sessionId}`]!;
+    expect(row).toMatchObject({ status: "idle", claimOwner: "structured-host:fixture", structuredHost: { process: identity } });
+    const journalLines = fs.readFileSync(path.join(root, "host-termination-journal.ndjson"), "utf8").trim().split("\n")
+      .map(line => JSON.parse(line) as { event: string; key: string; source: string });
+    const events = journalLines.filter(line => line.key === `${key.engine}:${key.sessionId}`).map(line => [line.event, line.source]);
+    if (laterStop) {
+      expect(laterOutcome).toMatchObject({ ok: false, terminationStarted: true, survivors: [identity] });
+      expect(row.structuredTerminationSurvivors).toEqual([identity]);
+      expect(events).toEqual([["captured", "controller-stop"], ["captured", "later-stop"], ["captured", "unspecified"],
+        ["withdrawal-superseded", "controller-stop"]]);
+    } else {
+      expect(row.structuredTerminationSurvivors ?? []).toEqual([]);
+      expect(row.structuredTerminationCaptureId).toBeUndefined();
+      expect(events).toEqual([["captured", "controller-stop"], ["withdrawn", "controller-stop"]]);
+    }
+  } finally {
+    await drain?.catch(() => {});
+    process.kill = originalKill;
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    setAgentRegistryForTests(null);
+    if (oldSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET;
+    else process.env.LLV_RUNTIME_HOST_SOCKET = oldSocket;
+    if (oldStructured === undefined) delete process.env.LLV_STRUCTURED_HOSTS;
+    else process.env.LLV_STRUCTURED_HOSTS = oldStructured;
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    journal.close();
+    child.kill(9);
+    await child.exited;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 10_000);
+
 test("the watchdog runs while startup is still seating hosts: a registered conversation's unreadable send stalls and recovers once, and an unregistered host's send waits for startup", async () => {
   /* docs/design/delivery-progress-and-drain.md, A7. */
   const { registry, journal, directory, client, close } = fixture("startup-watchdog");

@@ -141,3 +141,11 @@ describe("feed markdown lists", () => {
     expect(settled).toBe(html(text));
   });
 });
+
+
+test("the owner confirmation URL navigates to Delegatus instead of opening a local file", () => {
+  const html = renderToStaticMarkup(<>{mdBlocks("[Review this send](/telegram-file-confirmation?id=fixture-confirmation)")}</>);
+  expect(html).toContain('href="/telegram-file-confirmation?id=fixture-confirmation"');
+  expect(html).not.toContain("data-file-link");
+  expect(html).not.toContain("#f=");
+});

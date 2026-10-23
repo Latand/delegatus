@@ -18,6 +18,7 @@ import { heldDeliveryOccurrences, orchestratorMandateDeliveries } from "@/lib/ru
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
 import type { FileEntry } from "@/lib/types";
+import type { TranscriptEntry } from "@/lib/voiceCompanion/transcriptRecord";
 import { captureAttentionRing, captureWorkerLimitFrames, capturePrototypeQuestions, captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
 import { playPath, recordDrag } from "@/components/kanban/dragFrameMeter";
 import { measureStageChain, stageChainFailures, type StageChainLane } from "@/components/pipelines/stageChainMeasure";
@@ -825,7 +826,7 @@ browserTest("linked installs: this install renders at 390 and desktop widths in 
         const state = await page.locator(`[data-linked-state="${expected}"]`).innerText();
         expect(overflow).toBe(false);
         const savedAddress = mode === "lan-dns" ? "http://board.internal.test:8897" : "https://delegatus.example.com";
-        expect(await dialog.locator('input[type="url"]').inputValue()).toBe(savedAddress);
+        expect(await dialog.locator('input[placeholder="https://delegatus.example.com"]').inputValue()).toBe(savedAddress);
         const warning = dialog.locator("[data-linked-http-warning]");
         if (mode === "lan-dns") {
           expect(await warning.isVisible()).toBe(true);
@@ -4047,7 +4048,7 @@ browserTest("#2098: the phone's Overview is the phone kanban over three projects
  */
 const BOT_OUT = path.resolve(process.env.LLV_TELEGRAM_BOT_OUT ?? ".artifacts/telegram-bot");
 const BOT_EVIDENCE = path.resolve("evidence/telegram-bot");
-const BOT_SCENES = ["none", "chats", "webhook"] as const;
+const BOT_SCENES = ["none", "chats", "webhook", "clone", "pairing"] as const;
 
 async function readTelegramPanel(page: Page, phone: boolean) {
   return page.evaluate((isPhone) => {
@@ -4157,6 +4158,9 @@ browserTest("telegram bot: the setup panel on the phone and the desktop holds it
     { viewport: { width: 390, height: 844 }, scheme: "light", phone: true, lang: "uk", scenes: ["chats", "refused"] },
     { viewport: { width: 1_280, height: 800 }, scheme: "light", phone: false, lang: "uk", scenes: ["chats", "refused"] },
   );
+  for (const viewport of [{ width: 390, height: 844 }, { width: 410, height: 880 }, { width: 430, height: 932 }, { width: 1280, height: 800 }])
+    for (const scheme of SCHEMES) for (const lang of ["en", "uk"] as const)
+      cases.push({ viewport, scheme, phone: viewport.width < 600, lang, scenes: ["clone", "pairing"] });
   try {
     for (const { viewport, scheme, phone, lang, scenes } of cases) {
       for (const scene of scenes) {
@@ -4172,10 +4176,33 @@ browserTest("telegram bot: the setup panel on the phone and the desktop holds it
           const top = await readTelegramPanel(page, phone);
           const reportsLine = await page.locator('[role="dialog"][aria-label="Telegram"] [data-telegram-chat-reports]').allTextContents();
           await page.screenshot({ path: path.join(BOT_OUT, `${key}.png`) });
-          const expectedReports = scene === "chats" || scene === "webhook" ? [lang === "uk" ? "Звіти оркестратора: Atlas" : "Orchestrator reports: Atlas"]
+          const expectedReports = scene === "chats" || scene === "webhook" || scene === "clone" ? [lang === "uk" ? "Звіти оркестратора: Atlas" : "Orchestrator reports: Atlas"]
             : scene === "refused" ? [lang === "uk" ? "Звіти оркестратора: Atlas. Дописи сюди зараз відхиляються, тож звіти лишаються лише в журналі: увімкніть дописи або оберіть інший чат" : "Orchestrator reports: Atlas. Posts are refused here now, so they reach the log only: switch posting on or pick another chat"]
             : [];
           if (JSON.stringify(reportsLine) !== JSON.stringify(expectedReports)) failures.push(`${key}: the chat's reports line reads ${JSON.stringify(reportsLine)}`);
+          if (scene === "clone" || scene === "pairing") {
+            const state = page.getByLabel(`Report clone: ${lang === "uk" ? "Агентам можна писати" : "Agents may post"}`, { exact: true });
+            await state.scrollIntoViewIfNeeded();
+            if (!await state.isVisible()) failures.push(`${key}: clone posting status is missing`);
+            const ink = await state.evaluate(node => {
+              const range = document.createRange(); range.selectNodeContents(node);
+              return [...range.getClientRects()].every(r => r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight);
+            }).catch(() => false);
+            if (!ink) failures.push(`${key}: clone posting status is clipped`);
+            await page.screenshot({ path: path.join(BOT_OUT, `${key}-clone.png`) });
+          }
+          if (scene === "pairing") {
+            const switchName = (lang === "uk" ? "Агентам можна писати" : "Agents may post") + ": Team Reports";
+            const toggle = page.getByRole("switch", { name: switchName, exact: true });
+            if (await page.locator('input[type="password"]').count() !== 1) failures.push(`${key}: token setup is not visible`);
+            if (await toggle.getAttribute("aria-checked") !== "false") failures.push(`${key}: clone group did not start disabled`);
+            if (phone) await toggle.tap(); else await toggle.click();
+            await page.waitForFunction(({ name }) => document.querySelector(`[role="switch"][aria-label="${name}"]`)?.getAttribute("aria-checked") === "true", { name: switchName }, { timeout: 5_000 })
+              .catch(() => failures.push(`${key}: clone group did not become allowed`));
+            const posts = await page.evaluate(() => structuredClone((window as unknown as { evidence: { botPosts: Array<Record<string, unknown>> } }).evidence.botPosts));
+            const expected = { action: "chat", chatId: "-1000000000101", alias: "team-reports", postAllowed: true };
+            if (posts.length !== 1 || JSON.stringify(posts[0]) !== JSON.stringify(expected)) failures.push(`${key}: expected exactly one clone group allowlist save, saw ${JSON.stringify(posts)}`);
+          }
           /* The panel scrolls inside itself; the second frame is its end. */
           await page.evaluate(() => {
             const dialog = document.querySelector('[role="dialog"][aria-label="Telegram"]');
@@ -11362,6 +11389,292 @@ describe("phone orchestrator reads", () => {
     fs.mkdirSync("evidence/voice-companion", { recursive: true });
     fs.writeFileSync("evidence/voice-companion/orchestrator-phone.json", JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", frames: ".artifacts/voice-companion/orchestrator-phone", readings }, null, 2) + "\n");
   }, 180_000);
+});
+
+describe("phone voice call history", () => {
+  /* GitHub #2975 on the phone: the page opens as after a reload, with no call of its own (`?voice=history`). The
+     head's menu still offers the conversation, which opens the newest retained call; the panel's picker opens each
+     earlier one, and an opened request says why it was not sent or delivered and links its orchestrator. Every text
+     the case names is measured whole from its text ranges; frames go to the run's own `.artifacts`, never the tree. */
+  browserTest("after a reload the head opens the retained calls, a picker opens each, and a request's reason and orchestrator link fit at 390 px", async () => {
+    const out = path.resolve(".artifacts/voice-companion/history-phone");
+    fs.mkdirSync(out, { recursive: true });
+    const { base, stop } = await serveFixture();
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const readings: unknown[] = [];
+    /* The first action of an opened call (a tool call or a request to the orchestrator) and its status text. */
+    const FIRST_ACTION = ['.vc-tr-list > li:is([data-kind="call"], [data-kind="request"])', '.vc-tr-list > li:is([data-kind="call"], [data-kind="request"]) .vc-call-state'];
+    const whole = (page: Page, selectors: string[]) => page.evaluate((list) => {
+      const view = document.querySelector<HTMLElement>("[data-companion-transcript-view]")!;
+      const body = view.querySelector<HTMLElement>("[data-transcript-body]")!;
+      const result: Record<string, { found: boolean; whole: boolean; text: string; height: number }> = {};
+      for (const selector of list) {
+        const element = view.querySelector<HTMLElement>(selector);
+        if (!element) { result[selector] = { found: false, whole: false, text: "", height: 0 }; continue; }
+        const clip = (body.contains(element) ? body : view).getBoundingClientRect();
+        const range = document.createRange(); range.selectNodeContents(element);
+        const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+        /* Nothing else stands over the text: the topmost element at each piece's middle is the element itself. */
+        const uncovered = rects.every((rect) => { const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2); return !!top && (element === top || element.contains(top)); });
+        result[selector] = { found: true, text: element.innerText, height: element.getBoundingClientRect().height, whole: rects.length > 0 && uncovered && rects.every((rect) => rect.top >= clip.top - 0.5 && rect.bottom <= clip.bottom + 0.5
+          && rect.left >= clip.left - 0.5 && rect.right <= clip.right + 0.5 && rect.top >= 0 && rect.bottom <= innerHeight && rect.left >= 0 && rect.right <= innerWidth) };
+      }
+      const picker = view.querySelector<HTMLSelectElement>("select[data-transcript-calls]")!;
+      const style = getComputedStyle(picker);
+      const context = document.createElement("canvas").getContext("2d")!;
+      context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+      const label = picker.selectedOptions[0]?.textContent ?? "";
+      const box = view.getBoundingClientRect(); const pick = picker.getBoundingClientRect();
+      return { result, picker: { label, fits: context.measureText(label).width <= picker.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - 20, height: pick.height,
+        inside: pick.left >= box.left && pick.right <= box.right && pick.top >= box.top && pick.bottom <= box.bottom
+          && document.elementFromPoint(pick.left + pick.width / 2, pick.top + pick.height / 2) === picker },
+        panelInside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, sideways: body.scrollWidth - body.clientWidth,
+        /* A row of the list the body's top edge runs through: a retained call opens at its start, so none is cut there. */
+        cutByTop: [...body.querySelectorAll<HTMLElement>(".vc-tr-list > li")].filter((row) => { const rect = row.getBoundingClientRect(); return rect.top < body.getBoundingClientRect().top - 0.5 && rect.bottom > body.getBoundingClientRect().top + 0.5; })
+          .map((row) => row.getAttribute("data-kind") ?? ""),
+        scrolled: Math.round(body.scrollTop),
+        /* The opened request's name, whole in its own line. */
+        title: [...view.querySelectorAll<HTMLElement>("[data-transcript-request] [data-human-label]")].map((node) => ({ text: node.innerText, whole: node.scrollWidth <= node.clientWidth && node.scrollHeight <= node.clientHeight + 1 })) };
+    }, selectors);
+    const openRequest = async (page: Page) => {
+      const request = page.locator('[data-companion-transcript-view] [data-transcript-call="request_orchestrator_delegation"]');
+      await request.locator("[data-transcript-toggle]").tap();
+      await request.locator("[data-transcript-detail]").waitFor();
+      await request.evaluate((element) => { const body = element.closest<HTMLElement>("[data-transcript-body]")!; body.scrollTop += element.getBoundingClientRect().top - body.getBoundingClientRect().top - 8; });
+      await pause(page, 200);
+    };
+    try {
+      for (const size of [{ width: 390, height: 844 }]) for (const lang of ["uk", "en"]) for (const scheme of ["light", "dark"] as const) {
+        const prefix = `${size.width}x${size.height}-${lang}-${scheme}`;
+        console.info(`phone voice call history: ${prefix}`);
+        const context = await browser.newContext({ viewport: size, hasTouch: true, isMobile: true, colorScheme: scheme });
+        try {
+          await context.addInitScript((language) => localStorage.setItem("llv_lang", language), lang);
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", error => errors.push(error.message));
+          /* On the board: the orchestrator link then opens a screen of its own. */
+          await page.goto(`${base}/?voice=history&seatnoise=ii&runtime=structured`);
+          const head = page.locator("[data-phone-voice-head]");
+          await head.waitFor(); await pause(page, 900);
+          expect(await page.evaluate(() => (history.state as { mobile2?: { stack: Array<{ kind: string }> } } | null)?.mobile2?.stack.at(-1)?.kind ?? "board")).toBe("board");
+          await head.tap();
+          await page.locator("[data-phone-voice-transcript]").tap();
+          const panel = page.locator("[data-companion-transcript-view]");
+          const picker = panel.locator("select[data-transcript-calls]");
+          await picker.waitFor();
+          await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); const end = animation.effect?.getComputedTiming().endTime; animation.currentTime = typeof end === "number" && Number.isFinite(end) ? end : 0; } });
+          expect(await panel.getAttribute("aria-modal")).toBe("true");
+          expect(await picker.inputValue()).toBe("call_delegation");
+          expect(await page.evaluate(() => (window as unknown as { phoneVoice: { starts: string[] } }).phoneVoice.starts)).toEqual([]);
+          const newest = await whole(page, [".vc-tr-title", ".vc-tr-sub", ...FIRST_ACTION]);
+          await page.screenshot({ path: path.join(out, `${prefix}-1-newest.png`) });
+
+          await picker.selectOption("call_failed_delivery");
+          await panel.locator('[data-transcript-request][data-stage="failed"]').waitFor();
+          const failedStart = await whole(page, FIRST_ACTION);
+          await openRequest(page);
+          const failed = await whole(page, ['[data-transcript-request][data-stage="failed"] .vc-call-state', "[data-transcript-reason]", "a[data-transcript-orchestrator]"]);
+          expect(failed.result["a[data-transcript-orchestrator]"]!.text).toBe("Atlas");
+          expect(failed.result["[data-transcript-reason]"]!.text, `${prefix}: the failure reason reads in the owner's language, with no code in it`).not.toMatch(lang === "uk" ? /[A-Za-z]/u : /[(_)]/u);
+          expect(failed.result["a[data-transcript-orchestrator]"]!.height, "the link is a whole touch target").toBeGreaterThanOrEqual(44);
+          await page.screenshot({ path: path.join(out, `${prefix}-2-failed.png`) });
+
+          await picker.selectOption("call_refused");
+          await panel.locator('[data-transcript-request][data-stage="refused"]').waitFor();
+          const refusedStart = await whole(page, FIRST_ACTION);
+          await openRequest(page);
+          const refused = await whole(page, ['[data-transcript-request][data-stage="refused"] .vc-call-state', "[data-transcript-reason]"]);
+          await page.screenshot({ path: path.join(out, `${prefix}-3-refused.png`) });
+
+          /* Each call opens at its start: its first action row and that row's status text stand whole in the body and no row is cut by the body's top edge. */
+          for (const [step, reading] of [["newest", newest], ["failed", failedStart], ["refused", refusedStart]] as const) {
+            expect(Object.entries(reading.result).filter(([selector, value]) => FIRST_ACTION.includes(selector) && (!value.found || !value.whole)).map(([selector]) => selector), `${prefix} ${step}: the first action row and its status are whole on opening`).toEqual([]);
+            expect([reading.scrolled, reading.cutByTop], `${prefix} ${step}: opened at the start, no row cut by the body's top edge`).toEqual([0, []]);
+          }
+          for (const [step, reading] of [["newest", newest], ["failed", failed], ["refused", refused]] as const) {
+            expect(Object.entries(reading.result).filter(([, value]) => !value.found || !value.whole).map(([selector]) => selector), `${prefix} ${step}: every named text is whole`).toEqual([]);
+            expect([reading.panelInside, reading.picker.inside, reading.picker.fits, reading.sideways <= 1, reading.picker.height >= 44], `${prefix} ${step}: panel, picker, its label and its target`).toEqual([true, true, true, true, true]);
+          }
+          for (const [step, reading] of [["failed", failed], ["refused", refused]] as const) expect(reading.title.filter((title) => !title.whole), `${prefix} ${step}: the request's name is whole in its line`).toEqual([]);
+          /* The link gives the screen to the orchestrator's conversation. */
+          await picker.selectOption("call_failed_delivery");
+          await openRequest(page);
+          await panel.locator("a[data-transcript-orchestrator]").tap();
+          await panel.waitFor({ state: "detached" });
+          /* The phone's navigation store opens the orchestrator's conversation over the board. */
+          await page.waitForFunction(() => (history.state as { mobile2?: { stack: Array<{ kind: string; id?: string }> } } | null)?.mobile2?.stack.at(-1)?.id?.endsWith("/running.jsonl") === true);
+          await page.locator("[data-mobile-message=agent]").first().waitFor();
+          await page.screenshot({ path: path.join(out, `${prefix}-4-orchestrator.png`) });
+          expect(errors).toEqual([]);
+          readings.push({ viewport: size, lang, scheme, newest, failed, refused, linkCloses: true });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); stop(); }
+    fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
+  }, 180_000);
+});
+
+describe("phone voice drop", () => {
+  /*
+   * A call whose connection drops keeps what was said, offers the same call back in one tap, still does after a
+   * reload, and goes on with its history (docs/design/voice-call-memory.md, "A dropped call resumes"). The phone
+   * head runs the product's own adapter (`?voice=drop`); its session and resume routes are answered here with a
+   * synthetic call, and `window.phoneVoice.lose()` fails its peer connection as a lost network does.
+   *
+   *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=<chrome> bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "phone voice drop"
+   *
+   * Frames go to `.artifacts/voice-companion/phone-drop/` and are never committed.
+   */
+  browserTest("history after a drop, the one-tap reconnect, a reload, and the restored call at 390 px", async () => {
+    const out = path.resolve(".artifacts/voice-companion/phone-drop");
+    fs.mkdirSync(out, { recursive: true });
+    const { base, stop } = await serveFixture();
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const readings: unknown[] = [];
+    try {
+      for (const [lang, scheme] of [["uk", "light"], ["en", "dark"]] as const) {
+        const size = { width: 390, height: 844 };
+        const said = lang === "uk"
+          ? [["operator", "Як там лінія пошуку?"], ["companion", "Лінія пошуку пройшла перевірку з другої спроби."], ["operator", "А перегляд дошки на телефоні?"]]
+          : [["operator", "How is the search lane?"], ["companion", "The search lane passed its verifier on the second attempt."], ["operator", "And the phone board review?"]];
+        const after = lang === "uk" ? "Перегляд дошки на другому колі." : "The phone board review is on its second round.";
+        /* The synthetic Viewer: one call per start, its events by sequence, and the call's record joined across its parts
+           by the product's own `chainRecord`, the second part starting 20 s after the first. */
+        const { chainRecord } = await import("@/lib/voiceCompanion/callResume");
+        type Call = { id: string; resumes: string | null; createdAt: number; events: Array<Record<string, unknown>>; entries: TranscriptEntry[]; closed: string | null };
+        const calls: Call[] = [];
+        const starts: Array<Record<string, unknown>> = [];
+        const closes: Array<Record<string, unknown>> = [];
+        const event = (call: Call, payload: Record<string, unknown>) => call.events.push({ ...payload, version: 1, sessionId: call.id, generation: 1, eventId: `${call.id}-${call.events.length + 1}`, seq: call.events.length + 1, atMs: call.events.length * 10 });
+        const parts = (call: Call): Call[] => [...(call.resumes ? parts(calls.find((row) => row.id === call.resumes)!) : []), call];
+        const record = (call: Call) => chainRecord(parts(call).map((part) => ({ id: part.id, createdAt: part.createdAt, entries: part.entries, truncated: false }))).entries;
+        const context = await browser.newContext({ viewport: size, hasTouch: true, isMobile: true, colorScheme: scheme });
+        try {
+          await context.addInitScript((language) => localStorage.setItem("llv_lang", language), lang);
+          await context.route("**/api/voice-companion/resume", (route) => {
+            const last = calls.at(-1);
+            return route.fulfill({ json: { resumable: last && last.closed === "transport" ? { sessionId: last.id, project: "atlas", endedAt: 1 } : null } });
+          });
+          await context.route("**/api/voice-companion/session**", async (route) => {
+            const request = route.request();
+            const url = new URL(request.url());
+            if (request.method() === "POST") {
+              const body = JSON.parse(request.postData() ?? "{}") as Record<string, unknown>;
+              if (body.action === "start") {
+                starts.push(body);
+                const call: Call = { id: `drop-call-${calls.length + 1}`, resumes: typeof body.resume === "string" ? body.resume : null, createdAt: calls.length * 20_000, events: [], entries: [], closed: null };
+                calls.push(call);
+                event(call, { type: "session.ready", mode: "official-realtime" });
+                call.entries.push({ id: "start", kind: "session_start", atMs: 0, order: 0, data: call.resumes ? { resumes: call.resumes } : {} });
+                const lines = call.resumes ? [["companion", after]] : said;
+                lines.forEach(([speaker, text], index) => {
+                  event(call, { type: "transcript.snapshot", speaker, itemId: `${call.id}-line-${index}`, text, final: true });
+                  call.entries.push({ id: `line-${index}`, kind: speaker === "operator" ? "utterance" : "reply", atMs: 2000 + index * 4000, order: call.entries.length, data: { text, final: true } });
+                });
+                return route.fulfill({ status: 201, json: { sessionId: call.id, sdp: "v=0\r\n" } });
+              }
+              if (body.action === "close") {
+                closes.push(body);
+                const call = calls.find((row) => row.id === body.sessionId);
+                if (call && !call.closed) {
+                  call.closed = body.reason === "transport" ? "transport" : "operator";
+                  event(call, { type: "session.closed", reason: call.closed, incomplete: false });
+                  call.entries.push({ id: "end", kind: "session_end", atMs: 14_000, order: call.entries.length, data: { reason: call.closed } });
+                }
+              }
+              return route.fulfill({ json: { ok: true } });
+            }
+            const call = calls.find((row) => row.id === url.searchParams.get("sessionId"));
+            if (!call) return route.fulfill({ status: 409, json: { code: "SESSION_UNAVAILABLE" } });
+            if (url.searchParams.get("view") === "transcript") return route.fulfill({ json: { entries: record(call), truncated: false } });
+            const from = Number(url.searchParams.get("after") ?? 0);
+            return route.fulfill({ json: { events: call.events.filter((row) => (row.seq as number) > from) } });
+          });
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          const prefix = `${size.width}x${size.height}-${lang}-${scheme}`;
+          const head = page.locator("[data-phone-voice-head]");
+          const voice = page.locator("[data-phone-voice]");
+          const bubble = page.locator("[data-phone-voice-bubble]");
+          const panel = page.locator("[data-companion-transcript-view]");
+          const settled = () => page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); const end = animation.effect?.getComputedTiming().endTime; animation.currentTime = typeof end === "number" && Number.isFinite(end) ? end : 0; } });
+          const inside = (box: { x: number; y: number; width: number; height: number } | null) => !!box && box.x >= 0 && box.y >= 0 && box.x + box.width <= size.width + 0.5 && box.y + box.height <= size.height + 0.5;
+          const readHistory = async (frame: string, expected: string[]) => {
+            await head.tap(); await page.locator("[data-phone-voice-transcript]").tap();
+            await panel.locator("[data-transcript-text]").first().waitFor();
+            await page.waitForFunction((last) => document.querySelector("[data-companion-transcript-view]")?.textContent?.includes(last), expected.at(-1)!);
+            await settled();
+            const texts = await panel.locator("[data-transcript-text]").allTextContents();
+            for (const text of expected) expect(texts).toContain(text);
+            const box = await panel.boundingBox();
+            expect(inside(box)).toBe(true);
+            expect(await panel.locator("[data-transcript-body]").evaluate((node) => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
+            await page.screenshot({ path: path.join(out, `${prefix}-${frame}.png`) });
+            const divider = await panel.locator("[data-transcript-resumed]").allTextContents();
+            const dividerTimes = await panel.locator("[data-kind=resumed] .vc-tr-time").allTextContents();
+            await page.keyboard.press("Escape"); await panel.waitFor({ state: "detached" });
+            return { frame, texts, divider, dividerTimes, box };
+          };
+
+          await page.goto(`${base}/?voice=drop&voice-long=1&seatnoise=ii&runtime=structured#c=conversation_running`);
+          await head.waitFor(); await page.locator("[data-mobile-message=agent]").first().waitFor(); await pause(page, 600);
+          await head.tap(); await page.locator("[data-phone-voice-talk]").tap();
+          await page.waitForFunction(() => document.querySelector("[data-phone-voice]")?.getAttribute("data-phase") !== "offline");
+          await pause(page, 900);
+
+          /* The network goes mid-call. */
+          await page.evaluate(() => (window as unknown as { phoneVoice: { lose(): void } }).phoneVoice.lose());
+          await page.waitForFunction(() => document.querySelector("[data-phone-voice]")?.getAttribute("data-phase") === "offline");
+          await bubble.waitFor();
+          expect(closes.at(-1)).toMatchObject({ action: "close", sessionId: "drop-call-1", reason: "transport" });
+          const lost = (await bubble.textContent())?.replace(/\u00a0/gu, " ");
+          expect(lost).toBe(lang === "uk" ? "Зʼєднання обірвалося. Сказане збережено." : "The connection dropped. What was said is kept.");
+          expect(inside(await bubble.boundingBox())).toBe(true);
+          await settled();
+          await page.screenshot({ path: path.join(out, `${prefix}-1-dropped.png`) });
+          await head.tap();
+          const resumeRow = page.locator("[data-phone-voice-resume]");
+          await resumeRow.waitFor();
+          expect(await resumeRow.textContent()).toBe(lang === "uk" ? "Відновити розмову" : "Reconnect");
+          expect(inside(await page.locator("[data-phone-voice-pop]").boundingBox())).toBe(true);
+          await settled();
+          await page.screenshot({ path: path.join(out, `${prefix}-2-menu.png`) });
+          await head.tap();
+          const dropped = await readHistory("3-history", said.map(([, text]) => text));
+
+          /* A reload: nothing in the page's memory, the call still offered and readable. */
+          await page.reload();
+          await head.waitFor(); await pause(page, 900);
+          await head.tap(); await resumeRow.waitFor();
+          await settled();
+          await page.screenshot({ path: path.join(out, `${prefix}-4-reloaded-menu.png`) });
+          await head.tap();
+          const reloaded = await readHistory("5-reloaded-history", said.map(([, text]) => text));
+
+          /* One tap continues the same call. */
+          await head.tap(); await resumeRow.tap();
+          await page.waitForFunction(() => document.querySelector("[data-phone-voice]")?.getAttribute("data-phase") !== "offline");
+          expect(starts.at(-1)).toMatchObject({ action: "start", resume: "drop-call-1" });
+          await bubble.waitFor();
+          await page.waitForFunction((text) => document.querySelector("[data-phone-voice-bubble]")?.textContent?.replace(/\u00a0/gu, " ") === text,
+            lang === "uk" ? "Зʼєднання відновлено. Розмова триває з того місця, де обірвалася." : "Connection restored. The conversation goes on where it stopped.");
+          expect(inside(await bubble.boundingBox())).toBe(true);
+          await settled();
+          await page.screenshot({ path: path.join(out, `${prefix}-6-restored.png`) });
+          expect(await voice.getAttribute("data-phase")).not.toBe("offline");
+          const restored = await readHistory("7-restored-history", [...said.map(([, text]) => text), after]);
+          expect(restored.divider).toEqual([lang === "uk" ? "Зʼєднання обірвалося · відновлено" : "Connection dropped · reconnected"]);
+          /* One clock across the parts: the reconnect stands at 0:20, after the dropped part's last line at 0:10. */
+          expect(restored.dividerTimes).toEqual(["0:20"]);
+          expect(errors).toEqual([]);
+          readings.push({ viewport: size, lang, scheme, dropped, reloaded, restored, closes, starts: starts.map((row) => ({ resume: row.resume ?? null })), errors });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); stop(); }
+    fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", readings }, null, 2)}\n`);
+  }, 240_000);
 });
 
 describe("seat recovery failure history", () => {

@@ -23,7 +23,8 @@ request. The installation's role-memory kill switch still applies. Ordinary
 unasked lessons retain their existing seat-only admission. This supersedes the
 blanket refusals for clean roles and non-pipeline roles in the original design.
 
-The stored rule and its view carry `operatorCorrection:true`. Duplicate merging
+The operator's own conversation in Delegatus mode marks its project and
+machine corrections the same way. The stored rule and its view carry `operatorCorrection:true`. Duplicate merging
 preserves this marker on the survivor and keeps the incoming lesson's provenance
 in its merged record. A correction changed since its last curation is never
 archived to free budget, even when it duplicates a curated rule; the scope

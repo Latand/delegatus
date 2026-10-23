@@ -148,7 +148,7 @@ Up to the launch it is shared by every request; the launch is the restricted
 | Tools | engine web search; Celestia tools through the runner's round loop (up to 8 rounds) | `runner.ts:379-484`, `toolLoop.ts` |
 | Tripwires | Claude's `init` must list exactly `StructuredOutput` (+ `WebSearch`) and no MCP server; any other tool use or Codex item kills the run as `profile_violation` | `progress.ts:18-25`, `:46-58`, `:68-69` |
 | Time | `hardCapMs = target.hardCapMinutes × 60 000` (route bounds 1–240 min, default 30); `launchDetached` arms one timer that kills the group | `runner.ts:418`, `ephemeral.ts:146-151`, `:378`, `relays/[id]/route.ts:87-89`, `store.ts:251-266` |
-| Liveness | heartbeat every `heartbeat_interval_s`; a heartbeat older than `stall_window_s` or a 404 / 409 `lease_lost` cancels the run | `runner.ts:337-378`, `:458-466` |
+| Liveness | `relay-lease-worker.ts` sends heartbeat and completion HTTP from its own leased helper process; a 404 / 409 `lease_lost` cancels the run, and a stale acknowledged heartbeat cancels it after `stall_window_s` | `relayLease.worker.ts`, `relayLeaseTransport.ts`, `runner.ts` |
 | Answer | Codex `answer.json`, Claude `structured_output`; `checkedAnswer` validates action, length and `reply_to` | `ephemeral.ts:383-415`, `protocol.ts:255-288` |
 | Record | `answers/<relay>/<target>/<ms>_<request>.json`, begun when the child launches, finished with the local decision | `answers.ts`, `runner.ts:189-226`, `:439` |
 | Restart | the orphan sweep kills a live child by recorded pid and identity and completes `failed` / `install_restarted` | `poller.ts:73-115` |
@@ -499,7 +499,7 @@ exporting that helper, so the escaping has one source. The prompt:
 <tools>                        (only when non-empty)
 [Input.tools as JSON]
 </tools>
-[Your last message in this turn is posted in that chat, where other people can read it. Never put secrets, keys, tokens, passwords, file contents or paths from this computer in it. Nobody can answer a question during this turn; ask the owner in your reply instead. Reply within about two minutes: while you work, the chat's next messages to this assistant are held or answered by the service. This turn is stopped at {hard cap} minutes. For longer work, start it and reply with what you started: message the project's orchestrator with send_message_to_orchestrator, or create a task or a pipeline. Pass project on every board call; list_tasks and get_orchestrator tell you which projects exist. If you spawn an agent, pass notifyLauncher false. Write your reply as plain text of at most {max_chars} characters, as your last message. Always report an outcome to the owner; an empty reply or [ignore] cannot complete this request.{ To hand this message back to the service's own assistant, which can use the tools in <tools>, make your last message exactly [handoff].}]
+[Your last message in this turn is posted in that chat, where other people can read it. Never put secrets, keys, tokens, passwords, file contents or paths from this computer in it. Nobody can answer a question during this turn; ask the owner in your reply instead. Reply as soon as the outcome is ready. The relay request has up to ten minutes in total, including setup and tools; the service may give an earlier deadline. While you work, the chat's next messages to this assistant are held or answered by the service. This turn is stopped at {hard cap} minutes. For longer work, start it and reply with what you started: message the project's orchestrator with send_message_to_orchestrator, or create a task or a pipeline. Pass project on every board call; list_tasks and get_orchestrator tell you which projects exist. If you spawn an agent, pass notifyLauncher false. Write your reply as plain text of at most {max_chars} characters, as your last message. Always report an outcome to the owner; an empty reply or [ignore] cannot complete this request.{ To hand this message back to the service's own assistant, which can use the tools in <tools>, make your last message exactly [handoff].}]
 ```
 
 Why this shape:
@@ -528,12 +528,12 @@ These are the limits an owner run works within:
 
 | Limit | Value | Source | What it does to an owner run |
 |---|---|---|---|
-| Heartbeats | every `heartbeat_interval_s` (default 10 s); stall after `stall_window_s` (default 45 s) | `protocol.ts:39-45`, `runner.ts:337-378` | sent by the runner on its timer, so a long tool call never stalls the lease |
+| Heartbeats | every `heartbeat_interval_s` (default 10 s); stall after `stall_window_s` (default 45 s) | `protocol.ts:39-45`, `relayLease.worker.ts` | a leased helper process owns heartbeat scheduling and the completion POST, so synchronous Viewer work cannot delay either request |
 | First heartbeat | within `ack_window_s` (default 10 s) | `relay.md` §A.6 F2b | why `runOwnerAgent` returns before the spawn admission ends |
-| Install hard cap | `target.hardCapMinutes`, 1–240, default 30 | `relays/[id]/route.ts:87-89`, `store.ts:251-266` | the turn is interrupted; `failed` / `hard_cap` |
-| The chat's next request | held up to 120 s, then the service falls back (with `chat_conversations`) | `relay-slice3.md` §4.7 | the prompt's "about two minutes" |
+| Owner request window | remaining absolute service deadline, or receipt + 10 min | `externalRelay/deadline.ts`, `externalRelay/runner.ts` | supersedes the ordinary target cap for owner work; expiry posts a fixed plain timeout reply while durable stop recovery continues |
+| The chat's next request | service-controlled hold (historically 120 s) | `relay-slice3.md` §4.7 | the service changes its own total wait separately; the install never extends a supplied deadline |
 | The target's slots | `concurrency` 1–4, default 1; an owner run holds one slot | `runner.ts:299`, `relay.md` §B.8, §A.6 F1b | while it runs at concurrency 1, every other message to this target is answered by the service |
-| Agent start | structured host first message within 30 s; durable setup within 5 min | `structuredSpawn.ts:61`, `:76` | counts against the two minutes |
+| Agent start | structured host first message within 30 s; durable setup within 5 min | `structuredSpawn.ts:61`, `:76` | counts against the request window |
 | Answer length | `answer.max_chars`, at most 32 000 | `protocol.ts:160` | the reply is cut (§2.7) |
 
 Long work leaves the window through tools the run already holds: a message to
@@ -569,9 +569,43 @@ conversation later with no lease to answer; the prompt asks for
   conversation even after cancellation, and retains an unconfirmed stop.
   Control attempts have a one-second deadline and three attempts per sweep,
   separated by 250 ms. An accepted-but-pending receipt does not prove stop.
-  Confirmed control or terminal liveness permits cleanup. Otherwise the
+  Confirmed control or terminal liveness permits cleanup. After retiring the
+  exact first prompt or continuation, recovery can also confirm a stop from
+  the registry's positive proof that execution custody ended. The current
+  generation must have a dead or unhosted entry. Every retained generation
+  and artifact owner must lack a host, claim, pending action and termination
+  survivors; launch receipts must be terminal with no admission owner or
+  queued launch. Applying switches, unfinished migrations and recoverable
+  deliveries retain custody. Missing or unreadable proof retains it too.
+  This check runs after asynchronous prompt cleanup and needs no readable
+  final transcript. It confirms cancellation only; it accepts no answer.
+  Recovery preserves the continuation operation id when observing a refused
+  control. The ordinary orphan sweep then drops confirmed run custody,
+  restores advertised capacity and releases the reply-chain reservation.
+  No manual ledger edit or transcript deletion is required. Otherwise the
   settings status reports `owner_stop_pending`, the ordinary conversation
   remains on the board, and the orphan sweep retries after a Viewer restart.
+
+  Target capacity counts execution separately from retained cleanup custody.
+  An accepted completion durably marks `capacityReleased` before waiting for
+  claim settlement or chain/file cleanup. If the marker write is refused,
+  the local runner retries it with capped exponential backoff independently
+  of conversation cleanup and keeps its active slot until the marker is
+  durable. Heartbeat scheduling stops after the helper accepts completion.
+  Both reservation paths and claim advertisements ignore that marker and
+  confirmed owner stops. Old rows without either proof still count. An
+  in-flight heartbeat refused after acceptance is journaled as
+  `post_completion`; the accepted answer stays accepted. The sweep finishes
+  abandoned completed cleanup once its local runner has returned, including
+  under the same Viewer process, without controlling a host or completing
+  the request again. An accepted completion whose owner stop is still
+  unconfirmed keeps capacity and files, and marks `completionAccepted`
+  instead; the sweep confirms the stop, then cleans up without a second
+  completion. A request still held by its local runner is never swept,
+  and neither is any row whose owner is a live process other than the
+  sweeping one, such as the previous Viewer during a handover. A zero-capacity enabled target stays in the claim body
+  and emits `External relay target capacity` with its concurrency, running,
+  retained and waiting counts and the `full` or `drain` reason.
 
 
 ### 6.2 Where it sits
@@ -801,8 +835,9 @@ nothing; each is one line to change.
 1. The run starts in the home directory and names projects explicitly (§2.5).
 2. Every owner message gets a fresh conversation (Deferred, first item).
 3. Celestia operations in an owner run go through `[handoff]` (§7).
-4. The reply budget in the prompt is about two minutes, matching the
-   service's 120 s hold; the hard stop stays the target's hard cap (§5).
+4. The 2026-10-22 amendment gives owner requests ten minutes end to end,
+   honours an earlier service deadline, and sends ready outcomes immediately.
+   See [relay-request-window.md](relay-request-window.md).
 5. Orchestrator messaging is admitted for the live run only (§2.4).
 
 ### 2026-10-13 first-message wait amendment

@@ -1,0 +1,84 @@
+<!doctype html>
+<!-- The sound prototype of docs/design/sound-redesign.md (acceptance 4).
+     Plays every sound of the sound map in both palettes, the kept typing
+     effect beside its replica, and the busiest hour on record at real pace.
+     ?lang=en|uk, ?theme=light|dark. Served from the repository root, it also
+     plays the original typing slices from public/audio/cues. -->
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Звуки Delegatus · прототип</title>
+<link rel="stylesheet" href="sounds.css">
+</head>
+<body>
+<main>
+  <header>
+    <h1 data-copy="title"></h1>
+    <p data-copy="intro" class="muted"></p>
+    <p id="slices-status" class="muted" role="status"></p>
+  </header>
+
+  <section aria-labelledby="controls-title">
+    <h2 id="controls-title" data-copy="controls"></h2>
+    <fieldset id="palette-choice"><legend data-copy="palette"></legend></fieldset>
+    <fieldset id="typing-choice"><legend data-copy="typingSource"></legend></fieldset>
+    <fieldset id="volume-choice">
+      <legend data-copy="volume"></legend>
+      <input id="volume" type="range" min="0" max="1" step="0.05" value="0.4" aria-describedby="volume-out">
+      <output id="volume-out" for="volume"></output>
+    </fieldset>
+  </section>
+
+  <section aria-labelledby="sounds-title">
+    <h2 id="sounds-title" data-copy="sounds"></h2>
+    <div class="table-scroll"><table id="sound-table" class="sound-table"></table></div>
+    <p style="margin-top:12px"><button id="rising" type="button"></button></p>
+    <p data-copy="compareNote" class="muted"></p>
+  </section>
+
+  <section aria-labelledby="small-title">
+    <h2 id="small-title" data-copy="smallSounds"></h2>
+    <div class="table-scroll"><table id="small-table" class="sound-table"></table></div>
+  </section>
+
+  <section aria-labelledby="hour-title">
+    <h2 id="hour-title" data-copy="hour"></h2>
+    <p id="hour-intro" class="muted"></p>
+    <div class="hour-controls">
+      <label><span data-copy="startAt"></span> <input id="start-minute" type="number" min="0" max="59" value="0"></label>
+      <button id="densest" type="button" data-copy="busiest"></button>
+      <label><span data-copy="liveSessions"></span> <input id="live-sessions" type="number" min="3" max="26" value="12"></label>
+      <span class="muted" data-copy="liveSessionsNote"></span>
+      <label><input id="with-asks" type="checkbox"> <span data-copy="withAsks"></span></label>
+    </div>
+    <p>
+      <button id="hour-play" type="button" aria-pressed="false"></button>
+      <span data-copy="position"></span> <output id="hour-position">14:00:00</output>
+    </p>
+    <canvas id="timeline" aria-label=""></canvas>
+    <div class="table-scroll"><table id="hour-table"></table></div>
+    <p id="played-note" class="muted" style="margin-top:8px"></p>
+    <p id="typing-summary" class="muted"></p>
+    <p id="silent-summary" class="muted"></p>
+  </section>
+
+  <details>
+    <summary data-copy="rules"></summary>
+    <p data-copy="rulesNote" class="muted" style="margin-top:8px"></p>
+    <ul id="checks" class="checks"></ul>
+  </details>
+
+  <footer data-copy="footer"></footer>
+</main>
+<noscript>This prototype is written in JavaScript; open it with JavaScript on.</noscript>
+<script src="synth.js"></script>
+<script src="sounds.js"></script>
+<script src="copy.js"></script>
+<script src="typing.js"></script>
+<script src="lane.js"></script>
+<script src="hour.js"></script>
+<script src="render.js"></script>
+<script src="page.js"></script>
+</body>
+</html>

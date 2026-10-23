@@ -5,13 +5,13 @@
    Only a ready build is published as the installed release, which the next
    restart runs. The runner never starts or stops a process. Commands go
    through an injected port so tests stub them. */
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
-import { setPriority } from "node:os";
+import { cpus, loadavg, setPriority } from "node:os";
 
 import { recordHelperGroup } from "@/lib/helperLease";
-import { wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
+import { wrapReleaseCommand, wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
 import { machineCpuPressureGate, waitForCpuPressure, type CpuPressureGate } from "@/lib/runtime/cpuPressure";
 import { runGit, TIP_REF } from "./git";
 import { classifyStatus, disposableIgnoredPath } from "@/lib/pipelines/worktreeSweep";
@@ -38,7 +38,8 @@ export interface StepPorts {
   /** Makes a ready build the installed release. */
   publish(release: Release): void | Promise<void>;
   now(): number;
-  abort?(): void;
+  cpuLoad?(): { load1: number; cpus: number };
+  abort?(): void | Promise<void>;
   /** False for an authoritative end without an exit status; null for a
       missing PID whose exit notification is still pending. A recorded exit
       code remains valid while run() drains output and settles. */
@@ -98,11 +99,15 @@ export interface RunnerConfig {
   /** Tests can shorten the deadline without sleeping for minutes. */
   stepTimeoutMs?: Partial<Record<CheckoutStepName, number>>;
   livenessPollMs?: number;
+  /** Output renews this silence bound; the total step bound never moves. */
+  releaseIdleTimeoutMs?: number;
 }
 
+export const RELEASE_IDLE_TIMEOUT_MS = 30 * 60_000;
+
 export const STEP_TIMEOUT_MS: Record<CheckoutStepName, number> = {
-  fetch: 10 * 60_000, checkout: 5 * 60_000, install: 20 * 60_000,
-  build: 45 * 60_000, ready: 5 * 60_000,
+  fetch: 10 * 60_000, checkout: 5 * 60_000, install: 60 * 60_000,
+  build: 2 * 60 * 60_000, ready: 5 * 60_000,
 };
 
 /* A command that exited non-zero; its output is already in the log. */
@@ -189,14 +194,17 @@ export class UpdateRunner {
     for (let index = from; index < CHECKOUT_STEPS.length; index += 1) {
       const name = CHECKOUT_STEPS[index]!;
       const started = this.ports.now();
+      const releaseWork = name === "install" || name === "build";
       this.patch(index, { state: "running", startedAt: this.iso(), durationMs: null, exitCode: null, tail: [], failure: null });
       const fd = openSync(this.logPath(name), "w");
       const tail: string[] = [];
       let accepting = true;
+      let renewProgress: (() => void) | null = null;
       const push = (line: string, toTail = true) => {
         if (!accepting) return;
         writeSync(fd, `${line}\n`);
         if (!toTail) return;
+        if (line.trim()) renewProgress?.();
         tail.push(line);
         if (tail.length > TAIL_LINES) tail.shift();
         this.patch(index, { tail: tail.slice() });
@@ -204,39 +212,69 @@ export class UpdateRunner {
       let exitCode: number | null = null;
       let failure: StepFailure | null = null;
       let timer: ReturnType<typeof setTimeout> | null = null;
+      let silenceTimer: ReturnType<typeof setTimeout> | null = null;
       let exitTurn: ReturnType<typeof setImmediate> | null = null;
+      let exitGrace: ReturnType<typeof setTimeout> | null = null;
       let liveness: ReturnType<typeof setInterval> | null = null;
+      let expiring = false;
       try {
         const limit = this.config.stepTimeoutMs?.[name] ?? STEP_TIMEOUT_MS[name];
+        const timeout = (reason: "silence" | "total") => {
+          const failure: StepFailure = { kind: "timeout", minutes: releaseWork ? (this.ports.now() - started) / 60_000 : limit / 60_000,
+            ...(releaseWork ? { reason, ...(reason === "silence" ? { idleMinutes: (this.config.releaseIdleTimeoutMs ?? RELEASE_IDLE_TIMEOUT_MS) / 60_000 } : {}), ...this.ports.cpuLoad?.() } : {}) };
+          return new StepError(failure, `${name}: ${stepFailureDetail(failure)}`);
+        };
         exitCode = await Promise.race([
-          this.runStep(name, push),
+          this.runStep(name, push).then(
+            value => expiring ? new Promise<never>(() => {}) : value,
+            error => { if (expiring) return new Promise<never>(() => {}); throw error; },
+          ),
           new Promise<never>((_, reject) => {
-            const expire = () => {
-              const alive = this.ports.childAlive?.();
-              this.ports.abort?.();
-              reject(alive === false
-                ? new StepError({ kind: "interrupted" }, `${name} child process ended without an exit status before the deadline`)
-                : new StepError({ kind: "timeout", minutes: limit / 60_000 }, `${name} did not finish within ${limit / 60_000} min`));
+            const stop = (error: StepError) => {
+              if (expiring) return;
+              expiring = true;
+              renewProgress = null;
+              if (silenceTimer) clearTimeout(silenceTimer);
+              if (timer) clearTimeout(timer);
+              void Promise.resolve(this.ports.abort?.()).then(() => reject(error), cleanup => {
+                const text = `${stepFailureDetail(error.failure)}; cleanup failed: ${cleanup instanceof Error ? cleanup.message : String(cleanup)}`;
+                reject(new StepError({ kind: "error", text }, `${name}: ${text}`));
+              });
             };
-            timer = setTimeout(() => {
-              // Give queued I/O a turn before bounding an unreported exit.
-              // Timer callbacks alone cannot establish completion or loss.
+            const expire = (reason: "silence" | "total") => {
+              const alive = this.ports.childAlive?.();
+              stop(alive === false
+                ? new StepError({ kind: "interrupted" }, `${name} child process ended without an exit status before the deadline`)
+                : timeout(reason));
+            };
+            const due = (reason: "silence" | "total") => {
+              if (expiring) return;
+              // Both deadlines allow queued exit I/O to settle. A missing PID
+              // alone cannot distinguish a successful exit from a lost one.
               if (this.ports.childAlive?.() === null) {
-                // A lost child supplies no I/O to wake an unreferenced turn.
-                // Keep this turn scheduled so its bounded grace can start.
+                if (exitTurn || exitGrace) return;
                 exitTurn = setImmediate(() => {
                   exitTurn = null;
-                  timer = setTimeout(expire, this.config.livenessPollMs ?? 1_000);
-                  timer.unref?.();
+                  exitGrace = setTimeout(() => { exitGrace = null; expire(reason); }, this.config.livenessPollMs ?? 1_000);
+                  exitGrace.unref?.();
                 });
-              } else expire();
-            }, limit);
+              } else expire(reason);
+            };
+            if (releaseWork) {
+              renewProgress = () => {
+                if (silenceTimer) clearTimeout(silenceTimer);
+                silenceTimer = setTimeout(() => due("silence"), this.config.releaseIdleTimeoutMs ?? RELEASE_IDLE_TIMEOUT_MS);
+                silenceTimer.unref?.();
+              };
+              renewProgress();
+            }
+            timer = setTimeout(() => due("total"), limit);
             timer.unref?.();
           }),
           new Promise<never>((_, reject) => {
             if (!this.ports.childAlive) return;
             liveness = setInterval(() => {
-              if (this.ports.childAlive?.() === false) reject(new StepError({ kind: "interrupted" }, `${name} child process ended without settling the step`));
+              if (!expiring && this.ports.childAlive?.() === false) reject(new StepError({ kind: "interrupted" }, `${name} child process ended without settling the step`));
             }, this.config.livenessPollMs ?? 1_000);
             liveness.unref?.();
           }),
@@ -255,8 +293,11 @@ export class UpdateRunner {
           failure = { kind: "error", text };
         }
       } finally {
+        renewProgress = null;
+        if (silenceTimer) clearTimeout(silenceTimer);
         if (timer) clearTimeout(timer);
         if (exitTurn) clearImmediate(exitTurn);
+        if (exitGrace) clearTimeout(exitGrace);
         if (liveness) clearInterval(liveness);
         accepting = false;
         closeSync(fd);
@@ -288,7 +329,7 @@ export class UpdateRunner {
     const release = this.state.releaseDir!;
     const command = async (argv: string[], cwd: string, work?: string): Promise<number> => {
       push(`$ ${argv.join(" ")}   (in ${cwd})`, false);
-      const code = await this.ports.run(argv, { cwd, env, onLine: (line) => push(line), lowPriority: this.state.trigger === "auto", ...(work ? { work } : {}) });
+      const code = await this.ports.run(argv, { cwd, env, onLine: (line) => push(line), lowPriority: this.state.trigger === "auto" && name !== "build" && name !== "install", ...(work ? { work } : {}) });
       push(`exit ${code}`, false);
       if (code !== 0) throw new CommandFailure(code);
       return code;
@@ -357,25 +398,32 @@ export class UpdateRunner {
     arrives, so a build streams into the surface while it runs. Each command
     leads its own process group, recorded by PID, so abort() stops the command
     this runner started and nothing else. */
-export interface RealPorts extends StepPorts { abort(): void }
+export interface RealPorts extends StepPorts { abort(): Promise<void> }
 
 export function realPorts(publish: (release: Release) => void | Promise<void>,
   cpu: { pressure?: () => Pick<CpuPressureGate, "check"> | null; pollMs?: number } = {}): RealPorts {
   let current: RecordedPid | null = null;
   let completion: { ended: boolean; code: number | null } | null = null;
   let waiting: AbortController | null = null;
+  let currentExit: Promise<number | null> | null = null;
+  let currentScope: string | null = null;
   return {
     async run(command, { cwd, env, onLine, lowPriority, work }) {
+      const releaseWork = work === "update-install" || work === "update-build";
+      let scope: string | null = null;
       mkdirSync(env.TMPDIR ?? cwd, { recursive: true });
       if (work) {
-        // Heavy work: a missing CPU mechanism refuses the step with its reason
-        // (CpuContainmentUnavailable names the opt-out), and the start waits
-        // for CPU pressure to fall. Neither creates a child.
-        const wrapped = wrapWorkCommand(command[0]!, command.slice(1), { label: work });
+        // Release preparation has immediate admission and its own high-weight
+        // scope. Other heavy steps retain pressure admission and work quotas.
+        // A missing CPU mechanism refuses before any command starts.
+        const wrapped = releaseWork
+          ? wrapReleaseCommand(command[0]!, command.slice(1), work)
+          : { ...wrapWorkCommand(command[0]!, command.slice(1), { label: work }), unit: null };
+        scope = wrapped.unit;
         command = [wrapped.command, ...wrapped.args];
         waiting = new AbortController();
         try {
-          if (!await waitForCpuPressure((cpu.pressure ?? machineCpuPressureGate)(), { subject: work, onReason: onLine, signal: waiting.signal, ...(cpu.pollMs ? { pollMs: cpu.pollMs } : {}) })) return 143;
+          if (!releaseWork && !await waitForCpuPressure((cpu.pressure ?? machineCpuPressureGate)(), { subject: work, onReason: onLine, signal: waiting.signal, ...(cpu.pollMs ? { pollMs: cpu.pollMs } : {}) })) return 143;
         } finally { waiting = null; }
       }
       const child = spawn(command[0]!, command.slice(1), { cwd, env: env as NodeJS.ProcessEnv, detached: true, stdio: ["ignore", "pipe", "pipe"] });
@@ -395,9 +443,11 @@ export function realPorts(publish: (release: Release) => void | Promise<void>,
         child.once("exit", (code) => finish(code));
         child.once("close", (code) => finish(code));
       });
+      currentExit = exited;
+      currentScope = scope;
       const identity = child.pid ? readStartIdentity(child.pid) : null;
       current = child.pid && identity ? { pid: child.pid, startIdentity: identity } : null;
-      if (lowPriority && child.pid) {
+      if (lowPriority && !releaseWork && child.pid) {
         try { setPriority(child.pid, 10); } catch { /* best effort; never fail the update for scheduling */ }
       }
       try {
@@ -409,12 +459,29 @@ export function realPorts(publish: (release: Release) => void | Promise<void>,
         if (completion === result) {
           current = null;
           completion = null;
+          currentExit = null;
+          currentScope = null;
         }
       }
     },
-    abort() {
+    async abort() {
       waiting?.abort();
-      if (current) signalGroup(current, "SIGTERM");
+      const owned = current;
+      const exited = currentExit;
+      const scope = currentScope;
+      if (scope) { await stopReleaseScope(scope); return; }
+      if (!owned || !exited) return;
+      signalGroup(owned, "SIGTERM");
+      const wait = async () => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try { await Promise.race([exited, new Promise(resolve => { timer = setTimeout(resolve, 2_000); })]); }
+        finally { if (timer) clearTimeout(timer); }
+      };
+      await wait();
+      // Re-read the recorded process identity at the kill dispatch. A retry
+      // may already own current, so never signal through that mutable field.
+      if (sameProcess(owned)) { signalGroup(owned, "SIGKILL"); await wait(); }
+      if (sameProcess(owned)) throw new Error("The timed-out update child survived cleanup");
     },
     childAlive() {
       if (waiting) return true;
@@ -437,6 +504,7 @@ export function realPorts(publish: (release: Release) => void | Promise<void>,
     },
     publish,
     now: () => Date.now(),
+    cpuLoad: () => ({ load1: loadavg()[0]!, cpus: cpus().length }),
   };
 }
 
@@ -468,4 +536,39 @@ export async function pumpLines(stream: AsyncIterable<Uint8Array | string> | nul
 export function stripAnsi(text: string): string {
   // eslint-disable-next-line no-control-regex
   return text.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "");
+}
+
+/** Deployment records retain phase and cause, including older saved failures. */
+export function updateFailureDetail(state: UpdateState | undefined): string {
+  const step = state?.steps.find(step => step.state === "failed");
+  if (!step) return "Release preparation failed: no completed runner result";
+  const cause = step.failure ? stepFailureDetail(step.failure) : "no exit status";
+  return `Release ${step.name} failed: ${cause}`;
+}
+
+function stepFailureDetail(failure: StepFailure): string {
+  switch (failure.kind) {
+    case "timeout": return `timeout after ${Number(failure.minutes.toFixed(2))} minutes${failure.reason === "silence" ? ` (${failure.idleMinutes} minutes without output)` : failure.reason === "total" ? " (total deadline)" : ""}${failure.load1 === undefined ? "" : `; load avg1 ${failure.load1.toFixed(2)} on ${failure.cpus} CPUs`}`;
+    case "exit": return `exit ${failure.code}`;
+    case "error": return failure.text;
+    case "memory": return `only ${failure.availableMb} MB available; ${failure.neededMb} MB required`;
+    case "remote-moved": return `remote moved from ${failure.expected} to ${failure.fetched}`;
+    case "head-mismatch": return `HEAD ${failure.head}, expected ${failure.expected}`;
+    case "build-id-missing": return "missing .next/BUILD_ID";
+    case "interrupted": return "child interrupted without an exit status";
+    case "deployment-lost": return "deployment ownership lost";
+  }
+}
+
+/** The generated unit remains ours while descendants outlive their leader. */
+async function stopReleaseScope(unit: string): Promise<void> {
+  const control = (args: string[]) => new Promise<string>((resolve, reject) => {
+    execFile("systemctl", ["--user", ...args], { encoding: "utf8", timeout: 5_000, killSignal: "SIGKILL" },
+      (error, stdout) => error ? reject(error) : resolve(stdout.trim()));
+  });
+  try { await control(["stop", unit]); }
+  catch (error) {
+    // --collect can remove an empty scope between the command exit and stop.
+    if (await control(["show", unit, "--property=LoadState", "--value"]).catch(() => "unknown") !== "not-found") throw error;
+  }
 }

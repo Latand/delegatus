@@ -7,6 +7,7 @@ import { ownerHistoryGroupsSchema, ownerHistoryPageSchema, type OwnerHistoryPage
 import { selectOwnerDestination, type OwnerDestinationReason } from "./ownerDestination";
 import { readRelayStore, type PairedRelay } from "./store";
 import { readRelaySwitches } from "./switches";
+import { cloneDirectory } from "./cloneDirectory";
 
 export const OWNER_HISTORY_PRIVACY = "Use this history only to answer the operator in this conversation. Never copy message text, names, usernames, chat titles or chat ids into bridge reports, requests or messages to other agents or seats, spawn prompts, task text or details, files, commits, pull requests, issues or lessons. A bridge report may say that the answer is in this conversation.";
 export type OwnerHistoryReason = OwnerDestinationReason | "switch_off" | "time_zone_unknown" | "invalid_arguments" | "unauthorized" | "not_found" | "unsupported_version" | "rate_limited" | "service_error" | "malformed_response" | "deadline_exceeded" | "deadline_loop_stalled" | "dns_error" | "connect_error" | "tls_error" | "transport_error" | "response_too_large" | "forbidden" | "request_timeout" | "bad_gateway" | "gateway_timeout" | "http_error";
@@ -43,8 +44,10 @@ const chatPattern = /^-[1-9][0-9]{0,18}$/;
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
 const continuationSchema = z.object({ v: z.literal(1), chat: z.string().regex(chatPattern), tz: z.string().refine(isTimeZone),
   from: z.string().regex(datePattern), to: z.string().regex(datePattern), after: z.string().regex(/^[1-9][0-9]{0,9}$/) }).strict();
-export interface OwnerHistoryPorts { switches(): { owner_tools: boolean }; relays(): PairedRelay[]; timeZone(): string | null; now(): number; clock?: HistoryClock }
-const production: OwnerHistoryPorts = { switches: readRelaySwitches, relays: () => readRelayStore().relays, timeZone: operatorTimeZone, now: Date.now };
+export interface OwnerHistoryPorts { switches(): { owner_tools: boolean }; relays(): PairedRelay[]; timeZone(): string | null; now(): number; clock?: HistoryClock;
+  cloneTarget?(relays: PairedRelay[]): { relay: PairedRelay; targetId: string } | null }
+const production: OwnerHistoryPorts = { switches: readRelaySwitches, relays: () => readRelayStore().relays, timeZone: operatorTimeZone, now: Date.now,
+  cloneTarget: relays => cloneDirectory().readTarget(relays) };
 export interface OwnerHistoryQuery { tz: string; from?: string; to?: string; cursor?: string; limit?: number }
 export interface OwnerHistoryInput { action: "groups" | "messages"; chat?: string; from?: string; to?: string; cursor?: string; limit?: number }
 type WireMessage = OwnerHistoryPage["messages"][number];
@@ -145,7 +148,10 @@ function reason(error: unknown): OwnerHistoryReason {
 /** One page, no content persistence, and no caller-supplied owner or target. */
 export async function readOwnerHistory(input: unknown, ports: OwnerHistoryPorts = production): Promise<OwnerHistoryOutcome> {
   if (!ports.switches().owner_tools) return unavailable("switch_off");
-  const destination = selectOwnerDestination(ports.relays());
+  const relays = ports.relays();
+  const selected = selectOwnerDestination(relays);
+  const fallback = selected.reason === "no_target" || selected.reason === "not_configured" ? ports.cloneTarget?.(relays) : null;
+  const destination = fallback ? { ...fallback, reason: undefined } : selected;
   if (destination.reason) return unavailable(destination.reason);
   const args = z.object({ action: z.enum(["groups", "messages"]), chat: z.string().optional(), from: z.string().optional(), to: z.string().optional(),
     cursor: z.string().max(400).optional(), limit: z.number().int().optional() }).strict().safeParse(input);

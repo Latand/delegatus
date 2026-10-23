@@ -1174,3 +1174,24 @@ test("authority reads never decode scope history across tenfold growth and still
   expect(readPassAuthority(live.id)?.state).toBe("succeeded");
   expect(machinePassAuthority()).toBeNull();
 });
+test("a curator archive, its undo and a split keep each rule's departure log for the weekly report", async () => {
+  const { windowDepartures } = await import("../weeklyMetrics");
+  const scope = roleScope(PROJECT, "builder");
+  const kept = fixture(scope, { rule: `${text} Kept condition.` }), archived = fixture(scope, { rule: `${text} Archived condition.` }), split = fixture(scope, { rule: `${text} Split condition.`, departures: [{ at: at(-5000), reason: "stale", curated: true }] });
+  const p = pass();
+  const result = applyCuration(p, input({ [scope]: [kept, split, `split:${split}:1`] }, {
+    archive: [{ id: archived, reason: "stale", note: "The named command was removed." }],
+    split: [{ id: split, note: "Each part has its own condition.", parts: [{ to: scope, rule: `${text} First part.` }, { to: scope, rule: `${text} Second part.` }] }],
+  }), at(100));
+  expect(row(archived).departures).toEqual([{ at: at(100), reason: "stale", curated: true }]);
+  expect(row(result.placeholders[`split:${split}:1`]).departures).toBeUndefined();
+  const week = { from: at(0), to: at(1000) };
+  const read = () => windowDepartures(roleMemoryCollection()!.snapshot() as never, week);
+  expect(read()).toEqual({ evictions: { neverCurated: 0, curated: 0 }, adoptedArchived: 0, complete: true });
+  // Undoing the pass after the week brings the rule back; the week's departure stays.
+  ended(p); revertCuratorPass(p.id, at(2000));
+  expect(row(archived).state).toBe("active");
+  expect(row(archived).departures).toEqual([{ at: at(100), reason: "stale", curated: true }]);
+  expect(read()).toEqual({ evictions: { neverCurated: 0, curated: 0 }, adoptedArchived: 0, complete: true });
+  expect(windowDepartures(roleMemoryCollection()!.snapshot() as never, { from: at(1500), to: at(3000) }).complete).toBe(true);
+});

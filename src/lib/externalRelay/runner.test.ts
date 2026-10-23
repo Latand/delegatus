@@ -7,7 +7,7 @@ import dns from "node:dns/promises";
 import { callBody, toolSleep, type ToolLoopRuntime } from "./toolLoop";
 import { requestSchema, handoffAnswerSchema, answerSchema, replyAnswerSchema, type ToolCallResult } from "./protocol";
 import { ownerRequest, pendingRetryAfterSeconds, x1Request, x1Results, x1Errors, x1Dir } from "./toolLoop.fixture";
-import { relayClaimCapabilities } from "./poller";
+import { relayClaimCapabilities, sweepExternalRelayOrphans } from "./poller";
 import { setRelaySwitch } from "./switches";
 import { assertOwnerCaptureResponse } from "./ownerCapture.fixture";
 import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
@@ -19,7 +19,7 @@ import { procBackend } from "@/lib/proc";
 import { processMatches, terminateHeadlessReviewerGroup } from "@/lib/agent/headless";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { createManagedClaudeAccount } from "@/lib/accounts/claude";
-import { advertisedSlots, completeRelayRequest, HANDOFF_DETAIL, memberLimitDetail, runClaimedRequest, runningCount } from "./runner";
+import { advertisedSlots, completeRelayRequest, HANDOFF_DETAIL, memberLimitDetail, runClaimedRequest as runClaimedRequestWithLeaseWorker, runningCount } from "./runner";
 import { relayActivity } from "./activity";
 import { dropRun, externalRelayFile, readRunLedger, reserveRun, updateRelayStore, type PairedRelay } from "./store";
 import { confirmRelayPairing } from "./pairing";
@@ -30,6 +30,9 @@ import { saveTasks, loadTasks } from "@/lib/tasks/store";
 import { telegramRound, telegramTask } from "@/lib/prototypeReview/telegram.fixture";
 import { prototypeCopyLine, prototypeReference } from "@/lib/prototypeReview/telegramAnswer";
 import { prototypeDecisionText } from "@/lib/prototypeReview/decision";
+import { RelayLeaseTransport } from "./relayLeaseTransport";
+import { answerCapabilities, checkedAnswerV2 } from "./answerV2";
+import { richRequest } from "./rich.fixture";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-runner-test-"));
 process.env.LLV_STATE_DIR = path.join(root, "state");
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -101,6 +104,144 @@ function relay(api_base: string): PairedRelay {
     ],
   };
 }
+
+type RunnerRuntime = NonNullable<Parameters<typeof runClaimedRequestWithLeaseWorker>[3]>;
+function runClaimedRequest(relayValue: PairedRelay, requestValue: unknown, onFreed?: () => void, runtime?: RunnerRuntime) {
+  return runClaimedRequestWithLeaseWorker(relayValue, requestValue, onFreed, { ...runtime, leaseWorker: false });
+}
+
+test("capacity transition retains zero targets in the journal and ignores confirmed stop custody", () => {
+  const paired = relay("http://127.0.0.1:1/v1"); paired.targets[0]!.concurrency = 3;
+  const row = { requestId: "slot-old-a", leaseId: "fixture", relayId: paired.id, targetId: "target_1",
+    childPid: null, childIdentity: null, ownerPid: process.pid, ownerIdentity: null, runDir: "", startedAt: "2026-01-01T00:00:00.000Z" };
+  const lines: unknown[][] = [];
+  const journal = spyOn(console, "info").mockImplementation((...args) => { lines.push(args); });
+  try {
+    reserveRun(row); reserveRun({ ...row, requestId: "slot-old-b" }); reserveRun({ ...row, requestId: "slot-current" });
+    expect(advertisedSlots(paired)).toEqual([{ target_id: "target_1", free: 0 }]);
+    expect(lines.some(line => line[0] === "External relay target capacity" && (line[1] as { free?: number }).free === 0)).toBe(true);
+    dropRun("slot-current"); dropRun("slot-old-a"); dropRun("slot-old-b");
+    for (const requestId of ["slot-old-a", "slot-old-b"]) reserveRun({ ...row, requestId,
+      ownerTurn: { clientAttemptId: requestId, cancel: "interrupt", confirmed: true } });
+    expect(advertisedSlots(paired)).toEqual([{ target_id: "target_1", free: 3 }]);
+  } finally { journal.mockRestore(); for (const id of ["slot-old-a", "slot-old-b", "slot-current"]) dropRun(id); }
+});
+
+for (const downgrade of [false, true]) test(`production lease helper preserves a valid large Unicode completion${downgrade ? " through attachment downgrade" : ""}`, async () => {
+  const request = richRequest(true);
+  const text = "😀".repeat(20_000);
+  const answer = checkedAnswerV2({ action: "reply", text, reply_to: "m1", format: "rich_markdown", buttons: [] }, request,
+    answerCapabilities(request, "codex"), { handoff: true, ignore: true, stagedAttachments: 1 });
+  expect(answer).not.toBeNull();
+  expect(Buffer.byteLength(answer!.text)).toBe(80_000);
+  const body = { lease_id: request.lease_id, outcome: "answered" as const, duration_ms: 0, answer: {
+    action: "reply" as const, text, reply_to: "m1", format: "rich_markdown" as const, buttons: [],
+    ...(downgrade ? { attachments: [{ attachment_id: "fixture_attachment", kind: "document" as const }] } : {}),
+  } };
+  const posts: typeof body[] = [];
+  const server = await startTestRelay((req, value) => {
+    if (req.url?.endsWith("/heartbeat")) return { body: { status: "ok" } };
+    if (req.url?.endsWith("/complete")) {
+      posts.push(value as typeof body);
+      if (downgrade && posts.length === 1) return { status: 422, body: { error: { code: "attachment_not_ready", message: "not ready" } } };
+      return { body: { status: "accepted", duplicate: false } };
+    }
+    return { status: 404, body: {} };
+  });
+  const paired = relay(`${server.origin}/v1`);
+  const transport = new RelayLeaseTransport(paired, request.request_id, request.target_id, request.lease_id, 10_000, () => {});
+  try {
+    await transport.ready;
+    const result = await transport.complete(body, Date.now() + 10_000, 4000);
+    expect(result.delivery).toBe("accepted");
+    expect(result.body.outcome).toBe("answered");
+    if (result.body.outcome !== "answered") throw new Error("accepted fixture returned no answer");
+    expect(result.body.answer.text).toBe(text);
+    expect(result.body.answer.attachments).toBeUndefined();
+    expect(posts).toHaveLength(downgrade ? 2 : 1);
+    expect(posts.at(-1)?.answer.text).toBe(text);
+    expect(posts.at(-1)?.answer.attachments).toBeUndefined();
+  } finally {
+    await transport.close();
+    await server.close();
+  }
+});
+
+for (const refusalBeforeAck of [false, true]) test(`accepted completion releases capacity before chain cleanup and labels a racing heartbeat refusal (${refusalBeforeAck})`, async () => {
+  const chains = await import("./conversations");
+  let entered!: () => void, releaseCleanup!: () => void, releaseHeartbeat!: () => void, heartbeatArrived!: () => void, heartbeatLogged!: () => void;
+  const cleanupEntered = new Promise<void>(r => { entered = r; });
+  const cleanupGate = new Promise<void>(r => { releaseCleanup = r; });
+  const heartbeatGate = new Promise<void>(r => { releaseHeartbeat = r; });
+  const heartbeatPending = new Promise<void>(r => { heartbeatArrived = r; });
+  const heartbeatJournal = new Promise<void>(r => { heartbeatLogged = r; });
+  let completing = false;
+  let completions = 0;
+  const lines: unknown[][] = [];
+  const info = console.info;
+  const journal = spyOn(console, "info").mockImplementation((...args) => {
+    lines.push(args); info(...args);
+    if (args[0] === "External relay heartbeat" && (args[1] as { status?: number }).status === 409) heartbeatLogged();
+  });
+  const release = chains.releaseConversationAsync;
+  const cleanup = spyOn(chains, "releaseConversationAsync").mockImplementation(async (id, patch, until) => {
+    if (patch.state === "idle") { entered(); await cleanupGate; throw Error("fixture chain cleanup refused"); }
+    return release(id, patch, until);
+  });
+  const server = await startTestRelay(async (req, body) => {
+    if (req.url?.endsWith("/heartbeat")) {
+      if ((body as { seq: number }).seq > 1 && completing) {
+        heartbeatArrived(); await heartbeatGate;
+        return { status: 409, body: { error: { code: "lease_lost" } } };
+      }
+      return { body: { status: "ok" } };
+    }
+    if (req.url?.endsWith("/complete")) {
+      completions++;
+      completing = true;
+      await heartbeatPending;
+      if (refusalBeforeAck) { releaseHeartbeat(); await heartbeatJournal; }
+      return { body: { status: "accepted", duplicate: false } };
+    }
+    return { status: 404 };
+  });
+  const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  paired.targets[0]!.concurrency = 3;
+  for (const requestId of ["completion-stale-a", "completion-stale-b"]) reserveRun({ requestId, leaseId: "fixture", relayId: paired.id,
+    targetId: "target_1", childPid: null, childIdentity: null, ownerPid: process.pid, ownerIdentity: null, runDir: "",
+    startedAt: "2026-01-01T00:00:00.000Z", ownerTurn: { clientAttemptId: requestId, cancel: "interrupt", confirmed: true } });
+  updateRelayStore(s => ({ ...s, relays: [paired] })); setRelaySwitch("chain_conversations", true);
+  const request = { ...contextRequest, request_id: "slot-completion-race", chat: { key: "capacity-fixture" }, liveness: { ...contextRequest.liveness, heartbeat_interval_s: 2 },
+    input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } };
+  const pending = runClaimedRequestWithLeaseWorker(paired, request, undefined, { leaseWorker: true, ownerPorts: {
+    launch: async () => ({ status: 202, body: { conversationId: "conversation_slot-completion" } }),
+    observe: async () => ({ state: "ended", finalText: "Done" }), stop: async () => { throw Error("settled work must not be stopped"); },
+  } }).then(value => ({ value }), error => ({ error }));
+  try {
+    await cleanupEntered;
+    expect(advertisedSlots(paired)).toEqual([{ target_id: "target_1", free: 3 }]);
+    expect(runningCount(paired.id, "target_1")).toBe(0);
+    for (const id of ["completion-stale-a", "completion-stale-b"]) dropRun(id);
+    await sweepExternalRelayOrphans();
+    expect(readRunLedger().runs.some(row => row.requestId === request.request_id)).toBe(true);
+    expect(chains.readConversations().some(row => row.state === "running")).toBe(true);
+    releaseHeartbeat(); await heartbeatJournal;
+    expect(lines.some(line => line[0] === "External relay heartbeat" && (line[1] as { phase?: string }).phase === "post_completion")).toBe(true);
+    expect(readAnswerRecord(paired.id, "target_1", request.request_id)).toMatchObject({ outcome: "answered", delivery: "accepted" });
+  } finally {
+    releaseHeartbeat(); releaseCleanup(); await pending;
+    cleanup.mockRestore(); journal.mockRestore();
+    for (const id of ["completion-stale-a", "completion-stale-b"]) dropRun(id);
+    // A failed cleanup leaves its durable marker. The same process's sweep
+    // must release its chain without re-controlling the ended owner turn.
+    await sweepExternalRelayOrphans({ launch: async () => { throw Error("unexpected launch"); },
+      observe: async () => { throw Error("unexpected observation"); }, stop: async () => { throw Error("unexpected stop"); } });
+    expect(chains.readConversations().every(row => row.state !== "running")).toBe(true);
+    expect(completions).toBe(1);
+    await server.close();
+    for (const id of [request.request_id, "completion-stale-a", "completion-stale-b"]) dropRun(id);
+  }
+});
 function stub(script: string) {
   const file = path.join(root, `stub-${crypto.randomUUID()}`);
   fs.writeFileSync(file, `#!/usr/bin/env bun\nconsole.log(JSON.stringify({type:"thread.started",thread_id:"00000000-0000-0000-0000-000000000001"}));\nif(process.env.CODEX_HOME) await Bun.write(process.env.CODEX_HOME+"/sessions/rollout-fixture-00000000-0000-0000-0000-000000000001.jsonl", "fixture");\n${script}\n`);
@@ -407,7 +548,7 @@ test("invalid compact completion retries end at the captured request deadline", 
   const clock = spyOn(Date, "now").mockImplementation(() => now);
   let attempts = 0, accept = false, settled = false;
   const server = await startTestRelay(() => {
-    attempts++; now += 121000;
+    attempts++; now += 601000;
     return accept ? { body: { status: "ok" } } : { status: 503, body: { error: { code: "unavailable" } } };
   });
   const pending = runClaimedRequest(relay(`${server.origin}/v1`), { kind: "compact", request_id: "invalid-compact-deadline", lease_id: sampleRequest.lease_id })
@@ -447,6 +588,7 @@ test("an early decline keeps heartbeats during delivery without renewing its dea
   const previousSelection = accountManager.resolveHeadlessSpawn;
   accountManager.resolveHeadlessSpawn = (() => ({ kind: "exhausted", resetsAt: null })) as typeof previousSelection;
   const request = { ...sampleRequest, request_id: "early_decline_completion_retry",
+    deadline_at: new Date(now + 120_000).toISOString(),
     liveness: { ...sampleRequest.liveness, heartbeat_interval_s: 2, stall_window_s: 120 } };
   const pending = runClaimedRequest(paired, request).then(outcome => { settled = true; return outcome; });
   try {
@@ -809,10 +951,10 @@ test("an acknowledged heartbeat still keeps the run alive after a delayed respon
     `const a=process.argv.slice(2);await Bun.stdin.text();await Bun.sleep(12000);await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));`,
   );
   try {
-    const outcome = await runClaimedRequest(relay(`${server.origin}/v1`), {
+    const outcome = await runClaimedRequestWithLeaseWorker(relay(`${server.origin}/v1`), {
       ...sampleRequest, request_id: "rq_late_ack",
       liveness: { ...sampleRequest.liveness, heartbeat_interval_s: 2, stall_window_s: 10 },
-    }, undefined, { command: script, timeoutMs: 18000 });
+    }, undefined, { command: script, timeoutMs: 18000, leaseWorker: true });
     expect(outcome?.outcome).toBe("answered");
     expect(completions).toHaveLength(1);
   } finally {
@@ -963,7 +1105,7 @@ test("an immediately admitted owner can answer in the final ten seconds", async 
   } finally { await server.close(); }
 }, 10000);
 
-test("a confirmed owner run keeps its configured hard cap and may answer after the request deadline", async () => {
+test("a confirmed owner run completes a readable timeout at the service deadline", async () => {
   const completions: unknown[] = [];
   const stops: string[] = [];
   const server = await startTestRelay((req, body) => {
@@ -983,8 +1125,8 @@ test("a confirmed owner run keeps its configured hard cap and may answer after t
         stop: async (_id, action) => { stops.push(action); }, pollMs: 5,
       },
     });
-    expect(result).toMatchObject({ outcome: "answered", answer: { text: "Done" } });
-    expect(stops).toEqual([]);
+    expect(result).toMatchObject({ outcome: "answered", answer: { action: "reply", text: expect.stringMatching(/ran out of time/i) } });
+    expect(stops).toEqual(["interrupt"]);
     expect(completions).toHaveLength(1);
   } finally { await server.close(); }
 }, 10000);

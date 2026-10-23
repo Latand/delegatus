@@ -4,10 +4,11 @@ import { ROLE_IDS } from "@/lib/roles/types";
 import { automaticMemoryExcluded, roleIsClean } from "./eligibility";
 import { LESSON_MATCH_MIN_CHARS, lettersAndDigits } from "./roleConsolidate";
 import { lessonRequestLines, type HandedFindings } from "./roleRender";
-import { leaveCorrectionLessons, leaveSeatLessons, leaveLessons, lessonRequest, recordLessonRequest, roleMemoryCollection, RoleMemoryRefusal, type LeftLesson } from "./roleStore";
+import { leaveCorrectionLessons, leaveOperatorLessons, leaveSeatLessons, leaveLessons, lessonRequest, recordLessonRequest, roleMemoryCollection, RoleMemoryRefusal, type LeftLesson } from "./roleStore";
 import { assertGenericRule, problemInput } from "./roleProblems";
 import { scopeKind } from "./roleScopes";
 import { roleMemoryEnabled, roleMemorySelectorEnabled } from "./settings";
+import { operatorMemoryEnabled } from "./operatorMemory";
 import { lessonText, lessonTextLength, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS, type LessonInput, type ScopeKind, type RewriteInput, type ProblemInput } from "./roleTypes";
 
 /* The three points where role memory meets a pipeline stage: the selector at
@@ -215,4 +216,30 @@ export function leaveCorrectionForRole(caller: { project: string | null; convers
   const parsed = parseLessons(args, roleId);
   const result = leaveCorrectionLessons({ source: { origin: "conversation", project: caller.project, roleId, fixRound: false, conversationId: caller.conversationId }, lessons: parsed.lessons, now });
   return { project: caller.project, roleId: caller.roleId, ...result };
+}
+
+/** The binding supplies the server-resolved operator root conversation and its
+    project; this only runs in Delegatus mode (memory-source-switch.md §3.3). */
+export function leaveLessonForOperator(caller: { project: string | null; conversationId: string }, args: LessonAnswerArgs, now = new Date().toISOString()) {
+  if (!caller.project || caller.project === "*" || !operatorMemoryEnabled()) throw new RoleMemoryRefusal("LESSON_NOT_AN_ATTEMPT", "a lesson is left by a stage that was asked for one, by a project's designated orchestrator seat, or by the operator's own conversation while Delegatus memory is on; this conversation is none of them");
+  if (!roleMemoryEnabled()) throw new RoleMemoryRefusal("LESSON_SWITCHED_OFF", "learned rules are switched off on this installation");
+  try {
+    const usage = lessonUsage(args);
+    if (usage.applied?.length || usage.misled?.length) throw new RoleMemoryRefusal("RULE_NOT_DELIVERED", "usage measurement belongs to a stage attempt's delivered rules");
+    const lesson = args.lesson as { scope?: unknown } | undefined;
+    if (lesson && typeof lesson === "object" && lesson.scope === "role") throw new RoleMemoryRefusal("LESSON_WRONG_LEVEL", "an operator conversation leaves project or machine rules; a role's practice is its seat's or its stages'");
+    const parsed = parseLessons(args, null);
+    if (parsed.none !== null) throw new RoleMemoryRefusal("LESSON_INVALID", "an unasked conversation gives lesson or rewrite; there is no request to decline");
+    if (parsed.problem) throw new RoleMemoryRefusal("LESSON_IS_PROBLEM", "a defect is not a rule");
+    if (parsed.rewrite) {
+      const row = roleMemoryCollection()?.get(`r:${parsed.rewrite.id}`);
+      if (row?.kind === "rule") assertGenericRule(parsed.rewrite.rule, scopeKind(row.scope));
+    }
+    const result = leaveOperatorLessons({ ...(args.correction ? { correction: true as const } : {}), source: { origin: "operator", project: caller.project, roleId: null, fixRound: false, conversationId: caller.conversationId }, lessons: parsed.lessons, rewrite: parsed.rewrite, now });
+    return { project: caller.project, roleId: null, ...result };
+  } catch (error) {
+    if (error instanceof RoleMemoryRefusal && error.code === "LESSON_IS_PROBLEM") throw new RoleMemoryRefusal(error.code, "this names a defect: find or create its board task with create_task, or tell the operator in chat. For a practice that holds on other tasks, express the generic check without the project's fact");
+    if (error instanceof RoleMemoryRefusal && error.code === "LESSON_ABOUT_ONE_TASK") throw new RoleMemoryRefusal(error.code, "the rule names one task or run; it belongs on that task's card. If it holds elsewhere, say it without the identifier");
+    throw error;
+  }
 }

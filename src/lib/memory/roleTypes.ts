@@ -18,6 +18,8 @@ export const PROBLEM_EVIDENCE_MAX_CHARS = 1000;
 /** A rule shorter than this names nothing a later agent can act on. */
 export const RULE_MIN_CHARS = 20;
 export const MAX_LESSONS_PER_ATTEMPT = 1;
+/** Ordinary scope-history entries kept per scope; curator pass entries are kept apart. */
+export const ROLE_MEMORY_HISTORY_LIMIT = 10_000;
 
 /** A lesson's text as it is stored: trimmed, each run of spacing one space. */
 export function lessonText(value: string): string {
@@ -93,7 +95,25 @@ export interface ConversationRuleSource {
   fixRound: false;
   conversationId: string;
 }
-export type RuleSource = StageRuleSource | SeatRuleSource | ImportRuleSource | ConversationRuleSource;
+/** The operator's own root conversation, in Delegatus mode: project and machine only. */
+export interface OperatorRuleSource {
+  origin: "operator";
+  project: string;
+  roleId: null;
+  fixRound: false;
+  conversationId: string;
+}
+export type RuleSource = StageRuleSource | SeatRuleSource | ImportRuleSource | OperatorRuleSource | ConversationRuleSource;
+
+/** One time a rule left the injected text, as it was then. Appended, never
+    rewritten or removed, so a later restore, curation or re-archive leaves
+    a closed week's report unchanged (memory-source-switch.md §6.5). */
+export interface RuleDeparture {
+  at: string;
+  reason: RuleLeftReason;
+  /** A curator had read the rule when it left. */
+  curated: boolean;
+}
 
 export interface RoleMemoryRule {
   /** This rule includes a lesson prompted by an operator correction. */
@@ -113,6 +133,9 @@ export interface RoleMemoryRule {
   source: RuleSource;
   createdAt: string;
   changedAt: string;
+  /** Every archive of this rule, oldest first; absent on rules that never left
+      and on departures recorded before the log existed. */
+  departures?: RuleDeparture[];
   versionOf?: string;
   versions?: string[];
   revisedBy?: RuleRevision;

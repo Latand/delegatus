@@ -12,8 +12,9 @@ import { databaseFileIdentity } from "@/lib/state/currentDatabase";
 import { effectiveCurationSetting, readSeatTickSettings, seatTickSettingsPath } from "@/lib/monitor/seatTickSettings";
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized, stateDatabaseSignature, StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 
-import { appendRule, lessonPatternSource, retainRules, sameRule, scopeChars } from "./roleConsolidate";
+import { appendRule, archivedRule, lessonPatternSource, retainRules, sameRule, scopeChars } from "./roleConsolidate";
 import { roleMemoryEnabled } from "./settings";
+import { engineMemoryOff } from "./source";
 import { curationRevision, curationView } from "./curation/store";
 import { projectViewRows, projectViewRowsCooperatively, roleScopeKeys, roleViewVersion } from "./roleViewSource";
 import { crossProjectRoleScope, isCrossProjectRoleScope, MACHINE_SCOPE, scopeKind, scopeProject, scopeRole } from "./roleScopes";
@@ -21,9 +22,9 @@ import { renderLearnedRulesSelection } from "./roleRender";
 import { closestReadableRuleIds } from "./ruleIds";
 import { deliveredRuleIds } from "./deliveryLedger";
 import {
-  MAX_LESSONS_PER_ATTEMPT, ROLE_MEMORY_BOUND,
+  MAX_LESSONS_PER_ATTEMPT, ROLE_MEMORY_BOUND, ROLE_MEMORY_HISTORY_LIMIT,
   type LessonInput, type LessonRequestRow, type RoleMemoryProjectView, type RoleMemoryRow,
-  type RoleMemoryRule, type RoleMemoryScopeRow, type RuleSource, type StageRuleSource, type SeatRuleSource, type RuleView, type ScopeView, type StageLessonView,
+  type RoleMemoryRule, type RoleMemoryScopeRow, type RuleSource, type StageRuleSource, type SeatRuleSource, type OperatorRuleSource, type RuleView, type ScopeView, type StageLessonView,
   type RewriteInput, type RuleRevision, type RuleRevisionView, type ScopeHistoryEntry, type RulePrivacyHint, type ProblemInput,
 } from "./roleTypes";
 
@@ -42,7 +43,7 @@ import {
    same aliases without writing. */
 
 const COLLECTION = "role_memory";
-export const ROLE_MEMORY_HISTORY_LIMIT = 10_000;
+export { ROLE_MEMORY_HISTORY_LIMIT };
 /** Keep 10,000 ordinary changes independently of every curator Undo record.
  * At 141 daily writes this covers over 70 days; delivery rows keep their own
  * ordered ids and content hashes, so reconstruction never depends on this window. */
@@ -194,7 +195,7 @@ export function activeRules(scope: string): RoleMemoryRule[] {
 }
 
 /** The block a new stage of this role and project starts with. */
-export function learnedRulesSnapshot(project: string, roleId: string | null, maxBytes = Infinity) {
+export function learnedRulesSnapshot(project: string, roleId: string | null, maxBytes = Infinity, reader?: "operator") {
   // A process start resolves aliases in its snapshot; it never joins or migrates state.
   const all = rows();
   const resolve = scopeResolver();
@@ -208,7 +209,7 @@ export function learnedRulesSnapshot(project: string, roleId: string | null, max
       ? [{ scope: row.scope, revision: row.revision, revisionScope: row.revisionScope ?? row.scope }] : []);
     return { scope, revisions, rules: retainRules(active, new Date().toISOString()).active.reverse() };
   });
-  const rendered = renderLearnedRulesSelection(scopes, maxBytes);
+  const rendered = renderLearnedRulesSelection(scopes, maxBytes, { ...(reader ? { reader } : {}), engineMemoryOff: engineMemoryOff() });
   return { block: rendered.block, scopes: scopes.map(({ scope, revisions }) => ({ scope, revisions })),
     rules: rendered.rules.map(rule => ({ id: rule.id, hash: crypto.createHash("sha256").update(rule.rule).digest("hex") })),
     entries: rendered.rules.map(rule => [scopes.findIndex(scope => scope.scope === resolve(rule.scope)), rule.id, crypto.createHash("sha256").update(rule.rule).digest("hex")] as [number, string, string]),
@@ -291,6 +292,13 @@ export function leaveSeatLessons(input: Omit<LessonWriteInput, "source" | "none"
 /** Correction lessons do not spend the stage's closing request. */
 export function leaveCorrectionLessons(input: Omit<LessonWriteInput, "none" | "rewrite" | "problem" | "applied" | "misled">) {
   return writeLessonAnswer({ ...input, correction: true, none: null });
+}
+
+/** The operator's own root conversation in Delegatus mode: project and machine
+    rules only, with the seat's text guards and no request to consume. */
+export function leaveOperatorLessons(input: Omit<LessonWriteInput, "source" | "none" | "problem"> & { source: OperatorRuleSource }) {
+  if (input.lessons.some(lesson => lesson.scope === "role")) throw new RoleMemoryRefusal("LESSON_WRONG_LEVEL", "an operator conversation leaves project or machine rules; a role's practice is its seat's or its stages'");
+  return writeLessonAnswer({ ...input, none: null });
 }
 
 /** Both writers share versions, duplicate merging, bounds and privacy hints. */
@@ -392,7 +400,7 @@ export function deleteRule(ruleId: string, now = new Date().toISOString()): Role
     const held = tx.get(`s:${canonicalScope(rule.scope)}`);
     if (held?.kind !== "scope") throw new RoleMemoryRefusal("RULE_NOT_FOUND", "the rule's scope is missing");
     const revision = held.revision + 1;
-    const deleted: RoleMemoryRule = { ...rule, state: "archived", reason: "deleted", changedAt: now };
+    const deleted = archivedRule(rule, now, "deleted");
     tx.put(deleted);
     tx.put({ ...held, revision, active: held.active.filter((id) => id !== ruleId),
       history: keepHistory([...held.history, { revision, revisionScope: held.revisionScope ?? held.scope, at: now, by: "operator" as const, added: [], merged: [], archived: [ruleId] }]) });
@@ -532,7 +540,7 @@ function view(row: RoleMemoryRule, now: number, byId: ReadonlyMap<string, RoleMe
     id: row.id, rule: row.rule, why: row.why, state: row.state, hints: row.hints, tasks,
     ...(row.operatorCorrection ? { operatorCorrection: true as const } : {}),
     ...(row.reason ? { reason: row.reason } : {}), ...(row.mergedInto ? { mergedInto: row.mergedInto } : {}),
-    roleId: row.source.roleId, fixRound: row.source.fixRound, stageId: row.source.origin === "seat" ? "seat" : row.source.origin === "import" ? "import" : row.source.origin === "conversation" ? "conversation" : row.source.stageId,
+    roleId: row.source.roleId, fixRound: row.source.fixRound, stageId: row.source.origin === "seat" ? "seat" : row.source.origin === "operator" ? "operator" : row.source.origin === "import" ? "import" : row.source.origin === "conversation" ? "conversation" : row.source.stageId,
     ...(row.source.origin === "import" ? { importSource: { candidate: row.source.candidate, occurrences: row.source.occurrences, engine: row.source.engine, sha256: row.source.sha256, importId: row.source.importId } } : {}),
     fresh: now - Date.parse(row.createdAt) < DAY_MS, createdAt: row.createdAt, changedAt: row.changedAt,
     ...(row.revisedBy ? { revisedBy: revisionView(row.revisedBy) } : {}),

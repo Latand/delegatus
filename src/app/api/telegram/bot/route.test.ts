@@ -16,6 +16,7 @@ const { TelegramBotService, productionTelegramBotDependencies, setTelegramBotSer
 const { FakeBotTransport, fakeBotToken, ok } = await import("@/lib/telegram/bot/fakeTransport");
 const { setCallerConversationResolverForTests } = await import("@/lib/agent/operatorAuthority");
 const { VIEWER_SPAWN_CAPABILITY_HEADER } = await import("@/lib/agent/capabilityHeader");
+const { clonePairing } = await import("@/lib/externalRelay/clone.fixture");
 
 const BOT_ID = 4242424;
 const TOKEN = fakeBotToken(String(BOT_ID));
@@ -35,9 +36,11 @@ let service: InstanceType<typeof TelegramBotService>;
 beforeEach(() => {
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
   transport = new FakeBotTransport();
+  let confirmationSequence = 0;
   service = new TelegramBotService({
     ...productionTelegramBotDependencies(),
     transportFor: () => transport,
+    fileConfirmationId: () => `operator-route-fixture-${++confirmationSequence}`,
     sleep: async () => {},
     conversationTitle: () => "Report writer",
     documentEnvironment: () => ({ home: HOME, stateDir: process.env.LLV_STATE_DIR! }),
@@ -127,10 +130,15 @@ test.each(["send_media", "send_document"])("%s names the outside file and allowe
       body: { op, clientRequestId: `${op}-${roots}`, chat: "team-reports", images: [{ path: outside, caption: "" }], document: { path: outside } },
     }));
     expect(response.status).toBe(403);
-    expect(await response.json()).toEqual({
-      error: `${op === "send_media" ? "photo 1: " : ""}$HOME/outside.jpg is outside the allowed document roots (${roots}); write the file under one of them`,
-      code: "document_outside_roots", retryable: false,
-    });
+    const body = await response.json();
+    expect(body.code).toBe("document_outside_roots");
+    expect(body.retryable).toBe(false);
+    expect(body.error).toStartWith(`$HOME/outside.jpg is outside the allowed document roots (${roots}); write the file under one of them`);
+    expect(body.confirmation.id).toMatch(/^operator-route-fixture-\d+$/);
+    expect(body.confirmation.url).toBe(`/telegram-file-confirmation?id=${body.confirmation.id}`);
+    expect(body.error).toContain(body.confirmation.url);
+    expect(Number.isFinite(Date.parse(body.confirmation.expiresAt))).toBe(true);
+    expect(body.error).not.toContain(HOME);
   };
   await check("$HOME/handoff");
   service.setDocumentRoots([path.join(HOME, "reports"), path.join(HOME, "exports")]);
@@ -242,6 +250,37 @@ test("with no bot connected the chats read still answers, with a note naming the
   expect(await response.json()).toMatchObject({ bot: { connected: false }, chats: [], limits: expect.any(Array) });
   const status = await operatorRoute.GET(request("/api/telegram/bot"));
   expect(await status.json()).toMatchObject({ bot: { connected: false, receiving: "stopped" } });
+});
+
+test("paired clone discovery reaches the tokenless operator status and chat allowlist save", async () => {
+  await service.remove();
+  const relay = clonePairing("http://relay.invalid");
+  const route = { id: "fixture-route", relay, targetId: "fixture-clone", name: "Report clone" };
+  let discoveries = 0;
+  service = new TelegramBotService({
+    ...productionTelegramBotDependencies(),
+    clones: {
+      discoverChats: async () => { discoveries++; return [{ chatId: String(TEAM.id), title: TEAM.title }]; },
+      route: async () => route, peek: () => route, valid: () => true, invalidate: () => {},
+      send: async () => { throw new Error("unused in status test"); },
+    },
+    transportFor: () => transport,
+    documentEnvironment: () => ({ home: HOME, stateDir: process.env.LLV_STATE_DIR! }),
+  });
+  setTelegramBotServiceForTests(service);
+
+  const status = await operatorRoute.GET(request("/api/telegram/bot"));
+  expect(status.status).toBe(200);
+  expect(await status.json()).toMatchObject({ bot: { connected: false, chats: [{ chatId: String(TEAM.id), member: true, postAllowed: false }] } });
+  expect(discoveries).toBe(1);
+  const listing = await agentRoute.GET(request("/api/telegram/bot/agent?op=chats"));
+  expect(listing.status).toBe(200);
+  expect(await listing.json()).toMatchObject({ bot: { connected: false }, chats: [{ chatId: String(TEAM.id), alias: null }] });
+  expect(discoveries).toBe(2);
+  const saved = await operatorRoute.POST(request("/api/telegram/bot", { method: "POST", body: { action: "chat", chatId: String(TEAM.id), alias: "team-reports", postAllowed: true } }));
+  expect(saved.status).toBe(200);
+  expect(await saved.json()).toMatchObject({ bot: { connected: false, chats: [{ chatId: String(TEAM.id), alias: "team-reports", postAllowed: true, postable: true }] } });
+  expect(transport.calls).toEqual([]);
 });
 
 /* A post-only bot: the operator adds a chat by id and sends a test post; an
