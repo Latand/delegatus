@@ -1066,6 +1066,16 @@ async function main() {
     });
     return;
   }
+  /* `delegatus export` / `delegatus import` (install-memory-transfer §4.2): a
+     loopback client of the running Viewer. It starts nothing. */
+  if (process.argv[2] === "export" || process.argv[2] === "import") {
+    const packageRoot = launcherCheckout || findPackageRoot(cliDir);
+    const { runTransferCommand } = await import("./transfer.mjs");
+    process.exitCode = await runTransferCommand(process.argv[2], process.argv.slice(3), {
+      stateDirectory: cliRuntimeHostConfig(packageRoot).stateDirectory,
+    });
+    return;
+  }
   const options = parseArgs(process.argv.slice(2));
   /* Phone access turned on from the setup guide is remembered as a file; its
      presence stands for --tailscale. */
@@ -1596,7 +1606,7 @@ function handOffLauncher({ checkout, entry, record }) {
       if (child.pid) {
         try { recorded = JSON.parse(readFileSync(record, "utf8"))?.launcher?.pid === child.pid; } catch { /* no record */ }
       }
-      const oneShot = ["team", "stop"].includes(process.argv[2]) || process.argv.slice(2).some((arg) => ["-v", "--version", "-h", "--help"].includes(arg));
+      const oneShot = ["team", "stop", "export", "import"].includes(process.argv[2]) || process.argv.slice(2).some((arg) => ["-v", "--version", "-h", "--help"].includes(arg));
       if (!recorded && !forwarded && !oneShot) {
         console.error(`[self-update] installed launcher could not start (${spawnError?.message || `exit ${status}`}); using the checkout launcher.`);
         done(false);
@@ -1658,7 +1668,7 @@ try {
   const custodyModule = join(cliDir, "launcher-credentials.mjs");
   if (existsSync(custodyModule)) {
     const { restoreLauncherCredentials } = await import("./launcher-credentials.mjs");
-    const oneShot = ["team", "stop"].includes(process.argv[2]) || process.argv.slice(2).some((arg) => ["-v", "--version", "-h", "--help"].includes(arg));
+    const oneShot = ["team", "stop", "export", "import"].includes(process.argv[2]) || process.argv.slice(2).some((arg) => ["-v", "--version", "-h", "--help"].includes(arg));
     restoreLauncherCredentials(launcherCheckout || findPackageRoot(cliDir), process.env, { launch: !oneShot });
   } else if (process.env.LLV_LAUNCHER_CREDENTIAL_HANDOFF === "1") throw new Error("This launcher cannot read protected handoff credentials; keep the current launcher running.");
   const selectedLauncher = releaseLauncher();

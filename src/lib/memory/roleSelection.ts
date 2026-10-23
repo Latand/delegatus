@@ -6,6 +6,10 @@ import { roleMemoryCollection, type learnedRulesSnapshot } from "./roleStore";
 import type { MemoryEngineStart } from "./deliveryLedger";
 import type { RoleMemoryRule } from "./roleTypes";
 import metadata from "../../../package.json";
+import { frozenSwarmRule } from "./swarmPack";
+import { scopeKind } from "./roleScopes";
+import { swarmRulesEnabled } from "./settings";
+import { engineMemoryOff } from "./source";
 
 type Attempt = NonNullable<MemoryEngineStart["attempt"]>;
 type Snapshot = ReturnType<typeof learnedRulesSnapshot>;
@@ -64,11 +68,17 @@ export function selectionCandidate(attempt: Attempt, snapshot: Snapshot): RoleMe
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 /** Only explicit withdrawal or loss of the exact stored text changes a block.
  * Moves, rewrites and all other archives retain the first start's content. */
-function withdrawn(row: RoleMemorySelection): RoleMemorySelection {
+function withdrawn(row: RoleMemorySelection) {
   const store = roleMemoryCollection();
   const removed = [...row.removed];
   const scopes = row.scopes.map(scope => ({ scope, rules: [] as RoleMemoryRule[] }));
   const entries = row.entries.filter(([index, id, digest]) => {
+    if (scopeKind(row.scopes[index] ?? "") === "swarm") {
+      const exact = frozenSwarmRule(row.scopes[index], id, digest, row.block);
+      if (exact) { scopes[index].rules.push(exact); return true; }
+      removed.push({ id, reason: "unresolved", at: new Date().toISOString() });
+      return false;
+    }
     const current = store?.get(`r:${id}`);
     let reason: SelectionRemoval["reason"] | null = current?.kind === "rule" && current.reason === "deleted" ? "deleted" : null;
     const versions = current?.kind === "rule" ? [current, ...(current.versions ?? []).map(version => store?.get(`r:${version}`))] : [];
@@ -78,8 +88,9 @@ function withdrawn(row: RoleMemorySelection): RoleMemorySelection {
     scopes[index].rules.push({ ...exact as RoleMemoryRule, id, scope: row.scopes[index] });
     return true;
   });
-  return entries.length === row.entries.length ? row : { ...row, block: renderLearnedRulesSelection(scopes).block, entries, removed };
+  return { scopes, row: entries.length === row.entries.length ? row : { ...row, block: renderLearnedRulesSelection(scopes).block, entries, removed } };
 }
+
 /** Called inside ledger admission; every contender reads the row the single
  * state transaction kept. No network or asynchronous work holds this lock. */
 export function frozenSelection(candidate: RoleMemorySelection, snapshot?: Snapshot) {
@@ -87,10 +98,19 @@ export function frozenSelection(candidate: RoleMemorySelection, snapshot?: Snaps
   if (!store) throw Error("memory selection is not prepared");
   try { return store.boundedPatch(2, tx => {
     const existing = tx.get(key(candidate));
-    const row = withdrawn(existing ?? candidate);
+    const { row, scopes } = withdrawn(existing ?? candidate);
     if (!existing || row !== existing) tx.put(row);
-    return { block: row.block, scopes: !existing && snapshot ? snapshot.scopes : row.scopes.map(scope => ({ scope, revisions: [] })),
-      rules: row.entries.map(([, id, hash]) => ({ id, hash })), entries: row.entries,
+    // Consent also applies to resumed attempts. Retain the first durable
+    // selection; the ledger records only the scopes delivered this time.
+    const visible = scopes.filter(scope => scopeKind(scope.scope) !== "swarm" || swarmRulesEnabled());
+    const entries: RoleMemorySelection["entries"] = row.entries.flatMap(([index, id, digest]) => {
+      const next = visible.indexOf(scopes[index]);
+      return next < 0 ? [] : [[next, id, digest] as [number, string, string]];
+    });
+    const delivered = { scopes: visible.map(scope => scope.scope), entries,
+      block: visible.length === scopes.length ? row.block : renderLearnedRulesSelection(visible, Infinity, { engineMemoryOff: engineMemoryOff() }).block };
+    return { block: delivered.block, scopes: !existing && snapshot ? snapshot.scopes.filter(scope => delivered.scopes.includes(scope.scope)) : delivered.scopes.map(scope => ({ scope, revisions: [] })),
+      rules: delivered.entries.map(([, id, hash]) => ({ id, hash })), entries: delivered.entries,
       reason: existing ? "frozen" : row.reason, shadowIds: row.shadowIds, removed: row.removed };
   }); } finally { store.close(); }
 }

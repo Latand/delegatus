@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { hiddenAccountsOf, removalRefusalOf, type AccountRemovalRefusal as Refusal, type HiddenAccount } from "@/hooks/useEngineAccounts";
 import { consumePendingAccountPanel, onAccountPanelRequest } from "@/lib/accounts/openPanel";
@@ -8,6 +8,8 @@ import { useLocale } from "@/lib/i18n";
 import type { EngineLimits } from "@/lib/types";
 
 import { AccountRemovalRefusal } from "./AccountRemovalRefusal";
+import { Z } from "./layers";
+import { TransferAccountsChecklist, useImportedAccounts } from "./TransferAccountsChecklist";
 import { HiddenAccountOffer } from "./AccountRemovalSummary";
 import { engineTintOf } from "./utils";
 import { barColor, LimitWindowLine, quotaAsOfHint } from "./LimitRow";
@@ -179,10 +181,21 @@ export function CopilotAccountList({ accounts }: { accounts: CopilotAccounts }) 
   /* Removal arms on the first click and runs on the confirm, as in the
      Claude and Codex lists. */
   const [armed, setArmed] = useState<string | null>(null);
+  /* Copilot accounts an install transfer brought (install-memory-transfer
+     §3.4, §5.2): Copilot has no limit read, so a row is ready once its
+     account shows as signed in; a completed sign-in settles it by itself. */
+  const imported = useImportedAccounts("copilot", (body?.accounts ?? []).map((account) => `${account.id}:${account.auth}`).join(","));
   if (!body) return null;
   return (
     <>
       {!body.cli.present && body.cli.reason ? <p className="text-muted">{body.cli.reason}</p> : null}
+      <TransferAccountsChecklist
+        variant="inline"
+        engine="copilot"
+        rows={imported.rows}
+        onSignIn={async (accountId) => { await post({ action: "login", id: accountId }); await imported.reload(); }}
+        onAction={async (action) => { await imported.post(action); if (action.action !== "not_needed") await load(); await imported.reload(); }}
+      />
       <p className="text-muted">{t("copilot.accounts.hint")}</p>
       {body.accounts.map((account) => (
         <div key={account.id} data-copilot-account={account.id} className="flex flex-col gap-1 rounded-md border border-border bg-card px-2 py-1.5">
@@ -311,9 +324,27 @@ export function CopilotFooterRow({ limits, limitsAccountId, now, onChanged, dens
   const { t, locale } = useLocale();
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const tint = engineTintOf("copilot");
   const accounts = useCopilotAccounts({ polling: open, onChanged });
   const { body, load } = accounts;
+  const shown = open && !!body;
+
+  /* Bounded as the Claude and Codex account flyouts are: anchored by its
+     bottom beside this row, so its height is the room above it, and anything
+     past that scrolls inside the list. */
+  const [maxHeight, setMaxHeight] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    if (!shown) return;
+    const fit = () => {
+      const node = panelRef.current;
+      if (!node) return;
+      setMaxHeight(Math.max(160, Math.floor(node.getBoundingClientRect().bottom - 8)));
+    };
+    fit();
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  }, [shown]);
 
   /* A launch preflight on a signed-out Copilot account (#2170) opens this
      row's switcher, where the account's Sign in is. */
@@ -367,7 +398,18 @@ export function CopilotFooterRow({ limits, limitsAccountId, now, onChanged, dens
         </div>
       ) : null}
       {open ? (
-        <div role="dialog" aria-label={t("copilot.accounts.title")} className="flex flex-col gap-2 border-t border-border bg-sunken px-3.5 py-2.5 text-[11.5px]">
+        /* A flyout beside the rail, as the Claude and Codex account lists open:
+           inline under this row it grew down past the lower edge of a short
+           window, where nothing scrolls. */
+        <div
+          ref={panelRef}
+          role="dialog"
+          aria-label={t("copilot.accounts.title")}
+          data-copilot-panel=""
+          style={maxHeight === null ? undefined : { maxHeight }}
+          onKeyDown={(event) => { if (event.key === "Escape") setOpen(false); }}
+          className={`absolute bottom-1 left-full ml-2 ${Z.modal} flex w-[min(360px,calc(100vw-264px))] flex-col gap-2 overflow-y-auto overscroll-contain rounded-[14px] border border-border bg-card px-3.5 py-2.5 text-[11.5px] shadow-2 [&>*]:shrink-0`}
+        >
           <CopilotAccountList accounts={accounts} />
         </div>
       ) : null}

@@ -18,7 +18,7 @@ if (!process.env.LLV_STATE_DIR) throw new Error("task executor needs an explicit
 const { identifyCallerWhenReady, logCallerIdentificationError } = await import("./mcp/callerIdentification");
 const { runAsMcpHttpCaller } = await import("./mcp/callerContext");
 const { TASK_EXECUTOR_FRAME_BYTES, TASK_EXECUTOR_HTTP_FRAME_BYTES, TASK_EXECUTOR_TOOLS } = await import("./mcp/taskExecutor");
-const { createProductionViewerMcpService, createViewerMcpServer, mcpTextResultClient, MCP_HTTP_CLIENT_ID } = await import("./mcp/server");
+const { createProductionViewerMcpService, createViewerMcpServer, mcpTextResultClient, MCP_HTTP_CLIENT_ID, McpReceiptsNotReadyError, taskExecutorFailure } = await import("./mcp/server");
 const { WebStandardStreamableHTTPServerTransport } = await import("@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js");
 const { agentRegistry } = await import("./agent/registry");
 const { capabilityConversationResolver } = await import("./mcp/bindings");
@@ -118,7 +118,15 @@ async function httpTaskCall(request: TaskExecutorRequest, signal: AbortSignal): 
     }
     if (!conversationId) return serialized(mcpHttpRefusal(403, -32001, "This launch capability names no current agent: it is unknown or was rotated by a later launch."));
   }
-  const server = createViewerMcpServer(await taskService(), [toolName as import("./mcp/server").McpToolName],
+  let readyService: Awaited<ReturnType<typeof taskService>>;
+  try { readyService = await taskService(); }
+  catch (error) {
+    if (!(error instanceof McpReceiptsNotReadyError)) throw error;
+    // Preserve a tool result through the stdio HTTP adapter, which deliberately
+    // discards non-success HTTP bodies. No binding or receipt claim ran.
+    readyService = { async callTool(name, args) { return taskExecutorFailure(name, args, error); } };
+  }
+  const server = createViewerMcpServer(readyService, [toolName as import("./mcp/server").McpToolName],
     mcpTextResultClient(new Headers(headers).get("user-agent")?.split("/", 1)[0]));
   const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
   try {
@@ -183,7 +191,10 @@ input.on("line", (line: string) => {
   const operation = request.name === "httpTaskCall" ? httpTaskCall(request, admission.signal).then(response => sendHttpReply(request.id, response)) : runAsMcpHttpCaller(request.caller, async () => (await taskService()).callTool(request.name, request.args, {
     signal: admission.signal, deadlineAt: request.deadlineAt, nativeWork: request.nativeWork,
   })).then(result => send({ id: request.id, result }));
-  void operation.catch(() => send({ id: request.id, error: "task executor call failed; look up the original request key" }))
+  void operation.catch(error => {
+    if (error instanceof McpReceiptsNotReadyError) send({ id: request.id, result: taskExecutorFailure(request.name, request.args, error) });
+    else send({ id: request.id, error: "task executor call failed; look up the original request key" });
+  })
     .finally(() => admission.close());
 });
 input.once("close", () => shutdown("stdio-eof"));

@@ -4,6 +4,7 @@ import { Check, ChevronDown, CircleAlert, LoaderCircle, Mic, MicOff, Minimize2, 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { EngineMark } from "@/components/EngineMark";
+import { useActiveVoiceInput, useVoiceOutputFellBack } from "@/lib/audio/voiceDevices";
 import { useLocale } from "@/lib/i18n";
 import { createCompanionStore } from "@/hooks/useVoiceCompanion";
 import type { Locale, VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
@@ -91,7 +92,7 @@ const TOOL_LINE = {
   conversation_messages: "voiceCompanion.tool.conversation_messages", end_conversation: "voiceCompanion.tool.end_conversation",
 } as const;
 /** Failures whose remedy is in the settings. */
-export const SETTINGS_FAILURES = new Set(["NO_KEY", "CAP_REACHED", "KEY_FROM_ENV"]);
+export const SETTINGS_FAILURES = new Set(["NO_KEY", "CAP_REACHED", "KEY_FROM_ENV", "MICROPHONE_FALLBACK", "SPEAKERS_FALLBACK"]);
 /** The nominal speaking rate the bubbles of a playing line are paced by. A
     presentation pace only: no word is claimed to have been heard by it. */
 export const NOMINAL_MS_PER_CHAR = 58;
@@ -413,6 +414,9 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
   const [refusedStart, setRefusedStart] = useState<{ code: string; n: number } | null>(null);
   /* Each conversation's notices are its own: one that left the lane may be said again in the next. */
   const [talks, setTalks] = useState(0);
+  /* The microphone this call listens to and whether the chosen devices were there (voiceDevices). */
+  const micInUse = useActiveVoiceInput();
+  const speakersFellBack = useVoiceOutputFellBack();
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const [layout, setLayout] = useState<Layout | null>(null);
   /* The layout on screen: `layout` itself, except while the companion moves itself with elements in its lane.
@@ -644,8 +648,10 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     /* A retained reservation exists only for an API call. */
     if (state.closure?.incomplete && state.usage?.backend !== "codex" && !awaiting && state.error !== "FINALIZATION_INCOMPLETE") say("closure", "FINALIZATION_INCOMPLETE");
     if (seat === false && state.phase !== "offline") say("seat", "no_orchestrator", "note");
+    if (state.phase !== "offline" && micInUse?.fellBack) say("device-in", "MICROPHONE_FALLBACK", "note");
+    if (state.phase !== "offline" && speakersFellBack) say("device-out", "SPEAKERS_FALLBACK", "note");
     return [...speech, ...calls, ...deleg, ...reports, ...notices];
-  }, [state.lines, state.calls, state.delegation, state.deliveryCards, state.orchestratorReports, shownBubbles, state.phase, state.error, state.errorResetsAt, state.closure, state.usage?.backend, state.resumable, state.reconnected, paced, refusedStart, seat, talks, awaiting, charsOf, decidedFor]);
+  }, [state.lines, state.calls, state.delegation, state.deliveryCards, state.orchestratorReports, shownBubbles, state.phase, state.error, state.errorResetsAt, state.closure, state.usage?.backend, state.resumable, state.reconnected, paced, refusedStart, seat, talks, awaiting, charsOf, decidedFor, micInUse?.fellBack, speakersFellBack]);
 
   /* When each element arrived and when it settled. The lane is ordered by arrival,
      and one not stamped yet is the newest there is. */
@@ -1159,6 +1165,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     return () => { alive = false; clearInterval(timer); };
   }, [reading, adapter, following, waitingForReport, target, observe]);
   const phaseLabel = starting && !connected ? t("voiceCompanion.phase.connecting") : t(`voiceCompanion.phase.${state.phase}`);
+  const muteLabel = `${t(muted ? "voiceCompanion.unmute" : "voiceCompanion.mute")}${connected && micInUse?.label ? ` · ${t("voiceCompanion.micInUse", { name: micInUse.label })}` : ""}`;
   const failing = floaters.some((floater) => floater.kind === "notice" && floater.tone === "failure");
   const attention = stage === "awaiting-confirmation" || stage === "answered" || failing;
   const seconds = (value: number) => new Intl.NumberFormat(locale === "uk" ? "uk" : "en", { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(value / 1000);
@@ -1354,11 +1361,11 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
           >
             <CompanionCharacter ref={character} size={CHARACTER} />
           </button>
-          <span className="vc-state" data-companion-phase aria-hidden><span className="vc-phase"><span className="vc-dot" />{phaseLabel}</span>{adapter.mode === "simulated" ? <span className="vc-sim">{t("voiceCompanion.simulated")}</span> : null}</span>
+          <span className="vc-state" data-companion-phase aria-hidden><span className="vc-phase"><span className="vc-dot" />{phaseLabel}</span>{adapter.mode === "simulated" ? <span className="vc-sim">{t("voiceCompanion.simulated")}</span> : null}{connected && micInUse?.label ? <span className="vc-mic" data-companion-mic title={micInUse.label}><Mic size={10} aria-hidden /><span className="vc-mic-name">{micInUse.label}</span></span> : null}</span>
           <div className="vc-controls">
             {connected || starting ? (
               <>
-                <button type="button" className="vc-btn" data-on={muted ? "" : undefined} aria-pressed={muted} disabled={!connected} aria-label={t(muted ? "voiceCompanion.unmute" : "voiceCompanion.mute")} title={t(muted ? "voiceCompanion.unmute" : "voiceCompanion.mute")} onClick={toggleMute}>
+                <button type="button" className="vc-btn" data-on={muted ? "" : undefined} aria-pressed={muted} disabled={!connected} aria-label={muteLabel} title={muteLabel} onClick={toggleMute}>
                   {muted ? <MicOff size={15} aria-hidden /> : <Mic size={15} aria-hidden />}
                 </button>
                 <button type="button" className="vc-btn" data-companion-end aria-label={t("voiceCompanion.end")} title={t("voiceCompanion.end")} onClick={end}><PhoneOff size={15} aria-hidden /></button>
