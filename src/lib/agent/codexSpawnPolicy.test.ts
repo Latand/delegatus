@@ -152,7 +152,8 @@ test("native app-server threads deny hostile legacy aliases and never request a 
   const provider = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     await request.arrayBuffer();
     subagentHeaders.push(request.headers.get("x-openai-subagent"));
-    const output = { id: "fixture-message", type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Fixture complete", annotations: [] }] };
+    const text = policy === "ephemeral" ? JSON.stringify({ answer: "Fixture complete" }) : "Fixture complete";
+    const output = { id: "fixture-message", type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [] }] };
     const events = [
       { type: "response.created", response: { id: "fixture-response" } },
       { type: "response.output_item.done", output_index: 0, item: output },
