@@ -46,13 +46,18 @@ only the owner sees it. Its report goes to `stop-all.log` in the state
 folder, because the page stops answering soon after.
 
 A process is stopped only when the record Delegatus wrote at its start still
-matches it: the same pid, start time and boot. Nothing is chosen by name,
-pattern or port. The report lists what was stopped and which recorded
-processes were already gone. It also lists processes that were left running
-because they could not be proven to be the ones Delegatus started. The
-command works on Linux and macOS. On other platforms it stops nothing, says
-so, and lists the recorded agent hosts. It exits `1` when a process it proved
-to be Delegatus's is still running or a record could not be read.
+matches it: the same pid, start time and boot. A web app or runtime host must
+also carry this install's runtime-host socket in its own environment. A
+record from before the computer last started names nothing, since a crash
+can leave one behind. Nothing is chosen by name, pattern or port. The report
+lists what was stopped and which recorded processes were already gone. It
+also lists processes that were left running because they could not be
+proven to be the ones Delegatus started. The command works on Linux and
+macOS. On other platforms it stops nothing, says so, and lists the recorded
+agent hosts. It exits `1` when a process it proved to be Delegatus's is
+still running, a record could not be read, or a record could not be checked
+from where the command runs: a sandbox with its own process namespace, or a
+system whose boot cannot be read.
 
 ## Files
 

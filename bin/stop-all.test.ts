@@ -49,10 +49,15 @@ fs.writeFileSync(HOST, [
 ].join("\n"));
 
 let serial = 0;
-/** A process tree as a structured host is started: detached, with a child. */
-async function startHost(mode: "plain" | "stubborn" = "plain") {
+/** A process tree as a structured host is started: detached, with a child.
+    `socket` puts an install's runtime-host socket in its environment, as the
+    launcher does for the Viewer and the runtime host it starts. */
+async function startHost(mode: "plain" | "stubborn" = "plain", socket: string | null = null) {
   const report = path.join(SANDBOX, `host-${++serial}.json`);
-  const child = spawn(process.execPath, [HOST, "app-server", report, mode], { detached: true, stdio: "ignore" });
+  const env = { ...process.env };
+  delete env.LLV_RUNTIME_HOST_SOCKET;
+  if (socket) env.LLV_RUNTIME_HOST_SOCKET = socket;
+  const child = spawn(process.execPath, [HOST, "app-server", report, mode], { detached: true, stdio: "ignore", env });
   handles.push(child);
   for (let i = 0; i < 400 && !(fs.existsSync(report) && fs.existsSync(`${report}.leaf`)); i++) await Bun.sleep(25);
   const { pid, child: leafPid } = JSON.parse(fs.readFileSync(report, "utf8")) as { pid: number; child: number };
@@ -140,14 +145,15 @@ function writeLauncherRecord(state: string, name: string, record: unknown) {
 
 test.skipIf(!probe)("every recorded launcher is asked first, and a Viewer one left running is stopped by its own record", async () => {
   const state = stateDirectory();
+  const socket = path.join(SANDBOX, `runtime-${serial}.sock`);
   /* Launcher stand-ins that exit on SIGTERM without stopping their Viewer:
      a global install and a `bunx` cache keep a record each. */
   const launcher = await startHost();
   const second = await startHost();
-  const web = await startHost();
-  const decoy = await startHost();
+  const web = await startHost("plain", socket);
+  const decoy = await startHost("plain", socket);
   writeLauncherRecord(state, "global", {
-    version: 1, launcher: { pid: launcher.root.pid, startIdentity: launcher.launcherIdentity },
+    version: 1, launcher: { pid: launcher.root.pid, startIdentity: launcher.launcherIdentity, bootEpoch: probe!.bootEpoch() }, socket,
     web: { state: "healthy", pid: web.root.pid, startIdentity: web.launcherIdentity },
     /* Recorded under an identity the live process does not have. */
     runtimeHost: { state: "healthy", pid: decoy.root.pid, startIdentity: "0" },
@@ -162,6 +168,146 @@ test.skipIf(!probe)("every recorded launcher is asked first, and a Viewer one le
   expect([decoy.root, decoy.leaf].map(alive)).toEqual([true, true]);
   expect(report.registry).toEqual({ state: "missing" });
   expect(stopSucceeded(report)).toBe(true);
+});
+
+test.skipIf(!probe)("a recorded Viewer or runtime host is stopped only when its own environment carries this install's socket", async () => {
+  const state = stateDirectory();
+  const socket = path.join(SANDBOX, `runtime-${serial}.sock`);
+  /* The recorded pid and start identity match, which a reused pid at the
+     same start tick also would; neither carries this install's socket. */
+  const bare = await startHost();
+  const otherInstall = await startHost("plain", `${socket}.other`);
+  writeLauncherRecord(state, "a", {
+    version: 1, launcher: { pid: 999_999_999, startIdentity: "1", bootEpoch: probe!.bootEpoch() }, socket,
+    web: { state: "healthy", pid: bare.root.pid, startIdentity: bare.launcherIdentity },
+    runtimeHost: { state: "healthy", pid: otherInstall.root.pid, startIdentity: otherInstall.launcherIdentity },
+  });
+  const report = await stopEverything({ stateDirectory: state, ...quick });
+  expect([bare.root, bare.leaf, otherInstall.root, otherInstall.leaf].map(alive)).toEqual([true, true, true, true]);
+  expect(report.services).toEqual([
+    { role: "web", pid: bare.root.pid, state: "not-proven" },
+    { role: "runtimeHost", pid: otherInstall.root.pid, state: "not-proven" },
+  ]);
+  expect(stopSucceeded(report)).toBe(false);
+  expect(formatStopReport(report, "en")).toContain(`Left the Viewer (pid ${bare.root.pid}) running: it does not carry this install's runtime-host socket`);
+});
+
+/* An epoch of a boot that is not this one, and of this boot seen from a pid
+   namespace that is not this process's. */
+const otherBoot = (epoch: string) => epoch.startsWith("linux:")
+  ? epoch.replace(/^linux:[^:]+/, "linux:00000000-0000-0000-0000-000000000000") : "darwin:1:0";
+const otherNamespace = (epoch: string) => epoch.replace(/:pidns:.*$/, ":pidns:pid:[1]");
+
+test.skipIf(!probe)("a launcher record from before this boot names nothing: its launcher, Viewer and runtime host stay running", async () => {
+  const state = stateDirectory();
+  const socket = path.join(SANDBOX, `runtime-${serial}.sock`);
+  /* What a crash or power loss leaves: the record outlives its boot, and the
+     pids it names now belong to other processes, here at the very start
+     ticks it recorded. A record from a launcher that predates the recorded
+     epoch is dated by its file. */
+  const launcher = await startHost();
+  const web = await startHost("plain", socket);
+  const host = await startHost("plain", socket);
+  writeLauncherRecord(state, "legacy", {
+    version: 1, launcher: { pid: launcher.root.pid, startIdentity: launcher.launcherIdentity }, socket,
+    web: { state: "healthy", pid: web.root.pid, startIdentity: web.launcherIdentity },
+    runtimeHost: { state: "healthy", pid: host.root.pid, startIdentity: host.launcherIdentity },
+  });
+  fs.utimesSync(path.join(state, "self-update", "launcher-legacy.json"), 0, 0);
+  /* A current record names its boot. */
+  writeLauncherRecord(state, "recorded", {
+    version: 1, launcher: { pid: launcher.root.pid, startIdentity: launcher.launcherIdentity, bootEpoch: otherBoot(probe!.bootEpoch()!) }, socket,
+    web: { state: "healthy", pid: web.root.pid, startIdentity: web.launcherIdentity },
+  });
+
+  const report = await stopEverything({ stateDirectory: state, ...quick });
+
+  expect([launcher.root, launcher.leaf, web.root, web.leaf, host.root, host.leaf].map(alive)).toEqual([true, true, true, true, true, true]);
+  expect(report.launchers).toEqual([
+    { state: "earlier-boot", detail: "launcher-legacy.json" },
+    { state: "earlier-boot", detail: "launcher-recorded.json" },
+  ]);
+  expect(report.services).toEqual([]);
+  expect(stopSucceeded(report)).toBe(true);
+  expect(formatStopReport(report, "en")).toContain("The launcher record launcher-legacy.json was written before this computer last started; nothing was stopped by it.");
+  expect(formatStopReport(report, "uk")).toContain("Запис лаунчера launcher-legacy.json зроблено до останнього запуску комп'ютера");
+  for (const lang of ["en", "uk"]) expect(formatStopReport(report, lang)).not.toContain("earlier-boot");
+});
+
+test.skipIf(!probe)("registry hosts: another boot's record names nothing; another pid namespace's is not proven, never gone", async () => {
+  const state = stateDirectory();
+  const epoch = probe!.bootEpoch()!;
+  const earlier = await startHost();
+  const elsewhere = await startHost();
+  const entries = [
+    /* A live process at the recorded pid and start identity, recorded in an earlier boot. */
+    hostEntry("earlier", { pid: earlier.root.pid, startIdentity: earlier.root.identity, bootEpoch: otherBoot(epoch) }),
+  ];
+  const namespaced = epoch.includes(":pidns:");
+  if (namespaced) {
+    entries.push(
+      hostEntry("elsewhere", { pid: elsewhere.root.pid, startIdentity: elsewhere.root.identity, bootEpoch: otherNamespace(epoch) }),
+      /* A pid that reads as missing from here proves nothing about the namespace that recorded it. */
+      hostEntry("unseen", { pid: 999_999_999, startIdentity: "999999999:1", bootEpoch: otherNamespace(epoch) }),
+    );
+  }
+  await writeRegistry(state, entries);
+
+  const report = await stopEverything({ stateDirectory: state, ...quick });
+
+  expect([earlier.root, earlier.leaf, elsewhere.root, elsewhere.leaf].map(alive)).toEqual([true, true, true, true]);
+  expect(report.stopped).toEqual([]);
+  expect(report.gone).toBe(1);
+  if (namespaced) {
+    expect(report.notProven.map((entry: { session: string | null; reason: string }) => `${entry.session}:${entry.reason}`))
+      .toEqual(["codex elsewhere:other-pid-namespace", "codex unseen:other-pid-namespace"]);
+    expect(stopSucceeded(report)).toBe(false);
+    expect(formatStopReport(report, "en")).toContain(`codex-app-server pid ${elsewhere.root.pid} (codex elsewhere): recorded in another process namespace, so it cannot be checked from here`);
+  } else {
+    expect(report.notProven).toEqual([]);
+    expect(stopSucceeded(report)).toBe(true);
+  }
+});
+
+test.skipIf(!probe?.bootEpoch()?.includes(":pidns:"))("a launcher record from another pid namespace is not proven, and its launcher stays running", async () => {
+  const state = stateDirectory();
+  const launcher = await startHost();
+  writeLauncherRecord(state, "a", {
+    version: 1, launcher: { pid: launcher.root.pid, startIdentity: launcher.launcherIdentity, bootEpoch: otherNamespace(probe!.bootEpoch()!) },
+  });
+  const report = await stopEverything({ stateDirectory: state, ...quick });
+  expect(alive(launcher.root)).toBe(true);
+  expect(report.launchers).toEqual([{ state: "not-proven", pid: launcher.root.pid, detail: "launcher-a.json", reason: "other-pid-namespace" }]);
+  expect(stopSucceeded(report)).toBe(false);
+  expect(formatStopReport(report, "en")).toContain(`Left the launcher (pid ${launcher.root.pid}) of launcher-a.json and what it started alone: it was recorded in another process namespace`);
+  expect(formatStopReport(report, "uk")).toContain("його записано в іншому просторі імен процесів");
+});
+
+test.skipIf(!probe)("where the boot cannot be read, nothing recorded is signalled and the command fails", async () => {
+  const state = stateDirectory();
+  const launcher = await startHost();
+  const host = await startHost();
+  writeLauncherRecord(state, "a", { version: 1, launcher: { pid: launcher.root.pid, startIdentity: launcher.launcherIdentity } });
+  await writeRegistry(state, [
+    hostEntry("host", identity(host.root.pid, host.root.identity)),
+    hostEntry("gone", identity(999_999_999, "999999999:1")),
+  ]);
+  const blind = { ...probe!, bootEpoch: () => null, bootTimeMs: () => null };
+  const report = await stopEverything({ stateDirectory: state, probe: blind, ...quick });
+  expect([launcher.root, host.root, host.leaf].map(alive)).toEqual([true, true, true]);
+  expect(report.launchers).toEqual([{ state: "not-proven", pid: launcher.root.pid, detail: "launcher-a.json", reason: "unverifiable" }]);
+  expect(report.notProven.map((entry: { session: string | null; reason: string }) => `${entry.session}:${entry.reason}`))
+    .toEqual(["codex host:unverifiable", "codex gone:unverifiable"]);
+  expect(report.gone).toBe(0);
+  expect(stopSucceeded(report)).toBe(false);
+});
+
+test.skipIf(!probe)("the launcher record names the boot epoch the stop compares against", async () => {
+  const { createLauncherRecord } = await import("./self-update-supervisor.mjs");
+  const file = path.join(stateDirectory(), "launcher-x.json");
+  createLauncherRecord(file, { checkout: null, releasesDir: SANDBOX, releasePointer: path.join(SANDBOX, "release.json"),
+    requestFile: path.join(SANDBOX, "request.json"), port: 0, socket: path.join(SANDBOX, "x.sock") }).set("launcher", { state: "ready" });
+  expect(JSON.parse(fs.readFileSync(file, "utf8")).launcher.bootEpoch).toBe(probe!.bootEpoch());
 });
 
 test.skipIf(!probe)("a launcher that ignores SIGTERM past the wait is killed; a changed identity is left alone; an unreadable record fails the command", async () => {

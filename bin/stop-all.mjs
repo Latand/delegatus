@@ -6,28 +6,35 @@
    that would stop them. This stops what Delegatus recorded starting, from the
    records alone:
 
-   1. The launcher named by this install's launcher record, while its start
-      identity still matches. It stops its Viewer and runtime host the way
-      Ctrl-C does. A recorded Viewer or runtime host still running after that,
-      or left by a launcher that is gone, is stopped by its own recorded
-      identity.
+   1. The launcher named by each launcher record written in this boot, while
+      its start identity still matches. It stops its Viewer and runtime host
+      the way Ctrl-C does. A recorded Viewer or runtime host still running
+      after that, or left by a launcher that is gone, is stopped when its
+      start identity matches and its own environment carries this install's
+      runtime-host socket, the proof launcher-adoption.mjs takes over by.
    2. Every agent host the agent registry records (structured hosts, their
       signal sandbox, survivors of an earlier partial stop, tmux-pane agents)
-      whose pid, start identity and boot epoch all still match, with the
+      whose boot epoch, pid and start identity all still match, with the
       processes under it.
 
-   Nothing is chosen by name, pattern or port. A recorded pid whose identity
-   no longer matches is gone; a live pid recorded without an identity, or
-   whose identity cannot be read, is reported as not proven and left alone.
+   Linux start identities count clock ticks from boot, and a record left by a
+   crash or a power loss outlives the boot that wrote it, so the boot is
+   checked before any pid is read: a record from an earlier boot names
+   nothing, and one from another pid namespace (an agent's signal sandbox
+   running this command) cannot be checked from here. Nothing is chosen by
+   name, pattern or port. A recorded pid whose identity no longer matches is
+   gone; a live pid recorded without an identity, or whose identity cannot be
+   read, is reported as not proven and left alone.
    The registry is only read: after a stop it describes processes that are
    gone, which is what a reboot leaves, and the next start settles it the same
    way. Linux and macOS; elsewhere the command says what it could not do. */
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { darwinKernelIdentity } from "./darwin-process-identity.mjs";
-import { readStartIdentity } from "./self-update-supervisor.mjs";
+import { matchingProcess } from "./launcher-adoption.mjs";
+import { currentBootEpoch, readStartIdentity } from "./self-update-supervisor.mjs";
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -35,11 +42,12 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * @typedef {{ pid: number, startIdentity: string | null, bootEpoch: string | null, kind: string, session: string | null }} RecordedProcess
  * @typedef {{ pid: number, kind: string, session: string | null, under: number }} HostOutcome
  * @typedef {{ platform: string, supported: boolean,
- *   launchers: Array<{ state: "stopped" | "killed" | "survived" | "unreadable", pid?: number, detail?: string }>,
- *   services: Array<{ role: "web" | "runtimeHost", pid: number, state: "stopped" | "survived" }>,
+ *   launchers: Array<{ state: "stopped" | "killed" | "survived" | "unreadable" | "earlier-boot" | "not-proven", pid?: number, detail?: string,
+ *     reason?: "other-pid-namespace" | "unverifiable" }>,
+ *   services: Array<{ role: "web" | "runtimeHost", pid: number, state: "stopped" | "survived" | "not-proven" }>,
  *   registry: { state: "read" | "missing" | "unreadable", detail?: string },
  *   stopped: HostOutcome[], gone: number,
- *   notProven: Array<RecordedProcess & { reason: "no-recorded-identity" | "unverifiable" | "own-process-chain" | "unsupported-platform" }>,
+ *   notProven: Array<RecordedProcess & { reason: "no-recorded-identity" | "unverifiable" | "other-pid-namespace" | "own-process-chain" | "unsupported-platform" }>,
  *   survived: HostOutcome[] }} StopReport
  */
 
@@ -55,7 +63,10 @@ const running = (fields) => fields !== null && fields[0] !== "Z" && fields[0] !=
 
 /* Identities in the formats their writers record: `identity` as the agent
    registry does (src/lib/proc), `launcherIdentity` as the launcher record does
-   (readStartIdentity), `bootEpoch` as src/lib/processIdentity.ts does. */
+   (readStartIdentity), `bootEpoch` as src/lib/processIdentity.ts does.
+   `bootTimeMs` dates a launcher record written before records carried a boot
+   epoch; `ownsInstall` is launcher-adoption.mjs's proof that a recorded
+   Viewer or runtime host serves this install. */
 const linuxProbe = {
   identity(pid) {
     const fields = linuxStat(pid);
@@ -65,15 +76,16 @@ const linuxProbe = {
     const fields = linuxStat(pid);
     return running(fields) ? fields[19] : null;
   },
-  bootEpoch() {
+  bootEpoch: () => currentBootEpoch("linux"),
+  bootTimeMs() {
     try {
-      const bootId = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
-      const namespace = readlinkSync("/proc/self/ns/pid");
-      return bootId && namespace ? `linux:${bootId}:pidns:${namespace}` : null;
+      const match = /^btime\s+(\d+)$/m.exec(readFileSync("/proc/stat", "utf8"));
+      return match ? Number(match[1]) * 1_000 : null;
     } catch {
       return null;
     }
   },
+  ownsInstall: (pid, startIdentity, socket) => matchingProcess({ pid, startIdentity }, socket),
   /** pid → { ppid, pgid } of every running process. */
   table() {
     const rows = new Map();
@@ -91,11 +103,12 @@ const linuxProbe = {
 const darwinProbe = {
   identity: (pid) => darwinKernelIdentity(pid),
   launcherIdentity: (pid) => readStartIdentity(pid, "darwin"),
-  bootEpoch() {
-    const result = spawnSync("sysctl", ["-n", "kern.boottime"], { encoding: "utf8", timeout: 2_000 });
-    const match = typeof result.stdout === "string" ? /sec\s*=\s*(\d+)\s*,\s*usec\s*=\s*(\d+)/.exec(result.stdout) : null;
-    return match ? `darwin:${match[1]}:${match[2]}` : null;
+  bootEpoch: () => currentBootEpoch("darwin"),
+  bootTimeMs() {
+    const match = /^darwin:(\d+):(\d+)$/.exec(currentBootEpoch("darwin") ?? "");
+    return match ? Number(match[1]) * 1_000 + Math.floor(Number(match[2]) / 1_000) : null;
   },
+  ownsInstall: (pid, startIdentity, socket) => matchingProcess({ pid, startIdentity }, socket),
   table() {
     const rows = new Map();
     const result = spawnSync("ps", ["-A", "-o", "pid=,ppid=,pgid=,stat="], { encoding: "utf8", timeout: 5_000, maxBuffer: 16 * 1024 * 1024 });
@@ -113,13 +126,24 @@ export function processProbe(platform = process.platform) {
   return platform === "linux" ? linuxProbe : platform === "darwin" ? darwinProbe : null;
 }
 
-/** A record file this user wrote. */
+/** A record file this user wrote, with the time it was last written. */
 function readOwnJson(file) {
   const stat = lstatSync(file);
   if (!stat.isFile() || (typeof process.getuid === "function" && stat.uid !== process.getuid())) {
     throw new Error("the record is not a regular file of this user");
   }
-  return JSON.parse(readFileSync(file, "utf8"));
+  return { record: JSON.parse(readFileSync(file, "utf8")), writtenMs: stat.mtimeMs };
+}
+
+/* The boot part of an epoch: Linux epochs also name the pid namespace. */
+const bootOf = (epoch) => epoch.replace(/:pidns:.*$/, "");
+
+/** Whether a recorded epoch names this boot and pid namespace.
+    @returns {"this" | "earlier-boot" | "other-pid-namespace" | "unverifiable"} */
+function epochVerdict(recorded, current) {
+  if (!current) return "unverifiable";
+  if (bootOf(recorded) !== bootOf(current)) return "earlier-boot";
+  return recorded === current ? "this" : "other-pid-namespace";
 }
 
 /**
@@ -255,9 +279,22 @@ function launcherRecords(stateDirectory) {
   try { names = readdirSync(directory).filter((name) => /^launcher-[^/\\]+\.json$/.test(name)).sort(); }
   catch { return []; }
   return names.map((name) => {
-    try { return { file: name, record: readOwnJson(join(directory, name)) }; }
+    try { return { file: name, ...readOwnJson(join(directory, name)) }; }
     catch (error) { return { file: name, error: error instanceof Error ? error.message : String(error) }; }
   });
+}
+
+/* The boot a launcher record was written in: its recorded epoch, or for a
+   record from a launcher that predates the field, whether the file was last
+   written after this boot began. Every launcher rewrites its record at each
+   state change, so a record a live launcher of this boot owns is younger
+   than the boot. */
+function recordVerdict(record, writtenMs, probe, bootEpoch) {
+  const recorded = record?.launcher?.bootEpoch;
+  if (typeof recorded === "string" && recorded) return epochVerdict(recorded, bootEpoch);
+  const bootTime = probe.bootTimeMs();
+  if (bootTime === null || !Number.isFinite(writtenMs)) return "unverifiable";
+  return writtenMs < bootTime ? "earlier-boot" : "this";
 }
 
 const recordedProcess = (entry) => entry && Number.isSafeInteger(entry.pid) && entry.pid > 1 && typeof entry.startIdentity === "string" && entry.startIdentity
@@ -291,9 +328,18 @@ export async function stopEverything(input) {
     return report;
   }
 
+  const bootEpoch = probe.bootEpoch();
+
   /* 1. Each running launcher, then whatever it recorded and left running. */
-  for (const { file, record, error } of launcherRecords(input.stateDirectory)) {
+  for (const { file, record, writtenMs, error } of launcherRecords(input.stateDirectory)) {
     if (error) { report.launchers.push({ state: "unreadable", detail: `${file}: ${error}` }); continue; }
+    const verdict = recordVerdict(record, writtenMs, probe, bootEpoch);
+    if (verdict === "earlier-boot") { report.launchers.push({ state: "earlier-boot", detail: file }); continue; }
+    if (verdict !== "this") {
+      const pid = Number.isSafeInteger(record?.launcher?.pid) ? record.launcher.pid : undefined;
+      report.launchers.push({ state: "not-proven", ...(pid ? { pid } : {}), detail: file, reason: verdict });
+      continue;
+    }
     const launcher = recordedProcess(record?.launcher);
     if (launcher) {
       const matches = () => probe.launcherIdentity(launcher.pid) === launcher.startIdentity;
@@ -313,6 +359,12 @@ export async function stopEverything(input) {
     for (const role of /** @type {const} */ (["web", "runtimeHost"])) {
       const entry = recordedProcess(record?.[role]);
       if (!entry || probe.launcherIdentity(entry.pid) !== entry.startIdentity) continue;
+      /* The pid and start identity match; the install socket in its own
+         environment says it is this install's, which a pid alone never does. */
+      if (typeof record.socket !== "string" || !record.socket || !probe.ownsInstall(entry.pid, entry.startIdentity, record.socket)) {
+        report.services.push({ role, pid: entry.pid, state: "not-proven" });
+        continue;
+      }
       const identity = probe.identity(entry.pid);
       if (!identity) continue;
       const table = probe.table();
@@ -327,18 +379,23 @@ export async function stopEverything(input) {
   report.registry = registry.detail ? { state: registry.state, detail: registry.detail } : { state: registry.state };
   const targets = registryTargets(registry.entries);
 
-  /* 2. Agent hosts, each proven by pid, start identity and boot epoch. */
-  const bootEpoch = probe.bootEpoch();
+  /* 2. Agent hosts, each proven by boot epoch, pid and start identity. The
+     epoch comes first: from another pid namespace, every recorded pid reads
+     as missing, which would count a running host as gone. */
   const table = probe.table();
   const chain = ownChain(table);
   const roots = [];
   for (const target of targets) {
-    const current = probe.identity(target.pid);
-    if (current === null) { report.gone++; continue; }
-    if (!target.startIdentity || !target.bootEpoch) { report.notProven.push({ ...target, reason: "no-recorded-identity" }); continue; }
-    if (!bootEpoch) { report.notProven.push({ ...target, reason: "unverifiable" }); continue; }
-    /* Another boot, or the kernel gave the pid to another process. */
-    if (target.bootEpoch !== bootEpoch || current !== target.startIdentity) { report.gone++; continue; }
+    if (!target.startIdentity || !target.bootEpoch) {
+      if (probe.identity(target.pid) === null) report.gone++;
+      else report.notProven.push({ ...target, reason: "no-recorded-identity" });
+      continue;
+    }
+    const verdict = epochVerdict(target.bootEpoch, bootEpoch);
+    if (verdict === "earlier-boot") { report.gone++; continue; }
+    if (verdict !== "this") { report.notProven.push({ ...target, reason: verdict }); continue; }
+    /* Exited, or the kernel gave the pid to another process. */
+    if (probe.identity(target.pid) !== target.startIdentity) { report.gone++; continue; }
     if (chain.has(target.pid)) { report.notProven.push({ ...target, reason: "own-process-chain" }); continue; }
     roots.push(target);
   }
@@ -359,13 +416,17 @@ export async function stopEverything(input) {
   return report;
 }
 
-/** Whether everything proven to be Delegatus's is gone and every record was read.
+/** Whether everything proven to be Delegatus's is gone and every record was
+    read and checked. A host recorded without an identity (a tmux agent) or
+    running this command fails nothing; a record this command could not check
+    from where it runs does.
     @param {StopReport} report */
 export function stopSucceeded(report) {
   return report.supported
-    && report.launchers.every((launcher) => launcher.state === "stopped" || launcher.state === "killed")
+    && report.launchers.every((launcher) => ["stopped", "killed", "earlier-boot"].includes(launcher.state))
     && report.services.every((service) => service.state === "stopped")
     && report.registry.state !== "unreadable"
+    && report.notProven.every((entry) => entry.reason !== "unverifiable" && entry.reason !== "other-pid-namespace")
     && report.survived.length === 0;
 }
 
@@ -376,11 +437,15 @@ const TEXT = {
     launcher: { stopped: (pid) => `Stopped the launcher (pid ${pid}), and with it the Viewer and the runtime host it started.`,
       killed: (pid) => `The launcher (pid ${pid}) did not stop in time and was killed.`,
       survived: (pid) => `The launcher (pid ${pid}) is still running after SIGKILL.`,
-      unreadable: (_pid, detail) => `A launcher record could not be read (${detail}); no Viewer or runtime host was stopped by it.` },
+      unreadable: (_pid, detail) => `A launcher record could not be read (${detail}); no Viewer or runtime host was stopped by it.`,
+      "earlier-boot": (_pid, detail) => `The launcher record ${detail} was written before this computer last started; nothing was stopped by it.`,
+      "not-proven": (pid, detail, reason) => `Left the launcher${pid ? ` (pid ${pid})` : ""} of ${detail} and what it started alone: ${reason === "other-pid-namespace"
+        ? "it was recorded in another process namespace, so its pids cannot be checked from here" : "the boot it was recorded in cannot be read here"}.` },
     noLauncher: "No running launcher is recorded.",
     service: { web: "Viewer", runtimeHost: "runtime host" },
     serviceStopped: (name, pid) => `Stopped the ${name} (pid ${pid}) that the launcher left running.`,
     serviceSurvived: (name, pid) => `The ${name} (pid ${pid}) is still running.`,
+    serviceNotProven: (name, pid) => `Left the ${name} (pid ${pid}) running: it does not carry this install's runtime-host socket, so it is not proven to be Delegatus's.`,
     registryMissing: "No agent registry: no agent host is recorded.",
     registryUnreadable: (detail) => `The agent registry could not be read (${detail}); no agent host was stopped.`,
     stopped: "Stopped agent hosts:",
@@ -390,6 +455,7 @@ const TEXT = {
     gone: (count) => `${count} recorded process${count === 1 ? " was" : "es were"} already gone.`,
     notProven: "Left running, not proven to be Delegatus's:",
     reason: { "no-recorded-identity": "recorded without a start identity", unverifiable: "its identity cannot be read here",
+      "other-pid-namespace": "recorded in another process namespace, so it cannot be checked from here",
       "own-process-chain": "it runs this command", "unsupported-platform": "not checked on this platform" },
   },
   uk: {
@@ -398,11 +464,15 @@ const TEXT = {
     launcher: { stopped: (pid) => `Зупинено лаунчер (pid ${pid}), а з ним Viewer і runtime host, які він запустив.`,
       killed: (pid) => `Лаунчер (pid ${pid}) не зупинився вчасно, його вбито.`,
       survived: (pid) => `Лаунчер (pid ${pid}) працює навіть після SIGKILL.`,
-      unreadable: (_pid, detail) => `Не вдалося прочитати запис лаунчера (${detail}); Viewer і runtime host за ним не зупинено.` },
+      unreadable: (_pid, detail) => `Не вдалося прочитати запис лаунчера (${detail}); Viewer і runtime host за ним не зупинено.`,
+      "earlier-boot": (_pid, detail) => `Запис лаунчера ${detail} зроблено до останнього запуску комп'ютера; за ним нічого не зупинено.`,
+      "not-proven": (pid, detail, reason) => `Лаунчер${pid ? ` (pid ${pid})` : ""} із ${detail} і те, що він запустив, не зупинено: ${reason === "other-pid-namespace"
+        ? "його записано в іншому просторі імен процесів, тож звідси його pid не перевірити" : "тут не можна прочитати, в якому запуску системи його записано"}.` },
     noLauncher: "Запущеного лаунчера не записано.",
     service: { web: "Viewer", runtimeHost: "runtime host" },
     serviceStopped: (name, pid) => `Зупинено ${name} (pid ${pid}), який лишив лаунчер.`,
     serviceSurvived: (name, pid) => `${name} (pid ${pid}) досі працює.`,
+    serviceNotProven: (name, pid) => `${name} (pid ${pid}) не зупинено: у ньому немає сокета runtime host цієї інсталяції, тож не доведено, що це Delegatus.`,
     registryMissing: "Реєстру агентів немає: жодного хоста агента не записано.",
     registryUnreadable: (detail) => `Не вдалося прочитати реєстр агентів (${detail}); жодного хоста агента не зупинено.`,
     stopped: "Зупинено хости агентів:",
@@ -412,6 +482,7 @@ const TEXT = {
     gone: (count) => `Уже не працювали записаних процесів: ${count}.`,
     notProven: "Лишилися працювати, бо не доведено, що вони Delegatus:",
     reason: { "no-recorded-identity": "записаний без ідентичності запуску", unverifiable: "тут не можна прочитати його ідентичність",
+      "other-pid-namespace": "записаний в іншому просторі імен процесів, тож звідси його не перевірити",
       "own-process-chain": "він виконує цю команду", "unsupported-platform": "на цій платформі не перевірявся" },
   },
 };
@@ -423,10 +494,11 @@ export function formatStopReport(report, lang = "en") {
   const lines = [text.title];
   if (!report.supported) lines.push(text.unsupported(report.platform));
   else if (!report.launchers.length) lines.push(text.noLauncher);
-  for (const launcher of report.launchers) lines.push(text.launcher[launcher.state](launcher.pid, launcher.detail));
+  for (const launcher of report.launchers) lines.push(text.launcher[launcher.state](launcher.pid, launcher.detail, launcher.reason));
   for (const service of report.services) {
     const name = text.service[service.role];
-    lines.push(service.state === "stopped" ? text.serviceStopped(name, service.pid) : text.serviceSurvived(name, service.pid));
+    lines.push(service.state === "stopped" ? text.serviceStopped(name, service.pid)
+      : service.state === "not-proven" ? text.serviceNotProven(name, service.pid) : text.serviceSurvived(name, service.pid));
   }
   if (report.registry.state === "missing") lines.push(text.registryMissing);
   else if (report.registry.state === "unreadable") lines.push(text.registryUnreadable(report.registry.detail));
