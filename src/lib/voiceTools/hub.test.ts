@@ -133,6 +133,58 @@ test("a peer echo, count overflow, schema rejection and repeated cursors return 
   }
 }, 20_000);
 
+test.each([
+  { label: "exact catalog limit", count: 128, collision: false, code: "OK" },
+  { label: "aggregate catalog overflow", count: 129, collision: false, code: "CATALOG_BOUNDS" },
+  { label: "normalized collision across pages", count: 128, collision: true, code: "CATALOG_BOUNDS" },
+])("paginated discovery checks $label across the whole catalog", async ({ count, collision, code }) => {
+  const { store } = await setup();
+  const listed = Array.from({ length: count }, (_, i) => ({ ...tools[0], name: `search${i}` }));
+  if (collision) { listed[0].name = "search-all"; listed[64].name = "search_all"; }
+  const peer = fake(params => params.cursor === "second"
+    ? { tools: listed.slice(64) }
+    : { tools: listed.slice(0, 64), nextCursor: "second" });
+  const expected = await propose(store, peer.url);
+  await new VoiceToolHub(store).dryRun("music", expected);
+  const view = await store.view();
+  expect(peer.requests.filter(request => request.method === "tools/list")).toHaveLength(2);
+  expect(view.servers.music.lastDryRun?.code).toBe(code);
+  expect(view.servers.music.state).toBe("pending");
+  expect(view.servers.music.approval).toBeNull();
+  if (code === "OK") {
+    expect(view.servers.music.catalog?.tools.map(tool => tool.name)).toEqual(listed.map(tool => tool.name));
+    expect(Object.values(view.servers.music.tools).every(tool => !tool.enabled)).toBe(true);
+  } else {
+    expect(view.servers.music.catalog).toBeNull();
+    expect(view.servers.music.tools).toEqual({});
+    await expect(store.operatorChange("music", view.servers.music.digest, "approve")).rejects.toThrow("DRY_RUN_REQUIRED");
+  }
+});
+
+test.each(["description", "annotation", "schema"] as const)("a credential in a later page's %s never publishes a partial catalog", async field => {
+  const { store } = await setup();
+  const credential = "synthetic-paginated-credential";
+  const hidden = "x".repeat(1024) + credential;
+  const hostile = { ...tools[0], name: "later",
+    ...(field === "description" ? { description: hidden } : {}),
+    ...(field === "annotation" ? { annotations: { readOnlyHint: true, title: hidden } } : {}),
+    ...(field === "schema" ? { inputSchema: { type: "object", default: { value: credential } } } : {}),
+  };
+  const peer = fake(params => params.cursor === "second" ? { tools: [hostile] } : { tools, nextCursor: "second" });
+  await propose(store, peer.url, { Authorization: { secretRef: "music-token" } });
+  await saveSecrets(store, { "music-token": credential });
+  await new VoiceToolHub(store).dryRun("music", (await store.view()).servers.music.digest);
+  const view = await store.view();
+  expect(peer.requests.filter(request => request.method === "tools/list")).toHaveLength(2);
+  expect(view.servers.music.lastDryRun?.code).toBe("SECRET_ECHO");
+  expect(view.servers.music.catalog).toBeNull();
+  expect(view.servers.music.tools).toEqual({});
+  expect(JSON.stringify(view)).not.toContain(credential);
+  expect(await fs.readFile(store.file, "utf8")).not.toContain(credential);
+  expect(JSON.stringify(await new VoiceToolsStore(store.directory).view())).not.toContain(credential);
+  await expect(store.operatorChange("music", view.servers.music.digest, "approve")).rejects.toThrow("DRY_RUN_REQUIRED");
+});
+
 test("probe cancellation and proposal replacement cannot publish a stale catalog", async () => {
   const { store } = await setup(); const entered = barrier(), release = barrier();
   const server = fake(async () => { entered.release(); await release.promise; return { tools }; });
