@@ -36,7 +36,9 @@ export async function GET(req: NextRequest) {
     /* The footer panel polls this, which keeps the poller alive in this
        process the way the Telegram route keeps the report scheduler alive. */
     ensureTelegramBotPoller();
-    return NextResponse.json({ bot: withReportDestinations(telegramBotService().status()) });
+    const service = telegramBotService();
+    await service.discoverCloneChats();
+    return NextResponse.json({ bot: withReportDestinations(service.status()) });
   } catch (error) {
     return telegramBotFailure(error);
   }

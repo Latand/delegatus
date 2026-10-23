@@ -22,6 +22,7 @@ import { nativeHookCursor, nativeOccurrenceAfter } from "./native";
 import { nativeMatch, queryFor, type Candidate } from "./selection";
 import { resolveShortId } from "@/lib/shortIds";
 import { searchRoleRules } from "./roleSearch";
+import { systemScheduler, type DeadlineScheduler } from "@/lib/deadline";
 
 interface MemoryItem {
   id: string;
@@ -67,6 +68,8 @@ const memoryIndexes = declaredIndexes([
 
 /** A rebuildable, private derivative. Every source is opened read-only. */
 export class MemoryIndex {
+  constructor(private readonly scheduler: DeadlineScheduler = systemScheduler) {}
+
   private db?: BunDatabase;
   private pendingActivity = new Map<string, { month: string; event: string; count: number }>();
 
@@ -372,10 +375,10 @@ export class MemoryIndex {
     const deadline = Math.min(requestDeadline, performance.now() + 100);
     const check = () => { if (performance.now() >= deadline) throw Error("memory candidate budget"); };
     const read = async <T>(operation: Promise<T>): Promise<T> => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
+      let timer: unknown;
       try { return await Promise.race([operation, new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(Error("memory candidate budget")), Math.max(0, Math.ceil(deadline - performance.now())));
-      })]); } finally { clearTimeout(timer); }
+        timer = this.scheduler.setTimeout(() => reject(Error("memory candidate budget")), Math.max(0, Math.ceil(deadline - performance.now())));
+      })]); } finally { this.scheduler.clearTimeout(timer); }
     };
     // A pending confirmation may exclude an otherwise eligible candidate.
     // Drain bounded batches and abstain until that ledger is complete.
@@ -429,7 +432,7 @@ export class MemoryIndex {
           if (directories && claudeMemoryDirectoryProofCurrent(directories)) { keys.add(slug); recorded.add(slug); proofs.set(slug, directories); continue; }
           const walkDeadline = performance.now() + (deadline - performance.now()) / 2;
           try {
-            const proof = await claudeMemoryScopeProof(slug, walkDeadline); check();
+            const proof = await claudeMemoryScopeProof(slug, walkDeadline, this.scheduler); check();
             if (canonicalProject(proof.project ?? "") === canonical) { keys.add(slug); proofs.set(slug, proof.directories); }
             else if (performance.now() >= walkDeadline) incompleteScope = true;
           } catch (error) { check(); if (!(error instanceof Error && error.message === "slug identity deadline")) throw error; incompleteScope = true; }

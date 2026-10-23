@@ -388,8 +388,19 @@ function isAttempt(value: unknown, index: number): boolean {
     (attempt.fencedMessageRetries === undefined || typeof attempt.fencedMessageRetries === "number"
       && Number.isSafeInteger(attempt.fencedMessageRetries) && attempt.fencedMessageRetries >= 0) &&
     isUnresolvedTermination(attempt.unresolvedTermination) &&
+    isPriorWriterStop(attempt.priorWriterStop) &&
     isPermissionDenials(attempt.permissionDenials)
   );
+}
+
+function isPriorWriterStop(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const stop = value as Record<string, unknown>;
+  return typeof stop.conversationId === "string" && stop.conversationId.length > 0
+    && Number.isSafeInteger(stop.tries) && (stop.tries as number) >= 0
+    && typeof stop.lastAt === "string" && Number.isFinite(Date.parse(stop.lastAt))
+    && isNullableString(stop.error);
 }
 
 /** The automatic permission denials an attempt recorded (#2215). */

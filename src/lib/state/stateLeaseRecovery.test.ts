@@ -51,9 +51,9 @@ test("the owner's next write replaces its abandoned token without waiting for th
   expect(await c.mutate(async (rows, persist) => { rows.push({ key: "x", value: 1 }); await persist(); return 42; })).toBe(42);
   const first = token(c);
   expect(first).toBeDefined();
-  const start = Date.now();
+  // A synchronous replacement must finish before any abandoned-release timer
+  // can run. Keep its fault active and prove the old token was replaced.
   c.boundedPatch(1, (tx) => tx.put({ key: "x", value: 2 }));
-  expect(Date.now() - start).toBeLessThan(1000);
   expect(c.get("x")?.value).toBe(2);
   expect(token(c)).not.toBe(first);
   injectStateWriteFaultForTests(null);
@@ -186,15 +186,22 @@ test("read-only patches and unchanged persistence cannot certify disk recovery",
 });
 async function childOwner(c: SqliteStateCollection<Row>) {
   const dir = path.dirname(c.filename);
+  const ready = Promise.withResolvers<void>();
   const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "stateLeaseOwner.fixture.ts"), dir], {
     env: { ...process.env, LLV_STATE_DIR: dir }, stdout: "pipe", stderr: "pipe",
+    ipc(message) { if (message === "ready") ready.resolve(); },
   });
-  try { await until(() => fs.existsSync(path.join(dir, "ready"))); }
+  const stderr = new Response(child.stderr).text();
+  void child.exited.then(async code => ready.reject(Error(`fixture exited before readiness (${code}): ${await stderr}`)));
+  const watchdog = setTimeout(() => ready.reject(Error("fixture startup did not complete")), 30_000);
+  try { await ready.promise; }
   catch (error) { child.kill(); await child.exited; throw error; }
+  finally { clearTimeout(watchdog); }
   return { child, dir, stop: async () => {
     fs.writeFileSync(path.join(dir, "stop"), "");
-    const code = await Promise.race([child.exited, Bun.sleep(3000).then(() => { child.kill(); throw new Error("fixture child did not exit"); })]);
-    expect(code).toBe(0);
+    const timeout = setTimeout(() => child.kill(), 30_000);
+    try { expect(await child.exited).toBe(0); await stderr; }
+    finally { clearTimeout(timeout); }
   } };
 }
 test("cross-process recovery leaves the original owner alive", async () => {
@@ -209,14 +216,16 @@ test("cross-process recovery leaves the original owner alive", async () => {
     expect(() => process.kill(owner.child.pid, 0)).not.toThrow();
   } finally { await owner.stop(); }
 });
-test.each(["async", "sync"])("%s full-disk contender exits within two seconds", async (mode) => {
+test.each(["async", "sync"])("%s full-disk contender refuses on its first disk-space probe", async (mode) => {
   const c = setup();
   const owner = await childOwner(c);
   setStateFreeBytesProbeForTests(() => 0);
   try {
-    const start = Date.now();
+    let probes = 0;
+    setStateFreeBytesProbeForTests(() => { probes++; return 0; });
     if (mode === "async") await expect(c.mutate(() => {})).rejects.toBeInstanceOf(StateDiskFullError);
     else expect(() => c.boundedPatch(1, () => {})).toThrow(StateDiskFullError);
-    expect(Date.now() - start).toBeLessThan(2000);
+    expect(probes).toBe(1);
+    expect(c.get("parent")).toBeNull();
   } finally { await owner.stop(); }
 });

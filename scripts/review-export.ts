@@ -43,6 +43,10 @@ export function reviewExport(repository: string, ref: string, scratch: string): 
     fs.mkdirSync(checkout);
     execFileSync("tar", ["-xf", archive, "-C", checkout], { timeout: 60_000, stdio: ["ignore", "ignore", "pipe"] });
     fs.unlinkSync(archive);
+    // The gate runner ships an export through this record (scripts/gate-runner):
+    // it sits outside the checkout, so no test and no tree id sees it.
+    const repositoryDir = fs.realpathSync(git("rev-parse", "--path-format=absolute", "--git-common-dir"));
+    fs.writeFileSync(path.join(directory, "export.json"), `${JSON.stringify({ version: 1, checkout: fs.realpathSync(checkout), head, repository: repositoryDir })}\n`);
     let dependencies: "shared" | "unavailable" = "unavailable";
     if (!fs.lstatSync(path.join(checkout, "node_modules"), { throwIfNoEntry: false }) && canShare(repository, checkout)) {
       fs.symlinkSync(fs.realpathSync(path.join(repository, "node_modules")), path.join(checkout, "node_modules"), "dir");
