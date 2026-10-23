@@ -274,7 +274,7 @@ test.each(["interrupt", "kill"].flatMap(action => ["browser", "service", "api-cl
   setCallerConversationResolverForTests(() => "conversation_agent");
   const headers: Record<string, string> = caller === "browser" ? { cookie: `llv_operator=${soloBrowserSession()}`, "sec-fetch-site": "same-origin" }
     : caller === "service" ? { ...internalServiceHeaders("monitor"), "sec-fetch-site": "same-origin" }
-      : caller === "agent" ? { [VIEWER_SPAWN_CAPABILITY_HEADER]: "a".repeat(43) } : {};
+      : caller === "agent" ? { [VIEWER_SPAWN_CAPABILITY_HEADER]: "a".repeat(43) } : { cookie: "" };
   try {
     const response = await conversationHostPOST(post({ path: PATHNAME, action, operationId: "control-custody", origin: { kind: "operator" } }, headers));
     expect(response.status).toBe(202);
