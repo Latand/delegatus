@@ -2168,17 +2168,20 @@ test("async SQLite receipts retry each transition and a contended completion nev
   const store = await openAsyncMcpReceiptStore(filename);
   const holder = new Database(filename);
   const { stateLockWaitsInFlight } = await import("@/lib/state/lockWait");
-  const waiting = async () => {
-    const deadline = Date.now() + 2000;
+  // This connection holds the lock until the wait is observed, so a receipt
+  // operation that settles first never waited, whatever the runner's speed.
+  const waiting = async (pending: Promise<unknown>) => {
+    let settled = false;
+    void pending.then(() => { settled = true; }, () => { settled = true; });
     while (!stateLockWaitsInFlight().some(wait => wait.callSite.startsWith("mcp.receipts.") && wait.attempts >= 2)) {
-      if (Date.now() >= deadline) throw new Error("receipt operation did not yield while waiting for its lock");
+      if (settled) throw new Error("receipt operation did not yield while waiting for its lock");
       await Bun.sleep(1);
     }
   };
   const contended = async <T>(operation: () => T | Promise<T>) => {
     holder.exec("BEGIN IMMEDIATE");
     const result = operation();
-    try { await waiting(); }
+    try { await waiting(Promise.resolve(result)); }
     finally { holder.exec("ROLLBACK"); }
     return result;
   };
@@ -2214,13 +2217,14 @@ test("async SQLite receipts retry each transition and a contended completion nev
     const service = createMcpToolService(bindings, store);
     const args = { flowId: "flow_fixture", action: "pause", clientRequestId: "async-completion" };
     const completed = service.callTool("flow_action", args);
-    try { await waiting(); }
+    try { await waiting(completed); }
     finally { if (holder.inTransaction) holder.exec("ROLLBACK"); }
     expect(await completed).toMatchObject({ ok: true, effect: 1 });
     expect(await service.callTool("flow_action", args)).toMatchObject({ ok: true, replayed: true, effect: 1 });
     expect(effects).toBe(1);
   } finally { holder.close(); store.close(); }
-}, 10_000);
+  // Nothing here measures elapsed time, so the runner's own timeout bounds it.
+}, 60_000);
 
 const OTHER: McpRequestCaller = { kind: "worker", conversationId: "conversation_other", project: "proj-a" };
 const OTHER_PROJECT: McpRequestCaller = { kind: "worker", conversationId: "conversation_owner", project: "proj-b" };
