@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 
 import { readStateCollectionRows, readStateImport } from "@/lib/state/sqliteStateStore";
 
@@ -549,4 +549,41 @@ test("a registry that could not be read reports that, rather than an empty retir
   const unknown = readRetiredAccountIds("codex", directory);
   expect(unknown.kind).toBe("unknown");
   expect(unknown.kind === "unknown" && unknown.reason).toContain(`${CODEX_ACCOUNTS_SOURCE}.unreadable-`);
+});
+
+
+describe("database identity", () => {
+  test("cached account reads probe database identity without numeric precision loss", () => {
+    const directory = sandbox();
+    writeAccountSource(CLAUDE_ACCOUNTS_SOURCE, registry("first"), directory);
+    const stat = spyOn(fs, "statSync");
+    try {
+      readAccountSource(CLAUDE_ACCOUNTS_SOURCE, directory);
+      const probes = stat.mock.calls.filter(([file]) => file === accountsDatabasePath(directory));
+      expect(probes.length).toBeGreaterThan(0);
+      expect(probes[0]?.[1]).toEqual({ bigint: true });
+    } finally { stat.mockRestore(); }
+  });
+
+  test("absent, created and replaced account databases keep reads and writes on the current file", () => {
+    const replacement = sandbox();
+    writeAccountSource(CLAUDE_ACCOUNTS_SOURCE, registry("replacement"), replacement);
+    const directory = sandbox();
+    const database = accountsDatabasePath(directory);
+    expect(fs.existsSync(database)).toBe(false);
+    expect(body(directory, CLAUDE_ACCOUNTS_SOURCE)).toBeUndefined();
+    writeAccountSource(CLAUDE_ACCOUNTS_SOURCE, registry("original"), directory);
+    expect(body(directory, CLAUDE_ACCOUNTS_SOURCE)).toEqual(registry("original"));
+    for (const suffix of ["", "-wal", "-shm"]) {
+      if (fs.existsSync(database + suffix)) fs.renameSync(database + suffix, database + ".held" + suffix);
+      const source = accountsDatabasePath(replacement) + suffix;
+      if (fs.existsSync(source)) fs.renameSync(source, database + suffix);
+    }
+    expect(body(directory, CLAUDE_ACCOUNTS_SOURCE)).toEqual(registry("replacement"));
+    writeAccountSource(CLAUDE_ACCOUNTS_SOURCE, registry("updated"), directory);
+    expect(body(directory, CLAUDE_ACCOUNTS_SOURCE)).toEqual(registry("updated"));
+    expect(readStateCollectionRows(database + ".held", "accounts")).toEqual(
+      expect.arrayContaining([expect.objectContaining({ v: expect.objectContaining({ id: "original" }) })]),
+    );
+  });
 });

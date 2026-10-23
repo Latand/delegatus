@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { stateDir } from "@/lib/configDir";
+import { databaseFileIdentity } from "@/lib/state/currentDatabase";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { FileTransactionBusyError, withFileTransactionSync } from "@/lib/state/fileTransaction";
 import {
@@ -434,18 +435,9 @@ function isAccountRow(value: unknown): value is AccountStateRow {
    be served by a connection to the file that used to be there. */
 const collections = new Map<string, { identity: string; collection: SqliteStateCollection<AccountStateRow> }>();
 
-function databaseIdentity(database: string): string {
-  try {
-    const stat = fs.statSync(database);
-    return `${stat.dev}:${stat.ino}`;
-  } catch {
-    return "absent";
-  }
-}
-
 function cachedCollection(database: string): SqliteStateCollection<AccountStateRow> | null {
   const held = collections.get(database);
-  return held && held.identity === databaseIdentity(database) ? held.collection : null;
+  return held && held.identity === (databaseFileIdentity(database) ?? "absent") ? held.collection : null;
 }
 
 function openAccountCollection(database: string): SqliteStateCollection<AccountStateRow> {
@@ -461,7 +453,7 @@ function openAccountCollection(database: string): SqliteStateCollection<AccountS
     strictDecode: true,
     decodeError: (error) => new Error("invalid persisted account row", { cause: error }),
   });
-  collections.set(database, { identity: databaseIdentity(database), collection });
+  collections.set(database, { identity: databaseFileIdentity(database) ?? "absent", collection });
   return collection;
 }
 
