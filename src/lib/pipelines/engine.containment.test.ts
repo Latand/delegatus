@@ -97,7 +97,7 @@ test.each([false, true])("stored terminal budget refusal stays parked across res
   const current = loadPipelines()[0]!;
   expect(current.state).toBe("needs_decision");
   expect(current.reviewPending?.terminalRecheck).toBe(true);
-  expect(needsYouEntries({ files: [], pipelines: [current], tasks: loadTasks() }, null, Date.parse(current.updatedAt) / 1000, current.project)).toHaveLength(1);
+  expect(needsYouEntries({ files: [], pipelines: [current], tasks: loadTasks() }, null, Date.parse(h.ports.now()) / 1000, current.project)).toHaveLength(1);
   expect(current.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(2);
   expect(current.runs.find(run => run.stageId === "build")!.attempts).toHaveLength(2);
   expect(pipelineCompletedUnreviewed(current)).toBeNull();

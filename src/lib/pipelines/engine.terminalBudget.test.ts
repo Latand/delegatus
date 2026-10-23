@@ -26,7 +26,7 @@ test.each([
 ] as const)("terminal $role re-checks the final fix once (rounds=$rounds, pass=$pass, changed=$changed)", async ({ role, rounds, pass, changed }) => {
   const h = changed ? movingHeadHarness() : movingHeadHarness(() => "1".repeat(40));
   const launched = recordReviewLaunches(h);
-  const roleLookup = h.ports.roleLookup;
+  const roleLookup = h.ports.roleLookup!;
   h.ports.roleLookup = id => roleLookup(id === "visual-critic" ? "architect" : id);
   const stages = BUDGET_STAGES({ to: "build", maxRounds: rounds }, null);
   Object.assign(stages[1]!, { role: { roleId: role }, engine: role === "visual-critic" ? "claude" : "codex", access: "read-only" });
