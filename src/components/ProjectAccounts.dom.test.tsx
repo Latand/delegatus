@@ -73,3 +73,54 @@ test("removing an account makes the project strip read its bindings again", asyn
   expect(bindingReads).toBe(2);
   expect(host.querySelector("[data-project-accounts]")).not.toBeNull();
 });
+
+test("fresh quota readings revalidate the desktop project's next account in its open panel", async () => {
+  resetEngineAccountsStoresForTests();
+  let quotaChanged = false;
+  let bindingReads = 0;
+  const bindingChoices: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/api/accounts") return new Response(JSON.stringify({
+      claude: { active: "default", accounts: [accountRow("default", "Main"), accountRow("work", "Work")] },
+      codex: { active: "default", accounts: [] },
+    }));
+    if (url === "/api/accounts/claude/limits" && init?.method === "POST") {
+      quotaChanged = true;
+      return new Response(JSON.stringify({ account: { id: "work", limits: { state: "fresh", weekly: { usedPercent: 20, resetsAt: 1_900_000_000 } } } }));
+    }
+    if (url.startsWith("/api/account-project-bindings")) {
+      bindingReads += 1;
+      const nextChosenAccountId = quotaChanged ? "default" : "work";
+      bindingChoices.push(nextChosenAccountId);
+      return new Response(JSON.stringify({ project: "repo-fixture", engines: { claude: {
+        nextChosenAccountId, restricted: true,
+        allowed: [{ accountId: "default", label: "Main" }, { accountId: "work", label: "Work" }],
+        carrying: [], outsidePool: [],
+      } } }));
+    }
+    return new Response(null, { status: 204 });
+  }) as typeof fetch;
+
+  let refreshLimits: ((id: string) => Promise<boolean>) | null = null;
+  function Harness() {
+    refreshLimits = useEngineAccounts("claude").refreshLimits;
+    return <ProjectAccounts project="repo-fixture" />;
+  }
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  mounted = { root, host };
+  await act(async () => root.render(<Harness />));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+  expect(host.querySelector("[data-project-accounts]")).not.toBeNull();
+  await act(async () => (host.querySelector('[data-account-switch-engine="claude"] button') as HTMLButtonElement).click());
+  expect(host.querySelector('[data-account-row="work"]')?.getAttribute("data-account-next-chosen")).toBe("true");
+
+  await act(async () => { expect(await refreshLimits!("work")).toBe(true); });
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+  expect(bindingReads).toBe(2);
+  expect(bindingChoices).toEqual(["work", "default"]);
+  expect(host.querySelector('[data-account-row="default"]')?.getAttribute("data-account-next-chosen")).toBe("true");
+  expect(host.querySelector('[data-account-row="work"]')?.getAttribute("data-account-next-chosen")).toBeNull();
+});

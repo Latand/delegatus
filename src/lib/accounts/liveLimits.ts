@@ -27,7 +27,8 @@ import { kickStructuredDeliveryQueue } from "@/lib/runtime/structuredDeliverySig
  */
 
 /** Which reader took the observation, for the quota telemetry line. */
-export type LiveReadPhase = "operator-refresh" | "reset-credit-redeem" | "spawn-admission" | "login-complete";
+/** `transfer-verify`: an account an install transfer brought, read once it is signed in here. */
+export type LiveReadPhase = "operator-refresh" | "reset-credit-redeem" | "spawn-admission" | "login-complete" | "transfer-verify";
 
 export interface LiveLimitsDeps {
   registry?: Pick<AgentRegistry, "recordQuotaObservation"> & Partial<Pick<AgentRegistry, "quotaObservations" | "deliveryWriteOrBusy">>;
@@ -38,7 +39,9 @@ export interface LiveLimitsDeps {
 }
 
 export type LimitsRefreshResult =
-  | { kind: "refreshed"; account: ClaudeAccount | CodexAccount; observation: DurableQuotaObservation }
+  /** `observation` is what the registry retains for scheduling, which can be
+      a newer reading than this one; `probed` is this read's own answer. */
+  | { kind: "refreshed"; account: ClaudeAccount | CodexAccount; observation: DurableQuotaObservation; probed: QuotaObservation }
   | { kind: "unknown_account" }
   | { kind: "probe_failed"; detail: string };
 
@@ -103,7 +106,7 @@ export async function refreshAccountLimits(engine: MigrationEngine, accountId: s
       probe.probe(engine, account, now, { force: true }),
       probeTimeout(deps.timeoutMs ?? PROBE_TIMEOUT_MS),
     ]);
-    return { kind: "refreshed", account, observation: await recordLiveObservationOffLoop(observation, account.kind, deps) };
+    return { kind: "refreshed", account, observation: await recordLiveObservationOffLoop(observation, account.kind, deps), probed: observation };
   } catch (error) {
     const detail = redactAppServerDetail(error instanceof Error ? error.message : String(error));
     logQuotaEvent({

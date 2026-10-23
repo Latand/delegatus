@@ -12,6 +12,7 @@ import { companionErrorMessage, limitResetText } from "@/lib/voiceCompanion/erro
 
 import { callDuration, planName, planTone, planWindows, spendTone, voiceMoney, voiceMonth, windowName, windowTone } from "./CompanionSpend";
 import { CallMemorySetting } from "./CallMemorySetting";
+import { VoiceDevicesSetting } from "./VoiceDevicesSetting";
 import { VoiceToolsSetting } from "./VoiceToolsSetting";
 import { COMPANION_SETTINGS_EVENT } from "./hostSurfaces";
 
@@ -184,6 +185,7 @@ export function VoiceCompanionSetting() {
           ) : null}
         </div>
       ) : null}
+      <VoiceDevicesSetting />
       {settings ? <CallMemorySetting enabled={settings.callMemory ?? true} busy={busy} onChange={callMemory => void change({ callMemory }, "callMemory")} refusal={refusal("callMemory")} /> : null}
       {refusal(null)}
     </div>

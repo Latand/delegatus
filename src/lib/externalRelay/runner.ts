@@ -11,12 +11,13 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { resolveOwnerOutboundContext } from "./ownerOutboundContext";
 import { capacityWaiters, olderCapacityWaiter, enterRelayHold, leaveRelayHold, releasingRelayHolds, type RelayHoldCause } from "./hold";
 import { relayRequestDeadline, remainingMs } from "./deadline";
-import { ownerRelayAuthorized, ownerRelayAuthorizedAsync, ownerRelayStatusReplyAuthorized } from "./ownerAuthority";
+import { ownerRelayAuthorized, ownerRelayAuthorizedAsync, ownerRelayFailureReplyAuthorized, ownerRelayStatusReplyAuthorized } from "./ownerAuthority";
 import { ownerRequestTimeoutText } from "./requestTimeout";
 import { matchPrototypeAnswer } from "@/lib/prototypeReview/telegramAnswer";
 import { runPrototypeAnswer } from "./prototypeAnswer";
 import { resolveOwnerBridgeContext } from "./ownerBridgeContext";
-import { runOwnerAgent, OwnerContinuationRefused, ownerContinuationPrompt, ownerInitialCursor, ownerRunPrompt, type OwnerRunPorts } from "./ownerRun";
+import { runOwnerAgent, OwnerContinuationRefused, ownerContinuationPrompt, ownerInitialCursor, ownerRunPrompt, ownerFailureAnswer, ownerFailureCustody, type OwnerRunPorts } from "./ownerRun";
+import { ownerTurnDiagnostic, type OwnerTurnDiagnostic } from "./diagnostic";
 import { readRelaySwitches } from "./switches";
 import { compactRequestSchema } from "./protocol";
 import { runCompactRequest } from "./compact";
@@ -30,6 +31,8 @@ import { procBackend } from "@/lib/proc";
 import {
   runEphemeralAgent,
   EphemeralProfileError,
+  type EphemeralAgentRun,
+  type EphemeralAgentResult,
 } from "@/lib/agent/ephemeral";
 import type { HeadlessReviewRuntime } from "@/lib/agent/headless";
 import { relayCall, ExternalRelayError } from "./client";
@@ -68,6 +71,7 @@ import {
   RelayStoreBusy,
   readRunLedger,
   runHoldsCapacity,
+  ownerStopPending,
   settleRelayRequestClaimAsync,
   type PairedRelay,
   type RelayTargetSettings,
@@ -233,10 +237,16 @@ export async function runClaimedRequest(
     ...(request?.features ? { features: request.features } : {}),
   });
   inflight.add(requestId);
+  let diagnostic: OwnerTurnDiagnostic | undefined;
+  const recordDiagnostic = (value: OwnerTurnDiagnostic) => {
+    diagnostic ??= value;
+    recorder?.diagnose(diagnostic);
+  };
   let releaseRequested = false;
   let deliverySettled!: () => void;
   const released = new Promise<void>(resolve => { deliverySettled = resolve; });
   let allowOwnerReply: (() => boolean) | undefined;
+  let failureReply = false;
   let ownerStatusReply: ExternalRelayCompletion | undefined;
   let leaseUnavailable = false;
   let admissionHeld = false;
@@ -330,7 +340,7 @@ export async function runClaimedRequest(
       let sent: Awaited<ReturnType<typeof completeRelayRequest>>;
       try {
         sent = transport
-          ? await transport.complete(body, until, caps?.plainMax ?? 4000, ownerStatusReply ? "status" : !!allowOwnerReply)
+          ? await transport.complete(body, until, caps?.plainMax ?? 4000, ownerStatusReply ? "status" : failureReply ? "failure" : !!allowOwnerReply)
           : await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature, caps?.plainMax);
       } catch {
         console.error("External relay helper completion unavailable; using Viewer transport");
@@ -409,7 +419,7 @@ export async function runClaimedRequest(
   let runDir: string | null = null;
   let capacityReleased = false;
   let duplicate = false;
-  let run: ReturnType<typeof runEphemeralAgent> | null = null;
+  let run: EphemeralAgentRun | null = null;
   let runFinished = false;
   const callAbort = new AbortController();
   const identityTimers: ReturnType<typeof setTimeout>[] = [];
@@ -417,13 +427,24 @@ export async function runClaimedRequest(
   // A refused cutoff write can leave cancel absent from the ledger. The
   // unsettled owner still owns its capacity, chain reservation and files.
   const ownerRunPending = () => !!owner && !!run && !runFinished;
+  // A full owner turn (no prototype answer) answers at the request bound with
+  // the fixed status notice while its stop is still unconfirmed.
+  let boundedOwnerTurn = false;
+  const finishOwnerTimeout = async (startedAt: number): Promise<ExternalRelayCompletion | null> => {
+    console.info("External relay owner request timed out", { request: requestId.slice(0, 8), elapsed_ms: Date.now() - deadline.receivedAt });
+    callAbort.abort();
+    ownerStatusReply = { lease_id: leaseId, outcome: "answered", duration_ms: Date.now() - startedAt,
+      answer: { action: "reply", text: ownerRequestTimeoutText(caps!.plainMax), reply_to: owner!.messageId,
+        ...(caps!.rich ? { format: "plain", buttons: [], attachments: [] } : {}) } };
+    return await finish(ownerStatusReply);
+  };
   executionScope = true;
   releaseCapacity = async () => {
     if (!recorded || capacityReleased || ownerRunPending()) return;
     const held = readRunLedger().runs.find(row => row.requestId === requestId);
-    if (held?.ownerTurn?.cancel && !held.ownerTurn.confirmed) return;
+    if (held && ownerStopPending(held)) return;
     await changeRunAsync(requestId, row => {
-      if (ownerRunPending() || row.ownerTurn?.cancel && !row.ownerTurn.confirmed) return row;
+      if (ownerRunPending() || ownerStopPending(row)) return row;
       return { ...row, capacityReleased: true };
     }, Date.now() + 5000);
     const current = readRunLedger().runs.find(row => row.requestId === requestId);
@@ -445,7 +466,7 @@ export async function runClaimedRequest(
           delay = Math.min(delay * 2, 5000);
           continue;
         }
-        if (!held || held.ownerTurn?.cancel && !held.ownerTurn.confirmed) return;
+        if (!held || ownerStopPending(held)) return;
         try { await releaseCapacity?.(); }
         catch { console.error("External relay completed capacity release retry pending"); }
         if (capacityReleased) return;
@@ -555,6 +576,7 @@ export async function runClaimedRequest(
     const parent = request.input.conversation.find(message => message.id === trigger?.reply_to && message.author.self);
     const prototype = ownerMessage ? matchPrototypeAnswer(ownerMessage.text, undefined, replayReviewId, undefined, parent?.text) : null;
     owner = prototype ? ownerMessage : ownerTierFor(target, request);
+    boundedOwnerTurn = !!owner && !prototype;
     if (owner && !prototype) {
       try { owner.localContext = await withViewerOperation("telegram.outbound-state", () =>
         waitForStateLock("relay.owner-context", () => resolveOwnerOutboundContext(request, owner!, relay), { waitMs: 5000 })); }
@@ -564,7 +586,7 @@ export async function runClaimedRequest(
     }
     if (owner) allowOwnerReply = () => ownerStatusReply
       ? ownerRelayStatusReplyAuthorized(relay.id, target.id, requestId, ownerStatusReply, caps!.plainMax)
-      : ownerRelayAuthorized(relay.id, target.id, requestId);
+      : (failureReply ? ownerRelayFailureReplyAuthorized : ownerRelayAuthorized)(relay.id, target.id, requestId);
     const authority = conversationAuthority(request.input.requester, !!owner);
     const usesConversation = !prototype && readRelaySwitches().chain_conversations && request.chat && authority;
     let preResolvedConversation: RelayConversation | null = null;
@@ -734,7 +756,7 @@ export async function runClaimedRequest(
       steps.observe({ currentTool: pendingServiceTools > 0 ? "relay_tool" : null });
     } : undefined);
     if (owner && !prototype && caps?.rich) ownerParts = openOwnerAnswer(relay.id, request, runDir, [relay.credential], () => !leaseUnavailable && !callAbort.signal.aborted && ownerRelayAuthorized(relay.id, target.id, requestId),callAbort.signal);
-    let result: Awaited<ReturnType<typeof runEphemeralAgent>["done"]> | null = null;
+    let result: EphemeralAgentResult | null = null;
     let completion: ExternalRelayDecision | null = null;
     for (rounds = 1; rounds <= (loop ? RELAY_TOOL_ROUNDS : 1); rounds++) {
       if (Date.now() >= deadline.at) return await finish(declined(leaseId, "busy"));
@@ -781,6 +803,8 @@ export async function runClaimedRequest(
           ...(conversation?.conversationId ? { continuation: { conversationId: conversation.conversationId, prompt: turn!.prompt } } : {}),
           authorize: () => { if (leaseUnavailable || callAbort.signal.aborted || !ownerRelayAuthorized(relay.id, target.id, requestId)) throw new Error("owner relay authorization revoked"); },
           credentials: [relay.credential],
+          onDiagnostic: recordDiagnostic,
+          rawDeadlineAt: rawRequest.deadline_at,
           inboundContext: inbound?.prompt,
           request, owner, target: ownerTarget, deadline, accountId: selectedAccount().accountId,
           hardCapMs: Math.min(remainingMs(deadline), runtime?.timeoutMs ?? Infinity), ports: runtime?.ownerPorts,
@@ -799,7 +823,7 @@ export async function runClaimedRequest(
             recorder?.bindConversation(conversationId);
           },
           ...(steps ? { onProgress: steps.observe } : {}),
-        }) : runEphemeralAgent({
+        }) : await runEphemeralAgent({
           ...(conversation ? { session: { mode: conversation.sessionId ? "resume" as const : "start" as const, id: conversation.sessionId ?? (target.engine === "claude" ? crypto.randomUUID() : null), cwd: conversation.cwd!, codexHome: conversationCodexHome(conversation) } } : {}),
           key: loop ? `external-relay:${requestId}:${rounds}` : `external-relay:${requestId}`,
           engine: target.engine,
@@ -896,15 +920,10 @@ export async function runClaimedRequest(
         rounds--; continue;
       }
       finally { if (requestTimer) clearTimeout(requestTimer); }
-      if (owner && !prototype && (requestExpired || result.status === "timeout" && remainingMs(deadline) === 0)) {
-        console.info("External relay owner request timed out", { request: requestId.slice(0, 8), elapsed_ms: Date.now() - deadline.receivedAt });
-        callAbort.abort();
-        ownerStatusReply = { lease_id: leaseId, outcome: "answered", duration_ms: Date.now() - started,
-          answer: { action: "reply", text: ownerRequestTimeoutText(caps!.plainMax), reply_to: owner.messageId,
-            ...(caps!.rich ? { format: "plain", buttons: [], attachments: [] } : {}) } };
-        return await finish(ownerStatusReply);
-      }
+      if (owner && !prototype && (requestExpired || result.status === "timeout" && remainingMs(deadline) === 0))
+        return await finishOwnerTimeout(started);
       ownerParts?.close();
+      if (result.diagnostic) recordDiagnostic(result.diagnostic);
       if (ownerParts) { stagedAttachments = ownerParts.parts().attachments; answerDrops.push(...ownerParts.drops); }
       await ownerTools?.close(result.status);
       if (conversation && !owner) {
@@ -950,6 +969,8 @@ export async function runClaimedRequest(
     if (leaseUnavailable) return null;
     // A hand-off returns the request to the service, which answers it with
     // its own agent (§A.8); it carries no text from this install.
+    failureReply = !!owner && !!diagnostic && result?.status !== "cancelled";
+    if (failureReply) stagedAttachments = [];
     const body: ExternalRelayCompletion = completion?.action === "handoff"
       ? declined(leaseId, "handoff", null, HANDOFF_DETAIL)
       : completion
@@ -959,6 +980,8 @@ export async function runClaimedRequest(
           answer: completion,
           duration_ms: Date.now() - started,
         }
+      : owner && diagnostic && result?.status !== "cancelled" && allowOwnerReply?.()
+      ? { lease_id: leaseId, outcome: "answered", answer: ownerFailureAnswer(request, owner, diagnostic, [relay.credential])!, duration_ms: Date.now() - started }
       : failed(
           leaseId,
           result?.status === "violation"
@@ -979,9 +1002,41 @@ export async function runClaimedRequest(
       return null;
     }
     if (callAbort.signal.aborted) return null;
+    if (owner && !diagnostic) {
+      // Record, journal and hand the first failure to durable owner custody
+      // before cancelling: the stop below may wait for host confirmation.
+      const value = ownerTurnDiagnostic("exception", error, [relay.credential]);
+      recordDiagnostic(value);
+      console.error("Owner relay turn failed", JSON.stringify({ requestId, diagnostic: value }));
+    }
+    if (owner && diagnostic && run) {
+      run.diagnose?.(diagnostic);
+      // Durable custody keeps the reason and its reply even if host control
+      // never confirms. Awaited before the stop: its synchronous cutoff write
+      // must not contend with this write's file lock.
+      const kept = request ? ownerFailureCustody(request, owner, diagnostic, deadline.at, [relay.credential]) : { diagnostic };
+      try { await changeRunAsync(requestId, current => current.ownerTurn && !current.ownerTurn.diagnostic
+        ? { ...current, ownerTurn: { ...current.ownerTurn, ...kept } } : current, Date.now() + 5000); }
+      catch { console.error("Owner relay diagnostic persistence unavailable; the stop cutoff retries it"); }
+    }
     if (run) {
       if (!runFinished) run.cancel();
-      await run.done;
+      // Stop recovery may outlast the request: the requester still gets the
+      // status notice at the request bound while execution custody is retained.
+      let boundTimer: ReturnType<typeof setTimeout> | undefined;
+      const bound = boundedOwnerTurn ? new Promise<"expired">(resolve => {
+        boundTimer = setTimeout(() => resolve("expired"), remainingMs(deadline)); boundTimer.unref();
+      }) : null;
+      try {
+        const ended = run.done.then(() => "ended" as const);
+        if (await (bound ? Promise.race([ended, bound]) : ended) === "expired") return await finishOwnerTimeout(deadline.receivedAt);
+      } finally { if (boundTimer) clearTimeout(boundTimer); }
+    }
+    if (owner) {
+      failureReply = true;
+      stagedAttachments = [];
+      if (allowOwnerReply?.()) return await finish({ lease_id: leaseId, outcome: "answered",
+        answer: ownerFailureAnswer(request, owner, diagnostic!, [relay.credential])!, duration_ms: Date.now() - deadline.receivedAt });
     }
     return await finish(failed(leaseId, "agent_error"));
   } finally {
@@ -1018,14 +1073,15 @@ export async function runClaimedRequest(
         recorder.finish({ outcome: "lease_lost", answer: null, delivery: null, ...loopRecord() });
       try {
         const held = readRunLedger().runs.find(r => r.requestId === requestId);
-        const custodyPending = ownerRunPending() || !!held?.ownerTurn?.cancel && !held.ownerTurn.confirmed;
+        // Pending stops and released owner stops both keep their custody record.
+        const custodyPending = ownerRunPending() || !!held && ownerStopPending(held) || !!held?.ownerTurn?.released;
         if (recorded && !custodyPending && !(completionAccepted && !capacityReleased)) await dropRunAsync(requestId, Date.now() + 5000);
       } catch (error) {
         console.error("External relay run ledger cleanup failed", error instanceof Error ? error.name : "unknown");
       }
       try {
         const held = readRunLedger().runs.find(r => r.requestId === requestId);
-        if (runDir && !ownerRunPending() && !(held?.ownerTurn?.cancel && !held.ownerTurn.confirmed)) await fs.promises.rm(runDir, { recursive: true, force: true });
+        if (runDir && !ownerRunPending() && !(held && ownerStopPending(held))) await fs.promises.rm(runDir, { recursive: true, force: true });
       } catch (error) {
         console.error("External relay run directory cleanup failed", error instanceof Error ? error.name : "unknown");
       }

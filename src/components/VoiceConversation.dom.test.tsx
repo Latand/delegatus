@@ -87,6 +87,30 @@ test("a live call shows its running duration and a microphone level readout", ()
   flushSync(() => root.unmount());
 });
 
+test("a live call's status names the microphone its track carries, and says nothing of one before it is live", () => {
+  const stream = (label: string) => ({ getAudioTracks: () => [{ label }] }) as unknown as MediaStream;
+  const render = (phase: "live" | "connecting", mic: MediaStream | null) => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    flushSync(() => root.render(<VoiceConversationPanel phase={phase} error={null} startedAt={null} stream={mic} lines={[]} t={t} />));
+    const element = host.querySelector('[role="status"]');
+    /* A named microphone is the visible text; the whole sentence is the title and the accessible name. */
+    const status = element?.getAttribute("title") ?? element?.textContent ?? null;
+    if (element?.getAttribute("title")) {
+      expect(element.getAttribute("aria-label")).toBe(status);
+      expect(element.textContent).toBe(status!.replace(/^Voice conversation is live · /, ""));
+    }
+    flushSync(() => root.unmount());
+    return status;
+  };
+  expect(render("live", stream("Microphone Array (Realtek(R) Audio)"))).toBe("Voice conversation is live · Microphone Array (Realtek(R) Audio)");
+  expect(render("live", stream("Default - Headset Mic"))).toBe("Voice conversation is live · Headset Mic");
+  expect(render("live", stream(""))).toBe(t("voice.live"));
+  expect(render("live", null)).toBe(t("voice.live"));
+  expect(render("connecting", stream("Headset Mic"))).toBe(t("voice.connecting"));
+});
+
 test("neither the timer nor the meter renders outside a live call", () => {
   const host = document.createElement("div");
   document.body.append(host);

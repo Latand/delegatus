@@ -72,7 +72,7 @@ export function logQuotaEvent(fields: {
       an operator's per-account re-read (#1418), the re-read after a
       redeemed reset credit (#1373), or spawn admission's re-read of an
       exhaustion that may be history (task 8feee404), or login completion. */
-  probePhase: "account-rate-limits" | "operator-refresh" | "reset-credit-redeem" | "spawn-admission" | "login-complete";
+  probePhase: "account-rate-limits" | "operator-refresh" | "reset-credit-redeem" | "spawn-admission" | "login-complete" | "transfer-verify";
   provenance: "live" | "transcript" | "cache" | "unavailable";
   reasonCode: string | null;
 }): void {

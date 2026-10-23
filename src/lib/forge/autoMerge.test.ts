@@ -88,17 +88,17 @@ const pending = (name: string): Check => ({ name, status: "IN_PROGRESS", conclus
 const red = (name: string): Check => ({ name, status: "COMPLETED", conclusion: "FAILURE" });
 
 /** A fake GitHub: pull requests, commits, the base's required contexts, and
-    what each `update-branch` does to its pull request. */
+    legacy update receipts; any new GitHub branch update is refused. */
 function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: string[]; lanes: Pipeline[]; prs: PullRequest[]; tasks?: string[] }) {
   let clock = T0;
   const calls: string[][] = [];
+  const logs: string[] = [];
   const pipelines = new Map(options.lanes.map((pipeline) => [pipeline.id, structuredClone(pipeline)]));
   const prs = new Map(options.prs.map((pr) => [pr.number, pr]));
   const prOf = new Map(options.lanes.map((pipeline, index) => [pipeline.id, options.prs[index]!.number]));
   const commits = new Map<string, { parents: string[]; committer: string }>();
   const tasks = new Map((options.tasks ?? []).map((id) => [id, "assigned"]));
   let setting: MergeOnReviewSetting = { enabled: true, changedAt: iso(T0 - 3_600_000), changedBy: "operator", ...options.setting };
-  let onUpdate: ((pr: PullRequest) => void) | null = null;
   let mergeRefusal: string | null = null;
   const fail = (stderr: string) => Object.assign(new Error("Command failed: gh"), { stderr });
 
@@ -137,14 +137,7 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
     if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/branches/`)) return JSON.stringify(options.required ?? []);
     if (args[0] === "api" && /\/issues\/\d+\/comments/.test(args[1] ?? "")) return "";
     if (args[0] === "repo" && args[1] === "view") return JSON.stringify({ squashMergeAllowed: true, mergeCommitAllowed: true, rebaseMergeAllowed: true });
-    if (args[0] === "api" && args[1] === "-X" && args[2] === "PUT") {
-      const number = Number(/pulls\/(\d+)\/update-branch/.exec(args[3]!)![1]);
-      const pr = prs.get(number)!;
-      const expected = args[5]!.replace("expected_head_sha=", "");
-      if (expected !== pr.head) throw fail("gh: expected head sha didn’t match current head ref. (HTTP 422)");
-      onUpdate?.(pr);
-      return JSON.stringify({ message: "Updating pull request branch." });
-    }
+    if (args[0] === "api" && args[1] === "-X" && args[2] === "PUT") throw new Error("GitHub update-branch is forbidden");
     if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/commits/`)) {
       const sha = args[1].split("/").at(-1)!;
       return JSON.stringify(commits.get(sha) ?? { parents: [], committer: "someone" });
@@ -163,6 +156,7 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
   const writes: Array<{ args: string[]; repository: string }> = [];
   let writeRefusal: string | null = null;
   const ports = {
+    log: (line: string) => { logs.push(line); },
     now: () => clock,
     run,
     write: async (args: string[], repository: string) => {
@@ -192,13 +186,14 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
 
   return {
     calls,
+    logs,
+    ports,
     prs,
     commits,
     merge: (id: string): PipelineMerge | undefined => pipelines.get(id)?.merge,
     pipeline: (id: string) => pipelines.get(id)!,
     taskStatus: (id: string) => tasks.get(id),
     setSetting: (next: Partial<MergeOnReviewSetting>) => { setting = { ...setting, ...next }; },
-    onUpdate: (handler: (pr: PullRequest) => void) => { onUpdate = handler; },
     refuseMerges: (message: string) => { mergeRefusal = message; },
     /** Every call that went through the App write seam, and how to refuse them. */
     writes,
@@ -224,6 +219,14 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
 const openPr = (number: number, extra: Partial<PullRequest> = {}): PullRequest => ({
   number, state: "OPEN", head: HEAD_A, base: "main", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", checks: [green("ci")], ...extra,
 });
+
+/** Replay a durable update issued by an older runner; new writes are forbidden. */
+function retainedUpdate(h: ReturnType<typeof harness>, head: string, extra: Partial<PullRequest> = {}) {
+  const merge = h.merge("L1")!;
+  merge.updates.push({ requestedAt: iso(h.now()), head: null });
+  Object.assign(merge, { state: "updating", head: null, headSeenAt: null, lastChecks: null, nextReadAt: null });
+  Object.assign(h.prs.get(11)!, { head, ...extra });
+}
 
 beforeEach(() => resetAutoMergeForTests());
 
@@ -568,49 +571,43 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
     expect(h.merges()).toHaveLength(1);
   });
 
-  test("BEHIND updates the branch with the chain tip as expected_head_sha, then merges the update's head", async () => {
-    const h = harness({ lanes: [lane("L1")], prs: [openPr(11, { mergeStateStatus: "BEHIND" })] });
-    h.commits.set(HEAD_B, { parents: [HEAD_A, MAIN_1], committer: "web-flow" });
-    h.onUpdate((pr) => Object.assign(pr, { head: HEAD_B, mergeStateStatus: "UNKNOWN", mergeable: "UNKNOWN", checks: [] }));
+  test("a retained update's head is admitted without another GitHub update", async () => {
+    const h = harness({ lanes: [lane("L1")], prs: [openPr(11)] });
     await h.sweep();
-    expect(h.updates()).toEqual([["api", "-X", "PUT", `repos/${REPO}/pulls/11/update-branch`, "-f", `expected_head_sha=${HEAD_A}`]]);
-    expect(h.merge("L1")?.state).toBe("updating");
-    /* GitHub registers the new head's checks, then they pass. */
-    h.advance(MERGE_POLL_MS);
+    h.commits.set(HEAD_B, { parents: [HEAD_A, MAIN_1], committer: "web-flow" });
+    retainedUpdate(h, HEAD_B, { mergeStateStatus: "UNKNOWN", mergeable: "UNKNOWN", checks: [] });
     await h.sweep();
     Object.assign(h.prs.get(11)!, { checks: [green("ci")], mergeStateStatus: "CLEAN", mergeable: "MERGEABLE" });
     await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS * 2, () => h.merges().length > 0);
     expect(h.merges()).toEqual([["pr", "merge", "11", "--repo", REPO, "--squash", "--match-head-commit", HEAD_B]]);
     expect(h.merge("L1")).toMatchObject({ state: "merged", chain: [HEAD_A, HEAD_B], mergedHead: HEAD_B });
-    expect(h.merge("L1")!.updates).toEqual([{ requestedAt: expect.any(String), head: HEAD_B }]);
+    expect(h.merge("L1")!.updates).toEqual([{ requestedAt: iso(T0), head: HEAD_B }]);
+    expect(h.updates()).toHaveLength(0);
   });
 
-  test("a partial rollup right after update-branch (fewer names than the previous head) does not merge", async () => {
-    const h = harness({ required: ["ci", "lint"], lanes: [lane("L1")], prs: [openPr(11, { checks: [green("ci"), green("lint")], mergeStateStatus: "BEHIND" })] });
-    h.commits.set(HEAD_B, { parents: [HEAD_A, MAIN_1], committer: "web-flow" });
-    h.onUpdate((pr) => Object.assign(pr, { head: HEAD_B, mergeStateStatus: "CLEAN", checks: [green("ci")] }));
+  test("a partial rollup on a retained update's new head cannot reuse old green checks", async () => {
+    const h = harness({ required: ["ci", "lint"], lanes: [lane("L1")], prs: [openPr(11, { checks: [green("ci"), green("lint")] })] });
     await h.sweep();
-    expect(h.updates()).toHaveLength(1);
+    h.commits.set(HEAD_B, { parents: [HEAD_A, MAIN_1], committer: "web-flow" });
+    retainedUpdate(h, HEAD_B, { checks: [green("ci")] });
     await h.run(MERGE_SETTLE_MS * 3);
     expect(h.merges()).toEqual([]);
     expect(h.merge("L1")).toMatchObject({ state: "waiting-checks", reason: "waiting for lint" });
     h.prs.get(11)!.checks = [green("ci"), green("lint")];
     await h.run(MERGE_POLL_MS * 2, () => h.merges().length > 0);
     expect(h.merges()).toHaveLength(1);
+    expect(h.updates()).toHaveLength(0);
   });
 
-  test("an optional check seen before update-branch need not report on the new head", async () => {
-    const h = harness({ required: ["ci"], lanes: [lane("L1")], prs: [openPr(11, {
-      checks: [green("ci"), green("Docker")], mergeStateStatus: "BEHIND",
-    })] });
-    h.commits.set(HEAD_B, { parents: [HEAD_A, MAIN_1], committer: "web-flow" });
-    h.onUpdate((pr) => Object.assign(pr, { head: HEAD_B, mergeStateStatus: "CLEAN", checks: [green("ci")] }));
+  test("an optional check seen before a retained update need not report on its new head", async () => {
+    const h = harness({ required: ["ci"], lanes: [lane("L1")], prs: [openPr(11, { checks: [green("ci"), green("Docker")] })] });
     await h.sweep();
+    h.commits.set(HEAD_B, { parents: [HEAD_A, MAIN_1], committer: "web-flow" });
+    retainedUpdate(h, HEAD_B, { checks: [green("ci")] });
     expect(h.merge("L1")?.seenChecks).toContain("Docker");
     await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS * 2, () => h.merges().length > 0);
     expect(h.merge("L1")).toMatchObject({ state: "merged", chain: [HEAD_A, HEAD_B], mergedHead: HEAD_B });
-    expect(h.updates()).toHaveLength(1);
-    expect(h.merges()).toHaveLength(1);
+    expect(h.updates()).toHaveLength(0);
   });
 
   test("a rollup missing a required context waits until it arrives", async () => {
@@ -661,30 +658,29 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
     expect(h.merge("L1")?.state).toBe("merged");
   });
 
-  test("two updates in a row keep the head in the chain", async () => {
-    const h = harness({ lanes: [lane("L1")], prs: [openPr(11, { mergeStateStatus: "BEHIND" })] });
+  test("two retained update heads extend the legacy chain without a forge update", async () => {
+    const h = harness({ lanes: [lane("L1")], prs: [openPr(11)] });
+    await h.sweep();
     h.commits.set(HEAD_B, { parents: [HEAD_A, MAIN_1], committer: "web-flow" });
     h.commits.set(HEAD_C, { parents: [HEAD_B, MAIN_2], committer: "web-flow" });
-    let updates = 0;
-    h.onUpdate((pr) => {
-      updates += 1;
-      /* After the first update main moves again, so the PR is behind once more. */
-      Object.assign(pr, updates === 1 ? { head: HEAD_B, mergeStateStatus: "BEHIND" } : { head: HEAD_C, mergeStateStatus: "CLEAN" });
-    });
-    await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS * 4, () => h.merges().length > 0);
-    expect(h.updates().map((args) => args[5])).toEqual([`expected_head_sha=${HEAD_A}`, `expected_head_sha=${HEAD_B}`]);
+    retainedUpdate(h, HEAD_B);
+    await h.sweep();
+    retainedUpdate(h, HEAD_C);
+    await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS * 2, () => h.merges().length > 0);
     expect(h.merges()).toEqual([["pr", "merge", "11", "--repo", REPO, "--squash", "--match-head-commit", HEAD_C]]);
     expect(h.merge("L1")).toMatchObject({ state: "merged", chain: [HEAD_A, HEAD_B, HEAD_C] });
+    expect(h.updates()).toHaveLength(0);
   });
 
-  test("a one-parent web-flow head after an update blocks: the PR head changed after the lane finished", async () => {
-    const h = harness({ lanes: [lane("L1")], prs: [openPr(11, { mergeStateStatus: "BEHIND" })] });
-    /* A web-UI file edit is committed by web-flow too, with one parent. */
+  test("a one-parent web-flow head cannot satisfy a retained update", async () => {
+    const h = harness({ lanes: [lane("L1")], prs: [openPr(11)] });
+    await h.sweep();
     h.commits.set(HEAD_X, { parents: [HEAD_A], committer: "web-flow" });
-    h.onUpdate((pr) => Object.assign(pr, { head: HEAD_X, mergeStateStatus: "CLEAN" }));
+    retainedUpdate(h, HEAD_X);
     await h.run(MERGE_POLL_MS * 3);
     expect(h.merges()).toEqual([]);
     expect(h.merge("L1")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.headChanged, chain: [HEAD_A] });
+    expect(h.updates()).toHaveLength(0);
   });
 
   test("a push after the lane finished, with no update outstanding, blocks", async () => {
@@ -841,14 +837,11 @@ describe("eligibility (#2187 §4.2)", () => {
 });
 
 describe("writes go out as the App", () => {
-  test("the merge and the branch update use the write seam with their repository, and reads never do", async () => {
-    const h = harness({ lanes: [lane("L1")], prs: [openPr(11, { mergeStateStatus: "BEHIND" })] });
-    h.commits.set(HEAD_B, { parents: [HEAD_A, MAIN_1], committer: "web-flow" });
-    h.onUpdate((pr) => Object.assign(pr, { head: HEAD_B, mergeStateStatus: "CLEAN", mergeable: "MERGEABLE" }));
+  test("the merge uses the App write seam with its repository, and reads never do", async () => {
+    const h = harness({ lanes: [lane("L1")], prs: [openPr(11)] });
     await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS * 3, () => h.merges().length > 0);
     expect(h.writes).toEqual([
-      { args: ["api", "-X", "PUT", `repos/${REPO}/pulls/11/update-branch`, "-f", `expected_head_sha=${HEAD_A}`], repository: REPO },
-      { args: ["pr", "merge", "11", "--repo", REPO, "--squash", "--match-head-commit", HEAD_B], repository: REPO },
+      { args: ["pr", "merge", "11", "--repo", REPO, "--squash", "--match-head-commit", HEAD_A], repository: REPO },
     ]);
     expect(h.merge("L1")?.state).toBe("merged");
   });
@@ -864,13 +857,13 @@ describe("writes go out as the App", () => {
     expect(h.prs.get(11)!.state).toBe("OPEN");
   });
 
-  test("negative control: with no App credential the branch update blocks the same way", async () => {
-    const refusal = `Delegatus refused this GitHub write to ${REPO}: the GitHub App has no verified installation.`;
+  test("BEHIND without a refresh owner never attempts a GitHub write, even with no App credential", async () => {
     const h = harness({ lanes: [lane("L1")], prs: [openPr(11, { mergeStateStatus: "BEHIND" })] });
-    h.refuseAppWrites(refusal);
+    h.refuseAppWrites("App write unavailable");
     await h.sweep();
-    expect(h.merge("L1")).toMatchObject({ state: "blocked", reason: refusal });
-    expect(h.updates()).toEqual([]);
+    expect(h.merge("L1")?.state).toBe("blocked");
+    expect(h.merge("L1")?.reason).toContain("Delegatus could not start the refresh");
+    expect(h.writes).toEqual([]);
   });
 });
 
@@ -956,4 +949,111 @@ test("a restarted merge process reports its first refusal once with recreated sc
   expect(observations[0]).toHaveLength(1);
   expect(observations[0]![0]).toContain("reason-restart: not admitted:");
   expect(observations[1]).toEqual(observations[0]);
+});
+
+
+describe("merge queue stall recovery", () => {
+  test("a retried hold merges old successful duplicate contexts and lets its peer advance", async () => {
+    const h = harness({ required: ["privacy-tracker-audit"], lanes: [lane("old"), lane("peer", { closedAt: T0 })],
+      prs: [openPr(11, { checks: [green("privacy-tracker-audit"), green("privacy-tracker-audit")]
+        .map(check => ({ ...check, startedAt: iso(T0 - MERGE_WAIT_LIMIT_MS * 2) })) }), openPr(22, { checks: [green("privacy-tracker-audit")] })] });
+    await h.sweep();
+    Object.assign(h.merge("old")!, { state: "waiting-checks", attempts: 1, head: HEAD_A,
+      headSeenAt: iso(T0 - MERGE_SETTLE_MS), nextReadAt: null, lastChecks: ["privacy-tracker-audit", "privacy-tracker-audit"] });
+    await h.sweep();
+    expect(h.merge("old")?.state).toBe("merged");
+    await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS);
+    expect(h.merges().map(args => args[2])).toEqual(["11", "22"]);
+  });
+
+  test("an expired hold overrides a future poll, logs its release, and frees the next lane", async () => {
+    const h = harness({ required: ["ci"], lanes: [lane("old"), lane("peer", { closedAt: T0 })],
+      prs: [openPr(11, { checks: [pending("ci")] }), openPr(22)] });
+    await h.sweep();
+    Object.assign(h.merge("old")!, { head: HEAD_A, headSeenAt: iso(T0 - MERGE_WAIT_LIMIT_MS + 1),
+      lastChecks: ["ci"], state: "waiting-checks", nextReadAt: iso(T0 + MERGE_WAIT_LIMIT_MS) });
+    await h.sweep();
+    expect(h.merge("old")?.state).toBe("waiting-checks");
+    h.advance(1);
+    await h.sweep();
+    expect(h.merge("old")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.checksTimeout });
+    expect(h.logs.some(line => line.includes("old:") && line.includes(MERGE_REASONS.checksTimeout))).toBe(true);
+    await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS);
+    expect(h.merges().map(args => args[2])).toEqual(["22"]);
+  });
+
+  test("holds and queued peers log once across recreated ports, changed reasons log again, and evictions are bounded", async () => {
+    const h = harness({ required: ["ci"], lanes: [lane("old"), lane("peer", { closedAt: T0 })],
+      prs: [openPr(11, { checks: [pending("ci")] }), openPr(22)] });
+    await h.sweep();
+    expect(h.logs.some(line => line.includes("old:") && line.includes("waiting-checks") && line.includes("ci"))).toBe(true);
+    expect(h.logs.some(line => line.includes("peer:") && line.includes("behind old"))).toBe(true);
+    const count = h.logs.length;
+    await sweepAutoMerge({ ...h.ports });
+    expect(h.logs).toHaveLength(count);
+    h.advance(MERGE_POLL_MS);
+    await sweepAutoMerge({ ...h.ports });
+    expect(h.logs).toHaveLength(count);
+    h.pipeline("old").hiddenAt = iso(h.now());
+    await h.sweep();
+    expect(h.logs.at(-1)).toContain("old: skipped: lane is hidden");
+    const hiddenCount = h.logs.length;
+    h.advance(MERGE_POLL_MS);
+    await h.sweep();
+    expect(h.logs).toHaveLength(hiddenCount);
+    const host = globalThis as typeof globalThis & { __llvAutoMergeLaneReasons?: Map<string, string> };
+    expect(host.__llvAutoMergeLaneReasons?.size).toBe(2);
+    h.ports.loadPipelines = () => [];
+    await h.sweep();
+    expect(host.__llvAutoMergeLaneReasons?.size).toBe(0);
+  });
+});
+
+
+test.each(["CLEAN", "BEHIND", "unreadable"])("an overdue hold reconciles %s before releasing its slot", async status => {
+  const h = harness({ required: ["ci"], lanes: [lane("overdue")], prs: [openPr(11)] });
+  await h.sweep();
+  Object.assign(h.merge("overdue")!, { state: "waiting-checks", head: HEAD_A,
+    headSeenAt: iso(T0 - MERGE_WAIT_LIMIT_MS), lastChecks: ["ci"], nextReadAt: iso(T0 + MERGE_WAIT_LIMIT_MS) });
+  if (status === "unreadable") h.ports.run = async () => { throw new Error("fixture read unavailable"); };
+  else h.prs.get(11)!.mergeStateStatus = status;
+  await h.sweep();
+  expect(h.merge("overdue")?.state).toBe(status === "CLEAN" ? "merged" : "blocked");
+  if (status !== "CLEAN") expect(h.merge("overdue")?.reason).toBe(MERGE_REASONS.checksTimeout);
+  expect(h.updates()).toHaveLength(0);
+  expect(h.merges()).toHaveLength(status === "CLEAN" ? 1 : 0);
+});
+
+test("an expired read cannot block a retry that arrives while the forge read is awaited", async () => {
+  const h = harness({ required: ["ci"], lanes: [lane("racing")], prs: [openPr(11, { checks: [pending("ci")] })] });
+  await h.sweep();
+  Object.assign(h.merge("racing")!, { state: "waiting-checks", head: HEAD_A,
+    headSeenAt: iso(T0 - MERGE_WAIT_LIMIT_MS), lastChecks: ["ci"] });
+  const run = h.ports.run;
+  h.ports.run = async args => {
+    await Promise.resolve();
+    Object.assign(h.merge("racing")!, { attempts: 1, state: "queued", head: null, headSeenAt: null, lastChecks: null });
+    return run(args);
+  };
+  await h.sweep();
+  expect(h.merge("racing")).toMatchObject({ state: "queued", attempts: 1, headSeenAt: null });
+  expect(h.merges()).toHaveLength(0);
+  expect(h.logs.some(line => line.includes(MERGE_REASONS.checksTimeout))).toBe(false);
+});
+
+test("merge diagnostics flatten and bound reasons, deduplicate, and evict reopened lanes", async () => {
+  const h = harness({ lanes: [lane("bounded")], prs: [openPr(11)] });
+  await h.sweep();
+  Object.assign(h.merge("bounded")!, { state: "blocked", reason: "first\nsecond\r\n" + "x".repeat(1000) });
+  await h.sweep();
+  const line = h.logs.at(-1)!;
+  expect(line).toStartWith("[auto merge] bounded: blocked: first second ");
+  expect(line.split(/[\r\n]/)).toHaveLength(1);
+  expect(line.length).toBe("[auto merge] bounded: ".length + 400);
+  const count = h.logs.length;
+  await h.sweep();
+  expect(h.logs).toHaveLength(count);
+  h.pipeline("bounded").state = "running";
+  await h.sweep();
+  expect((globalThis as typeof globalThis & { __llvAutoMergeLaneReasons?: Map<string, string> }).__llvAutoMergeLaneReasons?.size).toBe(0);
 });

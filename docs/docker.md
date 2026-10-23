@@ -48,6 +48,18 @@ otherwise under `$HOME/.cache/delegatus/signal-runs`. A host without
 `/usr/bin/python3` launches the engine unprotected. Container services retain
 their `bun-container` interpreter.
 
+### Tests and gates without host systemd
+
+A development container does not need a reachable user systemd manager to run
+`bun test`, `scripts/gate-slot.sh`, or `scripts/verify-viewer-runtime.ts`.
+Those entry points automatically select the portable owned runner and print a
+best-effort warning. Test state remains private and recorded child identities
+are stopped and checked by the independent guardian. Unlike a transient
+service cgroup, this fallback cannot see a descendant that detaches between
+guardian polls; use the host-systemd shape above when that stronger kernel
+lifetime guarantee is required. CPU placement remains a separate policy: set
+`DELEGATUS_AGENT_CPU=off` where the container cannot create a quota scope.
+
 The shims use `nsenter --no-fork` with Compose's shared host PID namespace.
 The managed child handle therefore remains the launcher through the host
 transition and UID drop. Entering the host cgroup namespace also keeps
