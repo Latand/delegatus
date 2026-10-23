@@ -54,22 +54,24 @@ test("compact evidence validates changed rows across raw writes, deletion, rollb
 });
 
 /* Each startup admission asks for the revision two or three times. Opening
-   the state database and checking the index cost about 16 ms each on a
-   production copy; an answer is reused only until another connection commits. */
-test("the evidence revision is read again only after a commit, a schema edit or a replacement", () => {
+   the state database and checking the index schema cost about 16 ms each on a
+   production copy; the schema check now runs once per schema version, and the
+   revision is read from the clock on every call. */
+test("the evidence schema is checked again only after a schema edit or a replacement, and every commit moves the revision", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "evidence-revision-memo-"));
   const filename = path.join(root, "state.sqlite");
   const query = spyOn(Database.prototype, "query");
-  const indexReads = () => query.mock.calls.filter(([sql]) => String(sql).includes("FROM sqlite_master WHERE name IN")).length;
+  const schemaReads = () => query.mock.calls.filter(([sql]) => String(sql).includes("FROM sqlite_master WHERE name IN")).length;
   try {
     const seed = (collection: string) => ({ collection, schemaVersion: 1, migrationId: "one", key: (row: { id: string }) => row.id,
       loadRecords: () => [{ id: `${collection}-0` }] });
     initializeStateCollections(filename, ["pipelines", "pipelines_archive"].map(seed));
     const first = pipelineEvidenceRevision(filename);
     expect(first).not.toBeNull();
-    const reads = indexReads();
+    const reads = schemaReads();
     for (let call = 0; call < 5; call++) expect(pipelineEvidenceRevision(filename)).toBe(first);
-    expect(indexReads()).toBe(reads);
+    expect(await readCompactPipelineEvidence(filename, undefined, raw => raw)).not.toBeNull();
+    expect(schemaReads()).toBe(reads);
     const db = new Database(filename);
     try {
       db.exec("BEGIN IMMEDIATE");
@@ -78,17 +80,23 @@ test("the evidence revision is read again only after a commit, a schema edit or 
       expect(pipelineEvidenceRevision(filename)).toBe(first);
       db.query("UPDATE state_rows SET value_json='{\"id\":\"changed\"}' WHERE collection='pipelines'").run();
       const changed = pipelineEvidenceRevision(filename);
+      expect(changed).not.toBeNull();
       expect(changed).not.toBe(first);
-      expect(indexReads()).toBe(reads + 1);
-      expect(pipelineEvidenceRevision(filename)).toBe(changed);
-      expect(indexReads()).toBe(reads + 1);
+      expect(schemaReads()).toBe(reads);
+      // A schema edit is seen by the next call, through either reader.
       db.exec("DROP TRIGGER pipeline_evidence_update");
       expect(pipelineEvidenceRevision(filename)).toBeNull();
+      expect(await readCompactPipelineEvidence(filename, undefined, raw => raw)).toBeNull();
+      expect(schemaReads()).toBe(reads + 1);
     } finally { db.close(); }
     // A replacement at the same path never answers from the old file.
     fs.rmSync(filename); fs.rmSync(`${filename}-wal`, { force: true }); fs.rmSync(`${filename}-shm`, { force: true });
     initializeStateCollections(filename, ["pipelines", "pipelines_archive"].map(seed));
     expect(pipelineEvidenceRevision(filename)).not.toBeNull();
+    // A deleted clock row refuses at once, with the schema unchanged.
+    const raw = new Database(filename);
+    try { raw.query("DELETE FROM pipeline_evidence_clock").run(); } finally { raw.close(); }
+    expect(pipelineEvidenceRevision(filename)).toBeNull();
   } finally { query.mockRestore(); fs.rmSync(root, { recursive: true, force: true }); }
 });
 

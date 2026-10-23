@@ -18,7 +18,7 @@ import { rememberRecordBytes } from "./registryRecords";
 import { installPipelineControllerSchedule, pipelineControllerScheduleIndexes, selectPipelineTickWork, type PipelineTickWork } from "./pipelineControllerSchedule";
 import { installPipelineControllerIndex, type PipelineControllerSelection } from "./pipelineControllerIndex";
 import { installPipelineControllerReferences, pipelineControllerReferencesCurrent, pipelineControllerReferencesReady, type PipelineAttemptReference } from "./pipelineControllerReferences";
-import { installPipelineEvidenceIndex, pipelineEvidenceIndexReady } from "./pipelineEvidenceIndex";
+import { installPipelineEvidenceIndex, pipelineEvidenceIndexReady, pipelineEvidenceSchemaReady } from "./pipelineEvidenceIndex";
 import { databaseFileIdentity, databaseSwapMarker, databaseSwapInProgress, DatabaseReplacedError, openCurrentDatabase } from "./currentDatabase";
 import { collectionReadCache, rememberCollectionReadCache, type ReadCacheSlot } from "./collectionReadCache";
 import { FileTransactionBusyError } from "./fileTransaction";
@@ -979,32 +979,31 @@ export function stateEvidenceVersion(filename: string): string {
   return `${reader.generation}:${version}:${schema}`;
 }
 
-/* The last answer, valid while the version connection has seen no commit,
-   schema change or replacement since it was read. */
-const evidenceRevisionMemo = evidenceOwner as typeof evidenceOwner & { __llvPipelineEvidenceRevision?: { filename: string; version: string; revision: string | null } };
+/* Schema readiness per file and schema_version. Every schema edit moves
+   schema_version, and a replaced file has another identity. */
+const evidenceSchemaMemo = evidenceOwner as typeof evidenceOwner & { __llvPipelineEvidenceSchema?: { key: string; ready: boolean } };
+function evidenceIndexReadyAt(db: Database, key: string): boolean {
+  if (evidenceSchemaMemo.__llvPipelineEvidenceSchema?.key !== key) {
+    evidenceSchemaMemo.__llvPipelineEvidenceSchema = { key, ready: pipelineEvidenceSchemaReady(db) };
+  }
+  return evidenceSchemaMemo.__llvPipelineEvidenceSchema.ready
+    && Boolean(db.query("SELECT 1 FROM pipeline_evidence_clock WHERE id=1").get());
+}
 
 /** The index's validity is checked against the actual trigger definitions.
  * Schema loss or an older store takes the complete reader path. Opening the
- * state database and reading its schema cost about 16 ms, and one startup
- * admission asks two or three times; while no other connection has
- * committed, the previous answer still holds. */
+ * state database and checking its schema cost about 16 ms on a production
+ * copy, and one startup admission asks two or three times; the persistent
+ * version connection answers it, and the schema check runs once per
+ * schema_version. */
 export function pipelineEvidenceRevision(filename: string): string | null {
   if (!fs.existsSync(filename)) return null;
-  // Read before the revision: a commit in between moves the next version.
-  const version = stateEvidenceVersion(filename);
-  const memo = evidenceRevisionMemo.__llvPipelineEvidenceRevision;
-  if (version !== "missing" && memo?.filename === filename && memo.version === version) return memo.revision;
-  const db = connectReadonlyDatabase(filename);
-  try {
-    const revision = (() => {
-      if (!pipelineEvidenceIndexReady(db)) return null;
-      const clock = db.query<{ revision: number }, []>("SELECT revision FROM pipeline_evidence_clock WHERE id=1").get();
-      const schema = db.query<{ schema_version: number }, []>("PRAGMA schema_version").get()!.schema_version;
-      return clock ? `${databaseFileIdentity(filename)}:${schema}:${clock.revision}` : null;
-    })();
-    evidenceRevisionMemo.__llvPipelineEvidenceRevision = version === "missing" ? undefined : { filename, version, revision };
-    return revision;
-  } finally { db.close(); }
+  if (stateEvidenceVersion(filename) === "missing" || !evidenceVersions.reader) return null;
+  const { db, identity } = evidenceVersions.reader;
+  const schema = db.query<{ schema_version: number }, []>("PRAGMA schema_version").get()!.schema_version;
+  if (!evidenceIndexReadyAt(db, `${identity}:${schema}`)) return null;
+  const clock = db.query<{ revision: number }, []>("SELECT revision FROM pipeline_evidence_clock WHERE id=1").get();
+  return clock ? `${identity.slice(filename.length + 1)}:${schema}:${clock.revision}` : null;
 }
 
 export type CompactEvidenceCache<T> = { identity: string; sourceRevision?: number; rows: Map<string, { revision: number; value: T }> };
@@ -1029,8 +1028,8 @@ export async function readCompactPipelineEvidence<T>(filename: string, prior: Co
   const db = connectReadonlyDatabase(filename);
   try {
     db.exec("BEGIN");
-    if (!pipelineEvidenceIndexReady(db)) return null;
     const schema = db.query<{ schema_version: number }, []>("PRAGMA schema_version").get()!.schema_version;
+    if (!evidenceIndexReadyAt(db, `${filename}:${openedIdentity}:${schema}`)) return null;
     if (databaseFileIdentity(filename) !== openedIdentity) throw new StateSnapshotChangedError();
     const identity = `${openedIdentity}:${schema}`;
     const collections = db.query<{ collection: string }, []>("SELECT collection FROM state_collections WHERE collection IN ('pipelines','pipelines_archive')").all();
