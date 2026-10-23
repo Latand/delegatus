@@ -679,6 +679,10 @@ export type PipelineStageAttempt = {
         first line). Every park after the repair starts with that line. */
     parkDetail?: string;
   };
+  /** A parked publication released an idle, missing or expired producer turn.
+      Also covers legacy/replacement attempts with no repair request record.
+      Retained for audit; current affirmative activity still fences recovery. */
+  publicationRepairAbandonment?: { at: string; reason: string };
   /** Spawn calls this attempt has made across its activations, immediate
       handshake retries included (#1678). Each consumed one client attempt id,
       so the next retry index starts here. Persisted before the call is made:

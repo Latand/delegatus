@@ -12,21 +12,29 @@ deliveries retain their uncertainty. Late delivery preflight also checks that
 the repair is still owed and inside its original window.
 
 After a failed or expired repair, `resolve-decision` and `retry-stage` accept
-recovery when delivery failed, the producer is gone, the producer finished, or
-an expired reservation proves no dispatch. A failed delivery can retain
-duplicate-risk evidence from an earlier dispatch; that evidence alone does
-not keep the repair pending. A confirmed gone producer releases stale busy and
-queued markers from its old transcript and projection. Live or unverified
-producers retain the active-turn, background-work and outstanding-message
-guards. Unknown producer activity with an uncertain delivery also refuses.
+recovery when delivery failed, the producer is gone or idle, the producer
+finished, or the 20-minute window expired without affirmative running activity.
+A failed delivery can retain duplicate-risk evidence from an earlier dispatch;
+that evidence alone does not keep the repair pending. A confirmed gone or idle
+producer releases stale busy and queued markers from its old transcript and
+projection. Unknown activity, unreadable evidence and unsettled delivery refuse
+only inside the original window. Affirmative running activity still refuses
+after expiry, as does busy transcript progress or background work newer than
+the existing 12-minute silence bound. Custody refusals before head acceptance
+retain their original busy and queued guards. Abandonment records its timestamp
+and reason on the attempt and settles an unfinished repair as rejected,
+preserving any earlier settlement.
+A passed replacement with no repair record uses its own completion timestamp
+for the window; an earlier attempt's repair cannot keep it blocked.
 A stored failed receipt survives a read outage for the same operation.
-The refusal names the delivery operation and
+The refusal names the stage and attempt, age in seconds, delivery operation and
 its current state. Producer and receipt reads occur outside the shared pipeline
 mutation lease; revision, attempt and repair identity guards apply afterwards.
 
 The next controller tick refreshes parked repair records, including legacy
-records with no send key or start timestamps. Failed deliveries and gone
-producers settle the repair without another prompt or automatic publication;
+records with no send key or start timestamps and passed attempts with no repair
+record. Failed deliveries, gone or idle producers and expired unknown activity
+settle the repair without another prompt or automatic publication;
 the lane stays parked for an answer. The action paths also refresh this evidence.
 An accepted decision reserves one fresh attempt and records the revision the
 caller answered, so replaying that answer preserves its reservation even when
