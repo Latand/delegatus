@@ -3,6 +3,8 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline";
+import { Readable } from "node:stream";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -232,6 +234,107 @@ for (const engine of ["codex-mcp-client", "claude-code"]) test(`${engine} receiv
 function agentClient(agent: Agent): Promise<Client> {
   return httpClient({ "x-llv-spawn-capability": agent.capability });
 }
+
+// Native discovery uses no provider credentials or model turn. The process
+// receives the terminal command's global flags, with app-server as its probe
+// subcommand, so Codex itself opens the configured connector and lists tools.
+for (const mode of ["fresh", "resume", "denied"] as const) test.skipIf(originalEnv.LLV_NATIVE_CODEX_TEST !== "1")(`native ${mode} terminal verifies Viewer access after HTTP registration removal`, async () => {
+  const { freshSpecFor, prepareAgentPublicationSpec, resumeSpecForSession, withSpawnCapability } = await import("@/lib/agent/cli");
+  const { setCodexFeatureReaderForTest } = await import("@/lib/agent/codexSpawnPolicy");
+  const restoreFeatures = setCodexFeatureReaderForTest(undefined);
+  const previousBinary = process.env.LLV_CODEX_BINARY;
+  process.env.LLV_CODEX_BINARY = originalEnv.LLV_CODEX_BINARY ?? "codex";
+  const root = path.join(sandbox, `terminal-${mode}`);
+  const configRoot = path.join(root, "config");
+  const home = path.join(configRoot, "accounts", "codex", "fixture");
+  const tools = path.join(root, "bin");
+  fs.mkdirSync(home, { recursive: true }); fs.mkdirSync(tools);
+  for (const tool of ["dirname", "basename", "awk", "grep", "mktemp", "chmod", "mv"]) {
+    const found = Bun.which(tool);
+    if (!found) throw new Error(`missing installer fixture tool: ${tool}`);
+    fs.symlinkSync(found, path.join(tools, tool));
+  }
+  const catalog = path.join(root, "models.json");
+  fs.writeFileSync(catalog, JSON.stringify({ models: [{
+    slug: "fixture", display_name: "Fixture", description: null,
+    base_instructions: "Synthetic discovery fixture.", supported_reasoning_levels: [],
+    shell_type: "shell_command", visibility: "list", supported_in_api: true, priority: 0,
+    availability_nux: null, upgrade: null, support_verbosity: false, default_verbosity: null,
+    apply_patch_tool_type: "freeform", truncation_policy: { mode: "tokens", limit: 10000 },
+    experimental_supported_tools: [], tool_mode: "direct", multi_agent_version: "v2", context_window: 32000, prefer_websockets: false,
+  }] }));
+  const config = path.join(home, "config.toml");
+  fs.writeFileSync(config, [
+    'model="fixture"', 'model_provider="fixture"', `model_catalog_json=${JSON.stringify(catalog)}`,
+    '[model_providers.fixture]', 'name="fixture"', 'base_url="http://127.0.0.1:1/v1"',
+    'wire_api="responses"', 'requires_openai_auth=false',
+    '[mcp_servers.viewer]', 'command="bun"', `args=[${JSON.stringify(path.join(process.cwd(), "bin/mcp-server.mjs"))}]`,
+    '[mcp_servers.ungranted]', 'command="fixture-must-never-start"',
+  ].join("\n"));
+  try {
+    const installer = Bun.spawn([Bun.which("bash")!, "scripts/install-mcp.sh"], {
+      env: { HOME: root, CODEX_HOME: home, PATH: tools, LLV_CONFIG_ROOT: configRoot,
+        LLV_MCP_BIN: path.join(process.cwd(), "bin/mcp-server.mjs"), LLV_MCP_TRANSPORT: "http" },
+      stdout: "pipe", stderr: "pipe",
+    });
+    const [installed, , installerError] = await Promise.all([installer.exited, new Response(installer.stdout).text(), new Response(installer.stderr).text()]);
+    expect({ installed, installerError }).toEqual({ installed: 0, installerError: "" });
+    const installedConfig = fs.readFileSync(config, "utf8");
+    expect(installedConfig).not.toContain("mcp_servers.viewer");
+    const inventory = Bun.spawnSync([process.env.LLV_CODEX_BINARY, "-c", "features.plugins=false", "mcp", "list", "--json"], {
+      env: { ...process.env, CODEX_HOME: home }, stdout: "pipe", stderr: "pipe",
+    });
+    expect({ code: inventory.exitCode, error: inventory.stderr.toString() }).toMatchObject({ code: 0 });
+    const initial = mode !== "resume" ? freshSpecFor("codex", root, { codexHome: home, cleanMemory: true })
+      : resumeSpecForSession("codex", "12345678-1234-1234-1234-123456789abc", root, home, { cleanMemory: true, hostTerminal: true })!;
+    const prepared = await prepareAgentPublicationSpec(initial);
+    const capability = mode === "denied" ? "d".repeat(43) : alice.capability;
+    const admitted = withSpawnCapability(prepared, capability, { ...process.env, LLV_MCP_TRANSPORT: "http", DELEGATUS_MCP_TRANSPORT: undefined, LLV_MCP_HTTP_URL: `${origin}/api/mcp` });
+    const command = admitted.command.replace(prepared.codexPublication!.subcommand ?? /(?= \) \)$)/, " app-server");
+    const child = ownFixtureChild(Bun.spawn(["sh", "-c", command], {
+      cwd: root, env: { ...process.env, HOME: root, CODEX_HOME: home }, stdin: "pipe", stdout: "pipe", stderr: "pipe",
+    }));
+    const stderr = new Response(child.stderr).text();
+    // Bun and Node declare distinct Web Stream types for the same adapter.
+    const lines = createInterface({ input: Readable.fromWeb(child.stdout as unknown as import("node:stream/web").ReadableStream) });
+    const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
+    let nextId = 0;
+    lines.on("line", line => {
+      const response = JSON.parse(line);
+      const request = pending.get(response.id); if (!request) return;
+      pending.delete(response.id);
+      if (response.error) request.reject(new Error(JSON.stringify(response.error))); else request.resolve(response.result);
+    });
+    const rpc = (method: string, params: unknown): Promise<unknown> => new Promise((resolve, reject) => {
+      const id = ++nextId; pending.set(id, { resolve, reject });
+      child.stdin.write(JSON.stringify({ id, method, params }) + "\n");
+    });
+    const deadline = setTimeout(() => child.kill(9), 20_000);
+    try {
+      const discovered = async () => {
+        await rpc("initialize", { clientInfo: { name: "terminal-mcp-readiness", version: "1" }, capabilities: { experimentalApi: true } });
+        child.stdin.write(JSON.stringify({ method: "initialized", params: {} }) + "\n");
+        const started = await rpc("thread/start", { cwd: root, approvalPolicy: "never", sandbox: "read-only" }) as { thread: { id: string } };
+        const status = await rpc("mcpServerStatus/list", { threadId: started.thread.id, detail: "toolsAndAuthOnly" }) as { data: Array<{ name: string; tools: Record<string, unknown> }> };
+        const viewer = status.data.find(entry => entry.name === "viewer");
+        expect(viewer).toBeDefined();
+        if (mode === "denied") expect(Object.keys(viewer!.tools)).toHaveLength(0);
+        else expect(Object.keys(viewer!.tools)).toContain("list_tasks");
+        expect(status.data.some(entry => entry.name === "ungranted" && Object.keys(entry.tools).length > 0)).toBe(false);
+      };
+      await Promise.race([discovered(), child.exited.then(async code => { throw new Error(`native terminal probe exited ${code}: ${await stderr}`); })]);
+      expect(fs.readFileSync(config, "utf8")).toBe(installedConfig);
+    } finally {
+      clearTimeout(deadline); lines.close(); child.stdin.end();
+      await Promise.race([child.exited, Bun.sleep(1_000)]);
+      if (child.exitCode === null) child.kill();
+      await child.exited; await stderr;
+    }
+  } finally {
+    restoreFeatures();
+    if (previousBinary === undefined) delete process.env.LLV_CODEX_BINARY; else process.env.LLV_CODEX_BINARY = previousBinary;
+  }
+});
 
 function payloadOf(result: Awaited<ReturnType<Client["callTool"]>>): Record<string, unknown> {
   return (result.structuredContent ?? {}) as Record<string, unknown>;
