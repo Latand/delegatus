@@ -1427,6 +1427,15 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   /* Anything the window shows below the transcript. While it is present an
      empty transcript is not "no output" — it is a conversation mid-launch. */
   const windowTail = assistantHandoff.pending.length > 0 || visibleLiveTurnItems.length > 0 || pendingOutbox.length > 0 || Boolean(launch || mandateCard);
+  const feedState = !file ? "none" : feed.items.length || windowTail ? "items" : tail.loading ? "loading" : tail.error ? "error" : "empty";
+  /* What a first read settles on, after this file's feed showed its
+     skeleton: the phone's chat screen fades it in where it rests
+     (globals.css). A tail read before paints at once and never loads here. */
+  const [loadedFile, setLoadedFile] = useState<string | null>(null);
+  const feedPath = file?.path ?? null;
+  if (feedState === "loading" && loadedFile !== feedPath) setLoadedFile(feedPath);
+  else if (loadedFile !== null && loadedFile !== feedPath) setLoadedFile(null);
+  const feedArrived = loadedFile !== null && loadedFile === feedPath && feedState !== "loading";
 
   /* Session-stable, like the transcript's own row keys: once a canonical row
      has answered for a submission it keeps that key for as long as this feed
@@ -2037,7 +2046,8 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
            proves an arrival structurally (#1695) waits for rows, or for the
            empty state an empty transcript settles on. A read that failed is
            neither: it says `error`, and nothing arrives on it. */
-        data-feed-state={!file ? "none" : feed.items.length || windowTail ? "items" : tail.loading ? "loading" : tail.error ? "error" : "empty"}
+        data-feed-state={feedState}
+        data-feed-arrived={feedArrived ? "" : undefined}
         className={compact ? `px-3 ${liveTailPill ? "pb-8" : "pb-3"} text-body` : `mx-auto w-full max-w-[1060px] px-6 ${liveTailPill ? "pb-8" : "pb-4"}`}
       >
         {!file ? (
