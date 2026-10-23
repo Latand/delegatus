@@ -2072,10 +2072,10 @@ test("a transcript that stays corrupt is never recorded or adopted, until a wait
   });
 });
 
-test.each([
+test.each(([
   { engine: "claude", ledger: false }, { engine: "claude", ledger: true },
   { engine: "codex", ledger: false }, { engine: "codex", ledger: true },
-] as const)("an undated $engine completion of the turn the row names invents no cut (C5, D5, host ledger: $ledger)", async ({ engine, ledger: withLedger }) => {
+] as const).flatMap(item => (["live", "dead", "unhosted"] as const).map(status => ({ ...item, status }))))("an undated $engine completion on a $status row invents no cut (C5, D5, host ledger: $ledger)", async ({ engine, ledger: withLedger, status }) => {
   await withJournal(async (journal) => {
     const at = new Date(Date.now() - 60_000).toISOString();
     const records: Record<string, unknown>[] = engine === "claude"
@@ -2088,6 +2088,11 @@ test.each([
         { type: "event_msg", payload: { type: "task_complete", turn_id: CUT_TURN } },
       ];
     const cut = incumbentConversation(engine, cutSessionId(67), deadEngine(2_000_001_167), records);
+    if (status !== "live") {
+      const registry = new AgentRegistry(cut.registryFile);
+      const entry = registry.readOnlySnapshot().entries[cut.hostKey];
+      registry.upsert({ ...entry, status, structuredHost: { ...entry.structuredHost!, process: null } });
+    }
     /* The host recorded the turn's start and died before its end reached it. */
     if (withLedger) {
       appendHostLedger(cut, engine === "claude"
@@ -3191,4 +3196,95 @@ test("published release awaits the terminal registry checkpoint before acknowled
     try { expect(reopened.readOnlySnapshot().entries[`claude:${key.sessionId}`]?.claimOwner).toBeNull(); }
     finally { reopened.close(); }
   } finally { clearTimeout(timer); await holder.close(); journal.close(); registry.close(); }
+});
+
+test.each((["codex", "claude"] as const).flatMap(engine =>
+  (["dead", "unhosted"] as const).map(status => ({ engine, status })),
+))("a direct $engine cut checkpointed as $status resumes once", async ({ engine, status }) => {
+  await withJournal(async journal => {
+    const cut = incumbentConversation(engine, cutSessionId(170), deadEngine(2_000_001_270));
+    const registry = new AgentRegistry(cut.registryFile);
+    const entry = registry.readOnlySnapshot().entries[cut.hostKey];
+    registry.upsert({ ...entry, status, structuredHost: { ...entry.structuredHost!, process: null } });
+    const ledger = createFakeDeliveryLedger();
+    const boot = await successorBoot(cut.registryFile, journal, ledger);
+    expect(boot.error).toBeNull();
+    expect(boot.adopted).toEqual([cut.hostKey]);
+    await settle(() => ledger.writes.length > 0);
+    expect(continuationsIn(ledger)).toHaveLength(1);
+    expect(restartContinuations(ledger)).toHaveLength(1);
+    expect(restartCuts(cut.registryFile)).toHaveLength(1);
+    expect((await successorBoot(cut.registryFile, journal, ledger)).error).toBeNull();
+    await settle(() => false, 30);
+    expect(continuationsIn(ledger)).toHaveLength(1);
+    expect(registry.readOnlySnapshot().memberships[registry.conversationForPath(cut.artifactPath)!.id] ?? []).toEqual([]);
+  });
+});
+
+test.each((["codex", "claude"] as const).flatMap(engine =>
+  (["dead", "unhosted"] as const).map(status => ({ engine, status })),
+))("a direct $engine turn explicitly interrupted before a $status checkpoint stays stopped", async ({ engine, status }) => {
+  await withJournal(async journal => {
+    const records = engine === "claude" ? interruptedClaudeTurn().records : codexTurnRollout(CUT_TURN);
+    const cut = incumbentConversation(engine, cutSessionId(172), deadEngine(2_000_001_272), records);
+    appendHostLedger(cut, [turnStarted(CUT_TURN), ...records.map(record => frameOf(record, CUT_TURN)), turnEnded(CUT_TURN, "interrupted")]);
+    const registry = new AgentRegistry(cut.registryFile);
+    const entry = registry.readOnlySnapshot().entries[cut.hostKey];
+    registry.upsert({ ...entry, status, structuredHost: { ...entry.structuredHost!, process: null } });
+    const ledger = createFakeDeliveryLedger();
+    expect((await successorBoot(cut.registryFile, journal, ledger)).error).toBeNull();
+    await settle(() => ledger.writes.length > 0, 150);
+    expect(continuationsIn(ledger)).toEqual([]);
+    expect(restartCuts(cut.registryFile)).toEqual([]);
+  });
+});
+
+// Each child loads fresh module state while sharing only the persisted fixture.
+test.skipIf(!process.env.LLV_DIRECT_CUT_FIXTURE)("direct deploy cut subprocess boot", async () => {
+  const fixture = JSON.parse(fs.readFileSync(process.env.LLV_DIRECT_CUT_FIXTURE!, "utf8")) as {
+    registryFile: string; journalFile: string; state: string; result: string;
+  };
+  process.env.LLV_STATE_DIR = fixture.state;
+  const journal = new RuntimeJournal(fixture.journalFile, { structuredHosts: true });
+  const ledger = createFakeDeliveryLedger();
+  try {
+    const boot = await successorBoot(fixture.registryFile, journal, ledger);
+    expect(boot.error).toBeNull();
+    await settle(() => ledger.writes.length > 0);
+    fs.writeFileSync(fixture.result, JSON.stringify({ writes: continuationsIn(ledger), cuts: restartCuts(fixture.registryFile).map(cut => cut.id) }));
+  } finally { journal.close(); }
+});
+
+test.each([
+  { engine: "codex", status: "dead" }, { engine: "claude", status: "unhosted" },
+] as const)("a direct $engine continuation remains deduplicated across successor process restarts", async ({ engine, status }) => {
+  const cut = incumbentConversation(engine, cutSessionId(171), deadEngine(2_000_001_271));
+  const registry = new AgentRegistry(cut.registryFile);
+  const entry = registry.readOnlySnapshot().entries[cut.hostKey];
+  registry.upsert({ ...entry, status, structuredHost: { ...entry.structuredHost!, process: null } });
+  registry.close();
+  const fixtureFile = path.join(directory, "direct-cut-fixture.json");
+  const resultFile = path.join(directory, "direct-cut-result.json");
+  fs.writeFileSync(fixtureFile, JSON.stringify({ registryFile: cut.registryFile,
+    journalFile: path.join(directory, "runtime.sqlite"), state: process.env.LLV_STATE_DIR, result: resultFile }));
+  const bootChild = async () => {
+    const child = Bun.spawn([process.execPath, "test", "--timeout=20000", "--test-name-pattern", "^direct deploy cut subprocess boot$", import.meta.path], {
+      env: { ...process.env, LLV_DIRECT_CUT_FIXTURE: fixtureFile }, stdin: "ignore", stdout: "ignore", stderr: "pipe",
+    });
+    const errors = new Response(child.stderr).text();
+    const timer = setTimeout(() => child.kill("SIGTERM"), 25_000);
+    try {
+      const code = await child.exited;
+      const stderr = await errors;
+      expect({ code, error: code === 0 ? "" : stderr }).toEqual({ code: 0, error: "" });
+      return JSON.parse(fs.readFileSync(resultFile, "utf8")) as { writes: string[]; cuts: string[] };
+    } finally { clearTimeout(timer); }
+  };
+  const first = await bootChild();
+  expect(first.writes).toHaveLength(1);
+  expect(first.writes[0]).toContain("Viewer restarted and severed your structured host mid-turn.");
+  expect(first.cuts).toHaveLength(1);
+  const second = await bootChild();
+  expect(second.writes).toEqual([]);
+  expect(second.cuts).toEqual(first.cuts);
 });

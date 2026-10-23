@@ -4,6 +4,7 @@ import { withSpawnDiagnostics, bindSpawnDiagnostics, spawnDiagnosticError } from
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { sameRecordedProcessIdentity } from "@/lib/processIdentity";
 
 import { codexLaunchTier, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
 import { NextRequest, NextResponse } from "next/server";
@@ -56,7 +57,7 @@ import { runtimeEventsEnabled } from "@/lib/runtime/flags";
 import { runtimeImageCapability, runtimeImageStore, type RuntimeImageUpload } from "@/lib/runtime/runtimeImageStore";
 import { assertStructuredTextEnvelope, type StructuredImageRef } from "@/lib/runtime/structuredContent";
 import { composeStructuredFirstMessage } from "@/lib/runtime/structuredFirstMessage";
-import { queuedPinnedSpawnTitle, reconcileStructuredSpawnReplay, resolvePinnedSpawnAdmission, spawnStructuredConversation, structuredClaudePermissionMode } from "@/lib/runtime/structuredSpawn";
+import { withRuntimeAdmissionRetry, queuedPinnedSpawnTitle, reconcileStructuredSpawnReplay, resolvePinnedSpawnAdmission, spawnStructuredConversation, structuredClaudePermissionMode } from "@/lib/runtime/structuredSpawn";
 import { structuredSpawnGap, spawnTransport } from "@/lib/runtime/spawnTransport";
 import { adoptPipelineAttemptFromSource, pipelineAttemptTargetForSource } from "@/lib/pipelines/engine";
 import { loadPipelines } from "@/lib/pipelines/store";
@@ -129,6 +130,8 @@ export interface SpawnCommandDependencies {
   runtimeHostClient: typeof runtimeHostClient;
   publishFilesRevision?: typeof publishFilesRevision;
   spawnStructuredConversation: typeof spawnStructuredConversation;
+  /** Clock and sleep seam for bounded handover retries. */
+  runtimeAdmissionRetry?: Parameters<typeof withRuntimeAdmissionRetry>[1];
   assertStructuredRuntime: typeof assertDarwinStructuredRuntime;
   defer(work: () => Promise<void>): void;
   storeImages(images: readonly RuntimeImageUpload[]): StructuredImageRef[];
@@ -1247,17 +1250,44 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
           return;
         }
         try {
-          response = await dependencies.spawnStructuredConversation({
-            engine,
-            receipt,
-            spec,
-            account,
-            prompt,
-            imageRefs,
-            registry,
-            client: runtimeClient,
-            authorize: dependencies.authorizeAutonomousLaunch,
-          });
+          // Replays keep the durable launch id and first-message identity. A
+          // handover gets the admission window before the card is failed.
+          response = await withRuntimeAdmissionRetry(async () => {
+            const current = registry.spawnRecoverySnapshot([receipt.launchId]).receipts[receipt.launchId];
+            if (!current || current.state !== "starting") {
+              throw new Error(current?.error ?? "structured launch admission already settled");
+            }
+            if (receipt.admissionOwner && (!current.admissionOwner
+              || !sameRecordedProcessIdentity(receipt.admissionOwner, current.admissionOwner))) {
+              throw new Error("structured launch admission ownership changed");
+            }
+            try { authorizeLaunch(); }
+            catch {
+              await registry.failStructuredSpawnOffLoop(receipt.launchId, "autonomous launch authorization revoked");
+              throw new Error("autonomous launch authorization revoked");
+            }
+            try {
+              return await dependencies.spawnStructuredConversation({
+                engine,
+                receipt,
+                spec,
+                account,
+                prompt,
+                imageRefs,
+                registry,
+                client: runtimeClient,
+                authorize: dependencies.authorizeAutonomousLaunch,
+              });
+            } catch (error) {
+              // The launcher may already have settled its own failure. That
+              // durable result ends retries even if its last error was transport.
+              const current = registry.spawnRecoverySnapshot([receipt.launchId]).receipts[receipt.launchId];
+              if (current && ["failed", "conflicted", "completed"].includes(current.state)) {
+                throw new Error(error instanceof Error ? error.message : String(error), { cause: error });
+              }
+              throw error;
+            }
+          }, dependencies.runtimeAdmissionRetry);
           await recordActualSpawnAccountOffLoop(registry, receipt, account.accountId, response.path);
         } catch (error) {
           spawnDiagnosticError("[spawn] structured launch failed", {

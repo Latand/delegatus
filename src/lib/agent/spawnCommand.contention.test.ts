@@ -598,3 +598,147 @@ test.each(["existing", "account-lock"] as const)("scheduled report launch respec
     releaseDrain(drainFile(), "report-account-lock"); Object.assign(productionSpawnCommandDependencies, originalDependencies);
   }
 });
+
+test.each(["recovered", "expired", "refused", "conflict", "revoked", "terminal", "superseded", "released"] as const)("direct spawn handover: %s", async (outcome) => {
+  const { RuntimeHostUnavailableError } = await import("@/lib/runtime/client");
+  const cwd = statePath(`direct-handover-${outcome}`);
+  fs.mkdirSync(cwd, { recursive: true });
+  const dependencies = structuredRouteDependencies(cwd);
+  const spawn = dependencies.spawnStructuredConversation;
+  const launches: string[] = [];
+  let deferred: Promise<void> | undefined;
+  let slept = 0;
+  let authorized = true;
+  dependencies.authorizeAutonomousLaunch = () => {
+    if (!authorized) throw new Error("authorization revoked");
+  };
+  dependencies.defer = work => { deferred = work(); };
+  dependencies.runtimeAdmissionRetry = {
+    deadlineMs: 750,
+    now: () => 0,
+    sleep: async ms => {
+      slept += ms;
+      if (outcome === "revoked") authorized = false;
+      if (outcome === "superseded" || outcome === "released") {
+        const { AgentRegistry } = await import("./registry");
+        const secondWriter = new AgentRegistry(agentRegistry().filename, undefined, undefined, { resolveBackendIdentity: true });
+        try {
+          if (outcome === "superseded") {
+            expect((await secondWriter.failStructuredSpawnOffLoop(launches[0], "settled during handover")).claimed).toBe(true);
+          } else {
+            const receipt = secondWriter.spawnRecoverySnapshot(launches).receipts[launches[0]];
+            expect(secondWriter.releaseStartingStructuredSpawn(receipt.launchId, receipt.admissionOwner!).released).toBe(true);
+          }
+        }
+        finally { secondWriter.close(); }
+      }
+    },
+  };
+  dependencies.spawnStructuredConversation = async input => {
+    launches.push(input.receipt.launchId);
+    if (outcome === "refused") throw new RuntimeHostUnavailableError("authentication denied", "UNAUTHORIZED");
+    if (outcome === "conflict") throw new RuntimeHostUnavailableError("idempotency key already belongs to another request", "conflict");
+    if (outcome === "terminal") {
+      await input.registry.failStructuredSpawnOffLoop(input.receipt.launchId, "launch already failed");
+      throw new RuntimeHostUnavailableError("runtime host is unavailable");
+    }
+    if (outcome === "expired" || launches.length < 3) throw new RuntimeHostUnavailableError("runtime host is unavailable");
+    return spawn(input);
+  };
+  const response = await executeSpawnRequest(new NextRequest("http://127.0.0.1/api/spawn", {
+    method: "POST",
+    headers: { origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", host: "127.0.0.1", "content-type": "application/json" },
+    body: JSON.stringify({ clientAttemptId: `attempt_direct_handover_${outcome}`, title: "Direct handover", engine: "claude", cwd, prompt: "Continue the task", mcpServers: [] }),
+  }), dependencies);
+  expect(response.status).toBe(202);
+  await deferred;
+  const retried = outcome === "recovered" || outcome === "expired";
+  expect(launches).toHaveLength(retried ? 3 : 1);
+  expect(new Set(launches).size).toBe(1);
+  expect(slept).toBe(retried ? 750 : ["revoked", "superseded", "released"].includes(outcome) ? 250 : 0);
+  const receipt = agentRegistry().spawnRecoverySnapshot(launches).receipts[launches[0]];
+  expect(receipt.state === "failed").toBe(outcome !== "recovered" && outcome !== "released");
+});
+
+test.each(["recovered", "expired"] as const)("direct spawn uses real runtime admission: %s", async outcome => {
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { RuntimeHostUnavailableError } = await import("@/lib/runtime/client");
+  const { ADMISSION_RETRY_DEADLINE_MS, spawnStructuredConversation } = await import("@/lib/runtime/structuredSpawn");
+  const { FakeEngineHost } = await import("@/lib/runtime/fixtures/fakeEngineHost");
+  const { claudeTranscriptPath } = await import("./transcript");
+  const { captureProcessIdentity } = await import("@/lib/processIdentity");
+  const { procBackend } = await import("@/lib/proc");
+  const cwd = statePath(`real-direct-handover-${outcome}`);
+  fs.mkdirSync(cwd, { recursive: true });
+  const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
+  const dependencies = structuredRouteDependencies(cwd);
+  const memory = spyOn(procBackend, "systemMemory").mockReturnValue({ ramTotal: 8 * 1024 ** 3, ramAvailable: 4 * 1024 ** 3, swapTotal: 0, swapUsed: 0 });
+  let clock = 0;
+  let starts = 0;
+  let invocations = 0;
+  let launchId = "";
+  const operations: string[] = [];
+  let deferred: Promise<void> | undefined;
+  const client = {
+    command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => {
+      if (!command.operationId) throw new Error("fixture admission requires an operation id");
+      operations.push(command.operationId);
+      if (outcome === "expired" || operations.length < 3) throw new RuntimeHostUnavailableError("runtime host is unavailable");
+      return journal.executeOperation(command);
+    },
+    transitionOperation: async (...args: Parameters<RuntimeHostClient["transitionOperation"]>) => journal.transitionOperation(...args),
+    append: async (...args: Parameters<RuntimeHostClient["append"]>) => journal.append(...args),
+  } as RuntimeHostClient;
+  dependencies.runtimeHostClient = () => client;
+  dependencies.defer = work => { deferred = work(); };
+  dependencies.runtimeAdmissionRetry = { now: () => clock, sleep: async ms => { clock += ms; } };
+  dependencies.spawnStructuredConversation = async input => {
+    invocations++;
+    launchId = input.receipt.launchId;
+    return spawnStructuredConversation(input, {
+      now: () => clock,
+      sleep: async ms => { clock += ms; },
+      startHost: async () => {
+        starts++;
+        const sessionId = input.spec.transcript ? path.basename(input.spec.transcript, ".jsonl")
+          : ["21500000", "0000", "4000", "8000", "000000000001"].join("-");
+        const transcript = input.spec.transcript ?? claudeTranscriptPath(cwd, sessionId, input.account.transcriptRoot);
+        fs.mkdirSync(path.dirname(transcript), { recursive: true });
+        fs.writeFileSync(transcript, JSON.stringify({ type: "user", message: { role: "user", content: "fixture" } }) + "\n");
+        return Object.assign(new FakeEngineHost(), { identity: { sessionId }, onStateChange: () => () => {} });
+      },
+      bindHost: async (registry, key, host, owner, epoch) => {
+        const state = await host.health();
+        registry.setStructuredHostClaimed(key, {
+          kind: "claude-broker", endpoint: state.endpoint, process: captureProcessIdentity(process.pid),
+          eventCursor: 0, protocolVersion: "fake", writerClaimEpoch: epoch, activeTurnRef: null,
+          pendingAttention: [], activeFlags: [],
+        }, "idle", owner, epoch);
+        return () => {};
+      },
+      publishHost: async () => async () => {},
+      deliverFirst: async () => {},
+    });
+  };
+  try {
+    const response = await executeSpawnRequest(new NextRequest("http://127.0.0.1/api/spawn", {
+      method: "POST",
+      headers: { origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", host: "127.0.0.1", "content-type": "application/json" },
+      body: JSON.stringify({ clientAttemptId: `attempt_real_direct_${outcome}`, title: "Runtime handover", engine: "claude", cwd, prompt: "Continue the task", mcpServers: [] }),
+    }), dependencies);
+    expect(response.status).toBe(202);
+    await deferred;
+    expect(invocations).toBe(1);
+    expect(new Set(operations)).toEqual(new Set([launchId]));
+    expect(starts).toBe(outcome === "recovered" ? 1 : 0);
+    expect(clock).toBeLessThanOrEqual(ADMISSION_RETRY_DEADLINE_MS);
+    expect(clock).toBeGreaterThan(0);
+    const receipt = agentRegistry().spawnRecoverySnapshot([launchId]).receipts[launchId];
+    expect(receipt.state).toBe(outcome === "recovered" ? "completed" : "failed");
+    expect(operations.length).toBe(outcome === "recovered" ? 3 : 18);
+    expect(journal.snapshot().sessions.filter(row => row.conversationId === receipt.conversationId)).toHaveLength(outcome === "recovered" ? 1 : 0);
+  } finally {
+    try { await deferred; }
+    finally { journal.close(); memory.mockRestore(); }
+  }
+});
