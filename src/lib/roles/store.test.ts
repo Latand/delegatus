@@ -105,7 +105,7 @@ test("role overrides fail closed and preserve malformed or future-schema bytes",
   try {
     for (const content of [
       "{",
-      JSON.stringify({ schemaVersion: 6, overrides: {} }),
+      JSON.stringify({ schemaVersion: 7, overrides: {} }),
       JSON.stringify({ schemaVersion: 1, overrides: { builder: { config: { engine: "invalid" } } } }),
       JSON.stringify({ schemaVersion: 1, overrides: { builder: { config: { model: "fable", effort: "banana" } } } }),
       JSON.stringify({ schemaVersion: 1, overrides: { builder: { unexpected: true } } }),

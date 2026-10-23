@@ -514,6 +514,12 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
       if (permission) file.pendingPermission = permission;
       const memoryKill = !conversation.supersededBy ? registryEntry?.structuredHost?.memory?.lastKill : null;
       if (memoryKill) file.memoryKill = { at: memoryKill.at, limitBytes: memoryKill.limitBytes, limit: memoryKill.limit, fatal: memoryKill.fatal };
+      if (!conversation.supersededBy && registryEntry?.structuredHost) {
+        const memory = registryEntry.structuredHost.memory;
+        file.memoryCap = memory?.cap ?? (memory
+          ? { limitBytes: memory.limitBytes, requestedBytes: null, source: "automatic", clamped: false, enforced: true }
+          : { limitBytes: null, requestedBytes: null, source: "automatic", clamped: false, enforced: false });
+      }
       if (registryEntry?.status === "dead" && file.pid === null) {
         file.activity = Date.now() / 1000 - file.mtime < 900 ? "recent" : "idle";
         file.activityReason = "registry_terminal";

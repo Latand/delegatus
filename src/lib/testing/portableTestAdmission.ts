@@ -6,8 +6,7 @@ export function admitPortableTestRunner(
   env: NodeJS.ProcessEnv = process.env,
   warn: (message: string) => void = console.error,
 ): void {
-  if (platform === "linux") throw new Error("owned gates on Linux require a reachable user systemd manager");
   if (env.LLV_PORTABLE_TEST_WARNING_SHOWN === "1") return;
-  warn("owned test runner: portable cleanup is best effort; a detached descendant can escape between guardian polls");
+  warn(`owned test runner: portable cleanup on ${platform} is best effort; a detached descendant can escape between guardian polls`);
   env.LLV_PORTABLE_TEST_WARNING_SHOWN = "1";
 }

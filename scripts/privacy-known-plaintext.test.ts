@@ -61,6 +61,39 @@ test("the dictionary phrase remains private in identity fields and account paths
   }
 });
 
+test("the configured label is private as the whole publication", async () => {
+  const scanner = await inspector("unrelated fixture value", false, false,
+    join(import.meta.dir, "privacy-known-value-fingerprints.json"));
+  const label = ["open", "source"].join("");
+  for (const source of [label, ` \n${label}\t`, label.toUpperCase(),
+    Array.from(label).map(char => `%${char.codePointAt(0)!.toString(16)}`).join(""),
+    Array.from(label).map(char => `&#${char.codePointAt(0)};`).join("")]) {
+    expect(scanner.sensitiveClasses(source).has("known_value")).toBe(true);
+  }
+  for (const source of ["open source", "open-source", `prefix${label}suffix`, `the ${label} core`, `the\n${label}\ncore`]) {
+    expect(scanner.sensitiveClasses(source).has("known_value"), source).toBe(false);
+  }
+});
+
+test.each([false, true])("standalone file labels survive UTF-16 decoding (big-endian: %s)", async (bigEndian) => {
+  const directory = mkdtempSync(join(tmpdir(), "privacy-standalone-encoding-"));
+  try {
+    const scanner = await inspector("unrelated fixture value", false, false,
+      join(import.meta.dir, "privacy-known-value-fingerprints.json"));
+    const label = ["open", "source"].join("");
+    const file = join(directory, "sample.txt");
+    for (const source of [label, ` \n${label}\t`, `the ${label} core`, `the\n${label}\ncore`]) {
+      const bytes = Buffer.from(`\ufeff${source}`, "utf16le");
+      if (bigEndian) bytes.swap16();
+      writeFileSync(file, bytes);
+      expect(scanner.inspectPaths([file], false, true, directory).has("known_value"))
+        .toBe(source.trim() === label);
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test.each(["files", "commits"] as const)("identity-context findings reach CLI inspection of %s", async (surface) => {
   const directory = mkdtempSync(join(tmpdir(), "privacy-identity-context-"));
   try {
@@ -88,6 +121,10 @@ test.each(["files", "commits"] as const)("identity-context findings reach CLI in
       stdout: "pipe", stderr: "pipe",
     });
     for (const { source, privateValue } of [
+      ...[label, ` \n${label}\t`, label.toUpperCase(),
+        Array.from(label).map(char => `%${char.codePointAt(0)!.toString(16)}`).join(""),
+        Array.from(label).map(char => `&#${char.codePointAt(0)};`).join("")]
+        .map(source => ({ source, privateValue: true })),
       ...[`account_id="${label}"`, JSON.stringify({ accountLabel: label }), `{"accountId":\n"${label}"}`,
         JSON.stringify({ account: { id: "fixture", label } }),
         JSON.stringify({ account: { label, id: "fixture" } }, null, 2),

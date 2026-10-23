@@ -174,7 +174,8 @@ and the generated catalog. Preserve per-value policy in the private input so
 regeneration retains it.
 
 The ambiguous dictionary-phrase fingerprint was removed in #2261 so ordinary
-open-source prose passes. The gate retains its digest for identity fields
+open-source prose passes. The gate rejects the label as the entire published
+content and retains its digest for identity fields
 (account id, label, username, handle and hostname), account-path segments, handle
 mentions and values following a textual account marker. Serialized account
 responses expose bare id and label keys, which receive the same protection.
