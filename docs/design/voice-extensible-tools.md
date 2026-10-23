@@ -1206,7 +1206,7 @@ of its six rendered sources; screenshots remain in the capture scratch.
 | A name outside the snapshot is refused (`TOOL_NOT_ALLOWED`) | `sessions.ts#call`, Codex provider |
 | A server or tool no longer approved is refused (`TOOL_REVOKED`), and a committed revocation stops its child | `sessions.ts#call`, `#reconcile` through `store.onCommit` |
 | Arguments are validated against the approved input schema with Ajv, inside the worker | `probe.worker.ts#serve` |
-| One deadline per call (`callTimeoutMs`), plus up to 20 s for a cold start; expiry sends MCP `notifications/cancelled` | `sessions.ts#dispatch`, `#deadline` |
+| One deadline per call (`callTimeoutMs`), plus up to 20 s for a cold start; it starts when the call is asked, so a wait behind an earlier call to the same server counts, and a call given up while queued is never sent; expiry sends MCP `notifications/cancelled` | `sessions.ts#dispatch`, `#deadline` |
 | Text joined and cut to 16 KB with a marker; `structuredContent` when there is no text; up to three images; other content named as omitted; `isError` maps to `failed` | `probe.worker.ts#mapResult` |
 | Results skip the board-read cache and pass the credential and local-path scrub | `liveSession.ts#addedTool`, `#tool` |
 | A tool that acts counts as egress after a private read (`private_data_boundary`); the backend reads the refusal and answers | `liveSession.ts#tool` |
@@ -1246,25 +1246,36 @@ both the API and the Codex case send.
 
 ### Measurements
 
-`bun scripts/benchmark-voice-tools-start.ts --runs 150 --warmup 20` on
-`origin/main` at `871d541e` and on this branch's merge of it, `bef48146`, with the same
+`bun scripts/benchmark-voice-tools-start.ts --runs 150 --warmup 20` on `origin/main`
+at `f0d09379` (before) and on this branch at `b11f4337` (after), with the same
 synthetic registry (N approved HTTP servers, 32 selected tools in total), the
-documented fake Live provider and a private state directory. Start latency is
-`CompanionLiveSessions.start`, which the start route awaits; no network time is
-included. Two rounds, head first, 2026-10-23 06:40–06:42 UTC, Bun 1.4.0, 24
-CPUs, load average 13.7–14.2.
+documented fake Live provider, call memory as the Viewer passes it (switched
+off, with a summarizer that refuses, so no model runs) and a private state
+directory. Start latency is `CompanionLiveSessions.start`, which the start
+route awaits; no network time is included. Each side ran through the gate
+runner (16 CPUs, Bun 1.4.0), three rounds alternating head first, 2026-10-23
+07:49–07:54 UTC, load average 5.5–12.8. The three counts share one process and
+are interleaved per run.
 
-| Servers | Before: start median / p90 (ms) | After: start median / p90 (ms) | Before: backend request bytes | After: backend request bytes | After: Live session bytes |
+| Servers | Before: start median / p90 (ms), three rounds | After: start median / p90 (ms), three rounds | Before: backend request bytes | After: backend request bytes | Before / after: Live session bytes |
 | ---: | --- | --- | ---: | ---: | ---: |
-| 0 | 17.7 / 23.4, 17.1 / 21.5 | 17.8 / 24.3, 18.5 / 23.4 | 32,554 | 32,554 | 7,968 |
-| 8 | 18.4 / 23.5, 17.3 / 23.1 | 20.0 / 25.0, 21.0 / 26.2 | 32,554 | 46,519 | 8,661 |
-| 16 | 18.1 / 24.2, 18.0 / 24.2 | 20.0 / 25.1, 21.2 / 26.8 | 32,554 | 46,555 | 9,305 |
+| 0 | 41.7 / 53.0, 46.6 / 54.1, 46.3 / 52.7 | 45.5 / 58.9, 49.9 / 60.6, 50.9 / 57.3 | 32,554 | 32,554 | 7,968 / 7,968 |
+| 8 | 39.9 / 51.4, 46.4 / 52.0, 46.0 / 52.5 | 46.3 / 60.3, 51.6 / 63.4, 52.3 / 58.8 | 32,554 | 46,519 | 7,968 / 8,661 |
+| 16 | 42.4 / 53.3, 47.1 / 53.5, 46.0 / 53.1 | 48.8 / 62.2, 53.1 / 65.8, 52.0 / 58.4 | 32,554 | 46,555 | 7,968 / 9,305 |
 
-Before, approved servers never reach a call, so the bytes do not change with N.
-With added tools a start costs about 2–3 ms more, mostly the second write of
-the `session_start` record that names the snapshot; with none, the difference
-is within run-to-run noise. 32 selected tools add about 14 KB to every backend
-request. This slice claims no performance gain.
+The 0-server count alone (`--servers 0 --runs 300 --warmup 30`, five rounds
+alternating, 07:54–08:00 UTC, load average 3.6–6.5) gave before 41.0, 40.9,
+47.8, 46.8, 48.5 ms and after 45.3, 41.4, 46.1, 46.4, 49.2 ms: after minus
+before per round is +4.3, +0.5, −1.7, −0.4 and +0.7 ms, within run-to-run
+noise. The 0-server row of the shared run is slower because the 8- and
+16-server registries share its process.
+
+Before, approved servers never reach a call, so the bytes do not change with
+N. With 8 or 16 servers a start costs about 4–7 ms more than before at the same
+N, and 1–3 ms more than the same run's 0-server count. The snapshot record
+joins the start record's one existing rewrite, so it adds no write. 32 selected
+tools add about 14 KB to every backend request. This slice claims no
+performance gain.
 
 ### Deferred and residual
 

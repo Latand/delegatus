@@ -1,6 +1,6 @@
 /* Voice call start with 0, 8 and 16 approved added MCP servers (docs/design/voice-extensible-tools.md §4.8, slice 2).
 
-     bun scripts/benchmark-voice-tools-start.ts [--runs 60] [--warmup 10]
+     bun scripts/benchmark-voice-tools-start.ts [--runs 60] [--warmup 10] [--servers 0,8,16]
 
    Measures, in one process and against a private state directory:
    - the start route's work: `CompanionLiveSessions.start` with the documented fake Live provider, so no network time
@@ -68,7 +68,8 @@ function service(store: InstanceType<typeof VoiceToolsStore>) {
     memory: new CallMemory(storage, admission.records, async () => { throw new Error("NO_MODEL_IN_BENCHMARK"); }),
     ...(voiceTools ? { voiceTools: voiceTools as never } : {}) }) };
 }
-const counts = [0, 8, 16];
+// --servers 0 measures one count alone, apart from the work the larger registries add to the same process.
+const counts = process.argv.includes("--servers") ? process.argv[process.argv.indexOf("--servers") + 1].split(",").map(Number) : [0, 8, 16];
 const sides: Array<{ count: number } & ReturnType<typeof service>> = [];
 for (const count of counts) sides.push({ count, ...service(await registry(count)) });
 const latency = new Map<number, number[]>(counts.map(count => [count, []]));
