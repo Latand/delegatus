@@ -3,13 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, type SpawnOptionsWithoutStdio } from "node:child_process";
 import { AgentMemoryCell, planAgentMemory } from "@/lib/runtime/agentMemory";
+import { agentMemoryScopes, type AgentMemoryScopeInput } from "@/lib/runtime/agentMemorySettings";
 import { planAgentCpu } from "@/lib/runtime/cpuPlacement";
 import { setupInterpreter, type ReviewedSetupRecipe } from "@/lib/projects/setupRecipe";
 import type { ExecResult } from "@/lib/workflows/provision";
 import type { PipelineSandbox } from "./types";
 
 export type SetupExecution = (root: string, recipe: ReviewedSetupRecipe, sandbox: PipelineSandbox,
-  signal?: AbortSignal, authorize?: () => void) => Promise<ExecResult>;
+  signal?: AbortSignal, authorize?: () => void, memoryInput?: AgentMemoryScopeInput) => Promise<ExecResult>;
 
 // The scope launcher must die with the Viewer too. Bubblewrap then ends its
 // PID namespace, including detached work, even if the Viewer cannot run finally.
@@ -23,12 +24,13 @@ export type SetupExecutionPorts = {
 /** Setup gets no account credentials. Only its checkout and scratch are
  * writable. PID isolation reaps detached children when the command ends.
  * Unsupported hosts refuse before executing repository code. */
-export const executeSetupRecipe: SetupExecution = (root, recipe, sandbox, signal, authorize) =>
-  runSetupRecipe(root, recipe, sandbox, signal, authorize);
+export const executeSetupRecipe: SetupExecution = (root, recipe, sandbox, signal, authorize, memoryInput) =>
+  runSetupRecipe(root, recipe, sandbox, signal, authorize, undefined, memoryInput);
 
 export async function runSetupRecipe(root: string, recipe: ReviewedSetupRecipe, sandbox: PipelineSandbox,
   signal?: AbortSignal, authorize?: () => void,
-  ports: SetupExecutionPorts = { planMemory: planAgentMemory, planCpu: planAgentCpu }): Promise<ExecResult> {
+  ports: SetupExecutionPorts = { planMemory: planAgentMemory, planCpu: planAgentCpu },
+  memoryInput?: AgentMemoryScopeInput): Promise<ExecResult> {
   if (signal?.aborted) return { code: null, stdout: "", stderr: "setup cancelled" };
   if (process.platform !== "linux") throw new Error("project setup requires Linux filesystem isolation; no command was run");
   const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "delegatus-setup-"));
@@ -72,16 +74,25 @@ export async function runSetupRecipe(root: string, recipe: ReviewedSetupRecipe, 
     const { agentRegistry } = await import("@/lib/agent/registry");
     const liveAgents = Object.values(agentRegistry().readOnlySnapshot().entries)
       .filter(entry => entry.structuredHost && entry.status !== "dead" && entry.status !== "unhosted").length + 1;
-    const plan = ports.planMemory({ engine: "setup", sessionKey: root, liveAgents, cpu: ports.planCpu("work") });
+    const plan = ports.planMemory({ engine: "setup", sessionKey: root, liveAgents, cpu: ports.planCpu("work"),
+      memoryScopes: memoryInput ? agentMemoryScopes(memoryInput) : undefined });
     memory = plan ? new AgentMemoryCell(plan) : null;
+    let supervisorPython: string, supervisorSandbox: string;
+    try {
+      supervisorPython = await setupInterpreter("python3");
+      supervisorSandbox = await setupInterpreter("bwrap");
+    } catch (error) {
+      return { code: null, stdout: "", stderr: `setup isolation could not start; no command was run: ${error instanceof Error ? error.message : String(error)}` };
+    }
     authorize?.();
     if (signal?.aborted) return { code: null, stdout: "", stderr: "setup cancelled" };
     return await new Promise<ExecResult>((resolve) => {
       let stdout = "", stderr = "", bytes = 0, stopped = "";
       const base = (command: string, argv: string[], options: SpawnOptionsWithoutStdio) =>
-        spawn("python3", ["-I", "-S", "-c", parentDeath, String(process.pid), command, ...argv], { ...options, stdio: ["pipe", "pipe", "pipe"] });
+        spawn(supervisorPython, ["-I", "-S", "-c", parentDeath, String(process.pid), command, ...argv], { ...options, stdio: ["pipe", "pipe", "pipe"] });
       const start = memory?.wrapSpawn(base) ?? base;
-      const child = start("bwrap", args, { cwd: root, env: { NODE_ENV: process.env.NODE_ENV, PATH: process.env.PATH, HOME: process.env.HOME,
+      const child = start(supervisorSandbox, args, { cwd: root, env: { NODE_ENV: process.env.NODE_ENV,
+        PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", HOME: process.env.HOME,
         XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS } });
       child.stdin?.end();
       const stop = (reason: string) => { stopped ||= reason; child.kill("SIGKILL"); };

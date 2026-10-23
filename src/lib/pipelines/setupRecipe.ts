@@ -2,6 +2,7 @@ import { projectSetupRecipe, reviewSetupRecipe } from "@/lib/projects/setupRecip
 import path from "node:path";
 import { redactBounded } from "@/lib/monitor/redact";
 import { executeSetupRecipe, type SetupExecution } from "./setupExecution";
+import { PIPELINE_MEMORY_DEFAULT_ROLE } from "@/lib/runtime/agentMemorySettings";
 import type { Pipeline, PipelineStage, PipelineStageAttempt } from "./types";
 
 /** Runs in stage activation after CPU admission. An interrupted start is not
@@ -40,7 +41,16 @@ export async function preparePipelineSetup(pipeline: Pipeline, stage: PipelineSt
     authorize();
     await persist();
     authorize();
-    const result = await execute(pipeline.worktreeDir, reviewed, stage.sandbox ?? "full", signal, authorize);
+    const definition = attempt.definition;
+    const result = await execute(pipeline.worktreeDir, reviewed,
+      (definition ? definition.sandbox : stage.sandbox) ?? "full", signal, authorize, {
+        cwd: pipeline.worktreeDir, project: pipeline.project,
+        role: attempt.effectiveRole.roleId ?? PIPELINE_MEMORY_DEFAULT_ROLE,
+        profile: {
+          agentMemoryMaxBytes: definition ? definition.agentMemoryMaxBytes : stage.agentMemoryMaxBytes,
+          agentMemoryRoleParams: definition ? definition.role?.params : stage.role?.params,
+        },
+      });
     assertCurrent?.();
     attempt.setup.code = result.code;
     attempt.setup.stdout = redactBounded(result.stdout, 16_000);

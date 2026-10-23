@@ -5,7 +5,7 @@ import net from "node:net";
 import { AgentMemoryCell } from "@/lib/runtime/agentMemory";
 import type { AgentCpuPlan } from "@/lib/runtime/cpuPlacement";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
 import { descendantPids } from "@/lib/proc/memory";
@@ -130,6 +130,40 @@ test.skipIf(process.platform !== "linux")("Python ignores adjacent module shadow
   expect(fs.existsSync(path.join(directory, "injected"))).toBe(false);
 });
 
+test.skipIf(process.platform !== "linux")("prototype-named scripts execute the immutable reviewed snapshot", async () => {
+  const directory = fs.mkdtempSync(path.join(root, "prototype-script-"));
+  fs.writeFileSync(path.join(directory, "__proto__"), "printf reviewed");
+  const approved = await reviewSetupRecipe(directory, { command: ["sh", "__proto__"], cwd: "." });
+  fs.writeFileSync(path.join(directory, "__proto__"), "printf wrong > injected; printf unreviewed");
+  const result = await executeSandboxRecipe(directory, approved, "restricted");
+  if (requireExecution(result)) expect(result.stdout).toBe("reviewed");
+  expect(fs.existsSync(path.join(directory, "injected"))).toBe(false);
+});
+
+for (const tool of ["python3", "bwrap"] as const) {
+  test.skipIf(process.platform !== "linux")(`the supervisor ignores checkout helper shadows (${tool})`, async () => {
+    const directory = fs.mkdtempSync(path.join(root, "helper-shadow-"));
+    const sentinel = path.join(root, `helper-${tool}-sentinel`); fs.writeFileSync(sentinel, "preserved");
+    let actual: string;
+    try { actual = await setupInterpreter(tool); }
+    catch (error) {
+      expect(String(error)).toContain("setup interpreter is unavailable");
+      expect(process.env.SETUP_REQUIRE_ISOLATION).not.toBe("1");
+      return;
+    }
+    fs.writeFileSync(path.join(directory, tool), `#!/usr/bin/python3\nimport os,sys\nopen(${JSON.stringify(sentinel)},"w").write("unreviewed")\nos.execv(${JSON.stringify(actual)},[${JSON.stringify(actual)},*sys.argv[1:]])\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(directory, "setup.sh"), "printf reviewed");
+    const recipe = await reviewSetupRecipe(directory, { command: ["sh", "setup.sh"], cwd: "." });
+    const prior = process.env.PATH;
+    process.env.PATH = `.${path.delimiter}${prior ?? "/usr/bin:/bin"}`;
+    try {
+      const result = await executeSandboxRecipe(directory, recipe, "restricted");
+      if (requireExecution(result)) expect(result.stdout).toBe("reviewed");
+      expect(fs.readFileSync(sentinel, "utf8")).toBe("preserved");
+    } finally { if (prior === undefined) delete process.env.PATH; else process.env.PATH = prior; }
+  });
+}
+
 test.skipIf(process.platform !== "linux")("Bun ignores checkout preload config added after approval", async () => {
   const directory = fs.mkdtempSync(path.join(root, "bun-"));
   fs.writeFileSync(path.join(directory, "setup.ts"), 'if (process.env.SETUP_DOTENV) throw new Error("unreviewed environment"); console.log("reviewed")');
@@ -190,17 +224,25 @@ test.skipIf(process.platform !== "linux")("Bun executes a reviewed file whose na
 
 test.skipIf(process.platform !== "linux")("frozen Bun installation retains its package-manager dispatch", async () => {
   const directory = fs.mkdtempSync(path.join(root, "bun-install-"));
-  const manifest = { name: "setup-fixture", version: "0.0.0", scripts: { postinstall: "printf reviewed > installed" } };
-  fs.writeFileSync(path.join(directory, "package.json"), JSON.stringify(manifest));
-  // Bun removes empty generated locks; seed the reviewed frozen input directly.
-  fs.writeFileSync(path.join(directory, "bun.lock"), JSON.stringify({ lockfileVersion: 1, configVersion: 1,
-    workspaces: { "": { name: manifest.name } }, packages: {} }));
-  expect(fs.existsSync(path.join(directory, "installed"))).toBe(false);
-  const approved = await reviewSetupRecipe(directory, { command: ["bun", "install", "--frozen-lockfile"], cwd: "." });
-  fs.writeFileSync(path.join(directory, "package.json"), JSON.stringify({ ...manifest, scripts: { postinstall: "printf unreviewed > injected" } }));
-  const result = await executeSandboxRecipe(directory, approved, "restricted");
-  if (requireExecution(result)) expect(fs.readFileSync(path.join(directory, "installed"), "utf8")).toBe("reviewed");
-  expect(fs.existsSync(path.join(directory, "injected"))).toBe(false);
+  const pkg = path.join(directory, "archive/package"); fs.mkdirSync(pkg, { recursive: true });
+  fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ name: "setup-fixture-dependency", version: "1.0.0" }));
+  const archive = execFileSync("tar", ["--format=ustar", "--sort=name", "--mtime=@0", "--owner=0", "--group=0", "--numeric-owner",
+    "-czf", "-", "-C", path.dirname(pkg), "package"]);
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(new Uint8Array(archive)) });
+  try {
+    const manifest = { name: "setup-fixture", version: "0.0.0", dependencies: { "setup-fixture-dependency": `http://127.0.0.1:${server.port}/dependency.tgz` },
+      scripts: { postinstall: "printf reviewed > installed" } };
+    fs.writeFileSync(path.join(directory, "package.json"), JSON.stringify(manifest));
+    const seed = Bun.spawn([process.execPath, "install", "--lockfile-only", "--ignore-scripts"], { cwd: directory, env: process.env, stdout: "pipe", stderr: "pipe" });
+    const [code, , stderr] = await Promise.all([seed.exited, new Response(seed.stdout).text(), new Response(seed.stderr).text()]);
+    expect(code, stderr).toBe(0);
+    expect(fs.existsSync(path.join(directory, "installed"))).toBe(false);
+    const approved = await reviewSetupRecipe(directory, { command: ["bun", "install", "--frozen-lockfile"], cwd: "." });
+    fs.writeFileSync(path.join(directory, "package.json"), JSON.stringify({ ...manifest, scripts: { postinstall: "printf unreviewed > injected" } }));
+    const result = await executeSandboxRecipe(directory, approved, "full");
+    if (requireExecution(result)) expect(fs.readFileSync(path.join(directory, "installed"), "utf8")).toBe("reviewed");
+    expect(fs.existsSync(path.join(directory, "injected"))).toBe(false);
+  } finally { await server.stop(true); }
 });
 
 test.skipIf(process.platform !== "linux")("restricted setup cannot reach an owned loopback listener while full setup can", async () => {
@@ -226,25 +268,38 @@ test.skipIf(process.platform !== "linux")("setup launches through the memory cel
   const recipe = await reviewSetupRecipe(directory, { command: ["sh", "setup.sh"], cwd: "." });
   const cpu: AgentCpuPlan = { workload: "work", slice: "delegatus-agents-work.slice", weight: 100, quotaPercent: 300, periodMs: 20, systemdVersion: 255 };
   const original = AgentMemoryCell.prototype.wrapSpawn;
+  const priorPath = process.env.PATH;
+  process.env.PATH = `.${path.delimiter}${priorPath ?? "/usr/bin:/bin"}`;
   let wrapped = 0, launched = 0;
   // Keep real process and sandbox coverage while observing the cell boundary.
   // Scope command generation is covered by agentMemory's own tests.
   AgentMemoryCell.prototype.wrapSpawn = function(base) {
     wrapped++; expect(this.plan.mechanism).toBe("scope"); expect(this.plan.cpu).toBe(cpu); expect(this.plan.limitBytes).toBe(512 * 1024 * 1024);
-    return (command, args, options) => { launched++; return base!(command, args, options); };
+    return (command, args, options) => {
+      launched++;
+      expect(options?.env?.PATH?.split(path.delimiter).every(directory => directory.startsWith("/usr/") || ["/bin", "/sbin"].includes(directory))).toBe(true);
+      return base!(command, args, options);
+    };
   };
   try {
     const result = await runSetupRecipe(directory, recipe, "restricted", undefined, undefined, {
       planCpu: workload => { expect(workload).toBe("work"); return cpu; },
       planMemory: input => {
         expect(input.cpu).toBe(cpu); expect(input.engine).toBe("setup"); expect(input.sessionKey).toBe(directory);
+        expect(input.memoryScopes?.stage).toBe(2 * 1024 ** 3);
         return { mechanism: "scope", mode: "scope", platform: "linux", limitBytes: 512 * 1024 * 1024, budgetBytes: 1024 ** 3,
           reserveBytes: 0, totalBytes: 2 * 1024 ** 3, score: 500, unit: "setup-fixture.scope", slice: "delegatus-agents.slice", viewerUnit: null, systemdVersion: 255, cpu: input.cpu };
       },
-    });
+    }, { cwd: directory, project: "setup-scope-project", role: "builder", profile: { agentMemoryMaxBytes: 2 * 1024 ** 3 } });
+    if (result.stderr.startsWith("setup isolation could not start; no command was run:")) {
+      expect(wrapped).toBe(0); expect(launched).toBe(0); requireExecution(result); return;
+    }
     expect(wrapped).toBe(1); expect(launched).toBe(1);
     if (requireExecution(result)) expect(result.stdout).toBe("scoped");
-  } finally { AgentMemoryCell.prototype.wrapSpawn = original; }
+  } finally {
+    AgentMemoryCell.prototype.wrapSpawn = original;
+    if (priorPath === undefined) delete process.env.PATH; else process.env.PATH = priorPath;
+  }
 });
 
 test.skipIf(process.platform !== "linux")("node is resolved from PATH including system locations outside usr bin", async () => {
@@ -258,7 +313,7 @@ test.skipIf(process.platform !== "linux")("node is resolved from PATH including 
   if (requireExecution(result)) expect(result.stdout.trim()).toBe("resolved node");
 });
 
-test.skipIf(process.platform !== "linux")("missing Bubblewrap refuses before repository effects across Python diagnostics", async () => {
+test.skipIf(process.platform !== "linux")("missing trusted Bubblewrap refuses before repository effects", async () => {
   const directory = fs.mkdtempSync(path.join(root, "missing-isolation-"));
   const bin = path.join(directory, "bin"); fs.mkdirSync(bin);
   for (const name of ["sh", "python3"]) fs.symlinkSync(await setupInterpreter(name), path.join(bin, name));

@@ -47,7 +47,8 @@ The pipeline reads this setting before its first builder, after the stage's CPU
 admission and outside the controller mutation lease. The existing bounded
 controller jobs own setup by activation, so a running setup leaves controller
 ticks and other lanes free to advance. Setup uses the work CPU
-scope and the agent memory policy. It runs in the new pipeline checkout, with
+scope and the agent memory policy, including project, role and bound stage
+memory caps. It runs in the new pipeline checkout, with
 private HOME, configuration, state and temporary directories. It receives no
 account credentials. System tools are read-only; only the checkout and private
 scratch are writable. Restricted stages also have isolated networking. This

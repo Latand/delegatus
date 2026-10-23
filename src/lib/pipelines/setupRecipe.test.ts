@@ -74,6 +74,27 @@ test("changed script, command, missing script and unusable settings refuse befor
   expect(() => projectSetupRecipe(lane.project)).toThrow("unreadable");
 });
 
+test("setup retains the bound sandbox and memory profile, with Builder as the roleless default", async () => {
+  await approve();
+  for (const roleId of ["builder", null] as const) {
+    const current = attempt(); current.effectiveRole.roleId = roleId;
+    const params = roleId ? { memory: 2 } : undefined;
+    current.definition = { boundAt: now(), stageDigest: "bound-stage", prompt: "Setup fixture", account: null,
+      role: roleId ? { roleId, params } : null, sandbox: "restricted", outputs: null, agentMemoryMaxBytes: 2 * 1024 ** 3 };
+    let calls = 0;
+    await preparePipelineSetup(lane, { ...stage, sandbox: "full", agentMemoryMaxBytes: 8 * 1024 ** 3,
+      role: { roleId: "builder", params: { memory: 8 } } }, current, now, () => {},
+    async (_cwd, _reviewed, sandbox, _signal, _authorize, memoryInput) => {
+      calls++;
+      expect(sandbox).toBe("restricted");
+      expect(memoryInput).toEqual({ cwd: root, project: lane.project, role: "builder",
+        profile: { agentMemoryMaxBytes: 2 * 1024 ** 3, agentMemoryRoleParams: params } });
+      return { code: 0, stdout: "ready", stderr: "" };
+    });
+    expect(calls).toBe(1);
+  }
+});
+
 test("failed output is retained, a fresh attempt retries, and approval revocation during preparation refuses", async () => {
   await approve();
   const first = attempt(); lane.runs[0]!.attempts.push(first);
@@ -118,6 +139,16 @@ test("every named script is pinned, and cwd is part of the approval", async () =
   fs.mkdirSync(path.join(root, "subdir"));
   fs.writeFileSync(path.join(root, "subdir/setup.sh"), "echo ready\n");
   expect((await reviewSetupRecipe(root, { ...recipe, cwd: "subdir" })).hash).not.toBe((await reviewSetupRecipe(root, recipe)).hash);
+});
+
+test("prototype-named scripts remain pinned to their captured bytes", async () => {
+  const input = { command: ["sh", "__proto__"], cwd: "." };
+  fs.writeFileSync(path.join(root, "__proto__"), "echo reviewed\n");
+  const first = await reviewSetupRecipe(root, input);
+  expect(Object.keys(first.files)).toEqual(["__proto__"]);
+  fs.writeFileSync(path.join(root, "__proto__"), "echo changed\n");
+  expect((await reviewSetupRecipe(root, input)).hash).not.toBe(first.hash);
+  expect(first.files["__proto__"]!.toString()).toBe("echo reviewed\n");
 });
 
 test("approval is rechecked at the final dispatch seam and superseded activations cannot start", async () => {

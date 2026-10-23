@@ -86,7 +86,7 @@ export async function reviewSetupRecipe(root: string, value: unknown): Promise<R
   if (install && recipe.cwd !== ".") throw new Error("frozen setup installs require the repository root");
   const cwd = await setupPath(root, recipe.cwd);
   if (!(await fs.stat(cwd)).isDirectory()) throw new Error("setup cwd must be a directory");
-  const files: Record<string, Buffer> = {};
+  const files: Record<string, Buffer> = Object.create(null);
   const candidates = recipe.command[1] === "install"
     ? ["package.json", "bun.lock", "bun.lockb"] : recipe.command.slice(1);
   for (const candidate of candidates) {
