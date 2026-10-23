@@ -9,6 +9,7 @@ import type { AttentionNotice, AttentionRequestV1, AttentionState, FocusResoluti
 import { MAX_ECHOED_IDS } from "@/lib/attention/targetRecords";
 import { applyPipelineSnapshot, applyTaskSnapshot, revertPipelineSnapshot } from "@/hooks/useFiles";
 import { publishNotices } from "@/components/attention/phoneNotices";
+import { cleanTitle } from "@/lib/title";
 
 /**
  * The client half of #688's ask-accept-decline-return loop.
@@ -370,7 +371,7 @@ export function useAttentionOffers({
        learns it was shown — so a hidden tab stays as silent as it is honest. The
        request id is the identity: this poll runs every few seconds and the offer
        stays in the record until it is answered. */
-    playCue({ cue: "your-move", eventId: `attention:${pending.request.id}`, obligation: `attention:${pending.request.id}` });
+    playCue({ cue: "your-move", eventId: `attention:${pending.request.id}`, obligation: `attention:${pending.request.id}`, caption: { what: "attention", subject: cleanTitle(pending.request.reason, 90) || null, target: null } });
     await post(pending.request.id, { kind: "offer", deviceId });
     const second = await read();
     if (second) noteWithdrawals(applyPushedRecords(second.records, appliedRecords.current));
