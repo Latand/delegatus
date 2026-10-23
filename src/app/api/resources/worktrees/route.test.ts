@@ -21,6 +21,29 @@ const read = (query = "", headers = {}) => GET(new NextRequest(`http://localhost
   headers: { Host: "localhost", Origin: "http://localhost", ...headers },
 }));
 
+test("route configuration loads under Node without opening SQLite or state", async () => {
+  const build = await Bun.build({
+    entrypoints: [path.join(import.meta.dir, "route.ts")],
+    outdir: path.join(root, "bundle"), target: "node", format: "cjs", external: ["next/*", "bun:*"],
+  });
+  expect(build.success).toBe(true);
+  const node = process.env.LLV_TEST_NODE_BIN || Bun.which("node");
+  if (!node) throw new Error("route configuration check requires Node on PATH");
+  const state = path.join(root, "state");
+  const probe = Bun.spawn([node, "-e", `
+    const route = require(process.argv[1]);
+    if (route.runtime !== "nodejs" || route.dynamic !== "force-dynamic" || typeof route.GET !== "function")
+      throw new Error("missing route configuration");
+  `, build.outputs[0]!.path], {
+    env: { ...process.env, NODE_PATH: path.resolve("node_modules"), NODE_ENV: "production",
+      HOME: root, XDG_CONFIG_HOME: path.join(root, "config"), LLV_STATE_DIR: state, TMPDIR: root },
+    stdout: "pipe", stderr: "pipe",
+  });
+  const [exit, error] = await Promise.all([probe.exited, new Response(probe.stderr).text()]);
+  expect({ exit, error }).toEqual({ exit: 0, error: "" });
+  expect(fs.existsSync(state)).toBe(false);
+});
+
 test("authorized first and subsequent pages are no-store and contain no raw checkout or detail paths", async () => {
   const at = "2026-10-23T10:00:00.000Z";
   recordWorktreeSweep({ at, mode: "dry-run", repositories: [root], kept: Array.from({ length: 5 }, (_, i) => ({
