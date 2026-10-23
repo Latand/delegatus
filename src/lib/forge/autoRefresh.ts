@@ -10,10 +10,15 @@ export type RefreshOptions = {
   refreshOf: { pipelineId: string; base: string; lineage: RefreshLineage };
 };
 
-/** Admission at a fresh conflict read; an old blocked record starts no work. */
+/** Admission at a fresh conflict or BEHIND read; an old block starts no work. */
 export function refreshAdmission(lane: Pipeline, pipelines: readonly Pipeline[], setting: MergeOnReviewSetting): boolean {
   const delivery = lane.delivery;
   const merge = lane.merge;
+  const current = pipelines.find(candidate => candidate.id === lane.id);
+  if (!current || current.lastPassedCommit !== lane.lastPassedCommit || current.merge?.updatedAt !== merge?.updatedAt
+    || current.delivery?.target.branch !== delivery?.target.branch || current.delivery?.target.remote !== delivery?.target.remote
+    || current.delivery?.target.repository !== delivery?.target.repository || current.delivery?.target.pr !== delivery?.target.pr
+    || current.delivery?.active || current.delivery?.disposition !== "owner" || !mergeEligible(current)) return false;
   if (!setting.enabled || !mergeEligible(lane) || !delivery || delivery.disposition !== "owner" || delivery.active
     || !merge?.prNumber || merge.refresh?.attempt === merge.attempts) return false;
   return !pipelines.some((other) => {
@@ -40,7 +45,7 @@ export function refreshRequest(lane: Pipeline, legacyBase = "main"): CreatePipel
   const base = refresh.baseBranch ?? legacyBase;
   const facts = `PR #${merge.prNumber}; finished lane ${lane.id}; base ${base} at ${refresh.base}; reviewed head ${refresh.head}; delivery ${target.branch}.`;
   return {
-    task: `#${merge.prNumber} ${lane.task.split("\n")[0]!.slice(0, 60)}: merge current ${base}, resolve the conflict, review the resolution only`,
+    task: `#${merge.prNumber} ${lane.task.split("\n")[0]!.slice(0, 60)}: merge current ${base}, review the merge resolution only`,
     taskIds: lane.taskIds,
     finishesTask: lane.finishesTaskIds ?? false,
     repoDir: lane.repoDir,
@@ -48,7 +53,7 @@ export function refreshRequest(lane: Pipeline, legacyBase = "main"): CreatePipel
     delivery: { branch: target.branch, remote: target.remote, pr: merge.prNumber! },
     publication: "remote-branch",
     autoStart: true,
-    spec: `Automatic refresh is authorized for conflicts with the PR base branch.
+    spec: `Automatic refresh is authorized for a PR behind or in conflict with its base branch.
 A content-preserving refresh from ${base} gets one review of the resolution only.
 ${facts}
 Both sides keep their behaviour. Commits use the enforced Delegatus machine identity plus the engine's noreply Co-Authored-By trailer. Never rebase, force-push or call GitHub update-branch. A semantic conflict parks needs_decision with its file:line and @@ hunk. Review only the resolution. The project's checks must pass.`,

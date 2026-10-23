@@ -160,10 +160,13 @@ alias the operator defined with `gh alias set` is not expanded.
   asks for a credential before any hook runs, which is why this is done in
   front of `git` and not in `pre-push`. A push the shim cannot start the helper
   for is refused. A git alias that stands for `push` is not expanded.
-- **The engine** (`src/lib/forge/autoMerge.ts`) merges and updates a branch
-  through `AutoMergePorts.write`: `forgeAppWriter` for a declared repository,
+- **The engine** (`src/lib/forge/autoMerge.ts`) merges through
+  `AutoMergePorts.write`: `forgeAppWriter` for a declared repository,
   the plain `gh` runner for any other. A refusal blocks the merge with the
-  refusal as its reason. The push that publishes a lane's branch
+  refusal as its reason. A behind or conflicting branch refreshes through an
+  owned pipeline that merges the base locally under the enforced machine
+  identity and publishes through the gate; the runner never calls GitHub
+  update-branch. The push that publishes a lane's branch
   (`src/lib/pipelines/git.ts`) and the push and `gh pr create` that finish a
   workflow (`src/lib/workflows/provision.ts`) run with `engineForgeWriteEnv()`,
   the same push rewrite and the same `gh` and `git` shims.
