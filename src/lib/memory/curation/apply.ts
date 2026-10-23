@@ -6,6 +6,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { ROLE_IDS } from "@/lib/roles/types";
 import { roleIsClean } from "../eligibility";
+import { swarmRulesEnabled } from "../settings";
+import { swarmRulesForRole } from "../swarmPack";
 import { archivedRule, lettersAndDigits, scopeChars } from "../roleConsolidate";
 import { taskIdentifier } from "../roleStage";
 import { assertGenericRule, problemInput } from "../roleProblems";
@@ -165,7 +167,13 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
       const rule = dispose(item.id, true);
       if (moved.has(item.id) || mergedTargets.has(item.id) || !reasons.includes(item.reason)) refuse("CURATE_PARTITION", "archive needs one valid disposition");
       note(item.note);
-      if (item.reason === "in-code" || item.reason === "in-instructions" || item.where) evidence(pass.repoDir, item.where);
+      if (item.where?.startsWith("swarm:")) {
+        const role = scopeRole(rule.scope);
+        if (item.reason !== "in-instructions" || !swarmRulesEnabled() || !role
+          || !swarmRulesForRole(role).some(entry => item.where === `swarm:${entry.id}`)) {
+          refuse("CURATE_EVIDENCE", "swarm evidence requires in-instructions and an entry for this role in the receiving pack");
+        }
+      } else if (item.reason === "in-code" || item.reason === "in-instructions" || item.where) evidence(pass.repoDir, item.where);
       if ((item.reason === "contradicted" || item.reason === "duplicate") && !item.against) refuse("CURATE_INVALID", "contradiction or duplicate needs an active counterpart");
       work.set(item.id, { ...archivedRule(rule, now, item.reason, true), note: item.note, where: item.where, against: item.against });
     }

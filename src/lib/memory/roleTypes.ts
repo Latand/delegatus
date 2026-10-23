@@ -32,7 +32,7 @@ export function lessonTextLength(value: string): number {
   return [...lessonText(value)].length;
 }
 
-export type ScopeKind = "role" | "project" | "machine";
+export type ScopeKind = "role" | "swarm" | "project" | "machine";
 
 export type RuleState = "active" | "merged" | "archived";
 export type CuratorReason = "task-specific" | "stale" | "in-code" | "in-instructions" | "no-reader" | "contradicted" | "duplicate" | "problem";
@@ -228,7 +228,7 @@ export interface LessonRequestRow {
 export type RoleMemoryRow = RoleMemoryRule | RoleMemoryScopeRow | LessonRequestRow;
 
 export interface LessonInput {
-  scope: ScopeKind;
+  scope: Exclude<ScopeKind, "swarm">;
   /** With scope role: the role the rule is for, when it is not the writer's own. */
   role?: string;
   rule: string;

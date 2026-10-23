@@ -9,7 +9,7 @@ import { assertGenericRule, problemInput } from "./roleProblems";
 import { scopeKind } from "./roleScopes";
 import { roleMemoryEnabled, roleMemorySelectorEnabled } from "./settings";
 import { operatorMemoryEnabled } from "./operatorMemory";
-import { lessonText, lessonTextLength, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS, type LessonInput, type ScopeKind, type RewriteInput, type ProblemInput } from "./roleTypes";
+import { lessonText, lessonTextLength, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS, type LessonInput, type RewriteInput, type ProblemInput } from "./roleTypes";
 
 /* The three points where role memory meets a pipeline stage: the selector at
    spawn, the request in the answer to an accepted stage_report, and the
@@ -114,7 +114,7 @@ export function parseLessons(args: LessonAnswerArgs, writerRole: string | null):
     assertGenericRule(rule, "role");
     return { lessons: [], none: null, rewrite: { id: text(item.id, "id", 1, 128), rule, why } };
   }
-  const scope = item.scope as ScopeKind;
+  const scope = item.scope as LessonInput["scope"];
   if (!["role", "project", "machine"].includes(scope)) throw new RoleMemoryRefusal("LESSON_INVALID", "lesson.scope must be role, project or machine");
   assertGenericRule(rule, scope);
   let role: string | undefined;

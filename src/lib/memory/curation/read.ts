@@ -9,7 +9,9 @@ import { canonicalScope, projectViewAsync, RoleMemoryRefusal } from "../roleStor
 import { isCrossProjectRoleScope, scopeRole, scopeProject } from "../roleScopes";
 import { scopeChars } from "../roleConsolidate";
 import { ROLE_MEMORY_BOUND } from "../roleTypes";
-import { otherProjectRoleRules, roleScopeReadMetadata } from "../roleViewSource";
+import { otherProjectRoleRules, roleScopeReadMetadata, ruleUsageCounts } from "../roleViewSource";
+import { swarmRulesForRole } from "../swarmPack";
+import { swarmRulesEnabled } from "../settings";
 import type { CuratorPass } from "./store";
 
 const PAGE_BYTES = 24_000;
@@ -58,7 +60,10 @@ async function readRuleCuration(pass: CuratorPass, scope?: string, cursor?: stri
   ];
   entries.sort((a, b) => Number(!!b.operatorCorrection && b.newSincePass === true) - Number(!!a.operatorCorrection && a.newSincePass === true));
   if (role && !isCrossProjectRoleScope(resolvedScope)) entries.push(...otherProjectRoleRules(resolvedScope).map(row => ({ kind: "other-project", id: row.id, scope: canonicalScope(row.scope), rule: row.rule, why: row.why, readOnly: true })));
-  const meta = { pass: pass.id, scope: resolvedScope, revision, chars: rules?.chars ?? scopeChars([]), bound: ROLE_MEMORY_BOUND, attempts, scaffold };
+  const usage = ruleUsageCounts(entries.map(entry => String(entry.id)));
+  for (const entry of entries) Object.assign(entry, usage[String(entry.id)] ?? { applied: 0, misled: 0 });
+  const meta = { pass: pass.id, scope: resolvedScope, revision, chars: rules?.chars ?? scopeChars([]), bound: ROLE_MEMORY_BOUND, attempts, scaffold,
+    ...(swarmRulesEnabled() ? { swarmReceiving: true, swarm: role ? swarmRulesForRole(role).map(({ id, rule }) => ({ id, rule, readOnly: true })) : [] } : {}) };
   const page: Record<string, unknown>[] = [];
   let bytes = Buffer.byteLength(JSON.stringify(meta)) + 512;
   while (offset + page.length < entries.length) {

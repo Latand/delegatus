@@ -6,6 +6,13 @@ import { writeJsonDurably } from "@/lib/state/durableJson";
 import { withFileTransactionSync } from "@/lib/state/fileTransaction";
 import metadata from "../../../package.json";
 import { memorySource } from "./source";
+import { preferences } from "@/lib/telemetry/store";
+
+/** Receiving public release text does not depend on install-ping consent. */
+export function swarmRulesEnabled(): boolean {
+  try { return roleMemoryEnabled() && preferences().swarmRules; }
+  catch { return false; }
+}
 
 /** The operator opted this repository in; every other project starts closed. */
 const ownProject = projectIdentityFromRemote(metadata.repository.url.replace(/^git\+/, ""), "/")?.project;
