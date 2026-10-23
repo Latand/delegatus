@@ -48,6 +48,7 @@ type FeedSources = {
 };
 type FeedTask = ReturnType<typeof loadTasksForList>[number];
 type TaskMatch = { task: FeedTask; order: number };
+type PipelineAttemptMatch = { pipeline: Pipeline; stageId: string; attempt: Pipeline["runs"][number]["attempts"][number] };
 const firstTask = (left: TaskMatch | undefined, right: TaskMatch | undefined) =>
   !left ? right : !right || left.order < right.order ? left : right;
 
@@ -78,6 +79,18 @@ function taskLookup(tasks: readonly FeedTask[]) {
   };
 }
 
+function pipelineAttemptLookup(pipelines: readonly Pipeline[]) {
+  const conversations = new Map<string, PipelineAttemptMatch>();
+  const paths = new Map<string, PipelineAttemptMatch>();
+  for (const pipeline of pipelines) for (const run of pipeline.runs) for (const attempt of run.attempts) {
+    const match = { pipeline, stageId: run.stageId, attempt };
+    if (typeof attempt.conversationId === "string" && !conversations.has(attempt.conversationId)) conversations.set(attempt.conversationId, match);
+    if (typeof attempt.agentPath === "string" && !paths.has(attempt.agentPath)) paths.set(attempt.agentPath, match);
+  }
+  return (conversationId: string | undefined, path: string) =>
+    conversationId === undefined ? paths.get(path) : conversations.get(conversationId) ?? paths.get(path);
+}
+
 /** SQLite selects only requested paths; plain snapshots build one path map.
     Last owner wins as before, while any owner's newest generation makes a
     path current for duplicate-transcript selection. */
@@ -104,14 +117,16 @@ function conversationLookup(snapshot: FeedSnapshot) {
 
 function rowFor(file: FileEntry, tasks: ReturnType<typeof taskLookup>, projects: ReadonlySet<string>,
   snapshot: FeedSnapshot, conversation: RegistryFile["conversations"][string] | undefined,
-  pipelines: ReadonlyMap<string, Pipeline>, seats: ReadonlyMap<string, string>, canonical: (project: string) => string): AgentRow | null {
+  pipelines: ReadonlyMap<string, Pipeline>, attemptFor: ReturnType<typeof pipelineAttemptLookup>, seats: ReadonlyMap<string, string>, canonical: (project: string) => string): AgentRow | null {
   if (!AGENT_ENGINES.has(file.engine)) return null;
   const conversationId = conversation?.id ?? file.conversationId;
   const identity = conversationId ?? file.path;
   if (!identity) return null;
   const task = tasks.assigned(conversationId, file.path);
   const membership = (conversationId ? snapshot.memberships[conversationId] : undefined)?.find((item) => item.kind === "pipeline" && item.containerId && item.stageId);
-  const pipeline = membership ? pipelines.get(membership.containerId!) : null;
+  const attemptMatch = attemptFor(conversationId, file.path);
+  const pipeline = membership ? pipelines.get(membership.containerId!) : attemptMatch?.pipeline;
+  const stageId = membership?.stageId ?? attemptMatch?.stageId;
   const boundTask = task ?? (pipeline ? tasks.pipeline(pipeline) : undefined);
   const p = canonical(boundTask?.project ?? file.project);
   const seat = !!conversationId && seats.get(p) === conversationId;
@@ -121,8 +136,9 @@ function rowFor(file: FileEntry, tasks: ReturnType<typeof taskLookup>, projects:
   if (!seat && file.proc !== "running" && Date.now() - at > 86_400_000) return null;
   const engine = safeId(file.engine)!;
   const model = safeId(file.launchModel) ?? safeId(file.model) ?? "unknown";
-  const stage = pipeline?.stages.find((item) => item.id === membership?.stageId);
-  const attempt = pipeline?.runs.find((run) => run.stageId === stage?.id)?.attempts.find((item) => typeof conversationId === "string" && typeof item.conversationId === "string" && item.conversationId === conversationId || item.agentPath === file.path);
+  const stage = pipeline?.stages.find((item) => item.id === stageId);
+  const attempt = attemptMatch && attemptMatch.pipeline === pipeline && attemptMatch.stageId === stageId ? attemptMatch.attempt
+    : pipeline?.runs.find((run) => run.stageId === stage?.id)?.attempts.find((item) => typeof conversationId === "string" && typeof item.conversationId === "string" && item.conversationId === conversationId || item.agentPath === file.path);
   /* The whole first line is checked before it is cut, so a lesson it quotes is withheld whole. */
   const title = seat ? "orchestrator" : boundTask?.chosen ? boundTask.text.split(/\r?\n|\r/, 1)[0]!
     : stage ? `${safeId(stage.id) ?? "Pipeline"} stage` : `${role ?? engine} agent`;
@@ -221,12 +237,13 @@ export class AgentFeed {
     const taskFor = taskLookup(candidates.length ? tasks : []);
     const pipelineById = new Map<string, Pipeline>();
     for (const pipeline of pipelines ?? []) if (!pipelineById.has(pipeline.id)) pipelineById.set(pipeline.id, pipeline);
+    const attemptFor = pipelineAttemptLookup(pipelines ?? []);
     const next = new Map<string, AgentRow>();
     const selectedPaths = new Map<string, string>();
     for (const file of candidates) {
       const matched = resolvePath(file.path);
       const conversation = matched.conversation ?? (file.conversationId ? snapshot.conversations[file.conversationId] : undefined);
-      const row = rowFor(file, taskFor, projects, snapshot, conversation, pipelineById, seats, canonical);
+      const row = rowFor(file, taskFor, projects, snapshot, conversation, pipelineById, attemptFor, seats, canonical);
       if (row) {
         const previous = next.get(row.k);
         const previousPath = selectedPaths.get(row.k);
