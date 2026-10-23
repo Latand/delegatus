@@ -9,6 +9,7 @@ import type { VoiceBackingHost } from "@/hooks/useCodexRealtime";
 
 
 import { viewBus } from "@/hooks/viewPresenceBus";
+import { attachVoiceOutput, detachVoiceOutput, openVoiceMicrophone, releaseVoiceMicrophone } from "@/lib/audio/voiceDevices";
 import { rememberMicGrant } from "@/lib/micPermission";
 import { viewerSelectedContext } from "@/lib/selection/viewerSelectedContext";
 
@@ -582,8 +583,8 @@ class CodexRealtimeClient {
     });
     const epoch = ++this.epoch;
     try {
-      const media = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      const { stream: media } = await openVoiceMicrophone({
+        echoCancellation: true, noiseSuppression: true, autoGainControl: true,
       });
       rememberMicGrant();
       const peer = new RTCPeerConnection();
@@ -592,6 +593,7 @@ class CodexRealtimeClient {
       audio.autoplay = true;
       audio.hidden = true;
       document.body.append(audio);
+      attachVoiceOutput(audio);
 
       this.media = media;
       this.peer = peer;
@@ -1308,6 +1310,8 @@ class CodexRealtimeClient {
     this.events?.close();
     this.peer?.close();
     for (const track of this.media?.getTracks() ?? []) track.stop();
+    if (this.media) releaseVoiceMicrophone(this.media);
+    if (this.audio) detachVoiceOutput(this.audio);
     this.audio?.remove();
     this.events = null;
     this.peer = null;

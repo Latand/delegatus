@@ -61,7 +61,7 @@ function installRuntime(configure: (child: FakeChild) => void = () => {}): FakeC
     const child = new FakeChild();
     configure(child);
     children.push(child);
-    return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
+    return CodexAppServerClient.start({ launchBinary: "/fixture/codex", readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
   } }));
   return children;
 }

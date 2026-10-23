@@ -1,7 +1,8 @@
 # Keeping Delegatus running and up to date
 
 This page covers updates, automatic updates, running a checkout under a user
-service, and the memory and CPU limits for agents. Docker has its own runbook,
+service, the memory and CPU limits for agents, and moving memory and settings
+to another install. Docker has its own runbook,
 [docs/docker.md](../docker.md).
 
 ## Updates
@@ -78,3 +79,54 @@ has the drop-in, the environment variables and the details.
 The published image, the production instance with its runtime host and the
 test profile are in [docs/docker.md](../docker.md). The Docker image uses the
 same limits above; memory in Docker is enforced by the watchdog.
+
+## Moving to another install
+
+`delegatus export` writes this install's Delegatus memory and core settings to
+one bundle: learned rules with their history, memory profiles, call memory,
+seat tick settings, role overrides, worker limits, project settings, operator
+settings, voice choices, the App repository declaration and relay switches.
+No login, key, token or pairing is ever in it. Engine memory (Claude project
+memory, Codex memories) is not carried: switch the install to Delegatus memory
+first, which imports it ([memory source switch](../design/memory-source-switch.md)),
+and the export says so when some was never imported, files an engine wrote
+after the switch included. That choice itself travels to an install that
+never made it, without importing anything there.
+
+```
+delegatus export                         # sealed; the passphrase is shown once
+delegatus import delegatus-transfer-2026-10-22.dlgt --dry-run
+delegatus import delegatus-transfer-2026-10-22.dlgt --map dir-…=/path/on/this/install
+delegatus export --plain - | ssh server delegatus import -
+delegatus import --report
+```
+
+Both commands talk to the running Delegatus on this machine and refuse when
+it is not running. The dry run lists, per section, what is new, already
+there, in conflict (this install's value stays unless `--replace` names the
+section) or skipped, and every folder that needs a folder here. Apply writes
+nothing when this install changed since the dry run, and leaves the install
+as it was when it fails or stops partway; a setting changed here meanwhile
+waits for the import and keeps its value. Importing the same bundle again
+leaves what arrived alone and plans only what was skipped then (such as a
+project whose folder is mapped now) or where this install kept its own
+value. A settings file that is a link, or larger than 64 MiB, is never
+read or replaced. The report compares each learned
+rule scope with the source and lists what still has to be done here: API
+keys through Keys → Import, the relay pairing, the GitHub App credential, and
+the environment variables the source used.
+
+Accounts arrive signed out, under the same labels and with the same project
+bindings, which apply at once: a project bound to an account that is not
+signed in yet waits for it. Each engine's accounts panel, the phone's
+accounts screen and the Copilot list then show **Accounts from your other
+install**: sign each one in with the usual link and code, and it is ready
+once its limits read here (a Copilot account once it shows as signed in, since
+Copilot has no limit read). The account that was active on the other install
+becomes active here when it is ready. A login that differs from the one the
+other install used, or one this install cannot read, waits until you confirm
+it. An account whose setup failed here offers **Try again**; one that cannot
+be made here, such as a custom provider account, is settled with **Not needed
+here**. `delegatus import --report` checks every account again and prints
+what is left. The
+design is [docs/design/install-memory-transfer.md](../design/install-memory-transfer.md).

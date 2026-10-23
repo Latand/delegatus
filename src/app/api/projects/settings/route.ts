@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
+import { validAgentMemoryMax } from "@/lib/runtime/agentMemoryConfig";
+import { projectAgentMemoryMax, setProjectAgentMemoryMax } from "@/lib/projects/settings";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { canonicalProject, recordedProjectRemote } from "@/lib/projects/aliases";
@@ -31,6 +33,7 @@ const headers = { "Cache-Control": "no-store" };
 /** What the board's setting rows draw (#2187 §6, #2146): the settings, and
     whether the project has a GitHub repository to merge in at all. */
 export interface ProjectSettingsResponse {
+  agentMemoryMaxBytes?: number | null;
   ok: true;
   project: string;
   mergeOnReview: MergeOnReviewSetting;
@@ -62,6 +65,7 @@ function answer(project: string): ProjectSettingsResponse {
   return {
     ok: true,
     project: key,
+    agentMemoryMaxBytes: projectAgentMemoryMax(key),
     mergeOnReview: mergeOnReviewSetting(key),
     bridgeReports: bridgeReportsSetting(key),
     reportTelegram: choice,
@@ -101,6 +105,8 @@ export async function PUT(request: NextRequest): Promise<NextResponse> {
   const project = projectParam(record?.project);
   const merge = record?.mergeOnReview;
   const bridge = record?.bridgeReports;
+  const memory = record?.agentMemoryMaxBytes;
+  if (!validAgentMemoryMax(memory)) return NextResponse.json({ error: "INVALID_REQUEST", message: "agentMemoryMaxBytes must be null or integer bytes from 1 GiB through 1 TiB" }, { status: 400, headers });
   const telegram = record?.reportTelegram;
   const telegramShape = telegram === undefined || telegram === null || (
     typeof telegram === "object" && !Array.isArray(telegram)
@@ -114,12 +120,16 @@ export async function PUT(request: NextRequest): Promise<NextResponse> {
   const shapeOk = (merge === undefined || typeof merge === "boolean")
     && (bridge === undefined || typeof bridge === "boolean")
     && telegramShape
-    && (merge !== undefined || bridge !== undefined || telegram !== undefined);
+    && (merge !== undefined || bridge !== undefined || telegram !== undefined || memory !== undefined);
   if (!project || project.length > 256 || !shapeOk) {
     return NextResponse.json({ error: "INVALID_REQUEST", message: "project and mergeOnReview or bridgeReports (boolean), or reportTelegram ({ chat, name } or null), are required" }, { status: 400, headers });
   }
   /* The Telegram destination decides where a public post goes, so only the
      operator sets it, and only to a chat the bot may post in (§5.6). */
+  if (memory !== undefined) {
+    const authority = requireOperatorAuthority(request);
+    if (!authority.ok) return NextResponse.json({ error: authority.error, code: "operator_only" }, { status: authority.status, headers });
+  }
   if (telegram !== undefined) {
     const authority = requireOperatorAuthority(request);
     if (!authority.ok) return NextResponse.json({ error: authority.error, code: "operator_only" }, { status: authority.status, headers });
@@ -159,7 +169,8 @@ export async function PUT(request: NextRequest): Promise<NextResponse> {
     }
   }
   if ((typeof merge === "boolean" && !setMergeOnReview(project, merge, "operator"))
-    || (typeof bridge === "boolean" && !setBridgeReports(project, bridge, "operator"))) {
+    || (typeof bridge === "boolean" && !setBridgeReports(project, bridge, "operator"))
+    || (memory !== undefined && !setProjectAgentMemoryMax(project, memory))) {
     return NextResponse.json({ error: "INTERNAL_ERROR", message: "could not persist the setting" }, { status: 500, headers });
   }
   /* The runner reads the merge setting on the controller's cycle, so a cycle
