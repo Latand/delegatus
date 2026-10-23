@@ -15,6 +15,14 @@ export function pipelineAttemptReleased(pipeline: Pipeline, attempt: PipelineSta
     || (!!latest && !latest.historical && latest.n !== attempt.n));
 }
 
+/** A working state or a missing turn-end stamp leaves a turn possibly open. A
+    release never proves idleness: such a host retires only on positive runtime
+    idle evidence and never by its recorded identity alone. */
+export function pipelineAttemptMayBeWorking(attempt: PipelineStageAttempt): boolean {
+  return ["pending", "spawning", "running", "reviewing", "committing"].includes(attempt.state)
+    || !(attempt.verdict || attempt.completedAt);
+}
+
 /** Fresh pipeline ownership for an engine-issued recovery. A ref never grants
     authority to a source owner, publication, or a different/current attempt. */
 export function providerRecoveryAttempt(
@@ -109,9 +117,7 @@ export function pipelineHostHasLiveWork(
         if (!publishing && attempt === recoveryAttempt) continue;
         // Completion stamps can survive a restart/resume. A running owner still
         // holds the host, even with an older verdict on the same attempt.
-        if (publishing || (!pipelineAttemptReleased(pipeline, attempt, latest)
-          && (["pending", "spawning", "running", "reviewing", "committing"].includes(attempt.state)
-            || !(attempt.verdict || attempt.completedAt)))
+        if (publishing || (!pipelineAttemptReleased(pipeline, attempt, latest) && pipelineAttemptMayBeWorking(attempt))
           || (attempt.activation && attempt.activation.phase !== "settled")) return true;
       }
     }

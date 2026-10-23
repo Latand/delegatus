@@ -432,6 +432,52 @@ test.each(["completed", "closed"] as const)("a %s lane keeps missing idle eviden
   expect(h.resident.get(conversationId)).toBe(false);
 });
 
+test.each(["completed", "closed", "superseded"] as const)("a stamped attempt still reading as running in a %s release sends no signal to an orphaned host", async release => {
+  const h = harness();
+  const conversationId = `conversation_stamped_running_${release}`;
+  const stamped = { ...attempt(1, conversationId, true), state: "running" as const };
+  const attempts = release === "superseded" ? [stamped, attempt(2, `conversation_current_${release}`, false)] : [stamped];
+  savePipelines([pipelineRecord({ id: `reap-stamped-running-${release}`,
+    state: release === "superseded" ? "paused" : release, attempts })]);
+  h.resident.set(conversationId, true);
+  if (release === "superseded") {
+    h.resident.set(`conversation_current_${release}`, true);
+    h.active.set(`conversation_current_${release}`, true);
+  }
+  // The registry row has lost its stream while the engine may still write:
+  // without the idle fence, retirement would end it by its recorded identity.
+  const identitySignals: string[] = [];
+  let idleObserved = false;
+  const stop = h.ports.stopStageAgent;
+  h.ports.stopStageAgent = async (target, options) => {
+    if (target.conversationId !== conversationId || idleObserved) return stop(target, options);
+    if (options?.requireIdleEvidence) return { outcome: "deferred" };
+    identitySignals.push(`${target.stageId}:${target.attempt}`);
+    h.resident.set(conversationId, false);
+    return { outcome: "stopped" };
+  };
+
+  for (let observation = 0; observation < 7; observation++) await tickPipelinesController([], h.ports);
+  expect(identitySignals).toEqual([]);
+  expect(h.stops).toEqual([]);
+  expect(h.resident.get(conversationId)).toBe(true);
+  const waiting = loadPipelines()[0]!;
+  expect(waiting.terminalReap?.settledAt ?? null).toBeNull();
+  expect(waiting.terminalReap?.settledAttempts ?? []).not.toContain("implement:1");
+  expect(waiting.unconfirmedHosts).toBeUndefined();
+
+  // The first positive idle observation retires the same recorded host.
+  idleObserved = true;
+  h.active.set(conversationId, false);
+  await tickPipelinesController([], h.ports);
+  expect(identitySignals).toEqual([]);
+  expect(h.stops).toEqual([`implement:1:${conversationId}`]);
+  expect(h.idleEvidenceRequired).toEqual([true]);
+  expect(loadPipelines()[0]!.terminalReap?.settledAttempts).toContain("implement:1");
+  if (release !== "superseded") expect(loadPipelines()[0]!.terminalReap?.settledAt).toBeTruthy();
+  if (release === "superseded") expect(h.resident.get(`conversation_current_${release}`)).toBe(true);
+});
+
 test("retryable idle evidence persists across process restart", async () => {
   const childPhase = process.env.LLV_TERMINAL_REAP_RESTART_PHASE;
   if (childPhase) {

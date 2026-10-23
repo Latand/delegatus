@@ -155,7 +155,7 @@ import { matchesShortId, resolveShortId, shortId } from "@/lib/shortIds";
 import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRuntimeProfile } from "./stageSandbox";
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
 import { firstRunsElsewhere, TASK_RUNS_ELSEWHERE } from "@/lib/links/linked";
-import { pipelineAttemptReleased, pipelineHostHasLiveWork } from "./hostRetirement";
+import { pipelineAttemptMayBeWorking, pipelineAttemptReleased, pipelineHostHasLiveWork } from "./hostRetirement";
 import { pipelineRecordRevalidator } from "./revalidation";
 import { controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, controllerUnclaimedPublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines as selectAllControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, controllerPipelineVersionNow, pipelineRecordReader, cloneControllerPipeline, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation as withAllPipelineControllerMutation, withPipelineMutation } from "./store";
 import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQueue";
@@ -945,7 +945,8 @@ export type StageStopProbes = {
   operationId?: string;
   automatic?: true;
   onlyIfIdle?: import("@/lib/runtime/contracts").RuntimeIdleKillFence;
-  /** An unstamped terminal attempt cannot authorize the orphan fallback. */
+  /** A possibly working attempt (working state or no turn-end stamp) cannot
+      authorize the orphan fallback. */
   requireIdleEvidence?: true;
   providerRecovery?: import("@/lib/runtime/contracts").RuntimeProviderRecoveryRef;
   client?: RuntimeHostClient | null;
@@ -11027,7 +11028,7 @@ async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePo
   let attempted = false;
   let deferred = otherCandidates || candidates.some(({ target }) => !controllerAttemptSelected(pipeline.id, target.stageId, target.attempt));
   let liveWork = false;
-  for (const [index, { target, attempt, turnSettled }] of candidates.entries()) {
+  for (const [index, { target, attempt }] of candidates.entries()) {
     if (!controllerAttemptSelected(pipeline.id, target.stageId, target.attempt)) continue;
     const attemptKey = `${target.stageId}:${target.attempt}`;
     if (ports.monotonicNow() >= deadline) {
@@ -11065,7 +11066,10 @@ async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePo
       liveWork = true;
       continue;
     }
-    const result = await ports.stopStageAgent(target, { onlyIfIdle: true, ...(!turnSettled ? { requireIdleEvidence: true as const } : {}) });
+    /* Release ends ownership, never a possibly open turn: a stamp can survive
+       a resume, so the working state alone also demands positive idle proof. */
+    const result = await ports.stopStageAgent(target, { onlyIfIdle: true,
+      ...(pipelineAttemptMayBeWorking(attempt) ? { requireIdleEvidence: true as const } : {}) });
     if (result.outcome === "deferred") {
       liveWork = true;
       continue;

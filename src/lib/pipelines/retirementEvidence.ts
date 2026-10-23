@@ -5,7 +5,7 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { readCompactPipelineEvidence, readStateCollectionRevisions, stateEvidenceVersion, type CompactEvidenceCache } from "@/lib/state/sqliteStateStore";
 import { isStoredPipeline } from "./store";
-import { pipelineAttemptReleased, pipelinePublicationHoldsHost } from "./hostRetirement";
+import { pipelineAttemptMayBeWorking, pipelineAttemptReleased, pipelinePublicationHoldsHost } from "./hostRetirement";
 import type { RuntimeProviderRecoveryRef } from "@/lib/runtime/contracts";
 import type { Pipeline } from "./types";
 
@@ -42,9 +42,7 @@ function project(raw: unknown): Projection {
           if (value) releasedSources.push(identity(kind, value));
         }
       }
-      if (!publishing && !activation && (released
-        || (!["pending", "spawning", "running", "reviewing", "committing"].includes(attempt.state)
-          && (attempt.verdict || attempt.completedAt)))) continue;
+      if (!publishing && !activation && (released || !pipelineAttemptMayBeWorking(attempt))) continue;
       add(run.stageId, attempt.n, [["conversation", attempt.conversationId], ["path", attempt.agentPath],
         ["session", attempt.sessionId], ["pane", attempt.paneId], ["launch", attempt.launchId]],
         run === pipeline.runs.find(candidate => candidate.stageId === run.stageId) && attempt === run.attempts.at(-1) && !attempt.historical);

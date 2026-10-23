@@ -32,18 +32,23 @@ receipt cannot hide the newly resident host from the controller window.
 Terminal lanes now consider every recorded host. Replaced operational attempts
 release their ownership, while adopted helpers retain their independent work
 evidence. Late adoption reopens a settled reap so the controller can reconcile
-the helper's terminal turn and retire its host. Every automatic stop still
-requires the runtime's conditional idle protocol; an open turn, publication
-custody, a replacement writer, pending
-work or unreadable evidence keeps the host alive and cleanup pending. Explicit
+the helper's terminal turn and retire its host. An automatic stop of a host
+with a control stream requires the runtime's conditional idle protocol; an open
+turn, publication custody, a replacement writer, pending work or unreadable
+evidence keeps the host alive and cleanup pending. Explicit
 close obligations continue to drain their frozen targets. Closed lanes without
 an obligation use the automatic idle reap when they have a recorded host.
 Closed records without hosts stay out of retirement work. Archiving waits for outstanding
 retirement and unconfirmed hosts.
 
-An unstamped attempt also requires positive runtime idle evidence when its
-registry row has lost its control stream. Its orphan fallback records why it
-cannot prove idleness and sends no process signal.
+A host whose registry row has lost its control stream gives no idle
+evidence. Only an attempt with a terminal state and a verdict or completion
+stamp may still be ended there by its recorded identity. An attempt without a
+stamp, or one still in a working state (pending, spawning, running, reviewing,
+committing) whatever stamps a restart or resume left on it, needs positive
+runtime idle evidence. Releasing it with its lane or a later attempt ends its
+ownership and proves nothing about its turn, so the reap defers it, sends no
+process signal and retires it on the first positive idle observation.
 
 The fenced schema upgrade rebuilds ownership references and scheduler triggers
 and re-enrols outstanding terminal hosts, including a lane with an earlier
