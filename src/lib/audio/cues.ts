@@ -1,3 +1,4 @@
+import type { CueCaption } from "./captions";
 import type { EventSoundId } from "./synth";
 
 /**
@@ -90,6 +91,12 @@ export interface CueRequest {
   obligation?: string;
   /** The lane an S3 or S4 belongs to, so a landing supersedes its last step. */
   pipeline?: string;
+  /**
+   * What the sound announces and about whom, for the toast that names it. Shown
+   * only when the sound actually plays; it never changes whether, when or how
+   * loud it does.
+   */
+  caption?: CueCaption;
   /** S2: how many agents are working off screen, which sets its pace (§5.5). */
   agentsOffScreen?: number;
   /** The settings panel previewing a sound: it plays at once, outside the lane. */
