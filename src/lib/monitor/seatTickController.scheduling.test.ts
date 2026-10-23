@@ -34,6 +34,90 @@ function deployRig() {
   return rig;
 }
 
+test.each(["priority", "deploy gather", "general gather", "controller"] as const)(
+  "a recorded settlement bypasses a separate 120-second pending lookup: %s", async mode => {
+    const { beginSeatDeployment, recordSeatDeployment, seatDeploymentsFor, seatDeploymentsFile } = await import("@/lib/orchestrator/seatDeployments");
+    const { seatTickDeployPending, gatherSeatTickDeployInput, gatherSeatTickInput } = await import("./seatTickSources");
+    const rig = deployRig();
+    const clock = virtualClock();
+    const file = seatDeploymentsFile();
+    const previous = fs.existsSync(file) ? fs.readFileSync(file) : null;
+    const pending = { conversationId: CONVERSATION, project: PROJECT, revision: "b".repeat(40),
+      requestedAt: new Date(NOW - 60_000).toISOString(), idempotencyKey: "pending-slow-deploy" };
+    const lookupEntered = deferred(), finished = deferred();
+    let lookups = 0;
+    let checking: Promise<unknown> | undefined;
+    try {
+      await beginSeatDeployment(pending);
+      await recordSeatDeployment({ ...pending, revision: "a".repeat(40), idempotencyKey: "accepted-deploy", deploymentId: "deploy-own" });
+      rig.deps.sources!.seatDeployments = seatDeploymentsFor;
+      rig.deps.sources!.deploymentByKey = () => {
+        lookups++;
+        lookupEntered.resolve();
+        return new Promise((_, reject) => {
+          clock.scheduler.setTimeout(() => reject(new Error("deployment lookup timed out")), 120_000);
+        });
+      };
+      // An overdue seat used to expire at the opening hint, then restart that
+      // same remote lookup on each poll, despite its other settled deployment.
+      rig.deps.writeState!(PROJECT, { ...rig.deps.readState!(PROJECT), ...OVERDUE });
+      Object.assign(rig.deps, { workClock: clock.now, workScheduler: clock.scheduler });
+      const sources = rig.deps.sources!;
+      const state = rig.deps.readState!(PROJECT);
+      checking = mode === "priority" ? seatTickDeployPending(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, sources)
+        : mode === "deploy gather" ? gatherSeatTickDeployInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, sources)
+        : mode === "general gather" ? gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, sources)
+        : runSeatTickCheck(PROJECT, rig.deps);
+      void checking.then(() => finished.resolve(), () => finished.resolve());
+      await Promise.race([finished.promise, lookupEntered.promise]);
+      expect(lookups).toBe(0);
+      const result = await checking;
+      if (mode === "priority") expect(result).toBe(true);
+      else if (mode === "controller") {
+        expect(result).toMatchObject({ verdict: "wake", reasons: ["deploy-settled"], delivery: { outcome: "delivered" } });
+        expect(rig.sent).toHaveLength(1);
+        expect(rig.deps.readState!(PROJECT).announcedDeploys).toEqual(["deploy-own"]);
+      } else expect(result).toMatchObject({ settledDeploys: [{ deploymentId: "deploy-own" }] });
+      expect(clock.now()).toBeLessThan(DEFAULT_SEAT_TICK_POLICY.checkIntervalMs);
+      expect(JSON.parse(fs.readFileSync(file, "utf8")).pending).toEqual([pending]);
+    } finally {
+      clock.advance(120_000);
+      await checking?.catch(() => {});
+      if (previous) fs.writeFileSync(file, previous);
+      else fs.rmSync(file, { force: true });
+    }
+  });
+
+test.each(["accepted", "unknown", "unavailable"] as const)(
+  "pending recovery without a recorded settlement retains its existing outcome: %s", async outcome => {
+    const { beginSeatDeployment, seatDeploymentsFor, seatDeploymentsFile } = await import("@/lib/orchestrator/seatDeployments");
+    const { gatherSeatTickDeployInput } = await import("./seatTickSources");
+    const rig = deployRig();
+    const file = seatDeploymentsFile();
+    const previous = fs.existsSync(file) ? fs.readFileSync(file) : null;
+    const pending = { conversationId: CONVERSATION, project: PROJECT, revision: "a".repeat(40),
+      requestedAt: new Date(NOW - 60_000).toISOString(), idempotencyKey: "pending-recovery" };
+    try {
+      await beginSeatDeployment(pending);
+      rig.deps.sources!.seatDeployments = seatDeploymentsFor;
+      const keys: string[] = [];
+      rig.deps.sources!.deploymentByKey = async key => {
+        keys.push(key);
+        if (outcome === "unavailable") throw new Error("lookup unavailable");
+        return outcome === "unknown" ? null : { idempotencyKey: key, requestedRevision: pending.revision,
+          deploymentId: "deploy-own", revision: pending.revision } as never;
+      };
+      const result = await gatherSeatTickDeployInput(PROJECT, rig.deps.readState!(PROJECT), DEFAULT_SEAT_TICK_POLICY, rig.deps.sources!);
+      expect(keys).toEqual([pending.idempotencyKey]);
+      if (outcome === "accepted") expect(result).toMatchObject({ settledDeploys: [{ deploymentId: "deploy-own" }] });
+      else expect(result).toBeNull();
+      expect(JSON.parse(fs.readFileSync(file, "utf8")).pending).toEqual(outcome === "accepted" ? [] : [pending]);
+    } finally {
+      if (previous) fs.writeFileSync(file, previous);
+      else fs.rmSync(file, { force: true });
+    }
+  });
+
 test("a deploy settling during an overlong pass revives its gone seat before one interval", async () => {
   const rig = deployRig();
   const clock = virtualClock();

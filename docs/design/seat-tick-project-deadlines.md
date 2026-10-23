@@ -19,6 +19,15 @@ the seat's paused lanes through the existing admission and delivery accounting.
 An outstanding send retains its original key and receipt rules. A transport
 answer after a project deadline cannot credit or overwrite its successor.
 
+Every deployment gather reads accepted attribution and its ledger outcomes
+before recovering pending request keys. An eligible recorded settlement defers
+that recovery until a later check has no recorded settlements to deliver. The
+opening priority hint uses the same order. A separate pending lookup with a
+120-second transport timeout therefore cannot consume the project's 75-second
+default budget before an already recorded settlement wakes its gone seat.
+The pending attribution remains durable; when no recorded settlement is ready,
+recovery still attaches a matching admission and retains unknown or failed reads.
+
 Immutable pipeline and task publications have a weakly held project index.
 Preparation and provenance checks visit the project's rows. Publications in
 another project cannot invalidate this project's PR evidence. Alias changes,

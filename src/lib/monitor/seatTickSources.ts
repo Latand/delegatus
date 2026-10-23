@@ -1082,17 +1082,16 @@ const SEAT_DEPLOY_LIMIT = 5;
  * cannot be read for one deployment leaves it out of this check only; the
  * next check asks again, and nothing is announced that was not seen.
  */
-async function settledSeatDeploys(
+function recordedSeatDeploys(
   seat: SeatTickSeatInput | null,
   announced: readonly string[],
   context: { now: number; backlogAfterMs: number; catchUp?: boolean },
   sources: SeatTickSources,
-): Promise<SeatTickDeployInput[]> {
+): SeatTickDeployInput[] {
   if (!seat || !sources.seatDeployments || !sources.deployment) return [];
   const settled: SeatTickDeployInput[] = [];
   let records: readonly SeatDeploymentRecord[];
   try {
-    if (sources.deploymentByKey) await recoverSeatDeploymentRequests(seat.conversationId, sources.deploymentByKey);
     records = sources.seatDeployments(seat.conversationId);
   } catch {
     return [];
@@ -1118,6 +1117,22 @@ async function settledSeatDeploys(
     });
   }
   return context.catchUp ? settled : settled.slice(-SEAT_DEPLOY_LIMIT);
+}
+
+async function settledSeatDeploys(
+  seat: SeatTickSeatInput | null,
+  announced: readonly string[],
+  context: { now: number; backlogAfterMs: number; catchUp?: boolean },
+  sources: SeatTickSources,
+): Promise<SeatTickDeployInput[]> {
+  const settled = recordedSeatDeploys(seat, announced, context, sources);
+  // A pending request's remote lookup can outlast this project's deadline.
+  // Deliver recorded settlements first on every gather, including the opening
+  // priority hint. Unresolved attribution stays durable for a later check.
+  if (settled.length || !seat || !sources.seatDeployments || !sources.deployment || !sources.deploymentByKey) return settled;
+  try { await recoverSeatDeploymentRequests(seat.conversationId, sources.deploymentByKey); }
+  catch { return []; }
+  return recordedSeatDeploys(seat, announced, context, sources);
 }
 
 /**
