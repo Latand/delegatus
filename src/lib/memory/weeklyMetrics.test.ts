@@ -1,4 +1,7 @@
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { pipelineRoleLookup } from "@/lib/pipelines/roles";
 import {
   decide, findingClasses, laneMetrics, proportionDifference, reviewVerdict, weeklyReport, wilson, windowReport,
@@ -6,7 +9,17 @@ import {
 } from "./weeklyMetrics";
 
 /* Slice 6 of docs/design/memory-source-switch.md: a synthetic pipeline set
-   per case. All times are fixed; nothing reads a clock. */
+   per case. All times are fixed; nothing reads a clock. The departure cases
+   drive the production role-memory writers on a private state directory. */
+const previousStateDir = process.env.LLV_STATE_DIR;
+const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-weekly-metrics-"));
+process.env.LLV_STATE_DIR = path.join(sandbox, "state");
+fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
+afterAll(() => {
+  if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousStateDir;
+  fs.rmSync(sandbox, { recursive: true, force: true });
+});
+const { roleMemoryCollection, restoreRule, deleteRule } = await import("./roleStore");
 const BASE = { from: "2026-10-01T00:00:00.000Z", to: "2026-10-08T00:00:00.000Z" };
 const IMPORT = { from: "2026-10-08T00:00:00.000Z", to: "2026-10-09T00:00:00.000Z" };
 const TRIAL = { from: "2026-10-09T00:00:00.000Z", to: "2026-10-16T00:00:00.000Z" };
@@ -96,14 +109,15 @@ test("a lane with an attempt on a legacy generation is excluded from the trial",
 test("evictions of each kind, lesson answers, seat and operator rules and import dispositions", () => {
   const rule = (id: string, extra: Record<string, unknown>) => ({ kind: "rule", id, scope: "role:A:builder", state: "active", source: { origin: "stage" }, createdAt: at(BASE, 1), changedAt: at(BASE, 1), ...extra });
   const pipelines = trialSet();
+  const left = (changedAt: string, reason: string, curated: boolean) => ({ state: "archived", reason, changedAt, departures: [{ at: changedAt, reason, curated }] });
   const memory = [
-    rule("r1", { state: "archived", reason: "budget", changedAt: at(TRIAL, 2) }),
-    rule("r2", { state: "archived", reason: "budget", changedAt: at(TRIAL, 3), curatedAt: at(TRIAL, 1) }),
-    rule("r3", { state: "archived", reason: "budget", changedAt: at(TRIAL, 3), versionOf: "r2" }),
-    rule("r4", { state: "archived", reason: "budget", changedAt: at(BASE, 3) }),
+    rule("r1", left(at(TRIAL, 2), "budget", false)),
+    rule("r2", { ...left(at(TRIAL, 3), "budget", true), curatedAt: at(TRIAL, 1) }),
+    rule("r3", { ...left(at(TRIAL, 3), "budget", true), versionOf: "r2" }),
+    rule("r4", left(at(BASE, 3), "budget", false)),
     rule("r5", { source: { origin: "seat" }, createdAt: at(TRIAL, 4) }),
     rule("r6", { source: { origin: "operator" }, createdAt: at(TRIAL, 4) }),
-    rule("r7", { source: { origin: "import" }, state: "archived", reason: "stale", changedAt: at(TRIAL, 5) }),
+    rule("r7", { source: { origin: "import" }, ...left(at(TRIAL, 5), "stale", true) }),
     { kind: "request", pipelineId: "within-grace", stageId: "build", attempt: 1, at: at(TRIAL, 2), ruleIds: ["r9"], none: null },
     { kind: "request", pipelineId: "within-grace", stageId: "build", attempt: 2, at: at(TRIAL, 6), ruleIds: [], none: null, rewrote: "r9" },
     { kind: "request", pipelineId: "fenced-json", stageId: "build", attempt: 1, at: at(TRIAL, 11), ruleIds: [], none: "covered" },
@@ -317,4 +331,106 @@ test("§6.5: builder domains are separate launch variants, and an edit within on
   // The same lanes in another project are a variant of their own.
   const elsewhere = { ...domainLane("front-b", at(TRIAL, 4), "frontend", "another project's scaffold"), project: "B" };
   expect(windowReport(input([...mixed, elsewhere]), TRIAL).valid).toBe(true);
+});
+
+const longRule = (id: string, length: number) => `${id} keeps a long rule body. `.padEnd(length, "x");
+const seeded = (id: string, extra: Record<string, unknown>) => ({
+  kind: "rule", id, scope: "role:A:builder", rule: longRule(id, 120), why: "A seeded rule for the weekly report.", hints: [], state: "active",
+  source: { origin: "stage", project: "A", pipelineId: "seed", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "seed" },
+  createdAt: at(BASE, 1), changedAt: at(BASE, 1), ...extra,
+});
+const evidence = (report: ReturnType<typeof windowReport>) => ({ evictions: report.evictions, imports: report.imports, guards: report.guards, valid: report.valid, invalidBecause: report.invalidBecause, unverified: report.unverified });
+
+test("§6.5: restoring, re-archiving or evicting a rule after a closed week leaves its evictions and verdict unchanged", () => {
+  const curatedAt = at(BASE, 2);
+  const budget = { state: "archived", reason: "budget", changedAt: at(TRIAL, 3), departures: [{ at: at(TRIAL, 3), reason: "budget", curated: false }] };
+  roleMemoryCollection(true)!.boundedPatch(16, tx => {
+    tx.put(seeded("r_00000000000000c1", { rule: longRule("r_00000000000000c1", 6000), curatedAt }) as never);
+    tx.put(seeded("r_00000000000000c2", { rule: longRule("r_00000000000000c2", 3900), curatedAt }) as never);
+    tx.put(seeded("r_00000000000000c3", { state: "archived", reason: "stale", changedAt: at(BASE, 3), curatedAt, departures: [{ at: at(BASE, 3), reason: "stale", curated: true }] }) as never);
+    // A never-curated budget archive inside the week, as an older build could leave it.
+    tx.put(seeded("r_00000000000000c4", budget) as never);
+    // An adopted import archived by the curator inside the week.
+    tx.put(seeded("r_00000000000000c5", { source: { origin: "import", project: "A", roleId: "builder", fixRound: false, candidate: "c", occurrences: [], engine: "claude", sha256: "0".repeat(64), importId: "i" },
+      state: "archived", reason: "stale", changedAt: at(TRIAL, 4), curatedAt, departures: [{ at: at(TRIAL, 4), reason: "stale", curated: true }] }) as never);
+    tx.put({ kind: "scope", scope: "role:A:builder", revision: 1, active: ["r_00000000000000c1", "r_00000000000000c2"], history: [] } as never);
+  });
+  // Inside the week the operator returns c3, and the full scope evicts the curated c1 for budget.
+  restoreRule("r_00000000000000c3", at(TRIAL, 2));
+  const memory = () => roleMemoryCollection()!.snapshot() as unknown as Record<string, unknown>[];
+  const read = () => windowReport(input(trialSet(), { memory: memory() }), TRIAL);
+  const before = read();
+  expect(before.evictions).toEqual({ neverCurated: 1, curated: 1 });
+  expect(before.imports.adoptedArchived).toBe(1);
+  expect(before).toMatchObject({ valid: false, invalidBecause: ["never-curated-eviction"], unverified: [] });
+  // After the week: every archived rule comes back, one is removed again, and a restore evicts another.
+  for (const id of ["r_00000000000000c4", "r_00000000000000c5", "r_00000000000000c1"]) restoreRule(id, at(TRIAL, 200));
+  deleteRule("r_00000000000000c5", at(TRIAL, 201));
+  restoreRule("r_00000000000000c5", at(TRIAL, 202));
+  expect(memory().find(row => row.id === "r_00000000000000c4")).toMatchObject({ state: "active" });
+  expect(evidence(read())).toEqual(evidence(before));
+  const decisive = decisiveSet();
+  expect(weeklyReport(input(decisive, { memory: memory() }), BASE, [TRIAL], LATE).decision.outcome).toBe("pending");
+});
+
+test("§6.5: an archive the departure log cannot account for makes the week unverified, never clean", () => {
+  const legacy = [{ kind: "rule", id: "r_00000000000000d1", scope: "role:A:builder", state: "archived", reason: "budget", source: { origin: "stage" }, createdAt: at(BASE, 1), changedAt: at(TRIAL, 2) }];
+  const report = weeklyReport(input(decisiveSet(), { memory: legacy }), BASE, [TRIAL], LATE);
+  expect(report.windows[0]).toMatchObject({ valid: false, invalidBecause: [], unverified: ["departure-log-incomplete"] });
+  expect(report.decision).toMatchObject({ outcome: "pending", heldWindows: [{ index: 0, because: ["departure-log-incomplete"] }] });
+  // A scope history entry naming an archive the rule's log does not hold, e.g. a rule since restored.
+  const history = [{ kind: "rule", id: "r_00000000000000d2", scope: "role:A:builder", state: "active", source: { origin: "stage" }, createdAt: at(BASE, 1), changedAt: at(TRIAL, 90) },
+    { kind: "scope", scope: "role:A:builder", active: ["r_00000000000000d2"], history: [{ revision: 2, at: at(TRIAL, 2), by: "agent", added: [], merged: [], archived: ["r_00000000000000d2"] }] }];
+  expect(windowReport(input(decisiveSet(), { memory: history }), TRIAL).unverified).toEqual(["departure-log-incomplete"]);
+  // History that no longer reaches back over the week cannot vouch for it.
+  const pruned = [{ kind: "scope", scope: "role:A:builder", active: [], history: Array.from({ length: 10_000 }, (_, i) => ({ revision: i + 1, at: at(TRIAL, 100), by: "agent", added: [], merged: [], archived: [] })) }];
+  expect(windowReport(input(decisiveSet(), { memory: pruned }), TRIAL).unverified).toEqual(["departure-log-incomplete"]);
+  expect(windowReport(input(decisiveSet(), { memory: [{ ...pruned[0], history: pruned[0].history.slice(1) }] }), TRIAL).unverified).toEqual([]);
+});
+
+const presetLane = (id: string, start: string, runtime: { engine: string; model: string; effort?: string }, stage: Record<string, unknown> = {}) => ({
+  ...lane(id, [builder(1, start, { effectiveRole: { roleId: "builder", ...runtime, promptScaffold: "builder scaffold" } })], [reviewer(1, new Date(Date.parse(start) + 2 * 3600_000).toISOString(), { verdict: { status: "pass" } })]),
+  stages: [{ id: "build", kind: "run", role: { roleId: "builder", params: {} }, ...stage }, { id: "review", kind: "run", onFail: { to: "build", maxRounds: 2 } }],
+});
+
+test("§6.5: a builder or reviewer preset changed inside the week invalidates it and keeps it out of the decision", () => {
+  const early = Array.from({ length: 6 }, (_, i) => presetLane(`early-${i}`, at(TRIAL, 1 + i), { engine: "codex", model: "m1" }));
+  const later = Array.from({ length: 6 }, (_, i) => presetLane(`later-${i}`, at(TRIAL, 100 + i), { engine: "claude", model: "m3" }));
+  const changed = windowReport(input([...early, ...later]), TRIAL);
+  expect(changed).toMatchObject({ valid: false, invalidBecause: ["preset-changed"], guards: { presets: { builder: { variants: 1, changed: 1 }, reviewer: { variants: 1, changed: 0 } } } });
+  // An effort change is a preset change too.
+  const effort = windowReport(input([...early, presetLane("effort", at(TRIAL, 120), { engine: "codex", model: "m1", effort: "high" })]), TRIAL);
+  expect(effort.invalidBecause).toEqual(["preset-changed"]);
+  // The reviewer's preset is held still the same way.
+  const reviewers = early.map((pipeline, i) => i < 3 ? pipeline : { ...pipeline, runs: [pipeline.runs[0], { stageId: "review", attempts: [reviewer(1, at(TRIAL, 10 + i), { verdict: { status: "pass" }, effectiveRole: { roleId: "reviewer", engine: "claude", model: "m4", promptScaffold: "reviewer scaffold" } })] }] });
+  expect(windowReport(input(reviewers), TRIAL).guards.presets.reviewer).toEqual({ variants: 1, changed: 1 });
+  const decided = weeklyReport(input([...decisiveSet(), ...early.map(pipeline => ({ ...pipeline, id: `d-${pipeline.id}` })), ...later]), BASE, [TRIAL], LATE);
+  expect(decided.decision).toMatchObject({ outcome: "pending", usedWindows: [] });
+  expect(decided.decision.invalidWindows.map(window => window.because.includes("preset-changed"))).toEqual([true]);
+});
+
+test("§6.5: stable distinct presets per variant stay valid", () => {
+  const frontend = (id: string, start: string) => ({ ...presetLane(id, start, { engine: "claude", model: "m3" }), stages: [{ id: "build", kind: "run", role: { roleId: "builder", params: { domain: "frontend" } } }, { id: "review", kind: "run", onFail: { to: "build", maxRounds: 2 } }] });
+  const general = (id: string, start: string) => presetLane(id, start, { engine: "codex", model: "m1" });
+  // A stage that chose its own runtime over the preset is a variant of its own.
+  const pinned = (id: string, start: string) => presetLane(id, start, { engine: "claude", model: "m5" }, { engine: "claude", model: "m5" });
+  const report = windowReport(input([frontend("f1", at(TRIAL, 1)), general("g1", at(TRIAL, 2)), pinned("p1", at(TRIAL, 3)), frontend("f2", at(TRIAL, 100)), general("g2", at(TRIAL, 101)), pinned("p2", at(TRIAL, 102))]), TRIAL);
+  expect(report).toMatchObject({ valid: true, invalidBecause: [], guards: { presets: { builder: { variants: 3, changed: 0 } } } });
+});
+
+test("§6.5: omitted, blank and explicit default parameters are one variant, so an edit between them is caught", () => {
+  expect(pipelineRoleLookup("builder", {})!.promptScaffold).toBe(pipelineRoleLookup("builder", { domain: "general" })!.promptScaffold);
+  const scaffold = pipelineRoleLookup("builder", {})!.promptScaffold!;
+  const withParams = (id: string, start: string, params: Record<string, string> | undefined, text = scaffold) => ({
+    ...lane(id, [builder(1, start, { effectiveRole: { roleId: "builder", engine: "codex", model: "m1", promptScaffold: text } })], [reviewer(1, new Date(Date.parse(start) + 2 * 3600_000).toISOString(), { verdict: { status: "pass" } })]),
+    stages: [{ id: "build", kind: "run", role: { roleId: "builder", ...(params ? { params } : {}) } }, { id: "review", kind: "run", onFail: { to: "build", maxRounds: 2 } }],
+  });
+  const spellings = [withParams("omitted", at(TRIAL, 1), {}), withParams("absent", at(TRIAL, 2), undefined), withParams("blank", at(TRIAL, 3), { domain: "" }), withParams("explicit", at(TRIAL, 4), { domain: "general" })];
+  expect(windowReport(input(spellings), TRIAL)).toMatchObject({ valid: true, guards: { scaffolds: { builder: { variants: 1, changed: 0 } } } });
+  const edited = windowReport(input([withParams("omitted", at(TRIAL, 1), {}), withParams("explicit", at(TRIAL, 100), { domain: "general" }, `${scaffold}\nAn added rule.`)]), TRIAL);
+  expect(edited).toMatchObject({ valid: false, invalidBecause: ["held-still-changed"], guards: { scaffolds: { builder: { variants: 1, changed: 1 } } } });
+  // A genuinely different domain or mode stays its own variant.
+  const modes = [withParams("general", at(TRIAL, 1), {}), withParams("frontend", at(TRIAL, 2), { domain: "frontend" }, pipelineRoleLookup("builder", { domain: "frontend" })!.promptScaffold!),
+    withParams("fix", at(TRIAL, 3), { mode: "apply-fixes" }, pipelineRoleLookup("builder", { mode: "apply-fixes" })!.promptScaffold!)];
+  expect(windowReport(input(modes), TRIAL)).toMatchObject({ valid: true, guards: { scaffolds: { builder: { variants: 3, changed: 0 } } } });
 });

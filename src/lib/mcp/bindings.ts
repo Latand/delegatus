@@ -1056,12 +1056,16 @@ function viewerOwnProjects(): string[] {
   return [...new Set(viewerRepositoryProjects(remote, process.cwd()).map(canonicalOrchestratorProject))];
 }
 
-/** The registry's proof that a caller is the operator's own root conversation. */
-function productionOperatorConversation(conversationId: string): { project: string | null } | null {
-  const snapshot = agentRegistry().readOnlySnapshot();
+/** The registry's proof that a caller is the operator's own root conversation:
+    the conversation's durable operator-origin stamp plus the root shape. */
+export function operatorConversationFromSnapshot(snapshot: RegistrySnapshot, conversationId: string): { project: string | null } | null {
   const conversation = readOnlyConversationLookupFromSnapshot(snapshot).conversation(conversationId as `conversation_${string}`);
   if (!conversation || !storedOperatorRoot(conversation, snapshot.memberships[conversation.id])) return null;
   return { project: callerProjectFromSnapshot(snapshot, conversation.id) };
+}
+
+function productionOperatorConversation(conversationId: string): { project: string | null } | null {
+  return operatorConversationFromSnapshot(agentRegistry().readOnlySnapshot(), conversationId);
 }
 
 /**

@@ -297,10 +297,15 @@ marker with `roleId: null`, which already reads the project and machine
 scopes (`roleStore.ts:109-111`), plus `reader: "operator"` so the block can
 tell it from a role-less stage. It is set at spawn and re-derived on resume
 in the block that sets the seat's (`registry.ts:6320-6338`) for a root
-conversation with no role and no parent, and only while the source is
-Delegatus (`draining` or `active`, the phases in which the engines' memory is
-off); restart adoption and account migration re-derive it from the same
-durable proof (`src/lib/memory/operatorMemory.ts`). The block's notice and pointer for this reader are new text in
+conversation the operator launched, and only while the source is Delegatus
+(`draining` or `active`, the phases in which the engines' memory is off). A
+launch from an external client also has no role, no parent and depth zero, so
+the shape proves nothing alone: admission stamps `operatorOrigin` on a launch
+receipt whose origin is `operator`, and the settlement that creates the
+conversation copies it onto the conversation record once. Resume, restart
+adoption, account migration and `leave_lesson` read that stamp beside the
+root shape (`src/lib/memory/operatorMemory.ts`); an external root, and a
+conversation born before the stamp existed, stay excluded. The block's notice and pointer for this reader are new text in
 `roleRender.ts:47-58`: the stage notice (`:13`) speaks of finishing stages and
 the stage pointer (`:12`) of `stage_report`, neither of which an operator
 conversation does. `leave_lesson` admits such a conversation in the binding
@@ -658,8 +663,9 @@ launches, and the deferred rule for notes written from outside after
 already runs on the transcript-scan cadence and already calls
 `scheduleMemoryImport()`, checks whether a sync is due from two small reads:
 the setting and the import record. Due means the record's last sync attempt
-(`sync.lastAt`, durable, so a restart neither repeats nor skips one) is at
-least the interval old; a run that stopped at its cap is due again at the
+(`sync.lastAt`, durable, so a restart neither repeats nor skips one; the
+helper stamps it with the time the due check read) is at least the interval
+old; a run that stopped at its cap is due again at the
 next refresh; a failed run is retried after one hour. A run records its
 start (`result: "running"`) once the state directory is proven apart from the
 engines' stores and before its inventory, its wait for the import lock and any
@@ -881,8 +887,16 @@ neither, and so is any lane with an attempt on a legacy generation (4.6). Review
 | Fix rounds per lane | attempts activated by a fail edge ÷ lanes reviewed, mean with a bootstrap 95 % interval over lanes, and the median | Corroboration |
 | Repeated finding classes | findings of a second or later review round whose keyword class (rendered, contract, seam, tests, privacy, hot path) appeared in an earlier round of the same lane ÷ findings of later rounds | Corroboration. Its base rate is high (78–86 % in every window measured), so it moves little |
 | Lesson writes | lesson-request answers by kind (lesson, rewrite, none, problem, open), fix-round answers separately; seat and operator rules written | Reported |
-| Evictions | budget archives, never-curated and curated separately | Guard |
+| Evictions | budget archives, never-curated and curated separately, read from each rule's departure log | Guard |
 | Import | candidates adopted, dropped by reason, adopted rules archived later in the window | Reported |
+
+Every writer that archives a rule appends `{ at, reason, curated }` to the
+rule's `departures` (`roleConsolidate.ts` `archivedRule`), and nothing removes
+an entry: a later restore, curation or re-archive leaves a closed week's
+evictions and adopted-archive count unchanged. An archive the log cannot
+account for (a rule archived in the window with no matching departure, a scope
+history entry naming one, or a scope history that no longer reaches back over
+the window) makes the window unverified, never clean.
 
 `scripts/memory-weekly-metrics.ts --state-dir <dir>` computes this table, the
 load of 6.4, the guards of 6.5 and the decision of 6.6 from `VACUUM INTO`
@@ -894,10 +908,13 @@ along a fail edge, which counts as a fail) and the intervals (Wilson; Newcombe
 for a difference of shares; a seeded bootstrap over lanes for fix rounds) are
 defined in `src/lib/memory/weeklyMetrics.ts`. Held-still changes that no record
 dates (the lesson request text, the curator brief, the budgets) are passed as
-`--held-change <time>`; a builder or reviewer scaffold that changes inside a
-window is detected from the attempts, comparing only launches of the same
-project, role and role parameters, because a role renders a different scaffold
-per parameter (a builder's domain, a fix round's mode). A missing delivery
+`--held-change <time>`; a builder or reviewer scaffold or preset (engine,
+model, effort) that changes inside a window is detected from the attempts,
+comparing only launches of the same project, role, effective role parameters
+and stage runtime choice, because a role renders a different scaffold and
+runtime per parameter (a builder's domain, a fix round's mode). Effective
+parameters are the ones the scaffold renders with: an omitted or blank value
+is its default, so `{}` and `{ domain: "general" }` are one variant. A missing delivery
 ledger, one without its table, or one whose oldest kept start is later than a
 start in the window cannot check the engine-memory guard: such a window is
 unverified and decides nothing, which is distinct from a ledger that reaches
@@ -1075,7 +1092,9 @@ position, the selector for the operator's root conversations, their notice
 and pointer, `leave_lesson` for them.
 Tests: in Delegatus mode an operator root conversation is spawned with
 `{ project, roleId: null }` and starts with the project and machine rules
-under its own notice; "not chosen" spawns none; its `leave_lesson` writes
+under its own notice; "not chosen" spawns none; an external root of the same
+shape gets no selector and no `leave_lesson` across resume, restart and a
+record without the stamp; its `leave_lesson` writes
 origin `operator` at project or machine and is refused at role scope; a stage
 without a request and a clean role are still refused; the seat's block
 carries the Delegatus-mode pointer only in that mode.
@@ -1109,7 +1128,9 @@ the fenced-JSON fallback, a review-loop outcome, a retried attempt and a
 parked `needs_decision`. Reviews and fix rounds appended after the grace leave
 a closed window unchanged; a week read before its grace ends, or with a
 missing, tableless or pruned ledger, gives no default; builder domains are
-separate scaffold variants, and an edit within one invalidates the week.
+separate scaffold variants, omitted and explicit default parameters are one,
+and an edit or a preset change within one invalidates the week; restoring or
+re-archiving a rule after a week leaves its evictions unchanged.
 
 **Slice 8: periodic sync while the engines' memory is on.** 4.9: the setting
 and its route field, the due check on the refresh cadence, the sync run of

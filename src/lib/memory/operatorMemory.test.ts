@@ -136,13 +136,54 @@ test("restart adoption and migration re-derive the selector from the stored reco
   expect(roleMemoryProfileForIdentity(profile, null, PROJECT, false, true)).toBe(profile);
   const stale = emptyLaunchProfile({ cwd: "/repo", learnedRules: OPERATOR as never });
   expect(roleMemoryProfileForIdentity(stale, null, PROJECT, false, true)?.learnedRules).toBeUndefined();
-  const root = { agentRole: null, delegationDepth: 0, generations: [{ launchProfile: { parentConversationId: null } }] };
+  const root = { operatorOrigin: true as const, agentRole: null, delegationDepth: 0, generations: [{ launchProfile: { parentConversationId: null } }] };
   expect(storedOperatorRoot(root, [])).toBe(true);
+  expect(storedOperatorRoot({ ...root, operatorOrigin: undefined }, [])).toBe(false);
   expect(storedOperatorRoot({ ...root, delegationDepth: null }, [])).toBe(false);
   expect(storedOperatorRoot({ ...root, agentRole: "builder" }, [])).toBe(false);
   expect(storedOperatorRoot({ ...root, generations: [{ launchProfile: { parentConversationId: "conversation_parent" } }] }, [])).toBe(false);
   expect(storedOperatorRoot(root, [{ kind: "pipeline" }])).toBe(false);
-  expect(operatorRootConversation({ agentRole: null, parentConversationId: null, delegationDepth: 1, memberships: [] })).toBe(false);
+  expect(operatorRootConversation({ operatorOrigin: true, agentRole: null, parentConversationId: null, delegationDepth: 1, memberships: [] })).toBe(false);
+  expect(operatorRootConversation({ operatorOrigin: false, agentRole: null, parentConversationId: null, delegationDepth: 0, memberships: [] })).toBe(false);
+});
+
+test("an external root has a root's shape but never the operator's provenance, across resume, restart and a legacy record", () => {
+  chooseSource("active");
+  const filename = path.join(sandbox, `provenance-${state}.json`);
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+  const external = settle(registry, launch(registry, { origin: { kind: "external" } }).launchId);
+  const operator = settle(registry, launch(registry).launchId);
+  expect(resume(registry, external).launchProfile.learnedRules).toBeUndefined();
+  expect(resume(registry, operator).launchProfile.learnedRules).toEqual(OPERATOR);
+  /* A fresh process reads the stamp from the durable file. */
+  const reopened = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+  const snapshot = reopened.readOnlySnapshot();
+  expect(snapshot.conversations[external]?.delegationDepth).toBe(0);
+  expect(snapshot.conversations[external]?.operatorOrigin).toBeUndefined();
+  expect(snapshot.conversations[operator]?.operatorOrigin).toBe(true);
+  expect(storedOperatorRoot(snapshot.conversations[external], snapshot.memberships[external])).toBe(false);
+  expect(storedOperatorRoot(snapshot.conversations[operator], snapshot.memberships[operator])).toBe(true);
+  expect(resume(reopened, external).launchProfile.learnedRules).toBeUndefined();
+  expect(resume(reopened, operator).launchProfile.learnedRules).toEqual(OPERATOR);
+  /* A conversation born before the stamp existed proves nothing. */
+  const raw = JSON.parse(fs.readFileSync(filename, "utf8"));
+  delete raw.conversations[operator].operatorOrigin;
+  for (const receipt of Object.values(raw.receipts) as { operatorOrigin?: true }[]) delete receipt.operatorOrigin;
+  fs.writeFileSync(filename, JSON.stringify(raw));
+  const legacy = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+  expect(storedOperatorRoot(legacy.readOnlySnapshot().conversations[operator], [])).toBe(false);
+  expect(resume(legacy, operator).launchProfile.learnedRules).toBeUndefined();
+});
+
+test("only the launch that creates a conversation stamps operator provenance", () => {
+  chooseSource("active");
+  const registry = registryAt("stamp");
+  const external = settle(registry, launch(registry, { origin: { kind: "external" } }).launchId);
+  const successor = resume(registry, external);
+  expect(successor.operatorOrigin).toBeUndefined();
+  settle(registry, successor.launchId);
+  expect(registry.readOnlySnapshot().conversations[external]?.operatorOrigin).toBeUndefined();
+  expect(launch(registry).operatorOrigin).toBe(true);
 });
 
 test("the operator block holds project and machine rules under its own notice and pointer", async () => {

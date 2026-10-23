@@ -81,15 +81,22 @@ test("the refresh cadence starts a due sync through the leased helper in the eng
   await fs.writeFile(path.join(process.env.LLV_STATE_DIR!, "memory-source.json"), JSON.stringify({ schemaVersion: 1, source: "engines", phase: "importing", importId: id, changedAt: at }));
   const late = "A note written while the engines' memory is on.\n";
   await fs.writeFile(path.join(fixtureHome.memory, "late.md"), late);
-  await scheduleMemoryImport();
+  // One fixed clock drives the due check and the helper's stamp; no wall time has to pass.
+  const first = Date.parse("2026-10-22T00:00:00.000Z");
+  await scheduleMemoryImport(() => first);
   const synced = readImportRecord(id)!;
-  expect(synced.sync).toMatchObject({ result: "ok", added: 1 });
+  expect(synced.sync).toEqual({ lastAt: "2026-10-22T00:00:00.000Z", result: "ok", added: 1 });
   expect(readImportCandidates(id).candidates.some(row => row.body === late)).toBe(true);
   // Within the interval the cadence starts nothing, even with a new note on disk.
-  await fs.writeFile(path.join(fixtureHome.memory, "later.md"), "Another note, for the next day.\n");
-  await scheduleMemoryImport(() => Date.parse(synced.sync!.lastAt) + 60_000);
-  expect(readImportRecord(id)!.sync).toEqual(synced.sync);
-  await scheduleMemoryImport(() => Date.parse(synced.sync!.lastAt) + 25 * 3600_000);
-  expect(readImportRecord(id)!.sync!.lastAt).not.toBe(synced.sync!.lastAt);
-  expect(readImportCandidates(id).candidates.some(row => row.body.startsWith("Another note"))).toBe(true);
+  const later = "Another note, for the next day.\n";
+  await fs.writeFile(path.join(fixtureHome.memory, "later.md"), later);
+  for (const within of [60_000, 24 * 3600_000 - 1]) {
+    await scheduleMemoryImport(() => first + within);
+    expect(readImportRecord(id)!.sync).toEqual(synced.sync);
+    expect(readImportCandidates(id).candidates.some(row => row.body === later)).toBe(false);
+  }
+  // Due at the interval: the next run imports the new note under the same clock.
+  await scheduleMemoryImport(() => first + 24 * 3600_000);
+  expect(readImportRecord(id)!.sync).toEqual({ lastAt: "2026-10-23T00:00:00.000Z", result: "ok", added: 1 });
+  expect(readImportCandidates(id).candidates.some(row => row.body === later)).toBe(true);
 });

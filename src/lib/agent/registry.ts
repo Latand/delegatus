@@ -330,6 +330,9 @@ export interface SpawnReceipt {
   /** The spawn_agent caller that asked to hear when this launch's turns end
       (spawn-completion-notice §1). Null on every other launch. */
   launcher?: SpawnLauncher | null;
+  /** Admission saw an `operator` origin on this new launch. Absent on every
+      other origin, including `external`, and on every successor receipt. */
+  operatorOrigin?: true;
   /** Typed terminal admission rejection (#393). Non-null means this receipt
       never launched: no conversation, lineage edge, membership, transcript,
       or process exists for it. */
@@ -691,6 +694,11 @@ export interface RegistryConversation {
       {@link RegistryConversation.agentRole}. Absent on every conversation no
       agent launched through spawn_agent. */
   launcher?: SpawnLauncher | null;
+  /** Durable proof the operator launched this conversation: stamped once, at
+      birth, from a launch receipt whose admission saw an `operator` origin
+      (memory-source-switch.md §3.3). Absent on external, delegated, scanner and
+      legacy conversations, and never copied from another record. */
+  operatorOrigin?: true;
   turn: TurnState & { observedAt: string | null };
   /**
    * THIS CONVERSATION'S DELIVERY EVIDENCE HAS BEEN COMPLETE SINCE IT BEGAN.
@@ -2478,6 +2486,7 @@ function normalizeConversation(value: RegistryConversation, policy?: McpGrantPol
     agentRole: normalizeAgentRole((value as Partial<RegistryConversation>).agentRole),
     delegationDepth: normalizeDelegationDepth((value as Partial<RegistryConversation>).delegationDepth),
     launcher: normalizeSpawnLauncher((value as Partial<RegistryConversation>).launcher),
+    ...((value as Partial<RegistryConversation>).operatorOrigin === true ? { operatorOrigin: true as const } : {}),
     turn: value.turn && typeof value.turn === "object"
       ? { state: value.turn.state, source: value.turn.source, terminalAt: value.turn.terminalAt ?? null, observedAt: value.turn.observedAt ?? null }
       : { state: "unknown", source: "empty", terminalAt: null, observedAt: null },
@@ -4106,6 +4115,7 @@ function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnRe
     agentRole: normalizeAgentRole(value.agentRole),
     delegationDepth: normalizeDelegationDepth(value.delegationDepth),
     launcher: normalizeSpawnLauncher(value.launcher),
+    ...(value.operatorOrigin === true ? { operatorOrigin: true as const } : {}),
     rejection: normalizeSpawnRejection(value.rejection),
     ...(value.failureAnnouncementSuppressed === true ? { failureAnnouncementSuppressed: true as const } : {}),
     ...(value.failureReporting && typeof value.failureReporting === "object" ? { failureReporting: {
@@ -6639,9 +6649,10 @@ export class AgentRegistry {
            its durable record (memory-source-switch.md §3.3). */
         const operatorRoot = existingConversation
           ? input.purpose !== undefined && input.purpose !== "launch" && operatorRootConversation({
+            operatorOrigin: existingConversation.operatorOrigin === true,
             agentRole: existingConversation.agentRole, parentConversationId,
             delegationDepth: existingConversation.delegationDepth, memberships: file.memberships[existingConversation.id] ?? [] })
-          : input.origin?.kind === "operator" && operatorRootConversation({
+          : operatorRootConversation({ operatorOrigin: input.origin?.kind === "operator",
             agentRole: role, parentConversationId, delegationDepth: 0, memberships: input.memberships ?? [] });
         applyOperatorMemorySelector(profile, memoryProject, operatorRoot);
       }
@@ -6836,6 +6847,7 @@ export class AgentRegistry {
            is where a notice is owed from; a tmux child never would, so it
            records no launcher and stays the seat tick's to harvest. */
         launcher: purpose === "launch" && input.transport === "structured" ? normalizeSpawnLauncher(input.launcher) : null,
+        ...(purpose === "launch" && input.origin?.kind === "operator" ? { operatorOrigin: true as const } : {}),
       };
       file.receipts[receipt.launchId] = receipt;
       /* A rejected launch persists exactly one terminal receipt: no lineage
@@ -7324,6 +7336,9 @@ export class AgentRegistry {
     conversation.agentRole ??= receipt.agentRole;
     conversation.delegationDepth ??= receipt.delegationDepth;
     if (receipt.purpose === "launch") conversation.launcher ??= receipt.launcher ?? null;
+    /* Operator provenance is a birth fact: only the launch that creates the
+       conversation can stamp it, and nothing later adds it. */
+    if (!existingConversation && receipt.purpose === "launch" && receipt.operatorOrigin === true) conversation.operatorOrigin = true;
     if (receipt.purpose === "launch" && receipt.accountPin && receipt.accountId) {
       conversation.pinnedAccountId = receipt.accountId;
     }

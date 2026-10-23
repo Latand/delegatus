@@ -12,7 +12,7 @@ import { databaseFileIdentity } from "@/lib/state/currentDatabase";
 import { effectiveCurationSetting, readSeatTickSettings, seatTickSettingsPath } from "@/lib/monitor/seatTickSettings";
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized, stateDatabaseSignature, StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 
-import { appendRule, lessonPatternSource, retainRules, sameRule, scopeChars } from "./roleConsolidate";
+import { appendRule, archivedRule, lessonPatternSource, retainRules, sameRule, scopeChars } from "./roleConsolidate";
 import { roleMemoryEnabled } from "./settings";
 import { engineMemoryOff } from "./source";
 import { curationRevision, curationView } from "./curation/store";
@@ -22,7 +22,7 @@ import { renderLearnedRulesSelection } from "./roleRender";
 import { closestReadableRuleIds } from "./ruleIds";
 import { deliveredRuleIds } from "./deliveryLedger";
 import {
-  MAX_LESSONS_PER_ATTEMPT, ROLE_MEMORY_BOUND,
+  MAX_LESSONS_PER_ATTEMPT, ROLE_MEMORY_BOUND, ROLE_MEMORY_HISTORY_LIMIT,
   type LessonInput, type LessonRequestRow, type RoleMemoryProjectView, type RoleMemoryRow,
   type RoleMemoryRule, type RoleMemoryScopeRow, type RuleSource, type StageRuleSource, type SeatRuleSource, type OperatorRuleSource, type RuleView, type ScopeView, type StageLessonView,
   type RewriteInput, type RuleRevision, type RuleRevisionView, type ScopeHistoryEntry, type RulePrivacyHint, type ProblemInput,
@@ -43,7 +43,7 @@ import {
    same aliases without writing. */
 
 const COLLECTION = "role_memory";
-export const ROLE_MEMORY_HISTORY_LIMIT = 10_000;
+export { ROLE_MEMORY_HISTORY_LIMIT };
 /** Keep 10,000 ordinary changes independently of every curator Undo record.
  * At 141 daily writes this covers over 70 days; delivery rows keep their own
  * ordered ids and content hashes, so reconstruction never depends on this window. */
@@ -393,7 +393,7 @@ export function deleteRule(ruleId: string, now = new Date().toISOString()): Role
     const held = tx.get(`s:${canonicalScope(rule.scope)}`);
     if (held?.kind !== "scope") throw new RoleMemoryRefusal("RULE_NOT_FOUND", "the rule's scope is missing");
     const revision = held.revision + 1;
-    const deleted: RoleMemoryRule = { ...rule, state: "archived", reason: "deleted", changedAt: now };
+    const deleted = archivedRule(rule, now, "deleted");
     tx.put(deleted);
     tx.put({ ...held, revision, active: held.active.filter((id) => id !== ruleId),
       history: keepHistory([...held.history, { revision, revisionScope: held.revisionScope ?? held.scope, at: now, by: "operator" as const, added: [], merged: [], archived: [ruleId] }]) });

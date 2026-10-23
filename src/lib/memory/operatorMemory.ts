@@ -7,6 +7,11 @@ import { engineMemoryOff } from "./source";
    lessons at those levels. Outside Delegatus mode they keep today's output. */
 
 export interface OperatorRootEvidence {
+  /** Admission saw an `operator` origin: the request's own origin for a new
+      launch, the conversation's durable birth stamp for everything later. An
+      `external` launch has depth zero and no parent too, so shape alone proves
+      nothing. */
+  operatorOrigin: boolean;
   agentRole: string | null | undefined;
   parentConversationId: string | null | undefined;
   /** Admission stamps 0 on every root; a stored row without it proves nothing. */
@@ -15,9 +20,9 @@ export interface OperatorRootEvidence {
   memberships: readonly unknown[];
 }
 
-/** A root conversation the operator launched: no role, no parent, depth zero, no membership. */
+/** A root conversation the operator launched: operator origin, no role, no parent, depth zero, no membership. */
 export function operatorRootConversation(input: OperatorRootEvidence): boolean {
-  return !input.agentRole && !input.parentConversationId && input.delegationDepth === 0 && input.memberships.length === 0;
+  return input.operatorOrigin === true && !input.agentRole && !input.parentConversationId && input.delegationDepth === 0 && input.memberships.length === 0;
 }
 
 /** The selector is set and re-derived only while the engines' own memory is off. */
@@ -34,9 +39,11 @@ export function applyOperatorMemorySelector(profile: Pick<LaunchProfile, "cleanM
   else if (!wanted && owned) delete profile.learnedRules;
 }
 
-/** The same proof read from a stored conversation, for restart adoption and account migration. */
-export function storedOperatorRoot(conversation: { agentRole: string | null; delegationDepth: number | null; generations: readonly { launchProfile: { parentConversationId: string | null } }[] } | null | undefined, memberships: readonly unknown[] | undefined): boolean {
+/** The same proof read from a stored conversation, for resume, restart
+    adoption, account migration and lesson admission. A conversation born
+    before the stamp existed cannot prove it and stays excluded. */
+export function storedOperatorRoot(conversation: { operatorOrigin?: true; agentRole: string | null; delegationDepth: number | null; generations: readonly { launchProfile: { parentConversationId: string | null } }[] } | null | undefined, memberships: readonly unknown[] | undefined): boolean {
   if (!conversation) return false;
-  return operatorRootConversation({ agentRole: conversation.agentRole, delegationDepth: conversation.delegationDepth,
+  return operatorRootConversation({ operatorOrigin: conversation.operatorOrigin === true, agentRole: conversation.agentRole, delegationDepth: conversation.delegationDepth,
     parentConversationId: conversation.generations.at(-1)?.launchProfile.parentConversationId ?? null, memberships: memberships ?? [] });
 }

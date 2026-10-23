@@ -14,7 +14,9 @@ afterAll(() => {
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousStateDir;
   fs.rmSync(sandbox, { recursive: true, force: true });
 });
-const { viewerMcpBindings } = await import("./bindings");
+const { viewerMcpBindings, operatorConversationFromSnapshot } = await import("./bindings");
+const { AgentRegistry } = await import("@/lib/agent/registry");
+const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
 const { createMcpToolService, MemoryMcpReceiptStore } = await import("./server");
 const { roleMemoryCollection, projectView, learnedRulesBlock } = await import("@/lib/memory/roleStore");
 const { chooseSource, SOURCE_STATES, sourceTurnsEnginesOff } = await import("@/lib/memory/fixtures/source");
@@ -119,4 +121,31 @@ test("a designated seat keeps its own path in Delegatus mode", async () => {
   chooseSource("active");
   const api = service({ kind: "manager", role: "orchestrator", seats: [{ project, conversationId, path: null }] });
   expect(await call(lesson("role"), api)).toMatchObject({ ok: true, roleId: "orchestrator", left: [{ scope: `role:${project}:orchestrator` }] });
+});
+
+test("the registry's proof admits an operator-origin root and refuses an external root of the same shape", async () => {
+  chooseSource("active");
+  const registry = new AgentRegistry(path.join(sandbox, `registry-${state}.json`), undefined, undefined, { sqliteMode: "off" });
+  const root = (origin: { kind: "operator" } | { kind: "external" }) => {
+    const begun = registry.beginSpawnRequest({ engine: "codex", cwd: "/repo", origin, explicitProject: project,
+      launchProfile: emptyLaunchProfile({ cwd: "/repo", title: "Root conversation" }) });
+    if (begun.kind !== "created") throw new Error("expected a fresh admission");
+    const sessionId = `${origin.kind}-session`;
+    const settled = registry.settleSpawn(begun.receipt.launchId, { key: { engine: "codex", sessionId }, artifactPath: `/sessions/${sessionId}.jsonl`, cwd: "/repo",
+      accountId: "account", status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+    if (settled.kind !== "settled") throw new Error("settlement conflict");
+    return settled.conversation.id;
+  };
+  const external = root({ kind: "external" });
+  const operator = root({ kind: "operator" });
+  const caller = (id: string, kind = "agent") => createMcpToolService(viewerMcpBindings(undefined, undefined, {
+    callerAttribution: () => ({ kind, conversationId: id, role: null }),
+    authorizedSeats: () => [],
+    operatorConversation: (asked: string) => operatorConversationFromSnapshot(registry.readOnlySnapshot(), asked),
+    listPipelineRecords: () => [],
+  } as never), new MemoryMcpReceiptStore());
+  expect(await call(lesson("project"), caller(external))).toMatchObject({ ok: false, details: { code: "LESSON_NOT_AN_ATTEMPT" } });
+  expect(await call(lesson("machine"), caller(external, "gateway"))).toMatchObject({ ok: false, details: { code: "LESSON_NOT_A_SEAT" } });
+  expect(roleMemoryCollection()?.snapshot() ?? []).toEqual([]);
+  expect(await call(lesson("project"), caller(operator))).toMatchObject({ ok: true, left: [{ scope: `project:${project}` }] });
 });

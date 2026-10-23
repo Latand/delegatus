@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
 import { automaticMemoryExcluded, roleIsClean } from "./eligibility";
+import { ROLE_MEMORY_HISTORY_LIMIT, type RuleDeparture } from "./roleTypes";
+import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
+import { defaultRoleParameterValue } from "@/lib/roles/parameters";
 
 /* The weekly memory report (docs/design/memory-source-switch.md §6, slice 6):
    the metrics of §6.2 and the load of §6.4 for any windows, the guards of
@@ -29,7 +32,11 @@ export interface MetricsAttempt {
 export interface MetricsPipeline {
   id: string;
   project: string;
-  stages: { id: string; kind: string; onFail?: unknown; effectiveRole?: { roleId?: string | null } | null; role?: { roleId?: string | null; params?: Record<string, unknown> | null } | null }[];
+  stages: {
+    id: string; kind: string; onFail?: unknown; effectiveRole?: { roleId?: string | null } | null; role?: { roleId?: string | null; params?: Record<string, unknown> | null } | null;
+    /** A runtime the stage itself chose over its role's preset. */
+    engine?: string | null; model?: string | null; effort?: string | null;
+  }[];
   runs: { stageId: string; attempts: MetricsAttempt[] }[];
 }
 export interface MetricsDelivery { at: string; engineMemory?: readonly unknown[] }
@@ -208,9 +215,14 @@ export interface WindowReport {
     deploys: number;
     presets: Record<"builder" | "reviewer", Record<string, number>>;
   };
-  /** `engineMemoryStarts` is null when the ledger cannot answer for the window. `scaffolds` counts
-      launch variants (project, role and parameters) and the variants whose scaffold changed. */
-  guards: { engineMemoryStarts: number | null; neverCuratedEvictions: number; attemptsChange: number | null; heldChanges: number; scaffolds: Record<"builder" | "reviewer", { variants: number; changed: number }> };
+  /** `engineMemoryStarts` is null when the ledger cannot answer for the window. `scaffolds` and
+      `presets` count launch variants (project, role and effective parameters) and the variants whose
+      scaffold, or whose engine, model and effort, changed inside the window. */
+  guards: {
+    engineMemoryStarts: number | null; neverCuratedEvictions: number; attemptsChange: number | null; heldChanges: number;
+    scaffolds: Record<"builder" | "reviewer", { variants: number; changed: number }>;
+    presets: Record<"builder" | "reviewer", { variants: number; changed: number }>;
+  };
   /** A window that passed every guard; false when a guard failed or could not be checked. */
   valid: boolean;
   invalidBecause: string[];
@@ -222,6 +234,20 @@ export interface WindowReport {
 }
 
 const count = (target: Record<string, number>, key: string) => { target[key] = (target[key] ?? 0) + 1; };
+
+/** The parameter values a launch renders its scaffold with, as pipelineRoleLookup resolves them: an
+    omitted or blank value takes the role's shipped default, and a key the role does not declare
+    renders nothing. So `{}` and `{ domain: "general" }` are one builder variant. */
+export function effectiveRoleParams(roleId: string, params: Record<string, unknown> | null | undefined): [string, string][] {
+  const given = params ?? {};
+  const definition = ROLE_DEFAULTS.find(role => role.id === roleId);
+  if (!definition) return Object.keys(given).sort().map(key => [key, String(given[key])]);
+  return definition.parameters.map(parameter => {
+    const chosen = given[parameter.key];
+    const value = chosen !== undefined && chosen !== null && chosen !== "" ? chosen : defaultRoleParameterValue(parameter);
+    return [parameter.key, String(value)] as [string, string];
+  }).sort(([a], [b]) => a.localeCompare(b));
+}
 
 function lessonKind(row: Record<string, unknown>): string {
   if (typeof row.rewrote === "string") return "rewrite";
@@ -256,6 +282,37 @@ function concurrency(intervals: readonly [number, number][], window: MetricsWind
   return { mean: to > from ? covered / (to - from) : 0, peak };
 }
 
+/** Rules that left the injected text in the window, from each rule's append-only departure log
+    (roleTypes.ts RuleDeparture): what it was when it left, so a later restore, curation or re-archive
+    changes nothing here. `complete` is false when an archive in the window has no logged departure
+    (written before the log existed) or a scope's history no longer reaches back over the window:
+    the evictions then cannot be counted, which is no evidence that there were none (§6.5). */
+export function windowDepartures(memory: MetricsInput["memory"], window: MetricsWindow): { evictions: { neverCurated: number; curated: number }; adoptedArchived: number; complete: boolean } {
+  const evictions = { neverCurated: 0, curated: 0 };
+  let adoptedArchived = 0, complete = true;
+  const logged = new Map<string, readonly RuleDeparture[]>();
+  for (const row of memory) {
+    if (row.kind !== "rule" || row.versionOf || typeof row.id !== "string") continue;
+    const log = Array.isArray(row.departures) ? row.departures as RuleDeparture[] : [];
+    logged.set(row.id, log);
+    const left = log.filter(departure => inside(departure.at, window));
+    for (const departure of left) if (departure.reason === "budget") { if (departure.curated) evictions.curated += 1; else evictions.neverCurated += 1; }
+    if (left.length && (row.source as { origin?: string } | undefined)?.origin === "import") adoptedArchived += 1;
+    if (row.state === "archived" && inside(row.changedAt as string, window) && !log.some(departure => departure.at === row.changedAt)) complete = false;
+  }
+  for (const row of memory) {
+    if (row.kind !== "scope" || !Array.isArray(row.history)) continue;
+    const history = row.history as { at: string; pass?: string; archived?: string[] }[];
+    const ordinary = history.filter(entry => !entry.pass);
+    if (ordinary.length >= ROLE_MEMORY_HISTORY_LIMIT && !(Math.min(...ordinary.map(entry => ms(entry.at))) <= ms(window.from))) complete = false;
+    for (const entry of history) {
+      if (!inside(entry.at, window)) continue;
+      for (const id of entry.archived ?? []) if (!(logged.get(id) ?? []).some(departure => departure.at === entry.at)) complete = false;
+    }
+  }
+  return { evictions, adoptedArchived, complete };
+}
+
 /** Metrics, load and guards for one window. `baselineAttempts` drives the load guard. */
 export function windowReport(input: MetricsInput, window: MetricsWindow, baselineAttempts?: number): WindowReport {
   const legacy = legacyGenerations(input.imports);
@@ -283,8 +340,8 @@ export function windowReport(input: MetricsInput, window: MetricsWindow, baselin
     if (attempt.activatedBy?.edge === "fail") fixRoundAttempts.add(`${pipeline.id}\u0000${run.stageId}\u0000${attempt.n}`);
   }
   const lessons: WindowReport["lessons"] = { stage: {}, fixRound: {}, seatRules: 0, operatorRules: 0 };
-  const evictions = { neverCurated: 0, curated: 0 };
-  let adoptedArchived = 0;
+  const departures = windowDepartures(input.memory, window);
+  const { evictions, adoptedArchived } = departures;
   for (const row of input.memory) {
     if (row.kind === "request" && inside(row.at as string, window)) {
       count(fixRoundAttempts.has(`${row.pipelineId}\u0000${row.stageId}\u0000${row.attempt}`) ? lessons.fixRound : lessons.stage, lessonKind(row));
@@ -294,10 +351,6 @@ export function windowReport(input: MetricsInput, window: MetricsWindow, baselin
     if (inside(row.createdAt as string, window)) {
       if (source?.origin === "seat") lessons.seatRules += 1;
       if (source?.origin === "operator") lessons.operatorRules += 1;
-    }
-    if (row.state === "archived" && inside(row.changedAt as string, window)) {
-      if (row.reason === "budget") { if (row.curatedAt) evictions.curated += 1; else evictions.neverCurated += 1; }
-      if (source?.origin === "import") adoptedArchived += 1;
     }
   }
   const imports: WindowReport["imports"] = { adopted: 0, dropped: {}, adoptedArchived };
@@ -329,9 +382,11 @@ export function windowReport(input: MetricsInput, window: MetricsWindow, baselin
     deploys: (input.deployments ?? []).filter(row => row.phase === "succeeded" && inside(row.updatedAt, window)).length,
     presets: { builder: {}, reviewer: {} },
   };
-  // A role renders a different scaffold per parameter (a builder's domain, a fix round's mode), so a
-  // scaffold is compared only with launches of the same project, role and parameters (§6.5).
+  // A role renders a different scaffold and runtime per parameter (a builder's domain, a fix round's
+  // mode), so a scaffold or preset is compared only with launches of the same project, role and
+  // effective parameters (§6.5); a runtime the stage itself chose is a variant of its own.
   const scaffolds = { builder: new Map<string, Set<string>>(), reviewer: new Map<string, Set<string>>() };
+  const presets = { builder: new Map<string, Set<string>>(), reviewer: new Map<string, Set<string>>() };
   for (const { pipeline, stage, attempt } of started) {
     const role = attempt.effectiveRole;
     if (!automaticMemoryExcluded({ roleId: role?.roleId ?? stage?.effectiveRole?.roleId ?? null, stage: stage ?? null }) && !roleIsClean(role?.roleId)) load.nonClean += 1;
@@ -340,16 +395,18 @@ export function windowReport(input: MetricsInput, window: MetricsWindow, baselin
     count(load.byProject, pipeline.project);
     if (role?.roleId === "builder" || role?.roleId === "reviewer") {
       count(load.presets[role.roleId], `${role.engine ?? "unknown"}/${role.model ?? "unknown"}`);
-      const params = stage?.role?.params ?? {};
-      const variant = JSON.stringify([pipeline.project, Object.keys(params).sort().map(key => [key, params[key]])]);
+      const variant = JSON.stringify([pipeline.project, effectiveRoleParams(role.roleId, stage?.role?.params), [stage?.engine ?? null, stage?.model ?? null, stage?.effort ?? null]]);
       const hashes = scaffolds[role.roleId].get(variant) ?? new Set<string>();
       hashes.add(createHash("sha256").update(role.promptScaffold ?? "").digest("hex"));
       scaffolds[role.roleId].set(variant, hashes);
+      const runtimes = presets[role.roleId].get(variant) ?? new Set<string>();
+      runtimes.add(JSON.stringify([role.engine ?? null, role.model ?? null, role.effort ?? null]));
+      presets[role.roleId].set(variant, runtimes);
     }
   }
 
   const ledger = Array.isArray(input.deliveries) ? input.deliveries as readonly MetricsDelivery[] : null;
-  const unverified: string[] = [];
+  const unverified: string[] = departures.complete ? [] : ["departure-log-incomplete"];
   if (!ledger) unverified.push(`delivery-ledger-${(input.deliveries as { unavailable: string }).unavailable}`);
   else {
     // The ledger keeps its newest starts only. A start before its oldest row may have loaded engine memory unseen.
@@ -362,11 +419,13 @@ export function windowReport(input: MetricsInput, window: MetricsWindow, baselin
   const heldChanges = (input.heldChanges ?? []).filter(at => inside(at, window)).length;
   const changed = (variants: Map<string, Set<string>>) => [...variants.values()].filter(hashes => hashes.size > 1).length;
   const scaffoldGuard = { builder: { variants: scaffolds.builder.size, changed: changed(scaffolds.builder) }, reviewer: { variants: scaffolds.reviewer.size, changed: changed(scaffolds.reviewer) } };
+  const presetGuard = { builder: { variants: presets.builder.size, changed: changed(presets.builder) }, reviewer: { variants: presets.reviewer.size, changed: changed(presets.reviewer) } };
   const invalidBecause = [
     ...(engineMemoryStarts ? ["engine-memory-loaded"] : []),
     ...(evictions.neverCurated ? ["never-curated-eviction"] : []),
     ...(attemptsChange !== null && Math.abs(attemptsChange) > 0.5 ? ["load-changed"] : []),
     ...(heldChanges || scaffoldGuard.builder.changed || scaffoldGuard.reviewer.changed ? ["held-still-changed"] : []),
+    ...(presetGuard.builder.changed || presetGuard.reviewer.changed ? ["preset-changed"] : []),
   ];
   return {
     window,
@@ -375,7 +434,7 @@ export function windowReport(input: MetricsInput, window: MetricsWindow, baselin
     fixRounds: { perLane, mean: perLane.length ? mean(perLane) : null, interval: bootstrapMean(perLane), median: perLane.length ? median(perLane) : null },
     repeatedClasses: { repeated, later, share: later ? repeated / later : null, interval: wilson(repeated, later) },
     lessons, evictions, imports, load,
-    guards: { engineMemoryStarts, neverCuratedEvictions: evictions.neverCurated, attemptsChange, heldChanges, scaffolds: scaffoldGuard },
+    guards: { engineMemoryStarts, neverCuratedEvictions: evictions.neverCurated, attemptsChange, heldChanges, scaffolds: scaffoldGuard, presets: presetGuard },
     valid: invalidBecause.length === 0 && unverified.length === 0,
     invalidBecause,
     unverified,

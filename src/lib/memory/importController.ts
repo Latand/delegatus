@@ -20,8 +20,10 @@ export function scheduleMemoryImport(now: () => number = Date.now): Promise<void
     // The engines position: a due periodic sync extends the ready import (§4.9).
     if (source?.source === "engines" && source.importId) {
       const record = readImportRecord(source.importId);
-      if (!memorySyncDue(record, now())) return;
-      await withViewerOperation("memory.import.sync", () => runMemoryImport({ importId: source.importId!, previous: record!.previous, sync: true }));
+      const at = now();
+      if (!memorySyncDue(record, at)) return;
+      // The helper stamps the run with the clock that found it due, so the next due time follows that clock.
+      await withViewerOperation("memory.import.sync", () => runMemoryImport({ importId: source.importId!, previous: record!.previous, sync: true, at: new Date(at).toISOString() }));
       return;
     }
     if (source?.source !== "delegatus" || !source.importId) return;
