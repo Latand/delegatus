@@ -805,6 +805,39 @@ test("structured-host startup retries an arbitrary recoverable adoption error", 
   }
 });
 
+test("structured-host startup failure diagnostics retain the host key and a redacted message", async () => {
+  const privateDiagnostic = path.join(os.homedir(), "fixture", "runtime.sock");
+  const failure = Object.assign(new RuntimeHostUnavailableError(privateDiagnostic), {
+    hostKey: "structured-host-fixture",
+  });
+  const logged: unknown[][] = [];
+
+  try {
+    await runStructuredHostStartup(
+      async () => { throw failure; },
+      (...args) => { logged.push(args); },
+      {
+        random: () => 0.5,
+        schedule: () => ({ unref() {} }),
+      },
+    );
+
+    expect(logged).toEqual([[
+      "[structured hosts] startup adoption failed; retry scheduled",
+      {
+        message: "~/fixture/runtime.sock",
+        hostKey: "structured-host-fixture",
+        category: "runtime-host-unavailable",
+        attempt: 1,
+        retryInMs: 5_000,
+      },
+    ]]);
+    expect(JSON.stringify(logged)).not.toContain(privateDiagnostic);
+  } finally {
+    markStructuredHostStartupReady();
+  }
+});
+
 test("release activation can wait until structured-host adoption recovers", async () => {
   const scheduled: Array<() => void> = [];
   let attempts = 0;

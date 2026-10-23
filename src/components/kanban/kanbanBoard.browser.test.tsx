@@ -8709,7 +8709,7 @@ describe("columns balanced on large screens, stage pills and heads on one line",
     });
     const pills = [...board.querySelectorAll('.card[data-id^="task:t-bal-"] .pb-pills .pb-pill')].filter(pill => pill.getBoundingClientRect().width > 0).map(pill => {
       /* The pill's name is .pb-name since the one pipeline block (#2072). */
-      const name = pill.querySelector(".pb-name, .pname");
+      const name = pill.querySelector(".pb-name");
       const model = pill.querySelector(".imodel");
       const parts = [pill.querySelector(".pdot"), pill.querySelector(".pident > span:first-child"), model, pill.querySelector(".reasoning-slot")].filter(Boolean);
       const r = box(pill);

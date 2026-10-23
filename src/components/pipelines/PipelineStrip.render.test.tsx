@@ -140,6 +140,14 @@ test("the status dot follows the tone matrix (accent busy, amber attention, ok d
   expect(render(pipeline({ state: "needs_decision" }))).not.toContain("rounded-full bg-danger");
 });
 
+test("a paused pipeline keeps a neutral status dot rather than requesting attention (#2279)", () => {
+  const html = render(pipeline({ state: "paused" }));
+  const dot = html.slice(0, html.indexOf("aria-hidden"));
+
+  expect(dot).toContain("bg-strong");
+  expect(dot).not.toContain("bg-warning");
+});
+
 test("the compact pipeline surface shows the 8-character base SHA and copies the full ref (#388)", () => {
   const baseRef = "48c739bbcc87b3244aee7fb0e2d1b3f8e312548f";
   const html = renderToStaticMarkup(<PipelineStrip pipeline={pipeline({ baseRef, lastPassedCommit: baseRef })} compact />);
