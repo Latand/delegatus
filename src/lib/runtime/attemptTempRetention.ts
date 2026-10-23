@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Database } from "bun:sqlite";
 import { statePath } from "@/lib/configDir";
+import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { attemptTempJournalPath, sweepStaleTempDirs, type ProcessScan } from "@/lib/tempSweep";
 import { allocatedAttemptBytes, attemptReferencesClear, inspectAttemptTree, removeAttemptTree, RepositoryLinkInventory } from "./attemptTempFilesystem";
@@ -17,6 +18,10 @@ export type AttemptTempOwner = {
 type Row = AttemptTempOwner & { identity: string; released: number; checkedAt: number; bytes: number };
 export const DEFAULT_ATTEMPT_TEMP_CAP_BYTES = 100 * 1024 ** 3;
 
+const attemptTempIndexes = declaredIndexes([
+  "CREATE INDEX IF NOT EXISTS roots_due ON roots(checkedAt,createdAt,directory)",
+]);
+
 /** A separate, small ledger: selecting a tick never reads pipeline history or
  * walks all roots. The due index also prevents live roots starving old ones. */
 export class AttemptTempStore {
@@ -27,6 +32,7 @@ export class AttemptTempStore {
     if (!sqlite) throw new Error("Attempt temp retention requires Bun");
     this.db = new sqlite.Database(filename, { create: true });
     try {
+      attemptTempIndexes.assertRepairAuthority(this.db, path.dirname(filename));
       this.db.exec("PRAGMA busy_timeout=0");
       this.db.exec("PRAGMA journal_mode=WAL");
       this.db.exec(`CREATE TABLE IF NOT EXISTS roots (
@@ -34,7 +40,7 @@ export class AttemptTempStore {
         retainUntilClose INTEGER NOT NULL, createdAt REAL NOT NULL,
         identity TEXT NOT NULL, released INTEGER NOT NULL DEFAULT 0,
         checkedAt REAL NOT NULL DEFAULT 0, bytes REAL NOT NULL DEFAULT 0)`);
-      this.db.exec("CREATE INDEX IF NOT EXISTS roots_due ON roots(checkedAt,createdAt,directory)");
+      attemptTempIndexes.install(this.db, path.dirname(filename));
       this.db.exec("CREATE TABLE IF NOT EXISTS totals (id INTEGER PRIMARY KEY CHECK(id=1), bytes REAL NOT NULL)");
       this.db.exec("INSERT OR IGNORE INTO totals VALUES (1,0)");
       this.db.exec("CREATE TRIGGER IF NOT EXISTS roots_bytes_update AFTER UPDATE OF bytes ON roots BEGIN UPDATE totals SET bytes=bytes+NEW.bytes-OLD.bytes WHERE id=1; END");

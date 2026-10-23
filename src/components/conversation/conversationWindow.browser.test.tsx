@@ -35,6 +35,42 @@ const LAUNCH: LaunchOptions = {
 };
 const FIXTURE = "src/components/conversation/conversationWindowEvidence.fixture.tsx";
 
+describe("scoped memory cap", () => {
+  browserTest("the effective cap and clamp note fit every locale, theme and viewport", async () => {
+    const out = path.resolve(".artifacts/memory-caps");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    let browser: Browser | null = null;
+    try {
+      browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        for (const width of [390, 1280]) for (const mode of ["clamped", "unenforced"]) {
+          const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=memory-cap&lang=${lang}&mode=${mode}`, { width, height: 844 }, theme, lang);
+          try {
+            for (const surface of ["completed", "placeholder", "row"]) {
+              const frame = page.locator(`[data-memory-surface="${surface}"]`);
+              const note = frame.locator("[data-agent-memory-cap]");
+              await note.waitFor();
+              await note.scrollIntoViewIfNeeded();
+              expect(await note.innerText()).toBe(mode === "unenforced" ? translate(lang, "agentMemory.unenforced")
+                : `${translate(lang, "agentMemory.cap", { size: 8 })} ${translate(lang, "agentMemory.clamped", { size: 12 })}`);
+              const bounds = await note.evaluate(element => {
+                const frame = element.closest("[data-memory-surface]")!.getBoundingClientRect();
+                const box = element.getBoundingClientRect();
+                return { overflow: element.scrollWidth > element.clientWidth, inside: box.top >= frame.top && box.bottom <= frame.bottom };
+              });
+              expect(bounds.overflow).toBe(false);
+              expect(bounds.inside).toBe(true);
+            }
+            expect(pageErrors).toEqual([]);
+            await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-${mode}.png`), fullPage: true });
+          } finally { await context.close(); }
+        }
+      }
+    } finally { await browser?.close(); served.stop(); }
+  });
+});
+
 describe("#1793 launch-prompt bubble", () => {
   /*
    * Rendered evidence for issue #1793: a launch whose receipt says its initial
