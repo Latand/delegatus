@@ -622,6 +622,51 @@ test("ending projection preserves offset and legacy timestamps through archive r
 });
 
 
+/* A refresh compiled into a row trigger made every registry write several
+   times slower. The row triggers only queue owner and delivery changes; an
+   older release's write leaves its change queued, so the projection is not
+   trusted until this release's next write or preparation refreshes it. */
+test("row triggers queue ending changes, a reader skips a projection with queued changes, and the next write drains them", async () => {
+  const { dataset, open } = history();
+  const legacy = new Database(dataset.filename);
+  try { legacy.run("CREATE TRIGGER registry_rows_ending_insert AFTER INSERT ON registry_rows BEGIN SELECT 1; END"); } finally { legacy.close(); }
+  const store = open();
+  await store.prepareReadOnlySnapshot();
+  const since = "2098-01-01T00:00:00.000Z", stamp = "2099-01-01T00:00:00.000Z";
+  const db = new Database(dataset.filename);
+  try {
+    const triggers = db.query<{ name: string; sql: string }, []>(
+      "SELECT name,sql FROM sqlite_master WHERE type='trigger' AND tbl_name IN ('registry_rows','registry_cold')").all();
+    expect(triggers.filter(trigger => trigger.sql.includes("registry_owner_endings"))).toEqual([]);
+    expect(triggers.filter(trigger => trigger.sql.includes("registry_owner_ending_changes")).map(trigger => trigger.name).sort()).toEqual(
+      ["registry_cold", "registry_rows"].flatMap(table => ["delete", "insert", "update"].map(event => `${table}_ending_change_${event}`)));
+    expect(triggers.some(trigger => trigger.name === "registry_rows_ending_insert")).toBe(false);
+    const queued = () => db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM registry_owner_ending_changes").get()!.n;
+    const projected = (key: string) => db.query<{ ending_ms: number | null }, [string]>("SELECT ending_ms FROM registry_owner_endings WHERE operation_id=?").get(key)?.ending_ms;
+    expect(queued()).toBe(0);
+    // An older release's write: a new archive version of one owner, mapped in place.
+    const key = db.query<{ row_key: string }, []>("SELECT row_key FROM registry_cold WHERE collection='deliveryOperationOwners' ORDER BY row_key LIMIT 1").get()!.row_key;
+    const before = projected(key);
+    const version = db.query<{ id: number }, [string, string]>(`INSERT INTO registry_archive(collection,row_key,value_json,row_order)
+      SELECT a.collection,a.row_key,json_set(a.value_json,'$.settledAt',?),a.row_order
+      FROM registry_cold c JOIN registry_archive a ON a.id=c.archive_id
+      WHERE c.collection='deliveryOperationOwners' AND c.row_key=? RETURNING id`).get(stamp, key)!;
+    db.query("UPDATE registry_cold SET archive_id=? WHERE collection='deliveryOperationOwners' AND row_key=?").run(version.id, key);
+    expect(queued()).toBeGreaterThan(0);
+    expect(projected(key)).toBe(before!);
+    // The stale projection is not read: the compatibility selection names the owner.
+    expect(archivedOwnersEndedSince(store.readOnlySnapshot().file, since)).toEqual([key]);
+    // This release's next write drains the queue in its own transaction.
+    store.mutate(file => {
+      const entry = Object.keys(file.entries)[0]!;
+      file.entries[entry] = { ...file.entries[entry]!, updatedAt: "2026-10-23T00:00:00.000Z" };
+    }, false);
+    expect(queued()).toBe(0);
+    expect(projected(key)).toBe(Date.parse(stamp));
+    expect(archivedOwnersEndedSince(store.readOnlySnapshot().file, since)).toEqual([key]);
+  } finally { db.close(); }
+});
+
 test("ending preparation resumes a committed partial cursor in a fresh process", async () => {
   const { dataset } = history();
   const db = new Database(dataset.filename);

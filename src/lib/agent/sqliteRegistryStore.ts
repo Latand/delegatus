@@ -21,7 +21,7 @@ import { reboundAssembledMcpGrants, rowClaimsBeyondBaselineGrant, type McpGrantP
 import { identityMaterializationFence } from "./identityMaterialization";
 import type { AgentRegistryEntry, ConversationAuthorityFacts, RegistryFile, SeatChildrenAnchor, SeatChildrenPage, SnapshotSpawnProjection, SnapshotTitleConversationProjection } from "./registry";
 import { sessionKeyId } from "./sessionKey";
-import { endingInstant, prepareRegistryEndingsBatch, registryEndingsPrepared } from "./registryEndings";
+import { drainRegistryEndingChanges, endingInstant, prepareRegistryEndingsBatch, registryEndingChangesPending, registryEndingsPrepared } from "./registryEndings";
 import { archiveCandidates, archiveInactiveRegistryRows, installRegistryArchive } from "./registryArchive";
 
 /** The collections the MCP grant decision reads and writes. Touching any one of
@@ -1002,6 +1002,8 @@ export class SqliteAgentRegistryStore {
   /** The change journal position the cold key set was read at; 0 forces a full read. */
   private coldKeysChangeId = 0;
   private changesReady = false;
+  /** Whether this connection's file has the ending change queue; read on first use. */
+  private endingQueueReady: boolean | undefined;
   private recordsSource = "registry_rows";
   private readonly localRows = new Map<string, { dataVersion: string; valueJson: string | null }>();
   /** Frozen copies of rows for the shared view. Keyed by what a row was
@@ -1087,6 +1089,7 @@ export class SqliteAgentRegistryStore {
         if (!table || !this.imported()) throw new Error(`${path.basename(filename)} holds no imported registry`);
         this.recordsSource = this.db.query("SELECT 1 FROM sqlite_master WHERE name='registry_records'").get() ? "registry_records" : "registry_rows";
         this.changesReady = Boolean(this.db.query("SELECT 1 FROM sqlite_master WHERE name='registry_changes'").get());
+        this.endingQueueReady = undefined;
         this.grantJournalReady = Boolean(this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'registry_grant_changes'").get());
         this.generationIdentitiesReady = this.generationIdentitiesInstalled(this.db);
         return;
@@ -1161,6 +1164,7 @@ export class SqliteAgentRegistryStore {
     try {
     this.grantJournalReady = true;
     this.changesReady = Boolean(this.db.query("SELECT 1 FROM sqlite_master WHERE name='registry_changes'").get());
+    this.endingQueueReady = undefined;
     this.recordsSource = this.changesReady ? "registry_records" : "registry_rows";
     const columns = this.db.query<{ name: string }, []>("PRAGMA table_info(registry_rows)").all();
     if (!columns.some((column) => column.name === "row_order")) {
@@ -1546,6 +1550,7 @@ export class SqliteAgentRegistryStore {
     this.localRows.clear();
     this.recordsSource = db.query("SELECT 1 FROM sqlite_master WHERE name='registry_records'").get() ? "registry_records" : "registry_rows";
     this.changesReady = Boolean(db.query("SELECT 1 FROM sqlite_master WHERE name='registry_changes'").get());
+    this.endingQueueReady = undefined;
     this.grantJournalReady = Boolean(db.query(
       "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'registry_grant_changes'",
     ).get());
@@ -2544,6 +2549,7 @@ export class SqliteAgentRegistryStore {
     try {
       const moved = archiveInactiveRegistryRows(this.db,limit,preselected);
       if (moved) {
+        this.drainEndingChanges();
         this.setMeta("revision",String(Number(this.meta("revision") ?? 0)+1));
         this.db.run("DELETE FROM registry_changes WHERE seq <= (SELECT MAX(seq)-100000 FROM registry_changes)");
         this.db.run("DELETE FROM registry_grant_changes WHERE seq <= (SELECT MAX(seq)-100000 FROM registry_grant_changes)");
@@ -3267,7 +3273,9 @@ export class SqliteAgentRegistryStore {
     projectionReaders.set(file,(collection,projector) => this.projectRows(file,collection,projector,ids.get(collection),identity));
     if (this.changesReady) endedOwnerReaders.set(file,(since, page) => {
       if (page && (!Number.isSafeInteger(page.limit) || page.limit < 1 || page.limit > 5000)) throw new RangeError("invalid ending page limit");
-      const ready = this.db.query<{ value: string }, []>("SELECT value FROM registry_meta WHERE key='owner_endings_cursor'").get()?.value === "complete";
+      // A queued change not yet refreshed leaves the projection behind its rows.
+      const ready = this.db.query<{ value: string }, []>("SELECT value FROM registry_meta WHERE key='owner_endings_cursor'").get()?.value === "complete"
+        && !registryEndingChangesPending(this.db);
       if (ready) {
         const ms = Date.parse(since);
         const legacy = this.db.query<{ operation_id: string; ending_text: string }, []>(`SELECT e.operation_id,e.ending_text FROM registry_owner_endings e
@@ -5112,6 +5120,16 @@ export class SqliteAgentRegistryStore {
     this.setMeta("revision", String(revision));
     if (this.changesReady) this.db.run("DELETE FROM registry_changes WHERE seq <= (SELECT MAX(seq)-100000 FROM registry_changes)");
     this.db.exec("DELETE FROM registry_grant_changes WHERE seq <= (SELECT MAX(seq) - 100000 FROM registry_grant_changes)");
+    this.drainEndingChanges();
+  }
+
+  /** Refreshes the ending projection for the owner and delivery rows queued
+      in this transaction, a bounded number at a time. A change left queued
+      (an older release's write, a longer backlog) keeps the projection from
+      reading as ready until a later write or preparation drains it. */
+  private drainEndingChanges(): void {
+    this.endingQueueReady ??= Boolean(this.db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='registry_owner_ending_changes'").get());
+    if (this.endingQueueReady) drainRegistryEndingChanges(this.db, 64);
   }
 
   private deleteRow(collection: RowCollection,key: string): void {

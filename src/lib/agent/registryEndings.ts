@@ -63,15 +63,23 @@ export function installRegistryEndings(db: Database): void {
     "CREATE INDEX IF NOT EXISTS registry_owner_endings_time ON registry_owner_endings(ending_ms,operation_id)",
     "CREATE INDEX IF NOT EXISTS registry_owner_endings_delivery ON registry_owner_endings(delivery_id,operation_id)",
     "CREATE INDEX IF NOT EXISTS registry_owner_endings_unparsed ON registry_owner_endings(operation_id) WHERE ending_ms IS NULL AND ending_text IS NOT NULL",
-    ...["registry_rows", "registry_cold"].flatMap(table => ["INSERT", "UPDATE", "DELETE"].map(event => {
+    /* A refresh compiled into any trigger a row write reaches, even one on
+       another table, made every registry_rows write of any collection several
+       times slower (2.4 instead of 0.4 ms per upsert on a fresh registry).
+       The row triggers only queue an owner or delivery change, which older
+       releases' writes also do. The projection reads as ready only with an
+       empty queue; this release drains it in its own writes and preparation. */
+    "CREATE TABLE IF NOT EXISTS registry_owner_ending_changes (collection TEXT NOT NULL, row_key TEXT NOT NULL)",
+    ...["registry_rows", "registry_cold"].flatMap(table => ["INSERT", "UPDATE", "DELETE"].flatMap(event => {
       const row = event === "DELETE" ? "OLD" : "NEW";
-      return `CREATE TRIGGER IF NOT EXISTS ${table}_ending_${event.toLowerCase()} AFTER ${event} ON ${table}
+      return [
+        // Earlier builds of this projection refreshed inside the row trigger.
+        `DROP TRIGGER IF EXISTS ${table}_ending_${event.toLowerCase()}`,
+        `CREATE TRIGGER IF NOT EXISTS ${table}_ending_change_${event.toLowerCase()} AFTER ${event} ON ${table}
         WHEN ${row}.collection IN ('deliveryOperationOwners','heldDeliveries') BEGIN
-          DELETE FROM registry_owner_endings WHERE operation_id=${row}.row_key AND ${row}.collection='deliveryOperationOwners';
-          ${refreshOwnerEndingSql(`o.row_key=${row}.row_key AND ${row}.collection='deliveryOperationOwners'`)};
-          ${refreshOwnerEndingSql(`o.row_key IN (SELECT operation_id FROM registry_owner_endings WHERE delivery_id=${row}.row_key)
-            AND ${row}.collection='heldDeliveries'`)};
-        END`;
+          INSERT INTO registry_owner_ending_changes(collection,row_key) VALUES (${row}.collection,${row}.row_key);
+        END`,
+      ];
     })),
   ]) db.run(statement);
 }
@@ -87,6 +95,9 @@ export function prepareRegistryEndingsBatch(db: Database, limit = 16): boolean {
   for (const key of keys) insert.run(key.row_key);
   if (mark !== "complete") db.query("INSERT OR REPLACE INTO registry_meta(key,value) VALUES ('owner_endings_cursor',?)")
     .run(keys.length < limit ? "complete" : JSON.stringify(keys.at(-1)!.row_key));
+  // The traversal refreshes every key it has yet to reach; queued changes
+  // drain once it is complete, before the projection reads as ready.
+  const drained = (mark === "complete" || keys.length < limit) && drainRegistryEndingChanges(db, limit);
   const legacy = db.query<{ operation_id: string; ending_text: string }, [number]>(`SELECT operation_id,ending_text FROM registry_owner_endings
     WHERE ending_ms IS NULL AND ending_text IS NOT NULL LIMIT ?`).all(limit);
   const parsed = db.query("UPDATE registry_owner_endings SET ending_ms=?,ending_text=? WHERE operation_id=?");
@@ -94,11 +105,40 @@ export function prepareRegistryEndingsBatch(db: Database, limit = 16): boolean {
     const ms = endingInstant(row.ending_text);
     parsed.run(Number.isFinite(ms) ? ms : null, Number.isFinite(ms) ? row.ending_text : null, row.operation_id);
   }
-  return keys.length < limit && legacy.length < limit;
+  return keys.length < limit && drained && legacy.length < limit;
 }
 
+/** Refreshes queued owner and delivery changes, oldest first, at most `limit`
+    per call, with the statements the row triggers once ran. A change applies
+    to the rows as they are now, so a late refresh writes what an immediate
+    one would have. Answers whether the queue is empty afterwards. */
+export function drainRegistryEndingChanges(db: Database, limit = 64): boolean {
+  const queued = db.query<{ id: number; collection: string; row_key: string }, [number]>(
+    "SELECT rowid AS id,collection,row_key FROM registry_owner_ending_changes ORDER BY rowid LIMIT ?").all(limit);
+  if (queued.length === 0) return true;
+  const removeOwner = db.query("DELETE FROM registry_owner_endings WHERE operation_id=?");
+  const refreshOwner = db.query(refreshOwnerEndingSql("o.row_key=?"));
+  const refreshDelivery = db.query(refreshOwnerEndingSql("o.row_key IN (SELECT operation_id FROM registry_owner_endings WHERE delivery_id=?)"));
+  const done = db.query("DELETE FROM registry_owner_ending_changes WHERE rowid=?");
+  for (const change of queued) {
+    if (change.collection === "deliveryOperationOwners") {
+      removeOwner.run(change.row_key);
+      refreshOwner.run(change.row_key);
+    } else refreshDelivery.run(change.row_key);
+    done.run(change.id);
+  }
+  return queued.length < limit && !db.query("SELECT 1 FROM registry_owner_ending_changes LIMIT 1").get();
+}
+
+/** True while a change awaits its refresh. A file without the queue has no
+    trigger keeping the projection current, so it never reads as drained. */
+export function registryEndingChangesPending(db: Database): boolean {
+  try { return Boolean(db.query("SELECT 1 FROM registry_owner_ending_changes LIMIT 1").get()); }
+  catch { return true; }
+}
 
 export function registryEndingsPrepared(db: Database): boolean {
   return db.query<{ value: string }, []>("SELECT value FROM registry_meta WHERE key='owner_endings_cursor'").get()?.value === "complete"
+    && !registryEndingChangesPending(db)
     && !db.query("SELECT 1 FROM registry_owner_endings WHERE ending_ms IS NULL AND ending_text IS NOT NULL LIMIT 1").get();
 }
