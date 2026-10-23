@@ -70,21 +70,39 @@ test("new snapshots invalidate cursors even at the same report time; malformed a
   expect(readWorktreePage(null).rows).toHaveLength(1);
 });
 
-test("an empty report is distinct from absent, corrupt or locked data; a refused write preserves the old projection", () => {
+test("an empty report is distinct from absent data; the sweep replaces a snapshot held by a reader", () => {
   rejects(null, 503, "unavailable");
   recordWorktreeSweep(report(0));
   expect(readWorktreePage(null)).toMatchObject({ total: 0, rows: [], nextCursor: null });
   const filename = path.join(root, "worktree-drilldown.sqlite");
-  const db = new Database(filename);
+  const db = new Database(filename, { readonly: true });
+  try {
+    db.exec("BEGIN");
+    expect(db.query("SELECT total FROM snapshot").get()).toEqual({ total: 0 });
+    expect(() => recordWorktreeSweep(report(2))).not.toThrow();
+    expect(readWorktreePage(null).total).toBe(2);
+    expect(db.query("SELECT total FROM snapshot").get()).toEqual({ total: 0 });
+    db.exec("ROLLBACK");
+  } finally { db.close(); }
+});
+
+test("a locked projection answers unavailable until the sweep replaces it", () => {
+  recordWorktreeSweep(report(1));
+  const db = new Database(path.join(root, "worktree-drilldown.sqlite"));
   try {
     db.exec("BEGIN EXCLUSIVE");
     rejects(null, 503, "unavailable");
-    expect(() => recordWorktreeSweep(report(2))).toThrow();
-    db.exec("ROLLBACK");
-    expect(readWorktreePage(null).total).toBe(0);
+    recordWorktreeSweep(report(2));
+    expect(readWorktreePage(null).total).toBe(2);
   } finally { db.close(); }
+});
+
+test("the next sweep repairs a damaged projection", () => {
+  const filename = path.join(root, "worktree-drilldown.sqlite");
   fs.writeFileSync(filename, "unreadable snapshot");
   rejects(null, 503, "unavailable");
+  expect(() => recordWorktreeSweep(report(2))).not.toThrow();
+  expect(readWorktreePage(null).total).toBe(2);
 });
 
 test("unrecorded values stay unknown and all checkouts are relative to repository or home", () => {
@@ -101,8 +119,10 @@ test("unrecorded values stay unknown and all checkouts are relative to repositor
 test("an oversized row refuses the whole projection without losing its preceding snapshot", () => {
   recordWorktreeSweep(report(1));
   const large = owners(); large[0]!.task = "я".repeat(65536);
-  expect(() => recordWorktreeSweep(report(2), large)).toThrow();
+  expect(() => recordWorktreeSweep(report(2), large)).not.toThrow();
   expect(readWorktreePage(null).total).toBe(1);
+  expect(JSON.parse(fs.readFileSync(path.join(root, "worktree-sweep-report.json"), "utf8")).kept).toHaveLength(2);
+  expect(fs.readdirSync(root).filter(name => name.startsWith(".worktree-drilldown-"))).toEqual([]);
 });
 
 test.each(["missing-row", "invalid-row", "invalid-meta"])("a damaged %s projection fails closed", damage => {

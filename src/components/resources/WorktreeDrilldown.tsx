@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useLocale, type MessageKey } from "@/lib/i18n";
 import type { WorktreePage } from "@/lib/pipelines/worktreeDrilldown";
@@ -15,12 +15,6 @@ export function WorktreeDrilldown({ onClose }: { onClose: () => void }) {
   const [retry, setRetry] = useState(0);
   const [result, setResult] = useState<{ page?: WorktreePage; error?: string } | null>(null);
   useEffect(() => { dialog.current?.showModal(); }, []);
-  // Disabling a paging button during a read can move focus to the document.
-  // Keep it inside the native modal as each loading/result state commits.
-  useLayoutEffect(() => {
-    const element = dialog.current;
-    if (element?.open && !element.contains(document.activeElement)) element.focus();
-  }, [result]);
   useEffect(() => {
     const controller = new AbortController();
     void (async () => {
@@ -42,7 +36,11 @@ export function WorktreeDrilldown({ onClose }: { onClose: () => void }) {
     })();
     return () => controller.abort();
   }, [cursor, retry]);
-  const navigate = (next: string | null) => { setResult(null); setCursor(next); };
+  const navigate = (next: string | null) => {
+    // Transfer focus before React disables or removes the initiating control.
+    dialog.current?.focus();
+    setResult(null); setCursor(next);
+  };
   const date = (at: string | null) => at ? new Date(at).toLocaleString(locale, { dateStyle: "medium", timeStyle: "medium" }) : t("worktrees.unknownTime");
   const page = result?.page;
   return createPortal(

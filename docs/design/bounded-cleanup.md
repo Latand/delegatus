@@ -555,7 +555,11 @@ Sizes follow the sweep's bounded accounting and may be partial or carried
 forward. The report time and dry-run mode are shown separately.
 
 The sweep worker writes `worktree-drilldown.sqlite` beside its JSON report.
-This derived artifact is replaced transactionally, with a fresh generation
+This derived artifact is built in a fresh file and atomically renamed over its
+predecessor after closing it, so concurrent readers keep their snapshot and a
+damaged artifact is replaced. A projection failure is logged without failing
+the sweep or skipping its cache persistence; the next sweep retries it.
+Each replacement has a fresh generation
 even when report times coincide. `GET /api/resources/worktrees` uses the existing
 same-origin and operator-authority checks and returns four rows per primary-key
 seek. Each encoded row is bounded to 64 KiB. Reads use a zero SQLite busy

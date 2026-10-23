@@ -5,6 +5,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { statePath } from "@/lib/configDir";
+import { fsyncPath } from "@/lib/state/durableJson";
 import type { SweptPipeline, WorktreeKeptReason, WorktreeSweepReport } from "./worktreeSweep";
 
 export const WORKTREE_PAGE_SIZE = 4;
@@ -47,20 +48,26 @@ export function relativeCheckout(checkout: string, repository?: string): string 
   return `~/${relative.split(path.sep).join("/")}`;
 }
 
-/** One producer, the off-thread sweep. A transaction replaces the complete
- * projection; failed writes keep the preceding snapshot. No request rebuilds it.
+/** One producer, the off-thread sweep. Build beside the target, close, then
+ * atomically replace it; readers retain their inode and damage is replaced.
+ * Failed writes keep the preceding snapshot. No request rebuilds it.
  * This separate derived database never changes the shared state-store schema. */
 export function recordWorktreeDrilldown(report: WorktreeSweepReport, pipelines: readonly SweptPipeline[] = []): void {
-  fs.mkdirSync(path.dirname(file()), { recursive: true, mode: 0o700 });
-  const db = new Database(file(), { create: true });
+  const target = file();
+  const parent = path.dirname(target);
+  fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
+  const temporary = fs.mkdtempSync(path.join(parent, ".worktree-drilldown-"));
+  const snapshot = path.join(temporary, "snapshot.sqlite");
+  let db: Database | undefined;
   try {
+    db = new Database(snapshot, { create: true });
+    const source = db;
     db.exec("PRAGMA busy_timeout = 0");
     db.exec("CREATE TABLE IF NOT EXISTS snapshot (id INTEGER PRIMARY KEY CHECK (id = 1), generation TEXT NOT NULL, at TEXT NOT NULL, mode TEXT NOT NULL, total INTEGER NOT NULL)");
     db.exec("CREATE TABLE IF NOT EXISTS retained (id INTEGER PRIMARY KEY, body TEXT NOT NULL CHECK (length(CAST(body AS BLOB)) <= 65536))");
     const owners = new Map(pipelines.map(p => [p.id, p]));
     const insert = db.prepare("INSERT INTO retained (id, body) VALUES (?, ?)");
-    db.transaction(() => {
-      db.exec("DELETE FROM retained");
+    source.transaction(() => {
       report.kept.forEach((kept, index) => {
         const owner = kept.pipelineId ? owners.get(kept.pipelineId) : undefined;
         const repository = kept.repository ?? owner?.repoDir;
@@ -72,11 +79,18 @@ export function recordWorktreeDrilldown(report: WorktreeSweepReport, pipelines: 
         };
         insert.run(index + 1, JSON.stringify(row));
       });
-      db.prepare("INSERT OR REPLACE INTO snapshot VALUES (1, ?, ?, ?, ?)")
+      source.prepare("INSERT INTO snapshot VALUES (1, ?, ?, ?, ?)")
         .run(randomUUID(), report.at, report.mode, report.kept.length);
     })();
-    fs.chmodSync(file(), 0o600);
-  } finally { db.close(); }
+    db.close(); db = undefined;
+    fs.chmodSync(snapshot, 0o600);
+    fsyncPath(snapshot);
+    fs.renameSync(snapshot, target);
+    fsyncPath(parent);
+  } finally {
+    try { db?.close(); }
+    finally { fs.rmSync(temporary, { recursive: true, force: true }); }
+  }
 }
 
 export class WorktreePageError extends Error {

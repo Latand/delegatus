@@ -1922,7 +1922,12 @@ export async function productionWorktreeSweepPorts(
 export function recordWorktreeSweep(report: WorktreeSweepReport, pipelines: readonly SweptPipeline[] = []): void {
   fs.mkdirSync(path.dirname(REPORT_FILE()), { recursive: true, mode: 0o700 });
   writeJsonDurably(REPORT_FILE(), report);
-  recordWorktreeDrilldown(report, pipelines);
+  try { recordWorktreeDrilldown(report, pipelines); }
+  catch (error) {
+    // A derived display artifact cannot interrupt retirement, cache persistence
+    // or the next slice. The next sweep retries from its own kept rows.
+    console.error("[worktree sweep] drilldown projection failed; the next sweep will retry", error instanceof Error ? error.message : String(error));
+  }
 }
 
 /** The production sweep: mode from the environment, report to the state directory. */

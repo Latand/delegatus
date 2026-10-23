@@ -84,16 +84,23 @@ describe("retained worktree drilldown", () => {
         const state = async (value: string) => page.evaluate(value => {
           const url = new URL(location.href); url.searchParams.set("worktree-state", value); history.replaceState(null, "", url);
         }, value);
-        const open = async (value: string) => {
+        const open = async (value: string, captureEntry = false) => {
           await state(value);
           await footerButton.click();
-          await page.locator("[data-open-worktrees]").click();
+          const entry = page.locator("[data-open-worktrees]");
+          if (captureEntry) {
+            await entry.focus();
+            expect(await entry.innerText()).toContain(text("worktrees.title"));
+            expect(await entry.locator("span").last().innerText()).toBe(translate(lang, "worktrees.aggregate", { n: 10, size: "78 MiB" }));
+            await frame("entry", entry);
+          }
+          await entry.click();
           await dialog.waitFor();
         };
-        const frame = async (name: string) => {
+        const frame = async (name: string, target = dialog) => {
           // Text ranges test the actual wrapped lines, including native dialog
           // and scroll clipping; hit tests ensure the top layer owns controls.
-          const geometry = await dialog.evaluate(element => {
+          const geometry = await target.evaluate(element => {
             const failures: string[] = [];
             const bounds = element.getBoundingClientRect();
             const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
@@ -104,7 +111,7 @@ describe("retained worktree drilldown", () => {
               for (const rect of range.getClientRects()) {
                 if (rect.width === 0 || rect.height === 0) continue;
                 if (rect.left < 0 || rect.right > innerWidth || rect.top < 0 || rect.bottom > innerHeight) failures.push(node.textContent);
-                for (let parent = node.parentElement; parent && parent !== element; parent = parent.parentElement) {
+                for (let parent = node.parentElement; parent; parent = parent.parentElement) {
                   const style = getComputedStyle(parent);
                   if (!/(auto|scroll|hidden|clip)/.test(style.overflow + style.overflowX + style.overflowY)) continue;
                   const box = parent.getBoundingClientRect();
@@ -112,23 +119,24 @@ describe("retained worktree drilldown", () => {
                 }
               }
             }
-            for (const button of element.querySelectorAll("button")) {
+            for (const button of [...(element.matches("button") ? [element] : []), ...element.querySelectorAll("button")]) {
               const box = button.getBoundingClientRect();
               if (!button.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2))) failures.push("covered control");
             }
             return { failures, left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom,
-              scrollTop: element.querySelector("[data-worktree-body]")!.scrollTop,
+              text: element.textContent,
+              scrollTop: (element.querySelector("[data-worktree-body]") ?? element.parentElement)!.scrollTop,
               focused: element.contains(document.activeElement), background: getComputedStyle(element).backgroundColor };
           });
           expect(geometry.failures).toEqual([]);
           expect(geometry.focused).toBe(true);
           expect(geometry.scrollTop).toBe(0);
-          expect(geometry.background).not.toBe("rgba(0, 0, 0, 0)");
+          if (name !== "entry") expect(geometry.background).not.toBe("rgba(0, 0, 0, 0)");
           await page.screenshot({ path: path.join(out, `${width}-${lang}-${theme}-${name}.png`) });
           readings.push({ width, lang, theme, name, ...geometry });
         };
         try {
-          await open("ready");
+          await open("ready", true);
           await page.waitForFunction(() => document.querySelectorAll("[data-retained-worktree]").length === 4);
           expect(await dialog.innerText()).toContain(text("worktrees.reason.not-created-by-delegatus"));
           expect(await dialog.innerText()).not.toContain("local-only-commits");
