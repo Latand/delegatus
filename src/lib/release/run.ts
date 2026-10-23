@@ -84,8 +84,30 @@ function settle(project: string, ports: ReleasePorts, run: ReleaseRun, outcome: 
   return settled;
 }
 async function reconcileRun(project: string, ports: ReleasePorts): Promise<string | null> {
-  const run = readReleaseProject(project).live;
+  let run = readReleaseProject(project).live;
   if (!run) return null;
+
+  // A create may have committed durably while its reply was lost. Recover its
+  // receipt before stale task/tag evidence can settle and consume this claim.
+  if (!run.pipelineId) {
+    const pipelineId = ports.lookup?.(run.key);
+    if (pipelineId) {
+      const claim = run;
+      let recovered = false;
+      mutateReleaseProject(project, current => {
+        if (current.live?.key !== claim.key || current.live.cut !== claim.cut
+          || current.live.taskId !== claim.taskId || current.live.pipelineId !== null) return current;
+        recovered = true;
+        return { ...current, live: { ...current.live, pipelineId },
+          request: current.request?.at === claim.requestedAt ? null : current.request };
+      });
+      const current = readReleaseProject(project).live;
+      if (!recovered || !current || current.key !== claim.key || current.cut !== claim.cut
+        || current.taskId !== claim.taskId || current.pipelineId !== pipelineId) return null;
+      run = current;
+    }
+  }
+
   const lane = run.pipelineId ? ports.pipeline(run.pipelineId) : null;
   const outcome = lane?.state === "completed" && lane.merged ? "published"
     : lane?.state === "closed" ? lane.declined ? "declined" : "failed" : null;

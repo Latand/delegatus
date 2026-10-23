@@ -133,6 +133,7 @@ function staleRunFixture() {
 
 test("the copied stale shape settles a done task, consumes its request and releases the next amount run", async () => {
   const h = staleRunFixture();
+  h.ports.lookup = () => null;
   await productionReleaseController(h.ports).reconcile(h.project);
   const settled = readReleaseProject(h.project);
   expect(settled.live).toBeNull();
@@ -160,6 +161,25 @@ test.each(["running", "parked", "completed"])("review: a bound %s pipeline keeps
   }
 });
 
+test.each(["running", "parked", "completed", "unreadable"])("a lost creation receipt is recovered before %s lifecycle and stale signals", async state => {
+  for (const signal of ["task-done", "covering-tag"] as const) {
+    const h = staleRunFixture();
+    h.ports.lookup = key => { expect(key).toBe("old-release"); return "existing-lane"; };
+    h.ports.pipeline = id => {
+      expect(id).toBe("existing-lane");
+      return state === "unreadable" ? null : { state, merged: false, declined: false };
+    };
+    h.ports.taskDone = () => signal === "task-done";
+    h.ports.supersedingTag = async () => signal === "covering-tag" ? "v1.15.0" : null;
+
+    const result = await productionReleaseController(h.ports).reconcile(h.project);
+    expect(result).toBe(state === "unreadable" ? "release: pipeline unreadable" : null);
+    expect(readReleaseProject(h.project).live).toMatchObject({ key: "old-release", cut: "old-cut", pipelineId: "existing-lane" });
+    expect(readReleaseProject(h.project).request).toBeNull();
+    expect(readReleaseProject(h.project).history).toEqual([]);
+  }
+});
+
 test("review: a recovered pipeline receipt with unreadable lifecycle retains its bound run", async () => {
   const h = staleRunFixture();
   mutateReleaseProject(h.project, row => ({ ...row, live: { ...row.live!, pipelineId: "recovered-lane" } }));
@@ -174,6 +194,7 @@ test("review: a recovered pipeline receipt with unreadable lifecycle retains its
 
 test("a published tag supersedes an unbound older cut", async () => {
   const h = staleRunFixture();
+  h.ports.lookup = () => null;
   h.ports.taskDone = () => false;
   h.ports.supersedingTag = async (project, run) => { expect(project).toBe(h.project); expect(run.cut).toBe("old-cut"); return "v1.15.0"; };
   await productionReleaseController(h.ports).reconcile(h.project);
