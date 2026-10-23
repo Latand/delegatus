@@ -150,8 +150,9 @@ async function recordAuthorizedOperatorActivity(
   target: { pid: number; hasPid: boolean; filePath: string; conversationId: string },
   identity: { idempotencyKey?: string },
   kind: "message" | "dialog",
+  inProcessPerson = false,
 ): Promise<AuthorizedOperatorAction> {
-  if (!directOperatorActivityAuthority(req).ok) return { byOperator: false, conversationId: target.conversationId };
+  if (!inProcessPerson && !directOperatorActivityAuthority(req).ok) return { byOperator: false, conversationId: target.conversationId };
   const fallbackEntry = operatorFallbackEntry((await dependencies.completedFileScan()).snapshot.files, target);
   dependencies.recordOperatorRequest(req, {
     kind,
@@ -242,6 +243,9 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
   };
   const deniedActor = actorRejection();
   if (deniedActor) return deniedActor;
+  // A rechecked in-process operator or member is the person's own authority;
+  // the synthetic request it built carries no session cookie.
+  const inProcessPerson = trustedActor?.kind === "operator" || trustedActor?.kind === "member";
 
   let body: { orchestratorRelayProject?: unknown; pid?: unknown; path?: unknown; conversationId?: unknown; clientMessageId?: unknown; operationId?: unknown; text?: unknown; policy?: unknown; image?: unknown; images?: unknown; files?: unknown; action?: unknown; key?: unknown; label?: unknown; question?: unknown; decision?: unknown; requestId?: unknown; answer?: unknown; target?: unknown; model?: unknown; effort?: unknown; fast?: unknown; accountId?: unknown };
   try {
@@ -288,11 +292,16 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
       || (body.files != null && (!Array.isArray(body.files) || body.files.length > 0))) {
       return NextResponse.json({ error: "orchestrator relays accept text only; attachments are not supported" }, { status: 400 });
     }
+    // A team install answers a person without a live member session with the
+    // sign-in refusal its identity gate gives, before relay admission.
+    const anonymousRelay = refuseAnonymous(trustedActor ?? teamActor(req));
+    if (anonymousRelay) return anonymousRelay;
     const admitted = admitOrchestratorRelay(req, body.orchestratorRelayProject,
       typeof body.conversationId === "string" ? body.conversationId : "",
       typeof body.text === "string" ? body.text : "",
       typeof body.clientMessageId === "string" ? body.clientMessageId : undefined,
-      voiceBinding ? { sessionId: voiceBinding.sessionId as string, proposalId: voiceBinding.proposalId as string } : undefined);
+      voiceBinding ? { sessionId: voiceBinding.sessionId as string, proposalId: voiceBinding.proposalId as string } : undefined,
+      inProcessPerson);
     if (!admitted.ok) {
       return NextResponse.json({ error: admitted.error, code: admitted.code, admission: "refused" }, { status: admitted.status });
     }
@@ -384,6 +393,7 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
           target,
           clientMessageId ? { idempotencyKey: clientMessageId } : {},
           "dialog",
+          inProcessPerson,
         );
       } catch (error) {
         if (error instanceof OperatorActivityTargetConflictError) {
@@ -397,7 +407,7 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
       actor: controlCaller ? { kind: "agent", conversationId: controlCaller } : { kind: "operator" },
       ...(["interrupt", "kill"].includes(explicitAction) ? { controlOrigin: controlCaller
         ? { kind: "agent" as const, conversationId: controlCaller }
-        : operatorBrowserRequest(req) ? { kind: "operator" as const } : API_CLIENT_ORIGIN } : {}),
+        : inProcessPerson || operatorBrowserRequest(req) ? { kind: "operator" as const } : API_CLIENT_ORIGIN } : {}),
       conversationId,
       transcriptPath: filePath,
       action: explicitAction,
@@ -529,6 +539,7 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
       operatorTarget,
       clientMessageId ? { idempotencyKey: clientMessageId } : {},
       "message",
+      inProcessPerson,
     );
   } catch (error) {
     if (error instanceof OperatorActivityTargetConflictError) {

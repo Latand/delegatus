@@ -68,8 +68,12 @@ export function directOperatorActivityAuthority(request: Pick<NextRequest, "head
   return requireOperatorAuthority(request);
 }
 
-/** Browser attribution requires a verified cookie. Fetch Metadata adds no authority. */
+/** Browser attribution requires a verified cookie. Fetch Metadata adds no
+    authority; it only subtracts: a browser that labels the request as not sent
+    by a Delegatus page (`none`, `same-site`) is not the page acting. */
 export function operatorBrowserRequest(request: Pick<NextRequest, "headers">): boolean {
+  const site = request.headers.get("sec-fetch-site");
+  if (site !== null && site !== "same-origin") return false;
   return directOperatorActivityAuthority(request).ok && authenticatedSession(request);
 }
 

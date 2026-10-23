@@ -2,6 +2,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { startComposerPayloadRuntime, type ComposerPayloadRuntime } from "@/lib/runtime/fixtures/composerPayloadRuntime";
 import { resetLegacyDocumentStoresForTests } from "@/lib/state/legacyDocumentStore";
 import { saveTasks, loadTasks, TASKS_FILE } from "@/lib/tasks/store";
@@ -37,7 +38,7 @@ const root = path.join(process.env.TMPDIR!,"runtime");
 const previousSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
 const comment = "  Combine the navigation of 1 and spacing of 2.\nKeep these words exactly.  ";
 function request(body?: unknown) {
-  return new NextRequest("http://localhost/api/tasks/task-prototype/prototypes",{ headers: { host: "localhost", "sec-fetch-site": "same-origin" },
+  return new NextRequest("http://localhost/api/tasks/task-prototype/prototypes",{ headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "localhost", "sec-fetch-site": "same-origin" },
     ...(body === undefined ? {} : { method: "POST",body: JSON.stringify(body) }) });
 }
 async function read() { return await (await reviewGET(request(),"task-prototype",world)).json() as PrototypeReviewRead; }

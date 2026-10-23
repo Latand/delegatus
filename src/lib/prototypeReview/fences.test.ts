@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { GET as frameGET } from "@/app/api/artifact/frame/[...rest]/route";
 import { GET as artifactGET } from "@/app/api/artifact/route";
 import { GET as imageGET } from "@/app/api/image/route";
@@ -34,7 +35,7 @@ function task(id = TASK,project = "project-a") { return { id, project, status: "
 beforeEach(() => saveTasks([task()]));
 afterEach(async () => { await settlePrototypeDeliveriesForTests(); for (const root of roots.splice(0)) await fs.rm(root,{ recursive: true, force: true }); });
 function request(url: string,body?: unknown) {
-  return new NextRequest(`http://localhost${url}`,{ headers: { host: "localhost", "sec-fetch-site": "same-origin" }, ...(body ? { method: "POST", body: JSON.stringify(body) } : {}) });
+  return new NextRequest(`http://localhost${url}`,{ headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "localhost", "sec-fetch-site": "same-origin" }, ...(body ? { method: "POST", body: JSON.stringify(body) } : {}) });
 }
 async function directory(parent: string,prefix: string) { const root = await fs.realpath(await fs.mkdtemp(path.join(parent,prefix))); roots.push(root); return root; }
 const source = () => directory(process.env.HOME!,"prototype-source-");
