@@ -1,5 +1,5 @@
 import { fixtureBoardReads } from "./boardReads.fixture";
-import { afterAll, beforeEach, expect, test, spyOn } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, jest, test, spyOn } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,25 +15,55 @@ const { CompanionAdmission } = await import("./admission");
 const { CompanionLiveSessions } = await import("./liveSession");
 const { SESSION_START_ROOM_USD, VOICE_SESSION_RESERVE_USD, BACKEND_RESPONSE_RESERVE_USD } = await import("./usage");
 const { shutdownTranscriptSearchWorker } = await import("@/lib/search/transcriptSearchWorker");
+const { replaceConversationCatalog, conversationCatalogSnapshot } = await import("@/lib/scanner/conversationCatalog");
+const { saveTasks: clearTaskRows } = await import("@/lib/tasks/store");
+const taskFiles = new Set<string>();
+function taskStoreFixture(...parts: string[]) {
+  const filename = path.join(root, ...parts);
+  taskFiles.add(filename);
+  return filename;
+}
+function completedCatalogFixture() {
+  return {
+    projectCatalog: conversationCatalogSnapshot().map(row => ({
+      project: row.project, displayName: row.projectName, smt: row.mtime, conversations: 1,
+    })),
+    files: [],
+  };
+}
 // The real search cases start the leased query worker; it must not outlive the file.
 afterAll(async () => {
   await shutdownTranscriptSearchWorker();
   fs.rmSync(root, { recursive: true, force: true });
 });
-beforeEach(() => fs.rmSync(path.join(root, "state"), { recursive: true, force: true }));
+beforeEach(() => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  replaceConversationCatalog([]);
+});
+afterEach(() => {
+  // Clear both persisted tasks and the membership their public writer retains.
+  for (const filename of taskFiles) clearTaskRows([], filename);
+  taskFiles.clear();
+  replaceConversationCatalog([]);
+});
 
 const noReads = () => fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] });
-function fixture(key = "synthetic-credential", prototype?: import("@/lib/tasks/types").BoardTask) {
-  const storage = new CompanionStorage();
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
+}
+function fixture(key = "synthetic-credential", prototype?: import("@/lib/tasks/types").BoardTask, now = Date.now) {
+  const storage = new CompanionStorage(now);
   storage.updateSettings({ enabled: true });
   let sends = 0;
   const reports: import("@/lib/bridge/types").BridgeReportV1[] = [];
   const admission = new CompanionAdmission(storage, { recipient: () => ({ project: "fixture", conversationId: "conversation_fixture", seatEpoch: 1, engine: "claude" }),
-    send: async () => { sends++; return { status: "queued", operationId: "operation_fixture" }; }, reports: () => reports });
+    send: async () => { sends++; return { status: "queued", operationId: "operation_fixture" }; }, reports: () => reports }, now);
   const reads = fixtureBoardReads({ tasks: () => [prototype ?? { id: "task_fixture", project: "fixture", text: "Review the plan", status: "inbox" }],
     pipelines: () => [], activity: async () => [], messages: async () => [] });
   const provider = new FakeLiveProvider();
-  const service = new CompanionLiveSessions(storage, admission, reads, provider, { key: () => key, closeTimeoutMs: 20, timers: false });
+  const service = new CompanionLiveSessions(storage, admission, reads, provider, { key: () => key, closeTimeoutMs: 20, timers: false, now });
   return { storage, admission, provider, reads, service, reports, sends: () => sends };
 }
 /** Answers a first round with the given calls and every later round with speech. */
@@ -442,7 +472,6 @@ test("show deduplicates within a delegation before reading and refuses a full sp
 });
 
 test("real voice scope refusals explain that nothing was read and PR cache follows the project in view", async () => {
-  const { replaceConversationCatalog } = await import("@/lib/scanner/conversationCatalog");
   const { productionDomainDependencies } = await import("@/lib/mcp/bindings");
   const { createCompanionBoardReadPaths } = await import("./readPaths");
   const { CompanionBoardReads } = await import("./boardReads");
@@ -450,7 +479,9 @@ test("real voice scope refusals explain that nothing was read and PR cache follo
   const tasks = ["board-a", "board-b"].map(project => ({ id: `task-${project}`, project, text: `${project} cards`, status: "done" as const, placement: "unplaced" as const, assignments: [], createdAt: at, updatedAt: at,
     workLinks: [{ repository: "acme/widgets", number: 2800, kind: "pr" as const, addedAt: at, addedBy: "operator" as const }] }));
   replaceConversationCatalog(["board-a", "board-b", "empty-board"].map(project => ({ path: path.join(root, `${project}.jsonl`), root: "claude-projects" as const, name: "fixture", project, projectName: project === "empty-board" ? "Empty" : "Duplicate", title: "Fixture", firstPrompt: "", engine: "claude" as const, kind: "session", fmt: "claude" as const, mtime: 0, size: 0 })));
-  const paths = createCompanionBoardReadPaths({ domain: { ...productionDomainDependencies, taskSelectionSource: undefined, pipelineSelectionSource: undefined, listTaskRecords: () => tasks, listPipelineRecords: () => [] } });
+  const paths = createCompanionBoardReadPaths({ domain: { ...productionDomainDependencies,
+    lastCompletedCatalog: completedCatalogFixture,
+    taskSelectionSource: undefined, pipelineSelectionSource: undefined, listTaskRecords: () => tasks, listPipelineRecords: () => [] } });
   let dispatched = 0;
   const reads = new CompanionBoardReads({ ...paths, call: (name, args, redact) => { dispatched++; return paths.call(name, args, redact); } });
   const f = fixture();
@@ -533,20 +564,29 @@ test("a repeated logical delegation in a later backend round reuses its stored s
 
 test("a delayed yes from one backend turn cannot confirm a newer proposal", async () => {
   const f = fixture();
+  const thirdRequest = deferred();
+  const secondProposal = deferred();
+  const propose = f.admission.propose.bind(f.admission);
+  let proposalCount = 0;
+  f.admission.propose = (...args: Parameters<typeof f.admission.propose>) => {
+    const proposal = propose(...args);
+    if (proposal && ++proposalCount === 2) secondProposal.resolve();
+    return proposal;
+  };
   let releaseAnswer!: () => void;
   f.provider.responder = (_request, index) => index === 0
     ? backendResponse("resp_a", [functionCall("call-a", "request_orchestrator_delegation", { instruction: "Delete the old presets", confirmation_reason: "A needs confirmation." })])
-      : index === 2 ? new Promise(resolve => { releaseAnswer = () => resolve(backendResponse("resp_yes", [functionCall("call-yes", "resolve_orchestrator_confirmation", { decision: "send" })])); })
+      : index === 2 ? (thirdRequest.resolve(), new Promise(resolve => { releaseAnswer = () => resolve(backendResponse("resp_yes", [functionCall("call-yes", "resolve_orchestrator_confirmation", { decision: "send" })])); }))
         : index === 3 ? backendResponse("resp_b", [functionCall("call-b", "request_orchestrator_delegation", { instruction: "Deploy the new release", confirmation_reason: "B needs confirmation." })])
           : backendResponse(`resp_${index}`, [message("Waiting for confirmation.")]);
   const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
   f.provider.replay(s.providerId, delegationCreated("delegation-a", 10));
   await f.service.drain(s.sessionId);
   f.provider.replay(s.providerId, delegationCreated("answer-turn-a", 20));
-  for (let waited = 0; waited < 50 && f.provider.requests.length < 3; waited++) await new Promise(resolve => setTimeout(resolve, 2));
+  await thirdRequest.promise;
   expect(f.provider.requests).toHaveLength(3);
   f.provider.replay(s.providerId, delegationCreated("delegation-b", 30));
-  for (let waited = 0; waited < 50 && Object.values(f.admission.session(s.sessionId).proposals).length < 2; waited++) await new Promise(resolve => setTimeout(resolve, 2));
+  await secondProposal.promise;
   const proposals = Object.values(f.admission.session(s.sessionId).proposals);
   expect(proposals).toHaveLength(2);
   expect(proposals.map(row => row.state)).toEqual(["pending", "pending"]);
@@ -627,14 +667,15 @@ test("parallel delegations keep their own calls, outputs and spoken answers", as
 test("session closure waits for a backend response in flight before releasing the reservation", async () => {
   const f = fixture();
   f.provider.autoClose = false;
+  const requestStarted = deferred();
   let answer!: () => void;
-  f.provider.responder = () => new Promise(resolve => { answer = () => resolve(backendResponse("resp_late", [message("Late.")])); });
+  f.provider.responder = () => { requestStarted.resolve(); return new Promise(resolve => { answer = () => resolve(backendResponse("resp_late", [message("Late.")])); }); };
   const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
   f.provider.replay(s.providerId, delegationCreated("a", 10));
-  await new Promise(resolve => setTimeout(resolve, 0));
+  await requestStarted.promise;
   const closing = f.service.close(s.sessionId);
   f.provider.replay(s.providerId, { type: "session.closed", event_id: "closed-first", usage: { seconds: 21 } });
-  await new Promise(resolve => setTimeout(resolve, 5));
+  await f.service.events(s.sessionId, 0);
   expect(f.provider.attached).toBe(1);
   answer();
   await closing;
@@ -888,18 +929,37 @@ test("the parallel delegations a cap can pay for run; the rest are never asked, 
 });
 
 test("a shutdown with backend responses still in flight keeps them under the cap as incomplete usage", async () => {
-  const f = fixture();
-  f.provider.autoClose = false;
-  const cap = 1.33;
-  f.storage.updateSettings({ monthlyCapUsd: cap });
-  f.provider.responder = () => new Promise(() => undefined);
-  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
-  f.provider.replay(s.providerId, ...Array.from({ length: 7 }, (_, at) => delegationCreated(`d${at}`, at * 10)));
-  await new Promise(resolve => setTimeout(resolve, 60)); // the close times out and hangs up
-  expect(f.admission.session(s.sessionId).closed).toBe(true);
-  expect(f.provider.requests.length).toBeLessThanOrEqual(Math.floor((cap - VOICE_SESSION_RESERVE_USD) / BACKEND_RESPONSE_RESERVE_USD));
-  expect(f.storage.settings()).toMatchObject({ incomplete: true, reservedUsd: 0 });
-  expect(f.storage.settings().usageUsd).toBeLessThanOrEqual(cap);
+  jest.useFakeTimers();
+  try {
+    const f = fixture();
+    f.provider.autoClose = false;
+    const cap = 1.33;
+    f.storage.updateSettings({ monthlyCapUsd: cap });
+    f.provider.responder = () => new Promise(() => undefined);
+    const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+    f.provider.replay(s.providerId, ...Array.from({ length: 7 }, (_, at) => delegationCreated(`d${at}`, at * 10)));
+    // Process all delegations before advancing the timeout they schedule.
+    await f.service.events(s.sessionId, 0);
+    expect(f.provider.commands.filter(row => row.type === "session.close")).toHaveLength(1);
+    const fits = Math.floor((cap - VOICE_SESSION_RESERVE_USD) / BACKEND_RESPONSE_RESERVE_USD);
+    expect(f.provider.requests).toHaveLength(fits);
+    expect(f.admission.session(s.sessionId).closed).toBe(false);
+    jest.advanceTimersByTime(19);
+    expect(f.provider.hangups).toEqual([]);
+    expect(f.admission.session(s.sessionId).closed).toBe(false);
+    jest.advanceTimersByTime(1);
+    await f.service.close(s.sessionId);
+    await f.service.drain(s.sessionId);
+    expect(f.admission.session(s.sessionId).closed).toBe(true);
+    expect(f.provider.requests.length).toBeLessThanOrEqual(Math.floor((cap - VOICE_SESSION_RESERVE_USD) / BACKEND_RESPONSE_RESERVE_USD));
+    expect(f.storage.settings()).toMatchObject({ incomplete: true, reservedUsd: 0 });
+    expect(f.storage.settings().usageUsd).toBeLessThanOrEqual(cap);
+    const responses = Object.values(f.admission.session(s.sessionId).usage!.responses);
+    expect(responses).toHaveLength(fits);
+    expect(responses.every(row => !row.complete && row.usd === null)).toBe(true);
+    expect(f.provider.hangups).toEqual([s.providerId]);
+    expect(f.admission.events(s.sessionId, 0)).toContainEqual(expect.objectContaining({ type: "session.closed", reason: "cap", incomplete: true }));
+  } finally { jest.useRealTimers(); }
 });
 
 test("a backend round the cap cannot pay for is never requested", async () => {
@@ -1029,7 +1089,7 @@ test("a hangup the provider refused is asked again after a restart until it is c
   const live = await second.service.start({ project: "fixture", locale: "en", sdp: "v=1", requestId: "forced" });
   f.provider.hangupFailures = 1;
   f.provider.disconnect(live.providerId);
-  await new Promise(resolve => setTimeout(resolve, 10));
+  await second.service.close(live.sessionId);
   expect(second.storage.read().sessions[live.sessionId]).toMatchObject({ closed: true, remoteOpen: true });
   await second.service.recover();
   expect(second.storage.read().sessions[live.sessionId]).toMatchObject({ closed: true, remoteOpen: false });
@@ -1044,14 +1104,15 @@ test("a restart between a send and its recorded outcome recovers that very send 
     // The relay keeps one message per key, as the orchestrator send path does.
     const relay = new Map<string, string>();
     const keys: string[] = [];
+    const sendStarted = deferred();
     const deliver = (key: string, text: string) => { keys.push(key); if (!relay.has(key)) relay.set(key, text); return { status: "queued" as const, operationId: `operation-${key}` }; };
     const admission = new CompanionAdmission(storage, { recipient: () => recipient, reports: () => [],
-      send: async ({ delivery, text }) => { if (crash === "after-relay") deliver(delivery.clientMessageId, text); return new Promise(() => undefined); } });
+      send: async ({ delivery, text }) => { if (crash === "after-relay") deliver(delivery.clientMessageId, text); sendStarted.resolve(); return new Promise(() => undefined); } });
     const provider = new FakeLiveProvider();
     const service = new CompanionLiveSessions(storage, admission, noReads(), provider, { key: () => KEY, timers: false, closeTimeoutMs: 20 });
     const s = await service.start({ project: "fixture", locale: "en", sdp: "v=0" });
     void admission.delegate(s.sessionId, "call", "delegation", "Review the plan");
-    await new Promise(resolve => setTimeout(resolve, 5));
+    await sendStarted.promise;
     const [held] = Object.values(storage.read().sessions[s.sessionId].proposals);
     const proposal = held.proposal;
     expect(held).toMatchObject({ state: "admitted", status: "unknown" });
@@ -1097,40 +1158,49 @@ test("a credential said in pieces with separators between them cannot be put bac
 });
 
 test("documented cache-write receipts never let the month spend past the cap, in parallel, reordered and across a shutdown", async () => {
-  const written = { input_tokens: 1_000_000, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 1_000_000 }, output_tokens: 512 };
-  const official = 1_000_000 * 0.25 / 1_000_000 + 512 * 0.75 / 1_000_000;
-  const cap = 1.40;
-  for (const order of ["serial", "parallel-reordered", "shutdown"] as const) {
-    fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
-    const f = fixture();
-    f.provider.autoClose = false;
-    f.storage.updateSettings({ monthlyCapUsd: cap });
-    const waiting: Array<() => void> = [];
-    f.provider.responder = (_request, index) => order === "serial" ? backendResponse(`resp_${index}`, [message("Read.")], written)
-      : new Promise(resolve => { waiting.push(() => resolve(backendResponse(`resp_${index}`, [message("Read.")], written))); });
-    const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
-    for (let at = 0; at < 7; at += 1) {
-      f.provider.replay(s.providerId, delegationCreated(`d${at}`, at * 10));
-      if (order === "serial") await f.service.drain(s.sessionId);
+  jest.useFakeTimers();
+  try {
+    const written = { input_tokens: 1_000_000, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 1_000_000 }, output_tokens: 512 };
+    const official = 1_000_000 * 0.25 / 1_000_000 + 512 * 0.75 / 1_000_000;
+    const cap = 1.40;
+    for (const order of ["serial", "parallel-reordered", "shutdown"] as const) {
+      fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+      const f = fixture();
+      f.provider.autoClose = false;
+      f.storage.updateSettings({ monthlyCapUsd: cap });
+      const waiting: Array<() => void> = [];
+      f.provider.responder = (_request, index) => order === "serial" ? backendResponse(`resp_${index}`, [message("Read.")], written)
+        : new Promise(resolve => { waiting.push(() => resolve(backendResponse(`resp_${index}`, [message("Read.")], written))); });
+      const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+      for (let at = 0; at < 7; at += 1) {
+        f.provider.replay(s.providerId, delegationCreated(`d${at}`, at * 10));
+        if (order === "serial") await f.service.drain(s.sessionId);
+      }
+      await f.service.events(s.sessionId, 0);
+      const asked = f.provider.requests.length;
+      if (order === "parallel-reordered") for (const answer of waiting.reverse()) answer();
+      if (order === "shutdown") {
+        expect(f.provider.commands.filter(row => row.type === "session.close")).toHaveLength(1);
+        jest.advanceTimersByTime(20);
+        await f.service.close(s.sessionId);
+        await f.service.drain(s.sessionId);
+        expect(f.provider.hangups).toEqual([s.providerId]);
+        expect(f.admission.events(s.sessionId, 0)).toContainEqual(expect.objectContaining({ type: "session.closed", reason: "cap", incomplete: true }));
+      } else {
+        f.provider.replay(s.providerId, { type: "session.closed", event_id: "closed", reason: "close_requested", usage: { seconds: 300 } });
+        await f.service.drain(s.sessionId);
+      }
+      expect(f.admission.session(s.sessionId).closed, order).toBe(true);
+      // What the provider bills by its documented rates, for every response this server asked.
+      expect(0.25 + asked * official, order).toBeLessThanOrEqual(cap);
+      expect(f.storage.settings().usageUsd, order).toBeLessThanOrEqual(cap);
+      expect(f.storage.settings().reservedUsd, order).toBe(0);
+      if (order !== "shutdown") {
+        expect(f.storage.settings().usageUsd, order).toBeCloseTo(0.25 + asked * official, 6);
+        expect(Object.values(f.admission.session(s.sessionId).usage!.responses).every(row => row.complete && row.usd !== null && Math.abs(row.usd - official) < 1e-9), order).toBe(true);
+      } else expect(f.storage.settings().usageUsd, order).toBeGreaterThanOrEqual(0.25 + asked * official);
     }
-    await new Promise(resolve => setTimeout(resolve, 5));
-    const asked = f.provider.requests.length;
-    if (order === "parallel-reordered") for (const answer of waiting.reverse()) answer();
-    if (order === "shutdown") await new Promise(resolve => setTimeout(resolve, 60)); // the cap close times out and hangs up
-    else {
-      f.provider.replay(s.providerId, { type: "session.closed", event_id: "closed", reason: "close_requested", usage: { seconds: 300 } });
-      await f.service.drain(s.sessionId);
-    }
-    expect(f.admission.session(s.sessionId).closed, order).toBe(true);
-    // What the provider bills by its documented rates, for every response this server asked.
-    expect(0.25 + asked * official, order).toBeLessThanOrEqual(cap);
-    expect(f.storage.settings().usageUsd, order).toBeLessThanOrEqual(cap);
-    expect(f.storage.settings().reservedUsd, order).toBe(0);
-    if (order !== "shutdown") {
-      expect(f.storage.settings().usageUsd, order).toBeCloseTo(0.25 + asked * official, 6);
-      expect(Object.values(f.admission.session(s.sessionId).usage!.responses).every(row => row.complete && row.usd !== null && Math.abs(row.usd - official) < 1e-9), order).toBe(true);
-    } else expect(f.storage.settings().usageUsd, order).toBeGreaterThanOrEqual(0.25 + asked * official);
-  }
+  } finally { jest.useRealTimers(); }
 });
 
 test("a finished withdrawal takes a waiting confirmation off: the old tap, a retry and a restart send nothing", async () => {
@@ -1218,6 +1288,8 @@ test("no new session is minted while the provider has not confirmed an earlier o
 });
 
 test("a session the provider never confirmed closed is charged for the time it may have run, and the timer asks again by itself", async () => {
+  jest.useFakeTimers();
+  try {
   const storage = new CompanionStorage(); storage.updateSettings({ enabled: true });
   let now = Date.parse("2026-10-06T12:00:00Z");
   const admission = new CompanionAdmission(storage, { recipient: () => null, send: async () => { throw new Error("unexpected"); }, reports: () => [] }, () => now);
@@ -1226,14 +1298,18 @@ test("a session the provider never confirmed closed is charged for the time it m
   provider.hangupFailures = 2;
   const service = new CompanionLiveSessions(new CompanionStorage(() => now), admission, noReads(), provider, { key: () => KEY, now: () => now, closeTimeoutMs: 10 });
   const s = await service.start({ project: "fixture", locale: "en", sdp: "v=0" });
-  await service.close(s.sessionId);
+  const closing = service.close(s.sessionId);
+  jest.advanceTimersByTime(10);
+  await closing;
   expect(storage.read().sessions[s.sessionId]).toMatchObject({ closed: true, remoteOpen: true });
   now += 20 * 60_000; // twenty minutes with the provider session possibly open
   await expect(service.start({ project: "fixture", locale: "en", sdp: "v=1" })).rejects.toThrow("PROVIDER_ERROR");
   expect(storage.read().charges[s.sessionId]).toMatchObject({ reserved: false, incomplete: true });
   expect(storage.read().charges[s.sessionId].usd).toBeCloseTo(20 * 0.05, 6);
-  // The retry timer of the forced close confirms the hangup with no further call.
-  for (let waited = 0; waited < 40 && storage.read().sessions[s.sessionId].remoteOpen; waited += 1) await new Promise(resolve => setTimeout(resolve, 100));
+  // Advancing the retry schedule confirms the hangup with no further call.
+  jest.advanceTimersByTime(1_000);
+  expect(provider.hangups).toHaveLength(3);
+  await service.recover();
   expect(storage.read().sessions[s.sessionId].remoteOpen).toBe(false);
   expect(provider.hangups).toHaveLength(3);
   expect(provider.sessions).toHaveLength(1);
@@ -1241,6 +1317,7 @@ test("a session the provider never confirmed closed is charged for the time it m
   expect(provider.sessions).toHaveLength(2);
   provider.autoClose = true;
   await service.close(next.sessionId);
+  } finally { jest.useRealTimers(); }
 });
 
 test("end_conversation closes nothing unless the operator asked to end the call; an explicit request and the hang-up close it once", async () => {
@@ -1251,7 +1328,6 @@ test("end_conversation closes nothing unless the operator asked to end the call;
     const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
     f.provider.replay(s.providerId, { ...said(question, 0), end_ms: 100 }, delegationCreated("ending", 200));
     await f.service.drain(s.sessionId);
-    await new Promise(resolve => setTimeout(resolve, 5));
     expect(f.admission.session(s.sessionId).closed, question).toBe(false);
     expect(f.provider.commands.some(row => row.type === "session.close"), question).toBe(false);
     expect(f.admission.events(s.sessionId, 0), question).toContainEqual(expect.objectContaining({ type: "tool.result", callId: "end-call", status: "failed" }));
@@ -1652,7 +1728,7 @@ test("an explicit refresh reads changed persisted tasks immediately and repeated
   const { CompanionBoardReads } = await import("./boardReads");
   const { createCompanionBoardReadPaths } = await import("./readPaths");
   const at = "2026-10-10T00:00:00.000Z";
-  const taskFile = path.join(root, "refresh-tasks.json");
+  const taskFile = taskStoreFixture("refresh-tasks.json");
   saveTasks([{ id: "task-refresh", project: "fixture", text: "Review the plan", status: "inbox", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at }], taskFile);
   const f = fixture();
   const paths = createCompanionBoardReadPaths({ domain: { ...productionDomainDependencies,
@@ -1708,7 +1784,7 @@ async function credentialReadFixture(options: { taskText?: (key: string) => stri
   const key = ["Zr9QvB", "private", "credential", "Q7vLm2Xr9TbW4nZc8KpY3dHs6FgJ1aE5"].join("-");
   const pieces = key.match(/.{1,6}/g)!.join(" ");
   const at = "2026-10-10T00:00:00.000Z";
-  const taskFile = path.join(root, "credential-reads.json");
+  const taskFile = taskStoreFixture("credential-reads.json");
   const description = "Keep the complete safe description. ".repeat(160);
   const round = { id: `pr_${"a".repeat(32)}`, taskId: "task-credential", project: "fixture", title: "Safe prototype review", createdAt: at,
     source: { conversationId: null }, publicationKey: "fixture-publication", inputDigest: "b".repeat(64),
@@ -1996,7 +2072,6 @@ for (const locale of ["en","uk"] as const) test(`${locale} starting and switched
 });
 
 test("current-view context updates the same provider call and a named project targets its own orchestrator", async () => {
-  const { replaceConversationCatalog } = await import("@/lib/scanner/conversationCatalog");
   const { saveTasks, loadTasks, taskSelectionSource } = await import("@/lib/tasks/store");
   const { productionDomainDependencies } = await import("@/lib/mcp/bindings");
   const { createCompanionBoardReadPaths } = await import("./readPaths");
@@ -2007,7 +2082,7 @@ test("current-view context updates the same provider call and a named project ta
     completeOrchestratorSeatIntent({ project, clientRequestId: project, conversationId: `conversation_${project}`, path: null });
   }
   const at = "2026-10-10T12:00:00.000Z";
-  const taskFile = path.join(root, "context-store", "tasks.json");
+  const taskFile = taskStoreFixture("context-store", "tasks.json");
   replaceConversationCatalog(["Alpha","Beta"].map((projectName,index)=>({path:path.join(root,`${index}.jsonl`),root:"claude-projects" as const,name:"fixture",project:`project-${index}`,projectName,title:"Fixture",firstPrompt:"",engine:"claude" as const,kind:"session",fmt:"claude" as const,mtime:0,size:0})));
   saveTasks([0,1].map(index=>({id:`task-${index}`,project:`project-${index}`,text:`Project ${index} task`,status:"inbox" as const,placement:"unplaced" as const,assignments:[],createdAt:at,updatedAt:at})), taskFile);
   const storage = new CompanionStorage(); storage.updateSettings({enabled:true});
@@ -2015,6 +2090,7 @@ test("current-view context updates the same provider call and a named project ta
   const admission = new CompanionAdmission(storage,{recipient:project=>({project,conversationId:`conversation_${project}`,seatEpoch:1,engine:"claude"}),send:async binding=>{sent.push(binding.delivery.recipient.project);return {status:"delivered",operationId:"operation-a"};},reports:()=>[]});
   const provider = new FakeLiveProvider();
   const reads = new CompanionBoardReads(createCompanionBoardReadPaths({ domain: { ...productionDomainDependencies,
+    lastCompletedCatalog: completedCatalogFixture,
     loadTasks: () => loadTasks(taskFile), listTaskRecords: () => loadTasks(taskFile), taskSelectionSource: () => taskSelectionSource(taskFile),
     pipelineSelectionSource: undefined, listPipelineRecords: () => [] } }));
   const service = new CompanionLiveSessions(storage,admission,reads,provider,{key:()=>"synthetic-credential",timers:false});
@@ -2171,6 +2247,334 @@ test("an empty final answer names the searches tried and admits that no frame wa
     expect(Buffer.byteLength(speech)).toBeLessThanOrEqual(480);
     expect(speech).not.toContain("task_fixture");
   } finally { await f.service.close(s.sessionId); }
+});
+
+test("a report due during dictation waits for the request's tool and answer before its commentary", async () => {
+  const f = fixture("synthetic-credential", undefined, () => Date.parse("2026-10-11T12:05:00Z"));
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  let release!: () => void;
+  let started!: () => void;
+  const ready = new Promise<void>(resolve => { started = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  f.provider.responder = async (request, index) => {
+    if (index === 0) { started(); await held; }
+    return calling(functionCall("dictated-read", "list_tasks"))(request, index);
+  };
+  try {
+    f.provider.replay(s.providerId, said("What is open", 100));
+    await f.service.drain(s.sessionId);
+    f.reports.push({ id: "during-dictation", seq: 1, project: "fixture", at: "2026-10-11T12:00:00Z", class: "completed", body: "HELD_REPORT",
+      origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+    await f.service.events(s.sessionId, 0);
+    expect(spoken(f)).toEqual([]);
+    expect(f.admission.reportSpeech(s.sessionId)).toMatchObject([{ reportId: "during-dictation", handed: 0 }]);
+    f.provider.replay(s.providerId, said(" on the board?", 500), delegationCreated("dictated-request", 1000));
+    await ready;
+    await f.service.events(s.sessionId, 0);
+    expect(spoken(f)).toEqual([]);
+    release();
+    await f.service.drain(s.sessionId);
+    expect(spoken(f)).toMatchObject([{ delegation_id: "dictated-request" }, { delegation_id: null, content: expect.stringContaining("HELD_REPORT") }]);
+    const entries = f.service.transcriptRecord(s.sessionId).entries;
+    expect(entries.findIndex(entry => entry.kind === "tool" && entry.data.callId === "dictated-read"))
+      .toBeLessThan(entries.findIndex(entry => entry.kind === "handoff" && String(entry.data.text).includes("HELD_REPORT")));
+    await f.service.events(s.sessionId, 0);
+    expect(spoken(f)).toHaveLength(2);
+  } finally { release(); await f.service.drain(s.sessionId); await f.service.close(s.sessionId); }
+});
+
+test("barge-in during a backend await keeps reports held when the older request finishes", async () => {
+  const f = fixture("synthetic-credential", undefined, () => Date.parse("2026-10-11T12:05:00Z"));
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  let release!: () => void;
+  let started!: () => void;
+  const ready = new Promise<void>(resolve => { started = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  f.provider.responder = async (_request, index) => {
+    if (index === 0) { started(); await held; }
+    return backendResponse(`answer-${index}`, [message(index === 0 ? "Earlier answer." : "Newer answer.")]);
+  };
+  try {
+    f.provider.replay(s.providerId, said("Read the board", 100), delegationCreated("earlier", 600));
+    await ready;
+    f.reports.push({ id: "while-waiting", seq: 1, project: "fixture", at: "2026-10-11T12:00:00Z", class: "completed", body: "HELD_REPORT",
+      origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+    // The sideband receives newer input while the old backend is awaiting I/O.
+    f.provider.replay(s.providerId, said("Actually, read the pipelines", 2000));
+    await f.service.events(s.sessionId, 0);
+    await f.service.command(s.sessionId, { type: "interrupt", responseId: "earlier" });
+    expect(f.provider.commands.at(-1)).toMatchObject({ type: "session.instructions.append", content: expect.stringContaining("Yield to the operator") });
+    release();
+    await f.service.drain(s.sessionId);
+    expect(spoken(f)).toMatchObject([{ delegation_id: "earlier" }]);
+    expect(f.admission.reportSpeech(s.sessionId)).toMatchObject([{ handed: 0 }]);
+    // The voice speaking the earlier answer is not an answer to the newer input.
+    f.provider.replay(s.providerId, said("Earlier answer.", 3000, "output"));
+    await f.service.drain(s.sessionId);
+    await f.service.events(s.sessionId, 0);
+    expect(spoken(f)).toMatchObject([{ delegation_id: "earlier" }]);
+    expect(f.admission.reportSpeech(s.sessionId)).toMatchObject([{ handed: 0 }]);
+    f.provider.replay(s.providerId, delegationCreated("newer", 3600));
+    await f.service.drain(s.sessionId);
+    expect(spoken(f)).toMatchObject([{ delegation_id: "earlier" }, { delegation_id: "newer" }, { delegation_id: null, content: expect.stringContaining("HELD_REPORT") }]);
+    expect(spoken(f)).toHaveLength(3);
+    await f.service.events(s.sessionId, 0);
+    expect(spoken(f)).toHaveLength(3);
+  } finally { release(); await f.service.drain(s.sessionId); await f.service.close(s.sessionId); }
+});
+
+test("every display segment of an older answer, spoken after newer input, keeps reports held", async () => {
+  const f = fixture("synthetic-credential", undefined, () => Date.parse("2026-10-11T12:05:00Z"));
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  let release!: () => void;
+  let started!: () => void;
+  const ready = new Promise<void>(resolve => { started = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  f.provider.responder = async (_request, index) => {
+    if (index === 0) { started(); await held; }
+    return backendResponse(`answer-${index}`, [message(index === 0 ? "Earlier answer." : "Newer answer.")]);
+  };
+  try {
+    f.provider.replay(s.providerId, said("Read the board", 100), delegationCreated("earlier", 600));
+    await ready;
+    f.reports.push({ id: "while-waiting", seq: 1, project: "fixture", at: "2026-10-11T12:00:00Z", class: "completed", body: "HELD_REPORT",
+      origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+    f.provider.replay(s.providerId, said("Actually, read the pipelines", 2000));
+    await f.service.events(s.sessionId, 0);
+    release();
+    await f.service.drain(s.sessionId);
+    // The transcript starts a new display item after a pause of 1,500 ms: both are the earlier answer's speech.
+    f.provider.replay(s.providerId, said("Earlier answer.", 3000, "output"), said("It continues.", 5000, "output"));
+    await f.service.drain(s.sessionId);
+    await f.service.events(s.sessionId, 0);
+    expect(spoken(f)).toMatchObject([{ delegation_id: "earlier" }]);
+    expect(f.admission.reportSpeech(s.sessionId)).toMatchObject([{ handed: 0 }]);
+    f.provider.replay(s.providerId, delegationCreated("newer", 6000));
+    await f.service.drain(s.sessionId);
+    expect(spoken(f)).toMatchObject([{ delegation_id: "earlier" }, { delegation_id: "newer" }, { delegation_id: null, content: expect.stringContaining("HELD_REPORT") }]);
+    await f.service.events(s.sessionId, 0);
+    expect(spoken(f)).toHaveLength(3);
+  } finally { release(); await f.service.drain(s.sessionId); await f.service.close(s.sessionId); }
+});
+
+test("an older answer already speaking when newer input interrupts it keeps reports held as it continues", async () => {
+  const f = fixture("synthetic-credential", undefined, () => Date.parse("2026-10-11T12:05:00Z"));
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  f.provider.responder = (_request, index) => backendResponse(`answer-${index}`, [message(index === 0 ? "Earlier answer." : "Newer answer.")]);
+  try {
+    f.provider.replay(s.providerId, said("Read the board", 100), delegationCreated("earlier", 600));
+    await f.service.drain(s.sessionId);
+    expect(spoken(f)).toMatchObject([{ delegation_id: "earlier" }]);
+    f.provider.replay(s.providerId, said("Earlier answer", 1000, "output"));
+    f.provider.replay(s.providerId, said("Actually, read the pipelines", 2000));
+    await f.service.drain(s.sessionId);
+    f.reports.push({ id: "while-speaking", seq: 1, project: "fixture", at: "2026-10-11T12:00:00Z", class: "completed", body: "HELD_REPORT",
+      origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+    await f.service.command(s.sessionId, { type: "interrupt", responseId: "earlier" });
+    f.provider.replay(s.providerId, said(" goes on.", 2500, "output"));
+    await f.service.drain(s.sessionId);
+    await f.service.events(s.sessionId, 0);
+    expect(spoken(f)).toMatchObject([{ delegation_id: "earlier" }]);
+    expect(f.admission.reportSpeech(s.sessionId)).toMatchObject([{ handed: 0 }]);
+    f.provider.replay(s.providerId, delegationCreated("newer", 3000));
+    await f.service.drain(s.sessionId);
+    expect(spoken(f)).toMatchObject([{ delegation_id: "earlier" }, { delegation_id: "newer" }, { delegation_id: null, content: expect.stringContaining("HELD_REPORT") }]);
+    await f.service.events(s.sessionId, 0);
+    expect(spoken(f)).toHaveLength(3);
+  } finally { await f.service.close(s.sessionId); }
+});
+
+test("barge-in between report parts preserves speechHanded and resumes in order after the request", async () => {
+  const f = fixture("synthetic-credential", undefined, () => Date.parse("2026-10-11T12:05:00Z"));
+  const attach = f.provider.attach.bind(f.provider);
+  let interrupt = true;
+  f.provider.attach = async (...args: Parameters<typeof attach>) => {
+    const connection = await attach(...args);
+    return { ...connection, send: command => {
+      connection.send(command);
+      if (command.type === "session.commentary.append" && command.delegation_id === null && interrupt) {
+        interrupt = false;
+        f.provider.replay(args[0], said("What is open?", 1000));
+      }
+    } };
+  };
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  try {
+    for (const seq of [1, 2]) f.reports.push({ id: `parts-${seq}`, seq, project: "fixture", at: "2026-10-11T12:00:00Z", class: "completed",
+      body: seq === 1 ? Array.from({ length: 8 }, (_, at) => `FACT_${at}: ${"The check passed. ".repeat(8)}`).join("\n") : "LATER_REPORT",
+      origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+    await f.service.events(s.sessionId, 0);
+    await f.service.drain(s.sessionId);
+    const first = String(spoken(f)[0]!.content);
+    expect(spoken(f)).toHaveLength(1);
+    expect(f.admission.reportSpeech(s.sessionId)).toMatchObject([{ reportId: "parts-1", handed: 1 }, { reportId: "parts-2", handed: 0 }]);
+    f.provider.responder = calling(functionCall("barge-read", "list_tasks"));
+    f.provider.replay(s.providerId, delegationCreated("barge-request", 1600));
+    await f.service.drain(s.sessionId);
+    const speech = spoken(f);
+    expect(speech[0]!.content).toBe(first);
+    expect(speech[1]!.delegation_id).toBe("barge-request");
+    const parts = speech.filter(row => row.delegation_id === null).map(row => String(row.content));
+    expect(new Set(parts).size).toBe(parts.length);
+    const text = parts.join("\n");
+    for (let at = 1; at < 8; at++) expect(text.indexOf(`FACT_${at - 1}:`)).toBeLessThan(text.indexOf(`FACT_${at}:`));
+    expect(parts.at(-1)).toContain("LATER_REPORT");
+    expect(f.admission.reportSpeech(s.sessionId)).toEqual([]);
+  } finally { await f.service.close(s.sessionId); }
+});
+
+test("a direct voice answer releases reports, while overlapping older output and invalid deltas do not", async () => {
+  const f = fixture("synthetic-credential", undefined, () => Date.parse("2026-10-11T12:05:00Z"));
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  try {
+    f.provider.replay(s.providerId, said("Explain the plan", 1000));
+    await f.service.drain(s.sessionId);
+    f.reports.push({ id: "direct-answer", seq: 1, project: "fixture", at: "2026-10-11T12:00:00Z", class: "completed", body: "HELD_REPORT",
+      origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+    f.provider.replay(s.providerId, said("Earlier output", 500, "output"), { type: "session.output_transcript.delta", delta: "bad", start_ms: NaN, end_ms: 2000 },
+      { type: "session.output_transcript.delta", delta: "bad", start_ms: 3000, end_ms: 2000 });
+    await f.service.events(s.sessionId, 0);
+    expect(spoken(f)).toEqual([]);
+    f.provider.replay(s.providerId, said("Here is the plan", 1600, "output"));
+    await f.service.drain(s.sessionId);
+    expect(spoken(f)).toMatchObject([{ content: expect.stringContaining("HELD_REPORT") }]);
+    await f.service.events(s.sessionId, 0);
+    expect(spoken(f)).toHaveLength(1);
+  } finally { await f.service.close(s.sessionId); }
+});
+
+test("a failed request answers its failure before releasing a held report", async () => {
+  const f = fixture("synthetic-credential", undefined, () => Date.parse("2026-10-11T12:05:00Z"));
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  try {
+    f.provider.replay(s.providerId, said("Read the board", 100));
+    await f.service.drain(s.sessionId);
+    f.reports.push({ id: "failed-request", seq: 1, project: "fixture", at: "2026-10-11T12:00:00Z", class: "completed", body: "HELD_REPORT",
+      origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+    await f.service.events(s.sessionId, 0);
+    expect(spoken(f)).toEqual([]);
+    f.provider.responder = async () => { throw new Error("PROVIDER_ERROR"); };
+    f.provider.replay(s.providerId, delegationCreated("failed-request", 600));
+    await f.service.drain(s.sessionId);
+    expect(spoken(f)).toMatchObject([{ delegation_id: "failed-request", content: expect.stringContaining("could not be read") },
+      { delegation_id: null, content: expect.stringContaining("HELD_REPORT") }]);
+  } finally { await f.service.close(s.sessionId); }
+});
+
+test("late transcript repair of an answered request cannot hold later reports", async () => {
+  const f = fixture("synthetic-credential", undefined, () => Date.parse("2026-10-11T12:05:00Z"));
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  try {
+    f.provider.replay(s.providerId, said("Read the board", 100), delegationCreated("answered", 600));
+    await f.service.drain(s.sessionId);
+    f.provider.replay(s.providerId, { type: "session.input_transcript.delta", event_id: "late-repair", delta: ", please", start_ms: 300, end_ms: 500 });
+    await f.service.drain(s.sessionId);
+    f.reports.push({ id: "after-repair", seq: 1, project: "fixture", at: "2026-10-11T12:00:00Z", class: "completed", body: "REPORT_AFTER_REPAIR",
+      origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+    await f.service.events(s.sessionId, 0);
+    expect(spoken(f)).toMatchObject([{ delegation_id: "answered" }, { content: expect.stringContaining("REPORT_AFTER_REPAIR") }]);
+    f.provider.replay(s.providerId, said("Read the pipelines too", 2000));
+    await f.service.drain(s.sessionId);
+    f.reports.push({ id: "new-request", seq: 2, project: "fixture", at: "2026-10-11T12:01:00Z", class: "completed", body: "NEXT_REPORT",
+      origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+    await f.service.events(s.sessionId, 0);
+    expect(spoken(f)).toHaveLength(2);
+    expect(f.admission.reportSpeech(s.sessionId)).toMatchObject([{ reportId: "new-request", handed: 0 }]);
+  } finally { await f.service.close(s.sessionId); }
+});
+
+test("a late fragment of words already handed off, arriving during the request, does not keep reports held after its answer", async () => {
+  const f = fixture("synthetic-credential", undefined, () => Date.parse("2026-10-11T12:05:00Z"));
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  let release!: () => void;
+  let started!: () => void;
+  const ready = new Promise<void>(resolve => { started = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  f.provider.responder = async (_request, index) => {
+    if (index === 0) { started(); await held; }
+    return backendResponse(`answer-${index}`, [message("Here is the board.")]);
+  };
+  try {
+    f.provider.replay(s.providerId, said("Read the board", 100), delegationCreated("handed", 600));
+    await ready;
+    f.reports.push({ id: "repair-during-request", seq: 1, project: "fixture", at: "2026-10-11T12:00:00Z", class: "completed", body: "HELD_REPORT",
+      origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+    f.provider.replay(s.providerId, { type: "session.input_transcript.delta", event_id: "repair-in-flight", delta: ", please", start_ms: 300, end_ms: 500 });
+    await f.service.events(s.sessionId, 0);
+    expect(spoken(f)).toEqual([]);
+    release();
+    await f.service.drain(s.sessionId);
+    expect(spoken(f)).toMatchObject([{ delegation_id: "handed" }, { delegation_id: null, content: expect.stringContaining("HELD_REPORT") }]);
+  } finally { release(); await f.service.drain(s.sessionId); await f.service.close(s.sessionId); }
+});
+
+test("input the voice never answers holds reports for 15 seconds after its last fragment, and the next poll hands them", async () => {
+  let clock = Date.parse("2026-10-11T12:05:00Z");
+  const f = fixture("synthetic-credential", undefined, () => clock);
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  try {
+    f.provider.replay(s.providerId, said("Hmm", 100));
+    await f.service.drain(s.sessionId);
+    f.reports.push({ id: "unanswered", seq: 1, project: "fixture", at: "2026-10-11T12:00:00Z", class: "completed", body: "LAPSED_REPORT",
+      origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+    await f.service.events(s.sessionId, 0);
+    expect(spoken(f)).toEqual([]);
+    clock += 14_999;
+    await f.service.events(s.sessionId, 0);
+    expect(spoken(f)).toEqual([]);
+    // A further fragment starts the window again.
+    f.provider.replay(s.providerId, said(" and the pipelines", 900));
+    await f.service.drain(s.sessionId);
+    clock += 14_999;
+    await f.service.events(s.sessionId, 0);
+    expect(spoken(f)).toEqual([]);
+    clock += 1;
+    await f.service.events(s.sessionId, 0);
+    expect(spoken(f)).toMatchObject([{ delegation_id: null, content: expect.stringContaining("LAPSED_REPORT") }]);
+    await f.service.events(s.sessionId, 0);
+    expect(spoken(f)).toHaveLength(1);
+  } finally { await f.service.close(s.sessionId); }
+});
+
+test("a process restart retires a call with held reports and a fresh call inherits no input hold", async () => {
+  const directory = fs.mkdtempSync(path.join(root, "held-restart-"));
+  const source = `
+    import { CompanionStorage } from ${JSON.stringify(path.join(import.meta.dir, "storage.ts"))};
+    import { CompanionAdmission } from ${JSON.stringify(path.join(import.meta.dir, "admission.ts"))};
+    import { CompanionLiveSessions } from ${JSON.stringify(path.join(import.meta.dir, "liveSession.ts"))};
+    import { fixtureBoardReads } from ${JSON.stringify(path.join(import.meta.dir, "boardReads.fixture.ts"))};
+    import { FakeLiveProvider } from ${JSON.stringify(path.join(import.meta.dir, "fakeProvider.ts"))};
+    const now = () => Date.parse("2026-10-11T12:05:00Z");
+    const storage = new CompanionStorage(now); storage.updateSettings({ enabled: true });
+    const reports = [];
+    const admission = new CompanionAdmission(storage, { recipient: () => ({ project: "fixture", conversationId: "conversation_fixture", seatEpoch: 1, engine: "claude" }),
+      send: async () => ({ status: "failed", operationId: null }), reports: () => reports }, now);
+    const provider = new FakeLiveProvider();
+    const reads = fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] });
+    const service = new CompanionLiveSessions(storage, admission, reads, provider, { key: () => "synthetic-credential", timers: false, now });
+    const before = Object.keys(storage.read().sessions)[0];
+    if (before) await service.recover();
+    const s = await service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+    if (!before) { provider.replay(s.providerId, { type: "session.input_transcript.delta", delta: "Read the board", start_ms: 100, end_ms: 500 }); await service.drain(s.sessionId); }
+    reports.push({ id: before ? "fresh-report" : "held-report", seq: 1, project: "fixture", at: "2026-10-11T12:00:00Z", class: "completed", body: "REPORT_FACT",
+      origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+    await service.events(s.sessionId, 0);
+    const result = { handed: provider.commands.filter(row => row.type === "session.commentary.append").length,
+      owed: admission.reportSpeech(s.sessionId).map(row => row.handed), retired: before ? admission.session(before).closed : false };
+    if (before) await service.close(s.sessionId);
+    console.log(JSON.stringify(result));
+  `;
+  const run = async () => {
+    const child = Bun.spawn([process.execPath, "-e", source], { env: { ...process.env, HOME: directory, XDG_CONFIG_HOME: path.join(directory, "config"),
+      LLV_STATE_DIR: path.join(directory, "state"), TMPDIR: directory, LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:9" }, stdout: "pipe", stderr: "pipe", timeout: 10_000, killSignal: "SIGKILL" });
+    try {
+      const [stdout, stderr, status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      expect({ status, stderr }).toEqual({ status: 0, stderr: "" });
+      return JSON.parse(stdout);
+    } finally { child.kill(); await child.exited; }
+  };
+  expect(await run()).toEqual({ handed: 0, owed: [0], retired: false });
+  expect(await run()).toEqual({ handed: 1, owed: [], retired: true });
 });
 
 test("a report hand-off that fails part-way resumes at the failed part on the next poll: every fact once, in order, and a later report waits behind it", async () => {

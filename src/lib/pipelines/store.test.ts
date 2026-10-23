@@ -1147,6 +1147,21 @@ test("suspension custody round-trips independently and rejects malformed stop ev
   }
 }));
 
+test("account holds a relaunched attempt keeps round-trip independently and reject malformed entries (#3158)", async () => isolatedDelivery(() => {
+  const lane = providerStoreFixture();
+  const accountHolds = [{ accountId: "account-b", resetsAt: 1_792_000_000, observedAt: "2026-10-15T00:00:00Z" },
+    { accountId: "account-c", resetsAt: null, observedAt: null }];
+  lane.runs[0]!.attempts[0]!.accountHolds = accountHolds;
+  savePipelines([lane]);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.accountHolds).toEqual(accountHolds);
+  loadPipelines()[0]!.runs[0]!.attempts[0]!.accountHolds![0]!.resetsAt = 1;
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.accountHolds![0]!.resetsAt).toBe(1_792_000_000);
+  for (const bad of [{}, [{}], [{ ...accountHolds[0], accountId: 7 }], [{ ...accountHolds[0], resetsAt: "soon" }]]) {
+    lane.runs[0]!.attempts[0]!.accountHolds = bad as never;
+    expect(() => savePipelines([lane])).toThrow("malformed pipeline record");
+  }
+}));
+
 test("malformed provider waits and histories are rejected at the persistence boundary", async () => isolatedDelivery(() => {
   for (const bad of [{}, { condition: {} }, { ...providerStoreFixture().runs[0]!.attempts[0]!.providerWait, resumeAt: "invalid" },
     { ...providerStoreFixture().runs[0]!.attempts[0]!.providerWait, capacityProbes: -1 },

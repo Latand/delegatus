@@ -400,6 +400,20 @@ test("a rate-limited post is re-sent on replay byte for byte, under a new reques
   expect(readBridgeReportLog().reports[0]!.telegram).toMatchObject({ state: "sent", attempts: 2, html: stored });
 });
 
+test("clone rate-limit wait reaches the bridge caller and stored failed copy", async () => {
+  await connectTeamChat();
+  setReportTelegram(PROJECT, { chat: "team-reports", name: "Delegatus" }, "operator");
+  bot.send = async () => { throw new TelegramBotError("rate_limited", "Celestia is rate-limiting sends; retry after 7 s", { retryAfterSeconds: 7 }); };
+  const first = await file({ key: "clone-rate-limit", summary: "One lane running." });
+  expect(first.destinations?.telegram).toMatchObject({ state: "failed", code: "rate_limited", retryable: true,
+    message: "Celestia is rate-limiting sends; retry after 7 s" });
+  expect(readBridgeReportLog().reports[0]!.telegram).toMatchObject({ state: "failed", code: "rate_limited",
+    message: "Celestia is rate-limiting sends; retry after 7 s" });
+  const replay = await file({ key: "clone-rate-limit", summary: "Changed replay" });
+  expect(replay.destinations?.telegram?.message).toBe("Celestia is rate-limiting sends; retry after 7 s");
+  expect(transport.callsOf("sendMessage")).toHaveLength(0);
+});
+
 test("a failed post is not re-sent on replay once the project chose the log only", async () => {
   await connectTeamChat();
   setReportTelegram(PROJECT, { chat: "team-reports", name: "Delegatus" }, "operator");

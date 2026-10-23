@@ -5,6 +5,9 @@ import type { PairedRelay } from "./store";
 import type { OwnerDestinationReason } from "./ownerDestination";
 import { historyDouble } from "./ownerHistory.fixture";
 import { readOwnerHistory, readOwnerGroups, readOwnerGroupMessages } from "./ownerHistory";
+import { CloneDirectory } from "./cloneDirectory";
+import { knownRelay } from "./knownRelays";
+import os from "node:os";
 
 const double = await historyDouble();
 afterAll(() => double.close());
@@ -14,6 +17,26 @@ let enabled = true;
 let resetCount = 0;
 const ports = { switches: () => ({ owner_tools: enabled }), relays: () => [double.relay], timeZone: () => zone, now: () => now };
 const reset = () => { double.relay.id = `paired-${++resetCount}`; double.state.forced = null; double.state.afterHistoryResponse = null; double.state.admissions = 0; now = Date.parse("2026-10-12T09:00:00Z"); double.state.now = now; zone = "Europe/Kyiv"; enabled = true; };
+
+test("a supported persisted directory authorizes the existing read through a service-answered clone", async () => {
+  reset();
+  const relay = structuredClone(double.relay);
+  relay.targets.forEach(t => { t.answered_by = "service"; t.engine = null; t.model = null; });
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "history-clone-")), file = path.join(root, "directory.json");
+  const local = { ...ports, relays: () => [relay] };
+  try {
+    expect(await readOwnerHistory({ action: "groups" }, local)).toMatchObject({ reason: "no_target" });
+    fs.writeFileSync(file, JSON.stringify({ v: 1, entries: [{ relayId: relay.id, apiBase: relay.api_base, pairedAt: relay.pairedAt,
+      attemptedAt: now, snapshot: { relayId: relay.id, apiBase: relay.api_base, pairedAt: relay.pairedAt,
+        fetchedAt: now, supported: true, targets: [{ target_id: "first", name: "Read clone", active: true, chats: [] }] } }] }));
+    const directory = new CloneDirectory({ file, relays: local.relays, now: () => now, origin: knownRelay("celestia")!.origin });
+    const reading = { ...local, cloneTarget: (relays: PairedRelay[]) => directory.readTarget(relays) };
+    expect(await readOwnerHistory({ action: "groups" }, reading)).toMatchObject({ available: true });
+    expect(await readOwnerHistory({ action: "messages", chat: "-101" }, reading)).toMatchObject({ available: true });
+    relay.paused = true;
+    expect(await readOwnerHistory({ action: "groups" }, reading)).toMatchObject({ reason: "paused" });
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
 
 test("OFF and missing time zone make no request", async () => {
   reset(); const before = double.state.requests; enabled = false;
