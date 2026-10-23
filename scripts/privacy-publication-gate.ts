@@ -1671,7 +1671,7 @@ function hasEmailAddress(text: string, source?: EmailTextView["source"]): boolea
 // Keep its digest here rather than matching it globally inside ordinary prose.
 const contextualIdentityDigest = "b829e805ab160bf10124b48da39c07eecc55bea7b9229820abbcc396ebf35cf1";
 const contextualIdentityPatterns = [
-  /(?:^|[^\p{L}\p{N}])(?:account(?:[_ -]?(?:id|name))?|id|user(?:[_ -]?(?:name|id))?|handle|host(?:name)?)[\t ]*["'` ]*[:=][\t ]*["'` ]*([\p{L}\p{N}._-]{4,512})(?![\p{L}\p{N}._-])/giu,
+  /(?:^|[^\p{L}\p{N}])(?:account(?:[_ -]?(?:id|name|label))?|id|user(?:[_ -]?(?:name|id))?|handle|host(?:name)?)[\s"'`]*[:=][\s"'`]*([\p{L}\p{N}._-]{4,512})(?![\p{L}\p{N}._-])/giu,
   /(?:^|[/\\])accounts?[/\\](?:(?:claude|codex|copilot)[/\\])?([\p{L}\p{N}._-]{4,512})(?=$|[/\\\s"'`])/giu,
   /(?<![\p{L}\p{N}._-])@([\p{L}\p{N}._-]{4,512})(?![\p{L}\p{N}._-])/giu,
 ];

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { knownValueFingerprint } from "./generate-privacy-known-value-fingerprints";
+import { runPrivacyTestProcess } from "./privacy-test-process";
 
 let inspectorNumber = 0;
 async function inspector(value: string, exactOnly: boolean, plaintext: boolean, catalog: string) {
@@ -39,6 +40,9 @@ test("the dictionary phrase remains private in identity fields and account paths
   const label = ["open", "source"].join("");
   const sources = [
     `account_id="${label}"`, `{"accountId":"${label}"}`, `data-account-id='${label}'`,
+    JSON.stringify({ accountLabel: label }), `account_label: ${label}`, `account-label = ${label}`,
+    ...["\n", "\r\n", "\t\n "].map(space => `{"accountId":${space}"${label}"}`),
+    `{"accountId"\n:\n"${label}"}`, `accountLabel\n=\n${label}`,
     `id="${label}"`, `account_name: ${label}`, `user_id: ${label}`, `username: ${label}`, `handle = ${label}`, `hostname=${label}`, `@${label}`,
     `accounts/claude/${label}/sessions`, `accounts/codex/${label}/sessions`,
     `accounts/copilot/${label}/sessions`, `accounts/${label}/sessions`,
@@ -59,10 +63,7 @@ test("identity-context findings reach file and commit inspection", async () => {
     const scanner = await inspector("unrelated fixture value", false, false,
       join(import.meta.dir, "privacy-known-value-fingerprints.json"));
     const label = ["open", "source"].join("");
-    const source = `account_id="${label}"`;
     const file = join(directory, "sample.txt");
-    writeFileSync(file, source);
-    expect(scanner.inspectPaths([file], false, true, directory).has("known_value")).toBe(true);
     const git = (...args: string[]) => {
       const result = Bun.spawnSync(["git", "-C", directory, ...args], {
         env: { ...process.env, GIT_AUTHOR_DATE: "2026-10-23T10:00:00Z", GIT_COMMITTER_DATE: "2026-10-23T10:00:00Z", GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture",
@@ -74,11 +75,39 @@ test("identity-context findings reach file and commit inspection", async () => {
     };
     git("init", "--initial-branch=main");
     git("-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "Fixture base");
-    const base = git("rev-parse", "HEAD");
-    git("-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", source);
-    expect(scanner.commitMessageFindings(directory, base).has("known_value")).toBe(true);
-    writeFileSync(file, "the open-source core");
-    expect(scanner.inspectPaths([file], false, true, directory).has("known_value")).toBe(false);
+    const cli = (args: string[]) => runPrivacyTestProcess({
+      cmd: [process.execPath, join(import.meta.dir, "privacy-publication-gate.ts"),
+        "--require-known-values", "--repository", directory, ...args, "--paths", file],
+      env: { ...process.env, LLV_PRIVACY_KNOWN_VALUES: "", LLV_PRIVACY_KNOWN_VALUES_FILE: "",
+        LLV_PRIVACY_KNOWN_VALUES_FORMAT: "plain",
+        LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: join(import.meta.dir, "privacy-known-value-fingerprints.json") },
+      stdout: "pipe", stderr: "pipe",
+    });
+    for (const { source, privateValue } of [
+      ...[`account_id="${label}"`, JSON.stringify({ accountLabel: label }), `{"accountId":\n"${label}"}`]
+        .map(source => ({ source, privateValue: true })),
+      ...["open-source", "open source", label]
+        .map(spelling => ({ source: `the ${spelling} core`, privateValue: false })),
+    ]) {
+      writeFileSync(file, source);
+      expect(scanner.inspectPaths([file], false, true, directory).has("known_value"), source).toBe(privateValue);
+      const fileResult = await cli([]);
+      expect(fileResult.exitCode, source).toBe(privateValue ? 1 : 0);
+      expect(fileResult.stdout.toString(), source).toStartWith(privateValue
+        ? "PRIVACY GATE: FAIL\nknown_value: 1\n" : "PRIVACY GATE: PASS\n");
+      expect(fileResult.stdout.toString()).not.toContain(label);
+      expect(fileResult.stderr.toString()).toBe("");
+
+      const base = git("rev-parse", "HEAD");
+      git("-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", source);
+      expect(scanner.commitMessageFindings(directory, base).has("known_value"), source).toBe(privateValue);
+      writeFileSync(file, "safe publication prose");
+      const commitResult = await cli(["--check-commits", "--base", base]);
+      expect(commitResult.exitCode, source).toBe(privateValue ? 1 : 0);
+      expect(commitResult.stdout.toString(), source).toContain(privateValue ? "known_value: 1\n" : "PRIVACY GATE: PASS\n");
+      expect(commitResult.stdout.toString()).not.toContain(label);
+      expect(commitResult.stderr.toString()).toBe("");
+    }
     expect(scanner.commitMessageFindings(directory, "HEAD").size).toBe(0);
   } finally {
     rmSync(directory, { recursive: true, force: true });
