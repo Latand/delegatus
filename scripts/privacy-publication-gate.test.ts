@@ -409,7 +409,11 @@ async function runGate(paths: string[], environment: Record<string, string> = {}
 
 test.serial("the configured generator runtime must match the provenance pin", () => {
   const saved = process.env.LLV_PRIVACY_GENERATOR_BUN;
-  const selected = privacyGeneratorRuntime();
+  const directory = mkdtempSync(join(tmpdir(), "privacy-generator-runtime-"));
+  temporaryDirectories.push(directory);
+  const selected = join(directory, "pinned-bun");
+  installTool(directory, "pinned-bun", `printf '%s\\n' '${PRIVACY_GENERATOR_BUN_VERSION}'`);
+  installTool(directory, "wrong-bun", "printf '%s\\n' '0.0.0'");
   try {
     process.env.LLV_PRIVACY_GENERATOR_BUN = process.execPath;
     if (Bun.version === PRIVACY_GENERATOR_BUN_VERSION) {
@@ -417,8 +421,12 @@ test.serial("the configured generator runtime must match the provenance pin", ()
     } else {
       expect(() => privacyGeneratorRuntime()).toThrow(`requires Bun ${PRIVACY_GENERATOR_BUN_VERSION}`);
     }
-    process.env.LLV_PRIVACY_GENERATOR_BUN = join(tmpdir(), "missing-privacy-generator", "bun");
+    process.env.LLV_PRIVACY_GENERATOR_BUN = join(directory, "wrong-bun");
     expect(() => privacyGeneratorRuntime()).toThrow(`requires Bun ${PRIVACY_GENERATOR_BUN_VERSION}`);
+    process.env.LLV_PRIVACY_GENERATOR_BUN = join(directory, "missing-bun");
+    expect(() => privacyGeneratorRuntime()).toThrow(`requires Bun ${PRIVACY_GENERATOR_BUN_VERSION}`);
+    process.env.LLV_PRIVACY_GENERATOR_BUN = selected;
+    expect(privacyGeneratorRuntime()).toBe(selected);
     process.env.LLV_PRIVACY_GENERATOR_BUN = relative(process.cwd(), selected);
     expect(privacyGeneratorRuntime()).toBe(selected);
   } finally {

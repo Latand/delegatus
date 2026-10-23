@@ -154,6 +154,27 @@ The agenda test file is unchanged. Its twelve inherited failures remain outside
 this task's requested test files. The optional sibling-file campaign stopped
 after this completed comparison; the other four sibling files were not run.
 
+## Publication repair
+
+Publication of `da0569312` identified a new failure in the runtime-selection
+test when the pinned generator was absent. Its initial unconfigured lookup
+ran before the refusal cases. Earlier full-suite checks provisioned the real
+generator and therefore missed this dependency.
+
+The selection test now creates private executable version responders through
+the existing tool-fixture helper. It checks the selected executable by absolute
+and relative path, rejects a fixed wrong version and a missing executable, and
+retains the current-interpreter check. Fixture teardown removes its directory.
+Production runtime selection and real generator integration tests are unchanged.
+
+```sh
+gate-remote -- env -u LLV_PRIVACY_GENERATOR_BUN bun test scripts/privacy-publication-gate.test.ts -t 'the configured generator runtime must match the provenance pin'
+```
+
+Accepted commit: exit 1, zero pass / one fail, requiring the missing pinned
+runtime. Repair: exit 0, one pass / zero fail, five assertions. Both runs used
+native Bun 1.4.0 with the same isolation and no generator configuration.
+
 ## Privacy tool provisioning
 
 Run inside the remote command's isolated temporary root, then execute the
