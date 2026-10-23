@@ -25,6 +25,9 @@ export function publicationDeadlineOnly(output: string): boolean {
     if (/^command timed out after \d+ms/.test(line)
       || /^pre-push: no verdict within the push budget of \d+ s:/.test(line)
       || /^owned runner: (?:deadline expired|execution guard expired)$/.test(line)
+      // The gate runner lost a started run: nothing was judged, and the
+      // retries after 1, 5 and 15 minutes run here (scripts/gate-runner).
+      || /^gate-runner: no verdict:/.test(line)
       || runnerDeadline.test(line)) deadline = true;
   }
   return deadline;
