@@ -22931,7 +22931,7 @@ describe("floating voice companion", () => {
    * in both languages and themes: its defining words are whole on screen once the section is
    * scrolled to, no text range leaves the dialog or the window, the page never scrolls sideways,
    * and every control is at least 24 px tall (44 on the phone). Wherever Run dry run starts a command,
-   * the line saying that it runs the program as the operator's OS user is whole beside it. Approving a chosen tool and
+   * the full filesystem sandbox warning is beside it. Approving a chosen tool and
    * flipping «ask before acting» on an approved server are pressed for real (a tap on the phone).
    * Frames go to `$LLV_VOICE_TOOLS_OUT` (default `.artifacts/voice-tools`), never committed.
    */
@@ -22939,7 +22939,7 @@ describe("floating voice companion", () => {
     const out = path.resolve(process.env.LLV_VOICE_TOOLS_OUT ?? ".artifacts/voice-tools");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
-    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
+    let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
     const failures: string[] = [];
     const measurements: unknown[] = [];
     const dryRun = (lang: "en" | "uk") => [translate(lang, "voiceCompanion.tools.action.dryRun"), translate(lang, "voiceCompanion.tools.dryRunHint")];
@@ -22948,6 +22948,7 @@ describe("floating voice companion", () => {
        read in these frames. */
     const defining: Record<string, (lang: "en" | "uk") => { head: string[]; tools?: string[]; foot: string[] }> = {
       empty: lang => ({ head: [translate(lang, "voiceCompanion.tools.empty")], foot: [] }),
+      "sign-in-required": lang => ({ head: [translate(lang, "voiceCompanion.tools.signIn")], foot: [] }),
       pending: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example",
         translate(lang, "voiceCompanion.tools.secretValue", { name: "SPOTIFY_CLIENT_ID" }), "SPOTIFY_REDIRECT_URI=http://127.0.0.1:8888/callback"],
         foot: [translate(lang, "voiceCompanion.tools.secretNeeded"), translate(lang, "voiceCompanion.tools.dryRun.none"), ...dryRun(lang), translate(lang, "voiceCompanion.tools.action.reject")] }),
@@ -22965,18 +22966,27 @@ describe("floating voice companion", () => {
         foot: [translate(lang, "voiceCompanion.tools.refused.SELECTION_BOUNDS"), translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.disable")] }),
       "dry-run-busy": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
         foot: [...dryRun(lang), translate(lang, "voiceCompanion.tools.refused.dryRun.BUSY")] }),
+      "destination-refused": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
+        tools: ["skip"], foot: [translate(lang, "voiceCompanion.tools.refused.SECRET_DESTINATION"), translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.approve")] }),
+      "destination-result": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
+        foot: [translate(lang, "voiceCompanion.tools.dryRun.SECRET_DESTINATION"), ...dryRun(lang)] }),
       rejected: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.rejected"), "spotify-mcp-example"],
         foot: [...dryRun(lang), translate(lang, "voiceCompanion.tools.action.remove")] }),
       disabled: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.disabled"), "spotify-mcp-example"],
         foot: [translate(lang, "voiceCompanion.tools.ask"), ...dryRun(lang), translate(lang, "voiceCompanion.tools.action.approve"), translate(lang, "voiceCompanion.tools.action.remove")] }),
     };
     /* The refused states are read after their press, which every language and theme makes. */
-    const refusedPress: Record<string, string> = { "approved-refused": "[data-voice-tool-ask]", "dry-run-busy": "[data-voice-tool-action='dry-run']" };
+    const refusedPress: Record<string, string> = { "approved-refused": "[data-voice-tool-ask]", "dry-run-busy": "[data-voice-tool-action='dry-run']",
+      "destination-refused": "[data-voice-tool-action='approve']" };
     try {
-      for (const width of [1440, 820, 390]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const state of Object.keys(defining)) {
+      for (const width of [1440, 1000, 820, 390]) {
+        // Release each width's renderers before the next matrix, bounding retained browser memory.
+        await browser?.close();
+        browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
+        for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const state of Object.keys(defining)) {
         const label = `${width}-${lang}-${scheme}-${state}`;
         const phone = width === 390;
-        const { context, page, pageErrors } = await openVoice(browser, server.base, `&mount=product&backend=codex&voicetools=${state}`, { viewport: { width, height: 844 }, lang, scheme, product: true, phone, motion: "reduce" });
+        const { context, page, pageErrors } = await openVoice(browser, server.base, `&mount=product&backend=codex&voicetools=${state}`, { viewport: { width, height: width === 1000 ? 700 : 844 }, lang, scheme, product: true, phone, motion: "reduce" });
         try {
           await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-voice-companion-settings")));
           const section = page.locator("[data-voice-tools]");
@@ -22994,14 +23004,14 @@ describe("floating voice companion", () => {
               expect(await page.locator("[data-voice-tool-state]").getAttribute("data-voice-tool-state")).toBe("enabled");
             }
           }
-          for (const part of ["head", "tools", "foot"] as const) {
-            const words = defining[state](lang)[part] ?? [];
+          for (const part of ["head", "secrets", "tools", "foot"] as const) {
+            const words = part === "secrets" ? (await page.locator("[data-voice-tool-reference]").count() ? [translate(lang, "voiceCompanion.tools.destinations")] : []) : defining[state](lang)[part] ?? [];
             if (!words.length) continue;
-            if (state === "empty") await section.scrollIntoViewIfNeeded();
+            if (state === "empty" || state === "sign-in-required") await section.scrollIntoViewIfNeeded();
             /* The head: the row's top at the dialog's top. The tools: the list's end at the dialog's bottom. The foot: its last line (the action row, or a line or refusal under it) at the dialog's bottom. */
-            else await page.evaluate(([selector, top]) => document.querySelector(selector)!.scrollIntoView({ block: top ? "start" : "end" }), [part === "head" ? "[data-voice-tool-server]" : part === "tools" ? "[data-voice-tool-tools]" : "[data-voice-tool-server] > :last-child", part === "head"] as const);
+            else await page.evaluate(([selector, top]) => document.querySelector(selector)!.scrollIntoView({ block: top ? "start" : "end" }), [part === "head" ? "[data-voice-tool-server]" : part === "secrets" ? "[data-voice-tool-reference]" : part === "tools" ? "[data-voice-tool-tools]" : "[data-voice-tool-server] > :last-child", part === "head"] as const);
             await page.screenshot({ path: path.join(out, `${label}-${part}.png`) });
-            const read = await page.evaluate(({ words, phone }) => {
+            const read = await page.evaluate(({ words, phone, part }) => {
               const dialog = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!;
               const box = dialog.getBoundingClientRect();
               const section = document.querySelector<HTMLElement>("[data-voice-tools]")!;
@@ -23015,7 +23025,8 @@ describe("floating voice companion", () => {
               }
               /* Each defining phrase: every text range of it inside the dialog's visible box and the window; a short word on one line. */
               const shown = words.map(word => {
-                const all = document.createTreeWalker(section, NodeFilter.SHOW_TEXT);
+                const searchRoot = part === "tools" ? section.querySelector("[data-voice-tool-tools]") ?? section : section;
+                const all = document.createTreeWalker(searchRoot, NodeFilter.SHOW_TEXT);
                 for (let node = all.nextNode(); node; node = all.nextNode()) {
                   const at = node.textContent?.indexOf(word) ?? -1;
                   if (at < 0) continue;
@@ -23032,14 +23043,14 @@ describe("floating voice companion", () => {
               }).map(control => control.outerHTML.slice(0, 80));
               return { viewportOverflow: document.documentElement.scrollWidth > innerWidth + 1, dialogOverflow: dialog.scrollWidth > dialog.clientWidth + 1, outside, shown, small,
                 background: getComputedStyle(dialog).backgroundColor, rows: section.querySelectorAll("[data-voice-tool-server]").length };
-            }, { words, phone });
+            }, { words, phone, part });
             measurements.push({ label: `${label}-${part}`, ...read });
             if (read.viewportOverflow || read.dialogOverflow) failures.push(`${label}: scrolls sideways`);
             if (read.outside) failures.push(`${label}: ${read.outside} text box(es) outside the dialog`);
             read.shown.forEach((whole, at) => { if (!whole) failures.push(`${label}-${part}: «${words[at]}» is not whole on screen`); });
             if (read.small.length) failures.push(`${label}: small targets ${read.small.join(" | ")}`);
           }
-          expect(await row.count()).toBe(state === "empty" ? 0 : 1);
+          expect(await row.count()).toBe(state === "empty" || state === "sign-in-required" ? 0 : 1);
           if (state === "approved" || state === "approved-ask") {
             const ask = page.locator("[data-voice-tool-ask]");
             expect(await ask.isChecked()).toBe(state === "approved-ask");
@@ -23065,10 +23076,14 @@ describe("floating voice companion", () => {
           if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
         } finally { await context.close(); }
       }
+      }
       fs.mkdirSync("evidence/voice-companion", { recursive: true });
-      fs.writeFileSync("evidence/voice-companion/voice-tools.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", synthetic: true, viewportBasis: "configured scene width", failures, measurements }, null, 2) + "\n");
+      const sources = ["src/components/kanban/kanbanBoard.browser.test.tsx", "src/components/kanban/issue1695Evidence.fixture.tsx", "src/components/voiceCompanion/VoiceToolsSetting.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts", "src/app/globals.css"];
+      fs.writeFileSync("evidence/voice-companion/voice-tools.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", synthetic: true, viewportBasis: "configured scene width",
+        command: "LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chromium> bun test src/components/kanban/kanbanBoard.browser.test.tsx --test-name-pattern 'voice tools settings render every state'",
+        sources: Object.fromEntries(sources.map(source => [source, createHash("sha256").update(fs.readFileSync(source)).digest("hex")])), failures, measurements }, null, 2) + "\n");
       expect(failures).toEqual([]);
-    } finally { await browser.close(); server.stop(); }
+    } finally { await browser?.close(); server.stop(); }
   }, 900_000);
 
   /*
@@ -25346,6 +25361,158 @@ describe("floating voice companion", () => {
       const processes = await close();
       expect(processes.leftAfterClose, "every browser process this case started has exited").toBe(0);
       record("transcript.json", { driver: DRIVER, variant: 2, rule: "call and month sums sit at the foot of the transcript above a thin monthly-cap meter; the call's share is teal", processes, readings });
+    }
+  }, 1_800_000);
+
+  /* GitHub #2975: after a call the owner reads what the voice did. The page opens as after a reload, with no call of
+     its own (`&history=1`, `sampleCallHistory`): the character opens the newest retained call, the panel's picker
+     opens each earlier one, and an opened request says why it was not sent or delivered and links the orchestrator
+     conversation it went to. Every text the case names is measured whole inside the panel's body and the viewport,
+     from its text ranges. `LLV_VOICE_COMPANION_ONLY` runs it when it names `history`. Images go to
+     `<hand-off>/history`, never into the tree. */
+  browserTest("call history after a reload: the newest retained call, a picker for each earlier one, and a request's reason and orchestrator link, 1440 and 1000, en and uk, light and dark", async () => {
+    if (ONLY && !ONLY.includes("history")) return;
+    /* The first action of an opened call (a tool call or a request to the orchestrator) and its status text. */
+    const FIRST_ACTION = ['.vc-tr-list > li:is([data-kind="call"], [data-kind="request"])', '.vc-tr-list > li:is([data-kind="call"], [data-kind="request"]) .vc-call-state'];
+    const out = path.join(HANDOFF, "history");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const { browser, close } = await launchOwned();
+    const readings: unknown[] = [];
+    /** Whether each text range of each element is whole inside the panel's body (or, for the picker row, the panel) and the viewport. */
+    const whole = (page: Page, selectors: string[]) => page.evaluate(({ list, controlSelector }) => {
+      const view = document.querySelector<HTMLElement>("[data-companion-transcript-view]")!;
+      const body = view.querySelector<HTMLElement>("[data-transcript-body]")!;
+      const result: Record<string, { found: boolean; whole: boolean; text: string }> = {};
+      for (const selector of list) {
+        const element = view.querySelector<HTMLElement>(selector);
+        if (!element) { result[selector] = { found: false, whole: false, text: "" }; continue; }
+        const clip = (body.contains(element) ? body : view).getBoundingClientRect();
+        const range = document.createRange(); range.selectNodeContents(element);
+        const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+        /* Nothing else stands over the text: the topmost element at each piece's middle is the element itself. */
+        const uncovered = rects.every((rect) => { const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2); return !!top && (element === top || element.contains(top)); });
+        result[selector] = { found: true, text: element.innerText, whole: rects.length > 0 && uncovered && rects.every((rect) => rect.top >= clip.top - 0.5 && rect.bottom <= clip.bottom + 0.5
+          && rect.left >= clip.left - 0.5 && rect.right <= clip.right + 0.5 && rect.top >= 0 && rect.bottom <= innerHeight && rect.left >= 0 && rect.right <= innerWidth) };
+      }
+      /* A closed select draws its chosen option's text itself: measured with its own font against its content box. */
+      const picker = view.querySelector<HTMLSelectElement>("select[data-transcript-calls]")!;
+      const style = getComputedStyle(picker);
+      const context = document.createElement("canvas").getContext("2d")!;
+      context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+      const label = picker.selectedOptions[0]?.textContent ?? "";
+      const room = picker.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - 20;
+      const box = view.getBoundingClientRect(); const pick = picker.getBoundingClientRect();
+      return { result, picker: { label, fits: context.measureText(label).width <= room, height: pick.height, inside: pick.left >= box.left && pick.right <= box.right && pick.top >= box.top && pick.bottom <= box.bottom
+          && document.elementFromPoint(pick.left + pick.width / 2, pick.top + pick.height / 2) === picker },
+        panelInside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, sideways: body.scrollWidth - body.clientWidth,
+        /* The page's own top bar: no control of the page that starts in its first 48 px stands under the panel. */
+        covered: [...document.querySelectorAll<HTMLElement>(controlSelector)].filter((control) => !view.contains(control) && !control.closest("[data-voice-companion]"))
+          .map((control) => ({ control, rect: control.getBoundingClientRect() }))
+          .filter(({ rect }) => rect.width > 0 && rect.height > 0 && rect.top < 48 && rect.left < box.right && rect.right > box.left && rect.top < box.bottom && rect.bottom > box.top)
+          .map(({ control, rect }) => `${control.tagName.toLowerCase()} ${(control.innerText || control.getAttribute("aria-label") || "").slice(0, 24)} ${Math.round(rect.left)},${Math.round(rect.top)}`),
+        top: Math.round(box.top),
+        /* A row of the list the body's top edge runs through: a retained call opens at its start, so none is cut there. */
+        cutByTop: [...body.querySelectorAll<HTMLElement>(".vc-tr-list > li")].filter((row) => { const rect = row.getBoundingClientRect(); return rect.top < body.getBoundingClientRect().top - 0.5 && rect.bottom > body.getBoundingClientRect().top + 0.5; })
+          .map((row) => row.getAttribute("data-kind") ?? ""),
+        scrolled: Math.round(body.scrollTop),
+        /* The open request's name, whole inside its own line. */
+        title: [...view.querySelectorAll<HTMLElement>("[data-transcript-request] [data-human-label]")].map((node) => ({ text: node.innerText, whole: node.scrollWidth <= node.clientWidth && node.scrollHeight <= node.clientHeight + 1 })),
+        /* The space between the end of what is read above each label of the opened request and the label itself, from the text. */
+        gaps: [...view.querySelectorAll<HTMLElement>(".vc-tr-detail .vc-tr-label")].map((label) => {
+          const previous = label.previousElementSibling as HTMLElement | null;
+          if (!previous) return null;
+          const ink = (node: HTMLElement) => {
+            if (node.matches("pre, .vc-instruction")) { const rect = node.getBoundingClientRect(); return { top: rect.top, bottom: rect.bottom }; }
+            const range = document.createRange(); range.selectNodeContents(node);
+            const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+            return { top: Math.min(...rects.map((rect) => rect.top)), bottom: Math.max(...rects.map((rect) => rect.bottom)) };
+          };
+          return { label: label.textContent ?? "", after: previous.matches("[data-transcript-reason]") ? "reason" : previous.tagName.toLowerCase(), gap: Math.round((ink(label).top - ink(previous).bottom) * 10) / 10 };
+        }).filter((gap) => gap !== null) as Array<{ label: string; after: string; gap: number }> };
+    }, { list: selectors, controlSelector: CONTROL_SELECTOR });
+    /** Opens the shown call's request and scrolls its line to the top of the body. */
+    const openRequest = async (page: Page) => {
+      const request = page.locator('[data-companion-transcript-view] [data-transcript-call="request_orchestrator_delegation"]');
+      await request.locator("[data-transcript-toggle]").click();
+      await request.locator("[data-transcript-detail]").waitFor();
+      await request.evaluate((element) => { const body = element.closest<HTMLElement>("[data-transcript-body]")!; body.scrollTop += element.getBoundingClientRect().top - body.getBoundingClientRect().top - 8; });
+      await page.waitForTimeout(150);
+    };
+    try {
+      for (const viewport of SIZES) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const label = `${viewport.width}-${lang}-${scheme}`;
+        const { context, page, pageErrors } = await openVoice(browser, server.base, "&history=1", { viewport, scheme, lang, motion: "reduce" });
+        try {
+          /* The fixture's own attention notices are the page's, not the panel's: they are dismissed as in the cases above. */
+          for (let notice = 0; notice < 3 && await page.locator("[data-attention-toast-dismiss]").count(); notice++) await page.locator("[data-attention-toast-dismiss]").first().click();
+          const grip = page.locator("[data-voice-companion] [data-grip]");
+          await page.waitForFunction(() => document.querySelector("[data-voice-companion] [data-grip]")?.getAttribute("aria-expanded") === "false", null, { timeout: 10_000 });
+          expect(await page.locator("[data-companion-talk]").count(), `${label}: no call runs`).toBe(1);
+          await grip.focus();
+          await page.keyboard.press("Enter");
+          const panel = page.locator("[data-companion-transcript-view]");
+          const picker = panel.locator("select[data-transcript-calls]");
+          await picker.waitFor({ timeout: 5_000 });
+          await page.waitForTimeout(250);
+          const options = await picker.locator("option").allTextContents();
+          expect(options.length, `${label}: three retained calls`).toBe(3);
+          expect(await picker.inputValue(), `${label}: the newest call opens`).toBe("call_delegation");
+          expect(await panel.locator("[data-transcript-request]").first().getAttribute("data-stage")).toBe("delivered");
+          const newest = await whole(page, [".vc-tr-title", ".vc-tr-sub", ...FIRST_ACTION]);
+          await page.screenshot({ path: path.join(out, `history-${label}-1-newest.png`) });
+
+          await picker.selectOption("call_failed_delivery");
+          await panel.locator('[data-transcript-request][data-stage="failed"]').waitFor({ timeout: 5_000 });
+          const failedStart = await whole(page, FIRST_ACTION);
+          await openRequest(page);
+          const failed = await whole(page, ['[data-transcript-request][data-stage="failed"] .vc-call-state', "[data-transcript-reason]", "a[data-transcript-orchestrator]"]);
+          expect(failed.result["[data-transcript-reason]"]!.text, `${label}: the delivery failure says why`).toContain(lang === "uk" ? "нічого не надіслано" : "nothing was sent");
+          expect(failed.result["a[data-transcript-orchestrator]"]!.text, `${label}: the orchestrator link names its project`).toBe("Atlas");
+          await page.screenshot({ path: path.join(out, `history-${label}-2-failed.png`) });
+
+          await picker.selectOption("call_refused");
+          await panel.locator('[data-transcript-request][data-stage="refused"]').waitFor({ timeout: 5_000 });
+          const refusedStart = await whole(page, FIRST_ACTION);
+          await openRequest(page);
+          const refused = await whole(page, ['[data-transcript-request][data-stage="refused"] .vc-call-state', "[data-transcript-reason]"]);
+          expect(refused.result["[data-transcript-reason]"]!.text, `${label}: the refusal says why`).toContain(lang === "uk" ? "немає призначеного оркестратора" : "no designated orchestrator");
+          expect(await panel.locator("a[data-transcript-orchestrator]").count(), `${label}: a refusal before any orchestrator links none`).toBe(0);
+          await page.screenshot({ path: path.join(out, `history-${label}-3-refused.png`) });
+
+          /* Each call opens at its start: its first action row and that row's status text stand whole in the body and no row is cut by the body's top edge. */
+          for (const [step, reading] of [["newest", newest], ["failed", failedStart], ["refused", refusedStart]] as const) {
+            expect(Object.entries(reading.result).filter(([selector, value]) => FIRST_ACTION.includes(selector) && (!value.found || !value.whole)).map(([selector]) => selector), `${label} ${step}: the first action row and its status are whole on opening`).toEqual([]);
+            expect([reading.scrolled, reading.cutByTop], `${label} ${step}: opened at the start, no row cut by the body's top edge`).toEqual([0, []]);
+          }
+          for (const [step, reading] of [["newest", newest], ["failed", failed], ["refused", refused]] as const) {
+            expect(Object.entries(reading.result).filter(([, value]) => !value.found || !value.whole).map(([selector]) => selector), `${label} ${step}: every named text is whole`).toEqual([]);
+            expect([reading.panelInside, reading.picker.inside, reading.picker.fits, reading.sideways <= 1], `${label} ${step}: panel, picker and its label fit`).toEqual([true, true, true, true]);
+            expect(reading.covered, `${label} ${step}: the panel (top at ${reading.top}) stands below the page's top bar`).toEqual([]);
+          }
+          for (const [step, reading] of [["failed", failed], ["refused", refused]] as const) {
+            expect(reading.title.filter((title) => !title.whole), `${label} ${step}: the request's name is whole in its line`).toEqual([]);
+            const reason = reading.gaps.find((gap) => gap.after === "reason");
+            const others = reading.gaps.filter((gap) => gap.after !== "reason").map((gap) => gap.gap);
+            expect(reason, `${label} ${step}: a label follows the reason`).toBeDefined();
+            expect(reason!.gap, `${label} ${step}: the reason has the space the other blocks leave above their next label (${JSON.stringify(reading.gaps)})`).toBeGreaterThanOrEqual(Math.min(...others) - 1);
+            expect(reason!.gap, `${label} ${step}: and within the 12 to 18 px the opened request leaves above its other labels`).toBeGreaterThanOrEqual(12);
+            expect(reason!.gap).toBeLessThanOrEqual(18);
+          }
+          expect(failed.result["[data-transcript-reason]"]!.text, `${label}: the failure reason reads in the owner's language, with no code in it`).not.toMatch(lang === "uk" ? /[A-Za-z]/u : /[(_)]/u);
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-companion-transcript-view]", { state: "detached", timeout: 5_000 });
+          expect(pageErrors, label).toEqual([]);
+          readings.push({ viewport: viewport.width, lang, scheme, options, newest, failed, refused });
+        } finally { await context.close(); }
+      }
+    } finally {
+      fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify(readings, null, 2)}\n`);
+      server.stop();
+      const processes = await close();
+      expect(processes.leftAfterClose, "every browser process this case started has exited").toBe(0);
+      if (!ONLY) record("call-history.json", { driver: DRIVER, issue: 2975, fixture: "?scenario=voice-companion&history=1", synthetic: true,
+        rule: "after a reload the character opens the newest retained call; the panel's picker opens each retained call, named by its time, project and number of actions; an opened request says in the owner's language why it was not sent or delivered and links the orchestrator conversation it went to", processes, readings });
     }
   }, 1_800_000);
 
@@ -34748,6 +34915,221 @@ describe("full autonomy", () => {
 });
 
 
+describe("turbo mode «Форсаж»", () => {
+  browserTest("turbo: the switch beside Full autonomy, the confirmation with its credit approval, and every state on board, dock and phone", async () => {
+    const out = path.resolve(process.env.LLV_TURBO_FRAMES ?? ".artifacts/turbo-mode");
+    fs.mkdirSync(out, { recursive: true });
+    const { defaultSeatTickSettings, writeSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+    const { seatTickSettingsAnswer } = await import("@/lib/monitor/seatTickSettingsAnswer");
+    const gateway = { kind: "gateway" as const, project: null, conversationId: null, seatEpoch: null };
+    type TurboState = "off" | "switching" | "on" | "on-credits" | "ending" | "disabled";
+    let state: TurboState = "off";
+    const plan = [
+      { accountId: "acct-a", label: "Account A", plan: "promax", tiers: { "gpt-6.1-sol": "ultrafast" as const, "gpt-6-astra": "ultrafast" as const, "gpt-6-luna": "priority" as const }, hadCredits: true },
+      { accountId: "acct-b", label: "Account B", plan: "pro", tiers: { "gpt-6.1-sol": "priority" as const }, hadCredits: true },
+      { accountId: "acct-c", label: "Account C", plan: "prolite", tiers: { "gpt-6.1-sol": "priority" as const }, hadCredits: false },
+    ];
+    const turbo = () => {
+      if (state === "off" || state === "disabled") return { active: false, episode: null, history: [], available: state === "off", unavailableReason: state === "off" ? null : "no-faster-tier", progress: null };
+      const minutes = state === "ending" ? 8 : 115;
+      const paid = state === "on-credits";
+      const episode = { enabled: true, startedAt: new Date(Date.now() - 5 * 60_000).toISOString(), until: new Date(Date.now() + minutes * 60_000).toISOString(), endedAt: null, endReason: null,
+        updatedAt: new Date().toISOString(), setBy: gateway, why: null, plan,
+        credits: { approved: paid, accounts: paid ? ["acct-a", "acct-b"] : [], approvedAt: paid ? new Date().toISOString() : null, withdrawnAt: null, withdrawnBy: null, withdrawnWhy: null },
+        switches: state === "on" ? [{ conversationId: "conversation_failed", accountId: "acct-a", model: "gpt-6.1-sol", from: "default", to: "ultrafast", state: "failed", reason: "native tier update refused", at: new Date().toISOString() }] : [] };
+      const pending = state === "switching" ? 5 : 0;
+      return { active: true, episode, history: [], titles: { conversation_failed: "Review issue #913" }, available: true, unavailableReason: null, progress: { total: 7, switched: 7 - pending - (state === "on" ? 1 : 0), armed: 0, skipped: 0, failed: state === "on" ? 1 : 0, pending, reverted: 0 } };
+    };
+    const preview = { accounts: [
+      { accountId: "acct-a", label: "Account A", plan: "promax", tiers: plan[0]!.tiers, weeklyPercent: 36, weeklyResetsAt: Math.floor(Date.parse("2026-10-27T00:00:00Z") / 1000), balance: "412", holdsCredits: true, otherProjects: 0, unavailable: null },
+      { accountId: "acct-b", label: "Account B", plan: "pro", tiers: plan[1]!.tiers, weeklyPercent: 58, weeklyResetsAt: Math.floor(Date.parse("2026-10-25T00:00:00Z") / 1000), balance: "75", holdsCredits: true, otherProjects: 2, unavailable: null },
+      { accountId: "acct-c", label: "Account C", plan: "prolite", tiers: plan[2]!.tiers, weeklyPercent: 12, weeklyResetsAt: Math.floor(Date.parse("2026-10-28T00:00:00Z") / 1000), balance: null, holdsCredits: false, otherProjects: 0, unavailable: null },
+    ], conversations: { total: 7, stages: 3, agents: 4 } };
+    const writes: unknown[] = [];
+    const answer = (project: string, withPreview = false) => {
+      writeSeatTickSettings(project, { ...defaultSeatTickSettings(project), project });
+      const read = seatTickSettingsAnswer(project, false, gateway, { now: Date.now });
+      return { ...read, turbo: { ...turbo(), ...(withPreview ? { preview } : {}) } };
+    };
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/monitor/seat-tick/settings": async (request: Request) => {
+        const url = new URL(request.url);
+        const project = url.searchParams.get("project") ?? "atlas";
+        if (request.method !== "PUT") return Response.json(answer(project, url.searchParams.get("turboPreview") === "1"));
+        const body = await request.json() as { project: string; turbo?: { enabled?: boolean; credits?: boolean } };
+        writes.push(body);
+        if (body.turbo) state = body.turbo.enabled === false ? "off" : body.turbo.credits ? "on-credits" : "switching";
+        return Response.json({ ...answer(body.project), changed: true });
+      },
+      "/api/roles": { revision: "fixture", health: "ok", launchChoices: [], roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "claude", model: "opus", effort: "high" } }] },
+    });
+    const browserTemp = fs.mkdtempSync(path.join(os.tmpdir(), "turbo-browser-"));
+    const browserTempFd = fs.openSync(browserTemp, "r");
+    const socketRoot = process.platform === "linux" ? `/proc/${process.pid}/fd/${browserTempFd}` : browserTemp;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: socketRoot } });
+    const readings: unknown[] = [];
+    const chipSelector = '[role="slider"][data-seat-tick-switch]';
+    const freeze = (page: Page) => page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 600; } });
+    try {
+      for (const surface of ["board", "tablet", "dock-440", "dock-360", "phone"] as const) for (const scheme of ["light", "dark"] as const) for (const lang of ["uk", "en"] as const) {
+        const phone = surface === "phone";
+        const dockWidth = surface === "dock-440" ? 440 : surface === "dock-360" ? 360 : null;
+        const width = phone ? 390 : surface === "tablet" ? 915 : 1440;
+        const host = phone ? '[data-mobile2-sheet="seat"]' : dockWidth ? "[data-orchestrator-dock]" : "[data-kanban-seat]:not(.side)";
+        const label = `${width}-${scheme}-${lang}${dockWidth ? `-${surface}` : ""}`;
+        for (const shot of ["off", "dialog", "dialog-credits", "switching", "on", "on-credits", "ending", "disabled"] as const) {
+          state = shot === "dialog" || shot === "dialog-credits" ? "off" : shot;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&tick=driver${dockWidth ? `&dockWidth=${dockWidth}` : ""}`, { width, height: phone ? 844 : 900 }, scheme, lang, "no-preference", phone);
+          try {
+            await page.evaluate(value => document.documentElement.setAttribute("data-role-frame", value), DEFAULT_ROLE_FRAME);
+            const toastDismiss = page.locator("[data-attention-toast-dismiss]");
+            await toastDismiss.waitFor({ timeout: 2000 }).catch(error => { if (error.name !== "TimeoutError") throw error; });
+            if (await toastDismiss.isVisible()) await toastDismiss.click();
+            if (phone) await page.locator("[data-mobile2-open=seat]").first().click();
+            await page.locator(host).waitFor();
+            const chip = page.locator(`${host} ${chipSelector}:visible`).first();
+            await chip.waitFor();
+            const on = shot !== "off" && shot !== "dialog" && shot !== "dialog-credits" && shot !== "disabled";
+            if (on) await chip.locator("[data-seat-tick-turbo-mark]").waitFor();
+            await chip.locator("[data-seat-tick-thumb]").click();
+            const control = page.locator("[data-turbo-control]:visible").first();
+            await control.waitFor();
+            expect(await control.getAttribute("aria-checked")).toBe(String(on));
+            expect(await control.getAttribute("data-turbo")).toBe(shot === "dialog" || shot === "dialog-credits" ? "off" : shot === "on-credits" ? "on" : shot);
+            // The control sits in the autonomy section, which leads the editable sections.
+            const section = await page.locator("[data-seat-tick-autonomy-section]:visible").first().evaluate((node, turboSelector) => ({
+              holdsControl: !!node.querySelector(turboSelector),
+              beforeWakes: !!node.compareDocumentPosition(document.querySelector("[data-seat-tick-enabled]")!) && (node.compareDocumentPosition(document.querySelector("[data-seat-tick-enabled]")!) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+            }), "[data-turbo-control]");
+            expect(section).toEqual({ holdsControl: true, beforeWakes: true });
+            if (shot === "dialog" || shot === "dialog-credits") {
+              await control.click();
+              const dialog = page.locator("[data-turbo-dialog]");
+              await dialog.waitFor();
+              await page.locator("[data-turbo-account]").first().waitFor();
+              if (shot === "dialog-credits") await page.locator("[data-turbo-credits-toggle]").check();
+              const fit = await dialog.evaluate(node => {
+                const box = node.getBoundingClientRect();
+                const confirm = node.querySelector("[data-turbo-confirm]")!.getBoundingClientRect();
+                const foot = node.querySelector("[data-turbo-credits] p:last-of-type") as HTMLElement | null;
+                const credits = node.querySelector("[data-turbo-credits]") as HTMLElement | null;
+                const colorText = getComputedStyle(foot!).color;
+                const backgroundText = getComputedStyle(credits!).backgroundColor;
+                const channels = (value: string) => {
+                  const parsed = value.match(/[\d.]+/g)!.slice(0, 3).map(Number);
+                  if (value.startsWith("color(srgb ")) return parsed.map(channel => channel * 255);
+                  if (value.startsWith("oklab(")) {
+                    const [lightness, a, b] = parsed;
+                    const l = (lightness! + 0.3963377774 * a! + 0.2158037573 * b!) ** 3;
+                    const m = (lightness! - 0.1055613458 * a! - 0.0638541728 * b!) ** 3;
+                    const s = (lightness! - 0.0894841775 * a! - 1.291485548 * b!) ** 3;
+                    return [4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+                      -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+                      -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s]
+                      .map(channel => (channel <= 0.0031308 ? 12.92 * channel : 1.055 * channel ** (1 / 2.4) - 0.055) * 255);
+                  }
+                  return parsed;
+                };
+                const color = channels(colorText);
+                const background = channels(backgroundText);
+                const luminance = (rgb: number[]) => rgb.map(value => value / 255).map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4).reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index]!, 0);
+                const [a, b] = [luminance(color), luminance(background)].sort((left, right) => right - left);
+                /* Every payer row and the foot, measured from text ranges, sit whole above the pinned button bar. */
+                const barTop = node.querySelector("[data-turbo-confirm]")!.parentElement!.getBoundingClientRect().top;
+                const bodyTop = node.querySelector("[data-turbo-dialog-body]")!.getBoundingClientRect().top;
+                const lines = [...node.querySelectorAll("[data-turbo-payers] li"), ...(foot ? [foot] : [])].flatMap(item => {
+                  const range = document.createRange(); range.selectNodeContents(item);
+                  return [...range.getClientRects()].map(rect => ({ top: rect.top, bottom: rect.bottom }));
+                });
+                const approvalCut = lines.filter(line => line.bottom > barTop + 0.5 || line.top < bodyTop - 0.5).length;
+                return { approvalCut, approvalLines: lines.length, top: box.top, bottom: box.bottom, viewport: innerHeight, confirmVisible: confirm.bottom <= innerHeight && confirm.top >= 0,
+                  checked: (node.querySelector("[data-turbo-credits-toggle]") as HTMLInputElement | null)?.checked ?? null, footContrast: (a + 0.05) / (b + 0.05), colorText, backgroundText };
+              });
+              expect(fit.top).toBeGreaterThanOrEqual(0);
+              expect(fit.bottom).toBeLessThanOrEqual(fit.viewport + 0.5);
+              expect(fit.confirmVisible).toBe(true);
+              expect(fit.checked).toBe(shot === "dialog-credits");
+              if (shot === "dialog-credits") { expect(fit.approvalLines).toBeGreaterThan(0); expect(fit.approvalCut).toBe(0); }
+              if (shot === "dialog-credits") expect(fit.footContrast, `${fit.colorText} on ${fit.backgroundText}`).toBeGreaterThanOrEqual(4.5);
+              await freeze(page);
+              await page.screenshot({ path: path.join(out, `${label}-${shot}.png`) });
+              readings.push({ surface, scheme, lang, shot, fit, pageErrors: [...pageErrors] });
+            } else {
+              await freeze(page);
+              await control.scrollIntoViewIfNeeded();
+              const status = on ? await page.locator("[data-turbo-status]:visible").first().textContent() : null;
+              const caption = await page.locator("[data-turbo-about]:visible").first().textContent();
+              await page.screenshot({ path: path.join(out, `${label}-${shot}.png`) });
+              if (dockWidth) await page.locator(host).screenshot({ path: path.join(out, `${label}-${shot}-host.png`) });
+              /* The autonomy section head keeps one line beside its toggle, in uk too. */
+              const headLines = await page.locator("[data-seat-tick-autonomy-section]:visible").first().evaluate(node => {
+                const range = document.createRange(); range.selectNodeContents(node.querySelector("p")!);
+                return range.getClientRects().length;
+              });
+              expect(headLines).toBe(1);
+              if (shot === "on") expect(status).toContain(lang === "uk" ? "не перемкнено: 1" : "not switched: 1");
+              else if (on) expect(status).not.toMatch(/не перемкнено|not switched/);
+              readings.push({ surface, scheme, lang, shot, status, caption, headLines, pageErrors: [...pageErrors] });
+              if (shot === "on") {
+                await page.locator("[data-seat-tick-details]:visible > summary").click();
+                const detail = page.locator("[data-turbo-switch-details]:visible");
+                await detail.scrollIntoViewIfNeeded();
+                const detailText = (await detail.textContent()) ?? "";
+                expect(detailText).toContain("Review issue #913");
+                expect(detailText).toContain(lang === "uk" ? "типово → Ultrafast" : "standard → Ultrafast");
+                expect(detailText).toContain(lang === "uk" ? "Перемикання відхилено" : "The switch was refused");
+                expect(detailText).not.toMatch(/native tier update refused|gpt-6\.1-sol|conversation_failed/);
+                await page.screenshot({ path: path.join(out, `${label}-switch-details.png`) });
+              }
+            }
+            expect(pageErrors).toEqual([]);
+          } catch (error) {
+            await page.screenshot({ path: path.join(out, `${label}-${shot}-failure.png`) });
+            fs.writeFileSync(path.join(out, "failure.json"), JSON.stringify({ label, shot, writes, body: await page.locator("body").innerText() }, null, 2));
+            throw error;
+          } finally { await context.close(); }
+        }
+      }
+      // The shortest desktop window: the Turbo row and its caption stay above the popover's scroll edge, and the dialog fits whole.
+      for (const turboState of ["off", "on"] as const) {
+        state = turboState;
+        const { context, page } = await openFixture(browser, `${server.base}?scenario=seat-head&tick=driver&dockWidth=440`, { width: 1000, height: 700 }, "light", "en");
+        try {
+          const chip = page.locator(`[data-orchestrator-dock] ${chipSelector}:visible`).first();
+          await chip.waitFor();
+          await chip.locator("[data-seat-tick-thumb]").click();
+          await page.locator("[data-turbo-control]:visible").first().waitFor();
+          const edge = await page.evaluate(() => {
+            const popover = document.querySelector("[data-seat-tick-popover]")!;
+            let scroller: Element | null = popover;
+            for (const node of [popover, ...popover.querySelectorAll("*")]) if (/(auto|scroll)/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight) { scroller = node; break; }
+            const visibleBottom = Math.min(scroller!.getBoundingClientRect().bottom, innerHeight);
+            const caption = document.querySelector("[data-turbo-about]")!.getBoundingClientRect();
+            const control = document.querySelector("[data-turbo-control]")!.getBoundingClientRect();
+            return { visibleBottom, captionBottom: caption.bottom, controlBottom: control.bottom, scrollTop: scroller!.scrollTop };
+          });
+          expect(edge.scrollTop).toBe(0);
+          expect(edge.controlBottom).toBeLessThanOrEqual(edge.visibleBottom);
+          expect(edge.captionBottom).toBeLessThanOrEqual(edge.visibleBottom);
+          if (turboState === "off") {
+            await page.locator("[data-turbo-control]:visible").first().click();
+            await page.locator("[data-turbo-account]").first().waitFor();
+            const body = await page.locator("[data-turbo-dialog-body]").evaluate(node => ({ scrollHeight: node.scrollHeight, clientHeight: node.clientHeight }));
+            expect(body.scrollHeight).toBeLessThanOrEqual(body.clientHeight + 1);
+          }
+          await freeze(page);
+          await page.screenshot({ path: path.join(out, `1000x700-light-en-${turboState}.png`) });
+          readings.push({ surface: "board-1000x700", turboState, edge });
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ readings, writes }, null, 2) + "\n");
+    } finally {
+      await browser.close(); server.stop(); fs.closeSync(browserTempFd);
+      fs.rmSync(browserTemp, { recursive: true, force: true });
+    }
+  }, 900_000);
+});
+
 describe("pipeline repository initialization", () => {
   browserTest("the picker admits a new folder and shows a concrete refusal", async () => {
     const out = path.resolve(".artifacts/pipeline-repository-initialization");
@@ -35851,4 +36233,123 @@ describe("Telegram multiple bots", () => {
       fs.writeFileSync("evidence/telegram-multi-bot/desktop.json", JSON.stringify({ readings }, null, 2) + "\n");
     } finally { await browser.close(); if (tempFd !== null) fs.closeSync(tempFd); server.stop(); }
   }, 300_000);
+});
+
+describe("the sound map's one control: «Agent typing»", () => {
+  /*
+   * docs/design/sound-redesign.md §9: the sound levels gain one switch,
+   * «Звук роботи агентів» / "Agent typing", which turns the typing on screen
+   * and the murmur of agents off screen off together. On the desktop it sits
+   * in the board's ⋯ (Sound levels, opened in place), on the phone in the
+   * header menu's Settings page (Sound, its levels dialog).
+   *
+   * Desktop at 1440×900 and the shortest desktop window, 1000×700; the phone
+   * at 390×844 with a coarse pointer; en and uk, light and dark. It fails when
+   * the switch's label is cut by its scroller or the window, when another
+   * control covers it, when it is not on, or when one click does not store
+   * "off" on this device while leaving sound itself on.
+   *
+   * Frames go to `LLV_SOUND_SWITCH_OUT` (default `.artifacts/sound-switch/`,
+   * never committed), the readings to `evidence/sound-switch/rendered.json`.
+   *
+   *   CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "Agent typing"
+   */
+  const DESKTOP = [{ width: 1440, height: 900 }, { width: 1000, height: 700 }] as const;
+  const PHONE = { width: 390, height: 844 } as const;
+
+  /** Where the label's text is drawn, against what may clip it and what is drawn on top of it. */
+  async function measure(page: Page, panel: string) {
+    return page.evaluate((panelSelector) => {
+      const input = document.querySelector<HTMLInputElement>(`${panelSelector} [data-testid="typing-enabled"]`);
+      const label = input?.closest("label");
+      const text = label?.querySelector("span");
+      if (!input || !label || !text) return null;
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      const rect = range.getBoundingClientRect();
+      let clip = { top: 0, left: 0, right: window.innerWidth, bottom: window.innerHeight };
+      for (let node = label.parentElement; node; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        if (!/(auto|scroll|hidden|clip)/.test(style.overflowY + style.overflowX)) continue;
+        const box = node.getBoundingClientRect();
+        clip = { top: Math.max(clip.top, box.top), left: Math.max(clip.left, box.left), right: Math.min(clip.right, box.right), bottom: Math.min(clip.bottom, box.bottom) };
+      }
+      const centre = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      const box = label.getBoundingClientRect();
+      return {
+        text: text.textContent ?? "",
+        checked: input.checked,
+        rect: [rect.left, rect.top, rect.right, rect.bottom].map((value) => Math.round(value * 10) / 10),
+        clip: [clip.left, clip.top, clip.right, clip.bottom].map((value) => Math.round(value * 10) / 10),
+        whole: rect.top >= clip.top - 0.5 && rect.bottom <= clip.bottom + 0.5 && rect.left >= clip.left - 0.5 && rect.right <= clip.right + 0.5,
+        onTop: Boolean(centre && label.contains(centre)),
+        labelHeight: Math.round(box.height * 10) / 10,
+      };
+    }, panel);
+  }
+
+  browserTest("the switch is whole, on, and stores «off» in both layouts, languages and themes", async () => {
+    const out = path.resolve(process.env.LLV_SOUND_SWITCH_OUT ?? ".artifacts/sound-switch");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        const expected = translate(lang, "sound.typing");
+        for (const viewport of [...DESKTOP, PHONE]) {
+          const phone = viewport === PHONE;
+          const tag = `${phone ? "phone" : "desktop"} ${viewport.width}×${viewport.height} ${lang} ${theme}`;
+          const { context, page, pageErrors } = await openFixture(browser, server.base, viewport, theme, lang, "reduce", phone);
+          try {
+            let panel: string;
+            if (phone) {
+              await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+              await page.locator('[data-mobile2-open="menu"]').first().click();
+              await page.locator("[data-mobile2-sheet='menu'] [data-mobile2-menu-row='settings']").click();
+              await page.locator("[data-mobile2-sheet='menu'] [data-testid='sound-settings-trigger']").click();
+              panel = "[data-mobile2-sheet='menu'] [data-testid='sound-settings']";
+            } else {
+              await page.locator("[data-kanban-board]").waitFor({ timeout: 30_000 });
+              await openBoardMenu(page);
+              await page.locator("[data-bar-more-menu] [data-testid='sound-settings-trigger']").click();
+              panel = "[data-bar-more-menu] [data-testid='sound-settings']";
+            }
+            await page.locator(`${panel} [data-testid="typing-enabled"]`).scrollIntoViewIfNeeded();
+            const reading = await measure(page, panel);
+            if (!reading) throw new Error("the switch is not drawn");
+            const frame = `${phone ? "phone" : "desktop"}-${viewport.width}-${lang}-${theme}.png`;
+            await page.screenshot({ path: path.join(out, frame) });
+            if (reading.text !== expected) failures.push(`${tag}: label «${reading.text}», expected «${expected}»`);
+            if (!reading.checked) failures.push(`${tag}: the switch starts off`);
+            if (!reading.whole) failures.push(`${tag}: label ${reading.rect} is cut by ${reading.clip}`);
+            if (!reading.onTop) failures.push(`${tag}: something is drawn over the label`);
+            await page.locator(`${panel} [data-testid="typing-enabled"]`).click();
+            const stored = await page.evaluate(() => ({ typing: localStorage.getItem("llvAudioTypingEnabled"), sound: localStorage.getItem("llvSound") }));
+            if (stored.typing !== "off" || stored.sound === "off") failures.push(`${tag}: one click stored ${JSON.stringify(stored)}`);
+            const after = await measure(page, panel);
+            if (after?.checked !== false) failures.push(`${tag}: the switch still reads on after the click`);
+            await page.screenshot({ path: path.join(out, `off-${frame}`) });
+            if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join(" | ")}`);
+            readings.push({ surface: phone ? "phone" : "desktop", ...viewport, lang, theme, frame, ...reading, stored });
+          } catch (error) {
+            failures.push(`${tag}: ${String(error).split("\n")[0]}`);
+            await page.screenshot({ path: path.join(out, `failed-${viewport.width}-${lang}-${theme}.png`) }).catch(() => {});
+          } finally { await context.close(); }
+        }
+      }
+      fs.mkdirSync("evidence/sound-switch", { recursive: true });
+      const sources = ["src/components/SoundToggle.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts"];
+      fs.writeFileSync("evidence/sound-switch/rendered.json", JSON.stringify({
+        capturedAt: new Date().toISOString(),
+        command: "CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t \"Agent typing\" (isolated roots, scripts/gate-slot.sh)",
+        sourceDigests: Object.fromEntries(sources.map((file) => [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")])),
+        readings,
+        failures,
+      }, null, 2) + "\n");
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 900_000);
 });

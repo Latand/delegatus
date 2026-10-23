@@ -33,13 +33,15 @@ export type ViewerOperation = "state.index-repair" | "temp.sweep" | "resources.r
   | "resources.read" | "seat.panel" | "attention.read" | "pipelines.revalidate" | "runtime-journal.receipt-sweep"
   | "done.sweep" | "done.media" | "done.frame-source"
   | "seat-tick.prepare" | "seat-tick.liveness" | "seat-tick.children" | "seat-tick.reports" | "seat-tick.worker-asks" | "seat-tick.rule-reports" | "seat-tick.check" | "seat-tick.payload" | "seat-tick.audit"
-  | "state.document"
+  | "state.document" | "tasks.proactive.admission"
   | "memory.search" | "memory.open"
   | "codex.protocol-admission" | "mcp.page-cursors"
+  | "worktrees.discovery" | "worktrees.candidate" | "worktrees.accounting"
   | "pipelines.controller-job" | "pipelines.controller-lane" | "pipelines.controller-schedule" | "pipelines.publication-recovery"
   | "pipelines.controller-artifacts"
   | "telegram.membership-check" | "telegram.outbound-state" | "telegram.outbound-publication" | "links.telegram-publication" | "orchestrator.recipient-authority" | "orchestrator.seat-channel"
-  | "seat-tick.pause-conditions" | "structured-user.publish" | "structured-user.provenance" | "structured-user.retention";
+  | "seat-tick.pause-conditions" | "structured-user.publish" | "structured-user.provenance" | "structured-user.retention"
+  | "turbo.sweep" | "turbo.sweep.read" | "turbo.sweep.apply" | "turbo.sweep.settle";
 type Operation = { name: ViewerOperation; start: number; end?: number };
 const shared = globalThis as typeof globalThis & { __delegatusLoopMonitor?: ReturnType<typeof createViewerLoopMonitor> };
 

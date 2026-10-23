@@ -319,3 +319,38 @@ test("a team call is private to its starting human across events, transcripts, c
   await f.service.close(minted.sessionId);
   resetTeamStoreForTests();
 });
+
+test("a dropped team call is offered and resumed only by its starting human, and only a drop is accepted as a close reason", async () => {
+  const { claimInstall, createInvite, redeemJoin } = await import("@/lib/team/members");
+  const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
+  const { MEMBER_COOKIE } = await import("@/lib/team/sessions");
+  const resume = await import("../resume/route");
+  resetTeamStoreForTests();
+  const store = teamStore();
+  const device = { surface: "desktop" as const, browser: "chrome" as const };
+  const owner = claimInstall(store, "Owner", device);
+  const starter = redeemJoin(store, createInvite(store, owner.member, null).code, "Starter", device);
+  const cookie = (value: string) => ({ cookie: `${MEMBER_COOKIE}=${value}` });
+  const offered = async (value: string) => (await (await resume.GET(new NextRequest("http://127.0.0.1/api/voice-companion/resume",
+    { headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin", ...cookie(value) } }))).json()).resumable;
+  const f = fixture();
+  const minted = await (await POST(request({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: "team-drop" }, cookie(starter.cookie)))).json();
+  const providerId = f.provider.sessions[0].id;
+  f.provider.replay(providerId, { type: "session.input_transcript.delta", event_id: "said", delta: "Synthetic question.", start_ms: 0, end_ms: 900 });
+  await f.service.drain(minted.sessionId);
+  expect((await POST(request({ action: "close", sessionId: minted.sessionId, reason: "operator-gone" }, cookie(starter.cookie)))).status).toBe(400);
+  expect((await POST(request({ action: "close", sessionId: minted.sessionId, reason: "transport" }, cookie(starter.cookie)))).status).toBe(200);
+  expect(f.service.transcriptRecord(minted.sessionId).entries.find(row => row.kind === "session_end")?.data.reason).toBe("transport");
+
+  expect(await offered(owner.cookie)).toBeNull();
+  expect(await offered(starter.cookie)).toMatchObject({ sessionId: minted.sessionId });
+  const again = { action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: "team-drop-again", resume: minted.sessionId };
+  expect(await (await POST(request(again, cookie(owner.cookie)))).json()).toEqual({ code: "MEMBER_REQUIRED" });
+  expect((await POST(request({ ...again, resume: "../escape" }, cookie(starter.cookie)))).status).toBe(400);
+  expect(f.provider.sessions).toHaveLength(1);
+  const resumed = await POST(request(again, cookie(starter.cookie)));
+  expect(resumed.status).toBe(201);
+  expect(f.provider.sessions[1].memory).toContain("operator: Synthetic question.");
+  await f.service.close((await resumed.json()).sessionId);
+  resetTeamStoreForTests();
+});

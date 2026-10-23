@@ -14,6 +14,8 @@ export interface AutonomyDecision {
 }
 
 export interface AutonomySetting {
+  /** Episode-local permission. Legacy episodes have no invention authority. */
+  proactive?: { enabled: boolean };
   enabled: boolean;
   startedAt: string;
   until: string | null;
@@ -26,24 +28,34 @@ export interface AutonomySetting {
   reportAt?: string;
 }
 
-export interface AutonomyChange { enabled?: boolean; hours?: number | null; why?: string | null }
+export interface AutonomyChange { enabled?: boolean; hours?: number | null; why?: string | null; proactive?: { enabled: boolean } }
 export type AutonomyDecisionInput = Pick<AutonomyDecision, "id" | "decision" | "why" | "undo" | "taskId"> & { startedAt: string; review?: DecidePrototypeInput };
 
 export function autonomyActive(setting: AutonomySetting | null | undefined, now: number): boolean {
   return !!setting?.enabled && (setting.until === null || Date.parse(setting.until) > now);
 }
 
+export function proactiveActive(setting: AutonomySetting | null | undefined, now: number): boolean {
+  return autonomyActive(setting, now) && setting?.proactive?.enabled === true;
+}
+
 /** An expiry is evaluated on every read, including after a stopped Viewer. */
 export function endedAutonomy(setting: AutonomySetting | null | undefined, now: number): AutonomySetting | null {
   if (!setting) return null;
   return setting.enabled && setting.until !== null && Date.parse(setting.until) <= now
-    ? { ...setting, enabled: false, endedAt: setting.until, endReason: "expired" } : setting;
+    ? { ...setting, proactive: { enabled: false }, enabled: false, endedAt: setting.until, endReason: "expired" } : setting;
 }
 
 export function changeAutonomy(current: AutonomySetting | null | undefined, raw: AutonomyChange,
   context: { at: string; actor: SeatTickSettingsActor }, project: string, wakesEnabled: boolean): AutonomySetting | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("autonomy must be an object");
-  const { actor, at } = context;
+  const { at } = context;
+  // Root agent sessions can carry gateway attribution for older controls.
+  // That attribution cannot extend an episode carrying invention authority.
+  const guarded = current?.proactive?.enabled === true || Object.hasOwn(raw, "proactive");
+  const actor: SeatTickSettingsActor = guarded && context.actor.kind === "gateway" && context.actor.conversationId !== null
+    ? { ...context.actor, kind: context.actor.project === project && context.actor.seatEpoch !== null ? "manager" : "agent" }
+    : context.actor;
   if (actor.kind !== "gateway" && !(actor.kind === "manager" && actor.project === project)) throw new Error("only the operator or this project's seat may change autonomy");
   const why = typeof raw.why === "string" ? raw.why.trim() : null;
   if (actor.kind !== "gateway" && !why) throw new Error("autonomy.why is required");
@@ -61,10 +73,19 @@ export function changeAutonomy(current: AutonomySetting | null | undefined, raw:
   if (actor.kind !== "gateway" && enabled && (!previous?.enabled || (previous.until !== null && (until === null || Date.parse(until) > Date.parse(previous.until))))) {
     throw new Error("the seat may only shorten or turn off autonomy; only the operator may enable or extend it");
   }
+  let proactive = { enabled: enabled && previous?.enabled ? previous.proactive?.enabled === true : false };
+  if (Object.hasOwn(raw, "proactive")) {
+    const value = raw.proactive;
+    if (!value || typeof value !== "object" || Array.isArray(value) || typeof value.enabled !== "boolean"
+      || Object.keys(value).some(key => key !== "enabled")) throw new Error("autonomy.proactive must contain only enabled, a boolean");
+    if (value.enabled && (actor.kind !== "gateway" || actor.conversationId !== null)) throw new Error("only the operator may enable proactive autonomy");
+    if (value.enabled && !enabled) throw new Error("proactive autonomy requires active full autonomy");
+    proactive = { enabled: value.enabled };
+  }
   if (!enabled && !previous) return null;
-  if (!enabled) return { ...previous!, enabled: false, endedAt: previous!.endedAt ?? at, endReason: previous!.endReason ?? "turned-off", updatedAt: at, setBy: actor, why };
+  if (!enabled) return { ...previous!, proactive: { enabled: false }, enabled: false, endedAt: previous!.endedAt ?? at, endReason: previous!.endReason ?? "turned-off", updatedAt: at, setBy: actor, why };
   return { enabled: true, startedAt: previous?.enabled ? previous.startedAt : previous && Date.parse(previous.startedAt) >= Date.parse(at) ? new Date(Date.parse(previous.startedAt) + 1).toISOString() : at, until, endedAt: null, endReason: null,
-    updatedAt: at, setBy: actor, why, decisions: previous?.enabled ? previous.decisions : [] };
+    proactive, updatedAt: at, setBy: actor, why, decisions: previous?.enabled ? previous.decisions : [] };
 }
 
 export function autonomyReportKey(episode: Pick<AutonomySetting, "startedAt">): string { return `autonomy:${episode.startedAt}`; }

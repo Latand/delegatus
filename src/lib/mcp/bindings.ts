@@ -1,3 +1,5 @@
+import { readSelf } from "@/lib/links/self";
+import { readFileConfirmationLink } from "@/lib/telegram/bot/fileConfirmationContract";
 import { FLOW_ARCHIVE, FLOW_RETIREMENT, STAGE_RETIREMENT, FlowRetiredError } from "@/lib/flows/retirement";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { curationAnswer } from "@/lib/memory/curation/answer";
@@ -14,7 +16,9 @@ import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { decidePrototype } from "@/lib/prototypeReview/decision";
 import { deliverPrototypeDecision } from "@/lib/prototypeReview/deliveryWorker";
 import { findPrototypeRound } from "@/lib/prototypeReview/store";
-import { autonomyActive, autonomyMandate, autonomyReportKey, pendingAutonomyReports } from "@/lib/monitor/autonomy";
+import { autonomyActive, proactiveActive, autonomyMandate, autonomyReportKey, pendingAutonomyReports } from "@/lib/monitor/autonomy";
+import { endedTurbo, turboActive, turboMandate, turboNeedsPlan, turboProgress } from "@/lib/monitor/turbo";
+import { turboChangeContext } from "@/lib/monitor/turboRuntime";
 import { changeSeatTickSettings, markAutonomyReported, markAutonomyDecisionReview } from "@/lib/monitor/seatTickSettings";
 import { pipelinePublishesRemoteBranch } from "@/lib/pipelines/publication";
 import { recordSeatProjectSuccessions, seatLaunchCwd } from "@/lib/orchestrator/seatProjectIdentity";
@@ -160,6 +164,7 @@ import {
   readSeatTickSettings,
   writeSeatTickSettings,
   type SeatTickNoteLineEdits,
+  type SeatTickSettings,
   type SeatTickSettingsActor,
   type SeatTickSettingsChange,
 } from "@/lib/monitor/seatTickSettings";
@@ -771,6 +776,7 @@ async function dispatchViewerControl(
       ...(typeof result.expectedRevision === "number" || result.expectedRevision === null ? { expectedRevision: result.expectedRevision } : {}),
       ...(typeof result.retryAfterSeconds === "number" ? { retryAfterSeconds: result.retryAfterSeconds } : {}),
       ...(Array.isArray(result.sentMessageIds) && result.sentMessageIds.every((id) => typeof id === "number") ? { sentMessageIds: result.sentMessageIds } : {}),
+      ...(readFileConfirmationLink(result.confirmation) ? { confirmation: readFileConfirmationLink(result.confirmation) } : {}),
       ...(text(result.secretClass) ? { secretClass: text(result.secretClass) } : {}),
       ...(refusals.length ? { refusals } : {}),
     });
@@ -4704,6 +4710,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
 
   const change: SeatTickSettingsChange = {};
   if (args.autonomy !== undefined) change.autonomy = args.autonomy as SeatTickSettingsChange["autonomy"];
+  if (args.turbo !== undefined) change.turbo = args.turbo as SeatTickSettingsChange["turbo"];
   if (args.autonomyDecision !== undefined) change.autonomyDecision = structuredClone(args.autonomyDecision) as SeatTickSettingsChange["autonomyDecision"];
   if (args.release !== undefined) change.release = args.release as SeatTickSettingsChange["release"];
   if (args.autoRotate !== undefined) change.autoRotate = args.autoRotate as SeatTickSettingsChange["autoRotate"];
@@ -4773,13 +4780,17 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
         instructionActor = { ...actor, kind: "manager", project: authorizedProject, seatEpoch: null };
       }
     }
-    const context = { at: new Date().toISOString(), actor, instructionActor };
+    /* Paid credits spend money: the tool never approves them; the operator ticks them in the panel. */
+    if ((change.turbo as { credits?: unknown } | undefined)?.credits === true) throw new Error("paid credits are approved only in the operator's Turbo dialog");
+    const context = { at: new Date().toISOString(), actor, instructionActor, ...(turboNeedsPlan(change.turbo) ? { turbo: turboChangeContext(project) } : {}) };
     const applied = dependencies.writeTickSettings || dependencies.readTickSettings
       ? applySeatTickSettingsChange(current, change, context)
       : changeSeatTickSettings(project, change, context);
     if (!applied.ok) throw new Error(applied.error);
     if (change.release) releaseControlChange(project, change.release, actor, applied.settings.updatedAt!);
     if (dependencies.writeTickSettings || dependencies.readTickSettings) writeSettings(project, applied.settings);
+    /* The Viewer owns Codex hosts and runs the sweep from its seat-tick pass.
+       MCP writes only the durable setting; its process cannot dispatch host RPCs. */
     if (review) {
       const taskId = change.autonomyDecision?.taskId ?? null;
       const authorize = () => {
@@ -4817,6 +4828,8 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   delete settingsWithoutPrompt.release;
   delete settingsWithoutPrompt.autonomy;
   delete settingsWithoutPrompt.autonomyHistory;
+  delete settingsWithoutPrompt.turbo;
+  delete settingsWithoutPrompt.turboHistory;
   /* #2030: a write is acknowledged, never read back. The caller holds what it
      sent; the revision and the stored length are what it needs to know the row
      took it. A change to another project's tick still says so out loud. */
@@ -4878,8 +4891,10 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
        see what it is restoring before it restores it. */
     ...(verbose ? { defaults: seatTickScheduleDefaults(project) } : {}),
     autonomy: settings.autonomy || settings.autonomyHistory?.length || verbose ? { active: autonomyActive(settings.autonomy, now), until: settings.autonomy?.until ?? null, startedAt: settings.autonomy?.startedAt ?? null,
+      proactive: { enabled: effective.enabled && proactiveActive(effective.autonomy, now) },
       decisionCount: settings.autonomy?.decisions.length ?? 0, pendingReports: pendingAutonomyReports(settings, now).map(autonomyReportKey),
       ...(verbose ? { mandate: autonomyMandate(settings.autonomy, now).join("\n").trim(), episode: effective.autonomy, history: settings.autonomyHistory ?? [] } : {}) } : { active: false },
+    ...(settings.turbo || settings.turboHistory?.length || verbose ? { turbo: turboToolAnswer(settings, now, verbose) } : {}),
     release: { ...RELEASE_DEFAULTS, ...settings.release, effectiveAskBeforePublish: (settings.release?.askBeforePublish ?? true) && !autonomyActive(settings.autonomy, now), status: releaseStatus(project) },
     autoRotate: { enabled: settings.autoRotate?.enabled ?? false, thresholdPercent: settings.autoRotate?.thresholdPercent ?? 50,
       ...(verbose ? { setBy: settings.autoRotate?.setBy ?? null, updatedAt: settings.autoRotate?.updatedAt ?? null, why: settings.autoRotate?.why ?? null } : {}),
@@ -4896,6 +4911,16 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     ...fenceAnswer,
     ...reportAsk,
   });
+}
+
+/** Turbo for the seat: whether it is on, the credit approval and the switch progress. */
+function turboToolAnswer(settings: SeatTickSettings, now: number, verbose: boolean) {
+  const episode = endedTurbo(settings.turbo, now);
+  if (!episode && (!verbose || !settings.turboHistory?.length)) return { active: false };
+  return { active: turboActive(episode, now), until: episode?.until ?? null, startedAt: episode?.startedAt ?? null,
+    credits: episode ? { approved: episode.credits.approved, accounts: episode.credits.accounts } : null,
+    progress: episode ? turboProgress(episode.switches) : null,
+    ...(verbose ? { overlay: turboMandate(episode, now).join("\n").trim(), episode, history: settings.turboHistory ?? [] } : {}) };
 }
 
 /** What the tick owes the report log for a project, and the report to file
@@ -5360,6 +5385,20 @@ async function telegramBotSend(args: McpToolArgs, control: ViewerControlDependen
   return redactPayload(result);
 }
 
+function telegramFileConfirmation(value: unknown) {
+  const link = readFileConfirmationLink(value);
+  if (!link) return null;
+  const published = readSelf()?.publicUrl;
+  let origin = viewerControlOrigin();
+  if (published) {
+    try {
+      const url = new URL(published);
+      if ((url.protocol === "http:" || url.protocol === "https:") && !url.username && !url.password) origin = url.origin;
+    } catch { /* An invalid saved address keeps the local control origin. */ }
+  }
+  return { ...link, url: new URL(link.url, origin).href };
+}
+
 async function telegramBotSendMedia(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
   const result = await dispatchControl(control)("/api/telegram/bot/agent", {
     op: "send_media",
@@ -5373,7 +5412,9 @@ async function telegramBotSendMedia(args: McpToolArgs, control: ViewerControlDep
   }, callerCapabilityHeaders()).catch((error: unknown) => {
     if (error instanceof McpDispatchVerdictError && typeof error.details.code === "string") {
       const code = error.details.code;
-      throw new McpToolRefusal(error.message, { code, retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode),
+      const confirmation = telegramFileConfirmation(error.details.confirmation);
+      throw new McpToolRefusal(confirmation ? error.message.replace(readFileConfirmationLink(error.details.confirmation)!.url, confirmation.url) : error.message, { code, retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode),
+        ...(confirmation ? { confirmation } : {}),
         ...(Array.isArray(error.details.refusals) ? { refusals: readTelegramBotRefusals(error.details.refusals) } : {}) });
     }
     throw error;
@@ -5396,10 +5437,12 @@ async function telegramBotSendDocument(args: McpToolArgs, control: ViewerControl
   }, callerCapabilityHeaders()).catch((error: unknown) => {
     if (error instanceof McpDispatchVerdictError && typeof error.details.code === "string") {
       const code = error.details.code;
+      const confirmation = telegramFileConfirmation(error.details.confirmation);
       const { retryAfterSeconds, secretClass } = error.details;
-      throw new McpToolRefusal(error.message, {
+      throw new McpToolRefusal(confirmation ? error.message.replace(readFileConfirmationLink(error.details.confirmation)!.url, confirmation.url) : error.message, {
         code,
         retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode),
+        ...(confirmation ? { confirmation } : {}),
         ...(Array.isArray(error.details.refusals) ? { refusals: readTelegramBotRefusals(error.details.refusals) } : {}),
         ...(typeof retryAfterSeconds === "number" ? { retryAfterSeconds } : {}),
         ...(typeof secretClass === "string" ? { secretClass } : {}),
