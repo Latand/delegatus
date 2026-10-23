@@ -574,6 +574,28 @@ test("«Past attempts · n» comes last: every finished attempt and round, each 
   expect(design.textContent).toContain(translate("en", "kanban.past.none"));
 });
 
+test.each([false, true])("retained phone rounds open their exact archive with a transcript present: %s", present => {
+  const flow = { id: "retained-phone-review", state: "closed", rounds: [1, 2].map(n => ({
+    n, reviewerPath: present ? REVIEW.path : null, verdict: n === 1 ? "REQUEST_CHANGES" : "APPROVE", startedAt: at(3700 - n),
+  })) } as unknown as Flow;
+  const pipeline = parkedPipeline({ runs: [{ stageId: "review", attempts: [attempt({ n: 3, state: "passed", flowId: flow.id })] }] } as unknown as Partial<Pipeline>);
+  const targets: unknown[] = [];
+  const opened: string[] = [];
+  const record = (event: Event) => targets.push((event as CustomEvent).detail);
+  window.addEventListener("llv:review-history", record);
+  try {
+    const host = mount(<MobilePipelineScreen pipeline={pipeline} flows={[flow]} files={present ? [REVIEW] : []} now={NOW} onOpenConversation={file => opened.push(file.path)} />);
+    click(q(host, "[data-mobile2-past-toggle]"));
+    for (const n of [1, 2]) {
+      const entry = q(host, `[data-mobile2-review-history="${flow.id}"][data-review-round="${n}"]`)!;
+      expect(entry.tagName).toBe("BUTTON");
+      click(entry);
+    }
+    expect(targets).toEqual([{ id: flow.id, round: 1 }, { id: flow.id, round: 2 }]);
+    expect(opened).toEqual([]);
+  } finally { window.removeEventListener("llv:review-history", record); }
+});
+
 test("the bar's ⋯ holds the lane's own actions and leads on to the board's menu", async () => {
   const store = nav();
   const boardMenu = (name: string, close: () => void) => (name === "menu" ? <div data-board-menu onClick={close} /> : null);
