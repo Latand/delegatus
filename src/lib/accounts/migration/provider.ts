@@ -1,4 +1,5 @@
 import { learnedRulesForLaunchProfile, memoryStartIdentity, roleMemoryProfileForIdentity } from "@/lib/memory/roleLaunch";
+import { storedOperatorRoot } from "@/lib/memory/operatorMemory";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -1538,6 +1539,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
         memoryRole,
         memoryProject,
         Boolean(seatMembership && seatMembership.containerId === memoryProject),
+        storedOperatorRoot(conversation, conversation ? registry.readOnlySnapshot().memberships[conversation.id] : undefined),
       ) ?? input.launchProfile;
       const publicationInput = {
         receipt,

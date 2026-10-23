@@ -826,7 +826,7 @@ browserTest("linked installs: this install renders at 390 and desktop widths in 
         const state = await page.locator(`[data-linked-state="${expected}"]`).innerText();
         expect(overflow).toBe(false);
         const savedAddress = mode === "lan-dns" ? "http://board.internal.test:8897" : "https://delegatus.example.com";
-        expect(await dialog.locator('input[type="url"]').inputValue()).toBe(savedAddress);
+        expect(await dialog.locator('input[placeholder="https://delegatus.example.com"]').inputValue()).toBe(savedAddress);
         const warning = dialog.locator("[data-linked-http-warning]");
         if (mode === "lan-dns") {
           expect(await warning.isVisible()).toBe(true);
@@ -4048,7 +4048,7 @@ browserTest("#2098: the phone's Overview is the phone kanban over three projects
  */
 const BOT_OUT = path.resolve(process.env.LLV_TELEGRAM_BOT_OUT ?? ".artifacts/telegram-bot");
 const BOT_EVIDENCE = path.resolve("evidence/telegram-bot");
-const BOT_SCENES = ["none", "chats", "webhook"] as const;
+const BOT_SCENES = ["none", "chats", "webhook", "clone", "pairing"] as const;
 
 async function readTelegramPanel(page: Page, phone: boolean) {
   return page.evaluate((isPhone) => {
@@ -4158,6 +4158,9 @@ browserTest("telegram bot: the setup panel on the phone and the desktop holds it
     { viewport: { width: 390, height: 844 }, scheme: "light", phone: true, lang: "uk", scenes: ["chats", "refused"] },
     { viewport: { width: 1_280, height: 800 }, scheme: "light", phone: false, lang: "uk", scenes: ["chats", "refused"] },
   );
+  for (const viewport of [{ width: 390, height: 844 }, { width: 410, height: 880 }, { width: 430, height: 932 }, { width: 1280, height: 800 }])
+    for (const scheme of SCHEMES) for (const lang of ["en", "uk"] as const)
+      cases.push({ viewport, scheme, phone: viewport.width < 600, lang, scenes: ["clone", "pairing"] });
   try {
     for (const { viewport, scheme, phone, lang, scenes } of cases) {
       for (const scene of scenes) {
@@ -4173,10 +4176,33 @@ browserTest("telegram bot: the setup panel on the phone and the desktop holds it
           const top = await readTelegramPanel(page, phone);
           const reportsLine = await page.locator('[role="dialog"][aria-label="Telegram"] [data-telegram-chat-reports]').allTextContents();
           await page.screenshot({ path: path.join(BOT_OUT, `${key}.png`) });
-          const expectedReports = scene === "chats" || scene === "webhook" ? [lang === "uk" ? "Звіти оркестратора: Atlas" : "Orchestrator reports: Atlas"]
+          const expectedReports = scene === "chats" || scene === "webhook" || scene === "clone" ? [lang === "uk" ? "Звіти оркестратора: Atlas" : "Orchestrator reports: Atlas"]
             : scene === "refused" ? [lang === "uk" ? "Звіти оркестратора: Atlas. Дописи сюди зараз відхиляються, тож звіти лишаються лише в журналі: увімкніть дописи або оберіть інший чат" : "Orchestrator reports: Atlas. Posts are refused here now, so they reach the log only: switch posting on or pick another chat"]
             : [];
           if (JSON.stringify(reportsLine) !== JSON.stringify(expectedReports)) failures.push(`${key}: the chat's reports line reads ${JSON.stringify(reportsLine)}`);
+          if (scene === "clone" || scene === "pairing") {
+            const state = page.getByLabel(`Report clone: ${lang === "uk" ? "Агентам можна писати" : "Agents may post"}`, { exact: true });
+            await state.scrollIntoViewIfNeeded();
+            if (!await state.isVisible()) failures.push(`${key}: clone posting status is missing`);
+            const ink = await state.evaluate(node => {
+              const range = document.createRange(); range.selectNodeContents(node);
+              return [...range.getClientRects()].every(r => r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight);
+            }).catch(() => false);
+            if (!ink) failures.push(`${key}: clone posting status is clipped`);
+            await page.screenshot({ path: path.join(BOT_OUT, `${key}-clone.png`) });
+          }
+          if (scene === "pairing") {
+            const switchName = (lang === "uk" ? "Агентам можна писати" : "Agents may post") + ": Team Reports";
+            const toggle = page.getByRole("switch", { name: switchName, exact: true });
+            if (await page.locator('input[type="password"]').count() !== 1) failures.push(`${key}: token setup is not visible`);
+            if (await toggle.getAttribute("aria-checked") !== "false") failures.push(`${key}: clone group did not start disabled`);
+            if (phone) await toggle.tap(); else await toggle.click();
+            await page.waitForFunction(({ name }) => document.querySelector(`[role="switch"][aria-label="${name}"]`)?.getAttribute("aria-checked") === "true", { name: switchName }, { timeout: 5_000 })
+              .catch(() => failures.push(`${key}: clone group did not become allowed`));
+            const posts = await page.evaluate(() => structuredClone((window as unknown as { evidence: { botPosts: Array<Record<string, unknown>> } }).evidence.botPosts));
+            const expected = { action: "chat", chatId: "-1000000000101", alias: "team-reports", postAllowed: true };
+            if (posts.length !== 1 || JSON.stringify(posts[0]) !== JSON.stringify(expected)) failures.push(`${key}: expected exactly one clone group allowlist save, saw ${JSON.stringify(posts)}`);
+          }
           /* The panel scrolls inside itself; the second frame is its end. */
           await page.evaluate(() => {
             const dialog = document.querySelector('[role="dialog"][aria-label="Telegram"]');
@@ -11362,6 +11388,130 @@ describe("phone orchestrator reads", () => {
     } finally { await browser.close(); stop(); }
     fs.mkdirSync("evidence/voice-companion", { recursive: true });
     fs.writeFileSync("evidence/voice-companion/orchestrator-phone.json", JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", frames: ".artifacts/voice-companion/orchestrator-phone", readings }, null, 2) + "\n");
+  }, 180_000);
+});
+
+describe("phone voice call history", () => {
+  /* GitHub #2975 on the phone: the page opens as after a reload, with no call of its own (`?voice=history`). The
+     head's menu still offers the conversation, which opens the newest retained call; the panel's picker opens each
+     earlier one, and an opened request says why it was not sent or delivered and links its orchestrator. Every text
+     the case names is measured whole from its text ranges; frames go to the run's own `.artifacts`, never the tree. */
+  browserTest("after a reload the head opens the retained calls, a picker opens each, and a request's reason and orchestrator link fit at 390 px", async () => {
+    const out = path.resolve(".artifacts/voice-companion/history-phone");
+    fs.mkdirSync(out, { recursive: true });
+    const { base, stop } = await serveFixture();
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const readings: unknown[] = [];
+    /* The first action of an opened call (a tool call or a request to the orchestrator) and its status text. */
+    const FIRST_ACTION = ['.vc-tr-list > li:is([data-kind="call"], [data-kind="request"])', '.vc-tr-list > li:is([data-kind="call"], [data-kind="request"]) .vc-call-state'];
+    const whole = (page: Page, selectors: string[]) => page.evaluate((list) => {
+      const view = document.querySelector<HTMLElement>("[data-companion-transcript-view]")!;
+      const body = view.querySelector<HTMLElement>("[data-transcript-body]")!;
+      const result: Record<string, { found: boolean; whole: boolean; text: string; height: number }> = {};
+      for (const selector of list) {
+        const element = view.querySelector<HTMLElement>(selector);
+        if (!element) { result[selector] = { found: false, whole: false, text: "", height: 0 }; continue; }
+        const clip = (body.contains(element) ? body : view).getBoundingClientRect();
+        const range = document.createRange(); range.selectNodeContents(element);
+        const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+        /* Nothing else stands over the text: the topmost element at each piece's middle is the element itself. */
+        const uncovered = rects.every((rect) => { const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2); return !!top && (element === top || element.contains(top)); });
+        result[selector] = { found: true, text: element.innerText, height: element.getBoundingClientRect().height, whole: rects.length > 0 && uncovered && rects.every((rect) => rect.top >= clip.top - 0.5 && rect.bottom <= clip.bottom + 0.5
+          && rect.left >= clip.left - 0.5 && rect.right <= clip.right + 0.5 && rect.top >= 0 && rect.bottom <= innerHeight && rect.left >= 0 && rect.right <= innerWidth) };
+      }
+      const picker = view.querySelector<HTMLSelectElement>("select[data-transcript-calls]")!;
+      const style = getComputedStyle(picker);
+      const context = document.createElement("canvas").getContext("2d")!;
+      context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+      const label = picker.selectedOptions[0]?.textContent ?? "";
+      const box = view.getBoundingClientRect(); const pick = picker.getBoundingClientRect();
+      return { result, picker: { label, fits: context.measureText(label).width <= picker.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - 20, height: pick.height,
+        inside: pick.left >= box.left && pick.right <= box.right && pick.top >= box.top && pick.bottom <= box.bottom
+          && document.elementFromPoint(pick.left + pick.width / 2, pick.top + pick.height / 2) === picker },
+        panelInside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, sideways: body.scrollWidth - body.clientWidth,
+        /* A row of the list the body's top edge runs through: a retained call opens at its start, so none is cut there. */
+        cutByTop: [...body.querySelectorAll<HTMLElement>(".vc-tr-list > li")].filter((row) => { const rect = row.getBoundingClientRect(); return rect.top < body.getBoundingClientRect().top - 0.5 && rect.bottom > body.getBoundingClientRect().top + 0.5; })
+          .map((row) => row.getAttribute("data-kind") ?? ""),
+        scrolled: Math.round(body.scrollTop),
+        /* The opened request's name, whole in its own line. */
+        title: [...view.querySelectorAll<HTMLElement>("[data-transcript-request] [data-human-label]")].map((node) => ({ text: node.innerText, whole: node.scrollWidth <= node.clientWidth && node.scrollHeight <= node.clientHeight + 1 })) };
+    }, selectors);
+    const openRequest = async (page: Page) => {
+      const request = page.locator('[data-companion-transcript-view] [data-transcript-call="request_orchestrator_delegation"]');
+      await request.locator("[data-transcript-toggle]").tap();
+      await request.locator("[data-transcript-detail]").waitFor();
+      await request.evaluate((element) => { const body = element.closest<HTMLElement>("[data-transcript-body]")!; body.scrollTop += element.getBoundingClientRect().top - body.getBoundingClientRect().top - 8; });
+      await pause(page, 200);
+    };
+    try {
+      for (const size of [{ width: 390, height: 844 }]) for (const lang of ["uk", "en"]) for (const scheme of ["light", "dark"] as const) {
+        const prefix = `${size.width}x${size.height}-${lang}-${scheme}`;
+        console.info(`phone voice call history: ${prefix}`);
+        const context = await browser.newContext({ viewport: size, hasTouch: true, isMobile: true, colorScheme: scheme });
+        try {
+          await context.addInitScript((language) => localStorage.setItem("llv_lang", language), lang);
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", error => errors.push(error.message));
+          /* On the board: the orchestrator link then opens a screen of its own. */
+          await page.goto(`${base}/?voice=history&seatnoise=ii&runtime=structured`);
+          const head = page.locator("[data-phone-voice-head]");
+          await head.waitFor(); await pause(page, 900);
+          expect(await page.evaluate(() => (history.state as { mobile2?: { stack: Array<{ kind: string }> } } | null)?.mobile2?.stack.at(-1)?.kind ?? "board")).toBe("board");
+          await head.tap();
+          await page.locator("[data-phone-voice-transcript]").tap();
+          const panel = page.locator("[data-companion-transcript-view]");
+          const picker = panel.locator("select[data-transcript-calls]");
+          await picker.waitFor();
+          await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); const end = animation.effect?.getComputedTiming().endTime; animation.currentTime = typeof end === "number" && Number.isFinite(end) ? end : 0; } });
+          expect(await panel.getAttribute("aria-modal")).toBe("true");
+          expect(await picker.inputValue()).toBe("call_delegation");
+          expect(await page.evaluate(() => (window as unknown as { phoneVoice: { starts: string[] } }).phoneVoice.starts)).toEqual([]);
+          const newest = await whole(page, [".vc-tr-title", ".vc-tr-sub", ...FIRST_ACTION]);
+          await page.screenshot({ path: path.join(out, `${prefix}-1-newest.png`) });
+
+          await picker.selectOption("call_failed_delivery");
+          await panel.locator('[data-transcript-request][data-stage="failed"]').waitFor();
+          const failedStart = await whole(page, FIRST_ACTION);
+          await openRequest(page);
+          const failed = await whole(page, ['[data-transcript-request][data-stage="failed"] .vc-call-state', "[data-transcript-reason]", "a[data-transcript-orchestrator]"]);
+          expect(failed.result["a[data-transcript-orchestrator]"]!.text).toBe("Atlas");
+          expect(failed.result["[data-transcript-reason]"]!.text, `${prefix}: the failure reason reads in the owner's language, with no code in it`).not.toMatch(lang === "uk" ? /[A-Za-z]/u : /[(_)]/u);
+          expect(failed.result["a[data-transcript-orchestrator]"]!.height, "the link is a whole touch target").toBeGreaterThanOrEqual(44);
+          await page.screenshot({ path: path.join(out, `${prefix}-2-failed.png`) });
+
+          await picker.selectOption("call_refused");
+          await panel.locator('[data-transcript-request][data-stage="refused"]').waitFor();
+          const refusedStart = await whole(page, FIRST_ACTION);
+          await openRequest(page);
+          const refused = await whole(page, ['[data-transcript-request][data-stage="refused"] .vc-call-state', "[data-transcript-reason]"]);
+          await page.screenshot({ path: path.join(out, `${prefix}-3-refused.png`) });
+
+          /* Each call opens at its start: its first action row and that row's status text stand whole in the body and no row is cut by the body's top edge. */
+          for (const [step, reading] of [["newest", newest], ["failed", failedStart], ["refused", refusedStart]] as const) {
+            expect(Object.entries(reading.result).filter(([selector, value]) => FIRST_ACTION.includes(selector) && (!value.found || !value.whole)).map(([selector]) => selector), `${prefix} ${step}: the first action row and its status are whole on opening`).toEqual([]);
+            expect([reading.scrolled, reading.cutByTop], `${prefix} ${step}: opened at the start, no row cut by the body's top edge`).toEqual([0, []]);
+          }
+          for (const [step, reading] of [["newest", newest], ["failed", failed], ["refused", refused]] as const) {
+            expect(Object.entries(reading.result).filter(([, value]) => !value.found || !value.whole).map(([selector]) => selector), `${prefix} ${step}: every named text is whole`).toEqual([]);
+            expect([reading.panelInside, reading.picker.inside, reading.picker.fits, reading.sideways <= 1, reading.picker.height >= 44], `${prefix} ${step}: panel, picker, its label and its target`).toEqual([true, true, true, true, true]);
+          }
+          for (const [step, reading] of [["failed", failed], ["refused", refused]] as const) expect(reading.title.filter((title) => !title.whole), `${prefix} ${step}: the request's name is whole in its line`).toEqual([]);
+          /* The link gives the screen to the orchestrator's conversation. */
+          await picker.selectOption("call_failed_delivery");
+          await openRequest(page);
+          await panel.locator("a[data-transcript-orchestrator]").tap();
+          await panel.waitFor({ state: "detached" });
+          /* The phone's navigation store opens the orchestrator's conversation over the board. */
+          await page.waitForFunction(() => (history.state as { mobile2?: { stack: Array<{ kind: string; id?: string }> } } | null)?.mobile2?.stack.at(-1)?.id?.endsWith("/running.jsonl") === true);
+          await page.locator("[data-mobile-message=agent]").first().waitFor();
+          await page.screenshot({ path: path.join(out, `${prefix}-4-orchestrator.png`) });
+          expect(errors).toEqual([]);
+          readings.push({ viewport: size, lang, scheme, newest, failed, refused, linkCloses: true });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); stop(); }
+    fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
   }, 180_000);
 });
 

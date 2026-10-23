@@ -499,7 +499,7 @@ exporting that helper, so the escaping has one source. The prompt:
 <tools>                        (only when non-empty)
 [Input.tools as JSON]
 </tools>
-[Your last message in this turn is posted in that chat, where other people can read it. Never put secrets, keys, tokens, passwords, file contents or paths from this computer in it. Nobody can answer a question during this turn; ask the owner in your reply instead. Reply within about two minutes: while you work, the chat's next messages to this assistant are held or answered by the service. This turn is stopped at {hard cap} minutes. For longer work, start it and reply with what you started: message the project's orchestrator with send_message_to_orchestrator, or create a task or a pipeline. Pass project on every board call; list_tasks and get_orchestrator tell you which projects exist. If you spawn an agent, pass notifyLauncher false. Write your reply as plain text of at most {max_chars} characters, as your last message. Always report an outcome to the owner; an empty reply or [ignore] cannot complete this request.{ To hand this message back to the service's own assistant, which can use the tools in <tools>, make your last message exactly [handoff].}]
+[Your last message in this turn is posted in that chat, where other people can read it. Never put secrets, keys, tokens, passwords, file contents or paths from this computer in it. Nobody can answer a question during this turn; ask the owner in your reply instead. Reply as soon as the outcome is ready. The relay request has up to ten minutes in total, including setup and tools; the service may give an earlier deadline. While you work, the chat's next messages to this assistant are held or answered by the service. This turn is stopped at {hard cap} minutes. For longer work, start it and reply with what you started: message the project's orchestrator with send_message_to_orchestrator, or create a task or a pipeline. Pass project on every board call; list_tasks and get_orchestrator tell you which projects exist. If you spawn an agent, pass notifyLauncher false. Write your reply as plain text of at most {max_chars} characters, as your last message. Always report an outcome to the owner; an empty reply or [ignore] cannot complete this request.{ To hand this message back to the service's own assistant, which can use the tools in <tools>, make your last message exactly [handoff].}]
 ```
 
 Why this shape:
@@ -530,10 +530,10 @@ These are the limits an owner run works within:
 |---|---|---|---|
 | Heartbeats | every `heartbeat_interval_s` (default 10 s); stall after `stall_window_s` (default 45 s) | `protocol.ts:39-45`, `relayLease.worker.ts` | a leased helper process owns heartbeat scheduling and the completion POST, so synchronous Viewer work cannot delay either request |
 | First heartbeat | within `ack_window_s` (default 10 s) | `relay.md` §A.6 F2b | why `runOwnerAgent` returns before the spawn admission ends |
-| Install hard cap | `target.hardCapMinutes`, 1–240, default 30 | `relays/[id]/route.ts:87-89`, `store.ts:251-266` | the turn is interrupted; `failed` / `hard_cap` |
-| The chat's next request | held up to 120 s, then the service falls back (with `chat_conversations`) | `relay-slice3.md` §4.7 | the prompt's "about two minutes" |
+| Owner request window | remaining absolute service deadline, or receipt + 10 min | `externalRelay/deadline.ts`, `externalRelay/runner.ts` | supersedes the ordinary target cap for owner work; expiry posts a fixed plain timeout reply while durable stop recovery continues |
+| The chat's next request | service-controlled hold (historically 120 s) | `relay-slice3.md` §4.7 | the service changes its own total wait separately; the install never extends a supplied deadline |
 | The target's slots | `concurrency` 1–4, default 1; an owner run holds one slot | `runner.ts:299`, `relay.md` §B.8, §A.6 F1b | while it runs at concurrency 1, every other message to this target is answered by the service |
-| Agent start | structured host first message within 30 s; durable setup within 5 min | `structuredSpawn.ts:61`, `:76` | counts against the two minutes |
+| Agent start | structured host first message within 30 s; durable setup within 5 min | `structuredSpawn.ts:61`, `:76` | counts against the request window |
 | Answer length | `answer.max_chars`, at most 32 000 | `protocol.ts:160` | the reply is cut (§2.7) |
 
 Long work leaves the window through tools the run already holds: a message to
@@ -627,7 +627,12 @@ conversation later with no lease to answer; the prompt asks for
   `post_completion`; the accepted answer stays accepted. The sweep finishes
   abandoned completed cleanup once its local runner has returned, including
   under the same Viewer process, without controlling a host or completing
-  the request again. A zero-capacity enabled target stays in the claim body
+  the request again. An accepted completion whose owner stop is still
+  unconfirmed keeps capacity and files, and marks `completionAccepted`
+  instead; the sweep confirms the stop, then cleans up without a second
+  completion. A request still held by its local runner is never swept,
+  and neither is any row whose owner is a live process other than the
+  sweeping one, such as the previous Viewer during a handover. A zero-capacity enabled target stays in the claim body
   and emits `External relay target capacity` with its concurrency, running,
   retained and waiting counts and the `full` or `drain` reason.
 
@@ -859,8 +864,9 @@ nothing; each is one line to change.
 1. The run starts in the home directory and names projects explicitly (§2.5).
 2. Every owner message gets a fresh conversation (Deferred, first item).
 3. Celestia operations in an owner run go through `[handoff]` (§7).
-4. The reply budget in the prompt is about two minutes, matching the
-   service's 120 s hold; the hard stop stays the target's hard cap (§5).
+4. The 2026-10-22 amendment gives owner requests ten minutes end to end,
+   honours an earlier service deadline, and sends ready outcomes immediately.
+   See [relay-request-window.md](relay-request-window.md).
 5. Orchestrator messaging is admitted for the live run only (§2.4).
 
 ### 2026-10-13 first-message wait amendment

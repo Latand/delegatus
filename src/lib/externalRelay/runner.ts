@@ -10,8 +10,9 @@ import { waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { resolveOwnerOutboundContext } from "./ownerOutboundContext";
 import { capacityWaiters, olderCapacityWaiter, enterRelayHold, leaveRelayHold, releasingRelayHolds, type RelayHoldCause } from "./hold";
-import { relayRequestDeadline } from "./deadline";
-import { ownerRelayAuthorized, ownerRelayAuthorizedAsync, ownerRelayFailureReplyAuthorized } from "./ownerAuthority";
+import { relayRequestDeadline, remainingMs } from "./deadline";
+import { ownerRelayAuthorized, ownerRelayAuthorizedAsync, ownerRelayFailureReplyAuthorized, ownerRelayStatusReplyAuthorized } from "./ownerAuthority";
+import { ownerRequestTimeoutText } from "./requestTimeout";
 import { matchPrototypeAnswer } from "@/lib/prototypeReview/telegramAnswer";
 import { runPrototypeAnswer } from "./prototypeAnswer";
 import { resolveOwnerBridgeContext } from "./ownerBridgeContext";
@@ -77,10 +78,27 @@ import {
 const globalRelay = globalThis as typeof globalThis & {
   __llvExternalRelayActive?: Map<string, number>;
   __llvExternalRelayInflight?: Set<string>;
+  __llvExternalRelayUnrecordedAcceptances?: Set<string>;
 };
 const active = (globalRelay.__llvExternalRelayActive ??= new Map<string, number>());
 const inflight = globalRelay.__llvExternalRelayInflight ??= new Set<string>();
-export const relayRequestInFlight = (requestId: string): boolean => inflight.has(requestId);
+const unrecordedAcceptances = globalRelay.__llvExternalRelayUnrecordedAcceptances ??= new Set<string>();
+export const relayRequestInFlight = (requestId: string): boolean => inflight.has(requestId) || unrecordedAcceptances.has(requestId);
+/** Marks a retained run as delivered. Until the mark is durable this process
+ * keeps delivery ownership, so orphan recovery cannot complete it again. */
+async function recordAcceptedCompletion(requestId: string): Promise<void> {
+  const write = () => changeRunAsync(requestId, row => ({ ...row, completionAccepted: true }), Date.now() + 5000);
+  try { await write(); return; }
+  catch { console.error("External relay accepted completion receipt pending"); }
+  unrecordedAcceptances.add(requestId);
+  void (async () => {
+    for (let delay = 100; unrecordedAcceptances.has(requestId); delay = Math.min(delay * 2, 5000)) {
+      await new Promise<void>(resolve => { const timer = setTimeout(resolve, delay); timer.unref(); });
+      try { await write(); unrecordedAcceptances.delete(requestId); }
+      catch { /* Delivery ownership stays with this process. */ }
+    }
+  })();
+}
 export function externalRelayTempRoot(): string {
   const temporary = path.resolve(os.tmpdir());
   const home = path.resolve(os.homedir());
@@ -227,6 +245,7 @@ export async function runClaimedRequest(
   const released = new Promise<void>(resolve => { deliverySettled = resolve; });
   let allowOwnerReply: (() => boolean) | undefined;
   let failureReply = false;
+  let ownerStatusReply: ExternalRelayCompletion | undefined;
   let leaseUnavailable = false;
   let admissionHeld = false;
   const admissionCutoff = () => admissionHeld ? deadline.declineAt : deadline.at;
@@ -319,7 +338,7 @@ export async function runClaimedRequest(
       let sent: Awaited<ReturnType<typeof completeRelayRequest>>;
       try {
         sent = transport
-          ? await transport.complete(body, until, caps?.plainMax ?? 4000, failureReply ? "failure" : !!allowOwnerReply)
+          ? await transport.complete(body, until, caps?.plainMax ?? 4000, ownerStatusReply ? "status" : failureReply ? "failure" : !!allowOwnerReply)
           : await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature, caps?.plainMax);
       } catch {
         console.error("External relay helper completion unavailable; using Viewer transport");
@@ -331,6 +350,9 @@ export async function runClaimedRequest(
         if (recorded && activeTarget && !activeCapacityFreed) { activeCapacityFreed = true; free(relay, activeTarget); }
         try { await releaseCapacity?.(); }
         catch { console.error("External relay completed capacity release pending"); retryCapacityRelease(); }
+        // A retained row (an unconfirmed owner stop or a pending capacity
+        // release) leaves recovery cleanup only, never a second completion.
+        if (recorded && !capacityReleased) await recordAcceptedCompletion(requestId);
       }
       if (caps?.rich && sent.body !== body) recorder?.annotateV2({ drops: [...answerDrops, {part:"answer",reason:"service_downgrade"}] });
       claimTerminal = sent.delivery !== "refused";
@@ -400,13 +422,16 @@ export async function runClaimedRequest(
   const callAbort = new AbortController();
   const identityTimers: ReturnType<typeof setTimeout>[] = [];
   let owner: ReturnType<typeof ownerTierFor> = null;
+  // A refused cutoff write can leave cancel absent from the ledger. The
+  // unsettled owner still owns its capacity, chain reservation and files.
+  const ownerRunPending = () => !!owner && !!run && !runFinished;
   executionScope = true;
   releaseCapacity = async () => {
-    if (!recorded || capacityReleased) return;
+    if (!recorded || capacityReleased || ownerRunPending()) return;
     const held = readRunLedger().runs.find(row => row.requestId === requestId);
     if (held && ownerStopPending(held)) return;
     await changeRunAsync(requestId, row => {
-      if (ownerStopPending(row)) return row;
+      if (ownerRunPending() || ownerStopPending(row)) return row;
       return { ...row, capacityReleased: true };
     }, Date.now() + 5000);
     const current = readRunLedger().runs.find(row => row.requestId === requestId);
@@ -545,7 +570,9 @@ export async function runClaimedRequest(
       try { owner.bridgeReport = resolveOwnerBridgeContext(request, owner, relay.api_base); }
       catch { owner.bridgeReport = null; }
     }
-    if (owner) allowOwnerReply = () => (failureReply ? ownerRelayFailureReplyAuthorized : ownerRelayAuthorized)(relay.id, target.id, requestId);
+    if (owner) allowOwnerReply = () => ownerStatusReply
+      ? ownerRelayStatusReplyAuthorized(relay.id, target.id, requestId, ownerStatusReply, caps!.plainMax)
+      : (failureReply ? ownerRelayFailureReplyAuthorized : ownerRelayAuthorized)(relay.id, target.id, requestId);
     const authority = conversationAuthority(request.input.requester, !!owner);
     const usesConversation = !prototype && readRelaySwitches().chain_conversations && request.chat && authority;
     let preResolvedConversation: RelayConversation | null = null;
@@ -694,7 +721,7 @@ export async function runClaimedRequest(
     if (hasInboundMedia(request)) {
       if (!await lease.ack()) return null;
       inbound = await prepareInboundMedia(relay, request, runDir, { signal: callAbort.signal, deadlineAt: deadline.at,
-        authorize: () => { if (leaseUnavailable || releaseRequested || allowOwnerReply && !allowOwnerReply()) throw new ExternalRelayError("lease_lost", 409); } });
+        authorize: () => { if (leaseUnavailable || releaseRequested || owner && !ownerRelayAuthorized(relay.id, target.id, requestId)) throw new ExternalRelayError("lease_lost", 409); } });
       callAbort.signal.throwIfAborted();
     }
     const hydrated = await hydrateToolIndex(relay, request, lease, runtime, deadline.at);
@@ -714,7 +741,7 @@ export async function runClaimedRequest(
       // Service tools never read the Delegatus board; their names stay local.
       steps.observe({ currentTool: pendingServiceTools > 0 ? "relay_tool" : null });
     } : undefined);
-    if (owner && !prototype && caps?.rich) ownerParts = openOwnerAnswer(relay.id, request, runDir, [relay.credential], () => !leaseUnavailable && !callAbort.signal.aborted && allowOwnerReply!(),callAbort.signal);
+    if (owner && !prototype && caps?.rich) ownerParts = openOwnerAnswer(relay.id, request, runDir, [relay.credential], () => !leaseUnavailable && !callAbort.signal.aborted && ownerRelayAuthorized(relay.id, target.id, requestId),callAbort.signal);
     let result: Awaited<ReturnType<typeof runEphemeralAgent>["done"]> | null = null;
     let completion: ExternalRelayDecision | null = null;
     for (rounds = 1; rounds <= (loop ? RELAY_TOOL_ROUNDS : 1); rounds++) {
@@ -732,10 +759,11 @@ export async function runClaimedRequest(
         }
         const roundPrompt = loop ? toolRoundPrompt(request, rounds, { results: loop.results, callsLeft: loop.callsLeft(), final, actionSent: loop.actionSent }, target.engine) : answerPrompt(request, target.engine);
         const frame = roundPrompt.slice(roundPrompt.lastIndexOf("[Answer with one JSON object"));
-        if (conversation && rounds === 1) turn = owner ? ownerContinuationPrompt(request, owner, target.hardCapMinutes, conversation) : conversationTurnPrompt(request, conversation, frame);
+        const ownerTarget = owner ? { ...target, hardCapMinutes: Math.max(1, Math.ceil(remainingMs(deadline) / 60_000)) } : target;
+        if (conversation && rounds === 1) turn = owner ? ownerContinuationPrompt(request, owner, ownerTarget.hardCapMinutes, conversation) : conversationTurnPrompt(request, conversation, frame);
         const persistentPrompt = conversation ? rounds === 1 ? turn!.prompt : conversationRoundPrompt(loop!.results.filter((r) => r.round === rounds - 1), frame) : roundPrompt;
         if (conversation) {
-          const promptBytes = Buffer.byteLength(owner ? conversation.conversationId ? turn!.prompt : ownerRunPrompt(request, owner, target.hardCapMinutes) : persistentPrompt);
+          const promptBytes = Buffer.byteLength(owner ? conversation.conversationId ? turn!.prompt : ownerRunPrompt(request, owner, ownerTarget.hardCapMinutes) : persistentPrompt);
           chain = rounds === 1 ? { continued: owner ? !!conversation.conversationId : !!conversation.sessionId, promptBytes }
             : { continued: chain!.continued, promptBytes: chain!.promptBytes + promptBytes };
         }
@@ -756,7 +784,7 @@ export async function runClaimedRequest(
         steps?.observe({});
         stepLog = path.join(loop ? path.join(runDir, `round-${rounds}`) : runDir, "stdout.log");
         run = prototype ? runPrototypeAnswer(prototype, owner!.messageId, () => {
-          if (leaseUnavailable || callAbort.signal.aborted || !allowOwnerReply!()) throw new Error("owner relay authorization revoked");
+          if (leaseUnavailable || callAbort.signal.aborted || !ownerRelayAuthorized(relay.id, target.id, requestId)) throw new Error("owner relay authorization revoked");
         }, { telegramUserId: relay.owner.namespace === "telegram" ? relay.owner.id : undefined }) : owner ? runOwnerAgent({
           ...(conversation?.conversationId ? { continuation: { conversationId: conversation.conversationId, prompt: turn!.prompt } } : {}),
           authorize: () => { if (leaseUnavailable || callAbort.signal.aborted || !ownerRelayAuthorized(relay.id, target.id, requestId)) throw new Error("owner relay authorization revoked"); },
@@ -764,13 +792,13 @@ export async function runClaimedRequest(
           onDiagnostic: recordDiagnostic,
           rawDeadlineAt: rawRequest.deadline_at,
           inboundContext: inbound?.prompt,
-          request, owner, target, deadline, accountId: selectedAccount().accountId,
-          hardCapMs: Math.min(target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity), ports: runtime?.ownerPorts,
+          request, owner, target: ownerTarget, deadline, accountId: selectedAccount().accountId,
+          hardCapMs: Math.min(remainingMs(deadline), runtime?.timeoutMs ?? Infinity), ports: runtime?.ownerPorts,
           onConversation: async (conversationId, initialPrompt) => {
             await changeRunAsync(requestId, current => ({ ...current, conversationId }), Date.now() + 5000);
             if (conversation) {
               conversation.conversationId = conversationId;
-              const cursor = initialPrompt ? ownerInitialCursor(request, owner!, target.hardCapMinutes) : null;
+              const cursor = initialPrompt ? ownerInitialCursor(request, owner!, ownerTarget.hardCapMinutes) : null;
               if (cursor) turn = { prompt: "", ...cursor };
               const patch = { conversationId, state: "running" as const, runningRequestId: requestId,
                 ...(initialPrompt && cursor ? { pendingCursor: { operationId: initialPrompt.operationId, seen: cursor.seen, staticDigest: cursor.digest } } : {}) };
@@ -839,9 +867,20 @@ export async function runClaimedRequest(
           identityTimers.push(timer);
         }
       if (leaseUnavailable) launchedRun.cancel();
-      // The request deadline bounds admission and delivery retries. A run
-      // already launched remains protected by its lease and configured cap.
-      try { result = await launchedRun.done; }
+      // An owner turn gets the remaining request window, including when the
+      // target's ordinary-agent cap is shorter. Delivery cannot wait for stop
+      // recovery; its durable custody keeps recovering after the completion.
+      let requestTimer: ReturnType<typeof setTimeout> | undefined;
+      let requestExpired = false;
+      const expired = owner && !prototype ? new Promise<Awaited<typeof launchedRun.done>>(resolve => {
+        requestTimer = setTimeout(() => {
+          requestExpired = true;
+          launchedRun.cancel();
+          resolve({ status: "timeout", answer: null, durationMs: Date.now() - started, code: null, signal: null });
+        }, remainingMs(deadline));
+        requestTimer.unref();
+      }) : null;
+      try { result = await (expired ? Promise.race([launchedRun.done, expired]) : launchedRun.done); }
       catch (error) {
         if (!(error instanceof OwnerContinuationRefused) || !conversation || !owner) throw error;
         run = null;
@@ -865,6 +904,15 @@ export async function runClaimedRequest(
           if (!await admit()) return admissionDecline ? await finish(admissionDecline) : null;
         }
         rounds--; continue;
+      }
+      finally { if (requestTimer) clearTimeout(requestTimer); }
+      if (owner && !prototype && (requestExpired || result.status === "timeout" && remainingMs(deadline) === 0)) {
+        console.info("External relay owner request timed out", { request: requestId.slice(0, 8), elapsed_ms: Date.now() - deadline.receivedAt });
+        callAbort.abort();
+        ownerStatusReply = { lease_id: leaseId, outcome: "answered", duration_ms: Date.now() - started,
+          answer: { action: "reply", text: ownerRequestTimeoutText(caps!.plainMax), reply_to: owner.messageId,
+            ...(caps!.rich ? { format: "plain", buttons: [], attachments: [] } : {}) } };
+        return await finish(ownerStatusReply);
       }
       ownerParts?.close();
       if (result.diagnostic) recordDiagnostic(result.diagnostic);
@@ -992,7 +1040,7 @@ export async function runClaimedRequest(
       if (conversation && owner) {
         try {
           const custody = readRunLedger().runs.find(r => r.requestId === requestId)?.ownerTurn;
-          releasePin = !(custody?.cancel && !custody.confirmed && !custody.released);
+          releasePin = !ownerRunPending() && !(custody?.cancel && !custody.confirmed && !custody.released);
         } catch { releasePin = false; } // Unreadable custody cannot admit a peer turn.
       }
       if (conversation && releasePin) {
@@ -1009,14 +1057,14 @@ export async function runClaimedRequest(
       try {
         const held = readRunLedger().runs.find(r => r.requestId === requestId);
         // Pending stops and released owner stops both keep their custody record.
-        const custodyPending = !!held && ownerStopPending(held) || !!held?.ownerTurn?.released;
+        const custodyPending = ownerRunPending() || !!held && ownerStopPending(held) || !!held?.ownerTurn?.released;
         if (recorded && !custodyPending && !(completionAccepted && !capacityReleased)) await dropRunAsync(requestId, Date.now() + 5000);
       } catch (error) {
         console.error("External relay run ledger cleanup failed", error instanceof Error ? error.name : "unknown");
       }
       try {
         const held = readRunLedger().runs.find(r => r.requestId === requestId);
-        if (runDir && !(held && ownerStopPending(held))) await fs.promises.rm(runDir, { recursive: true, force: true });
+        if (runDir && !ownerRunPending() && !(held && ownerStopPending(held))) await fs.promises.rm(runDir, { recursive: true, force: true });
       } catch (error) {
         console.error("External relay run directory cleanup failed", error instanceof Error ? error.name : "unknown");
       }

@@ -1,4 +1,5 @@
-import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, expect, spyOn, test } from "bun:test";
+import { systemScheduler, type DeadlineScheduler } from "@/lib/deadline";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -245,11 +246,12 @@ async function holdReceiptLock(holdMs: number) {
   const child = ownFixtureChild(Bun.spawn([process.execPath, path.join(import.meta.dir, "receiptStoreProbeChild.ts"),
     "hold-sqlite", filename, ready, release, String(holdMs)], { env: process.env, stdout: "pipe", stderr: "pipe" }));
   await awaitFixtureFile(ready);
-  return { child, async close() {
+  let closing: Promise<void> | undefined;
+  return { child, close() { return closing ??= (async () => {
     fs.writeFileSync(release, "released");
     expect(await child.exited).toBe(0);
     expect(await new Response(child.stderr).text()).toBe("");
-  } };
+  })(); } };
 }
 
 test("HTTP retries a failed first inline initialization and original keys without repeating a write", async () => {
@@ -285,29 +287,34 @@ test("forwarded stdio receipt contention yields on the Viewer and preserves repl
       .filter((entry): entry is [string, string] => entry[1] !== undefined)), stderr: "pipe" });
   await client.connect(transport);
   await client.callTool({ name: "list_flows", arguments: { limit: 1 } });
-  const lock = await holdReceiptLock(1200);
-  const { performanceSpans, performanceSites } = await import("@/lib/performanceSpans");
-  const start = performance.now();
-  let previous = start, maxGapMs = 0;
-  const timer = setInterval(() => {
-    const now = performance.now(); maxGapMs = Math.max(maxGapMs, now - previous); previous = now;
-  }, 5);
+  const lock = await holdReceiptLock(60_000);
+  const { stateLockWaitsInFlight } = await import("@/lib/state/lockWait");
+  const blockingWait = spyOn(Atomics, "wait");
+  const blockingSleep = spyOn(Bun, "sleepSync");
   const args = { limit: 1, clientRequestId: "stdio-held-receipt" };
+  let pending: ReturnType<Client["callTool"]> | undefined;
   try {
-    expect(payloadOf(await client.callTool({ name: "list_flows", arguments: args }))).toMatchObject({ ok: true });
-    await new Promise<void>(resolve => setTimeout(resolve, 10));
-    const slices = performanceSpans.snapshot(start).records.filter(row => row.kind === "sync"
-      && performanceSites[row.site] === "state.write-wait");
-    const maxSliceMs = Math.max(0, ...slices.map(row => row.maxMs));
-    console.info(`[receipt contention] ${JSON.stringify({ maxGapMs, maxSliceMs })}`);
-    expect(maxGapMs).toBeLessThan(50);
-    expect(slices.length).toBeGreaterThan(0);
-    expect(maxSliceMs).toBeLessThan(50);
+    let settled = false;
+    pending = client.callTool({ name: "list_flows", arguments: args });
+    void pending.then(() => { settled = true; }, () => { settled = true; });
+    // The lock stays held until the Viewer has retried and the event loop has
+    // returned to this test. Runner latency cannot release it for us.
+    const retried = () => stateLockWaitsInFlight().some(wait => wait.callSite === "mcp.receipts.claim" && wait.attempts >= 2);
+    while (!settled && !retried())
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
+    expect(retried()).toBe(true);
+    expect(blockingWait).not.toHaveBeenCalled();
+    expect(blockingSleep).not.toHaveBeenCalled();
+    await lock.close();
+    expect(payloadOf(await pending)).toMatchObject({ ok: true });
     expect(payloadOf(await client.callTool({ name: "list_flows", arguments: args }))).toMatchObject({ ok: true, replayed: true });
     expect(payloadOf(await send(client, "stdio-held-send"))).toMatchObject({ ok: true });
     expect(payloadOf(await send(client, "stdio-held-send"))).toMatchObject({ ok: true, replayed: true });
     expect(deliveries).toHaveLength(1);
-  } finally { clearInterval(timer); await lock.close(); await client.close(); }
+  } finally {
+    blockingWait.mockRestore(); blockingSleep.mockRestore();
+    await lock.close(); await pending?.catch(() => {}); await client.close();
+  }
 }, 20_000);
 
 test("task HTTP execution preserves protocol validation, exact text, caller receipts and replay", async () => {
@@ -358,10 +365,10 @@ test("an authenticated compatibility adapter keeps unidentified authority and ca
   }
 });
 
-async function inMemoryAgentClient() {
+async function inMemoryAgentClient(control = productionViewerControlDependencies()) {
   process.env.LLV_SPAWN_CAPABILITY = alice.capability;
   const store = new SqliteMcpReceiptStore(path.join(process.env.LLV_STATE_DIR!, "reconnect-receipts.sqlite"));
-  const service = createMcpToolService(viewerMcpBindings(), store, viewerMcpToolPolicy(), {
+  const service = createMcpToolService(viewerMcpBindings(undefined, control), store, viewerMcpToolPolicy(), {
     recovery: viewerMcpRecoverableTools(),
   });
   const server = createViewerMcpServer(service);
@@ -458,15 +465,37 @@ test("a send with a lost acceptance answer keeps its original claim and never re
 });
 
 test("cancellation during a refused-connection backoff releases the unadmitted send", async () => {
-  const { client, server, store, service } = await inMemoryAgentClient();
+  const backoff = Promise.withResolvers<void>();
+  const timers = new Map<unknown, number>();
+  let realTimers = false;
+  const scheduler: DeadlineScheduler = {
+    setTimeout(handler, ms) {
+      if (realTimers) return systemScheduler.setTimeout(handler, ms);
+      timers.set(handler, ms);
+      if (ms <= 100) backoff.resolve();
+      return handler;
+    },
+    clearTimeout(handle) {
+      if (!timers.delete(handle)) systemScheduler.clearTimeout(handle);
+    },
+  };
+  const { client, server, store, service } = await inMemoryAgentClient(productionViewerControlDependencies(false, scheduler));
   const args = { clientRequestId: "cancel-refused-send", conversationId: bob.conversationId, text: "cancel before sending" };
   try {
     await listener!.stop(true);
     listener = null;
     const controller = new AbortController();
-    const cancelled = service.callTool("send_message", args, { signal: controller.signal, deadlineAt: Date.now() + 2_000 });
-    const timer = setTimeout(() => controller.abort(new Error("fixture cancellation")), 25);
-    const result = await cancelled.finally(() => clearTimeout(timer));
+    const clock = spyOn(Date, "now").mockReturnValue(Date.now());
+    let result;
+    try {
+      const cancelled = service.callTool("send_message", args, { signal: controller.signal, deadlineAt: Date.now() + 60_000 });
+      await backoff.promise;
+      expect([...timers.values()]).toHaveLength(1);
+      expect(controller.signal.aborted).toBe(false);
+      controller.abort(new Error("fixture cancellation"));
+      result = await cancelled;
+      expect(timers.size).toBe(0);
+    } finally { clock.mockRestore(); realTimers = true; }
     expect(result).toMatchObject({ ok: false, details: { outcome: "not-executed", nextAction: "retry-same-key" } });
     expect(await store.lookup("send_message:cancel-refused-send")).toBeNull();
     expect(deliveries).toHaveLength(0);

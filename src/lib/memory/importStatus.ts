@@ -3,6 +3,7 @@ import { readMemorySourceFile } from "./source";
 import { readImportRecord } from "./importStore";
 import { canonicalProject } from "@/lib/projects/aliases";
 import type { SeatTickSignalInput } from "@/lib/monitor/types";
+import { memorySyncStatus } from "./importSync";
 
 /** Counts only: native paths and candidate bodies never reach a setting read. */
 export function memoryImportStatus() {
@@ -13,6 +14,13 @@ function readImportStatus() {
   const record = source?.importId ? readImportRecord(source.importId) : null;
   return record ? { counts: record.progress ?? null, remainingGenerations: record.remainingGenerations?.length ?? 0,
     hold: record.reason ?? null } : null;
+}
+/** The periodic sync's schedule and last run (§4.9), counts only; null where it cannot apply. */
+export function memorySyncState(now = Date.now()) {
+  return withViewerOperation("memory.import.status", () => {
+    const source = readMemorySourceFile();
+    return source?.importId ? memorySyncStatus(readImportRecord(source.importId), now) : null;
+  });
 }
 export function memoryImportDrainSignal(project: string, now = Date.now()): SeatTickSignalInput[] {
   return withViewerOperation("memory.import.status", () => drainSignal(project, now));

@@ -3,6 +3,7 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { accountManager } from "@/lib/accounts/manager";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { creditGuardBlock } from "@/lib/accounts/creditGuard";
+import { turboCreditExemptFor } from "@/lib/accounts/turboCreditExemption";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import type { AgentRegistry, RegistryConversation } from "@/lib/agent/registry";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
@@ -88,6 +89,8 @@ async function runAccountCreditGuard(registry: AgentRegistry,
     const generation = conversation?.generations.at(-1);
     if (!conversation || !generation || generation.id !== item.key.sessionId) return;
     if (!generation.accountId || !blockedAccounts.has(generation.accountId)) return;
+    /* Turbo's paid-credit approval covers this project's conversations on the named accounts only. */
+    if (turboCreditExemptFor(conversationProjectKey(conversation.projectOwnership, generation.launchProfile), generation.accountId)) return;
     const owner = pipelineOwner(conversation.id, registry);
     if (owner && openRuntimeSwitch(owner.attempt)) return;
     const reviewer = registry.conversationMemberships(conversation.id).some(membership => membership.kind === "flow" && membership.role === "reviewer");

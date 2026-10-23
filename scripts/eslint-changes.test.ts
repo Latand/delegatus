@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { compareErrors, diagnosticMessage, lintChanges, type LintSite } from "./eslint-changes";
 
@@ -68,4 +68,49 @@ test("an elided codeframe keys the same when its span crosses line 1000", () => 
   expect(message(949)).toContain("\n      …");
   expect(message(963)).toContain("\n       …");
   expect(compareErrors([site(949)], [site(963)]).introduced).toEqual([]);
+});
+
+
+test("a clean head skips every base read, even when the base is unavailable", async () => {
+  const f = fixture(); f.write("old.js", "export const used = 1;\n");
+  expect(await lintChanges(f.root, "unavailable-base", ["old.js"])).toEqual({ introduced: [], baseErrors: 0 });
+});
+test("only files with head errors borrow their own baseline diagnostics", async () => {
+  const f = fixture();
+  f.write("clean.js", "const old = 1;\n");
+  execFileSync("git", ["add", "clean.js"], { cwd: f.root });
+  execFileSync("git", ["-c", "user.name=Tool", "-c", "user.email=noreply@example.invalid", "commit", "-qm", "Second baseline"], { cwd: f.root });
+  const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: f.root, encoding: "utf8" }).trim();
+  f.write("clean.js", "export const used = 1;\n");
+  const result = await lintChanges(f.root, base, ["old.js", "clean.js"]);
+  expect(result.introduced).toEqual([]); expect(result.baseErrors).toBe(1);
+});
+
+
+test("native content cache survives processes and invalidates edits, configuration and dependency inputs", () => {
+  const f = fixture();
+  const marker = path.join(f.root, "calls.log");
+  const config = (extra = "") => `import { appendFileSync } from "node:fs";
+    export default [{ plugins: { probe: { rules: { visit: { create() { return { Program() { appendFileSync(${JSON.stringify(marker)}, "visit\\n"); } }; } } } } }, rules: { "probe/visit": "error" } }]; ${extra}`;
+  f.write("eslint.config.mjs", config());
+  const run = () => {
+    const result = Bun.spawnSync([process.execPath, path.join(import.meta.dir, "eslint-changes.ts"), "--base", f.base, "old.js"], { cwd: f.root, env: process.env });
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+  };
+  const calls = () => readFileSync(marker, "utf8").trim().split("\n").length;
+  run(); expect(calls()).toBe(1);
+  run(); expect(calls()).toBe(1);
+  f.write("old.js", "export const changed = 2;\n"); run(); expect(calls()).toBe(2);
+  f.write("eslint.config.mjs", config("// changed configuration")); run(); expect(calls()).toBe(3);
+  f.write("bun.lock", "changed dependency graph"); run(); expect(calls()).toBe(4);
+});
+
+test("an unavailable native cache still lints head and refuses new diagnostics", async () => {
+  const f = fixture();
+  mkdirSync(path.join(f.root, ".git/delegatus-gate"));
+  writeFileSync(path.join(f.root, ".git/delegatus-gate/eslint"), "not a directory");
+  f.write("old.js", "export const used = 1;\n");
+  expect((await lintChanges(f.root, f.base, ["old.js"])).introduced).toEqual([]);
+  f.write("old.js", "missing();\n");
+  expect((await lintChanges(f.root, f.base, ["old.js"])).introduced.map(site => site.ruleId)).toEqual(["no-undef"]);
 });

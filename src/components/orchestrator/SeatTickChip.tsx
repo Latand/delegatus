@@ -116,6 +116,8 @@ function SeatTickPopover({ anchorRef, project, projectName, read, onClose }: {
     const away = (event: Event) => {
       const target = event.target as Node | null;
       if (rootRef.current?.contains(target ?? null) || anchorRef.current?.contains(target ?? null)) return;
+      /* Turbo's confirmation is portalled to the body but opened from here. */
+      if ((target as Element | null)?.closest?.("[data-turbo-scrim]")) return;
       onClose();
     };
     window.addEventListener("pointerdown", away);
@@ -154,7 +156,7 @@ function SeatTickPopover({ anchorRef, project, projectName, read, onClose }: {
         read={read}
         state={state}
         surface="desktop"
-        actions={state.dirty || read.error ? <SeatTickActions read={read} state={state} surface="desktop" /> : null}
+        actions={state.dirty || (read.error && read.errorScope !== "turbo") ? <SeatTickActions read={read} state={state} surface="desktop" /> : null}
         onOpenedCard={onClose}
       />
     </div>,

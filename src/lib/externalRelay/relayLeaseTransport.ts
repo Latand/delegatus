@@ -7,7 +7,7 @@ import type { PairedRelay } from "./store";
 import type { RelayAnswerDelivery } from "./answers";
 import { ExternalRelayError, relayCall } from "./client";
 import { completeRelayRequest } from "./relayCompletion";
-import { ownerRelayAuthorized, ownerRelayFailureReplyAuthorized } from "./ownerAuthority";
+import { ownerRelayAuthorized, ownerRelayFailureReplyAuthorized, ownerRelayStatusReplyAuthorized } from "./ownerAuthority";
 
 export type TransportResult = { body: ExternalRelayCompletion; delivery: RelayAnswerDelivery };
 type Frame = { type: "ready" } | { type: "heartbeat"; seq: number; phase: "attempt" | "acknowledged" | "failed" | "completion_pending" | "post_completion"; status: number; code?: string }
@@ -89,7 +89,7 @@ export class RelayLeaseTransport {
 
   progress(progress: ExternalRelayProgress | null) { this.send({ type: "progress", progress }); }
 
-  complete(body: ExternalRelayCompletion, until: number, plainMax: number, ownerAuthorization: boolean | "failure" = false): Promise<TransportResult> {
+  complete(body: ExternalRelayCompletion, until: number, plainMax: number, ownerAuthorization: boolean | "status" | "failure" = false): Promise<TransportResult> {
     if (this.completePromise) return this.completePromise;
     this.completePromise = new Promise((resolve, reject) => { this.completeResolve = resolve; this.completeReject = reject; });
     this.send({ type: "complete", body, until, plainMax, ownerAuthorization });
@@ -196,10 +196,12 @@ export class InlineRelayLeaseTransport {
     }
   }
 
-  async complete(body: ExternalRelayCompletion, until: number, plainMax: number, ownerAuthorization: boolean | "failure" = false): Promise<TransportResult> {
+  async complete(body: ExternalRelayCompletion, until: number, plainMax: number, ownerAuthorization: boolean | "status" | "failure" = false): Promise<TransportResult> {
     this.completing = true;
     const result = await completeRelayRequest(this.relay, this.requestId, body, () => until,
-      ownerAuthorization ? () => (ownerAuthorization === "failure" ? ownerRelayFailureReplyAuthorized : ownerRelayAuthorized)(this.relay.id, this.targetId, this.requestId) : undefined,
+      ownerAuthorization ? () => ownerAuthorization === "status"
+        ? ownerRelayStatusReplyAuthorized(this.relay.id, this.targetId, this.requestId, body, plainMax)
+        : (ownerAuthorization === "failure" ? ownerRelayFailureReplyAuthorized : ownerRelayAuthorized)(this.relay.id, this.targetId, this.requestId) : undefined,
       async () => { this.onRefreshFeatures?.(); }, plainMax);
     this.completing = false;
     this.accepted = result.delivery === "accepted";
