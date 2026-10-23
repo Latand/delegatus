@@ -70,6 +70,44 @@ const TEXT = {
     accountState: { unchecked: "signed in, not checked yet", signed_out: "signed out", usable: "ready", different_account: "signed into a different account", read_failed: "limits not read", not_needed: "not needed here", not_created: "not created" },
     accountsPending: "Memory and settings arrived. Sign in each account from the accounts panel's checklist, then run delegatus import --report.",
     noReport: "No import has been applied on this install.",
+    skippedLine: (key, reason) => `      skipped ${key}: ${reason}`,
+    conflictLine: (key, action) => `      conflict ${key}: ${action}`,
+    sourceVersion: "from the bundle",
+    targetVersion: "on this install",
+    versionLine: (side, kind, at) => `        ${side} (${kind}${at ? `, changed ${at}` : ""})`,
+    accountsHeading: "Accounts:",
+    accountPlan: (account, action) => `  ${account.engine} «${account.label}»: ${action}${account.bindings.length ? `; bound to ${account.bindings.join(", ")}` : ""}`,
+    accountAction: {
+      create: (id) => `made here signed out${id ? ` as ${id}` : ""}`,
+      legacy: (id) => `this install's own ${id ? `«${id}» ` : ""}account home`,
+      existing: (id) => `already here as ${id}`,
+      skip: (reason) => `not made here (${reason})`,
+    },
+    activeOnSource: " (active on the source)",
+    overBudget: (scope, points) => `Over the 10 000 code point target after the merge: ${scope} (${points}); the next curation trims it.`,
+    reasons: {
+      "needs-newer-delegatus": "needs a newer Delegatus",
+      "already-imported": "already imported by an earlier import of this bundle",
+      "invalid-record": "not a record this install accepts",
+      "unknown-part": "a part this install does not know",
+      "target-file-unreadable": "this install's file is damaged or not a regular file; repair it, then import again",
+      "target-store-not-migrated": "this install has not migrated that store yet",
+      "manual-project-without-folder": "a hand-made project without a folder here",
+      "provider-account": "a provider account needs its token here",
+      "pending:choose-on-target": "choose it on this install",
+      "pending:machine-value-shown-only": "a value of the source machine, shown only",
+      "pending:confirm-on-target": "confirm it on this install",
+      "pending:approve-on-target": "approve it on this install",
+      "pending:waits-for-relay-pairing": "waits for the relay pairing",
+      "pending:waits-for-same-bot": "waits for the same Telegram bot",
+    },
+    actions: {
+      "kept-target": "this install keeps its own",
+      "took-source": "the bundle's replaces it",
+      "stored-as-version": "the bundle's text is kept as a version of this install's rule",
+      merged: "merged",
+    },
+    kinds: { rule: "rule", scope: "scope", text: "text", stage: "a stage", seat: "a seat", import: "an import", operator: "the operator", active: "active", archived: "archived", merged: "merged" },
   },
   uk: {
     usage: [
@@ -105,6 +143,44 @@ const TEXT = {
     accountState: { unchecked: "ввійдено, ще не перевірено", signed_out: "не ввійдено", usable: "готовий", different_account: "ввійдено в інший акаунт", read_failed: "ліміти не прочитано", not_needed: "тут не потрібен", not_created: "не створено" },
     accountsPending: "Пам'ять і налаштування прибули. Увійдіть у кожен акаунт за списком у панелі акаунтів, потім запустіть delegatus import --report.",
     noReport: "На цій інсталяції ще не застосовано жодного імпорту.",
+    skippedLine: (key, reason) => `      пропущено ${key}: ${reason}`,
+    conflictLine: (key, action) => `      конфлікт ${key}: ${action}`,
+    sourceVersion: "з пакета",
+    targetVersion: "на цій інсталяції",
+    versionLine: (side, kind, at) => `        ${side} (${kind}${at ? `, змінено ${at}` : ""})`,
+    accountsHeading: "Акаунти:",
+    accountPlan: (account, action) => `  ${account.engine} «${account.label}»: ${action}${account.bindings.length ? `; прив'язаний до ${account.bindings.join(", ")}` : ""}`,
+    accountAction: {
+      create: (id) => `буде створений тут без входу${id ? ` як ${id}` : ""}`,
+      legacy: (id) => `власний дім акаунта цієї інсталяції${id ? ` «${id}»` : ""}`,
+      existing: (id) => `уже є тут як ${id}`,
+      skip: (reason) => `не буде створений тут (${reason})`,
+    },
+    activeOnSource: " (активний на джерелі)",
+    overBudget: (scope, points) => `Понад ціль 10 000 символів після злиття: ${scope} (${points}); наступне курування скоротить.`,
+    reasons: {
+      "needs-newer-delegatus": "потрібен новіший Delegatus",
+      "already-imported": "уже імпортовано попереднім імпортом цього пакета",
+      "invalid-record": "запис, який ця інсталяція не приймає",
+      "unknown-part": "частина, якої ця інсталяція не знає",
+      "target-file-unreadable": "файл цієї інсталяції пошкоджений або не звичайний файл; виправте його й імпортуйте знову",
+      "target-store-not-migrated": "ця інсталяція ще не перенесла це сховище",
+      "manual-project-without-folder": "створений вручну проєкт без теки тут",
+      "provider-account": "акаунту провайдера тут потрібен його токен",
+      "pending:choose-on-target": "оберіть на цій інсталяції",
+      "pending:machine-value-shown-only": "значення машини джерела, лише показується",
+      "pending:confirm-on-target": "підтвердьте на цій інсталяції",
+      "pending:approve-on-target": "дозвольте на цій інсталяції",
+      "pending:waits-for-relay-pairing": "чекає на спарювання ретранслятора",
+      "pending:waits-for-same-bot": "чекає на того самого Telegram-бота",
+    },
+    actions: {
+      "kept-target": "ця інсталяція лишає своє",
+      "took-source": "значення з пакета замінює його",
+      "stored-as-version": "текст із пакета зберігається як версія правила цієї інсталяції",
+      merged: "об'єднано",
+    },
+    kinds: { rule: "правило", scope: "область", text: "текст", stage: "етап", seat: "місце", import: "імпорт", operator: "оператор", active: "активне", archived: "в архіві", merged: "об'єднане" },
   },
 };
 
@@ -251,10 +327,55 @@ async function ask(io, question) {
   } finally { rl.close(); }
 }
 
+const VALUE_PREVIEW_CHARS = 400;
+
+const reasonText = (text, reason) => text.reasons[reason] ?? reason;
+const actionText = (text, action) => text.actions[action] ?? action;
+
+function versionKind(text, version) {
+  const words = [text.kinds[version.kind] ?? version.kind];
+  if (version.origin) words.push(text.kinds[version.origin] ?? version.origin);
+  if (version.state) words.push(text.kinds[version.state] ?? version.state);
+  return words.join(", ");
+}
+
+/** A version's content: a rule's or a file's text whole, a setting's value up to a bound. */
+function versionBody(version) {
+  if (typeof version.text === "string") return version.text.split("\n").map((line) => `          ${line}`);
+  if (version.value === undefined) return [];
+  const json = JSON.stringify(version.value) ?? "null";
+  return [`          ${json.length > VALUE_PREVIEW_CHARS ? `${json.slice(0, VALUE_PREVIEW_CHARS)}…` : json}`];
+}
+
+/** Each record of a section that is not plainly applied: skipped with its reason, in conflict with its decision and, in the dry run, both versions. */
+function printSectionDetail(context, section) {
+  const { log, text } = context;
+  for (const entry of section.skippedRecords ?? []) log(text.skippedLine(entry.key, reasonText(text, entry.reason)));
+  for (const conflict of section.conflicts ?? []) {
+    log(text.conflictLine(conflict.key, actionText(text, conflict.action)));
+    for (const [side, version] of [[text.sourceVersion, conflict.source], [text.targetVersion, conflict.target]]) {
+      if (!version) continue;
+      log(text.versionLine(side, versionKind(text, version), version.at));
+      for (const line of versionBody(version)) log(line);
+    }
+  }
+}
+
 function printPlan(context, plan) {
   const { log, text } = context;
   if (plan.previousImport) log(text.previous(plan.previousImport.importId, plan.previousImport.at));
-  for (const section of plan.sections) log(text.sectionLine(section));
+  for (const section of plan.sections) {
+    log(text.sectionLine(section));
+    printSectionDetail(context, section);
+  }
+  if (plan.accounts?.length) {
+    log(text.accountsHeading);
+    for (const account of plan.accounts) {
+      const action = account.action === "skip" ? text.accountAction.skip(reasonText(text, account.reason ?? "skipped")) : text.accountAction[account.action]?.(account.plannedId) ?? account.action;
+      log(`${text.accountPlan(account, action)}${account.sourceActive ? text.activeOnSource : ""}`);
+    }
+  }
+  for (const scope of plan.overBudgetScopes ?? []) log(text.overBudget(scope.scope, scope.codePoints));
   const unmapped = plan.projects.filter((project) => project.state === "unmapped");
   if (unmapped.length) log(text.unmapped(unmapped.map((project) => `${project.displayName} (${project.key})`).join(", ")));
   if (plan.notices?.length) for (const notice of plan.notices) if (notice.code === "engine_memory_not_imported") log(engineMemoryNote(text, notice));
@@ -274,7 +395,10 @@ function printRedo(context, redo) {
 
 function printReport(context, report) {
   const { log, text } = context;
-  for (const section of report.sections) log(`${section.balanced ? "✓" : "✗"}${text.sectionLine(section).slice(1)}`);
+  for (const section of report.sections) {
+    log(`${section.balanced ? "✓" : "✗"}${text.sectionLine(section).slice(1)}`);
+    printSectionDetail(context, section);
+  }
   for (const scope of report.scopes) {
     log(`${scope.ok ? "✓" : "✗"} ${text.scopeLine(scope)}`);
   }

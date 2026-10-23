@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -84,6 +84,28 @@ function journalStates(target: Install): string[] {
   return journals(target).map(entry => entry.journal.state);
 }
 
+/** Whether the target's database holds an import's ledger row, read straight from SQLite. */
+function ledgerVisible(target: Install): boolean {
+  const db = new Database(path.join(target.state, "state.sqlite"), { readonly: true });
+  try { return !!db.query("SELECT 1 FROM state_rows WHERE collection = 'transfer_imports'").get(); }
+  finally { db.close(); }
+}
+
+/** `chmodSync` of the target's database fails as an I/O error does, once, the first time after an import's commit is visible: the step `commitPatchesSync` runs after COMMIT. */
+function failChmodAfterCommit(target: Install) {
+  const database = path.join(target.state, "state.sqlite");
+  const original = fs.chmodSync;
+  const state = { fired: false };
+  const spy = spyOn(fs, "chmodSync").mockImplementation(((file: fs.PathLike, mode: fs.Mode) => {
+    if (!state.fired && String(file) === database && ledgerVisible(target)) {
+      state.fired = true;
+      throw Object.assign(new Error("EIO: i/o error, chmod (injected)"), { code: "EIO" });
+    }
+    return original(file, mode);
+  }) as typeof fs.chmodSync);
+  return { state, restore: () => spy.mockRestore() };
+}
+
 /** A writer that takes no lock: it rewrites the file in place of whatever is there. */
 const writeRaw = (target: Install, relative: string, text: string) => fs.writeFileSync(path.join(target.state, relative), text);
 
@@ -131,6 +153,117 @@ describe("apply exits", () => {
       expect((await runWorker(target, { operation: "recover" })).response).toEqual({ ok: true, result: [] });
     }, 60_000);
   }
+
+  test("a failure after COMMIT keeps the commit: the rows and the files stay together, recovery included", async () => {
+    const { target, plan } = await prepared("after-commit-error");
+    const created = path.join(target.state, "project-settings.json");
+    expect(fs.existsSync(created)).toBe(false);
+    const chmod = failChmodAfterCommit(target);
+    const { report } = await within(target, () => applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions })).finally(() => chmod.restore());
+    expect(chmod.state.fired).toBe(true);
+    expect(report.complete).toBe(true);
+    const imported = snapshot(target);
+    const [record] = await within(target, () => readImportRecords());
+    expect(record?.importId).toBe(report.importId);
+    expect(JSON.parse(fs.readFileSync(created, "utf8")).projects[REPOSITORY].mergeOnReview.enabled).toBe(true);
+    expect(journalStates(target)).toEqual(["done"]);
+    expect((await runWorker(target, { operation: "recover" })).response).toEqual({ ok: true, result: [] });
+    expect(snapshot(target)).toEqual(imported);
+  }, 60_000);
+
+  test("a commit whose outcome cannot be read is never undone on a guess: recovery waits until it reads, then finishes it", async () => {
+    const { target, plan } = await prepared("after-commit-unknown");
+    const created = path.join(target.state, "project-settings.json");
+    const chmod = failChmodAfterCommit(target);
+    process.env.LLV_TRANSFER_TEST_READ_FAULT = "ledger";
+    let failure: unknown;
+    try {
+      failure = await within(target, () => applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions })).then(() => null, (error: unknown) => error);
+      expect(String((failure as Error)?.message)).toMatch(/whether it landed cannot be read yet/);
+      // Committed, and nothing undone: the journal stays open for recovery.
+      expect(journalStates(target)).toEqual(["writing"]);
+      expect(await within(target, () => readImportRecords())).toHaveLength(1);
+      expect(fs.existsSync(created)).toBe(true);
+      const held = snapshot(target);
+      await expect(within(target, () => settleInterruptedTransfers())).rejects.toThrow(/activation refused: .*whether import .* committed cannot be read \(EIO\)/);
+      expect(journalStates(target)).toEqual(["writing"]);
+      expect(snapshot(target)).toEqual(held);
+    } finally {
+      chmod.restore();
+      delete process.env.LLV_TRANSFER_TEST_READ_FAULT;
+    }
+    const settled = await within(target, () => recoverTransferImports());
+    expect(settled).toEqual([{ importId: expect.any(String), outcome: "finished" }]);
+    expect(journalStates(target)).toEqual(["done"]);
+    expect(JSON.parse(fs.readFileSync(created, "utf8")).projects[REPOSITORY].mergeOnReview.enabled).toBe(true);
+  }, 60_000);
+
+  test("a commit that failed, with its outcome unreadable, waits for recovery, which then undoes it", async () => {
+    const { target, plan } = await prepared("failed-commit-unknown");
+    const before = snapshot(target);
+    process.env.LLV_TRANSFER_TEST_FAULT = "sqlite";
+    process.env.LLV_TRANSFER_TEST_READ_FAULT = "ledger";
+    try {
+      const failure = await within(target, () => applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions })).then(() => null, (error: unknown) => error);
+      expect(String((failure as Error)?.message)).toMatch(/whether it landed cannot be read yet/);
+    } finally {
+      delete process.env.LLV_TRANSFER_TEST_FAULT;
+      delete process.env.LLV_TRANSFER_TEST_READ_FAULT;
+    }
+    expect(journalStates(target)).toEqual(["writing"]);
+    expect(snapshot(target).files).not.toEqual(before.files);
+    expect(await within(target, () => recoverTransferImports())).toEqual([{ importId: expect.any(String), outcome: "rolled-back" }]);
+    expect(snapshot(target)).toEqual(before);
+  }, 60_000);
+
+  test("a file system that refuses links refuses the creation of a new file, with nothing written under its name", async () => {
+    const { target, plan } = await prepared("links-refused");
+    const before = snapshot(target);
+    const link = spyOn(fs, "linkSync").mockImplementation(() => { throw Object.assign(new Error("EPERM: operation not permitted, link (injected)"), { code: "EPERM" }); });
+    let failure: unknown;
+    try { failure = await within(target, () => applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions })).then(() => null, (error: unknown) => error); }
+    finally { link.mockRestore(); }
+    expect((failure as Error).name).toBe("TransferLinkRefusedError");
+    expect(snapshot(target)).toEqual(before);
+    expect(journalStates(target)).toEqual(["rolled-back"]);
+  }, 60_000);
+
+  test("a write that fails part way through a new file leaves no partial file under its name", async () => {
+    const { target, plan } = await prepared("partial-create");
+    const before = snapshot(target);
+    const original = fs.writeFileSync;
+    let partial = 0;
+    const write = spyOn(fs, "writeFileSync").mockImplementation(((file: fs.PathOrFileDescriptor, data: string | NodeJS.ArrayBufferView, options?: fs.WriteFileOptions) => {
+      if (typeof file === "string" && file.endsWith(".transfer-new") && path.basename(file).startsWith(".project-settings.json.")) {
+        partial += 1;
+        original(file, String(data).slice(0, 8), options);
+        throw Object.assign(new Error("ENOSPC: no space left on device, write (injected)"), { code: "ENOSPC" });
+      }
+      return original(file, data, options);
+    }) as typeof fs.writeFileSync);
+    let failure: unknown;
+    try { failure = await within(target, () => applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions })).then(() => null, (error: unknown) => error); }
+    finally { write.mockRestore(); }
+    expect(partial).toBe(1);
+    expect(String((failure as Error).message)).toContain("ENOSPC");
+    expect(fs.existsSync(path.join(target.state, "project-settings.json"))).toBe(false);
+    expect(snapshot(target)).toEqual(before);
+    expect(await within(target, () => recoverTransferImports())).toEqual([]);
+    expect(snapshot(target)).toEqual(before);
+  }, 60_000);
+
+  test("a worker killed while a new file is staged leaves nothing under its name, and recovery removes the staged bytes", async () => {
+    const { target, plan } = await prepared("die-before-link");
+    const before = snapshot(target);
+    const result = await runWorker(target, { operation: "apply", request: { bundleSha256: plan.bundleSha256, revisions: plan.revisions } }, "die-before-link");
+    expect(result.signal).toBe("SIGKILL");
+    const [{ journal }] = journals(target);
+    const created = journal.files.find(entry => entry.before === null)!;
+    expect(fs.existsSync(path.join(target.state, created.relative))).toBe(false);
+    expect(fs.readdirSync(path.dirname(path.join(target.state, created.relative))).filter(name => name.endsWith(".transfer-new"))).toHaveLength(1);
+    expect((await runWorker(target, { operation: "recover" })).response).toMatchObject({ ok: true, result: [{ outcome: "rolled-back" }] });
+    expect(snapshot(target)).toEqual(before);
+  }, 60_000);
 
   test("a worker killed after its commit is finished by recovery, never undone", async () => {
     const { target, plan } = await prepared("die-after-commit");

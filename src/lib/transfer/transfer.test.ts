@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,9 +14,9 @@ import { ensureLegacyCollectionsImported } from "@/lib/state/legacyCollections";
 
 import { decodeBundle, encodeBundle } from "./bundle";
 import { exportTransferBundle, TransferSecretError } from "./exporter";
-import { applyTransferImport, previewTransferImport, readImportRecords, TransferImportError } from "./importer";
+import { applyTransferImport, previewTransferImport, readImportRecords, readTransferReport, TransferImportError } from "./importer";
 import type { BundleProject } from "./types";
-import { engineMemoryNotImported } from "./workerProtocol";
+import { engineMemoryNotImported, type TransferWorkerResponse } from "./workerProtocol";
 import { installEnv, makeInstall, MOVED_FROM, NOW, readInstall, RELAY_CREDENTIAL, REPOSITORY, SECRET_SHAPED_VALUE, seedSource, treeDigest, within, type Install } from "./transfer.fixture";
 
 /* The round trip between two isolated installs (docs/design/install-memory-transfer.md
@@ -50,6 +50,18 @@ async function freshTarget(name: string): Promise<Install> {
 }
 
 const mappingFor = (target: Install) => ({ [seeded.folderKey]: path.join(target.root, "work", "beta-here") });
+
+/** One transfer step in a worker process of its own: what a restarted Viewer reads. */
+async function inWorker(install: Install, request: unknown): Promise<TransferWorkerResponse | null> {
+  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "transfer.worker.ts")], {
+    env: { ...process.env, ...installEnv(install), HOME: install.home, NODE_ENV: "test" }, stdin: "pipe", stdout: "pipe", stderr: "inherit",
+  });
+  child.stdin.write(JSON.stringify(request));
+  child.stdin.end();
+  const [, text] = await Promise.all([child.exited, new Response(child.stdout).text()]);
+  const line = text.trim().split("\n").at(-1);
+  return line ? JSON.parse(line) as TransferWorkerResponse : null;
+}
 
 beforeAll(async () => {
   parent = fs.mkdtempSync(path.join(os.tmpdir(), "transfer-roundtrip-"));
@@ -258,10 +270,23 @@ describe("into a populated install", () => {
     const second = (await exportFrom(sourceAgain, { exportId: "export-2" })).bytes;
     const plan = await within(target, () => previewTransferImport(second, {}));
     const settings = plan.sections.find(section => section.name === "settings.projects")!;
-    expect(settings.conflicts).toEqual(expect.arrayContaining([{ key: `map:project-settings|${REPOSITORY}`, action: "kept-target" }]));
+    const settingConflict = settings.conflicts.find(conflict => conflict.key === `map:project-settings|${REPOSITORY}`)!;
+    expect(settingConflict.action).toBe("kept-target");
+    // §4.5: both versions of a setting, with their kind and time, before anything is applied.
+    expect(settingConflict.source).toMatchObject({ kind: "object", value: { mergeOnReview: { enabled: true } } });
+    expect(settingConflict.target).toMatchObject({ kind: "object", value: { mergeOnReview: { enabled: false, changedAt: "2026-10-23T00:00:00.000Z" } } });
     const role = plan.sections.find(section => section.name === "memory.role")!;
-    expect(role.conflicts).toEqual(expect.arrayContaining([{ key: `rows:role_memory|r:${seeded.ruleIds[2]}`, action: "stored-as-version" }]));
+    const ruleConflict = role.conflicts.find(conflict => conflict.key === `rows:role_memory|r:${seeded.ruleIds[2]}`)!;
+    expect(ruleConflict).toEqual({
+      key: `rows:role_memory|r:${seeded.ruleIds[2]}`, action: "stored-as-version",
+      source: { kind: "rule", origin: "seat", state: "active", at: "2026-10-24T00:00:00.000Z", text: "Read the newest answer before every action." },
+      target: { kind: "rule", origin: "seat", state: "active", at: expect.any(String), text: "Read the newest operator answer before acting." },
+    });
+    // The dry run wrote nothing: the target still holds its own text.
+    expect(await within(target, async () => (await import("@/lib/memory/roleStore")).roleMemoryCollection()!.get(`r:${seeded.ruleIds[2]}`))).toMatchObject({ rule: "Read the newest operator answer before acting." });
     const { report, ledger } = await within(target, () => applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions }));
+    // The import record keeps each conflict's decision, not the versions' content.
+    expect(report.sections.find(section => section.name === "memory.role")!.conflicts).toEqual(expect.arrayContaining([{ key: `rows:role_memory|r:${seeded.ruleIds[2]}`, action: "stored-as-version" }]));
     expect(report.sections.every(section => section.balanced)).toBe(true);
     expect(report.scopes.filter(scope => !scope.ok)).toEqual([]);
     const view = await within(target, async () => {
@@ -301,10 +326,56 @@ describe("apply refusals", () => {
     const damaged = path.join(target.state, "project-settings.json");
     fs.writeFileSync(damaged, "{ half a file");
     const plan = await within(target, () => previewTransferImport(bundle, { mappings: mappingFor(target) }));
-    expect(plan.sections.find(section => section.name === "settings.projects")!.skippedReasons["target-file-unreadable"]).toBe(1);
-    await within(target, () => applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions, mappings: mappingFor(target) }));
+    const planned = plan.sections.find(section => section.name === "settings.projects")!;
+    expect(planned.skippedReasons["target-file-unreadable"]).toBe(1);
+    expect(planned.skippedRecords).toEqual([{ key: expect.stringContaining(REPOSITORY), reason: "target-file-unreadable" }]);
+    const { report } = await within(target, () => applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions, mappings: mappingFor(target) }));
     expect(fs.readFileSync(damaged, "utf8")).toBe("{ half a file");
+    // §5.1: once the staged bundle is gone, a restarted reader still names the record and why it did not arrive.
+    expect(fs.readdirSync(path.join(target.state, "transfer", "staged"))).toEqual([]);
+    const stored = await inWorker(target, { operation: "report", importId: report.importId });
+    expect(stored?.ok).toBe(true);
+    const section = (stored as { result: { sections: typeof report.sections } }).result.sections.find(entry => entry.name === "settings.projects")!;
+    expect(section.skippedRecords).toEqual(planned.skippedRecords);
+    expect(section.skippedReasons).toEqual({ "target-file-unreadable": 1 });
+    expect([section.skipped, section.balanced]).toEqual([1, true]);
+    expect(await within(target, () => readTransferReport(report.importId)?.report.sections.find(entry => entry.name === "settings.projects")?.skippedRecords)).toEqual(planned.skippedRecords);
   }, 60_000);
+
+  test("never opens a linked, FIFO or oversized settings file: preview and apply skip each unread", async () => {
+    const target = await freshTarget("unopened-target");
+    const linked = path.join(target.state, "shared-memory-settings.json");
+    const elsewhere = path.join(target.root, "elsewhere-shared.json");
+    fs.writeFileSync(elsewhere, "{}\n");
+    fs.symlinkSync(elsewhere, linked);
+    const fifo = path.join(target.state, "asks-you-settings.json");
+    expect(Bun.spawnSync(["mkfifo", fifo]).exitCode).toBe(0);
+    const oversized = path.join(target.state, "operator-settings.json");
+    fs.writeFileSync(oversized, "");
+    fs.truncateSync(oversized, 64 * 1024 * 1024 + 1);
+    const unread = new Set([linked, fifo, oversized, elsewhere]);
+    const opened: string[] = [];
+    const record = (file: unknown) => { if (typeof file === "string" && unread.has(file)) opened.push(file); };
+    const original = { open: fs.openSync, read: fs.readFileSync };
+    const open = spyOn(fs, "openSync").mockImplementation(((file: fs.PathLike, ...rest: unknown[]) => { record(file); return (original.open as (...args: unknown[]) => number)(file, ...rest); }) as typeof fs.openSync);
+    const read = spyOn(fs, "readFileSync").mockImplementation(((file: fs.PathOrFileDescriptor, ...rest: unknown[]) => { record(file); return (original.read as (...args: unknown[]) => unknown)(file, ...rest); }) as typeof fs.readFileSync);
+    try {
+      const plan = await within(target, () => previewTransferImport(bundle, { mappings: mappingFor(target) }));
+      const reasons = (name: string) => plan.sections.find(section => section.name === name)!.skippedReasons["target-file-unreadable"];
+      expect([reasons("memory.settings"), reasons("settings.operator")]).toEqual([1, 5]);
+      expect(Object.entries(plan.revisions).filter(([store]) => /shared-memory-settings|asks-you-settings|operator-settings/.test(store)).map(([, revision]) => revision).sort())
+        .toEqual(["unsupported:link", "unsupported:not-a-file", "unsupported:too-large"]);
+      const { report } = await within(target, () => applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions, mappings: mappingFor(target) }));
+      expect(report.sections.every(section => section.balanced)).toBe(true);
+    } finally {
+      open.mockRestore();
+      read.mockRestore();
+    }
+    expect(opened).toEqual([]);
+    expect(fs.lstatSync(linked).isSymbolicLink()).toBe(true);
+    expect(fs.lstatSync(fifo).isFIFO()).toBe(true);
+    expect(fs.statSync(oversized).size).toBe(64 * 1024 * 1024 + 1);
+  }, 120_000);
 
   test("never takes an oversized or linked settings file for an absent one: their bytes and choices stay", async () => {
     const target = await freshTarget("unsupported-target");
@@ -381,7 +452,7 @@ describe("settings and memory a target already has", () => {
     const target = await freshTarget("fields-target");
     await within(target, () => setMergeOnReview(REPOSITORY, false, "operator", NOW));
     const plan = await within(target, () => previewTransferImport(fields, {}));
-    expect(plan.sections[0]!.conflicts).toEqual([{ key: `map:project-settings|${REPOSITORY}`, action: "merged" }]);
+    expect(plan.sections[0]!.conflicts.map(({ key, action }) => ({ key, action }))).toEqual([{ key: `map:project-settings|${REPOSITORY}`, action: "merged" }]);
     await within(target, () => applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions }));
     expect(await within(target, () => [mergeOnReviewEnabled(REPOSITORY), bridgeReportsEnabled(REPOSITORY)])).toEqual([false, false]);
     // «Take the source's» replaces the differing choice too, and only for that section.
@@ -406,7 +477,8 @@ describe("settings and memory a target already has", () => {
     const own = JSON.stringify({ schemaVersion: 1, source: "engines", changedAt: NOW });
     fs.writeFileSync(path.join(chosen.state, "memory-source.json"), own);
     const kept = await within(chosen, () => previewTransferImport(settled, { replace: ["memory.settings"] }));
-    expect(kept.sections[0]!.conflicts).toEqual([{ key: "text:memory-source|memory-source.json", action: "kept-target" }]);
+    expect(kept.sections[0]!.conflicts).toEqual([{ key: "text:memory-source|memory-source.json", action: "kept-target",
+      source: { kind: "text", at: NOW, text: expect.stringContaining('"source":"delegatus"') }, target: { kind: "text", at: NOW, text: own } }]);
     await within(chosen, () => applyTransferImport({ bundleSha256: kept.bundleSha256, revisions: kept.revisions, replace: ["memory.settings"] }));
     expect(fs.readFileSync(path.join(chosen.state, "memory-source.json"), "utf8")).toBe(own);
 

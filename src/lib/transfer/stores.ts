@@ -28,15 +28,62 @@ export interface StoredRow {
 
 export const MAX_SETTINGS_FILE_BYTES = 64 * 1024 * 1024;
 
-function readText(file: string, limit = MAX_SETTINGS_FILE_BYTES): string | null {
-  try {
-    const stat = fs.lstatSync(file);
-    if (!stat.isFile() || stat.size > limit) return null;
-    return fs.readFileSync(file, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT" || (error as NodeJS.ErrnoException).code === "ENOTDIR") return null;
+export type RegularFileRead =
+  | { kind: "absent" }
+  | { kind: "bytes"; bytes: Buffer }
+  | { kind: "unsupported"; reason: "link" | "not-a-file" | "too-large" };
+
+const READ_CHUNK_BYTES = 64 * 1024;
+
+/** A regular file's bytes, at most `limit` of them, or why it is not read. A
+    link, a FIFO, a device or a file past the bound is never opened for its
+    content: the kind is checked before the open, the open neither follows a
+    link nor waits on a FIFO, and the descriptor is checked again before the
+    first byte is read, so a file swapped in between cannot block or overrun. */
+export function readRegularFile(file: string, limit = MAX_SETTINGS_FILE_BYTES): RegularFileRead {
+  let stat: fs.Stats;
+  try { stat = fs.lstatSync(file); }
+  catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return { kind: "absent" };
+    /* A parent that is a file: nothing can be written beneath it. */
+    if (code === "ENOTDIR") return { kind: "unsupported", reason: "not-a-file" };
     throw error;
   }
+  if (stat.isSymbolicLink()) return { kind: "unsupported", reason: "link" };
+  if (!stat.isFile()) return { kind: "unsupported", reason: "not-a-file" };
+  if (stat.size > limit) return { kind: "unsupported", reason: "too-large" };
+  let descriptor: number;
+  try { descriptor = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0)); }
+  catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return { kind: "absent" };
+    if (code === "ELOOP") return { kind: "unsupported", reason: "link" };
+    if (code === "ENOTDIR" || code === "ENXIO") return { kind: "unsupported", reason: "not-a-file" };
+    throw error;
+  }
+  try {
+    const opened = fs.fstatSync(descriptor);
+    if (!opened.isFile()) return { kind: "unsupported", reason: "not-a-file" };
+    if (opened.size > limit) return { kind: "unsupported", reason: "too-large" };
+    const chunks: Buffer[] = [];
+    let total = 0;
+    const chunk = Buffer.allocUnsafe(READ_CHUNK_BYTES);
+    for (;;) {
+      const read = fs.readSync(descriptor, chunk, 0, chunk.length, null);
+      if (!read) break;
+      total += read;
+      /* Grown past the bound since the check. */
+      if (total > limit) return { kind: "unsupported", reason: "too-large" };
+      chunks.push(Buffer.from(chunk.subarray(0, read)));
+    }
+    return { kind: "bytes", bytes: Buffer.concat(chunks, total) };
+  } finally { fs.closeSync(descriptor); }
+}
+
+function readText(file: string, limit = MAX_SETTINGS_FILE_BYTES): string | null {
+  const read = readRegularFile(file, limit);
+  return read.kind === "bytes" ? read.bytes.toString("utf8") : null;
 }
 
 function listNames(directory: string): string[] {
@@ -146,28 +193,20 @@ export type TargetText =
   | { kind: "unsupported"; reason: "link" | "not-a-file" | "too-large" };
 
 export function readTargetText(root: "state" | "config", relative: string, limit = MAX_SETTINGS_FILE_BYTES): TargetText {
-  const file = path.join(targetRoot(root), relative);
-  let stat: fs.Stats;
-  try { stat = fs.lstatSync(file); }
-  catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") return { kind: "absent" };
-    /* A parent that is a file: nothing can be written beneath it. */
-    if (code === "ENOTDIR") return { kind: "unsupported", reason: "not-a-file" };
-    throw error;
-  }
-  if (stat.isSymbolicLink()) return { kind: "unsupported", reason: "link" };
-  if (!stat.isFile()) return { kind: "unsupported", reason: "not-a-file" };
-  if (stat.size > limit) return { kind: "unsupported", reason: "too-large" };
-  return { kind: "text", text: fs.readFileSync(file, "utf8") };
+  const read = readRegularFile(path.join(targetRoot(root), relative), limit);
+  return read.kind === "bytes" ? { kind: "text", text: read.bytes.toString("utf8") } : read;
 }
 
-/** A file's revision for the dry run: absent, or a hash of its bytes. A hash
-    rather than a time, so a file put back by a rolled-back import still reads
-    as the file the dry run saw. */
+/** A file's revision for the dry run: absent, a hash of its bytes, or, for a
+    file the import never reads (§4.5: a link, not a regular file, past the
+    bound), its kind alone, taken without opening it. A hash rather than a
+    time, so a file put back by a rolled-back import still reads as the file
+    the dry run saw. */
 export function fileRevision(root: "state" | "config", relative: string): string {
-  try { return crypto.createHash("sha256").update(fs.readFileSync(path.join(targetRoot(root), relative))).digest("hex"); }
-  catch { return "absent"; }
+  const read = readRegularFile(path.join(targetRoot(root), relative));
+  if (read.kind === "absent") return "absent";
+  if (read.kind === "unsupported") return `unsupported:${read.reason}`;
+  return crypto.createHash("sha256").update(read.bytes).digest("hex");
 }
 
 /** What is at a target path, without reading it. */
@@ -183,22 +222,33 @@ export function targetFileKind(root: "state" | "config", relative: string): "abs
   }
 }
 
+/** Thrown when the file system refuses the link that puts a new file in
+    place: the import is refused with nothing written to the target name. */
+export class TransferLinkRefusedError extends Error {
+  readonly code = "ETRANSFERLINK";
+  constructor(cause: unknown) {
+    super("this file system refuses hard links, so the import cannot create a new settings file whole; nothing was written", { cause });
+    this.name = "TransferLinkRefusedError";
+  }
+}
+
 /** Create a file that must not exist yet, whole or not at all: written aside,
     then linked into place, which fails with EEXIST when anything holds the
-    name by then. A file system that refuses links gets an exclusive create
-    instead, which is exclusive too though a reader may see it partly written. */
-export function createFileExclusive(target: string, text: string): void {
+    name by then. A file system that refuses links refuses the creation: an
+    exclusive create in place would show the name before its bytes, and a
+    stop or a failed write in between would leave a partial file nobody could
+    tell from a later writer's. */
+export function createFileExclusive(target: string, text: string, options: { staging?: string; beforeLink?: () => void } = {}): void {
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
-  const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${crypto.randomUUID()}.transfer.tmp`);
+  const temporary = options.staging ?? path.join(path.dirname(target), `.${path.basename(target)}.${crypto.randomUUID()}.transfer.tmp`);
   try {
     fs.writeFileSync(temporary, text, { encoding: "utf8", mode: 0o600, flag: "wx" });
     fsyncPath(temporary);
+    options.beforeLink?.();
     try { fs.linkSync(temporary, target); }
     catch (error) {
-      if (!["EPERM", "ENOTSUP", "EOPNOTSUPP", "EMLINK"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
-      const descriptor = fs.openSync(target, "wx", 0o600);
-      try { fs.writeFileSync(descriptor, text, "utf8"); fs.fsyncSync(descriptor); }
-      finally { fs.closeSync(descriptor); }
+      if (["EPERM", "ENOTSUP", "EOPNOTSUPP", "EMLINK", "ENOSYS"].includes((error as NodeJS.ErrnoException).code ?? "")) throw new TransferLinkRefusedError(error);
+      throw error;
     }
     fsyncPath(path.dirname(target));
   } finally {
@@ -206,10 +256,32 @@ export function createFileExclusive(target: string, text: string): void {
   }
 }
 
-/** Write through a temporary file and a rename, owner-only, then fsync the file and its directory. */
-export function writeFileAtomic(target: string, text: string): void {
+/** Whether one row is committed in `state.sqlite`, read from the database
+    itself. Unlike the collections' own readers, which take an unreadable
+    database for one not initialized yet, any failure to answer throws: a
+    caller deciding between finishing and undoing a commit must not guess. */
+export function targetRowCommitted(collection: string, key: string): boolean {
+  const file = path.join(stateDir(), "state.sqlite");
+  try { fs.statSync(file); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+  const db = new (sqlite().Database)(file, { readonly: true, strict: true });
+  try {
+    db.exec("PRAGMA busy_timeout = 5000");
+    const table = db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_rows'").get();
+    if (!table) return false;
+    return !!db.query<{ found: number }, [string, string]>("SELECT 1 AS found FROM state_rows WHERE collection = ? AND row_key = ?").get(collection, key);
+  } finally { db.close(); }
+}
+
+/** Write through a temporary file and a rename, owner-only, then fsync the file
+    and its directory. `staging` names the temporary file, so whoever knows the
+    name can remove what a stop left of it. */
+export function writeFileAtomic(target: string, text: string, staging?: string): void {
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
-  const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${crypto.randomUUID()}.transfer.tmp`);
+  const temporary = staging ?? path.join(path.dirname(target), `.${path.basename(target)}.${crypto.randomUUID()}.transfer.tmp`);
   try {
     fs.writeFileSync(temporary, text, { encoding: "utf8", mode: 0o600, flag: "wx" });
     fsyncPath(temporary);

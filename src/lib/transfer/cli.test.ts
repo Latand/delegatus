@@ -7,6 +7,7 @@ import { NextRequest } from "next/server";
 
 import { internalServiceHeaders } from "@/lib/agent/callerClaims";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
+import { leaveSeatLessons, roleMemoryCollection } from "@/lib/memory/roleStore";
 import { ensureLegacyCollectionsImported } from "@/lib/state/legacyCollections";
 
 import { runTransferCommand } from "../../../bin/transfer.mjs";
@@ -22,6 +23,7 @@ let parent: string;
 let source: Install;
 let target: Install;
 let folderKey: string;
+let ruleIds: string[];
 let server: ReturnType<typeof Bun.serve>;
 
 async function closedPort(): Promise<number> {
@@ -49,7 +51,7 @@ beforeAll(async () => {
   parent = fs.mkdtempSync(path.join(os.tmpdir(), "transfer-cli-"));
   source = makeInstall(parent, "source");
   target = makeInstall(parent, "target");
-  folderKey = (await seedSource(source)).folderKey;
+  ({ folderKey, ruleIds } = await seedSource(source));
   fs.mkdirSync(path.join(target.root, "work", "beta"), { recursive: true });
   for (const install of [source, target]) await within(install, async () => { await ensureLegacyCollectionsImported(() => {}); ensureOperatorSpawnCapability(); });
   server = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(request) {
@@ -124,7 +126,82 @@ describe("delegatus export / import", () => {
     const report = await cli(target, "import", ["--report"]);
     expect(report.code).toBe(0);
     expect(report.out).toContain("✓ memory.role");
+    // §5.1: each record that did not arrive is named with its reason.
+    expect(report.out).toMatch(/ {6}skipped settings\.relay\|\S+: waits for the relay pairing/);
   }, 180_000);
+
+  test("a dry run into a populated install shows both texts of a conflicting rule and what apply would do, and applies nothing", async () => {
+    const changed = makeInstall(parent, "source-changed");
+    fs.cpSync(source.root, changed.root, { recursive: true });
+    await within(changed, () => leaveSeatLessons({ source: { origin: "seat", project: REPOSITORY, roleId: "orchestrator", fixRound: false, conversationId: "c-cli" }, now: "2026-10-24T00:00:00.000Z",
+      lessons: [], rewrite: { id: ruleIds[2]!, rule: "Read the newest answer before every action.", why: "Later answers replace earlier ones." } }));
+    const file = path.join(parent, "changed.dlgt");
+    expect((await cli(changed, "export", ["--plain", "--out", file])).code).toBe(0);
+    const records = await within(target, () => readImportRecords());
+    const dry = await cli(target, "import", [file, "--dry-run"]);
+    expect(dry.code).toBe(0);
+    const lines = dry.out.split("\n");
+    const at = lines.findIndex(line => line === `      conflict rows:role_memory|r:${ruleIds[2]}: the bundle's text is kept as a version of this install's rule`);
+    expect(at).toBeGreaterThan(-1);
+    expect(lines.slice(at + 1, at + 5)).toEqual([
+      expect.stringMatching(/^ {8}from the bundle \(rule, a seat, active, changed 2026-10-24T00:00:00\.000Z\)$/),
+      "          Read the newest answer before every action.",
+      expect.stringMatching(/^ {8}on this install \(rule, a seat, active, changed \S+\)$/),
+      "          Read the newest operator answer before acting.",
+    ]);
+    expect(await within(target, () => readImportRecords())).toEqual(records);
+    expect(await within(target, () => roleMemoryCollection()!.get(`r:${ruleIds[2]}`))).toMatchObject({ rule: "Read the newest operator answer before acting." });
+  }, 180_000);
+
+  test("a dry run shows each setting's two values, the planned accounts and the scopes over budget, in each language", async () => {
+    const plan = {
+      bundleSha256: "0".repeat(64), exportId: "e", createdAt: "2026-10-22T00:00:00.000Z", sourceProduct: "test", unknownSections: [], projects: [], redo: [], environment: [], notices: [], revisions: {}, previousImport: null,
+      sections: [{
+        name: "settings.projects", records: 2, new: 0, same: 0, conflict: 1, skipped: 1, pending: 0, replace: false,
+        skippedReasons: { "target-file-unreadable": 1 }, skippedRecords: [{ key: "settings.projects|map:project-settings|repo-b", reason: "target-file-unreadable" }],
+        conflicts: [{ key: "map:project-settings|repo-a", action: "kept-target",
+          source: { kind: "object", at: "2026-10-20T00:00:00.000Z", value: { mergeOnReview: { enabled: true } } },
+          target: { kind: "object", at: null, value: { mergeOnReview: { enabled: false } } } }],
+      }],
+      accounts: [
+        { engine: "codex", sourceId: "team", label: "Team", kind: "managed", sourceActive: true, action: "create", plannedId: null, bindings: ["repo-a"] },
+        { engine: "claude", sourceId: "work", label: "Work", kind: "managed", sourceActive: false, action: "existing", plannedId: "work-2", bindings: [] },
+        { engine: "claude", sourceId: "provider", label: "Gateway", kind: "managed", sourceActive: false, action: "skip", plannedId: null, bindings: [], reason: "provider-account" },
+      ],
+      overBudgetScopes: [{ scope: "project:repo-a", codePoints: 12_345 }],
+    };
+    const stub = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: request => new URL(request.url).pathname === "/api/transfer/preview"
+      ? Response.json({ ok: true, result: plan }) : new Response("not found", { status: 404 }) });
+    const file = path.join(parent, "stub.dlgt");
+    fs.writeFileSync(file, "a plain bundle the stub never reads");
+    try {
+      const run = async (lang: "en" | "uk") => {
+        const lines: string[] = [];
+        const code = await runTransferCommand("import", [file, "--dry-run"], { stateDirectory: target.state, env: { LLV_VIEWER_CONTROL_URL: `http://127.0.0.1:${stub.port}`, LLV_LANG: lang },
+          log: line => lines.push(line), err: line => lines.push(line), terminal: () => null });
+        expect(code).toBe(0);
+        return lines;
+      };
+      expect(await run("en")).toEqual([
+        "  settings.projects       2 records: 0 new, 0 same, 1 conflict, 1 skipped",
+        "      skipped settings.projects|map:project-settings|repo-b: this install's file is damaged or not a regular file; repair it, then import again",
+        "      conflict map:project-settings|repo-a: this install keeps its own",
+        "        from the bundle (object, changed 2026-10-20T00:00:00.000Z)",
+        "          {\"mergeOnReview\":{\"enabled\":true}}",
+        "        on this install (object)",
+        "          {\"mergeOnReview\":{\"enabled\":false}}",
+        "Accounts:",
+        "  codex «Team»: made here signed out; bound to repo-a (active on the source)",
+        "  claude «Work»: already here as work-2",
+        "  claude «Gateway»: not made here (a provider account needs its token here)",
+        "Over the 10 000 code point target after the merge: project:repo-a (12345); the next curation trims it.",
+      ]);
+      const uk = await run("uk");
+      expect(uk).toContain("      конфлікт map:project-settings|repo-a: ця інсталяція лишає своє");
+      expect(uk).toContain("  codex «Team»: буде створений тут без входу; прив'язаний до repo-a (активний на джерелі)");
+      expect(uk).toContain("Понад ціль 10 000 символів після злиття: project:repo-a (12345); наступне курування скоротить.");
+    } finally { await stub.stop(true); }
+  });
 
   test("pipes a plain bundle from export into import", async () => {
     const piped: Buffer[] = [];

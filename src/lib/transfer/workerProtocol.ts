@@ -8,7 +8,7 @@ import { projectAliasSnapshot, recordedProjectRemotes } from "@/lib/projects/ali
 import metadata from "../../../package.json";
 import { TransferBundleError } from "./bundle";
 import { exportTransferBundle, TransferSecretError } from "./exporter";
-import { applyTransferImport, previewTransferImport, readTransferReport, recoverTransferImports, TransferImportError } from "./importer";
+import { applyTransferImport, importAccountRows, previewTransferImport, readTransferReport, recoverTransferImports, TransferImportError } from "./importer";
 import { isSectionName, type BundleNotice, type SectionName, type TransferImportRequest } from "./types";
 
 export type TransferWorkerRequest =
@@ -107,8 +107,8 @@ export async function runTransferWorkerRequest(request: TransferWorkerRequest): 
       case "report": {
         const row = readTransferReport(request.importId);
         if (!row) return { ok: true, result: null };
-        const { accountReportRows, accountsReady, importedAccountRows } = await import("./accounts");
-        const accounts = accountReportRows(importedAccountRows().filter(account => account.importId === row.importId));
+        const { accountReportRows, accountsReady } = await import("./accounts");
+        const accounts = accountReportRows(importAccountRows(row));
         return { ok: true, result: { ...row.report, accounts, accountsReady: accountsReady(accounts) } };
       }
     }

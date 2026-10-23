@@ -21,7 +21,8 @@ import type { ScopeFigures } from "./types";
      first in the machine scope's never-curated segment, so the target's next
      curation pass reads them first. */
 
-export type RoleRecordOutcome = { key: string; outcome: "new" | "same" | "conflict"; action?: "stored-as-version" | "merged" };
+/** A conflict carries both rows as they were before this import, for the dry run's diff (§4.5). */
+export type RoleRecordOutcome = { key: string; outcome: "new" | "same" | "conflict"; action?: "stored-as-version" | "merged"; versions?: { source: RoleMemoryRow; target: RoleMemoryRow } };
 
 export interface RoleMemoryPlan {
   outcomes: RoleRecordOutcome[];
@@ -111,7 +112,7 @@ export function planRoleMemory(
     writes.set(`r:${id}`, version);
     writes.set(row.key, { ...held, versions: [...(held.versions ?? []), id] });
     versions[id] = rule.id;
-    outcomes.push({ key: row.key, outcome: "conflict", action: "stored-as-version" });
+    outcomes.push({ key: row.key, outcome: "conflict", action: "stored-as-version", versions: { source: rule, target: held } });
     if (held.state === "active") activeAfter.add(held.id);
   }
 
@@ -140,7 +141,7 @@ export function planRoleMemory(
         history: [...held.history, { revision, ...(held.revisionScope ? { revisionScope: held.revisionScope } : {}), at: context.now, by: "transfer", added, merged: [], archived: [] }],
       });
     }
-    outcomes.push({ key: row.key, outcome: "conflict", action: "merged" });
+    outcomes.push({ key: row.key, outcome: "conflict", action: "merged", versions: { source: scope, target: held } });
   }
   return { outcomes, writes: [...writes].map(([key, value]) => ({ key, value })), versions };
 }

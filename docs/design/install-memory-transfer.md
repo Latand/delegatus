@@ -137,10 +137,12 @@ slice 3 is dropped. What the build settled differently from the text below:
   source and the voice companion store already did), so a setting changed
   during an apply waits and lands on top of the import, or of the original
   after a rollback. A file the dry run found absent is created only if it
-  still is (written aside, then linked into place), so a writer that made it
-  meanwhile keeps it, lock or no lock. A target file that is a link, not a
-  regular file, or over 64 MiB is never read or replaced: its records are
-  skipped as `target-file-unreadable`.
+  still is (written aside under a name of the import, then linked into
+  place), so a writer that made it meanwhile keeps it, lock or no lock; a
+  file system that refuses links refuses the import rather than create the
+  file in place, and recovery removes what a stop left under the staging name. A target file that is a link, not a
+  regular file, or over 64 MiB is never opened for its content (its revision
+  is its kind alone): its records are skipped as `target-file-unreadable`.
 - The checkpoint is a hard link to each replaced file (a copy where links are
   refused), kept beside the file under a name of the import, so putting it
   back is a rename inside one directory that needs no free space and never
@@ -849,7 +851,11 @@ no launch is admitted against a half-imported account set. Order:
    declaration, voice settings and choices, the voice tool registry, call
    journals, engine memory files, new account homes.
 5. Commit every SQLite section and the import ledger row in one transaction
-   on `state.sqlite`. This commit is the point of no return.
+   on `state.sqlite`. This commit is the point of no return. The ledger row
+   is its witness: when the commit call throws, apply reads the row back
+   before it undoes anything, keeps an import whose row is there (a step after
+   COMMIT failed), and leaves the journal open for recovery when the database
+   cannot answer.
 6. Remove the checkpoint and mark the journal done.
 
 Every exit, and what it leaves:
@@ -896,7 +902,7 @@ three parts.
 
 | Per section | Compared |
 | --- | --- |
-| Every section | Records in the bundle = new + same + conflict + skipped, each listed by reason. Any difference fails the section in the report |
+| Every section | Records in the bundle = new + same + conflict + skipped, each skipped record listed by key and reason and each conflict by key and decision, kept in the import record. Any difference fails the section in the report |
 | `memory.role` per scope (after remap) | Source and target: rules, active rules, active code points, history entries. Every source active id is active on the target or kept as a version of a target rule; the target's active count is at least the source's; code points over the target are named for curation |
 | `accounts` | Every source account has a target row, with the same bindings after remap |
 | `memory.engine` | Files in the bundle = written + already present + waiting for a checkout |

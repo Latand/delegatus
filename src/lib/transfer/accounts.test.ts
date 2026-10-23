@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,15 +8,17 @@ import { activeClaudeAccountId, createManagedClaudeAccount, listClaudeAccounts }
 import { activeCodexAccountId, createManagedCodexAccount, listCodexAccounts, setActiveCodexAccount } from "@/lib/accounts/codex";
 import { CODEX_ACCOUNTS_SOURCE, readAccountSource, writeAccountSource } from "@/lib/accounts/accountsStore";
 import { accountProjectBindings, allowedAccountIdsForProject, bindAccountToProject } from "@/lib/accounts/projectBindings";
+import { createManagedCopilotAccount } from "@/lib/accounts/copilot";
+import * as copilotModels from "@/lib/agent/copilotModels";
 import { ensureLegacyCollectionsImported } from "@/lib/state/legacyCollections";
 
 import {
-  accountExporter, accountReportRows, accountsReady, identityHash, importedAccountRows, markImportedAccount, retryImportedAccount, settleImportedAccountSignIn, transferLimitsReader,
+  accountExporter, accountReportRows, accountsReady, copilotCatalogReader, identityHash, importedAccountRows, markImportedAccount, retryImportedAccount, settleImportedAccountSignIn, transferLimitsReader,
   unavailableAccountId, verifyImportedAccount, verifyImportedAccounts, type IdentityReader, type ImportedAccountRow, type LimitsEvidence, type TransferEngine,
 } from "./accounts";
 import { decodeBundle, encodeBundle } from "./bundle";
 import { exportTransferBundle } from "./exporter";
-import { applyTransferImport, previewTransferImport, readImportRecords, recoverTransferImports } from "./importer";
+import { applyTransferImport, previewTransferImport, readImportRecords, readTransferReport, recoverTransferImports } from "./importer";
 import { installVariables, makeInstall, NOW, REPOSITORY, within, type Install } from "./transfer.fixture";
 import type { TransferWorkerResponse } from "./workerProtocol";
 
@@ -455,14 +457,27 @@ describe("a later import naming the same source account", () => {
     const here = await target("later-signed-out");
     const first = await importInto(here, codexBundle("export-signed-out", "team@example.test"));
     const teamHere = first.report.accounts[0]!.targetId!;
+    expect([first.report.accounts.map(entry => entry.state), first.report.accountsReady]).toEqual([["signed_out"], false]);
     const replay = await importInto(here, codexBundle("export-signed-out", "team@example.test"));
     expect(replay.plan.accounts).toEqual([]);
     expect(await within(here, () => importedAccountRows().map(entry => [entry.targetId, entry.state]))).toEqual([[teamHere, "signed_out"]]);
+    // §5.2: the replay made nothing, and its report still names the account that waits for its sign-in, as does `--report` read afresh.
+    expect([replay.report.accounts.map(entry => [entry.targetId, entry.state]), replay.report.accountsReady]).toEqual([[[teamHere, "signed_out"]], false]);
+    const stored = await runWorker(here, { operation: "report" });
+    expect((stored.response as { result: { importId: string; accounts: { targetId: string; state: string }[]; accountsReady: boolean } }).result).toMatchObject({
+      importId: replay.report.importId, accounts: [{ targetId: teamHere, state: "signed_out" }], accountsReady: false,
+    });
+    expect(await within(here, () => listCodexAccounts().length)).toBe(2);
     // Signed out, the account here holds no login to compare: a new export gets its own.
     const later = await importInto(here, codexBundle("export-signed-out-2", "team@example.test"));
     expect(later.plan.accounts[0]?.action).toBe("create");
     expect(later.report.accounts[0]?.targetId).not.toBe(teamHere);
     expect(later.report.accountsReady).toBe(false);
+    // Each import's report keeps its own account, whichever import wrote the row last.
+    expect(await within(here, () => readImportRecords().map(record => record.accountKeys))).toEqual([
+      [`codex:${sourceIds.team}:${teamHere}`], [`codex:${sourceIds.team}:${teamHere}`], [`codex:${sourceIds.team}:${later.report.accounts[0]!.targetId}`],
+    ]);
+    expect(await within(here, () => readTransferReport(first.report.importId)?.importId)).toBe(first.report.importId);
   }, 120_000);
 });
 
@@ -500,6 +515,38 @@ describe("the transfer-verify read through the production adapter", () => {
     expect([row.state, selected]).toEqual(["usable", ["work-here"]]);
   }, 60_000);
 
+  /** A Codex account here whose registry already holds a live reading taken a second before this check. */
+  async function verifyCodexWith(observed: Record<string, unknown>): Promise<{ row: ImportedAccountRow; selected: string[]; recorded: number }> {
+    installs += 1;
+    const here = await target(`adapter-codex-${installs}`);
+    const account = { id: "team-here", label: "Team", kind: "managed" as const, home: path.join(here.root, "team-home"), signedIn: true };
+    const retained = {
+      engine: "codex", accountId: "team-here", authenticated: true, authCheckedAt: new Date(CHECK_AT.getTime() - 1_000).toISOString(),
+      limits: { session: window, weekly: window, plan: "pro", capturedAt: Math.floor(CHECK_AT.getTime() / 1000) - 1 },
+      provenance: { source: "live", reason: null, staleSince: null }, observedAt: new Date(CHECK_AT.getTime() - 1_000).toISOString(), bootId: "controller", resetCredits: null,
+    };
+    let recorded = 0;
+    const probe = { list: () => [account], active: () => "default", probe: async () => observed } as never;
+    const registry = { recordQuotaObservation: () => { recorded += 1; }, quotaObservations: () => [retained] } as never;
+    const selected: string[] = [];
+    const row = await within(here, () => verifyImportedAccount({ ...ROW, engine: "codex", sourceId: "team", targetId: "team-here", label: "Team" }, {
+      list: async () => [account], identity, now: checkClock, readLimits: transferLimitsReader({ probe, registry, now: CHECK_AT.getTime() }),
+      select: async (_engine, id) => { selected.push(id); },
+    }));
+    return { row, selected, recorded };
+  }
+
+  test("a Codex probe answered from an hour-old cache stays read_failed though the registry keeps a newer live reading", async () => {
+    const { row, selected } = await verifyCodexWith(observation({ engine: "codex", accountId: "team-here",
+      provenance: { source: "cache", reason: "quota-probe-failed", staleSince: "2026-10-23T11:00:00.000Z" }, observedAt: CHECK_AT.getTime() - 3_600_000 }));
+    expect([row.state, row.detail, selected]).toEqual(["read_failed", "limits-not-live", []]);
+  }, 60_000);
+
+  test("a Codex probe that is live and fresh passes over a registry that already holds a reading", async () => {
+    const { row, selected, recorded } = await verifyCodexWith(observation({ engine: "codex", accountId: "team-here" }));
+    expect([row.state, selected, recorded]).toEqual(["usable", ["team-here"], 1]);
+  }, 60_000);
+
   for (const [name, observed, detail] of [
     ["a read the provider refused, answered from cache", observation({ provenance: { source: "cache", reason: "quota-probe-failed", staleSince: "2026-10-23T11:00:00.000Z" }, observedAt: CHECK_AT.getTime() - 3_600_000 }), "limits-not-live"],
     ["a live read that names no plan", observation({ limits: { session: window, weekly: window, plan: null, capturedAt: null } }), "no-plan"],
@@ -510,4 +557,42 @@ describe("the transfer-verify read through the production adapter", () => {
       expect([row.state, row.detail, selected]).toEqual(["read_failed", detail, []]);
     }, 60_000);
   }
+});
+
+describe("a Copilot account's check", () => {
+  /** A Copilot account made here, signed in by its config; its identity is not checked (none travelled). */
+  async function copilotHere(name: string): Promise<{ here: Install; row: ImportedAccountRow; account: { id: string; label: string; kind: "managed"; home: string; signedIn: boolean } }> {
+    const here = await target(name);
+    const made = await within(here, () => createManagedCopilotAccount("Pilot"));
+    const account = { id: made.id, label: "Pilot", kind: "managed" as const, home: made.home, signedIn: true };
+    const row: ImportedAccountRow = {
+      kind: "account", importId: "import-copilot", exportId: "export-copilot", engine: "copilot", sourceId: "pilot", targetId: made.id, label: "Pilot",
+      sourceKind: "managed", activeOnSource: true, identity: null, bindings: [], state: "signed_out",
+    };
+    return { here, row, account };
+  }
+
+  test("is usable once its config shows a signed-in user and its model catalog reads, and becomes active", async () => {
+    const { here, row, account } = await copilotHere("copilot-catalog");
+    expect(await within(here, () => copilotCatalogReader(account.id))).toMatchObject({ ok: true });
+    const selected: string[] = [];
+    const checked = await within(here, () => verifyImportedAccount(row, { list: async () => [account], now: checkClock, select: async (_engine, id) => { selected.push(id); } }));
+    expect([checked.state, selected]).toEqual(["usable", [account.id]]);
+  }, 60_000);
+
+  test("a model catalog that cannot be read keeps the row read_failed with a redacted cause, and selects nothing", async () => {
+    const { here, row, account } = await copilotHere("copilot-catalog-fails");
+    const catalog = spyOn(copilotModels, "copilotModelCatalog").mockImplementation(() => {
+      throw Object.assign(new Error(`EIO: i/o error, open '${here.home}/catalog' token=abc`), { code: "EIO" });
+    });
+    const selected: string[] = [];
+    try {
+      const checked = await within(here, () => verifyImportedAccount(row, { list: async () => [account], now: checkClock, select: async (_engine, id) => { selected.push(id); } }));
+      expect([checked.state, checked.detail, selected]).toEqual(["read_failed", "catalog-read-failed: EIO", []]);
+      expect(catalog).toHaveBeenCalledTimes(1);
+    } finally { catalog.mockRestore(); }
+    // An injected reader that answers nothing usable holds the row too.
+    const empty = await within(here, () => verifyImportedAccount(row, { list: async () => [account], now: checkClock, readCopilotCatalog: async () => ({ ok: true as const, models: 0 }), select: async (_engine, id) => { selected.push(id); } }));
+    expect([empty.state, empty.detail, selected]).toEqual(["read_failed", "no-models", []]);
+  }, 60_000);
 });

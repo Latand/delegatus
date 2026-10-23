@@ -104,6 +104,37 @@ export interface DecodedBundle {
 
 export type RecordOutcome = "new" | "same" | "conflict" | "skipped";
 
+export type ConflictAction = "kept-target" | "took-source" | "stored-as-version" | "merged";
+
+/** One side of a conflict, as the operator's dry run shows it (§4.5). */
+export interface ConflictVersion {
+  /** `rule`, `scope`, or a setting's own kind (`object`, `string`, …). */
+  kind: string;
+  /** A rule's origin (`stage`, `seat`, `import`, `operator`). */
+  origin?: string;
+  /** A rule's state (`active`, `archived`, `merged`). */
+  state?: string;
+  /** When this version last changed, where the record says. */
+  at: string | null;
+  /** A rule's text, or a text file's content. */
+  text?: string;
+  /** A setting's value. */
+  value?: unknown;
+}
+
+/** A record in conflict and what apply does with it. The two versions travel
+    in the dry run only, which is the operator's own; the import record keeps
+    the key and the action. */
+export interface ConflictEntry {
+  key: string;
+  action: ConflictAction;
+  source?: ConflictVersion;
+  target?: ConflictVersion;
+}
+
+/** A record apply leaves out, and why. */
+export interface SkippedEntry { key: string; reason: string }
+
 export interface SectionPlan {
   name: string;
   records: number;
@@ -113,8 +144,10 @@ export interface SectionPlan {
   skipped: number;
   /** Count of skipped records per reason. */
   skippedReasons: Record<string, number>;
+  /** Each skipped record by id, with its reason. */
+  skippedRecords: SkippedEntry[];
   /** The keys in conflict and what apply will do with each. */
-  conflicts: { key: string; action: "kept-target" | "took-source" | "stored-as-version" | "merged" }[];
+  conflicts: ConflictEntry[];
   /** Records kept in the import record until their target connects (relay, Telegram, voice tools). */
   pending: number;
   replace: boolean;
@@ -208,7 +241,14 @@ export interface SectionReport {
   conflict: number;
   skipped: number;
   pending: number;
-  /** Records = new + same + conflict + skipped; false fails the section in the report. */
+  skippedReasons: Record<string, number>;
+  /** Each skipped record and its reason, and each conflict and what apply did
+      with it, kept with the import record: `--report` names them after the
+      staged bundle is gone. */
+  skippedRecords: SkippedEntry[];
+  conflicts: { key: string; action: ConflictAction }[];
+  /** Records = new + same + conflict + skipped, and the skipped and conflict
+      counts equal the records listed; false fails the section in the report. */
   balanced: boolean;
 }
 

@@ -16,16 +16,19 @@ import { assertStateStartupMutation } from "@/lib/stateOwnership";
 
 import {
   accountCommitRows, accountReportRows, accountsReady, finishAccountCreation, importedAccountRows, initializeImportedAccountRows, planAccounts, releaseReservation,
-  reserveAccounts, TRANSFER_ACCOUNTS_COLLECTION, transferAccountKey, validAccountRecord, type AccountTargetDeps, type TransferEngine,
+  reserveAccounts, TRANSFER_ACCOUNTS_COLLECTION, transferAccountKey, validAccountRecord, type AccountTargetDeps, type ImportedAccountRow, type TransferEngine,
 } from "./accounts";
 import { decodeBundle, splitRecordKey } from "./bundle";
 import { remapText, resolveAliasChain } from "./projectKeys";
 import { planRoleMemory, scopeFigures, validRoleRecord } from "./roleMemory";
 import { partById, PARTS, type MapPart, type Part, type RowsPart } from "./sections";
-import { createFileExclusive, fileRevision, legacyStoreImported, readTargetRows, readTargetText, targetFileKind, targetRoot, writeFileAtomic, type StoredRow } from "./stores";
+import {
+  createFileExclusive, fileRevision, legacyStoreImported, readRegularFile, readTargetRows, readTargetText, targetFileKind, targetRoot, targetRowCommitted, writeFileAtomic,
+  type StoredRow,
+} from "./stores";
 import {
   isSectionName,
-  type AccountPlan, type BundleProject, type DecodedBundle, type ProjectPlan, type RedoItem, type ScopeFigures,
+  type AccountPlan, type BundleProject, type ConflictAction, type ConflictVersion, type DecodedBundle, type ProjectPlan, type RedoItem, type ScopeFigures,
   type SectionPlan, type SectionReport, type TransferImportRequest, type TransferPlan, type TransferReport,
 } from "./types";
 
@@ -44,13 +47,13 @@ export class TransferImportError extends Error {
   }
 }
 
-export type TransferFault = "file-step" | "disk-full" | "sqlite" | "hang" | "die-after-reservations" | "die-after-checkpoint" | "die-after-files" | "die-after-commit" | "die-after-accounts";
+export type TransferFault = "file-step" | "disk-full" | "sqlite" | "hang" | "die-after-reservations" | "die-after-checkpoint" | "die-before-link" | "die-after-files" | "die-after-commit" | "die-after-accounts";
 
 /** Fault injection for the exit tests; read only under `bun test`. */
 function injectedFault(): TransferFault | null {
   if (process.env.NODE_ENV !== "test") return null;
   const value = process.env.LLV_TRANSFER_TEST_FAULT ?? "";
-  return (["file-step", "disk-full", "sqlite", "hang", "die-after-reservations", "die-after-checkpoint", "die-after-files", "die-after-commit", "die-after-accounts"] as const).find(fault => fault === value) ?? null;
+  return (["file-step", "disk-full", "sqlite", "hang", "die-after-reservations", "die-after-checkpoint", "die-before-link", "die-after-files", "die-after-commit", "die-after-accounts"] as const).find(fault => fault === value) ?? null;
 }
 
 /** `disk-full`: once the first file is written, every write that allocates
@@ -60,9 +63,9 @@ let diskFull = false;
 function allocate(): void {
   if (diskFull) throw Object.assign(new Error("ENOSPC: no space left on device (injected)"), { code: "ENOSPC" });
 }
-function writeAtomic(target: string, text: string): void {
+function writeAtomic(target: string, text: string, staging?: string): void {
   allocate();
-  writeFileAtomic(target, text);
+  writeFileAtomic(target, text, staging);
 }
 
 /** `LLV_TRANSFER_TEST_SPLIT_ROOTS=1`: the state and config roots behave as two
@@ -89,7 +92,7 @@ function moveFile(from: string, to: string): void {
 }
 
 /** `LLV_TRANSFER_TEST_READ_FAULT`: the recovery metadata read fails as an I/O error does. */
-function readFault(what: "journal" | "imports"): void {
+function readFault(what: "journal" | "imports" | "ledger"): void {
   if (process.env.NODE_ENV === "test" && process.env.LLV_TRANSFER_TEST_READ_FAULT === what) {
     throw Object.assign(new Error("EIO: i/o error (injected)"), { code: "EIO" });
   }
@@ -128,6 +131,10 @@ export interface LedgerRow {
   /** The source's history of every scope merged into one this install already had. */
   scopeHistories: Record<string, unknown[]>;
   accounts: AccountPlan[];
+  /** The checklist row of every account the bundle names (`transferAccountKey`),
+      the ones an earlier import of this bundle already brought included: the
+      report reads these, whichever import last wrote the row. */
+  accountKeys?: string[];
   /** Work after the commit that recovery finishes when a stop cut it short:
       the lesson known values the publication gate reads, and the accounts
       whose ids the commit reserved and bound. */
@@ -152,11 +159,19 @@ export function readImportRecords(): LedgerRow[] {
   finally { held.close(); }
 }
 
-function readImportRecord(importId: string): LedgerRow | null {
-  const held = ledgerCollection(false);
-  if (!held) return null;
-  try { return held.get(`i:${importId}`); }
-  finally { held.close(); }
+/** Whether an import's commit landed: its ledger row is the commit's own
+    witness. A database that cannot answer throws, so no caller undoes a
+    commit on a guess. */
+function importCommitted(importId: string): boolean {
+  readFault("ledger");
+  return targetRowCommitted(LEDGER_COLLECTION, `i:${importId}`);
+}
+
+/** The checklist rows an import's report shows. */
+export function importAccountRows(ledger: Pick<LedgerRow, "importId" | "accountKeys">, rows: readonly ImportedAccountRow[] = importedAccountRows()): ImportedAccountRow[] {
+  if (!ledger.accountKeys) return rows.filter(row => row.importId === ledger.importId);
+  const keys = new Set(ledger.accountKeys);
+  return rows.filter(row => keys.has(transferAccountKey(row)));
 }
 
 /* ── Staging ─────────────────────────────────────────────────────────── */
@@ -293,6 +308,8 @@ interface PlannedWrites {
   accountRecords: PlanRow[];
   /** Scopes whose record an earlier import of this bundle applied (§4.8): checked then. */
   scopesImportedBefore: Set<string>;
+  /** Checklist rows of accounts an earlier import of this bundle brought: still this import's to report. */
+  replayedAccountKeys: Set<string>;
 }
 
 interface Built {
@@ -302,7 +319,7 @@ interface Built {
 }
 
 function emptySectionPlan(name: string, records: number, replace: boolean): SectionPlan {
-  return { name, records, new: 0, same: 0, conflict: 0, skipped: 0, skippedReasons: {}, conflicts: [], pending: 0, replace };
+  return { name, records, new: 0, same: 0, conflict: 0, skipped: 0, skippedReasons: {}, skippedRecords: [], conflicts: [], pending: 0, replace };
 }
 
 /** The bundle records each section plan does not apply, by record id
@@ -322,11 +339,47 @@ function unapplied(plan: SectionPlan, rid: string): void {
 /** A bundle record's id, before any project key is remapped. */
 const recordId = (record: { s: string; k: string }) => `${record.s}|${record.k}`;
 
-function count(plan: SectionPlan, outcome: "new" | "same" | "conflict" | "skipped", key: string, detail?: string, action?: SectionPlan["conflicts"][number]["action"]) {
+const AT_FIELDS = ["changedAt", "updatedAt", "lastAt", "savedAt", "at", "createdAt"] as const;
+
+/** When a value says it last changed: its own time field, or its document's. */
+function valueTime(value: unknown): string | null {
+  for (const holder of [value, isRecordObject(value) ? value.value : undefined, isRecordObject(value) ? value.v : undefined]) {
+    if (!isRecordObject(holder)) continue;
+    for (const field of AT_FIELDS) if (typeof holder[field] === "string") return holder[field] as string;
+  }
+  return null;
+}
+
+/** One side of a conflict as the dry run shows it: kind and time, and the text of a rule. */
+function conflictVersion(value: unknown): ConflictVersion {
+  if (isRecordObject(value) && value.kind === "rule" && typeof value.rule === "string") {
+    const origin = isRecordObject(value.source) && typeof value.source.origin === "string" ? value.source.origin : undefined;
+    return { kind: "rule", ...(origin ? { origin } : {}), ...(typeof value.state === "string" ? { state: value.state } : {}), at: typeof value.changedAt === "string" ? value.changedAt : null, text: value.rule };
+  }
+  if (isRecordObject(value) && value.kind === "scope" && Array.isArray(value.history)) {
+    const last = value.history.at(-1);
+    return { kind: "scope", at: isRecordObject(last) && typeof last.at === "string" ? last.at : null, value: { active: Array.isArray(value.active) ? value.active.length : 0, history: value.history.length } };
+  }
+  if (typeof value === "string") {
+    /* A text file that holds a JSON document says when it changed. */
+    let parsed: unknown = null;
+    try { parsed = JSON.parse(value); } catch { parsed = null; }
+    return { kind: "text", at: valueTime(parsed), text: value };
+  }
+  return { kind: Array.isArray(value) ? "list" : isRecordObject(value) && typeof value.kind === "string" ? value.kind : value === null ? "null" : typeof value, at: valueTime(value), value };
+}
+
+function count(plan: SectionPlan, outcome: "new" | "same" | "conflict" | "skipped", key: string, detail?: string, action?: ConflictAction, versions?: { source: unknown; target: unknown }) {
   plan[outcome] += 1;
-  if (outcome === "skipped") unapplied(plan, key);
-  if (outcome === "skipped") plan.skippedReasons[detail ?? "skipped"] = (plan.skippedReasons[detail ?? "skipped"] ?? 0) + 1;
-  if (outcome === "conflict") plan.conflicts.push({ key, action: action ?? "kept-target" });
+  if (outcome === "skipped") {
+    const reason = detail ?? "skipped";
+    unapplied(plan, key);
+    plan.skippedReasons[reason] = (plan.skippedReasons[reason] ?? 0) + 1;
+    plan.skippedRecords.push({ key, reason });
+  }
+  if (outcome === "conflict") {
+    plan.conflicts.push({ key, action: action ?? "kept-target", ...(versions ? { source: conflictVersion(versions.source), target: conflictVersion(versions.target) } : {}) });
+  }
 }
 
 /** "absent" for a collection with no rows and no write yet, so one an owner
@@ -353,7 +406,7 @@ export function buildPlan(decoded: DecodedBundle, request: { mappings?: Record<s
   const projectTarget = new Map(projectPlans.map(project => [project.key, project.target ?? project.key] as const));
   const remap = (text: string) => remapText(text, key => projectTarget.get(key) ?? key);
   const revisions: Record<string, string> = {};
-  const writes: PlannedWrites = { rows: new Map(), files: new Map(), pending: [], versions: {}, aliases: [], roleRowsAfter: [], sourceActive: new Map(), keptAsVersion: new Set(), scopeHistories: {}, accountRecords: [], scopesImportedBefore: new Set() };
+  const writes: PlannedWrites = { rows: new Map(), files: new Map(), pending: [], versions: {}, aliases: [], roleRowsAfter: [], sourceActive: new Map(), keptAsVersion: new Set(), scopeHistories: {}, accountRecords: [], scopesImportedBefore: new Set(), replayedAccountKeys: new Set() };
   const sectionPlans = new Map<string, SectionPlan>();
   const unknownSections = decoded.header.sections.filter(section => !isSectionName(section.name) || section.schema !== 1).map(section => section.name);
   for (const section of decoded.header.sections) sectionPlans.set(section.name, emptySectionPlan(section.name, section.records, replace.has(section.name as never)));
@@ -376,6 +429,11 @@ export function buildPlan(decoded: DecodedBundle, request: { mappings?: Record<s
     const row: PlanRow = { key: remap(key), value: JSON.parse(remap(JSON.stringify(record.v))) as unknown, rid };
     if (importedBefore(rid)) {
       if (part === "rows:role_memory" && row.key.startsWith("s:") && isRecordObject(row.value) && typeof row.value.scope === "string") writes.scopesImportedBefore.add(row.value.scope);
+      /* An account brought before stays on this import's checklist: the row the latest earlier import planned for it. */
+      if (record.s === "accounts" && part === "accounts" && key.startsWith("account:")) {
+        const planned = [...earlier].reverse().map(previous => previous.accounts?.find(account => `account:${account.engine}:${account.sourceId}` === key)).find(Boolean);
+        if (planned) writes.replayedAccountKeys.add(transferAccountKey({ engine: planned.engine, sourceId: planned.sourceId, targetId: planned.action === "skip" ? null : planned.plannedId }));
+      }
       count(sectionPlan, "skipped", rid, "already-imported");
       continue;
     }
@@ -459,13 +517,13 @@ export function buildPlan(decoded: DecodedBundle, request: { mappings?: Record<s
               file.changes!.push({ kind: "set", path: [...part.path, row.key, field], ...(was === undefined ? {} : { before: was }), after: value });
             }
             if (!added && !differing) { count(plan, "same", `${part.id}|${row.key}`); continue; }
-            count(plan, "conflict", `${part.id}|${row.key}`, undefined, differing && take ? "took-source" : added ? "merged" : "kept-target");
+            count(plan, "conflict", `${part.id}|${row.key}`, undefined, differing && take ? "took-source" : added ? "merged" : "kept-target", { source: row.value, target: held });
             if (differing && !take) unapplied(plan, row.rid);
             if (added || take) { container[row.key] = next; file.changed = true; }
             continue;
           }
           const outcome = planValue(held, row.value, part.merge, take);
-          count(plan, outcome.outcome, `${part.id}|${row.key}`, undefined, outcome.action);
+          count(plan, outcome.outcome, `${part.id}|${row.key}`, undefined, outcome.action, { source: row.value, target: held });
           if (outcome.action === "kept-target") unapplied(plan, row.rid);
           if (outcome.write) {
             container[row.key] = row.value;
@@ -499,7 +557,7 @@ export function buildPlan(decoded: DecodedBundle, request: { mappings?: Record<s
           const file = fileFor(part.root, relative, "text");
           if (file.unreadable) { count(plan, "skipped", row.rid, "target-file-unreadable"); continue; }
           const outcome = planValue(file.object === null ? undefined : file.object, row.value, part.merge, take);
-          count(plan, outcome.outcome, `${part.id}|${row.key}`, undefined, outcome.action);
+          count(plan, outcome.outcome, `${part.id}|${row.key}`, undefined, outcome.action, { source: row.value, target: file.object });
           if (outcome.action === "kept-target") unapplied(plan, row.rid);
           if (outcome.write) { file.object = row.value; file.changed = true; }
         }
@@ -599,7 +657,7 @@ function planRows(
   });
   if (part.merge === "role-memory") {
     const role = planRoleMemory(valid, held, { now });
-    for (const outcome of role.outcomes) count(plan, outcome.outcome, `${part.id}|${outcome.key}`, undefined, outcome.action);
+    for (const outcome of role.outcomes) count(plan, outcome.outcome, `${part.id}|${outcome.key}`, undefined, outcome.action, outcome.versions);
     for (const row of valid) {
       if (!row.key.startsWith("s:")) continue;
       const scope = row.value as { scope: string; active: string[]; history: unknown[] };
@@ -629,12 +687,12 @@ function planRows(
       if (sameValue(currentValue, value)) { count(plan, "same", row.key); continue; }
       const later = typeof value.lastAt === "string" && (typeof currentValue.lastAt !== "string" || value.lastAt > currentValue.lastAt);
       if (later) out.records.push({ key: row.key, value: { ...currentValue, lastAt: value.lastAt } });
-      count(plan, "conflict", `${part.id}|${row.key}`, undefined, later ? "merged" : "kept-target");
+      count(plan, "conflict", `${part.id}|${row.key}`, undefined, later ? "merged" : "kept-target", { source: value, target: currentValue });
       if (!later) unapplied(plan, row.rid);
       continue;
     }
     const outcome = planValue(currentValue, value, part.merge === "absent-only" ? "absent-only" : "default", take);
-    count(plan, outcome.outcome, `${part.id}|${row.key}`, undefined, outcome.action);
+    count(plan, outcome.outcome, `${part.id}|${row.key}`, undefined, outcome.action, { source: value, target: currentValue });
     if (outcome.action === "kept-target") unapplied(plan, row.rid);
     if (outcome.write) out.records.push({ key: row.key, value });
   }
@@ -721,9 +779,14 @@ interface Journal {
 
 const sha256Of = (bytes: string | Buffer) => crypto.createHash("sha256").update(bytes).digest("hex");
 
+/** A file's hash, null when absent; a file the import never reads (a link, a
+    FIFO, past the bound) answers its kind without being opened, which matches
+    no hash the journal holds. */
 function currentHash(file: string): string | null {
-  try { return sha256Of(fs.readFileSync(file)); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
+  const read = readRegularFile(file);
+  if (read.kind === "absent") return null;
+  if (read.kind === "unsupported") return `unsupported:${read.reason}`;
+  return sha256Of(read.bytes);
 }
 
 function writeJournal(directory: string, journal: Journal): void {
@@ -768,6 +831,11 @@ function readJournal(directory: string): Journal | null {
 
 /** Where an import keeps the original of a file it replaces: beside it. */
 const backupRelative = (relative: string, importId: string) => path.join(path.dirname(relative), `.${path.basename(relative)}.${importId}.transfer-original`);
+/** Where an import writes a file's new bytes before they take its name: beside
+    it, under a name of the import, so what a stop left there is removed when
+    the journal settles. */
+const stagingPath = (entry: Pick<JournalFile, "root" | "relative">, importId: string) =>
+  path.join(targetRoot(entry.root), path.dirname(entry.relative), `.${path.basename(entry.relative)}.${importId}.transfer-new`);
 
 /** Runs `operation` holding the shared write lock of every file the import
     touches, taken in path order: a store writer that takes its file's lock
@@ -797,7 +865,9 @@ function setAt(object: Record<string, unknown>, keys: readonly string[], value: 
     what was there before, and everything else is the later writer's and stays. */
 function undoChanges(file: string, changes: readonly FileChange[]): boolean {
   let parsed: unknown;
-  try { parsed = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return false; }
+  const read = readRegularFile(file);
+  if (read.kind !== "bytes") return false;
+  try { parsed = JSON.parse(read.bytes.toString("utf8")); } catch { return false; }
   let changed = false;
   for (const change of [...changes].reverse()) {
     if (change.kind === "append") {
@@ -855,8 +925,11 @@ function restoreFiles(directory: string, journal: Journal, wrote?: ReadonlySet<n
     `writing`, and the next recovery finds nothing left to restore. */
 function settleJournal(directory: string, journal: Journal, state: "done" | "rolled-back"): void {
   try { writeJournal(directory, { ...journal, state }); } catch { /* the next recovery settles it */ }
-  /* Originals a rollback put back are gone already; the rest are this import's own names. */
-  for (const entry of journal.files) if (entry.backup) fs.rmSync(path.join(targetRoot(entry.root), entry.backup.relative), { force: true });
+  /* Originals a rollback put back are gone already; the rest are this import's own names, as is a staged write a stop left. */
+  for (const entry of journal.files) {
+    if (entry.backup) fs.rmSync(path.join(targetRoot(entry.root), entry.backup.relative), { force: true });
+    fs.rmSync(stagingPath(entry, journal.importId), { force: true });
+  }
   fs.rmSync(path.join(directory, "checkpoint"), { recursive: true, force: true });
 }
 
@@ -965,9 +1038,15 @@ export async function applyTransferImport(request: TransferImportRequest, option
   writeJournal(directory, journal);
   if (fault === "hang") hangForTest(directory);
 
+  /* §5.1: each record not plainly applied stays named with its reason or its
+     decision, without the versions' content, which the dry run alone shows. */
   const sections: SectionReport[] = built.plan.sections.map(section => ({
     name: section.name, records: section.records, new: section.new, same: section.same, conflict: section.conflict, skipped: section.skipped, pending: section.pending,
-    balanced: section.new + section.same + section.conflict + section.skipped === section.records,
+    skippedReasons: { ...section.skippedReasons },
+    skippedRecords: section.skippedRecords.map(entry => ({ ...entry })),
+    conflicts: section.conflicts.map(({ key, action }) => ({ key, action })),
+    balanced: section.new + section.same + section.conflict + section.skipped === section.records
+      && section.skippedRecords.length === section.skipped && section.conflicts.length === section.conflict,
   }));
   const targetScopes = scopeFigures(built.writes.roleRowsAfter);
   const scopes = Object.entries(built.sourceScopes).sort(([a], [b]) => a.localeCompare(b)).map(([scope, source]) => {
@@ -997,6 +1076,9 @@ export async function applyTransferImport(request: TransferImportRequest, option
 
   let committed = false;
   let restoreFailed = false;
+  /* The commit threw and whether it landed could not be read: nothing is
+     undone here, and recovery decides once the database answers. */
+  let commitUnknown = false;
   let committedBindings: { engine: "claude" | "codex"; accountId: string; project: string }[] = [];
   const wrote = new Set<number>();
   diskFull = false;
@@ -1023,6 +1105,10 @@ export async function applyTransferImport(request: TransferImportRequest, option
       committedBindings = bindings;
       built.writes.rows.set(TRANSFER_ACCOUNTS_COLLECTION, { part: null, records: rows.map(row => ({ key: transferAccountKey(row), value: row })) });
     }
+    ledger.accountKeys = [...new Set([
+      ...built.plan.accounts.map(account => transferAccountKey({ engine: account.engine, sourceId: account.sourceId, targetId: account.action === "skip" ? null : account.plannedId })),
+      ...built.writes.replayedAccountKeys,
+    ])].sort();
 
     const files = [...built.writes.files.values()];
     withFileLocks(files.map(file => path.join(targetRoot(file.root), file.relative)), () => {
@@ -1063,7 +1149,10 @@ export async function applyTransferImport(request: TransferImportRequest, option
           if (journal.files[index]!.before === null) {
             /* A file the dry run found absent is created only if it still is:
                a writer that made it since, lock or no lock, keeps it. */
-            try { allocate(); createFileExclusive(target, file.text); }
+            try {
+              allocate();
+              createFileExclusive(target, file.text, { staging: stagingPath(file, importId), beforeLink: () => { if (fault === "die-before-link") dieForTest(); } });
+            }
             catch (error) {
               if ((error as NodeJS.ErrnoException).code !== "EEXIST") { wrote.add(index); throw error; }
               fs.rmSync(writingMarker(directory, index), { force: true });
@@ -1072,7 +1161,7 @@ export async function applyTransferImport(request: TransferImportRequest, option
             wrote.add(index);
           } else {
             wrote.add(index);
-            writeAtomic(target, file.text);
+            writeAtomic(target, file.text, stagingPath(file, importId));
           }
           if (index === 0 && fault === "file-step") throw new Error("injected file step failure");
           if (index === 0 && fault === "disk-full") diskFull = true;
@@ -1080,13 +1169,25 @@ export async function applyTransferImport(request: TransferImportRequest, option
         }
         if (fault === "die-after-files") dieForTest();
         report.applyMs = Math.round(performance.now() - started);
-        writeCollections(built.writes, ledger, built.plan.revisions, fault);
+        try { writeCollections(built.writes, ledger, built.plan.revisions, fault); }
+        catch (error) {
+          /* A step after COMMIT can throw too (securing the database files):
+             the ledger row, committed with every other row, decides whether
+             this import stands, never the throw. */
+          let landed: boolean;
+          try { landed = importCommitted(importId); }
+          catch (readError) {
+            commitUnknown = true;
+            throw new Error(`the import's commit failed and whether it landed cannot be read yet (${readError instanceof Error ? readError.message : String(readError)}); recovery settles it`, { cause: error });
+          }
+          if (!landed) throw error;
+        }
         committed = true;
       } catch (error) {
         /* Undone under the same locks, before any waiting writer runs. An
            undo that fails leaves the journal open: recovery finishes it, and
            the Viewer admits no work until it has. */
-        if (!committed) {
+        if (!committed && !commitUnknown) {
           try { restoreFiles(directory, journal, wrote); }
           catch (restoreError) { restoreFailed = true; throw new Error(`the import failed and could not be undone yet: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`, { cause: error }); }
         }
@@ -1094,7 +1195,7 @@ export async function applyTransferImport(request: TransferImportRequest, option
       }
     });
   } catch (error) {
-    if (!committed && !restoreFailed) {
+    if (!committed && !restoreFailed && !commitUnknown) {
       for (const reservation of journal.reservations) {
         try { await releaseReservation(reservation.engine, reservation.id, options.accounts); } catch { /* kept: an empty home blocks only its own id */ }
       }
@@ -1117,7 +1218,7 @@ export async function applyTransferImport(request: TransferImportRequest, option
   await options.afterCommit?.(ledger);
   /* The import record holds the time up to its own commit; the caller gets
      the whole apply, the commit and the cleanup included. */
-  const accounts = accountReportRows(importedAccountRows().filter(row => row.importId === importId));
+  const accounts = accountReportRows(importAccountRows(ledger));
   return { report: { ...report, applyMs: Math.round(performance.now() - started), accounts, accountsReady: accountsReady(accounts) }, ledger };
 }
 
@@ -1172,7 +1273,12 @@ export async function recoverTransferImports(deps?: AccountTargetDeps): Promise<
     const directory = path.join(root, name);
     const journal = readJournal(directory);
     if (!journal || journal.state !== "writing") continue;
-    if (readImportRecord(journal.importId)) {
+    let committed: boolean;
+    try { committed = importCommitted(journal.importId); }
+    catch (error) {
+      throw new TransferImportError("recovery_unreadable", `whether import ${journal.importId} committed cannot be read (${(error as NodeJS.ErrnoException).code ?? "error"}); it is kept for the next attempt`);
+    }
+    if (committed) {
       settleJournal(directory, journal, "done");
       outcomes.push({ importId: journal.importId, outcome: "finished" });
     } else {

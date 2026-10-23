@@ -394,28 +394,51 @@ export interface VerifyDeps {
   identity?: IdentityReader;
   /** The live limit read; production is {@link transferLimitsReader}. */
   readLimits?: (engine: "claude" | "codex", accountId: string) => Promise<LimitsRead>;
+  /** The Copilot model catalog read; production is {@link copilotCatalogReader}. */
+  readCopilotCatalog?: (accountId: string) => Promise<CatalogRead>;
   select?: (engine: TransferEngine, accountId: string) => Promise<void>;
   now?: () => Date;
+}
+
+export type CatalogRead = { ok: true; models: number } | { ok: false; detail: string };
+
+/** Copilot has no live limit read (§5.2): its row is usable once its config
+    shows a signed-in user and its model catalog reads, through the same
+    reader `GET /api/accounts/copilot/models` answers from. */
+export async function copilotCatalogReader(accountId: string): Promise<CatalogRead> {
+  try {
+    const { listCopilotAccounts } = await import("@/lib/accounts/copilot");
+    const { copilotModelCatalog } = await import("@/lib/agent/copilotModels");
+    const account = listCopilotAccounts().find(candidate => candidate.id === accountId);
+    if (!account) return { ok: false, detail: "unknown account" };
+    return { ok: true, models: copilotModelCatalog(account.id, account.sessionStateDir).models.length };
+  } catch (error) {
+    /* The error's code only: its message can carry a path or a token. */
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    return { ok: false, detail: typeof code === "string" && /^[A-Z0-9_]{1,32}$/.test(code) ? `catalog-read-failed: ${code}` : "catalog-read-failed" };
+  }
 }
 
 /** How old the observation a verification read may be: it is taken by that read. */
 export const VERIFY_OBSERVATION_MAX_AGE_MS = 2 * 60_000;
 
 /** The production read: `refreshAccountLimits` with phase `transfer-verify`,
-    its observation handed on whole, so a reading the provider did not give
+    judged on what this probe itself returned. The registry may keep a newer
+    reading than an older one this probe answered with, and that retained
+    reading is no answer to this read; so a reading the provider did not give
     now (a cached or carried one, one without a plan) cannot pass for one. */
 export function transferLimitsReader(liveDeps: import("@/lib/accounts/liveLimits").LiveLimitsDeps = {}) {
   return async (engine: "claude" | "codex", accountId: string): Promise<LimitsRead> => {
     const { refreshAccountLimits } = await import("@/lib/accounts/liveLimits");
     const result = await refreshAccountLimits(engine, accountId, { ...liveDeps, phase: "transfer-verify" });
     if (result.kind !== "refreshed") return { ok: false, detail: result.kind === "unknown_account" ? "unknown account" : result.detail };
-    const { observation } = result;
-    const limits = observation.limits;
+    const { probed } = result;
+    const limits = probed.limits;
     return { ok: true, evidence: {
-      authenticated: observation.authenticated,
-      source: observation.provenance.source,
-      staleSince: observation.provenance.staleSince,
-      observedAt: observation.observedAt,
+      authenticated: probed.authenticated,
+      source: probed.provenance.source,
+      staleSince: probed.provenance.staleSince,
+      observedAt: new Date(probed.observedAt).toISOString(),
       plan: limits?.plan ?? null,
       windows: !!limits && !!(limits.session || limits.weekly),
     } };
@@ -452,6 +475,10 @@ export async function verifyImportedAccount(row: ImportedAccountRow, deps: Verif
     /* §5.2: usable means this read returned a fresh observation with a plan and windows. */
     const refusal = limitsRefusal(read.evidence, clock.getTime());
     if (refusal) return { ...row, state: "read_failed", detail: refusal, checkedAt: now };
+  } else {
+    const catalog = await (deps.readCopilotCatalog ?? copilotCatalogReader)(row.targetId);
+    if (!catalog.ok) return { ...row, state: "read_failed", detail: catalog.detail, checkedAt: now };
+    if (!catalog.models) return { ...row, state: "read_failed", detail: "no-models", checkedAt: now };
   }
   /* The source reported an identity: this account is the same one only when
      the provider says so here too. An identity this install cannot read is no
