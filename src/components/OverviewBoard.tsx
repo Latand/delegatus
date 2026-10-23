@@ -7,7 +7,7 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import { reachLineText, useServerReach } from "@/hooks/serverReach";
 import { projectDisplayName } from "@/lib/displayNames";
 import { useLocale } from "@/lib/i18n";
-import type { Flow } from "@/lib/flows/types";
+import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry, ProjectCatalogEntry } from "@/lib/types";
 import type { Pipeline } from "@/lib/pipelines/types";

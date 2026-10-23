@@ -1,6 +1,6 @@
 import { BOARD_SURFACE, bandHistoryAvailable, bandContainsTarget, stageSurface } from "./boardPresentation";
 import { conversationIdentity } from "@/lib/accounts/identity";
-import type { Flow } from "@/lib/flows/types";
+import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { taskShowsOnBoard } from "@/lib/tasks/boardVisibility";
 import { COLLAPSED_DECK_CHIP_H, deckDisclosureTerminal } from "@/components/flows/reviewDeckDisclosure";

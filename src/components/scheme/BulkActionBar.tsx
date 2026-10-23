@@ -1,31 +1,25 @@
 "use client";
 
-import { DEFAULT_REVIEW_ROUNDS } from "@/lib/reviewHistory/limits";
-import { CircleCheck, CircleX, Focus, Loader2, OctagonMinus, Repeat2, RotateCcw, Square, Trash2, X } from "lucide-react";
+import { CircleCheck, CircleX, Focus, Loader2, OctagonMinus, RotateCcw, Square, Trash2, X } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import { PipelineTemplatePicker } from "@/components/pipelines/PipelineTemplatePicker";
+import { createDraftPipeline } from "@/components/pipelines/pipelineModel";
 import { ComposerBar } from "@/components/ComposerBar";
 import { createTask, newClientRequestId, sendTask, uploadTaskAttachment } from "@/components/tasks/taskApi";
 import type { TaskAttachment } from "@/lib/tasks/types";
 import { cleanTitle } from "@/components/utils";
 import { useComposer } from "@/hooks/useComposer";
-import type { Flow, FlowsResponse, RoleConfig } from "@/lib/flows/types";
+import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
 import { useLocale } from "@/lib/i18n";
 
-import { canBulkFlow, canBulkInterrupt, canBulkKill, runBulk, withPresenceGuard, type BulkItemResult, type BulkRunner } from "./bulkActions";
+import { canBulkInterrupt, canBulkKill, runBulk, withPresenceGuard, type BulkItemResult, type BulkRunner } from "./bulkActions";
 import type { SchemeNode } from "./layout";
 import { findFreeSlot } from "./findFreeSlot";
 import { TASK_W } from "./taskGeometry";
 import { Z } from "@/components/layers";
 
-type ActionId = "message" | "interrupt" | "kill" | "remove" | "flow";
-
-/* Mirrors FlowDialog's private fallback: used only when the presets fetch
-   came back empty, so a bulk start never silently no-ops. */
-const FALLBACK_ROLES: Record<"implementer" | "reviewer", RoleConfig> = {
-  implementer: { engine: "claude", model: null, effort: null },
-  reviewer: { engine: "codex", model: null, effort: "xhigh" },
-};
+type ActionId = "message" | "interrupt" | "kill" | "remove";
 
 async function postJson(url: string, body: Record<string, unknown>): Promise<{ ok: true } | { ok: false; error: string }> {
   const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -75,7 +69,6 @@ function ActionButton({
 export const BulkActionBar = memo(function BulkActionBar({
   project,
   nodes,
-  flowsByImpl,
   onRemove,
   onFit,
   onExit,
@@ -103,7 +96,7 @@ export const BulkActionBar = memo(function BulkActionBar({
     titles: ReadonlyMap<string, string>;
   } | null>(null);
   const [confirm, setConfirm] = useState<"kill" | "remove" | null>(null);
-  const [flowOpen, setFlowOpen] = useState(false);
+  const [pipelineOpen, setPipelineOpen] = useState(false);
   const retryRef = useRef<{ action: ActionId; runner: BulkRunner } | null>(null);
   /* Live view of the selection for the presence guard: a node that left the
      board mid-sweep must fail its slot, not receive a blind delivery. Layout
@@ -243,7 +236,7 @@ export const BulkActionBar = memo(function BulkActionBar({
 
   const interruptible = nodes.filter(canBulkInterrupt);
   const killable = nodes.filter(canBulkKill);
-  const flowable = nodes.filter((node) => canBulkFlow(node, flowsByImpl));
+  const repoDir = nodes[0]?.file.projectRoot?.trim() || nodes[0]?.file.cwd?.trim() || "";
 
   const failedCount = report?.items.filter((item) => !item.ok).length ?? 0;
 
@@ -252,19 +245,9 @@ export const BulkActionBar = memo(function BulkActionBar({
       data-scheme-ui
       className={`absolute bottom-3 left-1/2 ${Z.dock} flex w-[640px] max-w-[94%] -translate-x-1/2 flex-col gap-1.5 rounded-[12px] border border-border bg-card/95 p-2.5 shadow-2`}
     >
-      {flowOpen ? (
-        <BulkFlowPopover
-          count={flowable.length}
-          disabled={running !== null}
-          onStart={(config) => {
-            setFlowOpen(false);
-            void execute("flow", flowable.map((node) => node.file.path), (path) =>
-              postJson("/api/flows", { implementerPath: path, ...config }),
-            );
-          }}
-          onClose={() => setFlowOpen(false)}
-        />
-      ) : null}
+      {pipelineOpen ? <PipelineTemplatePicker repoDir={repoDir} onClose={() => setPipelineOpen(false)}
+        onCreate={(template, directory) => createDraftPipeline(project, directory, template ?? undefined)}
+        onCreated={() => setPipelineOpen(false)} /> : null}
 
       <form
         onSubmit={(event) => {
@@ -350,10 +333,10 @@ export const BulkActionBar = memo(function BulkActionBar({
           }}
         />
         <ActionButton
-          icon={<Repeat2 className="h-3.5 w-3.5" aria-hidden />}
-          label={`${t("bulk.flow")} ${flowable.length}/${nodes.length}`}
-          disabled={running !== null || !flowable.length}
-          onClick={() => setFlowOpen((value) => !value)}
+          icon={<span aria-hidden>⇢</span>}
+          label={t("scheme.pipeline")}
+          disabled={running !== null || !nodes.length}
+          onClick={() => setPipelineOpen(true)}
         />
         <ActionButton
           icon={<Focus className="h-3.5 w-3.5" aria-hidden />}
@@ -406,113 +389,3 @@ export const BulkActionBar = memo(function BulkActionBar({
     </div>
   );
 });
-
-/** Shared config for the per-node flow launch: one set of rules for all. */
-function BulkFlowPopover({
-  count,
-  disabled,
-  onStart,
-  onClose,
-}: {
-  count: number;
-  disabled: boolean;
-  onStart: (config: Record<string, unknown>) => void;
-  onClose: () => void;
-}) {
-  const { t } = useLocale();
-  const [presets, setPresets] = useState<FlowsResponse["presets"]>([]);
-  const [presetName, setPresetName] = useState<string | null>(null);
-  const [mode, setMode] = useState<"auto" | "manual">("auto");
-  const [roundLimit, setRoundLimit] = useState(DEFAULT_REVIEW_ROUNDS);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/api/flows")
-      .then((res) => res.json() as Promise<FlowsResponse>)
-      .then((json) => {
-        if (cancelled || !Array.isArray(json.presets) || !json.presets.length) return;
-        setPresets(json.presets);
-        setPresetName((prev) => prev ?? json.presets[0]!.name);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  return (
-    <div
-      className="absolute bottom-[calc(100%+8px)] left-1/2 flex w-[420px] max-w-[94%] -translate-x-1/2 flex-col gap-2 rounded-[12px] border border-border bg-card p-2.5 shadow-2"
-      onKeyDown={(event) => {
-        if (event.key === "Escape") onClose();
-      }}
-    >
-      <span className="text-[12px] font-bold">{t("bulk.flowTitle", { count })}</span>
-      <div className="grid grid-cols-3 gap-2">
-        <label className="col-span-3 flex flex-col gap-1 text-[10.5px] font-semibold text-muted">
-          {t("flowDialog.preset")}
-          <select
-            value={presetName ?? ""}
-            className="h-8 rounded-[8px] border border-border bg-canvas px-2 text-[12px] font-normal text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            onChange={(event) => setPresetName(event.target.value || null)}
-          >
-            {presets.length ? (
-              presets.map((preset) => (
-                <option key={preset.name} value={preset.name}>
-                  {preset.name}
-                </option>
-              ))
-            ) : (
-              <option value="">{t("flowDialog.effortDefault")}</option>
-            )}
-          </select>
-        </label>
-        <label className="flex flex-col gap-1 text-[10.5px] font-semibold text-muted">
-          {t("flowDialog.transitions")}
-          <select
-            value={mode}
-            className="h-8 rounded-[8px] border border-border bg-canvas px-2 text-[11.5px] font-normal text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            onChange={(event) => setMode(event.target.value as "auto" | "manual")}
-          >
-            <option value="auto">{t("flowDialog.auto")}</option>
-            <option value="manual">{t("flowDialog.manual")}</option>
-          </select>
-        </label>
-        <label className="flex flex-col gap-1 text-[10.5px] font-semibold text-muted">
-          {t("flowDialog.roundLimit")}
-          <input
-            type="number"
-            min={1}
-            max={20}
-            value={roundLimit}
-            className="h-8 rounded-[8px] border border-border bg-canvas px-2 text-[11.5px] font-normal text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            onChange={(event) => setRoundLimit(Math.max(1, Math.min(20, Number(event.target.value) || DEFAULT_REVIEW_ROUNDS)))}
-          />
-        </label>
-        <div className="flex items-end justify-end gap-1.5">
-          <button
-            className="h-8 rounded-[8px] border border-border bg-canvas px-2 text-[11px] font-semibold text-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            onClick={onClose}
-          >
-            {t("common.cancel")}
-          </button>
-          <button
-            className="h-8 rounded-[8px] border border-brand bg-brand px-2.5 text-[11.5px] font-bold text-on-brand hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40"
-            disabled={disabled || !count}
-            onClick={() =>
-              onStart({
-                ...(presetName ? { preset: presetName } : { roles: FALLBACK_ROLES }),
-                baseMode: "head",
-                mode,
-                reviewerMode: "headless",
-                roundLimit,
-              })
-            }
-          >
-            {t("bulk.flowStart", { count })}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}

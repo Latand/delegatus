@@ -3,7 +3,8 @@
 import { ArrowUpRight, ChevronLeft, ChevronRight, Search, X } from "lucide-react";
 import { memo, useMemo, useState } from "react";
 import { useLocale } from "@/lib/i18n";
-import type { Flow } from "@/lib/flows/types";
+import { openReviewHistory } from "@/components/flows/ReviewHistory";
+import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 import { cleanTitle } from "@/components/utils";
@@ -15,7 +16,7 @@ const PAGE = 30;
 
 /** Task history is a bounded navigation surface over recorded relationships.
  * It never starts, retries, edits, or settles an execution. */
-export const TaskWorkflowPanel = memo(function TaskWorkflowPanel({ model, onOpen, onClose, onOpenPipeline, onOpenFlow, initialTaskId = null }: {
+export const TaskWorkflowPanel = memo(function TaskWorkflowPanel({ model, onOpen, onClose, onOpenPipeline, initialTaskId = null }: {
   initialTaskId?: string | null;
   onOpenPipeline?: (pipeline: Pipeline) => void;
   onOpenFlow?: (flow: Flow) => void;
@@ -58,7 +59,7 @@ export const TaskWorkflowPanel = memo(function TaskWorkflowPanel({ model, onOpen
           {execution.pipeline.stateDetail && <p className="mt-1 text-danger">{execution.pipeline.stateDetail}</p>}
           <p className="mt-1">{execution.pipeline.publishedCommit ? t("taskHistory.published", { sha: execution.pipeline.publishedCommit.slice(0, 12) }) : t("taskHistory.unpublished")}</p>
         </section>)}
-        {onOpenFlow && task.flows.map(flow => <button key={flow.id} className="mb-2 flex w-full items-center justify-between text-left text-xs hover:text-accent" onClick={() => onOpenFlow(flow)}>{t("taskHistory.reviewFlow")} · {flow.state}<ArrowUpRight size={14} /></button>)}
+        {task.flows.map(flow => <button key={flow.id} className="mb-2 flex w-full items-center justify-between text-left text-xs hover:text-accent" onClick={() => openReviewHistory(flow.id)}>{t("reviewHistory.open")} · {t(`flowState.${flow.state}`)}<ArrowUpRight size={14} /></button>)}
         {task.flows.filter(flow => flow.mergeEvidence).map(flow => <p key={flow.id} className="my-2 text-xs">
           {flow.mergeEvidence?.mergedAt ? t("taskHistory.merged") : t("taskHistory.mergeUnrecorded")}
           {flow.mergeEvidence?.headSha ? ` · ${flow.mergeEvidence.headSha.slice(0, 12)}` : ""}
@@ -67,7 +68,7 @@ export const TaskWorkflowPanel = memo(function TaskWorkflowPanel({ model, onOpen
       </> : <>
         <p className="mb-3 text-sm text-muted">{t("taskHistory.unlinkedExplanation")}</p>
         {model.unlinkedPipelines.map(pipeline => <details key={pipeline.id} className="mb-2 text-xs"><summary>{pipeline.task} · {pipeline.state}</summary><p className="mt-2">{pipeline.stateDetail ?? t("taskHistory.associationUnrecorded")}</p></details>)}
-        {model.unlinkedFlows.map(flow => <p key={flow.id} className="mb-2 text-xs">{t("taskHistory.reviewFlow")} · {flow.state} · {flow.rounds.length}</p>)}
+        {model.unlinkedFlows.map(flow => <button key={flow.id} className="mb-2 block min-h-11 text-xs text-accent" onClick={() => openReviewHistory(flow.id)}>{t("reviewHistory.open")} · {t(`flowState.${flow.state}`)} · {flow.rounds.length}</button>)}
       </>}
       <label className="mb-3 flex items-center gap-2 rounded border border-border bg-canvas px-2"><Search size={15} /><input className="min-w-0 flex-1 bg-transparent py-2 text-sm outline-none" aria-label={t("taskHistory.search")} placeholder={t("taskHistory.search")} value={query} onChange={event => { setQuery(event.target.value); setPage(0); }} /></label>
       <p className="mb-2 text-xs text-muted">{t("taskHistory.records", { count: matching.length })}</p>

@@ -5,7 +5,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 
 import { useBoardState } from "@/hooks/useBoardState";
 import { cameraToPresence, orderedSelection, schemeFocusedPath, schemeVisiblePaths, viewBus } from "@/hooks/viewPresenceBus";
-import type { Flow } from "@/lib/flows/types";
+import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { useLocale } from "@/lib/i18n";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -17,6 +17,7 @@ import { conversationIdentity } from "@/lib/accounts/identity";
 import { GroupOverridePanel } from "./GroupOverridePanel";
 import { PipelineEditor } from "@/components/pipelines/PipelineEditor";
 import { createVisibilityIndex } from "./visibilityIndex";
+import { openReviewHistory, openProjectReviewHistory } from "@/components/flows/ReviewHistory";
 import { flowByImplementer } from "@/components/flows/flowModel";
 import { deckCollapsed, deckDisclosureMarker, deckDisclosureTerminal, readDeckDisclosureOverride } from "@/components/flows/reviewDeckDisclosure";
 import type { BranchGroup } from "@/components/projectModel";
@@ -264,7 +265,7 @@ export function SchemeBoard({
   const mapMode = Boolean(onNodePick);
   const [controlsFlowId, setControlsFlowId] = useState<string | null>(null);
   const controlsFlow = flows.find(flow => flow.id === controlsFlowId);
-  const openFlowControls = useCallback((flow: Flow) => {setControlsFlowId(flow.id);setControlsPipelineId(null);}, []);
+  const openFlowControls = useCallback((flow: Flow) => openReviewHistory(flow.id), []);
   const [controlsPipelineId, setControlsPipelineId] = useState<string | null>(null);
   const controlsPipeline = pipelines.find(pipeline => pipeline.id === controlsPipelineId);
   const openPipelineControls = useCallback((pipeline: Pipeline) => {setControlsPipelineId(pipeline.id);setControlsFlowId(null);}, []);
@@ -648,10 +649,7 @@ export function SchemeBoard({
      conversation id first, then falls back to the path — so a path-only attempt
      (no adopted id yet) still navigates and a migrated attempt never opens the
      folded predecessor. */
-  const openPipelineFlow = useCallback((flowId: string) => {
-    const flow = flows.find((candidate) => candidate.id === flowId);
-    if (flow) focusRound(flow.id, flow.rounds.at(-1)?.n ?? 1);
-  }, [flows, focusRound]);
+  const openPipelineFlow = useCallback((flowId: string) => openReviewHistory(flowId), []);
   const renderablePipelinePaths = useMemo(() => new Set(files.map((entry) => entry.path)), [files]);
   const placedNodePaths = useMemo(() => new Set(layout.nodes.map((node) => node.file.path)), [layout]);
   const renderableGroupFlows = useMemo(() => renderableFlowIds(layoutFlows, placedNodePaths), [layoutFlows, placedNodePaths]);
@@ -1629,6 +1627,9 @@ export function SchemeBoard({
             {viewSwitch ? (
               <>
                 {viewSwitch}
+                <ToolButton title={t("reviewHistory.title")} onClick={() => openProjectReviewHistory(project)}>
+                  <History className="h-4 w-4" aria-hidden />
+                </ToolButton>
                 <div className="mx-0.5 h-5 w-px bg-border" aria-hidden />
               </>
             ) : null}

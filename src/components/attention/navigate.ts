@@ -1,3 +1,4 @@
+import { openReviewHistory } from "@/components/flows/ReviewHistory";
 import { frameWasRead } from "@/lib/attention/frames";
 import { navigableAnchorKeys, resolveFocusTarget, type FocusFrameIndex } from "@/lib/attention/resolve";
 import { focusTargetAnchorKeys, isGeometricTarget } from "@/lib/attention/targets";
@@ -258,6 +259,9 @@ export async function runFocusHandoff(
      and never a second glide. A navigator without the quiet half gets
      `placePath` — materialization without the competing move — rather than
      the gliding `openPath` this used to race against. */
+  if (request.intent === "open" && request.target.kind === "flowRound") {
+    openReviewHistory(request.target.flowId, request.target.round);
+  }
   if (request.intent === "open" && request.target.kind === "conversation" && shell) {
     if (shell.openPathQuiet) shell.openPathQuiet(request.target.path);
     else if (!asked) shell.placePath(request.target.path);

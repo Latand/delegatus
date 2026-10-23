@@ -1,0 +1,670 @@
+{
+  "introduced": [],
+  "preexisting": [
+    {
+      "file": "src/components/OverviewBoard.kanban.dom.test.tsx",
+      "suite": "",
+      "name": "what needs one project to write into is absent, never faked",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/ProjectDashboard.launchClaim.dom.test.tsx",
+      "suite": "",
+      "name": "a failed-delivery launch record on a scanned transcript path never hides the conversation",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/ProjectDashboard.launchClaim.dom.test.tsx",
+      "suite": "",
+      "name": "a pathless terminal receipt is still shelved and never becomes a board card",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/ProjectDashboard.looseReader.dom.test.tsx",
+      "suite": "",
+      "name": "a switch to a project the Board is already showing files for leaves the reader behind, and it is not back on return",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/ProjectDashboard.looseReader.dom.test.tsx",
+      "suite": "",
+      "name": "an attention jump to a conversation a card holds brings it into the same window, never into its card",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/ProjectDashboard.looseReader.dom.test.tsx",
+      "suite": "",
+      "name": "a `#c=` landing on a conversation a card holds brings it into the same window, never into its card",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/ProjectDashboard.looseReader.dom.test.tsx",
+      "suite": "",
+      "name": "another conversation no card holds comes into the window after the first, which stays in its list",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/ProjectDashboard.looseReader.dom.test.tsx",
+      "suite": "",
+      "name": "a focus handoff `show` to a card does not report arrival under the window, and leaves the window",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/ProjectDashboard.looseReader.dom.test.tsx",
+      "suite": "",
+      "name": "a focus handoff `open` to a card does not report arrival under the window, and brings the conversation into it",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/ProjectDashboard.looseReader.dom.test.tsx",
+      "suite": "",
+      "name": "a pipeline link on this project leaves the window and focuses the card that holds the pipeline",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/ProjectDashboard.looseReader.dom.test.tsx",
+      "suite": "",
+      "name": "a pipeline link to another project switches to it with no window, and focuses the card that holds the pipeline there",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+      "suite": "",
+      "name": "an active flow's reviewer round: on no card, and a catalog landing opens its transcript and composer on the Board, with nothing written",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+      "suite": "",
+      "name": "an active flow's reviewer round: an attention jump opens the same reader",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+      "suite": "",
+      "name": "an active flow's reviewer round: a focus handoff resolves it though no card holds it, opens its reader in the window, and its Return closes it",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+      "suite": "",
+      "name": "a collapsed worker: on no card, and a catalog landing opens its transcript and composer on the Board, with nothing written",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+      "suite": "",
+      "name": "a collapsed worker: an attention jump opens the same reader",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+      "suite": "",
+      "name": "a collapsed worker: a focus handoff resolves it though no card holds it, opens its reader in the window, and its Return closes it",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+      "suite": "",
+      "name": "an engine's own subagent: on no card, and a catalog landing opens its transcript and composer on the Board, with nothing written",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+      "suite": "",
+      "name": "an engine's own subagent: an attention jump opens the same reader",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+      "suite": "",
+      "name": "an engine's own subagent: a focus handoff resolves it though no card holds it, opens its reader in the window, and its Return closes it",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+      "suite": "",
+      "name": "under a standing landing, a card's link to Conversations opens the project's list over the Board",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/TmuxComposer.liveRefreshFocus.dom.test.tsx",
+      "suite": "",
+      "name": "[desktop] a board/feed refresh mid-IME-composition never wipes the composing word or moves the caret (real owner, node identity held)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/TmuxComposer.liveRefreshFocus.dom.test.tsx",
+      "suite": "",
+      "name": "[desktop] a mid-string selection, focus, draft, attachments, and runtime choice survive a surface-resolving refresh (real owner)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/TmuxComposer.liveRefreshFocus.dom.test.tsx",
+      "suite": "",
+      "name": "[390px mobile] a mid-string selection, focus, draft, attachments, and runtime choice survive a surface-resolving refresh (real owner)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/TmuxComposer.liveRefreshFocus.dom.test.tsx",
+      "suite": "",
+      "name": "[desktop] a background board reorder keeps focus, caret, and the textarea node on the typed pane (real NodesLayer keying)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/TmuxComposer.liveRefreshFocus.dom.test.tsx",
+      "suite": "",
+      "name": "[negative control] the reenacted historical remount mutation turns the identity assertion RED",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/Viewer.switching.dom.test.tsx",
+      "suite": "",
+      "name": "desktop: an in-app «Open conversation» link focuses the target's reader without rebuilding the board",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/Viewer.switching.dom.test.tsx",
+      "suite": "",
+      "name": "desktop: a fresh tail record in one reader leaves the other readers' panes untouched",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/attention/AttentionHost.dom.test.tsx",
+      "suite": "",
+      "name": "an arrival marks the card it landed on, and the mark takes itself off",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/kanban/KanbanOpenableConversations.dom.test.tsx",
+      "suite": "",
+      "name": "a failed launch shows at once with its error, opens its launch view, and counts as no conversation",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/kanban/KanbanPipelines.dom.test.tsx",
+      "suite": "",
+      "name": "an open card whose lane finished and whose work is stopped with no reason still says so in its state line",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/kanban/KanbanStages.dom.test.tsx",
+      "suite": "",
+      "name": "a failed terminal budget card sends a bounded revision-checked grant (legacy: %s)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/kanban/KanbanStages.dom.test.tsx",
+      "suite": "",
+      "name": "a failed terminal budget card sends a bounded revision-checked grant (legacy: %s)",
+      "kind": "test",
+      "occurrence": 1
+    },
+    {
+      "file": "src/components/kanban/KanbanUndo.dom.test.tsx",
+      "suite": "",
+      "name": "a move: Ctrl+Z puts the card back and Ctrl+Shift+Z moves it again, each fenced on the board's own last revision",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/kanban/KanbanUndo.dom.test.tsx",
+      "suite": "",
+      "name": "the receipt's Undo and Redo run the same step as the keys",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/kanban/KanbanUndo.dom.test.tsx",
+      "suite": "",
+      "name": "an undo of a task someone else changed meanwhile is refused: one write, nothing overwritten, and a receipt that says so",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/kanban/KanbanUndo.dom.test.tsx",
+      "suite": "",
+      "name": "a redo that saves after a new edit was made while it was out goes back below that edit, and Ctrl+Z still undoes it",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/kanban/KanbanUndo.dom.test.tsx",
+      "suite": "",
+      "name": "a redo that saves after a new edit was made while it was out goes back below that edit, and the receipt's Undo still undoes it",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/mobile/MobileFocusView.keyboardInset.dom.test.tsx",
+      "suite": "",
+      "name": "integrated, portrait keyboard: long draft caps at 160px and the chrome fits (#983 round 2)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/mobile/MobileFocusView.keyboardInset.dom.test.tsx",
+      "suite": "",
+      "name": "integrated, a 280px visible viewport: the whole composer unit still fits it (#983 round 2, #1483)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/mobile/MobileFocusView.strip.dom.test.tsx",
+      "suite": "",
+      "name": "the phone renders no inline control strip: every control is a labelled 44 px row in the conversation menu",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/mobile/MobileKanban.dom.test.tsx",
+      "suite": "",
+      "name": "a phone card with a shown lane and stopped work with no reason keeps its state line text",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/mobile/MobilePipelineScreen.actions.dom.test.tsx",
+      "suite": "",
+      "name": "One more round reads the revision the operator saw and grants exactly one round, as the desktop menu does",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/mobile/MobilePipelineScreen.dom.test.tsx",
+      "suite": "",
+      "name": "a spent review budget is answered inside the review stage: its heads, Close lane and One more round",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/mobile/MobileShell.board.dom.test.tsx",
+      "suite": "",
+      "name": "⋯ opens the board menu over the board: create cells, the places as rows, the header's entries, the project's rules as a page",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/mobile/MobileTaskScreen.entry.dom.test.tsx",
+      "suite": "",
+      "name": "a column card opens the task screen, and a card pinned by its pipeline's decision does too; ‹ returns to the board",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/mobile/MobileTaskScreen.entry.dom.test.tsx",
+      "suite": "",
+      "name": "from the task: the Stages line opens the pipeline screen, Open conversation and an agent row open their conversations full screen, and ‹ returns to the task",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/mobile/MobileTaskScreen.entry.dom.test.tsx",
+      "suite": "",
+      "name": "a conversation's pinned message opens the task screen above the conversation, and ‹ returns to it",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/mobile/mobileHeaderFit.dom.test.tsx",
+      "suite": "",
+      "name": "the 390px header row keeps one elastic cell — the project name — and fixed 44px targets (#613)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/mobile/mobileHeaderFit.dom.test.tsx",
+      "suite": "",
+      "name": "both board faces stay one tap away inside the «more» menu and still switch the board (#613)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/mobile/mobileHeaderFit.dom.test.tsx",
+      "suite": "",
+      "name": "Undo and Redo are not «⋯» items, even with a close in the device-local log (#1801; kanban undo is #1856)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/mobile/mobileHeaderFit.dom.test.tsx",
+      "suite": "",
+      "name": "«Keep screen awake» is on the «⋯» menu's Settings page and holds a real sentinel (#712)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/mobile/mobileHeaderFit.dom.test.tsx",
+      "suite": "",
+      "name": "the wake-lock row never becomes a sixth 44px target on the header row (#712)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/scheme/nodes.stageRow.dom.test.tsx",
+      "suite": "",
+      "name": "a live stage pane is titled role · stage · position, never the prompt's shared preamble",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/scheme/nodes.strip.dom.test.tsx",
+      "suite": "",
+      "name": "a scheme node mounts the strip: live-root for the running root",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/scheme/nodes.strip.dom.test.tsx",
+      "suite": "",
+      "name": "a scheme node classifies a scanner-shaped subagent from its live structured root",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/components/scheme/nodes.strip.dom.test.tsx",
+      "suite": "",
+      "name": "dormant far-zoom scheme nodes render no control strip; active nodes restore it",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/mcp/schemaParity.test.ts",
+      "suite": "",
+      "name": "create_pipeline publishes the stage contract in its tool definition",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.routing.test.ts",
+      "suite": "",
+      "name": "a stage that keeps working after its turn ended keeps its host through the recovery tick and the deferred cursor write",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.routing.test.ts",
+      "suite": "",
+      "name": "a descendant that outlives the runtime's release is still signalled, and the attempt is replaced",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCompletion.test.ts",
+      "suite": "",
+      "name": "stage_report and controller ticks ignore a future stage beside a healthy running lane",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCompletion.test.ts",
+      "suite": "",
+      "name": "terminal JSON with a bare severity cannot settle as a review finding",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCompletion.test.ts",
+      "suite": "",
+      "name": "a long stage_report finding survives settlement and the fix relay intact",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCompletion.test.ts",
+      "suite": "",
+      "name": "a live attempt's reported completion settles it when the turn ends, with server-collected provenance",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCompletion.test.ts",
+      "suite": "",
+      "name": "claude final brief reaches the next stage through {{prev.output}} and the automatic relay",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCompletion.test.ts",
+      "suite": "",
+      "name": "codex final brief reaches the next stage through {{prev.output}} and the automatic relay",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCompletion.test.ts",
+      "suite": "",
+      "name": "a brief written before stage_report survives a shorter closing message",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCompletion.test.ts",
+      "suite": "",
+      "name": "a long final brief is bounded in bytes with an explicit truncation marker",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCompletion.test.ts",
+      "suite": "",
+      "name": "a pass reported without a summary relays its prose without the fenced JSON verdict",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCompletion.test.ts",
+      "suite": "",
+      "name": "a persisted legacy attempt without final prose relays its summary",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCompletion.test.ts",
+      "suite": "",
+      "name": "a second call replaces the first before settlement, and is refused after it",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCompletion.test.ts",
+      "suite": "",
+      "name": "a reported fail routes along the fail edge and relays the summary as the stage's output",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCompletion.test.ts",
+      "suite": "",
+      "name": "a review-loop stage's reviewer cannot report a completion, and nothing is written",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCompletion.test.ts",
+      "suite": "",
+      "name": "a needs_decision with findings fires the fail edge and hands the findings to the fix stage (#1785)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCompletion.test.ts",
+      "suite": "",
+      "name": "a needs_decision with findings parks once a park edge's budget is spent (#1785)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCompletion.test.ts",
+      "suite": "",
+      "name": "a needs_decision with findings on a spent default edge is handed to the fix stage once, then follows the pass edge (#1868)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCompletion.test.ts",
+      "suite": "",
+      "name": "a spent-budget handoff keeps the fix's whole brief and cuts a longer one with a marker, on a character boundary",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCompletion.test.ts",
+      "suite": "",
+      "name": "a needs_decision parks with no fail edge, and parks with no findings (#1785)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCompletion.test.ts",
+      "suite": "",
+      "name": "a plain fail still routes under its own heading, and a plain pass still advances (#1785)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCompletion.test.ts",
+      "suite": "",
+      "name": "a routed needs_decision leaves no chip claiming the operator is needed, while a parked one still reads needs you (#1785)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCompletion.test.ts",
+      "suite": "",
+      "name": "a delivered parked attempt accepts its report verdict and takes the fail edge (#1979)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCompletion.test.ts",
+      "suite": "",
+      "name": "a delivered parked attempt accepts its fenced verdict and takes the fail edge (#1979)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCompletion.test.ts",
+      "suite": "",
+      "name": "a stage parked before spawn replaces the preceding stage note, while newer notes still win",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCompletion.test.ts",
+      "suite": "",
+      "name": "retrying a signed-out park clears its automatic note through running and completion",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCompletion.test.ts",
+      "suite": "",
+      "name": "publication blocked, a failed stage and a spent budget each leave a plain current note",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/reviewHistory/reader.test.ts",
+      "suite": "",
+      "name": "fresh unowned production process imports GETs without claiming ownership or initializing state",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/telegram/reportRunner.test.ts",
+      "suite": "",
+      "name": "a settled scheduled report retires its admitted placeholder and keeps its conversation",
+      "kind": "test",
+      "occurrence": 0
+    }
+  ],
+  "fixed": [
+    {
+      "file": "src/components/mobile/MobileShell.board.dom.test.tsx",
+      "suite": "",
+      "name": "<between-tests error> TypeError: null is not an object (evaluating 'q(root, '[data-mobile2-sheet=\"menu\"]').textContent')",
+      "kind": "error"
+    }
+  ],
+  "absent": [],
+  "flaky": [
+    {
+      "file": "src/components/flows/RoundDeck.dom.test.tsx",
+      "suite": "",
+      "name": "a manual expand of the TERMINAL group is durable across remounts until a new round starts",
+      "kind": "test",
+      "occurrence": 0,
+      "base": {
+        "pass": 2,
+        "fail": 0
+      },
+      "head": {
+        "pass": 1,
+        "fail": 1
+      }
+    },
+    {
+      "file": "src/components/kanban/KanbanBoard.dom.test.tsx",
+      "suite": "",
+      "name": "the mouse resting in a narrow column widens it after the dwell, with the cue on the way; a menu or a pin holds it",
+      "kind": "test",
+      "occurrence": 0,
+      "base": {
+        "pass": 2,
+        "fail": 0
+      },
+      "head": {
+        "pass": 1,
+        "fail": 1
+      }
+    },
+    {
+      "file": "src/components/kanban/KanbanBoard.dom.test.tsx",
+      "suite": "",
+      "name": "on a large screen a project board balances its columns; narrow, scroll, tabs and the Overview keep theirs",
+      "kind": "test",
+      "occurrence": 0,
+      "base": {
+        "pass": 2,
+        "fail": 0
+      },
+      "head": {
+        "pass": 1,
+        "fail": 1
+      }
+    }
+  ]
+}

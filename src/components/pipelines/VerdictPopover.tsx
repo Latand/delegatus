@@ -1,5 +1,6 @@
 "use client";
 
+import { openReviewHistory } from "@/components/flows/ReviewHistory";
 import { shortId } from "@/lib/shortIds";
 import { RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -7,7 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/Badge";
 import { reviewerBindingTargetsForRound } from "@/components/flows/flowModel";
 import { useLocale } from "@/lib/i18n";
-import type { Flow } from "@/lib/flows/types";
+import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
 import type { Pipeline, PipelineStage, PipelineStageAttempt } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 
@@ -74,11 +75,9 @@ export function VerdictPopover({
   files = [],
   availablePaths,
   mobile = false,
-  canOpenFlow = true,
   canOpenPath = true,
   onClose,
   onOpenPath,
-  onOpenFlow,
 }: {
   pipeline: Pipeline;
   stage: PipelineStage;
@@ -87,8 +86,7 @@ export function VerdictPopover({
   files?: readonly FileEntry[];
   availablePaths?: ReadonlySet<string>;
   mobile?: boolean;
-  /** Whether the embedded flow still has a board deck; a closed/missing flow
-      hides "Open review" so it never routes to an absent entry (default true). */
+  /** Compatibility prop; archive navigation remains available without a deck. */
   canOpenFlow?: boolean;
   /** Whether the run transcript is still in the scan; a vanished path hides
       "Open transcript" so it never no-ops on a missing file (default true). */
@@ -237,8 +235,8 @@ export function VerdictPopover({
             {t("pipelineVerdict.openTranscript")}
           </button>
         ) : null}
-        {attempt.flowId && onOpenFlow && canOpenFlow ? (
-          <button type="button" className={`rounded-full border border-border bg-canvas px-2.5 py-1 text-[10px] font-bold text-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${mobileTarget}`} onClick={() => onOpenFlow(attempt.flowId!)}>
+        {attempt.flowId ? (
+          <button type="button" className={`rounded-full border border-border bg-canvas px-2.5 py-1 text-[10px] font-bold text-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${mobileTarget}`} onClick={() => openReviewHistory(attempt.flowId!)}>
             {t("pipelineVerdict.openFlow")}
           </button>
         ) : null}

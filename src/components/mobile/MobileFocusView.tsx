@@ -13,7 +13,7 @@ import { useNowSeconds } from "@/hooks/useNowSeconds";
 import { useRuntimeBusState, useRuntimeSessionForConversation } from "@/hooks/useRuntime";
 import { selectionInOrder, viewBus } from "@/hooks/viewPresenceBus";
 import { projectDisplayName } from "@/lib/displayNames";
-import type { Flow } from "@/lib/flows/types";
+import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { useLocale } from "@/lib/i18n";
 import { conversationFrameRole } from "@/lib/roleFrames";

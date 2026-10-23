@@ -36805,3 +36805,81 @@ describe("sound captions", () => {
     }, null, 2) + "\n");
   }
 });
+
+describe("retired review history", () => {
+  browserTest("S6 archive is read-only at desktop and phone widths in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/review-history");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const)
+      for (const width of [320, 390, 640, 1280, 1440]) {
+        const height = width === 640 ? 320 : width < 500 ? 844 : 900;
+        const { context, page, pageErrors } = await openFixture(browser, server.base, { width, height }, theme, lang, "reduce", width < 500);
+        const writes: string[] = [];
+        try {
+          const archive = {
+            row: { id: "archive-evidence", project: "atlas", implementerPath: "/reviewed.jsonl", state: "paused",
+              stateDetail: lang === "uk" ? "Доставку останнього раунду не зʼясовано. Оригінальні записи збережено." : "The last delivery remains unresolved. Original records are preserved.",
+              roles: { reviewer: { engine: "codex" } },
+              rounds: Array.from({ length: 9 }, (_, index) => ({ n: index + 1, reviewerPath: null,
+                verdict: index === 8 ? "APPROVE" : "REQUEST_CHANGES", findingsCount: 2,
+                reviewHeadSha: "a".repeat(40), reviewedAt: "2026-09-20T00:00:00Z", startedAt: "2026-09-19T00:00:00Z", error: null })) },
+            currentHead: "unknown",
+            artifacts: Array.from({ length: 9 }, (_, index) => ({ round: index + 1, artifacts: {
+              findings: index === 0 ? { status: "available", text: (lang === "uk" ? "Збережене зауваження з довгим поясненням. " : "Recorded finding with a long explanation. ").repeat(60) } : { status: "missing" },
+            } })),
+          };
+          await page.evaluate(archive => {
+            const previous = window.fetch.bind(window);
+            window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => String(input).startsWith("/api/review-history/")
+              ? Response.json(archive) : previous(input, init)) as unknown as typeof window.fetch;
+          }, archive);
+          page.on("request", request => { if (request.url().includes("/api/flows") && request.method() !== "GET") writes.push(request.method()); });
+          await page.evaluate(() => window.dispatchEvent(new CustomEvent("llv:review-history", { detail: { id: "archive-evidence", round: 1 } })));
+          const dialog = page.getByRole("dialog", { name: translate(lang, "reviewHistory.title") });
+          await dialog.getByText(translate(lang, "reviewHistory.unresolved"), { exact: true }).waitFor();
+          expect(await dialog.locator("nav button").count()).toBe(9);
+          const rect = await dialog.boundingBox();
+          expect(rect!.x).toBeGreaterThanOrEqual(0);
+          expect(rect!.x + rect!.width).toBeLessThanOrEqual(width);
+          expect(rect!.y + rect!.height).toBeLessThanOrEqual(height);
+          expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+          const clipped = await dialog.evaluate(element => {
+            const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+            const failures: string[] = [];
+            while (walker.nextNode()) {
+              const node = walker.currentNode;
+              if (!node.textContent?.trim()) continue;
+              const range = document.createRange(); range.selectNodeContents(node);
+              for (const rect of range.getClientRects()) if (rect.width > 0 && (rect.left < 0 || rect.right > window.innerWidth + 1)) failures.push(node.textContent.slice(0, 60));
+            }
+            return failures;
+          });
+          expect(clipped).toEqual([]);
+          const close = dialog.getByRole("button", { name: translate(lang, "common.close"), exact: true });
+          await close.focus();
+          await page.keyboard.press("Tab");
+          expect(await dialog.evaluate(element => element.contains(document.activeElement))).toBe(true);
+          const frame = lang + "-" + theme + "-" + width + ".png";
+          await page.screenshot({ path: path.join(out, frame) });
+          await dialog.locator("nav button").last().click();
+          await dialog.getByText(translate(lang, "reviewHistory.artifactMissing"), { exact: true }).waitFor();
+          expect(await dialog.innerText()).toContain("APPROVE");
+          await dialog.getByText(translate(lang, "reviewHistory.artifactMissing"), { exact: true }).scrollIntoViewIfNeeded();
+          expect(await dialog.locator("textarea").count()).toBe(0);
+          expect(writes).toEqual([]);
+          await page.screenshot({ path: path.join(out, "last-" + frame) });
+          await page.keyboard.press("Escape");
+          expect(await dialog.count()).toBe(0);
+          expect(pageErrors).toEqual([]);
+          readings.push({ lang, theme, width, height, rect, rounds: 9, writes: writes.length, frame });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/review-history", { recursive: true });
+      fs.writeFileSync("evidence/review-history/rendered.json", JSON.stringify({ command: "LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t 'retired review history' (isolated state)", sourceDigests: Object.fromEntries(["src/components/flows/ReviewHistory.tsx", "src/components/flows/RoundDeck.tsx", "src/components/kanban/kanbanBoard.browser.test.tsx"].map(file => [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")])), frameDigests: Object.fromEntries(readings.flatMap(item => { const { frame } = item as { frame: string }; return [frame, "last-" + frame].map(name => [name, createHash("sha256").update(fs.readFileSync(path.join(out, name))).digest("hex")]); })), readings }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});

@@ -6,7 +6,7 @@ import { ChevronRight } from "@/components/icons";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 
 import { useLocale } from "@/lib/i18n";
-import type { Flow } from "@/lib/flows/types";
+import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
