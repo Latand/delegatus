@@ -1,3 +1,5 @@
+import { SeatTickWork, seatTickWorkDetail, assertSeatTickWork, guardedSeatTickPort, seatTickYield as yieldToRuntime } from "./seatTickWork";
+import type { DeadlineScheduler } from "@/lib/deadline";
 import type { SeatTickInstructionLine } from "./seatTickInstructions";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { seatMessageKeys } from "@/lib/orchestrator/seatDeliveryKeys";
@@ -18,7 +20,6 @@ import { productionBoardMaintenanceController, type BoardMaintenanceController }
 import crypto from "node:crypto";
 import path from "node:path";
 
-import { yieldToRuntime } from "@/lib/cooperative";
 import { SeatTickAccounting } from "./seatTickAccounting";
 
 import { statePath } from "@/lib/configDir";
@@ -58,6 +59,8 @@ import { readSeatTickState, readSeatTickStateFile, seatTickStateForEpoch, writeS
 import {
   defaultSeatTickSources,
   gatherSeatTickInput,
+  gatherSeatTickDeployInput,
+  seatTickDeployPending,
   refreshSeatTickEvidence,
   seatInput,
   repoDirForProject,
@@ -131,6 +134,11 @@ import type {
  */
 
 export interface SeatTickControllerDependencies {
+  /** One budget for all phases and the one immediate evidence retry. */
+  workBudgetMs?: number;
+  workClock?: () => number;
+  workScheduler?: DeadlineScheduler;
+  workStarted?: (work: SeatTickWork) => void;
   /** Turbo's sweep for a project whose episode needs work; the MCP tool writes from another process. */
   turbo?: (project: string) => void;
   seatRecovery?: SeatHostRecoveryPorts;
@@ -927,7 +935,7 @@ async function reconcileRetiredWakes(context: {
       continue;
     }
     if (state.accounting) {
-      const accounting = new SeatTickAccounting(state.accounting.filename, context.project);
+      const accounting = tickAccounting(state.accounting.filename, context.project);
       if (!accounting.settleRetired(wake.clientMessageId)) {
         state = accounting.readState();
         continue;
@@ -1010,7 +1018,7 @@ async function reconcileOutstandingWake(context: {
   let state = context.state;
   const persist = (next: SeatTickProjectState): SeatTickProjectState => {
     if (next.accounting) {
-      const accounting = new SeatTickAccounting(next.accounting.filename, context.project);
+      const accounting = tickAccounting(next.accounting.filename, context.project);
       accounting.writeState(next);
       return accounting.readState();
     }
@@ -1073,7 +1081,7 @@ async function reconcileOutstandingWake(context: {
       settlement = { verdict: "uncertain", outcome: "uncertain", row: "keep",
         detail: "the layer holding the wake raised for the replaced seat ended it without proving arrival; the original key and all obligations remain outstanding, and no wake replaces it" };
     } else if (observed === "absent" && !wake.operationId && wake.text && wake.dispatch?.state === "refused" && state.accounting) {
-      const accounting = new SeatTickAccounting(state.accounting.filename, context.project);
+      const accounting = tickAccounting(state.accounting.filename, context.project);
       if (!accounting.settleAbsent(wake)) return accounting.readState();
       state = accounting.readState();
       settlement = { verdict: "revoked", outcome: "unsent", row: "clear",
@@ -1095,7 +1103,7 @@ async function reconcileOutstandingWake(context: {
        release. */
     if (context.refreshWake && state.accounting) {
       const payload = await context.refreshWake(state, wake);
-      const accounting = new SeatTickAccounting(state.accounting.filename, context.project);
+      const accounting = tickAccounting(state.accounting.filename, context.project);
       const fresh = accounting.readState();
       const current = fresh.outstandingWake;
       if (!current || current.clientMessageId !== wake.clientMessageId || current.conversationId !== wake.conversationId
@@ -1116,7 +1124,7 @@ async function reconcileOutstandingWake(context: {
          reader it cannot safely replay its frozen agenda. */
       return state;
     }
-    const held = state.accounting ? new SeatTickAccounting(state.accounting.filename, context.project).readState() : state;
+    const held = state.accounting ? tickAccounting(state.accounting.filename, context.project).readState() : state;
     if (held.outstandingWake?.clientMessageId !== wake.clientMessageId) return held;
     const mayDispatch = !context.mayDispatch || await context.mayDispatch();
     if (!mayDispatch) {
@@ -1127,7 +1135,7 @@ async function reconcileOutstandingWake(context: {
       // afterward so a designation during that wait fences the old retry.
       const authority = context.sources.seatFor(context.project).active;
       if (!authority || authority.conversationId !== wake.conversationId || authority.seatEpoch !== wake.seatEpoch) return state;
-      const accounting = state.accounting ? new SeatTickAccounting(state.accounting.filename, context.project) : null;
+      const accounting = state.accounting ? tickAccounting(state.accounting.filename, context.project) : null;
       if (!accounting) return state;
       const token = accounting.beginDispatch(wake);
       state = accounting.readState();
@@ -1227,7 +1235,7 @@ async function reconcileOutstandingWake(context: {
   let evicted: string | null = null;
   if (retirement) {
     if (state.accounting) {
-      const accounting = new SeatTickAccounting(state.accounting.filename, context.project);
+      const accounting = tickAccounting(state.accounting.filename, context.project);
       const moved = accounting.retire(wake, context.at, retirement, context.now - seatTickFenceBoundMs(context.wakeIntervalMs));
       retired = moved.retired;
       evicted = moved.evicted;
@@ -1287,7 +1295,7 @@ async function reconcileOutstandingWake(context: {
   if (retired) return state;
   if (settlement!.row === "keep") return next;
   if (state.accounting) {
-    const accounting = new SeatTickAccounting(state.accounting.filename, context.project);
+    const accounting = tickAccounting(state.accounting.filename, context.project);
     accounting.settle(wake.clientMessageId, next, settlement!.row === "commit" ? "landed" : "unsent", observation.evidence?.record?.settledAt ?? null);
     return accounting.readState();
   }
@@ -1310,6 +1318,48 @@ function retirementDetail(settled: string | null, retirement: Retirement, wake: 
   return `${settled ? `${settled}; ` : ""}${moved}: ${kept}${rederived}${room}`;
 }
 
+function tickAccounting(filename: string, project: string): SeatTickAccounting {
+  assertSeatTickWork();
+  return guardedSeatTickPort(new SeatTickAccounting(filename, project), "accounting");
+}
+
+/** Each check owns its deadline. A late source can finish, but its old
+ * continuation cannot mutate accounting or enter delivery after this scope. */
+export async function runSeatTickCheck(project: string, dependencies: SeatTickControllerDependencies = {}): Promise<SeatTickRunRecord | null> {
+  const policy = dependencies.policy === undefined ? seatTickPolicy() : dependencies.policy;
+  if (!policy) return null;
+  project = canonicalOrchestratorProject(project);
+  const work = new SeatTickWork(project, Math.min(dependencies.workBudgetMs ?? policy.checkIntervalMs / 4, policy.checkIntervalMs / 4),
+    dependencies.workClock, dependencies.workScheduler);
+  dependencies.workStarted?.(work);
+  const append = dependencies.appendRecord ?? appendSeatTickRecord;
+  const scoped = work.ports({ ...dependencies, policy,
+    sources: dependencies.sources ?? defaultSeatTickSources(),
+    readState: dependencies.readState ?? readSeatTickState,
+    writeState: dependencies.writeState ?? writeSeatTickState,
+    ensureCard: dependencies.ensureCard ?? ensureSeatTickCard,
+    deliver: dependencies.deliver ?? deliverConversationMessage,
+    appendRecord: append,
+  }, "check");
+  try {
+    return await work.run(() => work.wait("check", (async () => {
+      for (let attempt = 0; ; attempt++) {
+        const record = await runSeatTickAttempt(project, scoped);
+        if (attempt || !record?.detail?.includes("Seat alarm sources changed")) return record;
+        console.error(`[seat tick] evidence retry: ${work.detail()}`);
+        await yieldToRuntime();
+      }
+    })()));
+  } catch (error) {
+    const record: SeatTickRunRecord = { schemaVersion: 1, at: new Date().toISOString(), project,
+      seatEpoch: null, verdict: "error", reasons: [], items: 0, deferred: 0, eventsThrough: 0, delivery: null,
+      detail: `the check overflowed or was canceled: ${work.detail()}; ${redactMonitorText(error instanceof Error ? error.message : "unknown error")}; retry within one interval` };
+    console.error(`[seat tick] ${record.detail}`);
+    append(record);
+    return record;
+  } finally { work.close(); }
+}
+
 /**
  * One check of one project: read, decide, maybe wake, journal.
  *
@@ -1319,7 +1369,7 @@ function retirementDetail(settled: string | null, retirement: Retirement, wake: 
  * an `error` line, because a check that vanished silently is the ambiguity this
  * journal exists to remove.
  */
-export async function runSeatTickCheck(
+async function runSeatTickAttempt(
   project: string,
   dependencies: SeatTickControllerDependencies = {},
 ): Promise<SeatTickRunRecord | null> {
@@ -1336,6 +1386,8 @@ export async function runSeatTickCheck(
     return await withViewerOperation("seat-tick.check", () => check(canonical, policy, dependencies, appendRecord));
   } catch (error) {
     let detail = `the check failed: ${redactMonitorText(error instanceof Error ? error.message : "unknown error")}`;
+    const progress = seatTickWorkDetail();
+    if (progress) detail += `; ${progress}`;
     if (error instanceof SeatTickEvidenceRefreshCanceledError) {
       const readState = dependencies.readState ?? readSeatTickState;
       const writeState = dependencies.writeState ?? writeSeatTickState;
@@ -1352,7 +1404,7 @@ export async function runSeatTickCheck(
             break;
           }
           try {
-            new SeatTickAccounting(fresh.accounting.filename, canonical).writeState(updated);
+            tickAccounting(fresh.accounting.filename, canonical).writeState(updated);
             break;
           } catch (writeError) {
             if (attempt < 2 && writeError instanceof Error && writeError.message === "stale seat tick state") continue;
@@ -1464,7 +1516,6 @@ async function check(
   appendRecord: typeof appendSeatTickRecord,
 ): Promise<SeatTickRunRecord> {
   const sources = dependencies.sources ?? defaultSeatTickSources();
-  await sources.prepareRead?.();
   const readState = dependencies.readState ?? readSeatTickState;
   const writeState = dependencies.writeState ?? writeSeatTickState;
   const deliver = dependencies.deliver ?? deliverConversationMessage;
@@ -1535,6 +1586,7 @@ async function check(
       hostVerdict = reachability.detail;
     }
     const currentSeat = () => {
+      assertSeatTickWork();
       const current = sources.seatFor(canonical).active;
       if (activeDrain()) throw new DeliveryAdmissionRefusedError("AUTO_UPDATE_DRAIN");
       if (!current || current.seatEpoch !== seat.seatEpoch || current.conversationId !== seat.conversationId)
@@ -1589,6 +1641,9 @@ async function check(
       if (!(error instanceof DeliveryAdmissionRefusedError)) throw error;
       return { ok: false, outcome: "failed", status: 409, error: error.message, code: error.code, admission: "refused" };
     }
+    if (dependencies.ownsTraffic && !await dependencies.ownsTraffic())
+      throw new DeliveryAdmissionRefusedError("viewer-release-replaced");
+    assertSeatTickWork();
     const outcome = await deliver(message);
     if (!seat || seat.conversationId !== message.conversationId) return outcome;
     const at = new Date(sources.now()).toISOString();
@@ -1657,6 +1712,11 @@ async function check(
      launch it was activated on, so this check opens on the seat the operator
      can actually reach rather than on a provisional one whose launch died. */
   const rollbackDetail = await reconcileProvisionalSeat(canonical, dependencies);
+  const deployPending = await seatTickDeployPending(canonical, readState(canonical), policy, sources);
+  // Preserve problem credit before epoch reset, without putting a deploy
+  // wake behind general pipeline and task preparation.
+  if (deployPending) await sources.prepareMemoryProblems?.();
+  else await sources.prepareRead?.();
   /* Each phase rebuilds the whole task state at least once; the event loop
      runs between them so one check is never one long block (#1987). The
      phases already read fresh state, as they do after any real I/O. */
@@ -1723,7 +1783,8 @@ async function check(
     deliver: message => deliverWake({ ...message, admissionGuard: retryAdmission?.guard,
       recoveryAuthorityGuard: retryAdmission?.authorityGuard }),
     refreshWake: async (state, wake) => {
-      let input = await refreshSeatTickEvidence(await gatherSeatTickInput(canonical, state, policy, sources), sources);
+      const deployment = await gatherSeatTickDeployInput(canonical, state, policy, sources);
+      let input = deployment ?? await refreshSeatTickEvidence(await gatherSeatTickInput(canonical, state, policy, sources), sources);
       let issues: readonly ProposalIssue[] = [];
       if (needsWorkSources(seatTickDecision(input).verdict)) {
         issues = await (dependencies.proposalIssues ?? defaultProposalIssues)(canonical, sources);
@@ -1759,29 +1820,35 @@ async function check(
   });
 
   await yieldToRuntime();
+  const priorityInput = await gatherSeatTickDeployInput(canonical, settled, policy, sources);
   const maintenanceDetails: string[] = [];
-  try { const detail = await dependencies.curation?.reconcile(canonical); if (detail) maintenanceDetails.push(detail); }
+  try { const detail = !priorityInput && await dependencies.curation?.reconcile(canonical); if (detail) maintenanceDetails.push(detail); }
   catch (error) { maintenanceDetails.push(`curation reconcile: ${redactMonitorText(error instanceof Error ? error.message : "failed")}`); }
-  try { const detail = await dependencies.release?.reconcile(canonical); if (detail) maintenanceDetails.push(detail); }
+  try { const detail = !priorityInput && await dependencies.release?.reconcile(canonical); if (detail) maintenanceDetails.push(detail); }
   catch (error) { maintenanceDetails.push(`release reconcile: ${redactMonitorText(error instanceof Error ? error.message : "failed")}`); }
-  try { const detail = await dependencies.maintenance?.reconcile(canonical); if (detail) maintenanceDetails.push(detail); }
+  try { const detail = !priorityInput && await dependencies.maintenance?.reconcile(canonical); if (detail) maintenanceDetails.push(detail); }
   catch (error) { maintenanceDetails.push(`maintenance reconcile: ${redactMonitorText(error instanceof Error ? error.message : "failed")}`); }
-  const gathered = await gatherSeatTickInput(canonical, settled, policy, sources);
+  const gathered = priorityInput ?? await gatherSeatTickInput(canonical, settled, policy, sources);
   await yieldToRuntime();
   /* The gather's own row, not the one it was handed: a first check seals the
      event cursor at the journal head while reading it, and re-deriving the row
      from `settled` here would drop the seal and read the whole journal as
      unread again at the next check. */
-  let input = await refreshSeatTickEvidence(gathered, sources);
+  let input = priorityInput ?? await refreshSeatTickEvidence(gathered, sources);
   input = { ...input, state: seatTickStateForEpoch(input.state, input.seat?.seatEpoch ?? null) };
   // Outcomes are visible even when the seat needs no wake or operator answer.
-  await sources.recordRuleReports?.(input.project, new Date(input.now).toISOString());
+  if (!priorityInput) await sources.recordRuleReports?.(input.project, new Date(input.now).toISOString());
   const authDetail = await recoverSeatAuthentication(input, sources, readState, writeState, ensureCard, dependencies.seatAuth ?? {});
-  const autoRotateDetail = await runSeatAutoRotation(input, sources, readState, writeState, ensureCard, deliver, dependencies.seatAutoRotation ?? {});
+  const autoRotateDetail = priorityInput ? null : await runSeatAutoRotation(input, sources, readState, writeState, ensureCard, deliver, dependencies.seatAutoRotation ?? {});
   let proposalIssues: readonly ProposalIssue[] = [];
   if (needsWorkSources(seatTickDecision(input).verdict)) {
     proposalIssues = await (dependencies.proposalIssues ?? defaultProposalIssues)(input.project, sources);
     input = await refreshSeatTickEvidence(input, sources);
+  }
+  if (priorityInput) {
+    const refreshed = await gatherSeatTickDeployInput(canonical, input.state, policy, sources, input.reports ?? null);
+    if (!refreshed) throw new SeatTickEvidenceRefreshCanceledError(input.state.pullRequestGap);
+    input = refreshed;
   }
   const at = new Date(input.now).toISOString();
   const mcpHealth = input.seat ? mcpHealthFor(input.seat, input.now) : null;
@@ -1810,6 +1877,7 @@ async function check(
   } catch (error) {
     console.error("[seat tick] deploy snapshot failed", error instanceof Error ? error.name : "unknown");
   }
+  assertSeatTickWork();
   const decision = seatTickDecision(input);
 
   /* An expiry that passed is already reflected in everything above — the
@@ -1818,19 +1886,23 @@ async function check(
      beside a tick that is ticking is the kind of disagreement someone reads
      off the board at the worst possible moment. */
   if (input.settings.autonomy?.endReason === "expired") {
-    try { expireSeatAutonomy(input.project, input.now); }
+    try { assertSeatTickWork(); expireSeatAutonomy(input.project, input.now); }
     catch (error) { console.error("[seat tick] autonomy expiry could not be persisted", error instanceof Error ? error.name : "unknown"); }
   }
   if (input.settings.lapsed) {
     try {
       if (dependencies.writeSettings) dependencies.writeSettings(input.project, seatTickSettingsAfterLapse(input.project, input.settings));
-      else expireSeatSchedule(input.project, input.now, SEAT_TICK_WAKE_INTERVAL_MS);
+      else { assertSeatTickWork(); expireSeatSchedule(input.project, input.now, SEAT_TICK_WAKE_INTERVAL_MS); }
     } catch (error) {
       console.error("[seat tick] lapsed settings could not be persisted", error instanceof Error ? error.name : "unknown");
     }
   }
 
   let state = decision.state;
+  if (priorityInput && decision.verdict.kind === "wake") {
+    // A deploy-only observation has not established that older stalls cleared.
+    delete decision.verdict.activeStallTokens;
+  }
   for (const card of decision.cards) {
     let carded = false;
     try {
@@ -1945,7 +2017,7 @@ async function check(
         clientMessageId, conversationId: input.seat.conversationId, seatEpoch: input.seat.seatEpoch,
         operationId: null, commit, text, preparedAt: at,
       };
-      const accounting = state.accounting ? new SeatTickAccounting(state.accounting.filename, input.project) : null;
+      const accounting = state.accounting ? tickAccounting(state.accounting.filename, input.project) : null;
       /* One prepared attempt per project, whichever store holds the row. The
          accounting's own admission is the fence in production; a row with no
          accounting beside it answers the same question here, because an age
@@ -2291,30 +2363,58 @@ export async function reconcileSeatTick(dependencies: SeatTickControllerDependen
   // Recovery must settle a curator whose project no longer has a seat or open work.
   const incumbent = machinePass();
   if (incumbent) projects.add(canonicalOrchestratorProject(incumbent.project));
-  let first = true;
-  for (const project of [...projects].sort()) {
-    /* One project's check at a time, with the event loop between them. Every
-       phase below awaits promises that are usually already settled, so without
-       this a sweep over thirty-odd seats ran as one block of several seconds
-       and every HTTP request waited behind it (#1987). */
-    if (!first) await yieldToRuntime();
-    first = false;
+  // Each project starts independently. Its own deadline includes every phase;
+  // an overdue project never holds the roster behind its await.
+  const checked = await Promise.all([...projects].sort().map(project => checkSeatTickProject(project, {
+    ...dependencies, sources, ownsTraffic: dependencies.ownsTraffic ?? releaseOwnsTraffic,
+    release: dependencies.release === undefined ? releaseControllerForSources(sources) : dependencies.release,
+    curation: dependencies.curation === undefined ? productionCurationController(sources) : dependencies.curation,
+    maintenance: dependencies.maintenance === undefined ? productionBoardMaintenanceController(sources) : dependencies.maintenance,
+  })));
+  records.push(...checked.filter((record): record is SeatTickRunRecord => record !== null));
+  return records;
+}
+
+type ActiveProjectCheck = { promise: Promise<SeatTickRunRecord | null>; work?: SeatTickWork; owed: boolean };
+function checkSeatTickProject(project: string, dependencies: SeatTickControllerDependencies): Promise<SeatTickRunRecord | null> {
+  const checks = tickHost.__llvSeatTickProjects ??= new Map();
+  const active = checks.get(project);
+  if (active) {
+    active.owed = true;
+    console.error(`[seat tick] project held: ${active.work?.detail() ?? `project=${project}; opening`}; retry owed`);
+    return active.promise;
+  }
+  const entry: ActiveProjectCheck = { promise: Promise.resolve(null), owed: false };
+  checks.set(project, entry);
+  const generation = tickHost.__llvSeatTickGeneration;
+  entry.promise = (async () => {
     try {
       kickTurboWork(project, dependencies.turbo);
-      const record = await runSeatTickCheck(project, { ...dependencies, sources, release: dependencies.release === undefined ? releaseControllerForSources(sources) : dependencies.release, curation: dependencies.curation === undefined ? productionCurationController(sources) : dependencies.curation, maintenance: dependencies.maintenance === undefined ? productionBoardMaintenanceController(sources) : dependencies.maintenance });
-      if (record) records.push(record);
+      return await runSeatTickCheck(project, { ...dependencies, workStarted: work => {
+        entry.work = work;
+        dependencies.workStarted?.(work);
+      } });
     } catch (error) {
-      /* Only an unwritable journal reaches here; the check itself records its
-         own failures. */
       console.error("[seat tick] check could not be journaled", error instanceof Error ? error.name : "unknown");
+      return null;
+    } finally {
+      if (checks.get(project) === entry) checks.delete(project);
+      if (entry.owed && generation === tickHost.__llvSeatTickGeneration) {
+        // A callback which arrived during this check is a fresh obligation.
+        // Coalesce it once; the new check re-reads all durable state.
+        void checkSeatTickProject(project, dependencies);
+      }
     }
-  }
-  return records;
+  })();
+  return entry.promise;
 }
 
 const tickHost = globalThis as typeof globalThis & {
   __llvSeatTickTimer?: ReturnType<typeof setInterval>;
   __llvSeatTickRunning?: boolean;
+  __llvSeatTickGeneration?: number;
+  __llvSeatTickProjects?: Map<string, ActiveProjectCheck>;
+  __llvSeatTickPasses?: Map<symbol, number>;
 };
 
 /**
@@ -2336,6 +2436,7 @@ const tickHost = globalThis as typeof globalThis & {
  * already read.
  */
 export function startSeatTick(ports: {
+  clock?: () => number;
   handoffHeld?: () => boolean;
   drainHeld?: () => boolean;
   recordSuccessions?: () => unknown[];
@@ -2378,14 +2479,15 @@ export function startSeatTick(ports: {
     return false;
   }
   const schedule = ports.scheduleInterval ?? ((callback, delayMs) => setInterval(callback, delayMs));
-  const sweep = ports.sweep ?? (() => reconcileSeatTick());
+  const sweep = ports.sweep ?? (() => reconcileSeatTick({ policy }));
+  const passes = tickHost.__llvSeatTickPasses ??= new Map();
+  const clock = ports.clock ?? (() => performance.now());
+  const generation = tickHost.__llvSeatTickGeneration;
   const handoffHeld = ports.handoffHeld ?? (() => !!activeRestartGate(statePath("self-update", "auto-admission.json")));
   const drainHeld = ports.drainHeld ?? (() => !!activeDrain());
   const run = () => {
-    /* A check that outran its interval drops the next one rather than stacking
-       it. A tick that would land behind the one before it is stale by
-       construction, and staleness is the whole reason nothing is queued. */
-    const gate = tickHost.__llvSeatTickRunning ? "sweep-running" : handoffHeld() ? "restart-handoff" : drainHeld() ? "update-drain" : null;
+    if (generation !== tickHost.__llvSeatTickGeneration) return;
+    const gate = handoffHeld() ? "restart-handoff" : drainHeld() ? "update-drain" : null;
     if (gate) {
       const at = new Date().toISOString();
       const detail = `seat tick held: ${gate}; next check ${new Date(Date.parse(at) + policy.checkIntervalMs).toISOString()}`;
@@ -2396,12 +2498,25 @@ export function startSeatTick(ports: {
       } catch { /* The service log retains the hold if the journal is unavailable. */ }
       return;
     }
+    if (passes.size) {
+      const age = Math.round(clock() - Math.min(...passes.values()));
+      const projects = [...(tickHost.__llvSeatTickProjects?.values() ?? [])]
+        .map(entry => entry.work?.detail()).filter(Boolean).join(" | ");
+      log(`[seat tick] sweep-running; ageMs=${age}; state=${age >= policy.checkIntervalMs ? "long-running" : "running"}; ${projects || "project=discovery"}; checking due projects`);
+    }
+    const pass = Symbol();
+    passes.set(pass, clock());
     tickHost.__llvSeatTickRunning = true;
-    void Promise.resolve(sweep())
+    void (async () => { await sweep(); })()
       .catch((error) => console.error("[seat tick] sweep failed", error instanceof Error ? error.name : "unknown"))
-      .finally(() => { tickHost.__llvSeatTickRunning = false; });
+      .finally(() => {
+        passes.delete(pass);
+        tickHost.__llvSeatTickRunning = passes.size > 0;
+      });
   };
-  const timer = schedule(run, policy.checkIntervalMs);
+  // Poll at half the advertised interval; even a settlement just after a poll
+  // has room for its project budget before the one-interval delivery bound.
+  const timer = schedule(run, policy.checkIntervalMs / 2);
   timer.unref?.();
   tickHost.__llvSeatTickTimer = timer;
   // Read durable stall observations immediately; a restart owes no new interval.
@@ -2410,12 +2525,16 @@ export function startSeatTick(ports: {
 }
 
 export function seatTickIdle(): boolean {
-  return !tickHost.__llvSeatTickRunning;
+  return !tickHost.__llvSeatTickRunning && !tickHost.__llvSeatTickProjects?.size;
 }
 
 /** Test seam: the timer is process-global, so a suite must be able to start
     from an unstarted one without reaching into module internals. */
 export function stopSeatTick(): void {
+  tickHost.__llvSeatTickGeneration = (tickHost.__llvSeatTickGeneration ?? 0) + 1;
+  for (const entry of tickHost.__llvSeatTickProjects?.values() ?? []) entry.work?.close();
+  tickHost.__llvSeatTickProjects?.clear();
+  tickHost.__llvSeatTickPasses?.clear();
   const timer = tickHost.__llvSeatTickTimer;
   if (timer) clearInterval(timer);
   tickHost.__llvSeatTickTimer = undefined;

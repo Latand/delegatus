@@ -295,7 +295,10 @@ test("lane hashing yields and refuses a frozen source replaced while hashing", a
   performanceSpans.observeSite(site => {
     if (performanceSites[site] !== "seat-tick.hash" || scheduled) return;
     scheduled = true;
-    setImmediate(() => { rows = Object.freeze([...rows]); });
+    // A publication with unchanged rows keeps its evidence. Change an owned
+    // row during hashing to prove the provenance fence still refuses it.
+    setImmediate(() => { rows = Object.freeze(rows.map((row, index) => index === 0
+      ? Object.freeze({ ...row, task: "replacement source evidence" }) : row)); });
   });
   try {
     await expect(gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports)).rejects.toThrow("sources changed");
@@ -3289,6 +3292,24 @@ test("frozen lane evidence avoids whole-row serialization and replacement invali
     expect(replaced.pullRequestEvidenceKey).not.toBe(first.pullRequestEvidenceKey);
     expect(bodies).toBe(0);
   } finally { serializing.mockRestore(); }
+});
+
+test("unrelated collection publications cannot cancel this project's alarm evidence", async () => {
+  const { refreshSeatTickEvidence } = await import("./seatTickSources");
+  const { deepFreeze } = await import("@/lib/deepFreeze");
+  const own = deepFreeze(lane({ id: "own-evidence", spec: "project evidence" }));
+  let generation = 0;
+  const ports = sources({});
+  // A different project publishes between every read and every yield. This
+  // project's immutable row remains exactly the one which was prepared.
+  ports.pipelines = () => Object.freeze([own, deepFreeze(lane({ id: "foreign-evidence",
+    project: "unrelated", spec: `foreign publication ${++generation}` }))]) as never;
+  const input = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  for (let pass = 0; pass < 3; pass++) {
+    const fresh = await refreshSeatTickEvidence(input, ports);
+    expect(fresh.pullRequestEvidenceKey).toBe(input.pullRequestEvidenceKey);
+    expect(fresh.pipelines.map(row => row.id)).toEqual(["own-evidence"]);
+  }
 });
 
 
