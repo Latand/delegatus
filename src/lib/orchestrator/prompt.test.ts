@@ -84,8 +84,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 58, and a v57 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(58);
+test("the default mandate is at version 59, and a v58 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(59);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -162,7 +162,8 @@ test("the default mandate is at version 58, and a v57 seat reads as stale", () =
   expect(orchestratorMandateStale(55)).toBe(true);
   expect(orchestratorMandateStale(56)).toBe(true);
   expect(orchestratorMandateStale(57)).toBe(true);
-  expect(orchestratorMandateStale(58)).toBe(false);
+  expect(orchestratorMandateStale(58)).toBe(true);
+  expect(orchestratorMandateStale(59)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("gives the shape, the outcome rule and what");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
@@ -170,7 +171,7 @@ test("the default mandate is at version 58, and a v57 seat reads as stale", () =
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("keep these rare");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Off: file no bridge reports at all");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('onExhausted?: "advance" | "stop-after-fix" | "park"');
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Use stop-after-fix only when the operator asked to look before merge");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Use stop-after-fix only when asked to look before merge");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('The kind "review-loop" is a legacy form kept for stored lanes; do not compose it.');
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("You are this project's orchestrator in Delegatus");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("registered under the key `viewer`");
@@ -243,6 +244,8 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   57: "928041c147b9f068a23674313b33c285c78555fa6a8afc0a89aeb20f49e99639",
   // v58 states the maintenance practice and ships #3083's working rule 16.
   58: "632ee54064e12e71db96a1ed427d0fc6f59566d6983d4b659429056ca7f4fb38",
+  // v59 restores one terminal review check and its automatic merge bar.
+  59: "c16c157ea7afb595eac8f1b6773c7f166771fd7c516ce7d1eb917a84136ad863",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -522,11 +525,40 @@ test("the mandate names every attention target and uses the tool schema for shap
 /* #1026 — a fresh seat composed its first pipeline through seven sequential
    validation errors because nothing it had read named the stage shape. The
    mandate now prints that shape as the schema declares it. */
-test("the mandate names explicit graph insertion and final-fix completion (#2247)", () => {
+test("the mandate names explicit graph insertion and bounded review fixes (#2247)", () => {
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("add-stage preserves edges; after:<stageId>");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("runs exactly N reviews and the fix of the N-th review");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("It creates no terminal re-check and no budget follow-up task");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("up to N reviews with fixes");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("No follow-up task");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Another gate's fail loop permits a fresh handoff; rounds stay cumulative");
+});
+
+test("fresh and upgraded mandates require the terminal review check before automatic merging (#3037)", () => {
+  const v57 = fs.readFileSync(path.join(import.meta.dir, "fixtures/mandate-v57.txt"), "utf8");
+  for (const mandate of [ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT), orchestratorMandateForDelivery(v57)]) {
+    expect(mandate).toContain("A terminal gate (next:null) re-checks the last fix once: pass completes; fail parks with budget-spent findings.");
+    expect(mandate).toContain("Nonterminal gates take their pass edge with findings after fixing.");
+    expect(mandate).toContain("terminal re-check included");
+    expect(mandate).toContain("only nonterminal gates spent their budget with the last fix passed");
+    expect(mandate).not.toContain("It creates no terminal re-check");
+    expect(mandate).not.toContain("then completes next:null");
+  }
+});
+
+test("the stored v58 review and merge policy upgrades once without changing pending replay or bespoke wording (#3037)", () => {
+  const v57 = fs.readFileSync(path.join(import.meta.dir, "fixtures/mandate-v57.txt"), "utf8");
+  const line = (text: string, prefix: string) => text.split("\n").find(value => value.startsWith(prefix))!;
+  const v58 = ["Review:", "- Merge bar:"].reduce((text, prefix) =>
+    text.replace(line(ORCHESTRATOR_SYSTEM_PROMPT, prefix), line(v57, prefix)), ORCHESTRATOR_SYSTEM_PROMPT);
+  expect(createHash("sha256").update(v58).digest("hex")).toBe(PROMPT_FINGERPRINTS[58]);
+  expect(orchestratorMandateUpgraded(v58)).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
+  const delivered = orchestratorMandateForDelivery(v58);
+  expect(delivered).toBe(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT));
+  expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
+  expect(orchestratorMandateUpgraded(orchestratorMandateUpgraded(v58))).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
+  expect(orchestratorMandateWithRoleTable(v58, null)).toBe(v58);
+  const bespoke = "Review: our own budget.\n- Merge bar: operator approval.";
+  expect(orchestratorMandateUpgraded(bespoke)).toBe(bespoke);
+  expect(orchestratorMandateForDelivery(bespoke)).toContain(bespoke);
 });
 
 test("the mandate carries the pipeline stage shape a first pipeline needs", () => {
@@ -862,7 +894,8 @@ test("the role table keeps the delivered default inside the structured envelope"
      2026-10-20: the mandate may grow to state it fully): delivered 29 576 →
      30 112 bytes, both bounds 300 higher. The scaffold and the spawn envelope
      still fit with 1 673 bytes to spare; handoffDigest.test.ts states what the
-     same 536 bytes take from a rotation's history. */
+     same 536 bytes take from a rotation's history. v59 adds 18 bytes for the
+     terminal review policy while preserving both bounds. */
   expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 1_850);
   expect(Buffer.byteLength(delivered) + launchOverheadBytes("spawn", { mode: "standard" })).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 1_650);
 });
@@ -927,10 +960,11 @@ test("the delivered default names no stack and teaches one verdict vocabulary (v
   /* Recommended when the project has GitHub, never mandatory (operator, 2026-09-27). */
   expect(delivered).toContain("Attach a useful GitHub issue with pipeline_action attach-link");
   /* Review of #2301: the merge bar names the lanes Delegatus merges
-     (forge/autoMerge.ts mergeEligible): reviews passed, or budget spent with
-     the last fix passed, whose kept findings the seat reads. */
-  expect(delivered).toContain("the last budget fix passed");
-  expect(delivered).toContain("Delegatus merges a completed lane whose reviews passed, or spent their budget with the last fix passed");
+     (forge/autoMerge.ts mergeEligible): terminal reviews passed; nonterminal
+     gates may spend their budget with the last fix passed (#3037). */
+  expect(delivered).toContain("a nonterminal gate's last budget fix passed");
+  expect(delivered).toContain("terminal re-check included");
+  expect(delivered).toContain("Delegatus merges a completed lane when reviews passed or only nonterminal gates spent their budget with the last fix passed");
   expect(delivered).toContain("continue-review cannot add rounds; traversed budgets cannot grow");
   /* One condition for stop-after-fix, stated once (review of #2301). */
   expect(delivered.match(/stop-after-fix only when|use stop-after-fix when/g)).toEqual(["stop-after-fix only when"]);
