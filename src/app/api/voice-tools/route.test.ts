@@ -53,6 +53,57 @@ function request(method: string, body?: unknown, headers: Record<string, string>
 }
 const proposal = { name: "music", title: "Music", capability: "Search music", transport: { type: "http", url: "https://example.invalid/mcp", headers: { Authorization: { secretRef: "music-token" } } } };
 
+test("uncontained dry-run confirmation uses the same owner gate on browser and MCP paths", async () => {
+  const body = { action: "dry-run", name: "music", digest: `sha256:${"a".repeat(64)}`, confirmUncontained: { reason: "MACOS", runId: `sha256:${"b".repeat(64)}` } };
+  const before = await fs.readFile(path.join(root, "state/voice-tools.json"), "utf8").catch(() => null);
+  for (const [headers, status, expected] of [[{ cookie: "" }, 401, { code: "MEMBER_REQUIRED" }], [{ "x-llv-spawn-capability": "invalid-agent-claim" }, 403, { code: "OPERATOR_REQUIRED", error: "Open this control in Delegatus." }], [internalServiceHeaders("mcp"), 403, { code: "OPERATOR_REQUIRED", error: "Open this control in Delegatus." }]] as const) {
+    const response = await POST(request("POST", body, headers));
+    expect(response.status).toBe(status);
+    expect(await response.json()).toEqual(expected);
+  }
+  const invite = createInvite(teamStore(), browserOwner.member, "Member");
+  const member = redeemJoin(teamStore(), invite.code, "Member", { surface: "desktop", browser: "chrome" });
+  const response = await POST(request("POST", body, { cookie: `${MEMBER_COOKIE}=${member.cookie}` }));
+  expect(response.status).toBe(401);
+  expect(await response.json()).toEqual({ code: "OPERATOR_REQUIRED" });
+  const mcpResponse = await proposalPOST(request("POST", { ...body, clientRequestId: "confirm-refused", conversationId: null }, internalServiceHeaders("mcp")));
+  expect(mcpResponse.status).toBe(400);
+  expect(await mcpResponse.json()).toEqual({ code: "INVALID_REQUEST" });
+  expect(await fs.readFile(path.join(root, "state/voice-tools.json"), "utf8").catch(() => null)).toBe(before);
+});
+
+test("the owner confirms an unavailable stdio run through settings and its record survives reload", async () => {
+  const { stdioContainment } = await import("@/lib/voiceTools/containment");
+  const availability = await stdioContainment();
+  if (!availability.reason) return; // The contained-path regression lives in hub.test.ts.
+  const at = "2026-01-01T00:00:00.000Z";
+  const directory = path.join(root, "uncontained-route");
+  const store = new VoiceToolsStore(directory, () => at);
+  setVoiceToolHubForTests(new VoiceToolHub(store));
+  const entry = path.join(root, "route-server.mjs");
+  const source = `import readline from 'node:readline'; readline.createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(m.id===undefined)return;console.log(JSON.stringify({jsonrpc:'2.0',id:m.id,result:m.method==='initialize'?{protocolVersion:'2025-03-26',capabilities:{tools:{}},serverInfo:{name:'fake',version:'1'}}:{tools:[]}}));});`;
+  try {
+    await fs.writeFile(entry, source);
+    const hash = (await import("node:crypto")).createHash("sha256").update(source).digest("hex");
+    const local = { name: "local", title: "Local", capability: "Search", transport: { type: "stdio", command: "bun", args: ["run", entry] }, entryFile: { path: entry, sha256: hash } };
+    expect((await POST(request("POST", { action: "propose", proposal: local }))).status).toBe(200);
+    const digest = (await store.view()).servers.local.digest;
+    const run = { action: "dry-run", name: "local", digest };
+    const refused = await POST(request("POST", run));
+    expect(refused.status).toBe(200);
+    const warning = (await refused.json()).servers.local.lastDryRun;
+    expect(warning.containmentReason).toBe(availability.reason);
+    const confirmed = await POST(request("POST", { ...run, confirmUncontained: { reason: availability.reason, runId: warning.runId } }));
+    expect(confirmed.status).toBe(200);
+    const record = (await confirmed.json()).servers.local.lastDryRun;
+    expect(record.code).toBe("OK");
+    expect(record.confirmation).toEqual({ by: "operator", at, tool: "local", reason: availability.reason, runId: warning.runId });
+    expect((await new VoiceToolsStore(directory).view()).servers.local.lastDryRun).toEqual(record);
+    const again = await POST(request("POST", { ...run, digest: (await store.view()).servers.local.digest }));
+    expect((await again.json()).servers.local.lastDryRun.code).toBe("CONTAINMENT_REQUIRED");
+  } finally { setVoiceToolHubForTests(new VoiceToolHub(new VoiceToolsStore(path.join(root, "state")))); }
+});
+
 test("both proposal routes return INVALID_PROPOSAL for non-registry package targets", async () => {
   const before = await (await GET(request("GET"))).json();
   const approvedService = internalServiceHeaders("mcp");

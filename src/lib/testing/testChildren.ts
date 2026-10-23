@@ -12,7 +12,7 @@ import { admitPortableTestRunner } from "./portableTestAdmission";
  * The caller awaits the returned teardown before releasing this root.
  */
 export function beginTestChildOwnership(root: string): () => Promise<void> {
-  if (process.platform !== "linux") admitPortableTestRunner();
+  if (process.platform !== "linux" || !process.env.LLV_OWNED_TEST_RUN_CGROUP) admitPortableTestRunner();
   const owner = captureProcessIdentity(process.pid);
   const supervisor = captureProcessIdentity(process.ppid);
   const cgroup = process.platform === "linux" ? process.env.LLV_OWNED_TEST_RUN_CGROUP : undefined;
@@ -28,9 +28,9 @@ export function beginTestChildOwnership(root: string): () => Promise<void> {
   fs.writeFileSync(ledger, "", { mode: 0o600 });
   const rawBunSpawn = Bun.spawn;
   const rawBunSpawnSync = Bun.spawnSync;
-  // Linux already owns the complete tree in the test's private service. The
-  // portable guardian is a fallback, rather than a second polling supervisor.
-  const guardian = process.platform === "linux" ? null : rawBunSpawn([process.execPath, path.resolve(import.meta.dir, "../../../scripts/test-child-guardian.ts"), ledger, JSON.stringify(owner)], { env: process.env, stdin: "ignore", stdout: "ignore", stderr: "inherit" });
+  // An admitted cgroup owns the complete tree in the test's private service.
+  // Otherwise a portable guardian retains the recorded child identities.
+  const guardian = cgroup ? null : rawBunSpawn([process.execPath, path.resolve(import.meta.dir, "../../../scripts/test-child-guardian.ts"), ledger, JSON.stringify(owner)], { env: process.env, stdin: "ignore", stdout: "ignore", stderr: "inherit" });
   guardian?.unref();
   const nodeChildren = new Map<ChildProcess, ProcessIdentity>();
   const bunChildren = new Map<ReturnType<typeof Bun.spawn>, ProcessIdentity>();

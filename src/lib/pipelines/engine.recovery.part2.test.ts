@@ -297,6 +297,9 @@ test.each([false, true])("restart after receipt completion clears only the recov
     f.advance(61_000);
     await f.recover(f.launchId(), () => true);
   }
+  const cap = { limitBytes: 8 * 2 ** 30, requestedBytes: 12 * 2 ** 30, source: "stage" as const, clamped: true, enforced: true };
+  await f.registry.recordSpawnMemoryCapOffLoop(f.launchId(), cap);
+  productionHostSeams(f);
   expect(f.registry.readOnlySnapshot().receipts[f.launchId()]?.state).toBe("completed");
   expect(f.attempt().state).toBe("spawning");
   expect(loadPipelines()[0]!.stateDetail).toContain("waiting for the runtime host");
@@ -315,6 +318,7 @@ test.each([false, true])("restart after receipt completion clears only the recov
     expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: "manual review required for changed requirements" });
     expect(f.attempt().controllerWait).toBeDefined();
   } else {
+    expect(f.attempt().memoryCap).toMatchObject(cap);
     expect(f.attempt().controllerWait).toBeUndefined();
     expect(loadPipelines()[0]!.stateDetail).toBeNull();
   }

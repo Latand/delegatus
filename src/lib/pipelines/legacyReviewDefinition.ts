@@ -302,6 +302,7 @@ export function previewLegacyReviewConversion(
     kind: "run",
     ...fixerInput,
     ...(source.sandbox !== undefined ? { sandbox: source.sandbox } : {}),
+    ...(source.agentMemoryMaxBytes !== undefined ? { agentMemoryMaxBytes: source.agentMemoryMaxBytes } : {}),
     ...(source.account !== undefined && resolved.role.engine === source.effectiveRole.engine ? { account: source.account } : {}),
     "prompt": fixerPrompt(stageId),
     next: stageId,
