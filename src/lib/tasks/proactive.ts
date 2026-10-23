@@ -4,7 +4,7 @@ import { effectiveSeatTickSettings, readSeatTickSettings } from "@/lib/monitor/s
 import { orchestratorSeatForCurrentProject } from "@/lib/orchestrator/seatProjectIdentity";
 import { canonicalProject, projectAliasKeys } from "@/lib/projects/aliases";
 import { legacyDatabasePath } from "@/lib/state/legacyImport";
-import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
+import { initializeStateCollections, readStateCollectionRevision, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { createTask, type CreateTaskInput } from "./commands";
 import { TASKS_FILE, patchTaskCompanion } from "./store";
@@ -197,9 +197,21 @@ export function validProactiveDecisionToken(value: unknown): value is ProactiveD
 /** A read grants no authority. Adoption compares this entire tuple again
  * under the task/decision transaction, after all admission waits. */
 export function proactiveDecisionToken(task: BoardTask, file = TASKS_FILE): ProactiveDecisionToken {
+  return proactiveDecisionSnapshot(task, file).expected;
+}
+
+/** The displayed decision and its revision belong to one observation. A
+ * concurrent family write holds the response for a fresh read. */
+export function proactiveDecisionSnapshot(task: BoardTask, file = TASKS_FILE): {
+  decision: { rejected: boolean; adopted: boolean }; expected: ProactiveDecisionToken;
+} {
   if (!task.proactive) throw new Error("invented task not found");
-  return { taskId: task.id, decisionRevision: readDecision(task, file).revision,
-    scopeRevision: task.proactive.scopeRevision, scopeHash: proactiveScopeHash(task) };
+  const database = legacyDatabasePath(file);
+  const before = readStateCollectionRevision(database, seed.collection);
+  const { rejected, adopted, revision } = readDecision(task, file);
+  if (readStateCollectionRevision(database, seed.collection) !== before) throw new Error("proactive decision changed while reading; reload before deciding");
+  return { decision: { rejected, adopted }, expected: { taskId: task.id, decisionRevision: revision,
+    scopeRevision: task.proactive.scopeRevision, scopeHash: proactiveScopeHash(task) } };
 }
 
 /** Caller identity is supplied by the authenticated transport, never its body.

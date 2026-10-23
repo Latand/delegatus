@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { refuseAnonymous, teamActor } from "@/lib/team";
-import { decideProactiveTask, proactiveCandidateDecision, proactiveDecisionToken, validProactiveDecisionToken } from "@/lib/tasks/proactive";
+import { decideProactiveTask, proactiveDecisionSnapshot, validProactiveDecisionToken } from "@/lib/tasks/proactive";
 import { loadTasksByIds } from "@/lib/tasks/store";
 import { taskForResponse } from "@/lib/prototypeReview/read";
 
@@ -26,7 +26,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const task = loadTasksByIds(new Set([id]))[0];
     if (!task?.proactive) return NextResponse.json({ error: "invented task not found" }, { status: 404 });
     return NextResponse.json({ ok: true, task: taskForResponse(req, task),
-      decision: proactiveCandidateDecision(task), expected: proactiveDecisionToken(task) }, { headers: { "Cache-Control": "no-store" } });
+      ...proactiveDecisionSnapshot(task) }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "proactive decision is unreadable" }, { status: 409 });
   }
@@ -46,7 +46,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   try {
     const task = await decideProactiveTask(id, decision, "operator", expected);
     return NextResponse.json({ ok: true, task: taskForResponse(req, task),
-      decision: proactiveCandidateDecision(task), expected: proactiveDecisionToken(task) });
+      ...proactiveDecisionSnapshot(task) });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "proactive decision failed" }, { status: 409 });
   }
