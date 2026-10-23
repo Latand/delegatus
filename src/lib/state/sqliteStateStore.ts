@@ -979,16 +979,31 @@ export function stateEvidenceVersion(filename: string): string {
   return `${reader.generation}:${version}:${schema}`;
 }
 
+/* The last answer, valid while the version connection has seen no commit,
+   schema change or replacement since it was read. */
+const evidenceRevisionMemo = evidenceOwner as typeof evidenceOwner & { __llvPipelineEvidenceRevision?: { filename: string; version: string; revision: string | null } };
+
 /** The index's validity is checked against the actual trigger definitions.
- * Schema loss or an older store takes the complete reader path. */
+ * Schema loss or an older store takes the complete reader path. Opening the
+ * state database and reading its schema cost about 16 ms, and one startup
+ * admission asks two or three times; while no other connection has
+ * committed, the previous answer still holds. */
 export function pipelineEvidenceRevision(filename: string): string | null {
   if (!fs.existsSync(filename)) return null;
+  // Read before the revision: a commit in between moves the next version.
+  const version = stateEvidenceVersion(filename);
+  const memo = evidenceRevisionMemo.__llvPipelineEvidenceRevision;
+  if (version !== "missing" && memo?.filename === filename && memo.version === version) return memo.revision;
   const db = connectReadonlyDatabase(filename);
   try {
-    if (!pipelineEvidenceIndexReady(db)) return null;
-    const revision = db.query<{ revision: number }, []>("SELECT revision FROM pipeline_evidence_clock WHERE id=1").get();
-    const schema = db.query<{ schema_version: number }, []>("PRAGMA schema_version").get()!.schema_version;
-    return revision ? `${databaseFileIdentity(filename)}:${schema}:${revision.revision}` : null;
+    const revision = (() => {
+      if (!pipelineEvidenceIndexReady(db)) return null;
+      const clock = db.query<{ revision: number }, []>("SELECT revision FROM pipeline_evidence_clock WHERE id=1").get();
+      const schema = db.query<{ schema_version: number }, []>("PRAGMA schema_version").get()!.schema_version;
+      return clock ? `${databaseFileIdentity(filename)}:${schema}:${clock.revision}` : null;
+    })();
+    evidenceRevisionMemo.__llvPipelineEvidenceRevision = version === "missing" ? undefined : { filename, version, revision };
+    return revision;
   } finally { db.close(); }
 }
 
