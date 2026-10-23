@@ -28,6 +28,7 @@ export async function GET(req: NextRequest) {
   try {
     switch (params.get("op")) {
       case "chats":
+        await service.discoverCloneChats();
         return NextResponse.json(service.listChats({ includeInactive: params.get("includeInactive") === "1" }));
       case "messages":
         return NextResponse.json(service.readMessages({

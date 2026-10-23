@@ -30,7 +30,7 @@ import { RulesWindow } from "@/components/roleMemory/LearnedRules";
 import type { AttentionDismissalMark, DismissalTarget } from "@/lib/attention/dismissalTypes";
 import { COMPANION_PROTECT, COMPANION_ROWS, companionReserved, companionShellReady } from "@/components/voiceCompanion/hostSurfaces";
 import { VoiceCompanion } from "@/components/voiceCompanion/VoiceCompanion";
-import { sampleTranscript, sampleOrchestratorMessage } from "@/components/voiceCompanion/transcriptSample.fixture";
+import { sampleCallHistory, sampleTranscript, sampleOrchestratorMessage } from "@/components/voiceCompanion/transcriptSample.fixture";
 import type { CompanionEvent, CompanionPlan } from "@/lib/voiceCompanion/contract";
 import { DEMO_IDS, SCENARIO_PLAYBACK_PAUSE, demoAnswer, demoInstruction, isScenario, scenarioScript } from "@/lib/voiceCompanion/scenarios";
 import { createSimulatedCompanion, realClock } from "@/lib/voiceCompanion/simulator";
@@ -70,6 +70,8 @@ import { TeamPage } from "@/components/team/TeamPage";
 import { WorkspacePage } from "@/components/team/WorkspacePage";
 import { FIXTURE_WORKSPACE_IDS, workspacesFixture } from "@/components/team/workspacesEvidence.fixture";
 import { WORKSPACE_STORAGE_KEY } from "@/components/team/workspacesClient";
+import { pushSoundCaption } from "@/lib/audio/captions";
+import { readObstacles } from "@/components/soundCaptionPlacement";
 
 /*
  * The real Viewer on the kanban face (#1695), over invented content equivalent
@@ -453,6 +455,12 @@ const REVIEW_STOPS = SCENARIO === "review-stops";
    on by default and off with `&merge=off`. */
 const AUTO_REFRESH = SCENARIO === "auto-refresh";
 const MERGE_STATES = SCENARIO === "merge-states" || AUTO_REFRESH;
+/* Sound captions (docs/design/sound-captions.md §6): the default board plus one lane whose visual critic is running.
+   The page exposes `soundCaptionsFixture`: `push` puts a caption on the stack directly (the layout states),
+   `obstacles` reads what the stack's placement sees on the page, and
+   `passStage` turns the critic's attempt to `passed`, which the next files poll carries to the real planner and
+   from there through the real cue player. */
+const SOUND_CAPTIONS = SCENARIO === "sound-captions";
 /* #2187 §5.3, §6 (mockup D4): a lane marked as finishing its task, running;
    a task whose marked lane merged while a second lane still runs, so its move
    to Done waits; and a Done task its marked lane finished. */
@@ -610,6 +618,28 @@ function pipeline(id: string, task: string, taskId: string, state: string, stage
     baseBranch: "main", baseRef: "main", lastPassedCommit: "", stages, runs, cursor, state, pausedState: null, stateDetail: null,
     srcPath: null, srcConversationId: null, createdAt: iso(8 * 60 * MIN), closedAt: null, ...over,
   } as unknown as Pipeline;
+}
+
+const soundCaptionPipelines: Pipeline[] = SOUND_CAPTIONS ? [
+  pipeline("p-captions", L("Sound captions: say what each sound means", "Підписи до звуків: що означає кожен"), "t-captions", "running",
+    [stage("implement", "builder", "visual-critic"), stage("visual-critic", "visual-critic", null)],
+    [
+      { stageId: "implement", attempts: [attempt(1, "passed", null, { completedAt: iso(30 * 60) })] },
+      { stageId: "visual-critic", attempts: [attempt(1, "running", null)] },
+    ],
+    { stageId: "visual-critic", state: "running", input: null, activatedBy: null }),
+] : [];
+if (SOUND_CAPTIONS) {
+  Object.assign(window, { soundCaptionsFixture: {
+    push: pushSoundCaption,
+    /** What the stack's placement reads from the page, for the column's own right edge. */
+    obstacles: () => readObstacles(document.querySelector("[data-sound-captions]"), 16),
+    passStage() {
+      const critic = (soundCaptionPipelines[0]!.runs as unknown as Array<{ stageId: string; attempts: Array<{ state: string; completedAt: string | null }> }>).find((run) => run.stageId === "visual-critic")!;
+      critic.attempts[0]!.state = "passed";
+      critic.attempts[0]!.completedAt = new Date().toISOString();
+    },
+  } });
 }
 
 const files: FileEntry[] = [];
@@ -1722,6 +1752,7 @@ const pipelines: Pipeline[] = [
   ...reviewSpentPipelines,
   ...reviewStopPipelines,
   ...mergeStatePipelines,
+  ...soundCaptionPipelines,
   ...taskFinishPipelines,
   ...balancePipelines,
   ...arcPipelines,
@@ -1994,6 +2025,7 @@ const tasks: BoardTask[] = [
     task("t-rem-old", "assigned", L("A task from a peer that predates lane rows", "Задача від вузла, що ще не знає про рядки етапів"), "", 31 * MIN, [], { machine: STAGE_INSTALL } as Partial<BoardTask>),
     task("t-rem-done", "done", L("Publish the linked boards guide", "Опублікувати посібник зі зв’язаних дошок"), "", 3 * 60 * MIN, [], { machine: STAGE_INSTALL } as Partial<BoardTask>),
   ] : []),
+  ...(SOUND_CAPTIONS ? [task("t-captions", "assigned", L("Sound captions: say what each sound means", "Підписи до звуків: що означає кожен"), "", 3 * MIN)] : []),
   ...(MANY ? [task("t-many", "assigned", "Kanban: say what each pipeline of a task does", "Five pipelines on one card: two running, three finished.", 5 * MIN)] : []),
   ...(MARKS ? [task("t-marks", "assigned", "Say who runs each stage, and how often an edge fired", "Two pipelines: one fail edge fired twice of three, one with its budget spent.", 4 * MIN)] : []),
   ...(GLYPHS ? [
@@ -4926,6 +4958,9 @@ function voiceCompanionScene() {
   const script = params.get("script");
   const failure = params.get("failure");
   const readsTranscript = params.get("transcript") === "1";
+  /* `history=1`: the page opens after a reload, with no call of its own; the operator's retained calls are
+     `sampleCallHistory`'s three, which the character opens from the conversation panel's picker. */
+  const history = params.get("history") === "1" ? sampleCallHistory(UK ? "uk" : "en", PROJECT) : null;
   const clock = realClock();
   let pauseFrame = false;
   const adapter = createSimulatedCompanion({
@@ -4971,7 +5006,12 @@ function voiceCompanionScene() {
       if (sendLost && command.type === "confirmation" && command.decision === "send") { sendLost = false; throw new Error("COMPANION_UNAVAILABLE"); }
       return adapter.command(command);
     },
-    ...(readsTranscript ? { transcript: async () => {
+    ...(history ? {
+      calls: async () => history.calls, transcript: async (sessionId?: string) => {
+        const record = history.records[sessionId ?? history.calls[0]!.sessionId];
+        return record ? { ...record, usage: { callUsd: 0.19, callFinal: true, callIncomplete: false, month: "2026-10", monthUsd: 0.51, monthCapUsd: 20 } } : null;
+      },
+    } : readsTranscript ? { transcript: async () => {
       const record = sampleTranscript(UK ? "uk" : "en", PROJECT);
       record.entries.push({ id: "standalone-report", kind: "report", atMs: 90_000, order: 100,
         data: { project: PROJECT, projectName: "Atlas", status: "result", text: UK ? "Усі перевірки завершено. Звіт збережено після завершення розмови." : "All checks completed. This report remains saved after the call ended." } });

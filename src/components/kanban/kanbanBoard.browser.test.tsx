@@ -25364,6 +25364,158 @@ describe("floating voice companion", () => {
     }
   }, 1_800_000);
 
+  /* GitHub #2975: after a call the owner reads what the voice did. The page opens as after a reload, with no call of
+     its own (`&history=1`, `sampleCallHistory`): the character opens the newest retained call, the panel's picker
+     opens each earlier one, and an opened request says why it was not sent or delivered and links the orchestrator
+     conversation it went to. Every text the case names is measured whole inside the panel's body and the viewport,
+     from its text ranges. `LLV_VOICE_COMPANION_ONLY` runs it when it names `history`. Images go to
+     `<hand-off>/history`, never into the tree. */
+  browserTest("call history after a reload: the newest retained call, a picker for each earlier one, and a request's reason and orchestrator link, 1440 and 1000, en and uk, light and dark", async () => {
+    if (ONLY && !ONLY.includes("history")) return;
+    /* The first action of an opened call (a tool call or a request to the orchestrator) and its status text. */
+    const FIRST_ACTION = ['.vc-tr-list > li:is([data-kind="call"], [data-kind="request"])', '.vc-tr-list > li:is([data-kind="call"], [data-kind="request"]) .vc-call-state'];
+    const out = path.join(HANDOFF, "history");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const { browser, close } = await launchOwned();
+    const readings: unknown[] = [];
+    /** Whether each text range of each element is whole inside the panel's body (or, for the picker row, the panel) and the viewport. */
+    const whole = (page: Page, selectors: string[]) => page.evaluate(({ list, controlSelector }) => {
+      const view = document.querySelector<HTMLElement>("[data-companion-transcript-view]")!;
+      const body = view.querySelector<HTMLElement>("[data-transcript-body]")!;
+      const result: Record<string, { found: boolean; whole: boolean; text: string }> = {};
+      for (const selector of list) {
+        const element = view.querySelector<HTMLElement>(selector);
+        if (!element) { result[selector] = { found: false, whole: false, text: "" }; continue; }
+        const clip = (body.contains(element) ? body : view).getBoundingClientRect();
+        const range = document.createRange(); range.selectNodeContents(element);
+        const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+        /* Nothing else stands over the text: the topmost element at each piece's middle is the element itself. */
+        const uncovered = rects.every((rect) => { const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2); return !!top && (element === top || element.contains(top)); });
+        result[selector] = { found: true, text: element.innerText, whole: rects.length > 0 && uncovered && rects.every((rect) => rect.top >= clip.top - 0.5 && rect.bottom <= clip.bottom + 0.5
+          && rect.left >= clip.left - 0.5 && rect.right <= clip.right + 0.5 && rect.top >= 0 && rect.bottom <= innerHeight && rect.left >= 0 && rect.right <= innerWidth) };
+      }
+      /* A closed select draws its chosen option's text itself: measured with its own font against its content box. */
+      const picker = view.querySelector<HTMLSelectElement>("select[data-transcript-calls]")!;
+      const style = getComputedStyle(picker);
+      const context = document.createElement("canvas").getContext("2d")!;
+      context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+      const label = picker.selectedOptions[0]?.textContent ?? "";
+      const room = picker.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - 20;
+      const box = view.getBoundingClientRect(); const pick = picker.getBoundingClientRect();
+      return { result, picker: { label, fits: context.measureText(label).width <= room, height: pick.height, inside: pick.left >= box.left && pick.right <= box.right && pick.top >= box.top && pick.bottom <= box.bottom
+          && document.elementFromPoint(pick.left + pick.width / 2, pick.top + pick.height / 2) === picker },
+        panelInside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, sideways: body.scrollWidth - body.clientWidth,
+        /* The page's own top bar: no control of the page that starts in its first 48 px stands under the panel. */
+        covered: [...document.querySelectorAll<HTMLElement>(controlSelector)].filter((control) => !view.contains(control) && !control.closest("[data-voice-companion]"))
+          .map((control) => ({ control, rect: control.getBoundingClientRect() }))
+          .filter(({ rect }) => rect.width > 0 && rect.height > 0 && rect.top < 48 && rect.left < box.right && rect.right > box.left && rect.top < box.bottom && rect.bottom > box.top)
+          .map(({ control, rect }) => `${control.tagName.toLowerCase()} ${(control.innerText || control.getAttribute("aria-label") || "").slice(0, 24)} ${Math.round(rect.left)},${Math.round(rect.top)}`),
+        top: Math.round(box.top),
+        /* A row of the list the body's top edge runs through: a retained call opens at its start, so none is cut there. */
+        cutByTop: [...body.querySelectorAll<HTMLElement>(".vc-tr-list > li")].filter((row) => { const rect = row.getBoundingClientRect(); return rect.top < body.getBoundingClientRect().top - 0.5 && rect.bottom > body.getBoundingClientRect().top + 0.5; })
+          .map((row) => row.getAttribute("data-kind") ?? ""),
+        scrolled: Math.round(body.scrollTop),
+        /* The open request's name, whole inside its own line. */
+        title: [...view.querySelectorAll<HTMLElement>("[data-transcript-request] [data-human-label]")].map((node) => ({ text: node.innerText, whole: node.scrollWidth <= node.clientWidth && node.scrollHeight <= node.clientHeight + 1 })),
+        /* The space between the end of what is read above each label of the opened request and the label itself, from the text. */
+        gaps: [...view.querySelectorAll<HTMLElement>(".vc-tr-detail .vc-tr-label")].map((label) => {
+          const previous = label.previousElementSibling as HTMLElement | null;
+          if (!previous) return null;
+          const ink = (node: HTMLElement) => {
+            if (node.matches("pre, .vc-instruction")) { const rect = node.getBoundingClientRect(); return { top: rect.top, bottom: rect.bottom }; }
+            const range = document.createRange(); range.selectNodeContents(node);
+            const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+            return { top: Math.min(...rects.map((rect) => rect.top)), bottom: Math.max(...rects.map((rect) => rect.bottom)) };
+          };
+          return { label: label.textContent ?? "", after: previous.matches("[data-transcript-reason]") ? "reason" : previous.tagName.toLowerCase(), gap: Math.round((ink(label).top - ink(previous).bottom) * 10) / 10 };
+        }).filter((gap) => gap !== null) as Array<{ label: string; after: string; gap: number }> };
+    }, { list: selectors, controlSelector: CONTROL_SELECTOR });
+    /** Opens the shown call's request and scrolls its line to the top of the body. */
+    const openRequest = async (page: Page) => {
+      const request = page.locator('[data-companion-transcript-view] [data-transcript-call="request_orchestrator_delegation"]');
+      await request.locator("[data-transcript-toggle]").click();
+      await request.locator("[data-transcript-detail]").waitFor();
+      await request.evaluate((element) => { const body = element.closest<HTMLElement>("[data-transcript-body]")!; body.scrollTop += element.getBoundingClientRect().top - body.getBoundingClientRect().top - 8; });
+      await page.waitForTimeout(150);
+    };
+    try {
+      for (const viewport of SIZES) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const label = `${viewport.width}-${lang}-${scheme}`;
+        const { context, page, pageErrors } = await openVoice(browser, server.base, "&history=1", { viewport, scheme, lang, motion: "reduce" });
+        try {
+          /* The fixture's own attention notices are the page's, not the panel's: they are dismissed as in the cases above. */
+          for (let notice = 0; notice < 3 && await page.locator("[data-attention-toast-dismiss]").count(); notice++) await page.locator("[data-attention-toast-dismiss]").first().click();
+          const grip = page.locator("[data-voice-companion] [data-grip]");
+          await page.waitForFunction(() => document.querySelector("[data-voice-companion] [data-grip]")?.getAttribute("aria-expanded") === "false", null, { timeout: 10_000 });
+          expect(await page.locator("[data-companion-talk]").count(), `${label}: no call runs`).toBe(1);
+          await grip.focus();
+          await page.keyboard.press("Enter");
+          const panel = page.locator("[data-companion-transcript-view]");
+          const picker = panel.locator("select[data-transcript-calls]");
+          await picker.waitFor({ timeout: 5_000 });
+          await page.waitForTimeout(250);
+          const options = await picker.locator("option").allTextContents();
+          expect(options.length, `${label}: three retained calls`).toBe(3);
+          expect(await picker.inputValue(), `${label}: the newest call opens`).toBe("call_delegation");
+          expect(await panel.locator("[data-transcript-request]").first().getAttribute("data-stage")).toBe("delivered");
+          const newest = await whole(page, [".vc-tr-title", ".vc-tr-sub", ...FIRST_ACTION]);
+          await page.screenshot({ path: path.join(out, `history-${label}-1-newest.png`) });
+
+          await picker.selectOption("call_failed_delivery");
+          await panel.locator('[data-transcript-request][data-stage="failed"]').waitFor({ timeout: 5_000 });
+          const failedStart = await whole(page, FIRST_ACTION);
+          await openRequest(page);
+          const failed = await whole(page, ['[data-transcript-request][data-stage="failed"] .vc-call-state', "[data-transcript-reason]", "a[data-transcript-orchestrator]"]);
+          expect(failed.result["[data-transcript-reason]"]!.text, `${label}: the delivery failure says why`).toContain(lang === "uk" ? "нічого не надіслано" : "nothing was sent");
+          expect(failed.result["a[data-transcript-orchestrator]"]!.text, `${label}: the orchestrator link names its project`).toBe("Atlas");
+          await page.screenshot({ path: path.join(out, `history-${label}-2-failed.png`) });
+
+          await picker.selectOption("call_refused");
+          await panel.locator('[data-transcript-request][data-stage="refused"]').waitFor({ timeout: 5_000 });
+          const refusedStart = await whole(page, FIRST_ACTION);
+          await openRequest(page);
+          const refused = await whole(page, ['[data-transcript-request][data-stage="refused"] .vc-call-state', "[data-transcript-reason]"]);
+          expect(refused.result["[data-transcript-reason]"]!.text, `${label}: the refusal says why`).toContain(lang === "uk" ? "немає призначеного оркестратора" : "no designated orchestrator");
+          expect(await panel.locator("a[data-transcript-orchestrator]").count(), `${label}: a refusal before any orchestrator links none`).toBe(0);
+          await page.screenshot({ path: path.join(out, `history-${label}-3-refused.png`) });
+
+          /* Each call opens at its start: its first action row and that row's status text stand whole in the body and no row is cut by the body's top edge. */
+          for (const [step, reading] of [["newest", newest], ["failed", failedStart], ["refused", refusedStart]] as const) {
+            expect(Object.entries(reading.result).filter(([selector, value]) => FIRST_ACTION.includes(selector) && (!value.found || !value.whole)).map(([selector]) => selector), `${label} ${step}: the first action row and its status are whole on opening`).toEqual([]);
+            expect([reading.scrolled, reading.cutByTop], `${label} ${step}: opened at the start, no row cut by the body's top edge`).toEqual([0, []]);
+          }
+          for (const [step, reading] of [["newest", newest], ["failed", failed], ["refused", refused]] as const) {
+            expect(Object.entries(reading.result).filter(([, value]) => !value.found || !value.whole).map(([selector]) => selector), `${label} ${step}: every named text is whole`).toEqual([]);
+            expect([reading.panelInside, reading.picker.inside, reading.picker.fits, reading.sideways <= 1], `${label} ${step}: panel, picker and its label fit`).toEqual([true, true, true, true]);
+            expect(reading.covered, `${label} ${step}: the panel (top at ${reading.top}) stands below the page's top bar`).toEqual([]);
+          }
+          for (const [step, reading] of [["failed", failed], ["refused", refused]] as const) {
+            expect(reading.title.filter((title) => !title.whole), `${label} ${step}: the request's name is whole in its line`).toEqual([]);
+            const reason = reading.gaps.find((gap) => gap.after === "reason");
+            const others = reading.gaps.filter((gap) => gap.after !== "reason").map((gap) => gap.gap);
+            expect(reason, `${label} ${step}: a label follows the reason`).toBeDefined();
+            expect(reason!.gap, `${label} ${step}: the reason has the space the other blocks leave above their next label (${JSON.stringify(reading.gaps)})`).toBeGreaterThanOrEqual(Math.min(...others) - 1);
+            expect(reason!.gap, `${label} ${step}: and within the 12 to 18 px the opened request leaves above its other labels`).toBeGreaterThanOrEqual(12);
+            expect(reason!.gap).toBeLessThanOrEqual(18);
+          }
+          expect(failed.result["[data-transcript-reason]"]!.text, `${label}: the failure reason reads in the owner's language, with no code in it`).not.toMatch(lang === "uk" ? /[A-Za-z]/u : /[(_)]/u);
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-companion-transcript-view]", { state: "detached", timeout: 5_000 });
+          expect(pageErrors, label).toEqual([]);
+          readings.push({ viewport: viewport.width, lang, scheme, options, newest, failed, refused });
+        } finally { await context.close(); }
+      }
+    } finally {
+      fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify(readings, null, 2)}\n`);
+      server.stop();
+      const processes = await close();
+      expect(processes.leftAfterClose, "every browser process this case started has exited").toBe(0);
+      if (!ONLY) record("call-history.json", { driver: DRIVER, issue: 2975, fixture: "?scenario=voice-companion&history=1", synthetic: true,
+        rule: "after a reload the character opens the newest retained call; the panel's picker opens each retained call, named by its time, project and number of actions; an opened request says in the owner's language why it was not sent or delivered and links the orchestrator conversation it went to", processes, readings });
+    }
+  }, 1_800_000);
+
   /* A call that ran on Codex V3 (docs/design/voice-codex-subscription.md, Spend and limit display): the same footer,
      variant 2's two figures above a thin meter, with the call's length on the server clock and the plan window of
      the account it ran on. The meter is that window's use, its teal share the call's rise; the label and the hint
@@ -36200,4 +36352,456 @@ describe("the sound map's one control: «Agent typing»", () => {
       expect(failures).toEqual([]);
     } finally { await browser.close(); server.stop(); }
   }, 900_000);
+});
+
+describe("sound captions", () => {
+  /*
+   * docs/design/sound-captions.md §6: each event sound that plays shows a short
+   * toast on the right of the desktop view, where «Потрібні ви» shows. The page
+   * (`?scenario=sound-captions`) is the default board plus one lane whose visual
+   * critic is running, and exposes `soundCaptionsFixture`:
+   *   - `push` puts a caption on the real stack (the layout and timing states);
+   *   - `passStage` turns the critic's attempt to `passed`, which the next poll
+   *     carries through the real planner, event lane and cue player (the real
+   *     path, with Chrome started to allow audio without a gesture).
+   *
+   * Desktop at 1440×900, 1000×700 and 640×700 (the narrowest desktop window),
+   * the phone at 390×844 with a coarse pointer; en and uk, light and dark. It
+   * fails when a toast is cut by the window or its own box, when two boxes or a
+   * box and the island or the question toast intersect, when the stack is not
+   * bounded to four with the newest last, when a toast outlives 2 s with no
+   * pointer, when a hover does not hold it, when a click does not reach its
+   * lane, when a muted stage still captions, when an opened task has a line of its
+   * conversation, a control or an icon under a toast, when a stack on a free place
+   * has text, a control or an icon under it, when a stack with no free place shows
+   * more toasts than the width keeps or covers a control, when the docked panel does
+   * not move it, or when the phone draws any.
+   *
+   * Frames go to `LLV_SOUND_CAPTIONS_OUT` (default `.artifacts/sound-captions/`,
+   * never committed), the readings to `evidence/sound-captions/rendered.json`.
+   *
+   *   CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "sound captions"
+   */
+  const DESKTOP = [{ width: 1440, height: 900 }, { width: 1000, height: 700 }, { width: 640, height: 700 }] as const;
+  const PHONE = { width: 390, height: 844 } as const;
+  const OUT = path.resolve(process.env.LLV_SOUND_CAPTIONS_OUT ?? ".artifacts/sound-captions");
+  const SCENARIO_URL = (base: string) => `${base}?scenario=sound-captions`;
+  const AUTOPLAY = { ...LAUNCH, args: [...(LAUNCH.args ?? []), "--autoplay-policy=no-user-gesture-required"], ignoreDefaultArgs: ["--hide-scrollbars"] };
+
+  type Stack = {
+    column: { right: number; placement: string } | null;
+    island: number[] | null;
+    questionToast: number[] | null;
+    header: number[] | null;
+    toasts: Array<{
+      sound: string; what: string; tag: string; line: string; who: string | null; subject: string | null; subjectTitle: string | null;
+      rect: number[]; leaving: boolean; folded: boolean; lineHeight: number; subjectLines: number; lineWhole: boolean; subjectWhole: boolean; covered: boolean;
+      /** Lines of page text a person can see under the toast, and the controls (a sample of each). */
+      textUnder: string[]; controlsUnder: string[];
+    }>;
+    viewport: { width: number; height: number };
+  };
+
+  async function readStack(page: Page): Promise<Stack> {
+    return page.evaluate(() => {
+      const round = (rect: DOMRect | { left: number; top: number; right: number; bottom: number }) => [rect.left, rect.top, rect.right, rect.bottom].map((value) => Math.round(value * 10) / 10);
+      const visible = (selector: string) => [...document.querySelectorAll<HTMLElement>(selector)].map((element) => element.getBoundingClientRect()).filter((rect) => rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < innerHeight).sort((a, b) => b.bottom - a.bottom)[0];
+      const column = document.querySelector<HTMLElement>("[data-sound-captions]");
+      const island = visible("[data-attention-island]");
+      const questionToast = visible("[data-attention-toast]");
+      const header = visible(".kb .agent-window .aw-head");
+      const textRange = (element: Element) => {
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        const rects = [...range.getClientRects()].filter((rect) => rect.width > 0);
+        return { rects, box: range.getBoundingClientRect() };
+      };
+      /* What the page shows under a toast, apart from the column: the first thing at the middle of the overlap that is not a toast. */
+      const shownAt = (element: Element, overlap: { left: number; right: number; top: number; bottom: number }) => {
+        const hit = document.elementsFromPoint((overlap.left + overlap.right) / 2, (overlap.top + overlap.bottom) / 2).find((candidate) => !column?.contains(candidate));
+        return Boolean(hit) && (element.contains(hit!) || hit!.contains(element));
+      };
+      const underToast = (box: DOMRect) => {
+        const cut = (rect: { left: number; right: number; top: number; bottom: number }) => ({ left: Math.max(rect.left, box.left), right: Math.min(rect.right, box.right), top: Math.max(rect.top, box.top), bottom: Math.min(rect.bottom, box.bottom) });
+        const textUnder: string[] = [];
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        const range = document.createRange();
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const parent = node.parentElement;
+          if (!parent || !node.nodeValue?.trim() || column?.contains(parent) || parent.tagName === "STYLE" || parent.tagName === "SCRIPT") continue;
+          range.selectNodeContents(node);
+          for (const line of range.getClientRects()) {
+            const overlap = cut(line);
+            if (overlap.right - overlap.left >= 1 && overlap.bottom - overlap.top >= 1 && shownAt(parent, overlap)) textUnder.push((node.nodeValue ?? "").trim().slice(0, 40));
+          }
+        }
+        /* An icon-size control, or an icon inside a wider one: a row's blank part may sit under a toast, what it shows may not. */
+        const controlsUnder: string[] = [];
+        for (const control of document.querySelectorAll<HTMLElement>("a[href], button, input, select, textarea, summary, [role='button'], [role='tab'], [role='menuitem']")) {
+          if (column?.contains(control) || getComputedStyle(control).pointerEvents === "none") continue;
+          const own = control.getBoundingClientRect();
+          const parts: Array<{ element: Element; rect: DOMRect }> = own.width * own.height <= 6000 ? [{ element: control, rect: own }]
+            : [...control.querySelectorAll("svg, img")].filter((icon) => !icon.parentElement?.closest("svg")).map((icon) => ({ element: icon, rect: icon.getBoundingClientRect() }));
+          for (const part of parts) {
+            const overlap = cut(part.rect);
+            if (overlap.right - overlap.left >= 1 && overlap.bottom - overlap.top >= 1 && shownAt(part.element, overlap)) controlsUnder.push((control.getAttribute("aria-label") ?? control.textContent ?? control.tagName).trim().slice(0, 40));
+          }
+        }
+        return { textUnder, controlsUnder };
+      };
+      const toasts = [...document.querySelectorAll<HTMLElement>(".sc-toast")].map((toast) => {
+        const box = toast.getBoundingClientRect();
+        const folded = toast.hasAttribute("data-folded");
+        const under = folded ? { textUnder: [], controlsUnder: [] } : underToast(box);
+        const line = toast.querySelector<HTMLElement>(".sc-line")!;
+        const subject = toast.querySelector<HTMLElement>(".sc-subject");
+        const lineText = textRange(line);
+        const subjectText = subject ? textRange(subject) : null;
+        const inside = (rect: DOMRect) => rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 && rect.top >= box.top - 0.5 && rect.bottom <= box.bottom + 0.5
+          && rect.left >= -0.5 && rect.right <= innerWidth + 0.5 && rect.top >= -0.5 && rect.bottom <= innerHeight + 0.5;
+        const centre = document.elementFromPoint((lineText.box.left + lineText.box.right) / 2, (lineText.box.top + lineText.box.bottom) / 2);
+        return {
+          sound: toast.dataset.soundCaption ?? "", what: toast.dataset.captionWhat ?? "", tag: toast.tagName,
+          line: line.textContent ?? "", who: toast.querySelector(".sc-who")?.textContent ?? null,
+          subject: subject?.textContent ?? null, subjectTitle: subject?.title ?? null,
+          rect: round(box), leaving: toast.hasAttribute("data-leaving"), folded, ...under,
+          lineHeight: Math.round(parseFloat(getComputedStyle(line).lineHeight) * 10) / 10,
+          subjectLines: subjectText ? new Set(subjectText.rects.map((rect) => Math.round(rect.top))).size : 0,
+          lineWhole: lineText.rects.every(inside), subjectWhole: subjectText ? subjectText.rects.every((rect) => rect.top >= box.top - 0.5 && rect.bottom <= box.bottom + 0.5) : true,
+          covered: !(centre && toast.contains(centre)),
+        };
+      });
+      return {
+        column: column ? { right: Math.round((document.documentElement.clientWidth - column.getBoundingClientRect().right) * 10) / 10, placement: column.dataset.placement ?? "" } : null,
+        island: island ? round(island) : null, questionToast: questionToast ? round(questionToast) : null, header: header ? round(header) : null,
+        toasts, viewport: { width: innerWidth, height: innerHeight },
+      };
+    });
+  }
+
+  /** The toasts a person sees. */
+  const live = (stack: Stack) => stack.toasts.filter((toast) => !toast.leaving && !toast.folded);
+  /** The toasts in the stack, folded ones too: what the store holds. */
+  const held = (stack: Stack) => stack.toasts.filter((toast) => !toast.leaving);
+  const intersects = (a: number[], b: number[]) => a[0]! < b[2]! - 0.5 && b[0]! < a[2]! - 0.5 && a[1]! < b[3]! - 0.5 && b[1]! < a[3]! - 0.5;
+  const push = (page: Page, sound: string, batch: number, captions: unknown[]) =>
+    page.evaluate((payload) => (window as unknown as { soundCaptionsFixture: { push(p: unknown): void } }).soundCaptionsFixture.push(payload), { sound, batch, captions });
+
+  /* The planners cut a subject to 90 characters, so the longest one a toast meets is 90. */
+  const LONG = "Make every sound say what it announced, and about whom, without covering the board or the agent being read".slice(0, 90);
+  const LANE_TARGET = { kind: "lane", pipelineId: "p-captions", project: "atlas" };
+  const CRITIC = { id: "visual-critic", kind: "run", role: { roleId: "visual-critic" } };
+
+  /** What a stack must satisfy whatever its content: whole, inside the window, apart from each other and from the island and the question toast. */
+  function layoutFailures(tag: string, stack: Stack, strict = false): string[] {
+    const failures: string[] = [];
+    const toasts = live(stack);
+    /* A free place covers nothing at all. A page with none (a dense board at a narrow window) leaves the newest toast alone, over the least. */
+    const free = stack.column?.placement === "free";
+    if (strict && !free && toasts.length) failures.push(`${tag}: the stack found no free place, it covers text or controls`);
+    const keep = stack.viewport.width >= 1100 ? 2 : 1;
+    if (!free && toasts.length > keep) failures.push(`${tag}: ${toasts.length} toasts stand on a place that covers text, expected at most ${keep}`);
+    for (const [index, toast] of toasts.entries()) {
+      const [left, top, right, bottom] = toast.rect as [number, number, number, number];
+      if (left < 0 || top < 0 || right > stack.viewport.width || bottom > stack.viewport.height) failures.push(`${tag}: toast ${index} ${toast.rect} leaves the ${stack.viewport.width}×${stack.viewport.height} window`);
+      if (right - left > 300.5) failures.push(`${tag}: toast ${index} is ${right - left}px wide, over 300`);
+      if (!toast.lineWhole) failures.push(`${tag}: toast ${index} line «${toast.line}» is cut`);
+      if (!toast.subjectWhole) failures.push(`${tag}: toast ${index} subject is cut`);
+      if (toast.subjectLines > 1) failures.push(`${tag}: toast ${index} subject wraps to ${toast.subjectLines} lines`);
+      if (toast.covered) failures.push(`${tag}: toast ${index} is covered by another element`);
+      if (free && toast.textUnder.length) failures.push(`${tag}: toast ${index} covers ${toast.textUnder.length} lines of text: «${toast.textUnder.slice(0, 3).join("» «")}»`);
+      if (toast.controlsUnder.length) failures.push(`${tag}: toast ${index} covers controls: «${toast.controlsUnder.slice(0, 3).join("» «")}»`);
+      if (toast.lineHeight < 20 - 0.5) failures.push(`${tag}: toast ${index} line is ${toast.lineHeight}px tall, under the 20px leading`);
+      for (const [other, rest] of toasts.entries()) if (other > index && intersects(toast.rect, rest.rect)) failures.push(`${tag}: toasts ${index} and ${other} overlap`);
+      for (const [name, rect] of [["island", stack.island], ["question toast", stack.questionToast], ["agent window header", stack.header]] as const) {
+        if (rect && intersects(toast.rect, rect)) failures.push(`${tag}: toast ${index} covers the ${name} ${rect}`);
+      }
+      if (index > 0 && toast.rect[1]! < toasts[index - 1]!.rect[1]!) failures.push(`${tag}: toast ${index} is above the one before it, so the newest is not last`);
+    }
+    return failures;
+  }
+
+  async function settle(page: Page) {
+    await page.locator("[data-kanban-board]").waitFor({ timeout: 30_000 });
+    await page.waitForFunction(() => Boolean((window as unknown as { soundCaptionsFixture?: unknown }).soundCaptionsFixture), undefined, { timeout: 30_000 });
+    await page.locator(`${card("t-export")} .tile`).first().waitFor({ timeout: 30_000 });
+  }
+
+  browserTest("layout: whole, bounded, newest last, clear of the island, above an opened task, moved by the docked panel, in every window, language and theme", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch(AUTOPLAY);
+    const readings: unknown[] = [];
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const viewport of DESKTOP) {
+        const tag = `${viewport.width}×${viewport.height} ${lang} ${theme}`;
+        const { context, page, pageErrors } = await openFixture(browser, SCENARIO_URL(server.base), viewport, theme, lang, "no-preference");
+        try {
+          await settle(page);
+          /* Five pushes 300 ms apart: four stay, the first is gone, the newest is last. */
+          const kinds: Array<[string, unknown[]]> = [
+            ["reply", [{ what: "reply", subject: "Fix the board", target: null }]],
+            ["step", [{ what: "step", subject: "Sound captions: say what each sound means", stage: CRITIC, target: LANE_TARGET }]],
+            ["landed", [{ what: "merged", subject: LONG, pr: 3218, target: LANE_TARGET }]],
+            ["your-move", [{ what: "question", subject: "Which of the two variants do you want?", target: null }]],
+            ["fault", [{ what: "memory", subject: LONG, target: null }]],
+          ];
+          for (const [sound, captions] of kinds) {
+            await push(page, sound, 1, captions);
+            await page.waitForTimeout(300);
+          }
+          await page.waitForTimeout(200);
+          const stacked = await readStack(page);
+          /* The store holds four; the page folds the oldest where no free place holds them all, newest kept. */
+          const shown = held(stacked);
+          if (shown.length !== 4) failures.push(`${tag}: ${shown.length} toasts after five pushes, expected 4`);
+          if (shown.map((toast) => toast.sound).join() !== "step,landed,your-move,fault") failures.push(`${tag}: order ${shown.map((toast) => toast.sound)}`);
+          if (!live(stacked).length) failures.push(`${tag}: every toast is folded`);
+          if (live(stacked).at(-1)?.sound !== "fault") failures.push(`${tag}: the newest toast is not the one on show`);
+          failures.push(...layoutFailures(`${tag} stacked`, stacked));
+          if (stacked.column && stacked.column.right !== 16) failures.push(`${tag}: stack right edge is ${stacked.column.right}px from the window, expected 16`);
+          const expectedStep = translate(lang, "soundCaption.step", { stage: translate(lang, "roleCopy.visual-critic.name") });
+          if (shown[0]?.line !== expectedStep) failures.push(`${tag}: the step toast reads «${shown[0]?.line}», expected «${expectedStep}»`);
+          if (shown[0]?.who !== translate(lang, "roleCopy.visual-critic.name")) failures.push(`${tag}: the stage name is not set apart: ${shown[0]?.who}`);
+          if (shown[3]?.line !== translate(lang, "soundCaption.memory")) failures.push(`${tag}: the longest toast reads «${shown[3]?.line}»`);
+          if (shown[3]?.subjectTitle !== LONG) failures.push(`${tag}: the full subject is not in the toast's title`);
+          await page.screenshot({ path: path.join(OUT, `stacked-${viewport.width}-${lang}-${theme}.png`) });
+          await page.waitForTimeout(2600);
+          const gone = await readStack(page);
+          if (gone.toasts.length) failures.push(`${tag}: ${gone.toasts.length} toasts remain 2.6 s after the last push`);
+
+          /* The question toast: the stack starts under it and never covers it. */
+          await push(page, "your-move", 1, [{ what: "question", subject: "Which variant?", target: null }]);
+          await page.waitForTimeout(250);
+          const single = await readStack(page);
+          failures.push(...layoutFailures(`${tag} single`, single));
+          if (single.island && live(single)[0] && live(single)[0]!.rect[1]! < single.island[3]! + 7.5) failures.push(`${tag}: the toast starts ${live(single)[0]!.rect[1]! - single.island[3]!}px under the island, expected 8`);
+          await page.screenshot({ path: path.join(OUT, `single-${viewport.width}-${lang}-${theme}.png`) });
+
+          /* An opened task: its window draws at 64, the toast at 84, under the window's header. */
+          await page.waitForTimeout(2300);
+          await page.click(`${card("t-export")} .tile >> nth=0`);
+          await page.waitForSelector("[data-agent-window] .reader-slot:not([data-incoming])", { timeout: 15_000 });
+          await push(page, "reply", 1, [{ what: "reply", subject: "Fix the board", target: null }]);
+          await page.waitForTimeout(350);
+          const opened = await readStack(page);
+          failures.push(...layoutFailures(`${tag} task open`, opened, true));
+          const first = live(opened)[0];
+          if (!opened.header) failures.push(`${tag}: no agent window header to measure against`);
+          else if (!first) failures.push(`${tag}: no toast with a task open`);
+          else if (first.rect[1]! < opened.header[3]! + 7.5) failures.push(`${tag}: the toast starts at ${first.rect[1]}, under ${opened.header[3]}+8 of the window header`);
+          readings.push({ tag, ...viewport, lang, theme, stacked: shown.map((toast) => ({ sound: toast.sound, line: toast.line, rect: toast.rect, folded: toast.folded, textUnder: toast.textUnder.length })), placement: stacked.column?.placement ?? null, single: live(single).map((toast) => toast.rect), singlePlacement: single.column?.placement ?? null, island: single.island, taskOpen: { header: opened.header, toast: first?.rect ?? null } });
+          await page.screenshot({ path: path.join(OUT, `task-open-${viewport.width}-${lang}-${theme}.png`) });
+          if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${tag}: ${String(error).split("\n")[0]}`);
+          await page.screenshot({ path: path.join(OUT, `failed-${viewport.width}-${lang}-${theme}.png`) }).catch(() => {});
+        } finally { await context.close(); }
+      }
+      writeEvidence("layout", readings, failures);
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 1_800_000);
+
+  browserTest("timing and clicks: 2 s, a hover holds, leaving resumes, a click reaches the lane, the docked panel moves the stack", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch(AUTOPLAY);
+    const readings: unknown[] = [];
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        const tag = `1440×900 ${lang}`;
+        const { context, page, pageErrors } = await openFixture(browser, SCENARIO_URL(server.base), DESKTOP[0], "light", lang, "no-preference");
+        try {
+          await settle(page);
+          const count = async () => live(await readStack(page)).length;
+          const caption = [{ what: "reply", subject: "Fix the board", target: null }];
+
+          /* Expiry: no pointer, 2 s. */
+          await push(page, "reply", 1, caption);
+          await page.waitForTimeout(1500);
+          if (await count() !== 1) failures.push(`${tag}: the toast left before 1.5 s`);
+          await page.waitForTimeout(1000);
+          if (await count() !== 0) failures.push(`${tag}: the toast was still there 2.5 s after it appeared`);
+
+          /* Hover: held far past 2 s, then leaving gives it at least 1 s. */
+          await page.mouse.move(5, 5);
+          await push(page, "reply", 1, caption);
+          await page.waitForTimeout(250);
+          const at = live(await readStack(page))[0]!;
+          await page.mouse.move((at.rect[0]! + at.rect[2]!) / 2, (at.rect[1]! + at.rect[3]!) / 2);
+          await page.waitForTimeout(3500);
+          if (await count() !== 1) failures.push(`${tag}: a hovered toast left within 3.5 s`);
+          const held = await readStack(page);
+          await page.screenshot({ path: path.join(OUT, `hover-held-${lang}.png`) });
+          await page.mouse.move(5, 5);
+          await page.waitForTimeout(700);
+          if (await count() !== 1) failures.push(`${tag}: the toast left 0.7 s after the pointer did`);
+          await page.waitForTimeout(1500);
+          if (await count() !== 0) failures.push(`${tag}: the toast was still there 2.2 s after the pointer left`);
+
+          /* Keyboard focus holds the same way. */
+          await push(page, "step", 1, [{ what: "step", subject: "Sound captions", stage: CRITIC, target: LANE_TARGET }]);
+          await page.waitForTimeout(250);
+          await page.locator(".sc-toast").first().focus();
+          await page.waitForTimeout(2800);
+          if (await count() !== 1) failures.push(`${tag}: a focused toast left within 3 s`);
+          const focusRing = await page.evaluate(() => { const style = getComputedStyle(document.querySelector(".sc-toast:focus-visible")!); return `${style.outlineStyle} ${style.outlineWidth}`; }).catch(() => "none");
+          if (!/solid 2px/.test(focusRing)) failures.push(`${tag}: the focus ring reads «${focusRing}»`);
+          await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+          /* Frozen with about 1.75 s left, so it is still up a second later and gone by 2.2 s. */
+          await page.waitForTimeout(1000);
+          if (await count() !== 1) failures.push(`${tag}: the toast left the instant focus did`);
+          await page.waitForTimeout(1200);
+          if (await count() !== 0) failures.push(`${tag}: the toast stayed after focus left`);
+
+          /* A click: the lane's card flashes, the toast is gone. */
+          await page.evaluate(() => {
+            const flashed = { value: false };
+            Object.assign(window, { captionFlash: flashed });
+            const watch = new MutationObserver((records) => { for (const record of records) if ((record.target as HTMLElement).classList?.contains("flash")) flashed.value = true; });
+            watch.observe(document.querySelector("[data-kanban-board]")!, { subtree: true, attributes: true, attributeFilter: ["class"] });
+          });
+          await push(page, "step", 1, [{ what: "step", subject: "Sound captions", stage: CRITIC, target: LANE_TARGET }]);
+          await page.waitForTimeout(250);
+          await page.locator(".sc-toast").first().click();
+          await page.waitForTimeout(800);
+          const flashed = await page.evaluate(() => (window as unknown as { captionFlash: { value: boolean } }).captionFlash.value);
+          if (!flashed) failures.push(`${tag}: a click on the lane's toast did not reach its card`);
+          if (await count() !== 0) failures.push(`${tag}: the clicked toast is still there`);
+
+          /* A mouse click on one of two toasts must not leave the other held: the focus and the pointer go with the removed button. */
+          await page.mouse.move(5, 5);
+          await push(page, "step", 1, [{ what: "step", subject: "Sound captions", stage: CRITIC, target: LANE_TARGET }]);
+          await push(page, "reply", 1, [{ what: "reply", subject: "Fix the board", target: LANE_TARGET }]);
+          await page.waitForTimeout(250);
+          if (await count() !== 2) failures.push(`${tag}: ${await count()} toasts before the two-toast click, expected 2`);
+          await page.locator(".sc-toast").first().click();
+          await page.mouse.move(5, 5);
+          await page.waitForTimeout(2500);
+          if (await count() !== 0) failures.push(`${tag}: the second toast was still there 2.5 s after the first was clicked away`);
+
+          /* The needs-you panel docked: the stack's right edge moves with the question toast's. */
+          await page.evaluate(() => localStorage.setItem("llvNeedsYouPanel", "open"));
+          await page.reload();
+          await settle(page);
+          await push(page, "reply", 1, caption);
+          await page.waitForTimeout(350);
+          const docked = await readStack(page);
+          if (docked.column?.right !== 336) failures.push(`${tag}: with the panel docked the stack is ${docked.column?.right}px from the window, expected 336`);
+          failures.push(...layoutFailures(`${tag} docked`, docked));
+          await page.screenshot({ path: path.join(OUT, `panel-docked-${lang}.png`) });
+          readings.push({ tag, held: live(held).map((toast) => toast.rect), dockedRight: docked.column?.right ?? null, flashed });
+          if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${tag}: ${String(error).split("\n")[0]}`);
+          await page.screenshot({ path: path.join(OUT, `failed-timing-${lang}.png`) }).catch(() => {});
+        } finally { await context.close(); }
+      }
+      writeEvidence("timing", readings, failures);
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 900_000);
+
+  browserTest("the real path: a stage passing is heard once and captioned once; muted, nothing; muting clears; the phone shows none", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch(AUTOPLAY);
+    const readings: unknown[] = [];
+    const failures: string[] = [];
+    const passTheStage = (page: Page) => page.evaluate(() => (window as unknown as { soundCaptionsFixture: { passStage(): void } }).soundCaptionsFixture.passStage());
+    try {
+      for (const lang of ["uk", "en"] as const) {
+        const tag = `real path ${lang}`;
+        const { context, page, pageErrors } = await openFixture(browser, SCENARIO_URL(server.base), DESKTOP[0], lang === "uk" ? "light" : "dark", lang, "no-preference");
+        try {
+          await settle(page);
+          await page.mouse.click(700, 450);
+          await page.waitForTimeout(1500);
+          await passTheStage(page);
+          await page.waitForSelector('.sc-toast[data-sound-caption="step"]', { timeout: 30_000 });
+          await page.waitForTimeout(250);
+          const stack = await readStack(page);
+          const shown = live(stack);
+          const name = translate(lang, "roleCopy.visual-critic.name");
+          if (shown.length !== 1) failures.push(`${tag}: ${shown.length} toasts for one stage`);
+          if (shown[0]?.line !== translate(lang, "soundCaption.step", { stage: name })) failures.push(`${tag}: the toast reads «${shown[0]?.line}»`);
+          const task = lang === "uk" ? "Підписи до звуків: що означає кожен" : "Sound captions: say what each sound means";
+          if (shown[0]?.subject !== task) failures.push(`${tag}: line 2 reads «${shown[0]?.subject}»`);
+          if (shown[0]?.tag !== "BUTTON") failures.push(`${tag}: the step toast is not a button`);
+          failures.push(...layoutFailures(tag, stack));
+          await page.screenshot({ path: path.join(OUT, `real-path-${lang}.png`) });
+          await page.waitForTimeout(3000);
+          if (live(await readStack(page)).length) failures.push(`${tag}: the toast stayed past 2 s`);
+          readings.push({ tag, line: shown[0]?.line, subject: shown[0]?.subject, rect: shown[0]?.rect });
+          if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${tag}: ${String(error).split("\n")[0]}`);
+          await page.screenshot({ path: path.join(OUT, `failed-real-${lang}.png`) }).catch(() => {});
+        } finally { await context.close(); }
+      }
+
+      /* Muted: the stage passes and nothing is captioned; muting with a toast up removes it. */
+      {
+        const tag = "muted en";
+        const { context, page } = await openFixture(browser, SCENARIO_URL(server.base), DESKTOP[0], "light", "en", "no-preference");
+        try {
+          await settle(page);
+          await page.mouse.click(700, 450);
+          await push(page, "reply", 1, [{ what: "reply", subject: "Fix the board", target: null }]);
+          await page.waitForTimeout(300);
+          if (live(await readStack(page)).length !== 1) failures.push(`${tag}: no toast to mute`);
+          await openBoardMenu(page);
+          await page.locator(`[data-bar-more-menu] button[aria-pressed="true"]`, { hasText: translate("en", "sound.mute") }).click();
+          await page.waitForTimeout(300);
+          if ((await readStack(page)).toasts.length) failures.push(`${tag}: muting left a toast on screen`);
+          await page.keyboard.press("Escape");
+          await passTheStage(page);
+          await page.waitForTimeout(9000);
+          const after = await readStack(page);
+          if (after.toasts.length || after.column) failures.push(`${tag}: a muted stage drew ${after.toasts.length} toasts`);
+          await page.screenshot({ path: path.join(OUT, "muted-en.png") });
+          readings.push({ tag, toastsAfterMutedStage: after.toasts.length });
+        } catch (error) {
+          failures.push(`${tag}: ${String(error).split("\n")[0]}`);
+        } finally { await context.close(); }
+      }
+
+      /* The phone: the same stage, nothing in the DOM. */
+      for (const lang of ["en", "uk"] as const) {
+        const tag = `phone 390×844 ${lang}`;
+        const { context, page } = await openFixture(browser, SCENARIO_URL(server.base), PHONE, "light", lang, "no-preference", true);
+        try {
+          await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+          await page.waitForFunction(() => Boolean((window as unknown as { soundCaptionsFixture?: unknown }).soundCaptionsFixture), undefined, { timeout: 30_000 });
+          await push(page, "reply", 1, [{ what: "reply", subject: "Fix the board", target: null }]);
+          await passTheStage(page);
+          await page.waitForTimeout(6000);
+          const drawn = await page.evaluate(() => document.querySelectorAll("[data-sound-captions], [data-sound-caption], .sc-toast").length);
+          if (drawn) failures.push(`${tag}: ${drawn} caption elements in the DOM`);
+          await page.screenshot({ path: path.join(OUT, `phone-${lang}.png`) });
+          readings.push({ tag, captionElements: drawn });
+        } catch (error) {
+          failures.push(`${tag}: ${String(error).split("\n")[0]}`);
+        } finally { await context.close(); }
+      }
+      writeEvidence("real-path", readings, failures);
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 900_000);
+
+  function writeEvidence(part: string, readings: unknown[], failures: string[]) {
+    fs.mkdirSync("evidence/sound-captions", { recursive: true });
+    const sources = ["src/components/SoundCaptions.tsx", "src/components/soundCaptionPlacement.ts", "src/components/soundCaptionStyles.ts", "src/lib/audio/captions.ts", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts"];
+    fs.writeFileSync(`evidence/sound-captions/rendered-${part}.json`, JSON.stringify({
+      capturedAt: new Date().toISOString(),
+      command: "CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t \"sound captions\" (isolated roots, scripts/gate-slot.sh)",
+      sourceDigests: Object.fromEntries(sources.map((file) => [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")])),
+      readings,
+      failures,
+    }, null, 2) + "\n");
+  }
 });

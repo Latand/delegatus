@@ -1,6 +1,7 @@
 import { expect, test, harness, create, tickPipelines, loadPipelines, savePipelines, patchPipeline, providerRecoveryHarness, LIMITED_ACCOUNT, PASS_TEXT, AgentRegistry, path, fs } from "./engine.fixture";
 import { selectProjectAccount } from "@/lib/accounts/projectSelection";
-import { selectHeadlessAccount } from "@/lib/accounts/headlessSelection";
+import { accountQuotaVerdict, selectHeadlessAccount } from "@/lib/accounts/headlessSelection";
+import { ProjectAccountRefusedError } from "@/lib/accounts/manager";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 
@@ -28,6 +29,7 @@ async function fixture() {
       credits: { hasCredits: true, balance: "10", unlimited: false } } }));
   h.ports.allowedAccountIds = () => allowed;
   h.ports.accountExhausted = (engine, id, model) => selectHeadlessAccount([{ id, authPresent: true }], observations, id, [], now, model).kind === "exhausted";
+  h.ports.accountQuota = (engine, id, model) => accountQuotaVerdict(observations, id, now, model);
   h.ports.resolveProjectSpawn = (engine, request) => {
     const selected = selectProjectAccount({ ...request, engine, accounts, observations, now,
       bindings: allowed.map(accountId => ({ project: lane.project!, engine, accountId, createdAt: new Date(now).toISOString() })) });
@@ -302,4 +304,261 @@ test.each(["binding", "credit"])("aborted continuation rechecks %s immediately b
   expect(f.sends).toEqual([]);
   await tickPipelines([], f.h.ports);
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.suspension).toBeDefined();
+});
+
+/* Issue #3158: one account at its weekly limit, a poller that re-confirms the
+   100% reading every fourth tick and lets it age in between, and a launch that
+   requires capacity refusing while that reading is fresh, as the real
+   requireCapacity admission does. Each tick is two minutes of controller time
+   on the harness clock, which every quota read below shares. */
+async function guardedAccountClock(accountIds: string[] = ["account-a"]) {
+  const f = await fixture();
+  f.allow(accountIds);
+  let now = Date.parse(f.h.ports.now());
+  const resetsAt = Math.floor(now / 1_000) + 4 * 3_600;
+  const accounts = accountIds.map(id => ({ id, authPresent: true }));
+  for (const id of accountIds) if (!f.observations.some(item => item.accountId === id))
+    f.observations.push({ ...structuredClone(f.observations[0]!), accountId: id });
+  const read = (accountId: string, usedPercent: number, reset = resetsAt) => {
+    const observation = f.observations.find(item => item.accountId === accountId)!;
+    observation.observedAt = observation.authCheckedAt = new Date(now).toISOString();
+    observation.limits = { ...observation.limits!, credits: undefined, weekly: { usedPercent, resetsAt: reset } };
+  };
+  for (const id of accountIds) read(id, id === "account-a" ? 100 : 20);
+  f.h.ports.accountExhausted = (engine, id, model) => selectHeadlessAccount([{ id, authPresent: true }], f.observations, id, [], now, model).kind === "exhausted";
+  f.h.ports.accountQuota = (engine, id, model) => accountQuotaVerdict(f.observations, id, now, model);
+  f.h.ports.resolveProjectSpawn = (engine, request) => {
+    const selected = selectProjectAccount({ ...request, engine, accounts, observations: f.observations, now,
+      bindings: accountIds.map(accountId => ({ project: f.lane.project!, engine, accountId, createdAt: new Date(now).toISOString() })) });
+    return selected.kind === "available" ? { kind: "available", account: { engine, accountId: selected.accountId!, kind: "managed",
+      home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } } : selected;
+  };
+  const spawn = f.h.ports.spawnAgent;
+  f.h.ports.spawnAgent = async (input, reserved) => {
+    if (input.requireAccountCapacity && f.h.ports.accountExhausted!("codex", input.requestedAccountId!, null))
+      throw new ProjectAccountRefusedError({ kind: "exhausted", resetsAt, allowedAccountIds: accountIds }, "codex", f.lane.project!);
+    return spawn(input, reserved);
+  };
+  const advance = (ms: number) => { f.h.advanceWallClock(ms); now = Date.parse(f.h.ports.now()); };
+  const attempts = () => f.current().runs[0]!.attempts;
+  return { ...f, read, advance, attempts, resetsAt, now: () => now };
+}
+
+test("80 guarded ticks hold one stopped attempt until the reset, then one replacement settles", async () => {
+  const f = await guardedAccountClock();
+  const launches = f.h.spawnInputs.length;
+  let most = 0;
+  for (let tick = 0; tick < 80; tick++) {
+    await tickPipelines([], f.h.ports);
+    most = Math.max(most, f.attempts().length);
+    if (tick % 4 === 3) f.read("account-a", 100);
+    f.advance(120_000);
+  }
+  expect(most).toBe(1);
+  expect(f.h.spawnInputs).toHaveLength(launches);
+  expect(f.attempts()[0]).toMatchObject({ state: "running",
+    suspension: { reason: "account", hold: { accountId: "account-a", resetsAt: f.resetsAt } } });
+  expect(f.current().stateDetail).toContain(`waiting for account account-a to reset at ${new Date(f.resetsAt * 1_000).toISOString()}`);
+
+  f.advance(f.resetsAt * 1_000 - f.now() + 60_000);
+  for (let tick = 0; tick < 3; tick++) { await tickPipelines([], f.h.ports); f.advance(120_000); }
+  const [first, replacement] = f.attempts();
+  expect(f.attempts()).toHaveLength(2);
+  expect(first).toMatchObject({ state: "failed", launchId: f.attempt.launchId, error: "the stage account reached its usage or paid-credit guard" });
+  expect(replacement).toMatchObject({ accountId: "account-a", launchId: expect.any(String),
+    restartContext: { previousAttempt: 1, transcriptPath: first!.agentPath } });
+  expect(f.h.spawnInputs).toHaveLength(launches + 1);
+
+  // Push settlement of this chain is proved against real receipts in
+  // stageAttemptPush.test.ts; these harness launches write none.
+  const lane = f.current();
+  lane.delivery = { ...lane.delivery!, active: false, publish: "disabled" };
+  savePipelines([lane]);
+  const finished = f.h.finish(replacement!.agentPath!, "pass");
+  f.h.durableTurns.set(replacement!.agentPath!, { turn: "terminal", message: f.h.messages.get(replacement!.agentPath!)! });
+  await tickPipelines([finished], f.h.ports);
+  expect(f.attempts()).toHaveLength(2);
+  expect(f.attempts()[1]).toMatchObject({ state: "passed", verdict: { status: "pass" } });
+});
+
+test("a newer reading with headroom ends the hold before the reset, once", async () => {
+  const f = await guardedAccountClock();
+  for (let tick = 0; tick < 6; tick++) { await tickPipelines([], f.h.ports); f.advance(120_000); }
+  expect(f.attempts()).toHaveLength(1);
+  f.read("account-a", 40);
+  await tickPipelines([], f.h.ports);
+  for (let tick = 0; tick < 10; tick++) { f.advance(120_000); await tickPipelines([], f.h.ports); }
+  expect(f.attempts()).toHaveLength(2);
+  expect(f.attempts()[1]).toMatchObject({ accountId: "account-a", state: "running", launchId: expect.any(String) });
+});
+
+test("another allowed account with capacity takes the held stage once while the held reading ages", async () => {
+  const f = await guardedAccountClock(["account-a", "account-b"]);
+  for (let tick = 0; tick < 80; tick++) {
+    await tickPipelines([], f.h.ports);
+    if (tick % 4 === 3) { f.read("account-a", 100); f.read("account-b", 20); }
+    f.advance(120_000);
+  }
+  expect(f.attempts()).toHaveLength(2);
+  expect(f.attempts()[1]).toMatchObject({ accountId: "account-b", state: "running", restartContext: { previousAttempt: 1 } });
+});
+
+test("a replacement refused at launch by a fresh exhausted reading launches again itself after the next reset", async () => {
+  const f = await guardedAccountClock();
+  await tickPipelines([], f.h.ports);
+  f.advance(f.resetsAt * 1_000 - f.now() + 60_000);
+  await tickPipelines([], f.h.ports);
+  expect(f.attempts()).toHaveLength(2);
+  const nextReset = f.resetsAt + 6 * 3_600;
+  f.read("account-a", 100, nextReset);
+  for (let tick = 0; tick < 40; tick++) { await tickPipelines([], f.h.ports); f.advance(120_000); }
+  expect(f.attempts()).toHaveLength(2);
+  expect(f.attempts()[1]).toMatchObject({ launchId: null, suspension: { hold: { accountId: "account-a", resetsAt: nextReset } } });
+  expect(f.current().stateDetail).toContain(`to reset at ${new Date(nextReset * 1_000).toISOString()}`);
+
+  f.advance(nextReset * 1_000 - f.now() + 60_000);
+  for (let tick = 0; tick < 3; tick++) { await tickPipelines([], f.h.ports); f.advance(120_000); }
+  expect(f.attempts()).toHaveLength(2);
+  expect(f.attempts()[1]).toMatchObject({ state: "running", launchId: expect.any(String), error: null,
+    restartContext: { previousAttempt: 1, transcriptPath: f.attempt.agentPath } });
+  expect(f.attempts()[1]!.suspension).toBeUndefined();
+});
+
+test("a replacement never returns to an account its predecessor left held, over 80 ticks of refreshed and aged readings", async () => {
+  const f = await guardedAccountClock(["account-a", "account-b"]);
+  f.read("account-b", 100);
+  await tickPipelines([], f.h.ports);
+  expect(f.attempts()).toHaveLength(1);
+  // Both readings age into "unknown": B is no held account, so it takes the stage.
+  f.advance(6 * 60_000);
+  await tickPipelines([], f.h.ports);
+  await tickPipelines([], f.h.ports);
+  expect(f.attempts()[1]).toMatchObject({ accountId: "account-b", launchId: expect.any(String) });
+  f.read("account-b", 100);
+  await tickPipelines([], f.h.ports);
+  let most = f.attempts().length;
+  for (let tick = 0; tick < 80; tick++) {
+    if (tick % 4 === 0) { f.read("account-a", 100); f.read("account-b", 100); }
+    f.advance(120_000);
+    await tickPipelines([], f.h.ports);
+    most = Math.max(most, f.attempts().length);
+  }
+  expect(most).toBe(2);
+  expect(f.attempts().slice(1).map(attempt => attempt.accountId)).toEqual(["account-b"]);
+  expect(f.attempts()[0]!.suspension?.hold).toMatchObject({ accountId: "account-a", resetsAt: f.resetsAt });
+  expect(f.attempts()[1]).toMatchObject({ suspension: { hold: { accountId: "account-b", resetsAt: f.resetsAt } } });
+  expect(f.current().stateDetail).toContain(`waiting for account account-b to reset at ${new Date(f.resetsAt * 1_000).toISOString()}`);
+});
+
+test("a predecessor hold that newer headroom ended stays ended after that reading ages", async () => {
+  const f = await guardedAccountClock(["account-a", "account-b", "account-c"]);
+  f.read("account-c", 100);
+  await tickPipelines([], f.h.ports);
+  await tickPipelines([], f.h.ports);
+  expect(f.attempts().map(attempt => attempt.accountId)).toEqual(["account-a", "account-b"]);
+
+  f.advance(60_000);
+  f.read("account-a", 40); f.read("account-b", 100); f.read("account-c", 20);
+  await tickPipelines([], f.h.ports);
+  await tickPipelines([], f.h.ports);
+  expect(f.attempts().map(attempt => attempt.accountId)).toEqual(["account-a", "account-b", "account-c"]);
+  // The reading that ended A's hold retired it from every attempt that carried it.
+  expect([...new Set(f.attempts().flatMap(attempt => [...attempt.accountHolds ?? [], ...attempt.suspension?.hold ? [attempt.suspension.hold] : []])
+    .map(hold => hold.accountId))]).toEqual(["account-b"]);
+
+  // A's positive reading ages into "unknown"; no new exhaustion of A arrives.
+  f.advance(6 * 60_000);
+  f.read("account-c", 100);
+  await tickPipelines([], f.h.ports);
+  await tickPipelines([], f.h.ports);
+  expect(f.attempts().map(attempt => attempt.accountId)).toEqual(["account-a", "account-b", "account-c", "account-a"]);
+  expect(f.attempts()[3]).toMatchObject({ state: "running", launchId: expect.any(String), restartContext: { previousAttempt: 3 } });
+
+  // Only new exhaustion of A establishes another hold.
+  f.read("account-a", 100);
+  for (let tick = 0; tick < 20; tick++) { await tickPipelines([], f.h.ports); f.advance(120_000); }
+  expect(f.attempts()).toHaveLength(4);
+  expect(f.attempts()[3]).toMatchObject({ suspension: { hold: { accountId: "account-a", resetsAt: f.resetsAt } } });
+});
+
+test("headroom observed while a healthy replacement runs ends its predecessor hold during that tick", async () => {
+  const f = await guardedAccountClock(["account-a", "account-b"]);
+  const standing = () => loadPipelines()[0]!.runs[0]!.attempts.flatMap(attempt =>
+    [...attempt.accountHolds ?? [], ...attempt.suspension?.hold ? [attempt.suspension.hold] : []]).map(hold => hold.accountId)
+    .filter((accountId, index, all) => all.indexOf(accountId) === index);
+  await tickPipelines([], f.h.ports);
+  await tickPipelines([], f.h.ports);
+  expect(f.attempts().map(attempt => attempt.accountId)).toEqual(["account-a", "account-b"]);
+  expect(standing()).toEqual(["account-a"]);
+  // B carries a copy, so its healthy ticks read no retained history.
+  expect(f.attempts()[1]).toMatchObject({ accountHolds: [{ accountId: "account-a", resetsAt: f.resetsAt }] });
+
+  // B runs with no guard and no suspension while A's fresh reading shows headroom.
+  f.advance(60_000);
+  f.read("account-a", 40); f.read("account-b", 20);
+  await tickPipelines([], f.h.ports);
+  expect(f.attempts()[1]!.suspension).toBeUndefined();
+  expect(standing()).toEqual([]);
+
+  // A's reading ages into "unknown", then B runs out: A takes the stage once.
+  f.advance(6 * 60_000);
+  f.read("account-b", 100);
+  for (let tick = 0; tick < 20; tick++) { await tickPipelines([], f.h.ports); f.advance(120_000); }
+  expect(f.attempts().map(attempt => attempt.accountId)).toEqual(["account-a", "account-b", "account-a"]);
+  expect(f.attempts()[2]).toMatchObject({ state: "running", launchId: expect.any(String), restartContext: { previousAttempt: 2 } });
+});
+
+test("a never-launched attempt that launches again on another account keeps its own hold", async () => {
+  const f = await guardedAccountClock(["account-a", "account-b"]);
+  const laterReset = f.resetsAt + 2 * 3_600;
+  f.read("account-b", 100, laterReset);
+  await tickPipelines([], f.h.ports);
+  f.advance(6 * 60_000);
+  f.read("account-b", 100, laterReset); // B is fresh again when its replacement launches
+  await tickPipelines([], f.h.ports);
+  expect(f.attempts()).toHaveLength(1);
+  f.advance(6 * 60_000);
+  await tickPipelines([], f.h.ports);
+  f.read("account-b", 100, laterReset);
+  await tickPipelines([], f.h.ports);
+  await tickPipelines([], f.h.ports);
+  expect(f.attempts()).toHaveLength(2);
+  expect(f.attempts()[1]).toMatchObject({ accountId: "account-b", launchId: null,
+    suspension: { hold: { accountId: "account-b", resetsAt: laterReset } } });
+
+  // A resets first: the never-launched attempt launches there and keeps B held.
+  f.advance(f.resetsAt * 1_000 - f.now() + 60_000);
+  for (let tick = 0; tick < 3; tick++) { await tickPipelines([], f.h.ports); f.advance(120_000); }
+  expect(f.attempts()).toHaveLength(2);
+  expect(f.attempts()[1]).toMatchObject({ accountId: "account-a", launchId: expect.any(String),
+    accountHolds: [{ accountId: "account-b", resetsAt: laterReset }] });
+  // A runs out again before B resets: the stage waits, B stays held.
+  const againReset = laterReset + 3_600;
+  for (let tick = 0; tick < 20; tick++) {
+    if (tick % 4 === 0) f.read("account-a", 100, againReset);
+    await tickPipelines([], f.h.ports);
+    f.advance(120_000);
+  }
+  expect(f.attempts()).toHaveLength(2);
+  expect(f.attempts()[1]).toMatchObject({ accountId: "account-a", suspension: { hold: { accountId: "account-a", resetsAt: againReset } } });
+});
+
+test("the same exhausted reading, still fresh when its reset passes, keeps the reset and the hold ends there", async () => {
+  const f = await guardedAccountClock();
+  await tickPipelines([], f.h.ports);
+  expect(f.attempts()[0]!.suspension?.hold).toMatchObject({ resetsAt: f.resetsAt });
+  f.advance(f.resetsAt * 1_000 - f.now() - 60_000);
+  f.read("account-a", 100);
+  await tickPipelines([], f.h.ports);
+  f.advance(120_000);
+  await tickPipelines([], f.h.ports);
+  expect(f.attempts()).toHaveLength(1);
+  expect(f.attempts()[0]!.suspension?.hold).toBeUndefined();
+  // No new reading: once the old one ages, one replacement launches.
+  f.advance(10 * 60_000);
+  await tickPipelines([], f.h.ports);
+  await tickPipelines([], f.h.ports);
+  expect(f.attempts()).toHaveLength(2);
+  expect(f.attempts()[1]).toMatchObject({ accountId: "account-a", state: "running", launchId: expect.any(String),
+    restartContext: { previousAttempt: 1, transcriptPath: f.attempt.agentPath } });
 });

@@ -9,6 +9,7 @@ import type { AgentRegistry } from "@/lib/agent/registry";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { recordMemoryDelivery, type MemoryEngineStart } from "./deliveryLedger";
 import { roleMemoryEnabled } from "./settings";
+import { applyOperatorMemorySelector, operatorMemoryEnabled } from "./operatorMemory";
 import { memorySelection, prepareRoleSelection, selectionCandidate, frozenSelection } from "./roleSelection";
 import { MEMORY_SELECTION_DEADLINE_MS, selectRoleMemory } from "./roleSelect";
 import { stateLockDeferral, waitForStateLock } from "@/lib/state/lockWait";
@@ -24,7 +25,14 @@ export function roleMemoryProfileForIdentity(
   roleId: "orchestrator" | "maintainer" | null | undefined,
   project: string | null | undefined,
   designatedSeat = false,
+  /** Proven from the durable record (operatorRootConversation): the selector is re-derived for Delegatus mode. */
+  operatorRoot = false,
 ): LaunchProfile | null | undefined {
+  if (profile && !roleId && !designatedSeat) {
+    const next = { ...profile };
+    applyOperatorMemorySelector(next, project, operatorRoot);
+    return next.learnedRules === profile.learnedRules ? profile : next;
+  }
   if (!profile || !roleId || !project || project === "*") return profile;
   if (roleId !== "orchestrator" && roleId !== "maintainer") return profile;
   if (!designatedSeat) return profile;
@@ -51,7 +59,9 @@ export async function learnedRulesForLaunchProfile(profile: Pick<LaunchProfile, 
   const clean = profile?.cleanMemory === true;
   const select = () => {
     if (!marker || clean || roleIsClean(marker.roleId) || !roleMemoryEnabled()) return undefined;
-    try { return learnedRulesSnapshot(marker.project, marker.roleId, LEARNED_RULES_MAX_BYTES); }
+    // An operator selector reads rules only while the engines' memory is off.
+    if (marker.reader === "operator" && !operatorMemoryEnabled()) return undefined;
+    try { return learnedRulesSnapshot(marker.project, marker.roleId, LEARNED_RULES_MAX_BYTES, marker.reader === "operator" ? "operator" : undefined); }
     catch (error) {
       if (stateLockDeferral(error)) throw error;
       // Store diagnostics can contain private text; log only the cause class.
