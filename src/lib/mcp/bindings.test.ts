@@ -1728,6 +1728,37 @@ test("list_pipelines applies project, state, and closed filters to the durable r
     .toEqual([{ id: "pipeline_live", project: "viewer", state: "running" }]);
 });
 
+test.each([false, true])("list_pipelines resolves archived ids with the same filters and cursors (indexed: %s)", async (indexed) => {
+  const rows = [
+    { id: "pipeline_archived", project: "viewer", state: "closed", createdAt: "2026-10-01T00:00:00.000Z" },
+    { id: "pipeline_completed", project: "viewer", state: "completed", createdAt: "2026-10-02T00:00:00.000Z" },
+    { id: "pipeline_foreign", project: "other", state: "closed", createdAt: "2026-10-03T00:00:00.000Z" },
+  ];
+  const read = (id: string) => rows.find(row => row.id === id) ?? null;
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    getPipelines: () => { throw new Error("explicit ids traversed the hot registry"); },
+    listPipelineRecords: () => { throw new Error("explicit ids traversed the hot registry"); },
+    ...(indexed ? { pipelineSelectionSource: () => ({ filename: "unused-for-keyed-reads", read: () => null }) } : {}),
+    readPipelineRecord: read,
+    callerAttribution: () => ({ kind: "manager", conversationId: "conversation_seat" }),
+    authorizedSeats: () => [{ conversationId: "conversation_seat", project: "viewer" }],
+  } as never);
+
+  const args = { ids: [...rows.map(row => row.id), "missing", rows[0]!.id], includeClosed: true, compact: true, limit: 1 };
+  const first = await bindings.list_pipelines(args);
+  expect(first).toMatchObject({ count: 1, total: 2, hasMore: true, pipelines: [{ id: "pipeline_completed" }] });
+  const next = await bindings.list_pipelines({ ...args, cursor: first.nextCursor });
+  expect(next).toMatchObject({ count: 1, total: 2, hasMore: false, pipelines: [{ id: "pipeline_archived", state: "closed" }] });
+  await expect(bindings.list_pipelines({ ...args, state: ["closed", "completed"], limit: 10 }))
+    .resolves.toMatchObject({ count: 2, total: 2 });
+  await expect(bindings.list_pipelines({ ...args, includeClosed: false, limit: 10 }))
+    .resolves.toMatchObject({ count: 1, pipelines: [{ id: "pipeline_completed" }] });
+  await expect(bindings.list_pipelines({ ...args, state: "running" })).resolves.toMatchObject({ count: 0 });
+  await expect(bindings.list_pipelines({ ...args, ids: "missing" })).resolves.toMatchObject({ count: 0 });
+  await expect(bindings.list_pipelines({ ...args, project: "other" }))
+    .rejects.toMatchObject({ details: { code: "cross_project_refused" } });
+});
+
 /* #863: the list is a board-card projection, not the registry records. Detail —
    the spec body, stage prompts, and every attempt's relay input and transcript
    tail — belongs to get_pipeline, which still returns the whole record. */

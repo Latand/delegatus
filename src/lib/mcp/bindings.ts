@@ -5975,7 +5975,12 @@ async function listPipelines(
     queryIds: undefined as string[] | undefined };
   const number = pullRequestQuery(scope.query);
   if (number !== null) scope.queryIds = pipelineReferenceRows(dependencies, scope.project).filter(row => pipelineMatchesPr(row, number)).map(row => row.id).sort();
-  const source = dependencies.pipelineSelectionSource?.();
+  const hotSource = dependencies.pipelineSelectionSource?.();
+  // Explicit ids share get_pipeline's hot-or-archive lookup. Keep ordinary
+  // lists on their scalar selection index and materialize only requested rows.
+  const source = hotSource && scope.ids.length && dependencies.readPipelineRecord
+    ? { ...hotSource, read: dependencies.readPipelineRecord }
+    : hotSource;
   /* #2059: the compact row names its PR in one string, the full forms carry
      every resolved link. */
   const project = (source: Pipeline) => {
@@ -5987,7 +5992,9 @@ async function listPipelines(
   };
   const page = source ? boardSelection(source.filename, "pipelines").page(source, scope, args.cursor,
     Math.max(1, Math.min(200, integer(args.limit, PIPELINE_LIST_DEFAULT_LIMIT))), project)
-    : await listPageAsync(dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines, {
+    : await listPageAsync(scope.ids.length && dependencies.readPipelineRecord
+      ? scope.ids.flatMap(id => dependencies.readPipelineRecord!(id) ?? [])
+      : dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines, {
     scope, cursor: args.cursor, limit: Math.max(1, Math.min(200, integer(args.limit, PIPELINE_LIST_DEFAULT_LIMIT))),
     identity: pipeline => ({ id: pipeline.id, time: pipeline.createdAt ?? "" }),
     matches: pipeline => (!scope.project || canonicalProject(pipeline.project) === scope.project)
