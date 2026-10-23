@@ -1,3 +1,4 @@
+import { assertProactiveTaskExecution, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
 import type { AgentRegistry, SpawnReceipt } from "./registry";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
 import { withSpawnDiagnostics, bindSpawnDiagnostics, spawnDiagnosticError } from "./spawnDiagnostics";
@@ -574,6 +575,8 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     return NextResponse.json({ error: `not a directory: ${cwd}` }, { status: 400 });
   }
   const authorizeLaunch = () => {
+    assertProactiveTaskExecution([...(typeof body.taskId === "string" ? [body.taskId] : []),
+      ...proactiveConversationTaskIds([authenticatedCaller?.kind === "agent" ? authenticatedCaller.conversationId : null, supersedesConversationId], registry)]);
     if (role.value?.role === "curator") {
       const pass = machinePassAuthority();
       const project = canonicalProject(explicitProject ?? projectForCwd(cwd) ?? "");

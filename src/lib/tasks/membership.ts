@@ -59,6 +59,9 @@ export interface MembershipInput {
   /** Set by launch admission; the reconcile pass and delete replacements
       record conversations that already run and pass none. */
   admit?: MembershipAdmission;
+  /** Launch authority also follows related identities when an explicit target
+      suppresses assignment inheritance. Failed assignments retain that history. */
+  admitRelated?: { identities: readonly MembershipIdentity[]; admit: MembershipAdmission };
 }
 
 export type MembershipResult =
@@ -181,6 +184,13 @@ export function ensureTaskMembership(existing: readonly BoardTask[], input: Memb
   if (!project && !input.explicitTaskIds?.length) return { ok: false, error: "project is required", status: 400 };
   if (!input.origin.key.trim()) return { ok: false, error: "membership origin key is required", status: 400 };
   if (!hasIdentity(input.identity)) return { ok: false, error: "membership needs a launch, conversation or path identity", status: 400 };
+  const relatedAdmission = input.admitRelated;
+  if (relatedAdmission) {
+    const related = existing.filter(task => task.assignments.some(assignment =>
+      relatedAdmission.identities.some(identity => sameIdentity(assignment, identity))));
+    const refusal = relatedAdmission.admit(related);
+    if (refusal) return { ok: false, ...refusal };
+  }
   const now = deps.now?.() ?? isoNow();
   let tasks = existing.slice();
   let changed = false;

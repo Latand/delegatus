@@ -1,3 +1,4 @@
+import { proactiveExecutionError } from "./proactiveExecution";
 import { AccountCommitBusyError } from "@/lib/accounts/accountMutationContext";
 import { stateLockDeferral } from "@/lib/state/lockWait";
 import { appendLifecycleEvents } from "@/lib/lifecycle/journal";
@@ -78,7 +79,14 @@ export class LaunchMembershipError extends Error {
 }
 
 /** M.4 seam 2: no agent process starts here for a task another machine runs. */
+const proactiveAdmission: MembershipAdmission = (tasks) => {
+  const proactive = proactiveExecutionError(tasks);
+  return proactive ? { error: proactive, status: 403, code: "PROACTIVE_EXECUTION_FENCED" } : null;
+};
+
 export const launchAdmission: MembershipAdmission = (tasks) => {
+  const proactive = proactiveAdmission(tasks);
+  if (proactive) return proactive;
   const refusal = firstRunsElsewhere(tasks);
   return refusal ? { error: refusal.error, status: refusal.status, code: refusal.code } : null;
 };
@@ -187,7 +195,10 @@ export function admitReservedLaunch(
 ): MembershipResult {
   let result: MembershipResult;
   try {
-    const input: MembershipInput = { ...launchMembershipInput(launch, receipt, ports.pipelineContext, ports.projectForCwd, ports.seatIdentity), admit: launchAdmission };
+    const identities = [...new Set([launch.parentConversationId, launch.reviewsConversationId, receipt.conversationId]
+      .filter((id): id is string => !!id))].map(conversationId => ({ conversationId }));
+    const input: MembershipInput = { ...launchMembershipInput(launch, receipt, ports.pipelineContext, ports.projectForCwd, ports.seatIdentity),
+      admit: launchAdmission, admitRelated: { identities, admit: proactiveAdmission } };
     result = ports.commit(input);
   } catch (error) {
     if (error instanceof AccountCommitBusyError || stateLockDeferral(error)) throw error;

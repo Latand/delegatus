@@ -40,6 +40,38 @@ function registryAt(name: string) {
 }
 const holders = (conversationId: string) => loadTasks().filter((candidate) => candidate.assignments.some((assignment) => assignment.conversationId === conversationId)).map((candidate) => candidate.id);
 
+test("disabled candidates, rejected recovery and helpers with unrelated explicit targets never launch", async () => {
+  const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("./proactive");
+  const { candidate, context, authority, NOW } = await import("./proactive.fixture");
+  const { setAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const { proactiveConversationTaskIds } = await import("./proactiveExecution");
+  const registry = registryAt("proactive-authority");
+  setAgentRegistryForTests(registry);
+  try {
+    saveTasks([]);
+    const { task: invented } = await admitProactiveTask(candidate("launch-fences"), context(), undefined, authority());
+    const request = { engine: "codex" as const, cwd: stateDir, transport: "structured" as const,
+      origin: { kind: "operator" as const }, explicitProject: invented.project,
+      taskIds: [invented.id], launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Preserve the filter" }) };
+    expect(() => registry.beginSpawnRequest({ ...request, clientAttemptId: "proactive-disabled" })).toThrow("disabled");
+    await decideProactiveTask(invented.id, "adopt", "operator", proactiveDecisionToken(invented), undefined, () => new Date(NOW).toISOString());
+    const owner = registry.beginSpawnRequest({ ...request, clientAttemptId: "proactive-adopted" });
+    if (owner.kind !== "created") throw new Error("expected adopted reservation");
+    expect(proactiveConversationTaskIds([owner.receipt.conversationId], registry)).toEqual([invented.id]);
+    registry.failStructuredSpawn(owner.receipt.launchId, "fixture launch failed");
+    await decideProactiveTask(invented.id, "reject", "operator", proactiveDecisionToken(invented));
+    saveTasks([...loadTasks(), { ...task("ordinary-target", "Accepted work"), project: invented.project }]);
+    for (const relation of ["parentConversationId", "reviewsConversationId"] as const) {
+      expect(() => registry.beginSpawnRequest({ ...request, taskIds: ["ordinary-target"],
+        clientAttemptId: `proactive-${relation}`, [relation]: owner.receipt.conversationId,
+        ...(relation === "reviewsConversationId" ? { role: "reviewer" } : {}) })).toThrow("rejected");
+    }
+    await expect(registry.admitRecoveredLaunch(owner.receipt)).rejects.toThrow("rejected");
+    expect(loadTasks().find(row => row.id === "ordinary-target")?.assignments).toEqual([]);
+    expect(loadTasks().find(row => row.id === invented.id)).toBeDefined();
+  } finally { setAgentRegistryForTests(null); }
+});
+
 test("a read-only launch has a named, described task before its first turn, including failure and replay", () => {
   saveTasks([]);
   const registry = registryAt("named-read-only");
