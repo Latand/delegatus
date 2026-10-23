@@ -3,7 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { statePath } from "@/lib/configDir";
 import { procBackend } from "@/lib/proc";
-import type { ExternalRelayCompletion, ExternalRelayOwner, ExternalRelayTarget } from "./protocol";
+import type { ExternalRelayAnswer, ExternalRelayCompletion, ExternalRelayOwner, ExternalRelayTarget } from "./protocol";
 import type { OwnerBridgeContext } from "./ownerBridgeContext";
 import type { OwnerTurnDiagnostic } from "./diagnostic";
 
@@ -104,7 +104,10 @@ export type RunRecord = {
     /** When the cutoff was first written; older rows fall back to startedAt. */
     cancelledAt?: string;
     /** The target slot was released while this custody record is retained. */
-    released?: OwnerStopRelease };
+    released?: OwnerStopRelease;
+    /** The scrubbed failure reply and the request deadline it may be sent before,
+     * so recovery after a restart can still answer the requester. */
+    failureReply?: { answer: ExternalRelayAnswer; until: string } };
   requestId: string;
   leaseId: string;
   relayId: string;
@@ -117,17 +120,19 @@ export type RunRecord = {
   startedAt: string;
 };
 export type RunLedger = { v: 1; runs: RunRecord[] };
-/** `no_execution`: the attempt provably never had a session to stop.
- * `stop_unconfirmed`: stop control stayed unconfirmed past its bound. */
+/** `no_execution`: the attempt provably never had a session to stop; the stop
+ * is confirmed. `stop_unconfirmed`: stop control stayed unconfirmed past its
+ * bound; only the target slot is released and stop recovery continues. */
 export type OwnerStopRelease = { at: string; reason: "no_execution" | "stop_unconfirmed" };
 /** Released owner custody stays readable this long before the sweep drops it. */
 export const OWNER_RELEASED_CUSTODY_RETENTION_MS = 24 * 60 * 60_000;
-/** An unreleased cutoff whose stop is still unconfirmed holds its slot. */
+/** A cutoff whose stop is unconfirmed: execution may still run, so stop
+ * recovery, files and the conversation pin stay held, released slot or not. */
 export function ownerStopPending(run: RunRecord): boolean {
-  return !!run.ownerTurn?.cancel && !run.ownerTurn.confirmed && !run.ownerTurn.released;
+  return !!run.ownerTurn?.cancel && !run.ownerTurn.confirmed;
 }
 export function runHoldsCapacity(run: RunRecord): boolean {
-  return !run.capacityReleased && !run.ownerTurn?.confirmed;
+  return !run.capacityReleased && !run.ownerTurn?.confirmed && !run.ownerTurn?.released;
 }
 type RelayRequestClaim = { requestId: string; leaseId: string; ownerPid: number; ownerIdentity: string; claimedAt: number; terminalAt?: number; completion?: ExternalRelayCompletion };
 type RelayRequestLedger = { v: 1; claims: RelayRequestClaim[] };

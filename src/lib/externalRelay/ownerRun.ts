@@ -14,7 +14,8 @@ import os from "node:os";
 import type { EphemeralAgentRun, EphemeralAgentResult } from "@/lib/agent/ephemeral";
 import { launchAutonomousConversation, observeSpawnedTurn, type SpawnedTurn, type SpawnedTurnObservation } from "@/lib/agent/autonomousConversation";
 import type { ReportSpawnResult } from "@/lib/telegram/reportSpawn";
-import { resolveConversationAlias, type AgentRegistry } from "@/lib/agent/registry";
+import { resolveConversationAlias, type AgentRegistry, type RegistryFile } from "@/lib/agent/registry";
+import { processIdentityMayOwn } from "@/lib/processIdentity";
 import type { SeatTickSources } from "@/lib/monitor/seatTickSources";
 import { spawnNoticeFinalMessage, transcriptErrorFromRecords } from "@/lib/spawnNotice/production";
 import { scrubOwnerOutput } from "./ownerOutput";
@@ -188,6 +189,16 @@ export function ownerFailureAnswer(request: ExternalRelayRequest, owner: OwnerIn
   return answer?.action === "reply" ? answer : null;
 }
 
+/** What durable custody keeps of a failure: its diagnostic and, when the
+ * request admits one, the scrubbed reply that recovery after a restart may
+ * still send before the request deadline. */
+export function ownerFailureCustody(request: ExternalRelayRequest, owner: OwnerInstruction, diagnostic: OwnerTurnDiagnostic, deadlineAt: number,
+  credentials: readonly string[] = []): Pick<NonNullable<RunRecord["ownerTurn"]>, "diagnostic" | "failureReply"> {
+  let answer: ExternalRelayAnswer | null = null;
+  try { answer = ownerFailureAnswer(request, owner, diagnostic, credentials); } catch { /* The diagnostic alone stays readable. */ }
+  return { diagnostic, ...(answer && Number.isFinite(deadlineAt) ? { failureReply: { answer, until: new Date(deadlineAt).toISOString() } } : {}) };
+}
+
 export interface OwnerRunPorts {
   launch(body: Record<string, unknown>, authorize?: () => void): Promise<ReportSpawnResult>;
   continue?(run: OwnerSpawnedTurn, prompt: string, target: RelayTargetSettings, authorize: () => void): Promise<StructuredMessageResult | null>;
@@ -272,18 +283,26 @@ const productionPorts: OwnerRunPorts = {
 };
 
 /** A fresh owner launch whose receipt failed before any session, host or pane
- * was bound, whose first prompt is not pending and whose conversation the
- * registry never registered has nothing a stop could reach. */
+ * was bound, whose launch owner released admission or is proven dead, whose
+ * first prompt is not pending and whose conversation the registry never
+ * registered has nothing a stop could reach. Every other receipt and delivery
+ * for that conversation must be equally settled. */
 export function ownerAttemptHasNoExecution(run: RunRecord, registry: AgentRegistry): boolean {
   if (!run.ownerTurn?.admissionComplete || run.ownerTurn.continuation) return false;
   const receipt = registry.spawnReceiptForClientAttempt(run.ownerTurn.clientAttemptId);
-  if (!receipt || receipt.state !== "failed" || receipt.key || receipt.pane || receipt.verifiedHost || receipt.queuedPinnedSpawn) return false;
-  if (run.conversationId && receipt.conversationId !== run.conversationId) return false;
+  if (!receipt || run.conversationId && receipt.conversationId !== run.conversationId) return false;
+  // A failed receipt keeps its admission owner until that process releases it:
+  // while the owner may run it can still actuate the launch.
+  const settled = (candidate: typeof receipt) => candidate.state === "failed" && !candidate.key && !candidate.pane && !candidate.verifiedHost
+    && !candidate.queuedPinnedSpawn && !(candidate.admissionOwner && processIdentityMayOwn(candidate.admissionOwner));
+  if (!settled(receipt)) return false;
+  const pendingDelivery = (snapshot: RegistryFile) => Object.values(snapshot.heldDeliveries).some(delivery =>
+    delivery.state !== "delivered" && !(delivery.state === "failed" && !delivery.text));
   const operationId = `spawn_message_${receipt.launchId}`;
-  const snapshot = registry.deliverySnapshotForOperation(operationId);
-  const promptOwner = snapshot.deliveryOperationOwners[operationId];
-  const prompt = promptOwner ? snapshot.heldDeliveries[promptOwner.deliveryId] : undefined;
-  if (prompt && prompt.state !== "delivered" && !(prompt.state === "failed" && !prompt.text)) return false;
+  if (pendingDelivery(registry.deliverySnapshotForOperation(operationId))) return false;
+  const conversation = registry.livenessConversationSnapshot(receipt.conversationId);
+  if (Object.keys(conversation.conversations).length || Object.keys(conversation.entries).length) return false;
+  if (!Object.values(conversation.receipts).every(settled) || pendingDelivery(conversation)) return false;
   return !registry.conversation(receipt.conversationId as `conversation_${string}`);
 }
 
@@ -490,7 +509,7 @@ export function confirmOwnerStop(run: RunRecord, ports: OwnerRunPorts = producti
   if (existing) return existing;
   const work = (async () => {
     if (!run.ownerTurn?.cancel) return false;
-    if (run.ownerTurn.released) return true;
+    if (run.ownerTurn.confirmed) return true;
     try {
       if (run.ownerTurn.admissionComplete && await bounded(ports.noExecution?.(run) ?? Promise.resolve(false), 1000)) {
         releaseOwnerStop(run, "no_execution", ports);
@@ -541,10 +560,12 @@ export function confirmOwnerStop(run: RunRecord, ports: OwnerRunPorts = producti
       }
       if (attempt < 2) await sleep(ports.stopRetryMs ?? 250);
     }
+    // Elapsed time frees the target slot only: the executor may still run, so
+    // the stop stays unconfirmed and every later sweep retries control.
     const cancelledAt = Date.parse(run.ownerTurn.cancelledAt ?? "");
-    if (!Number.isFinite(cancelledAt) || (ports.now?.() ?? Date.now()) - cancelledAt >= OWNER_STOP_PENDING_LIMIT_MS) {
-      releaseOwnerStop(run, "stop_unconfirmed", ports);
-      return true;
+    if (!run.ownerTurn.released && (!Number.isFinite(cancelledAt) || (ports.now?.() ?? Date.now()) - cancelledAt >= OWNER_STOP_PENDING_LIMIT_MS)) {
+      try { releaseOwnerStop(run, "stop_unconfirmed", ports); }
+      catch { console.error("Owner relay target release unavailable; durable custody retained"); }
     }
     noteRelayOutcome(run.relayId, "owner_stop_pending");
     console.error("Owner relay stop remains pending; durable custody retained");
@@ -560,18 +581,18 @@ export function confirmOwnerStop(run: RunRecord, ports: OwnerRunPorts = producti
 }
 /** Frees the target slot and keeps the custody record, its cutoff and its
  * diagnostic. Only proven absence of execution also counts as a confirmed stop;
- * agent tools stay revoked by the cutoff either way. */
+ * an unconfirmed release leaves execution pending and stop recovery running.
+ * Agent tools stay revoked by the cutoff either way. */
 function releaseOwnerStop(run: RunRecord, reason: OwnerStopRelease["reason"], ports: OwnerRunPorts): void {
   const release: OwnerStopRelease = { at: new Date(ports.now?.() ?? Date.now()).toISOString(), reason };
   let found = false;
   changeRun(run.requestId, r => {
     found = true;
-    return { ...r, capacityReleased: true, ownerTurn: { ...r.ownerTurn!, released: r.ownerTurn?.released ?? release,
+    return { ...r, ownerTurn: { ...r.ownerTurn!, released: r.ownerTurn?.released ?? release,
       ...(reason === "no_execution" ? { confirmed: true } : {}) } };
   });
   if (!found) throw new Error("owner cancellation custody missing");
-  run.ownerTurn = { ...run.ownerTurn!, released: release, ...(reason === "no_execution" ? { confirmed: true } : {}) };
-  run.capacityReleased = true;
+  run.ownerTurn = { ...run.ownerTurn!, released: run.ownerTurn?.released ?? release, ...(reason === "no_execution" ? { confirmed: true } : {}) };
   console.error("Owner relay stop released target capacity; custody record retained", JSON.stringify({
     requestId: run.requestId, conversationId: run.conversationId ?? null, reason, diagnostic: run.ownerTurn.diagnostic ?? null }));
 }
@@ -639,6 +660,7 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
   let settled = false, admitted = false, launchAttempted = false;
   let firstMessagePending = true;
   let diagnostic: OwnerTurnDiagnostic | undefined;
+  let failureCustody: ReturnType<typeof ownerFailureCustody> | undefined;
   // The first failure wins: a stop that stays pending cannot hide it and a
   // later cutoff cannot replace it. Every stop cutoff persists it (persistStop).
   const adopt = (value: OwnerTurnDiagnostic, journaled = false) => {
@@ -646,7 +668,8 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
     diagnostic = value;
     if (!journaled) console.error("Owner relay turn failed", JSON.stringify({ requestId: input.request.request_id, conversationId: turn.conversationId ?? null, diagnostic }));
     input.onDiagnostic?.(diagnostic);
-    if (custody?.ownerTurn) custody = { ...custody, ownerTurn: { ...custody.ownerTurn, diagnostic: custody.ownerTurn.diagnostic ?? diagnostic } };
+    failureCustody = ownerFailureCustody(input.request, input.owner, diagnostic, deadline.at, input.credentials);
+    if (custody?.ownerTurn && !custody.ownerTurn.diagnostic) custody = { ...custody, ownerTurn: { ...custody.ownerTurn, ...failureCustody } };
   };
   const diagnose = (source: OwnerTurnDiagnostic["source"], reason: unknown, details: Partial<Omit<OwnerTurnDiagnostic, "source" | "message">> = {}) =>
     adopt({ ...ownerTurnDiagnostic(source, reason, input.credentials), ...details });
@@ -672,7 +695,7 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
   const persistStop = (): boolean => {
     const cancelledAt = custody?.ownerTurn?.cancelledAt ?? new Date().toISOString();
     if (custody) custody = { ...custody, ...(turn.conversationId ? { conversationId: turn.conversationId } : {}),
-      ownerTurn: { ...custody.ownerTurn!, ...(diagnostic ? { diagnostic } : {}), cancel: stopped!, admissionComplete: admitted, cancelledAt } };
+      ownerTurn: { ...custody.ownerTurn!, ...(failureCustody && !custody.ownerTurn?.diagnostic ? failureCustody : {}), cancel: stopped!, admissionComplete: admitted, cancelledAt } };
     let found = false;
     try {
       // A short wait: an in-flight async ledger write cannot release while this
@@ -680,7 +703,7 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
       changeRun(input.request.request_id, r => {
         found = true;
         return { ...r, ...(turn.conversationId ? { conversationId: turn.conversationId } : {}),
-          ownerTurn: { ...r.ownerTurn!, ...(diagnostic ? { diagnostic: r.ownerTurn?.diagnostic ?? diagnostic } : {}), cancel: stopped!, admissionComplete: admitted,
+          ownerTurn: { ...r.ownerTurn!, ...(failureCustody && !r.ownerTurn?.diagnostic ? failureCustody : {}), cancel: stopped!, admissionComplete: admitted,
             cancelledAt: r.ownerTurn?.cancelledAt ?? cancelledAt } };
       }, OWNER_STOP_LEDGER_WAIT_MS);
       return found || !custody;

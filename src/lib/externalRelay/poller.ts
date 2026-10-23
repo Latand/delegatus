@@ -1,4 +1,5 @@
 import { confirmOwnerStop, type OwnerRunPorts } from "./ownerRun";
+import { ownerRelayFailureReplyAuthorized } from "./ownerAuthority";
 import { changeRun, OWNER_RELEASED_CUSTODY_RETENTION_MS, ownerStopPending } from "./store";
 import { sweepConversationsAsync } from "./conversations";
 import { readRelaySwitches } from "./switches";
@@ -105,7 +106,8 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
   for (const run of readRunLedger().runs) {
     // Accepted completion already ended execution. Finish abandoned cleanup
     // without controlling a host or sending a second service completion.
-    if (run.capacityReleased) {
+    // An unconfirmed owner stop still needs control below first.
+    if (run.capacityReleased && !ownerStopPending(run)) {
       if (relayRequestInFlight(run.requestId) || run.ownerPid !== process.pid && processMatches(run.ownerPid, run.ownerIdentity)) continue;
       // Released owner custody keeps its cutoff and diagnostic readable for a bounded time.
       const released = run.ownerTurn?.released ? Date.parse(run.ownerTurn.released.at) : NaN;
@@ -140,11 +142,17 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
     if (!held || ownerHolds()) continue;
     if (run.childPid && processMatches(run.childPid, run.childIdentity))
       terminateHeadlessReviewerGroup(run.childPid, run.childIdentity);
+    // A released owner stop keeps its custody record until retention ends;
+    // the capacity marker tells later sweeps that its completion is done.
+    const settle = () => {
+      if (held.ownerTurn?.released) changeRun(run.requestId, r => ({ ...r, capacityReleased: true }));
+      else dropRun(run.requestId);
+    };
     // The accepted completion already reached the requester. Stop custody
     // only held capacity and files until the host confirmed the stop.
-    if (held.completionAccepted) {
+    if (held.completionAccepted || held.capacityReleased) {
       removeRunDirectory(run.runDir);
-      dropRun(run.requestId);
+      settle();
       continue;
     }
     if (run.ownerTurn) noteRelayOutcome(run.relayId, "failed:cancelled");
@@ -152,18 +160,26 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
       (item) => item.id === run.relayId,
     );
     let delivery: RelayAnswerDelivery = "unconfirmed";
+    // A diagnosed owner failure whose stop is confirmed still answers with its
+    // saved scrubbed reason while the request is open and the owner target
+    // still authorizes the reply; otherwise the generic restart failure.
+    const saved = held.ownerTurn?.failureReply;
+    const answer = saved && Date.now() < Date.parse(saved.until)
+      && ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId) ? saved.answer : null;
     if (relay) {
       try {
         await relayCall(
           relay.api_base,
           `/requests/${encodeURIComponent(run.requestId)}/complete`,
           "POST",
-          {
-            lease_id: run.leaseId,
-            outcome: "failed",
-            reason: "install_restarted",
-            detail: null,
-          },
+          answer
+            ? { lease_id: run.leaseId, outcome: "answered", answer, duration_ms: Math.max(0, Date.now() - Date.parse(run.startedAt)) }
+            : {
+                lease_id: run.leaseId,
+                outcome: "failed",
+                reason: "install_restarted",
+                detail: null,
+              },
           relay.credential,
         );
         delivery = "accepted";
@@ -176,9 +192,8 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
     }
     removeRunDirectory(run.runDir);
     const current = run.ownerTurn ? readRunLedger().runs.find(r => r.requestId === run.requestId) : undefined;
-    settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, delivery, current?.conversationId);
-    // A released owner stop keeps its custody record until retention ends.
-    if (!current?.ownerTurn?.released) dropRun(run.requestId);
+    settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, delivery, current?.conversationId, answer);
+    settle();
   }
   await sweepConversationsAsync(readRelayStore().relays, Date.now(), Date.now() + 5_000);
 }

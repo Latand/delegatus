@@ -16,7 +16,7 @@ import { ownerRequestTimeoutText } from "./requestTimeout";
 import { matchPrototypeAnswer } from "@/lib/prototypeReview/telegramAnswer";
 import { runPrototypeAnswer } from "./prototypeAnswer";
 import { resolveOwnerBridgeContext } from "./ownerBridgeContext";
-import { runOwnerAgent, OwnerContinuationRefused, ownerContinuationPrompt, ownerInitialCursor, ownerRunPrompt, ownerFailureAnswer, type OwnerRunPorts } from "./ownerRun";
+import { runOwnerAgent, OwnerContinuationRefused, ownerContinuationPrompt, ownerInitialCursor, ownerRunPrompt, ownerFailureAnswer, ownerFailureCustody, type OwnerRunPorts } from "./ownerRun";
 import { ownerTurnDiagnostic, type OwnerTurnDiagnostic } from "./diagnostic";
 import { readRelaySwitches } from "./switches";
 import { compactRequestSchema } from "./protocol";
@@ -425,6 +425,17 @@ export async function runClaimedRequest(
   // A refused cutoff write can leave cancel absent from the ledger. The
   // unsettled owner still owns its capacity, chain reservation and files.
   const ownerRunPending = () => !!owner && !!run && !runFinished;
+  // A full owner turn (no prototype answer) answers at the request bound with
+  // the fixed status notice while its stop is still unconfirmed.
+  let boundedOwnerTurn = false;
+  const finishOwnerTimeout = async (startedAt: number): Promise<ExternalRelayCompletion | null> => {
+    console.info("External relay owner request timed out", { request: requestId.slice(0, 8), elapsed_ms: Date.now() - deadline.receivedAt });
+    callAbort.abort();
+    ownerStatusReply = { lease_id: leaseId, outcome: "answered", duration_ms: Date.now() - startedAt,
+      answer: { action: "reply", text: ownerRequestTimeoutText(caps!.plainMax), reply_to: owner!.messageId,
+        ...(caps!.rich ? { format: "plain", buttons: [], attachments: [] } : {}) } };
+    return await finish(ownerStatusReply);
+  };
   executionScope = true;
   releaseCapacity = async () => {
     if (!recorded || capacityReleased || ownerRunPending()) return;
@@ -563,6 +574,7 @@ export async function runClaimedRequest(
     const parent = request.input.conversation.find(message => message.id === trigger?.reply_to && message.author.self);
     const prototype = ownerMessage ? matchPrototypeAnswer(ownerMessage.text, undefined, replayReviewId, undefined, parent?.text) : null;
     owner = prototype ? ownerMessage : ownerTierFor(target, request);
+    boundedOwnerTurn = !!owner && !prototype;
     if (owner && !prototype) {
       try { owner.localContext = await withViewerOperation("telegram.outbound-state", () =>
         waitForStateLock("relay.owner-context", () => resolveOwnerOutboundContext(request, owner!, relay), { waitMs: 5000 })); }
@@ -906,14 +918,8 @@ export async function runClaimedRequest(
         rounds--; continue;
       }
       finally { if (requestTimer) clearTimeout(requestTimer); }
-      if (owner && !prototype && (requestExpired || result.status === "timeout" && remainingMs(deadline) === 0)) {
-        console.info("External relay owner request timed out", { request: requestId.slice(0, 8), elapsed_ms: Date.now() - deadline.receivedAt });
-        callAbort.abort();
-        ownerStatusReply = { lease_id: leaseId, outcome: "answered", duration_ms: Date.now() - started,
-          answer: { action: "reply", text: ownerRequestTimeoutText(caps!.plainMax), reply_to: owner.messageId,
-            ...(caps!.rich ? { format: "plain", buttons: [], attachments: [] } : {}) } };
-        return await finish(ownerStatusReply);
-      }
+      if (owner && !prototype && (requestExpired || result.status === "timeout" && remainingMs(deadline) === 0))
+        return await finishOwnerTimeout(started);
       ownerParts?.close();
       if (result.diagnostic) recordDiagnostic(result.diagnostic);
       if (ownerParts) { stagedAttachments = ownerParts.parts().attachments; answerDrops.push(...ownerParts.drops); }
@@ -1003,17 +1009,26 @@ export async function runClaimedRequest(
     }
     if (owner && diagnostic && run) {
       run.diagnose?.(diagnostic);
-      // Durable custody keeps the reason even if host control never confirms.
-      // Awaited before the stop: its synchronous cutoff write must not contend
-      // with this write's file lock.
-      const value = diagnostic;
+      // Durable custody keeps the reason and its reply even if host control
+      // never confirms. Awaited before the stop: its synchronous cutoff write
+      // must not contend with this write's file lock.
+      const kept = request ? ownerFailureCustody(request, owner, diagnostic, deadline.at, [relay.credential]) : { diagnostic };
       try { await changeRunAsync(requestId, current => current.ownerTurn && !current.ownerTurn.diagnostic
-        ? { ...current, ownerTurn: { ...current.ownerTurn, diagnostic: value } } : current, Date.now() + 5000); }
+        ? { ...current, ownerTurn: { ...current.ownerTurn, ...kept } } : current, Date.now() + 5000); }
       catch { console.error("Owner relay diagnostic persistence unavailable; the stop cutoff retries it"); }
     }
     if (run) {
       if (!runFinished) run.cancel();
-      await run.done;
+      // Stop recovery may outlast the request: the requester still gets the
+      // status notice at the request bound while execution custody is retained.
+      let boundTimer: ReturnType<typeof setTimeout> | undefined;
+      const bound = boundedOwnerTurn ? new Promise<"expired">(resolve => {
+        boundTimer = setTimeout(() => resolve("expired"), remainingMs(deadline)); boundTimer.unref();
+      }) : null;
+      try {
+        const ended = run.done.then(() => "ended" as const);
+        if (await (bound ? Promise.race([ended, bound]) : ended) === "expired") return await finishOwnerTimeout(deadline.receivedAt);
+      } finally { if (boundTimer) clearTimeout(boundTimer); }
     }
     if (owner) {
       failureReply = true;
@@ -1040,7 +1055,7 @@ export async function runClaimedRequest(
       if (conversation && owner) {
         try {
           const custody = readRunLedger().runs.find(r => r.requestId === requestId)?.ownerTurn;
-          releasePin = !ownerRunPending() && !(custody?.cancel && !custody.confirmed && !custody.released);
+          releasePin = !ownerRunPending() && !(custody?.cancel && !custody.confirmed);
         } catch { releasePin = false; } // Unreadable custody cannot admit a peer turn.
       }
       if (conversation && releasePin) {
