@@ -103,8 +103,7 @@ export class VoiceToolSessions implements VoiceToolCalls {
       // Idle time starts again when this call is answered; it never runs out under a call in flight.
       live.idle?.(); live.idle = undefined;
       const result = await this.dispatch(live, tool.tool, args, server.callTimeoutMs, signal);
-      live.idle?.();
-      live.idle = this.schedule(() => this.stop(live, "TOOL_REVOKED"), voiceToolBounds.idleMs);
+      this.idleAfter(live);
       if (result.status === "done") return { status: "done", content: result.content ?? "", ...(result.omitted?.length ? { omitted: result.omitted } : {}),
         ...(result.images?.length ? { images: result.images } : {}), speech: `${server.title} answered.${result.omitted?.length ? ` Omitted: ${result.omitted.join(", ")}.` : ""}` };
       const code = result.code && Object.hasOwn(SPEECH, result.code) ? result.code : "TOOL_ERROR";
@@ -203,6 +202,11 @@ export class VoiceToolSessions implements VoiceToolCalls {
     }
     this.drift(live, input.server.catalog?.tools ?? [], Array.isArray(message.tools) ? message.tools as Tool[] : null);
     live.state = "ready";
+    this.idleAfter(live);
+  }
+  /** A server stops after five minutes without calls (§4.2). */
+  private idleAfter(live: Live): void {
+    live.idle?.();
     live.idle = this.schedule(() => this.stop(live, "TOOL_REVOKED"), voiceToolBounds.idleMs);
   }
   /** Live `tools/list` against the approved catalog: added tools stay hidden, a changed or missing one marks the server changed. */

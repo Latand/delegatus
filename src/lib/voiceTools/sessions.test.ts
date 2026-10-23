@@ -8,7 +8,6 @@ import { spawnSync } from "node:child_process";
 import { VoiceToolHub } from "./hub";
 import { VoiceToolSessions } from "./sessions";
 import { VoiceToolsStore } from "./store";
-import type { VoiceToolProposal } from "./contracts";
 
 const roots: string[] = [];
 const listeners: ReturnType<typeof Bun.serve>[] = [];
@@ -74,8 +73,7 @@ function fakeServer(options: { tools?: () => ToolRow[]; call?: (call: Call) => u
   return { url: `http://127.0.0.1:${listener.port}/mcp`, methods, calls, initialized: () => initialized, listener };
 }
 /** Proposed, dry-run through the real worker, selected and approved by the operator. */
-async function approve(store: VoiceToolsStore, hub: VoiceToolHub, proposal: Omit<VoiceToolProposal, "private" | "askBeforeActing" | "callTimeoutMs" | "entryFile"> & Partial<VoiceToolProposal>,
-  selection: Record<string, { enabled: boolean; acts: boolean }>) {
+async function approve(store: VoiceToolsStore, hub: VoiceToolHub, proposal: { name: string } & Record<string, unknown>, selection: Record<string, { enabled: boolean; acts: boolean }>) {
   await store.propose(proposal, actor);
   await hub.dryRun(proposal.name, (await store.view()).servers[proposal.name].digest);
   expect((await store.view()).servers[proposal.name].lastDryRun?.code).toBe("OK");
