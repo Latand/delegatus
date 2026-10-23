@@ -11,9 +11,9 @@ import { prepareAgentPublicationSpec, shellQuote, withSpawnCapability } from "@/
 import { prepareHeadlessPublication } from "@/lib/agent/headless";
 import { applyClaudeSpawnPolicy } from "@/lib/agent/spawnPolicy";
 
-async function fixture() {
+async function fixture(repositoryName = "renamed-project") {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "repository-identity-"));
-  const repo = path.join(root, "renamed-project"); fs.mkdirSync(repo);
+  const repo = path.join(root, repositoryName); fs.mkdirSync(repo);
   const source: NodeJS.ProcessEnv = { ...Object.fromEntries(Object.keys(process.env).filter(k => k.startsWith("GIT_")).map(k => [k, undefined])), PATH: process.env.PATH, HOME: root, XDG_CONFIG_HOME: path.join(root, "xdg"),
     TMPDIR: root, LLV_STATE_DIR: path.join(root, "state"), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: path.join(root, "global"),
     NODE_ENV: "test", ...controllerCommitIdentityEnv() };
@@ -67,8 +67,8 @@ test.each(["absent", "partial"])("repository identity keeps the machine fallback
   } finally { f.close(); }
 });
 
-test("checked-in privacy configuration preserves machine policy under a different project name", async () => {
-  const f = await fixture();
+test.each(["renamed-project", "renamed-project "])("checked-in privacy configuration preserves machine policy in %s", async repositoryName => {
+  const f = await fixture(repositoryName);
   try {
     await f.run(["config", "user.name", "Repository Fixture"]); await f.run(["config", "user.email", email]);
     fs.writeFileSync(path.join(f.repo, "package.json"), JSON.stringify({ scripts: { "privacy:check": "bun scripts/privacy-publication-gate.ts" } }));

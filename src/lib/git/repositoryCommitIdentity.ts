@@ -39,7 +39,8 @@ export async function repositoryCommitIdentity(cwd: string, exec: ExecPort = rea
   const root = await exec("git", ["rev-parse", "--show-toplevel"], cwd, readEnv, { timeoutMs: 5_000 });
   if (root.code === 128 && /^fatal: not a git repository(?:[ (]|$)/.test(root.stderr)) return { env: controllerCommitIdentityEnv() };
   if (root.code !== 0) throw new Error("Repository Git identity could not be read (values withheld)");
-  const directory = root.code === 0 && path.isAbsolute(root.stdout.trim()) ? root.stdout.trim() : cwd;
+  const reportedRoot = root.stdout.replace(/\r?\n$/, "");
+  const directory = path.isAbsolute(reportedRoot) ? reportedRoot : cwd;
   if (await repositoryHasPrivacyPolicy(directory)) return { env: controllerCommitIdentityEnv() };
   // One Git process reads both fields, avoiding a mixed identity if config
   // changes between separate name/email probes. Last definition wins, as Git
