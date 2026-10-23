@@ -30,12 +30,12 @@ export async function matchingDependencyInputs(source: string, lane: string): Pr
 /** clonefile on APFS and FICLONE on supporting Linux filesystems. FORCE is
  * essential: ordinary copy fallback would silently duplicate the full tree. */
 async function cloneTree(source: string, target: string, root: string, destination: string,
-  copyFile: typeof fs.copyFile, signal?: AbortSignal): Promise<void> {
+  copyFile: typeof fs.copyFile, signal?: AbortSignal, clone = true): Promise<void> {
   signal?.throwIfAborted();
   const stat = await fs.lstat(source);
   if (stat.isDirectory()) {
     await fs.mkdir(target, { mode: stat.mode });
-    for (const name of await fs.readdir(source)) await cloneTree(path.join(source, name), path.join(target, name), root, destination, copyFile, signal);
+    for (const name of await fs.readdir(source)) await cloneTree(path.join(source, name), path.join(target, name), root, destination, copyFile, signal, clone);
   } else if (stat.isSymbolicLink()) {
     const link = await fs.readlink(source);
     const relative = path.relative(root, path.resolve(path.dirname(source), link));
@@ -44,12 +44,12 @@ async function cloneTree(source: string, target: string, root: string, destinati
     }
     await fs.symlink(path.relative(path.dirname(target), path.join(destination, relative)) || ".", target);
   } else if (stat.isFile()) {
-    await copyFile(source, target, constants.COPYFILE_FICLONE_FORCE);
+    await copyFile(source, target, clone ? constants.COPYFILE_FICLONE_FORCE : 0);
     await fs.chmod(target, stat.mode);
   } else throw Object.assign(new Error("unsupported dependency entry"), { code: "ENOTSUP" });
 }
 
-export type DependencySharing = "clone" | "symlink" | "private-install" | "unchanged";
+export type DependencySharing = "clone" | "copy" | "private-install" | "unchanged";
 /** Called before a writer starts, including a stage whose access was changed
  * after provisioning. A private install or an unrelated link is preserved. */
 export function isolateWorktreeDependencies(pipeline: Pick<Pipeline, "repoDir" | "worktreeDir">): void {
@@ -70,7 +70,6 @@ export async function prepareWorktreeDependencies(pipeline: Pick<Pipeline, "repo
   if (path.resolve(source) === path.resolve(local) || await entry(local)) return "unchanged";
   if (!(await entry(source)) || !await matchingDependencyInputs(pipeline.repoDir, pipeline.worktreeDir)) return "private-install";
   const platform = options.platform ?? process.platform;
-  const writable = pipeline.stages.some(stage => stage.kind === "run" && (stage.access ?? stage.effectiveRole?.access) !== "read-only");
   if (platform === "darwin" || platform === "linux") {
     const scratch = await fs.mkdtemp(path.join(pipeline.worktreeDir, ".delegatus-dependencies-"));
     const cloned = path.join(scratch, "node_modules");
@@ -84,14 +83,28 @@ export async function prepareWorktreeDependencies(pipeline: Pick<Pipeline, "repo
       return "clone";
     } catch (error) {
       if (!unsupported.has((error as NodeJS.ErrnoException).code ?? "")) throw error;
+      // Stages receive full filesystem access. Even a nominally read-only
+      // verification command can write generated clients and caches beside a
+      // package, so a fallback link would expose the source installation.
     } finally { await fs.rm(scratch, { recursive: true, force: true }); }
   }
+  // Without CoW, make a private writable tree instead of a link. Verification
+  // commands can generate package files even in a read-only role stage.
   options.signal?.throwIfAborted();
-  // A writer can install before editing a lockfile. Never expose the source to
-  // that writer; its package manager may reuse its normal shared download cache.
-  if (writable) return "private-install";
-  if (!await matchingDependencyInputs(pipeline.repoDir, pipeline.worktreeDir)) return "private-install";
-  try { await fs.symlink(path.resolve(source), local, platform === "win32" ? "junction" : "dir"); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") return "unchanged"; throw error; }
-  return "symlink";
+  const scratch = await fs.mkdtemp(path.join(pipeline.worktreeDir, ".delegatus-dependencies-"));
+  const copied = path.join(scratch, "node_modules");
+  try {
+    const root = await fs.realpath(source);
+    try {
+      await cloneTree(root, copied, root, copied, options.copyFile ?? fs.copyFile, options.signal, false);
+      options.signal?.throwIfAborted();
+      if (!await matchingDependencyInputs(pipeline.repoDir, pipeline.worktreeDir)) return "private-install";
+      if (await entry(local)) return "unchanged";
+      await fs.rename(copied, local);
+      return "copy";
+    } catch (error) {
+      if (unsupported.has((error as NodeJS.ErrnoException).code ?? "")) return "private-install";
+      throw error;
+    }
+  } finally { await fs.rm(scratch, { recursive: true, force: true }); }
 }

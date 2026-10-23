@@ -17,6 +17,8 @@ import {
   type CopilotAcpHostOptions,
 } from "./copilotAcpHost";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
+import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
+import { DELEGATUS_COAUTHOR } from "@/lib/git/repositoryCommitIdentity";
 
 import type { RuntimeEventStore } from "./eventStore";
 import type { RuntimeEvent } from "./engineHost";
@@ -164,6 +166,71 @@ test("invalid Copilot publication settings release the owned stage scratch befor
     expect(cleanups).toBe(1);
     expect(fs.existsSync(scratch)).toBe(false);
   } finally { fs.rmSync(scratch, { recursive: true, force: true }); }
+});
+
+test.each(["fresh", "adopt"] as const)("Copilot %s binds repository authorship before child environment filtering", async launch => {
+  const root = fs.mkdtempSync(path.join(sandbox, "copilot-repository-identity-"));
+  const repo = path.join(root, "repo"); fs.mkdirSync(repo);
+  const git = (args: string[], env: NodeJS.ProcessEnv = process.env) => {
+    const result = Bun.spawnSync(["git", ...args], { cwd: repo, env, stdout: "pipe", stderr: "pipe" });
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    return result.stdout.toString().trim();
+  };
+  const child = new FakeCopilot();
+  try {
+    git(["init", "-q", "-b", "main"]);
+    git(["config", "user.name", "Repository Fixture"]);
+    git(["config", "user.email", "repo-fixture@example.invalid"]);
+    const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: root, NODE_ENV: "test", GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: path.join(root, "missing-global-config") };
+    const opts = options(child, { cwd: repo, env });
+    const host = launch === "fresh" ? await CopilotAcpHost.start(opts) : await CopilotAcpHost.adopt(child.sessionId, opts);
+    const childEnv = opts.captured.options!.env as NodeJS.ProcessEnv;
+    git(["commit", "--allow-empty", "-m", "copilot repository commit"], childEnv);
+    expect(git(["log", "-1", "--format=%an%n%ae"])).toBe("Repository Fixture\nrepo-fixture@example.invalid");
+    const message = git(["log", "-1", "--format=%B"]);
+    expect(message.split("\n").filter(line => line === DELEGATUS_COAUTHOR)).toHaveLength(1);
+    await host.release();
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("Copilot retains machine fallback without repository identity and the configured machine privacy policy", async () => {
+  const root = fs.mkdtempSync(path.join(sandbox, "copilot-machine-policy-"));
+  const repo = path.join(root, "repo"); fs.mkdirSync(repo);
+  const git = (args: string[], env: NodeJS.ProcessEnv = process.env) => {
+    const result = Bun.spawnSync(["git", ...args], { cwd: repo, env, stdout: "pipe", stderr: "pipe" });
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    return result.stdout.toString().trim();
+  };
+  try {
+    git(["init", "-q", "-b", "main"]);
+    const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: root, NODE_ENV: "test", GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: path.join(root, "missing-global-config") };
+    const child = new FakeCopilot();
+    const opts = options(child, { cwd: repo, env });
+    const host = await CopilotAcpHost.start(opts);
+    let childEnv = opts.captured.options!.env as NodeJS.ProcessEnv;
+    expect(childEnv.GIT_AUTHOR_NAME).toBe(controllerCommitIdentityEnv().GIT_AUTHOR_NAME);
+    git(["commit", "--allow-empty", "-m", "fallback commit"], childEnv);
+    expect(git(["log", "-1", "--format=%an"])).toBe(controllerCommitIdentityEnv().GIT_AUTHOR_NAME!);
+    expect(git(["log", "-1", "--format=%B"]).split("\n").filter(line => line === DELEGATUS_COAUTHOR)).toHaveLength(1);
+    await host.release();
+
+    git(["config", "user.name", "Repository Fixture"]);
+    git(["config", "user.email", "repo-fixture@example.invalid"]);
+    fs.writeFileSync(path.join(repo, "package.json"), JSON.stringify({ scripts: { "privacy:check": "bun scripts/privacy-publication-gate.ts" } }));
+    fs.mkdirSync(path.join(repo, "scripts"));
+    fs.writeFileSync(path.join(repo, "scripts/privacy-known-value-fingerprints.json"), "{}\n");
+    const privateChild = new FakeCopilot();
+    const privateOpts = options(privateChild, { cwd: repo, env });
+    const privateHost = await CopilotAcpHost.start(privateOpts);
+    childEnv = privateOpts.captured.options!.env as NodeJS.ProcessEnv;
+    expect(childEnv.GIT_AUTHOR_NAME).toBe(controllerCommitIdentityEnv().GIT_AUTHOR_NAME);
+    git(["commit", "--allow-empty", "-m", "privacy policy commit"], childEnv);
+    expect(git(["log", "-1", "--format=%an"])).toBe(controllerCommitIdentityEnv().GIT_AUTHOR_NAME!);
+    expect(git(["log", "-1", "--format=%B"])).not.toContain(DELEGATUS_COAUTHOR);
+    await privateHost.release();
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 function kinds(events: RuntimeEvent[] | undefined): string[] {

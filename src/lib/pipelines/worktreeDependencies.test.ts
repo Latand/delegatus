@@ -20,7 +20,10 @@ function fixture(writable = false) {
   const pipeline = { repoDir, worktreeDir, stages: [{ kind: "run", access: writable ? "read-write" : "read-only" }] } as Pipeline;
   return { root, source, local, pipeline, close: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
-const unavailable: typeof fs.promises.copyFile = async () => { throw Object.assign(new Error("clone unavailable"), { code: "ENOTSUP" }); };
+const unavailable: typeof fs.promises.copyFile = async (source, target, mode) => {
+  if (mode === fs.constants.COPYFILE_FICLONE_FORCE) throw Object.assign(new Error("clone unavailable"), { code: "ENOTSUP" });
+  await fs.promises.copyFile(source, target);
+};
 
 test.each(["darwin", "linux"] as const)("%s requires CoW and preserves private writes, modes and internal executable links", async platform => {
   const f = fixture(true);
@@ -42,26 +45,31 @@ test.each(["darwin", "linux"] as const)("%s requires CoW and preserves private w
   } finally { f.close(); }
 });
 
-test.each(["darwin", "linux", "win32"] as const)("%s fallback links a read-only lane and detaches before a writer installs", async platform => {
+test.each(["darwin", "linux", "win32"] as const)("%s fallback gives a read-only lane a private writable dependency copy", async platform => {
   const f = fixture();
   try {
-    expect(await prepareWorktreeDependencies(f.pipeline, { platform, copyFile: unavailable })).toBe("symlink");
-    expect(fs.realpathSync(f.local)).toBe(fs.realpathSync(f.source));
-    await isolateWorktreeDependencies(f.pipeline);
-    expect(fs.existsSync(f.local)).toBe(false);
-    fs.writeFileSync(path.join(f.pipeline.worktreeDir, "package-lock.json"), "new lock\n");
-    fs.mkdirSync(f.local); fs.writeFileSync(path.join(f.local, "new.js"), "installed\n");
-    expect(fs.existsSync(path.join(f.source, "new.js"))).toBe(false);
+    expect(await prepareWorktreeDependencies(f.pipeline, { platform, copyFile: unavailable })).toBe("copy");
+    expect(fs.realpathSync(f.local)).not.toBe(fs.realpathSync(f.source));
+    const generated = path.join(f.local, "fixture/generated.js");
+    const command = Bun.spawnSync([process.execPath, "-e", `require("node:fs").writeFileSync(${JSON.stringify(generated)}, "generated\\n")`], {
+      cwd: f.pipeline.worktreeDir, stdout: "pipe", stderr: "pipe",
+    });
+    expect(command.exitCode, command.stderr.toString()).toBe(0);
+    expect(fs.readFileSync(generated, "utf8")).toBe("generated\n");
+    expect(fs.existsSync(path.join(f.source, "fixture/generated.js"))).toBe(false);
     expect(fs.readFileSync(path.join(f.source, "fixture/index.js"), "utf8")).toBe("original\n");
+    await isolateWorktreeDependencies(f.pipeline);
+    expect(fs.existsSync(generated)).toBe(true);
   } finally { f.close(); }
 });
 
-test.each(["darwin", "linux", "win32"] as const)("%s gives a writable lane a private install when CoW is unavailable", async platform => {
+test.each(["darwin", "linux", "win32"] as const)("%s keeps a writable lane private when CoW is unavailable", async platform => {
   const f = fixture(true);
   try {
-    expect(await prepareWorktreeDependencies(f.pipeline, { platform, copyFile: unavailable })).toBe("private-install");
-    expect(fs.existsSync(f.local)).toBe(false);
-    expect(fs.readdirSync(f.pipeline.worktreeDir).sort()).toEqual(["package-lock.json", "package.json"]);
+    expect(await prepareWorktreeDependencies(f.pipeline, { platform, copyFile: unavailable })).toBe("copy");
+    expect(fs.realpathSync(f.local)).not.toBe(fs.realpathSync(f.source));
+    fs.writeFileSync(path.join(f.local, "fixture/generated.js"), "generated\n");
+    expect(fs.existsSync(path.join(f.source, "fixture/generated.js"))).toBe(false);
   } finally { f.close(); }
 });
 
@@ -97,10 +105,14 @@ test("the native filesystem either produces an independent CoW tree or takes the
   const f = fixture(true);
   try {
     const result = await prepareWorktreeDependencies(f.pipeline);
-    expect(["clone", "private-install"]).toContain(result);
+    expect(["clone", "copy"]).toContain(result);
     if (result === "clone") {
       fs.writeFileSync(path.join(f.local, "fixture/index.js"), "new\n");
       expect(fs.readFileSync(path.join(f.source, "fixture/index.js"), "utf8")).toBe("original\n");
-    } else expect(fs.existsSync(f.local)).toBe(false);
+    } else {
+      expect(fs.realpathSync(f.local)).not.toBe(fs.realpathSync(f.source));
+      fs.writeFileSync(path.join(f.local, "fixture/generated.js"), "generated\n");
+      expect(fs.existsSync(path.join(f.source, "fixture/generated.js"))).toBe(false);
+    }
   } finally { f.close(); }
 });
