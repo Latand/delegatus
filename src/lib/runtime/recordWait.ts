@@ -1,4 +1,7 @@
-import { ownsItsSettlement, type AgentRegistry, type DeliveryOperationOwner } from "@/lib/agent/registry";
+import { yieldToRuntime } from "@/lib/cooperative";
+import { performanceSpans } from "@/lib/performanceSpans";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { ownsItsSettlement, type AgentRegistry, type DeliveryOperationOwner, type RegistryFile } from "@/lib/agent/registry";
 import { archivedOwnersEndedSince, hotRegistryRows } from "@/lib/agent/sqliteRegistryStore";
 import { ACCOUNT_MIGRATION_PASS_INTERVAL_MS } from "@/lib/accounts/migration/controllerSignal";
 import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
@@ -259,7 +262,7 @@ export type RestorableProgress = DeliveryProgressPort & {
 };
 
 const RESTORED_DETAIL = "recorded from the delivery record";
-const RESTORE_ENDED_LIMIT = 5_000;
+const RESTORE_BATCH_LIMIT = 128;
 const ARCHIVED_ENDING_MARGIN_MS = 86_400_000;
 
 /**
@@ -281,8 +284,7 @@ const ARCHIVED_ENDING_MARGIN_MS = 86_400_000;
  * proves nothing, so the sweep takes no checkpoint past it and the next sweep
  * checks again.
  */
-export function restoreMissingRecords(registry: AgentRegistry, progress: RestorableProgress, now = Date.now()): boolean {
-  const file = registry.readOnlySnapshot();
+function* restorationSteps(registry: AgentRegistry, progress: RestorableProgress, now: number, file: RegistryFile): Generator<void, boolean> {
   let complete = true;
   /** Whether the record is missing; an unreadable store marks the sweep incomplete. */
   const missing = (operationId: string): boolean => {
@@ -293,6 +295,7 @@ export function restoreMissingRecords(registry: AgentRegistry, progress: Restora
   /* Open work is never archived: only hot rows can be open (#2761). */
   for (const [, delivery] of hotRegistryRows(file, "heldDeliveries")) {
     if (delivery.state !== "held" && delivery.state !== "assigned" && delivery.state !== "delivery-uncertain") continue;
+    yield;
     const operationId = delivery.command.operationId;
     if (!operationId || !missing(operationId)) continue;
     recordWait(progress, registry, delivery, {
@@ -303,29 +306,32 @@ export function restoreMissingRecords(registry: AgentRegistry, progress: Restora
   }
   for (const [operationId, owner] of hotRegistryRows(file, "deliveryOperationOwners")) {
     if (!ownsItsSettlement(owner) || owner.terminalState !== null || !missing(operationId)) continue;
+    yield;
     recordDirectWait(progress, registry, owner, { reason: "checking", detail: RESTORED_DETAIL, sinceMs: Date.parse(owner.createdAt) });
   }
   const mark = progress.completenessMark();
-  /* The endings since the mark, without reading the archive whole: hot owners,
-     and the archived ones whose stored instant can lie in the window. A day's
-     margin covers instants stored in another notation than this one. */
-  const archived = archivedOwnersEndedSince(file, new Date(Math.max(0, mark - ARCHIVED_ENDING_MARGIN_MS)).toISOString());
-  const owners: Array<[string, DeliveryOperationOwner]> = archived
-    ? [...hotRegistryRows(file, "deliveryOperationOwners"),
-      ...archived.flatMap((key): Array<[string, DeliveryOperationOwner]> => {
+  // The indexed page names at most one slice of cold owners. Every remaining
+  // ending is visited before a caller may advance its durable checkpoint.
+  function* endedOwners(): Generator<[string, DeliveryOperationOwner]> {
+    const since = new Date(Math.max(0, mark - ARCHIVED_ENDING_MARGIN_MS)).toISOString();
+    let after: string | undefined;
+    let keys = archivedOwnersEndedSince(file, since, { limit: 64 });
+    if (!keys) { yield* Object.entries(file.deliveryOperationOwners); return; }
+    yield* hotRegistryRows(file, "deliveryOperationOwners");
+    while (keys.length) {
+      for (const key of keys) {
         const owner = file.deliveryOperationOwners[key];
-        return owner ? [[key, owner]] : [];
-      })]
-    : Object.entries(file.deliveryOperationOwners);
-  const ended = owners
-    .filter(([, owner]) => {
-      if (owner.terminalState === null) return false;
-      const settledAt = Date.parse(owner.settledAt ?? "");
-      return Number.isFinite(settledAt) && settledAt >= mark && settledAt <= now;
-    })
-    .sort(([, left], [, right]) => (right.settledAt ?? "").localeCompare(left.settledAt ?? ""))
-    .slice(0, RESTORE_ENDED_LIMIT);
-  for (const [operationId, owner] of ended) {
+        if (owner) yield [key, owner];
+      }
+      after = keys.at(-1)!;
+      keys = archivedOwnersEndedSince(file, since, { limit: 64, after })!;
+    }
+  }
+  for (const [operationId, owner] of endedOwners()) {
+    yield;
+    if (owner.terminalState === null) continue;
+    const settledAt = Date.parse(owner.settledAt ?? "");
+    if (!Number.isFinite(settledAt) || settledAt < mark || settledAt > now) continue;
     if (!missing(operationId)) continue;
     const receipt = sendReceiptFor(file, operationId);
     if (!receipt || receipt.state === "in-flight") continue;
@@ -347,4 +353,87 @@ export function restoreMissingRecords(registry: AgentRegistry, progress: Restora
     }
   }
   return complete;
+}
+
+
+const restorations = new WeakMap<RestorableProgress, {
+  registry: AgentRegistry; steps: Generator<void, boolean>; now: number; file: RegistryFile;
+}>();
+
+function restoreSlice(registry: AgentRegistry, progress: RestorableProgress, now: number,
+  prepared?: RegistryFile, validate = true): boolean {
+  return withViewerOperation("delivery-progress.restore", () => performanceSpans.sync("delivery-progress.restore.slice", () => {
+    let pending = restorations.get(progress);
+    if (pending && (pending.registry !== registry || pending.now !== now || (prepared && pending.file !== prepared))) {
+      pending.steps.return(false); pending = undefined;
+    }
+    if (!pending) {
+      const file = prepared ?? registry.readOnlySnapshot();
+      pending = { registry, steps: restorationSteps(registry, progress, now, file), now, file };
+      restorations.set(progress, pending);
+    }
+    try {
+      const started = performance.now();
+      for (let count = 0; count < RESTORE_BATCH_LIMIT; count++) {
+        const next = pending.steps.next();
+        if (next.done) {
+          restorations.delete(progress);
+          return next.value && (!validate || registry.readOnlySnapshot() === pending.file);
+        }
+        if (performance.now() - started >= 8) break;
+      }
+      return false;
+    } catch (error) {
+      restorations.delete(progress);
+      pending.steps.return(false);
+      throw error;
+    }
+  }));
+}
+
+/** A slice never spends a checkpoint on work it has not visited. A restart
+    begins again from the durable mark; already-written records are preserved. */
+export function restoreMissingRecords(registry: AgentRegistry, progress: RestorableProgress, now = Date.now()): boolean {
+  return restoreSlice(registry, progress, now);
+}
+
+export async function restoreMissingRecordsAsync(registry: AgentRegistry, progress: RestorableProgress, now: number,
+  assertActive: () => void = () => {}, deadline = performance.now() + 30_000): Promise<boolean> {
+  const prepare = async () => {
+    assertActive();
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) return null;
+    const signal = AbortSignal.timeout(Math.ceil(remaining));
+    try {
+      const file = await registry.prepareReadOnlySnapshot(signal);
+      assertActive();
+      return performance.now() >= deadline ? null : file;
+    } catch (error) {
+      assertActive();
+      if (signal.aborted && performance.now() >= deadline) return null;
+      throw error;
+    }
+  };
+  const abandon = () => {
+    restorations.get(progress)?.steps.return(false);
+    restorations.delete(progress);
+  };
+  try {
+    await yieldToRuntime();
+    const file = await prepare();
+    if (!file) { abandon(); return false; }
+    let complete: boolean;
+    do {
+      await yieldToRuntime();
+      assertActive();
+      if (performance.now() >= deadline) { abandon(); return false; }
+      complete = restoreSlice(registry, progress, now, file, false);
+    } while (restorations.has(progress));
+    // Refresh cooperatively as well: a foreign writer may have invalidated
+    // the initial view while the bounded restoration slices were running.
+    return complete && await prepare() === file;
+  } catch (error) {
+    abandon();
+    throw error;
+  }
 }

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { fullGC } from "bun:jsc";
 
@@ -433,14 +433,16 @@ test("a view refreshed across mixed entry, receipt, conversation and lineage wri
    checkpoint. Enumerating the collection read and normalized every archived
    owner on each sweep, 0.3 s of the serving release's thread over retained
    history; the archive names the candidates from the instant each stores. */
-test("recent endings among archived operation owners are named without reading the archive", () => {
+test("recent endings among archived operation owners are named without reading the archive", async () => {
   const { dataset, open } = history();
   const db = new Database(dataset.filename);
   const archived = db.query<{ id: number; row_key: string; settled: string }, []>(`SELECT a.id, c.row_key, json_extract(a.value_json, '$.settledAt') AS settled
     FROM registry_cold c JOIN registry_archive a ON a.id = c.archive_id WHERE c.collection = 'deliveryOperationOwners' ORDER BY settled`).all();
   expect(archived.length).toBeGreaterThan(100);
-  /* One owner stored without its instant: it takes its delivery's, as normalization does. */
-  const [legacy, silent] = archived;
+  /* One owner stored without its instant: it takes its delivery's, as normalization does.
+     Another's delivery also predates command.operationId, which normalization
+     derives from the delivery's id. */
+  const [legacy, silent, unkeyed] = archived;
   const deliveredAt = archived.at(-1)!.settled;
   /* A version is immutable: each row below is archived again as a new one. */
   const rearchive = (collection: string, key: string, edit: string, ...values: string[]) => {
@@ -450,14 +452,28 @@ test("recent endings among archived operation owners are named without reading t
     db.run("UPDATE registry_cold SET archive_id = ? WHERE collection = ? AND row_key = ?", [version.id, collection, key]);
   };
   try {
-    for (const owner of [legacy!, silent!]) rearchive("deliveryOperationOwners", owner.row_key, "json_remove(a.value_json, '$.settledAt')");
-    const delivery = db.query<{ id: string }, [number]>("SELECT json_extract(value_json, '$.deliveryId') AS id FROM registry_archive WHERE id = ?").get(legacy!.id)!;
-    rearchive("heldDeliveries", delivery.id, "json_set(a.value_json, '$.deliveredAt', ?)", deliveredAt);
+    for (const owner of [legacy!, silent!, unkeyed!]) rearchive("deliveryOperationOwners", owner.row_key, "json_remove(a.value_json, '$.settledAt')");
+    const deliveryOf = (owner: { id: number }) => db.query<{ id: string }, [number]>("SELECT json_extract(value_json, '$.deliveryId') AS id FROM registry_archive WHERE id = ?").get(owner.id)!;
+    rearchive("heldDeliveries", deliveryOf(legacy!).id, "json_set(a.value_json, '$.deliveredAt', ?)", deliveredAt);
+    /* A send stored before command.operationId existed: its delivery, keyed
+       and identified by the operation's own id, names no operation. */
+    const operation = unkeyed!.row_key;
+    const previous = deliveryOf(unkeyed!).id;
+    const moved = db.query<{ id: number }, string[]>(`INSERT INTO registry_archive(collection, row_key, value_json, row_order)
+      SELECT a.collection, ?1, json_set(json_remove(a.value_json, '$.command.operationId'), '$.id', ?1, '$.deliveredAt', ?2), a.row_order
+      FROM registry_cold c JOIN registry_archive a ON a.id = c.archive_id WHERE c.collection = 'heldDeliveries' AND c.row_key = ?3 RETURNING id`)
+      .get(operation, deliveredAt, previous)!;
+    db.run("DELETE FROM registry_rows WHERE collection = 'heldDeliveries' AND row_key = ?", [previous]);
+    db.run("DELETE FROM registry_cold WHERE collection = 'heldDeliveries' AND row_key = ?", [previous]);
+    db.run("INSERT INTO registry_cold(collection, row_key, archive_id) VALUES ('heldDeliveries', ?, ?)", [operation, moved.id]);
+    rearchive("deliveryOperationOwners", operation, "json_set(a.value_json, '$.deliveryId', ?)", operation);
   } finally {
     db.close();
   }
   const metrics = { reads: 0 };
-  const view = open(metrics).readOnlySnapshot().file;
+  const selectedStore = open(metrics);
+  await selectedStore.prepareReadOnlySnapshot();
+  const view = selectedStore.readOnlySnapshot().file;
   const whole = open().snapshot().file;
   const ended = (since: string) => Object.entries(whole.deliveryOperationOwners)
     .filter(([, owner]) => owner.terminalState !== null && (owner.settledAt ?? "") >= since).map(([key]) => key).sort();
@@ -471,7 +487,22 @@ test("recent endings among archived operation owners are named without reading t
     expect({ since, named: [...named].sort() }).toEqual({ since, named: ended(since).filter((key) => !hot.has(key)) });
   }
   expect(archivedOwnersEndedSince(view, deliveredAt)).toContain(legacy!.row_key);
+  expect(whole.deliveryOperationOwners[unkeyed!.row_key]!.deliveryId).toBe(unkeyed!.row_key);
+  expect(whole.deliveryOperationOwners[unkeyed!.row_key]!.settledAt).toBe(deliveredAt);
+  expect(archivedOwnersEndedSince(view, deliveredAt)).toContain(unkeyed!.row_key);
   expect(archivedOwnersEndedSince(view, "1970-01-01T00:00:00.000Z")).not.toContain(silent!.row_key);
+  /* Reopened over the prepared projection, and rebuilt from nothing. */
+  const reopened = open();
+  await reopened.prepareReadOnlySnapshot();
+  expect(archivedOwnersEndedSince(reopened.readOnlySnapshot().file, deliveredAt)).toContain(unkeyed!.row_key);
+  const rebuild = new Database(dataset.filename);
+  try {
+    rebuild.run("DELETE FROM registry_owner_endings");
+    rebuild.run("DELETE FROM registry_meta WHERE key='owner_endings_cursor'");
+  } finally { rebuild.close(); }
+  const rebuilt = open();
+  await rebuilt.prepareReadOnlySnapshot();
+  expect(archivedOwnersEndedSince(rebuilt.readOnlySnapshot().file, deliveredAt)).toContain(unkeyed!.row_key);
   /* A plain file has no archive to ask: its caller reads the rows. */
   expect(archivedOwnersEndedSince(whole, deliveredAt)).toBeUndefined();
 });
@@ -524,4 +555,123 @@ test("receipt replacement lookups agree across archive, peer replacement and tra
     expect(registryRowsMatching(file, "receipts", "requestDigest", digest)).toEqual([]);
   }, false);
   expect(select()).toEqual([]);
+});
+
+
+test("archived endings page by normalized instant without fetching old owner payloads", async () => {
+  const { dataset, open } = history();
+  const store = open();
+  await store.prepareReadOnlySnapshot();
+  const view = store.readOnlySnapshot().file;
+  const since = "1970-01-01T00:00:00.000Z";
+  const all = archivedOwnersEndedSince(view, since)!;
+  expect(all.length).toBeGreaterThan(32);
+  const page = archivedOwnersEndedSince(view, since, { limit: 16 })!;
+  expect(page.length).toBe(16);
+  const queries = spyOn(Database.prototype, "query");
+  let next: string[], pageSql: string | undefined;
+  try {
+    next = archivedOwnersEndedSince(view, since, { limit: 16, after: page.at(-1)! })!;
+    pageSql = queries.mock.calls.map(([sql]) => sql).find(sql => sql.includes("SELECT e.operation_id,e.ending_ms"));
+  } finally { queries.mockRestore(); }
+  expect(next.length).toBe(16);
+  expect(new Set([...page, ...next]).size).toBe(32);
+  const db = new Database(dataset.filename, { readonly: true });
+  try {
+    const plan = db.query<{ detail: string }, []>(`EXPLAIN QUERY PLAN SELECT operation_id FROM registry_owner_endings
+      WHERE ending_ms >= 0 ORDER BY ending_ms, operation_id LIMIT 16`).all().map(row => row.detail).join(" ");
+    expect(plan).toContain("SEARCH");
+    expect(plan).toContain("ending_ms>?");
+    expect(plan).not.toContain("TEMP B-TREE");
+    // Inspect the actual paged reader: seeking only from `since` rescans all
+    // preceding pages. Both cursor columns must bound the index traversal.
+    expect(pageSql).toBeDefined();
+    const pagedPlan = db.query<{ detail: string }, number[]>(`EXPLAIN QUERY PLAN ${pageSql}`)
+      .all(...Array(pageSql!.match(/\?/g)!.length).fill(0)).map(row => row.detail).join(" ");
+    expect(pagedPlan).toContain("(ending_ms,operation_id)>(?,?)");
+    expect(pagedPlan).not.toContain("TEMP B-TREE");
+  } finally { db.close(); }
+});
+
+
+test("ending projection preserves offset and legacy timestamps through archive replacement", async () => {
+  const { dataset, open } = history();
+  const store = open();
+  await store.prepareReadOnlySnapshot();
+  const db = new Database(dataset.filename);
+  const keys = db.query<{ row_key: string }, []>("SELECT row_key FROM registry_cold WHERE collection='deliveryOperationOwners' ORDER BY row_key LIMIT 3").all();
+  try {
+    for (const [index, stamp] of ["2026-10-22T01:00:00+02:00", "Thu, 22 Oct 2026 00:00:00 GMT", "2026-10-22T00:00:00.000Z"].entries()) {
+      const key = keys[index]!.row_key;
+      const version = db.query<{ id: number }, [string, string]>(`INSERT INTO registry_archive(collection,row_key,value_json,row_order)
+        SELECT a.collection,a.row_key,json_set(a.value_json,'$.settledAt',?),a.row_order
+        FROM registry_cold c JOIN registry_archive a ON a.id=c.archive_id
+        WHERE c.collection='deliveryOperationOwners' AND c.row_key=? RETURNING id`).get(stamp, key)!;
+      db.query("UPDATE registry_cold SET archive_id=? WHERE collection='deliveryOperationOwners' AND row_key=?").run(version.id, key);
+    }
+    await store.prepareReadOnlySnapshot();
+    const file = store.readOnlySnapshot().file;
+    const named = archivedOwnersEndedSince(file, "2026-10-22T00:00:00.000Z")!;
+    expect(named).not.toContain(keys[0]!.row_key);
+    expect(named).toContain(keys[1]!.row_key);
+    expect(named).toContain(keys[2]!.row_key);
+    const page = archivedOwnersEndedSince(file, "2026-10-22T00:00:00.000Z", { limit: 1 })!;
+    const next = archivedOwnersEndedSince(file, "2026-10-22T00:00:00.000Z", { limit: 1, after: page[0] })!;
+    expect(new Set([...page, ...next]).size).toBe(2);
+  } finally { db.close(); }
+});
+
+
+test("ending preparation resumes a committed partial cursor in a fresh process", async () => {
+  const { dataset } = history();
+  const db = new Database(dataset.filename);
+  try {
+    db.run("DELETE FROM registry_owner_endings");
+    db.run("DELETE FROM registry_meta WHERE key='owner_endings_cursor'");
+  } finally { db.close(); }
+  const launch = async (finish: boolean) => {
+    const code = `import { Database } from "bun:sqlite";
+      import { prepareRegistryEndingsBatch } from "./src/lib/agent/registryEndings";
+      import { SqliteAgentRegistryStore } from "./src/lib/agent/sqliteRegistryStore";
+      import { normalizeRegistry } from "./src/lib/agent/registry";
+      const filename=${JSON.stringify(dataset.filename)};
+      if (${finish}) {
+        const store=new SqliteAgentRegistryStore(filename,{normalize:normalizeRegistry,initialSnapshot:()=>{throw Error("unexpected import")}});
+        await store.prepareReadOnlySnapshot(); store.close();
+      } else {
+        const db=new Database(filename); db.transaction(()=>prepareRegistryEndingsBatch(db,16))(); db.close();
+      }`;
+    const child = Bun.spawn([process.execPath, "-e", code], { stdout: "pipe", stderr: "pipe", env: { ...process.env, LLV_STATE_OWNER: undefined } });
+    const watchdog = setTimeout(() => child.kill(), 30_000);
+    try {
+      const output = await new Response(child.stderr).text();
+      expect({ exit: await child.exited, error: output }).toEqual({ exit: 0, error: "" });
+    } finally { clearTimeout(watchdog); if (child.exitCode === null) { child.kill(); await child.exited; } }
+  };
+  await launch(false);
+  const partial = new Database(dataset.filename, { readonly: true });
+  try {
+    expect(partial.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM registry_owner_endings").get()!.n).toBe(16);
+    expect(partial.query<{ value: string }, []>("SELECT value FROM registry_meta WHERE key='owner_endings_cursor'").get()!.value).not.toBe("complete");
+  } finally { partial.close(); }
+  await launch(true);
+  const complete = new Database(dataset.filename, { readonly: true });
+  try {
+    expect(complete.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM registry_owner_endings").get()!.n)
+      .toBe(complete.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM registry_rows WHERE collection='deliveryOperationOwners'").get()!.n);
+    expect(complete.query<{ value: string }, []>("SELECT value FROM registry_meta WHERE key='owner_endings_cursor'").get()!.value).toBe("complete");
+  } finally { complete.close(); }
+});
+
+
+test("cooperative hot loading bounds candidate keys before excluding cold history", async () => {
+  const { dataset, open } = history();
+  const store = open();
+  // Observe the generator's real read boundary. More retained cold keys must
+  // create more bounded steps, rather than hide inside a 16-result SQL call.
+  const reader = store as unknown as { loadHotSteps(): Generator<void, unknown> };
+  const steps = reader.loadHotSteps();
+  let count = 0;
+  for (let next = steps.next(); !next.done; next = steps.next()) count++;
+  expect(count).toBeGreaterThan(dataset.rows);
 });

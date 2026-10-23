@@ -1,4 +1,6 @@
-import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
+import { performanceSpans } from "@/lib/performanceSpans";
+import { startupHostSnapshot } from "./startupSnapshot";
+import { registryKeysMatching, registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { seatRecipientVerdict, seatRecipientVerdictAsync, setSeatChannelNativeWithdrawal } from "@/lib/orchestrator/seatChannel";
 import { conversationIdsResolvingTo, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
 import { detachCodexHostForViewerRestart, flushStructuredHostPersistence } from "./registry";
@@ -17,7 +19,7 @@ import { handoffQueue } from "./handoffQueueStore";
 import { blockingHostActivityFlags } from "./hostActivityFlags";
 import { runtimeIdleKillMatches } from "./contracts";
 import { settleNativeQueueEntry } from "./nativeQueueSettlement";
-import { conversationActorRunning, recordObservedWait, recordWait, restoreMissingRecords } from "./recordWait";
+import { conversationActorRunning, recordObservedWait, recordWait, restoreMissingRecordsAsync } from "./recordWait";
 
 /** How many times a failed switch's hold is asked for before it is given up
     and logged; each attempt waits up to the registry's lock deadline. */
@@ -70,7 +72,7 @@ import {
 import { structuredHostKillRefFromRegistry, terminateStructuredHostTree } from "./structuredHostControl";
 import { publishFilesRevision } from "./filesRevision";
 import { setStructuredDeliveryKick } from "./structuredDeliverySignal";
-import { confirmJournalDelivery, deliveryRouteOf, journalVerdict, mirrorSettledReceipts, SEND_DISCARDED_REASON, sendIsSettled, settleDueSends } from "./sendSettlement";
+import { confirmJournalDelivery, deliveryRouteOf, journalVerdict, mirrorSettledReceiptsAsync, SEND_DISCARDED_REASON, sendIsSettled, settleDueSends } from "./sendSettlement";
 import { runtimeImageCapability } from "./runtimeImageStore";
 import { noteVoiceWorkBoundary } from "./voiceViewBinding";
 import { STRUCTURED_IMAGE_CAPABILITY } from "./structuredContent";
@@ -468,8 +470,12 @@ async function reconcileTerminalDeliveries(
   registry: AgentRegistry,
   client: RuntimeHostClient,
   isCurrent: () => boolean,
+  assertActive: () => void,
 ): Promise<void> {
-  const snapshot = registry.readOnlySnapshot();
+  assertActive();
+  const snapshot = await registry.prepareReadOnlySnapshot(AbortSignal.timeout(30_000));
+  assertActive();
+  if (!isCurrent()) return;
   const unsettledDeliveries = Object.values(snapshot.heldDeliveries)
     .filter((delivery) => delivery.state === "delivery-uncertain" || delivery.state === "failed");
   const pendingOutcomes: Parameters<AgentRegistry["recordDeliveryOutcomesForOperations"]>[0][number][] = [];
@@ -564,7 +570,7 @@ function registrySessionProjection(
   const generation = conversation?.generations.at(-1);
   if (!conversation || !generation) return null;
   const sessionKey = { engine: conversation.engine, sessionId: generation.id } as const;
-  const entry = registry.readOnlySnapshot().entries[sessionKeyId(sessionKey)] ?? null;
+  const entry = startupHostSnapshot(registry, sessionKey).entries[sessionKeyId(sessionKey)] ?? null;
   const legacy = entry?.host?.kind === "tmux";
   const host = entry?.status === "dead"
     ? "dead"
@@ -1607,7 +1613,10 @@ export async function bindStructuredDeliveryQueue(
   let settleSweep = 0;
   const settleHostlessSessions = async (): Promise<number> => {
     if (superseded() || !client.appendSessionFenced) return 0;
-    const registrySnapshot = registry.readOnlySnapshot();
+    /* Selection only: every row is read again by key below. A whole snapshot
+       here was one 0.3 s slice per sweep on retained history. */
+    const registrySnapshot = await registry.prepareReadOnlySnapshot(AbortSignal.timeout(30_000), { recoveryIndexes: false });
+    if (superseded()) return 0;
     const hostless = hostlessConversations(registrySnapshot);
     for (const id of settledRows.keys()) if (!hostless.has(id)) settledRows.delete(id);
     const candidates = [...hostless].filter(([, row]) => !registrations.has(row.key));
@@ -1640,7 +1649,7 @@ export async function bindStructuredDeliveryQueue(
          next sweep, and the rest of this one is left for then too. */
       try { session = listed ? listed.get(conversationId) ?? null : await client.readSession!({ conversationId }); }
       catch { break; }
-      const current = hostlessConversationEvidence(registry.readOnlySnapshot(), conversationId);
+      const current = hostlessConversationEvidence(registry.conversationRetentionSnapshot(conversationId), conversationId);
       if (!current || current.key !== row.key || current.endedAt !== row.endedAt || registrations.has(row.key)) continue;
       if (session && sessionClaimsOpenTurn(session)) {
         /* A write the journal refused or never received settles nothing, as
@@ -2075,7 +2084,19 @@ export async function bindStructuredDeliveryQueue(
          registering hosts so even a registration-triggered drain sees the
          repaired durable state. */
       deferredStartupConversations = new Set(deferredConversationIds);
-      (await registry.deliveryWriteOrBusy({ label: "registry.repairCompletedStructuredSpawnMarkers" }, registry.repairCompletedStructuredSpawnMarkers.bind(registry)));
+      const markerSnapshot = await registry.prepareReadOnlySnapshot();
+      assertActive();
+      const markerKeys = registryKeysMatching(markerSnapshot, "entries", "structuredHost.kind",
+        ["codex-app-server", "claude-broker", "copilot-acp"]);
+      await forEachStartupBatch(markerKeys, async key => {
+        const entry = performanceSpans.sync("runtime.startup.select", () => markerSnapshot.entries[key]);
+        if (entry?.pendingAction !== "spawn") return;
+        await registry.deliveryWriteOrBusy({ label: "registry.repairCompletedStructuredSpawnMarkers" }, () => {
+          assertActive();
+          if (superseded()) throw new StructuredDeliveryControllerUnavailableError();
+          return registry.repairCompletedStructuredSpawnMarkers(entry.key);
+        });
+      }, assertActive);
       await phase("registering structured delivery hosts");
       for (const item of items) await register(item);
       assertActive();
@@ -2085,7 +2106,9 @@ export async function bindStructuredDeliveryQueue(
         await successor(items, progress, assertActive, deferredConversationIds);
         return;
       }
-      const startupSnapshot = registry.readOnlySnapshot();
+      // Marker repair changes no membership or generation. This selection is
+      // reused only to enumerate candidates; publication rechecks each host.
+      const startupSnapshot = markerSnapshot;
       /* Read only to skip republishing a projection that already says what
          this pass would say. It decides nothing else: the state published
          below is read off the registry, never off this snapshot, so a read
@@ -2099,7 +2122,12 @@ export async function bindStructuredDeliveryQueue(
         (runtimeSnapshot?.sessions ?? []).map((session) => [session.conversationId, session]),
       );
       await phase("publishing historical host fallbacks");
-      await forEachStartupBatch(Object.values(startupSnapshot.conversations), async (conversation) => {
+      const conversations = (function* () {
+        for (const id in startupSnapshot.conversations) {
+          yield performanceSpans.sync("runtime.startup.conversations", () => startupSnapshot.conversations[id]!);
+        }
+      })();
+      await forEachStartupBatch(conversations, async (conversation) => {
         assertActive();
         if (superseded()) return;
         const generation = conversation.generations.at(-1);
@@ -2123,7 +2151,7 @@ export async function bindStructuredDeliveryQueue(
         return;
       }
       await phase("reconciling terminal delivery receipts");
-      await reconcileTerminalDeliveries(registry, client, () => !stopped && state.activeQueue === queue);
+      await reconcileTerminalDeliveries(registry, client, () => !stopped && state.activeQueue === queue, assertActive);
       await phase("draining startup delivery queue");
       assertActive();
       startupPending = false;
@@ -2174,6 +2202,7 @@ export async function bindStructuredDeliveryQueue(
        own, so a sweep starts whether or not the last one has ended, and a
        conversation whose evidence does not answer holds only itself. */
     const settling = new Set<string>();
+    let restoration: Promise<void> | null = null;
     settlementSweepTimer = setInterval(() => {
       if (stopped || state.activeQueue !== queue) return;
       /* A3: an open record or an ending a crash or the inventory sidecar left
@@ -2182,24 +2211,37 @@ export async function bindStructuredDeliveryQueue(
          Its margin covers a row stamped just before the snapshot. A sweep
          that could not read the store, or failed a backfill, takes none. */
       const sweptAt = Date.now();
-      try {
-        const complete = restoreMissingRecords(registry, progressStore, sweptAt);
-        mirrorSettledReceipts(registry, progressStore);
-        if (complete) progressStore.checkpoint(sweptAt - sweepMs);
-      } catch (error) {
-        controllerDiagnosticError("[structured delivery] progress restoration failed", { error: error instanceof Error ? error.message : String(error) });
-      }
+      if (!restoration) restoration = (async () => {
+        const active = () => {
+          if (stopped || state.activeQueue !== queue) throw new Error("delivery restoration owner retired");
+        };
+        try {
+          const deadline = performance.now() + 30_000;
+          const complete = await restoreMissingRecordsAsync(registry, progressStore, sweptAt, active, deadline);
+          active();
+          await mirrorSettledReceiptsAsync(registry, progressStore, sweptAt, active, deadline);
+          active();
+          if (complete) progressStore.checkpoint(sweptAt - sweepMs);
+        } catch (error) {
+          if (!stopped && state.activeQueue === queue) controllerDiagnosticError("[structured delivery] progress restoration failed", { error: error instanceof Error ? error.message : String(error) });
+        }
+      })().finally(() => { restoration = null; });
       void settleDueSends({
         registry,
         client,
-        progress: progressStore,
+        assertActive: () => {
+          if (stopped || state.activeQueue !== queue) throw new Error("delivery settlement owner retired");
+        },
+        progress: { settle: (...args) => {
+          if (!stopped && state.activeQueue === queue) progressStore.settle(...args);
+        } },
         running: settling,
         onDeadline: (operationId, _conversationId, deadline) => {
           progressStore.deadline(operationId, deadline?.deadlineAt ?? null, deadline?.policy ?? null);
         },
         onSettled: () => requestDrain(),
       }).catch((error) => {
-        controllerDiagnosticError("[structured delivery] background settlement failed", { error: error instanceof Error ? error.message : String(error) });
+        if (!stopped && state.activeQueue === queue) controllerDiagnosticError("[structured delivery] background settlement failed", { error: error instanceof Error ? error.message : String(error) });
       });
     }, sweepMs);
     settlementSweepTimer.unref?.();

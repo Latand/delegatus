@@ -3736,12 +3736,12 @@ test("a resume claim loser leaves the winning writer projection and ownership in
 });
 
 test("a retained survivor fences resume before runtime admission even after the host column was cleared", async () => {
-  const sessionId = crypto.randomUUID();
+  const sessionId = "aaaaaaaa-aaaa-0aaa-0aaa-aaaaaaaaaaaa";
   const cwd = path.join(sandbox, `resume-survivor-fence-${sessionId}`);
   fs.mkdirSync(cwd, { recursive: true });
   const artifactPath = path.join(cwd, `${sessionId}.jsonl`);
   fs.writeFileSync(artifactPath, "");
-  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
   const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
   const client = runtimeClient(journal);
   const launchProfile = emptyLaunchProfile({ cwd });
@@ -3761,10 +3761,10 @@ test("a retained survivor fences resume before runtime admission even after the 
   const snapshot = registry.readOnlySnapshot();
   const current = snapshot.entries[`codex:${sessionId}`]!;
   const survivors: ProcessIdentity[] = [{ pid: 41_111, startIdentity: "41111:retained", bootEpoch: systemBootEpoch() }];
-  const snapshotSpy = spyOn(registry, "readOnlySnapshot").mockImplementation(() => ({
-    ...snapshot,
-    entries: { ...snapshot.entries, [`codex:${sessionId}`]: { ...current, structuredHost: null, structuredTerminationSurvivors: survivors } },
-  }));
+  registry.upsert({ ...current, structuredHost: null, structuredTerminationSurvivors: survivors });
+  const snapshotSpy = spyOn(registry, "readOnlySnapshot").mockImplementation(() => {
+    throw new Error("resume authorization rebuilt the registry");
+  });
   let runtimeAdmissions = 0;
   let starts = 0;
   const trackingClient: RuntimeHostClient = {
@@ -3790,6 +3790,7 @@ test("a retained survivor fences resume before runtime admission even after the 
   } finally {
     snapshotSpy.mockRestore();
     journal.close();
+    registry.close();
   }
 });
 

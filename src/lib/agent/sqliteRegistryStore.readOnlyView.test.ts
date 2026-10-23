@@ -80,8 +80,10 @@ test("a prepared reader cooperatively rebuilds its view after a peer archives a 
   const writer = open();
   const initial = await reader.prepareReadOnlySnapshot();
   const template = initial.file.receipts[kept]!;
+  // Four header batches exercise the same cancellation, ordering and yield
+  // contract without making synchronous fixture seeding dominate the test.
   writer.mutate(file => {
-    for (let index = 0; index < 4096; index++) {
+    for (let index = 0; index < 512; index++) {
       const id = `archived-receipt-${index}`;
       file.receipts[id] = { ...template, launchId: id, state: "failed", error: "archived history", createdAt: "2020-01-01T00:00:00Z" };
     }
@@ -108,9 +110,9 @@ test("a prepared reader cooperatively rebuilds its view after a peer archives a 
     const preparationSlices = performanceSpans.snapshot(started).records.filter(record =>
       record.kind === "sync" && ["registry.prepare.slice", "registry.headers"].includes(performanceSites[record.site]!));
     expect(preparationSlices.length).toBeGreaterThan(1);
-    expect(Object.keys(snapshot.file.receipts).filter(id => id.startsWith("archived-receipt-"))).toHaveLength(4096);
+    expect(Object.keys(snapshot.file.receipts).filter(id => id.startsWith("archived-receipt-"))).toHaveLength(512);
     expect(Object.keys(snapshot.file.receipts).filter(id => id.startsWith("archived-receipt-")))
-      .toEqual(Array.from({ length: 4096 }, (_, index) => `archived-receipt-${index}`));
+      .toEqual(Array.from({ length: 512 }, (_, index) => `archived-receipt-${index}`));
   }
   const snapshot = await reader.prepareReadOnlySnapshot();
   expect(Object.keys(snapshot.file.receipts)).toContain("archived-receipt-0");
@@ -781,3 +783,106 @@ for (const mode of ["off", "dual-write"] as const) {
     }
   });
 }
+
+test("warm recovery index proof is invalidated by an external schema edit", async () => {
+  const { open, filename, kept } = fixture();
+  const reader = open();
+  const first = await reader.prepareReadOnlySnapshot();
+  const db = new Database(filename);
+  try {
+    db.run("DROP INDEX registry_lookup_launchId");
+    expect(db.query("SELECT name FROM sqlite_master WHERE name='registry_lookup_launchId'").get()).toBeNull();
+    const next = await reader.prepareReadOnlySnapshot();
+    expect(next.file.receipts[kept]?.launchId).toBe(first.file.receipts[kept]?.launchId);
+    expect(db.query("SELECT name FROM sqlite_master WHERE name='registry_lookup_launchId'").get()).not.toBeNull();
+  } finally { db.close(); }
+});
+
+test("a schema edit during yielded recovery verification cannot publish an index proof", async () => {
+  const { open, filename } = fixture();
+  const reader = open();
+  await reader.prepareReadOnlySnapshot();
+  const db = new Database(filename);
+  let edit: ReturnType<typeof setImmediate> | undefined;
+  try {
+    // A missing final index guarantees a second yield after the first index
+    // was checked, so the peer edit lands behind that verified boundary.
+    db.run("DROP INDEX registry_archive_structured_host_kind");
+    const preparing = reader.prepareRecoveryIndexes();
+    edit = setImmediate(() => { edit = setImmediate(() => db.run("DROP INDEX registry_lookup_clientMessageId_heldDeliveries")); });
+    await expect(preparing).rejects.toThrow("indexes changed during preparation");
+    await reader.prepareRecoveryIndexes();
+    expect(db.query("SELECT name FROM sqlite_master WHERE name='registry_lookup_clientMessageId_heldDeliveries'").get()).not.toBeNull();
+  } finally { if (edit) clearImmediate(edit); db.close(); }
+});
+
+test("cooperative preparation normalizes hot rows in bounded batches and keeps the receipt backfill", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-readonly-batches-"));
+  directories.push(directory);
+  const seed = new AgentRegistry(path.join(directory, "seed.json"), undefined, undefined, { sqliteMode: "off" });
+  const template = seed.ensureConversation("codex", "/sessions/batch-template.jsonl", "default");
+  const spawn = seed.beginSpawn("codex", "/repo/batch-template", { title: "Batch template" });
+  const initial = seed.snapshot();
+  seed.close();
+  type ConversationId = RegistryFile["receipts"][string]["conversationId"] & string;
+  const conversationTemplate = initial.conversations[template.id]!;
+  const receiptTemplate = initial.receipts[spawn.launchId]!;
+  const rows = 200;
+  for (let index = 0; index < rows; index++) {
+    const id = `conversation_batch-${index}` as ConversationId;
+    const artifactPath = `/sessions/batch-${index}.jsonl`;
+    initial.conversations[id] = {
+      ...conversationTemplate, id, engine: index === 1 ? "claude" : "codex",
+      generations: conversationTemplate.generations.map(generation => ({ ...generation, path: artifactPath })),
+    };
+    // Every third receipt reaches its conversation through a two-link alias chain.
+    let conversationId = id;
+    if (index % 3 === 0) {
+      const near = `conversation_batch-alias-${index}` as ConversationId;
+      const far = `conversation_batch-alias-far-${index}` as ConversationId;
+      initial.conversationAliases[far] = near;
+      initial.conversationAliases[near] = id;
+      conversationId = far;
+    }
+    const launchId = `batch-receipt-${index}`;
+    initial.receipts[launchId] = {
+      ...receiptTemplate, launchId, conversationId, engine: "codex", transport: "structured", state: "completed",
+      artifactPath, artifactLifecycle: "pending", completionMode: "observed-completed",
+    };
+  }
+  let largest = 0;
+  let counting = false;
+  const normalize = ((value: unknown, mode?: Parameters<typeof normalizeRegistry>[1]) => {
+    if (counting) {
+      for (const collection of ["entries", "receipts", "conversations", "conversationAliases", "lineageEdges", "heldDeliveries"]) {
+        largest = Math.max(largest, Object.keys(((value as Record<string, unknown>)[collection] ?? {}) as object).length);
+      }
+    }
+    return normalizeRegistry(value, mode);
+  }) as typeof normalizeRegistry;
+  const store = new SqliteAgentRegistryStore(path.join(directory, "agent-registry.sqlite"), { initialSnapshot: initial, normalize });
+  stores.push(store);
+  counting = true;
+  const prepared = await store.prepareReadOnlySnapshot();
+  counting = false;
+  // One normalization call over every hot row was a 372 ms slice on the
+  // retained-history copy; each call now sees at most one batch.
+  expect(largest).toBeGreaterThan(0);
+  expect(largest).toBeLessThanOrEqual(64);
+  const batch = Object.keys(prepared.file.receipts).filter(id => id.startsWith("batch-receipt-"));
+  expect(batch).toEqual(Array.from({ length: rows }, (_, index) => `batch-receipt-${index}`));
+  expect(batch.filter(id => prepared.file.receipts[id]!.artifactLifecycle === "materialized"))
+    .toEqual(batch.filter(id => id !== "batch-receipt-1"));
+  // An engine mismatch keeps the receipt pending, as the complete normalization does.
+  expect(prepared.file.receipts["batch-receipt-1"]!.artifactLifecycle).toBe("pending");
+  expect(prepared.file.receipts["batch-receipt-0"]!.conversationId).toBe("conversation_batch-alias-far-0");
+  expect(Object.keys(prepared.file.conversations).filter(id => id.startsWith("conversation_batch-")))
+    .toEqual(Array.from({ length: rows }, (_, index) => `conversation_batch-${index}`));
+  expect(prepared.file.conversationAliases["conversation_batch-alias-far-0"]).toBe("conversation_batch-alias-0");
+  const complete = normalizeRegistry(structuredClone(initial));
+  for (const id of batch) expect(prepared.file.receipts[id]!.artifactLifecycle).toBe(complete.receipts[id]!.artifactLifecycle);
+  for (const collection of ["entries", "receipts", "conversations", "conversationAliases", "heldDeliveries", "deliveryOperationOwners"] as const) {
+    expect(Object.keys(prepared.file[collection])).toEqual(Object.keys(complete[collection]));
+  }
+  expect(prepared.file.deliveryOperationOwners).toEqual(complete.deliveryOperationOwners);
+}, 30_000);
