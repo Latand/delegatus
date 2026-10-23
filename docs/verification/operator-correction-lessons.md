@@ -78,7 +78,7 @@ a correction duplicate in both orders (agenda lead, budget retention through 32
 later lessons, cleared after curation), and integrate / rewrite / drop decisions
 with reversible history. The seat mandate advances to v60. Rule 13 keeps the correction duty and
 shortens its preceding answer-handling sentence. Compared with v58, the
-combined rule uses 126 additional bytes and retains the existing 500-byte
+combined rule uses 129 additional bytes and retains the existing 500-byte
 rotation-history case inside the structured message limit. Pending seat-intent
 replays retain their original bytes.
 
@@ -91,7 +91,7 @@ The initial comparison used main `3e570adf` and the merge commit
 reproduced the merge-train report:
 
 - The 500-byte history was dropped because the correction sentence enlarged
-  the mandate. Shortening rule 13's preceding sentence recovers 99 bytes while
+  the mandate. Shortening rule 13's preceding sentence recovers 97 bytes while
   retaining every correction instruction. The history assertion stays unchanged.
 - Three seat-command assertions expected the caller's text alone in durable
   mandates. New intents deliberately store the correction duty before delivery,
@@ -118,3 +118,37 @@ a new intent; rotation measures the same delivery transform; pending retries
 render the saved mandate and table. The repair changes the short rule and new
 intent validation, preserves the correction sentence, upgrades retained rule 13
 by exact match, and keeps pending replay outside that upgrade.
+
+Main also added a byte fingerprint for the curator brief. Correction-first
+review and the correction-write exception deliberately change that prose, so
+the fingerprint now records the combined brief. The test keeps its consent and
+read-only assertions and checks the correction duty with swarm receiving both
+off and on.
+
+## Verification isolation correction
+
+An early importer batch reused an explicit state directory between files; the
+preload preserves that variable. Its totals and the interrupted comparison are
+discarded. The replacement gives every file a fresh source checkout, state
+directory, HOME, XDG roots and native agent configuration roots before imports.
+Each child starts with detached stdin; results are reconciled against the
+manifest and retrieved logs. No discarded result is used to attribute a defect.
+
+Main advanced to `f348d75bd` during verification, adding tests only. It was
+merged with `50da20b7a`. The focused baseline inputs and all changed product
+modules are byte-identical between the prior main and that revision; the added
+test files receive separate checks.
+
+## Mandate disclosure repair
+
+The importer comparison found one further regression: the custom rotation
+parser test passes on main, while the branch puts the appended correction duty
+inside the handoff. Delivery appends that duty without a heading. The existing
+parser recognizes the earlier decisions and prototype paragraphs as mandate
+boundaries; it now recognizes the correction paragraph too. `MandateCard` and
+`imageGallery` consume this split. The original handoff equality remains, with
+additional parser and DOM assertions that the correction duty appears in the
+mandate disclosure.
+
+The stage-input byte snapshots and custom-mandate provenance assertions also
+fail on main in the same cases. Their assertions remain unchanged.
