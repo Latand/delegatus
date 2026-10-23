@@ -3,6 +3,8 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
+import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-wf-prov-test-"));
 const { buildWorkflow, normalizeTemplate, setupStdoutPath, workflowArtifactsDir } = await import("./store");
@@ -328,6 +330,25 @@ test("finishMerge uses the controller identity despite configured and inherited 
   expect((await box.run("config", "--local", "--get", "user.name"))).toBe("Configured Test");
 });
 
+async function completedSetup(wf: Workflow): Promise<Workflow> {
+  const setup = startSetup(wf);
+  if (setup.pid === null) throw new Error(setup.error ?? "setup did not start");
+  const identity = captureProcessIdentity(setup.pid);
+  try {
+    expect(setup.pid).toBeGreaterThan(0);
+    // The shell writes the exit artifact before its detached wrapper exits.
+    // Wait for that owned process to be reaped before ending either fixture.
+    const deadline = Date.now() + 10_000;
+    while (processIdentityStatus(identity) !== "dead" && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(processIdentityStatus(identity)).toBe("dead");
+    return { ...wf, setupPid: setup.pid };
+  } finally {
+    await stopFixtureIdentity(identity);
+  }
+}
+
 test("integration: provision + commit + local merge against a throwaway repo", async () => {
   const repoDir = makeRepo();
   let wf = makeWorkflow(repoDir, { template: { ...TEMPLATE, finish: "merge" as const } });
@@ -338,12 +359,7 @@ test("integration: provision + commit + local merge against a throwaway repo", a
   expect(fs.existsSync(path.join(wf.worktreeDir, "README.md"))).toBe(true);
 
   /* The detached setup command runs in the worktree and reports done. */
-  const setup = startSetup(wf);
-  expect(setup.pid).toBeGreaterThan(0);
-  wf = { ...wf, setupPid: setup.pid };
-  for (let i = 0; i < 100 && setupStatus(wf).status === "running"; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
+  wf = await completedSetup(wf);
   expect(setupStatus(wf).status).toBe("done");
 
   fs.writeFileSync(path.join(wf.worktreeDir, "greeting.txt"), "hi\n");
@@ -373,10 +389,7 @@ test("integration: a failing setup reports the exit code and stderr tail", async
   wf = { ...wf, worktreeDir: path.join(path.dirname(repoDir), path.basename(repoDir) + "-wf-" + wf.id) };
   const res = (await provisionWorktree(wf, realExec));
   if (!res.ok) throw new Error(res.error);
-  wf = { ...wf, setupPid: startSetup(wf).pid };
-  for (let i = 0; i < 100 && setupStatus(wf).status === "running"; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
+  wf = await completedSetup(wf);
   const status = setupStatus(wf);
   expect(status.status).toBe("failed");
   expect(status.detail).toContain("code 3");
