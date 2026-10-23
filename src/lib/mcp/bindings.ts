@@ -2267,7 +2267,7 @@ function admitTaskDuePatch(args: McpToolArgs): void {
   const task = taskSelectionSource()?.read(taskId);
   if (!task) return; // The ordinary command owns the missing-task refusal.
   const result = taskDuePatch(task, args as PatchTaskInput, new Date().toISOString(), { actor: "agent" });
-  if (!result.ok) throw new McpToolRefusal(result.error, { code: result.code ?? "TASK_INVALID_FIELD", field: result.field, status: result.status });
+  if (!result.ok) throw new McpUnadmittedRefusal(result.error, { code: result.code ?? "TASK_INVALID_FIELD", field: result.field, status: result.status });
 }
 
 async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
@@ -2321,7 +2321,11 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
     if (outcome.ok) changedFields = changedFieldNames(before, outcome.task);
     return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };
   });
-  if (!result.ok) throw new McpToolRefusal(result.error, { code: result.code ?? (result.status === 404 ? "TASK_NOT_FOUND" : "TASK_INVALID_FIELD"), field: result.field, status: result.status });
+  if (!result.ok) {
+    // patchTask's date refusals return before the transaction publishes tasks.
+    const Refusal = result.code?.startsWith("TASK_DUE_") ? McpUnadmittedRefusal : McpToolRefusal;
+    throw new Refusal(result.error, { code: result.code ?? (result.status === 404 ? "TASK_NOT_FOUND" : "TASK_INVALID_FIELD"), field: result.field, status: result.status });
+  }
   logMaintenanceWrite(maintainer, "update_task", prior, result.task, changedFields);
   return { ...taskAcknowledgement(result.task, args, changedFields), ...(result.notes ? { notes: result.notes } : {}), ...taskTextLanguageWarnings(args.text, dependencies) };
 }

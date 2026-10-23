@@ -98,27 +98,6 @@ test("MCP schema and raw binding enforce rescheduling; get_task returns history;
     // Before the date passes a later planning move needs no reason and adds no slip.
     const planned = await bindings.update_task({ taskId: initial.id, dueAt: "2026-10-25T12:00:00.000Z", full: true });
     expect((planned.task as BoardTask).dueHistory?.slips).toBe(1);
-    // Admission cannot authorize a stale row: another writer can change its
-    // date between the receipt claim and the command dispatch.
-    const beforeRace = loadTasks()[0]!;
-    const raced = { ...beforeRace, dueAt: past };
-    let committedRace: BoardTask | undefined;
-    const claim = receipts.claim.bind(receipts);
-    receipts.claim = (...args: Parameters<typeof claim>) => {
-      const result = claim(...args);
-      saveTasks([raced]);
-      committedRace = loadTasks()[0];
-      return result;
-    };
-    try {
-      expect(await call("update_task", { taskId: initial.id, dueAt: "2026-10-26T12:00:00.000Z" }))
-        .toMatchObject({ ok: false, code: "TASK_DUE_REASON_REQUIRED", details: { field: "dueReason" } });
-      expect(committedRace).toBeDefined();
-      expect(loadTasks()[0]).toEqual(committedRace!);
-    } finally {
-      receipts.claim = claim;
-      saveTasks([beforeRace]);
-    }
     const response = await PATCH(new NextRequest("http://localhost/api/tasks/due-integration", {
       method: "PATCH", headers: { host: "localhost", "content-type": "application/json" }, body: JSON.stringify({ dueAt: null }),
     }), { params: Promise.resolve({ id: initial.id }) });
@@ -130,6 +109,73 @@ test("MCP schema and raw binding enforce rescheduling; get_task returns history;
   } finally {
     setSystemTime();
     tasksDb?.close();
+    await client.close(); await server.close(); receipts.close();
+  }
+});
+
+test.each(["claim-writer", "locked-writer", "clock-slip", "clock-past"])("date refusal after %s releases only its receipt claim and retries the same key", async mode => {
+  const now = "2026-10-23T12:00:00.000Z";
+  const past = "2026-10-22T12:00:00.000Z";
+  const future = "2026-10-24T12:00:00.000Z";
+  const next = "2026-10-26T12:00:00.000Z";
+  const initial: BoardTask = { id: `due-race-${mode}`, project: PROJECT, text: "Finish the due work", status: "inbox", placement: "unplaced",
+    assignments: [], createdAt: past, updatedAt: past, dueAt: future, dueTz: "UTC" };
+  const receiptsFile = path.join(sandbox, `receipts-${mode}.sqlite`);
+  const receipts = new SqliteMcpReceiptStore(receiptsFile);
+  const server = createViewerMcpServer(createMcpToolService(viewerMcpBindings(), receipts));
+  const client = new Client({ name: "task-due-race-test", version: "1" });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  const claim = receipts.claim.bind(receipts);
+  let writer: Database | undefined;
+  let writerFinished: Promise<void> | undefined;
+  let competingTask: BoardTask | undefined;
+  const receiptCount = () => {
+    const db = new Database(receiptsFile, { readonly: true });
+    try { return db.query<{ count: number }, []>("SELECT count(*) AS count FROM mcp_receipts").get()!.count; }
+    finally { db.close(); }
+  };
+  try {
+    setSystemTime(new Date(now));
+    saveTasks([initial]);
+    const before = loadTasks()[0]!;
+    await Promise.all([client.connect(a), server.connect(b)]);
+    receipts.claim = (...args: Parameters<typeof claim>) => {
+      const result = claim(...args);
+      if (mode === "claim-writer") {
+        saveTasks([{ ...before, dueAt: past }]);
+        competingTask = loadTasks()[0];
+      } else if (mode === "locked-writer") {
+        // Read-only dispatch admission still sees the future date. The task
+        // mutation must wait for this writer, then validate its committed row.
+        writer = new Database(taskSelectionSource()!.filename);
+        writer.exec("BEGIN IMMEDIATE");
+        writerFinished = new Promise(resolve => setTimeout(() => {
+          writer!.exec("COMMIT");
+          saveTasks([{ ...before, dueAt: past }]);
+          competingTask = loadTasks()[0];
+          resolve();
+        }, 0));
+      } else setSystemTime(new Date(mode === "clock-slip" ? "2026-10-25T12:00:00.000Z" : "2026-10-27T12:00:00.000Z"));
+      return result;
+    };
+    const args = { clientRequestId: `due-race-${mode}`, full: true, taskId: initial.id, dueAt: next };
+    const call = async () => (await client.callTool({ name: "update_task", arguments: args })).structuredContent;
+    expect(await call()).toMatchObject({ ok: false, code: mode === "clock-past" ? "TASK_DUE_PAST" : "TASK_DUE_REASON_REQUIRED" });
+    await writerFinished;
+    expect(loadTasks()[0]).toEqual(competingTask ?? before);
+    expect(receiptCount()).toBe(0);
+    receipts.claim = claim;
+    setSystemTime(new Date(now));
+    saveTasks([before]);
+    expect(await call()).toMatchObject({ ok: true, replayed: false });
+    expect(receiptCount()).toBe(1);
+    expect(await call()).toMatchObject({ ok: true, replayed: true });
+    expect(receiptCount()).toBe(1);
+  } finally {
+    await writerFinished;
+    writer?.close();
+    receipts.claim = claim;
+    setSystemTime();
     await client.close(); await server.close(); receipts.close();
   }
 });
