@@ -33,6 +33,7 @@ import { VoiceCompanion } from "@/components/voiceCompanion/VoiceCompanion";
 import { sampleCallHistory, sampleTranscript, sampleOrchestratorMessage } from "@/components/voiceCompanion/transcriptSample.fixture";
 import type { CompanionEvent, CompanionPlan } from "@/lib/voiceCompanion/contract";
 import { DEMO_IDS, SCENARIO_PLAYBACK_PAUSE, demoAnswer, demoInstruction, isScenario, scenarioScript } from "@/lib/voiceCompanion/scenarios";
+import { openVoiceMicrophone, type VoiceMicrophone } from "@/lib/audio/voiceDevices";
 import { createSimulatedCompanion, realClock } from "@/lib/voiceCompanion/simulator";
 import type { VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
 
@@ -4968,8 +4969,15 @@ function voiceCompanionScene() {
   });
   Object.assign(window, { voiceCompanion: voice });
   let sendLost = params.get("sendlost") === "1";
+  /* `&dev=<state>` (docs/design/voice-device-picker.md): the driver stubs `navigator.mediaDevices`, and a start opens the
+     microphone through the product's own `openVoiceMicrophone`, as a real call does, so the status block names it. */
+  let microphone: VoiceMicrophone | null = null;
+  const withDevices = params.has("dev");
   const shown: VoiceCompanionAdapter = {
-    mode: adapter.mode, start: options => adapter.start(options), subscribe: emit => { listeners.add(emit); return () => listeners.delete(emit); }, close: () => adapter.close(),
+    mode: adapter.mode,
+    start: async options => { if (withDevices) microphone = await openVoiceMicrophone({}); return adapter.start(options); },
+    subscribe: emit => { listeners.add(emit); return () => listeners.delete(emit); },
+    close: () => { microphone?.release(); microphone = null; return adapter.close(); },
     command: async command => {
       if (sendLost && command.type === "confirmation" && command.decision === "send") { sendLost = false; throw new Error("COMPANION_UNAVAILABLE"); }
       return adapter.command(command);

@@ -256,12 +256,14 @@ export function VoiceConversationPanel({
   const { ref, onScroll } = useFollowLatest(lines);
   if (phase === "idle" && lines.length === 0 && !error && !notice && !agentUnavailable) return null;
   const live = phase === "live";
+  /* The name the browser gives the track is the microphone this call listens to. */
+  const mic = live ? (stream?.getAudioTracks()[0]?.label ?? "").replace(/^(Default|Communications) - /, "") : "";
   const status = phase === "connecting"
     ? t("voice.connecting")
     : phase === "stopping"
       ? t("voice.stopping")
       : live
-        ? t("voice.live")
+        ? mic ? t("voice.liveMic", { mic }) : t("voice.live")
         : phase === "error"
           ? t("voice.failed")
           : t("voice.ended");

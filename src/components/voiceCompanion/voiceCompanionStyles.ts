@@ -73,6 +73,9 @@ export const VOICE_COMPANION_CSS = `
 }
 .vc-phase { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; white-space: nowrap; }
 .vc-sim { color: var(--color-muted); white-space: nowrap; }
+.vc-mic { display: inline-flex; align-items: center; justify-content: center; gap: 3px; max-width: 100%; color: var(--color-muted); white-space: nowrap; }
+.vc-mic > svg { flex: none; }
+.vc-mic-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .vc-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--vc-ring); }
 .vc[data-phase="offline"] .vc-dot { background: none; border: 1.5px dashed var(--color-muted); }
 .vc-controls { display: flex; align-items: center; gap: 4px; }
@@ -353,6 +356,9 @@ export const PHONE_VOICE_CSS = `
 .pvc-status { display: flex; align-items: center; gap: 7px; margin: 0; padding: 8px 14px 6px; font-size: 12px; line-height: 16px; color: var(--color-secondary); }
 .pvc-status b { font-weight: 600; color: var(--color-primary); }
 .pvc-status .vc-dot { width: 8px; height: 8px; }
+.pvc-mic { display: flex; align-items: flex-start; gap: 6px; margin: 0; padding: 0 14px 6px; font-size: 12px; line-height: 16px; color: var(--color-muted); }
+.pvc-mic > svg { flex: none; margin-top: 2px; }
+.pvc-mic-name { min-width: 0; overflow-wrap: anywhere; }
 .pvc-row {
   display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 0 14px; border: 0; background: none; color: var(--color-primary);
   font: 600 14px/20px var(--font-sans); text-align: left; cursor: pointer;

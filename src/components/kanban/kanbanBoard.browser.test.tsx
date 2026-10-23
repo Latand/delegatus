@@ -11,6 +11,7 @@ import path from "node:path";
 import sharp from "sharp";
 import type { Browser, LaunchOptions, Page } from "playwright-core";
 
+import { stubVoiceDevices } from "@/test-helpers/voiceDevicesStub";
 import { translate } from "@/lib/i18n";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
@@ -22919,6 +22920,208 @@ describe("floating voice companion", () => {
       fs.writeFileSync("evidence/voice-companion/call-memory.json",JSON.stringify({ driver:"src/components/kanban/kanbanBoard.browser.test.tsx",synthetic:true,viewportBasis:"configured scene width",measurements },null,2)+"\n");
     } finally { await browser.close(); server.stop(); }
     /* 32 page loads ran 77 s on a loaded machine before the Tools section joined the dialog: past the 90 s default once it did. */
+  }, 300_000);
+
+  /*
+   * The «Microphone and speakers» section of the voice settings and the microphone line in a call
+   * (docs/design/voice-device-picker.md §2, §4). `navigator.mediaDevices` is stubbed before the page's own scripts with
+   * `&dev=<state>`; the names are real-length ones. Each state of the §2 table is read at 1440, 820 and 390, in both
+   * languages and themes: the selected text and the line under each select are the ones the state calls for, every text
+   * range of the section is whole inside the dialog and the window, nothing scrolls sideways, and every control is at
+   * least 24 px tall (44 on the phone). The permission button is pressed for real and the list that follows is read.
+   * A choice is made with the select itself and read back from the browser's storage. The call cases start the
+   * simulator, which opens the stubbed microphone through the product's own `openVoiceMicrophone`, and read the
+   * companion's status block against the 132 × 148 block, with the notice the missing device is said with.
+   * Frames go to `$LLV_VOICE_DEVICES_OUT` (default `.artifacts/voice-devices`), never committed.
+   */
+  browserTest("voice device settings render every state on desktop and phone", async () => {
+    const out = path.resolve(process.env.LLV_VOICE_DEVICES_OUT ?? ".artifacts/voice-devices");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const measurements: unknown[] = [];
+    const DEFAULT_MIC = "Microphone Array (Realtek(R) Audio)";
+    const DEFAULT_SPEAKERS = "Speakers (Realtek(R) Audio)";
+    type Expected = { input: (lang: "en" | "uk") => string; output: (lang: "en" | "uk") => string; inputDisabled: boolean; outputDisabled: boolean;
+      inputHint: ((lang: "en" | "uk") => string) | null; outputHint: ((lang: "en" | "uk") => string) | null; button: boolean };
+    const plain = (lang: "en" | "uk") => translate(lang, "voiceCompanion.devices.default");
+    const named = (name: string) => (lang: "en" | "uk") => translate(lang, "voiceCompanion.devices.defaultNamed", { name });
+    const hint = (key: string) => (lang: "en" | "uk") => translate(lang, key as never);
+    const missing = (name: string) => (lang: "en" | "uk") => translate(lang, "voiceCompanion.devices.missingOption", { name });
+    const STATES: Record<string, Expected> = {
+      noperm: { input: plain, output: plain, inputDisabled: false, outputDisabled: true, inputHint: hint("voiceCompanion.devices.permission"), outputHint: null, button: true },
+      denied: { input: plain, output: plain, inputDisabled: true, outputDisabled: true, inputHint: hint("voiceCompanion.devices.denied"), outputHint: null, button: false },
+      default: { input: named(DEFAULT_MIC), output: named(DEFAULT_SPEAKERS), inputDisabled: false, outputDisabled: false, inputHint: null, outputHint: null, button: false },
+      chosen: { input: () => "Навушники AirPods Pro (Bluetooth)", output: () => "DELL U2723QE (NVIDIA High Definition Audio)", inputDisabled: false, outputDisabled: false, inputHint: null, outputHint: null, button: false },
+      gone: { input: missing("Конференц-мікрофон Jabra Speak 750"), output: missing("Bluetooth Speaker (JBL Flip 6)"), inputDisabled: false, outputDisabled: false,
+        inputHint: hint("voiceCompanion.devices.missingHint"), outputHint: hint("voiceCompanion.devices.missingHint"), button: false },
+      nosink: { input: named(DEFAULT_MIC), output: named(DEFAULT_SPEAKERS), inputDisabled: false, outputDisabled: true, inputHint: null, outputHint: hint("voiceCompanion.devices.outputUnsupported"), button: false },
+    };
+    /* What the section shows, from the page: the selects' selected text, the lines under them, and every text range's place. */
+    const read = (page: Page, configuredWidth: number) => page.evaluate((width) => {
+      const section = document.querySelector<HTMLElement>("[data-voice-devices]")!;
+      const dialog = section.closest<HTMLElement>("[role=dialog]")!;
+      const frame = dialog.getBoundingClientRect();
+      const kinds = (["input", "output"] as const).map((kind) => {
+        const row = section.querySelector<HTMLElement>(`[data-voice-device='${kind}']`)!;
+        const select = row.querySelector<HTMLSelectElement>("select")!;
+        const box = select.getBoundingClientRect();
+        const style = getComputedStyle(select);
+        const canvas = document.createElement("canvas").getContext("2d")!;
+        canvas.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+        const selected = select.selectedOptions[0]?.textContent ?? "";
+        const room = box.width - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - 20;
+        return { kind, selected, options: [...select.options].map((option) => option.textContent), disabled: select.disabled, optionDisabled: [...select.options].map((option) => option.disabled),
+          hint: row.querySelector("[data-voice-device-hint]")?.textContent?.replace(/\s+/g, " ").trim() ?? null, width: Math.round(box.width), height: Math.round(box.height),
+          textWidth: Math.round(canvas.measureText(selected).width), room: Math.round(room), truncated: canvas.measureText(selected).width > room, background: style.backgroundColor };
+      });
+      const button = section.querySelector<HTMLElement>("[data-voice-devices-allow]");
+      const controls = [...section.querySelectorAll<HTMLElement>("select, button")].map((node) => Math.round(node.getBoundingClientRect().height));
+      /* Every text range of the section against the dialog's visible box and the window. */
+      const outside: string[] = [];
+      const walker = document.createTreeWalker(section, NodeFilter.SHOW_TEXT);
+      const range = document.createRange();
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.textContent?.trim() || node.parentElement?.closest("select")) continue;
+        range.selectNodeContents(node);
+        for (const line of range.getClientRects()) {
+          if (line.width < 1) continue;
+          if (line.left < frame.left - 0.5 || line.right > frame.right + 0.5 || line.top < frame.top - 0.5 || line.bottom > frame.bottom + 0.5 || line.left < 0 || line.right > innerWidth + 0.5 || line.bottom > innerHeight + 0.5)
+            outside.push(`${node.textContent.trim().slice(0, 40)} @ ${Math.round(line.left)},${Math.round(line.top)}`);
+        }
+      }
+      return { kinds, button: button ? { text: button.textContent, height: Math.round(button.getBoundingClientRect().height), left: button.getBoundingClientRect().left, right: button.getBoundingClientRect().right } : null,
+        controls, outside, title: section.querySelector("h3")?.textContent ?? null,
+        sideways: document.documentElement.scrollWidth - width, dialogSideways: dialog.scrollWidth - dialog.clientWidth,
+        dialogBackground: getComputedStyle(dialog).backgroundColor, stored: { input: localStorage.getItem("llvVoiceInputDevice"), output: localStorage.getItem("llvVoiceOutputDevice") } };
+    }, configuredWidth);
+    try {
+      for (const width of [1440, 820, 390]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const state of Object.keys(STATES)) {
+        const label = `${width}-${lang}-${scheme}-${state}`;
+        const phone = width === 390;
+        const { context, page, pageErrors } = await openVoice(browser, server.base, `&mount=product&backend=codex&dev=${state}`, { viewport: { width, height: 844 }, lang, scheme, product: true, phone, motion: "reduce", init: stubVoiceDevices });
+        try {
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-voice-companion-settings")));
+          const section = page.locator("[data-voice-devices]");
+          await section.waitFor();
+          /* The lists arrive after the section mounts (enumerate and the permission query). */
+          await page.waitForFunction((count) => document.querySelectorAll("[data-voice-devices] option").length >= count, state === "noperm" || state === "denied" ? 2 : 6);
+          await section.scrollIntoViewIfNeeded();
+          const want = STATES[state]!;
+          const check = (reading: Awaited<ReturnType<typeof read>>, expected: Expected, step: string) => {
+            const [input, output] = reading.kinds;
+            const where = `${label} ${step}`;
+            expect(reading.title, where).toBe(translate(lang, "voiceCompanion.devices.title"));
+            expect([input!.selected, output!.selected], where).toEqual([expected.input(lang), expected.output(lang)]);
+            expect([input!.disabled, output!.disabled], where).toEqual([expected.inputDisabled, expected.outputDisabled]);
+            /* The permission line carries its button in the same paragraph. */
+            const inputHint = expected.inputHint ? `${expected.inputHint(lang)}${expected.button ? ` ${translate(lang, "voiceCompanion.devices.allow")}` : ""}` : null;
+            expect([input!.hint, output!.hint], where).toEqual([inputHint, expected.outputHint?.(lang) ?? null]);
+            expect(reading.button?.text ?? null, where).toBe(expected.button ? translate(lang, "voiceCompanion.devices.allow") : null);
+            expect(reading.outside, `${where}: text outside the dialog or the window`).toEqual([]);
+            expect([reading.sideways <= 0, reading.dialogSideways <= 0], `${where}: sideways scroll`).toEqual([true, true]);
+            expect(reading.dialogBackground, where).not.toBe("rgba(0, 0, 0, 0)");
+            expect(Math.min(...reading.controls), `${where}: the smallest control`).toBeGreaterThanOrEqual(phone ? 44 : 24);
+          };
+          const first = await read(page, width);
+          check(first, want, "as opened");
+          if (state === "gone") {
+            expect(first.kinds.map((kind) => kind.optionDisabled[1]), label).toEqual([true, true]);
+            expect(first.stored.input, `${label}: the choice is kept`).toContain("mic-gone");
+          }
+          await page.screenshot({ path: path.join(out, `${label}.png`) });
+          measurements.push({ label, ...first });
+          if (state === "noperm") {
+            const allow = page.locator("[data-voice-devices-allow]");
+            if (phone) await allow.tap(); else await allow.click();
+            await page.waitForFunction(() => !document.querySelector("[data-voice-devices-allow]") && document.querySelectorAll("[data-voice-devices] option").length >= 6);
+            const granted = await read(page, width);
+            check(granted, STATES.default!, "after Show devices");
+            await page.screenshot({ path: path.join(out, `${label}-granted.png`) });
+            measurements.push({ label: `${label}-granted`, ...granted });
+          }
+          if (state === "default") {
+            /* A choice made with the select is stored at once, read back, and System default clears it. */
+            const microphone = page.locator("[data-voice-device='input'] select");
+            await microphone.selectOption("mic-pods");
+            await page.waitForFunction(() => localStorage.getItem("llvVoiceInputDevice")?.includes("mic-pods"));
+            expect((await read(page, width)).kinds[0]!.selected, label).toBe("Навушники AirPods Pro (Bluetooth)");
+            await page.screenshot({ path: path.join(out, `${label}-picked.png`) });
+            await microphone.selectOption("");
+            await page.waitForFunction(() => localStorage.getItem("llvVoiceInputDevice") === null);
+          }
+          expect(pageErrors, label).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/voice-companion", { recursive: true });
+      fs.writeFileSync("evidence/voice-companion/voice-devices.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", synthetic: true, viewportBasis: "configured scene width", measurements }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 900_000);
+
+  browserTest("the companion in a call names its microphone, and says when the default was taken", async () => {
+    const out = path.resolve(process.env.LLV_VOICE_DEVICES_OUT ?? ".artifacts/voice-devices");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const measurements: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const state of ["callchosen", "callgone"] as const) {
+        const label = `${lang}-${scheme}-${state}`;
+        const { context, page, pageErrors } = await openVoice(browser, server.base, `&dev=${state}`, { viewport: VIEWPORT, scheme, lang, motion: "reduce", init: stubVoiceDevices });
+        try {
+          expect(await page.locator("[data-companion-mic]").count(), `${label}: no line before a call`).toBe(0);
+          await page.locator("[data-companion-talk]").click();
+          await page.waitForSelector("[data-companion-mic]", { timeout: 15_000 });
+          /* The simulator adds a «Simulated voice» line that the product's adapter never draws; the block is read as the product has it. */
+          await page.addStyleTag({ content: ".vc-sim { display: none !important; }" });
+          await page.waitForTimeout(600);
+          const mic = state === "callchosen" ? "Навушники AirPods Pro (Bluetooth)" : "Microphone Array (Realtek(R) Audio)";
+          const reading = await page.evaluate(() => {
+            const block = document.querySelector<HTMLElement>(".vc-block")!;
+            const status = document.querySelector<HTMLElement>("[data-companion-phase]")!;
+            const line = document.querySelector<HTMLElement>("[data-companion-mic]")!;
+            const name = line.querySelector<HTMLElement>(".vc-mic-name")!;
+            const controls = document.querySelector<HTMLElement>(".vc-controls")!;
+            const box = (element: Element) => { const r = element.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height, bottom: r.bottom, right: r.right }; };
+            const range = document.createRange(); range.selectNodeContents(name);
+            const mute = document.querySelector<HTMLElement>(".vc-btn[aria-pressed]")!;
+            /* The same block with the microphone line taken out, to read what the line adds. */
+            line.style.display = "none";
+            const without = { block: box(block), status: box(status), controls: box(controls) };
+            line.style.display = "";
+            return { without, block: box(block), status: box(status), line: box(line), controls: box(controls), text: range.getBoundingClientRect().width,
+              nameCut: name.scrollWidth > name.clientWidth + 0.5, name: name.textContent ?? "", muteLabel: mute.getAttribute("aria-label") ?? "", muteTitle: mute.title,
+              statusHidden: status.getAttribute("aria-hidden"), blockOverflow: block.scrollHeight - block.clientHeight };
+          });
+          expect(reading.name, label).toBe(mic);
+          expect(reading.muteLabel, label).toBe(`${translate(lang, "voiceCompanion.mute")} · ${translate(lang, "voiceCompanion.micInUse", { name: mic })}`);
+          expect(reading.muteTitle, label).toBe(reading.muteLabel);
+          expect(reading.statusHidden, label).toBe("true");
+          /* The status block (phase and microphone) ends above the controls, and the whole block stays within its box. */
+          expect(reading.status.bottom, `${label}: the status block meets the controls (measured ${JSON.stringify(reading.status)} against ${JSON.stringify(reading.controls)})`).toBeLessThanOrEqual(reading.controls.y + 0.5);
+          expect(reading.controls.bottom, `${label}: the controls end inside the block`).toBeLessThanOrEqual(reading.block.bottom + 0.5);
+          expect(reading.line.right, label).toBeLessThanOrEqual(reading.block.right + 0.5);
+          if (state === "callgone") {
+            await page.waitForSelector('[data-companion-notice][data-code="MICROPHONE_FALLBACK"]', { timeout: 10_000 });
+            const notice = await page.evaluate(() => {
+              const element = document.querySelector<HTMLElement>('[data-companion-notice][data-code="MICROPHONE_FALLBACK"]')!;
+              const text = element.querySelector<HTMLElement>(".vc-notice-text")!;
+              const box = element.getBoundingClientRect();
+              return { text: text.innerText.trim(), tone: element.dataset.tone, settings: !!element.querySelector("[data-companion-open-settings]"),
+                inside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, clipped: text.scrollWidth > text.clientWidth + 1 || text.scrollHeight > text.clientHeight + 1 };
+            });
+            expect(notice, label).toEqual({ text: companionErrorMessage("MICROPHONE_FALLBACK", lang), tone: "note", settings: true, inside: true, clipped: false });
+          } else expect(await page.locator('[data-companion-notice][data-code="MICROPHONE_FALLBACK"]').count(), label).toBe(0);
+          await page.screenshot({ path: path.join(out, `call-${label}.png`) });
+          await page.locator("[data-companion-end]").click();
+          await page.waitForSelector("[data-companion-mic]", { state: "detached", timeout: 10_000 });
+          expect(pageErrors, label).toEqual([]);
+          measurements.push({ label, ...reading });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/voice-companion", { recursive: true });
+      fs.writeFileSync("evidence/voice-companion/voice-devices-call.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", synthetic: true, measurements }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
   }, 300_000);
 
   /*
