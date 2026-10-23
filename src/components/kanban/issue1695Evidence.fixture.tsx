@@ -15,7 +15,7 @@ import { DeputyBlock } from "@/components/conversation/DeputyBlock";
 import { SeatDeputyChip } from "@/components/orchestrator/SeatDeputyChip";
 import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
 import { NativeQueuePanel } from "@/components/NativeQueuePanel";
-import { translate } from "@/lib/i18n";
+import { translate, useLocale } from "@/lib/i18n";
 import { lessonRequestLines, renderLearnedRules } from "@/lib/memory/roleRender";
 import { taskReferencePrelude } from "@/lib/selection/selectedContext";
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
@@ -29,10 +29,12 @@ import { OrchestratorDock } from "@/components/orchestrator/OrchestratorDock";
 import { RulesWindow } from "@/components/roleMemory/LearnedRules";
 import type { AttentionDismissalMark, DismissalTarget } from "@/lib/attention/dismissalTypes";
 import { COMPANION_PROTECT, COMPANION_ROWS, companionReserved, companionShellReady } from "@/components/voiceCompanion/hostSurfaces";
+import { VoiceConversationPanel } from "@/components/VoiceConversation";
 import { VoiceCompanion } from "@/components/voiceCompanion/VoiceCompanion";
 import { sampleCallHistory, sampleTranscript, sampleOrchestratorMessage } from "@/components/voiceCompanion/transcriptSample.fixture";
 import type { CompanionEvent, CompanionPlan } from "@/lib/voiceCompanion/contract";
 import { DEMO_IDS, SCENARIO_PLAYBACK_PAUSE, demoAnswer, demoInstruction, isScenario, scenarioScript } from "@/lib/voiceCompanion/scenarios";
+import { attachVoiceOutput, openVoiceMicrophone, type VoiceMicrophone } from "@/lib/audio/voiceDevices";
 import { createSimulatedCompanion, realClock } from "@/lib/voiceCompanion/simulator";
 import type { VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
 
@@ -5008,8 +5010,17 @@ function voiceCompanionScene() {
   });
   Object.assign(window, { voiceCompanion: voice });
   let sendLost = params.get("sendlost") === "1";
+  /* `&dev=<state>` (docs/design/voice-device-picker.md): the driver stubs `navigator.mediaDevices`, and a start opens the
+     microphone through the product's own `openVoiceMicrophone` and gives an audio element to `attachVoiceOutput`, as a real
+     call does, so the status block names the microphone and the chosen speakers are looked for. */
+  let microphone: VoiceMicrophone | null = null;
+  let detachOutput: (() => void) | null = null;
+  const withDevices = params.has("dev");
   const shown: VoiceCompanionAdapter = {
-    mode: adapter.mode, start: options => adapter.start(options), subscribe: emit => { listeners.add(emit); return () => listeners.delete(emit); }, close: () => adapter.close(),
+    mode: adapter.mode,
+    start: async options => { if (withDevices) { microphone = await openVoiceMicrophone({}); detachOutput = attachVoiceOutput(new Audio()); } return adapter.start(options); },
+    subscribe: emit => { listeners.add(emit); return () => listeners.delete(emit); },
+    close: () => { microphone?.release(); microphone = null; detachOutput?.(); detachOutput = null; return adapter.close(); },
     command: async command => {
       if (sendLost && command.type === "confirmation" && command.decision === "send") { sendLost = false; throw new Error("COMPANION_UNAVAILABLE"); }
       return adapter.command(command);
@@ -5099,6 +5110,25 @@ const diskDensity = new URLSearchParams(location.search).get("disk-density");
 // Mount the production dock beside the Viewer for shared desktop-host cases.
 const dockWidth = new URLSearchParams(location.search).get("dockWidth");
 if (dockWidth === "440" || dockWidth === "360") localStorage.setItem(`llvOrchestratorPanelWidth:${PROJECT}`, dockWidth);
+/* `?scenario=voice-panel&mic=<name>&panelWidth=<px>`: the composer's live voice call panel with a microphone track of that name,
+   at the width of the picture-in-picture window (380) or the phone (390). */
+function VoicePanelScene() {
+  const { t } = useLocale();
+  const query = new URLSearchParams(location.search);
+  const [startedAt] = useState(() => Date.now() - 83_000);
+  const mic = query.get("mic") ?? "";
+  const [stream] = useState(() => {
+    const context = new AudioContext();
+    const stream = context.createMediaStreamDestination().stream;
+    Object.defineProperty(stream.getAudioTracks()[0]!, "label", { value: mic });
+    return stream;
+  });
+  return (
+    <div className="p-4" style={{ width: Number(query.get("panelWidth") ?? 380), boxSizing: "content-box" }}>
+      <VoiceConversationPanel phase="live" error={null} startedAt={startedAt} stream={stream} lines={[]} t={t} onToggleMic={() => {}} onToggleOutput={() => {}} />
+    </div>
+  );
+}
 const relayChainEvidence: RelayChatsPayload = { relays: [{ id: "fixture-relay", name: "Example relay", origin: "https://relay.example" }], chats:
   (["member", "admin", "owner"] as const).map((authority, i) => ({ id: `chain-${i}`, relayId: "fixture-relay", relayName: "Example relay", targetId: "fixture-target", targetName: "Support bot", chatKey: "fixture-chat-chain-key", authority,
     engine: "claude", turns: 3, compactions: 0, createdAt: "2026-10-17T10:00:00Z", lastTurnAt: "2026-10-17T10:00:00Z", state: "idle", file: { ...files[0]!, path: `fixture-chain-${i}`, title: `Chain ${i}` } })) };
@@ -5109,7 +5139,7 @@ createRoot(document.getElementById("root")!).render(SCENARIO === "workspaces-tea
     <OrchestratorDock project={PROJECT} projectName="Atlas" files={files} onClose={() => {}} />
     <div className="min-w-0 flex-1"><Viewer /></div>
   </div>
-) : SCENARIO === "codex-callbacks" ? <CodexCallbacksScene /> : SCENARIO === "memory-profile" ? <RulesWindow project="garden" onClose={() => {}} /> : VOICE ? voiceCompanionScene() : diskDensity ? (
+) : SCENARIO === "codex-callbacks" ? <CodexCallbacksScene /> : SCENARIO === "memory-profile" ? <RulesWindow project="garden" onClose={() => {}} /> : SCENARIO === "voice-panel" ? <VoicePanelScene /> : VOICE ? voiceCompanionScene() : diskDensity ? (
   <div className="bg-panel" style={{ width: diskDensity === "full" ? "100%" : 248, marginTop: "auto" }}>
     <ResourcesFooter density={diskDensity === "full" ? "full" : diskDensity === "detail" ? "detail" : "line"} />
   </div>
