@@ -1,7 +1,7 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { writeJsonDurably } from "@/lib/state/durableJson";
 import { statePath } from "@/lib/configDir";
 import { FileTransactionBusyError, withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { isOpaqueProjectKey, projectDisplayName } from "@/lib/displayNames";
@@ -190,20 +190,13 @@ export function bridgeReportsEnabled(project: string): boolean {
 
 function writeProjects(projects: Record<string, ProjectSettingsEntry>): boolean {
   const file = settingsFile();
-  const temporary = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${crypto.randomUUID()}.tmp`);
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(temporary, JSON.stringify({ schemaVersion: 1, projects } satisfies ProjectSettingsFile, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
-    fs.renameSync(temporary, file);
+    writeJsonDurably(file, { schemaVersion: 1, projects } satisfies ProjectSettingsFile);
     cache = null;
     readProjects();
     return true;
   } catch {
-    try {
-      fs.rmSync(temporary, { force: true });
-    } catch {
-      // The next toggle retries the write.
-    }
     return false;
   }
 }
