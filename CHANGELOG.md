@@ -61,6 +61,13 @@ guarantees for the 1.x series.
   Delegatus restart. The resumed call keeps the same conversation, the
   dictation history stays, and the earlier part of the call returns into
   the call's context ([#3197]).
+- **Past voice calls can be reopened.** After a call, also after a page
+  reload, the character opens the newest retained call with its actions:
+  when each happened, the project, whether a request was sent and
+  delivered and, if not, why in your language, with a link to the
+  orchestrator conversation it went to. With more than one call, a
+  picker opens any of them. The list carries no words of the call
+  ([#3218]).
 - **New sounds.** The sound map uses the «Wood» palette for asks, finished
   work, pipelines, failures and launches; the original typing sound stays,
   and an «Agent typing» checkbox turns it off. Mute, volume and call music
@@ -113,7 +120,10 @@ guarantees for the 1.x series.
   zero ([#3140]). Role memory refresh, the seat tick check, registry reads
   and auto-merge work in bounded steps ([#3125]), and pipeline history
   reads keep progress across retries and share one read between
-  concurrent callers ([#3166]).
+  concurrent callers ([#3166]). The worktree sweep and the controller's
+  jobs work in small slices that scale with what changed instead of with
+  the number of worktrees, and a kept worktree is rechecked when its
+  retention ends ([#3208]).
 - **Agents run in a signal sandbox where Linux allows it.** A managed
   agent cannot signal processes outside its own tree; where the boundary
   cannot be set up, the agent starts as before and its launch reports the
@@ -172,6 +182,9 @@ guarantees for the 1.x series.
   timer; a failed deploy keeps its phase and cause ([#3175]).
 
 ### Security
+- **Next.js 16.4.1**, the first release that fixes three advisories
+  published on 2026-10-22: two critical (GHSA-2464-fhr4-w9xw,
+  GHSA-673q-mjm6-r5xr) and one high (GHSA-p3m5-59mp-jv5r) ([#3220]).
 - **Every route checks the Host header** against the configured names
   (loopback, the launch hostname, the Tailscale name, the saved public
   address), streams included, so a DNS-rebinding page cannot read
@@ -189,7 +202,9 @@ guarantees for the 1.x series.
 - `scripts/gate-slot.sh` moves a sandboxed stage agent's heavy command into
   the 8 GB gate scope again ([#3159]). The pre-push touched-test gate
   finishes at high load: a 60-second test timeout and the largest engine
-  test files split ([#3128]).
+  test files split ([#3128]). Pre-push and publication reuse a passed
+  step's verdict for an identical tree, base and toolchain, and skip
+  checks a change cannot affect ([#3203]).
 - A launched merger explains the GitHub App setup when the batch principal
   check is refused ([#3182]).
 - Test repairs: native Codex runtime timing ([#3147]), the minimum macOS
@@ -5058,11 +5073,15 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#3199]: https://github.com/Latand/delegatus/pull/3199
 [#3201]: https://github.com/Latand/delegatus/pull/3201
 [#3202]: https://github.com/Latand/delegatus/pull/3202
+[#3203]: https://github.com/Latand/delegatus/pull/3203
 [#3204]: https://github.com/Latand/delegatus/pull/3204
 [#3206]: https://github.com/Latand/delegatus/pull/3206
+[#3208]: https://github.com/Latand/delegatus/pull/3208
 [#3209]: https://github.com/Latand/delegatus/pull/3209
 [#3211]: https://github.com/Latand/delegatus/pull/3211
 [#3213]: https://github.com/Latand/delegatus/pull/3213
 [#3216]: https://github.com/Latand/delegatus/pull/3216
 [#3217]: https://github.com/Latand/delegatus/pull/3217
+[#3218]: https://github.com/Latand/delegatus/pull/3218
+[#3220]: https://github.com/Latand/delegatus/pull/3220
 [#3221]: https://github.com/Latand/delegatus/pull/3221
