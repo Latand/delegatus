@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { cloudPollDelay, cloudStageConfigurationError, cloudTransportError, isCloudStageAttempt,
+import { cloudPollDelay, cloudStageConfigurationError, cloudServiceTierError, cloudTransportError, isCloudStageAttempt,
   validCloudTaskReference, validCloudThreadReference, type CloudStageAttempt, type CloudStageClient } from "./cloudStage";
 import type { PipelineStage } from "./types";
 
@@ -31,6 +31,15 @@ test("a transport must explicitly honour model and effort; a missing adapter ref
   expect(cloudTransportError(supported, "gpt-6.1-sol", "xhigh")).toBeNull();
   expect(cloudTransportError(supported, "gpt-6.1-sol", "low")).toContain("cannot honour");
   expect(cloudTransportError(supported, "different-model", "xhigh")).toContain("cannot honour");
+});
+
+test.each(["default", "priority", "ultrafast"])("explicit %s tiers are refused; role preferences and local runtimes keep their contract", serviceTier => {
+  const effectiveRole = { ...stage.effectiveRole, serviceTier, serviceTierSource: "explicit" as const };
+  expect(cloudServiceTierError(effectiveRole)).toContain("explicit service tier");
+  expect(cloudServiceTierError({ ...effectiveRole, serviceTierSource: undefined })).toContain("explicit service tier");
+  expect(cloudServiceTierError({ ...effectiveRole, serviceTierSource: "role-default" })).toBeNull();
+  expect(cloudStageConfigurationError({ ...stage, effectiveRole })).toBeNull();
+  expect(cloudStageConfigurationError({ ...stage, effectiveRole, runtime: undefined })).toBeNull();
 });
 
 test("backoff is deterministic and bounded", () => {

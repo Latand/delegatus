@@ -1,5 +1,5 @@
 import { codexCloudEnvironmentId } from "@/lib/projects/settings";
-import { CLOUD_STAGE_TIMEOUT_MS, cloudPollDelay, cloudStageConfigurationError, cloudTransportError, validCloudTaskReference, validCloudThreadReference, type CloudStageClient, type CloudStageAttempt } from "./cloudStage";
+import { CLOUD_STAGE_TIMEOUT_MS, cloudPollDelay, cloudStageConfigurationError, cloudServiceTierError, cloudTransportError, validCloudTaskReference, validCloudThreadReference, type CloudStageClient, type CloudStageAttempt } from "./cloudStage";
 import { hostedCloudStageClient } from "./cloudHostedClient";
 import { FLOW_ARCHIVE, STAGE_RETIREMENT, hasRetiredStage } from "@/lib/flows/retirement";
 import { ensureStagePullRequest, stagePullRequestProducer, type StagePullRequestResult } from "./stagePullRequest";
@@ -8141,7 +8141,7 @@ async function tickCloudStage(pipeline: Pipeline, stage: PipelineStage, attempt:
     setCursorState(pipeline, stage.id, "pending");
     await park(pipeline, error, attempt); await persist();
   };
-  const configurationError = cloudStageConfigurationError(bound);
+  const configurationError = cloudStageConfigurationError(bound) ?? cloudServiceTierError(bound.effectiveRole);
   if (configurationError) return reject(configurationError);
   if (!publishesRemoteBranch(pipeline) || !pipeline.delivery?.active || pipeline.delivery.publish !== "enabled"
     || pipeline.delivery.disposition !== "owner" || pipeline.delivery.ownerId !== pipeline.id) {
@@ -8153,6 +8153,12 @@ async function tickCloudStage(pipeline: Pipeline, stage: PipelineStage, attempt:
   if (!attempt.cloud) {
     if (await holdStageLaunchForUpdate(pipeline, ports, persist)) return;
     bindAttemptDefinition(stage, attempt, ports);
+    // Hosted tiers are unverified. Role defaults are preferences; record the
+    // ordinary fallback so the attempt never claims an unapplied tier.
+    if (attempt.effectiveRole.serviceTierSource === "role-default" && attempt.effectiveRole.serviceTier) {
+      attempt.effectiveRole.preferredServiceTier = attempt.effectiveRole.serviceTier;
+      delete attempt.effectiveRole.serviceTier;
+    }
     attempt.state = "running"; attempt.startedAt = ports.now();
     attempt.cloud = { phase: "reserved", environmentId,
       branch: pipeline.delivery.target.branch.replace(/^refs\/heads\//, ""), headSha: pipeline.lastPassedCommit,

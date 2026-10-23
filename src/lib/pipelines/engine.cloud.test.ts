@@ -69,6 +69,59 @@ test("cloud reviewers submit the role scaffold, relay and lane facts, settle thr
   expect(attempt().output).toBe("All checked.");
 });
 
+test.each(["default", "priority", "ultrafast"])("cloud admission refuses an explicit %s tier before any submission", async serviceTier => {
+  const { h, submits } = await fixture();
+  // Stored stages from an older release must hit the execution guard too.
+  await step(h);
+  const record = lane();
+  Object.assign(record.stages[0]!.effectiveRole, { serviceTier, serviceTierSource: "explicit" });
+  savePipelines([record]);
+  await step(h);
+  expect(attempt().error).toContain("explicit service tier");
+  expect(submits).toHaveLength(0);
+  expect(h.spawnInputs).toHaveLength(0);
+});
+
+test("cloud execution checks the bound attempt tier even when the live stage has no tier", async () => {
+  const { h, submits } = await fixture();
+  await submitted(h);
+  const record = lane();
+  Object.assign(record.runs[0]!.attempts.at(-1)!.effectiveRole, { serviceTier: "default", serviceTierSource: "explicit" });
+  savePipelines([record]);
+  await step(h);
+  expect(attempt().error).toContain("explicit service tier");
+  expect(submits).toHaveLength(1);
+});
+
+test("a newly created cloud stage with an explicit default tier fails before submission", async () => {
+  const { h, submits } = await fixture({ stages: [{ ...stage, serviceTier: "default" }] });
+  await step(h); await step(h);
+  expect(attempt().error).toContain("explicit service tier");
+  expect(submits).toHaveLength(0);
+});
+
+test("cloud role tier preferences visibly fall back to the provider default", async () => {
+  const { h, submits } = await fixture();
+  const record = lane();
+  Object.assign(record.stages[0]!.effectiveRole, { serviceTier: "priority", serviceTierSource: "role-default" });
+  savePipelines([record]);
+  await submitted(h);
+  expect(submits).toHaveLength(1);
+  expect(attempt().effectiveRole).toMatchObject({ preferredServiceTier: "priority", serviceTierSource: "role-default" });
+  expect(attempt().effectiveRole.serviceTier).toBeUndefined();
+  expect(lane().stages[0]!.effectiveRole.serviceTier).toBe("priority");
+});
+
+test("a cloud failure diagnostic is retained through durable stage settlement", async () => {
+  const { h } = await fixture();
+  const error = "Codex Cloud turn failed (environment_setup_failed): Environment setup failed: missing dependency";
+  h.ports.cloudClient!.poll = async () => ({ state: "failed", model: "gpt-6.1-sol", error });
+  await submitted(h); await step(h); await step(h);
+  expect(attempt().cloud?.error).toBe(error);
+  expect(attempt().error).toBe(error);
+  expect(lane().stateDetail).toContain(error);
+});
+
 test("cloud verifier findings use the same normalization, severity ranking and failure routing", async () => {
   const { h } = await fixture();
   const record = lane();

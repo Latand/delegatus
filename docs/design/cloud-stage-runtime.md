@@ -38,6 +38,20 @@ that contract and has no adapter or fallback here. The transport supports
 GPT-6.1 Sol, including an explicit reasoning effort. The project setting keeps
 all remote work disabled until an operator supplies an ASB configuration ID.
 
+Hosted service-tier fidelity is unverified in slice 1. An explicit tier,
+including `default`, is refused at execution before submission. Saved stage
+definitions remain readable. The adapter also refuses direct submissions carrying a tier
+before authentication. An inherited role tier remains a preference: cloud runs
+use the provider default and record `preferredServiceTier` with no applied
+`serviceTier`, using the existing visible fallback label. Local tier handling
+is unchanged.
+
+Failed-turn diagnostics retain a bounded, credential-redacted message and
+recognized error cause name. Raw provider bodies, headers and additional error
+fields are discarded; unknown shapes use the generic cloud failure. Redaction
+precedes truncation, and the engine persists this sanitized diagnostic through
+the existing failure path.
+
 The interface isolates these operations from pipeline orchestration:
 
 - Submit the environment, published branch, role scaffold and prompt, explicit

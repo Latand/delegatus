@@ -3434,5 +3434,463 @@
     "Hosted app-server protocol is the current desktop protocol and has no verified public stability guarantee.",
     "Build/fix, untracked diff application and cloud checks remain slice 2.",
     "The branch remains based on the pinned starting revision; concurrent main changes were inspected separately."
-  ]
+  ],
+  "fixVerification": {
+    "recordedAt": "2026-10-23T22:11:10.478988+00:00",
+    "base": "8008507865d9b4826f07a84e567c59bc68307f14",
+    "sourceRevision": "Uncommitted fix snapshot; final checked inputs are identified by the source fingerprints.",
+    "sourcesSha256": {
+      "docs/design/cloud-stage-runtime.md": "5e2fbdfd158c992912243540238b72d3ef9e3aa8e331c813543e39f65365ed01",
+      "src/lib/pipelines/cloudHostedClient.test.ts": "85fbfd77d99fd904cb5bfe2181139bbb000a549b283ccaf9f993a7094aef8f20",
+      "src/lib/pipelines/cloudHostedClient.ts": "abd8854a708276f901731059146fb18e14440c3314b0107e982e12275b978f25",
+      "src/lib/pipelines/cloudStage.test.ts": "56853f00296f001d0fa5e7da3fa608401a16fff342c973431037aca491a136f3",
+      "src/lib/pipelines/cloudStage.ts": "189aef1134b9a9ab8d3ddbbc282955d73af13d6ca034864c5621f83e5b139f9c",
+      "src/lib/pipelines/engine.cloud.test.ts": "0082ca74e046f73167df0068b12c27c5e3898b5d1dc8480d5f56e482f59016da",
+      "src/lib/pipelines/engine.ts": "9dfcfdf9d63f29575a537c9864d75f9db5d13e3dc980b0bfad7e20c7fed691aa"
+    },
+    "fixes": {
+      "serviceTier": "Cloud execution refuses every explicit tier before submission. Role defaults retain the preference as preferredServiceTier with no claim of an applied tier. Durable shape validation is unchanged. The hosted adapter refuses direct tier requests before authentication.",
+      "failureCause": "Failed turns retain bounded credential-redacted messages and recognized cause names. Additional payload fields are discarded. Malformed non-null errors fail on poll, final-message and diff reads."
+    },
+    "isolation": {
+      "transport": "Controller-provided gate-slot.sh with gate-remote; one remote command at a time.",
+      "roots": [
+        "HOME",
+        "XDG_CONFIG_HOME",
+        "TMPDIR",
+        "LLV_STATE_DIR"
+      ],
+      "controlUrl": "Closed loopback port",
+      "testRuntime": "Bun 1.4.0",
+      "network": "Cloud clients and sockets are fake; no live cloud task."
+    },
+    "commands": {
+      "focused": "setsid bun scripts/owned-runner.ts bun run test <explicit path>, stdin closed",
+      "typecheck": "bunx tsc --noEmit --incremental false",
+      "eslint": "bun node_modules/eslint/bin/eslint.js --max-warnings=0 <the six touched TypeScript files>",
+      "importers": "setsid bun -e 'import { touchedTests } from \"./scripts/local-gate-tests\"; const r = await touchedTests(process.cwd(), \"8008507865d9b4826f07a84e567c59bc68307f14\", process.argv.slice(1), { budgets: { fileMs: 600000, runMs: 3600000 } }); if (r.introduced.length) process.exitCode = 1;' <files below>, stdin closed",
+      "sourcePrivacy": "bun scripts/privacy-publication-gate.ts --require-known-values --base 800850786 --paths <the seven source, test and design files>"
+    },
+    "focused": [
+      {
+        "path": "src/lib/pipelines/cloudStage.test.ts",
+        "exitCode": 0,
+        "pass": 11,
+        "fail": 0
+      },
+      {
+        "path": "src/lib/pipelines/cloudHostedClient.test.ts",
+        "exitCode": 0,
+        "pass": 65,
+        "fail": 0
+      },
+      {
+        "path": "src/lib/pipelines/engine.cloud.test.ts",
+        "exitCode": 0,
+        "pass": 47,
+        "fail": 0
+      }
+    ],
+    "staticChecks": [
+      {
+        "check": "typecheck",
+        "exitCode": 0
+      },
+      {
+        "check": "touched-file ESLint",
+        "exitCode": 0
+      },
+      {
+        "check": "source publication privacy",
+        "exitCode": 0
+      }
+    ],
+    "baselineRegression": {
+      "method": "Run the new fake-socket and engine probes with production modules restored to the pre-fix revision in the isolated remote checkout, then restore the final modules and run all three focused files.",
+      "observations": [
+        {
+          "probe": "hosted",
+          "exitCode": 1,
+          "expectedExitCode": 1,
+          "failedAssertions": [
+            "hosted submission refuses explicit default tiers before authentication or remote I/O",
+            "failed turns retain only sanitized messages and recognized cause codes: Codex Cloud turn failed (environment_setup_failed): Environment setup failed: missing dependency"
+          ]
+        },
+        {
+          "probe": "engine",
+          "exitCode": 1,
+          "expectedExitCode": 1,
+          "failedAssertions": [
+            "a newly created cloud stage with an explicit default tier fails before submission",
+            "cloud role tier preferences visibly fall back to the provider default"
+          ]
+        }
+      ]
+    },
+    "importers": {
+      "selection": "Resolved direct imports of the three changed modules and engine.fixture consumers, plus seven conservative candidates.",
+      "selectedCount": 107,
+      "completedCount": 107,
+      "exitCode": 0,
+      "files": [
+        "src/app/api/pipelines/[id]/route.lifecycle.test.ts",
+        "src/app/api/pipelines/route.admission.test.ts",
+        "src/app/api/pipelines/route.busy.test.ts",
+        "src/components/BranchPane.spawn.dom.test.tsx",
+        "src/lib/attention/landing.test.ts",
+        "src/lib/delivery.test.ts",
+        "src/lib/flows/commands.durable.test.ts",
+        "src/lib/flows/commands.set-roles.test.ts",
+        "src/lib/flows/decisions.test.ts",
+        "src/lib/flows/engine.test.ts",
+        "src/lib/flows/relayResumeAccount.test.ts",
+        "src/lib/flows/retirement.test.ts",
+        "src/lib/forge/autoMergeStore.test.ts",
+        "src/lib/lifecycle/projector.test.ts",
+        "src/lib/mcp/inputLimits.test.ts",
+        "src/lib/mcp/pipelineBusyAdmission.test.ts",
+        "src/lib/mcp/pipelineRoleFence.test.ts",
+        "src/lib/mcp/retryStageLaunch.integration.test.ts",
+        "src/lib/memory/roleLane.test.ts",
+        "src/lib/orchestrator/seatProjectIdentity.test.ts",
+        "src/lib/pipelines/adoptionHistory.test.ts",
+        "src/lib/pipelines/autoRefreshStore.test.ts",
+        "src/lib/pipelines/backgroundTaskSettlement.test.ts",
+        "src/lib/pipelines/cloudHostedClient.test.ts",
+        "src/lib/pipelines/cloudStage.test.ts",
+        "src/lib/pipelines/controllerLease.reproduction.test.ts",
+        "src/lib/pipelines/decisionAuthority.test.ts",
+        "src/lib/pipelines/deputyLineage.test.ts",
+        "src/lib/pipelines/engine.accountGuard.test.ts",
+        "src/lib/pipelines/engine.activation.test.ts",
+        "src/lib/pipelines/engine.cloud.test.ts",
+        "src/lib/pipelines/engine.containment.test.ts",
+        "src/lib/pipelines/engine.controllerPass.test.ts",
+        "src/lib/pipelines/engine.controllerSnapshot.test.ts",
+        "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+        "src/lib/pipelines/engine.cpuQueue.test.ts",
+        "src/lib/pipelines/engine.creation.test.ts",
+        "src/lib/pipelines/engine.fencedMessage.test.ts",
+        "src/lib/pipelines/engine.pauseMetadata.test.ts",
+        "src/lib/pipelines/engine.ports.part2.test.ts",
+        "src/lib/pipelines/engine.ports.part3.test.ts",
+        "src/lib/pipelines/engine.ports.test.ts",
+        "src/lib/pipelines/engine.providerBudget.test.ts",
+        "src/lib/pipelines/engine.providerBudgetChains.part3.test.ts",
+        "src/lib/pipelines/engine.providerBudgetKinds.test.ts",
+        "src/lib/pipelines/engine.providerChains.part2.test.ts",
+        "src/lib/pipelines/engine.providerChains.test.ts",
+        "src/lib/pipelines/engine.providerReset.part2.test.ts",
+        "src/lib/pipelines/engine.providerReset.part3.test.ts",
+        "src/lib/pipelines/engine.providerReset.test.ts",
+        "src/lib/pipelines/engine.providerSignals.test.ts",
+        "src/lib/pipelines/engine.provisioning.test.ts",
+        "src/lib/pipelines/engine.publication.test.ts",
+        "src/lib/pipelines/engine.recoveredPending.test.ts",
+        "src/lib/pipelines/engine.recovery.part2.test.ts",
+        "src/lib/pipelines/engine.recovery.test.ts",
+        "src/lib/pipelines/engine.recoveryAdmission.part2.test.ts",
+        "src/lib/pipelines/engine.recoveryAdmission.test.ts",
+        "src/lib/pipelines/engine.recoveryAuthority.part2.test.ts",
+        "src/lib/pipelines/engine.recoveryAuthority.test.ts",
+        "src/lib/pipelines/engine.rolePrivacy.test.ts",
+        "src/lib/pipelines/engine.routing.test.ts",
+        "src/lib/pipelines/engine.settlement.test.ts",
+        "src/lib/pipelines/engine.spawnSilence.test.ts",
+        "src/lib/pipelines/engine.succession.part2.test.ts",
+        "src/lib/pipelines/engine.succession.part3.test.ts",
+        "src/lib/pipelines/engine.succession.test.ts",
+        "src/lib/pipelines/engine.watchdogRegression.test.ts",
+        "src/lib/pipelines/engineConnectionRefusal.test.ts",
+        "src/lib/pipelines/git.test.ts",
+        "src/lib/pipelines/graphEdits.test.ts",
+        "src/lib/pipelines/handLaunch.test.ts",
+        "src/lib/pipelines/legacyReviewConversion.test.ts",
+        "src/lib/pipelines/materializationHistory.test.ts",
+        "src/lib/pipelines/parkedPublication.test.ts",
+        "src/lib/pipelines/publicationRecovery.test.ts",
+        "src/lib/pipelines/remoteActions.test.ts",
+        "src/lib/pipelines/repositoryInitialization.test.ts",
+        "src/lib/pipelines/resolveDecision.test.ts",
+        "src/lib/pipelines/runtimeReads.test.ts",
+        "src/lib/pipelines/runtimeSwitch.test.ts",
+        "src/lib/pipelines/severedStageRetry.test.ts",
+        "src/lib/pipelines/severedTurnResume.test.ts",
+        "src/lib/pipelines/spawnRestartRecovery.test.ts",
+        "src/lib/pipelines/stageAccountBinding.test.ts",
+        "src/lib/pipelines/stageCommitRepair.test.ts",
+        "src/lib/pipelines/stageCompletion.test.ts",
+        "src/lib/pipelines/stageHostGenerationClose.integration.test.ts",
+        "src/lib/pipelines/stageHostLiveness.test.ts",
+        "src/lib/pipelines/stageHostTeardown.test.ts",
+        "src/lib/pipelines/stagePublicationRepair.test.ts",
+        "src/lib/pipelines/stagePullRequest.test.ts",
+        "src/lib/pipelines/stageSizing.test.ts",
+        "src/lib/pipelines/stageVerdictRequest.test.ts",
+        "src/lib/pipelines/taskBinding.test.ts",
+        "src/lib/pipelines/terminalReap.test.ts",
+        "src/lib/projects/succession.test.ts",
+        "src/lib/release/stages.test.ts",
+        "src/lib/runtime/codexSubagentDetection.test.ts",
+        "src/lib/runtime/nativeQueueHost.integration.test.ts",
+        "src/lib/runtime/pipelineStageHostAccess.integration.test.ts",
+        "src/lib/runtime/releaseInterruption.test.ts",
+        "src/lib/runtime/structuredDeliveryQueue.test.ts",
+        "src/lib/scanner/taskExtractionRetirement.test.ts",
+        "src/lib/workflows/engine.contention.test.ts",
+        "src/lib/workflows/engine.cpuAdmission.test.ts",
+        "src/lib/workflows/engine.test.ts"
+      ],
+      "comparisonCounts": {
+        "introduced": 0,
+        "preexisting": 164,
+        "fixed": 0,
+        "absent": 0,
+        "flaky": 6
+      },
+      "baselineFailuresByFile": {
+        "src/app/api/pipelines/route.busy.test.ts": 1,
+        "src/components/BranchPane.spawn.dom.test.tsx": 1,
+        "src/lib/flows/relayResumeAccount.test.ts": 8,
+        "src/lib/lifecycle/projector.test.ts": 1,
+        "src/lib/mcp/pipelineBusyAdmission.test.ts": 1,
+        "src/lib/mcp/pipelineRoleFence.test.ts": 1,
+        "src/lib/mcp/retryStageLaunch.integration.test.ts": 4,
+        "src/lib/memory/roleLane.test.ts": 1,
+        "src/lib/pipelines/backgroundTaskSettlement.test.ts": 6,
+        "src/lib/pipelines/engine.activation.test.ts": 1,
+        "src/lib/pipelines/engine.controllerPass.test.ts": 1,
+        "src/lib/pipelines/engine.routing.test.ts": 2,
+        "src/lib/pipelines/engineConnectionRefusal.test.ts": 4,
+        "src/lib/pipelines/git.test.ts": 1,
+        "src/lib/pipelines/remoteActions.test.ts": 42,
+        "src/lib/pipelines/severedStageRetry.test.ts": 2,
+        "src/lib/pipelines/severedTurnResume.test.ts": 10,
+        "src/lib/pipelines/stageCommitRepair.test.ts": 18,
+        "src/lib/pipelines/stageCompletion.test.ts": 25,
+        "src/lib/pipelines/stageHostGenerationClose.integration.test.ts": 13,
+        "src/lib/pipelines/stageHostTeardown.test.ts": 6,
+        "src/lib/pipelines/stagePublicationRepair.test.ts": 3,
+        "src/lib/pipelines/stageSizing.test.ts": 9,
+        "src/lib/pipelines/stageVerdictRequest.test.ts": 1,
+        "src/lib/projects/succession.test.ts": 2
+      },
+      "filteredRerunCandidates": [
+        {
+          "path": "src/lib/pipelines/engine.activation.test.ts",
+          "test": "a completed two-stage pipeline reaps its final stage host too (#1728)",
+          "base": {
+            "pass": 2,
+            "fail": 0
+          },
+          "head": {
+            "pass": 1,
+            "fail": 1
+          }
+        },
+        {
+          "path": "src/lib/pipelines/engine.activation.test.ts",
+          "test": "a settled attempt with an idle CLI in its pane does not block the close (#670)",
+          "base": {
+            "pass": 2,
+            "fail": 0
+          },
+          "head": {
+            "pass": 1,
+            "fail": 1
+          }
+        },
+        {
+          "path": "src/lib/pipelines/engine.activation.test.ts",
+          "test": "a re-hosted Codex continuation settles once and activates the next stage exactly once (#1589)",
+          "base": {
+            "pass": 2,
+            "fail": 0
+          },
+          "head": {
+            "pass": 1,
+            "fail": 1
+          }
+        },
+        {
+          "path": "src/lib/pipelines/engine.activation.test.ts",
+          "test": "a Claude session limit preserves dirty work, stage identity and review rounds through controller recovery",
+          "base": {
+            "pass": 2,
+            "fail": 0
+          },
+          "head": {
+            "pass": 1,
+            "fail": 1
+          }
+        },
+        {
+          "path": "src/lib/pipelines/engine.activation.test.ts",
+          "test": "a recorded Claude limit launches a fresh target registry conversation and settles there",
+          "base": {
+            "pass": 2,
+            "fail": 0
+          },
+          "head": {
+            "pass": 1,
+            "fail": 1
+          }
+        },
+        {
+          "path": "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+          "test": "expired pipeline heads start in FIFO with real spacing while their predecessor's commit hook waits",
+          "base": {
+            "pass": 2,
+            "fail": 0
+          },
+          "head": {
+            "pass": 1,
+            "fail": 1
+          }
+        }
+      ]
+    },
+    "wholeFileActivation": {
+      "path": "src/lib/pipelines/engine.activation.test.ts",
+      "method": "Three whole-file runs on each side, fresh isolated roots and JUnit reports.",
+      "sameOutcomes": true,
+      "observations": [
+        {
+          "side": "base",
+          "round": 1,
+          "pass": 47,
+          "failures": [
+            "an internal terminal pass an older build left waiting on publication closes without the network (#1692)",
+            "a completed two-stage pipeline reaps its final stage host too (#1728)",
+            "a settled attempt with an idle CLI in its pane does not block the close (#670)",
+            "a re-hosted Codex continuation settles once and activates the next stage exactly once (#1589)",
+            "a Claude session limit preserves dirty work, stage identity and review rounds through controller recovery",
+            "a recorded Claude limit launches a fresh target registry conversation and settles there"
+          ]
+        },
+        {
+          "side": "base",
+          "round": 2,
+          "pass": 47,
+          "failures": [
+            "an internal terminal pass an older build left waiting on publication closes without the network (#1692)",
+            "a completed two-stage pipeline reaps its final stage host too (#1728)",
+            "a settled attempt with an idle CLI in its pane does not block the close (#670)",
+            "a re-hosted Codex continuation settles once and activates the next stage exactly once (#1589)",
+            "a Claude session limit preserves dirty work, stage identity and review rounds through controller recovery",
+            "a recorded Claude limit launches a fresh target registry conversation and settles there"
+          ]
+        },
+        {
+          "side": "base",
+          "round": 3,
+          "pass": 47,
+          "failures": [
+            "an internal terminal pass an older build left waiting on publication closes without the network (#1692)",
+            "a completed two-stage pipeline reaps its final stage host too (#1728)",
+            "a settled attempt with an idle CLI in its pane does not block the close (#670)",
+            "a re-hosted Codex continuation settles once and activates the next stage exactly once (#1589)",
+            "a Claude session limit preserves dirty work, stage identity and review rounds through controller recovery",
+            "a recorded Claude limit launches a fresh target registry conversation and settles there"
+          ]
+        },
+        {
+          "side": "head",
+          "round": 1,
+          "pass": 47,
+          "failures": [
+            "an internal terminal pass an older build left waiting on publication closes without the network (#1692)",
+            "a completed two-stage pipeline reaps its final stage host too (#1728)",
+            "a settled attempt with an idle CLI in its pane does not block the close (#670)",
+            "a re-hosted Codex continuation settles once and activates the next stage exactly once (#1589)",
+            "a Claude session limit preserves dirty work, stage identity and review rounds through controller recovery",
+            "a recorded Claude limit launches a fresh target registry conversation and settles there"
+          ]
+        },
+        {
+          "side": "head",
+          "round": 2,
+          "pass": 47,
+          "failures": [
+            "an internal terminal pass an older build left waiting on publication closes without the network (#1692)",
+            "a completed two-stage pipeline reaps its final stage host too (#1728)",
+            "a settled attempt with an idle CLI in its pane does not block the close (#670)",
+            "a re-hosted Codex continuation settles once and activates the next stage exactly once (#1589)",
+            "a Claude session limit preserves dirty work, stage identity and review rounds through controller recovery",
+            "a recorded Claude limit launches a fresh target registry conversation and settles there"
+          ]
+        },
+        {
+          "side": "head",
+          "round": 3,
+          "pass": 47,
+          "failures": [
+            "an internal terminal pass an older build left waiting on publication closes without the network (#1692)",
+            "a completed two-stage pipeline reaps its final stage host too (#1728)",
+            "a settled attempt with an idle CLI in its pane does not block the close (#670)",
+            "a re-hosted Codex continuation settles once and activates the next stage exactly once (#1589)",
+            "a Claude session limit preserves dirty work, stage identity and review rounds through controller recovery",
+            "a recorded Claude limit launches a fresh target registry conversation and settles there"
+          ]
+        }
+      ],
+      "conclusion": "All six runs have the same six failed assertions. Five filtered-rerun candidates are pre-existing whole-file ordering leakage."
+    },
+    "wholeFileCpu": {
+      "path": "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+      "method": "Three alternating full-file head/base repetitions with fresh isolated roots and JUnit reports. The base is a disposable detached Git clone at the captured revision with matching origin, test file and dependency inputs.",
+      "observations": [
+        {
+          "side": "head",
+          "round": 1,
+          "exitCode": 0,
+          "pass": 15,
+          "failures": []
+        },
+        {
+          "side": "base",
+          "round": 1,
+          "exitCode": 0,
+          "pass": 15,
+          "failures": []
+        },
+        {
+          "side": "head",
+          "round": 2,
+          "exitCode": 0,
+          "pass": 15,
+          "failures": []
+        },
+        {
+          "side": "base",
+          "round": 2,
+          "exitCode": 1,
+          "pass": 14,
+          "failures": [
+            "expired pipeline heads start in FIFO with real spacing while their predecessor's commit hook waits"
+          ]
+        },
+        {
+          "side": "head",
+          "round": 3,
+          "exitCode": 0,
+          "pass": 15,
+          "failures": []
+        },
+        {
+          "side": "base",
+          "round": 3,
+          "exitCode": 0,
+          "pass": 15,
+          "failures": []
+        }
+      ],
+      "conclusion": "All three head repetitions pass 15 tests. The same candidate assertion fails in one of the three base repetitions, confirming pre-existing intermittency."
+    },
+    "notes": [
+      "The comparator reports 164 pre-existing failures and six filtered-rerun candidates. Five candidates reproduce as identical whole-file ordering failures on both sides; the remaining CPU assertion also fails on the base in a whole-file repetition. No new failure remains.",
+      "No live cloud task was launched. Local runtime branches, workflows and dependencies are unchanged."
+    ]
+  }
 }

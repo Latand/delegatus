@@ -81,6 +81,15 @@ test("hosted launch pins model, effort, permissions, ASB configuration and publi
   expect(f.sockets.every(socket => socket.readyState === 3)).toBe(true);
 });
 
+test.each(["default", "priority", "ultrafast"])("hosted submission refuses explicit %s tiers before authentication or remote I/O", async serviceTier => {
+  const f = fixture();
+  await expect(f.client.submit({ ...f.input, serviceTier })).rejects.toThrow("service tier unsupported");
+  expect(f.authCalls()).toBe(0);
+  expect(f.sockets).toHaveLength(0);
+  expect(f.fetches).toHaveLength(0);
+  expect(f.frames).toHaveLength(0);
+});
+
 test.each(["model", "environment", "head", "rpc", "disconnect"])("launch refuses %s mismatch without starting work or replaying a mutation", async failure => {
   const f = fixture();
   f.respond((frame, socket) => {
@@ -116,6 +125,63 @@ test.each(["inProgress", "failed", "interrupted", "unknown"])("status maps %s an
   const f = fixture(); f.respond((frame, socket) => frame.method === "thread/turns/list" ? { data: [{ ...turn, status }] } : f.original(frame, socket));
   if (status === "unknown") await expect(f.client.poll(f.access)).rejects.toThrow("turn status unknown");
   else expect((await f.client.poll(f.access)).state).toBe(status === "inProgress" ? "pending" : "failed");
+});
+
+test.each([
+  { error: { message: "Environment setup failed: missing dependency", code: "environment_setup_failed" },
+    diagnostic: "Codex Cloud turn failed (environment_setup_failed): Environment setup failed: missing dependency" },
+  { error: { message: "Provider connection failed", codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 503, body: "fixture-auth" } }, additionalDetails: "fixture-auth" },
+    diagnostic: "Codex Cloud turn failed (httpConnectionFailed): Provider connection failed" },
+  { error: { message: "Quota exhausted", codexErrorInfo: "usageLimitExceeded" }, diagnostic: "Codex Cloud turn failed (usageLimitExceeded): Quota exhausted" },
+  { error: { message: "Setup unavailable", code: "fixture-auth", payload: "fixture-auth" }, diagnostic: "Codex Cloud turn failed: Setup unavailable" },
+  { error: { message: { headers: "fixture-auth" }, code: { payload: "fixture-auth" } }, diagnostic: "Codex Cloud turn failed" },
+  { error: ["fixture-auth"], diagnostic: "Codex Cloud turn failed" },
+  { error: "fixture-auth", diagnostic: "Codex Cloud turn failed" },
+  { error: { message: JSON.stringify({ headers: "fixture-auth" }) }, diagnostic: "Codex Cloud turn failed" },
+])("failed turns retain only sanitized messages and recognized cause codes: $diagnostic", async ({ error, diagnostic }) => {
+  const f = fixture();
+  f.respond((frame, socket) => frame.method === "thread/turns/list" ? { data: [{ ...turn, status: "failed", error }] } : f.original(frame, socket));
+  expect(await f.client.poll(f.access)).toEqual({ state: "failed", error: diagnostic, model });
+});
+
+test("cloud failure messages redact credentials and raw payload fields before bounding the diagnostic", async () => {
+  const f = fixture();
+  const secrets = ["fixture-auth", "fixture-routing", "header-credential", "cookie-credential", "quoted-credential", "url-credential", "inline-credential"];
+  const authorization = ["Author", "ization"].join("");
+  const bearer = ["Bear", "er"].join("");
+  const apiKey = ["api", "key"].join("_");
+  const message = ["Environment setup failed: missing dependency; fixture-auth fixture-routing",
+    `${authorization}: ${bearer} ${secrets[2]}`, "Cookie: session=cookie-credential",
+    `Configuration ${JSON.stringify({ [apiKey]: secrets[4] + '"escaped-tail' })}`, `Provider refused ${authorization}: ${bearer} ${secrets[6]}`,
+    "See https://example.com/setup?key=url-credential", "x".repeat(3000), "fixture-auth"].join("\n");
+  f.respond((frame, socket) => frame.method === "thread/turns/list" ? { data: [{ ...turn, status: "failed",
+    error: { message, code: "environment_setup_failed", additionalDetails: "raw-payload", cause: { headers: "raw-payload" } } }] } : f.original(frame, socket));
+  const result = await f.client.poll(f.access);
+  expect(result.state).toBe("failed");
+  if (result.state !== "failed") throw new Error("expected failure");
+  expect(result.error).toStartWith("Codex Cloud turn failed (environment_setup_failed): Environment setup failed: missing dependency;");
+  expect(result.error).toContain("[redacted]");
+  expect(result.error).toEndWith("…");
+  expect(result.error.length).toBeLessThan(1600);
+  expect(result.error).not.toMatch(/[\r\n]/);
+  for (const secret of [...secrets, "escaped-tail", "raw-payload"]) expect(result.error).not.toContain(secret);
+});
+
+test.each([false, 0, ""])("a completed turn with a non-null malformed error fails safely: %j", async error => {
+  const f = fixture();
+  f.respond((frame, socket) => frame.method === "thread/turns/list" ? { data: [{ ...turn, error }] } : f.original(frame, socket));
+  expect(await f.client.poll(f.access)).toEqual({ state: "failed", error: "Codex Cloud turn failed", model });
+  await expect(f.client.readFinalMessage(f.access)).rejects.toThrow("turn is not completed");
+  await expect(f.client.readDiff(f.access)).rejects.toThrow("turn is not completed");
+});
+
+test.each(["readFinalMessage", "readDiff"] as const)("%s refuses a failed turn without emitting its credential-bearing payload", async method => {
+  const f = fixture();
+  f.respond((frame, socket) => frame.method === "thread/turns/list" ? { data: [{ ...turn, status: "failed", error: { message: "fixture-auth", additionalDetails: "raw-payload" } }] } : f.original(frame, socket));
+  const error = await f.client[method](f.access).then(() => "unexpected success", error => error.message);
+  expect(error).toBe("Codex Cloud turn is not completed");
+  expect(error).not.toContain("fixture-auth");
+  expect(error).not.toContain("raw-payload");
 });
 
 test.each(["model", "thread", "environment", "turn", "rerouted", "missing"])("status fails closed for %s", async failure => {

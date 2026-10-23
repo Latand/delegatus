@@ -1,5 +1,5 @@
 import type { AccountContext } from "@/lib/accounts/contracts";
-import type { PipelineStage } from "./types";
+import type { EffectivePipelineRole, PipelineStage } from "./types";
 import { stageVerdictFrom, type ParsedStageVerdict, type RejectedStageVerdict } from "./verdict";
 
 export const CLOUD_STAGE_TIMEOUT_MS = 30 * 60_000;
@@ -48,7 +48,7 @@ export type CloudTaskAccess = {
 export interface CloudStageClient {
   supportsModel(model: string, reasoningEffort: string | null): boolean;
   submit(input: { environmentId: string; branch: string; headSha: string; prompt: string; model: string;
-    reasoningEffort: string | null; allowProviderModelFallback: false; account: AccountContext; signal: AbortSignal;
+    reasoningEffort: string | null; serviceTier?: string | null; allowProviderModelFallback: false; account: AccountContext; signal: AbortSignal;
     assertCurrent: () => void }): Promise<{ taskId: string; taskUrl: string; thread?: CloudThreadReference }>;
   poll(input: CloudTaskAccess): Promise<CloudTaskObservation>;
   readFinalMessage(input: CloudTaskAccess): Promise<{ message: string; model: string }>;
@@ -113,6 +113,13 @@ export function cloudStageConfigurationError(stage: Pick<PipelineStage, "runtime
     return "codex-cloud requires an explicit stage model matching the bound role model";
   }
   return null;
+}
+
+/** Execution admission stays separate from durable shape validation, so a
+ * stage saved by an older release can still be read and failed normally. */
+export function cloudServiceTierError(role: Pick<EffectivePipelineRole, "serviceTier" | "serviceTierSource">): string | null {
+  return role.serviceTier && role.serviceTierSource !== "role-default"
+    ? "codex-cloud cannot honour an explicit service tier; remove the tier requirement to use this runtime" : null;
 }
 
 export function cloudTransportError(client: CloudStageClient | undefined, model: string, reasoningEffort: string | null): string | null {

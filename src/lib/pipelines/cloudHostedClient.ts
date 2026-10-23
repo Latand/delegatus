@@ -6,6 +6,7 @@ import { codexAccountBinary } from "@/lib/accounts/codexAppServer";
 import { signalDetachedProcessGroup } from "@/lib/processGroup";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import type { AccountContext } from "@/lib/accounts/contracts";
+import { redactBounded } from "@/lib/monitor/redact";
 import { validCloudThreadReference, type CloudStageClient, type CloudTaskAccess } from "./cloudStage";
 
 // Desktop app protocol, verified against the hosted service; not a public API.
@@ -23,6 +24,37 @@ export type HostedCloudDependencies = {
   uuid: () => string;
 };
 const row = (value: unknown): Row => value && typeof value === "object" && !Array.isArray(value) ? value as Row : {};
+
+/** Only known cause names cross the transport boundary. Nested error payloads
+ * can contain headers and provider bodies, so never serialize them. */
+const FAILURE_CODES = new Set(["environment_setup_failed", "setup_failed", "provider_error", "provider_failed",
+  "rate_limit_exceeded", "contextWindowExceeded", "usageLimitExceeded", "serverOverloaded", "httpConnectionFailed",
+  "httpResponseStreamError", "responseStreamConnectionFailed", "responseStreamDisconnected", "responseTooManyFailedAttempts",
+  "internalServerError", "unauthorized", "badRequest", "sandboxError", "other"]);
+function turnFailure(value: unknown, auth: Auth): string {
+  const error = row(value);
+  const scrub = (value: string) => {
+    let clean = value;
+    for (const secret of [auth.token, auth.account]) if (secret) {
+      for (const form of new Set([secret, encodeURIComponent(secret), JSON.stringify(secret).slice(1, -1)])) {
+        clean = clean.replaceAll(form, "[redacted]");
+      }
+    }
+    // Drop URLs and quoted credential assignments as well as the shared
+    // redactor's token families, known provider secrets and header values.
+    clean = clean.replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9+/._=-]+/gi, "[redacted]")
+      .replace(/https?:\/\/[^\s<>"']+/gi, "[redacted-url]")
+      .replace(/(["']?[\w.-]*(?:api[_-]?key|token|authorization|cookie|secret|password|passwd|pwd)["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[^\s,;}]+)/gi, "$1[redacted]");
+    return redactBounded(clean, 1500).replace(/\p{Cc}+/gu, " ").trim();
+  };
+  const info = error.codexErrorInfo;
+  const candidates = [error.code, typeof info === "string" ? info : Object.keys(row(info)).length === 1 ? Object.keys(row(info))[0] : undefined];
+  const code = candidates.find((code): code is string => typeof code === "string" && FAILURE_CODES.has(code) && scrub(code) === code);
+  // An opaque JSON body is not a diagnostic message. Unknown shapes fall back
+  // to the stable failure, without coercing or stringifying the payload.
+  const message = typeof error.message === "string" && !/^\s*[{[]/.test(error.message) ? scrub(error.message) : "";
+  return `Codex Cloud turn failed${code ? ` (${code})` : ""}${message ? `: ${message}` : ""}`;
+}
 function requireCloud(ok: unknown, code: string): asserts ok {
   if (!ok) throw new Error(`Codex Cloud ${code}`);
 }
@@ -263,7 +295,9 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
   }
   return {
     supportsModel: (model, effort) => model === MODEL && (effort === null || ["none", "minimal", "low", "medium", "high", "xhigh"].includes(effort)),
-    submit: input => using(input, async (client, auth, scope) => {
+    submit: input => {
+      if (input.serviceTier != null) return Promise.reject(new Error("Codex Cloud explicit service tier unsupported"));
+      return using(input, async (client, auth, scope) => {
       requireCloud(input.model === MODEL && input.allowProviderModelFallback === false, "explicit model unsupported");
       requireCloud(/^(?:[A-Za-z0-9_-]+~)?asenvcfg_[A-Za-z0-9_-]+$/.test(input.environmentId), "environment must be an ASB configuration");
       requireCloud(/^[a-f0-9]{40}$/i.test(input.headSha) && Buffer.byteLength(input.prompt) <= 1024 * 1024, "submission input invalid");
@@ -325,17 +359,20 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
       requireCloud(/^[A-Za-z0-9_-]{1,160}$/.test(turnId), "accepted turn invalid");
       return { taskId: threadId, taskUrl: `codex://threads/${threadId}?hostId=durable`,
         thread: { threadId, turnId, hosted: { environmentId: String(environment.environmentId), cwd, model: input.model } } };
-    }, true),
-    poll: input => using(input, async client => {
+      }, true);
+    },
+    poll: input => using(input, async (client, auth) => {
       const { turn, model } = await status(client, input);
-      if (turn.status === "completed" && !turn.error) return { state: "completed", model };
-      if (turn.error || ["failed", "interrupted"].includes(String(turn.status))) return { state: "failed", error: `Codex Cloud turn ${turn.error ? "failed" : turn.status}`, model };
+      const hasError = turn.error != null;
+      if (turn.status === "completed" && !hasError) return { state: "completed", model };
+      if (hasError || ["failed", "interrupted"].includes(String(turn.status))) return { state: "failed",
+        error: hasError ? turnFailure(turn.error, auth) : `Codex Cloud turn ${turn.status}`, model };
       requireCloud(turn.status === "inProgress", "turn status unknown");
       return { state: "pending", model };
     }),
     readFinalMessage: input => using(input, async (client, auth) => {
       const { threadId, turn, model, environment } = await status(client, input);
-      requireCloud(turn.status === "completed" && !turn.error, "turn is not completed");
+      requireCloud(turn.status === "completed" && turn.error == null, "turn is not completed");
       const head = await command(client, environment, `git rev-parse HEAD`);
       requireCloud(head.trim() === input.headSha, "reviewed head changed");
       let cursor: unknown, message = "", size = 0;
@@ -359,7 +396,7 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
     // transport consumer; no staging, follow-up model turn or patch application.
     readDiff: input => using(input, async (client, auth) => {
       const { turn, environment } = await status(client, input);
-      requireCloud(turn.status === "completed" && !turn.error, "turn is not completed");
+      requireCloud(turn.status === "completed" && turn.error == null, "turn is not completed");
       const snapshot = `delegatus-review-${input.thread!.turnId}.patch`;
       const script = `import hashlib,json,pathlib,subprocess\np=pathlib.Path(subprocess.check_output(['git','rev-parse','--absolute-git-dir']).decode().strip())/${JSON.stringify(snapshot)}\nwith p.open('wb') as f: subprocess.run(['git','diff','--binary','--full-index','--no-ext-diff','--no-textconv',${JSON.stringify(input.headSha)},'--'],stdout=f,check=True)\nb=p.read_bytes()\nassert len(b)<=16777216\nprint(json.dumps({'bytes':len(b),'sha256':hashlib.sha256(b).hexdigest()}))`;
       const manifest = row(JSON.parse(await command(client, environment, `python3 -c ${shell(script)}`)));
