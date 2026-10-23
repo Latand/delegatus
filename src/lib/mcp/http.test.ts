@@ -315,12 +315,14 @@ test("local MCP access never substitutes for current launch identity or native p
 // Native discovery uses no provider credentials or model turn. The process
 // receives the terminal command's global flags, with app-server as its probe
 // subcommand, so Codex itself opens the configured connector and lists tools.
-for (const mode of ["fresh", "resume", "denied"] as const) test.skipIf(originalEnv.LLV_NATIVE_CODEX_TEST !== "1")(`native ${mode} terminal verifies Viewer access after HTTP registration removal`, async () => {
+for (const mode of ["fresh", "resume", "denied", "keyed"] as const) test.skipIf(originalEnv.LLV_NATIVE_CODEX_TEST !== "1")(`native ${mode} terminal verifies Viewer access after HTTP registration removal`, async () => {
   const { freshSpecFor, prepareAgentPublicationSpec, resumeSpecForSession, withSpawnCapability } = await import("@/lib/agent/cli");
   const { setCodexFeatureReaderForTest } = await import("@/lib/agent/codexSpawnPolicy");
   const restoreFeatures = setCodexFeatureReaderForTest(undefined);
   const previousBinary = process.env.LLV_CODEX_BINARY;
   const previousPath = process.env.PATH;
+  const previousToken = process.env.LLV_TOKEN;
+  const previousPort = process.env.LLV_VIEWER_PORT;
   const requestedBinary = originalEnv.LLV_CODEX_BINARY?.trim() || "codex";
   const selectedBinary = path.isAbsolute(requestedBinary) || requestedBinary.includes(path.sep)
     ? path.resolve(requestedBinary)
@@ -362,6 +364,10 @@ for (const mode of ["fresh", "resume", "denied"] as const) test.skipIf(originalE
     '[mcp_servers.ungranted]', 'command="fixture-must-never-start"',
   ].join("\n"));
   try {
+    if (mode === "keyed") {
+      process.env.LLV_TOKEN = crypto.randomBytes(32).toString("base64url");
+      process.env.LLV_VIEWER_PORT = String(port);
+    }
     const installer = Bun.spawn([Bun.which("bash")!, "scripts/install-mcp.sh"], {
       env: { HOME: root, CODEX_HOME: home, PATH: tools, LLV_CONFIG_ROOT: configRoot,
         LLV_MCP_BIN: path.join(process.cwd(), "bin/mcp-server.mjs"), LLV_MCP_TRANSPORT: "http" },
@@ -382,8 +388,10 @@ for (const mode of ["fresh", "resume", "denied"] as const) test.skipIf(originalE
     nativeMcpRequests.length = 0;
     const admitted = withSpawnCapability(prepared, capability, { ...process.env, LLV_MCP_TRANSPORT: "http", DELEGATUS_MCP_TRANSPORT: undefined, LLV_MCP_HTTP_URL: `${origin}/api/mcp` });
     const command = admitted.command.replace(prepared.codexPublication!.subcommand ?? /(?= \) \)$)/, " app-server");
+    const childEnv: NodeJS.ProcessEnv = { ...process.env, HOME: root, CODEX_HOME: home };
+    delete childEnv.LLV_TOKEN;
     const child = ownFixtureChild(Bun.spawn(["sh", "-c", command], {
-      cwd: root, env: { ...process.env, HOME: root, CODEX_HOME: home }, stdin: "pipe", stdout: "pipe", stderr: "pipe",
+      cwd: root, env: childEnv, stdin: "pipe", stdout: "pipe", stderr: "pipe",
     }));
     const stderr = new Response(child.stderr).text();
     // Bun and Node declare distinct Web Stream types for the same adapter.
@@ -431,6 +439,8 @@ for (const mode of ["fresh", "resume", "denied"] as const) test.skipIf(originalE
     restoreFeatures();
     if (previousBinary === undefined) delete process.env.LLV_CODEX_BINARY; else process.env.LLV_CODEX_BINARY = previousBinary;
     if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
+    if (previousToken === undefined) delete process.env.LLV_TOKEN; else process.env.LLV_TOKEN = previousToken;
+    if (previousPort === undefined) delete process.env.LLV_VIEWER_PORT; else process.env.LLV_VIEWER_PORT = previousPort;
   }
 });
 

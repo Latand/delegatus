@@ -21,8 +21,12 @@ and every tool keeps its own authorization policy. A credential alone cannot
 call tools. Authentication failure never returns a credential or sets a cookie.
 
 Claude and Copilot receive the credential in their private generated config
-files. Structured Codex receives it through its thread configuration. Existing
-Codex stdio registrations retain their transport. An HTTP override pointing at
+files. Structured Codex receives it through its thread configuration. Terminal
+Codex keeps HTTP opt-in and references the credential by environment name. Its
+launch command reads an owner-only file, scoped to the account and endpoint;
+the file is atomically replaced on key rotation. Neither the key nor the MCP
+credential appears in the command. The account configuration stays unchanged.
+Existing Codex stdio registrations retain their transport. An HTTP override pointing at
 another local service receives no credential and retains the stdio fallback.
 
 The request path adds a bounded HMAC and header checks. No performance gain is
@@ -40,6 +44,7 @@ gate-remote -- bun run test src/proxy.test.ts
 gate-remote -- bun run test src/proxy.host.test.ts
 gate-remote -- bun run test src/proxy.team.test.ts
 gate-remote -- bun run test src/lib/agent/spawnPolicy.test.ts
+gate-remote -- bun run test src/lib/agent/cli.mcp.test.ts
 gate-remote -- bun run test src/lib/codexHeadlessConfig.test.ts
 gate-remote -- bun run test src/lib/runtime/copilotAcpHost.test.ts
 ```
@@ -52,3 +57,5 @@ unrelated routes and methods, malformed native proofs, missing and rotated
 capabilities, and key rotation. Separate processes verify that a Viewer restart
 does not lose the credential. Team cases verify that the credential cannot
 bypass member or agent identity checks.
+The native terminal cases in the HTTP suite also cover keyed discovery when
+`LLV_NATIVE_CODEX_TEST=1` is set, using Codex itself without a model request.
