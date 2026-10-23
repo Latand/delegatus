@@ -1,3 +1,4 @@
+import { isolateWorktreeDependencies, prepareWorktreeDependencies } from "./worktreeDependencies";
 import { shortId } from "@/lib/shortIds";
 import { publicationFailurePhase } from "./publicationHistory";
 export { publicationFailurePhase } from "./publicationHistory";
@@ -7,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { realExec, type ExecPort, type ExecResult } from "@/lib/workflows/provision";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
+import { repositoryCommitIdentity } from "@/lib/git/repositoryCommitIdentity";
 import { canonicalSensitiveText } from "@/lib/privacy/canonicalText";
 import { compactSensitiveText, staticSensitiveClasses } from "@/lib/privacy/staticDetectors";
 import { mailboxPattern } from "@/lib/privacy/mailbox";
@@ -204,6 +206,14 @@ export async function provisionPipelineWorktree(pipeline: Pipeline, exec: ExecPo
   const base = (await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir));
   if (base.code !== 0 || !base.stdout.trim()) return failure("resolving the pipeline base ref", base);
   if (base.stdout.trim() !== pipeline.baseRef) return { ok: false, error: "the pipeline worktree does not match its persisted base" };
+  if (fs.existsSync(path.join(pipeline.repoDir, "package.json"))) {
+    const ignored = await exec("git", ["check-ignore", "--quiet", "node_modules/"], pipeline.worktreeDir);
+    if (ignored.code !== 0 && ignored.code !== 1) return failure("checking ignored worktree dependencies", ignored);
+    if (ignored.code === 0) {
+      try { await prepareWorktreeDependencies(pipeline); }
+      catch { return { ok: false, error: "preparing isolated worktree dependencies failed; source dependencies preserved" }; }
+    }
+  }
   return { ok: true, sha: pipeline.baseRef, baseBranch: pipeline.baseBranch };
 }
 
@@ -429,6 +439,14 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
     const unlock = await exec("git", ["worktree", "unlock", pipeline.worktreeDir], pipeline.repoDir, signal);
     if (unlock.code !== 0) return failure("unlocking the finished pipeline checkout", unlock);
   }
+  try {
+    if (fs.existsSync(path.join(pipeline.repoDir, "package.json"))) {
+      const ignored = await exec("git", ["check-ignore", "--quiet", "node_modules/"], pipeline.worktreeDir, signal);
+      if (ignored.code !== 0 && ignored.code !== 1) return failure("checking ignored worktree dependencies", ignored);
+      if (ignored.code === 0) await prepareWorktreeDependencies(pipeline, { signal });
+    }
+  }
+  catch { return { ok: false, error: "preparing isolated worktree dependencies failed; source dependencies preserved" }; }
   return { ok: true, sha: base.stdout.trim(), baseBranch: pipeline.baseBranch };
 }
 
@@ -800,9 +818,10 @@ async function commitStageTree(pipeline: Pipeline, parent: string, tree: string,
     }
   }
   const marker = `Delegatus-Stage-Settlement: ${crypto.randomUUID()}`;
+  const identity = await repositoryCommitIdentity(cwd, exec);
   await beforeCommit?.();
-  const commit = await exec("git", ["commit", ...[...messages, marker].flatMap(message => ["-m", message])], cwd,
-    pipelineLiteralGitEnv({ ...controllerCommitIdentityEnv(), ...cpuPriorityEnv(instanceCpuPrioritySource(pipeline.taskIds)) }), { timeoutMs: STAGE_COMMIT_TIMEOUT_MS });
+  const commit = await exec("git", ["commit", ...[...messages, marker, ...(identity.coauthor ? [identity.coauthor] : [])].flatMap(message => ["-m", message])], cwd,
+    pipelineLiteralGitEnv({ ...identity.env, ...cpuPriorityEnv(instanceCpuPrioritySource(pipeline.taskIds)) }), { timeoutMs: STAGE_COMMIT_TIMEOUT_MS });
   if (commit.code !== 0) {
     const current = await exec("git", ["rev-parse", "HEAD"], cwd);
     if (current.code === 0 && current.stdout.trim() !== parent) return changed();
@@ -1317,6 +1336,7 @@ export async function reconcilePipelineStageHead(pipeline: Pipeline, head: strin
   const local = (await currentPipelineBranchHead(pipeline, exec));
   if (!local.ok) return local;
   if (local.sha !== head) return { ok: false, error: "the stage head moved before history reconciliation" };
+  const repositoryIdentity = await repositoryCommitIdentity(pipeline.worktreeDir, exec);
   // Check every commit this parent would reintroduce, including an unsafe
   // ancestor behind an admitted accepted tip. Unknown identities are refused
   // conservatively; values and partial metadata reads never enter the reason.
@@ -1327,7 +1347,7 @@ export async function reconcilePipelineStageHead(pipeline: Pipeline, head: strin
     const [commit, parents, ...fields] = line.split("\0");
     if (!/^[0-9a-f]{40}$/.test(commit) || !/^(?:[0-9a-f]{40}(?: [0-9a-f]{40})*)?$/.test(parents) || fields.length !== 4) return unreadableIdentity;
     for (const offset of [0, 2]) {
-      if (!admittedPublicationIdentity(fields[offset], fields[offset + 1], offset === 0 ? "author" : "committer", parents ? parents.split(" ").length : 0)) return { ok: false,
+      if (!repositoryIdentity.coauthor && !admittedPublicationIdentity(fields[offset], fields[offset + 1], offset === 0 ? "author" : "committer", parents ? parents.split(" ").length : 0)) return { ok: false,
         error: `history reconciliation refused to restore ${commit.slice(0, 12)} ${offset === 0 ? "author" : "committer"} identity; restored commits require publication-safe attribution (values withheld)` };
     }
     // Formatting with %B truncates at NUL and transcodes declared encodings.
@@ -1340,7 +1360,7 @@ export async function reconcilePipelineStageHead(pipeline: Pipeline, head: strin
     if (messageStart < 0) return unreadableMessage;
     const encoding = /^encoding (.+)$/m.exec(bytes.subarray(0, messageStart).toString("ascii"))?.[1];
     if (encoding && !/^utf-?8$/i.test(encoding)) return unreadableMessage;
-    if (!admittedPublicationMessage(bytes.subarray(messageStart + 2).toString("utf8"))) return { ok: false,
+    if (!repositoryIdentity.coauthor && !admittedPublicationMessage(bytes.subarray(messageStart + 2).toString("utf8"))) return { ok: false,
       error: `history reconciliation refused to restore ${commit.slice(0, 12)} commit message; restored commits require publication-safe messages (values withheld)` };
   }
   const branch = (await exec("git", ["symbolic-ref", "HEAD"], pipeline.worktreeDir));
@@ -1463,8 +1483,9 @@ export async function reconcilePipelineStageHead(pipeline: Pipeline, head: strin
   if (missing) {
     return { ok: false, error: `stage head ${shortId(head)} does not preserve accepted head ${shortId(accepted)}; dropped accepted commits: ${[...dropped, ...droppedMerges].map(shortId).join(", ")}; accepted content is missing or conflicts with the stage tree` };
   }
+  const identity = repositoryIdentity;
   const commit = (await exec("git", ["commit-tree", tree.stdout.trim(), "-p", head, "-p", accepted,
-    "-m", `pipeline(${pipeline.id}): reconcile rebased stage`], pipeline.worktreeDir, controllerCommitIdentityEnv()));
+    "-m", `pipeline(${pipeline.id}): reconcile rebased stage`, ...(identity.coauthor ? ["-m", identity.coauthor] : [])], pipeline.worktreeDir, identity.env));
   if (commit.code !== 0) return failure("recording the stage reconciliation merge", commit);
   const sha = commit.stdout.trim();
   if (!/^[0-9a-f]{40}$/i.test(sha)) return { ok: false, error: "reconciliation did not produce an exact commit SHA" };
@@ -2181,6 +2202,7 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
   // left node_modules incomplete, or a merged lockfile may have moved on.
   if (fs.existsSync(path.join(pipeline.worktreeDir, "package.json"))
     && ["bun.lock", "bun.lockb"].some((file) => fs.existsSync(path.join(pipeline.worktreeDir, file)))) {
+    await isolateWorktreeDependencies(pipeline);
     const installed = await exec("bun", ["install", "--frozen-lockfile"], pipeline.worktreeDir, pipelinePublicationHookEnv(), { timeoutMs: 180_000 });
     if (installed.code !== 0) return failure("preparing publication dependencies", installed);
     // Lifecycle scripts must not change the accepted head or tracked work.

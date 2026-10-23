@@ -45,7 +45,7 @@ function verifiedHook(target: string, body: Buffer, digest: string): boolean {
  * and config, and refuse branch-history replacements that discard another author.
  * This is a cooperative agent guard, not a sandbox against hostile shell code.
  */
-export function agentHistoryGuardEnv(source: AgentEnvironment, name: string, email: string): Record<string, string | undefined> {
+export function agentHistoryGuardEnv(source: AgentEnvironment, name: string, email: string, coauthor?: string): Record<string, string | undefined> {
   let count = Number(source.GIT_CONFIG_COUNT ?? 0);
   if (!Number.isSafeInteger(count) || count < 0 || count > 1024) throw new Error("Invalid agent Git environment");
   if (count > 0 && source.GIT_CONFIG_KEY_0 === undefined) throw new Error("Invalid agent Git environment");
@@ -62,7 +62,7 @@ export function agentHistoryGuardEnv(source: AgentEnvironment, name: string, ema
   const script = `#!/bin/sh
 set -eu
 refuse() {
-  echo "Delegatus: refusing to rewrite a commit whose author is not this machine identity; add a new commit on top instead." >&2
+  echo "Delegatus: refusing to rewrite a commit whose author is not this configured identity; add a new commit on top instead." >&2
   exit 1
 }
 check_author() {
@@ -78,6 +78,7 @@ if [ "$hook" = prepare-commit-msg ]; then
   identity=$(git var GIT_AUTHOR_IDENT) || refuse
   [ "\${identity%>*}>" = ${quote(name + " <" + email + ">")} ] || refuse
   if picked=$(git rev-parse --verify -q CHERRY_PICK_HEAD); then check_author "$picked"; fi
+  ${coauthor ? `git interpret-trailers --in-place --if-exists addIfDifferent --trailer ${quote(coauthor)} "$1" || exit 1` : ""}
 fi
 if [ "$hook" = pre-applypatch ]; then
   # am keeps its author in the sequencer's quoted data, rather than exporting
