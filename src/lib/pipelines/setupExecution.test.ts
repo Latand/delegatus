@@ -144,6 +144,65 @@ test.skipIf(process.platform !== "linux")("Bun ignores checkout preload config a
   expect(fs.existsSync(path.join(directory, "injected"))).toBe(false);
 });
 
+for (const mode of ["paths", "jsx"] as const) {
+  test.skipIf(process.platform !== "linux")(`Bun ignores compiler configuration added after approval (${mode})`, async () => {
+    const directory = fs.mkdtempSync(path.join(root, `bun-${mode}-`));
+    const script = mode === "paths" ? "setup.ts" : "setup.tsx";
+    fs.writeFileSync(path.join(directory, script), mode === "paths"
+      ? 'import { value } from "fixture"; console.log(value)'
+      : 'console.log((<div />).type)');
+    const pkg = path.join(directory, "node_modules", mode === "paths" ? "fixture" : "react");
+    fs.mkdirSync(pkg, { recursive: true });
+    fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify(mode === "paths"
+      ? { name: "fixture", main: "index.ts" }
+      : { name: "react", exports: { "./jsx-runtime": "./jsx-runtime.ts", "./jsx-dev-runtime": "./jsx-runtime.ts" } }));
+    fs.writeFileSync(path.join(pkg, mode === "paths" ? "index.ts" : "jsx-runtime.ts"), mode === "paths"
+      ? 'export const value="reviewed"'
+      : 'export const jsx=(type)=>({type}); export const jsxs=jsx; export const jsxDEV=jsx;');
+    const input = { command: ["bun", script], cwd: "." };
+    const approved = await reviewSetupRecipe(directory, input);
+    fs.writeFileSync(path.join(directory, "tsconfig.json"), JSON.stringify({ compilerOptions: mode === "paths"
+      ? { baseUrl: ".", paths: { fixture: ["./evil.ts"] } } : { jsxImportSource: "./evil" } }));
+    if (mode === "paths") fs.writeFileSync(path.join(directory, "evil.ts"), 'await Bun.write("injected","wrong"); export const value="unreviewed"');
+    else {
+      fs.mkdirSync(path.join(directory, "evil"));
+      const source = 'export const jsx=()=>{require("node:fs").writeFileSync("injected","wrong");return {type:"unreviewed"}}; export const jsxs=jsx; export const jsxDEV=jsx;';
+      for (const name of ["jsx-runtime.ts", "jsx-dev-runtime.ts"]) fs.writeFileSync(path.join(directory, "evil", name), source);
+    }
+    expect((await reviewSetupRecipe(directory, input)).hash).toBe(approved.hash);
+    const result = await executeSandboxRecipe(directory, approved, "restricted");
+    if (requireExecution(result)) expect(result.stdout.trim()).toBe(mode === "paths" ? "reviewed" : "div");
+    expect(fs.existsSync(path.join(directory, "injected"))).toBe(false);
+  });
+}
+
+test.skipIf(process.platform !== "linux")("Bun executes a reviewed file whose name is a native command", async () => {
+  const directory = fs.mkdtempSync(path.join(root, "bun-dispatch-"));
+  fs.writeFileSync(path.join(directory, "test"), 'console.log("reviewed")');
+  const input = { command: ["bun", "test"], cwd: "." };
+  const approved = await reviewSetupRecipe(directory, input);
+  fs.writeFileSync(path.join(directory, "evil.test.ts"), 'import {test} from "bun:test"; test("fixture",()=>{require("node:fs").writeFileSync("injected","wrong")});');
+  expect((await reviewSetupRecipe(directory, input)).hash).toBe(approved.hash);
+  const result = await executeSandboxRecipe(directory, approved, "restricted");
+  if (requireExecution(result)) expect(result.stdout.trim()).toBe("reviewed");
+  expect(fs.existsSync(path.join(directory, "injected"))).toBe(false);
+});
+
+test.skipIf(process.platform !== "linux")("frozen Bun installation retains its package-manager dispatch", async () => {
+  const directory = fs.mkdtempSync(path.join(root, "bun-install-"));
+  const manifest = { name: "setup-fixture", version: "0.0.0", scripts: { postinstall: "printf reviewed > installed" } };
+  fs.writeFileSync(path.join(directory, "package.json"), JSON.stringify(manifest));
+  // Bun removes empty generated locks; seed the reviewed frozen input directly.
+  fs.writeFileSync(path.join(directory, "bun.lock"), JSON.stringify({ lockfileVersion: 1, configVersion: 1,
+    workspaces: { "": { name: manifest.name } }, packages: {} }));
+  expect(fs.existsSync(path.join(directory, "installed"))).toBe(false);
+  const approved = await reviewSetupRecipe(directory, { command: ["bun", "install", "--frozen-lockfile"], cwd: "." });
+  fs.writeFileSync(path.join(directory, "package.json"), JSON.stringify({ ...manifest, scripts: { postinstall: "printf unreviewed > injected" } }));
+  const result = await executeSandboxRecipe(directory, approved, "restricted");
+  if (requireExecution(result)) expect(fs.readFileSync(path.join(directory, "installed"), "utf8")).toBe("reviewed");
+  expect(fs.existsSync(path.join(directory, "injected"))).toBe(false);
+});
+
 test.skipIf(process.platform !== "linux")("restricted setup cannot reach an owned loopback listener while full setup can", async () => {
   let connections = 0;
   const server = net.createServer(socket => { connections++; socket.end("owned"); });

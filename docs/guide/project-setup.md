@@ -23,9 +23,12 @@ its file arguments are hashed together. A frozen Bun install also pins its manif
 root; workspace, patched dependency and local dependency installs (including
 local overrides and resolutions) are refused in this slice. Use a reviewed
 direct script for those.
-Python runs in isolated mode, which excludes checkout module shadows. Bun runs
-with an empty explicit configuration and automatic `.env` loading disabled,
-so checkout preloads cannot execute.
+Python runs in isolated mode, which excludes checkout module shadows. Bun uses
+an empty explicit configuration and disables automatic `.env` loading. Direct
+Bun scripts also use an empty TypeScript configuration, so checkout preloads,
+import aliases and JSX runtime overrides cannot execute implicitly.
+Direct scripts launch by their resolved file paths, including
+files whose names match an interpreter's built-in commands.
 Interpreters resolve on the Viewer's PATH in the read-only system trees; an
 unavailable interpreter refuses approval.
 Approval covers those direct inputs; programs, downloads and scripts invoked

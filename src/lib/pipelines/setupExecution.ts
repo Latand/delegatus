@@ -53,14 +53,22 @@ export async function runSetupRecipe(root: string, recipe: ReviewedSetupRecipe, 
     const interpreter = await setupInterpreter(recipe.command[0]!);
     const emptyConfig = path.join(scratch, "empty-bunfig.toml");
     await fs.writeFile(emptyConfig, "", { mode: 0o400 });
+    const emptyTypeScriptConfig = path.join(scratch, "empty-tsconfig.json");
+    await fs.writeFile(emptyTypeScriptConfig, "{}", { mode: 0o400 });
+    const frozenInstall = recipe.command[0] === "bun" && recipe.command[1] === "install";
     const flags = recipe.command[0] === "python3" ? ["-I"]
-      : recipe.command[0] === "bun" ? ["--no-env-file", `--config=${emptyConfig}`] : [];
+      : recipe.command[0] === "bun" ? ["--no-env-file", `--config=${emptyConfig}`,
+        ...(!frozenInstall ? [`--tsconfig-override=${emptyTypeScriptConfig}`] : [])] : [];
+    // A bare name such as "test" selects Bun's native command dispatcher.
+    // Bind execution to the file whose bytes were reviewed and mounted above.
+    const command = frozenInstall ? recipe.command.slice(1)
+      : [path.resolve(root, recipe.cwd, recipe.command[1]!), ...recipe.command.slice(2)];
     args.push("--ro-bind", interpreter, path.join(scratch, "interpreter"));
     args.push("--ro-bind", process.execPath, path.join(scratch, "bin/bun"));
     const env = { PATH: `${scratch}/bin:/usr/bin:/bin`, HOME: privateHome, XDG_CONFIG_HOME: path.join(privateHome, "config"),
       LLV_STATE_DIR: path.join(privateHome, "state"), TMPDIR: scratch, LANG: "C.UTF-8" };
     args.push("--clearenv", ...Object.entries(env).flatMap(([key, value]) => ["--setenv", key, value]),
-      "--chdir", path.resolve(root, recipe.cwd), "--", path.join(scratch, "interpreter"), ...flags, ...recipe.command.slice(1));
+      "--chdir", path.resolve(root, recipe.cwd), "--", path.join(scratch, "interpreter"), ...flags, ...command);
     const { agentRegistry } = await import("@/lib/agent/registry");
     const liveAgents = Object.values(agentRegistry().readOnlySnapshot().entries)
       .filter(entry => entry.structuredHost && entry.status !== "dead" && entry.status !== "unhosted").length + 1;
