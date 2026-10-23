@@ -132,7 +132,7 @@ test("a review's finding becomes the fixer's abstract rule, a fresh builder star
   expect(spawned[0]!.cleanMemory).toBe(true);
   await settle(1, "fail", [{ severity: "P2", text: "parseSize(\"\") throws instead of returning null, and the branch has no test." }]);
   expect(lessonRequestForReport(lane(first), "review", 1, conversation(1))).toBeNull();
-  expect(() => leaveLessonForConversation(loadPipelines(), conversation(1), { lesson: { scope: "project", rule: RULE, why: "x" } })).toThrow(/stays clean/);
+  expect(() => leaveLessonForConversation(loadPipelines(), conversation(1), { lesson: { scope: "project", rule: RULE, why: "x" } })).toThrow("a review stage reads no learned rules and leaves only explicit operator correction lessons");
   await endTurn(1);
   await tickPipelines([], ports);
 

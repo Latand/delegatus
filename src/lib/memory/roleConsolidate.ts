@@ -61,14 +61,20 @@ export function leavingOrder(rules: readonly RoleMemoryRule[]): RoleMemoryRule[]
   ];
 }
 
+/** A correction changed after its last curation still waits for the curator,
+    so the budget cannot archive it before that review. */
+export function pendingCorrection(rule: RoleMemoryRule): boolean {
+  return !!rule.operatorCorrection && (!rule.curatedAt || rule.changedAt > rule.curatedAt);
+}
+
 /** The same bound applies to append, rewrite, succession and operator Return. */
 export function retainRules(rules: readonly RoleMemoryRule[], at: string, protectedIds: ReadonlySet<string> = new Set(), bound = ROLE_MEMORY_BOUND): Pick<AppendOutcome, "active" | "changed" | "archived"> {
   const active = leavingOrder(rules);
   const changed: RoleMemoryRule[] = [];
   const archived: string[] = [];
   while (active.length > 1 && scopeChars(active) > bound) {
-    let index = active.findIndex(rule => !!rule.curatedAt && !protectedIds.has(rule.id) && !rule.keptByOperatorAt);
-    if (index < 0) index = active.findIndex(rule => !!rule.curatedAt && !protectedIds.has(rule.id));
+    let index = active.findIndex(rule => !!rule.curatedAt && !pendingCorrection(rule) && !protectedIds.has(rule.id) && !rule.keptByOperatorAt);
+    if (index < 0) index = active.findIndex(rule => !!rule.curatedAt && !pendingCorrection(rule) && !protectedIds.has(rule.id));
     if (index < 0) break;
     const [left] = active.splice(index, 1);
     changed.push(archivedRule(left!, at, "budget"));
@@ -86,9 +92,9 @@ export function appendRule(active: readonly RoleMemoryRule[], incoming: RoleMemo
   if (duplicate) {
     changed.push({ ...incoming, state: "merged", reason: "duplicate", mergedInto: duplicate.id, mergedAt: at, changedAt: at });
     merged.push({ from: incoming.id, into: duplicate.id });
-    if (!duplicate.curatedAt && !duplicate.keptByOperatorAt) {
+    if (incoming.operatorCorrection || (!duplicate.curatedAt && !duplicate.keptByOperatorAt)) {
       next.splice(next.indexOf(duplicate), 1);
-      const refreshed = { ...duplicate, changedAt: at };
+      const refreshed = { ...duplicate, changedAt: at, ...(incoming.operatorCorrection ? { operatorCorrection: true as const } : {}) };
       next.push(refreshed);
       changed.push(refreshed);
     }

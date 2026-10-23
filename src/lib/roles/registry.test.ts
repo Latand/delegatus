@@ -525,7 +525,7 @@ test("the issue-reporter preset is read-only, previews and never publishes, and 
   expect(text).not.toContain("until it answers a digest");
   expect(text).toContain("You never publish.");
   expect(text).toContain("no edits, staging, commits, pushes, service restarts, forge comments or issues");
-  expect(text).toContain("the only write is issue_report with action preview");
+  expect(text).toContain("writes are issue_report with action preview and leave_lesson correction:true");
 });
 
 /* The operator, 2026-10-06: the last check of a UI lane looks only at the
@@ -596,4 +596,18 @@ test("the visual critic judges every prototype variant with the operator's check
   const resolved = resolveRole("visual-critic", {});
   if (!resolved.ok) throw new Error(resolved.error);
   for (const words of ["judge exactly those frames", "every frame of every variant", "summary names each variant", "clutter", "no clear place to click", "many identical elements"]) expect(resolved.value.prompt).toContain(words);
+});
+
+const correctionInstruction = "When an operator corrects a result or task misread, direct or via send_message, call leave_lesson that turn: correction:true, lesson with misread in why, preventive practice in rule, narrowest true level. New work needs none.";
+
+test("every role receives the correction duty, including stored scaffold overrides", () => {
+  for (const definition of listRoles()) {
+    const params = Object.fromEntries(definition.parameters.map(parameter => [parameter.key, defaultRoleParameterValue(parameter)]));
+    for (const source of [definition, { ...definition, promptScaffold: "A stored role scaffold." }]) {
+      const scaffold = roleScaffoldBody(source, params);
+      const prompt = roleSpawnPrompt({ role: source.id, scaffold }, "Handle the operator message.");
+      expect(prompt).toContain(correctionInstruction);
+      expect(prompt.split(correctionInstruction)).toHaveLength(2);
+    }
+  }
 });

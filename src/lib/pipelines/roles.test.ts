@@ -149,10 +149,13 @@ test("a near-limit override scaffold composes with fences inside the store cap",
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-roles-cap-"));
   process.env.LLV_STATE_DIR = sandbox;
   try {
-    saveRoleOverrides({ reviewer: { promptScaffold: "x".repeat(MAX_SCAFFOLD_LENGTH) } });
-    const resolved = pipelineRoleLookup("reviewer");
-    expect(resolved?.promptScaffold?.length).toBeLessThanOrEqual(MAX_SCAFFOLD_LENGTH);
-    expect(resolved?.promptScaffold).toContain("Safety fences:");
+    for (const role of ["reviewer", "orchestrator"] as const) {
+      saveRoleOverrides({ [role]: { promptScaffold: "x".repeat(MAX_SCAFFOLD_LENGTH) } });
+      const resolved = pipelineRoleLookup(role);
+      expect(resolved?.promptScaffold?.length).toBeLessThanOrEqual(MAX_SCAFFOLD_LENGTH);
+      expect(resolved?.promptScaffold).toContain("Safety fences:");
+      expect(resolved?.promptScaffold).toContain("call leave_lesson that turn: correction:true, lesson");
+    }
   } finally {
     if (previous === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previous;
@@ -319,7 +322,7 @@ test("a reviewer diff source past the stage cap is refused, a usual one keeps ru
   const resolved = resolvePipelineRole({ role: { roleId: "reviewer", params: { diffSource: usual } } }, "review-loop", pipelineRoleLookup);
   const scaffold = resolved.role?.promptScaffold ?? "";
   expect(scaffold).toContain(`Change under review: ${usual}`);
-  for (const rule of ["13. Read the newest answer before you act", "14. Date and list from the primary record", "15. An error reply, a timeout or a status is no proof", "16. Leave the checkout as you found it"]) expect(scaffold).toContain(rule);
+  for (const rule of ["13. Read later answers first", "14. Date and list from the primary record", "15. An error reply, a timeout or a status is no proof", "16. Leave the checkout as you found it"]) expect(scaffold).toContain(rule);
   expect(scaffold).toEndWith(pipelineRoleLookup("reviewer")!.promptScaffold!.slice(-2_000));
 });
 
