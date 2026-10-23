@@ -415,16 +415,22 @@ test("a publication's cleanup while a delivery holds its round's lock leaves it 
   expect((await save()).status).toBe(200);
   for (let n = 0; sends === 0 && n < 500; n += 1) await Bun.sleep(5);
   expect(sends).toBe(1);
-  // Nothing the operator does waits on the delivery that holds the lock.
-  const answers = await Promise.all([save(),reviewGET(request("/review"),TASK,world),reviewPOST(request("/review",{ reviewId: id, retry: true }),TASK,world,delivery)]);
+  // A second save and a read answer at once while the delivery holds the lock.
+  // An explicit resend waits for its delivery verdict (#3023), so it answers
+  // only once the held delivery settles.
+  let retried = false;
+  const retry = reviewPOST(request("/review",{ reviewId: id, retry: true }),TASK,world,delivery).then(response => { retried = true; return response; });
+  const answers = await Promise.all([save(),reviewGET(request("/review"),TASK,world)]);
   for (const response of answers) expect(response.status).toBe(200);
   expect(sends).toBe(1);
+  expect(retried).toBe(false);
   // Another task's publication runs the cleanup while the lock is held.
   await publish({ ...body, taskId: "task-other", clientRequestId: "lock-held-other" });
   const queue = path.join(stateDir(),"prototype-reviews",`${id}.decision.lock.write-locks`);
   expect((await fs.readdir(queue)).length).toBe(1);
   expect(await lockLeftovers()).toEqual([`${id}.decision.lock.write-lock`,`${id}.decision.lock.write-locks`]);
   release();
+  expect((await retry).status).toBe(200);
   await settlePrototypeDeliveriesForTests();
   expect(sends).toBe(1);
   expect(loadTasks()[0]!.prototypeReviews![0]!.decision!.delivery).toMatchObject({ state: "sent", operationId: "operation-1" });
