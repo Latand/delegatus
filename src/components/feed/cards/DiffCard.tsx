@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 import { ChevronUp } from "../../icons";
 import { MESSAGE_ACTION } from "../actionStyles";
@@ -13,7 +13,7 @@ import { headingText, type DiffLine, type FileDiff, type Hunk } from "../diff";
     shown expanded by default; "show all" reveals the capped rest (issue #90). */
 const PREVIEW_LINES = 8;
 
-const OP_TONE: Record<FileDiff["op"], string> = {
+export const OP_TONE: Record<FileDiff["op"], string> = {
   add: "text-diff-add",
   update: "text-accent",
   delete: "text-diff-del",
@@ -80,21 +80,36 @@ function LineRow({ line, prose = false }: { line: DiffLine; prose?: boolean }) {
 
 /** The diff's rows in the feed's own tones and intraline spans. `prose` is the
     wrapping variant a mandate (paragraphs, not code) is read in: sans, wrapped,
-    hunk captions without the `@@` prefix. */
-export function DiffRows({ rows, prose = false }: { rows: DiffRow[]; prose?: boolean }) {
+    hunk captions without the `@@` prefix. `numbers` draws a gutter cell before
+    each row and `after` content below it (the lane review's line numbers and
+    comments); callers that omit both render exactly as before. */
+export function DiffRows<Row extends DiffRow>({ rows, prose = false, numbers, after }: {
+  rows: Row[];
+  prose?: boolean;
+  numbers?: (row: Row, index: number) => ReactNode;
+  after?: (index: number) => ReactNode;
+}) {
   const caption = (text: string) => (
     <div className={prose ? "break-words px-2 pt-1 text-caption text-muted" : "whitespace-pre px-2 text-muted"}>{text}</div>
   );
   return (
     <>
-      {rows.map(({ line, header, start }, i) => {
+      {rows.map((row, i) => {
+        const { line, header, start } = row;
         /* A heading the diff passes through unchanged reads as the same small
            caption a hunk's own heading does, in prose without its `#` marker. */
         const heading = prose && line.t === " " ? headingText(line.text) : null;
+        const body = heading !== null ? caption(heading) : <LineRow line={line} prose={prose} />;
         return (
           <div key={i} className={prose && start && i > 0 ? "mt-1 border-t border-border pt-1" : undefined}>
             {header ? caption(prose ? (headingText(header) ?? header) : `@@ ${header}`) : null}
-            {heading !== null ? caption(heading) : <LineRow line={line} prose={prose} />}
+            {numbers ? (
+              <div className="flex">
+                {numbers(row, i)}
+                <div className="min-w-0 flex-1">{body}</div>
+              </div>
+            ) : body}
+            {after?.(i)}
           </div>
         );
       })}

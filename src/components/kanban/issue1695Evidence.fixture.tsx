@@ -4014,6 +4014,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     && ["/api/files", "/api/tasks"].includes(url.pathname)) return serverFetch(input, init);
 
   const method = (init?.method ?? "GET").toUpperCase();
+  /* The lane review case answers these from the driver's own server, through
+     the real route handlers over a real repository (docs/design/lane-diff-comments.md). */
+  if (new URLSearchParams(location.search).has("laneReview")
+    && (/^\/api\/pipelines\/[^/]+\/(?:changes|review)$/.test(url.pathname) || url.pathname.startsWith("/api/runtime/operations/"))) {
+    return serverFetch(url.pathname + url.search, init);
+  }
   if (WORKSPACES) {
     const answered = await WORKSPACES.answer(url, init);
     if (answered) return answered;

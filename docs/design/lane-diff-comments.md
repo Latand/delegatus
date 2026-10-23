@@ -96,6 +96,9 @@ diff took 14 ms.
 The routes sit beside `src/app/api/pipelines/[id]/route.ts`:
 
 - `GET /api/pipelines/[id]/changes` returns the summary plus `target` (§4).
+- `GET /api/pipelines/[id]/changes?base=<sha>&head=<sha>` returns that pair's
+  file list, so a draft whose branch moved still shows the files its comments
+  were written on.
 - `GET /api/pipelines/[id]/changes?base=<sha>&head=<sha>&path=<path>` returns
   one `FileDiff`. Every request names its pair, so a review stays on one
   revision pair while the branch moves. A non-40-hex SHA is 400; a path outside
@@ -236,8 +239,9 @@ This slice adds no separate size limit of its own.
 
 The text is plain and deterministic. Its frame is in the operator's interface
 language; the comment bodies are verbatim. Comments are ordered by the file
-list's order, then by line number with file-level comments first, then `new`
-before `old`. Each body line is indented three spaces. Both SHAs are given in
+list's order; within a file the file-level comments come first, then the
+`new` side before the `old` side (their numbers count lines of different
+files), then by line number. Each body line is indented three spaces. Both SHAs are given in
 full.
 
 English:
@@ -389,24 +393,39 @@ All keys are new under `laneReview.*` in `src/lib/i18n/en.ts` and
 | cut | Diff cut at {count} lines; comment on the file for the rest. | Diff обрізано на {count} рядках; для решти лишіть коментар до файлу. |
 | notSaved | The draft is not saved on this device. | Чернетку не збережено на цьому пристрої. |
 | phoneNote | Line comments are written on a computer. | Коментарі до рядків пишуться на комп’ютері. |
-| msg.* | the message frame lines in §5 | the message frame lines in §5 |
+| reason.* | named refusals (no head, no base, git, file gone, quote gone, operator only), else «the server did not answer» / «the server refused it ({status})» | the same in Ukrainian |
+| binary | Binary file: no lines to show. | Бінарний файл: рядків для показу немає. |
+
+The message frame (§5) is composed on the server in `message.ts` and is not a
+dictionary key.
 
 ## 9. Files
 
 New:
 - `src/lib/pipelines/laneChanges.ts` (+ `.test.ts`, which runs real git in a temp repository)
-- `src/lib/laneReview/model.ts`, `message.ts` (+ tests)
-- `src/app/api/pipelines/[id]/changes/route.ts`, `src/app/api/pipelines/[id]/review/route.ts` (+ tests)
-- `src/components/laneReview/LaneReviewSheet.tsx`, `LaneReviewPhoneSheet.tsx` (+ DOM tests)
+- `src/lib/laneReview/model.ts`, `message.ts` (+ tests); `http.ts` (both
+  routes' handlers and the in-process delivery), `dependencies.ts` (their
+  production ports), `gitFixture.ts` (the lane-shaped repository the tests and
+  drivers share)
+- `src/app/api/pipelines/[id]/changes/route.ts`, `src/app/api/pipelines/[id]/review/route.ts` (+ `review/route.test.ts`)
+- `src/components/laneReview/LaneReviewSheet.tsx`, `LaneReviewPhoneSheet.tsx`,
+  `client.ts` (+ `LaneReviewSheet.dom.test.tsx`, which covers both sheets)
 
 Changed:
 - `src/components/feed/diff.ts`: export `diffFromGitFilePatch` and `REVIEW_DIFF_CAPS`
 - `src/components/feed/cards/DiffCard.tsx`: optional `numbers` / `after` props on `DiffRows`
 - `src/components/kanban/KanbanBoard.tsx`: menu item and mount
-- `src/components/mobile/MobilePipelineScreen.tsx`: one row
+- `src/components/mobile/MobilePipelineScreen.tsx`: one row, and
+  `mobileNav.ts`: the sheet name `changes`
+- `src/lib/viewerLoopMonitor.ts`: the operation name `pipelines.laneChanges`
+- `src/components/kanban/KanbanStages.dom.test.tsx`: the lane menu's item list
+  gains «Review changes»
 - `src/lib/i18n/en.ts`, `uk.ts`
 - `src/components/kanban/kanbanBoard.browser.test.tsx` (one `describe` block) and
-  `src/components/mobile/issue1671Evidence.browser.test.tsx` (one case)
+  `src/components/mobile/issue1671Evidence.browser.test.tsx` (one case), both
+  calling `captureLaneReviewFrames` in `issue1695BrowserHarness.ts`; the
+  fixture passes the lane review routes to the driver's server only under
+  `?laneReview`
 
 ## 10. Tests the acceptance names
 
