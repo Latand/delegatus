@@ -1,4 +1,5 @@
 "use client";
+import { AgentMemoryCapNote } from "@/components/AgentMemoryCapNote";
 
 import { Check, ChevronLeft, ChevronRight, Loader2, SlidersHorizontal } from "lucide-react";
 import { useState } from "react";
@@ -340,6 +341,7 @@ export function StagePlaceholderPane({ slot, interactive }: { slot: StageSlot; i
           </button>
         ) : null}
       </header>
+      <AgentMemoryCapNote cap={slot.attempt?.memoryCap} />
 
       {interactive && configOpen ? (
         <RoleSection
