@@ -234,7 +234,7 @@ const voiceSettings = {
 const VOICE_TOOLS = new URLSearchParams(location.search).get("voicetools");
 type FixtureVoiceTool = Record<string, unknown> & { state: string; digest: string; askBeforeActing: boolean; tools: Record<string, { enabled: boolean; acts: boolean }>;
   missingSecrets: string[]; secretRefs: string[]; catalog: { digest: string; fetchedAt: string; tools: Array<{ name: string; description: string; annotations?: { readOnlyHint?: boolean } }> } | null;
-  lastDryRun: { code: string; at: string; digest: string } | null };
+  lastDryRun: { code: string; at: string; digest: string; runId?: string; containmentReason?: string; confirmation?: { by: string; at: string; tool: string; reason: string; runId: string } } | null };
 const voiceToolsState = { revision: 7, servers: {} as Record<string, FixtureVoiceTool> };
 /* One refusal per action, answered before the record changes, as the route answers a refused mutation. */
 const voiceToolsRefuse: Record<string, string> = VOICE_TOOLS === "approved-refused" ? { configure: "SELECTION_BOUNDS" }
@@ -260,6 +260,10 @@ function seedVoiceTools() {
   });
   const chosen = { search: { enabled: true, acts: false }, now_playing: { enabled: true, acts: false }, play: { enabled: true, acts: true }, pause: { enabled: false, acts: true }, skip: { enabled: false, acts: true } };
   const ok = { code: "OK", at: voiceToolAt(4), digest: voiceToolDigest(501) };
+  if (VOICE_TOOLS?.startsWith("uncontained-")) voiceToolsState.servers.spotify = spotify({ lastDryRun: {
+    code: "CONTAINMENT_REQUIRED", at: voiceToolAt(1), digest: voiceToolDigest(503), runId: voiceToolDigest(700),
+    containmentReason: VOICE_TOOLS === "uncontained-macos" ? "MACOS" : VOICE_TOOLS === "uncontained-windows" ? "WINDOWS" : "BWRAP_MISSING",
+  } });
   if (VOICE_TOOLS === "pending") voiceToolsState.servers.spotify = spotify({ missingSecrets: ["spotify-client-id"], secretDestinations: { "spotify-client-id": [] } });
   if (VOICE_TOOLS === "review") voiceToolsState.servers.spotify = spotify({ catalog: spotifyCatalog(), lastDryRun: ok, tools: { ...chosen, play: { enabled: false, acts: true } } });
   if (VOICE_TOOLS === "destination-refused") voiceToolsState.servers.spotify = spotify({ catalog: spotifyCatalog(), lastDryRun: ok, tools: { ...chosen, play: { enabled: false, acts: true } } });
@@ -4732,7 +4736,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (VOICE && url.pathname === "/api/voice-tools") {
     if (VOICE_TOOLS === "sign-in-required" && method === "GET") return json({ code: "OPERATOR_REQUIRED" }, 401);
     if (method === "POST") {
-      const body = JSON.parse(String(init?.body ?? "{}")) as { action: string; name?: string; digest?: string; tools?: FixtureVoiceTool["tools"]; askBeforeActing?: boolean; reapprove?: true; secrets?: Record<string, { value?: string; destinations: string[] }> };
+      const body = JSON.parse(String(init?.body ?? "{}")) as { action: string; name?: string; digest?: string; tools?: FixtureVoiceTool["tools"]; askBeforeActing?: boolean; reapprove?: true; confirmUncontained?: { reason: string; runId: string }; secrets?: Record<string, { value?: string; destinations: string[] }> };
       const server = body.name ? voiceToolsState.servers[body.name] : undefined;
       const refused = voiceToolsRefuse[body.action];
       if (refused) { delete voiceToolsRefuse[body.action]; return json({ code: refused }, 409); }
@@ -4746,8 +4750,16 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       } else if (!server) return json({ code: "SERVER_NOT_FOUND" }, 409);
       else if (server.digest !== body.digest) return json({ code: "STALE_APPROVAL" }, 409);
       else if (body.action === "dry-run") {
+        if (VOICE_TOOLS?.startsWith("uncontained-")) {
+          const reason = VOICE_TOOLS === "uncontained-macos" ? "MACOS" : VOICE_TOOLS === "uncontained-windows" ? "WINDOWS" : "BWRAP_MISSING";
+          if (body.confirmUncontained?.reason !== reason || body.confirmUncontained.runId !== server.lastDryRun?.runId) {
+            server.lastDryRun = { code: "CONTAINMENT_REQUIRED", at: voiceToolAt(0), digest: voiceToolDigest(504), runId: next, containmentReason: reason };
+            return json({ version: 1, revision: voiceToolsState.revision, servers: voiceToolsState.servers });
+          }
+        }
         server.lastDryRun = { code: body.name === "notes" ? "TIMEOUT" : "OK", at: voiceToolAt(0), digest: voiceToolDigest(504) };
         if (body.name !== "notes") { server.catalog = spotifyCatalog(); server.tools = Object.fromEntries(server.catalog.tools.map(tool => [tool.name, server.tools[tool.name] ?? { enabled: false, acts: tool.annotations?.readOnlyHint !== true }])); }
+        if (body.confirmUncontained && server.lastDryRun) server.lastDryRun.confirmation = { by: "operator", at: voiceToolAt(0), tool: body.name!, ...body.confirmUncontained };
         server.digest = next;
       } else if (body.action === "configure") {
         if (body.reapprove && server.state !== "enabled") return json({ code: "STALE_APPROVAL" }, 409);
