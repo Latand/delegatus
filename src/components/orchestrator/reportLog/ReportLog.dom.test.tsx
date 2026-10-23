@@ -46,6 +46,7 @@ const realFetch = globalThis.fetch;
 let root: Root | null = null;
 let filesListener: ((revision: number) => void) | null = null;
 let pages: ReportLogPage[] = [];
+let reportsResponse: Promise<void> | null = null;
 let requests: string[] = [];
 let settingWrites: unknown[] = [];
 let dismissals: Array<{ target: unknown; undo: boolean; surface: string }> = [];
@@ -74,6 +75,7 @@ beforeEach(() => {
   dismissalRefusal = null;
   resetDismissalOverlayForTests();
   pages = [];
+  reportsResponse = null;
   dom.localStorage.clear();
   /* A live runtime bus whose `files.revision` the test fires by hand. */
   setRuntimeBusForTests({
@@ -91,6 +93,7 @@ beforeEach(() => {
     const url = String(input);
     if (url.startsWith("/api/orchestrator/reports")) {
       requests.push(url);
+      if (reportsResponse) await reportsResponse;
       const next = pages.length > 1 ? pages.shift()! : pages[0]!;
       return new Response(JSON.stringify(next));
     }
@@ -141,6 +144,31 @@ async function settle(): Promise<void> {
   for (let index = 0; index < 5; index += 1) await Bun.sleep(5);
 }
 
+async function mountWithDeferredReports(): Promise<HTMLElement> {
+  const response = Promise.withResolvers<void>();
+  reportsResponse = response.promise;
+  const expectedRows = pages[0]!.entries.length;
+  const host = mount();
+  expect(requests).toHaveLength(1);
+  expect(host.querySelectorAll("[data-report-entry]")).toHaveLength(0);
+  const committed = new Promise<void>((resolve, reject) => {
+    const observer = new dom.MutationObserver(() => {
+      if (host.querySelectorAll("[data-report-entry]").length !== expectedRows) return;
+      clearTimeout(timeout);
+      observer.disconnect();
+      resolve();
+    });
+    const timeout = setTimeout(() => {
+      observer.disconnect();
+      reject(new Error("Report rows did not render after releasing the response"));
+    }, 5_000);
+    observer.observe(host, { childList: true, subtree: true });
+  });
+  response.resolve();
+  await committed;
+  return host;
+}
+
 for (const locale of ["en", "uk"] as const) {
   test(`recorded authors and conversation links in ${locale}, with no invented legacy or unidentified link`, async () => {
     setLocale(locale);
@@ -152,8 +180,7 @@ for (const locale of ["en", "uk"] as const) {
       entry(2, { author: { kind: "agent", conversationId: null, role: null } }),
       entry(1),
     ])];
-    const host = mount();
-    await settle();
+    const host = await mountWithDeferredReports();
     expect([...host.querySelectorAll("[data-report-author]")].map(node => node.textContent)).toEqual(locale === "en"
       ? ["Orchestrator", "Builder", "Gateway", "an unidentified caller", "Agent"]
       : ["Оркестратор", "Білдер", "Шлюз", "невідомий виклик", "Агент"]);
@@ -170,8 +197,7 @@ for (const locale of ["en", "uk"] as const) {
 test("an author id stays an encoded conversation hash and a custom role renders as text", async () => {
   const id = "conversation_odd&x=<script>";
   pages = [page([entry(1, { author: { kind: "agent", conversationId: id, role: "<img src=x onerror=alert(1)>" } })])];
-  const host = mount();
-  await settle();
+  const host = await mountWithDeferredReports();
   expect(host.querySelector('[data-report-link="author"]')?.getAttribute("href")).toBe(`#c=${encodeURIComponent(id)}`);
   expect(host.querySelector("img, script")).toBeNull();
   expect(host.querySelector("[data-report-author]")?.textContent).toBe("<img src=x onerror=alert(1)>");
