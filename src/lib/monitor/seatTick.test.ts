@@ -218,6 +218,78 @@ function lane(over: Partial<SeatTickPipelineInput> = {}): SeatTickPipelineInput 
   };
 }
 
+describe("overdue board tasks", () => {
+  const HOUR = 60 * MINUTE;
+  const DAY = 24 * HOUR;
+  const dated = (id: string, over: Partial<SeatTickTaskInput> = {}) => card({
+    id, title: `Finish ${id}`, status: "inbox", accepted: true,
+    createdAt: new Date(NOW - 9 * DAY).toISOString(),
+    dueAt: new Date(NOW - 2 * DAY - 4 * HOUR).toISOString(), ...over,
+  });
+
+  test("priority then overdue age; seven overdue name five and defer two, with facts and seat policy", () => {
+    const tasks = [dated("low", { priority: "low" }), dated("normal"), dated("high-new", { priority: "high", dueAt: new Date(NOW - HOUR).toISOString() }),
+      dated("high-old", { priority: "high" }), dated("normal-2"), dated("normal-3"), dated("normal-4")];
+    const decision = seatTickDecision(input({ tasks, overdueTasks: tasks }));
+    expect(decision.verdict.kind).toBe("wake");
+    if (decision.verdict.kind !== "wake") return;
+    expect(decision.verdict.items.map(item => item.id)).toEqual(["high-old", "high-new", "normal", "normal-2", "normal-3"]);
+    const reason = decision.verdict.reasons.find(reason => reason.kind === "overdue-task")!;
+    expect(reason.detail).toContain("2 more await a later wake");
+    expect(reason.detail).toContain("high next day, normal +3 days, low +7 days");
+    expect(reason.detail).toContain("open over 7 days");
+    expect(reason.detail).toContain("without reminding the operator");
+    expect(decision.verdict.reasons.some(reason => reason.kind === "unstarted-task")).toBe(false);
+    expect(decision.verdict.items[0]!.label).toContain("overdue 2d 4h · open 9d · high · moved 0×");
+    expect(decision.verdict.items[0]!.label).toContain("first due");
+  });
+
+  test("done, future-held and other-machine are absent; holds without until remain; ticking off is quiet", () => {
+    const overdueTasks = [dated("done", { status: "done" }), dated("remote", { runsOn: "another machine" }),
+      dated("held", { hold: { kind: "postponed", note: "Later", until: new Date(NOW + DAY).toISOString(), since: new Date(NOW).toISOString(), by: "operator" } }),
+      dated("unbounded-hold", { hold: { kind: "worker", note: "Wait for capacity", since: new Date(NOW).toISOString(), by: "operator" } })];
+    const decision = seatTickDecision(input({ overdueTasks }));
+    expect(decision.verdict.kind).toBe("wake");
+    if (decision.verdict.kind !== "wake") return;
+    expect(decision.verdict.items.map(item => item.id)).toEqual(["unbounded-hold"]);
+    expect(seatTickDecision(input({ overdueTasks, settings: { ...input().settings, enabled: false } })).verdict.kind).toBe("quiet");
+  });
+
+  test("same date waits 24 hours after delivery across process restart; new passed date is offered immediately", () => {
+    const task = dated("repeat");
+    const first = seatTickDecision(input({ tasks: [task], overdueTasks: [task] }));
+    expect(first.verdict.kind).toBe("wake");
+    if (first.verdict.kind !== "wake") return;
+    const landed = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 0), NOW);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "due-repeat-"));
+    try {
+      const file = path.join(root, "input.json");
+      const source = `import fs from "node:fs"; import {seatTickDecision} from ${JSON.stringify(path.join(import.meta.dir, "seatTick.ts"))}; console.log(JSON.stringify(seatTickDecision(JSON.parse(fs.readFileSync(process.argv[1],"utf8"))).verdict));`;
+      const restarted = (now: number, taskInput = task) => {
+        fs.writeFileSync(file, JSON.stringify(input({ now, tasks: [taskInput], overdueTasks: [taskInput], state: landed })));
+        const child = Bun.spawnSync({ cmd: [process.execPath, "-e", source, file], stdout: "pipe", stderr: "pipe", env: { ...process.env, LLV_STATE_DIR: path.join(root, "state") } });
+        expect(child.exitCode).toBe(0);
+        return JSON.parse(child.stdout.toString()) as SeatTickVerdict;
+      };
+      expect(restarted(NOW + DAY - 1).kind).toBe("quiet");
+      expect(restarted(NOW + DAY).kind).toBe("wake");
+      expect(restarted(NOW + 2 * HOUR, { ...task, dueAt: new Date(NOW - HOUR).toISOString() }).kind).toBe("wake");
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test("accepted-work and overdue reminders merge to one line; three slips ask for structural action; 51st says 50 or more", () => {
+    const task = dated("slips", { dueHistory: { firstAt: new Date(NOW - 4 * DAY).toISOString(), slips: 3 } });
+    const decision = seatTickDecision(input({ tasks: [task], overdueTasks: [task] }));
+    expect(decision.verdict.kind).toBe("wake");
+    if (decision.verdict.kind !== "wake") return;
+    expect(decision.verdict.items).toHaveLength(1);
+    expect(decision.verdict.items[0]!.label).toContain("moved 3×: move again only with a lane running on it or a hold with an until; otherwise split or close it");
+    const capped = seatTickDecision(input({ overdueTasks: Array.from({ length: 51 }, (_, n) => dated(`task-${String(n).padStart(2, "0")}`)) }));
+    expect(capped.verdict.kind).toBe("wake");
+    if (capped.verdict.kind === "wake") expect(capped.verdict.reasons.find(reason => reason.kind === "overdue-task")!.detail).toContain("50 or more");
+  });
+});
+
 function card(over: Partial<SeatTickTaskInput> = {}): SeatTickTaskInput {
   return {
     id: "task_b2",

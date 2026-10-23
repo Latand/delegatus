@@ -196,6 +196,7 @@ export type SeatTickWakeReasonKind =
   | "autonomy-ended"
   /** A board task eligible to start. */
   | "unstarted-task"
+  | "overdue-task"
   /** The wake interval elapsed while work is open — "roughly hourly". */
   | "interval"
   /** A standalone child the seat spawned reached a terminal outcome nobody has
@@ -232,6 +233,7 @@ export const SEAT_TICK_WAKE_REASON_KINDS: readonly SeatTickWakeReasonKind[] = [
   "autonomy-idle",
   "autonomy-ended",
   "unstarted-task",
+  "overdue-task",
   "interval",
   "child-terminal",
   "own-lane-settled",
@@ -252,7 +254,7 @@ export interface SeatTickWakeReason {
 
 /** One line of the wake's body. Bounded and structural — never transcript text. */
 export interface SeatTickItem {
-  reminderKind?: "task" | "pause";
+  reminderKind?: "task" | "pause" | "overdue";
   occurredAt?: string | null;
   /** Journal identity of a merge this visible line announces on delivery. */
   mergeEventSeq?: number;
@@ -611,6 +613,10 @@ export interface SeatTickOwnLaneInput {
 }
 
 export interface SeatTickTaskInput {
+  dueAt?: string;
+  dueHistory?: import("@/lib/tasks/types").BoardTask["dueHistory"];
+  priority?: import("@/lib/tasks/types").BoardTask["priority"];
+  createdAt?: string;
   /** Explicitly chosen work, including a submitted continuation. */
   accepted?: boolean;
   waitingSince?: string;
@@ -1346,6 +1352,7 @@ export interface SeatTickCheckInput {
   seatEverHeld?: boolean;
   pipelines: readonly SeatTickPipelineInput[];
   tasks: readonly SeatTickTaskInput[];
+  overdueTasks?: readonly SeatTickTaskInput[];
   /** The waits «Waiting for you» routes to this project's seat first
       (docs/design/attention-auto-resolve.md), each with the line that says
       what was asked and how to answer it. Absent reads as none. */

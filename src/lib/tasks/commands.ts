@@ -6,7 +6,7 @@ import { canonicalProject } from "@/lib/projects/aliases";
 import { readTaskHold, storedTaskHold } from "./hold";
 import { isTaskAttachment } from "./attachments";
 import { taskRevision } from "./revision";
-import { isoNow } from "./helpers";
+import { isoNow, storedDueHistory } from "./helpers";
 import { hasUndeliveredDecision, TaskDecisionUndeliveredError } from "./decisionCompletion";
 import { withTaskCompletion } from "./completion";
 import { countBoardTasks, taskShowsOnBoard } from "./boardVisibility";
@@ -95,6 +95,7 @@ export interface CreateTaskInput {
 }
 
 export interface PatchTaskInput {
+  dueReason?: unknown;
   findingKey?: unknown;
   /** Dashboard undo only, accepted with operator authority and both fences. */
   restoreHold?: unknown;
@@ -449,7 +450,7 @@ export function createTask(
     ...(steps.steps ? { steps: steps.steps } : {}),
     placement,
     ...(placement === "pinned" && pos ? { pos } : {}),
-    ...(due.dueAt ? { dueAt: due.dueAt, dueTz: due.dueTz } : {}),
+    ...(due.dueAt ? { dueAt: due.dueAt, dueTz: due.dueTz, dueHistory: { firstAt: due.dueAt, slips: 0 } } : {}),
     ...(attachments.attachments ? { attachments: attachments.attachments } : {}),
     ...(source ? { source } : {}),
     ...(board ? { board } : {}),
@@ -689,18 +690,40 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     if (!edited.ok) return edited;
     if (edited.changed) patch.workLinks = edited.links.length ? edited.links : undefined;
   }
-  /* Deadline: `{dueAt:null}` clears both fields; `{dueAt,dueTz}` sets them
-     (both-or-neither, validated). Touching only one is a 400. */
+  /* Clearing is operator-only. A supplied date retains its zone when omitted;
+     rescheduling a passed date records a slip atomically with the new date. */
   if (Object.hasOwn(input, "dueAt") || Object.hasOwn(input, "dueTz")) {
     if (input.dueAt === null && input.dueTz === undefined) {
       patch.dueAt = undefined;
       patch.dueTz = undefined;
     } else {
-      const due = normalizeDue(input.dueAt, input.dueTz);
+      const due = normalizeDue(input.dueAt, input.dueTz ?? (input.dueAt ? task.dueTz ?? Intl.DateTimeFormat().resolvedOptions().timeZone : undefined));
       if (!due.ok) return { ok: false, error: due.error, status: 400 };
       patch.dueAt = due.dueAt;
       patch.dueTz = due.dueTz;
     }
+    if (options.actor === "agent" && !patch.dueAt) {
+      return { ok: false, status: 400, code: "TASK_DUE_REQUIRED", field: "dueAt", error: "Only the operator can clear a due date" };
+    }
+    if (patch.dueAt) {
+      const next = Date.parse(patch.dueAt);
+      if (options.actor === "agent" && next <= Date.parse(now)) {
+        return { ok: false, status: 400, code: "TASK_DUE_PAST", field: "dueAt", error: "dueAt must be in the future" };
+      }
+      const reason = typeof input.dueReason === "string" ? input.dueReason.trim() : undefined;
+      const slip = !!task.dueAt && Date.parse(task.dueAt) <= Date.parse(now) && next > Date.parse(task.dueAt);
+      if (slip && options.actor === "agent" && (!reason || reason.length > 200)) {
+        return { ok: false, status: 400, code: "TASK_DUE_REASON_REQUIRED", field: "dueReason", error: "A slip needs a dueReason of 1 to 200 characters" };
+      }
+      if (input.dueReason !== undefined && (typeof input.dueReason !== "string" || (reason?.length ?? 0) > 200)) {
+        return { ok: false, status: 400, code: "TASK_INVALID_FIELD", field: "dueReason", error: "dueReason must be at most 200 characters" };
+      }
+      const history = storedDueHistory(task.dueHistory) ?? { firstAt: task.dueAt ?? patch.dueAt, slips: 0 };
+      patch.dueHistory = slip ? { ...history, slips: history.slips + 1, last: {
+        at: now, from: task.dueAt!, to: patch.dueAt, by: options.actor ?? "operator",
+        ...(reason ? { reason } : {}), ...(options.conversationId ? { conversationId: options.conversationId } : {}),
+      } } : history;
+    } else patch.dueHistory = undefined;
   }
 
   const candidateKey = Object.hasOwn(patch, "findingKey") ? patch.findingKey : task.findingKey;
@@ -734,6 +757,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
   if (Object.hasOwn(patch, "dueAt") && patch.dueAt === undefined) {
     delete updated.dueAt;
     delete updated.dueTz;
+    delete updated.dueHistory;
   }
   if (Object.hasOwn(patch, "note") && patch.note === undefined) delete updated.note;
   if (Object.hasOwn(patch, "findingKey") && patch.findingKey === undefined) delete updated.findingKey;

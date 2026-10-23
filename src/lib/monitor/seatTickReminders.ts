@@ -33,6 +33,16 @@ export function taskHasBlocker(task: SeatTickTaskInput, now: number): boolean {
     && (!hold.until || !Number.isFinite(Date.parse(hold.until)) || Date.parse(hold.until) > now);
 }
 
+export function taskIsOverdue(task: SeatTickTaskInput, now: number): boolean {
+  return task.status !== "done" && !task.runsOn && !!task.dueAt && Date.parse(task.dueAt) <= now
+    && !(task.hold?.until && Date.parse(task.hold.until) > now);
+}
+
+function age(ms: number): string {
+  const hours = Math.max(0, Math.floor(ms / SEAT_REMINDER_AFTER_MS));
+  return hours >= 24 ? `${Math.floor(hours / 24)}d${hours % 24 ? ` ${hours % 24}h` : ""}` : `${hours}h`;
+}
+
 /** One lookup per check over the already bounded delivered agenda. */
 export function seatTickReminders(input: SeatTickCheckInput): SeatTickItem[] {
   const shown = new Map<string, number>();
@@ -42,7 +52,27 @@ export function seatTickReminders(input: SeatTickCheckInput): SeatTickItem[] {
     if (Number.isFinite(Number(stamp))) shown.set(key!, Number(stamp));
   }
   const items: { dueAt: number; item: SeatTickItem }[] = [];
+  const overdueItems: SeatTickItem[] = [];
+  const overdue = (input.overdueTasks ?? []).filter(task => taskIsOverdue(task, input.now));
+  const overdueIds = new Set(overdue.map(task => task.id));
+  const priority = (task: SeatTickTaskInput) => task.priority === "high" ? 0 : task.priority === "low" ? 2 : 1;
+  for (const task of [...overdue].sort((a, b) => priority(a) - priority(b) || Date.parse(a.dueAt!) - Date.parse(b.dueAt!) || a.id.localeCompare(b.id))) {
+    const key = `${PREFIX}overdue:${createHash("sha256").update(JSON.stringify([task.id, new Date(task.dueAt!).toISOString()])).digest("hex")}`;
+    const last = shown.get(key);
+    if (last !== undefined && input.now - last < SEAT_REMINDER_REPEAT_MS) continue;
+    const history = task.dueHistory;
+    const moved = history?.slips ?? 0;
+    const first = new Date(history?.firstAt ?? task.dueAt!).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+    const action = moved >= 3 ? ": move again only with a lane running on it or a hold with an until; otherwise split or close it" : "";
+    const opened = Date.parse(task.createdAt ?? task.waitingSince ?? task.updatedAt ?? "");
+    overdueItems.push({
+      kind: "task", reminderKind: "overdue", id: task.id, occurredAt: task.dueAt,
+      itemVersion: `${key}@${input.now}`,
+      label: `overdue ${age(input.now - Date.parse(task.dueAt!))} · open ${Number.isFinite(opened) ? age(input.now - opened) : "unknown"} · ${task.priority ?? "normal"} · moved ${moved}×${action} (first due ${first}) · ${task.owned ? "lane running" : "no lane"} — ${task.title}`,
+    });
+  }
   for (const task of input.tasks) {
+    if (overdueIds.has(task.id) || taskIsOverdue(task, input.now)) continue;
     if (!task.accepted || !["inbox", "assigned"].includes(task.status) || task.owned || task.runsOn || taskHasBlocker(task, input.now)) continue;
     const since = Date.parse(task.waitingSince ?? task.updatedAt ?? "");
     if (!Number.isFinite(since) || input.now - since < SEAT_REMINDER_AFTER_MS) continue;
@@ -67,6 +97,6 @@ export function seatTickReminders(input: SeatTickCheckInput): SeatTickItem[] {
       itemVersion: `${key}@${input.now}`,
       label: `${pipeline.title} — paused; reason: ${pipeline.pause?.reason ?? "not recorded"}; ${pipeline.pause?.resumeCondition ? "resume condition is met" : "no resume condition recorded; review the pause"}; use pipeline_action resume when ready` } });
   }
-  return items.sort((a, b) => a.dueAt - b.dueAt || a.item.id.localeCompare(b.item.id) || a.item.kind.localeCompare(b.item.kind))
-    .map(entry => entry.item);
+  return [...overdueItems, ...items.sort((a, b) => a.dueAt - b.dueAt || a.item.id.localeCompare(b.item.id) || a.item.kind.localeCompare(b.item.kind))
+    .map(entry => entry.item)];
 }

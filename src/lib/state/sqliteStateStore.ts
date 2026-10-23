@@ -406,6 +406,12 @@ const stateSchema = [
     WHERE collection='tasks' AND json_valid(value_json)
       AND json_type(value_json,'$.findingKey')='text' AND json_type(value_json,'$.status')='text'
       AND json_extract(value_json,'$.status') <> 'done'`,
+  `CREATE INDEX IF NOT EXISTS state_rows_task_due ON state_rows(
+    json_extract(value_json,'$.project'),
+    round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000), row_key)
+    WHERE collection='tasks' AND json_valid(value_json)
+      AND json_type(value_json,'$.dueAt')='text' AND json_type(value_json,'$.status')='text'
+      AND json_extract(value_json,'$.status') <> 'done'`,
   ...["text", "status", "look", "place", "links", "machine", "handover"].map(field => `CREATE INDEX IF NOT EXISTS state_rows_task_stamp_${field}
       ON state_rows(json_extract(value_json,'$.project'), json_extract(value_json,'$.sync.s.${field}') DESC)
       WHERE collection='tasks' AND json_valid(value_json) AND json_type(value_json,'$.sync.s.${field}')='text'`),
@@ -1231,6 +1237,20 @@ function sharedStateReadonlyDatabase(filename: string): Database {
   return db;
 }
 
+export const OVERDUE_TASK_KEYS_SQL = `
+      SELECT row_key FROM state_rows INDEXED BY state_rows_task_due
+      WHERE collection='tasks' AND json_valid(value_json)
+        AND json_type(value_json,'$.dueAt')='text' AND json_type(value_json,'$.status')='text'
+        AND json_extract(value_json,'$.status') <> 'done'
+        AND json_extract(value_json,'$.project') IN (SELECT value FROM json_each(?))
+        AND round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) <= ?
+        AND coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0) <= ?
+        AND (coalesce(json_extract(value_json,'$.machine'),'') = '' OR json_extract(value_json,'$.machine') = ?)
+      ORDER BY CASE json_extract(value_json,'$.priority') WHEN 'high' THEN 0 WHEN 'low' THEN 2 ELSE 1 END,
+        round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000), row_key
+      LIMIT ?
+    `;
+
 export class SqliteStateCollection<T> {
   private readonly readDb: Database;
   private localCache: CollectionCache<T> | null = null;
@@ -1524,6 +1544,13 @@ export class SqliteStateCollection<T> {
         AND json_extract(value_json,'$.project')=? AND json_extract(value_json,'$.findingKey')=?
       ORDER BY row_order, row_key
     `).all(project, findingKey).map(row => row.row_key);
+  }
+
+  /** One indexed read; rejected holds and remote rows never reach the decoder. */
+  overdueTaskKeys(projects: readonly string[], nowMs: number, limit = 51, machine: string | null = null): string[] {
+    if (!projects.length) return [];
+    if (!Number.isFinite(nowMs) || !Number.isSafeInteger(limit) || limit < 1 || limit > 51) throw new Error("invalid overdue task selection");
+    return this.readDb.query<{ row_key: string }, [string, number, number, string | null, number]>(OVERDUE_TASK_KEYS_SQL).all(JSON.stringify([...new Set(projects)]), nowMs, nowMs, machine, limit).map(row => row.row_key);
   }
 
   /** Release an evicted document owner's connection. */

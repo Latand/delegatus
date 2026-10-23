@@ -6,6 +6,7 @@ import { readFindingKey, reconcileOpenFindings, validStoredFinding } from "./fin
 import path from "node:path";
 
 import { isTaskNote } from "./note";
+import { storedDueHistory } from "./helpers";
 
 import { statePath } from "@/lib/configDir";
 import { deepFreeze } from "@/lib/deepFreeze";
@@ -29,7 +30,7 @@ import { readStateImport, SqliteStateCollection, type StateImportRecord, type St
 
 import { TASK_SYNC_GROUPS } from "./types";
 import { derivedStamp } from "@/lib/links/stamp";
-import { linkedContext } from "@/lib/links/linked";
+import { linkedContext, runsHere } from "@/lib/links/linked";
 import { groupDigest, snapshotGroups, stampLinkedRows, type GroupSnapshot, type TaskSyncWrite } from "@/lib/links/taskStamp";
 import { tombstoneCollection, tombstoneRowKey, type TombstoneRow } from "@/lib/links/tombstones";
 
@@ -247,6 +248,9 @@ function coerceTask(value: unknown, canonical = canonicalProject): BoardTask | n
   if (task.statusBy !== undefined && !isTaskStatusBy(task.statusBy)) delete task.statusBy;
   // A rejected checklist must not survive the raw extension spread above.
   if (!steps) delete task.steps;
+  const dueHistory = task.dueAt ? storedDueHistory(raw.dueHistory) : undefined;
+  if (dueHistory) task.dueHistory = dueHistory;
+  else delete task.dueHistory;
   if (!pinned) delete task.pos;
   /* An icon is a name or nothing; a row carrying anything else loads without one. */
   if (task.icon !== undefined && typeof task.icon !== "string") delete task.icon;
@@ -563,6 +567,23 @@ export function loadTasksFile(filePath = TASKS_FILE): TasksFileState {
   const collection = taskCollection(filePath, "read");
   if (!collection) return readLegacyTasksFile(filePath);
   return stateFromBody(bodyFromRows(collection.snapshot()));
+}
+
+/** The tick reads only overdue payloads, independently of the board snapshot. */
+export function overdueTasks(project: string, nowMs: number, filePath = TASKS_FILE): BoardTask[] {
+  const collection = taskCollection(filePath, "read");
+  if (!collection) throw new Error("overdue task selection requires the SQLite task store");
+  const canonical = canonicalProject(project);
+  const projects = [canonical, ...Object.keys(projectAliasSnapshot().aliases).filter(alias => canonicalProject(alias) === canonical)];
+  const context = linkedContext();
+  return collection.overdueTaskKeys(projects, nowMs, 51, context.self?.id ?? null)
+    .flatMap(key => {
+      const row = collection.get(key);
+      const task = row ? coerceTask(row) : null;
+      return task && canonicalProject(task.project) === canonical && task.status !== "done" && runsHere(task, context)
+        && task.dueAt && Date.parse(task.dueAt) <= nowMs
+        && !(task.hold?.until && Date.parse(task.hold.until) > nowMs) ? [task] : [];
+    });
 }
 
 /** Prepare the bounded MCP selection reader without loading the collection. */
