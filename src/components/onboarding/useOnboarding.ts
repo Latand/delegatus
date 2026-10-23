@@ -19,6 +19,14 @@ type OpenRequest = { mode: OnboardingMode; step: OnboardingStepId | null };
 
 const OPEN_EVENT = "llv:open-onboarding";
 
+/** A first run still in progress, which is all the guide's newcomer help
+    (the cost estimate, the cheaper choice) is shown to: never decided, or a
+    marker neither completed nor dismissed. An existing install, and a guide
+    finished or left once and opened again from the menu, read as before. */
+export function unfinishedFirstRun(marker: OnboardingMarker | null): boolean {
+  return marker === null || (marker.reason !== "existing-install" && !marker.completedAt && !marker.dismissedAt);
+}
+
 export function openOnboarding(mode: OnboardingMode = "guide", step: OnboardingStepId | null = null): void {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent<OpenRequest>(OPEN_EVENT, { detail: { mode, step } }));

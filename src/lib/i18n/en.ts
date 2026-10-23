@@ -5827,7 +5827,7 @@ export const en = {
   "onboarding.project.noMatches": "No matching repositories.",
   "onboarding.legacy.notice": "Delegatus is using existing state from agent-log-viewer through a linked configuration directory. Your previous settings and work are still in use.",
   "onboarding.legacy.cleanStart": "Start clean instead",
-  "onboarding.legacy.instructions": "Stop Delegatus and its runtime service first. Back up the agent-log-viewer configuration directory, then remove only the Delegatus configuration link and move the earlier configuration directory aside. Start Delegatus again to create a fresh configuration. Keep the backup if you want to restore your previous settings and work. Nothing has been changed by opening these instructions.",
+  "onboarding.legacy.instructions": "1. Stop Delegatus and its runtime service.\n2. Back up the agent-log-viewer configuration directory, plus ~/.claude/viewer-state, ~/.claude/viewer-inbox and the live-log-viewer configuration directory where they exist.\n3. Remove only the Delegatus configuration link, then move each of those folders aside. Whatever stays in place comes back: Delegatus uses an agent-log-viewer directory it finds, copies the two ~/.claude folders into the new state on its first start, and reads settings from live-log-viewer.\n4. Start Delegatus again to create a fresh configuration.\nKeep the backup to restore your previous settings and work. Opening these instructions changed nothing.",
   "onboarding.project.onDisk": "Already on this computer",
   "onboarding.project.other": "Open another folder",
   "onboarding.project.otherHint": "A folder the list does not show",

@@ -22,7 +22,7 @@ import { PhoneStep, type PhoneStepOutcome } from "./PhoneStep";
 import { ProjectStep, type GuideProject } from "./ProjectStep";
 import { RelayStep } from "./RelayStep";
 import { TelegramReportsStep } from "./TelegramReportsStep";
-import { putOnboarding, useOnboarding, type OnboardingMode } from "./useOnboarding";
+import { putOnboarding, unfinishedFirstRun, useOnboarding, type OnboardingMode } from "./useOnboarding";
 import { VoiceStep } from "./VoiceStep";
 
 /**
@@ -365,7 +365,7 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
       onCreate={create}
       onReadFirst={readFirst}
       onOpenSeat={openSeat}
-      newcomer={marker?.reason !== "existing-install"}
+      newcomer={unfinishedFirstRun(marker)}
     />
   ) : (
     <EnginesStep claude={claude} codex={codex} cli={cli} now={now} onRecheck={recheckAll} />

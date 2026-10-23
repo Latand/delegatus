@@ -36878,6 +36878,12 @@ describe("installer guide: old state, project search, newcomer clarity", () => {
           const search = page.locator("[data-onboarding-dialog] input[type=search]");
           await search.fill("harbor");
           reading.searched = await rows();
+          if (JSON.stringify(reading.searched) !== JSON.stringify([`repo-${"2".repeat(32)}`])) failures.push(`${at}: search lists ${JSON.stringify(reading.searched)}`);
+          /* The phone context has a coarse pointer, and every phone target is at least 44px tall. */
+          if (width === 390) {
+            reading.searchHeight = await search.evaluate((node) => node.getBoundingClientRect().height);
+            if (Number(reading.searchHeight) < 44) failures.push(`${at}: the project search is ${reading.searchHeight}px tall, under the 44px phone target`);
+          }
           await frame("project-search", ["[role=radiogroup]"]);
           await search.fill("nothing like this");
           reading.empty = await text("[data-onboarding-project-empty]");

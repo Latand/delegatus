@@ -933,8 +933,9 @@ test("linked earlier state is disclosed and clean start instructions preserve it
   const before = requests.length;
   flushSync(() => action.click());
   expect(action.getAttribute("aria-expanded")).toBe("true");
-  expect(notice.textContent).toContain("Stop Delegatus and its runtime service first");
+  expect(notice.textContent).toContain("Stop Delegatus and its runtime service.");
   expect(notice.textContent).toContain("Back up");
+  for (const source of ["agent-log-viewer", "~/.claude/viewer-state", "~/.claude/viewer-inbox", "live-log-viewer"]) expect(notice.textContent).toContain(source);
   expect(requests.length).toBe(before);
   flushSync(() => root.render(<OnboardingDialog mode="guide" marker={null} legacyState={false} onClose={() => {}} />));
   expect(host.querySelector("[data-onboarding-legacy-state]")).toBeNull();
@@ -1017,22 +1018,47 @@ test("a new install can choose the cheaper orchestrator without changing saved r
   host.remove();
 });
 
-test("an existing installation's guide shows no cost estimate or cheaper choice", async () => {
+const noSteps = { engines: null, project: null, telegram: null, orchestrator: null, agents: null, phone: null, voice: null, check: null, relay: null } as const;
+const finishedMarkers = [
+  ["an existing installation", { schemaVersion: 1, completedAt: null, dismissedAt: "2026-10-01T00:00:00.000Z", reason: "existing-install", lastHealth: null, walk: null, steps: noSteps }],
+  ["a new install that completed the guide", { schemaVersion: 1, completedAt: "2026-10-01T00:00:00.000Z", dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { ...noSteps, engines: "done", project: "done", orchestrator: "done" } }],
+  ["a new install that left the guide", { schemaVersion: 1, completedAt: null, dismissedAt: "2026-10-01T00:00:00.000Z", reason: null, lastHealth: null, walk: null, steps: { ...noSteps, engines: "done" } }],
+] as const;
+
+for (const [label, marker] of finishedMarkers) {
+  test(`${label}: the reopened guide shows no cost estimate or cheaper choice`, async () => {
+    rolesBody = { roles: [] };
+    answerAccounts({ claude: { active: "default", cli: "found", accounts: [signedIn("default", "Main")] }, codex: { active: "default", cli: "found", accounts: [signedIn("default", "Main")] }, copilot: { active: "", accounts: [] } });
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    const projects = [{ project: "repo-todo", name: "todo-cli", cwd: "projects/todo-cli", conversations: 0 }];
+    flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="orchestrator" marker={marker} projects={projects} onClose={() => {}} />));
+    chooseProject(host, "orchestrator");
+    await until(() => Boolean(host.querySelector<HTMLButtonElement>("[data-onboarding-orchestrator-create]:not([disabled])")) && (host.querySelector("[data-onboarding-orchestrator-runs-on]")?.textContent ?? "").includes("account Main"));
+    expect(host.querySelector("[data-onboarding-orchestrator-create]:not([disabled])")).not.toBeNull();
+    /* The saved launch configuration is what it offers. */
+    expect(host.querySelector("[data-onboarding-orchestrator-runs-on]")?.textContent).toContain("Claude · Opus");
+    expect(host.querySelector("[data-onboarding-permissions]")?.textContent).toContain("without per-action confirmations by default");
+    expect({ cost: Boolean(host.querySelector("[data-onboarding-cost]")), cheaper: Boolean(host.querySelector("[data-onboarding-cheaper]")) }).toEqual({ cost: false, cheaper: false });
+    flushSync(() => root.unmount());
+    host.remove();
+  });
+}
+
+test("a first run still in progress keeps the cost estimate and the cheaper choice", async () => {
   rolesBody = { roles: [] };
   answerAccounts({ claude: { active: "default", cli: "found", accounts: [signedIn("default", "Main")] }, codex: { active: "default", cli: "found", accounts: [signedIn("default", "Main")] }, copilot: { active: "", accounts: [] } });
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
-  const marker = { schemaVersion: 1, completedAt: null, dismissedAt: "2026-10-01T00:00:00.000Z", reason: "existing-install", lastHealth: null, walk: null, steps: { engines: null, project: null, telegram: null, orchestrator: null, agents: null, phone: null, voice: null, check: null, relay: null } } as const;
+  const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { ...noSteps, engines: "done", project: "done" } } as const;
   const projects = [{ project: "repo-todo", name: "todo-cli", cwd: "projects/todo-cli", conversations: 0 }];
   flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="orchestrator" marker={marker} projects={projects} onClose={() => {}} />));
   chooseProject(host, "orchestrator");
   await until(() => Boolean(host.querySelector<HTMLButtonElement>("[data-onboarding-orchestrator-create]:not([disabled])")) && (host.querySelector("[data-onboarding-orchestrator-runs-on]")?.textContent ?? "").includes("account Main"));
-  expect(host.querySelector("[data-onboarding-orchestrator-create]:not([disabled])")).not.toBeNull();
-  expect(host.querySelector("[data-onboarding-orchestrator-runs-on]")?.textContent).toContain("Claude · Opus");
-  expect(host.querySelector("[data-onboarding-permissions]")?.textContent).toContain("without per-action confirmations by default");
-  expect(host.querySelector("[data-onboarding-cost]")).toBeNull();
-  expect(host.querySelector("[data-onboarding-cheaper]")).toBeNull();
+  expect(host.querySelector("[data-onboarding-cost]")?.textContent).toContain("$0.60 for 100k uncached input + 10k output tokens");
+  expect(host.querySelector("[data-onboarding-cheaper]")?.textContent).toBe("Use cheaper Codex · GPT-6.1-Sol");
   flushSync(() => root.unmount());
   host.remove();
 });

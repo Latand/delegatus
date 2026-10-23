@@ -56,7 +56,7 @@ export function ProjectStep({ projects, chosen, onChoose, onCreate }: {
   return (
     <div className="flex flex-col gap-2">
       <div className="text-label font-semibold uppercase tracking-[0.06em] text-muted">{t("onboarding.project.onDisk")}</div>
-      <input type="search" aria-label={t("activity.filter.searchAria")} placeholder={t("activity.filter.search")} value={search} onInput={(event) => setSearch(event.currentTarget.value)} className="min-h-9 rounded-[8px] border border-border bg-card px-3 text-ui text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" />
+      <input type="search" aria-label={t("activity.filter.searchAria")} placeholder={t("activity.filter.search")} value={search} onInput={(event) => setSearch(event.currentTarget.value)} className="min-h-9 rounded-[8px] border border-border bg-card px-3 text-ui text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:min-h-11" />
       {visible.length === 0 ? <p role="status" data-onboarding-project-empty="" className="text-ui text-muted">{t("onboarding.project.noMatches")}</p> : null}
       <div role="radiogroup" aria-label={t("onboarding.project.heading")} className="flex flex-col gap-2">
         {visible.map((entry) => {
