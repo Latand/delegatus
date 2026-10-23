@@ -36827,6 +36827,7 @@ describe("retired review history", () => {
     async function capture(page: Page, name: string, selector: string) {
       const element = page.locator(selector).filter({ visible: true }).first();
       await element.waitFor();
+      await element.scrollIntoViewIfNeeded();
       const measurement = await element.evaluate(el => {
         const box = el.getBoundingClientRect();
         const clipped: string[] = [];
