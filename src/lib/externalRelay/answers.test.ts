@@ -36,6 +36,19 @@ function finished(requestId: string, text = "Hello", targetId = "target") {
   return recorder;
 }
 
+test("the first diagnostic survives a fresh-process interrupted-answer settlement", () => {
+  const recorder = answerRecorder({ requestId: "reason-restart", relayId: "relay", targetId: "diagnostic", targetName: null, claimedAt: null, input: null })!;
+  recorder.begin("claude", "opus", { webSearch: true, owner: true });
+  recorder.diagnose({ source: "exception", message: "Error: fixture launch response lost" });
+  recorder.diagnose({ source: "observation", message: "secondary cleanup error" });
+  expect(readAnswerRecord("relay", "diagnostic", "reason-restart")).toMatchObject({ state: "running", diagnostic: { message: "Error: fixture launch response lost" } });
+  const child = Bun.spawnSync([process.execPath, "-e", `import { settleInterruptedAnswer, readAnswerRecord } from './src/lib/externalRelay/answers.ts';
+    settleInterruptedAnswer('relay', 'diagnostic', 'reason-restart', 'accepted');
+    console.log(JSON.stringify(readAnswerRecord('relay', 'diagnostic', 'reason-restart')));`], { env: { ...process.env } });
+  expect(child.exitCode).toBe(0);
+  expect(JSON.parse(child.stdout.toString())).toMatchObject({ state: "finished", diagnostic: { source: "exception", message: "Error: fixture launch response lost" } });
+});
+
 test("the retention is one 30-day constant for readers and pruning", () => {
   expect(RELAY_ANSWER_RETENTION_DAYS).toBe(30);
   finished("rq_young");

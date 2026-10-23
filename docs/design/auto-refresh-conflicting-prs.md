@@ -565,8 +565,8 @@ publication. No suite that sweeps runtime directories runs against live state
 - **The park detail in the seat wake.** The wake names the lane and its
   `needs_decision`; the seat reads the hunk with `get_pipeline`. Adding detail
   changes the wake for every parked lane.
-- **Refreshing a `BEHIND` PR through a lane.** The runner's existing update
-  path through the App write seam is outside this requirement.
+- **Refreshing a `BEHIND` PR through a lane.** Implemented by the strict-base
+  amendment below; the earlier GitHub update path is retired.
 - **A localized title for the refresh lane.** It follows the English shape of
   the seat's hand-built titles and of other engine-generated lane text.
 - **A lifecycle event for a started refresh.** The lane's creation and the
@@ -638,3 +638,19 @@ Regression coverage lives in `src/lib/forge/autoRefresh.test.ts`,
 refresh review, delay the handoff by zero or 27 seconds, and require one merge
 at the refreshed head only after checks pass. This change claims no performance
 gain.
+
+
+## Strict base updates (2026-10-23)
+
+Strict branch protection can mark the next queued PR `BEHIND` after each
+merge while its existing head's checks remain green. A fresh `BEHIND` read now
+uses this same visible local-merge refresh, with the same ownership, review,
+base-source, reservation and publication guards. The runner issues no GitHub
+update-branch request. A missing or unavailable delivery owner stops the lane
+with the existing refresh-refusal reason and releases its repository slot.
+
+A new reviewed successor starts a check clock for its own head. Its predecessor's
+old green checks and clock supply no settlement evidence for that head. If the
+base moves during refresh, the existing second-movement and same-base guards
+still apply. Refresh admission checks the current delivery and completed review
+both after forge awaits and under the reservation write lock.
