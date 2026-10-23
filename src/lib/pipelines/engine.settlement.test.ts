@@ -1108,19 +1108,19 @@ test("onExhausted: park keeps today's park once the review budget is spent (#186
   expect(current.stages.find((stage) => stage.id === "critique")!.onFail).toEqual({ to: "build", maxRounds: 2, onExhausted: "park" });
 });
 
-test("a spent review budget on the last stage completes after its final fix (#1868)", async () => {
+test("a spent review budget on the last stage parks after its final re-check (#3037)", async () => {
   const h = harness();
   await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
   await tickPipelines([], h.ports);
   await failEveryCritique(h, 1);
 
   const current = loadPipelines()[0]!;
-  expect(current.state).toBe("completed");
-  expect(current.cursor).toBeNull();
-  expect(current.reviewPending).toBeUndefined();
+  expect(current.state).toBe("needs_decision");
+  expect(current.cursor?.stageId).toBe("critique");
+  expect(current.reviewPending?.terminalRecheck).toBe(true);
   expect(current.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(2);
   const critiques = current.runs.find((run) => run.stageId === "critique")!.attempts;
-  expect(critiques).toHaveLength(1);
+  expect(critiques).toHaveLength(2);
   expect(critiques[0]).toMatchObject({ state: "failed", budgetSpent: true, verdict: { findings: ["P2 evidence gap 1"] } });
 });
 
@@ -1375,26 +1375,26 @@ test("another gate's fail loop gives a spent gate a fresh bounded check cycle (#
   expect(pipeline.state).toBe("completed");
   expect(pipeline.runs.find((run) => run.stageId === "review")!.attempts).toHaveLength(2);
   expect(pipeline.runs.find((run) => run.stageId === "fix")!.attempts).toHaveLength(4);
-  expect(pipeline.runs.find((run) => run.stageId === "ui-check")!.attempts.map((attempt) => attempt.verdict!.status)).toEqual(["fail", "fail"]);
+  expect(pipeline.runs.find((run) => run.stageId === "ui-check")!.attempts.map((attempt) => attempt.verdict!.status)).toEqual(["fail", "fail", "pass"]);
 });
 
-test.each([1, 3, 5])("terminal advance budget %s completes after its N reviews and final fix", async (reviews) => {
+test.each([1, 3, 5])("terminal advance budget %s parks after its N reviews, final fix and terminal re-check", async (reviews) => {
   const h = movingHeadHarness();
   await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: reviews }, null) as never);
   const { pipeline } = await driveWithController(h);
   const builds = pipeline.runs.find(run => run.stageId === "build")!.attempts;
   const critiques = pipeline.runs.find(run => run.stageId === "critique")!.attempts;
-  expect(pipeline.state).toBe("completed");
-  expect(pipeline.cursor).toBeNull();
-  expect(pipeline.reviewPending).toBeUndefined();
-  expect(critiques).toHaveLength(reviews);
+  expect(pipeline.state).toBe("needs_decision");
+  expect(pipeline.cursor?.stageId).toBe("critique");
+  expect(pipeline.reviewPending?.terminalRecheck).toBe(true);
+  expect(critiques).toHaveLength(reviews + 1);
   expect(builds).toHaveLength(reviews + 1);
   expect(builds.at(-1)!.input).toContain(`P2 evidence gap ${reviews}`);
   expect(builds.at(-1)!.state).toBe("passed");
-  expect(critiques.every(a => !a.activatedBy?.budgetRecheck)).toBe(true);
-  expect(pipelineCompletedUnreviewed(pipeline)?.stageId).toBe("critique");
+  expect(critiques.at(-1)!.activatedBy?.budgetRecheck).toBe(true);
+  expect(pipelineCompletedUnreviewed(pipeline)).toBeNull();
   await tickPipelines([], h.ports);
-  expect(loadPipelines()[0]!.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(reviews);
+  expect(loadPipelines()[0]!.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(reviews + 1);
 });
 
 

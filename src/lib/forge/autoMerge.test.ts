@@ -191,6 +191,7 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
   };
 
   return {
+    ports,
     calls,
     prs,
     commits,
@@ -504,7 +505,8 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
         activatedBy: { stageId: "review", attempt: 1, edge: "fail", budgetSpent: true } }] } as unknown as Pipeline["runs"][number]);
       const earlierReview = harness({ lanes: [unreviewed], prs: [openPr(11, { head: oldHead })] });
       await earlierReview.sweep();
-      expect(earlierReview.merge("L2")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.headChanged });
+      expect(earlierReview.merge("L2")).toBeUndefined();
+      expect(earlierReview.merges()).toEqual([]);
     } finally {
       fs.rmSync(repo, { recursive: true, force: true });
     }
@@ -829,14 +831,57 @@ describe("eligibility (#2187 §4.2)", () => {
     expect(mergeEligible(lane("failed", { reviews: [{ n: 1, state: "failed" }] }))).toBe(false);
   });
 
-  test("a spent budget whose last fix passed is eligible, and so is a skipped or accepted review", () => {
+  test("a spent nonterminal budget whose last fix passed is eligible, and so is a skipped or accepted review", () => {
     const spent = lane("spent", {
       reviews: [{ n: 1, state: "failed" }, { n: 2, state: "failed", budgetSpent: true }],
       builds: [{ n: 1, state: "passed" }, { n: 2, state: "passed", activatedBy: { stageId: "review", attempt: 1, edge: "fail" } }, { n: 3, state: "passed", activatedBy: { stageId: "review", attempt: 2, edge: "fail", budgetSpent: true } }],
     });
+    spent.stages[1]!.next = "ship";
+    spent.stages.push({ ...spent.stages[0]!, id: "ship", next: null });
+    spent.runs.push({ stageId: "ship", attempts: [{ ...spent.runs[0]!.attempts[0]! }] });
     expect(mergeEligible(spent)).toBe(true);
     expect(mergeEligible(lane("skipped", { reviews: [{ n: 1, state: "skipped" }] }))).toBe(true);
     expect(mergeEligible(lane("accepted", { reviews: [{ n: 1, state: "failed", budgetSpent: true }], acceptances: [{ stageId: "review", attempt: 1 }] }))).toBe(true);
+  });
+
+  test.each([false, true])("a retained completed terminal budget fix cannot automatically merge before its re-check (queued: %s)", async queued => {
+    const unreviewed = lane("terminal-spent", {
+      reviews: [{ n: 1, state: "failed", budgetSpent: true }],
+      builds: [{ n: 1, state: "passed", activatedBy: { stageId: "review", attempt: 1, edge: "fail", budgetSpent: true } }],
+    });
+    expect(mergeEligible(unreviewed)).toBe(false);
+    const h = harness({ lanes: [unreviewed], prs: [openPr(11)] });
+    if (queued) {
+      h.pipeline(unreviewed.id).runs[1]!.attempts[0]!.state = "passed";
+      await h.sweep();
+      h.pipeline(unreviewed.id).runs[1]!.attempts[0]!.state = "failed";
+      h.calls.length = 0;
+      h.advance(MERGE_POLL_MS);
+    }
+    await h.sweep();
+    if (queued) expect(h.merge(unreviewed.id)).toMatchObject({ state: "blocked", reason: "lane has not met the review merge bar" });
+    else expect(h.merge(unreviewed.id)).toBeUndefined();
+    expect(h.merges()).toEqual([]);
+    expect(h.calls).toEqual([]);
+  });
+
+  test.each(["update", "merge"] as const)("the review bar is checked again after forge reads before %s", async action => {
+    const h = harness({ lanes: [lane("review-moved")], prs: [openPr(11, action === "update" ? { mergeStateStatus: "BEHIND" } : {})] });
+    if (action === "merge") { await h.sweep(); h.advance(MERGE_SETTLE_MS + MERGE_POLL_MS); }
+    const run = h.ports.run;
+    let changed = false;
+    h.ports.run = async args => {
+      const result = await run(args);
+      if (!changed && args[0] === "pr" && args[1] === "view") {
+        h.pipeline("review-moved").runs[1]!.attempts[0]!.state = "failed";
+        changed = true;
+      }
+      return result;
+    };
+    await h.sweep();
+    expect(changed).toBe(true);
+    expect(h.writes).toEqual([]);
+    expect(h.merge("review-moved")).toMatchObject({ state: "blocked", reason: "lane has not met the review merge bar" });
   });
 });
 

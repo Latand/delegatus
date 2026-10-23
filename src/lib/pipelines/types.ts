@@ -84,8 +84,9 @@ export type PipelineEdgeKind = "pass" | "fail";
     (#1868, #2187). `advance` (the default, and every edge without the field)
     reads `maxRounds` as the number of reviews: the last review's findings go to
     the target once more and, when that fix passes, the lane follows the
-    source's own pass edge without re-running the source, or completes when
-    that edge is null, whether or not the fix wrote a new head.
+    source's own pass edge without re-running the source. A terminal source
+    re-checks that fix once: a pass completes, a fail parks with the remaining
+    findings, whether or not the fix wrote a new head.
     `stop-after-fix` counts and hands off the same way, and after that fix the
     lane waits in `needs_review` for the operator (#1938). `park` keeps the
     older count, one more review after `maxRounds` traversals, then stops for
@@ -187,10 +188,10 @@ export type PipelineEdgeActivation = {
   edge: PipelineEdgeKind;
   /** On a fail activation: the source's budget was spent, so this is the
       one handoff past it (#1868). It spends no reviewed round, and the
-      target's pass follows the source's pass edge or completes, with no
-      further review. */
+      target's pass follows the source's pass edge. A terminal source
+      re-checks the final fix once before completion. */
   budgetSpent?: true;
-  /** Legacy terminal re-check activation retained for existing records. */
+  /** The single terminal check after a spent budget's final fix. */
   budgetRecheck?: true;
 };
 
@@ -799,7 +800,7 @@ export type PipelineState = "draft" | "provisioning" | "running" | "needs_decisi
 /** Why review budget stopped this lane: an unreviewed fix in needs_review
     (#1938), or a failed terminal re-check in needs_decision. */
 export type PipelineReviewPending = {
-  /** A terminal budget re-check judged the current head and failed: fix first. */
+  /** A terminal budget re-check judged the current head and failed: retain the decision. */
   terminalRecheck?: true;
   /** The review stage whose fail-edge budget is spent, and its last attempt. */
   stageId: string;

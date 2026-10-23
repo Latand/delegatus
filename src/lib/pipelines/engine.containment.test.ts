@@ -80,12 +80,11 @@ test.each(["codex", "claude"].flatMap(engine => ["full", "restricted"].map(sandb
 });
 
 
-test.each([false, true])("stored default-advance terminal budget park fixes retained findings once across restart (metadata: %s)", async (metadata) => {
+test.each([false, true])("stored terminal budget refusal stays parked across restart (metadata: %s)", async (metadata) => {
   const h = movingHeadHarness();
   await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
   const parked = (await driveLegacyTerminalRecheck(h)).pipeline;
   const { needsYouEntries } = await import("@/lib/attention/needsYouRead");
-  expect(needsYouEntries({ files: [], pipelines: [parked], tasks: [] }, null, Date.now() / 1000, parked.project)).toHaveLength(1);
   if (!metadata) delete parked.reviewPending;
   if (metadata) parked.reviewGrants = [{ clientRequestId: "historical-grant", expectedRevision: pipelineRevision(parked), stageId: "critique", terminalAttempt: 1,
     rounds: 1, reviewedHead: REVIEW_HEADS[0], currentHead: parked.lastPassedCommit, actor: { kind: "operator" }, at: parked.createdAt }];
@@ -95,24 +94,14 @@ test.each([false, true])("stored default-advance terminal budget park fixes reta
   parked.taskIds = [task.id];
   savePipelines([parked]);
   await tickPipelines([], h.ports);
-  expect(loadTasks().find(row => row.id === task.id)?.note ?? null).toBeNull();
-  const resumed = loadPipelines()[0]!;
-  expect(resumed.state).toBe("running");
-  expect(resumed.reviewPending).toBeUndefined();
-  expect(needsYouEntries({ files: [], pipelines: [resumed], tasks: loadTasks() }, null, Date.now() / 1000, resumed.project)).toEqual([]);
-  const { pipeline } = await driveWithController(h);
-  expect(pipeline.state).toBe("completed");
-  expect(pipeline.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(2);
-  const fixes = pipeline.runs.find(run => run.stageId === "build")!.attempts;
-  expect(fixes).toHaveLength(3);
-  expect(fixes.at(-1)!.input).toContain("P2 evidence gap 2");
-  expect(pipelineCompletedUnreviewed(pipeline)?.findings).toBe(1);
-  expect(needsYouEntries({ files: [], pipelines: [pipeline], tasks: loadTasks() }, null, Date.now() / 1000, pipeline.project)).toEqual([]);
-  await tickPipelines([], h.ports);
-  expect(loadPipelines()[0]!.state).toBe("completed");
-  expect(loadPipelines()[0]!.runs.find(run => run.stageId === "build")!.attempts).toHaveLength(3);
+  const current = loadPipelines()[0]!;
+  expect(current.state).toBe("needs_decision");
+  expect(current.reviewPending?.terminalRecheck).toBe(true);
+  expect(needsYouEntries({ files: [], pipelines: [current], tasks: loadTasks() }, null, Date.parse(current.updatedAt) / 1000, current.project)).toHaveLength(1);
+  expect(current.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(2);
+  expect(current.runs.find(run => run.stageId === "build")!.attempts).toHaveLength(2);
+  expect(pipelineCompletedUnreviewed(current)).toBeNull();
 });
-
 
 test.each(["park", "stop-after-fix", "operator-choice"])("stored terminal budget recovery preserves %s", async (policy) => {
   const h = movingHeadHarness();
@@ -141,7 +130,8 @@ test("stored default-advance needs_review resumes after its already passed final
   savePipelines([parked]);
   await tickPipelines([], h.ports);
   const current = loadPipelines()[0]!;
-  expect(current.state).toBe("completed");
+  expect(current.state).toBe("running");
+  expect(current.cursor?.activatedBy?.budgetRecheck).toBe(true);
   expect(current.reviewPending).toBeUndefined();
   expect(current.runs.find(run => run.stageId === "build")!.attempts).toHaveLength(2);
 });
