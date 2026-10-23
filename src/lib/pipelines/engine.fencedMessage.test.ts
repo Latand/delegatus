@@ -1,4 +1,4 @@
-import { expect, test, harness, create, tickPipelines, loadPipelines, savePipelines, failedReceipt, frozenWallClock, forbiddenSleep, fs, path, defaultPipelinePorts, AgentRegistry, setAgentRegistryForTests, crypto, stageHostChild } from "./engine.fixture";
+import { afterAll, expect, test, harness, create, tickPipelines, loadPipelines, savePipelines, failedReceipt, frozenWallClock, forbiddenSleep, fs, path, defaultPipelinePorts, AgentRegistry, setAgentRegistryForTests, crypto, stageHostChild } from "./engine.fixture";
 import { SEND_LOST_REASON, SEND_UNVERIFIED_REASON } from "@/lib/runtime/sendSettlement";
 import { RuntimeJournal } from "@/runtime-host/journal";
 
@@ -375,6 +375,16 @@ test("fenced retry delivers once across controller processes before and after di
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }, 120_000);
 
+const recordedHosts: Awaited<ReturnType<typeof stageHostChild>>[] = [];
+/* A case that times out never reaches its finally; its host is ended after the
+   file's last test so it cannot outlive the file. */
+async function ownedHost() {
+  const host = await stageHostChild();
+  recordedHosts.push(host);
+  return host;
+}
+afterAll(async () => { for (const host of recordedHosts.splice(0)) await host.end(); });
+
 /* 2026-10-23: four failed-startup recoveries parked on "could not terminate its
    recorded host: stage launch changed or wrote its transcript before
    termination" while the recorded host pid no longer existed, and a manual
@@ -391,7 +401,7 @@ async function fencedLaunchWithRecordedHost(recordedIdentity?: (host: import("@/
   const root = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "fenced-recorded-host-"));
   const registry = new AgentRegistry(path.join(root, "agent-registry.json"));
   const journal = new RuntimeJournal(path.join(root, "runtime-journal.sqlite"), { structuredHosts: true, now: () => Date.parse("2026-10-23T12:00:00Z") });
-  const host = await stageHostChild();
+  const host = await ownedHost();
   setAgentRegistryForTests(registry);
   const { captureProcessIdentity } = await import("@/lib/processIdentity");
   const begun = registry.beginSpawnRequest({ engine: "codex", cwd: root, transport: "structured", role: "builder",
@@ -526,7 +536,7 @@ test.each(["unset", "set"] as const)("failed startup recovery never signals a li
   const prior = process.env.LLV_RUNTIME_HOST_SOCKET;
   if (socketSet) process.env.LLV_RUNTIME_HOST_SOCKET = path.join(process.env.TMPDIR!, "closed-runtime-host.sock");
   const f = await fencedLaunchWithRecordedHost();
-  const peer = await stageHostChild();
+  const peer = await ownedHost();
   try {
     await f.tick(async () => {
       const before = f.registry.readOnlySnapshot();
