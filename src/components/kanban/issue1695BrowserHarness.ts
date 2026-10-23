@@ -1494,6 +1494,7 @@ export async function captureLaneReviewFrames(browser: Browser, out: string, pho
   const pipeline = lane.pipeline({ id: ID, runs: [{ stageId: "build", attempts: [writer] }] }) as PipelineRecord;
   let deliverStatus = 200;
   let hold: Promise<void> | null = null;
+  let operationReceipt: { status: string; resend?: string } = { status: "delivered" };
   const deps = {
     pipeline: (id: string) => (id === ID ? pipeline : null),
     exec: realExec,
@@ -1507,7 +1508,7 @@ export async function captureLaneReviewFrames(browser: Browser, out: string, pho
       return laneChangesGET(new NextRequest(request), ID, deps);
     },
     [`/api/pipelines/${ID}/review`]: (request: Request) => laneReviewPOST(new NextRequest(request), ID, deps),
-    "/api/runtime/operations/op-lane-review": () => Response.json({ operationId: "op-lane-review", receipt: { status: "delivered" } }),
+    "/api/runtime/operations/op-lane-review": () => Response.json({ operationId: "op-lane-review", receipt: operationReceipt }),
   });
   const short = (sha: string) => sha.slice(0, 10);
   const readings: unknown[] = [];
@@ -1516,6 +1517,7 @@ export async function captureLaneReviewFrames(browser: Browser, out: string, pho
   try {
     for (const width of widths) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
       lane.git("update-ref", `refs/heads/${LANE_BRANCH}`, tip);
+      operationReceipt = { status: "delivered" };
       const height = phone ? 844 : 900;
       const label = `${phone ? "phone" : "desktop"}-${width}-${lang}-${theme}`;
       const fail = (text: string) => failures.push(`${label}: ${text}`);
@@ -1540,6 +1542,12 @@ export async function captureLaneReviewFrames(browser: Browser, out: string, pho
           const footer = document.querySelector("[data-lane-review-footer]")?.getBoundingClientRect();
           const scroller = document.querySelector<HTMLElement>("[data-lane-review-diff]");
           const gutters = [...document.querySelectorAll("[data-lane-review-line]")].map((element) => element.getBoundingClientRect()).filter((box) => box.width > 0);
+          /* Edit and Delete under a saved comment: each a 24 px target, with room between them. */
+          const actionBoxes = [...document.querySelectorAll("[data-lane-review-comment-actions] button")].map((element) => element.getBoundingClientRect()).filter((box) => box.width > 0);
+          const actionGap = [...document.querySelectorAll("[data-lane-review-comment-actions]")].map((group) => {
+            const [edit, remove] = [...group.querySelectorAll("button")].map((button) => button.getBoundingClientRect());
+            return edit && remove ? remove.left - edit.right : null;
+          }).filter((gap): gap is number => gap !== null);
           let lastRowClear = true;
           if (scroller && footer) {
             const before = scroller.scrollTop;
@@ -1553,12 +1561,16 @@ export async function captureLaneReviewFrames(browser: Browser, out: string, pho
           return {
             open: Boolean(sheet),
             gutterMin: gutters.length ? Math.min(...gutters.map((box) => Math.min(box.width, box.height))) : null,
+            actionMin: actionBoxes.length ? Math.min(...actionBoxes.map((box) => Math.min(box.width, box.height))) : null,
+            actionGapMin: actionGap.length ? Math.min(...actionGap) : null,
             lastRowClear,
             boardInert: Boolean(board?.closest("[inert]")),
           };
         });
         if (geometry) {
           if (geometry.gutterMin !== null && geometry.gutterMin < 24) fail(`${state}: a gutter target is ${geometry.gutterMin}px`);
+          if (geometry.actionMin !== null && geometry.actionMin < 24) fail(`${state}: an Edit or Delete target is ${geometry.actionMin}px`);
+          if (geometry.actionGapMin !== null && geometry.actionGapMin < 8) fail(`${state}: Edit and Delete are ${geometry.actionGapMin}px apart`);
           if (!geometry.lastRowClear) fail(`${state}: the footer covers the last diff row`);
           if (!geometry.boardInert) fail(`${state}: the board behind the sheet is not inert`);
         }
@@ -1575,6 +1587,12 @@ export async function captureLaneReviewFrames(browser: Browser, out: string, pho
           await frame("list", "[data-lane-review-phone-note]", tr("laneReview.phoneNote"));
           await page.locator('[data-lane-review-phone-file="src/app.ts"]').click();
           await frame("file", '[data-mobile2-lane-review] li:has([data-lane-review-phone-file="src/app.ts"])', "line five");
+          const opened = await page.locator("[data-mobile2-lane-review]").evaluate((element) => ({
+            paths: (element.textContent ?? "").split("src/app.ts").length - 1,
+            marked: element.querySelector('[data-lane-review-phone-file="src/app.ts"]')?.getAttribute("aria-expanded"),
+            chevron: Boolean(element.querySelector('[data-lane-review-phone-file="src/app.ts"] svg')),
+          }));
+          if (opened.paths !== 1 || opened.marked !== "true" || !opened.chevron) fail(`the opened phone file is repeated or unmarked: ${JSON.stringify(opened)}`);
           const controls = await page.locator("[data-mobile2-lane-review] [data-lane-review-line], [data-mobile2-lane-review] textarea, [data-lane-review-send]").count();
           if (controls) fail(`the phone draws ${controls} comment controls`);
           const rows = await page.locator("[data-lane-review-phone-file]").evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().height));
@@ -1600,6 +1618,8 @@ export async function captureLaneReviewFrames(browser: Browser, out: string, pho
           await page.locator('[data-lane-review-line="new:5"]').click();
           await page.locator("[data-lane-review-editor] textarea").fill(lang === "en" ? "Keep the old name: callers still import it." : "Залиште стару назву: її ще імпортують.");
           await frame("editor", "[data-lane-review-editor]", lang === "en" ? "Save" : "Зберегти");
+          const editorFooter = (await page.locator("[data-lane-review-status]").textContent()) ?? "";
+          if (/(^|\s)0\s/.test(editorFooter) || editorFooter !== tr("laneReview.footerTarget", { stage: "build", engine: "Claude" })) fail(`editor: the footer reads ${JSON.stringify(editorFooter)}, expected only the target`);
           await page.locator("[data-lane-review-save]").click();
           await page.locator('[data-lane-review-line="new:26"]').click();
           await page.locator("[data-lane-review-editor] textarea").fill(lang === "en" ? "Why the extra line?" : "Навіщо додатковий рядок?");
@@ -1623,13 +1643,33 @@ export async function captureLaneReviewFrames(browser: Browser, out: string, pho
           deliverStatus = 200;
           await page.locator("[data-lane-review-send]").click();
           await page.locator("[data-lane-review-sent]").waitFor({ timeout: 15_000 });
-          await page.waitForFunction((word) => (document.querySelector("[data-lane-review-sent]")?.textContent ?? "").includes(word), tr("laneReview.delivered"));
+          await page.waitForFunction(() => document.querySelector("[data-lane-review-sent]")?.getAttribute("data-receipt") === "delivered");
           await frame("sent", "[data-lane-review-sent]", new RegExp(`build.*${tr("laneReview.delivered")}`));
+          const footerStyle = () => page.locator("[data-lane-review-sent]").evaluate((element) => {
+            const style = getComputedStyle(element);
+            return { color: style.color, weight: Number(style.fontWeight), size: style.fontSize };
+          });
+          const delivered = await footerStyle();
+          /* A send that was not delivered or not confirmed leads with the outcome in its own tone and weight. */
+          for (const [state, receipt, expected] of [
+            ["unconfirmed", { status: "uncertain", resend: "verify-first" }, new RegExp(`^${tr("laneReview.sentUnconfirmed", { stage: "build", time: "" }).split("(")[0]!.trim()}`)],
+            ["rejected", { status: "rejected", resend: "safe" }, new RegExp(`^${tr("laneReview.sentFailed", { stage: "build", time: "" }).split("(")[0]!.trim()}`)],
+          ] as const) {
+            operationReceipt = receipt;
+            await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+            await page.waitForFunction((name) => document.querySelector("[data-lane-review-sent]")?.getAttribute("data-receipt") === name, state === "rejected" ? "failed" : state);
+            await frame(state, "[data-lane-review-sent]", expected);
+            const style = await footerStyle();
+            if (style.color === delivered.color || style.weight <= delivered.weight) fail(`${state}: the receipt line keeps the delivered line's colour ${delivered.color} or weight ${delivered.weight}: ${JSON.stringify(style)}`);
+          }
 
           lane.git("update-ref", `refs/heads/${LANE_BRANCH}`, lane.git("rev-parse", "main"));
           await page.evaluate(() => window.dispatchEvent(new Event("focus")));
           const main = lane.git("rev-parse", "main");
-          await frame("empty", "[data-lane-review-empty]", tr("laneReview.empty", { base: short(main), head: short(main) }));
+          await frame("empty", "[data-lane-review-empty]", tr("laneReview.empty"));
+          const emptySheet = await page.locator("[data-lane-review]").evaluate((element) => ({ text: element.textContent ?? "", files: element.querySelectorAll("[data-lane-review-files]").length }));
+          if (emptySheet.text.split(short(main)).length - 1 > 2) fail(`empty: the pair ${short(main)} is named more than twice`);
+          if (emptySheet.files) fail("empty: an empty file column remains");
         }
         if (pageErrors.length) fail(`page errors: ${pageErrors.join(" | ")}`);
       } catch (error) {

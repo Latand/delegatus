@@ -117,7 +117,7 @@ export function DiffRows<Row extends DiffRow>({ rows, prose = false, numbers, af
   );
 }
 
-function FileDiffView({ file }: { file: FileDiff }) {
+function FileDiffView({ file, bare }: { file: FileDiff; bare?: boolean }) {
   const [all, setAll] = useState(false);
   const rows = flattenHunks(file.hunks);
   const overflow = rows.length > PREVIEW_LINES;
@@ -125,7 +125,7 @@ function FileDiffView({ file }: { file: FileDiff }) {
   const copyText = file.hunks.flatMap((hunk) => hunk.lines.map((line) => line.t + line.text)).join("\n");
   return (
     <div className="group/diff relative overflow-hidden rounded-[10px] border border-border bg-sunken">
-      <div className="flex items-center gap-2 border-b border-border px-2.5 py-1 text-[11.5px]">
+      {bare ? null : <div className="flex items-center gap-2 border-b border-border px-2.5 py-1 text-[11.5px]">
         <span className={`shrink-0 font-semibold uppercase ${OP_TONE[file.op]}`}>{file.op}</span>
         <span className="min-w-0 flex-1 truncate">
           <FileRef file={file.path} />
@@ -142,7 +142,7 @@ function FileDiffView({ file }: { file: FileDiff }) {
             className={`shrink-0 ${MESSAGE_ACTION} group-hover/diff:opacity-100`}
           />
         ) : null}
-      </div>
+      </div>}
       {file.binary ? (
         <div className="px-2.5 py-2 text-[11.5px] text-muted">{tr("tools.binaryContent", { size: humanKb(file.added + file.removed) })}</div>
       ) : rows.length ? (
@@ -172,11 +172,13 @@ function FileDiffView({ file }: { file: FileDiff }) {
   );
 }
 
-export function DiffCard({ body }: { body: ToolBody }) {
+/** `bare` leaves out each file's header line, for a caller whose own row above
+    the card already names the file and its counts. */
+export function DiffCard({ body, bare }: { body: ToolBody; bare?: boolean }) {
   return (
     <div className="mt-1.5 space-y-1.5">
       {body.files.map((file, i) => (
-        <FileDiffView key={`${file.path}:${i}`} file={file} />
+        <FileDiffView key={`${file.path}:${i}`} file={file} bare={bare} />
       ))}
       {body.filesTruncated ? <div className="text-[11px] text-muted">{tr("tools.moreFiles", { count: body.files.length })}</div> : null}
     </div>

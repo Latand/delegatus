@@ -304,14 +304,14 @@ computed on the server. Editing comments is local and immediate.
 | --- | --- | --- |
 | loading | «Reading changes…» in the file column; «Loading diff…» in the diff column | Close |
 | error | «Could not read the changes: {reason}» | Try again, Close |
-| empty | «No changes between {base} and {head}.» | Send disabled |
-| ready / draft | Header `{base} → {head}`, «{n} files · +a −b»; footer «{count} comments to {stage} · {engine}» | Line-number buttons, Comment on the file, Send |
+| empty | «No changes on this branch yet.» alone, the pair named once in the header, no file column | Send disabled |
+| ready / draft | Header `{base} → {head}`, «{n} files · +a −b»; footer «{count} comments to {stage} · {engine}», or «To {stage} · {engine}» while no comment is saved | Line-number buttons, Comment on the file, Send |
 | no target | Footer «No stage has written to this lane yet» | Send disabled |
 | stale head | Banner under the header: «The branch moved: {old} → {new}. Your {count} comments are kept.» | Re-anchor to {new}; Send disabled with «Re-anchor first: the comments point at an older commit» |
 | re-anchored | Banner: «{moved} moved, {detached} need a line»; detached comments listed first in their file under «Needs a line» | Edit, delete, or leave a detached comment as file-level; Send enabled |
 | target changed | «The lane's writer is now {stage}. Check and send again.» | Send |
 | sending | Send reads «Sending…», disabled | none |
-| sent | Footer «Sent to {stage} at {time}» plus the receipt word (queued / delivered) | Open conversation; new comments start a new draft (`draftId` renewed) |
+| sent | Footer «Sent to {stage} at {time}» plus the receipt word (queued / delivered), muted. A rejected or failed receipt leads with the outcome in the danger tone, «Not delivered to {stage} (sent {time})»; an uncertain one in the warning tone, «Delivery to {stage} unconfirmed (sent {time})» | Open conversation; new comments start a new draft (`draftId` renewed) |
 | failed | «Not sent: {reason}. Your comments are kept.» | Retry delivery (runtime retry) or Send again (same key) |
 
 Uncommitted files (§1) add one line under the header in any state that has a
@@ -368,7 +368,7 @@ All keys are new under `laneReview.*` in `src/lib/i18n/en.ts` and
 | loadingFile | Loading diff… | Завантажую diff… |
 | error | Could not read the changes: {reason} | Не вдалося прочитати зміни: {reason} |
 | tryAgain | Try again | Спробувати ще раз |
-| empty | No changes between {base} and {head}. | Між {base} і {head} змін немає. |
+| empty | No changes on this branch yet. | У цій гілці змін ще немає. |
 | moreFiles | {count} more files not listed | Ще {count} файлів не показано |
 | uncommitted | {count} uncommitted files in the checkout are not shown | Незакомічені файли в робочій копії ({count}) не показано |
 | lineOld / lineNew | Comment on old line {line} / Comment on new line {line} | Коментар до старого рядка {line} / до нового рядка {line} |
@@ -377,6 +377,8 @@ All keys are new under `laneReview.*` in `src/lib/i18n/en.ts` and
 | save / delete / edit | Save / Delete / Edit | Зберегти / Видалити / Змінити |
 | note | Overall note (optional) | Загальна примітка (необов’язково) |
 | footer | {count} comments to {stage} · {engine} (plural) | {count} коментар/коментарі/коментарів для {stage} · {engine} |
+| footerTarget | To {stage} · {engine} | Для {stage} · {engine} |
+| sentFailed / sentUnconfirmed | Not delivered to {stage} (sent {time}) / Delivery to {stage} unconfirmed (sent {time}) | Не доставлено: {stage} (надіслано о {time}) / Доставку до {stage} не підтверджено (надіслано о {time}) |
 | send | Send to agent | Надіслати агентові |
 | sending | Sending… | Надсилаю… |
 | noTarget | No stage has written to this lane yet | Жоден етап ще не писав у цю гілку |
@@ -478,14 +480,16 @@ Frames are made with the existing drivers only, and saved in scratch:
 
 - Kanban board driver: desktop at 1440, 1024 and 640 px, in en and uk, light
   and dark. States: ready with comments, an open editor, stale, re-anchored,
-  sent, failed, empty and loading. The fixture uses real data: a lane with an
+  sent, unconfirmed, rejected, failed, empty and loading. The fixture uses real data: a lane with an
   added, an updated, a deleted and a binary file, and a multi-hunk file.
-- Phone driver: 390 px, list and one expanded file, in en and uk, light and
-  dark.
+- Phone driver: 390 px, list and one expanded file (its row marked open, its
+  path and counts shown once), in en and uk, light and dark.
 
 Each frame is checked for: the state's defining text visible on the first
 screen; the pinned footer not covering the last diff row; gutter targets at
-least 24 px; the background inert.
+least 24 px; Edit and Delete targets at least 24 px tall and 8 px apart; the
+receipt line leading with the outcome in its own tone; the empty sheet naming
+the pair once; the background inert.
 
 ## 11. What not to touch
 

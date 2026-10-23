@@ -76,7 +76,7 @@ describe("lane diff comments", () => {
     const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
     const result = await captureLaneReviewFrames(browser, out, false);
     expect(result.failures).toEqual([]);
-    expect(result.readings.length).toBe(3 * 2 * 2 * 8);
+    expect(result.readings.length).toBe(3 * 2 * 2 * 10);
   }, 600_000);
 });
 

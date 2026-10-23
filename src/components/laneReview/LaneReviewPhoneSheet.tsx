@@ -1,5 +1,6 @@
 "use client";
 
+import { ChevronRight } from "@/components/icons";
 import { useEffect, useMemo, useState } from "react";
 
 import { DiffCard, OP_TONE } from "@/components/feed/cards/DiffCard";
@@ -58,7 +59,7 @@ export function LaneReviewPhoneSheet({ pipelineId, onClose, fetchPort }: { pipel
               {summary.total ? <span>{t("laneReview.totals", { count: summary.total, added: totals!.added, removed: totals!.removed })}</span> : null}
             </p>
             {summary.uncommitted > 0 ? <p className="m-0 text-caption text-muted">{t("laneReview.uncommitted", { count: summary.uncommitted })}</p> : null}
-            {summary.total === 0 ? <p className="m-0 text-ui">{t("laneReview.empty", { base: shortSha(summary.base), head: shortSha(summary.head) })}</p> : null}
+            {summary.total === 0 ? <p className="m-0 text-ui">{t("laneReview.empty")}</p> : null}
             <ul className="m-0 flex list-none flex-col gap-1 p-0">
               {summary.files.map((file) => {
                 const entry = files[file.path];
@@ -67,10 +68,11 @@ export function LaneReviewPhoneSheet({ pipelineId, onClose, fetchPort }: { pipel
                     <button
                       type="button"
                       aria-expanded={open === file.path}
-                      className="flex min-h-11 w-full min-w-0 items-center gap-2 rounded-[10px] bg-quiet px-3 text-left text-ui ring-1 ring-inset ring-border active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                      className={`flex min-h-11 w-full min-w-0 items-center gap-2 rounded-[10px] px-3 ${open === file.path ? "bg-sunken font-semibold" : "bg-quiet"} text-left text-ui ring-1 ring-inset ring-border active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40`}
                       data-lane-review-phone-file={file.path}
                       onClick={() => toggle(file.path)}
                     >
+                      <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-muted transition-transform ${open === file.path ? "rotate-90" : ""}`} aria-hidden />
                       <span className={`w-3 shrink-0 font-mono text-caption font-semibold ${OP_TONE[file.op]}`}>{t(`laneReview.op.${file.op}`)}</span>
                       <span className="min-w-0 flex-1 truncate [direction:rtl] text-left"><bdi>{file.path}</bdi></span>
                       {file.binary ? null : (
@@ -82,7 +84,7 @@ export function LaneReviewPhoneSheet({ pipelineId, onClose, fetchPort }: { pipel
                     {open === file.path ? (
                       entry?.kind === "ready" ? (
                         entry.file.binary ? <p className="m-0 px-1 pt-1.5 text-caption text-muted">{t("laneReview.binary")}</p>
-                          : <DiffCard body={{ type: "diff", files: [entry.file], filesTruncated: false }} />
+                          : <DiffCard bare body={{ type: "diff", files: [entry.file], filesTruncated: false }} />
                       ) : entry?.kind === "error" ? <p className="m-0 px-1 pt-1.5 text-caption" role="alert">{t("laneReview.error", { reason: entry.reason })}</p>
                         : <p className="m-0 px-1 pt-1.5 text-caption text-muted">{t("laneReview.loadingFile")}</p>
                     ) : null}

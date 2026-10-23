@@ -191,7 +191,7 @@ describe("the desktop sheet", () => {
     expect(files).toEqual(["assets/logo.bin", "src/added.ts", "src/app.ts", "src/gone.ts"]);
     expect($("[data-lane-review-pair]")!.textContent).toBe(`${lane.git("rev-parse", "main").slice(0, 10)} → ${lane.git("rev-parse", LANE_BRANCH).slice(0, 10)}`);
     expect($("[data-lane-review-totals]")!.textContent).toBe("4 files · +3 −2");
-    expect($("[data-lane-review-status]")!.textContent).toBe("0 comments to build · Claude");
+    expect($("[data-lane-review-status]")!.textContent).toBe("To build · Claude");
     expect(send().disabled).toBe(true);
     await until(() => text().includes("Binary file"), "the binary file's note");
   });
@@ -200,6 +200,11 @@ describe("the desktop sheet", () => {
     await ready();
     await commentOnNewLine5();
     expect($("[data-lane-review-comment]")!.textContent).toContain("Keep the old name.");
+    expect($("[data-lane-review-status]")!.textContent).toBe("1 comment to build · Claude");
+    /* Edit and Delete each carry a 24 px target box (the board resets a button's padding). */
+    const actions = [...host.querySelectorAll("[data-lane-review-comment-actions] button > span")];
+    expect(actions.map((span) => span.textContent)).toEqual(["Edit", "Delete"]);
+    for (const span of actions) expect(span.className).toContain("min-h-6");
     const stored = JSON.parse(dom.localStorage.getItem(laneReviewDraftKey(pipeline.id))!);
     expect(stored.comments).toMatchObject([{ path: "src/app.ts", side: "new", line: 5, quote: "line five", body: "Keep the old name.", state: "anchored" }]);
     remount();
@@ -290,7 +295,7 @@ describe("the desktop sheet", () => {
     operationReceipt = { status: "failed", resend: "safe" };
     dom.dispatchEvent(new dom.Event("focus") as never);
     await until(() => Boolean($("[data-lane-review-retry]")), "Retry delivery");
-    expect($("[data-lane-review-sent]")!.textContent).toContain("not delivered");
+    expect($("[data-lane-review-sent]")!.textContent).toMatch(/^Not delivered to build \(sent .+\)$/);
     click("[data-lane-review-retry]");
     await until(() => operationCalls.some((call) => call.method === "POST"), "the runtime retry");
     expect(operationCalls.filter((call) => call.method === "POST")).toEqual([{ url: "/api/runtime/operations/op-1", method: "POST" }]);
@@ -309,7 +314,11 @@ describe("the desktop sheet", () => {
   test("a rejected receipt reads not delivered and Retry delivery posts the runtime retry once", async () => {
     await sendAndReceive({ status: "rejected", resend: "safe" });
     await until(() => Boolean($("[data-lane-review-retry]")), "Retry delivery");
-    expect($("[data-lane-review-sent]")!.textContent).toContain("not delivered");
+    const line = $("[data-lane-review-sent]")!;
+    expect(line.textContent).toMatch(/^Not delivered to build \(sent .+\)$/);
+    /* The outcome leads and carries the danger tone; the delivered line stays muted. */
+    expect(line.getAttribute("data-receipt")).toBe("failed");
+    expect(line.className).toContain("text-danger");
     click("[data-lane-review-retry]");
     await until(() => operationCalls.some((call) => call.method === "POST"), "the runtime retry");
     expect(operationCalls.filter((call) => call.method === "POST")).toEqual([{ url: "/api/runtime/operations/op-1", method: "POST" }]);
@@ -318,7 +327,10 @@ describe("the desktop sheet", () => {
   test("an uncertain receipt says delivery is unconfirmed and re-checks verify-first, never a plain retry", async () => {
     await sendAndReceive({ status: "uncertain", resend: "verify-first" });
     await until(() => Boolean($("[data-lane-review-recheck]")), "Re-check delivery");
-    expect($("[data-lane-review-sent]")!.textContent).toContain("Delivery unconfirmed");
+    const line = $("[data-lane-review-sent]")!;
+    expect(line.textContent).toMatch(/^Delivery to build unconfirmed \(sent .+\)$/);
+    expect(line.getAttribute("data-receipt")).toBe("unconfirmed");
+    expect(line.className).toContain("text-warning");
     expect($("[data-lane-review-retry]")).toBeNull();
     click("[data-lane-review-recheck]");
     await until(() => operationCalls.some((call) => call.method === "POST"), "the verify-first retry");
@@ -330,7 +342,8 @@ describe("the desktop sheet", () => {
   test("a steered receipt reads delivered and offers no retry", async () => {
     await sendAndReceive({ status: "steered" });
     await until(() => $("[data-lane-review-sent]")!.textContent!.includes("delivered"), "delivered word");
-    expect($("[data-lane-review-sent]")!.textContent).not.toContain("not delivered");
+    expect($("[data-lane-review-sent]")!.textContent).toMatch(/^Sent to build at .+ · delivered$/);
+    expect($("[data-lane-review-sent]")!.className).not.toMatch(/text-(danger|warning)/);
     expect($("[data-lane-review-retry]")).toBeNull();
     expect($("[data-lane-review-recheck]")).toBeNull();
   });
@@ -375,7 +388,10 @@ describe("the desktop sheet", () => {
     dom.localStorage.clear();
     mount();
     await until(() => state() === "empty", "empty");
-    expect($("[data-lane-review-empty]")!.textContent).toMatch(/^No changes between \w{10} and \w{10}\.$/);
+    expect($("[data-lane-review-empty]")!.textContent).toBe("No changes on this branch yet.");
+    /* The pair is named once, in the header, and no empty file column remains. */
+    expect($("[data-lane-review-files]")).toBeNull();
+    expect(text().match(new RegExp(lane.git("rev-parse", "main").slice(0, 10), "g"))?.length).toBe(2);
     expect(send().disabled).toBe(true);
     flushSync(() => root!.unmount());
     root = null;
@@ -409,6 +425,11 @@ describe("the phone sheet", () => {
     expect(scope.textContent).toContain("Line comments are written on a computer.");
     flushSync(() => (dom.document.querySelector('[data-lane-review-phone-file="src/app.ts"]') as unknown as HTMLElement).click());
     await until(() => (scope.textContent ?? "").includes("line five"), "the phone diff");
+    /* The opened row is marked and the card does not repeat its path and counts. */
+    const row = scope.querySelector('[data-lane-review-phone-file="src/app.ts"]')!;
+    expect(row.getAttribute("aria-expanded")).toBe("true");
+    expect(row.className).toContain("bg-sunken");
+    expect((scope.textContent ?? "").match(/src\/app\.ts/g)?.length).toBe(1);
     expect(scope.querySelector("[data-lane-review-line]")).toBeNull();
     expect(scope.querySelector("[data-lane-review-send], [data-lane-review-editor], textarea")).toBeNull();
     expect(dom.localStorage.getItem(laneReviewDraftKey(pipeline.id))).toBeNull();

@@ -83,8 +83,6 @@ function receiptView(receipt: { status?: string; resend?: string } | null): Rece
 function receiptWord(t: TFunction, receipt: { status?: string; resend?: string } | null): string | null {
   switch (receiptView(receipt)) {
     case "delivered": return t("laneReview.delivered");
-    case "failed": return t("composer.receiptFailed");
-    case "unconfirmed": return t("composer.deliveryCheckEnded");
     case "queued": return t("composer.receiptQueued");
     default: return null;
   }
@@ -371,8 +369,8 @@ export function LaneReviewSheet(props: {
           </div>
         ) : null}
 
-        <div className="grid min-h-0 flex-1 grid-cols-[220px_minmax(0,1fr)] lg:grid-cols-[260px_minmax(0,1fr)]">
-          <nav className="min-h-0 overflow-y-auto border-r border-border py-1" aria-label={t("laneReview.filesAria")} data-lane-review-files="">
+        <div className={`grid min-h-0 flex-1 ${empty ? "grid-cols-[minmax(0,1fr)]" : "grid-cols-[220px_minmax(0,1fr)] lg:grid-cols-[260px_minmax(0,1fr)]"}`}>
+          {empty ? null : <nav className="min-h-0 overflow-y-auto border-r border-border py-1" aria-label={t("laneReview.filesAria")} data-lane-review-files="">
             {load.kind === "loading" ? <p className="px-3 py-2 text-ui text-muted">{t("laneReview.loading")}</p> : null}
             {load.kind === "error" ? (
               <div className="flex flex-col items-start gap-2 px-3 py-2 text-ui" role="alert" data-lane-review-error="">
@@ -384,11 +382,11 @@ export function LaneReviewSheet(props: {
               <FileRow key={file.path} file={file} t={t} selected={file.path === current} comments={counts.get(file.path) ?? 0} onSelect={() => { setSelected(file.path); setEditor(null); }} />
             ))}
             {listing?.truncated ? <p className="px-3 py-1.5 text-caption text-muted">{t("laneReview.moreFiles", { count: listing.total - files.length })}</p> : null}
-          </nav>
+          </nav>}
 
           <div className="min-h-0 min-w-0 overflow-y-auto" data-lane-review-diff="">
             {load.kind === "loading" ? <p className="px-4 py-3 text-ui text-muted">{t("laneReview.loadingFile")}</p> : null}
-            {empty && draft ? <p className="px-4 py-3 text-ui" data-lane-review-empty="">{t("laneReview.empty", { base: shortSha(draft.base), head: shortSha(draft.head) })}</p> : null}
+            {empty && draft ? <p className="px-4 py-3 text-ui" data-lane-review-empty="">{t("laneReview.empty")}</p> : null}
             {draft && fileInfo ? (
               <FileView
                 t={t}
@@ -461,10 +459,18 @@ function FooterStatus({ t, locale, draft, target, send, stale, receipt }: {
   if (!target) return <span data-lane-review-no-target="">{t("laneReview.noTarget")}</span>;
   if (draft?.sent && !draft.comments.length && !draft.note.trim()) {
     const time = new Date(draft.sent.at).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
+    const view = receiptView(receipt);
+    const params = { stage: draft.sent.stageName, time };
+    /* A send that needs the operator's attention leads with the outcome in the
+       warning or danger tone; a delivered or queued one stays muted. */
+    if (view === "failed") return <span role="status" className="font-medium text-danger" data-lane-review-sent="" data-receipt="failed">{t("laneReview.sentFailed", params)}</span>;
+    if (view === "unconfirmed") return <span role="status" className="font-medium text-warning" data-lane-review-sent="" data-receipt="unconfirmed">{t("laneReview.sentUnconfirmed", params)}</span>;
     const word = receiptWord(t, receipt);
-    return <span role="status" data-lane-review-sent="">{t("laneReview.sent", { stage: draft.sent.stageName, time })}{word ? ` · ${word}` : ""}</span>;
+    return <span role="status" data-lane-review-sent="" data-receipt={view ?? undefined}>{t("laneReview.sent", params)}{word ? ` · ${word}` : ""}</span>;
   }
-  return <span>{t("laneReview.footer", { count: draft?.comments.length ?? 0, stage: target.stageName, engine: engineName(target.engine) })}</span>;
+  const count = draft?.comments.length ?? 0;
+  const engine = engineName(target.engine);
+  return <span>{count ? t("laneReview.footer", { count, stage: target.stageName, engine }) : t("laneReview.footerTarget", { stage: target.stageName, engine })}</span>;
 }
 
 function FileRow({ file, t, selected, comments, onSelect }: { file: LaneChangeFile; t: TFunction; selected: boolean; comments: number; onSelect: () => void }) {
@@ -638,9 +644,11 @@ function CommentCard({ t, comment, readOnly, onEdit, onDelete }: { t: TFunction;
       {comment.line === null && comment.quote ? <p className="m-0 truncate font-mono text-caption text-muted">&gt; {comment.quote}</p> : null}
       <p className="m-0 whitespace-pre-wrap break-words">{comment.body}</p>
       {readOnly ? null : (
-        <div className="mt-1 flex gap-3 text-caption">
-          <button type="button" className="group" onClick={onEdit}><span className="font-semibold text-accent group-hover:underline">{t("laneReview.edit")}</span></button>
-          <button type="button" className="group" onClick={onDelete}><span className="font-semibold text-diff-del group-hover:underline">{t("laneReview.delete")}</span></button>
+        /* The board's stylesheet resets a button's padding, so each target's box
+           is its span: 24 px tall, with a gap between Edit and the destructive Delete. */
+        <div className="mt-0.5 flex gap-3 text-caption" data-lane-review-comment-actions="">
+          <button type="button" className="group flex" onClick={onEdit}><span className="inline-flex min-h-6 min-w-6 items-center justify-center px-2 font-semibold text-accent group-hover:underline">{t("laneReview.edit")}</span></button>
+          <button type="button" className="group flex" onClick={onDelete}><span className="inline-flex min-h-6 min-w-6 items-center justify-center px-2 font-semibold text-diff-del group-hover:underline">{t("laneReview.delete")}</span></button>
         </div>
       )}
     </article>
