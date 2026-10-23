@@ -721,6 +721,53 @@ test("asynchronous restoration prepares both its selection and freshness check w
 });
 
 
+/* The first read decodes every retained record. Inside one presence check it
+   took a startup slice past 250 ms on a loaded production copy. */
+test("the first read decodes in yielded slices, and a write while it yields completes the read synchronously", async () => {
+  const now = Date.parse("2026-10-11T00:00:00Z");
+  for (const variant of ["completes", "written"] as const) {
+    const filename = path.join(root, `cooperative-load-${variant}.sqlite`);
+    const seed = new DeliveryProgressStore(filename, () => now, noTimer);
+    seed.note("open-send", "conversation", { waitReason: "queued", originalKey: "open-key" });
+    expect(seed.flush()).toBe(true);
+    seed.close();
+    addRecentCompletions(filename, now);
+    const store = new DeliveryProgressStore(filename, () => now, noTimer);
+    const loaded = () => (store as unknown as { loaded: boolean }).loaded;
+    let turns = 0, reading = true;
+    const tick = () => { if (!reading) return; turns++; if (variant === "written" && turns === 1) {
+      store.note("late-send", "conversation", { waitReason: "queued" }); expect(store.flush()).toBe(true);
+    } setImmediate(tick); };
+    setImmediate(tick);
+    try {
+      await store.loadCooperatively();
+      reading = false;
+      expect(turns).toBeGreaterThan(0);
+      expect(loaded()).toBe(true);
+      // Either way every reader sees the file and the newer write.
+      expect(store.get("open-send")?.originalKey).toBe("open-key");
+      expect(store.presence("recent-completion-10000")).toBe("present");
+      if (variant === "written") expect(store.get("late-send")?.waitReason).toBe("queued");
+    } finally { reading = false; store.close(); }
+  }
+});
+
+test("asynchronous restoration reads the store cooperatively before its first presence check", async () => {
+  const { registry, conversation, filename } = sweepFixture("cooperative-restoration");
+  registry.holdDelivery(conversation.id, "owed before the first read", "cooperative-key");
+  const store = new DeliveryProgressStore(filename, () => 1000, noTimer);
+  const { restoreMissingRecordsAsync } = await import("./recordWait");
+  const events: string[] = [];
+  const load = store.loadCooperatively.bind(store), presence = store.presence.bind(store);
+  store.loadCooperatively = async check => { events.push("load"); await load(check); };
+  store.presence = operationId => { events.push("presence"); return presence(operationId); };
+  try {
+    await restoreMissingRecordsAsync(registry, store, 1000);
+    expect(events[0]).toBe("load");
+    expect(events).toContain("presence");
+  } finally { store.close(); registry.close(); }
+});
+
 /* Restoration's private deadline joins the registry preparation startup also
    waits on. When restoration started it and its deadline passes first, only
    restoration is refused: the unsignalled reader still receives the view

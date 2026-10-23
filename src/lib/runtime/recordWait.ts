@@ -259,6 +259,8 @@ export type RestorableProgress = DeliveryProgressPort & {
   presence(operationId: string): "present" | "absent" | "unknown";
   backfillEnded(ended: Parameters<import("./deliveryProgress").DeliveryProgressStore["backfillEnded"]>[0]): boolean;
   completenessMark(): number;
+  /** The first read in bounded slices, under the caller's checks. */
+  loadCooperatively?(assertActive: () => void): Promise<void>;
 };
 
 const RESTORED_DETAIL = "recorded from the delivery record";
@@ -422,6 +424,15 @@ export async function restoreMissingRecordsAsync(registry: AgentRegistry, progre
     await yieldToRuntime();
     const file = await prepare();
     if (!file) { abandon(); return false; }
+    // The store's first read decodes every retained record; take it in
+    // slices here instead of inside the first presence check.
+    const expired = new Error("delivery progress restoration deadline exceeded");
+    try {
+      await progress.loadCooperatively?.(() => { assertActive(); if (performance.now() >= deadline) throw expired; });
+    } catch (error) {
+      if (error !== expired) throw error;
+      abandon(); return false;
+    }
     let complete: boolean;
     do {
       await yieldToRuntime();

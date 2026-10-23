@@ -1,5 +1,6 @@
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { yieldToRuntime } from "@/lib/cooperative";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import fs from "node:fs";
 import path from "node:path";
@@ -650,6 +651,69 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
 
   /** The records already on disk, read once, so a restarted Viewer continues
       the ones its predecessor wrote. */
+  /* Retained completions can outgrow the cache. Every open send must still
+     be loaded; cold completed sends are read by operation id on demand. */
+  private loadedRows(): Array<{ record_json: string }> {
+    return this.connection().query<{ record_json: string }, [number, number]>(`
+      SELECT record_json FROM delivery_progress WHERE terminal = 0
+      UNION ALL
+      SELECT record_json FROM (
+        SELECT record_json FROM delivery_progress
+        WHERE terminal = 1 AND updated_at >= ?
+        ORDER BY updated_at DESC LIMIT ?
+      )
+    `).all(this.now() - DELIVERY_PROGRESS_TERMINAL_RETENTION_MS, TERMINAL_ROW_LIMIT + OPEN_ROW_LIMIT);
+  }
+
+  /** A record already in memory is newer than the file's; it stays. */
+  private adoptLoaded(records: ReadonlyArray<DeliveryProgressRecord | null>): void {
+    for (const record of records) {
+      if (record && !this.records.has(record.operationId)) this.records.set(record.operationId, record);
+    }
+    this.trimMemory();
+    /* A file written by an earlier build has no meta table: no checkpoint. */
+    try {
+      const stored = this.connection().query<{ value: string }, [string]>("SELECT value FROM delivery_progress_meta WHERE key = ?").get(CHECKED_THROUGH);
+      const through = stored ? Number(stored.value) : NaN;
+      this.checkedThrough = Number.isFinite(through) ? through : null;
+    } catch {
+      this.checkedThrough = null;
+    }
+    this.loaded = true;
+  }
+
+  /**
+   * The first read, with its record decoding in slices of at most 8 ms and a
+   * yield between them. Startup restoration calls this before its first
+   * presence check: on a production copy the synchronous read of about 6,300
+   * records took one slice past 250 ms under load. Every reader and writer
+   * reads synchronously first, so one that runs while this yields completes
+   * the read; this one then stops and keeps nothing it decoded, as it does
+   * after a close.
+   */
+  async loadCooperatively(assertActive: () => void = () => {}): Promise<void> {
+    if (this.loaded || this.filename === null || this.now() < this.loadRetryAt) return;
+    let db: BunDatabase;
+    let rows: Array<{ record_json: string }>;
+    try {
+      if (!progressFileExists(this.filename)) return;
+      db = this.connection();
+      rows = this.loadedRows();
+    } catch { return; } // The synchronous read records and retries the failure.
+    const records: Array<DeliveryProgressRecord | null> = [];
+    let started = performance.now();
+    for (const row of rows) {
+      if (performance.now() - started >= 8) {
+        await yieldToRuntime();
+        assertActive();
+        if (this.loaded || this.db !== db) return;
+        started = performance.now();
+      }
+      records.push(parseRecord(row.record_json, db));
+    }
+    this.adoptLoaded(records);
+  }
+
   private load(): void {
     if (this.loaded) return;
     /* A read that failed is tried again, at most once per retry interval:
@@ -660,29 +724,8 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
       if (!progressFileExists(this.filename)) { this.loaded = true; return; }
       /* Retained completions can outgrow the cache. Every open send must still
          be loaded; cold completed sends are read by operation id on demand. */
-      const rows = this.connection().query<{ record_json: string }, [number, number]>(`
-        SELECT record_json FROM delivery_progress WHERE terminal = 0
-        UNION ALL
-        SELECT record_json FROM (
-          SELECT record_json FROM delivery_progress
-          WHERE terminal = 1 AND updated_at >= ?
-          ORDER BY updated_at DESC LIMIT ?
-        )
-      `).all(this.now() - DELIVERY_PROGRESS_TERMINAL_RETENTION_MS, TERMINAL_ROW_LIMIT + OPEN_ROW_LIMIT);
-      for (const row of rows) {
-        const record = parseRecord(row.record_json, this.connection());
-        if (record && !this.records.has(record.operationId)) this.records.set(record.operationId, record);
-      }
-      this.trimMemory();
-      /* A file written by an earlier build has no meta table: no checkpoint. */
-      try {
-        const stored = this.connection().query<{ value: string }, [string]>("SELECT value FROM delivery_progress_meta WHERE key = ?").get(CHECKED_THROUGH);
-        const through = stored ? Number(stored.value) : NaN;
-        this.checkedThrough = Number.isFinite(through) ? through : null;
-      } catch {
-        this.checkedThrough = null;
-      }
-      this.loaded = true;
+      const db = this.connection();
+      this.adoptLoaded(this.loadedRows().map(row => parseRecord(row.record_json, db)));
     } catch (error) {
       this.loadRetryAt = this.now() + FLUSH_RETRY_MS;
       this.db?.close();
