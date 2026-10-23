@@ -16,6 +16,7 @@ import { focusHandoffBus, type FocusHandoffBus } from "./focusHandoffBus";
 import { claimHandoff, clearHandoffClaim, readHandoffClaim } from "./handoffClaim";
 import { restoreFocusPoint, runFocusTransaction, type FocusObservation, type HandoffTiming } from "./navigate";
 import { forgetReturnProject, readReturnProject, rememberReturnProject } from "./returnProjectMemory";
+import { cleanTitle } from "@/lib/title";
 
 /**
  * Where the focus handoff is actually mounted (#688 D3).
@@ -337,7 +338,7 @@ export function AttentionHost({ mobile, bus = focusHandoffBus, deviceId: forcedD
        a directed request never passes through `pending`, so this is its one
        chance to be heard. The request id keys the dedupe, so however many polls
        re-deliver it, it rings once. */
-    playCue({ cue: "your-move", eventId: `attention:${request.id}`, obligation: `attention:${request.id}` });
+    playCue({ cue: "your-move", eventId: `attention:${request.id}`, obligation: `attention:${request.id}`, caption: { what: "attention", subject: cleanTitle(request.reason, 90) || null, target: null } });
     if (runningHandoffs.has(request.id)) return;
     /* The pre-move viewport is captured EXACTLY ONCE per tab, durably: a
        duplicate mount or a remount gets the original back from the claim, so
