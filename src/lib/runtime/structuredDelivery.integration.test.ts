@@ -2781,8 +2781,9 @@ test("with nobody draining, the bound controller's watchdog delivers an admitted
       settlementSweepMs: 0,
       queueTiming: { safetyPassMs: 100 },
     });
-    /* Let every wake the binding itself raised run out first. */
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    /* Finish any in-flight listing and cancel the binding's pending wake
+       before admission, so only the watchdog can discover this send. */
+    await kickStructuredDeliveryQueue();
     const text = "hold the cutover until I say go";
     const operationId = "operation-watchdog";
     const held = registry.holdDelivery(conversation.id, text, "watchdog-key", "text", [],

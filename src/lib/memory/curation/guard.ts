@@ -5,13 +5,14 @@ import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { RoleMemoryRefusal } from "../roleStore";
 import { roleMemoryEnabled } from "../settings";
+import { curatableImportId, syncCurationOpen } from "../importSync";
 import { machinePassAuthority, passForConversationAuthority, patchPass, readPassAuthority, passIsLive } from "./store";
 
 type Snapshot = ReturnType<ReturnType<typeof agentRegistry>["readOnlySnapshot"]>;
 
 /** Admission can precede the launch HTTP response. Bind only its exact receipt. */
 export function curatorCallerOf(conversationId: string | null, snapshot: Snapshot) {
-  if (!roleMemoryEnabled() || !conversationId) throw new RoleMemoryRefusal("CURATE_CALLER", "only the live curator conversation may curate rules");
+  if (!conversationId || !roleMemoryEnabled() && !curatableImportId()) throw new RoleMemoryRefusal("CURATE_CALLER", "only the live curator conversation may curate rules");
   const id = readOnlyConversationLookupFromSnapshot(snapshot).canonicalConversationId(conversationId as `conversation_${string}`);
   let pass = passForConversationAuthority(id);
   const receipt = registryRowsMatching(snapshot, "receipts", "conversationId", id).find(r => r.conversationId === id && r.agentRole === "curator" && r.clientAttemptId?.startsWith("curate_") && !r.rejection && !["failed", "conflicted"].includes(r.state));
@@ -33,5 +34,7 @@ export function curatorCallerOf(conversationId: string | null, snapshot: Snapsho
     }
   }
   if (!pass || !passIsLive(pass) || pass.clientAttemptId !== receipt.clientAttemptId || pass.conversationId !== id || machinePassAuthority()?.id !== pass.id) throw new RoleMemoryRefusal("CURATE_CALLER", "this conversation does not own the live pass");
+  // The engines position keeps an import pass of the synced import alone (memory-source-switch.md §4.9).
+  if (!roleMemoryEnabled() && !syncCurationOpen(pass.importBatch?.importId)) throw new RoleMemoryRefusal("CURATE_CALLER", "only the live curator conversation may curate rules");
   return pass;
 }
