@@ -484,3 +484,22 @@ test("guard replay uses its cut identity index without scanning pending history"
   } finally { scan.mockRestore(); }
   expect((await conversationCuts(store, first.obligation.conversationId)).length).toBe(131);
 });
+
+
+test("cut deduplication retains legacy pid/start equality across boot metadata", () => {
+  for (const startIdentity of [null, "start"]) {
+    for (const bootEpoch of [undefined, null, "boot-current", "boot-earlier"]) {
+      const store = interruptionObligationStore(fs.mkdtempSync(path.join(directory, "matrix-")));
+      const owner = { pid: 42, startIdentity, bootEpoch: "boot-current" };
+      const input = { ...releaseCut, owner };
+      store.record(input);
+      const sameOwner = { pid: 42, startIdentity, bootEpoch };
+      expect(store.record({ ...input, owner: sameOwner }).created).toBe(false);
+      const changedStart = { pid: 42, startIdentity: "other", bootEpoch };
+      expect(store.record({ ...input, owner: changedStart }).created).toBe(true);
+      const changedPid = { pid: 43, startIdentity, bootEpoch };
+      expect(store.record({ ...input, owner: changedPid }).created).toBe(true);
+      expect(store.record({ ...input, owner: null }).created).toBe(true);
+    }
+  }
+});
