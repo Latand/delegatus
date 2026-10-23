@@ -3809,6 +3809,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "tasks.newTask": "нова задача",
   "tasks.panelCreate": "Створити задачу",
   "tasks.addDue": "дедлайн",
+  "tasks.resetDue": "Повернути типовий термін",
+  "tasks.defaultDueTitle": "Типовий термін: через 72 години після створення, з округленням до наступної години (зона: {zone})",
   "tasks.clearDue": "Прибрати дедлайн",
   "tasks.dueTitle": "Дедлайн (зона: {zone})",
   "tasks.draftDiscarded": "чернетку відкинуто",

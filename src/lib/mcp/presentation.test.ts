@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { describe, expect, test } from "bun:test";
 
 import { describeMcpCall, isViewerMcpServer } from "./presentation";
@@ -30,7 +31,7 @@ describe("describeMcpCall", () => {
   test("gives every v1 tool its own action sentence and icon", () => {
     const cases = [
       ["send_message", { conversationId: "conversation_a", text: "Ship the fix" }, "message", "Sending message"],
-      ["create_task", { project: "viewer", text: "Audit MCP cards" }, "task", "Creating task"],
+      ["create_task", withTaskDue({ project: "viewer", text: "Audit MCP cards" }), "task", "Creating task"],
       ["update_task", { taskId: "task-a", status: "done" }, "task", "Updating task"],
       ["create_pipeline", { task: "Ship MCP", repoDir: "/repo" }, "pipeline", "Creating pipeline"],
       ["pipeline_action", { pipelineId: "pipe-a", action: "resume" }, "pipeline", "Resuming pipeline"],

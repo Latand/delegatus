@@ -4440,7 +4440,8 @@ test("task placement bindings require atomic guards and classify field refusals 
   }
   // Child imports happen only after every root has been isolated. The parent
   // file already imports bindings for its existing dependency-injected tests.
-  const child = Bun.spawn([process.execPath, "-e", `
+  const child = Bun.spawn([process.execPath, "-e", `import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
+
     import fs from "node:fs";
     import { viewerMcpBindings } from "./src/lib/mcp/bindings";
     import { createMcpToolService, MemoryMcpReceiptStore } from "./src/lib/mcp/server";
@@ -4453,13 +4454,13 @@ test("task placement bindings require atomic guards and classify field refusals 
     import { persistedTaskState } from "./src/lib/tasks/storeFixture";
     if (!TASKS_FILE.startsWith(process.env.LLV_STATE_DIR + "/")) throw new Error("state escaped sandbox");
     const service = createMcpToolService(viewerMcpBindings(), new MemoryMcpReceiptStore());
-    const created = await service.callTool("create_task", { clientRequestId: "binding-position-create", project: "fixture-project", text: "task" });
+    const created = await service.callTool("create_task", withTaskDue({ clientRequestId: "binding-position-create", project: "fixture-project", text: "task" }));
     if (!created.ok) throw new Error(created.error);
     const before = persistedTaskState(TASKS_FILE);
     const missing = await service.callTool("update_task", { clientRequestId: "binding-missing-guard", taskId: created.taskId, pos: { x: 0, y: 0 } });
     const invalid = [];
     for (const [index, pos] of [null, {}, { x: 1 }, { x: Infinity, y: 1 }, { x: 0, y: NaN }].entries()) {
-      invalid.push(await service.callTool("create_task", { clientRequestId: "binding-invalid-pos-" + index, project: "fixture-project", text: "task", placement: "pinned", pos }));
+      invalid.push(await service.callTool("create_task", withTaskDue({ clientRequestId: "binding-invalid-pos-" + index, project: "fixture-project", text: "task", placement: "pinned", pos })));
     }
     console.log(JSON.stringify({ missing, invalid, unchanged: persistedTaskState(TASKS_FILE) === before }));
   `], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
@@ -4482,7 +4483,8 @@ test("MCP task writes normalize holds, preserve step operator reasons and server
   for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "TMPDIR"]) {
     const dir = path.join(sandbox, key); fs.mkdirSync(dir); env[key] = dir;
   }
-  const child = Bun.spawn([process.execPath, "-e", `
+  const child = Bun.spawn([process.execPath, "-e", `import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
+
     import { Client } from "@modelcontextprotocol/sdk/client/index.js";
     import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
     import { viewerMcpBindings } from "./src/lib/mcp/bindings";
@@ -4516,10 +4518,10 @@ test("MCP task writes normalize holds, preserve step operator reasons and server
       ...(index === 5 ? { hold: { kind: "worker", note: "Waiting for capacity", by: "operator", conversationId: "conversation_spoofed" } } : {}),
     }));
     try {
-    const created = await call("create_task", {
+    const created = await call("create_task", withTaskDue({
       clientRequestId: "hold-create-bound", project: "fixture-project", text: "Track a waiting reason", full: true, steps,
       hold: { kind: "worker", note: "Waiting for capacity", by: "operator", since: "2000-01-01T00:00:00.000Z", conversationId: "conversation_spoofed" },
-    });
+    }));
     const createdTask = created.task;
     conversationId = "conversation_update_bound";
     const updated = await call("update_task", {
@@ -4527,11 +4529,11 @@ test("MCP task writes normalize holds, preserve step operator reasons and server
       hold: { kind: "worker", note: "Capacity is still full", by: "operator", since: "2001-01-01T00:00:00.000Z", conversationId: "conversation_spoofed" },
     });
     const read = await call("get_task", { clientRequestId: "hold-read-bound", taskId: created.taskId });
-    const normalizedCreate = await call("create_task", {
+    const normalizedCreate = await call("create_task", withTaskDue({
       clientRequestId: "hold-create-normalized", project: "fixture-project", text: "Normalize waiting reasons", full: true,
       hold: { kind: "unknown-kind", note: "x".repeat(201) },
       steps: [{ id: "long", text: "Wait", state: "open", hold: { kind: "unknown-kind", note: "x".repeat(201) } }],
-    });
+    }));
     const unknownUpdate = await call("update_task", {
       clientRequestId: "hold-update-unknown", taskId: normalizedCreate.taskId, full: true,
       hold: { kind: "unknown-kind", note: "z".repeat(201) },

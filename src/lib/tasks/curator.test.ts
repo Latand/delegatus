@@ -160,6 +160,7 @@ describe("task curator", () => {
 
     expect(first.created).toHaveLength(1);
     expect(first.created[0]!.text).toBe("Add hourly task curator");
+    expect(first.created[0]!.dueAt).toBeUndefined(); expect(first.created[0]!.dueTz).toBeUndefined();
     expect(first.created[0]!.source?.path).toBe(pathname);
     expect(first.skipped[0]!.reason).toBe("title must be short and clean");
     expect(second.created).toHaveLength(0);

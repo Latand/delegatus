@@ -1,0 +1,219 @@
+{
+  "capturedAt": "2026-10-23T10:44:11.237Z",
+  "clock": "2026-10-23T10:12:34.567Z",
+  "sourceDigests": {
+    "src/components/tasks/TaskComposer.tsx": "e366acd70a334861e0395ade157d40219a112689d6392ce81b2d8ab065e66753",
+    "src/hooks/useTaskDraft.ts": "a4085d1d1be0e69fa5493d15f4939dc6f27f8614411439560f8ca33db268d2e8",
+    "src/lib/tasks/helpers.ts": "a80d1be79cf2d5083c9be1486e902295719ee2a0c12b93e4d471b52f0a1217c7",
+    "src/lib/i18n/en.ts": "663a6317aa034a1f4b9a5aaf1dbf4204b7ec7f669146df1242e1d9878c803592",
+    "src/lib/i18n/uk.ts": "0016f089691db775f3b5941888276316c0509bd333e0d939886725680db9dbe2",
+    "src/components/kanban/issue1695BrowserHarness.ts": "30ddb989bf45c708712b2d369452e571c8926a86e1ef8ef7193b02b82c6d6a23",
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "b4889724fed5ee61f2730e2948fafaa81e24f690283fc60fe88a8cfc9e4a6962"
+  },
+  "readings": [
+    {
+      "lang": "en",
+      "theme": "light",
+      "phone": false,
+      "state": "default",
+      "file": "desktop-en-light-default.png",
+      "geometry": {
+        "x": 290,
+        "y": 865,
+        "width": 86.625,
+        "height": 21.765625,
+        "visible": true,
+        "unobscured": true,
+        "focus": "TEXTAREA"
+      },
+      "shownAt": "2026-10-26T11:00:00.000Z"
+    },
+    {
+      "lang": "en",
+      "theme": "light",
+      "phone": false,
+      "state": "picked",
+      "file": "desktop-en-light-picked.png",
+      "geometry": {
+        "x": 290,
+        "y": 865,
+        "width": 106.625,
+        "height": 21.765625,
+        "visible": true,
+        "unobscured": true,
+        "focus": "INPUT"
+      },
+      "shownAt": "2026-10-30T13:00:00.000Z"
+    },
+    {
+      "lang": "en",
+      "theme": "light",
+      "phone": false,
+      "state": "reset",
+      "file": "desktop-en-light-reset.png",
+      "geometry": {
+        "x": 290,
+        "y": 865,
+        "width": 86.625,
+        "height": 21.765625,
+        "visible": true,
+        "unobscured": true,
+        "focus": "BODY"
+      },
+      "shownAt": "2026-10-26T11:00:00.000Z"
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "phone": false,
+      "state": "default",
+      "file": "desktop-en-dark-default.png",
+      "geometry": {
+        "x": 290,
+        "y": 865,
+        "width": 86.625,
+        "height": 21.765625,
+        "visible": true,
+        "unobscured": true,
+        "focus": "TEXTAREA"
+      },
+      "shownAt": "2026-10-26T11:00:00.000Z"
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "phone": false,
+      "state": "picked",
+      "file": "desktop-en-dark-picked.png",
+      "geometry": {
+        "x": 290,
+        "y": 865,
+        "width": 106.625,
+        "height": 21.765625,
+        "visible": true,
+        "unobscured": true,
+        "focus": "INPUT"
+      },
+      "shownAt": "2026-10-30T13:00:00.000Z"
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "phone": false,
+      "state": "reset",
+      "file": "desktop-en-dark-reset.png",
+      "geometry": {
+        "x": 290,
+        "y": 865,
+        "width": 86.625,
+        "height": 21.765625,
+        "visible": true,
+        "unobscured": true,
+        "focus": "BODY"
+      },
+      "shownAt": "2026-10-26T11:00:00.000Z"
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "phone": false,
+      "state": "default",
+      "file": "desktop-uk-light-default.png",
+      "geometry": {
+        "x": 290,
+        "y": 865,
+        "width": 95.265625,
+        "height": 21.765625,
+        "visible": true,
+        "unobscured": true,
+        "focus": "TEXTAREA"
+      },
+      "shownAt": "2026-10-26T11:00:00.000Z"
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "phone": false,
+      "state": "picked",
+      "file": "desktop-uk-light-picked.png",
+      "geometry": {
+        "x": 290,
+        "y": 865,
+        "width": 115.265625,
+        "height": 21.765625,
+        "visible": true,
+        "unobscured": true,
+        "focus": "INPUT"
+      },
+      "shownAt": "2026-10-30T13:00:00.000Z"
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "phone": false,
+      "state": "reset",
+      "file": "desktop-uk-light-reset.png",
+      "geometry": {
+        "x": 290,
+        "y": 865,
+        "width": 95.265625,
+        "height": 21.765625,
+        "visible": true,
+        "unobscured": true,
+        "focus": "BODY"
+      },
+      "shownAt": "2026-10-26T11:00:00.000Z"
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "phone": false,
+      "state": "default",
+      "file": "desktop-uk-dark-default.png",
+      "geometry": {
+        "x": 290,
+        "y": 865,
+        "width": 95.265625,
+        "height": 21.765625,
+        "visible": true,
+        "unobscured": true,
+        "focus": "TEXTAREA"
+      },
+      "shownAt": "2026-10-26T11:00:00.000Z"
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "phone": false,
+      "state": "picked",
+      "file": "desktop-uk-dark-picked.png",
+      "geometry": {
+        "x": 290,
+        "y": 865,
+        "width": 115.265625,
+        "height": 21.765625,
+        "visible": true,
+        "unobscured": true,
+        "focus": "INPUT"
+      },
+      "shownAt": "2026-10-30T13:00:00.000Z"
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "phone": false,
+      "state": "reset",
+      "file": "desktop-uk-dark-reset.png",
+      "geometry": {
+        "x": 290,
+        "y": 865,
+        "width": 95.265625,
+        "height": 21.765625,
+        "visible": true,
+        "unobscured": true,
+        "focus": "BODY"
+      },
+      "shownAt": "2026-10-26T11:00:00.000Z"
+    }
+  ]
+}

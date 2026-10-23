@@ -1,5 +1,6 @@
-import { test } from "bun:test";
+import { expect, test } from "bun:test";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import tailwind from "@tailwindcss/postcss";
@@ -1457,4 +1458,107 @@ export async function captureTelegramMultiBot(browser: Browser, base: string, ou
     }
   }
   return readings;
+}
+
+
+/** Shared creation journey, called by the board and phone evidence drivers. */
+export async function captureTaskDueFrames(browser: Browser, base: string, out: string, phone: boolean) {
+  const { defaultTaskDue, formatDue } = await import("@/lib/tasks/helpers");
+  const { translate } = await import("@/lib/i18n");
+  const readings: unknown[] = [];
+  const now = new Date("2026-10-23T10:12:34.567Z");
+  for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+    const viewport = { width: phone ? 390 : 1440, height: phone ? 844 : 900 };
+    const context = await browser.newContext({ viewport, colorScheme: theme, reducedMotion: "reduce", timezoneId: "Europe/Kyiv", ...(phone ? { isMobile: true, hasTouch: true } : {}) });
+    await context.addInitScript(({ lang, theme }) => { localStorage.setItem("llv_lang", lang); localStorage.setItem("llv-theme", theme); }, { lang, theme });
+    const page = await context.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    await page.clock.setFixedTime(now);
+    const open = async () => {
+      if (phone) {
+        await page.locator('[data-mobile2-open="menu"]').first().click();
+        await page.locator('[data-mobile2-menu-row="new-task"]').click();
+      } else {
+        await page.locator("[data-bar-create]").click();
+        await page.locator('.menu [role="menuitem"]').first().click();
+      }
+      await page.locator("[data-task-due]").waitFor();
+    };
+    try {
+      await page.goto(`${base}?scenario=stages#p=atlas`);
+      await page.evaluate(() => {
+        const target = window as unknown as { taskDueWrites: Record<string, unknown>[] };
+        target.taskDueWrites = [];
+        const original = window.fetch;
+        window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+          if (new URL(String(input), location.origin).pathname === "/api/tasks" && init?.method === "POST") {
+            target.taskDueWrites.push(JSON.parse(String(init.body)));
+          }
+          return original(input, init);
+        }) as typeof window.fetch;
+      });
+      await open();
+      const chip = page.locator("[data-task-due]");
+      const field = chip.locator("input");
+      const expected = defaultTaskDue(now.getTime(), "Europe/Kyiv");
+      const frame = async (state: string, at: string) => {
+        expect(await chip.innerText()).toBe(formatDue(at, "Europe/Kyiv", lang));
+        const geometry = await chip.evaluate(el => {
+          const box = el.getBoundingClientRect();
+          const range = document.createRange(); range.selectNodeContents(el.querySelector("label")!);
+          const lines = [...range.getClientRects()].filter(r => r.width > 0 && r.height > 0);
+          const visible = lines.every(r => r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight);
+          const label = el.querySelector("label")!;
+          const textNode = [...label.childNodes].find(n => n.nodeType === Node.TEXT_NODE && n.textContent?.trim());
+          const text = document.createRange(); if (textNode) text.selectNodeContents(textNode);
+          const textRects = [...text.getClientRects()];
+          const unobscured = textRects.length > 0 && textRects.every(r => {
+            const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+            return !!hit && el.contains(hit);
+          });
+          return { x: box.x, y: box.y, width: box.width, height: box.height, visible, unobscured, focus: document.activeElement?.tagName };
+        });
+        expect(geometry.visible).toBe(true); expect(geometry.unobscured).toBe(true);
+        const file = `${phone ? "phone" : "desktop"}-${lang}-${theme}-${state}.png`;
+        await page.screenshot({ path: path.join(out, file) });
+        readings.push({ lang, theme, phone, state, file, geometry, shownAt: at });
+      };
+      expect(await chip.getAttribute("data-task-due")).toBe("default");
+      expect(await field.inputValue()).toBe("2026-10-26T13:00");
+      await frame("default", expected.dueAt);
+      await field.fill("2026-10-30T15:00");
+      expect(await chip.getAttribute("data-task-due")).toBe("picked");
+      await frame("picked", "2026-10-30T13:00:00.000Z");
+      const picked = await page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith("llvTaskDraft:")).map(key => JSON.parse(localStorage.getItem(key)!)));
+      expect(picked).toHaveLength(1);
+      expect(picked[0]).toMatchObject({ dueAt: "2026-10-30T13:00:00.000Z", dueTz: await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone) });
+      await chip.getByRole("button", { name: translate(lang, "tasks.resetDue") }).click();
+      expect(await chip.getAttribute("data-task-due")).toBe("default");
+      await frame("reset", expected.dueAt);
+      // A long-lived draft refreshes its preview without persisting a default.
+      await page.clock.setFixedTime(new Date("2026-10-30T10:12:34.567Z"));
+      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+      await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[data-task-due] input')?.value === "2026-11-02T13:00");
+      expect(await chip.getAttribute("data-task-due")).toBe("default");
+      const form = chip.locator("xpath=ancestor::form[1]");
+      await form.locator("textarea").fill("A dated outcome");
+      // Submit through the same form as the visible create control.
+      await form.evaluate(el => (el as HTMLFormElement).requestSubmit());
+      await page.waitForFunction(() => !document.querySelector("[data-task-due]"));
+      const writes = await page.evaluate(() => (window as unknown as { taskDueWrites: Record<string, unknown>[] }).taskDueWrites);
+      expect(writes).toHaveLength(1);
+      expect(writes[0].dueAt).toBeUndefined(); expect(writes[0].dueTz).toBeUndefined();
+      expect(errors).toEqual([]);
+    } finally { await context.close(); }
+  }
+  const sourceDigests = Object.fromEntries([
+    "src/components/tasks/TaskComposer.tsx", "src/hooks/useTaskDraft.ts", "src/lib/tasks/helpers.ts",
+    "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts", "src/components/kanban/issue1695BrowserHarness.ts",
+    phone ? "src/components/mobile/issue1671Evidence.browser.test.tsx" : "src/components/kanban/kanbanBoard.browser.test.tsx",
+  ].map(file => [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")]));
+  const record = JSON.stringify({ capturedAt: new Date().toISOString(), clock: now.toISOString(), sourceDigests, readings }, null, 2) + "\n";
+  fs.writeFileSync(path.join(out, "readings.json"), record);
+  fs.mkdirSync("evidence/task-due-composer", { recursive: true });
+  fs.writeFileSync(`evidence/task-due-composer/${phone ? "phone" : "desktop"}.json`, record);
 }

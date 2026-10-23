@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test";
 
 import { readAttachment, storeAttachment, sweepAttachments } from "./attachments";
 import { createTask, patchTask, type RecentCreate } from "./commands";
-import { formatDue, fromDueInput, isOverdue, toDueInputValue } from "./helpers";
+import { defaultTaskDue, formatDue, fromDueInput, isOverdue, toDueInputValue } from "./helpers";
 import { isTask, loadTasksFile, saveTasksFile } from "./store";
 import type { BoardTask, TaskAttachment } from "./types";
 
@@ -181,6 +181,7 @@ describe("store legacy load", () => {
     const loaded = loadTasksFile(filePath);
     expect(loaded.tasks[0]!.placement).toBe("pinned");
     expect(loaded.tasks[0]!.pos).toEqual({ x: 7, y: 8 });
+    expect(loaded.tasks[0]!.dueAt).toBeUndefined(); expect(loaded.tasks[0]!.dueTz).toBeUndefined();
   });
 });
 
@@ -284,5 +285,60 @@ describe("attachment store", () => {
     } finally {
       delete process.env.LLV_STATE_DIR;
     }
+  });
+});
+
+
+describe("new task date policy", () => {
+  const input = { project: "p", text: "New work", placement: "unplaced", clientRequestId: "dated-create" };
+  test("required missing and past dates leave rows and receipts unchanged", () => {
+    const existing: BoardTask[] = [];
+    const receipts: RecentCreate[] = [];
+    for (const dueAt of [undefined, null, ""]) {
+      expect(createTask(existing, { ...input, dueAt }, receipts, { ...deps, requireDue: true }))
+        .toMatchObject({ ok: false, code: "TASK_DUE_REQUIRED", field: "dueAt" });
+    }
+    for (const dueAt of [deps.now(), "2026-07-04T10:00:00Z"]) {
+      expect(createTask(existing, { ...input, dueAt }, receipts, { ...deps, requireDue: true }))
+        .toMatchObject({ ok: false, code: "TASK_DUE_PAST", field: "dueAt" });
+    }
+    expect(existing).toEqual([]);
+    expect(receipts).toEqual([]);
+  });
+  test("a date alone uses the transport zone and explicit zones are preserved", () => {
+    for (const dueTz of [undefined, "Asia/Tokyo"]) {
+      const result = createTask([], { ...input, dueAt: "2026-07-06T12:00:00+03:00", dueTz }, [],
+        { ...deps, requireDue: true, dueTimeZone: "Europe/Kyiv" });
+      expect(result).toMatchObject({ ok: true, task: { dueAt: "2026-07-06T09:00:00.000Z", dueTz: dueTz ?? "Europe/Kyiv" } });
+    }
+    expect(createTask([], { ...input, dueAt: "invalid" }, [], { ...deps, requireDue: true })).toMatchObject({ ok: false });
+    expect(createTask([], { ...input, dueAt: "2026-07-06T09:00:00Z", dueTz: "invalid" }, [], { ...deps, requireDue: true })).toMatchObject({ ok: false });
+  });
+  test("the operator default rounds up, leaves an exact hour alone and uses elapsed hours across DST", () => {
+    const now = "2026-10-23T10:12:34.567Z";
+    expect(defaultTaskDue(Date.parse(now), "Europe/Kyiv")).toEqual({ dueAt: "2026-10-26T11:00:00.000Z", dueTz: "Europe/Kyiv" });
+    expect(defaultTaskDue(Date.parse("2026-10-23T10:00:00Z"), "Europe/Kyiv").dueAt).toBe("2026-10-26T10:00:00.000Z");
+    expect(createTask([], input, [], { ...deps, now: () => now, defaultDue: true, dueTimeZone: "Europe/Kyiv" }))
+      .toMatchObject({ ok: true, task: { dueAt: "2026-10-26T11:00:00.000Z", dueTz: "Europe/Kyiv" } });
+  });
+  test("system and legacy undated records stay undated and never overdue", () => {
+    const made = createTask([], input, [], deps);
+    expect(made.ok).toBe(true);
+    if (!made.ok) throw new Error(made.error);
+    expect(made.task.dueAt).toBeUndefined();
+    expect(made.task.dueTz).toBeUndefined();
+    const restored = patchTask([made.task], made.task.id, { text: "Legacy work updated" }, deps.now());
+    expect(restored.ok).toBe(true);
+    if (!restored.ok) throw new Error(restored.error);
+    expect(restored.task.dueAt).toBeUndefined();
+    expect(isOverdue(restored.task.dueAt ?? "", Date.parse("2099-01-01T00:00:00Z"))).toBe(false);
+  });
+  test("matched findings retain their existing date and idempotent replays retain the first default", () => {
+    const first = createTask([], { ...input, findingKey: "recurrence" }, [], { ...deps, defaultDue: true });
+    if (!first.ok) throw new Error(first.error);
+    const replay = createTask(first.tasks, input, first.recentCreates, { ...deps, now: () => "2026-08-01T00:00:00Z", defaultDue: true });
+    expect(replay).toMatchObject({ ok: true, replay: true, task: { dueAt: first.task.dueAt } });
+    const matched = createTask(first.tasks, { ...input, clientRequestId: "next-occurrence", findingKey: "recurrence", dueAt: "2099-01-01T00:00:00Z" }, first.recentCreates, { ...deps, requireDue: true });
+    expect(matched).toMatchObject({ ok: true, matched: true, task: { id: first.task.id, dueAt: first.task.dueAt } });
   });
 });

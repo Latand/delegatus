@@ -307,6 +307,7 @@ test("the activation hook restores before the stores open, and the incident card
   expect(tasks.map((task) => task.id)).not.toContain("after-backup");
   const cards = tasks.filter((task) => task.text.startsWith("State database state.sqlite was restored"));
   expect(cards).toHaveLength(1);
+  expect(cards[0]?.dueAt).toBeUndefined(); expect(cards[0]?.dueTz).toBeUndefined();
   expect(cards[0]?.text).toContain("2026-09-19T10:00:00.000Z");
   expect(cards[0]).toMatchObject({ project: "proj", status: "inbox", placement: "unplaced" });
 });
