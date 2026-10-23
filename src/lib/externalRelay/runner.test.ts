@@ -3305,7 +3305,8 @@ for (const worker of [false, true]) test(`owner runner exception is recorded bef
 
 for (const seam of ["continuation-receipt", "fresh-receipt"] as const)
 for (const worker of [false, true]) test(`owner ${seam} failure keeps its runtime reason through the production observation (worker=${worker})`, async () => {
-  const { AgentRegistry } = await import("@/lib/agent/registry");
+  const registryModule = await import("@/lib/agent/registry");
+  const { AgentRegistry } = registryModule;
   const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
   const { observeOwnerContinuation, observeOwnerTurn } = await import("./ownerRun");
   const completions: unknown[] = [], journal: unknown[][] = [];
@@ -3330,19 +3331,32 @@ for (const worker of [false, true]) test(`owner ${seam} failure keeps its runtim
   let launched: string | null = null;
   const ports: import("./ownerRun").OwnerRunPorts = {
     launch: async () => {
-      if (seam === "continuation-receipt") return { status: 202, body: { conversationId: `conversation_${prefix}` } };
+      if (seam === "continuation-receipt") {
+        const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd, transport: "structured", clientAttemptId: `relay-owner-${prefix}-first`,
+          conversationId: `conversation_${prefix}` });
+        if (begun.kind !== "created") throw Error("owner conversation fixture unavailable");
+        return { status: 202, body: { conversationId: begun.receipt.conversationId } };
+      }
       const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd, transport: "structured", clientAttemptId: `relay-owner-${requestId}` });
       if (begun.kind !== "created") throw Error("owner receipt fixture unavailable");
       registry.failSpawn(begun.receipt.launchId, unsafe);
       launched = begun.receipt.conversationId;
       return { status: 202, body: { conversationId: launched } };
     },
-    continue: async turn => ({ ok: true, structured: true, target: turn.conversationId!, outcome: "held", operationId: turn.clientAttemptId }),
+    // The runtime refuses the held continuation; its receipt is read through
+    // the production send settlement, as observeOwnerContinuation does by default.
+    continue: async turn => {
+      const held = registry.holdDelivery(turn.conversationId! as `conversation_${string}`, "Fixture continuation", turn.clientAttemptId, "text", [], null,
+        { operationId: turn.continuation!.operationId });
+      registry.terminalizeHeldDelivery(held.id, unsafe);
+      return { ok: true, structured: true, target: turn.conversationId!, outcome: "held", operationId: turn.continuation!.operationId };
+    },
     observe: async turn => !turn.continuation
       ? seam === "fresh-receipt" ? observeOwnerTurn(turn, sources) : { state: "ended", finalText: "Done" }
-      : observeOwnerContinuation(turn, sources, async () => ({ state: "failed", acceptedAt: null, settledAt: new Date().toISOString(), conversationId: turn.conversationId!, reason: unsafe })),
+      : observeOwnerContinuation(turn, sources),
     stop: async () => {}, stopRetryMs: 1, pollMs: 1,
   };
+  const lookup = spyOn(registryModule, "agentRegistry").mockReturnValue(registry);
   const logging = spyOn(console, "error").mockImplementation((...args) => { journal.push(args); });
   try {
     if (seam === "continuation-receipt") {
@@ -3372,7 +3386,7 @@ for (const worker of [false, true]) test(`owner ${seam} failure keeps its runtim
       expect(JSON.stringify(surface)).not.toContain("/srv/fixture/private.txt");
     }
   } finally {
-    logging.mockRestore(); registry.close(); setRelaySwitch("chain_conversations", false);
+    logging.mockRestore(); lookup.mockRestore(); registry.close(); setRelaySwitch("chain_conversations", false);
     fs.rmSync(cwd, { recursive: true, force: true }); await service.close();
   }
 });
