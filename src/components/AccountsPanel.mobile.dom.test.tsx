@@ -9,7 +9,7 @@ import { getLocale, setLocale, translate } from "@/lib/i18n";
 import { selectProjectAccount } from "@/lib/accounts/projectSelection";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 
-import { MobileAccountsBody, mobileAccountCorner, mobileAccountState } from "./AccountsPanel";
+import { MobileAccountsBody, mobileAccountCorner, mobileAccountState, ProjectAwareMobileAccountsBody } from "./AccountsPanel";
 import { createReceiptStore, type ReceiptStore } from "./mobile/MobileReceipt";
 import { formatResetClock, formatResetEta } from "./rateLimit";
 
@@ -152,25 +152,71 @@ function engineState(engine: "claude" | "codex", accounts: AccountOption[], acti
 }
 
 const mounted: Array<{ root: Root; host: HTMLDivElement }> = [];
+const realFetch = globalThis.fetch;
 afterEach(async () => {
   await Promise.all(mounted.splice(0).map(async ({ root, host }) => {
     await act(async () => root.unmount());
     host.remove();
   }));
   document.body.replaceChildren();
+  globalThis.fetch = realFetch;
 });
 
-async function mount(engines: EngineAccountsState[], receipts: ReceiptStore = createReceiptStore(), nextChosenAccountIds?: Partial<Record<"claude" | "codex", string | null>>): Promise<{ host: HTMLDivElement; receipts: ReceiptStore; rerender(next: EngineAccountsState[]): Promise<void> }> {
+async function mount(engines: EngineAccountsState[], receipts: ReceiptStore = createReceiptStore(), nextChosenAccountIds?: Partial<Record<"claude" | "codex", string | null>>, project?: string): Promise<{ host: HTMLDivElement; receipts: ReceiptStore; rerender(next: EngineAccountsState[], now?: number): Promise<void> }> {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
   mounted.push({ root, host });
-  const render = async (next: EngineAccountsState[]) => {
-    await act(async () => root.render(<MobileAccountsBody engines={next} now={NOW} receipts={receipts} nextChosenAccountIds={nextChosenAccountIds} />));
+  const render = async (next: EngineAccountsState[], nextNow = NOW) => {
+    await act(async () => root.render(project
+      ? <ProjectAwareMobileAccountsBody engines={next} now={nextNow} project={project} receipts={receipts} />
+      : <MobileAccountsBody engines={next} now={nextNow} receipts={receipts} nextChosenAccountIds={nextChosenAccountIds} />));
   };
   await render(engines);
   return { host, receipts, rerender: render };
 }
+
+test("phone next choice follows refreshed quota selection while the project stays mounted", async () => {
+  let selected = "b";
+  let reads = 0;
+  let otherCalls = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    if (String(input).startsWith("/api/account-project-bindings")) {
+      reads += 1;
+      return Response.json({ engines: { claude: { nextChosenAccountId: selected } } });
+    }
+    otherCalls += 1;
+    return new Response(null, { status: 500 });
+  }) as typeof fetch;
+  const a = account({ id: "a", label: "Account A", limits: { freshness: "fresh", session: null, weekly: windowWeek(30, NOW + DAY * 2) } });
+  const b = account({ id: "b", label: "Account B", limits: { freshness: "fresh", session: null, weekly: windowWeek(50, NOW + DAY) } });
+  const initial = engineState("claude", [a, b], "a");
+  const view = await mount([initial], createReceiptStore(), undefined, "project-p");
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect([...view.host.querySelectorAll("[data-mobile2-account]")].map((row) => row.getAttribute("data-mobile2-account"))).toEqual(["b", "a"]);
+  expect(view.host.querySelector('[data-mobile2-account="b"]')?.textContent).toContain(translate(getLocale(), "accounts.nextForUnpinnedShort"));
+
+  selected = "a";
+  await view.rerender([engineState("claude", [
+    { ...a, limits: { freshness: "fresh", session: null, weekly: windowWeek(30, NOW + DAY) } },
+    { ...b, limits: { freshness: "fresh", session: null, weekly: windowWeek(50, NOW + DAY * 2) } },
+  ], "a", { limitsVersion: 1 })]);
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(reads).toBe(2);
+  expect([...view.host.querySelectorAll("[data-mobile2-account]")].map((row) => row.getAttribute("data-mobile2-account"))).toEqual(["a", "b"]);
+  expect(view.host.querySelector('[data-mobile2-account="a"]')?.textContent).toContain(translate(getLocale(), "accounts.nextForUnpinnedShort"));
+  expect(view.host.querySelector('[data-mobile2-account="b"]')?.textContent).not.toContain(translate(getLocale(), "accounts.nextForUnpinnedShort"));
+
+  selected = "b";
+  await view.rerender([engineState("claude", [
+    { ...a, limits: { freshness: "fresh", session: null, weekly: windowWeek(30, NOW + DAY) } },
+    { ...b, limits: { freshness: "fresh", session: null, weekly: windowWeek(50, NOW + DAY * 2) } },
+  ], "a", { limitsVersion: 1 })], NOW + DAY);
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(reads).toBe(3);
+  expect([...view.host.querySelectorAll("[data-mobile2-account]")].map((row) => row.getAttribute("data-mobile2-account"))).toEqual(["b", "a"]);
+  expect(otherCalls).toBe(0);
+});
 
 const click = async (element: Element | null) => {
   expect(element).toBeTruthy();

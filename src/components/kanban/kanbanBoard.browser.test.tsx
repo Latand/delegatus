@@ -32900,6 +32900,62 @@ describe("the sidebar names each account's weekly limit left, Claude as Codex", 
   }, 300_000);
 });
 
+describe("phone next account identity", () => {
+  browserTest("Ukrainian next-choice rows keep both account names and badges readable at 390 px", async () => {
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), "phone-next-account-"));
+    const out = path.join(work, "frames");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(work);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const scheme of ["light", "dark"] as const) {
+        const name = `next-account-390-uk-${scheme}`;
+        const { context, page, pageErrors } = await openFixture(browser,
+          `${server.base}?scenario=accounts&nextchoicefixture=1&nextchoice=account-c&codexnextchoice=account-d`,
+          { width: 390, height: 1000 }, scheme, "uk", "reduce", true);
+        try {
+          await page.locator('[data-mobile2-screen="board"]').waitFor({ timeout: 40_000 });
+          await page.click('[data-mobile2-open="menu"]');
+          await page.click('[data-mobile2-go="accounts"]');
+          await page.locator('[data-mobile2-screen="accounts"] [data-mobile2-account]').first().waitFor({ timeout: 15_000 });
+          const accountIds = await page.locator('[data-mobile2-screen="accounts"] [data-mobile2-account]').evaluateAll((rows) => rows.map((row) => row.getAttribute("data-mobile2-account")));
+          expect(accountIds, `${name} account rows`).toContain("account-c");
+          expect(accountIds, `${name} account rows`).toContain("account-d");
+          await page.locator('[data-mobile2-account="account-c"] [data-mobile2-account-name]').waitFor({ timeout: 15_000 });
+          await page.locator('[data-mobile2-account="account-d"] [data-mobile2-account-name]').waitFor({ timeout: 15_000 });
+          await page.getByText("Наступний вибір", { exact: true }).first().waitFor({ timeout: 5_000 });
+          const rows = await page.evaluate(() => ["account-c", "account-d"].map((id) => {
+            const row = document.querySelector<HTMLElement>(`[data-mobile2-account="${id}"]`)!;
+            const name = row.querySelector<HTMLElement>("[data-mobile2-account-name]")!;
+            const badge = [...row.querySelectorAll<HTMLElement>("span")].find((element) => element.textContent?.trim() === "Наступний вибір")!;
+            const fits = (element: HTMLElement) => {
+              const bounds = element.getBoundingClientRect();
+              const range = document.createRange();
+              range.selectNodeContents(element);
+              const rects = [...range.getClientRects()];
+              return element.scrollWidth <= element.clientWidth + 0.5 && rects.length > 0
+                && rects.every((rect) => rect.left >= bounds.left - 0.5 && rect.right <= bounds.right + 0.5);
+            };
+            return { id, name: name.textContent, nameFits: fits(name), badge: badge?.textContent?.trim() ?? null, badgeFits: badge ? fits(badge) : false };
+          }));
+          expect(rows, name).toEqual([
+            { id: "account-c", name: "Account C", nameFits: true, badge: "Наступний вибір", badgeFits: true },
+            { id: "account-d", name: "Account D", nameFits: true, badge: "Наступний вибір", badgeFits: true },
+          ]);
+          await page.screenshot({ path: path.join(out, `${name}.png`) });
+          expect(pageErrors, `${name} page errors`).toEqual([]);
+          readings.push({ shot: name, rows });
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(work, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+  }, 120_000);
+});
+
 describe("automatic conflict refresh", () => {
   browserTest("refresh and stopped reasons fit at 1440 and 390 in en and uk", async () => {
     const out = path.resolve(".artifacts/auto-refresh");

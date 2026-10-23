@@ -1351,6 +1351,13 @@ export function useAccountIdentityVersion(engine: Engine): number {
   return useSyncExternalStore(store.subscribe, () => store.getSnapshot().identityVersion, () => store.getSnapshot().identityVersion);
 }
 
+/** Moves whenever a fresh quota reading lands, for read-only views whose
+    result depends on the currently permitted account's reset window. */
+export function useAccountLimitsVersion(engine: Engine): number {
+  const store = stores[engine];
+  return useSyncExternalStore(store.subscribe, () => store.getSnapshot().limitsVersion, () => store.getSnapshot().limitsVersion);
+}
+
 /** The name an account goes by on every surface that names it: its label, or its
     id for an account the list does not enumerate, such as the legacy home. A
     surface that names accounts by id beside one that names them by label made

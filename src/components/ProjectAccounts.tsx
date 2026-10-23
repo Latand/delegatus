@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { useAccountIdentityVersion } from "@/hooks/useEngineAccounts";
+import { useAccountIdentityVersion, useAccountLimitsVersion } from "@/hooks/useEngineAccounts";
 
 import { EngineAccountSwitch, type EngineAccountSwitchAppearance } from "./EngineAccountSwitch";
 
@@ -77,34 +77,43 @@ export function parseProjectAccountsView(body: unknown): ProjectAccountsView | n
  * and out-of-pool detail moves into that switch's panel (#1331).
  */
 export function ProjectAccounts({ project, appearance }: { project: string; appearance?: EngineAccountSwitchAppearance }) {
-  const [view, setView] = useState<ProjectAccountsView | null>(null);
+  const [result, setResult] = useState<{ revision: string; view: ProjectAccountsView } | null>(null);
   /* A removal drops the account's bindings, so the strip reads again when an
      engine's accounts change; it clears only for another project, so an
      accounts panel open under it stays open through the re-read. */
   const claudeAccounts = useAccountIdentityVersion("claude");
   const codexAccounts = useAccountIdentityVersion("codex");
+  const claudeLimits = useAccountLimitsVersion("claude");
+  const codexLimits = useAccountLimitsVersion("codex");
+  const [refreshEpoch, setRefreshEpoch] = useState(0);
   const shownProject = useRef<string | null>(null);
+  const revision = JSON.stringify([project, claudeAccounts, codexAccounts, claudeLimits, codexLimits, refreshEpoch]);
+
+  useEffect(() => {
+    const timer = setInterval(() => setRefreshEpoch((current) => current + 1), 30_000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     let live = true;
     if (shownProject.current !== project) {
       shownProject.current = project;
-      setView(null);
+      setResult(null);
     }
     void (async () => {
       try {
         const response = await fetch(`/api/account-project-bindings?project=${encodeURIComponent(project)}`, { cache: "no-store" });
         if (!response.ok) return;
         const parsed = parseProjectAccountsView(await response.json());
-        if (live && parsed && parsed.project === project) setView(parsed);
+        if (live && parsed && parsed.project === project) setResult({ revision, view: parsed });
       } catch {
         // A failed read leaves the strip absent rather than guessing at a fence.
       }
     })();
     return () => { live = false; };
-  }, [project, claudeAccounts, codexAccounts]);
+  }, [project, claudeAccounts, codexAccounts, claudeLimits, codexLimits, refreshEpoch, revision]);
 
-  return <ProjectAccountsStrip view={view} appearance={appearance} />;
+  return <ProjectAccountsStrip view={result?.view.project === project ? result.view : null} appearance={appearance} />;
 }
 
 /** The rendering half, separated so it can be exercised without a fetch. */
