@@ -193,3 +193,29 @@ activation validation, account locking and recovery still execute normally.
 Both cases passed in two fresh focused runs after that correction. Assertions
 also verify that holding recovery writes no fence and that the launched
 attempt's receipt and private owner file agree after release.
+
+After merging main at `800a26eb`, the actual `.githooks/pre-push` hook ran
+through `gate-remote` on `7e08261e` and exited 0. Privacy, TypeScript, ESLint,
+52 distinct touched-test files, the Linux backend and all 17 scoped Linux
+files completed. The touched-test comparator reported zero new failures,
+six pre-existing failures and seven flaky observations. The complete repaired
+recovery file, publication recovery and real-Git custody suites passed.
+
+Whole-file controls then alternated three fresh runs per revision for
+activation and CPU polling, with `RAN_COUNT=12`. All six activation assertions
+recurred in every complete run on both revisions; five had been labelled flaky
+by the filtered comparator. CPU polling passed all three branch runs; main
+passed twice and failed the FIFO-spacing assertion once. These controls retain
+the baseline failures and timing variation in the verification record.
+
+Main subsequently added test coverage through `f348d75b`. Its new Git-history
+case was migrated to the required activation callback and merged in
+`bc8895f76`. TypeScript and touched-file ESLint passed on that combined source.
+The complete Git-history file passed 168 tests with 5,201 assertions, including
+the new passed-predecessor case. Complete recovery and recovery-admission files
+also passed. Complete routing runs on the branch and the latest main retained
+the same two previously observed assertions; both added routing cases passed.
+The integration batch recorded all four test files, and the latest-main
+routing comparison recorded its one complete file. Production code remained
+identical to the tree that passed the full hook. Publication hook settings and
+budgets were unchanged.
