@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -51,6 +51,27 @@ function fixtureWorker(source: string): { directory: string; workerPath: string 
   return { directory, workerPath };
 }
 
+test("worker monitoring lines reach the journal on successful completion", async () => {
+  const lines = ["[blocking-wait] {}", "[viewer loop-gap] {}", "[performance summary] {}"];
+  const { directory, workerPath } = fixtureWorker(`
+    process.stdin.resume();
+    process.stdin.on("end", () => {
+      process.stderr.write("[blocking-");
+      setImmediate(() => {
+        process.stderr.write(${JSON.stringify(`wait] {}\n${lines.slice(1).join("\n")}\nordinary stderr\n`)});
+        console.log(JSON.stringify({ type: "complete", snapshot: { files: [], projectCatalog: [], complete: true } }));
+      });
+    });
+  `);
+  const log = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    expect((await collectFileScanInWorker({ persist: false }, undefined, {
+      launch: { executable: process.execPath, workerPath }, cwd: directory,
+    })).complete).toBe(true);
+    expect(log.mock.calls.map(call => call[0])).toEqual(lines);
+  } finally { log.mockRestore(); }
+});
+
 test.each(["state database initialization is busy", "state admission is busy at state.schema"])(
 "a scanner bootstrap busy refusal before reading stdin retries within its generation: %s", async (refusal) => {
   const { directory, workerPath } = fixtureWorker(`
@@ -79,6 +100,45 @@ test.each(["state database initialization is busy", "state admission is busy at 
   });
   expect(snapshot.complete).toBe(true);
   expect(delays).toEqual([250]);
+});
+
+test("registry admission receives only the remaining generation budget after a bootstrap retry", async () => {
+  const { directory, workerPath } = fixtureWorker(`
+    import fs from "node:fs";
+    let input = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", chunk => { input += chunk; });
+    process.stdin.on("end", () => {
+      const ledger = new URL("budgets", import.meta.url);
+      const retry = fs.existsSync(ledger);
+      fs.appendFileSync(ledger, JSON.stringify(JSON.parse(input).lockWaitMs) + "\\n");
+      if (!retry) {
+        console.error("state database initialization is busy");
+        process.exitCode = 1;
+      } else console.log(JSON.stringify({ type: "complete", snapshot: { files: [], projectCatalog: [], complete: true } }));
+    });
+  `);
+  let now = 1_000;
+  const clock = spyOn(performance, "now").mockImplementation(() => now);
+  const timers: { callback: () => void; ms: number; active: boolean }[] = [];
+  try {
+    const snapshot = await collectFileScanInWorker({ persist: false }, undefined, {
+      launch: { executable: process.execPath, workerPath }, cwd: directory, timeoutMs: 10_000,
+      scheduler: {
+        setTimeout: (callback, ms) => {
+          const timer = { callback, ms, active: true };
+          timers.push(timer);
+          if (ms === 250) queueMicrotask(() => { now += ms; timer.active = false; callback(); });
+          return timer;
+        },
+        clearTimeout: timer => { (timer as typeof timers[number]).active = false; },
+      },
+    });
+    expect(snapshot.complete).toBe(true);
+    expect(fs.readFileSync(path.join(directory, "budgets"), "utf8").trim().split("\n").map(Number)).toEqual([10_000, 9_750]);
+    expect(timers.map(timer => timer.ms)).toEqual([10_000, 250]);
+    expect(timers.some(timer => timer.active)).toBe(false);
+  } finally { clock.mockRestore(); }
 });
 
 test("bootstrap retry exhaustion is capped at three launches in each real process", async () => {
@@ -450,6 +510,7 @@ test("worker scans publish a Claude transcript that appears in a previously sess
       XDG_CONFIG_HOME: path.join(directory, "config"),
       LLV_STATE_DIR: stateDir,
       TMPDIR: temporaryDir,
+      LLV_CLAUDE_HOME: path.join(home, ".claude"),
       NODE_ENV: "production" as const,
       LLV_AGENT_REGISTRY_SQLITE: "off",
     },
