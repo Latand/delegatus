@@ -7543,33 +7543,35 @@ function recordAccountHold(attempt: PipelineStageAttempt, blocked: string | null
   if (suspension.hold && accountHoldEnded(suspension.hold, quota, ports)) delete suspension.hold;
 }
 
-function recordedAccountHoldCount(pipeline: Pipeline, stage: PipelineStage): number {
-  return (runFor(pipeline, stage.id)?.attempts ?? []).reduce((count, attempt) => count + (attempt.accountHolds?.length ?? 0)
-    + (attempt.suspension?.reason === "account" && attempt.suspension.hold ? 1 : 0), 0);
+/** Reads the hold's account quota for this attempt; an unreadable reading
+    neither confirms nor ends a hold. */
+function accountHoldEndedNow(attempt: PipelineStageAttempt, hold: PipelineAccountHold, ports: PipelinePorts): boolean {
+  try {
+    return !!ports.accountQuota && accountHoldEnded(hold, ports.accountQuota(attempt.effectiveRole.engine, hold.accountId,
+      attempt.effectiveRole.model), ports);
+  } catch { return false; }
 }
 
 /** Every hold in this stage's attempts that still stands. A replacement
-    inherits its predecessors' holds, so it never returns to an account an
-    earlier attempt left at its confirmed limit before that account's reset.
-    A hold seen ended is removed from the attempt that carries it, so the
-    reading that ended it can age without bringing it back; only a new
-    exhaustion establishes another hold. Callers persist the pipeline. */
+    inherits its predecessors' holds, and carries a copy of them, so it never
+    returns to an account an earlier attempt left at its confirmed limit
+    before that account's reset. A hold seen ended is removed from every
+    attempt that carries it, so the reading that ended it can age without
+    bringing it back; only a new exhaustion establishes another hold. Callers
+    persist the pipeline. */
 function standingAccountHolds(pipeline: Pipeline, stage: PipelineStage, ports: PipelinePorts): PipelineAccountHold[] {
   const holds = new Map<string, PipelineAccountHold>();
   for (const attempt of runFor(pipeline, stage.id)?.attempts ?? []) {
     const own = attempt.suspension?.reason === "account" ? attempt.suspension.hold : undefined;
     for (const hold of [...attempt.accountHolds ?? [], ...own ? [own] : []]) {
-      try {
-        if (ports.accountQuota && accountHoldEnded(hold, ports.accountQuota(attempt.effectiveRole.engine, hold.accountId,
-          attempt.effectiveRole.model), ports)) {
-          if (hold === own) delete attempt.suspension!.hold;
-          else {
-            const kept = attempt.accountHolds!.filter(item => item !== hold);
-            if (kept.length) attempt.accountHolds = kept; else delete attempt.accountHolds;
-          }
-          continue;
+      if (accountHoldEndedNow(attempt, hold, ports)) {
+        if (hold === own) delete attempt.suspension!.hold;
+        else {
+          const kept = attempt.accountHolds!.filter(item => item !== hold);
+          if (kept.length) attempt.accountHolds = kept; else delete attempt.accountHolds;
         }
-      } catch { /* An unreadable reading neither confirms nor ends a hold. */ }
+        continue;
+      }
       holds.set(hold.accountId, hold); // A later attempt's hold rests on a newer reading.
     }
   }
@@ -7648,10 +7650,11 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   if (!attempt.suspension && !blocked) {
     // Headroom seen while a healthy replacement runs ends its predecessors'
     // holds now; a later tick may see only that reading aged (issue #3158).
-    const recorded = recordedAccountHoldCount(pipeline, stage);
-    if (recorded) {
+    // The replacement's own copies are read each tick; retained history is
+    // walked only to retire a hold that ended.
+    if (attempt.accountHolds?.some(hold => accountHoldEndedNow(attempt, hold, ports))) {
       standingAccountHolds(pipeline, stage, ports);
-      if (recordedAccountHoldCount(pipeline, stage) < recorded) await persist();
+      await persist();
     }
     return false;
   }
@@ -7739,6 +7742,7 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   next.activatedBy = attempt.activatedBy ? { ...attempt.activatedBy } : null;
   next.restartContext = { previousAttempt: attempt.n, transcriptPath: attempt.agentPath };
   next.accountId = target;
+  if (holds.length) next.accountHolds = holds.map(hold => ({ ...hold }));
   bindAttemptDefinition({ ...oldDefinition, account: target }, next, ports);
   pipeline.stateDetail = "continuing the stopped stage on an allowed account; keeping the current worktree";
   await persist(); ports.scheduleTick?.(0);

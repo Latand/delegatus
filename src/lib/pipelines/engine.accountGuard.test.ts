@@ -463,8 +463,8 @@ test("a predecessor hold that newer headroom ended stays ended after that readin
   await tickPipelines([], f.h.ports);
   expect(f.attempts().map(attempt => attempt.accountId)).toEqual(["account-a", "account-b", "account-c"]);
   // The reading that ended A's hold retired it from every attempt that carried it.
-  expect(f.attempts().flatMap(attempt => [...attempt.accountHolds ?? [], ...attempt.suspension?.hold ? [attempt.suspension.hold] : []])
-    .map(hold => hold.accountId)).toEqual(["account-b"]);
+  expect([...new Set(f.attempts().flatMap(attempt => [...attempt.accountHolds ?? [], ...attempt.suspension?.hold ? [attempt.suspension.hold] : []])
+    .map(hold => hold.accountId))]).toEqual(["account-b"]);
 
   // A's positive reading ages into "unknown"; no new exhaustion of A arrives.
   f.advance(6 * 60_000);
@@ -484,11 +484,14 @@ test("a predecessor hold that newer headroom ended stays ended after that readin
 test("headroom observed while a healthy replacement runs ends its predecessor hold during that tick", async () => {
   const f = await guardedAccountClock(["account-a", "account-b"]);
   const standing = () => loadPipelines()[0]!.runs[0]!.attempts.flatMap(attempt =>
-    [...attempt.accountHolds ?? [], ...attempt.suspension?.hold ? [attempt.suspension.hold] : []]).map(hold => hold.accountId);
+    [...attempt.accountHolds ?? [], ...attempt.suspension?.hold ? [attempt.suspension.hold] : []]).map(hold => hold.accountId)
+    .filter((accountId, index, all) => all.indexOf(accountId) === index);
   await tickPipelines([], f.h.ports);
   await tickPipelines([], f.h.ports);
   expect(f.attempts().map(attempt => attempt.accountId)).toEqual(["account-a", "account-b"]);
   expect(standing()).toEqual(["account-a"]);
+  // B carries a copy, so its healthy ticks read no retained history.
+  expect(f.attempts()[1]).toMatchObject({ accountHolds: [{ accountId: "account-a", resetsAt: f.resetsAt }] });
 
   // B runs with no guard and no suspension while A's fresh reading shows headroom.
   f.advance(60_000);
