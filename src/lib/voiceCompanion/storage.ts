@@ -124,7 +124,8 @@ const record = (value: unknown): value is Record<string, unknown> => !!value && 
 const identifier = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 200;
 const recipientValid = (value: unknown): boolean => record(value) && identifier(value.project) && identifier(value.conversationId)
   && Number.isSafeInteger(value.seatEpoch) && (value.seatEpoch as number) >= 0 && ["claude", "codex"].includes(value.engine as string);
-function sessionValid(key: string, session: unknown): boolean {
+/** Exported for the install transfer, which admits only sessions this reader accepts. */
+export function sessionValid(key: string, session: unknown): boolean {
   if (!record(session) || session.id !== key || !identifier(key) || !identifier(session.project)
     || !["en", "uk"].includes(session.locale as string) || typeof session.closed !== "boolean"
     || !Number.isSafeInteger(session.generation) || (session.generation as number) < 1 || !Number.isFinite(session.createdAt)

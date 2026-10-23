@@ -5,6 +5,7 @@ import path from "node:path";
 
 import {
   appendLifecycleEvents,
+  appendLifecycleEventsAsync,
   lifecycleEventId,
   lifecycleJournalPath,
   LifecycleJournalCorruptError,
@@ -14,6 +15,7 @@ import {
 } from "./journal";
 import { projectLifecycleEvents } from "./projector";
 import { operatorSafeSummary } from "./vocabulary";
+import { withFileTransaction } from "@/lib/state/fileTransaction";
 
 const sandboxes: string[] = [];
 const originalStateDir = process.env.LLV_STATE_DIR;
@@ -57,6 +59,22 @@ const reviewerStage: LifecycleEventInput[] = [
     summary: "APPROVE — no blocking findings",
   },
 ];
+
+test("background journal admission yields while preserving sync-writer idempotency", async () => {
+  sandbox();
+  appendLifecycleEvents(reviewerStage.slice(0, 1));
+  let enter!: () => void, release!: () => void;
+  const ready = new Promise<void>(resolve => { enter = resolve; });
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  const writer = withFileTransaction(lifecycleJournalPath(), "fixture journal lock", async () => { enter(); await hold; });
+  await ready;
+  const pending = appendLifecycleEventsAsync(reviewerStage);
+  await new Promise<void>(resolve => setImmediate(resolve));
+  release(); await writer;
+  const result = await pending;
+  expect(result.skipped).toBe(1); expect(result.appended.map(event => event.seq)).toEqual([2]);
+  expect(readLifecycleJournal().lastSeq).toBe(2);
+});
 
 test("the journal survives a restart and a replay appends nothing twice", () => {
   sandbox();
