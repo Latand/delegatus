@@ -5473,6 +5473,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "seatTick.reason.autonomyIdle": "Пошук автономної роботи",
   "seatTick.reason.autonomyEnded": "Звіт про автономію",
   "seatTick.reason.unstartedTask": "незапущене завдання",
+  "seatTick.reason.overdueTask": "прострочене завдання",
   "seatTick.reason.interval": "інтервал",
   "seatTick.reason.childTerminal": "воркер завершився",
   "seatTick.reason.ownLaneSettled": "конвеєр оркестратора завершився",

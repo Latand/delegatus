@@ -318,6 +318,50 @@ test("gather and refresh retain explicit work and its blocker for the reminder c
   expect(seatTickDecision(refreshed).verdict.kind).toBe("wake");
 });
 
+test("overdue selection runs once on gather and every refresh, including cached snapshots as time passes", async () => {
+  const task = boardCard({ status: "inbox", chosen: false, dueAt: new Date(NOW + 60_000).toISOString(), dueTz: "UTC" }) as unknown as import("@/lib/tasks/types").BoardTask;
+  const tasks = Object.freeze([Object.freeze(task)]);
+  const calls: number[] = [];
+  let now = NOW;
+  const ports = sources({ tasks: [], pipelines: [] });
+  ports.tasks = () => tasks;
+  const pipelines = Object.freeze([]);
+  ports.pipelines = () => pipelines;
+  ports.now = () => now;
+  const forwarded: string[][] = [];
+  const knownDates: string[][] = [];
+  ports.overdueTasks = (project, at, shown, _cursor, known) => {
+    knownDates.push([...known]);
+    expect(project).toBe(PROJECT);
+    forwarded.push([...shown]);
+    calls.push(at);
+    return at >= Date.parse(task.dueAt!) ? [task] : [];
+  };
+  const gathered = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  expect(calls).toEqual([NOW]);
+  expect(gathered.overdueTasks).toEqual([]);
+  now += 60_000;
+  const refreshed = refreshSeatTickInput(gathered, ports);
+  expect(calls).toEqual([NOW, now]);
+  expect(refreshed.overdueTasks?.[0]?.id).toBe(task.id);
+  const again = refreshSeatTickInput(refreshed, ports);
+  expect(calls).toEqual([NOW, now, now]);
+  const decision = seatTickDecision(again);
+  expect(decision.verdict.kind).toBe("wake");
+  if (decision.verdict.kind !== "wake") throw new Error("missing overdue wake");
+  const { seatTickWakeCommit, seatTickWakeCommitPlan } = await import("./seatTick");
+  const commit = seatTickWakeCommitPlan(decision.verdict, { fingerprint: again.changeFingerprint, eventsThrough: 0 })!;
+  const landed = seatTickWakeCommit(decision.state, commit, now);
+  refreshSeatTickInput({ ...again, state: landed }, ports);
+  expect(forwarded).toEqual([[], [], [], [`t:${task.id}:${Date.parse(task.dueAt!)}`]]);
+  now += DAY_MS;
+  refreshSeatTickInput({ ...again, state: landed }, ports);
+  expect(forwarded.at(-1)).toEqual([]);
+  expect(knownDates).toEqual([[], [], [], [`t:${task.id}:${Date.parse(task.dueAt!)}`], [`t:${task.id}:${Date.parse(task.dueAt!)}`]]);
+  ports.overdueTasks = () => { throw new Error("overdue source unavailable"); };
+  expect(() => refreshSeatTickInput(again, ports)).toThrow("overdue source unavailable");
+});
+
 test("accepted work is owned only by an open lane, including a hidden open lane", async () => {
   const task = boardCard({ chosen: true, status: "assigned", assignments: [{ state: "linked", path: null }] });
   const predecessor = lane({ state: "completed", closedAt: new Date(NOW - DAY_MS).toISOString(), taskIds: [task.id] });
