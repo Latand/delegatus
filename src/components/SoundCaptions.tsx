@@ -206,6 +206,31 @@ function SoundCaptionStack({ right, hidden, suppressPath, titleOf, onOpen }: Omi
     };
   }, [live, place]);
 
+  /*
+   * A toast removed while it holds the focus (clicked away, or evicted by a
+   * fifth push) is taken out during the commit, where React dispatches no
+   * blur: release the focus hold whenever the column no longer holds the
+   * focus. Releasing an unset hold is a no-op.
+   */
+  const column = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    if (!column.current?.contains(document.activeElement)) holdSoundCaptions(false, "focus");
+  });
+
+  /*
+   * The same for the pointer: a toast removed under it sends no pointerout, so
+   * React never sees the pointer leave the column. Any move that lands outside
+   * the column releases the pointer hold.
+   */
+  useEffect(() => {
+    if (!live) return;
+    const onMove = (event: PointerEvent) => {
+      if (!column.current?.contains(event.target as Node | null)) holdSoundCaptions(false, "pointer");
+    };
+    window.addEventListener("pointermove", onMove, { passive: true });
+    return () => window.removeEventListener("pointermove", onMove);
+  }, [live]);
+
   /* A toast removed under the pointer or the focus cannot report leaving. */
   useEffect(() => {
     if (live) return;
@@ -225,6 +250,7 @@ function SoundCaptionStack({ right, hidden, suppressPath, titleOf, onOpen }: Omi
     <>
       <style>{SOUND_CAPTION_CSS}</style>
       <div
+        ref={column}
         className="sc-column"
         data-sound-captions=""
         aria-live="polite"

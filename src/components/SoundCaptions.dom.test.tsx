@@ -230,10 +230,45 @@ describe("the stack", () => {
   test("keyboard focus holds the stack like the pointer does", async () => {
     const view = await mount();
     await push([{ what: "reply", subject: "T", target: lane }]);
-    await act(async () => { view.toasts()[0]!.dispatchEvent(new dom.Event("focusin", { bubbles: true }) as unknown as Event); });
+    await act(async () => { view.toasts()[0]!.focus(); });
     await advance(10_000);
     expect(soundCaptionsSnapshot()).toHaveLength(1);
-    await act(async () => { view.toasts()[0]!.dispatchEvent(new dom.Event("focusout", { bubbles: true }) as unknown as Event); });
+    await act(async () => { view.toasts()[0]!.blur(); });
+    await advance(2000);
+    expect(soundCaptionsSnapshot()).toHaveLength(0);
+  });
+
+  test("clicking one focused toast away while another is up leaves the other counting down", async () => {
+    const view = await mount();
+    await push([{ what: "reply", subject: "first", target: lane }]);
+    await push([{ what: "reply", subject: "second", target: lane }]);
+    await act(async () => { view.toasts()[0]!.focus(); });
+    await act(async () => { view.toasts()[0]!.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event); });
+    expect(soundCaptionsSnapshot().map((item) => item.captions[0]!.subject)).toEqual(["second"]);
+    await push([{ what: "reply", subject: "third", target: null }]);
+    await advance(2000);
+    expect(soundCaptionsSnapshot()).toHaveLength(0);
+  });
+
+  test("a toast clicked away under the pointer leaves the rest held only until the pointer moves outside", async () => {
+    const view = await mount();
+    await push([{ what: "reply", subject: "first", target: lane }]);
+    await push([{ what: "reply", subject: "second", target: null }]);
+    await act(async () => { pointerIn(view.toasts()[0]!); });
+    await act(async () => { view.toasts()[0]!.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event); });
+    await advance(10_000);
+    expect(soundCaptionsSnapshot()).toHaveLength(1);
+    await act(async () => { document.body.dispatchEvent(new dom.MouseEvent("pointermove", { bubbles: true }) as unknown as Event); });
+    await advance(2000);
+    expect(soundCaptionsSnapshot()).toHaveLength(0);
+  });
+
+  test("a focused oldest toast evicted by a fifth push leaves the other four counting down", async () => {
+    const view = await mount();
+    for (const name of ["a", "b", "c", "d"]) await push([{ what: "reply", subject: name, target: lane }]);
+    await act(async () => { view.toasts()[0]!.focus(); });
+    await push([{ what: "reply", subject: "e", target: lane }]);
+    expect(view.toasts().map((toast) => toast.querySelector(".sc-subject")!.textContent)).toEqual(["b", "c", "d", "e"]);
     await advance(2000);
     expect(soundCaptionsSnapshot()).toHaveLength(0);
   });

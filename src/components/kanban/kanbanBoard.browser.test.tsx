@@ -36468,6 +36468,17 @@ describe("sound captions", () => {
           if (!flashed) failures.push(`${tag}: a click on the lane's toast did not reach its card`);
           if (await count() !== 0) failures.push(`${tag}: the clicked toast is still there`);
 
+          /* A mouse click on one of two toasts must not leave the other held: the focus and the pointer go with the removed button. */
+          await page.mouse.move(5, 5);
+          await push(page, "step", 1, [{ what: "step", subject: "Sound captions", stage: CRITIC, target: LANE_TARGET }]);
+          await push(page, "reply", 1, [{ what: "reply", subject: "Fix the board", target: LANE_TARGET }]);
+          await page.waitForTimeout(250);
+          if (await count() !== 2) failures.push(`${tag}: ${await count()} toasts before the two-toast click, expected 2`);
+          await page.locator(".sc-toast").first().click();
+          await page.mouse.move(5, 5);
+          await page.waitForTimeout(2500);
+          if (await count() !== 0) failures.push(`${tag}: the second toast was still there 2.5 s after the first was clicked away`);
+
           /* The needs-you panel docked: the stack's right edge moves with the question toast's. */
           await page.evaluate(() => localStorage.setItem("llvNeedsYouPanel", "open"));
           await page.reload();

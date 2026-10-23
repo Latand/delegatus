@@ -1,8 +1,8 @@
 {
-  "capturedAt": "2026-10-23T02:43:08.372Z",
+  "capturedAt": "2026-10-23T03:45:57.141Z",
   "command": "CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t \"sound captions\" (isolated roots, scripts/gate-slot.sh)",
   "sourceDigests": {
-    "src/components/SoundCaptions.tsx": "4a6f7bf9edd6139ec4233599cd8c87a79f6a73a6f153c369d4f08921101c42ae",
+    "src/components/SoundCaptions.tsx": "becd4e6bdb4cab65437bbc50f882f0bb64473e84ca55567eb778e6a6be7e7713",
     "src/components/soundCaptionStyles.ts": "ef11b7e4d27255e4621f823b805d6e175e8b726a00888dca4a7b12de783c6090",
     "src/lib/audio/captions.ts": "aa34bd96d37b4e26a5d80a4aa0a9df9f451f17806fa21e564491876ecde47889",
     "src/lib/i18n/en.ts": "c7504d33ca1839397b185a1185186fa675da8461a353a88e8394dec5597fd60c",
