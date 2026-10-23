@@ -177,3 +177,19 @@ and retained both activation callbacks. In a disposable export of combined tree
 and the complete `src/lib/pipelines/publicationRecovery.test.ts` passed all 113
 tests with 2,238 assertions. Both commands used `gate-remote` with canonical
 isolated roots. The assigned branch was left unmerged.
+
+## Publication refusal repair
+
+The publication comparator identified two new recovery failures against main:
+the unsubmitted reserving activation cases at the before-recovery and
+account-lock seams. Both failed in two isolated runs of accepted revision
+`d46b531d` and passed in two runs of main at `800a26eb`. The earlier comparison
+against stage entry missed this distinction because that entry already
+contained the new Git-directory lookup.
+
+The synthetic checkout fixture supplied only its HEAD at the native Git
+boundary. It now also supplies a private Git directory, while guard writes,
+activation validation, account locking and recovery still execute normally.
+Both cases passed in two fresh focused runs after that correction. Assertions
+also verify that holding recovery writes no fence and that the launched
+attempt's receipt and private owner file agree after release.
