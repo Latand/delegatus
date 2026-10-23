@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { fixtureBoardReads } from "./boardReads.fixture";
 import { afterAll, afterEach, beforeEach, expect, jest, test, spyOn } from "bun:test";
 import fs from "node:fs";
@@ -290,7 +291,7 @@ test.each([true, false])("Claude actions keep their completed outcome across sca
     { type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content: JSON.stringify(value) }] } },
   ];
   const f = await seatVoiceFixture([
-    ...pair("older", "create_task", { text: "Earlier task" }, { ok: true }),
+    ...pair("older", "create_task", withTaskDue({ text: "Earlier task" }), { ok: true }),
     ...pair("boundary", "create_pipeline", { task: "Boundary lane" }, { ok }),
     ...Array.from({ length: 59 }, (_, index) => pair(`read-${index}`, "list_tasks", {}, { ok: true })).flat(),
     { type: "assistant", message: { content: [{ type: "tool_use", id: "pending-read", name: "mcp__viewer__list_tasks", input: {} }] } },

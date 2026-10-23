@@ -474,6 +474,8 @@ test("two unresolved attempts of one project share one standing card, updated in
 
   const cards = await unresolvedCardsOn(project);
   expect(cards).toHaveLength(1);
+  const storedCard = (await import("@/lib/tasks/store")).loadTasks(STANDING_BOARD()).find(task => task.id === cards[0]!.id)!;
+  expect(storedCard.dueAt).toBeUndefined(); expect(storedCard.dueTz).toBeUndefined();
   expect(cards[0]!.text).toContain(secondKey);
   expect(cards[0]!.text).toContain("Attempts on this card: 2");
 

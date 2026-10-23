@@ -2183,6 +2183,18 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
   return { ...view(readIssueReportPreview(digest, directory) ?? stored), issueUrl, published: true };
 }
 
+/** Date validation runs before receipts while preserving project admission. */
+function requireTaskCreateDue(binding: McpToolBinding): McpToolBinding {
+  const prepare = binding.prepareAdmission;
+  binding.prepareAdmission = async (args: McpToolArgs) => {
+    if (args.dueAt === undefined || args.dueAt === null || args.dueAt === "") {
+      throw new McpToolRefusal("A dueAt date is required for a new task", { code: "TASK_DUE_REQUIRED", field: "dueAt", status: 400 });
+    }
+    await prepare?.(args);
+  };
+  return binding;
+}
+
 async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   /* A new task runs on the machine that creates it (M.4); "here" is the only
      machine a create names. */
@@ -2202,7 +2214,7 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
   let prior: BoardTask | undefined;
   let matchedFields: string[] | undefined;
   const result = await waitForStateLock("mcp.tasks.create", () => mutateTasksFile((state) => {
-    let outcome = createTask(state.tasks, input, state.recentCreates, { explicit: true, actor: "agent", noteAuthor: caller?.kind === "manager" ? { kind: "orchestrator", conversationId: caller.conversationId } : { kind: "agent", conversationId: caller?.conversationId ?? null }, conversationId: caller?.conversationId ?? undefined, seatHolding: taskSeatHoldingSnapshot(), ...(dependencies ? { statusActor: pauseResumeActorOf(dependencies) } : {}) });
+    let outcome = createTask(state.tasks, input, state.recentCreates, { requireDue: true, dueTimeZone: operatorTimeZone() ?? undefined, explicit: true, actor: "agent", noteAuthor: caller?.kind === "manager" ? { kind: "orchestrator", conversationId: caller.conversationId } : { kind: "agent", conversationId: caller?.conversationId ?? null }, conversationId: caller?.conversationId ?? undefined, seatHolding: taskSeatHoldingSnapshot(), ...(dependencies ? { statusActor: pauseResumeActorOf(dependencies) } : {}) });
     // Publish the new owner task and its seat-tick eligibility atomically.
     // Replays and matched findings retain the task's existing status.
     if (outcome.ok && !outcome.replay && !outcome.matched && ownerRelay && !outcome.task.hold) {
@@ -8129,7 +8141,7 @@ export function viewerMcpBindings(
     spawn_agent: (args, context) => spawnAgent(args, viewerControlForCall(controlDependencies, context), context, domainDependencies),
     send_message: (args, context) => sendMessage(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
     message_receipt: (args) => messageReceipt(args),
-    create_task: orchestratorProjectBinding(domainDependencies, (args) => createBoardTask(args, domainDependencies), true, true, true),
+    create_task: requireTaskCreateDue(orchestratorProjectBinding(domainDependencies, (args) => createBoardTask(args, domainDependencies), true, true, true)),
     update_task: (args) => updateBoardTask(args, domainDependencies),
     create_pipeline: (args, context) => unadmittedBeforeMutation(async () => (await createPipeline(args, context, domainDependencies))),
     pipeline_action: Object.assign(

@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -66,7 +67,7 @@ test("task-only project keys are indexed before short-key writes and collisions 
   let writes = 0;
   const { createMcpToolService, MemoryMcpReceiptStore } = await import("@/lib/mcp/server");
   const service = createMcpToolService({ create_task: async () => { writes++; return { task: task("unexpected", right) }; } } as never, new MemoryMcpReceiptStore());
-  const refused = await service.callTool("create_task", { project: prefix, text: "must refuse" });
+  const refused = await service.callTool("create_task", withTaskDue({ project: prefix, text: "must refuse" }));
   expect(refused).toMatchObject({ ok: false, code: "ambiguous_project" });
   expect(writes).toBe(0);
   saveTasks([task("task-only-a", left)]);

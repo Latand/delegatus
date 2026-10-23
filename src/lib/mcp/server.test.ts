@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { afterAll, afterEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -2060,7 +2061,7 @@ test("create_task and update_task tell a writer which hold kind a worker slot wa
       expect(kind).toContain("resource is a shortage on the machine such as memory or disk");
       expect(kind).toContain("Unknown kinds normalize to unstated.");
     }
-    await client.callTool({ name: "create_task", arguments: { clientRequestId: "hold-worker", project: "fixture", text: "Queued lane", hold: { kind: "worker", note: "After a lane finishes" } } });
+    await client.callTool({ name: "create_task", arguments: withTaskDue({ clientRequestId: "hold-worker", project: "fixture", text: "Queued lane", hold: { kind: "worker", note: "After a lane finishes" } }) });
     await client.callTool({ name: "update_task", arguments: { clientRequestId: "hold-resource", id: "task_fixture", hold: { kind: "resource", note: "4 GB of memory available, 8 GB needed" } } });
     expect(seen.map((args) => (args.hold as { kind: string }).kind)).toEqual(["worker", "resource"]);
   } finally {

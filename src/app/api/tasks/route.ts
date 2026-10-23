@@ -1,3 +1,4 @@
+import { operatorTimeZone } from "@/lib/operator/settings";
 import fs from "node:fs";
 
 import { NextRequest, NextResponse } from "next/server";
@@ -87,6 +88,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; t
       /* An attachment ref only becomes task-owned once its bytes are actually
          in the store — a stale/forged ref is rejected loudly, never dangling. */
       attachmentExists: (att) => fs.existsSync(attachmentPath(att)),
+      defaultDue: true, dueTimeZone: operatorTimeZone() ?? undefined,
       explicit: true, seatHolding: taskSeatHoldingSnapshot(), statusActor: OPERATOR_PAUSE_RESUME_ACTOR,
     });
     /* Persist only a fresh create; a validation failure or a replay (which left

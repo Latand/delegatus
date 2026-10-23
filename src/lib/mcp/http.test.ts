@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { afterAll, beforeAll, beforeEach, expect, spyOn, test } from "bun:test";
 import { systemScheduler, type DeadlineScheduler } from "@/lib/deadline";
 import crypto from "node:crypto";
@@ -90,10 +91,10 @@ test("MCP dispatch yields to timers, preserves each caller and keeps awaited ope
     expect(observed).toEqual(["fixture-first", "fixture-second"]);
   } finally { clearTimeout(timer); release(); await first; }
   const cancelled = new AbortController(); cancelled.abort();
-  const refused = await service.callTool("create_task", { clientRequestId: "original-key" }, { signal: cancelled.signal });
+  const refused = await service.callTool("create_task", withTaskDue({ clientRequestId: "original-key" }), { signal: cancelled.signal });
   expect(refused).toMatchObject({ ok: false, code: "outcome_unknown", details: { nextAction: "original-key-lookup" } });
   expect(observed).toHaveLength(2);
-  expect((await service.callTool("create_task", { clientRequestId: "original-key" })).ok).toBe(true);
+  expect((await service.callTool("create_task", withTaskDue({ clientRequestId: "original-key" }))).ok).toBe(true);
   expect(observed).toHaveLength(3);
 });
 
@@ -235,9 +236,9 @@ for (const engine of ["codex-mcp-client", "claude-code"]) test(`${engine} receiv
     expect(success.structuredContent).toBeUndefined();
     expect(success.content).toHaveLength(1);
     expect(JSON.parse((success.content as Array<{ text: string }>)[0].text)).toMatchObject({ ok: true, toolName: "list_tasks" });
-    const invalid = await client.callTool({ name: "create_task", arguments: {
+    const invalid = await client.callTool({ name: "create_task", arguments: withTaskDue({
       clientRequestId: `format-invalid-${engine}`, project: "fixture-project", text: "Inspect the transport", details: 42,
-    } });
+    }) });
     expect(invalid.isError).toBe(true);
     expect(invalid.structuredContent).toBeUndefined();
     expect(invalid.content).toHaveLength(1);
@@ -459,15 +460,15 @@ test("task HTTP execution preserves protocol validation, exact text, caller rece
   const details = "First line\nA tab\tand a backslash \\ with Unicode λ";
   const args = { project: "Fixture Viewer", text: "Task HTTP executor fixture", details, board: "hidden", clientRequestId: "http-task-protocol" };
   try {
-    const invalid = payloadOf(await client.callTool({ name: "create_task", arguments: { ...args, steps: "invalid" } }));
+    const invalid = payloadOf(await client.callTool({ name: "create_task", arguments: withTaskDue({ ...args, steps: "invalid" }) }));
     expect(invalid).toMatchObject({ ok: false, code: "TASK_INVALID_FIELD" });
-    const created = payloadOf(await client.callTool({ name: "create_task", arguments: { ...args, full: true } }));
+    const created = payloadOf(await client.callTool({ name: "create_task", arguments: withTaskDue({ ...args, full: true }) }));
     expect(created).toMatchObject({ ok: true, task: { text: args.text, details } });
-    expect(payloadOf(await client.callTool({ name: "create_task", arguments: { ...args, full: true } })))
+    expect(payloadOf(await client.callTool({ name: "create_task", arguments: withTaskDue({ ...args, full: true }) })))
       .toMatchObject({ ok: true, replayed: true, taskId: created.taskId, revision: created.revision });
     const other = await agentClient(bob);
     try {
-      expect(payloadOf(await other.callTool({ name: "create_task", arguments: { ...args, full: true } })))
+      expect(payloadOf(await other.callTool({ name: "create_task", arguments: withTaskDue({ ...args, full: true }) })))
         .toMatchObject({ ok: true, replayed: true, taskId: created.taskId, revision: created.revision,
           task: { statusBy: (created.task as { statusBy: unknown }).statusBy } });
       expect(payloadOf(await other.callTool({ name: "update_task", arguments: {

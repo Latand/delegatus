@@ -52,3 +52,9 @@ export function fromDueInput(value: string): { dueAt: string; dueTz: string } | 
   if (!Number.isFinite(ms)) return null;
   return { dueAt: new Date(ms).toISOString(), dueTz: Intl.DateTimeFormat().resolvedOptions().timeZone };
 }
+
+/** A default advances by elapsed hours, including across daylight-saving changes. */
+export function defaultTaskDue(nowMs = Date.now(), dueTz = Intl.DateTimeFormat().resolvedOptions().timeZone): { dueAt: string; dueTz: string } {
+  const hour = 60 * 60 * 1000;
+  return { dueAt: new Date(Math.ceil((nowMs + 72 * hour) / hour) * hour).toISOString(), dueTz };
+}

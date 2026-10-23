@@ -1,0 +1,219 @@
+{
+  "capturedAt": "2026-10-23T10:44:19.437Z",
+  "clock": "2026-10-23T10:12:34.567Z",
+  "sourceDigests": {
+    "src/components/tasks/TaskComposer.tsx": "e366acd70a334861e0395ade157d40219a112689d6392ce81b2d8ab065e66753",
+    "src/hooks/useTaskDraft.ts": "a4085d1d1be0e69fa5493d15f4939dc6f27f8614411439560f8ca33db268d2e8",
+    "src/lib/tasks/helpers.ts": "a80d1be79cf2d5083c9be1486e902295719ee2a0c12b93e4d471b52f0a1217c7",
+    "src/lib/i18n/en.ts": "663a6317aa034a1f4b9a5aaf1dbf4204b7ec7f669146df1242e1d9878c803592",
+    "src/lib/i18n/uk.ts": "0016f089691db775f3b5941888276316c0509bd333e0d939886725680db9dbe2",
+    "src/components/kanban/issue1695BrowserHarness.ts": "30ddb989bf45c708712b2d369452e571c8926a86e1ef8ef7193b02b82c6d6a23",
+    "src/components/mobile/issue1671Evidence.browser.test.tsx": "b8c8d90cd959436bf1ab1abf8b69daef6d4a6d14593c6b844249b8b5988d4f53"
+  },
+  "readings": [
+    {
+      "lang": "en",
+      "theme": "light",
+      "phone": true,
+      "state": "default",
+      "file": "phone-en-light-default.png",
+      "geometry": {
+        "x": 21,
+        "y": 106,
+        "width": 118.046875,
+        "height": 44,
+        "visible": true,
+        "unobscured": true,
+        "focus": "BUTTON"
+      },
+      "shownAt": "2026-10-26T11:00:00.000Z"
+    },
+    {
+      "lang": "en",
+      "theme": "light",
+      "phone": true,
+      "state": "picked",
+      "file": "phone-en-light-picked.png",
+      "geometry": {
+        "x": 21,
+        "y": 106,
+        "width": 156.640625,
+        "height": 44,
+        "visible": true,
+        "unobscured": true,
+        "focus": "INPUT"
+      },
+      "shownAt": "2026-10-30T13:00:00.000Z"
+    },
+    {
+      "lang": "en",
+      "theme": "light",
+      "phone": true,
+      "state": "reset",
+      "file": "phone-en-light-reset.png",
+      "geometry": {
+        "x": 21,
+        "y": 106,
+        "width": 118.046875,
+        "height": 44,
+        "visible": true,
+        "unobscured": true,
+        "focus": "BODY"
+      },
+      "shownAt": "2026-10-26T11:00:00.000Z"
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "phone": true,
+      "state": "default",
+      "file": "phone-en-dark-default.png",
+      "geometry": {
+        "x": 21,
+        "y": 106,
+        "width": 118.046875,
+        "height": 44,
+        "visible": true,
+        "unobscured": true,
+        "focus": "BUTTON"
+      },
+      "shownAt": "2026-10-26T11:00:00.000Z"
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "phone": true,
+      "state": "picked",
+      "file": "phone-en-dark-picked.png",
+      "geometry": {
+        "x": 21,
+        "y": 106,
+        "width": 156.640625,
+        "height": 44,
+        "visible": true,
+        "unobscured": true,
+        "focus": "INPUT"
+      },
+      "shownAt": "2026-10-30T13:00:00.000Z"
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "phone": true,
+      "state": "reset",
+      "file": "phone-en-dark-reset.png",
+      "geometry": {
+        "x": 21,
+        "y": 106,
+        "width": 118.046875,
+        "height": 44,
+        "visible": true,
+        "unobscured": true,
+        "focus": "BODY"
+      },
+      "shownAt": "2026-10-26T11:00:00.000Z"
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "phone": true,
+      "state": "default",
+      "file": "phone-uk-light-default.png",
+      "geometry": {
+        "x": 21,
+        "y": 106,
+        "width": 128.96875,
+        "height": 44,
+        "visible": true,
+        "unobscured": true,
+        "focus": "BUTTON"
+      },
+      "shownAt": "2026-10-26T11:00:00.000Z"
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "phone": true,
+      "state": "picked",
+      "file": "phone-uk-light-picked.png",
+      "geometry": {
+        "x": 21,
+        "y": 106,
+        "width": 148.640625,
+        "height": 44,
+        "visible": true,
+        "unobscured": true,
+        "focus": "INPUT"
+      },
+      "shownAt": "2026-10-30T13:00:00.000Z"
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "phone": true,
+      "state": "reset",
+      "file": "phone-uk-light-reset.png",
+      "geometry": {
+        "x": 21,
+        "y": 106,
+        "width": 128.96875,
+        "height": 44,
+        "visible": true,
+        "unobscured": true,
+        "focus": "BODY"
+      },
+      "shownAt": "2026-10-26T11:00:00.000Z"
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "phone": true,
+      "state": "default",
+      "file": "phone-uk-dark-default.png",
+      "geometry": {
+        "x": 21,
+        "y": 106,
+        "width": 128.96875,
+        "height": 44,
+        "visible": true,
+        "unobscured": true,
+        "focus": "BUTTON"
+      },
+      "shownAt": "2026-10-26T11:00:00.000Z"
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "phone": true,
+      "state": "picked",
+      "file": "phone-uk-dark-picked.png",
+      "geometry": {
+        "x": 21,
+        "y": 106,
+        "width": 148.640625,
+        "height": 44,
+        "visible": true,
+        "unobscured": true,
+        "focus": "INPUT"
+      },
+      "shownAt": "2026-10-30T13:00:00.000Z"
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "phone": true,
+      "state": "reset",
+      "file": "phone-uk-dark-reset.png",
+      "geometry": {
+        "x": 21,
+        "y": 106,
+        "width": 128.96875,
+        "height": 44,
+        "visible": true,
+        "unobscured": true,
+        "focus": "BODY"
+      },
+      "shownAt": "2026-10-26T11:00:00.000Z"
+    }
+  ]
+}

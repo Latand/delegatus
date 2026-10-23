@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 /**
  * A new task's colour through every create surface: MCP `create_task` and the
  * HTTP create the board sends store it and answer it, an unknown colour is
@@ -60,14 +61,14 @@ const stored = (id: string) => loadTasks().find((row) => row.id === id)!;
 test("create_task stores the colour it is given and answers it in changedFields", async () => {
   const p = await protocol();
   try {
-    const created = await p.call("create_task", { project: "color-project", text: "Tidy the test helpers", icon: "wrench", color: "slate" });
+    const created = await p.call("create_task", withTaskDue({ project: "color-project", text: "Tidy the test helpers", icon: "wrench", color: "slate" }));
     expect(created).toMatchObject({ ok: true, task: { color: "slate", icon: "wrench" }, changes: { color: "slate" } });
     expect(created.changedFields).toContain("color");
     expect(created.notes).toBeUndefined();
     expect(stored(created.task.id).color).toBe("slate");
 
     /* none, like an absent colour, creates the task without one and no note. */
-    const none = await p.call("create_task", { project: "color-project", text: "No colour on purpose", color: "none" });
+    const none = await p.call("create_task", withTaskDue({ project: "color-project", text: "No colour on purpose", color: "none" }));
     expect(none.ok).toBe(true);
     expect("color" in none.task).toBe(false);
     expect(none.notes).toBeUndefined();
@@ -77,7 +78,7 @@ test("create_task stores the colour it is given and answers it in changedFields"
 test("an unknown colour is never an error: it is stored as none and the answer says so, on MCP and HTTP alike", async () => {
   const p = await protocol();
   try {
-    const created = await p.call("create_task", { project: "color-project", text: "Colour nobody has", icon: "bug", color: "mauve" });
+    const created = await p.call("create_task", withTaskDue({ project: "color-project", text: "Colour nobody has", icon: "bug", color: "mauve" }));
     expect(created.ok).toBe(true);
     expect(created.task.icon).toBe("bug");
     expect("color" in created.task).toBe(false);
@@ -85,7 +86,7 @@ test("an unknown colour is never an error: it is stored as none and the answer s
     expect(created.notes).toEqual(['color "mauve" is not one of coral, amber, lime, teal, sky, violet, pink, slate, so the task has no colour']);
 
     /* An unknown icon and an unknown colour each leave their own note. */
-    const both = await p.call("create_task", { project: "color-project", text: "Two clamps", icon: "starship", color: 7 });
+    const both = await p.call("create_task", withTaskDue({ project: "color-project", text: "Two clamps", icon: "starship", color: 7 }));
     expect(both.ok).toBe(true);
     expect(both.notes).toHaveLength(2);
     expect(both.notes?.[1]).toContain("color number is not one of");

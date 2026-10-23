@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { afterEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { flushSync } from "react-dom";
@@ -154,7 +155,7 @@ test("routes task chips through the viewer entity navigation channel", () => {
       mcp: {
         serverName: "viewer",
         toolName: "create_task",
-        args: { project: "viewer", text: "Audit MCP cards" },
+        args: withTaskDue({ project: "viewer", text: "Audit MCP cards" }),
         result: { taskId: "task-431" },
       },
     }), new Set());
