@@ -850,6 +850,10 @@ export async function commitPipelineStage(
     const unstage = await unstageControllerArtifacts(exec, pipeline.worktreeDir);
     return unstage ?? { ok: true, sha };
   };
+  const stagingFailure = (result: ExecResult): PipelineGitResult => ({
+    ok: false,
+    error: `${failure("staging the passed stage", result).error}\nWorktree changes:\n${status.stdout.trimEnd()}`,
+  });
   let changedOutputPaths: string[] = [];
   if (!allowCommit) {
     if (declaredOutputs.length === 0) {
@@ -857,7 +861,7 @@ export async function commitPipelineStage(
       return { ok: false, error: `read-only stage ${stageId} modified the pipeline worktree` };
     }
     const changed = (await changedWorktreePaths(exec, pipeline.worktreeDir));
-    if (!changed.ok) return changed;
+    if (!changed.ok) return { ok: false, error: `staging the passed stage: ${changed.error}` };
     const refused = changed.paths.filter((candidate) => !pathIsDeclaredOutput(candidate, declaredOutputs));
     if (refused.length > 0) {
       return { ok: false, error: `read-only stage ${stageId} modified undeclared worktree paths` };
@@ -868,10 +872,6 @@ export async function commitPipelineStage(
     return settleWithoutCommit();
   }
   if (control?.recoveryHead !== undefined) return unrecoveredRetry;
-  const stagingFailure = (result: ExecResult): PipelineGitResult => ({
-    ok: false,
-    error: `${failure("staging the passed stage", result).error}\nWorktree changes:\n${status.stdout.trimEnd()}`,
-  });
   if (allowCommit) {
     // With exclusion pathspecs, `add -A .` can reject an ignored directory
     // even when it contains tracked files. Update the index's tracked paths
@@ -886,8 +886,16 @@ export async function commitPipelineStage(
       if (add.code !== 0) return stagingFailure(add);
     }
   } else {
-    const add = await exec("git", ["add", "-f", "-A", "--", ...changedOutputPaths], pipeline.worktreeDir);
-    if (add.code !== 0) return stagingFailure(add);
+    const tracked = await exec("git", ["add", "-u", "--", ...changedOutputPaths.map(file => `:(top,literal)${file}`)], pipeline.worktreeDir);
+    if (tracked.code !== 0) return stagingFailure(tracked);
+    const untracked = await exec("git", ["ls-files", "--others", "--exclude-standard", "-z", "--", ...declaredOutputs], pipeline.worktreeDir);
+    if (untracked.code !== 0) return stagingFailure(untracked);
+    const outputPaths = new Set(changedOutputPaths);
+    const eligibleUntracked = untracked.stdout.split("\0").filter((candidate) => candidate && outputPaths.has(candidate));
+    for (let start = 0; start < eligibleUntracked.length; start += 100) {
+      const add = await exec("git", ["add", "--", ...eligibleUntracked.slice(start, start + 100).map(file => `:(top,literal)${file}`)], pipeline.worktreeDir);
+      if (add.code !== 0) return stagingFailure(add);
+    }
   }
   if (!allowCommit) {
     const staged = (await exec(
@@ -895,10 +903,10 @@ export async function commitPipelineStage(
       ["diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD", "--", ...declaredOutputs],
       pipeline.worktreeDir,
     ));
-    if (staged.code !== 0) return failure("verifying staged declared output paths", staged);
+    if (staged.code !== 0) return stagingFailure(staged);
     const stagedPaths = new Set(staged.stdout.split("\0").filter(Boolean));
     const missing = changedOutputPaths.find((candidate) => !stagedPaths.has(candidate));
-    if (missing) return { ok: false, error: `declared output ${missing} was not staged` };
+    if (missing) return stagingFailure({ code: 1, stdout: "", stderr: `declared output ${missing} was not staged` });
   }
   const unstage = await unstageControllerArtifacts(exec, pipeline.worktreeDir);
   if (unstage) return unstage;

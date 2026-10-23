@@ -1804,6 +1804,37 @@ test.each([
   }
 });
 
+test.each([
+  { label: "read-write", allowCommit: true, mutateAfterListing: 1 },
+  { label: "read-only", allowCommit: false, mutateAfterListing: 2 },
+])("$label settlement refuses an output that becomes ignored after discovery", async ({ allowCommit, mutateAfterListing }) => {
+  const box = await isolatedIdentityRepo();
+  try {
+    const subject = pipeline();
+    subject.worktreeDir = box.repo;
+    subject.lastPassedCommit = await box.run("rev-parse", "HEAD");
+    const output = path.join(box.repo, "new.md");
+    fs.writeFileSync(output, "stage output\n");
+    let listings = 0;
+    const exec: ExecPort = async (command, args, cwd, env, options) => {
+      const result = await box.exec(command, args, cwd, env, options);
+      if (command === "git" && args[0] === "ls-files" && args.includes("--others")) {
+        listings += 1;
+        if (listings === mutateAfterListing) fs.appendFileSync(path.join(box.repo, ".git", "info", "exclude"), "\n/new.md\n");
+      }
+      return result;
+    };
+
+    const result = await commitPipelineStage(subject, "audit", allowCommit, exec, ["new.md"]);
+
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining("new.md") });
+    expect(await box.run("rev-parse", "HEAD")).toBe(subject.lastPassedCommit);
+    expect(await box.run("ls-files", "--", "new.md")).toBe("");
+    expect(await box.run("ls-files", "--others", "--exclude-standard", "--", "new.md")).toBe("");
+    expect(fs.readFileSync(output, "utf8")).toBe("stage output\n");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
 test("a declared output directory leaves ignored descendants alone", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-output-directory-"));
   try {
