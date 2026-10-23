@@ -9,6 +9,7 @@ import { Database } from "bun:sqlite";
 import { drainFile, writeDrain, releaseDrain } from "@/lib/selfUpdate/drain";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import type { SpawnCommandDependencies } from "./spawnCommand";
+import type { SpawnReceipt } from "./registry";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-account-contention-"));
 const savedEnv = { ...process.env };
@@ -135,8 +136,10 @@ test.each(["released", "refused", "revoked"] as const)("a reserved maintenance l
     expect(receipt.membershipAdmitted).toBe(outcome === "released");
     expect(deferred).toHaveLength(outcome === "released" ? 1 : 0);
     if (outcome === "refused") expect(receipt).toMatchObject({ state: "failed", error: "fixture task membership refused" });
+    if (outcome === "revoked") expect(receipt.admissionOwner).toBeNull();
     membership.mockRestore();
-    if (outcome === "released") {
+    if (outcome === "released" || outcome === "revoked") {
+      dependencies.assertAccountAdmission = () => {};
       expect((await executeSpawnRequest(request(), dependencies)).status).toBe(202);
       expect(registry.spawnReceiptForClientAttempt(attempt)!.launchId).toBe(reservedId!);
       expect(deferred).toHaveLength(1);
@@ -147,6 +150,158 @@ test.each(["released", "refused", "revoked"] as const)("a reserved maintenance l
     if (locked) { peer.exec("ROLLBACK"); locked = false; }
     peer.close();
   }
+});
+
+for (const guard of ["account", "authority"] as const) test.each(["reservation", "membership", "recorded"] as const)(`a ${guard} guard refusal after %s releases fresh dispatch custody for same-key replay`, async seam => {
+  const { productionLaunchMembershipPorts } = await import("@/lib/tasks/launchMembership");
+  const { AccountAdmissionChangedError } = await import("@/lib/accounts/accountMutation");
+  const cwd = statePath(`guard-custody-${guard}-${seam}`);
+  fs.mkdirSync(cwd, { recursive: true });
+  const attempt = `guard_custody_${guard}_${seam}`;
+  const registry = agentRegistry();
+  const dependencies = structuredRouteDependencies(cwd);
+  const deferred: Array<() => Promise<void>> = [];
+  dependencies.defer = work => { deferred.push(work); };
+  let membershipCommitted = false;
+  let refuse = true;
+  const commit = productionLaunchMembershipPorts.commit;
+  const membership = spyOn(productionLaunchMembershipPorts, "commit").mockImplementation(input => {
+    const admitted = commit(input);
+    if (admitted.ok) membershipCommitted = true;
+    return admitted;
+  });
+  const write = registry.accountMutationWrite.bind(registry);
+  const record = spyOn(registry, "accountMutationWrite").mockImplementation(async (...args) => {
+    const result = await write(...args);
+    if (refuse && seam === "recorded" && args[0] === "spawn membership record" && result.acquired) {
+      throw new AccountAdmissionChangedError();
+    }
+    return result;
+  });
+  const assertAdmission = () => {
+    const receipt = registry.spawnReceiptForClientAttempt(attempt);
+    if (refuse && receipt && (seam === "reservation" || (seam === "membership" && membershipCommitted))) {
+      throw new AccountAdmissionChangedError();
+    }
+  };
+  if (guard === "account") dependencies.assertAccountAdmission = assertAdmission;
+  else dependencies.authorizeAutonomousLaunch = assertAdmission;
+  const request = () => new NextRequest("http://127.0.0.1/api/spawn", {
+    method: "POST", headers: { origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", host: "127.0.0.1", "content-type": "application/json" },
+    body: JSON.stringify({ clientAttemptId: attempt, title: "Guard custody fixture", engine: "claude", cwd, prompt: "Inspect fixture custody", mcpServers: [] }),
+  });
+  try {
+    const response = await executeSpawnRequest(request(), dependencies);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ code: "account_admission_changed", retryable: true, retrySafe: true });
+    const receipt = registry.spawnReceiptForClientAttempt(attempt)!;
+    expect(receipt.state).toBe("starting");
+    expect(receipt.membershipAdmitted).toBe(seam === "recorded");
+    expect(receipt.admissionOwner).toBeNull();
+    expect(deferred).toHaveLength(0);
+    if (guard === "authority" && seam !== "recorded") {
+      expect((await executeSpawnRequest(request(), dependencies)).status).toBe(503);
+      expect(registry.spawnReceiptForClientAttempt(attempt)!.admissionOwner).toBeNull();
+      expect(deferred).toHaveLength(0);
+    }
+    refuse = false;
+    expect((await executeSpawnRequest(request(), dependencies)).status).toBe(202);
+    expect(registry.spawnReceiptForClientAttempt(attempt)!.launchId).toBe(receipt.launchId);
+    expect(registry.spawnReceiptForClientAttempt(attempt)!.membershipAdmitted).toBe(true);
+    expect(deferred).toHaveLength(1);
+    expect((await executeSpawnRequest(request(), dependencies)).status).toBe(202);
+    expect(deferred).toHaveLength(1);
+  } finally {
+    membership.mockRestore();
+    record.mockRestore();
+  }
+});
+
+test("exhausted spawn reservation admission preserves the retryable response and same-key retry", async () => {
+  const { executeOrchestratorSeatRequest } = await import("@/lib/orchestrator/seatCommand");
+  const { orchestratorSeatFor } = await import("@/lib/orchestrator/seats");
+  const cwd = statePath("exhausted-reservation");
+  fs.mkdirSync(cwd, { recursive: true });
+  const attempt = "exhausted_reservation";
+  const registry = agentRegistry();
+  const dependencies = structuredRouteDependencies(cwd);
+  const deferred: Array<() => Promise<void>> = [];
+  dependencies.defer = work => { deferred.push(work); };
+  const write = registry.accountMutationWrite.bind(registry);
+  const busy = spyOn(registry, "accountMutationWrite").mockImplementation(async (...args) =>
+    args[0] === "spawn admission" ? { acquired: false } : write(...args));
+  const request = () => new NextRequest("http://127.0.0.1/api/spawn", {
+    method: "POST", headers: { origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", host: "127.0.0.1", "content-type": "application/json" },
+    body: JSON.stringify({ clientAttemptId: attempt, title: "Reservation contention fixture", engine: "claude", cwd, prompt: "Inspect fixture admission", mcpServers: [] }),
+  });
+  try {
+    const response = await executeSpawnRequest(request(), dependencies);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ code: "account_store_busy", retryable: true, retrySafe: true });
+    expect(registry.spawnReceiptForClientAttempt(attempt)).toBeNull();
+    expect(deferred).toHaveLength(0);
+    const keys: unknown[] = [];
+    const project = "reservation-admission-fixture";
+    const seat = await executeOrchestratorSeatRequest({ project, mandate: "Inspect the fixture board", cwd,
+      clientRequestId: attempt, engine: "claude", model: "opus" }, {
+      resolveProject: project => ({ project, displayName: project }),
+      spawn: async body => {
+        keys.push(body.clientAttemptId);
+        expect(orchestratorSeatFor(project).pending).not.toBeNull();
+        expect(orchestratorSeatFor(project).history).toEqual([]);
+        const response = await executeSpawnRequest(new NextRequest("http://127.0.0.1/api/spawn", {
+          method: "POST", headers: { origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", host: "127.0.0.1", "content-type": "application/json" },
+          body: JSON.stringify(body),
+        }), dependencies);
+        if (keys.length === 1) {
+          expect(response.status).toBe(503);
+          expect(registry.spawnReceiptForClientAttempt(attempt)).toBeNull();
+          expect(deferred).toHaveLength(0);
+          busy.mockRestore();
+        }
+        return { status: response.status, body: await response.json() };
+      },
+      deliver: async () => ({ ok: true, outcome: "delivered" }), conversationTarget: () => null,
+      summarizeHandoffs: async () => ({ kind: "fallback", reason: "unavailable" }),
+      launchSettlement: () => ({ kind: "unknown" }), stampRegistryIdentity: () => {},
+      runtimeIdentity: () => ({ engine: "claude", model: "opus" }), resolvedConversation: () => null,
+      now: () => "2026-10-23T00:00:00.000Z",
+    });
+    expect(seat.status).toBe(202);
+    expect(keys).toEqual([attempt, attempt]);
+    expect(orchestratorSeatFor(project)).toMatchObject({ pending: null, history: [] });
+    expect(registry.spawnReceiptForClientAttempt(attempt)).not.toBeNull();
+    expect(deferred).toHaveLength(1);
+  } finally { busy.mockRestore(); }
+});
+
+test.each(["replay", "replaced-owner"] as const)("a failed admission preserves another dispatcher's custody: %s", async seam => {
+  const { AgentRegistry } = await import("./registry");
+  const { AccountAdmissionChangedError } = await import("@/lib/accounts/accountMutation");
+  const root = statePath(`foreign-custody-${seam}`);
+  fs.mkdirSync(root, { recursive: true });
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const input = { engine: "claude" as const, cwd: root, transport: "structured" as const,
+    clientAttemptId: `foreign_custody_${seam}`, purpose: "resume-successor" as const,
+    origin: { kind: "successor" as const }, launchProfile: { title: "Foreign custody fixture" } };
+  let guards = 0;
+  let owner: SpawnReceipt["admissionOwner"] = null;
+  try {
+    if (seam === "replay") owner = (await registry.beginSpawnRequestAsync(input)).receipt.admissionOwner;
+    await expect(registry.beginSpawnRequestAsync(input, () => {
+      if (++guards === 1) return;
+      if (seam === "replaced-owner") {
+        const snapshot = registry.snapshot();
+        const receipt = Object.values(snapshot.receipts)[0]!;
+        receipt.admissionOwner = { pid: 987_654, startIdentity: "foreign-custody" };
+        owner = receipt.admissionOwner;
+        fs.writeFileSync(registry.filename, JSON.stringify(snapshot));
+      }
+      throw new AccountAdmissionChangedError();
+    })).rejects.toThrow(AccountAdmissionChangedError);
+    expect(registry.spawnReceiptForClientAttempt(input.clientAttemptId)!.admissionOwner).toEqual(owner);
+    expect(Object.values(registry.readOnlySnapshot().receipts)).toHaveLength(1);
+  } finally { registry.close(); }
 });
 
 test("a refused anonymous structured spawn preserves the real Git index and writes no handoffs", async () => {

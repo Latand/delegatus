@@ -1,4 +1,5 @@
 import type { AgentRegistry, SpawnReceipt } from "./registry";
+import { RegistryWriterBusyError } from "./registry";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
 import { withSpawnDiagnostics, bindSpawnDiagnostics, spawnDiagnosticError } from "./spawnDiagnostics";
 import fs from "node:fs";
@@ -13,7 +14,7 @@ import { operatorLocale } from "@/lib/operator/settings";
 import { accountsCollectionRevision } from "@/lib/accounts/accountsStore";
 import { UnknownAccountError } from "@/lib/accounts/codex";
 import { claudeProviderForHome, claudeSettingsPath, isManagedClaudeHome, UnknownClaudeAccountError } from "@/lib/accounts/claude";
-import { accountProbeIdentity, accountProbeSnapshot, AccountAdmissionChangedError, isAccountAdmissionRetryable, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { accountProbeIdentity, accountProbeSnapshot, AccountAdmissionChangedError, AccountMutationBusyError, isAccountAdmissionRetryable, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { accountManager, ProjectAccountRefusedError, resolveHealthySpawnAccount, type HealthySpawnAccountResolution } from "@/lib/accounts/manager";
 import { emptyLaunchProfile, validExplicitProject } from "@/lib/accounts/migration/contracts";
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
@@ -1494,7 +1495,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     if (error instanceof SpawnChildLimitError) return NextResponse.json({ error: error.message }, { status: 429 });
     if (error instanceof RuntimeImageStorageError) return NextResponse.json({ error: error.message }, { status: 503 });
     if (error instanceof UnknownAccountError || error instanceof UnknownClaudeAccountError) return NextResponse.json({ error: error.message }, { status: 400 });
-    const accountError = spawnAccountErrorResponse(error);
+    const accountError = spawnAccountErrorResponse(error instanceof RegistryWriterBusyError ? new AccountMutationBusyError() : error);
     if (accountError) return accountError;
     if (receipt?.pane) {
       if (receipt.state === "prompt-delivered" || receipt.state === "host-verified") (await registry.deliveryWriteOrBusy({ label: "registry.markSpawnPathPending" }, registry.markSpawnPathPending.bind(registry, receipt.launchId)));

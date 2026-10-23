@@ -6399,28 +6399,39 @@ export class AgentRegistry {
     const written = await this.accountMutationWrite(`${caller} admission`, () => this.reserveSpawnRequest(input), guard, { waitMs: remaining() });
     if (!written.acquired) throw new RegistryWriterBusyError(`${caller} admission`);
     const result = written.value;
-    if (result.kind === "created" || result.kind === "replay") {
-      await new Promise<void>(resolve => setImmediate(resolve));
-      // Reservation is durable. Retry only its idempotent prerequisite, with
-      // no registry writer held while the task store takes its own writer.
-      const admission = await waitForStateLock(`${caller}.membership`, async () => {
-        try {
-          return await withAccountMutationLockAsync(() => {
-            guard?.();
-            return this.admitSpawnMembership(input, result);
-          }, { caller: `${caller} membership`, waitMs: remaining() });
-        } catch (error) {
-          if (error instanceof AccountMutationBusyError) throw new StateLockDeferredError(`${caller}.membership`);
-          throw error;
-        }
-      }, { waitMs: remaining(), subject: result.receipt.launchId });
-      if (admission.ok) {
+    try {
+      if (result.kind === "created" || result.kind === "replay") {
         await new Promise<void>(resolve => setImmediate(resolve));
-        const recorded = await this.accountMutationWrite(`${caller} membership record`, () => {
-          this.recordSpawnMembership(result.receipt, admission.taskIds);
-        }, guard, { waitMs: remaining() });
-        if (!recorded.acquired) throw new RegistryWriterBusyError(`${caller} membership record`);
+        // Reservation is durable. Retry only its idempotent prerequisite, with
+        // no registry writer held while the task store takes its own writer.
+        const admission = await waitForStateLock(`${caller}.membership`, async () => {
+          try {
+            return await withAccountMutationLockAsync(() => {
+              guard?.();
+              return this.admitSpawnMembership(input, result);
+            }, { caller: `${caller} membership`, waitMs: remaining() });
+          } catch (error) {
+            if (error instanceof AccountMutationBusyError) throw new StateLockDeferredError(`${caller}.membership`);
+            throw error;
+          }
+        }, { waitMs: remaining(), subject: result.receipt.launchId });
+        if (admission.ok) {
+          await new Promise<void>(resolve => setImmediate(resolve));
+          const recorded = await this.accountMutationWrite(`${caller} membership record`, () => {
+            this.recordSpawnMembership(result.receipt, admission.taskIds);
+          }, guard, { waitMs: remaining() });
+          if (!recorded.acquired) throw new RegistryWriterBusyError(`${caller} membership record`);
+        }
       }
+    } catch (error) {
+      // Only this invocation's fresh reservation carries dispatch custody.
+      // Replays belong to their original dispatcher. Release by exact owner
+      // so a later claimant or a settled host keeps its custody.
+      if (result.kind === "created" && result.receipt.admissionOwner) {
+        await this.deliveryWriteOrBusy({ label: `${caller} admission release`, operationId: result.receipt.launchId }, () =>
+          this.releaseSpawnActuation(result.receipt.launchId, result.receipt.admissionOwner!));
+      }
+      throw error;
     }
     return result;
   }
