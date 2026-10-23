@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
+import { FileTransactionBusyError, withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { isOpaqueProjectKey, projectDisplayName } from "@/lib/displayNames";
 import { translate, type Locale } from "@/lib/i18n/core";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
@@ -207,7 +208,18 @@ function writeProjects(projects: Record<string, ProjectSettingsEntry>): boolean 
   }
 }
 
+/** Each read-modify-write holds the file's lock, which an install transfer
+    holds while it writes the same file, so neither loses the other's entry. */
+function underFileLock<T>(operation: () => T, refused: T): T {
+  try { return withFileTransactionSync(settingsFile(), "project settings are busy", () => { cache = null; return operation(); }); }
+  catch (error) { if (error instanceof FileTransactionBusyError) return refused; throw error; }
+}
+
 function setSwitch(name: ProjectSwitchName, project: string, enabled: boolean, changedBy: string, now: string): ProjectSwitchSetting | null {
+  return underFileLock(() => setSwitchLocked(name, project, enabled, changedBy, now), null);
+}
+
+function setSwitchLocked(name: ProjectSwitchName, project: string, enabled: boolean, changedBy: string, now: string): ProjectSwitchSetting | null {
   const key = canonicalProject(project.trim());
   if (!key) return null;
   const projects = { ...readProjects() };
@@ -268,6 +280,7 @@ export function setReportTelegram(
   changedBy: string,
   now: string = new Date().toISOString(),
 ): ReportTelegramChoice | false {
+  return underFileLock((): ReportTelegramChoice | false => {
   const key = canonicalProject(project.trim());
   if (!key) return false;
   const projects = { ...readProjects() };
@@ -280,6 +293,7 @@ export function setReportTelegram(
   projects[key] = entry;
   if (!writeProjects(projects)) return false;
   return { ...entry.reportTelegram };
+  }, false);
 }
 
 /** The GitHub repository's name, capitalised, when the project has a GitHub
