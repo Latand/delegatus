@@ -3,7 +3,10 @@ import { z } from "zod";
 
 export const voiceToolBounds = { servers: 64, enabledServers: 16, tools: 128, selectedTools: 32,
   schemaBytes: 8192, schemaDepth: 10, descriptionBytes: 1024, selectionBytes: 48 * 1024,
-  wireBytes: 2 * 1024 * 1024, secretBytes: 2 * 1024 * 1024, registryBytes: 8 * 1024 * 1024, deadlineMs: 20_000, children: 8 } as const;
+  wireBytes: 2 * 1024 * 1024, secretBytes: 2 * 1024 * 1024, registryBytes: 8 * 1024 * 1024, deadlineMs: 20_000, children: 8,
+  /* A tool call (design §3.5, §4.2): its answer, a cold start beside its own timeout, and when a server stops. */
+  callTextBytes: 16 * 1024, callImages: 3, callImageBytes: 2 * 1024 * 1024, callImagesBytes: 3 * 1024 * 1024, callWireBytes: 8 * 1024 * 1024,
+  callLineBytes: 6 * 1024 * 1024, coldStartMs: 20_000, idleMs: 5 * 60_000, afterCallMs: 60_000, startFailures: 2 } as const;
 const text = (max: number) => z.string().min(1).max(max).refine(value => !value.includes("\0"));
 export const serverName = z.string().regex(/^[a-z][a-z0-9_]{1,23}$/);
 export const secretReferenceSchema = z.string().regex(/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/);
