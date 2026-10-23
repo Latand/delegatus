@@ -6,6 +6,9 @@ import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { canonicalProject, recordedProjectRemote } from "@/lib/projects/aliases";
 import { viewerPostableReportChats, viewerReportChatTitle } from "@/lib/projects/reportDestination";
 import {
+  codexCloudEnvironmentId,
+  setCodexCloudEnvironmentId,
+  validCodexCloudEnvironmentId,
   bridgeReportsSetting,
   mergeOnReviewSetting,
   effectiveReportTelegram,
@@ -33,6 +36,7 @@ const headers = { "Cache-Control": "no-store" };
 export interface ProjectSettingsResponse {
   ok: true;
   project: string;
+  codexCloudEnvironmentId: string;
   mergeOnReview: MergeOnReviewSetting;
   bridgeReports: BridgeReportsSetting;
   /** What the operator chose for reports besides the bridge log
@@ -62,6 +66,7 @@ function answer(project: string): ProjectSettingsResponse {
   return {
     ok: true,
     project: key,
+    codexCloudEnvironmentId: codexCloudEnvironmentId(key),
     mergeOnReview: mergeOnReviewSetting(key),
     bridgeReports: bridgeReportsSetting(key),
     reportTelegram: choice,
@@ -101,6 +106,7 @@ export async function PUT(request: NextRequest): Promise<NextResponse> {
   const project = projectParam(record?.project);
   const merge = record?.mergeOnReview;
   const bridge = record?.bridgeReports;
+  const cloud = record?.codexCloudEnvironmentId;
   const telegram = record?.reportTelegram;
   const telegramShape = telegram === undefined || telegram === null || (
     typeof telegram === "object" && !Array.isArray(telegram)
@@ -112,11 +118,16 @@ export async function PUT(request: NextRequest): Promise<NextResponse> {
     && ((telegram as Record<string, unknown>).link === undefined || (telegram as Record<string, unknown>).topicId === undefined)
   );
   const shapeOk = (merge === undefined || typeof merge === "boolean")
+    && (cloud === undefined || validCodexCloudEnvironmentId(cloud))
     && (bridge === undefined || typeof bridge === "boolean")
     && telegramShape
-    && (merge !== undefined || bridge !== undefined || telegram !== undefined);
+    && (merge !== undefined || bridge !== undefined || telegram !== undefined || cloud !== undefined);
   if (!project || project.length > 256 || !shapeOk) {
-    return NextResponse.json({ error: "INVALID_REQUEST", message: "project and mergeOnReview or bridgeReports (boolean), or reportTelegram ({ chat, name } or null), are required" }, { status: 400, headers });
+    return NextResponse.json({ error: "INVALID_REQUEST", message: "project and mergeOnReview or bridgeReports (boolean), reportTelegram ({ chat, name } or null), or codexCloudEnvironmentId (environment id or empty string), are required" }, { status: 400, headers });
+  }
+  if (cloud !== undefined) {
+    const authority = requireOperatorAuthority(request);
+    if (!authority.ok) return NextResponse.json({ error: authority.error, code: "operator_only" }, { status: authority.status, headers });
   }
   /* The Telegram destination decides where a public post goes, so only the
      operator sets it, and only to a chat the bot may post in (§5.6). */
@@ -159,6 +170,7 @@ export async function PUT(request: NextRequest): Promise<NextResponse> {
     }
   }
   if ((typeof merge === "boolean" && !setMergeOnReview(project, merge, "operator"))
+    || (typeof cloud === "string" && !setCodexCloudEnvironmentId(project, cloud))
     || (typeof bridge === "boolean" && !setBridgeReports(project, bridge, "operator"))) {
     return NextResponse.json({ error: "INTERNAL_ERROR", message: "could not persist the setting" }, { status: 500, headers });
   }

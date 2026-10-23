@@ -32,7 +32,7 @@ import type { PipelineStage } from "./types";
  * `v` versions this canonical form: v2 added the effective role id and
  * scaffold, v3 the edges.
  */
-export function stageDigestInput(stage: Pick<PipelineStage, "prompt" | "account" | "role" | "effectiveRole" | "next" | "onFail">): string {
+export function stageDigestInput(stage: Pick<PipelineStage, "prompt" | "account" | "role" | "effectiveRole" | "next" | "onFail" | "runtime">): string {
   const account = typeof stage.account === "string" && stage.account.trim() ? stage.account.trim() : null;
   const params = stage.role?.params && Object.keys(stage.role.params).length
     ? Object.fromEntries(Object.entries(stage.role.params).sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0)))
@@ -40,6 +40,7 @@ export function stageDigestInput(stage: Pick<PipelineStage, "prompt" | "account"
   const runtime = stage.effectiveRole;
   return JSON.stringify({
     v: 3,
+    ...(stage.runtime ? { stageRuntime: stage.runtime } : {}),
     "prompt": stage.prompt,
     account,
     role: stage.role ? { roleId: stage.role.roleId, params } : null,
@@ -62,7 +63,7 @@ export function stageDigestInput(stage: Pick<PipelineStage, "prompt" | "account"
 }
 
 /** SHA-256 (hex) of `stageDigestInput`. */
-export function stageDigest(stage: Pick<PipelineStage, "prompt" | "account" | "role" | "effectiveRole" | "next" | "onFail">): string {
+export function stageDigest(stage: Pick<PipelineStage, "prompt" | "account" | "role" | "effectiveRole" | "next" | "onFail" | "runtime">): string {
   return crypto.createHash("sha256").update(stageDigestInput(stage)).digest("hex");
 }
 

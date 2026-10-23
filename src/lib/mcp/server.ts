@@ -3879,6 +3879,8 @@ const snapshotScopeSchema = z.discriminatedUnion("kind", [
    edge targets, review-loop reachability, role parameter values — stay with the
    engine, which now answers with all of them at once. */
 const pipelineStageSchema = z.object({
+  runtime: z.literal("codex-cloud").optional()
+    .describe("Run reviewer/verifier in Codex Cloud on the published lane branch. Requires engine codex, an explicit model, a capable current-cloud transport and the project's codexCloudEnvironmentId setting. Omitted keeps local execution. Builder/fix stages are not supported."),
   /* Bounds here stay exactly as wide as the engine's: it trims before it
      checks, so a padded id it accepts must not be refused at the door. */
   id: z.string().regex(/^\s*[A-Za-z0-9_-]{1,64}\s*$/u)
