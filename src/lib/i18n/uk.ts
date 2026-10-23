@@ -1632,6 +1632,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "telegram.bot.privacyOff": "Режим приватності вимкнено: бачить усі повідомлення груп",
   "telegram.bot.privacyOn": "Режим приватності ввімкнено: у групах бачить лише згадки й відповіді, якщо не адмін",
   "telegram.bot.chats": "Чати",
+  "telegram.bot.noCloneChats": "Для цього сполучення ще не знайдено груп клонів.",
   "telegram.bot.noChats": "Чатів ще немає. Додайте бота в групу; у групі з режимом приватності згадайте його один раз (наприклад /start@{username}).",
   "telegram.bot.type.private": "особистий",
   "telegram.bot.type.group": "група",

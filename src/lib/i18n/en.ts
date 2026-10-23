@@ -1657,6 +1657,7 @@ export const en = {
   "telegram.bot.privacyOff": "Privacy mode off: sees all group messages",
   "telegram.bot.privacyOn": "Privacy mode on: in groups sees only mentions and replies unless admin",
   "telegram.bot.chats": "Chats",
+  "telegram.bot.noCloneChats": "No clone groups found for this pairing yet.",
   "telegram.bot.noChats": "No chats yet. Add the bot to a group; in a group with privacy mode on, mention it once (for example /start@{username}).",
   "telegram.bot.type.private": "private",
   "telegram.bot.type.group": "group",
