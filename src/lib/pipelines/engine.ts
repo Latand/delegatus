@@ -73,7 +73,7 @@ import type { CreateFlowRequest, Flow, FlowEngine, RoleConfig } from "@/lib/flow
 import type { DismissedBy } from "@/lib/attention/dismissalTypes";
 import { OPERATOR_PAUSE_RESUME_ACTOR, pauseResumeDetail, type PauseResumeActor } from "@/lib/pauseResumeActor";
 import { isRuntimeHostTransportFailure, runtimeHostClient, type RuntimeHostClient } from "@/lib/runtime/client";
-import { structuredHostsEnabled, supervisedRuntimeHostUnavailableReason } from "@/lib/runtime/flags";
+import { runtimeHostSocket, structuredHostsEnabled, supervisedRuntimeHostUnavailableReason } from "@/lib/runtime/flags";
 import { readHostTurnRecord } from "@/lib/runtime/eventStore";
 import { restartCutEvidenceUnresolved } from "@/lib/runtime/restartCutHold";
 import { conversationTurnLiveness, outstandingDeliverySince, readHostProcessEvidence, type TurnLivenessDependencies } from "@/lib/runtime/liveness";
@@ -1382,10 +1382,16 @@ export async function stopSettledPipelineStageWriter(
   }
 }
 
-/** Why this process could not use the runtime command channel; every report
-    the identity path produces ends with it, so the operator can tell a
-    socketless caller from a host that answered. */
-const NO_CONTROL_CHANNEL = "this process has no structured control channel (LLV_RUNTIME_HOST_SOCKET is unset), so no runtime host generation could be asked";
+/** Which control channel this process had; every report the identity path
+    produces ends with it, so the operator can tell a socketless caller (the
+    MCP host process) from the Viewer. The Viewer runs pipeline recovery with
+    the socket set, and its own structured delivery controller holds the
+    engine hosts it started, so the runtime host has none to end. */
+function controlChannelNote(): string {
+  return runtimeHostSocket()
+    ? "the Viewer's structured delivery controller holds the engine host; the runtime host holds none"
+    : "this process has no structured control channel (LLV_RUNTIME_HOST_SOCKET is unset), so no runtime host generation could be asked";
+}
 
 /**
  * Ends a stage host from a process that has no channel to any runtime host
@@ -1427,7 +1433,7 @@ async function stopStageHostByRecordedIdentity(
   const registry = agentRegistry();
   const refused = (reason: string): PipelineStageStopResult => ({
     outcome: "failed",
-    error: `${reason}; nothing was signalled; ${NO_CONTROL_CHANNEL}`,
+    error: `${reason}; nothing was signalled; ${controlChannelNote()}`,
   });
   if (!target.conversationId?.startsWith("conversation_")) {
     return refused("unresolved ownership: the attempt records no conversation id to bind the host to");
@@ -1512,7 +1518,7 @@ async function stopStageHostByRecordedIdentity(
   if (outcome.ok) {
     return {
       outcome: "stopped",
-      detail: `ended host pid ${ref.pid} by its recorded identity (${outcome.via}); ${generation}; ${NO_CONTROL_CHANNEL}`,
+      detail: `ended host pid ${ref.pid} by its recorded identity (${outcome.via}); ${generation}; ${controlChannelNote()}`,
     };
   }
   const named = outcome.remaining.length > 0 ? `; still running: ${outcome.remaining.join(", ")}` : "";
@@ -1524,7 +1530,7 @@ async function stopStageHostByRecordedIdentity(
       : outcome.remaining.map((pid) => ({ pid, startIdentity: null }));
     return {
       outcome: "unresolved",
-      error: `${outcome.error} (pid ${ref.pid}${named}); ${generation}; ${NO_CONTROL_CHANNEL}`,
+      error: `${outcome.error} (pid ${ref.pid}${named}); ${generation}; ${controlChannelNote()}`,
       survivors,
     };
   }
@@ -2007,7 +2013,17 @@ export function defaultPipelinePorts(
         if (!receipt.key || sessionKeyId(receipt.key) !== sessionKeyId(probe.key) || receipt.artifactPath !== probe.transcriptPath) {
           return { outcome: "failed", error: "the recorded launch is no longer the current stage host generation" };
         }
-        return stopStageHostByRecordedIdentity(target, probe, dependencies.termination ?? {}, () => {
+        /* Once the stop has released the host or signalled it, the row, the
+           claim and the transcript move because of the stop itself: the
+           exiting host writes its last record and its binding gives the claim
+           up. Reading that as a new launch parked failed startups whose host
+           was already gone, so from the first effect on the ladder runs to its
+           end on the identity and row checks alone; the transcript is judged
+           again once the stop settles. */
+        let effectStarted = false;
+        const root = writer?.structuredHost?.process ?? null;
+        let stopped = await stopStageHostByRecordedIdentity(target, probe, dependencies.termination ?? {}, () => {
+          if (effectStarted) return null;
           const current = target.launchId ? registry.spawnReceipt(target.launchId) : null;
           const snapshot = registry.readOnlySnapshot();
           const entry = receipt.key ? snapshot.entries[sessionKeyId(receipt.key)] : null;
@@ -2020,7 +2036,27 @@ export function defaultPipelinePorts(
             return { status: 409, error: "stage launch changed or wrote its transcript before termination" };
           }
           return null;
-        });
+        }, undefined, () => { effectStarted = true; });
+        /* A stop that ends refused or unresolved has still finished when the
+           recorded host is proven gone (its pid absent, or that pid now names
+           another process), every process it captured is gone, the row names
+           nothing that may still run and no newer writer claimed it. Nothing
+           more is signalled here. */
+        const settledRow = receipt.key ? registry.readOnlySnapshot().entries[sessionKeyId(receipt.key)] : null;
+        if ((stopped.outcome === "failed" || stopped.outcome === "unresolved") && root
+          && terminationIdentityStatus(root) === "dead" && !probe.resident()
+          && (!settledRow || settledRow.claimEpoch === writer?.claimEpoch
+            && (settledRow.claimOwner === null || settledRow.claimOwner === writer?.claimOwner))
+          && (stopped.outcome === "failed" || stopped.survivors.every(survivor => terminationIdentityStatus(survivor) === "dead"))) {
+          stopped = { outcome: "stopped", detail: `recorded host pid ${root.pid} is proven gone: ${stopped.error}` };
+        }
+        if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") return stopped;
+        const settledStamp = stageArtifactStamp(receipt.artifactPath);
+        if (settledStamp === stamp) return stopped;
+        if (settledStamp === undefined || settledStamp === null) return { outcome: "failed", error: "stage launch artifact became unreadable while its host stopped" };
+        const settledEvidence = await durableStageTurnEvidence(receipt.engine, receipt.artifactPath!);
+        return provesNoNativeStageTurn(settledEvidence) ? stopped
+          : { outcome: "failed", error: "stage launch wrote native turn evidence while its host stopped" };
       })
       : options?.onlyIfIdle
       ? retirePipelineStageAgent(target, { providerRecovery: options.providerRecovery })
