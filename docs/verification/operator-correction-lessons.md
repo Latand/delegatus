@@ -152,3 +152,10 @@ mandate disclosure.
 
 The stage-input byte snapshots and custom-mandate provenance assertions also
 fail on main in the same cases. Their assertions remain unchanged.
+
+The role-lane file has another deliberate message change: ordinary review
+lessons are still refused, and the refusal now names the correction exception.
+Its old `stays clean` expectation stopped the first case before it stored a
+rule. The next case explicitly uses that stored rule, causing a second failure.
+Only the refusal-message expectation changes; the original seed and relay
+redaction assertions run together in the full-file check.
