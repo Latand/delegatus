@@ -202,6 +202,47 @@ test("a priority deploy preserves opening problem credit before epoch reset", as
   expect(rig.sent).toHaveLength(1);
 });
 
+test("a pending memory preparation cannot delay deploy settlement or discard opening problem credit", async () => {
+  const rig = deployRig();
+  const state = rig.deps.readState!(PROJECT);
+  rig.deps.writeState!(PROJECT, { ...state, seatEpoch: 6, itemsShown: ["opening-problem"] });
+  const preparation = deferred();
+  const entered = deferred();
+  const credited: string[][] = [];
+  rig.deps.sources!.prepareMemoryProblems = async () => { entered.resolve(); await preparation.promise; };
+  rig.deps.sources!.prepareRead = async () => { throw new Error("deploy settlement must not prepare general history"); };
+  rig.deps.sources!.memoryProblems = (_project, shown) => { credited.push([...shown]); return []; };
+  const checking = runSeatTickCheck(PROJECT, rig.deps);
+  try {
+    await entered.promise;
+    const record = await checking;
+    expect(record).toMatchObject({ verdict: "wake", reasons: ["deploy-settled"], delivery: { outcome: "delivered" } });
+    expect(rig.sent).toHaveLength(1);
+    expect(credited).toEqual([]);
+    expect(rig.deps.readState!(PROJECT).memoryProblemCreditOwed).toEqual({
+      shown: ["opening-problem"], recipient: { conversationId: CONVERSATION, seatEpoch: 7 },
+    });
+    preparation.resolve();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    rig.deps.sources!.prepareRead = async () => {};
+    const retry = await runSeatTickCheck(PROJECT, rig.deps);
+    expect(retry?.verdict).toBe("quiet");
+    expect(credited).toContainEqual(["opening-problem"]);
+    expect(rig.deps.readState!(PROJECT).memoryProblemCreditOwed).toBeUndefined();
+  } finally { preparation.resolve(); }
+});
+
+test("a failed memory preparation leaves deploy dispatch and problem credit available", async () => {
+  const rig = deployRig();
+  const state = rig.deps.readState!(PROJECT);
+  rig.deps.writeState!(PROJECT, { ...state, itemsShown: ["opening-problem"] });
+  rig.deps.sources!.prepareMemoryProblems = async () => { throw new Error("memory unavailable"); };
+  const record = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(record).toMatchObject({ verdict: "wake", reasons: ["deploy-settled"], delivery: { outcome: "delivered" } });
+  expect(rig.sent).toHaveLength(1);
+  expect(rig.deps.readState!(PROJECT).memoryProblemCreditOwed?.shown).toEqual(["opening-problem"]);
+});
+
 test.each([300_000, 30_000])("an unannounced deploy wakes inside the interval despite a recent wake (%i ms)", async intervalMs => {
   const rig = deployRig();
   const settings = rig.deps.sources!.settings(PROJECT);
@@ -322,23 +363,35 @@ const childMode = process.env.LLV_SEAT_DEADLINE_TEST_MODE;
 test.skipIf(!childMode)("seat deadline subprocess case", async () => {
   const filename = process.env.LLV_SEAT_DEADLINE_TEST_STATE!;
   if (childMode === "expire") writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, filename);
+  let elapsed = 0;
+  let expireDeadline = () => {};
   const rig = harness({ pipelines: OPEN_LANE, stateFile: filename, wakeState: "landed",
     ...(childMode === "expire" ? { deliverWith: async () => {
-      process.stdout.write("DEADLINE_READY\n");
-      await new Promise<void>(resolve => setTimeout(resolve, 1_500));
+      const key = readSeatTickState(PROJECT, filename).outstandingWake?.clientMessageId;
+      process.stdout.write(`DEADLINE_READY:${key ?? "missing"}\n`);
+      elapsed += 1000;
       expireDeadline();
       return new Promise<DeliveryOutcome>(() => {});
     } } : {}) });
   rig.deps.workBudgetMs = 1000;
-  let expireDeadline = () => {};
-  if (childMode === "expire") rig.deps.workScheduler = {
+  rig.deps.workClock = () => elapsed;
+  rig.deps.workScheduler = {
     setTimeout: callback => { expireDeadline = callback; return 1 as never; },
     clearTimeout: () => {},
+  };
+  rig.deps.sources!.prepareRead = async () => {
+    await new Promise<void>(resolve => setTimeout(resolve, 1_500));
+    process.stdout.write("PREPARATION_READY\n");
   };
   if (childMode === "recover") {
     const key = readSeatTickState(PROJECT, filename).outstandingWake?.clientMessageId;
     expect(typeof key).toBe("string");
-    rig.deps.sources!.wakeState = async wake => { expect(wake.clientMessageId).toBe(key!); return "landed"; };
+    rig.deps.sources!.wakeState = async wake => {
+      expect(wake.clientMessageId).toBe(key!);
+      process.stdout.write(`RECOVERY_READY:${wake.clientMessageId}\n`);
+      elapsed += 250;
+      return "landed";
+    };
   }
   const record = await runSeatTickCheck(PROJECT, rig.deps);
   const state = readSeatTickState(PROJECT, filename);
@@ -373,7 +426,9 @@ test.skipIf(!!childMode)("a deadline in a real process preserves the wake for th
       });
       expect({ code, errors }).toMatchObject({ code: 0 });
       expect(output).toContain(`DEADLINE_DONE:${mode}`);
-      if (mode === "expire") expect(output).toContain("DEADLINE_READY");
+      expect(output).toContain("PREPARATION_READY");
+      if (mode === "expire") expect(output).toMatch(/DEADLINE_READY:[^\s]+/);
+      else expect(output).toMatch(/RECOVERY_READY:[^\s]+/);
     } finally { clearTimeout(timeout); child.stdin.end(); }
   }
 });

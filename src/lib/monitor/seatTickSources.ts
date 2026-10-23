@@ -655,13 +655,15 @@ function seatProjectResolver(): (project: string) => string {
 export function defaultSeatTickSources(): SeatTickSources {
   const admission = defaultSeatTickAdmissionSources();
   let preparing: Promise<void> | undefined;
+  let preparingMemoryProblems: Promise<void> | undefined;
+  const prepareMemoryProblems = () => preparingMemoryProblems ??= prepareMemoryProblemRead().finally(() => { preparingMemoryProblems = undefined; });
   return {
     ...admission,
-    prepareMemoryProblems: prepareMemoryProblemRead,
+    prepareMemoryProblems,
     prepareRead: () => preparing ??= withViewerOperation("seat-tick.prepare", () => performanceSpans.wait("seat-tick.prepare", async () => {
       await loadPipelinesForListAsync();
       await loadTasksForListAsync();
-      await prepareMemoryProblemRead();
+      await prepareMemoryProblems();
     })).finally(() => { preparing = undefined; }),
     liveness: query => query.project ? withViewerOperation("seat-tick.liveness", () => performanceSpans.wait("seat-tick.liveness", async () => {
       const { runSeatSourceInWorker } = await import("@/lib/scanner/filesResponseWorker");

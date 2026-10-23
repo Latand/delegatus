@@ -1141,6 +1141,8 @@ export interface SeatTickProjectState {
   diskPressureShown?: string;
   /** Latest delivered versions, bounded to 2000 recent agenda items. */
   itemsShown?: string[];
+  /** Problem versions whose delivered credit awaits the asynchronous memory read. */
+  memoryProblemCreditOwed?: { shown: string[]; recipient: { conversationId: string; seatEpoch: number } | null };
   accounting?: { filename: string; revision: number; gap: string | null };
   seatEpoch: number | null;
   lastCheckAt: string | null;

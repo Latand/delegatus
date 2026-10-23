@@ -1515,7 +1515,12 @@ async function check(
   dependencies: SeatTickControllerDependencies,
   appendRecord: typeof appendSeatTickRecord,
 ): Promise<SeatTickRunRecord> {
-  const sources = dependencies.sources ?? defaultSeatTickSources();
+  const sourcePorts = dependencies.sources ?? defaultSeatTickSources();
+  let memoryProblemsReady = !sourcePorts.prepareRead && !sourcePorts.prepareMemoryProblems;
+  const sources: SeatTickSources = {
+    ...sourcePorts,
+    memoryProblems: (...args) => memoryProblemsReady ? sourcePorts.memoryProblems?.(...args) ?? [] : [],
+  };
   const readState = dependencies.readState ?? readSeatTickState;
   const writeState = dependencies.writeState ?? writeSeatTickState;
   const deliver = dependencies.deliver ?? deliverConversationMessage;
@@ -1713,10 +1718,19 @@ async function check(
      can actually reach rather than on a provisional one whose launch died. */
   const rollbackDetail = await reconcileProvisionalSeat(canonical, dependencies);
   const deployPending = await seatTickDeployPending(canonical, readState(canonical), policy, sources);
-  // Preserve problem credit before epoch reset, without putting a deploy
-  // wake behind general pipeline and task preparation.
-  if (deployPending) await sources.prepareMemoryProblems?.();
-  else await sources.prepareRead?.();
+  // Deploy settlement cannot wait for the global memory collection. Keep its
+  // preparation alive and carry opening credit durably until it is ready.
+  if (deployPending && sources.prepareMemoryProblems) {
+    const deferred = (error: unknown) => {
+      if (!(error instanceof Error) || error.message !== "seat project check ended")
+        console.error(`[seat tick] memory problem preparation deferred: ${redactMonitorText(error instanceof Error ? error.message : "unknown error")}`);
+    };
+    try { void Promise.resolve(sources.prepareMemoryProblems()).then(() => { memoryProblemsReady = true; }, deferred); }
+    catch (error) { deferred(error); }
+  } else if (!deployPending) {
+    await sources.prepareRead?.();
+    memoryProblemsReady = true;
+  }
   /* Each phase rebuilds the whole task state at least once; the event loop
      runs between them so one check is never one long block (#1987). The
      phases already read fresh state, as they do after any real I/O. */
@@ -1734,10 +1748,25 @@ async function check(
   /* Every attempt this check finds unresolved, for the one card the project
      carries for them; written once, after the send, from the final row. */
   const unresolved: UnresolvedAttempt[] = [];
-  const openingRow = readState(canonical);
-  // Credit delivered problem rows before a successor resets the generic agenda history.
-  sources.memoryProblems?.(canonical, openingRow.itemsShown ?? [], openingSeat?.conversationId ? { conversationId: openingSeat.conversationId, seatEpoch: openingSeat.seatEpoch } : null);
+  let openingRow = readState(canonical);
+  const openingRecipient = openingSeat?.conversationId ? { conversationId: openingSeat.conversationId, seatEpoch: openingSeat.seatEpoch } : null;
+  const creditOwed = openingRow.memoryProblemCreditOwed;
+  if (memoryProblemsReady) {
+    if (creditOwed) sources.memoryProblems?.(canonical, creditOwed.shown, creditOwed.recipient);
+    sources.memoryProblems?.(canonical, openingRow.itemsShown ?? [], openingRecipient);
+  } else {
+    const shown = [...new Set([...(creditOwed?.shown ?? []), ...(openingRow.itemsShown ?? [])])].slice(-2_000);
+    if (shown.length) {
+      const owed = { shown, recipient: creditOwed?.recipient ?? openingRecipient };
+      writeState(canonical, { ...openingRow, memoryProblemCreditOwed: owed });
+      openingRow = readState(canonical);
+    }
+  }
   let opened = seatTickStateForEpoch(openingRow, openingSeat?.seatEpoch ?? null);
+  if (memoryProblemsReady && sources.memoryProblems && opened.memoryProblemCreditOwed) {
+    opened = { ...opened, memoryProblemCreditOwed: undefined };
+    writeState(canonical, opened);
+  }
   if (openingSeat?.conversationId) {
     const reachability = await hostReachabilityFor({ ...openingSeat, conversationId: openingSeat.conversationId });
     openingReachability = { conversationId: openingSeat.conversationId, seatEpoch: openingSeat.seatEpoch, observation: reachability };
