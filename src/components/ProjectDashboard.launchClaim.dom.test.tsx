@@ -206,14 +206,16 @@ test("a failed-delivery launch record on a scanned transcript path never hides t
   boardManual = [path];
   const host = mount([conversationWithFailedLaunchRecord(path)]);
 
-  /* The conversation is real board content: it must keep its tile on the Board (the kanban, #1695). */
-  expect(await waitFor(() => host.querySelector(`[data-member="${path}"]`) !== null)).toBe(true);
+  /* The conversation is real board content: it must keep its card on the Board
+     even when the current layout presents that quiet card folded. */
+  const card = `[data-kanban-card="lineage:conversation-launch-claim-1"]`;
+  expect(await waitFor(() => host.querySelector(card) !== null)).toBe(true);
 
   await settle();
   /* The launch-history drawer is gone (#1765); what this guards is the
      conversation, which keeps its tile whatever the record says. */
   expect(host.querySelector('[data-testid="launch-history"]')).toBeNull();
-  expect(host.querySelector(`[data-member="${path}"]`)).not.toBeNull();
+  expect(host.querySelector(card)?.textContent).toContain("Finished conversation");
 });
 
 test("a pathless terminal receipt is still shelved and never becomes a board card", async () => {
@@ -222,7 +224,7 @@ test("a pathless terminal receipt is still shelved and never becomes a board car
   const beside = "/claude-projects/repo-fixture/conversation-beside.jsonl";
   boardManual = ["spawn:launch-claim-2"];
   const host = mount([{ ...conversationWithFailedLaunchRecord(beside), spawn: undefined } as FileEntry, pathlessReceipt("launch-claim-2")]);
-  expect(await waitFor(() => host.querySelector(`[data-kanban-board] [data-member="${beside}"]`) !== null)).toBe(true);
+  expect(await waitFor(() => host.querySelector('[data-kanban-board] [data-kanban-card="lineage:conversation-launch-claim-1"]') !== null)).toBe(true);
   await settle();
 
   expect(host.querySelector('[data-kanban-board] [data-member="spawn:launch-claim-2"]')).toBeNull();
