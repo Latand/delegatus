@@ -48,6 +48,10 @@ export interface MapPart extends PartBase {
   path: string[];
   skeleton(): Record<string, unknown>;
   merge: MergeRule;
+  /** A record is an object of separate settings: the merge rule applies per
+      field, so a target that chose one of them keeps that choice and still
+      receives the ones it never chose. */
+  fields?: boolean;
 }
 
 export interface SetPart extends PartBase {
@@ -101,6 +105,19 @@ const documentRow = (prefix: string | readonly string[]) => (key: string, value:
 const rows = (collection: string, include: (key: string) => boolean = () => true) =>
   (source: SourceSnapshot) => source.rows(collection).filter(row => include(row.key));
 
+const MEMORY_SOURCE = "memory-source.json";
+
+/** The memory source as a target may take it: Delegatus memory whose engine
+    import finished, or the engines' own memory. The fields are the store's
+    (`src/lib/memory/source.ts`); the source's import id stays behind, since
+    no import of that id exists on the target. */
+function settledMemorySource(value: unknown): { schemaVersion: 1; source: "delegatus" | "engines"; changedAt: string; phase?: "active" } | null {
+  if (!isRecord(value) || value.schemaVersion !== 1 || !isString(value.changedAt) || !Number.isFinite(Date.parse(value.changedAt))) return null;
+  if (value.source === "delegatus" && value.phase === "active") return { schemaVersion: 1, source: "delegatus", changedAt: value.changedAt, phase: "active" };
+  if (value.source === "engines" && value.phase === undefined) return { schemaVersion: 1, source: "engines", changedAt: value.changedAt };
+  return null;
+}
+
 const VOICE_COMPANION = "voice-companion.json";
 const companionSkeleton = () => ({ version: 1, settings: { enabled: false, monthlyCapUsd: 20 }, charges: {}, sessions: {} });
 const VOICE_CONFIG_FILE = /^(?:tts-backend|tts-voice-[a-z]+|tts-model-[a-z]+|transcribe-backend)$/;
@@ -108,6 +125,23 @@ const VOICE_PERSONA = "prompts/voice-persona.md";
 const TRANSCRIPTS = path.join("voice-companion", "transcripts");
 const RELAY_SWITCHES = ["relay:rich_media", "chain_conversations", "compact"];
 const RELAY_TARGET_FIELDS = ["id", "name", "answered_by", "fallback", "enabled", "engine", "model", "effort", "project", "concurrency", "hardCapMinutes", "memberLimitPerHour", "ownerTier"] as const;
+
+/** The closed calls and their journals from one read of the store and one
+    listing of the journals, shared by both parts so they agree. */
+function closedCalls(source: SourceSnapshot): { sessions: StoredRow[]; journals: StoredRow[] } {
+  return source.memo("memory.calls", () => {
+    const names = new Set(source.stateNames(TRANSCRIPTS));
+    const sessions = mapRecords(source.stateText(VOICE_COMPANION), ["sessions"], (key, value) =>
+      isRecord(value) && value.closed === true && sessionValid(key, value) && names.has(`${key}.jsonl`));
+    const journals = sessions.flatMap(session => {
+      const text = source.stateText(path.join(TRANSCRIPTS, `${session.key}.jsonl`));
+      return text === null ? [] : [{ key: `${session.key}.jsonl`, value: text }];
+    });
+    /* A session whose journal vanished between the listing and the read travels without it. */
+    const present = new Set(journals.map(journal => journal.key));
+    return { sessions: sessions.filter(session => present.has(`${session.key}.jsonl`)), journals };
+  });
+}
 
 export const PARTS: readonly Part[] = [
   /* memory.role — every rule in every state and every scope with its history;
@@ -131,12 +165,21 @@ export const PARTS: readonly Part[] = [
   { kind: "map", id: "map:shared-memory-settings", section: "memory.settings", root: "state", file: "shared-memory-settings.json", path: [], skeleton: () => ({}), merge: "default",
     accept: (key, value) => PROJECT_KEY.test(key) && typeof value === "boolean",
     collect: source => mapRecords(source.stateText("shared-memory-settings.json"), [], (_key, value) => typeof value === "boolean") },
-  /* Choosing Delegatus memory on the target starts the target's own engine
-     memory import, so the source's choice is shown for the operator to make. */
+  /* The memory source, once the source settled it (§4.6 memory.settings):
+     written only to a target that never chose, as the settled choice itself,
+     so the target starts no engine memory import of its own; a target's own
+     choice stays. A choice still importing on the source is shown for the
+     operator to make here. */
+  { kind: "text", id: "text:memory-source", section: "memory.settings", root: "state", fileOf: key => key, merge: "absent-only",
+    accept: (key, value) => key === MEMORY_SOURCE && isString(value) && settledMemorySource(parseJson(value)) !== null,
+    collect: source => {
+      const settled = settledMemorySource(parseJson(source.stateText(MEMORY_SOURCE)));
+      return settled ? [{ key: MEMORY_SOURCE, value: `${JSON.stringify(settled)}\n` }] : [];
+    } },
   { kind: "pending", id: "pending:memory-source", section: "memory.settings", reason: "choose-on-target", redo: "memory_source",
     collect: source => {
-      const value = parseJson(source.stateText("memory-source.json"));
-      return isRecord(value) && (value.source === "delegatus" || value.source === "engines") ? [{ key: "source", value: value.source }] : [];
+      const value = parseJson(source.stateText(MEMORY_SOURCE));
+      return isRecord(value) && (value.source === "delegatus" || value.source === "engines") && !settledMemorySource(value) ? [{ key: "source", value: value.source }] : [];
     } },
 
   /* memory.calls — the call memory switch, the closed calls and their journals. */
@@ -145,16 +188,12 @@ export const PARTS: readonly Part[] = [
     collect: source => mapRecords(source.stateText(VOICE_COMPANION), ["settings"], key => key === "callMemory") },
   { kind: "map", id: "map:voice-call-sessions", section: "memory.calls", root: "state", file: VOICE_COMPANION, path: ["sessions"], skeleton: companionSkeleton, merge: "absent-only",
     accept: (key, value) => isRecord(value) && value.closed === true && sessionValid(key, value),
-    collect: source => {
-      const journals = new Set(source.stateNames(TRANSCRIPTS));
-      return mapRecords(source.stateText(VOICE_COMPANION), ["sessions"], (key, value) => isRecord(value) && value.closed === true && journals.has(`${key}.jsonl`));
-    } },
+    collect: source => closedCalls(source).sessions },
+  /* Only the journals of the closed calls above: an ongoing call's journal
+     and one no closed call cites stay on the source (§2.2). */
   { kind: "text", id: "text:voice-call-journals", section: "memory.calls", root: "state", fileOf: key => path.join(TRANSCRIPTS, key), merge: "absent-only",
     accept: (key, value) => /^[A-Za-z0-9_-]{1,200}\.jsonl$/.test(key) && isString(value),
-    collect: source => source.stateNames(TRANSCRIPTS).filter(name => name.endsWith(".jsonl")).flatMap(name => {
-      const text = source.stateText(path.join(TRANSCRIPTS, name));
-      return text === null ? [] : [{ key: name, value: text }];
-    }) },
+    collect: source => closedCalls(source).journals },
 
   { kind: "rows", id: "rows:seat_tick_settings", section: "settings.seat", collection: "seat_tick_settings", legacyDocument: true, merge: "default",
     accept: documentRow(""),
@@ -177,7 +216,7 @@ export const PARTS: readonly Part[] = [
     } },
 
   { kind: "map", id: "map:project-settings", section: "settings.projects", root: "state", file: "project-settings.json", path: ["projects"],
-    skeleton: () => ({ schemaVersion: 1, projects: {} }), merge: "default",
+    skeleton: () => ({ schemaVersion: 1, projects: {} }), merge: "default", fields: true,
     accept: (key, value) => PROJECT_KEY.test(key) && isRecord(value),
     collect: source => mapRecords(source.stateText("project-settings.json"), ["projects"]) },
   { kind: "rows", id: "rows:project_aliases", section: "settings.projects", collection: "project_aliases", legacyDocument: true, merge: "default",

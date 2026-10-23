@@ -104,33 +104,66 @@ slice 3 is dropped. What the build settled differently from the text below:
 - The code is `src/lib/transfer/`. Sections are made of parts, one per store
   (`sections.ts`); a record key is `<part>|<key>`. Project keys are remapped by
   rewriting every `repo-…`/`dir-…` key in a record (`projectKeys.ts`).
-- The memory source choice, the subscription API consent, the voice tool
-  registry, relay targets, Telegram chats and the machine worker limit wait in
-  the import record and on the redo list. Choosing Delegatus memory on the
-  target starts the target's own engine memory import, so it stays the
-  operator's choice there.
+- The subscription API consent, the voice tool registry, relay targets,
+  Telegram chats and the machine worker limit wait in the import record and on
+  the redo list. The memory source travels only once the source settled it
+  (Delegatus memory with its engine import finished, or the engines' own
+  memory): it is written to a target that never chose, as that settled choice,
+  so the target starts no engine memory import; a target's own choice stays,
+  and a choice the source is still importing waits on the redo list.
+- Settings whose record holds several choices (project settings) merge per
+  choice: a field the target set stays, a field it never set arrives.
 - The shared memory index is not refreshed after an import: it is built from
   engine memory files, which no longer travel.
+- Only the journals of the closed calls that travel go with them; an ongoing
+  call's journal and one no closed call cites stay on the source.
+- The secret guard also covers the finished header: environment values,
+  project names and remotes, account labels and notices.
 - `delegatus export` needs the running Viewer, like `import`; an export of an
   install whose Viewer does not start is deferred.
 - File revisions in the dry run are content hashes, so a file restored by a
   rolled-back import still matches its preview.
+- Apply holds the shared write lock of every file it writes from the revision
+  check through its commit or rollback, and checks each file again just before
+  writing it. The checkpoint is a hard link to each replaced file (a copy where
+  links are refused), so putting it back is a rename that needs no free space;
+  a full disk during the writes leaves the originals in place. A rollback puts
+  back only what is still the import's: a file holding the import's bytes gets
+  its original back, a file a later writer rewrote keeps that writer's values
+  and loses only the import's own, and a file the import never reached is left
+  alone. The work after the commit (lesson known values, accounts) is recorded
+  in the import record and finished by recovery. A recovery that cannot settle
+  refuses the Viewer's activation; the journal stays for the next start. After
+  a failed apply the Viewer runs recovery at once, under the account lock.
 - Accounts (slice 2, `src/lib/transfer/accounts.ts`): an account travels
   when it is signed in or bound to a project. Its identity hash is salted
-  with the export id. On the target, accounts are made through the existing
-  account setup after the commit (§4.8), with their bindings applied at once;
-  an account whose setup failed keeps its source id in its bindings, which
-  matches no account, so its projects park. The import record keeps the
-  account records, so an apply stopped after its commit finishes them at
-  recovery. A Claude custom-provider account is not made (its token never
-  travels) and is listed. The checklist rows live in the `transfer_accounts`
-  collection; `POST /api/transfer/accounts` verifies them with the
-  `transfer-verify` live read, and a completed sign-in settles its row at
-  once. Copilot rows count as usable when the CLI config shows a signed-in
-  user; no limit read exists for them (§11).
+  with the export id. On the target an account stands in for a source account
+  only when it is proven the same: one an earlier import of this source made,
+  the target's own engine home while signed out or signed into the same
+  identity, or the same id signed into the same identity. Every other account
+  gets a fresh id, reserved before the commit by an empty home that every
+  account setup skips. The bindings and the checklist rows commit in the
+  import's own transaction, so a project is fenced to its accounts before any
+  of them exists; the accounts are then made through the existing account
+  setup under their reserved ids, and recovery or «Try again» finishes one that
+  failed or was cut short, making it once. An account that cannot be made here
+  (a Claude custom-provider account, whose token never travels) is bound under
+  an id no account can have, so its projects park. The checklist rows live in
+  the `transfer_accounts` collection; `POST /api/transfer/accounts` verifies
+  them with the `transfer-verify` live read, and a completed sign-in settles
+  its row at once. A source identity that this install cannot read keeps the
+  row waiting, and nothing becomes active, until a read answers or the
+  operator confirms the account. The checklist is in the desktop accounts
+  dialog (inside its bounded account list; the dialog itself is bounded to the
+  window), on the phone's accounts screen and in the Copilot list. Copilot
+  rows count as usable when the CLI config shows a signed-in user; no limit
+  read exists for them (§11), and the Copilot checklist says so.
 - Measured apply window for the learned rules of §1.10's shape (2,898 rules,
-  112 scopes, about 20 MB of history): 1.06–1.36 s over three runs
-  (`src/lib/transfer/transferMeasure.test.ts` with `LLV_TRANSFER_MEASURE=1`).
+  112 scopes, about 20 MB of history): 1.33 s in the worker, 1.62–1.63 s with
+  the worker's start, over three runs on the shared test server on
+  2026-10-23 (`src/lib/transfer/transferMeasure.test.ts` with
+  `LLV_TRANSFER_MEASURE=1`). The test applies in the real worker under the
+  Viewer's own deadline, so an apply that hangs is stopped and fails.
 
 ## 0. Earlier work this builds on
 

@@ -121,12 +121,17 @@ export interface ImportedAccountRow {
   bindings: string[];
   state: AccountReportRow["state"];
   detail?: string;
+  /** The id is reserved and the import's bindings name it; the account itself
+      is made after the commit, and again by recovery or «Try again» until it is. */
+  pendingCreate?: boolean;
   /** The operator confirmed a different signed-in identity is the right account here. */
   confirmedDifferent?: boolean;
   checkedAt?: string;
 }
 
-const SEED = { collection: "transfer_accounts", schemaVersion: 1, migrationId: "transfer-accounts-v1", key: (row: ImportedAccountRow) => `${row.engine}:${row.sourceId}`, loadRecords: (): ImportedAccountRow[] => [] };
+export const TRANSFER_ACCOUNTS_COLLECTION = "transfer_accounts";
+export const TRANSFER_ACCOUNTS_SEED = { collection: TRANSFER_ACCOUNTS_COLLECTION, schemaVersion: 1, migrationId: "transfer-accounts-v1", key: (row: ImportedAccountRow) => `${row.engine}:${row.sourceId}`, loadRecords: (): ImportedAccountRow[] => [] };
+const SEED = TRANSFER_ACCOUNTS_SEED;
 
 function collection(create: boolean): SqliteStateCollection<ImportedAccountRow> | null {
   const file = path.join(stateDir(), "state.sqlite");
@@ -137,6 +142,9 @@ function collection(create: boolean): SqliteStateCollection<ImportedAccountRow> 
     decode: value => value && typeof value === "object" && (value as ImportedAccountRow).kind === "account" ? value as ImportedAccountRow : null,
   });
 }
+
+/** Creates the checklist collection before an import's commit writes into it. */
+export function initializeImportedAccountRows(): void { collection(true)?.close(); }
 
 export function importedAccountRows(): ImportedAccountRow[] {
   const held = collection(false);
@@ -156,8 +164,12 @@ export interface TargetAccount { id: string; label: string; kind: "legacy" | "ma
 
 export interface AccountTargetDeps {
   list?: (engine: TransferEngine) => Promise<TargetAccount[]>;
-  create?: (engine: TransferEngine, label: string) => Promise<string>;
-  bind?: (engine: "claude" | "codex", accountId: string, project: string) => Promise<boolean>;
+  /** Makes the account under the id the import reserved; idempotent for that id. */
+  create?: (engine: TransferEngine, label: string, id: string) => Promise<string>;
+  /** Holds a fresh id with an empty home, so no other account setup takes it. */
+  reserve?: (engine: TransferEngine, label: string, taken: ReadonlySet<string>) => Promise<string>;
+  /** Gives back a reservation an uncommitted import made. */
+  release?: (engine: TransferEngine, id: string) => Promise<void>;
   identity?: IdentityReader;
 }
 
@@ -166,15 +178,22 @@ async function listTarget(engine: TransferEngine): Promise<TargetAccount[]> {
   return engines.find(entry => entry.engine === engine)!.accounts;
 }
 
-async function createTarget(engine: TransferEngine, label: string): Promise<string> {
-  if (engine === "claude") return (await import("@/lib/accounts/claude")).createManagedClaudeAccount(label).id;
-  if (engine === "codex") return (await import("@/lib/accounts/codex")).createManagedCodexAccount(label).id;
-  return (await import("@/lib/accounts/copilot")).createManagedCopilotAccount(label).id;
+async function createTarget(engine: TransferEngine, label: string, id: string): Promise<string> {
+  if (engine === "claude") return (await import("@/lib/accounts/claude")).createManagedClaudeAccount(label, undefined, { id }).id;
+  if (engine === "codex") return (await import("@/lib/accounts/codex")).createManagedCodexAccount(label, { id }).id;
+  return (await import("@/lib/accounts/copilot")).createManagedCopilotAccount(label, { id }).id;
 }
 
-async function bindTarget(engine: "claude" | "codex", accountId: string, project: string): Promise<boolean> {
-  const { bindAccountToProject } = await import("@/lib/accounts/projectBindings");
-  return bindAccountToProject(engine, accountId, project).ok;
+async function reserveTarget(engine: TransferEngine, label: string, taken: ReadonlySet<string>): Promise<string> {
+  if (engine === "claude") return (await import("@/lib/accounts/claude")).reserveManagedClaudeAccountId(label, taken).id;
+  if (engine === "codex") return (await import("@/lib/accounts/codex")).reserveManagedCodexAccountId(label, taken).id;
+  return (await import("@/lib/accounts/copilot")).reserveManagedCopilotAccountId(label, taken).id;
+}
+
+async function releaseTarget(engine: TransferEngine, id: string): Promise<void> {
+  if (engine === "claude") (await import("@/lib/accounts/claude")).releaseManagedClaudeAccountReservation(id);
+  else if (engine === "codex") (await import("@/lib/accounts/codex")).releaseManagedCodexAccountReservation(id);
+  else (await import("@/lib/accounts/copilot")).releaseManagedCopilotAccountReservation(id);
 }
 
 const isEngine = (value: unknown): value is TransferEngine => value === "claude" || value === "codex" || value === "copilot";
@@ -194,13 +213,25 @@ export function validAccountRecord(key: string, value: unknown): boolean {
   return false;
 }
 
-/** What apply will do with each account, against this install now. Read-only. */
+/** The account a binding names when its source account could not be made
+    here. No account id can have a dot, so the binding authorizes nothing and
+    the project's work parks rather than widening to every account. */
+export function unavailableAccountId(sourceId: string): string {
+  return `transfer-unavailable.${sourceId.replace(/[^A-Za-z0-9-]/g, "-")}`;
+}
+
+/** What apply will do with each account, against this install now. Read-only.
+    A target account stands in for a source account only when it is proven to
+    be the same: one an earlier import of this source made, or the same id
+    signed into the same identity. Anything else gets an account of its own. */
 export async function planAccounts(records: readonly StoredRow[], exportId: string, deps: AccountTargetDeps = {}): Promise<AccountPlan[]> {
   const list = deps.list ?? listTarget;
   const identity = deps.identity ?? productionIdentityReader;
   const accounts = records.filter(row => row.key.startsWith("account:")).map(row => row.value as AccountRecordValue);
   const bindings = records.filter(row => row.key.startsWith("binding:")).map(row => row.value as BindingRecordValue);
   const previous = new Map(importedAccountRows().map(row => [`${row.engine}:${row.sourceId}`, row] as const));
+  const sameIdentity = async (account: AccountRecordValue, candidate: TargetAccount) =>
+    !!account.identity && candidate.signedIn && identityHash(exportId, await identity(account.engine, candidate)) === account.identity;
   const plans: AccountPlan[] = [];
   for (const account of accounts) {
     const here = await list(account.engine);
@@ -211,6 +242,8 @@ export async function planAccounts(records: readonly StoredRow[], exportId: stri
       plans.push({ ...base, action: "existing", plannedId: earlier.targetId });
       continue;
     }
+    /* An earlier import reserved an id and has not made the account yet: the same reservation. */
+    if (earlier?.pendingCreate && earlier.targetId) { plans.push({ ...base, action: "create", plannedId: earlier.targetId }); continue; }
     if (account.engine === "claude" && account.provider) {
       plans.push({ ...base, action: "skip", plannedId: null, reason: "provider-account" });
       continue;
@@ -219,63 +252,95 @@ export async function planAccounts(records: readonly StoredRow[], exportId: stri
       /* The target's own engine home stands in while it is signed out or
          signed into the same identity (§2.3); otherwise a managed account. */
       const legacy = here.find(candidate => candidate.kind === "legacy");
-      if (legacy && (!legacy.signedIn || (account.identity && identityHash(exportId, await identity(account.engine, legacy)) === account.identity))) {
+      if (legacy && (!legacy.signedIn || await sameIdentity(account, legacy))) {
         plans.push({ ...base, action: "legacy", plannedId: legacy.id });
         continue;
       }
     }
     const same = here.find(candidate => candidate.id === account.id && candidate.kind === "managed");
-    if (same && account.kind === "managed") { plans.push({ ...base, action: "existing", plannedId: same.id }); continue; }
+    if (same && account.kind === "managed" && await sameIdentity(account, same)) { plans.push({ ...base, action: "existing", plannedId: same.id }); continue; }
     plans.push({ ...base, action: "create", plannedId: null });
   }
   return plans;
 }
 
-/** After the import's commit: create each account signed out through the
-    existing setup, apply its bindings at once, and record the checklist rows.
-    Idempotent: an account already created for this source account is reused. */
-export async function applyAccounts(importId: string, exportId: string, records: readonly StoredRow[], deps: AccountTargetDeps = {}): Promise<ImportedAccountRow[]> {
-  const plans = await planAccounts(records, exportId, deps);
+/** Inside apply, before anything is written: a reserved id for every account
+    to be made, so the commit can bind projects to it. Each reservation is
+    reported as it is made, for the journal that gives it back on a rollback. */
+export async function reserveAccounts(plans: AccountPlan[], deps: AccountTargetDeps = {}, reserved: (engine: TransferEngine, id: string) => void = () => {}): Promise<void> {
+  const taken = new Map<TransferEngine, Set<string>>();
+  for (const plan of plans) if (plan.plannedId) (taken.get(plan.engine) ?? taken.set(plan.engine, new Set()).get(plan.engine)!).add(plan.plannedId);
+  for (const plan of plans) {
+    if (plan.action !== "create" || plan.plannedId) continue;
+    const engineTaken = taken.get(plan.engine) ?? taken.set(plan.engine, new Set()).get(plan.engine)!;
+    const id = await (deps.reserve ?? reserveTarget)(plan.engine, plan.label, engineTaken);
+    engineTaken.add(id);
+    plan.plannedId = id;
+    reserved(plan.engine, id);
+  }
+}
+
+export async function releaseReservation(engine: TransferEngine, id: string, deps: AccountTargetDeps = {}): Promise<void> {
+  await (deps.release ?? releaseTarget)(engine, id);
+}
+
+/** What the commit writes for the accounts: the checklist rows and every
+    binding, each naming the account it maps to here. Computed after the
+    reservations, so no binding ever falls back to a source id. */
+export async function accountCommitRows(importId: string, exportId: string, records: readonly StoredRow[], plans: readonly AccountPlan[], options: { now: string; canonical: (project: string) => string; deps?: AccountTargetDeps }): Promise<{ rows: ImportedAccountRow[]; bindings: { engine: "claude" | "codex"; accountId: string; project: string; createdAt: string }[] }> {
+  const list = options.deps?.list ?? listTarget;
   const previous = new Map(importedAccountRows().map(row => [`${row.engine}:${row.sourceId}`, row] as const));
   const accounts = new Map(records.filter(row => row.key.startsWith("account:")).map(row => [row.key, row.value as AccountRecordValue] as const));
-  const bindings = records.filter(row => row.key.startsWith("binding:")).map(row => row.value as BindingRecordValue);
-  const list = deps.list ?? listTarget;
-  const rows: ImportedAccountRow[] = [];
   const mapped = new Map<string, string>();
+  const rows: ImportedAccountRow[] = [];
   for (const plan of plans) {
     const source = accounts.get(`account:${plan.engine}:${plan.sourceId}`)!;
-    let targetId = plan.plannedId;
+    const earlier = previous.get(`${plan.engine}:${plan.sourceId}`);
+    const targetId = plan.action === "skip" ? null : plan.plannedId;
     let state: ImportedAccountRow["state"] = "signed_out";
-    let detail: string | undefined;
-    if (plan.action === "skip") { state = "not_created"; detail = plan.reason; targetId = null; }
-    else if (!targetId) {
-      try { targetId = await (deps.create ?? createTarget)(plan.engine, plan.label); }
-      catch (error) { state = "not_created"; detail = error instanceof Error ? error.name : "create-failed"; }
-    }
-    if (targetId) {
-      mapped.set(`${plan.engine}:${plan.sourceId}`, targetId);
-      /* A signed-in account waits for its live read; a re-import keeps the
-         state a check already settled. */
-      const earlier = previous.get(`${plan.engine}:${plan.sourceId}`);
+    let detail: string | undefined = plan.action === "skip" ? plan.reason : undefined;
+    if (plan.action === "skip") state = "not_created";
+    else if (plan.action !== "create") {
+      /* A signed-in account waits for its live read; a re-import keeps the state a check already settled. */
       const signedIn = (await list(plan.engine)).find(candidate => candidate.id === targetId)?.signedIn ?? false;
       if (earlier?.targetId === targetId && earlier.state !== "not_created") { state = earlier.state; detail = earlier.detail; }
       else if (signedIn) state = "unchecked";
     }
-    const earlier = previous.get(`${plan.engine}:${plan.sourceId}`);
+    mapped.set(`${plan.engine}:${plan.sourceId}`, targetId ?? unavailableAccountId(plan.sourceId));
     rows.push({ kind: "account", importId, exportId, engine: plan.engine, sourceId: plan.sourceId, targetId, label: plan.label, sourceKind: plan.kind,
       activeOnSource: plan.sourceActive, identity: source.identity, bindings: plan.bindings, state, ...(detail ? { detail } : {}),
+      ...(plan.action === "create" ? { pendingCreate: true } : {}),
       ...(earlier?.targetId === targetId && earlier.confirmedDifferent ? { confirmedDifferent: true } : {}) });
   }
-  /* Bindings at once, before any account signs in: a binding is what keeps a
-     project's work off every other account, so a missing one would widen it.
-     An account that could not be made keeps its source id, which matches no
-     account here, so the project parks until it is. */
-  for (const binding of bindings) {
-    const accountId = mapped.get(`${binding.engine}:${binding.accountId}`) ?? binding.accountId;
-    await (deps.bind ?? bindTarget)(binding.engine, accountId, binding.project);
+  const bindings = records.filter(row => row.key.startsWith("binding:")).map(row => row.value as BindingRecordValue).map(binding => ({
+    engine: binding.engine,
+    accountId: mapped.get(`${binding.engine}:${binding.accountId}`) ?? unavailableAccountId(binding.accountId),
+    project: options.canonical(binding.project),
+    createdAt: options.now,
+  }));
+  return { rows, bindings };
+}
+
+/** After the commit, and again at recovery: make every reserved account of
+    this import. A failed setup leaves its row «Not created» with the cause and
+    its reservation, which «Try again» and the next recovery take up. */
+export async function finishAccountCreation(filter: { importId?: string; engine?: TransferEngine; sourceId?: string }, deps: AccountTargetDeps = {}): Promise<ImportedAccountRow[]> {
+  const pending = importedAccountRows().filter(row => row.pendingCreate && row.targetId
+    && (!filter.importId || row.importId === filter.importId) && (!filter.engine || row.engine === filter.engine) && (!filter.sourceId || row.sourceId === filter.sourceId));
+  const done: ImportedAccountRow[] = [];
+  for (const row of pending) {
+    try {
+      const made = await (deps.create ?? createTarget)(row.engine, row.label, row.targetId!);
+      if (made !== row.targetId) throw new Error("the account was made under another id");
+      const settled: ImportedAccountRow = { ...row, state: "signed_out", detail: undefined };
+      delete settled.pendingCreate;
+      done.push(settled);
+    } catch (error) {
+      done.push({ ...row, state: "not_created", detail: error instanceof Error && error.name !== "Error" ? error.name : "create-failed" });
+    }
+    putRows([done.at(-1)!]);
   }
-  putRows(rows);
-  return rows;
+  return done;
 }
 
 /* ── Verification ────────────────────────────────────────────────────── */
@@ -309,16 +374,23 @@ export async function verifyImportedAccount(row: ImportedAccountRow, deps: Verif
   const now = (deps.now ?? (() => new Date()))().toISOString();
   if (row.state === "not_needed" || row.state === "not_created" || !row.targetId) return row;
   const account = (await (deps.list ?? listTarget)(row.engine)).find(candidate => candidate.id === row.targetId);
-  if (!account) return { ...row, state: "not_created", detail: "the account is no longer on this install", checkedAt: now };
+  if (!account) return { ...row, state: "not_created", detail: "account-missing", checkedAt: now };
   if (!account.signedIn) return { ...row, state: "signed_out", detail: undefined, checkedAt: now };
   if (row.engine !== "copilot") {
     const read = await (deps.readLimits ?? readLimitsLive)(row.engine, row.targetId);
     if (!read.ok) return { ...row, state: "read_failed", detail: read.detail, checkedAt: now };
     if (!read.authenticated) return { ...row, state: "signed_out", detail: undefined, checkedAt: now };
-    if (!read.windows) return { ...row, state: "read_failed", detail: "no limit windows in the reading", checkedAt: now };
+    if (!read.windows) return { ...row, state: "read_failed", detail: "no-limit-windows", checkedAt: now };
   }
-  const here = identityHash(row.exportId, await (deps.identity ?? productionIdentityReader)(row.engine, account));
-  if (row.identity && here && here !== row.identity && !row.confirmedDifferent) return { ...row, state: "different_account", detail: undefined, checkedAt: now };
+  /* The source reported an identity: this account is the same one only when
+     the provider says so here too. An identity this install cannot read is no
+     evidence either way, so the row waits, unselected, until a read answers or
+     the operator confirms the account. */
+  if (row.identity && !row.confirmedDifferent) {
+    const read = await (deps.identity ?? productionIdentityReader)(row.engine, account);
+    if (read === null) return { ...row, state: "read_failed", detail: "identity-unreadable", checkedAt: now };
+    if (identityHash(row.exportId, read) !== row.identity) return { ...row, state: "different_account", detail: undefined, checkedAt: now };
+  }
   const usable: ImportedAccountRow = { ...row, state: "usable", detail: undefined, checkedAt: now };
   /* §3.5: the source's active account becomes active here once it is usable. */
   if (row.activeOnSource) await (deps.select ?? selectLive)(row.engine, row.targetId);
@@ -337,9 +409,21 @@ export async function verifyImportedAccounts(filter: { engine?: TransferEngine; 
 export function markImportedAccount(engine: TransferEngine, sourceId: string, mark: "not_needed" | "confirm_identity"): ImportedAccountRow | null {
   const row = importedAccountRows().find(candidate => candidate.engine === engine && candidate.sourceId === sourceId);
   if (!row) return null;
+  /* «Not needed here» also stops the account from being made later; its reservation and bindings stay, so its projects still park. */
   const next: ImportedAccountRow = mark === "not_needed" ? { ...row, state: "not_needed" } : { ...row, confirmedDifferent: true };
+  if (mark === "not_needed") delete next.pendingCreate;
   putRows([next]);
   return next;
+}
+
+/** «Try again» on a row whose account could not be made: the same reserved id. */
+export async function retryImportedAccount(engine: TransferEngine, sourceId: string, deps: AccountTargetDeps = {}): Promise<ImportedAccountRow | null> {
+  const row = importedAccountRows().find(candidate => candidate.engine === engine && candidate.sourceId === sourceId);
+  if (!row) return null;
+  if (!row.pendingCreate) return row;
+  const { withAccountMutationLockAsync } = await import("@/lib/accounts/accountMutation");
+  const [done] = await withAccountMutationLockAsync(() => finishAccountCreation({ engine, sourceId }, deps), { holder: "install transfer account retry" });
+  return done ?? row;
 }
 
 /** A signed-in account settles its checklist row at once (called after a login's own live read). */
@@ -354,6 +438,7 @@ export function accountReportRows(rows: readonly ImportedAccountRow[] = imported
     engine: row.engine, sourceId: row.sourceId, targetId: row.targetId, label: row.label,
     state: row.state, ...(row.detail ? { detail: row.detail } : {}),
     bindings: row.bindings, activeOnSource: row.activeOnSource,
+    ...(row.state === "not_created" && row.pendingCreate ? { retry: true } : {}),
   }));
 }
 

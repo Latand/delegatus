@@ -34,6 +34,13 @@ export interface ServiceOptions {
   timeoutMs?: number;
   /** Extra environment for the worker; the exit tests name a fault here. */
   env?: Record<string, string>;
+  /** The recovery the Viewer runs after a failed apply; tests inject account deps. */
+  recover?: () => Promise<RecoveryOutcome[]>;
+}
+
+async function recoverUnderAccountLock(recover: () => Promise<RecoveryOutcome[]> = () => recoverTransferImports()): Promise<RecoveryOutcome[]> {
+  const { withAccountMutationLockAsync } = await import("@/lib/accounts/accountMutation");
+  return withAccountMutationLockAsync(recover, { holder: "install transfer recovery" });
 }
 
 async function runWorker(request: TransferWorkerRequest, options: ServiceOptions): Promise<{ response: TransferWorkerResponse | null; exit: string | null }> {
@@ -110,10 +117,13 @@ export async function applyBundle(request: TransferImportRequest, options: Servi
   if (applying) return { ok: false, error: { code: "busy", message: "another import is being applied; wait for its report" } };
   const run = viewerLoopMonitor.run("transfer.apply", async () => {
     const { response, exit } = await runWorker({ operation: "apply", request }, options);
-    if (response) return response;
-    /* The worker died between its checkpoint and its cleanup: settle it now
-       rather than at the next activation. */
-    return stopped(exit!, await viewerLoopMonitor.run("transfer.recover", () => recoverTransferImports()));
+    if (response?.ok) return response;
+    /* Whatever stopped the apply — the worker's death, or an error it
+       answered with after its commit — is settled now, under the lock spawn
+       admission takes, before any launch can be admitted against it:
+       uncommitted writes undone, committed work finished. */
+    const recovered = await viewerLoopMonitor.run("transfer.recover", () => recoverUnderAccountLock(options.recover));
+    return response ? { ...response, recovered } : stopped(exit!, recovered);
   });
   applying = run;
   try { return await run; }

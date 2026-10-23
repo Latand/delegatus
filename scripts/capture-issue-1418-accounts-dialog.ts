@@ -27,10 +27,15 @@
  * control only on Codex and enabled only while that card holds a credit, every
  * meter filled with what REMAINS (its value equals the row's own «n% left»),
  * no corner number repeating the week the card lists, 44px targets and no
- * horizontal scroll. Transfer checklist (install
- * transfer slice 2): two accounts an import brought, signed out, one per
- * engine; each dialog lists its one row with its state, «Sign in» and «Not
- * needed here» in en/light and uk/dark, nothing overflowing. Shots land in
+ * horizontal scroll. Transfer checklist (install transfer slice 2): an
+ * import brought eight Codex accounts in every checklist state, two Claude
+ * accounts (one a provider account that could not be made) and one Copilot
+ * account. In en/light and uk/dark, at 1280×860 and at a short 1024×640, each
+ * dialog stays wholly on screen with its header and close control, the
+ * checklist heading is whole at the top when it opens, and every row and
+ * action is reachable by scrolling, unclipped and uncovered; the phone screen
+ * and the Copilot list carry the same checklist, every action reachable at
+ * 44 px. Shots land in
  * <tmp>/llv-issue-1418-latest/out/1418-<surface>-<engine>.png and are never
  * committed: the privacy gate refuses rasters.
  */
@@ -56,6 +61,7 @@ const STATE = path.join(CONFIG, "agent-log-viewer", "state");
 const OUT_DIR = path.join(BASE, "out");
 const CODEX_STUB = path.join(BASE, "bin", "codex");
 const DESKTOP = { width: 1280, height: 860 };
+const INTERMEDIATE = { width: 1024, height: 640 };
 const PHONE = { width: 390, height: 844 };
 const DAY = 86_400;
 
@@ -77,6 +83,7 @@ function seedEnvironment(): void {
   process.env.LLV_STATE_DIR = STATE;
   process.env.LLV_CLAUDE_HOME = path.join(HOME, ".claude");
   process.env.LLV_CODEX_HOME = path.join(HOME, ".codex");
+  process.env.COPILOT_HOME = path.join(HOME, ".copilot");
 }
 
 /* One invented project with one transcript: the phone's Accounts & limits
@@ -128,13 +135,7 @@ async function seedHome(): Promise<void> {
   const claudeB = createManagedClaudeAccount("Account B");
   fs.writeFileSync(path.join(claudeB.home, ".credentials.json"), "{}", { mode: 0o600 });
 
-  /* An install transfer brought two accounts (install-memory-transfer §3.4):
-     made signed out through the same account setup, with no identity read. */
-  const { applyAccounts } = await import("@/lib/transfer/accounts");
-  await applyAccounts("capture-import", "capture-export", [
-    { key: "account:codex:team", value: { engine: "codex", id: "team", label: "Team", kind: "managed", active: true, identity: null } },
-    { key: "account:claude:research", value: { engine: "claude", id: "research", label: "Research", kind: "managed", active: false, identity: null } },
-  ], { identity: async () => null });
+  await seedImportedAccounts();
 
   const now = new Date();
   const nowS = Math.floor(now.getTime() / 1000);
@@ -183,6 +184,50 @@ async function seedHome(): Promise<void> {
   });
 }
 
+/* An install transfer brought these accounts (install-memory-transfer §3.4):
+   made signed out through the account setup, their checklist rows in every
+   state a row can show. The rows are written into the transfer's own
+   collection, as an import's commit writes them. */
+const IMPORTED_CODEX: { label: string; state: string; detail?: string; activeOnSource?: boolean; made?: false; retry?: true }[] = [
+  { label: "Team 1", state: "signed_out", activeOnSource: true },
+  { label: "Team 2", state: "signed_out" },
+  { label: "Team 3", state: "different_account" },
+  { label: "Team 4", state: "read_failed", detail: "identity-unreadable" },
+  { label: "Team 5", state: "read_failed", detail: "quota probe timed out" },
+  { label: "Team 6", state: "signed_out" },
+  { label: "Team 7", state: "not_created", detail: "create-failed", made: false, retry: true },
+  { label: "Team 8", state: "signed_out" },
+];
+
+async function seedImportedAccounts(): Promise<void> {
+  const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
+  const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
+  const { createManagedCopilotAccount } = await import("@/lib/accounts/copilot");
+  const { TRANSFER_ACCOUNTS_SEED } = await import("@/lib/transfer/accounts");
+  const { initializeStateCollections, SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
+  const row = (engine: string, sourceId: string, targetId: string | null, label: string, state: string, extra: Record<string, unknown> = {}) => ({
+    kind: "account", importId: "capture-import", exportId: "capture-export", engine, sourceId, targetId, label, sourceKind: "managed",
+    activeOnSource: false, identity: null, bindings: [], state, ...extra,
+  });
+  const rows: Record<string, unknown>[] = [];
+  for (const [index, entry] of IMPORTED_CODEX.entries()) {
+    const targetId = entry.made === false ? `team-${index + 1}` : createManagedCodexAccount(entry.label).id;
+    rows.push(row("codex", `team-${index + 1}`, targetId, entry.label, entry.state, {
+      ...(entry.detail ? { detail: entry.detail } : {}), ...(entry.activeOnSource ? { activeOnSource: true } : {}), ...(entry.retry ? { pendingCreate: true } : {}),
+    }));
+  }
+  rows.push(row("claude", "research", createManagedClaudeAccount("Research").id, "Research", "signed_out"));
+  rows.push(row("claude", "gateway", null, "Gateway", "not_created", { detail: "provider-account" }));
+  rows.push(row("copilot", "github-work", createManagedCopilotAccount("GitHub work").id, "GitHub work", "signed_out"));
+  const database = path.join(STATE, "state.sqlite");
+  initializeStateCollections(database, [TRANSFER_ACCOUNTS_SEED]);
+  const collection = new SqliteStateCollection<Record<string, unknown>>(database, {
+    collection: TRANSFER_ACCOUNTS_SEED.collection, schemaVersion: 1, busyMessage: "transfer accounts busy",
+    key: (value) => `${String(value.engine)}:${String(value.sourceId)}`, decode: (value) => value as Record<string, unknown>, clone: structuredClone,
+  });
+  try { collection.patchSync(() => ({ records: rows })); } finally { collection.close(); }
+}
+
 function serverEnvironment(port: number): NodeJS.ProcessEnv {
   return {
     NODE_ENV: "production",
@@ -196,6 +241,7 @@ function serverEnvironment(port: number): NodeJS.ProcessEnv {
     LLV_STATE_DIR: STATE,
     LLV_CLAUDE_HOME: path.join(HOME, ".claude"),
     LLV_CODEX_HOME: path.join(HOME, ".codex"),
+    COPILOT_HOME: path.join(HOME, ".copilot"),
     LLV_CODEX_BINARY: CODEX_STUB,
     LLV_ACCOUNT_CONTROLLER_DISABLED: "1",
     LLV_REAPER_ENABLED: "0",
@@ -274,20 +320,15 @@ function checkDialog(engine: "Codex" | "Claude", facts: DialogFacts): void {
 interface ChecklistFacts {
   rows: { label: string; state: string; buttons: string[]; overflow: boolean }[];
   title: string | null;
-  bottom: number;
-  viewport: number;
-  scrollWidth: number;
-  innerWidth: number;
 }
 
 /** The open accounts dialog that carries the transfer checklist, in any language. */
 const CHECKLIST_DIALOG = '[role="dialog"]:has([data-transfer-checklist])';
 
-/** The transfer checklist at the top of a dialog, read off the DOM. */
-async function checklistFacts(page: Page): Promise<ChecklistFacts> {
+/** The transfer checklist inside a container, read off the DOM. */
+async function checklistFacts(page: Page, container: string): Promise<ChecklistFacts> {
   return page.evaluate((selector) => {
-    const dialog = document.querySelector(selector)!;
-    const section = dialog.querySelector("[data-transfer-checklist]");
+    const section = document.querySelector(selector)!.querySelector("[data-transfer-checklist]");
     return {
       title: section?.querySelector("h3")?.textContent ?? null,
       rows: [...(section?.querySelectorAll("[data-transfer-account]") ?? [])].map((row) => {
@@ -299,31 +340,100 @@ async function checklistFacts(page: Page): Promise<ChecklistFacts> {
           overflow: [...row.querySelectorAll<HTMLElement>("*")].some((element) => element.scrollWidth > element.clientWidth + 1 && !element.classList.contains("truncate")),
         };
       }),
-      bottom: Math.round(dialog.getBoundingClientRect().bottom),
-      viewport: window.innerHeight,
-      scrollWidth: document.documentElement.scrollWidth,
-      innerWidth: window.innerWidth,
     };
-  }, CHECKLIST_DIALOG);
+  }, container);
 }
 
-/* Each dialog lists the one account the transfer brought to its engine,
-   signed out, with the product's own sign-in offered and every word in the
-   page's language; nothing overflows and the dialog stays on screen. */
-function checkChecklist(engine: "Codex" | "Claude", locale: "en" | "uk", facts: ChecklistFacts): void {
-  const where = `desktop ${engine} transfer checklist (${locale})`;
-  const words = locale === "en"
-    ? { title: "Accounts from your other install", state: "Signed out", signIn: "Sign in", skip: "Not needed here" }
-    : { title: "Акаунти з вашої іншої інсталяції", state: "Не ввійдено", signIn: "Увійти", skip: "Тут не потрібен" };
-  const label = engine === "Codex" ? "Team" : "Research";
-  if (facts.title !== words.title) throw new Error(`${where}: the title reads «${facts.title}»`);
-  if (facts.rows.length !== 1 || facts.rows[0]!.label !== label) throw new Error(`${where}: rows are [${facts.rows.map((row) => row.label).join(", ")}], expected ${label}`);
-  const row = facts.rows[0]!;
-  if (row.state !== words.state) throw new Error(`${where}: the state reads «${row.state}»`);
-  if (row.buttons.join("|") !== `${words.signIn}|${words.skip}`) throw new Error(`${where}: the row offers [${row.buttons.join(", ")}]`);
-  if (row.overflow) throw new Error(`${where}: text in the row overflows its box`);
-  if (facts.scrollWidth > facts.innerWidth) throw new Error(`${where}: the document scrolls to ${facts.scrollWidth}px at ${facts.innerWidth}px`);
-  if (facts.bottom > facts.viewport) throw new Error(`${where}: the dialog ends at ${facts.bottom}px, past the ${facts.viewport}px viewport`);
+const WORDS = {
+  en: { title: "Accounts from your other install", signIn: "Sign in", again: "Sign in again", confirm: "This is the right account", retry: "Try again", skip: "Not needed here",
+    signedOut: "Signed out", different: "Different account", readFailed: "Limits not read", notCreated: "Not created" },
+  uk: { title: "Акаунти з вашої іншої інсталяції", signIn: "Увійти", again: "Увійти знову", confirm: "Це правильний акаунт", retry: "Спробувати ще раз", skip: "Тут не потрібен",
+    signedOut: "Не ввійдено", different: "Інший акаунт", readFailed: "Ліміти не прочитано", notCreated: "Не створено" },
+} as const;
+
+/** What each imported row must say and offer, per engine and language. */
+function expectedRows(engine: "codex" | "claude" | "copilot", locale: "en" | "uk"): { label: string; state: string; buttons: string[] }[] {
+  const w = WORDS[locale];
+  if (engine === "claude") return [
+    { label: "Research", state: w.signedOut, buttons: [w.signIn, w.skip] },
+    { label: "Gateway", state: w.notCreated, buttons: [w.skip] },
+  ];
+  if (engine === "copilot") return [{ label: "GitHub work", state: w.signedOut, buttons: [w.signIn, w.skip] }];
+  return IMPORTED_CODEX.map((entry) => entry.state === "signed_out" ? { label: entry.label, state: w.signedOut, buttons: [w.signIn, w.skip] }
+    : entry.state === "different_account" ? { label: entry.label, state: w.different, buttons: [w.again, w.confirm, w.skip] }
+      : entry.state === "read_failed" ? { label: entry.label, state: w.readFailed, buttons: entry.detail === "identity-unreadable" ? [w.again, w.confirm, w.skip] : [w.again, w.skip] }
+        : { label: entry.label, state: w.notCreated, buttons: [w.retry, w.skip] });
+}
+
+function checkChecklist(where: string, engine: "codex" | "claude" | "copilot", locale: "en" | "uk", facts: ChecklistFacts): void {
+  if (facts.title !== WORDS[locale].title) throw new Error(`${where}: the title reads «${facts.title}»`);
+  const expected = expectedRows(engine, locale);
+  const got = facts.rows.map((row) => ({ label: row.label, state: row.state, buttons: row.buttons }));
+  if (JSON.stringify(got) !== JSON.stringify(expected)) throw new Error(`${where}: rows are ${JSON.stringify(got)}, expected ${JSON.stringify(expected)}`);
+  if (facts.rows.some((row) => row.overflow)) throw new Error(`${where}: text in a row overflows its box`);
+}
+
+/**
+ * Whether everything the checklist offers can be reached in `container`: the
+ * container lies wholly inside the viewport, its close control too; the
+ * checklist heading's text is whole at the opening scroll position; and every
+ * row and every action, once scrolled to, lies wholly inside the viewport and
+ * every scrolling ancestor, with nothing (a sticky header, fixed chrome) drawn
+ * over its centre. Measured from the elements and the heading's text range.
+ */
+async function reachability(page: Page, container: string, closeControl: string | null): Promise<string[]> {
+  return page.evaluate(async ({ selector, close }) => {
+    const problems: string[] = [];
+    const root = document.querySelector(selector) as HTMLElement;
+    const frame = () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    const viewport = { top: 0, left: 0, bottom: window.innerHeight, right: window.innerWidth };
+    type Box = { top: number; left: number; bottom: number; right: number };
+    const round = (box: Box) => `${Math.round(box.top)}..${Math.round(box.bottom)}`;
+    const inside = (box: Box, bound: Box) => box.top >= bound.top - 0.5 && box.bottom <= bound.bottom + 0.5 && box.left >= bound.left - 0.5 && box.right <= bound.right + 0.5;
+    const clip = (element: Element): Box => {
+      let box: Box = { ...viewport };
+      for (let node = element.parentElement; node; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        if (!/(auto|scroll|hidden)/.test(style.overflowY + style.overflowX)) continue;
+        const rect = node.getBoundingClientRect();
+        box = { top: Math.max(box.top, rect.top), left: Math.max(box.left, rect.left), bottom: Math.min(box.bottom, rect.bottom), right: Math.min(box.right, rect.right) };
+      }
+      return box;
+    };
+    const uncovered = (element: Element) => {
+      const rect = element.getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      return !!hit && (hit === element || element.contains(hit));
+    };
+    if (root.getAttribute("role") === "dialog" && !inside(root.getBoundingClientRect(), viewport)) problems.push(`the dialog spans ${round(root.getBoundingClientRect())} in a ${window.innerHeight}px viewport`);
+    if (close) {
+      const control = root.querySelector(close);
+      if (!control || !inside(control.getBoundingClientRect(), viewport) || !uncovered(control)) problems.push("the close control is not wholly on screen");
+    }
+    const heading = root.querySelector("[data-transfer-checklist] h3");
+    if (!heading) return [...problems, "no checklist heading"];
+    if (root.getAttribute("role") === "dialog") {
+      const range = document.createRange();
+      range.selectNodeContents(heading);
+      const text = range.getBoundingClientRect();
+      if (!inside(text, clip(heading))) problems.push(`the checklist heading's text is cut at opening (${round(text)} in ${round(clip(heading))})`);
+    }
+    const targets = [...root.querySelectorAll("[data-transfer-checklist] [data-transfer-account]")].flatMap((row) => [row, ...row.querySelectorAll("button")]);
+    for (const target of targets) {
+      target.scrollIntoView({ block: "nearest", inline: "nearest" });
+      await frame();
+      const name = `${target.closest("[data-transfer-account]")?.getAttribute("data-transfer-account")} ${target.tagName === "BUTTON" ? `«${(target.textContent ?? "").trim()}»` : "row"}`;
+      const rect = target.getBoundingClientRect();
+      if (!inside(rect, clip(target))) problems.push(`${name} is cut by a scroll edge (${round(rect)} in ${round(clip(target))})`);
+      else if (!uncovered(target)) problems.push(`${name} is covered at its centre`);
+      if (target.tagName === "BUTTON" && root.closest("[data-mobile2-screen]") && rect.height < 44) problems.push(`${name} is ${Math.round(rect.height)}px tall, under 44px`);
+    }
+    if (close) {
+      const control = root.querySelector(close);
+      if (!control || !inside(control.getBoundingClientRect(), viewport) || !uncovered(control)) problems.push("the close control left the screen while scrolling");
+    }
+    return problems;
+  }, { selector: container, close: closeControl });
 }
 
 interface EngineFacts {
@@ -514,34 +624,68 @@ async function main(): Promise<void> {
     }
     await desktop.close();
 
-    /* The transfer checklist in both languages and both schemes. */
+    /* The transfer checklist in both languages and both schemes, at a full
+       desktop and at a short window, then on the phone and in the Copilot list. */
     const TRIGGER = { en: (engine: string) => `button[aria-label="${engine} accounts — switch or add"]`, uk: (engine: string) => `button[aria-label="Акаунти ${engine} — змінити або додати"]` };
+    const CLOSE = { en: 'header button[aria-label="Close"]', uk: 'header button[aria-label="Закрити"]' };
+    const COPILOT_ROW = { en: 'button[aria-label="GitHub Copilot accounts"]', uk: 'button[aria-label="Акаунти GitHub Copilot"]' };
+    const problems: string[] = [];
     for (const [locale, colorScheme] of [["en", "light"], ["uk", "dark"]] as const) {
       const write = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale, source: "chosen" }) });
       if (!write.ok) throw new Error(`the interface language write answered ${write.status}`);
-      const context = await browser.newContext({ viewport: DESKTOP, colorScheme, reducedMotion: "reduce" });
-      await context.addInitScript((lang: string) => { localStorage.setItem("llv_lang", lang); }, locale);
-      const page = await context.newPage();
-      await page.goto(baseUrl, { waitUntil: "load" });
-      /* The first-run install-ping notice sits over the dialog's lower edge. */
-      const notice = page.locator("[data-telemetry-notice] button", { hasText: locale === "en" ? "Got it" : "Зрозуміло" });
-      if (await notice.waitFor({ state: "visible", timeout: 5_000 }).then(() => true, () => false)) await notice.click();
-      for (const engine of ["Codex", "Claude"] as const) {
-        await page.click(TRIGGER[locale](engine));
-        await page.waitForSelector(CHECKLIST_DIALOG);
-        /* The shot shows the checklist above the cards it belongs to. */
-        await page.waitForSelector(`${CHECKLIST_DIALOG} [data-account-limits]`, { timeout: 30_000 });
-        await page.waitForTimeout(250);
-        checkChecklist(engine, locale, await checklistFacts(page));
-        const file = path.join(OUT_DIR, `1418-desktop-${engine.toLowerCase()}-transfer-${locale}-${colorScheme}.png`);
-        await page.locator(CHECKLIST_DIALOG).screenshot({ path: file });
-        console.log(`  ${path.basename(file)}`);
-        await page.keyboard.press("Escape");
-        await page.waitForSelector(CHECKLIST_DIALOG, { state: "detached" });
+      for (const [size, viewport] of [["desktop", DESKTOP], ["short", INTERMEDIATE]] as const) {
+        const context = await browser.newContext({ viewport, colorScheme, reducedMotion: "reduce" });
+        await context.addInitScript((lang: string) => { localStorage.setItem("llv_lang", lang); }, locale);
+        const page = await context.newPage();
+        await page.goto(baseUrl, { waitUntil: "load" });
+        /* The first-run install-ping notice sits over the dialog's lower edge. */
+        const notice = page.locator("[data-telemetry-notice] button", { hasText: locale === "en" ? "Got it" : "Зрозуміло" });
+        if (await notice.waitFor({ state: "visible", timeout: 5_000 }).then(() => true, () => false)) await notice.click();
+        for (const engine of ["Codex", "Claude"] as const) {
+          await page.click(TRIGGER[locale](engine));
+          await page.waitForSelector(CHECKLIST_DIALOG);
+          await page.waitForSelector(`${CHECKLIST_DIALOG} [data-account-limits]`, { timeout: 30_000 });
+          await page.waitForTimeout(250);
+          const where = `${size} ${engine} transfer checklist (${locale}, ${colorScheme})`;
+          checkChecklist(where, engine === "Codex" ? "codex" : "claude", locale, await checklistFacts(page, CHECKLIST_DIALOG));
+          const base = `1418-${size}-${engine.toLowerCase()}-transfer-${locale}-${colorScheme}`;
+          await page.screenshot({ path: path.join(OUT_DIR, `${base}-open.png`) });
+          problems.push(...(await reachability(page, CHECKLIST_DIALOG, CLOSE[locale])).map((problem) => `${where}: ${problem}`));
+          await page.screenshot({ path: path.join(OUT_DIR, `${base}-scrolled.png`) });
+          console.log(`  ${base}-open.png, ${base}-scrolled.png`);
+          await page.keyboard.press("Escape");
+          await page.waitForSelector(CHECKLIST_DIALOG, { state: "detached" });
+        }
+        if (size === "desktop") {
+          await page.click(COPILOT_ROW[locale]);
+          const list = '[data-engine-limits="copilot"]';
+          await page.waitForSelector(`${list} [data-transfer-checklist="copilot"]`, { timeout: 30_000 });
+          const where = `Copilot list transfer checklist (${locale}, ${colorScheme})`;
+          checkChecklist(where, "copilot", locale, await checklistFacts(page, list));
+          problems.push(...(await reachability(page, list, null)).map((problem) => `${where}: ${problem}`));
+          const file = `1418-desktop-copilot-transfer-${locale}-${colorScheme}.png`;
+          await page.screenshot({ path: path.join(OUT_DIR, file) });
+          console.log(`  ${file}`);
+        }
+        await context.close();
       }
-      await context.close();
+      const phoneContext = await browser.newContext({ viewport: PHONE, isMobile: true, hasTouch: true, deviceScaleFactor: 2, colorScheme, reducedMotion: "reduce" });
+      await phoneContext.addInitScript((lang: string) => { localStorage.setItem("llv_lang", lang); }, locale);
+      const phonePage = await phoneContext.newPage();
+      await openAccountsScreen(phonePage, baseUrl, await seededProject(baseUrl));
+      await phonePage.screenshot({ path: path.join(OUT_DIR, `1418-phone-transfer-${locale}-${colorScheme}-open.png`) });
+      for (const engine of ["claude", "codex"] as const) {
+        const section = `${PHONE_SCREEN} [data-mobile2-accounts-engine="${engine}"]`;
+        const where = `phone ${engine} transfer checklist (${locale}, ${colorScheme})`;
+        checkChecklist(where, engine, locale, await checklistFacts(phonePage, section));
+        problems.push(...(await reachability(phonePage, section, null)).map((problem) => `${where}: ${problem}`));
+        await phonePage.screenshot({ path: path.join(OUT_DIR, `1418-phone-transfer-${locale}-${colorScheme}-${engine}.png`) });
+      }
+      console.log(`  1418-phone-transfer-${locale}-${colorScheme}-{open,claude,codex}.png`);
+      await phoneContext.close();
     }
     await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale: "en", source: "chosen" }) });
+    if (problems.length) throw new Error(`the transfer checklist is not wholly reachable:\n${problems.join("\n")}`);
 
     /* The phone (mobile v2 lane 9): one screen holds both engines, so there is
        one shot and one set of checks, reached the way the operator reaches it. */

@@ -191,6 +191,8 @@ export interface AccountReportRow {
   detail?: string;
   bindings: string[];
   activeOnSource: boolean;
+  /** A `not_created` row whose reserved account «Try again» can still make. */
+  retry?: boolean;
 }
 
 export interface SectionReport {

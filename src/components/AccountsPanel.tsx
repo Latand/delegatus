@@ -1,7 +1,7 @@
 "use client";
 
 import { Plus } from "lucide-react";
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import {
   accountNoticeText,
@@ -927,6 +927,24 @@ export function AccountsPanel({
      sign-in state here changes, since a sign-in settles its row. */
   const imported = useImportedAccounts(engine, accounts.map((account) => `${account.id}:${account.authPresent ? 1 : 0}`).join(","));
   const closeRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  /* The whole dialog stays inside the viewport: it is anchored by one edge
+     (its bottom for the footer flyout and the phone sheet, its top under the
+     header), so its height is bounded by the room on that side, and anything
+     past it scrolls inside the dialog under its own header. */
+  const [maxHeight, setMaxHeight] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const fit = () => {
+      const node = dialogRef.current;
+      if (!node) return;
+      const rect = node.getBoundingClientRect();
+      const growsDown = placement === "header" && window.matchMedia("(min-width: 640px)").matches;
+      setMaxHeight(Math.max(160, Math.floor(growsDown ? window.innerHeight - rect.top - 8 : rect.bottom - 8)));
+    };
+    fit();
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  }, [placement]);
   const engineName = engineDisplay(engine);
   // Desktop anchor per caller; both share the mobile bottom sheet. The header
   // placement drops downward (`sm:top-full`) so an overflow-hidden ancestor
@@ -984,9 +1002,11 @@ export function AccountsPanel({
         aria-label={t("accounts.titleFor", { engine: engineName })}
         aria-busy={mutation !== null}
         onKeyDown={(event) => handleOverlayEscape(event, onClose)}
-        className={`fixed bottom-3 left-1/2 ${Z.modal} flex w-[min(400px,calc(100vw-16px))] -translate-x-1/2 flex-col rounded-[14px] border border-border bg-card shadow-2 ${placementClass}`}
+        ref={dialogRef}
+        style={maxHeight === null ? undefined : { maxHeight }}
+        className={`fixed bottom-3 left-1/2 ${Z.modal} flex w-[min(400px,calc(100vw-16px))] -translate-x-1/2 flex-col overflow-y-auto rounded-[14px] border border-border bg-card shadow-2 ${placementClass}`}
       >
-        <header className="flex items-center gap-2 border-b border-border px-3 py-2">
+        <header className="sticky top-0 z-[1] flex shrink-0 items-center gap-2 rounded-t-[14px] border-b border-border bg-card px-3 py-2">
           <span aria-hidden className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: engineTintOf(engine).color }} />
           <span className="text-[12.5px] font-bold">{t("accounts.titleFor", { engine: engineName })}</span>
           <button
@@ -1004,21 +1024,6 @@ export function AccountsPanel({
 
         {projectContext ? <ProjectAccountDetail context={projectContext} /> : null}
 
-        <TransferAccountsChecklist
-          engine={engine}
-          rows={imported.rows}
-          onSignIn={async (accountId) => {
-            if (engine === "claude") await state.retryLogin(accountId);
-            else await startCodexDeviceSignIn(state, accountId);
-            await imported.reload();
-          }}
-          onAction={async (body) => {
-            await imported.post(body);
-            if (body.action === "verify") await state.refresh();
-            await imported.reload();
-          }}
-        />
-
         {mutation ? (
           <div role="status" aria-live="polite" className="flex items-center gap-2 border-b border-border bg-accent/5 px-3 py-2 text-[11px] font-semibold text-primary">
             <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin motion-reduce:animate-none text-accent" aria-hidden />
@@ -1026,7 +1031,23 @@ export function AccountsPanel({
           </div>
         ) : null}
           <>
-            <div className="max-h-[min(420px,60vh)] divide-y divide-border/40 overflow-y-auto">
+            <div data-accounts-scroller className="max-h-[min(420px,60vh)] min-h-0 shrink divide-y divide-border/40 overflow-y-auto">
+              {/* Inside the bounded list, so a long import scrolls with the
+                  accounts it brought instead of pushing the dialog off screen. */}
+              <TransferAccountsChecklist
+                engine={engine}
+                rows={imported.rows}
+                onSignIn={async (accountId) => {
+                  if (engine === "claude") await state.retryLogin(accountId);
+                  else await startCodexDeviceSignIn(state, accountId);
+                  await imported.reload();
+                }}
+                onAction={async (body) => {
+                  await imported.post(body);
+                  if (body.action === "verify" || body.action === "retry") await state.refresh();
+                  await imported.reload();
+                }}
+              />
               {status === "loading" ? <AccountRowsSkeleton className="px-1.5 py-1" /> : null}
               {status === "error" && accounts.length === 0 ? <div className="px-3.5 py-2 text-[11px] text-muted">{t("accounts.noAccounts")}</div> : null}
               {rows.map(({ account, quota }) => {
@@ -1558,6 +1579,9 @@ function MobileEngineSection({ state, now, focusAccountId, receipts }: { state: 
     setChallenge((current) => (current?.accountId === account.id ? null : current));
     void cancelCodexDeviceSignIn(state, account.id);
   };
+  /* Accounts an install transfer brought, as on the desktop dialog: re-read
+     whenever a sign-in here changes, since a sign-in settles its row. */
+  const imported = useImportedAccounts(engine, accounts.map((account) => `${account.id}:${account.authPresent ? 1 : 0}`).join(","));
 
   return (
     <section data-mobile2-accounts-engine={engine} aria-label={t("accounts.titleFor", { engine: engineName })}>
@@ -1567,6 +1591,21 @@ function MobileEngineSection({ state, now, focusAccountId, receipts }: { state: 
       </div>
       {/* The phone has no footer slot: the removal answer leads the section. */}
       <RemovalOutcome state={state} phone />
+      <TransferAccountsChecklist
+        variant="phone"
+        engine={engine}
+        rows={imported.rows}
+        onSignIn={async (accountId) => {
+          const account = accounts.find((candidate) => candidate.id === accountId);
+          if (account) signIn(account);
+          await imported.reload();
+        }}
+        onAction={async (body) => {
+          await imported.post(body);
+          if (body.action === "verify" || body.action === "retry") await state.refresh();
+          await imported.reload();
+        }}
+      />
       {status === "loading" && accounts.length === 0 ? <AccountRowsSkeleton className="px-1 pb-2" /> : null}
       {status !== "loading" && accounts.length === 0 ? <div className="px-3 pb-2 text-label text-muted">{t("mobile2.accounts.noAccounts", { engine: engineName })}</div> : null}
       {ordered.map((account) => (

@@ -131,7 +131,8 @@ export async function getAccounts(req: NextRequest): Promise<Response> {
 }
 
 /** `{ action: "verify" }` reads each account's limits live (phase `transfer-verify`);
-    `not_needed` and `confirm_identity` record the operator's answer on one row. */
+    `not_needed` and `confirm_identity` record the operator's answer on one row;
+    `retry` makes an account whose setup failed, under the id its bindings name. */
 export async function postAccounts(req: NextRequest): Promise<Response> {
   const refused = transferGate(req);
   if (refused) return refused;
@@ -147,9 +148,13 @@ export async function postAccounts(req: NextRequest): Promise<Response> {
     const rows = await viewerLoopMonitor.run("transfer.verify", () => accounts.verifyImportedAccounts({ engine, sourceId }));
     return transferJson({ ok: true, result: accounts.accountReportRows(rows) });
   }
+  if (input.action === "retry" && engine && sourceId) {
+    const row = await accounts.retryImportedAccount(engine, sourceId);
+    return row ? transferJson({ ok: true, result: accounts.accountReportRows([row])[0] }) : transferJson({ ok: false, error: { code: "unknown_account", message: "no imported account with that id" } }, 404);
+  }
   if ((input.action === "not_needed" || input.action === "confirm_identity") && engine && sourceId) {
     const row = accounts.markImportedAccount(engine, sourceId, input.action);
     return row ? transferJson({ ok: true, result: accounts.accountReportRows([row])[0] }) : transferJson({ ok: false, error: { code: "unknown_account", message: "no imported account with that id" } }, 404);
   }
-  return transferJson({ error: "action must be verify, not_needed or confirm_identity", code: "bad_request" }, 400);
+  return transferJson({ error: "action must be verify, retry, not_needed or confirm_identity", code: "bad_request" }, 400);
 }

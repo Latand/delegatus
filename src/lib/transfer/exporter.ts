@@ -17,7 +17,9 @@ import { SECTION_NAMES, type BundleAccount, type BundleEnvironmentEntry, type Bu
 
 export class TransferSecretError extends Error {
   constructor(readonly section: string, readonly key: string) {
-    super(`the export stopped: a record in ${section} (${key}) holds a secret-shaped string; remove it from that record or leave the section out, then export again`);
+    super(section === "header"
+      ? `the export stopped: the bundle header's ${key} holds a secret-shaped string; clear that value on this install, then export again`
+      : `the export stopped: a record in ${section} (${key}) holds a secret-shaped string; remove it from that record or leave the section out, then export again`);
     this.name = "TransferSecretError";
   }
 }
@@ -100,14 +102,29 @@ function walkStrings(value: unknown, visit: (text: string) => boolean): boolean 
   return false;
 }
 
+const secretShaped = (text: string) => text.length >= 12 && staticSensitiveClasses(text.normalize("NFKC")).has("credential");
+
 /** A credential-shaped string anywhere in a record stops the export (§2.4 rule 2). */
 export function assertNoSecrets(section: string, rows: readonly StoredRow[]): void {
   for (const row of rows) {
-    if (walkStrings(row.value, text => text.length >= 12 && staticSensitiveClasses(text.normalize("NFKC")).has("credential"))
-      || staticSensitiveClasses(row.key).has("credential")) {
+    if (walkStrings(row.value, secretShaped) || staticSensitiveClasses(row.key).has("credential")) {
       throw new TransferSecretError(section, row.key);
     }
   }
+}
+
+/** The same guard over the finished header: environment values, project names
+    and remotes, account labels and notices travel outside the records. A hit
+    names the field, never its value. */
+export function assertHeaderHasNoSecrets(header: { projects: readonly BundleProject[]; accounts: readonly BundleAccount[]; environment: readonly BundleEnvironmentEntry[]; notices: readonly BundleNotice[]; [field: string]: unknown }): void {
+  const fields: [string, unknown][] = [
+    ...header.environment.map((entry): [string, unknown] => [`environment ${entry.name}`, entry]),
+    ...header.projects.map((project): [string, unknown] => [`project ${project.key}`, project]),
+    ...header.accounts.map((account): [string, unknown] => [`account ${account.engine}:${account.id}`, account]),
+    ...header.notices.map((notice, index): [string, unknown] => [`notice ${index + 1}`, notice]),
+    ...Object.entries(header).filter(([field]) => !["projects", "accounts", "environment", "notices", "sections"].includes(field)).map(([field, value]): [string, unknown] => [field, value]),
+  ];
+  for (const [field, value] of fields) if (walkStrings(value, secretShaped)) throw new TransferSecretError("header", field);
 }
 
 function sectionSummary(section: SectionName, records: readonly { k: string; v: unknown }[]): Record<string, unknown> {
@@ -172,7 +189,7 @@ export async function exportTransferBundle(options: ExportOptions): Promise<Expo
     const notices: BundleNotice[] = [];
     const engineFiles = await (options.engineMemoryNotImported?.() ?? Promise.resolve(0));
     if (engineFiles > 0) notices.push({ code: "engine_memory_not_imported", files: engineFiles });
-    const bytes = encodeBundle({
+    const header = {
       exportId,
       createdAt: now.toISOString(),
       product: options.product ?? "unknown",
@@ -180,8 +197,9 @@ export async function exportTransferBundle(options: ExportOptions): Promise<Expo
       accounts: accountHeader,
       environment: environmentList(options.env ?? {}),
       notices,
-      sections,
-    });
+    };
+    assertHeaderHasNoSecrets(header);
+    const bytes = encodeBundle({ ...header, sections });
     return { bytes, exportId, sections: sections.map(section => ({ name: section.name, records: section.records.length })), notices };
   } finally {
     snapshot.close();

@@ -5,7 +5,9 @@ import path from "node:path";
 import zlib from "node:zlib";
 
 import { leaveSeatLessons } from "@/lib/memory/roleStore";
-import { setMergeOnReview } from "@/lib/projects/settings";
+import { importCollection } from "@/lib/memory/importStore";
+import { memorySource } from "@/lib/memory/source";
+import { bridgeReportsEnabled, mergeOnReviewEnabled, setBridgeReports, setMergeOnReview } from "@/lib/projects/settings";
 import { ensureLegacyCollectionsImported } from "@/lib/state/legacyCollections";
 
 import { decodeBundle, encodeBundle } from "./bundle";
@@ -270,5 +272,85 @@ test("a hostile bundle cannot name another file, a key outside its part, or a va
   const changed = Object.entries(treeDigest(target.root)).filter(([file, hash]) => before[file] !== hash && !/\.sqlite(?:-wal|-shm)?$/.test(file) && !file.includes("/transfer/"));
   expect(changed).toEqual([]);
 }, 60_000);
+
+describe("settings and memory a target already has", () => {
+  test("project settings merge per setting: a choice the target made stays, one it never made arrives", async () => {
+    const other = makeInstall(parent, "fields-source");
+    await within(other, async () => {
+      await ensureLegacyCollectionsImported(() => {});
+      setMergeOnReview(REPOSITORY, true, "operator", NOW);
+      setBridgeReports(REPOSITORY, false, "operator", NOW);
+    });
+    const fields = (await exportFrom(other, { sections: ["settings.projects"], exportId: "fields" })).bytes;
+    const target = await freshTarget("fields-target");
+    await within(target, () => setMergeOnReview(REPOSITORY, false, "operator", NOW));
+    const plan = await within(target, () => previewTransferImport(fields, {}));
+    expect(plan.sections[0]!.conflicts).toEqual([{ key: `map:project-settings|${REPOSITORY}`, action: "merged" }]);
+    await within(target, () => applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions }));
+    expect(await within(target, () => [mergeOnReviewEnabled(REPOSITORY), bridgeReportsEnabled(REPOSITORY)])).toEqual([false, false]);
+    // «Take the source's» replaces the differing choice too, and only for that section.
+    const again = await within(target, () => previewTransferImport(fields, { replace: ["settings.projects"] }));
+    await within(target, () => applyTransferImport({ bundleSha256: again.bundleSha256, revisions: again.revisions, replace: ["settings.projects"] }));
+    expect(await within(target, () => [mergeOnReviewEnabled(REPOSITORY), bridgeReportsEnabled(REPOSITORY)])).toEqual([true, false]);
+  }, 60_000);
+
+  test("a settled memory source reaches a target that never chose, without an engine import there; a target's own choice stays", async () => {
+    const other = makeInstall(parent, "memory-source");
+    await within(other, () => ensureLegacyCollectionsImported(() => {}));
+    fs.writeFileSync(path.join(other.state, "memory-source.json"), JSON.stringify({ schemaVersion: 1, source: "delegatus", phase: "active", changedAt: NOW, importId: "import_source", importStartedAt: NOW, flippedAt: NOW, drainedAt: NOW }));
+    const settled = (await exportFrom(other, { sections: ["memory.settings"], exportId: "memory-source" })).bytes;
+
+    const unchosen = await freshTarget("memory-source-unchosen");
+    const plan = await within(unchosen, () => previewTransferImport(settled, {}));
+    expect(plan.redo.map(item => item.code)).not.toContain("memory_source");
+    await within(unchosen, () => applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions }));
+    expect(await within(unchosen, () => ({ choice: memorySource(), imports: importCollection()?.snapshot().length ?? 0 }))).toEqual({ choice: { choice: "delegatus", phase: "active" }, imports: 0 });
+
+    const chosen = await freshTarget("memory-source-chosen");
+    const own = JSON.stringify({ schemaVersion: 1, source: "engines", changedAt: NOW });
+    fs.writeFileSync(path.join(chosen.state, "memory-source.json"), own);
+    const kept = await within(chosen, () => previewTransferImport(settled, { replace: ["memory.settings"] }));
+    expect(kept.sections[0]!.conflicts).toEqual([{ key: "text:memory-source|memory-source.json", action: "kept-target" }]);
+    await within(chosen, () => applyTransferImport({ bundleSha256: kept.bundleSha256, revisions: kept.revisions, replace: ["memory.settings"] }));
+    expect(fs.readFileSync(path.join(chosen.state, "memory-source.json"), "utf8")).toBe(own);
+
+    // A choice the source is still importing is the operator's to make here.
+    fs.writeFileSync(path.join(other.state, "memory-source.json"), JSON.stringify({ schemaVersion: 1, source: "delegatus", phase: "importing", changedAt: NOW, importId: "import_source" }));
+    const importing = (await exportFrom(other, { sections: ["memory.settings"], exportId: "memory-importing" })).bytes;
+    const waiting = await freshTarget("memory-source-importing");
+    const pending = await within(waiting, () => previewTransferImport(importing, {}));
+    expect(pending.redo.find(item => item.code === "memory_source")?.detail).toBe("delegatus");
+  }, 60_000);
+
+  test("only the journals of closed calls travel: an ongoing call's and an uncited one stay", async () => {
+    const other = makeInstall(parent, "calls-source");
+    await within(other, () => ensureLegacyCollectionsImported(() => {}));
+    const session = (id: string, closed: boolean) => ({ id, project: REPOSITORY, locale: "en", closed, generation: 1, createdAt: Date.parse(NOW), seq: 0, inputs: [], events: [], proposals: {} });
+    fs.writeFileSync(path.join(other.state, "voice-companion.json"), JSON.stringify({ version: 1, settings: { enabled: true, monthlyCapUsd: 5, callMemory: true }, charges: {},
+      sessions: { "call-closed": session("call-closed", true), "call-open": session("call-open", false) } }));
+    const transcripts = path.join(other.state, "voice-companion", "transcripts");
+    fs.mkdirSync(transcripts, { recursive: true });
+    for (const name of ["call-closed", "call-open", "call-orphan"]) fs.writeFileSync(path.join(transcripts, `${name}.jsonl`), `{"text":"${name} journal"}\n`);
+    const decoded = await decodeBundle((await exportFrom(other, { sections: ["memory.calls"], exportId: "calls" })).bytes);
+    expect(decoded.records.map(record => record.k).sort()).toEqual(["map:voice-call-memory|callMemory", "map:voice-call-sessions|call-closed", "text:voice-call-journals|call-closed.jsonl"]);
+    expect(JSON.stringify(decoded.records)).not.toMatch(/call-open journal|call-orphan journal/);
+  }, 60_000);
+
+  test("the header passes the same secret guard as the records, naming the field and never the value", async () => {
+    const shaped = `${["api", "key"].join("_")} = ${SECRET_SHAPED_VALUE}`;
+    const header = (options: Parameters<typeof exportTransferBundle>[0]) => exportFrom(source, { sections: ["settings.operator"], ...options }).then(() => null, (error: unknown) => error as TransferSecretError);
+    const cases = [
+      [{ env: { LLV_LANG: shaped } }, "environment LLV_LANG"],
+      [{ projects: { aliases: {}, remotes: {}, displayNames: { [REPOSITORY]: shaped } }, sections: ["settings.projects"] as const }, `project ${REPOSITORY}`],
+      [{ accounts: async () => ({ header: [{ engine: "codex" as const, id: "team", label: shaped, kind: "managed" as const, active: false, identity: null }], records: [] }), sections: ["accounts"] as const }, "account codex:team"],
+    ] as const;
+    for (const [options, field] of cases) {
+      const failure = await header(options as Parameters<typeof exportTransferBundle>[0]);
+      expect(failure).toBeInstanceOf(TransferSecretError);
+      expect([failure!.section, failure!.key]).toEqual(["header", field]);
+      expect(failure!.message).not.toContain(SECRET_SHAPED_VALUE);
+    }
+  }, 60_000);
+});
 
 void installEnv;

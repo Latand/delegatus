@@ -300,6 +300,8 @@ test("a Codex row that is not signed in opens the device sign-in, shows its code
   const calls: { url: string; body: unknown }[] = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async (url: string, init?: { body?: string }) => {
+    /* The screen also reads the install transfer's checklist rows; none here, and not the call under test. */
+    if (String(url).startsWith("/api/transfer/accounts")) return new Response(JSON.stringify({ ok: true, result: [] }), { status: 200 });
     calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : null });
     return new Response(JSON.stringify({ account: { id: "cx-spare" }, deviceAuth: { url: "https://example.invalid/device", code: "ABCD-EFGH" } }), { status: 200, headers: { "content-type": "application/json" } });
   }) as unknown as typeof fetch;
@@ -335,6 +337,8 @@ test("#2166: Codex Main signs in directly, with no label and no second account, 
   const calls: { url: string; body: unknown }[] = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async (url: string, init?: { body?: string }) => {
+    /* The screen also reads the install transfer's checklist rows; none here, and not the call under test. */
+    if (String(url).startsWith("/api/transfer/accounts")) return new Response(JSON.stringify({ ok: true, result: [] }), { status: 200 });
     calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : null });
     return new Response(JSON.stringify({ account: { id: "default" }, deviceAuth: { url: "https://example.invalid/device", code: "WXYZ-1234" }, cancelled: true }), { status: 200, headers: { "content-type": "application/json" } });
   }) as unknown as typeof fetch;

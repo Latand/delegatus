@@ -8,19 +8,29 @@ import type { RoleMemoryRule, RoleMemoryScopeRow, ScopeHistoryEntry } from "@/li
 import { ensureLegacyCollectionsImported } from "@/lib/state/legacyCollections";
 
 import { exportTransferBundle } from "./exporter";
-import { applyTransferImport, previewTransferImport } from "./importer";
-import { makeInstall, within } from "./transfer.fixture";
+import { previewTransferImport, readImportRecords } from "./importer";
+import { applyBundle } from "./service";
+import { makeInstall, within, type Install } from "./transfer.fixture";
 
 /* The apply window (docs/design/install-memory-transfer.md §4.7, §7 slice 1)
    on learned rules shaped like the inventory of §1.10: 2,898 rules and 112
    scopes whose histories hold about 20 MB, the largest scope 4.7 MB. The
    design's target is under 10 s for the default sections. LLV_TRANSFER_MEASURE=1
-   runs the full shape and prints the timings; by default a tenth of it runs. */
+   runs the full shape; by default a tenth of it runs. The apply runs in the
+   real worker process and the budget is the Viewer's own deadline on it,
+   enforced from this process: a worker past it is stopped and the apply
+   fails. The times it reports are printed as diagnostics only. */
 
 const FULL = process.env.LLV_TRANSFER_MEASURE === "1";
 const SCALE = FULL ? 1 : 0.1;
+/** The design's 10 s window, plus the worker's own start on a loaded runner for the scaled run. */
+const BUDGET_MS = FULL ? 10_000 : 20_000;
+const WORKER = path.join(import.meta.dir, "transfer.worker.ts");
+const launch = { executable: process.execPath, workerPath: WORKER };
 const parent = fs.mkdtempSync(path.join(os.tmpdir(), "transfer-measure-"));
 afterAll(() => { fs.rmSync(parent, { recursive: true, force: true }); });
+
+const workerEnv = (install: Install, extra: Record<string, string> = {}) => ({ HOME: install.home, NODE_ENV: "test", ...extra });
 
 test(`applies role memory shaped like the live inventory${FULL ? "" : " (a tenth of it)"} inside the window`, async () => {
   const source = makeInstall(parent, "source");
@@ -58,8 +68,31 @@ test(`applies role memory shaped like the live inventory${FULL ? "" : " (a tenth
   const previewStarted = performance.now();
   const plan = await within(target, () => previewTransferImport(bundle));
   const previewMs = performance.now() - previewStarted;
-  const { report } = await within(target, () => applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions }));
-  console.info(`[transfer measure] scale ${SCALE}: ${rules} rules, ${scopes} scopes, bundle ${(bundle.length / 1024 / 1024).toFixed(2)} MiB compressed; export ${Math.round(exportMs)} ms, dry run ${Math.round(previewMs)} ms, apply ${report.applyMs} ms`);
-  expect(report.complete).toBe(true);
-  expect(report.applyMs).toBeLessThan(10_000);
+  const applyStarted = performance.now();
+  const applied = await within(target, () => applyBundle({ bundleSha256: plan.bundleSha256, revisions: plan.revisions }, { launch, timeoutMs: BUDGET_MS, env: workerEnv(target) }));
+  const wallMs = Math.round(performance.now() - applyStarted);
+  const report = applied.ok ? applied.result as { complete: boolean; applyMs: number } : null;
+  console.info(`[transfer measure] scale ${SCALE}: ${rules} rules, ${scopes} scopes, bundle ${(bundle.length / 1024 / 1024).toFixed(2)} MiB compressed; export ${Math.round(exportMs)} ms, dry run ${Math.round(previewMs)} ms, apply ${report?.applyMs ?? "-"} ms in the worker, ${wallMs} ms with its start (budget ${BUDGET_MS} ms)`);
+  expect(applied).toMatchObject({ ok: true, result: { complete: true } });
 }, 600_000);
+
+test("an apply that hangs is stopped by the parent's budget, fails, and leaves nothing applied", async () => {
+  const source = makeInstall(parent, "hang-source");
+  const target = makeInstall(parent, "hang-target");
+  await within(source, () => {
+    const rule: RoleMemoryRule = { kind: "rule", id: "r_0000000000000001", scope: "machine", rule: "Keep the evidence beside the claim.", why: "Measured.", state: "active", hints: [],
+      source: { origin: "seat", project: `repo-${"b".repeat(32)}`, roleId: "orchestrator", fixRound: false, conversationId: "c" }, createdAt: "2026-10-01T00:00:00.000Z", changedAt: "2026-10-01T00:00:00.000Z" };
+    roleMemoryCollection(true)!.patchSync(() => ({ records: [rule, { kind: "scope", scope: "machine", revision: 1, active: [rule.id], history: [] } satisfies RoleMemoryScopeRow] }));
+  });
+  await within(target, () => ensureLegacyCollectionsImported(() => {}));
+  const bundle = (await within(source, () => exportTransferBundle({ sections: ["memory.role"], env: {}, product: "measure" }))).bytes;
+  const plan = await within(target, () => previewTransferImport(bundle));
+  const budget = 15_000;
+  const applied = await within(target, () => applyBundle({ bundleSha256: plan.bundleSha256, revisions: plan.revisions }, { launch, timeoutMs: budget, env: workerEnv(target, { LLV_TRANSFER_TEST_FAULT: "hang" }) }));
+  expect(applied).toMatchObject({ ok: false, error: { code: "worker_stopped", message: `the transfer worker ran past ${budget} ms and was stopped` }, recovered: [{ outcome: "rolled-back" }] });
+  // The worker reached the apply before it was stopped, and nothing of it stayed.
+  const imports = path.join(target.state, "transfer", "imports");
+  const [importId] = fs.readdirSync(imports);
+  expect(fs.existsSync(path.join(imports, importId!, "hanging"))).toBe(true);
+  expect(await within(target, () => ({ records: readImportRecords(), rules: roleMemoryCollection()?.snapshot().length ?? 0 }))).toEqual({ records: [], rules: 0 });
+}, 120_000);

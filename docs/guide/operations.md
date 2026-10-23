@@ -89,7 +89,8 @@ settings, voice choices, the App repository declaration and relay switches.
 No login, key, token or pairing is ever in it. Engine memory (Claude project
 memory, Codex memories) is not carried: switch the install to Delegatus memory
 first, which imports it ([memory source switch](../design/memory-source-switch.md)),
-and the export says so when some was never imported.
+and the export says so when some was never imported. That choice itself
+travels to an install that never made it, without importing anything there.
 
 ```
 delegatus export                         # sealed; the passphrase is shown once
@@ -111,11 +112,15 @@ the environment variables the source used.
 
 Accounts arrive signed out, under the same labels and with the same project
 bindings, which apply at once: a project bound to an account that is not
-signed in yet waits for it. Each engine's accounts panel then shows
-**Accounts from your other install**: sign each one in with the usual link
-and code, and it is ready once its limits read here. The account that was
-active on the other install becomes active here when it is ready. A login
-that differs from the one the other install used is shown as a different
-account until you confirm it. `delegatus import --report` checks every
-account again and prints what is left. The
+signed in yet waits for it. Each engine's accounts panel, the phone's
+accounts screen and the Copilot list then show **Accounts from your other
+install**: sign each one in with the usual link and code, and it is ready
+once its limits read here (a Copilot account once it shows as signed in, since
+Copilot has no limit read). The account that was active on the other install
+becomes active here when it is ready. A login that differs from the one the
+other install used, or one this install cannot read, waits until you confirm
+it. An account whose setup failed here offers **Try again**; one that cannot
+be made here, such as a custom provider account, is settled with **Not needed
+here**. `delegatus import --report` checks every account again and prints
+what is left. The
 design is [docs/design/install-memory-transfer.md](../design/install-memory-transfer.md).

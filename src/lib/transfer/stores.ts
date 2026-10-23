@@ -73,6 +73,14 @@ export class SourceSnapshot {
     ).all(collection).map(row => ({ key: row.row_key, value: JSON.parse(row.value_json) as unknown }));
   }
 
+  private readonly memos = new Map<string, unknown>();
+
+  /** One computation per snapshot, for parts that must read the same thing. */
+  memo<T>(key: string, compute: () => T): T {
+    if (!this.memos.has(key)) this.memos.set(key, compute());
+    return this.memos.get(key) as T;
+  }
+
   stateText(relative: string): string | null { return readText(path.join(this.stateDirectory, relative)); }
   configText(relative: string): string | null { return readText(path.join(this.configDirectory, relative)); }
   stateNames(relativeDirectory: string): string[] { return listNames(path.join(this.stateDirectory, relativeDirectory)); }

@@ -8,6 +8,7 @@ import { useLocale } from "@/lib/i18n";
 import type { EngineLimits } from "@/lib/types";
 
 import { AccountRemovalRefusal } from "./AccountRemovalRefusal";
+import { TransferAccountsChecklist, useImportedAccounts } from "./TransferAccountsChecklist";
 import { HiddenAccountOffer } from "./AccountRemovalSummary";
 import { engineTintOf } from "./utils";
 import { barColor, LimitWindowLine, quotaAsOfHint } from "./LimitRow";
@@ -179,10 +180,21 @@ export function CopilotAccountList({ accounts }: { accounts: CopilotAccounts }) 
   /* Removal arms on the first click and runs on the confirm, as in the
      Claude and Codex lists. */
   const [armed, setArmed] = useState<string | null>(null);
+  /* Copilot accounts an install transfer brought (install-memory-transfer
+     §3.4, §5.2): Copilot has no limit read, so a row is ready once its
+     account shows as signed in; a completed sign-in settles it by itself. */
+  const imported = useImportedAccounts("copilot", (body?.accounts ?? []).map((account) => `${account.id}:${account.auth}`).join(","));
   if (!body) return null;
   return (
     <>
       {!body.cli.present && body.cli.reason ? <p className="text-muted">{body.cli.reason}</p> : null}
+      <TransferAccountsChecklist
+        variant="inline"
+        engine="copilot"
+        rows={imported.rows}
+        onSignIn={async (accountId) => { await post({ action: "login", id: accountId }); await imported.reload(); }}
+        onAction={async (action) => { await imported.post(action); if (action.action !== "not_needed") await load(); await imported.reload(); }}
+      />
       <p className="text-muted">{t("copilot.accounts.hint")}</p>
       {body.accounts.map((account) => (
         <div key={account.id} data-copilot-account={account.id} className="flex flex-col gap-1 rounded-md border border-border bg-card px-2 py-1.5">

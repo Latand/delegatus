@@ -10,10 +10,14 @@ import type { RoleMemoryRow } from "@/lib/memory/roleTypes";
 import { projectIdentityFromDirectory, projectIdentityFromRepositoryRoot, repositoryRootForPath } from "@/lib/projects/identity";
 import { fsyncPath } from "@/lib/state/durableJson";
 import { withFileTransactionSync } from "@/lib/state/fileTransaction";
+import { canonicalProject } from "@/lib/projects/aliases";
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
 
-import { accountReportRows, accountsReady, applyAccounts, importedAccountRows, planAccounts, validAccountRecord, type AccountTargetDeps } from "./accounts";
+import {
+  accountCommitRows, accountReportRows, accountsReady, finishAccountCreation, importedAccountRows, initializeImportedAccountRows, planAccounts, releaseReservation,
+  reserveAccounts, TRANSFER_ACCOUNTS_COLLECTION, validAccountRecord, type AccountTargetDeps, type TransferEngine,
+} from "./accounts";
 import { decodeBundle, splitRecordKey } from "./bundle";
 import { remapText, resolveAliasChain } from "./projectKeys";
 import { planRoleMemory, scopeFigures, validRoleRecord } from "./roleMemory";
@@ -34,19 +38,31 @@ import {
    it leaves this install as it was. */
 
 export class TransferImportError extends Error {
-  constructor(readonly code: "not_staged" | "target_changed" | "bad_mapping" | "unknown_import", message: string) {
+  constructor(readonly code: "not_staged" | "target_changed" | "bad_mapping" | "unknown_import" | "target_unreadable", message: string) {
     super(message);
     this.name = "TransferImportError";
   }
 }
 
-export type TransferFault = "file-step" | "sqlite" | "die-after-checkpoint" | "die-after-files" | "die-after-commit";
+export type TransferFault = "file-step" | "disk-full" | "sqlite" | "hang" | "die-after-reservations" | "die-after-checkpoint" | "die-after-files" | "die-after-commit" | "die-after-accounts";
 
 /** Fault injection for the exit tests; read only under `bun test`. */
 function injectedFault(): TransferFault | null {
   if (process.env.NODE_ENV !== "test") return null;
   const value = process.env.LLV_TRANSFER_TEST_FAULT ?? "";
-  return (["file-step", "sqlite", "die-after-checkpoint", "die-after-files", "die-after-commit"] as const).find(fault => fault === value) ?? null;
+  return (["file-step", "disk-full", "sqlite", "hang", "die-after-reservations", "die-after-checkpoint", "die-after-files", "die-after-commit", "die-after-accounts"] as const).find(fault => fault === value) ?? null;
+}
+
+/** `disk-full`: once the first file is written, every write that allocates
+    space fails as a full disk does, for the rest of the process, recovery
+    included. Renames, links and removals still work, as they do on a full disk. */
+let diskFull = false;
+function allocate(): void {
+  if (diskFull) throw Object.assign(new Error("ENOSPC: no space left on device (injected)"), { code: "ENOSPC" });
+}
+function writeAtomic(target: string, text: string): void {
+  allocate();
+  writeFileAtomic(target, text);
 }
 
 function dieForTest(): never {
@@ -77,10 +93,10 @@ export interface LedgerRow {
   /** The source's history of every scope merged into one this install already had. */
   scopeHistories: Record<string, unknown[]>;
   accounts: AccountPlan[];
-  /** Account and binding records, applied after the commit; kept so an
-      interrupted apply can finish them without the bundle. */
-  accountRecords: StoredRow[];
-  accountsApplied: boolean;
+  /** Work after the commit that recovery finishes when a stop cut it short:
+      the lesson known values the publication gate reads, and the accounts
+      whose ids the commit reserved and bound. */
+  followUp: { knownValues: boolean; accounts: boolean };
   report: Omit<TransferReport, "accounts" | "accountsReady">;
 }
 
@@ -213,9 +229,17 @@ function planProjects(projects: readonly BundleProject[], mappings: Record<strin
   return { plans, folders, newAliases };
 }
 
+/** One value this import puts into a JSON file, so a rollback after a later
+    writer touched the same file undoes only what is still this import's. */
+export type FileChange =
+  | { kind: "set"; path: string[]; before?: unknown; after: unknown }
+  | { kind: "append"; item: unknown };
+
+interface PlannedFile { root: "state" | "config"; relative: string; text: string; changes: FileChange[] | null }
+
 interface PlannedWrites {
   rows: Map<string, { part: RowsPart | null; records: { key: string; value: unknown }[] }>;
-  files: Map<string, { root: "state" | "config"; relative: string; text: string }>;
+  files: Map<string, PlannedFile>;
   pending: LedgerRow["pending"];
   versions: Record<string, string>;
   aliases: LedgerRow["aliases"];
@@ -297,7 +321,7 @@ export function buildPlan(decoded: DecodedBundle, request: { mappings?: Record<s
   }
 
   /* Files are planned per file, since several parts can share one. */
-  const fileState = new Map<string, { root: "state" | "config"; relative: string; object: Record<string, unknown> | unknown[] | string | null; original: unknown; unreadable: boolean; changed: boolean }>();
+  const fileState = new Map<string, { root: "state" | "config"; relative: string; object: Record<string, unknown> | unknown[] | string | null; original: unknown; unreadable: boolean; changed: boolean; changes: FileChange[] | null }>();
   const fileFor = (root: "state" | "config", relative: string, parse: "json" | "text") => {
     const id = `${root}:${relative}`;
     let state = fileState.get(id);
@@ -311,7 +335,7 @@ export function buildPlan(decoded: DecodedBundle, request: { mappings?: Record<s
         if (parse === "text") object = text;
         else { try { object = JSON.parse(text) as Record<string, unknown>; } catch { unreadable = true; } }
       }
-      state = { root, relative, object, original: structuredClone(object), unreadable, changed: false };
+      state = { root, relative, object, original: structuredClone(object), unreadable, changed: false, changes: parse === "json" ? [] : null };
       fileState.set(id, state);
       revisions[`file:${id}`] = fileRevision(root, relative);
     }
@@ -347,9 +371,31 @@ export function buildPlan(decoded: DecodedBundle, request: { mappings?: Record<s
           if (!part.accept?.(row.key, row.value)) { count(plan, "skipped", `${part.id}|${row.key}`, "invalid-record"); continue; }
           const container = mapContainer(file, part);
           const held = isRecordObject(original) ? original[row.key] : undefined;
+          if (part.fields && isRecordObject(held) && isRecordObject(row.value)) {
+            /* One record holds several settings: each field is one choice, kept
+               on the target when it made it, taken from the source when it did not. */
+            const next: Record<string, unknown> = isRecordObject(container[row.key]) ? { ...(container[row.key] as Record<string, unknown>) } : {};
+            let added = 0, differing = 0;
+            for (const [field, value] of Object.entries(row.value)) {
+              const was = held[field];
+              if (was !== undefined && sameValue(was, value)) continue;
+              if (was === undefined) added += 1; else differing += 1;
+              if (was !== undefined && !take) continue;
+              next[field] = value;
+              file.changes!.push({ kind: "set", path: [...part.path, row.key, field], ...(was === undefined ? {} : { before: was }), after: value });
+            }
+            if (!added && !differing) { count(plan, "same", `${part.id}|${row.key}`); continue; }
+            count(plan, "conflict", `${part.id}|${row.key}`, undefined, differing && take ? "took-source" : added ? "merged" : "kept-target");
+            if (added || take) { container[row.key] = next; file.changed = true; }
+            continue;
+          }
           const outcome = planValue(held, row.value, part.merge, take);
           count(plan, outcome.outcome, `${part.id}|${row.key}`, undefined, outcome.action);
-          if (outcome.write) { container[row.key] = row.value; file.changed = true; }
+          if (outcome.write) {
+            container[row.key] = row.value;
+            file.changed = true;
+            file.changes!.push({ kind: "set", path: [...part.path, row.key], ...(held === undefined ? {} : { before: held }), after: row.value });
+          }
         }
         break;
       }
@@ -363,7 +409,7 @@ export function buildPlan(decoded: DecodedBundle, request: { mappings?: Record<s
         for (const row of entry.rows) {
           if (typeof row.value !== "string" || !part.accept?.(row.key, row.value)) { count(plan, "skipped", `${part.id}|${row.key}`, "invalid-record"); continue; }
           if (list.includes(row.value)) count(plan, "same", row.key);
-          else { list.push(row.value); file.changed = true; count(plan, "new", row.key); }
+          else { list.push(row.value); file.changed = true; file.changes!.push({ kind: "append", item: row.value }); count(plan, "new", row.key); }
         }
         break;
       }
@@ -386,7 +432,7 @@ export function buildPlan(decoded: DecodedBundle, request: { mappings?: Record<s
   for (const state of fileState.values()) {
     if (!state.changed) continue;
     const text = typeof state.object === "string" ? state.object : `${JSON.stringify(state.object, null, 2)}\n`;
-    writes.files.set(`${state.root}:${state.relative}`, { root: state.root, relative: state.relative, text });
+    writes.files.set(`${state.root}:${state.relative}`, { root: state.root, relative: state.relative, text, changes: state.changes });
   }
 
   if (newAliases.length) {
@@ -559,49 +605,164 @@ export async function previewTransferImport(
   return (await withAccountPlan(buildPlan(decoded, request, (options.now ?? new Date()).toISOString()), options.accounts)).plan;
 }
 
-/** After the commit: the accounts, signed out, and their bindings (§3.5); then the record says so. */
-async function finishAccounts(ledger: LedgerRow, deps: AccountTargetDeps | undefined): Promise<void> {
-  if (ledger.accountsApplied) return;
-  await applyAccounts(ledger.importId, ledger.exportId, ledger.accountRecords, deps);
-  const held = ledgerCollection(true)!;
-  try { held.patchSync(() => ({ records: [{ ...ledger, accountsApplied: true }] })); }
-  finally { held.close(); }
-  ledger.accountsApplied = true;
-}
-
 /* ── Apply ───────────────────────────────────────────────────────────── */
+
+/** One file the import writes, as the journal records it before the first write. */
+interface JournalFile {
+  root: "state" | "config";
+  relative: string;
+  /** SHA-256 of the file before the import, or null when it was absent. */
+  before: string | null;
+  /** SHA-256 of what the import writes. */
+  written: string;
+  /** The original under `checkpoint/`: a hard link to the same bytes, so
+      putting it back is a rename that needs no free space, or a copy where
+      the file system refuses links. */
+  backup: { name: string; kind: "link" | "copy" } | null;
+  changes: FileChange[] | null;
+}
 
 interface Journal {
   importId: string;
   state: "writing" | "done" | "rolled-back";
   at: string;
-  replaced: { root: "state" | "config"; relative: string; backup: string }[];
-  created: { root: "state" | "config"; relative: string }[];
+  files: JournalFile[];
+  /** Account ids this import reserved before its commit, given back on a rollback. */
+  reservations: { engine: TransferEngine; id: string }[];
+}
+
+const sha256Of = (bytes: string | Buffer) => crypto.createHash("sha256").update(bytes).digest("hex");
+
+function currentHash(file: string): string | null {
+  try { return sha256Of(fs.readFileSync(file)); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
 }
 
 function writeJournal(directory: string, journal: Journal): void {
-  writeFileAtomic(path.join(directory, "journal.json"), `${JSON.stringify(journal)}\n`);
+  writeAtomic(path.join(directory, "journal.json"), `${JSON.stringify(journal)}\n`);
 }
 
 function readJournal(directory: string): Journal | null {
-  try { return JSON.parse(fs.readFileSync(path.join(directory, "journal.json"), "utf8")) as Journal; }
-  catch { return null; }
+  try {
+    const journal = JSON.parse(fs.readFileSync(path.join(directory, "journal.json"), "utf8")) as Journal;
+    return Array.isArray(journal.files) && Array.isArray(journal.reservations) ? journal : null;
+  } catch { return null; }
 }
 
-/** Put every replaced file back and remove every created one. */
-function restoreFromCheckpoint(directory: string, journal: Journal): void {
-  for (const entry of journal.replaced) {
-    const backup = path.join(directory, "checkpoint", entry.backup);
-    writeFileAtomic(path.join(targetRoot(entry.root), entry.relative), fs.readFileSync(backup, "utf8"));
+/** Runs `operation` holding the shared write lock of every file the import
+    touches, taken in path order: a store writer that takes its file's lock
+    waits until the import committed or rolled back. */
+function withFileLocks<T>(targets: readonly string[], operation: () => T): T {
+  const ordered = [...new Set(targets)].sort();
+  const hold = (index: number): T => index === ordered.length
+    ? operation()
+    : withFileTransactionSync(ordered[index]!, "the install transfer is waiting for a settings file", () => hold(index + 1));
+  return hold(0);
+}
+
+const journalTarget = (entry: Pick<JournalFile, "root" | "relative">) => path.join(targetRoot(entry.root), entry.relative);
+
+function setAt(object: Record<string, unknown>, keys: readonly string[], value: unknown): void {
+  let container = object;
+  for (const key of keys.slice(0, -1)) {
+    if (!isRecordObject(container[key])) return;
+    container = container[key] as Record<string, unknown>;
   }
-  for (const entry of journal.created) fs.rmSync(path.join(targetRoot(entry.root), entry.relative), { force: true });
-  writeJournal(directory, { ...journal, state: "rolled-back" });
+  const last = keys.at(-1)!;
+  if (value === undefined) delete container[last]; else container[last] = value;
+}
+
+/** Undo this import's own values in a JSON file a later writer has since
+    rewritten: a value that still holds what the import put there goes back to
+    what was there before, and everything else is the later writer's and stays. */
+function undoChanges(file: string, changes: readonly FileChange[]): boolean {
+  let parsed: unknown;
+  try { parsed = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return false; }
+  let changed = false;
+  for (const change of [...changes].reverse()) {
+    if (change.kind === "append") {
+      if (!Array.isArray(parsed)) continue;
+      const index = parsed.findIndex(item => sameValue(item, change.item));
+      if (index >= 0) { parsed.splice(index, 1); changed = true; }
+      continue;
+    }
+    if (!isRecordObject(parsed) || !sameValue(at(parsed, change.path), change.after)) continue;
+    setAt(parsed, change.path, change.before);
+    changed = true;
+  }
+  if (changed) writeAtomic(file, typeof parsed === "string" ? parsed : `${JSON.stringify(parsed, null, 2)}\n`);
+  return true;
+}
+
+export interface RestoreOutcome { kept: string[] }
+
+/** An empty file set just before the import replaces file `index`: after a
+    stop, only a file with its marker can hold the import's bytes. Empty, so
+    it needs no free space beyond its name. */
+const writingMarker = (directory: string, index: number) => path.join(directory, "checkpoint", `${index}.writing`);
+
+/** Put back what this import wrote and nothing else. A file that still holds
+    exactly the import's bytes gets its original back by a rename (or loses
+    the file the import created); a file that holds its original is left; a
+    file a later writer rewrote keeps that writer's values, and only the
+    values that are still the import's own are undone. Idempotent, so a stop
+    in the middle is finished by the next recovery. Called under the files' locks. */
+function restoreFiles(directory: string, journal: Journal, wrote?: ReadonlySet<number>): RestoreOutcome {
+  const kept: string[] = [];
+  for (const [index, entry] of journal.files.entries()) {
+    const target = journalTarget(entry);
+    const now = currentHash(target);
+    if (now === entry.before) continue;
+    /* A file the import never reached is someone else's, whatever it holds now. */
+    if (!(wrote ? wrote.has(index) : fs.existsSync(writingMarker(directory, index)))) continue;
+    if (now === entry.written) {
+      if (entry.before === null) { fs.rmSync(target, { force: true }); fsyncPath(path.dirname(target)); continue; }
+      const backup = entry.backup ? path.join(directory, "checkpoint", entry.backup.name) : null;
+      if (!backup || !fs.existsSync(backup)) throw new Error(`the checkpoint copy of ${entry.relative} is missing; the import cannot be undone`);
+      try { fs.renameSync(backup, target); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
+        writeAtomic(target, fs.readFileSync(backup, "utf8"));
+      }
+      fsyncPath(path.dirname(target));
+      continue;
+    }
+    /* Rewritten after the import's own write. */
+    if (now !== null && entry.changes && undoChanges(target, entry.changes)) { kept.push(entry.relative); continue; }
+    kept.push(entry.relative);
+  }
+  return { kept };
+}
+
+/** The journal's final word, written when it can be: on a full disk it stays
+    `writing`, and the next recovery finds nothing left to restore. */
+function settleJournal(directory: string, journal: Journal, state: "done" | "rolled-back"): void {
+  try { writeJournal(directory, { ...journal, state }); } catch { /* the next recovery settles it */ }
   fs.rmSync(path.join(directory, "checkpoint"), { recursive: true, force: true });
 }
 
-function finishCommitted(directory: string, journal: Journal): void {
-  fs.rmSync(path.join(directory, "checkpoint"), { recursive: true, force: true });
-  writeJournal(directory, { ...journal, state: "done" });
+async function rollBack(directory: string, journal: Journal, deps: AccountTargetDeps | undefined): Promise<RestoreOutcome> {
+  const outcome = withFileLocks(journal.files.map(journalTarget), () => restoreFiles(directory, journal));
+  for (const reservation of journal.reservations) await releaseReservation(reservation.engine, reservation.id, deps);
+  settleJournal(directory, journal, "rolled-back");
+  return outcome;
+}
+
+/** The bindings record must be one this install can read and add to: a
+    damaged record refuses here rather than lose the fences it holds. */
+function bindingsCollectionReady(): { schemaVersion: number; headPresent: boolean } {
+  if (!legacyStoreImported("accounts")) throw new TransferImportError("target_unreadable", "this install has not migrated its accounts yet; restart Delegatus, then import");
+  const rows = readTargetRows("accounts");
+  if (!rows) throw new TransferImportError("target_unreadable", "this install's account store is missing; restart Delegatus, then import");
+  if (rows.rows.has("raw:account-project-bindings.json") || rows.rows.has("gap:binding")) {
+    throw new TransferImportError("target_unreadable", "this install's account-project binding record is unreadable; repair it, then import");
+  }
+  const head = rows.rows.get("meta:binding");
+  if (head !== undefined) {
+    const value = (JSON.parse(head) as { v?: { schemaVersion?: unknown } }).v;
+    if (value?.schemaVersion !== 1) throw new TransferImportError("target_unreadable", "this install's account-project binding record has an unsupported version");
+  }
+  return { schemaVersion: rows.schemaVersion, headPresent: head !== undefined };
 }
 
 function writeCollections(writes: PlannedWrites, ledger: LedgerRow, expected: Record<string, string>, fault: TransferFault | null): void {
@@ -639,7 +800,11 @@ function writeCollections(writes: PlannedWrites, ledger: LedgerRow, expected: Re
           if (!unchanged) throw new TransferImportError("target_changed", "this install changed since the preview; preview again");
         }
       },
-      beforeCommit: () => { if (fault === "sqlite") throw new Error("injected SQLite failure"); },
+      beforeCommit: () => {
+        if (fault === "sqlite") throw new Error("injected SQLite failure");
+        /* A full disk refuses the commit too. */
+        allocate();
+      },
     });
   } finally {
     for (const held of opened) held.close();
@@ -651,6 +816,14 @@ export interface ApplyOptions {
   accounts?: AccountTargetDeps;
   /** Runs after the commit, before the report is returned (known values, accounts). */
   afterCommit?: (ledger: LedgerRow) => Promise<void> | void;
+  /** Test seam: runs inside the files' locks after each file this import writes. */
+  afterFileWrite?: (index: number) => void;
+}
+
+function hangForTest(directory: string): never {
+  fs.writeFileSync(path.join(directory, "hanging"), `${process.pid}\n`);
+  // eslint-disable-next-line no-restricted-syntax -- a deliberately hung apply for the external deadline test; never outside `bun test`.
+  for (;;) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60_000);
 }
 
 export async function applyTransferImport(request: TransferImportRequest, options: ApplyOptions = {}): Promise<{ report: TransferReport; ledger: LedgerRow }> {
@@ -662,23 +835,14 @@ export async function applyTransferImport(request: TransferImportRequest, option
   for (const [store, revision] of Object.entries(built.plan.revisions)) {
     if (request.revisions[store] !== revision) throw new TransferImportError("target_changed", "this install changed since the preview; preview again");
   }
+  if (built.writes.accountRecords.length) bindingsCollectionReady();
   const fault = injectedFault();
   const importId = crypto.randomUUID();
   const directory = importDirectory(importId);
   fs.mkdirSync(path.join(directory, "checkpoint"), { recursive: true, mode: 0o700 });
-  const journal: Journal = { importId, state: "writing", at: now, replaced: [], created: [] };
-  for (const [index, file] of [...built.writes.files.values()].entries()) {
-    const target = path.join(targetRoot(file.root), file.relative);
-    if (fs.existsSync(target)) {
-      const backup = `${index}`;
-      fs.copyFileSync(target, path.join(directory, "checkpoint", backup));
-      fsyncPath(path.join(directory, "checkpoint", backup));
-      journal.replaced.push({ root: file.root, relative: file.relative, backup });
-    } else journal.created.push({ root: file.root, relative: file.relative });
-  }
-  fsyncPath(path.join(directory, "checkpoint"));
+  const journal: Journal = { importId, state: "writing", at: now, files: [], reservations: [] };
   writeJournal(directory, journal);
-  if (fault === "die-after-checkpoint") dieForTest();
+  if (fault === "hang") hangForTest(directory);
 
   const sections: SectionReport[] = built.plan.sections.map(section => ({
     name: section.name, records: section.records, new: section.new, same: section.same, conflict: section.conflict, skipped: section.skipped, pending: section.pending,
@@ -698,43 +862,118 @@ export async function applyTransferImport(request: TransferImportRequest, option
     appliedAt: now, applyMs: 0, sections, scopes, redo: built.plan.redo, mappings: request.mappings ?? {},
     complete: sections.every(section => section.balanced) && scopes.every(scope => scope.ok),
   };
+  const knownValues = (built.writes.rows.get("role_memory")?.records.length ?? 0) > 0;
   const ledger: LedgerRow = {
     kind: "import", importId, bundleSha256: decoded.sha256, exportId: decoded.header.exportId, sourceProduct: decoded.header.product,
     appliedAt: now, mappings: request.mappings ?? {}, aliases: built.writes.aliases, pending: built.writes.pending,
     versions: built.writes.versions, scopeHistories: built.writes.scopeHistories, accounts: built.plan.accounts, report,
-    accountRecords: built.writes.accountRecords, accountsApplied: built.writes.accountRecords.length === 0,
+    followUp: { knownValues, accounts: built.plan.accounts.some(account => account.action === "create") },
   };
+
+  let committed = false;
+  let restoreFailed = false;
+  let committedBindings: { engine: "claude" | "codex"; accountId: string; project: string }[] = [];
+  const wrote = new Set<number>();
+  diskFull = false;
   try {
-    let first = true;
-    for (const file of built.writes.files.values()) {
-      const target = path.join(targetRoot(file.root), file.relative);
-      /* Under the file's own write lock, which its store's writers take too,
-         and only while it still holds what the dry run read. */
-      withFileTransactionSync(target, "the install transfer is waiting for a settings file", () => {
-        if (fileRevision(file.root, file.relative) !== built.plan.revisions[`file:${file.root}:${file.relative}`]) {
-          throw new TransferImportError("target_changed", "this install changed since the preview; preview again");
-        }
-        writeFileAtomic(target, file.text);
+    /* Accounts first, before any file: every account to be made gets its id
+       now, held by an empty home, so the commit can bind projects to it and a
+       stop after the commit makes exactly that account (§4.7, §3.5). */
+    if (built.writes.accountRecords.length) {
+      await reserveAccounts(built.plan.accounts, options.accounts, (engine, id) => { journal.reservations.push({ engine, id }); writeJournal(directory, journal); });
+      if (fault === "die-after-reservations") dieForTest();
+      initializeImportedAccountRows();
+      const { rows, bindings } = await accountCommitRows(importId, decoded.header.exportId, built.writes.accountRecords, built.plan.accounts, {
+        now, canonical: project => canonicalProject(project.trim()), deps: options.accounts,
       });
-      if (first && fault === "file-step") throw new Error("injected file step failure");
-      first = false;
+      const ready = bindingsCollectionReady();
+      const held = readTargetRows("accounts")?.rows ?? new Map<string, string>();
+      const accountRows: StoredRow[] = [];
+      if (!ready.headPresent && bindings.length) accountRows.push({ key: "meta:binding", value: { k: "meta:binding", v: { schemaVersion: 1 } } });
+      for (const binding of bindings) {
+        const key = `binding:${binding.engine}:${binding.accountId}:${binding.project}`;
+        if (!held.has(key) && !accountRows.some(row => row.key === key)) accountRows.push({ key, value: { k: key, v: binding } });
+      }
+      if (accountRows.length) built.writes.rows.set("accounts", { part: null, records: accountRows });
+      committedBindings = bindings;
+      built.writes.rows.set(TRANSFER_ACCOUNTS_COLLECTION, { part: null, records: rows.map(row => ({ key: `${row.engine}:${row.sourceId}`, value: row })) });
     }
-    if (fault === "die-after-files") dieForTest();
-    report.applyMs = Math.round(performance.now() - started);
-    writeCollections(built.writes, ledger, built.plan.revisions, fault);
+
+    const files = [...built.writes.files.values()];
+    withFileLocks(files.map(file => path.join(targetRoot(file.root), file.relative)), () => {
+      try {
+        /* Every file still holds what the dry run read, checked under its lock
+           before the first byte is written, so a writer that came between
+           refuses the import with nothing written. */
+        for (const file of files) {
+          if (fileRevision(file.root, file.relative) !== built.plan.revisions[`file:${file.root}:${file.relative}`]) {
+            throw new TransferImportError("target_changed", "this install changed since the preview; preview again");
+          }
+        }
+        for (const [index, file] of files.entries()) {
+          const target = path.join(targetRoot(file.root), file.relative);
+          const before = currentHash(target);
+          let backup: JournalFile["backup"] = null;
+          if (before !== null) {
+            const name = `${index}`;
+            const copy = path.join(directory, "checkpoint", name);
+            try { fs.linkSync(target, copy); backup = { name, kind: "link" }; }
+            catch { allocate(); fs.copyFileSync(target, copy); fsyncPath(copy); backup = { name, kind: "copy" }; }
+          }
+          journal.files.push({ root: file.root, relative: file.relative, before, written: sha256Of(file.text), backup, changes: file.changes });
+        }
+        fsyncPath(path.join(directory, "checkpoint"));
+        writeJournal(directory, journal);
+        if (fault === "die-after-checkpoint") dieForTest();
+        for (const [index, file] of files.entries()) {
+          /* Again just before the write: a writer that skips the lock and came
+             in since refuses the import, and keeps what it wrote. */
+          if (fileRevision(file.root, file.relative) !== built.plan.revisions[`file:${file.root}:${file.relative}`]) {
+            throw new TransferImportError("target_changed", "this install changed since the preview; preview again");
+          }
+          fs.writeFileSync(writingMarker(directory, index), "", { flag: "wx", mode: 0o600 });
+          wrote.add(index);
+          writeAtomic(path.join(targetRoot(file.root), file.relative), file.text);
+          if (index === 0 && fault === "file-step") throw new Error("injected file step failure");
+          if (index === 0 && fault === "disk-full") diskFull = true;
+          options.afterFileWrite?.(index);
+        }
+        if (fault === "die-after-files") dieForTest();
+        report.applyMs = Math.round(performance.now() - started);
+        writeCollections(built.writes, ledger, built.plan.revisions, fault);
+        committed = true;
+      } catch (error) {
+        /* Undone under the same locks, before any waiting writer runs. An
+           undo that fails leaves the journal open: recovery finishes it, and
+           the Viewer admits no work until it has. */
+        if (!committed) {
+          try { restoreFiles(directory, journal, wrote); }
+          catch (restoreError) { restoreFailed = true; throw new Error(`the import failed and could not be undone yet: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`, { cause: error }); }
+        }
+        throw error;
+      }
+    });
   } catch (error) {
-    restoreFromCheckpoint(directory, journal);
+    if (!committed && !restoreFailed) {
+      for (const reservation of journal.reservations) {
+        try { await releaseReservation(reservation.engine, reservation.id, options.accounts); } catch { /* kept: an empty home blocks only its own id */ }
+      }
+      settleJournal(directory, journal, "rolled-back");
+    }
     throw error;
   }
   if (fault === "die-after-commit") dieForTest();
-  finishCommitted(directory, journal);
-  fs.rmSync(stagedPath(decoded.sha256), { force: true });
-  /* §4.8: the publication gate reads every stored lesson as a known value and
-     refuses a push while that file is missing. */
-  if (built.writes.rows.get("role_memory")?.records.length) {
-    try { refreshLessonKnownValues(); } catch { /* removed on failure; the gate refuses until the next lesson rewrites it */ }
+  settleJournal(directory, journal, "done");
+  /* The fences are read back from the owner's own reader before the report
+     may say the import is complete. */
+  if (committedBindings.length) {
+    const { accountProjectBindings } = await import("@/lib/accounts/projectBindings");
+    const held = accountProjectBindings();
+    const confirmed = committedBindings.every(binding => held.some(row => row.engine === binding.engine && row.accountId === binding.accountId && row.project === binding.project));
+    if (!confirmed) { report.complete = false; patchLedger(ledger); }
   }
-  await finishAccounts(ledger, options.accounts);
+  fs.rmSync(stagedPath(decoded.sha256), { force: true });
+  await finishFollowUp(ledger, options.accounts, fault);
   await options.afterCommit?.(ledger);
   /* The import record holds the time up to its own commit; the caller gets
      the whole apply, the commit and the cleanup included. */
@@ -742,13 +981,41 @@ export async function applyTransferImport(request: TransferImportRequest, option
   return { report: { ...report, applyMs: Math.round(performance.now() - started), accounts, accountsReady: accountsReady(accounts) }, ledger };
 }
 
+/** The work after a commit, each step recorded done in the import record once
+    it is: the lesson known values (§4.8: the publication gate reads every
+    stored lesson, and refuses while the file is missing) and the accounts the
+    commit reserved. A step that fails stays recorded for the next recovery. */
+async function finishFollowUp(ledger: LedgerRow, deps: AccountTargetDeps | undefined, fault: TransferFault | null = null): Promise<void> {
+  if (ledger.followUp.knownValues) {
+    try {
+      refreshLessonKnownValues();
+      ledger.followUp = { ...ledger.followUp, knownValues: false };
+      patchLedger(ledger);
+    } catch { /* removed on failure, so the gate refuses until it is rewritten; the next recovery tries again */ }
+  }
+  if (ledger.followUp.accounts) {
+    await finishAccountCreation({ importId: ledger.importId }, deps);
+    if (fault === "die-after-accounts") dieForTest();
+    ledger.followUp = { ...ledger.followUp, accounts: false };
+    patchLedger(ledger);
+  }
+}
+
+function patchLedger(ledger: LedgerRow): void {
+  const held = ledgerCollection(true)!;
+  try { held.patchSync(() => ({ records: [ledger] })); }
+  finally { held.close(); }
+}
+
 /* ── Recovery ────────────────────────────────────────────────────────── */
 
-export interface RecoveryOutcome { importId: string; outcome: "finished" | "rolled-back" }
+export interface RecoveryOutcome { importId: string; outcome: "finished" | "rolled-back"; kept?: string[] }
 
-/** Settle every import a stopped worker or Viewer left between its checkpoint
-    and its cleanup: committed (its ledger row exists) → finish; not → restore.
-    A committed import whose accounts were not made yet gets them now. */
+/** Settle every import a stopped worker or Viewer left between its first
+    write and its cleanup: committed (its ledger row exists) → finish;
+    not → undo what it wrote and give back its reservations. Then finish the
+    work after every commit that a stop cut short. Idempotent; a failure
+    throws, and the journal stays for the next attempt. */
 export async function recoverTransferImports(deps?: AccountTargetDeps): Promise<RecoveryOutcome[]> {
   const root = path.join(transferRoot(), "imports");
   let names: string[] = [];
@@ -759,23 +1026,31 @@ export async function recoverTransferImports(deps?: AccountTargetDeps): Promise<
     const journal = readJournal(directory);
     if (!journal || journal.state !== "writing") continue;
     if (readImportRecord(journal.importId)) {
-      finishCommitted(directory, journal);
+      settleJournal(directory, journal, "done");
       outcomes.push({ importId: journal.importId, outcome: "finished" });
     } else {
-      restoreFromCheckpoint(directory, journal);
-      outcomes.push({ importId: journal.importId, outcome: "rolled-back" });
+      const { kept } = await rollBack(directory, journal, deps);
+      outcomes.push({ importId: journal.importId, outcome: "rolled-back", ...(kept.length ? { kept } : {}) });
     }
   }
-  for (const row of readImportRecords()) if (row.accountsApplied === false) await finishAccounts(row, deps);
+  for (const row of readImportRecords()) {
+    if (row.followUp?.knownValues || row.followUp?.accounts) await finishFollowUp(row, deps);
+  }
+  /* An account whose setup failed after an earlier commit is tried again
+     here too, under the same reserved id, so no operator step is needed. */
+  if (importedAccountRows().some(row => row.pendingCreate)) await finishAccountCreation({}, deps);
   return outcomes;
 }
 
-/** The Viewer's startup step, under the release fence. */
-export async function recoverTransferImportsAtStartup(): Promise<RecoveryOutcome[]> {
+/** The Viewer's startup step, under the release fence and the account lock
+    spawn admission takes. Its failure is the Viewer's: activation stops
+    until the same journal settles (`registerViewerRuntime`). */
+export async function recoverTransferImportsAtStartup(deps?: AccountTargetDeps): Promise<RecoveryOutcome[]> {
   const directory = stateDir();
   if (!fs.existsSync(path.join(directory, "transfer", "imports"))) return [];
   assertStateStartupMutation(directory, "install transfer recovery");
-  return recoverTransferImports();
+  const { withAccountMutationLockAsync } = await import("@/lib/accounts/accountMutation");
+  return withAccountMutationLockAsync(() => recoverTransferImports(deps), { holder: "install transfer recovery" });
 }
 
 export function readTransferReport(importId?: string): LedgerRow | null {

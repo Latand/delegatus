@@ -69,8 +69,10 @@ export async function runTransferWorkerRequest(request: TransferWorkerRequest): 
         const { report } = await withAccountMutationLockAsync(() => applyTransferImport(request.request), { holder: "install transfer" });
         return { ok: true, result: report };
       }
-      case "recover":
-        return { ok: true, result: await recoverTransferImports() };
+      case "recover": {
+        const { withAccountMutationLockAsync } = await import("@/lib/accounts/accountMutation");
+        return { ok: true, result: await withAccountMutationLockAsync(() => recoverTransferImports(), { holder: "install transfer recovery" }) };
+      }
       case "report": {
         const row = readTransferReport(request.importId);
         if (!row) return { ok: true, result: null };

@@ -6,14 +6,16 @@ import zlib from "node:zlib";
 
 import { activeClaudeAccountId, createManagedClaudeAccount, listClaudeAccounts } from "@/lib/accounts/claude";
 import { activeCodexAccountId, createManagedCodexAccount, listCodexAccounts, setActiveCodexAccount } from "@/lib/accounts/codex";
+import { CODEX_ACCOUNTS_SOURCE, readAccountSource, writeAccountSource } from "@/lib/accounts/accountsStore";
 import { accountProjectBindings, allowedAccountIdsForProject, bindAccountToProject } from "@/lib/accounts/projectBindings";
 import { ensureLegacyCollectionsImported } from "@/lib/state/legacyCollections";
 
-import { accountExporter, importedAccountRows, markImportedAccount, settleImportedAccountSignIn, verifyImportedAccounts, type IdentityReader, type TransferEngine } from "./accounts";
+import { accountExporter, accountReportRows, accountsReady, importedAccountRows, markImportedAccount, retryImportedAccount, settleImportedAccountSignIn, unavailableAccountId, verifyImportedAccounts, type IdentityReader, type TransferEngine } from "./accounts";
 import { decodeBundle, encodeBundle } from "./bundle";
 import { exportTransferBundle } from "./exporter";
 import { applyTransferImport, previewTransferImport, readImportRecords, recoverTransferImports } from "./importer";
-import { makeInstall, NOW, REPOSITORY, within, type Install } from "./transfer.fixture";
+import { installVariables, makeInstall, NOW, REPOSITORY, within, type Install } from "./transfer.fixture";
+import type { TransferWorkerResponse } from "./workerProtocol";
 
 /* Accounts (docs/design/install-memory-transfer.md §3, §5.2, operator
    decision Q1): every account the source uses arrives signed out, its
@@ -32,10 +34,33 @@ function signIn(engine: "claude" | "codex", home: string): void {
 
 /** The provider's identity per account label on each install; a test swaps an entry to play a different login. */
 const identities = new Map<string, string>([["claude:Main", "main@example.test"], ["claude:Work", "work@example.test"], ["codex:Team", "team@example.test"]]);
+/** Per account home: a login that differs from what its label would say; `null` plays a provider read that failed. */
+const byHome = new Map<string, string | null>();
+let identityReads = 0;
 const identity: IdentityReader = async (engine, account) => {
+  identityReads += 1;
+  if (byHome.has(account.home)) return byHome.get(account.home)!;
   const label = account.kind === "legacy" ? "Main" : (engine === "claude" ? listClaudeAccounts() : listCodexAccounts()).find(candidate => candidate.id === account.id)?.label;
   return identities.get(`${engine}:${label}`) ?? null;
 };
+
+const WORKER = path.join(import.meta.dir, "transfer.worker.ts");
+
+/** One transfer step in a real worker process against an install, optionally killed at a named point. */
+async function runWorker(install: Install, request: unknown, fault?: string): Promise<{ signal: string | null; response: TransferWorkerResponse | null }> {
+  const variables = Object.fromEntries(Object.entries(installVariables(install)).filter((entry): entry is [string, string] => entry[1] !== undefined));
+  const env: Record<string, string | undefined> = { ...process.env, ...variables, HOME: install.home, NODE_ENV: "test", LLV_TRANSFER_TEST_FAULT: fault };
+  delete env.LLV_SEAT_TICK_SETTINGS_FILE;
+  if (!fault) delete env.LLV_TRANSFER_TEST_FAULT;
+  const child = Bun.spawn([process.execPath, WORKER], { env: env as Record<string, string>, stdin: "pipe", stdout: "pipe", stderr: "inherit" });
+  child.stdin.write(JSON.stringify(request));
+  child.stdin.end();
+  const [, text] = await Promise.all([child.exited, new Response(child.stdout).text()]);
+  const line = text.trim().split("\n").at(-1);
+  return { signal: child.signalCode ?? null, response: line ? JSON.parse(line) as TransferWorkerResponse : null };
+}
+
+const accountHome = (install: Install, engine: "claude" | "codex", id: string) => path.join(install.config, "delegatus", "accounts", engine, id);
 
 let parent: string;
 let source: Install;
@@ -196,19 +221,148 @@ describe("accounts on the new install", () => {
     expect(await within(here, () => listClaudeAccounts().map(account => account.label))).toEqual(["Main", "Work"]);
   }, 60_000);
 
-  test("accounts interrupted after the commit are made by recovery from the import record", async () => {
+  test("an account whose setup fails keeps its reserved id: the commit fenced its project, and recovery makes exactly that account", async () => {
     const here = await target("resume");
     const plan = await within(here, () => previewTransferImport(bundle, {}, { accounts: { identity } }));
-    const failure = await within(here, () => applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions },
-      { accounts: { identity, bind: async () => { throw new Error("stopped before the bindings"); } } })).then(() => null, (error: unknown) => error);
-    expect(String(failure)).toContain("stopped before the bindings");
-    expect((await within(here, () => readImportRecords()))[0]?.accountsApplied).toBe(false);
+    let refused = 0;
+    const { report } = await within(here, () => applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions },
+      { accounts: { identity, create: async (engine, label, id) => {
+        if (engine === "codex") { refused += 1; throw Object.assign(new Error("setup stopped"), { name: "SetupStoppedError" }); }
+        return engine === "claude" ? createManagedClaudeAccount(label, undefined, { id }).id : id;
+      } } }));
+    expect(refused).toBe(1);
+    const team = report.accounts.find(row => row.sourceId === sourceIds.team)!;
+    expect([team.state, team.detail, team.retry]).toEqual(["not_created", "SetupStoppedError", true]);
+    const reserved = team.targetId!;
+    // Bound to the reserved id before the account exists: the project parks instead of widening.
+    const fenced = await within(here, () => ({
+      allowed: allowedAccountIdsForProject(REPOSITORY, "codex"), codex: listCodexAccounts().map(account => account.id), home: fs.existsSync(accountHome(here, "codex", reserved)),
+    }));
+    expect(fenced).toEqual({ allowed: [reserved], codex: ["default"], home: true });
+    expect(report.accountsReady).toBe(false);
+    // Recovery (no manual step: the Viewer runs it after a failed apply and at start) makes it once, under that id.
     await within(here, () => recoverTransferImports({ identity }));
-    const after = await within(here, () => ({ record: readImportRecords()[0], codex: listCodexAccounts().length, bindings: accountProjectBindings().length }));
-    expect(after.record?.accountsApplied).toBe(true);
-    expect(after.codex).toBe(2);
-    expect(after.bindings).toBe(2);
+    await within(here, () => recoverTransferImports({ identity }));
+    expect(await within(here, () => retryImportedAccount("codex", sourceIds.team))).toMatchObject({ state: "signed_out", targetId: reserved });
+    const after = await within(here, () => ({ codex: listCodexAccounts().map(account => account.id), allowed: allowedAccountIdsForProject(REPOSITORY, "codex"), row: importedAccountRows().find(row => row.sourceId === sourceIds.team) }));
+    expect(after.codex).toEqual(["default", reserved]);
+    expect(after.allowed).toEqual([reserved]);
+    expect([after.row?.state, after.row?.pendingCreate]).toEqual(["signed_out", undefined]);
   }, 60_000);
+
+  test("a setup stopped after its registry write, or with its home made and no registry row, ends as exactly one account", async () => {
+    for (const stop of ["after-registry", "mid-home"] as const) {
+      const here = await target(`partial-${stop}`);
+      const plan = await within(here, () => previewTransferImport(bundle, {}, { accounts: { identity } }));
+      const { report } = await within(here, () => applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions }, { accounts: { identity, create: async (engine, label, id) => {
+        if (engine !== "codex") return createManagedClaudeAccount(label, undefined, { id }).id;
+        createManagedCodexAccount(label, { id });
+        if (stop === "mid-home") {
+          /* What a stop between the home's setup and its registry row leaves: the home made, no row. */
+          const read = readAccountSource(CODEX_ACCOUNTS_SOURCE);
+          const body = (read.kind === "collection" ? read.body : null) as { accounts: { id: string }[] } | null;
+          writeAccountSource(CODEX_ACCOUNTS_SOURCE, { ...body, accounts: body!.accounts.filter(account => account.id !== id) });
+          expect(fs.readdirSync(accountHome(here, "codex", id)).length).toBeGreaterThan(0);
+        }
+        throw new Error("stopped");
+      } } }));
+      const reserved = report.accounts.find(row => row.sourceId === sourceIds.team)!.targetId!;
+      for (let attempt = 0; attempt < 2; attempt += 1) await within(here, () => recoverTransferImports({ identity }));
+      await within(here, () => retryImportedAccount("codex", sourceIds.team));
+      const after = await within(here, () => ({ codex: listCodexAccounts().map(account => account.id), row: importedAccountRows().find(row => row.sourceId === sourceIds.team) }));
+      expect(after.codex).toEqual(["default", reserved]);
+      expect(after.row?.state).toBe("signed_out");
+    }
+  }, 120_000);
+
+  test("a same-id account here signed into another login is never reused or bound", async () => {
+    const here = await target("same-id");
+    const local = await within(here, () => { const made = createManagedClaudeAccount("Work"); signIn("claude", made.home); return made; });
+    expect(local.id).toBe(sourceIds.work);
+    byHome.set(local.home, "someone-here@example.test");
+    identityReads = 0;
+    try {
+      const plan = await within(here, () => previewTransferImport(bundle, {}, { accounts: { identity } }));
+      expect(plan.accounts.find(account => account.sourceId === sourceIds.work)?.action).toBe("create");
+      expect(identityReads).toBeGreaterThan(0);
+      const { report } = await within(here, () => applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions }, { accounts: { identity } }));
+      const workHere = report.accounts.find(row => row.sourceId === sourceIds.work)!.targetId!;
+      expect(workHere).not.toBe(local.id);
+      expect(await within(here, () => allowedAccountIdsForProject(REPOSITORY, "claude"))).toEqual([workHere]);
+    } finally { byHome.delete(local.home); }
+  }, 60_000);
+
+  test("a skipped provider account's bindings authorize no account here, even one with its id", async () => {
+    const here = await target("provider-collision");
+    await within(here, () => { const made = createManagedClaudeAccount("Work"); signIn("claude", made.home); });
+    const provider = encodeBundle({ exportId: "provider", createdAt: NOW, product: "test", projects: [], accounts: [], environment: [], notices: [], sections: [
+      { name: "accounts", schema: 1, summary: {}, records: [
+        { k: "accounts|account:claude:work", v: { engine: "claude", id: "work", label: "Gateway", kind: "managed", active: false, identity: null, provider: { baseUrl: "https://gateway.example.test", model: "m" } } },
+        { k: `accounts|binding:claude:work:${REPOSITORY}`, v: { engine: "claude", accountId: "work", project: REPOSITORY } },
+      ] },
+    ] });
+    const plan = await within(here, () => previewTransferImport(provider, {}, { accounts: { identity } }));
+    expect(plan.accounts.map(account => [account.action, account.reason])).toEqual([["skip", "provider-account"]]);
+    await within(here, () => applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions }, { accounts: { identity } }));
+    expect(await within(here, () => allowedAccountIdsForProject(REPOSITORY, "claude"))).toEqual([unavailableAccountId("work")]);
+    // «Not needed here» settles a row that could not be made.
+    const rows = await within(here, () => accountReportRows());
+    expect(rows.map(row => [row.state, row.detail, row.retry])).toEqual([["not_created", "provider-account", undefined]]);
+    expect(accountsReady(rows)).toBe(false);
+    await within(here, () => markImportedAccount("claude", "work", "not_needed"));
+    expect(accountsReady(await within(here, () => accountReportRows()))).toBe(true);
+  }, 60_000);
+
+  test("an identity this install cannot read keeps the row waiting and makes nothing active", async () => {
+    const here = await target("identity-unread");
+    const plan = await within(here, () => previewTransferImport(bundle, {}, { accounts: { identity } }));
+    const { report } = await within(here, () => applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions }, { accounts: { identity } }));
+    const teamHere = report.accounts.find(row => row.sourceId === sourceIds.team)!.targetId!;
+    const home = accountHome(here, "codex", teamHere);
+    await within(here, () => signIn("codex", home));
+    byHome.set(home, null);
+    const selected: string[] = [];
+    const deps = { identity, readLimits: limitsRead, select: async (_engine: TransferEngine, id: string) => { selected.push(id); } };
+    try {
+      const waiting = await within(here, () => verifyImportedAccounts({ engine: "codex" }, deps));
+      expect(waiting.map(row => [row.state, row.detail])).toEqual([["read_failed", "identity-unreadable"]]);
+      expect(selected).toEqual([]);
+      expect(await within(here, () => activeCodexAccountId())).toBe("default");
+      // The operator's confirmation is the evidence the read could not give.
+      await within(here, () => markImportedAccount("codex", sourceIds.team, "confirm_identity"));
+      expect((await within(here, () => verifyImportedAccounts({ engine: "codex" }, deps))).map(row => row.state)).toEqual(["usable"]);
+      expect(selected).toEqual([teamHere]);
+    } finally { byHome.delete(home); }
+  }, 60_000);
+
+  test("a worker killed after its reservations gives them back; one killed after its commit is finished by recovery", async () => {
+    const reservedHere = await target("killed-reserved");
+    const reservedPlan = await within(reservedHere, () => previewTransferImport(bundle, {}, { accounts: { identity } }));
+    const killed = await runWorker(reservedHere, { operation: "apply", request: { bundleSha256: reservedPlan.bundleSha256, revisions: reservedPlan.revisions } }, "die-after-reservations");
+    expect(killed.signal).toBe("SIGKILL");
+    const homes = () => ["claude", "codex"].flatMap(engine => {
+      const root = path.join(reservedHere.config, "delegatus", "accounts", engine);
+      return fs.existsSync(root) ? fs.readdirSync(root).filter(name => /^[a-z0-9-]+$/.test(name)).map(name => `${engine}/${name}`) : [];
+    });
+    expect(homes().length).toBe(2);
+    expect((await runWorker(reservedHere, { operation: "recover" })).response).toMatchObject({ ok: true, result: [{ outcome: "rolled-back" }] });
+    expect(homes()).toEqual([]);
+    expect(await within(reservedHere, () => ({ bindings: accountProjectBindings(), rows: importedAccountRows(), records: readImportRecords() }))).toEqual({ bindings: [], rows: [], records: [] });
+
+    const committedHere = await target("killed-committed");
+    const committedPlan = await within(committedHere, () => previewTransferImport(bundle, {}, { accounts: { identity } }));
+    expect((await runWorker(committedHere, { operation: "apply", request: { bundleSha256: committedPlan.bundleSha256, revisions: committedPlan.revisions } }, "die-after-commit")).signal).toBe("SIGKILL");
+    // Committed: every project is already fenced to the reserved ids, before any account exists.
+    const fenced = await within(committedHere, () => ({ rows: importedAccountRows(), allowed: allowedAccountIdsForProject(REPOSITORY, "codex"), codex: listCodexAccounts().length }));
+    const teamReserved = fenced.rows.find(row => row.sourceId === sourceIds.team)!.targetId!;
+    expect([fenced.allowed, fenced.codex]).toEqual([[teamReserved], 1]);
+    expect((await runWorker(committedHere, { operation: "recover" })).response).toMatchObject({ ok: true, result: [{ outcome: "finished" }] });
+    expect((await runWorker(committedHere, { operation: "recover" })).response).toEqual({ ok: true, result: [] });
+    const after = await within(committedHere, () => ({ codex: listCodexAccounts().map(account => account.id), record: readImportRecords()[0], rows: importedAccountRows().map(row => [row.sourceId, row.state]) }));
+    expect(after.codex).toEqual(["default", teamReserved]);
+    expect(after.record?.followUp).toEqual({ knownValues: false, accounts: false });
+    expect(after.rows.sort()).toEqual([["default", "signed_out"], [sourceIds.team, "signed_out"], [sourceIds.work, "signed_out"]].sort());
+  }, 120_000);
 
   test("a forged account record is skipped and makes nothing", async () => {
     const here = await target("forged");
