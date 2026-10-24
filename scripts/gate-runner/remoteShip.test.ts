@@ -1,3 +1,4 @@
+import { LOAD_PROBE } from "./load";
 // ship() and the real serve.ts: a symlink, and what an export bundle carries (T4, T19).
 // The remote command really runs, under a temporary runner home, through the
 // real serve.ts (harness.fixture.ts); every file stays well under the 300 s
@@ -93,6 +94,6 @@ test.if(linux)("an assume-unchanged edit is captured, a skip-worktree entry runs
   expect(result.code).toBe(0);
   expect(result.stderr).toMatch(/^gate-runner: running here: capturing the tree failed: capture: the checkout has skip-worktree entries/m);
   expect(result.stdout).toContain(`cwd=${h.fixture}`);
-  expect(h.calls().filter(call => !call.command.includes("manager=ok"))).toEqual([]);
+  expect(h.calls().filter(call => !call.command.includes("manager=ok") && call.command !== LOAD_PROBE)).toEqual([]);
   expect(fs.readFileSync(indexFile).equals(skipped)).toBeTrue();
 }, E2E_TIMEOUT);
