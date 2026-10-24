@@ -4,7 +4,7 @@ import { DEFAULT_REVIEW_ROUNDS } from "@/lib/reviewHistory/limits";
 import { useEffect, useId, useState } from "react";
 
 import { effortScale } from "@/lib/agent/efforts";
-import { ENGINE_MODELS } from "@/lib/agent/models";
+import { listedModels } from "@/lib/agent/models";
 import type { FlowPreset, FlowsResponse, RoleConfig } from "@/lib/flows/types";
 import { useLocale } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
@@ -49,7 +49,7 @@ function RoleEditor({
         }}
       />
       <datalist id={modelListId}>
-        {ENGINE_MODELS[role.engine].map((option) => (
+        {listedModels(role.engine, role.model).map((option) => (
           <option key={option.id} value={option.id}>{option.label}</option>
         ))}
       </datalist>

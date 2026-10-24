@@ -36865,10 +36865,19 @@ describe("installer guide: old state, project search, newcomer clarity", () => {
           await frame("engines-claude", ["[data-onboarding-claude-signin]"]);
           await notice.locator("button").click();
           reading.cleanStartExpanded = await notice.locator("button").getAttribute("aria-expanded");
+          reading.cleanStartLabel = await notice.locator("button").innerText();
+          if (reading.cleanStartLabel !== translate(lang, "onboarding.legacy.hideSteps")) failures.push(`${at}: open toggle reads ${reading.cleanStartLabel}`);
           await frame("engines-clean-start", ["[data-onboarding-legacy-state]"]);
+          /* Later steps open on their own heading: the notice and the opened instructions stay on the first step. */
+          const opensOnHeading = async (step: string) => {
+            const first = await page.locator("[data-onboarding-dialog] .overflow-y-auto").last().evaluate((node) => node.firstElementChild?.tagName ?? null);
+            const notices = await page.locator("[data-onboarding-legacy-state]").count();
+            if (first !== "H2" || notices !== 0) failures.push(`${at}: ${step} opens on ${first} with ${notices} notice(s)`);
+          };
 
           await goStep("project");
           await page.waitForSelector("[data-onboarding-project]");
+          await opensOnHeading("project");
           const rows = () => page.locator("[data-onboarding-project]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-onboarding-project")));
           reading.rows = await rows();
           reading.checked = await page.locator('[data-onboarding-project][aria-checked="true"]').count();
@@ -36888,22 +36897,38 @@ describe("installer guide: old state, project search, newcomer clarity", () => {
           await search.fill("nothing like this");
           reading.empty = await text("[data-onboarding-project-empty]");
           if (reading.empty !== translate(lang, "onboarding.project.noMatches")) failures.push(`${at}: empty search reads ${reading.empty}`);
+          if (!String(reading.empty).includes(translate(lang, "activity.filter.search").split(" ").at(-1)!)) failures.push(`${at}: empty search names another noun than the field: ${reading.empty}`);
           await frame("project-empty", ["[data-onboarding-project-empty]"]);
           await search.fill("");
           await page.locator(`[data-onboarding-project="repo-${"1".repeat(32)}"]`).click();
 
           await goStep("orchestrator");
           await page.waitForSelector("[data-onboarding-cheaper]");
+          await opensOnHeading("orchestrator");
+          const dollars = lang === "uk" ? "$0,60" : "$0.60";
           reading.permissions = await text("[data-onboarding-permissions]");
           reading.cost = await text("[data-onboarding-cost]");
           reading.cheaper = await text("[data-onboarding-cheaper]");
           if (reading.permissions !== translate(lang, "onboarding.orchestrator.permissions")) failures.push(`${at}: permissions read ${reading.permissions}`);
-          if (!String(reading.cost).includes("$0.60")) failures.push(`${at}: estimate reads ${reading.cost}`);
+          if (!String(reading.cost).includes(dollars)) failures.push(`${at}: estimate reads ${reading.cost}`);
+          const sizes = await page.evaluate(() => ["[data-onboarding-permissions]", "[data-onboarding-cost]"].map((selector) => getComputedStyle(document.querySelector(selector)!).fontSize));
+          const notesSize = await page.locator("[data-onboarding-permissions]").evaluate((node) => getComputedStyle(node.parentElement!.firstElementChild!).fontSize);
+          if (sizes.some((size) => size !== notesSize)) failures.push(`${at}: the notes use ${sizes.join("/")} beside ${notesSize}`);
+          /* The cheaper choice is a text action beside the estimate: no frame and no fill, so Create stays the one filled control. */
+          const cheaperStyle = await page.locator("[data-onboarding-cheaper]").evaluate((node) => { const style = getComputedStyle(node); return { border: style.borderTopWidth, fill: style.backgroundColor, width: node.getBoundingClientRect().width, parent: node.parentElement!.getBoundingClientRect().width }; });
+          reading.cheaperStyle = cheaperStyle;
+          if (cheaperStyle.border !== "0px" || cheaperStyle.fill !== "rgba(0, 0, 0, 0)" || cheaperStyle.width > cheaperStyle.parent + 0.5) failures.push(`${at}: the cheaper choice is drawn as a control: ${JSON.stringify(cheaperStyle)}`);
           if (!String(reading.cheaper).endsWith("Codex · GPT-6.1-Sol")) failures.push(`${at}: cheaper choice reads ${reading.cheaper}`);
           await frame("orchestrator-copy", ["[data-onboarding-permissions]", "[data-onboarding-cost]"]);
           await frame("orchestrator-cheaper", ["[data-onboarding-cost]", "[data-onboarding-cheaper]"]);
+          await page.locator("[data-onboarding-orchestrator-change=runs-on]").click();
+          await page.locator("[data-onboarding-orchestrator] select").first().waitFor();
+          reading.modelOptions = await page.locator("[data-onboarding-orchestrator] select").evaluateAll((nodes) => nodes.flatMap((node) => [...(node as HTMLSelectElement).options].map((option) => option.textContent ?? "")));
+          const haiku = (reading.modelOptions as string[]).filter((label) => /haiku 5\.5/i.test(label));
+          if (haiku.length > 1 || haiku.some((label) => /alias/i.test(label))) failures.push(`${at}: Haiku 5.5 listed as ${JSON.stringify(haiku)}`);
+          await page.locator("[data-onboarding-orchestrator-change=runs-on]").click();
           await page.locator("[data-onboarding-cheaper]").click();
-          await page.waitForFunction(() => document.querySelector("[data-onboarding-cost]")?.textContent?.includes("$0.30"));
+          await page.waitForFunction(() => document.querySelector("[data-onboarding-cost]")?.textContent?.includes("$0.30") || document.querySelector("[data-onboarding-cost]")?.textContent?.includes("$0,30"));
           reading.costAfter = await text("[data-onboarding-cost]");
           reading.runsOnAfter = await text("[data-onboarding-orchestrator-runs-on]");
           reading.cheaperAfter = await page.locator("[data-onboarding-cheaper]").count();

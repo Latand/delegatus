@@ -94,7 +94,7 @@ function StepBody({ project, connected, checkMinutes, onGoEngines, onGoProject, 
   launchKey: "ready" | null;
   runtime: { engine: Engine; model: string; effort: string };
 }) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const launch = useAgentLaunchDraft({ initialEngine: runtime.engine, initialModel: runtime.model, initialEffort: runtime.effort });
   const readiness = useLaunchReadiness(launch);
   /* The account starts as the engine's active one; when that one is signed
@@ -129,6 +129,7 @@ function StepBody({ project, connected, checkMinutes, onGoEngines, onGoProject, 
     return rate ? rate.input * 0.1 + rate.output * 0.01 : null;
   };
   const cost = estimate(launch.model);
+  const costFormat = new Intl.NumberFormat(locale === "uk" ? "uk-UA" : "en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   /* One cheaper step from the Claude default; once on Codex nothing further is offered. */
   const cheaperModel = CODEX_GPT61_SOL_MODEL;
   const cheaperCost = engine === "claude" ? estimate(cheaperModel, "codex") : null;
@@ -255,14 +256,16 @@ function StepBody({ project, connected, checkMinutes, onGoEngines, onGoProject, 
           ) : null}
         </div>
       </div>
-      <p className="text-caption leading-[1.5] text-muted">{t("onboarding.orchestrator.costNote", { engine: launchEngineLabel(launch.engine), check: checkMinutes })}</p>
-      <p data-onboarding-permissions="" className="text-ui text-secondary">{t("onboarding.orchestrator.permissions")}</p>
-      {newcomer ? <p data-onboarding-cost="" className="text-ui text-secondary">{cost === null ? t("onboarding.orchestrator.unpriced") : t("onboarding.orchestrator.estimate", { cost: cost.toFixed(2) })}</p> : null}
-      {newcomer && !held && launchKey !== null && connected.codex && cost !== null && cheaperCost !== null && cheaperCost < cost ? (
-        <button type="button" data-onboarding-cheaper="" className={secondary} onClick={() => { launch.setEngine("codex"); launch.setModel(cheaperModel); }}>
-          {t("onboarding.orchestrator.cheaper", { model: `${launchEngineLabel("codex")} · ${ENGINE_MODELS.codex.find((option) => option.id === cheaperModel)?.label ?? modelDisplayName("codex", cheaperModel)}` })}
-        </button>
-      ) : null}
+      <div className="flex flex-col gap-1.5 text-caption leading-[1.5] text-secondary">
+        <p>{t("onboarding.orchestrator.costNote", { engine: launchEngineLabel(launch.engine), check: checkMinutes })}</p>
+        <p data-onboarding-permissions="">{t("onboarding.orchestrator.permissions")}</p>
+        {newcomer ? <p data-onboarding-cost="">{cost === null ? t("onboarding.orchestrator.unpriced") : t("onboarding.orchestrator.estimate", { cost: costFormat.format(cost) })}</p> : null}
+        {newcomer && !held && launchKey !== null && connected.codex && cost !== null && cheaperCost !== null && cheaperCost < cost ? (
+          <button type="button" data-onboarding-cheaper="" className="self-start rounded-[6px] text-left text-ui font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:min-h-11" onClick={() => { launch.setEngine("codex"); launch.setModel(cheaperModel); }}>
+            {t("onboarding.orchestrator.cheaper", { model: `${launchEngineLabel("codex")} · ${ENGINE_MODELS.codex.find((option) => option.id === cheaperModel)?.label ?? modelDisplayName("codex", cheaperModel)}` })}
+          </button>
+        ) : null}
+      </div>
       {action}
     </div>
   );

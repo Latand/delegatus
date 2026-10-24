@@ -936,10 +936,15 @@ test("linked earlier state is disclosed and clean start instructions preserve it
   const before = requests.length;
   flushSync(() => action.click());
   expect(action.getAttribute("aria-expanded")).toBe("true");
+  expect(action.textContent).toBe("Hide these steps");
   expect(notice.textContent).toContain("Stop Delegatus and its runtime service.");
   expect(notice.textContent).toContain("Back up");
   for (const source of ["agent-log-viewer", "~/.claude/viewer-state", "~/.claude/viewer-inbox", "live-log-viewer"]) expect(notice.textContent).toContain(source);
   expect(requests.length).toBe(before);
+  /* A later step opens on its own heading: no notice and no opened steps. */
+  flushSync(() => host.querySelector<HTMLButtonElement>("[data-onboarding-primary]")!.click());
+  expect(host.querySelector("[data-onboarding-legacy-state]")).toBeNull();
+  expect(host.textContent).not.toContain("Stop Delegatus and its runtime service.");
   flushSync(() => root.render(<OnboardingDialog mode="guide" marker={null} legacyState={false} onClose={() => {}} />));
   expect(host.querySelector("[data-onboarding-legacy-state]")).toBeNull();
   flushSync(() => root.unmount());
@@ -976,7 +981,7 @@ test("project search filters names and folders, excludes non-git and temporary e
   flushSync(() => (host.querySelector("[data-onboarding-project=repo-beta]") as HTMLElement).click());
   type("nothing matches");
   expect(ids()).toEqual([]);
-  expect(host.textContent).toContain("No matching repositories.");
+  expect(host.textContent).toContain("No matching projects.");
   type("");
   expect(ids()).toEqual(["repo-alpha", "repo-beta"]);
   expect(host.querySelector("[data-onboarding-project=repo-beta]")?.getAttribute("aria-checked")).toBe("true");

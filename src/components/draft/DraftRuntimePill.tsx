@@ -6,7 +6,7 @@ import { RuntimePillFace, RuntimePopover, RuntimeSheet, tierWord, type AccountCh
 import { useAccountName } from "@/hooks/useEngineAccounts";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { effortScale } from "@/lib/agent/efforts";
-import { ENGINE_MODELS } from "@/lib/agent/models";
+import { ENGINE_MODELS, listedModels } from "@/lib/agent/models";
 import { useLocale } from "@/lib/i18n";
 
 import { AGENT_LAUNCH_ENGINES, launchEngineLabel, type AgentLaunchDraft, type LaunchEngine } from "./AgentLaunchControls";
@@ -42,9 +42,9 @@ export function DraftRuntimePill({ launch, disabled = false }: { launch: AgentLa
   const { accounts } = launch;
   const nameOf = useCallback((id: string) => accounts.find((account) => account.id === id)?.label ?? storeName(id), [accounts, storeName]);
 
-  const modelOptions = useMemo(() => AGENT_LAUNCH_ENGINES.flatMap((entry) => ENGINE_MODELS[entry].map((model) => ({
+  const modelOptions = useMemo(() => AGENT_LAUNCH_ENGINES.flatMap((entry) => listedModels(entry, entry === engine ? launch.model : null).map((model) => ({
     ...model, id: entry === engine ? model.id : foreignModel(entry, model.id), label: `${launchEngineLabel(entry)} · ${model.label}`,
-  }))), [engine]);
+  }))), [engine, launch.model]);
   const efforts = effortScale(engine, launch.model) ?? [];
   /* Speed is Codex's, and only a Codex launch carries it: the choice is kept for a return to Codex and
      said nowhere while another engine is chosen. */

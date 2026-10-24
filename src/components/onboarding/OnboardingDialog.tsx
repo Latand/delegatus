@@ -159,10 +159,13 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
   const [chosen, setChosen] = useState<GuideProject | null>(null);
   const [cleanStart, setCleanStart] = useState(false);
   const choose = (project: GuideProject) => setChosen(project);
-  const stateNotice = view === "guide" && legacyState ? (
+  /* The notice rides on the first guide step and on the step the guide opened
+     on, so a later step opens on its own heading. */
+  const [noticeStep] = useState<OnboardingGuideStepId>(lastGuide);
+  const stateNotice = view === "guide" && legacyState && (current === GUIDE[0] || current === noticeStep) ? (
     <div role="status" data-onboarding-legacy-state="" className="mb-4 rounded-[10px] border border-border bg-sunken p-3 text-ui text-secondary">
       <p>{t("onboarding.legacy.notice")}</p>
-      <button type="button" aria-expanded={cleanStart} onClick={() => setCleanStart((value) => !value)} className="mt-2 min-h-8 font-semibold text-accent hover:underline max-sm:min-h-11">{t("onboarding.legacy.cleanStart")}</button>
+      <button type="button" aria-expanded={cleanStart} onClick={() => setCleanStart((value) => !value)} className="mt-2 min-h-8 font-semibold text-accent hover:underline max-sm:min-h-11">{t(cleanStart ? "onboarding.legacy.hideSteps" : "onboarding.legacy.cleanStart")}</button>
       {cleanStart ? <p className="mt-2 whitespace-pre-line">{t("onboarding.legacy.instructions")}</p> : null}
     </div>
   ) : null;

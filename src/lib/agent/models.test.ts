@@ -15,7 +15,7 @@ import {
   modelDisplayName,
   modelFromBody,
   normalizeClaudeLaunchModel,
-  validateLaunchModel, claudeSpawnTier, claudeTierDisplayName } from "./models";
+  validateLaunchModel, listedModels, claudeSpawnTier, claudeTierDisplayName } from "./models";
 
 test("the model catalog exposes Opus 5.5 and GPT-6.1-Sol as launch defaults while retaining the catalogue", () => {
   expect(ENGINE_MODELS.claude[0]).toEqual({ id: "opus", label: "Opus 5.5", shortLabel: "Opus 5.5", use: "review" });
@@ -193,8 +193,11 @@ test("Haiku 5.5 and the previous Haiku launch with pinned ids and keep their dis
   expect(claudeCatalogModelId("claude-haiku-4-5-20251001")).toBe("claude-haiku-4-5");
 });
 
-test("Haiku choices distinguish the moving CLI alias from the pinned release", () => {
-  const options = ENGINE_MODELS.claude.filter((option) => ["haiku", "claude-haiku-5-5"].includes(option.id));
-  expect(options.map((option) => option.label)).toEqual(["Haiku 5.5 (CLI alias)", "Haiku 5.5"]);
+test("Haiku 5.5 is listed once while the CLI alias stays a valid launch id", () => {
+  expect(listedModels("claude").filter((option) => option.label === "Haiku 5.5").map((option) => option.id)).toEqual(["claude-haiku-5-5"]);
+  expect(validateLaunchModel("claude", "haiku")).toEqual({ model: "haiku" });
+  expect(validateLaunchModel("claude", "claude-haiku-5-5")).toEqual({ model: "claude-haiku-5-5" });
+  /* A stored alias choice stays visible, standing in for the pinned row. */
+  expect(listedModels("claude", "haiku").filter((option) => option.label === "Haiku 5.5").map((option) => option.id)).toEqual(["haiku"]);
   expect(modelDisplayName("claude", "haiku")).toBe("Haiku 5.5");
 });
