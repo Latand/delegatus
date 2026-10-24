@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { cpuAdmissionFile, CPU_QUEUE_MAX_WAIT_MS, CpuAdmissionQueue, inheritedCpuSlot } from "../src/lib/runtime/cpuAdmission";
+import { cpuOwnerIdentity } from "../src/lib/runtime/signalSandboxContext";
 import { realExec } from "../src/lib/workflows/provision";
 import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
 import { runSteps } from "./local-gate";
@@ -89,6 +90,54 @@ test("a shell's native owner mapping binds the queue ticket to the kernel PID", 
     expect(result.code, result.stderr).toBe(0);
   } finally { fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, ""); f.age(); await Promise.resolve(pending).catch(() => {}); f.close(); }
 }, 20_000);
+
+/* Queue heads as the incident left them: queued six hours ago and never
+   checked since, by an owner the helpers prove dead, one recorded in a PID
+   namespace they cannot read, or this live test process. */
+function seedHead(f: ReturnType<typeof fixture>, key: string, owner: object) {
+  f.db.query("INSERT INTO tickets (key, since, owner) VALUES (?, ?, ?)").run(key, Date.now() - 6 * 3_600_000, JSON.stringify(owner));
+}
+const interleaved = (word: string) => ["bash", "scripts/gate-slot.sh", "bash", "-c", `echo start-${word} >> "$CPU_QUEUE_OUTPUT"; sleep 0.3; echo end-${word} >> "$CPU_QUEUE_OUTPUT"`];
+
+test("dead and unverifiable owners at the head stop blocking real gates, each with one reason line, one slot holder at a time", async () => {
+  const f = fixture(), live = cpuOwnerIdentity(process.pid);
+  const pending: ReturnType<typeof realExec>[] = [];
+  try {
+    seedHead(f, "command:dead-head", { ...live, startIdentity: `${live.pid}:1` });
+    seedHead(f, "command:foreign-head", { pid: 4242, startIdentity: "4242:1", bootEpoch: live.bootEpoch!.replace(/pid:\[\d+\]$/, "pid:[1]") });
+    fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, "");
+    const env = { ...f.env, LLV_GATE_SLOTS: "1" };
+    for (const word of ["one", "two"]) pending.push(realExec("bash", interleaved(word).slice(1), process.cwd(), env, { timeoutMs: 15_000 }));
+    const results = await Promise.all(pending);
+    expect(results.map(r => r.code), JSON.stringify(results)).toEqual([0, 0]);
+    const lines = fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8").trim().split("\n");
+    expect([[lines[0], lines[1]], [lines[2], lines[3]]].map(pair => pair.map(line => line!.replace(/^(start|end)-/, "")))).toEqual(lines[0] === "start-one" ? [["one", "one"], ["two", "two"]] : [["two", "two"], ["one", "one"]]);
+    const stderr = results.map(r => r.stderr).join("\n");
+    expect(stderr.match(/removed command:dead-head: its owner process \d+ has exited/g)).toHaveLength(1);
+    expect(stderr.match(/passed over command:foreign-head: its owner process 4242 cannot be verified from here and has not checked in for \d+ s/g)).toHaveLength(1);
+    expect(f.db.query("SELECT key FROM tickets").all()).toEqual([{ key: "command:foreign-head" }]);
+  } finally { await Promise.allSettled(pending); f.close(); }
+}, 30_000);
+
+test("a live owner the helpers can verify keeps the head of a real gate's queue", async () => {
+  const f = fixture();
+  let pending: ReturnType<typeof realExec> | undefined;
+  try {
+    seedHead(f, "command:live-head", cpuOwnerIdentity(process.pid));
+    fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, "");
+    pending = realExec("bash", interleaved("waiting").slice(1), process.cwd(), f.env, { timeoutMs: 15_000 });
+    await until(() => f.count() === 2);
+    await Bun.sleep(1500); // many polls past every bound the head has outlived
+    expect(fs.existsSync(f.env.CPU_QUEUE_OUTPUT)).toBe(false);
+    expect(f.db.query("SELECT key FROM suspended").all()).toEqual([]);
+    f.db.query("DELETE FROM tickets WHERE key = ?").run("command:live-head"); // its owner leaves the queue
+    const result = await pending;
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stderr).toContain("stalled");
+    expect(result.stderr).not.toContain("live-head");
+    expect(fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8")).toBe("start-waiting\nend-waiting\n");
+  } finally { await Promise.resolve(pending).catch(() => {}); f.close(); }
+}, 30_000);
 
 test.skipIf(process.platform !== "linux")("an admitted parent can finish nested work while a fresh job waits for its only slot", async () => {
   const f = fixture(), controls = [new AbortController(), new AbortController()];
