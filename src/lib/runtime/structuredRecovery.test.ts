@@ -2,8 +2,10 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import net from "node:net";
+import { spawn } from "node:child_process";
 
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
 import type { AccountContext } from "@/lib/accounts/contracts";
@@ -22,6 +24,12 @@ import { statePath } from "@/lib/configDir";
 import { trackAccountLeases } from "@/lib/accounts/accountMutation.contention.fixture";
 import { buildPipeline, loadPipelines, savePipelines } from "@/lib/pipelines/store";
 import { cpuPriorityFromEnv, readCpuPriority } from "./cpuPriority";
+import { captureProcessIdentity } from "@/lib/processIdentity";
+import { CodexAppServerHost } from "./codexAppServerHost";
+import { FakeEngineHost, createFakeDeliveryLedger } from "./fixtures/fakeEngineHost";
+import { bindStructuredDeliveryQueue, hasStructuredDeliveryHost } from "./structuredDeliveryController";
+import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
+import { ownFixtureTree, stopFixtureTree } from "@/lib/testing/fixtureProcess";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-recovery-"));
 /* Publish-readiness now reads the limits cache out of the viewer state dir, so
@@ -29,6 +37,98 @@ const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-recovery-"
    write the state directory the running viewer owns. */
 process.env.LLV_STATE_DIR = path.join(sandbox, "state");
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
+
+for (const scenario of ["released", "foreign-owner", "failed-attachment", "revoked"] as const) test.skipIf(process.platform === "win32")(`startup recovery reconnects a verified live native host without spawning a successor (${scenario})`, async () => {
+  const cwd = fs.mkdtempSync(path.join(sandbox, "native-reconnect-"));
+  const socketDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-rpc-"));
+  fs.chmodSync(socketDirectory, 0o700);
+  const socketPath = path.join(socketDirectory, "rpc.sock");
+  const server = net.createServer(socket => socket.end());
+  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socketPath, resolve); });
+  fs.chmodSync(socketPath, 0o600);
+  const sessionId = crypto.randomUUID();
+  const artifactPath = path.join(cwd, `${sessionId}.jsonl`);
+  fs.writeFileSync(artifactPath, "");
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const conversation = registry.ensureConversation("codex", artifactPath, "default");
+  const key = { engine: "codex" as const, sessionId };
+  const identity = captureProcessIdentity(process.pid);
+  const endpoint = `codex-unix:${socketPath}`;
+  registry.upsert({ key, artifactPath, cwd, accountId: "default", launchProfile: emptyLaunchProfile({ cwd }),
+    status: "idle", host: null, claimEpoch: 2, claimOwner: null, pendingAction: null,
+    structuredHost: { kind: "codex-app-server", endpoint, process: identity, eventCursor: 0,
+      protocolVersion: "fixture", writerClaimEpoch: 2, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
+  const foreign = scenario === "foreign-owner"
+    ? ownFixtureTree(spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" })) : null;
+  if (foreign?.pid) {
+    expect(registry.claimStructuredHost(key, captureProcessIdentity(foreign.pid), {
+      allowUnhosted: true, reconnectCodex: { endpoint, process: identity },
+    })).not.toBeNull();
+  }
+  const originalClaim = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!.claimOwner;
+  const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
+  const client = {
+    append: async (event: Parameters<RuntimeJournal["append"]>[0]) => journal.append(event),
+    producerCursor: async () => 0,
+    snapshot: async () => journal.snapshot(),
+    effectBatch: async (kinds: string[], after: number) => journal.effectBatch(100, kinds, after),
+    operationStatus: async (id: string) => journal.operationResult(id),
+    transitionOperation: async (...args: Parameters<RuntimeJournal["transitionOperation"]>) => journal.transitionOperation(...args),
+  } as unknown as RuntimeHostClient;
+  const ledger = createFakeDeliveryLedger();
+  const host = Object.assign(new FakeEngineHost(ledger), {
+    health: async () => ({ status: "idle" as const, sessionKey: sessionId, endpoint, pid: identity.pid,
+      processStartIdentity: identity.startIdentity, eventCursor: 0, protocolVersion: "fixture",
+      activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null }),
+    setWriterFence: () => {}, onStateChange: () => () => {},
+    detachForViewerRestart: () => true,
+  });
+  let authorized = true;
+  const adopt = spyOn(CodexAppServerHost, "adopt").mockResolvedValue(host as never);
+  if (scenario === "failed-attachment") adopt.mockRejectedValue(new Error("native attachment refused"));
+  if (scenario === "revoked") adopt.mockImplementation(async () => { authorized = false; return host as never; });
+  let spawned = 0;
+  try {
+    await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true,
+      watchdogIntervalMs: 0, settlementSweepMs: 0, hostlessSettleIntervalMs: 0 });
+    const pending = recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id,
+      reconnectLiveHost: true, admissionGuard: () => { if (!authorized) throw new Error("reconnect authority revoked"); } }, { registry, client, transport: () => "structured", park: () => null,
+      resolveAccount: () => ({ engine: "codex", accountId: "default", kind: "legacy", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
+      spawn: async () => { spawned += 1; throw new Error("a live reconnect must not spawn"); } });
+    if (scenario === "failed-attachment" || scenario === "revoked") {
+      await expect(pending).rejects.toThrow(scenario === "revoked" ? "reconnect authority revoked" : "native attachment refused");
+      expect(registry.readOnlySnapshot().entries[`codex:${sessionId}`]!.claimOwner).toBeNull();
+      expect(spawned).toBe(0);
+      expect(hasStructuredDeliveryHost(key)).toBeFalse();
+      return;
+    }
+    const result = await pending;
+    expect(result?.spawned).toBeFalse();
+    if (scenario === "foreign-owner") {
+      expect(adopt).not.toHaveBeenCalled();
+      expect(registry.readOnlySnapshot().entries[`codex:${sessionId}`]!.claimOwner).toBe(originalClaim);
+      expect(hasStructuredDeliveryHost(key)).toBeFalse();
+      expect(spawned).toBe(0);
+      return;
+    }
+    expect(adopt).toHaveBeenCalledTimes(1);
+    expect(adopt.mock.calls[0]?.[1].socketOwner).toMatchObject({ endpoint, process: identity });
+    expect(hasStructuredDeliveryHost(key)).toBeTrue();
+    expect(spawned).toBe(0);
+    expect(Object.keys(registry.readOnlySnapshot().receipts)).toHaveLength(0);
+    journal.executeOperation({ kind: "send", operationId: "native-live-send", idempotencyKey: "native-live-send",
+      conversationId: conversation.id, text: "reach the live native listener", policy: "queue" });
+    await kickStructuredDeliveryQueue();
+    expect(ledger.writes).toHaveLength(1);
+  } finally {
+    adopt.mockRestore();
+    await bindStructuredDeliveryQueue([], { client: null });
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    fs.rmSync(socketDirectory, { recursive: true, force: true });
+    if (foreign) await stopFixtureTree(foreign);
+    journal.close(); registry.close();
+  }
+});
 
 test("recovery authorization waits outside admission and a racing revocation reserves nothing", async () => {
   const sessionId = crypto.randomUUID();

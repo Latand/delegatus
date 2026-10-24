@@ -1357,13 +1357,14 @@ export async function bindStructuredDeliveryQueue(
       const recovered = await recover({
         path: generation.path,
         conversationId: conversation.id,
+        ...(startupPending ? { reconnectLiveHost: true } : {}),
         ...admission,
       }, {
         registry,
         client,
         requestDeliveryDrain: requestDrain,
       });
-      return recovered?.spawned === true;
+      return recovered?.spawned === true || hostResolver(registry, hosts)(conversationId) !== null;
     },
     (effect, ownership) => applyStructuredReconfigure(effect, {
       ...dependencies.reconfigure,
