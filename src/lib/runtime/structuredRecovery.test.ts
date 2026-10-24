@@ -127,6 +127,7 @@ for (const scenario of ["released", "foreign-owner", "failed-attachment", "revok
       return;
     }
     expect(adopt).toHaveBeenCalledTimes(1);
+    expect(result?.reconnected).toBeTrue();
     expect(adopt.mock.calls[0]?.[1].socketOwner).toMatchObject({ endpoint, process: identity });
     expect(hasStructuredDeliveryHost(key)).toBeTrue();
     expect(spawned).toBe(0);

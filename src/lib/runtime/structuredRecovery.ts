@@ -85,6 +85,8 @@ export interface StructuredRecoveryResult {
   path: string;
   conversationId: ViewerConversationId;
   spawned: boolean;
+  /** A live native listener was connected and published without a new process. */
+  reconnected?: boolean;
   /** Rechecked when a recovered conversation accepts its queued message. */
   admissionGuard?: DeliveryAdmissionGuard;
   /** Set when the live host handed back cannot accept a turn yet because the
@@ -458,9 +460,10 @@ async function recoverCandidate(
                   && registry.conversation(current!.conversationId)?.generations.at(-1)?.id === current!.key.sessionId;
               };
               await publishStructuredDeliveryHost({ key: current.key, host, writerEpoch: claim.claimEpoch }, owns);
-              if (structuredDeliveryHostForConversation(current.conversationId) !== host) await releaseConnection();
+              const reconnected = structuredDeliveryHostForConversation(current.conversationId) === host;
+              if (!reconnected) await releaseConnection();
               dependencies.requestDeliveryDrain?.();
-              return { ...liveHostResult(current), ...(request.admissionGuard ? { admissionGuard: request.admissionGuard } : {}) };
+              return { ...liveHostResult(current), reconnected, ...(request.admissionGuard ? { admissionGuard: request.admissionGuard } : {}) };
             } catch (error) {
               try { await releaseConnection(); }
               catch { console.error("[structured recovery] native reconnect claim cleanup is pending"); }

@@ -1364,7 +1364,7 @@ export async function bindStructuredDeliveryQueue(
         client,
         requestDeliveryDrain: requestDrain,
       });
-      return recovered?.spawned === true || hostResolver(registry, hosts)(conversationId) !== null;
+      return recovered?.spawned === true || recovered?.reconnected === true;
     },
     (effect, ownership) => applyStructuredReconfigure(effect, {
       ...dependencies.reconfigure,
