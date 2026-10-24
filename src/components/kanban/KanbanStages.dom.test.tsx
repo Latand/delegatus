@@ -1181,3 +1181,21 @@ test.each(["running", "passed", "failed", "needs_decision"] as const)("desktop s
   expect(reader).toBeTruthy();
   expect(reader!.closest('[data-stages-sheet]')).toBeNull();
 });
+
+test("stage memory follows the displayed attempt and stays absent for legacy attempts", async () => {
+  const pipeline = searchPipeline();
+  const attempts = pipeline.runs.find(run => run.stageId === "verify")!.attempts;
+  attempts[0]!.memoryCap = { limitBytes: 8 * 2 ** 30, requestedBytes: 12 * 2 ** 30, source: "stage", enforced: true, clamped: true };
+  attempts[1]!.memoryCap = { limitBytes: null, requestedBytes: null, source: "automatic", enforced: false, clamped: false };
+  const { host } = mount(pipeline);
+  await tick();
+  click(card(host).querySelector("[data-open-stages]"));
+  const note = () => pane(host, "verify")!.querySelector("[data-agent-memory-cap]")?.textContent;
+  expect(note()).toBe("Memory cap: containment is off or unavailable.");
+  click(pane(host, "verify")!.querySelector('[data-attempt="1"]'));
+  expect(note()).toContain("8");
+  expect(note()).toContain("12");
+  expect(pane(host, "review")!.querySelector("[data-agent-memory-cap]")).toBeNull();
+  click(pane(host, "verify")!.querySelector('[data-attempt="2"]'));
+  expect(note()).toBe("Memory cap: containment is off or unavailable.");
+});
