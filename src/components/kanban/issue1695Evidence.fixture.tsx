@@ -384,6 +384,12 @@ const STAGE_CHAIN = SCENARIO === "stage-chain";
 const SEAT_CLS = SCENARIO === "seat-create-cls";
 const ORCH_FIRST = SCENARIO === "orchestrator-first" || SEAT_CLS;
 const ORCH_FIRST_OVERVIEW = SCENARIO === "orchestrator-first-overview";
+/* The setup guide on a fresh install that still runs on linked earlier state
+   (`guide=installer`): the guide opens by itself with the old-state notice, no
+   role is overridden, both engines are signed in, and the catalog adds three
+   repositories beside a plain folder and a checkout under a temporary
+   directory, which the project picker leaves out. */
+const INSTALLER_GUIDE = ORCH_FIRST && new URLSearchParams(location.search).get("guide") === "installer";
 /* The seat case opens as the create draft and leaves it when Confirm is pressed. */
 const FM_SEAT = FIRST_MESSAGE && FM_CASE === "s";
 const NO_SEAT = ORCH_FIRST || ORCH_FIRST_OVERVIEW || FM_SEAT;
@@ -578,6 +584,15 @@ const flowOf = (id: string) => (PIPELINES ? { flowId: id } : {});
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
 const MIN = 60;
+const INSTALLER_PROJECTS = INSTALLER_GUIDE ? [
+  { project: `repo-${"1".repeat(32)}`, displayName: "atlas-api", projectRoot: "/repo/atlas-api", conversations: 4, smt: now - 30 * MIN },
+  { project: `repo-${"2".repeat(32)}`, displayName: "harbor-docs", projectRoot: "/repo/harbor-docs", conversations: 2, smt: now - 2 * 60 * MIN },
+  { project: `repo-${"3".repeat(32)}`, displayName: "ledger-export", projectRoot: "/repo/ledger-export", conversations: 1, smt: now - 26 * 60 * MIN },
+  { project: `dir-${"4".repeat(32)}`, displayName: "notes", projectRoot: "/repo/notes", conversations: 1, smt: now - 40 * MIN },
+  { project: `repo-${"5".repeat(32)}`, displayName: "scratch-checkout", projectRoot: "/tmp/scratch-checkout", conversations: 1, smt: now - 10 * MIN },
+] : [];
+/* The guide preselects no project and lists repositories only, so the Telegram step's case picks this one first. */
+const TELEGRAM_REPOSITORY = { project: `repo-${"6".repeat(32)}`, displayName: "atlas", projectRoot: "/repo/atlas", conversations: 1, smt: now - MIN };
 const REV = (n: number) => `task-v1:00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
 function conversation(id: string, title: string, over: Record<string, unknown> = {}): FileEntry {
@@ -4044,6 +4059,15 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     && ["/api/orchestrator/seat", "/api/orchestrator/seat/status", "/api/operator/settings"].includes(url.pathname)) {
     return serverFetch(url.pathname + url.search, init);
   }
+  if (INSTALLER_GUIDE && url.pathname === "/api/onboarding") {
+    const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, steps: {}, lastHealth: null, walk: null };
+    if (method === "PUT") return json({ marker: { ...marker, ...(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>), steps: {} } });
+    return json({ marker, legacyState: true, seatTickCheckMinutes: 10 });
+  }
+  if (INSTALLER_GUIDE && url.pathname === "/api/roles") return json({ roles: [] });
+  if (INSTALLER_GUIDE && url.pathname === "/api/accounts" && method === "GET") {
+    return json({ ...accountsBody, claude: { ...accountsBody.claude, cli: "found" }, codex: { ...accountsBody.codex, cli: "found" } });
+  }
   if (ACCOUNT_PICKER && url.pathname === "/api/accounts" && method === "GET") {
     const held = Number(PICKER_PARAMS.get("pickerdelay") ?? 0);
     if (held > 0) await new Promise((resolve) => setTimeout(resolve, held));
@@ -4275,13 +4299,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       : NEEDS_FILTER
       ? { files: needsFiles, projectCatalog: [{ project: PROJECT, conversations: needsFiles.length, smt: now }], flows: [], pipelines: needsPipelines, tasks: needsTasks }
       : ORCH_FIRST || (FM_SEAT && !fm.confirmed)
-      ? { files: SEAT_CLS ? files : [], projectCatalog: [{ project: PROJECT, conversations: SEAT_CLS ? files.length : 0, smt: now }], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
+      ? { files: SEAT_CLS ? files : [], projectCatalog: [{ project: PROJECT, conversations: SEAT_CLS ? files.length : 0, smt: now }, ...INSTALLER_PROJECTS], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
       : {
         files: shown,
         projectCatalog: [...new Set(shown.map((file) => file.project))].filter((project) => !railCatalog.some((entry) => entry.project === project)).map((project) => {
           const own = shown.filter((file) => file.project === project);
           return { project, conversations: own.length, smt: Math.max(...own.map((file) => file.mtime)) };
-        }).concat(railCatalog),
+        }).concat(railCatalog, TELEGRAM_STEP ? [TELEGRAM_REPOSITORY] : []),
         ...(RAIL ? { crownedProjects: [LEDGER, "harbor-docs"] } : {}),
         flows: OVERVIEW_QUIET ? [] : flows,
         pipelines: OVERVIEW_QUIET ? [] : pipelines,
