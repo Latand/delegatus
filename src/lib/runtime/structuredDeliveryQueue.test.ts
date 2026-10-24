@@ -2068,8 +2068,10 @@ test("an expired explicit kill settles during startup deferral without terminati
 });
 
 test("startup recovery does not let an explicit send overtake deferred configuration or automatic work", async () => {
+  let deferred = true;
   const statuses = new Map<string, string>();
   const sent: string[] = [];
+  const actions: string[] = [];
   const effects: StructuredDeliveryEffect[] = [
     { id: "explicit", kind: "runtime.send", eventSeq: 1, payload: {
       operationId: "explicit", conversationId: "conversation-one", text: "operator message", policy: "queue",
@@ -2084,7 +2086,7 @@ test("startup recovery does not let an explicit send overtake deferred configura
     } },
   ];
   const queue = new StructuredDeliveryQueue({
-    deferTarget: () => true,
+    deferTarget: () => deferred,
     canRecoverDeferredTarget: () => true,
     effects: async () => effects,
     status: async id => ({ status: statuses.get(id) ?? "queued", revision: 1 }),
@@ -2092,14 +2094,23 @@ test("startup recovery does not let an explicit send overtake deferred configura
     transition: async (id, status) => { statuses.set(id, status); },
   }, () => host(async entry => {
     sent.push(entry.id);
+    actions.push(entry.id);
     return { outcome: "turn-started", turnId: "operator-turn" };
-  }));
+  }), undefined, undefined, undefined, async () => {
+    actions.push("configure");
+    return "applied";
+  });
 
   await queue.drain();
   expect(sent).toEqual([]);
   expect(statuses.has("explicit")).toBeFalse();
   expect(statuses.has("automatic")).toBeFalse();
   expect(statuses.has("configure")).toBeFalse();
+  deferred = false;
+  await queue.drain();
+  expect(actions).toEqual(["configure", "explicit"]);
+  expect(statuses.get("configure")).toBe("applied");
+  expect(statuses.get("explicit")).toBe("delivered");
 });
 
 test("startup recovery keeps a message queued when its predecessor is not registered yet", async () => {

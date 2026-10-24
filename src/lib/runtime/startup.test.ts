@@ -939,7 +939,12 @@ test("startup socket recovery retains a partially adopted host and drains its he
   }
 });
 
-for (const fence of ["none", "cut", "pipeline"] as const) test(`an explicit send recovers its recipient while unrelated startup adoption is still pending (${fence})`, async () => {
+for (const { fence, phase } of [
+  { fence: "none", phase: "adoption" },
+  { fence: "cut", phase: "adoption" },
+  { fence: "pipeline", phase: "adoption" },
+  { fence: "none", phase: "refresh" },
+] as const) test(`an explicit send recovers its recipient while unrelated startup ${phase} is still pending (${fence})`, async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-recipient-recovery-"));
   const { artifactPath, conversation, registry, sessionId } = structuredRestartFixture(directory, "codex", "unhosted");
   const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
@@ -969,12 +974,15 @@ for (const fence of ["none", "cut", "pipeline"] as const) test(`an explicit send
       },
     });
     startup = adoptStructuredHostsAtStartup({
-      registry, client, orchestratorSeats: () => [], refreshTranscriptState: async () => {},
+      registry, client, orchestratorSeats: () => [], refreshTranscriptState: async () => {
+        if (phase === "refresh") { entered.resolve(); await release.promise; }
+      },
       pipelineEvidence: () => ({ settled: new Set(), deferred: new Set(fence === "pipeline" ? [conversation.id] : []) }),
       schedule: () => ({ unref() {} }),
       adopt: async () => {
         if (fence === "cut") holdRestartCutRow(hostKey);
-        entered.resolve(); await release.promise; return [];
+        if (phase === "adoption") { entered.resolve(); await release.promise; }
+        return [];
       },
       adoptClaude: async () => [],
     }).then(() => { startupFinished = true; });
@@ -1010,6 +1018,49 @@ for (const fence of ["none", "cut", "pipeline"] as const) test(`an explicit send
     await bindStructuredDeliveryQueue([], { registry, client: null });
     journal.close(); registry.close();
     fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a ready adopted host receives messages while another host is still being adopted", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-ready-host-"));
+  const { artifactPath, conversation, registry, sessionId } = structuredRestartFixture(directory, "codex", "unhosted");
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeJournalClient(journal);
+  projectHostedRestart(journal, "codex", conversation.id, sessionId, directory, artifactPath);
+  const key = { engine: "codex" as const, sessionId };
+  const ledger = createFakeDeliveryLedger();
+  const host = Object.assign(new ObservedDeliveryHost(ledger), { onStateChange: () => () => {} });
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let finished = false;
+  let startup: Promise<unknown> | undefined;
+  try {
+    startup = adoptStructuredHostsAtStartup({
+      registry, client, orchestratorSeats: () => [], refreshTranscriptState: async () => {},
+      pipelineEvidence: () => ({ settled: new Set(), deferred: new Set() }),
+      adopt: async (_registry, _options, _env, _filter, _progress, hooks) => {
+        const entry = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!;
+        registry.upsert({ ...entry, status: "idle", claimOwner: "fixture",
+          structuredHost: { ...entry.structuredHost!, endpoint: "fake:adopted" } });
+        hooks?.onAdopted?.({ key, host: host as never });
+        entered.resolve(); await release.promise;
+        return [{ key, host: host as never }];
+      },
+      adoptClaude: async () => [],
+    }).then(() => { finished = true; });
+    await entered.promise;
+    journal.executeOperation({ kind: "send", operationId: "ready-host-send", idempotencyKey: "ready-host-send",
+      conversationId: conversation.id, text: "reach the ready host", policy: "queue" });
+    const { kickStructuredDeliveryQueue } = await import("./structuredDeliverySignal");
+    await kickStructuredDeliveryQueue();
+    await Promise.race([host.sent.promise, Bun.sleep(1_000)]);
+    expect(finished).toBeFalse();
+    expect(ledger.writes).toHaveLength(1);
+    expect(journal.operationResult("ready-host-send")?.receipt.status).toBe("delivered");
+  } finally {
+    release.resolve(); await startup;
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close(); registry.close(); fs.rmSync(directory, { recursive: true, force: true });
   }
 });
 

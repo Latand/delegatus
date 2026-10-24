@@ -2171,6 +2171,14 @@ async function adoptStructuredHostsPass(
       deferStartupWork: true,
     });
   }
+  const readEvidence = () => (dependencies.pipelineEvidence ?? pipelineStartupEvidence)(registry);
+  if (controllerBoundEarly && !rowRetry) {
+    const recoveryEvidence = await admitState(async (available) =>
+      available ? readEvidence() : pipelineStartupEvidence(registry, false));
+    assertActive();
+    for (const id of recoveryEvidence.deferred) updateStructuredStartupDeferral(registry, id, true);
+    allowStructuredStartupRecovery(registry);
+  }
   if (!resumeDeferred) markStructuredHostStartupProgress({
     phase: "refreshing transcripts",
     completedHosts: 0,
@@ -2185,7 +2193,6 @@ async function adoptStructuredHostsPass(
   // Read under the existing lease, then release before any host or transcript I/O.
   // Each writer claim below re-resolves pipeline evidence in its own short hold.
   assertActive();
-  const readEvidence = () => (dependencies.pipelineEvidence ?? pipelineStartupEvidence)(registry);
   let pipelineEvidence = await admitState(async (available) =>
     available ? readEvidence() : pipelineStartupEvidence(registry, false));
   if (controllerBoundEarly && !rowRetry) {
@@ -2350,9 +2357,38 @@ async function adoptStructuredHostsPass(
     // A later row may throw after earlier hosts have launched and acquired
     // writer claims. Keep each handle before the batch can reject, so the
     // retry can publish it instead of waiting on its own engine forever.
+    let publicationTail = Promise.resolve();
     const onAdopted = (item: AdoptedStructuredHost) => {
       nextAdoptedHosts = retainAdoptedHosts(nextAdoptedHosts, [item]);
       rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
+      if (!controllerBoundEarly || rowRetry) return;
+      const key = sessionKeyId(item.key);
+      const captured = startupSnapshot(registry).entries[key];
+      if (!captured?.structuredHost || !captured.claimOwner) return;
+      const claimOwner = captured.claimOwner;
+      const claimEpoch = captured.claimEpoch;
+      const writerEpoch = captured.structuredHost.writerClaimEpoch;
+      const owns = async (): Promise<boolean> => {
+        try { assertActive(); } catch { return false; }
+        if (heldHostKeys.has(key) || deferredHostKeys.has(key) || skippedHostKeys.has(key)) return false;
+        const current = startupSnapshot(registry).entries[key];
+        if (!current?.structuredHost || current.status === "dead" || current.status === "unhosted"
+          || current.claimOwner !== claimOwner || current.claimEpoch !== claimEpoch
+          || current.structuredHost.writerClaimEpoch !== writerEpoch) return false;
+        const conversation = registry.conversationForPath(current.artifactPath);
+        return !!conversation && !conversation.supersededBy
+          && conversation.generations.at(-1)?.id === item.key.sessionId;
+      };
+      // Keep publication ordered, but let each ready host serve
+      // while the adopter continues through unrelated rows. A failed publish
+      // retains the adopted handle for the normal completion retry.
+      publicationTail = publicationTail.then(async () => {
+        if (await owns()) await publishStructuredDeliveryHost(item, owns);
+      }).catch(error => {
+        console.warn("[structured hosts] early host publication deferred", {
+          key, error: error instanceof Error ? error.message : String(error),
+        });
+      });
     };
     await reportProgress("adopting Codex hosts");
     const resolveCodexOwner = dependencies.resolveCodexOwner ?? ((entry: AgentRegistryEntry) =>
@@ -2624,6 +2660,8 @@ async function adoptStructuredHostsPass(
         && !heldHostKeys.has(sessionKeyId(item.key)),
     );
     await reportProgress("finalizing structured delivery");
+    await publicationTail;
+    assertActive();
     /* `controllerBoundEarly` is exactly "this pass has a runtime client", so the
        only way past it is a viewer that cannot host at all. Rebinding there would
        retire a publication this pass has no client to replace — and every spawn
