@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
@@ -7,6 +7,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, test } from "bun:test";
 
+import { procBackend } from "../src/lib/proc";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
 import { stopFixtureIdentity, stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
 import { createTailscaleStub, hermeticTailscaleEnvironment, STUB_DNS_NAME } from "../src/test-helpers/tailscaleStub";
@@ -173,7 +174,7 @@ import { createViewerLoopMonitor } from ${JSON.stringify(pathToFileURL(path.reso
 import { createPerformanceSpans } from ${JSON.stringify(pathToFileURL(path.resolve("src/lib/performanceSpans.ts")).href)};
 process.env.LLV_STATE_OWNER = ${JSON.stringify(role)};
 writeFileSync(process.env.LLV_STATE_DIR + "/" + process.env.LLV_STATE_OWNER + "-quiet.json",
-  JSON.stringify({ quiet: process.env.LLV_QUIET_DIAGNOSTICS ?? null }));
+  JSON.stringify({ quiet: process.env.LLV_QUIET_DIAGNOSTICS ?? null, loop: process.env.LLV_LOOP_DIAGNOSTICS ?? null }));
 startupDiagnostic("info", "[fixture startup diagnostic] " + process.env.LLV_STATE_OWNER);
 let at = 0;
 const monitor = createViewerLoopMonitor(undefined, () => at, createPerformanceSpans(() => at));
@@ -182,9 +183,12 @@ monitor.tick();
 `;
 }
 
-async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableAddress?: string; startupChatter?: boolean; failQr?: boolean; diagnostics?: boolean } = {}): Promise<{ cli: string; env: NodeJS.ProcessEnv }> {
+/* Without `git: true` the fixture has no .git and the launcher reads it as a
+   packaged install; with it, as a checkout. */
+async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableAddress?: string; startupChatter?: boolean; failQr?: boolean; diagnostics?: boolean; git?: boolean; stopAll?: boolean } = {}): Promise<{ cli: string; env: NodeJS.ProcessEnv }> {
   const fixture = await mkdtemp(path.join(tmpdir(), "llv-cli-exposure-"));
   fixtures.add(fixture);
+  if (options.git && spawnSync("git", ["init", "-q", fixture]).status !== 0) throw new Error("git init failed for the checkout fixture");
   const bin = path.join(fixture, "bin");
   const nextBin = path.join(fixture, "node_modules", ".bin");
   const runtimeHost = path.join(fixture, "dist", "runtime-host.mjs");
@@ -228,6 +232,7 @@ async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableA
     copyFile(path.resolve("bin/viewerGateKey.mjs"), path.join(bin, "viewerGateKey.mjs")),
     copyFile(path.resolve("bin/windows-process-identity.mjs"), path.join(bin, "windows-process-identity.mjs")),
     copyFile(path.resolve("bin/darwin-process-identity.mjs"), path.join(bin, "darwin-process-identity.mjs")),
+    copyFile(path.resolve("bin/stop-all.mjs"), path.join(bin, "stop-all.mjs")),
     writeFile(path.join(fixture, "package.json"), JSON.stringify({ type: "module", version: "0.0.0" })),
     writeFile(path.join(nextBin, "next"), `${options.startupChatter ? STARTUP_CHATTER : ""}
 import { writeFileSync } from "node:fs";
@@ -238,7 +243,12 @@ const hostname = ${options.ignoreHostname ? JSON.stringify("0.0.0.0") : "hostnam
 const server = Bun.serve({
   hostname,
   port: Number(process.env.PORT),
-  fetch(request) {
+  async fetch(request) {
+    /* The menu's «Stop Delegatus», as the route starts it. */
+    if (${options.stopAll ? "true" : "false"} && new URL(request.url).pathname === "/api/stop-all-fixture") {
+      const { productionStopAllPorts, startStopAll } = await import(${JSON.stringify(pathToFileURL(path.resolve("src/lib/stopAll.ts")).href)});
+      return Response.json(await startStopAll("en", productionStopAllPorts()));
+    }
     /* What the launcher handed the Viewer, for the phone-access case. */
     /* Whether the gate is on, never the key itself. */
     if (new URL(request.url).pathname === "/api/access") return Response.json({ tailnetUrl: process.env.LLV_TS_URL ?? null, host: process.env.LLV_TS_HOST ?? null, gated: Boolean(process.env.LLV_TOKEN) });
@@ -699,22 +709,28 @@ test.each(["en", "uk"] as const)("the %s notice is printed once on first start a
 
 /* Use a real PTY for the interactive case; CLI children still use pipes, as
    they do in production. Journal metadata must override even a terminal. */
+/* `loop` is the loop-gap volume the children are handed: bounded for a
+   packaged install, unset for a checkout (the service's journal keeps every
+   line, even when a shell exported the bounded choice) and under debug. */
 for (const scenario of [
-  { name: "piped output", terminal: false, journal: undefined, debug: undefined, quiet: null },
-  { name: "journal output", terminal: false, journal: "1:1", debug: undefined, quiet: null },
-  { name: "interactive terminal", terminal: true, journal: undefined, debug: undefined, quiet: "1" },
-  { name: "journal with a terminal", terminal: true, journal: "1:1", debug: undefined, quiet: null },
-  { name: "debug terminal", terminal: true, journal: undefined, debug: "1", quiet: null },
+  { name: "piped output", terminal: false, journal: undefined, debug: undefined, quiet: null, git: false, loop: "bounded" },
+  { name: "journal output", terminal: false, journal: "1:1", debug: undefined, quiet: null, git: false, loop: "bounded" },
+  { name: "checkout journal output", terminal: false, journal: "1:1", debug: undefined, quiet: null, git: true, loop: null },
+  { name: "interactive terminal", terminal: true, journal: undefined, debug: undefined, quiet: "1", git: false, loop: "bounded" },
+  { name: "journal with a terminal", terminal: true, journal: "1:1", debug: undefined, quiet: null, git: false, loop: "bounded" },
+  { name: "checkout journal with a terminal", terminal: true, journal: "1:1", debug: undefined, quiet: null, git: true, loop: null },
+  { name: "debug terminal", terminal: true, journal: undefined, debug: "1", quiet: null, git: false, loop: null },
 ]) {
   // Bun's PTY is a POSIX facility; piped cases also run on Windows.
   test.skipIf(scenario.terminal && process.platform === "win32")(
     `${scenario.name} selects diagnostics for both children and retains stall evidence`, async () => {
-      const fixture = await checkoutFixture({ diagnostics: true });
+      const fixture = await checkoutFixture({ diagnostics: true, git: scenario.git });
       await mkdir(fixture.env.TMPDIR!, { recursive: true });
       const port = await availablePort();
       let output = "";
       const env = { ...fixture.env, JOURNAL_STREAM: scenario.journal, DELEGATUS_DEBUG: scenario.debug,
-        LLV_QUIET_DIAGNOSTICS: scenario.quiet === "1" ? undefined : "1" };
+        LLV_QUIET_DIAGNOSTICS: scenario.quiet === "1" ? undefined : "1",
+        LLV_LOOP_DIAGNOSTICS: scenario.loop === null ? "bounded" : undefined };
       const child = Bun.spawn([process.execPath, "--bun", fixture.cli, "--no-open", "--port", String(port)], {
         cwd: path.dirname(path.dirname(fixture.cli)), env,
         ...(scenario.terminal ? { terminal: { data(_terminal: Bun.Terminal, chunk: Uint8Array) { output += Buffer.from(chunk).toString(); } } }
@@ -735,7 +751,7 @@ for (const scenario of [
         await waitForStatus("127.0.0.1", port, 200);
         for (const role of ["viewer", "runtime-host"]) {
           expect(JSON.parse(await readFile(path.join(fixture.env.LLV_STATE_DIR!, `${role}-quiet.json`), "utf8")))
-            .toEqual({ quiet: scenario.quiet });
+            .toEqual({ quiet: scenario.quiet, loop: scenario.loop });
         }
         const deadline = Date.now() + 10_000;
         const diagnosticLines = () => output.split(/\r?\n/).filter(line => /^\[(viewer loop-gap|performance summary)\]/.test(line));
@@ -805,3 +821,70 @@ writeFileSync(path.join(process.env.LLV_STATE_DIR, "runtime-control.json"), JSON
   expect(await (await fetch(`http://127.0.0.1:${port}/api/control-port`)).json()).toEqual({ port: String(port) });
   expect(JSON.parse(await readFile(path.join(fixture.env.LLV_STATE_DIR!, "runtime-control.json"), "utf8"))).toEqual({ port: String(port), credentialInherited: true });
 });
+
+/* The menu's «Stop Delegatus» end to end: the Viewer starts the stop, the stop
+   asks the real launcher to end, the launcher retires the Viewer and its
+   process group, and the stop, in a group of its own, goes on to the agent
+   host the registry records. A same-named process nobody recorded stays. */
+test("the menu's stop outlives the Viewer it stops and ends the launcher, the runtime host and the recorded agent host", async () => {
+  const fixture = await checkoutFixture({ stopAll: true });
+  await mkdir(fixture.env.TMPDIR!, { recursive: true });
+  const state = fixture.env.LLV_STATE_DIR!;
+  const hostScript = path.join(path.dirname(path.dirname(fixture.cli)), "codex");
+  await writeFile(hostScript, "setInterval(() => {}, 1000);\n");
+  const host = spawn(process.execPath, [hostScript, "app-server"], { detached: true, stdio: "ignore" });
+  const foreign = spawn(process.execPath, [hostScript, "app-server"], { detached: true, stdio: "ignore" });
+  children.add(host);
+  children.add(foreign);
+  const hostIdentity = captureProcessIdentity(host.pid!);
+  const foreignIdentity = captureProcessIdentity(foreign.pid!);
+  const { AgentRegistry, normalizeRegistry } = await import("../src/lib/agent/registry");
+  const { SqliteAgentRegistryStore } = await import("../src/lib/agent/sqliteRegistryStore");
+  const seed = new AgentRegistry(path.join(state, "seed.json"), undefined, undefined, { sqliteMode: "off" });
+  const initial = seed.snapshot();
+  seed.close();
+  (initial.entries as Record<string, unknown>)["codex:orchestrator"] = {
+    key: { engine: "codex", sessionId: "orchestrator" }, artifactPath: "/sessions/orchestrator.jsonl", cwd: "/work", accountId: null,
+    status: "idle", host: null,
+    structuredHost: { kind: "codex-app-server", endpoint: "stdio:orchestrator", process: hostIdentity, eventCursor: 0, protocolVersion: "fixture-v1",
+      writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+    claimEpoch: 1, claimOwner: null, pendingAction: null, updatedAt: "2026-10-21T15:00:00.000Z",
+  };
+  new SqliteAgentRegistryStore(path.join(state, "agent-registry.sqlite"), { initialSnapshot: initial, normalize: normalizeRegistry }).close();
+
+  const port = await availablePort();
+  const cli = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(port)], {
+    cwd: path.dirname(path.dirname(fixture.cli)), env: { ...fixture.env, LLV_LANG: "en" }, stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.add(cli);
+  const output = captureOutput(cli);
+  await waitForStatus("127.0.0.1", port, 200);
+  await output.waitFor("Delegatus v", 10_000);
+  const runtimePid = Number(await readFile(path.join(state, "runtime.pid"), "utf8"));
+  const webPid = Number(await readFile(path.join(state, "web.pid"), "utf8"));
+  const runtime = captureProcessIdentity(runtimePid);
+  const web = captureProcessIdentity(webPid);
+
+  const started = await (await fetch(`http://127.0.0.1:${port}/api/stop-all-fixture`)).json() as { ok: boolean; pid: number };
+  expect(started).toMatchObject({ ok: true });
+  const stop = captureProcessIdentity(started.pid);
+  try {
+    expect(await waitForExit(cli, 20_000)).toBe(0);
+    const deadline = Date.now() + 20_000;
+    while (processIdentityStatus(stop) === "alive" && Date.now() < deadline) await Bun.sleep(25);
+    expect(processIdentityStatus(stop)).not.toBe("alive");
+    const report = await readFile(path.join(state, "stop-all.log"), "utf8");
+    expect(report).toContain(`Stopped the launcher (pid ${cli.pid}), and with it the Viewer and the runtime host it started.`);
+    expect(report).toContain(`codex-app-server pid ${host.pid} (codex orchestrator)`);
+    /* Exited, whether or not its parent has reaped it yet. */
+    const ended = (identity: ProcessIdentity) => processIdentityStatus(identity) === "dead" || procBackend.processExited(identity.pid);
+    for (let i = 0; i < 200 && !(host.exitCode !== null || host.signalCode !== null); i++) await Bun.sleep(25);
+    expect(host.signalCode).toBe("SIGTERM");
+    expect([runtime, web].map(ended)).toEqual([true, true]);
+    expect(ended(foreignIdentity)).toBe(false);
+  } catch (error) {
+    throw new Error(`stop-all chain failed:\n${output.text()}`, { cause: error });
+  } finally {
+    await stopFixtureIdentity(stop);
+  }
+}, 60_000);

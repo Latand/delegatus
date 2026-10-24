@@ -10,7 +10,7 @@ import type { MemorySettingView } from "@/lib/memory/viewTypes";
     phone's two device rows. */
 export const HEADER_ITEMS = [
   "activity", "team", "update", "qr", "language", "push", "memory", "key",
-  "mapping", "workers", "dictation", "voice", "linked", "relay", "ping", "guide", "walk", "signOut", "sound", "awake",
+  "mapping", "workers", "dictation", "voice", "linked", "relay", "ping", "guide", "walk", "signOut", "sound", "awake", "stop",
 ] as const;
 export type HeaderItem = (typeof HEADER_ITEMS)[number];
 export type HeaderSurface = "desktop" | "phone";
@@ -43,13 +43,16 @@ export const HEADER_LAYOUTS: Record<HeaderSurface, HeaderLayout> = {
       { kind: "item", item: "qr" },
       { kind: "page", id: "settings", items: ["language", "push", "memory", "key", "mapping", "workers", "dictation", "voice", "linked", "relay", "ping"] },
       { kind: "fold", id: "help", items: HELP_ITEMS },
+      /* `delegatus stop --all` from the page: with the session-ending row. */
+      { kind: "item", item: "stop" },
       { kind: "item", item: "signOut" },
     ],
   },
   phone: {
     cells: CELLS,
     rows: [
-      { kind: "page", id: "settings", items: ["sound", "awake", "memory", "key", "mapping", "workers", "dictation", "voice", "linked", "relay", "ping"] },
+      /* The sheet at rest has no room left, so stopping is the last row of Settings. */
+      { kind: "page", id: "settings", items: ["sound", "awake", "memory", "key", "mapping", "workers", "dictation", "voice", "linked", "relay", "ping", "stop"] },
       /* A page on the phone: the sheet at rest already stands near today's 743 px, and in place it would scroll. */
       { kind: "page", id: "help", items: HELP_ITEMS },
     ],

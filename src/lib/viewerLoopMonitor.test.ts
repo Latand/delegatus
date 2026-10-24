@@ -1,5 +1,5 @@
 import { expect, spyOn, test } from "bun:test";
-import { createViewerLoopMonitor } from "./viewerLoopMonitor";
+import { BOUNDED_LOOP_DIAGNOSTICS, createViewerLoopMonitor, LOOP_DIAGNOSTICS_ENV } from "./viewerLoopMonitor";
 import { performanceProcess, createPerformanceSpans } from "./performanceSpans";
 import { createLoopHeapSignals } from "./loopHeapSignals";
 
@@ -148,4 +148,59 @@ test.each(["viewer", "runtime-host"])("%s uses its own gap threshold", role => {
     monitor.stop();
     if (owner === undefined) delete process.env.LLV_STATE_OWNER; else process.env.LLV_STATE_OWNER = owner;
   }
+});
+
+/* Tester report 2026-10-21: a packaged install on a large old state wrote
+   392 KB of these lines in 25 minutes into a file nothing rotated. The same
+   25 minutes, a 990 ms gap every second, with and without the launcher's
+   bounded choice. */
+function twentyFiveMinutes(bounded: boolean, role: "viewer" | "runtime-host") {
+  const previous = { mode: process.env[LOOP_DIAGNOSTICS_ENV], owner: process.env.LLV_STATE_OWNER };
+  if (bounded) process.env[LOOP_DIAGNOSTICS_ENV] = "bounded"; else delete process.env[LOOP_DIAGNOSTICS_ENV];
+  process.env.LLV_STATE_OWNER = role;
+  let at = 0;
+  const lines: string[] = [];
+  const monitor = createViewerLoopMonitor(line => lines.push(line), () => at, createPerformanceSpans(() => at));
+  const run = (seconds: number) => { for (let i = 0; i < seconds; i++) { at += 1000; monitor.tick(); } };
+  try {
+    run(25 * 60);
+    const firstWindow = [...lines];
+    /* The next hour opens a new budget. */
+    run(40 * 60);
+    return { firstWindow, all: lines };
+  } finally {
+    monitor.stop();
+    if (previous.mode === undefined) delete process.env[LOOP_DIAGNOSTICS_ENV]; else process.env[LOOP_DIAGNOSTICS_ENV] = previous.mode;
+    if (previous.owner === undefined) delete process.env.LLV_STATE_OWNER; else process.env.LLV_STATE_OWNER = previous.owner;
+  }
+}
+const bytes = (lines: string[]) => lines.reduce((sum, line) => sum + Buffer.byteLength(line) + 1, 0);
+const gaps = (lines: string[]) => lines.filter(line => line.startsWith("[viewer loop-gap] "));
+const summaries = (lines: string[]) => lines.filter(line => line.startsWith("[performance summary] "))
+  .map(line => JSON.parse(line.slice("[performance summary] ".length)));
+
+test.each(["viewer", "runtime-host"] as const)("%s on a package install: gap reports stay within the hourly budget and the summary counts what was held back", role => {
+  const { firstWindow, all } = twentyFiveMinutes(true, role);
+  const unbounded = twentyFiveMinutes(false, role).firstWindow;
+  expect(bytes(gaps(firstWindow))).toBeLessThanOrEqual(BOUNDED_LOOP_DIAGNOSTICS.gapBytes);
+  expect(gaps(firstWindow).length).toBeGreaterThan(0);
+  /* A minute after start, then every fifteen minutes. */
+  expect(summaries(firstWindow).map(summary => summary.monotonic)).toEqual([60_000, 960_000]);
+  expect(bytes(firstWindow) * 10).toBeLessThan(bytes(unbounded));
+  /* Nothing disappears unannounced: every gap is written or counted. */
+  const held = summaries(firstWindow).reduce((sum, summary) => sum + summary.loopGapsWithheld.count, 0);
+  expect(gaps(firstWindow).length + held).toBe(960);
+  expect(summaries(firstWindow)[1].loopGapsWithheld).toMatchObject({ budgetBytes: BOUNDED_LOOP_DIAGNOSTICS.gapBytes, windowMs: 3_600_000, maxGapMs: 990 });
+  /* After the hour, gap reports are written again. */
+  const later = all.slice(firstWindow.length);
+  const reopened = later.findIndex(line => line.startsWith("[viewer loop-gap] "));
+  expect(reopened).toBeGreaterThanOrEqual(0);
+  expect(JSON.parse(later[reopened]!.slice("[viewer loop-gap] ".length)).tick).toBeGreaterThanOrEqual(3_600_000);
+});
+
+test.each(["viewer", "runtime-host"] as const)("%s without the bounded choice, as a checkout's service runs, writes every gap and a summary each minute", role => {
+  const { firstWindow } = twentyFiveMinutes(false, role);
+  expect(gaps(firstWindow)).toHaveLength(25 * 60);
+  expect(summaries(firstWindow)).toHaveLength(25);
+  for (const summary of summaries(firstWindow)) expect(summary).not.toHaveProperty("loopGapsWithheld");
 });
