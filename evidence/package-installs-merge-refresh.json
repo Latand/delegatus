@@ -6,7 +6,9 @@
     "normalHeadAgeMinutes": 86.18721666666667,
     "cpuPressureAvg10": 0.84,
     "kernelSlotsAvailableObserved": true,
-    "checksWaiting": "three whole-file observations per side"
+    "checksWaiting": "three whole-file observations per side",
+    "latestReadonlyHeadStillUnverified": true,
+    "latestObservedAgeMinutes": 98.3
   },
   "ownQueuedRequestCleanup": {
     "ownCallerDead": true,
@@ -2749,6 +2751,110 @@
       "exit": 0,
       "startedAt": "2026-10-24T02:11:58.171132+00:00",
       "finishedAt": "2026-10-24T02:11:58.213280+00:00"
+    },
+    {
+      "label": "latest-input-scope",
+      "command": [
+        "git",
+        "diff",
+        "--name-only",
+        "HEAD"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:15:06.613221+00:00",
+      "finishedAt": "2026-10-24T02:15:06.620680+00:00"
+    },
+    {
+      "label": "latest-upstream-file-match",
+      "command": [
+        "git",
+        "diff",
+        "--name-only",
+        "origin/main",
+        "--",
+        "evidence/native-queue-compaction-startup.md",
+        "src/lib/runtime/nativeQueueCompaction.integration.test.ts"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:15:06.710044+00:00",
+      "finishedAt": "2026-10-24T02:15:06.717024+00:00"
+    },
+    {
+      "label": "stage-latest-evidence",
+      "command": [
+        "git",
+        "add",
+        "evidence/package-installs-merge-refresh.json"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:15:06.808570+00:00",
+      "finishedAt": "2026-10-24T02:15:06.825974+00:00"
+    },
+    {
+      "label": "latest-staged-whitespace",
+      "command": [
+        "git",
+        "diff",
+        "--cached",
+        "--check"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:15:06.914924+00:00",
+      "finishedAt": "2026-10-24T02:15:06.922172+00:00"
+    },
+    {
+      "label": "commit-latest-main",
+      "command": [
+        "git",
+        "commit",
+        "-F",
+        "$STAGE_SCRATCH/resume/latest-merge-message.txt"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:15:07.011918+00:00",
+      "finishedAt": "2026-10-24T02:15:11.585089+00:00"
+    },
+    {
+      "label": "verify-latest-checkpoint",
+      "command": [
+        "python3",
+        "$STAGE_SCRATCH/resume/verify-latest-checkpoint.py"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:16:51.128860+00:00",
+      "finishedAt": "2026-10-24T02:16:51.242516+00:00"
+    },
+    {
+      "label": "final-admission-owner-read",
+      "command": [
+        "bun",
+        "$STAGE_SCRATCH/resume/read-final-owner.ts"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:17:12.628735+00:00",
+      "finishedAt": "2026-10-24T02:17:12.648259+00:00"
+    },
+    {
+      "label": "latest-publication-privacy",
+      "command": [
+        "bun",
+        "run",
+        "privacy:check"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:16:36.987130+00:00",
+      "finishedAt": "2026-10-24T02:17:26.380301+00:00"
+    },
+    {
+      "label": "final-clean-status",
+      "command": [
+        "git",
+        "status",
+        "--short"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:17:38.602848+00:00",
+      "finishedAt": "2026-10-24T02:17:38.615356+00:00"
     }
   ],
   "shellCommandReceipts": [
@@ -3698,6 +3804,141 @@
       "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" latest-main-merge git merge --no-ff --no-commit origin/main",
       "exit": 0,
       "commandSha256": "268d12cfee847a21c1023aa2eb7601ad282b0ccf8d217b76b48c08254700104e"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "690b4edb52cb56e6a55dcc176eb397aaa03db7b0368e36a63a4520ca675f03ed",
+      "stdinSha256": "4d2a7c17e93dc11f782426785844a3666418dfe8d927660b8baf53d393a46443"
+    },
+    {
+      "command": "rtk proxy node \"$TMPDIR/resume/extract-commands.cjs\"",
+      "exit": 0,
+      "commandSha256": "617b3b394cf5ab04a004ff260fd35ff84a3b18074041516c705e45ae9735a777"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "fa5a6594d40fdcc8d9a00495c961f20dd16e1156b9c273fb6371f32c634d1e83",
+      "stdinSha256": "803115ef87f64a06fb2d39ecc6499d8459e917a675bd204f24d572460ef6450b"
+    },
+    {
+      "command": "rtk proxy rg -n 'priority|operator' docs/design/cpu-placement.md src/lib/runtime/cpuPriority.ts",
+      "exit": 0,
+      "commandSha256": "28fca9dbdcd6129c9add00d8180b1862d4973191e8dc5deaaed9c38d62dcce05"
+    },
+    {
+      "command": "rtk proxy bun -e 'import fs from \"node:fs\";import path from \"node:path\";import{systemBootEpoch}from\"./src/lib$PROC_ROOTessIdentity\";import{signalSandboxContext}from\"./src/lib/runtime/signalSandboxContext\";const root=path.join(process.env.TMPDIR!,\"resume\");const r=JSON.parse(fs.readFileSync(path.join(root,\"final-admission-head.json\"),\"utf8\"));const o=JSON.parse(r.owner);const c=signalSandboxContext()!;const result={headNamespaceMatchesThisAttempt:o.bootEpoch===systemBootEpoch(),headNamespaceMatchesHost:o.bootEpoch===c.hostEpoch,headPidVisibleInThisAttempt:fs.existsSync(\"$PROC_ROOT/\"+o.pid)};fs.writeFileSync(path.join(root,\"head-ownership-comparison.json\"),JSON.stringify(result));console.log(JSON.stringify(result));'",
+      "exit": 0,
+      "commandSha256": "61fb52b6729ae1565e44342cec706d88d26df310a65a173d2c8f731615385b59"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" latest-input-scope git diff --name-only HEAD",
+      "exit": 0,
+      "commandSha256": "fbabc169e2dc9fb398a548ed7325f8043b85d39169984effe2f0ea61be0bea6c"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" latest-upstream-file-match git diff --name-only origin/main -- evidence/native-queue-compaction-startup.md src/lib/runtime/nativeQueueCompaction.integration.test.ts",
+      "exit": 0,
+      "commandSha256": "bd4271e48d38e084d9d41284a5d4f753b229a0cd3f67fdd9b4324245967ff297"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" stage-latest-evidence git add evidence/package-installs-merge-refresh.json",
+      "exit": 0,
+      "commandSha256": "4de7634a5c520d595c516bba5d8a159341a66ee38b7844df0fd9f73dfcce2d55"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" latest-staged-whitespace git diff --cached --check",
+      "exit": 0,
+      "commandSha256": "11efaf8ed87aca6e1623bf6676dcef75f5057d4d57708a2fdee6ca72d0078662"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" commit-latest-main git commit -F \"$TMPDIR/resume/latest-merge-message.txt\"",
+      "exit": 0,
+      "session": 56996,
+      "exitSource": "Completed command journal; original tool output envelope was truncated.",
+      "commandSha256": "93ec715021b70011d96c6176a9568a2a2175f9288c6e6622afe8ed9b1ed00def"
+    },
+    {
+      "command": "git status --short --branch\n git show -s --format='%H %s%n%P' HEAD\npython3 - <<'PY'\nimport os,json\np=os.path.join(os.environ['TMPDIR'],'resume','commands.jsonl')\nfor line in open(p).readlines()[-12:]:\n d=json.loads(line); print(json.dumps(d))\nPY",
+      "exit": 0,
+      "commandSha256": "5f5976ea180931504a93b5796ce4d90f87418db574d417f813816afa96ac36cc"
+    },
+    {
+      "command": "sed -n '1,110p' \"$TMPDIR/resume/run.py\"\npython3 - <<'PY'\nimport json,os\np='evidence/package-installs-merge-refresh.json'\nd=json.load(open(p));print('FIELDS',list(d))\nfor k in ['status','checkedMain','mergedMain','newerMainPendingChecks','admissionBlocker','pendingChecks','decisionRequired']:\n if k in d:print(k,json.dumps(d[k],ensure_ascii=False)[:7500])\nprint('HELPERS')\nfor n in os.listdir(os.path.join(os.environ['TMPDIR'],'resume')):\n if any(s in n for s in ['admission','checkpoint','post-commit','cancellation','backup','ownership']):print(n)\nPY",
+      "exit": 0,
+      "commandSha256": "6d09b20a9a5cb8d8d85414ac9a6e7f555befac4a5f955011a22209cf8e95f0ad"
+    },
+    {
+      "command": "python3 -",
+      "exit": 0,
+      "commandSha256": "cb82315d23843d720e3435c116736f39a0d8de59c6bea5a8be30b1dba7beec62",
+      "stdinSha256": "17269c887ea8f31392514fc7599ffad0d6cc2bf7bec572775ea114710708f107"
+    },
+    {
+      "command": "python3 -",
+      "exit": 0,
+      "session": 14315,
+      "commandSha256": "be6b3c2f33e6ad141601d50cdcc17f0fd0f71384279d18610665a6e38fd942ed",
+      "stdinSha256": "ecfcd12aaa14399286554c84e79af598e14c7045bf7e552064750b1155d9a21e"
+    },
+    {
+      "command": "python3 -",
+      "exit": 0,
+      "commandSha256": "cd65ce2e36d8fff421375c3417d41eacd558ea044275e15bcfd0aa293cc7547a",
+      "stdinSha256": "26f90c0da0e23a6cb41f7b744c97d7d904402c647dbfb0f654a264dbfc96d7a6"
+    },
+    {
+      "command": "python3 -",
+      "exit": 0,
+      "commandSha256": "36001bb9628cbb79451d76aa60419721146617b86dd47eb1f9c065330bbc8aa1",
+      "stdinSha256": "31636a56ce30f3b06a49adbac357b0d69cbb1bb0b82ac4b99f9347abc1ece866"
+    },
+    {
+      "command": "python3 -",
+      "exit": 2,
+      "commandSha256": "8663cfc3575ee9bad07f8ed55f4b98694fa3ff9d0438ce4b80f05f7bf69e88a0",
+      "stdinSha256": "31337ca8f59d74a7be4bb6256aa8630d46164a218a9253c8d92ca4fe88067e34"
+    },
+    {
+      "command": "rg -n 'export.*cpuOwnerStatus|function cpuOwnerStatus|interface.*Context|export.*signalSandboxContext' src/lib/runtime/signalSandboxContext.ts\nsed -n '1,65p' src/lib/runtime/signalSandboxContext.ts\npython3 - <<'PY'\nimport pathlib,os,json\nr=pathlib.Path(os.environ['TMPDIR'])/'resume'\nprint((r/'host-proc-context.json').read_text())\nprint((r/'admission-owner-statuses.json').read_text()[:1400])\nPY",
+      "exit": 0,
+      "commandSha256": "71abd6b5bd21477c4ece6506876bcdb0da8dbfc0e6ca2235804b397a5241089d"
+    },
+    {
+      "command": "python3 -",
+      "exit": 0,
+      "commandSha256": "5f77831c8f051949c43a87e13b2d106c79f64e8625bf8acb3dabea01b8575f64",
+      "stdinSha256": "04f64f7b8423924d5d55c2c8482d226deb5dc38e328e605384c0dd7ce0300635"
+    },
+    {
+      "command": "python3 -",
+      "exit": 0,
+      "commandSha256": "4bc36e1230d92f2f87efafacc45982dbaa0fe0c9d913444c577454a765990bdf",
+      "stdinSha256": "a19a6cac33c3cfcd4638ef24e6f588ed537b5e94ff30640034f944072806c714"
+    },
+    {
+      "command": "python3 -",
+      "exit": 0,
+      "commandSha256": "7ce6fa2cc25a789b4efe7170c3fb4c07ec7b6a71c9ec8d6f175db3dfa3f54b31",
+      "stdinSha256": "cbcf1c04aa6d8d3d74825340fff019161765f053880972a14297411c99dc1719"
+    },
+    {
+      "command": "python3 -",
+      "exit": 0,
+      "commandSha256": "680019993aecc1564019884596504885be7d829e506a1e40543b024c98616a93",
+      "stdinSha256": "6a145f629f697155df1e644d055d5d270b8f2f539f3fe6b9d3bc91f1f79de132"
+    },
+    {
+      "command": "python3 -",
+      "exit": 0,
+      "commandSha256": "f8f16c6ed4aec4b009e6ada8c6f4dc30d5f3afbbef63f79a0b3d59929a89f369",
+      "stdinSha256": "34de4aee8e825aab6bbc2b1bfbab83dd60a3a0f7b1172d133ed853b0ffe50ba6"
+    },
+    {
+      "command": "sed -n '1,100p' \"$TMPDIR/resume/checkpoint-report.py\"",
+      "exit": 0,
+      "commandSha256": "638c869d2e950a6282ed16ed0169b7d19736e411a1acc7d896b2645c0cc9f84d"
     }
   ],
   "commandNotation": "$GATE_SLOT names the prescribed wrapper, $STAGE_SCRATCH the owned scratch directory, $GATE_RUNNER the runner, $ORIGIN_URL the existing repository remote, $BASH the shell, and $PAIRED_CHECK_DRIVER the inline serial test/check program. Here-document inputs are represented by SHA256; every shell invocation, test file command and exit is listed. Hook/commit and post-commit commands after this report's cutoff are reported in the stage summary.",
@@ -3733,5 +3974,13 @@
       "src/lib/runtime/nativeQueueCompaction.integration.test.ts": "0815b74ef29f68070a9310801ea0bf1f71de0f2bfa8f8300ad6814e31512ffe2"
     }
   },
-  "finalSourceHashesCoverage": "Hashes of the previously checked inputs. Upstream-only hashes above identify the later unchecked fixture/evidence."
+  "finalSourceHashesCoverage": "Hashes of the previously checked inputs. Upstream-only hashes above identify the later unchecked fixture/evidence.",
+  "finalCheckpointVerification": {
+    "latestMergeParentsVerified": true,
+    "worktreeCleanAtVerification": true,
+    "workflowEdits": false,
+    "upstreamFilesMatchCapturedMain": true,
+    "finalPublicationPrivacyExit": 0,
+    "pendingHeavyChecksRemain": true
+  }
 }
