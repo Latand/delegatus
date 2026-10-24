@@ -13,9 +13,11 @@
  * the lane back to its conversation.
  *
  * The query string picks what is drawn:
- *   ?variant=1|2|3&screen=1..4&lang=uk|en&theme=light|dark  one screen
- *   ?strip&variant=…&device=desktop|phone&lang=…&theme=…    the four screens
+ *   ?variant=1|2|3&screen=1..5&lang=uk|en&theme=light|dark  one screen
+ *   ?strip&variant=…&device=desktop|phone&lang=…&theme=…    the four steps
  *                                                            and their captions
+ * Step 4 is two frames: the board (screen 4, «4а») and the source
+ * conversation after the start (screen 5, «4б»).
  *   …&w=820                                                  an in-between width
  * The strip lays every screen out in its own frame at its real viewport, so
  * each screen keeps its own width rules. See README.md.
@@ -49,7 +51,7 @@ const params = new URLSearchParams(location.search);
 const LANG: Locale = params.get("lang") === "en" ? "en" : "uk";
 const THEME = params.get("theme") === "dark" ? "dark" : "light";
 const VARIANT = ([1, 2, 3] as const).find((n) => String(n) === params.get("variant")) ?? 1;
-const SCREEN = ([1, 2, 3, 4] as const).find((n) => String(n) === params.get("screen")) ?? 1;
+const SCREEN = ([1, 2, 3, 4, 5] as const).find((n) => String(n) === params.get("screen")) ?? 1;
 type Variant = typeof VARIANT;
 type Screen = typeof SCREEN;
 
@@ -64,6 +66,10 @@ const NOW_MS = Date.parse("2026-10-24T10:46:00.000Z");
 const NOW = NOW_MS / 1000;
 Date.now = () => NOW_MS;
 const iso = (minutesAgo: number) => new Date(NOW_MS - minutesAgo * 60_000).toISOString();
+function clock(minutesAgo: number): string {
+  const at = new Date(NOW_MS - minutesAgo * 60_000);
+  return `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+}
 
 /* No server stands behind the prototype: every read answers empty, and every
    conversation has a host to send to, so the composer is the one a live agent has. */
@@ -86,12 +92,16 @@ const PROJECT = "orbit-store";
 const BRANCH = "fix/csv-export-retry";
 const WORKTREE_LABEL = "worktrees/csv-export-retry";
 const NEW_BRANCH = "pipeline/csv-export-retry";
-const LAST_COMMIT = "4e1c9a2";
-const LAST_COMMIT_SUBJECT = "export: split writer into chunks";
+/* The conversation's last commit, in the clock the feed shows its times in. */
+const LAST_COMMIT_AT = clock(22);
 const DIRTY = ["src/export/csvWriter.ts", "src/export/upload.ts", "src/export/retry.ts"];
 
-/* The source conversation is mid-turn on screens 1 and 2, done after. */
+/* The source conversation is mid-turn on screens 1 and 2, done after. On
+   screens 4 and 5 the lane exists; in variant 3 the source is its Build stage,
+   so it is working again. */
 const SOURCE_WORKING = SCREEN <= 2;
+const STARTED = SCREEN >= 4;
+const SOURCE_IS_BUILD = STARTED && VARIANT === 3;
 
 const SOURCE_TITLE = L("CSV export retry", "Повтор експорту CSV");
 const TASK_TITLE = L("CSV export fails on large projects", "Експорт CSV падає на великих проєктах");
@@ -130,13 +140,23 @@ function sourceTranscript(): string[] {
     said(5, L("Running the export tests first.", "Спершу запускаю тести експорту."), { id: "t-test", name: "Bash", input: { command: "bun test src/export", description: L("Run the export tests", "Тести експорту") } }),
   ];
   if (SOURCE_WORKING) return lines;
-  return [
+  const done = [
     ...lines,
     result(3, "t-test", "42 pass\n0 fail\nRan 42 tests across 6 files. [4.81s]"),
     said(1, L(
       "Tests are green (42 pass). An 80k-row file writes in 6 s and stays under 120 MB. Left: a test for the retry after 503.",
       "Тести зелені (42 pass). Файл на 80 тис. рядків пишеться за 6 с і тримається до 120 МБ. Лишилось: тест на повтор після 503.",
     )),
+  ];
+  if (!SOURCE_IS_BUILD) return done;
+  /* Variant 3: the Build stage's rules arrive as this conversation's newest message. */
+  return [
+    ...done,
+    user(0.7, L(
+      `Pipeline stage ${BUILD_NAME}. Task: CSV export fails on large projects. Finish what is left (a test for the retry after 503), keep the file format byte for byte, commit, and report to the pipeline. ${REVIEW_NAME} comes next.`,
+      `Етап пайплайна ${BUILD_NAME}. Задача: експорт CSV падає на великих проєктах. Доробіть, що лишилось (тест на повтор після 503), формат файлу не міняйте, закомітьте і звітуйте пайплайну. Далі — ${REVIEW_NAME}.`,
+    )),
+    said(0.4, L("Taking the Build stage: writing the test for the retry after 503.", "Беру етап Build: пишу тест на повтор після 503.")),
   ];
 }
 
@@ -155,10 +175,12 @@ const conversation = (over: Partial<FileEntry> & { path: string }): FileEntry =>
 const SOURCE = conversation({
   path: SOURCE_PATH, conversationId: SOURCE_ID, title: SOURCE_TITLE,
   cwd: `/work/${PROJECT}/${WORKTREE_LABEL}`, gitBranch: BRANCH,
-  activity: SOURCE_WORKING || (SCREEN === 4 && VARIANT === 3) ? "live" : "idle",
+  activity: SOURCE_WORKING || SOURCE_IS_BUILD ? "live" : "idle",
   proc: "running", pid: 48_213,
-  mtime: SOURCE_WORKING ? NOW - 20 : NOW - 60,
-  lastTurn: SOURCE_WORKING ? { startedAt: NOW_MS - 6 * 60_000, endedAt: null } : { startedAt: NOW_MS - 6 * 60_000, endedAt: NOW_MS - 60_000 },
+  mtime: SOURCE_WORKING ? NOW - 20 : SOURCE_IS_BUILD ? NOW - 10 : NOW - 60,
+  lastTurn: SOURCE_WORKING ? { startedAt: NOW_MS - 6 * 60_000, endedAt: null }
+    : SOURCE_IS_BUILD ? { startedAt: NOW_MS - 40_000, endedAt: null }
+    : { startedAt: NOW_MS - 6 * 60_000, endedAt: NOW_MS - 60_000 },
 } as Partial<FileEntry> & { path: string });
 const BUILD = conversation({
   path: BUILD_PATH, conversationId: "conv_pipeline_build", title: L("Build · CSV export retry", "Build · Повтор експорту CSV"),
@@ -201,9 +223,8 @@ function lane(): Pipeline {
   } as unknown as Pipeline;
 }
 
-const ON_BOARD = SCREEN === 4;
-const PIPELINES: Pipeline[] = ON_BOARD ? [lane()] : [];
-const FILES: FileEntry[] = [SOURCE, CHECKOUT, SEARCH, ...(ON_BOARD && VARIANT !== 3 ? [BUILD] : [])];
+const PIPELINES: Pipeline[] = STARTED ? [lane()] : [];
+const FILES: FileEntry[] = [SOURCE, CHECKOUT, SEARCH, ...(STARTED && VARIANT !== 3 ? [BUILD] : [])];
 const TASKS: BoardTask[] = [
   task("t-csv", "assigned", `${TASK_TITLE}\n${L("The worker runs out of memory past 50k rows.", "Понад 50 тис. рядків воркер вилітає по пам’яті.")}`, [SOURCE], 6),
   task("t-pay", "assigned", `${L("Card payments: 3-D Secure", "Оплата карткою: 3-D Secure")}\n${L("The bank's second step opens in a new tab.", "Другий крок банку відкривається в новій вкладці.")}`, [CHECKOUT], 50,
@@ -211,6 +232,13 @@ const TASKS: BoardTask[] = [
   task("t-search", "inbox", `${L("Search filters lose their state", "Фільтри пошуку губляться")}\n${L("Going back from a product resets them.", "Після повернення з товару скидаються.")}`, [SEARCH], 120),
   task("t-orders", "inbox", `${L("Orders page is slow on phones", "Сторінка замовлень повільна на телефоні")}\n${L("Over 3 s on a mid-range phone.", "Понад 3 с на середньому телефоні.")}`, [], 300),
 ];
+
+/* The stage names as the product draws them, in both languages. */
+const STAGE_NAMES = (() => {
+  const t = (key: string, vars?: Record<string, string | number>) => translate(LANG, key as never, vars as never);
+  return (STAGES as Pipeline["stages"]).map((stage) => stageDisplayName(t as never, stage));
+})();
+const [BUILD_NAME, REVIEW_NAME, FIX_NAME] = STAGE_NAMES as [string, string, string];
 
 /* The feed reads the transcript through the feed's own dependency seam. */
 const SOURCE_LINES = sourceTranscript();
@@ -233,13 +261,8 @@ setLogFeedDependenciesForTests({ useLogTail: (file) => { const state = tailOf(fi
 
 /* ---------- the words this prototype adds ---------- */
 
-const STAGE_NAMES = (() => {
-  const t = (key: string, vars?: Record<string, string | number>) => translate(LANG, key as never, vars as never);
-  return (STAGES as Pipeline["stages"]).map((stage) => stageDisplayName(t as never, stage));
-})();
-const [BUILD_NAME, REVIEW_NAME, FIX_NAME] = STAGE_NAMES as [string, string, string];
 /* The last completed turn, in the clock the feed shows its times in. */
-const CUTOFF = (() => { const at = new Date(NOW_MS - 60_000); return `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`; })();
+const CUTOFF = clock(1);
 
 const WORDS = {
   menuRow: L("Start pipeline", "Запустити пайплайн"),
@@ -257,6 +280,7 @@ const WORDS = {
   waitingButton: L("Waiting for the turn…", "Чекаю кінця ходу…"),
   briefPending: L("The brief appears when the turn ends.", "Опис з’явиться, коли хід закінчиться."),
   where: L("Where it works", "Де працює"),
+  who: L("Who works", "Хто працює"),
   branch: L("Branch", "Гілка"),
   checkout: L("Checkout", "Робоча копія"),
   changes: L("Changes", "Зміни"),
@@ -292,7 +316,7 @@ function whereRows(variant: Variant): { label: string; value: ReactNode; note?: 
   const code = (text: string) => <code className="font-mono text-[12px] text-primary [overflow-wrap:anywhere]">{text}</code>;
   if (variant === 2) {
     return [
-      { label: WORDS.branch, value: <>{code(NEW_BRANCH)}</>, note: L(`New, from commit ${LAST_COMMIT} «${LAST_COMMIT_SUBJECT}»`, `Нова, від коміту ${LAST_COMMIT} «${LAST_COMMIT_SUBJECT}»`) },
+      { label: WORDS.branch, value: <>{code(NEW_BRANCH)}</>, note: L(`New, from this conversation's last commit (${LAST_COMMIT_AT})`, `Нова, від останнього коміту розмови (${LAST_COMMIT_AT})`) },
       { label: WORDS.checkout, value: <>{code("pipelines/csv-export-retry")}</>, note: L("New; this conversation keeps its own and can go on working", "Нова; розмова лишає свою і може працювати далі") },
       { label: WORDS.changes, value: L("3 uncommitted files stay behind", "3 незакомічені файли сюди не потраплять"), note: DIRTY.join(" · "), warn: true },
     ];
@@ -308,6 +332,63 @@ function holdNote(variant: Variant): string {
   if (variant === 1) return L("While the pipeline holds this checkout, this conversation can be read but not written to.", "Поки пайплайн тримає робочу копію, розмову можна читати, але не писати в неї.");
   if (variant === 2) return L("This conversation stays free: it can keep working in its own branch.", "Розмова лишається вільною: вона може працювати далі у своїй гілці.");
   return L(`This agent receives the ${BUILD_NAME} stage's rules and reports to the pipeline when it is done.`, `Цей агент отримає умови етапу ${BUILD_NAME} і звітуватиме пайплайну, коли закінчить.`);
+}
+
+/** What the source conversation says about the lane once it started (screen 5, «4б»). */
+function afterWords(variant: Variant): { banner: string; locked: string | null } {
+  if (variant === 1) return {
+    banner: L(`Pipeline «${TASK_TITLE}» works in this checkout`, `Пайплайн «${TASK_TITLE}» працює в цій робочій копії`),
+    locked: L("The pipeline holds this checkout: the conversation can only be read", "Пайплайн тримає цю робочу копію — розмову можна лише читати"),
+  };
+  if (variant === 2) return {
+    banner: L(`Pipeline «${TASK_TITLE}» works on branch ${NEW_BRANCH}; this conversation stays on ${BRANCH}`, `Пайплайн «${TASK_TITLE}» працює в гілці ${NEW_BRANCH}; ця розмова лишається в ${BRANCH}`),
+    locked: null,
+  };
+  return {
+    banner: L(`This conversation is the ${BUILD_NAME} stage of pipeline «${TASK_TITLE}»`, `Ця розмова — етап ${BUILD_NAME} пайплайна «${TASK_TITLE}»`),
+    locked: null,
+  };
+}
+
+function AfterBanner({ variant }: { variant: Variant }) {
+  return (
+    <a href="#pipeline=pl_csv_export" data-proto-new="" data-proto-after="banner" className="flex min-h-7 min-w-0 shrink-0 items-start gap-1.5 border-b border-border bg-sunken px-3 py-1.5 text-label font-semibold text-primary hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+      <Workflow className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" aria-hidden />
+      <span className="min-w-0">{afterWords(variant).banner}</span>
+    </a>
+  );
+}
+
+/** Variant 1 only: where the composer was, the reason it is gone. */
+function LockedNotice({ text }: { text: string }) {
+  return (
+    <div role="status" data-proto-new="" data-proto-after="locked" className="mx-3 my-2 flex shrink-0 items-center gap-2 rounded-control border border-dashed border-strong bg-warning-soft px-3 py-2.5 text-ui font-semibold text-warning">
+      <Workflow className="h-4 w-4 shrink-0" aria-hidden />
+      <span className="min-w-0">{text}</span>
+    </div>
+  );
+}
+
+/** Desktop: the banner goes under the reader's header and, in variant 1, the notice takes the composer's place. */
+function DesktopAfterState({ variant }: { variant: Variant }) {
+  const words = afterWords(variant);
+  const banner = useInsertedHost(findReaderBannerSpot);
+  const locked = useInsertedHost(words.locked ? findReaderComposerSpot : nothing);
+  return (
+    <>
+      {banner ? createPortal(<AfterBanner variant={variant} />, banner) : null}
+      {locked && words.locked ? createPortal(<LockedNotice text={words.locked} />, locked) : null}
+    </>
+  );
+}
+const nothing = () => null;
+function findReaderBannerSpot() {
+  const body = document.querySelector("[data-agent-window] [data-conversation-body]") ?? document.querySelector("[data-conversation-body]");
+  return body ? { parent: body.parentElement!, before: body } : null;
+}
+function findReaderComposerSpot() {
+  const body = document.querySelector("[data-agent-window] [data-conversation-body]") ?? document.querySelector("[data-conversation-body]");
+  return body ? { parent: body, before: null } : null;
 }
 
 /* ---------- the preview ---------- */
@@ -358,24 +439,24 @@ function PreviewBody({ variant, waiting }: { variant: Variant; waiting: boolean 
         )}
         {waiting ? null : <span className="text-label text-muted">{WORDS.briefNote}</span>}
       </label>
-      <section className="flex flex-col gap-1.5" aria-label={WORDS.where}>
-        <span className="text-label font-semibold text-secondary">{WORDS.where}</span>
-        <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1.5">
-          {whereRows(variant).map((row) => (
-            <div key={row.label} className="contents">
-              <dt className="pt-px text-label font-semibold text-muted">{row.label}</dt>
-              <dd className="flex min-w-0 flex-col">
-                <span className={`text-ui font-semibold ${row.warn ? "text-warning" : "text-primary"}`}>{row.value}</span>
-                {row.note ? <span className="text-label text-muted [overflow-wrap:anywhere]">{row.note}</span> : null}
-              </dd>
-            </div>
-          ))}
-          <dt className="pt-px text-label font-semibold text-muted">{WORDS.stages}</dt>
-          <dd className="min-w-0"><StageChain variant={variant} /></dd>
-          <dt className="pt-px text-label font-semibold text-muted">{WORDS.publish}</dt>
-          <dd className="min-w-0 text-ui text-primary">{WORDS.publishValue}</dd>
-        </dl>
-      </section>
+      {/* One label column for both sections, so their values start on one line. */}
+      <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1.5">
+        <dt className="col-span-2 text-label font-semibold text-secondary" data-proto-heading="where">{WORDS.where}</dt>
+        {whereRows(variant).map((row) => (
+          <div key={row.label} className="contents">
+            <dt className="pt-px text-label font-semibold text-muted">{row.label}</dt>
+            <dd className="flex min-w-0 flex-col">
+              <span className={`text-ui font-semibold ${row.warn ? "text-warning" : "text-primary"}`}>{row.value}</span>
+              {row.note ? <span className="text-label text-muted [overflow-wrap:anywhere]">{row.note}</span> : null}
+            </dd>
+          </div>
+        ))}
+        <dt className="col-span-2 pt-1.5 text-label font-semibold text-secondary" data-proto-heading="who">{WORDS.who}</dt>
+        <dt className="pt-px text-label font-semibold text-muted">{WORDS.stages}</dt>
+        <dd className="min-w-0"><StageChain variant={variant} /></dd>
+        <dt className="pt-px text-label font-semibold text-muted">{WORDS.publish}</dt>
+        <dd className="min-w-0 text-ui text-primary">{WORDS.publishValue}</dd>
+      </dl>
       <p className={`rounded-control px-3 py-2 text-label font-semibold ${variant === 1 ? "bg-warning-soft text-warning" : "bg-sunken text-secondary"}`} data-proto-hold="">
         {holdNote(variant)}
       </p>
@@ -424,8 +505,8 @@ function DesktopPreview({ variant, waiting }: { variant: Variant; waiting: boole
 
 /* ---------- the menu row the conversation's ⋯ gains ---------- */
 
-/** Waits for an element the product renders, then hands back a node inserted where the new row goes. */
-function useInsertedHost(find: () => { parent: Element; before: Element | null } | null): HTMLElement | null {
+/** Waits for an element the product renders, then hands back a node inserted where the new row goes, and inserts it again if the product redraws that place. */
+function useInsertedHost(find: () => { parent: Element; before: Element | null } | null, tag: "div" | "span" = "div"): HTMLElement | null {
   const [host, setHost] = useState<HTMLElement | null>(null);
   useEffect(() => {
     let made: HTMLElement | null = null;
@@ -433,15 +514,16 @@ function useInsertedHost(find: () => { parent: Element; before: Element | null }
       if (made?.isConnected) return true;
       const spot = find();
       if (!spot) return false;
-      made = document.createElement("div");
+      made = document.createElement(tag);
       made.setAttribute("role", "none");
       made.dataset.protoInserted = "";
       spot.parent.insertBefore(made, spot.before);
       setHost(made);
       return true;
     };
-    if (attempt()) return;
-    const observer = new MutationObserver(() => { if (attempt()) observer.disconnect(); });
+    attempt();
+    /* Keeps watching: a card that unfolds draws its lane anew, and the row goes back in. */
+    const observer = new MutationObserver(() => { attempt(); });
     observer.observe(document.body, { childList: true, subtree: true });
     return () => observer.disconnect();
   }, [find]);
@@ -498,7 +580,7 @@ function findPhoneMenuSpot() {
 
 function linkWords(variant: Variant): { line: string; state: string } {
   if (variant === 1) return { line: L(`Continues «${SOURCE_TITLE}»`, `Продовжує розмову «${SOURCE_TITLE}»`), state: L("the conversation is read-only while the pipeline holds its checkout", "розмова лише для читання, поки пайплайн тримає її робочу копію") };
-  if (variant === 2) return { line: L(`Started from «${SOURCE_TITLE}»`, `Запущено з розмови «${SOURCE_TITLE}»`), state: L(`branch ${NEW_BRANCH}; the conversation keeps working in its own`, `гілка ${NEW_BRANCH}; розмова працює далі у своїй`) };
+  if (variant === 2) return { line: L(`Started from «${SOURCE_TITLE}»`, `Запущено з розмови «${SOURCE_TITLE}»`), state: L(`branch ${NEW_BRANCH}; the conversation keeps working on its own branch ${BRANCH}`, `гілка ${NEW_BRANCH}; розмова працює далі у своїй гілці ${BRANCH}`) };
   return { line: L(`${BUILD_NAME} is the conversation «${SOURCE_TITLE}»`, `${BUILD_NAME} — це розмова «${SOURCE_TITLE}»`), state: L("same agent, now a stage", "той самий агент, тепер етап") };
 }
 
@@ -517,6 +599,18 @@ function LaneLink({ variant, phone }: { variant: Variant; phone: boolean }) {
     host,
   );
 }
+/** Variant 3 names the conversation on the lane's own Build chip: the stage is that conversation. */
+function BuildChipName() {
+  const host = useInsertedHost(findBuildChipSpot, "span");
+  if (!host) return null;
+  return createPortal(<span data-proto-new="" data-proto-chip-name="" className="font-normal"> · {SOURCE_TITLE}</span>, host);
+}
+function findBuildChipSpot() {
+  const chip = document.querySelector('[data-pipeline="pl_csv_export"] .pb-pill:not(.side)');
+  const label = chip?.querySelector(".pb-name") ?? null;
+  return chip ? { parent: label ?? chip, before: null } : null;
+}
+
 function findDesktopLaneSpot() {
   const block = document.querySelector('.kb [data-pipeline="pl_csv_export"][data-density="task"]');
   return block ? { parent: block, before: null } : null;
@@ -548,7 +642,7 @@ function usePress(selector: string | null) {
 }
 
 function DesktopScreen({ variant, screen }: { variant: Variant; screen: Screen }) {
-  const reading = screen <= 3;
+  const reading = screen !== 4;
   /* Screen 1: the reader's ⋯. Screen 4: the task card unfolds, so its lane row and members show. */
   usePress(screen === 1 ? "[data-reader-menu]" : screen === 4 ? '[data-kanban-card="task:t-csv"] button.fold[aria-expanded="false"]' : null);
   return (
@@ -569,13 +663,20 @@ function DesktopScreen({ variant, screen }: { variant: Variant; screen: Screen }
         selection={new Set()}
         seatRefs={null}
         focus={reading ? SOURCE_PATH : null}
+        readerStorage={null}
       />
       {screen === 1 ? <DesktopMenuRow variant={variant} /> : null}
       {screen === 2 || screen === 3 ? <DesktopPreview variant={variant} waiting={screen === 2} /> : null}
       {screen === 4 ? <LaneLink variant={variant} phone={false} /> : null}
+      {screen >= 4 && variant === 3 ? <BuildChipName /> : null}
+      {screen === 5 ? <DesktopAfterState variant={variant} /> : null}
+      {screen === 5 && variant === 1 ? <style>{LOCKED_CSS}</style> : null}
     </div>
   );
 }
+
+/* Variant 1's composer is gone while the pipeline holds the checkout: the reader keeps its feed. */
+const LOCKED_CSS = `[data-conversation-body] > :not([data-composer-yields]):not([data-proto-inserted]):not([data-proto-keep]) { display: none !important; }`;
 
 /* ---------- phone ---------- */
 
@@ -586,11 +687,21 @@ function PhoneChat({ variant, screen }: { variant: Variant; screen: Screen }) {
       <MobileShell
         screen="chat"
         screenId={SOURCE_ID}
-        title={<MobileBarTitle meta={<span className="truncate text-label text-muted">{SOURCE_WORKING ? L("working", "працює") : L("idle", "чекає")}</span>}>{SOURCE_TITLE}</MobileBarTitle>}
+        /* Variant 3 after the start: the bar names the stage, as the desktop reader's header does. */
+        title={<MobileBarTitle meta={<span className="truncate text-label text-muted">{SOURCE_WORKING || SOURCE_IS_BUILD ? L("working", "працює") : L("idle", "чекає")}</span>}>{SOURCE_IS_BUILD ? `${BUILD_NAME} · ${SOURCE_TITLE}` : SOURCE_TITLE}</MobileBarTitle>}
         back
         renderSheet={() => null}
       >
-        <BranchPane file={SOURCE} tasks={[]} isRoot chromeInMenu onClose={noop} />
+        <BranchPane
+          file={SOURCE}
+          tasks={[]}
+          isRoot
+          chromeInMenu
+          onClose={noop}
+          {...(screen === 5 ? { banner: <AfterBanner variant={variant} /> } : {})}
+          {...(screen === 5 && variant === 1 ? { noComposer: true } : {})}
+        />
+        {screen === 5 && afterWords(variant).locked ? <LockedNotice text={afterWords(variant).locked!} /> : null}
       </MobileShell>
       {screen === 1 ? (
         <>
@@ -634,6 +745,7 @@ function PhoneBoard({ variant }: { variant: Variant }) {
         />
       </MobileShell>
       <LaneLink variant={variant} phone />
+      {variant === 3 ? <BuildChipName /> : null}
     </div>
   );
 }
@@ -652,28 +764,33 @@ const CAPTIONS: Record<Variant, Record<Screen, string>> = {
     1: "У меню розмови з’являється пункт «Запустити пайплайн»: нові агенти працюватимуть у гілці й робочій копії цієї розмови.",
     2: "Агент ще дописує хід, тому вікно чекає і візьме опис задачі, щойно хід закінчиться.",
     3: "Перед стартом видно опис задачі з розмови (його можна правити), ту саму гілку й робочу копію з трьома незакоміченими файлами та етапи Build → Review → Fix.",
-    4: "На картці задачі з’являється лінія пайплайна з посиланням на розмову, а розмова лишається лише для читання, поки пайплайн тримає робочу копію.",
+    4: "На картці задачі з’являється лінія пайплайна з посиланням на розмову; Build виконує новий агент у тій самій робочій копії.",
+    5: "Сама розмова тепер лише для читання: замість поля вводу написано, що пайплайн тримає її робочу копію.",
   },
   2: {
     1: "У меню розмови з’являється пункт «Запустити пайплайн»: він відкриє нову гілку від останнього коміту цієї розмови.",
     2: "Агент ще дописує хід, тому вікно чекає: опис і останній коміт стануть остаточними, коли хід закінчиться.",
-    3: "Перед стартом видно опис задачі, нову гілку від коміту 4e1c9a2 і попередження, що три незакомічені файли в неї не потраплять.",
-    4: "На картці задачі з’являється лінія в новій гілці з посиланням на розмову, а сама розмова вільна й може працювати далі.",
+    3: "Перед стартом видно опис задачі, нову гілку від останнього коміту розмови і попередження, що три незакомічені файли в неї не потраплять.",
+    4: "На картці задачі з’являється лінія в новій гілці з посиланням на розмову; Build виконує новий агент в окремій робочій копії.",
+    5: "Сама розмова вільна: поле вводу на місці, і вона працює далі у своїй гілці fix/csv-export-retry.",
   },
   3: {
     1: "У меню розмови з’являється пункт «Запустити пайплайн»: цей самий агент стане першим етапом, Build.",
     2: "Агент ще дописує хід, тому вікно чекає: умови етапу він отримає лише після кінця ходу.",
     3: "Перед стартом видно опис задачі, ту саму гілку й робочу копію і що Build — це цей агент, а Review і Fix — нові агенти.",
-    4: "На картці задачі з’являється лінія, де етап Build — це сама розмова, а Review і Fix потім виконають нові агенти.",
+    4: "На картці задачі з’являється лінія, де етап Build названо цією розмовою, а Review і Fix потім виконають нові агенти.",
+    5: "Сама розмова стала етапом Build: у заголовку назва етапу, а останнє повідомлення — умови етапу від пайплайна.",
   },
 };
+/* Step 4 is two frames: the board, then the conversation after the start. */
+const LABELS: Record<Screen, string> = { 1: "1", 2: "2", 3: "3", 4: "4а", 5: "4б" };
 
 function Strip() {
   const phone = params.get("device") === "phone";
   /* `w` checks an in-between width (820) with the desktop's height. */
   const width = Number(params.get("w")) || (phone ? 390 : 1440);
   const height = phone ? 844 : 900;
-  const screens: Screen[] = [1, 2, 3, 4];
+  const screens: Screen[] = [1, 2, 3, 4, 5];
   const src = (screen: Screen) => `?variant=${VARIANT}&screen=${screen}&lang=${LANG}&theme=${THEME}`;
   return (
     <main className="bg-sunken p-6 text-primary" data-proto-strip={phone ? "phone" : "desktop"} style={{ width: "max-content" }}>
@@ -683,9 +800,9 @@ function Strip() {
       <div className={phone ? "flex items-start gap-6" : "flex flex-col gap-6"}>
         {screens.map((screen) => (
           <figure key={screen} className="flex flex-col gap-2" style={{ width }} data-proto-figure={screen}>
-            <iframe title={`${VARIANT}.${screen}`} src={src(screen)} width={width} height={height} className="block rounded-[4px] border border-border bg-canvas" style={{ width, height }} />
+            <iframe title={`${VARIANT}.${LABELS[screen]}`} src={src(screen)} width={width} height={height} className="block rounded-[4px] border border-border bg-canvas" style={{ width, height }} />
             <figcaption className="text-body text-primary" style={{ maxWidth: width }}>
-              <b>{VARIANT}.{screen}</b> {CAPTIONS[VARIANT][screen]}
+              <b>{VARIANT}.{LABELS[screen]}</b> {CAPTIONS[VARIANT][screen]}
             </figcaption>
           </figure>
         ))}

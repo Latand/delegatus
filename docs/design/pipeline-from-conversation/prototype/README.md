@@ -7,11 +7,12 @@ pipeline works and who does the first stage. No product code changes.
 | Variant | What happens | The checkout | Build stage |
 |---|---|---|---|
 | 1 | Keep this conversation's branch and worktree | `fix/csv-export-retry` in `worktrees/csv-export-retry`; the 3 uncommitted files stay in place; the conversation is read-only while the pipeline holds the checkout | a new agent |
-| 2 | A fresh branch from the conversation's last commit | new `pipeline/csv-export-retry` from commit `4e1c9a2`; the 3 uncommitted files stay behind; the conversation keeps working in its own branch | a new agent |
+| 2 | A fresh branch from the conversation's last commit | new `pipeline/csv-export-retry` from the conversation's last commit (13:24); the 3 uncommitted files stay behind; the conversation keeps working in its own branch | a new agent |
 | 3 | The current agent becomes the Build stage | the conversation's own branch and worktree | this agent, in this conversation |
 
 Review and Fix are new agents in every variant. Each variant is one strip of
-four screens, with one plain Ukrainian sentence under each:
+four steps, the last drawn in two frames, with one plain Ukrainian sentence
+under each frame:
 
 1. The conversation's ⋯ menu with the new row «Запустити пайплайн» / «Start
    pipeline»; the row's second line already names the variant.
@@ -21,8 +22,16 @@ four screens, with one plain Ukrainian sentence under each:
    conversation, where the lane works (branch, checkout, uncommitted files),
    the stages Build → Review → Fix with who runs each, and local-only
    publication.
-4. The board: the task card's lane, with a line that links it back to the
-   conversation and says what became of the conversation.
+4. After the start, two frames:
+   - 4а, the board: the task card's lane, with a line that links it back to
+     the conversation; in variant 3 the Build chip names the conversation;
+   - 4б, the conversation itself, opened from the board: a line under its
+     header names the pipeline, and what it may do now differs by variant.
+     Variant 1: the composer is gone and a notice in its place says the
+     pipeline holds the checkout, so the conversation can only be read.
+     Variant 2: the composer stays and the line names both branches.
+     Variant 3: the header names the Build stage, and the stage's rules are the
+     newest message.
 
 ## What is the product and what is new
 
@@ -43,7 +52,10 @@ New, drawn with existing primitives and classes:
 - the preview: the pipeline template picker's dialog shell on the desktop
   (`PipelineTemplatePicker.tsx`), wider for the brief; a `MobileSheet` with its
   footer on the phone; stage chips as the template picker draws them;
-- the lane's link line under the lane row.
+- the lane's link line under the lane row, and in variant 3 the conversation's
+  title on the Build chip;
+- in the conversation after the start: the line under its header that names
+  the pipeline, and variant 1's notice where the composer was.
 
 The stage names come from the product (`stageDisplayName`), so the preview and
 the board name Build, Review and Fix the same way in both languages. Project,
@@ -52,9 +64,9 @@ tasks, conversation, branch, commit and file names are invented.
 ## Files
 
 - `prototype.fixture.tsx`: the whole prototype. Query string:
-  `?variant=1|2|3&screen=1..4&lang=uk|en&theme=light|dark` draws one screen at
+  `?variant=1|2|3&screen=1..5&lang=uk|en&theme=light|dark` draws one screen at
   the window's size; `?strip&variant=…&device=desktop|phone&lang=…&theme=…`
-  draws the four screens, each in its own frame at its real viewport (1440×900
+  draws the five frames, each in its own frame at its real viewport (1440×900
   or 390×844), with the captions; `&w=820` checks an in-between width.
 - `prototype.css`: the product's `globals.css` plus this directory as a
   Tailwind source.
