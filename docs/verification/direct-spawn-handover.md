@@ -1,63 +1,37 @@
 Refs #2150
 
-Origin: Codex Cloud (GPT-6.1 Sol), result 06. The 10,382-byte input patch matched `06.meta.json` before application: SHA-256 `d7e4ce68f32761990988097546d92a12bd1c41d8258d1ce1518402b61bf14ac8` (hash/size assertion exit 0); `git apply --check` and `git apply` both exited 0.
+Origin: Codex Cloud (GPT-6.1 Sol), result 06. The input patch matches `06.meta.json`: 10,382 bytes, SHA-256 `d7e4ce68f32761990988097546d92a12bd1c41d8258d1ce1518402b61bf14ac8`. Its original base is `adce5764927f7e838f20070cd2968128912e861c`.
 
-`src/lib/agent/spawnCommand.ts:1255` retries transport failures under the existing 30-second admission window and keeps the launch and first-message identities. `src/lib/runtime/startup.ts:653` recognizes busy direct conversations checkpointed as dead or unhosted and uses the existing interruption obligations to resume them once.
+Direct launches admitted for execution persist their specification, prompt, image references, selected account and admission deadline before returning 202. A successor can replay that payload after the answering process exits, using the original launch, conversation and first-message identities. The existing quota queue carries these optional admission fields; both JSON and SQLite retain them.
 
-Fixes on top of the Cloud patch:
+The deployment budget is ten minutes, shared with pipeline launches through `src/lib/runtime/admissionBudget.ts`. A foreground attempt keeps the existing asynchronous backoff window. A transport outage leaves the receipt starting, preserves its final transport cause and hands the remaining work to the durable reaper. Each later recovery pass attempts admission once. Restarting or replaying the request preserves the original deadline. Exhaustion settles the receipt once with the retained cause.
 
-- Stop retries when another writer settles the receipt or releases admission ownership; compare the recorded owner identity before each attempt.
-- Recheck authorization after backoff and settle a revoked launch; preserve failures already settled by the launcher.
-- Correct the Cloud test's continuation assertion to expect the restart notice for its simulated restart cut.
-- Add real admission logic over a fake runtime journal/engine, fixed-clock deadline cases, concurrent-writer and authorization cases, completed/interrupted negative cases, and deduplication across two fresh successor processes (`src/lib/agent/spawnCommand.contention.test.ts:602`, `src/lib/runtime/releaseInterruption.test.ts:3203`).
+A concurrent replay waits with a retryable 503 until the publisher commits the payload. Once the payload exists, HTTP replay preserves its deployment deadline through a long handover. Runtime acknowledgement records `hostSetupStartedAt` while retiring the admission payload. An acknowledged launch keeps returning 202 while its host starts. The host then has its existing separate five-minute setup window; receipt creation time still records the original reservation. HTTP reconciliation, recovery and the transactional stale-owner guard use the setup timestamp, with the legacy timestamp fallback for older receipts. Tests exercise six minutes of admission waiting followed by successful setup and by setup expiry.
 
-Verification used fake engines, private HOME/XDG_CONFIG_HOME/LLV_STATE_DIR/TMPDIR roots, explicit files, and serial remote execution through `gate-remote --` and `scripts/gate-slot.sh`. Each manifest file started with `setsid`, stdin closed; both manifests finished with `RAN_COUNT=25`. Baseline main was `adce5764927f7e838f20070cd2968128912e861c`. The branch had 10 failing files versus 13 on main; every remaining failed test name and assertion location matched main. No failing assertion was newly introduced. Both broad runs exited 1 with pre-existing failures. The full cut/release file passed 152 tests (one subprocess-only helper skipped), and the supplemental structured-spawn file passed all 142 tests.
+Deferring admission saves the retry and releases its owner in one transaction. Retry and recovery settlements compare the recorded process identity. After that atomic handoff, the deferring worker skips lease cleanup so it preserves a new claim in the same process. Tests change ownership during payload publication, authorization, replies, account resolution and deferral. Recovery respects `actuateQueuedSpawns: false`. A pinned replay that observes a later quota reset preserves its already admitted payload and deployment deadline. The admission payload retires after runtime acknowledgement, before engine setup can leave an uncertain process. Later setup follows the existing staged recovery and cleanup path, including cleanup refusal.
 
-| Test command (`bun test --timeout=60000` + file) | Main exit | Branch exit |
-|---|---:|---:|
-| `src/app/api/spawn/route.binding.test.ts` | 1 | 1 |
-| `src/app/api/spawn/route.launcher.test.ts` | 0 | 0 |
-| `src/lib/accounts/accountMutation.callers.test.ts` | 1 | 0 |
-| `src/lib/agent/registry.servingWriters.test.ts` | 1 | 0 |
-| `src/lib/agent/spawnCommand.contention.test.ts` | 1 | 1 |
-| `src/lib/agent/spawnCommand.locale.test.ts` | 0 | 0 |
-| `src/lib/agent/spawnCommand.telegram.test.ts` | 1 | 1 |
-| `src/lib/agent/spawnDeferral.test.ts` | 1 | 1 |
-| `src/lib/mcp/orchestratorTools.test.ts` | 1 | 1 |
-| `src/lib/mcp/spawnRecovery.integration.test.ts` | 1 | 1 |
-| `src/lib/monitor/seatAutoRotation.spawn.test.ts` | 0 | 0 |
-| `src/lib/monitor/seatTickController.reporting.test.ts` | 1 | 1 |
-| `src/lib/orchestrator/operatorDecisionForms.test.ts` | 0 | 0 |
-| `src/lib/orchestrator/seatRecoveryBusy.test.ts` | 1 | 1 |
-| `src/lib/pipelines/engine.containment.test.ts` | 0 | 0 |
-| `src/lib/runtime/claudeStreamBrokerHost.test.ts` | 0 | 0 |
-| `src/lib/runtime/releaseInterruption.test.ts` | 0 | 0 |
-| `src/lib/runtime/retirementReaders.test.ts` | 0 | 0 |
-| `src/lib/runtime/startup.handoverRetry.test.ts` | 0 | 0 |
-| `src/lib/runtime/startup.quarantine.test.ts` | 0 | 0 |
-| `src/lib/runtime/startup.test.ts` | 1 | 1 |
-| `src/lib/runtime/startupFinalization.integration.test.ts` | 0 | 0 |
-| `src/lib/runtime/structuredDeliveryRebind.test.ts` | 1 | 1 |
-| `src/lib/runtime/structuredSpawn.integration.test.ts` | 1 | 0 |
-| `src/lib/telegram/reportSpawn.test.ts` | 0 | 0 |
+Busy direct conversations checkpointed as dead or unhosted use the existing restart-cut obligations. Completed turns and explicitly interrupted turns remain stopped. A second successor boot consumes the same durable continuation obligation.
 
-Other verification commands and exits:
+The shared contract was checked through its producers and consumers: direct and quota-delayed reservation in `src/lib/agent/spawnCommand.ts`; normalization, queue publication, defer, release, setup and terminal settlement in `src/lib/agent/registry.ts`; foreground admission, startup recovery and controller actuation in `src/lib/runtime/structuredSpawn.ts`; SQLite receipt indexes and archive exclusions; account liveness, lifecycle census, seat monitoring and owner-relay cleanup. Optional fields preserve legacy quota queues; their deployment deadline starts when capacity is admitted. Receipt-only admission checks use the existing keyed reader. Requested-account authority and an admitted fallback remain separate identities.
 
-- `bun test --timeout=60000 --test-name-pattern 'direct spawn|a direct .*cut checkpointed|a direct .*explicitly interrupted|undated .*completion on a .*row|a direct .*continuation remains' src/lib/agent/spawnCommand.contention.test.ts`: final branch exit 0 (10 cases).
-- The same filtered command for `src/lib/runtime/releaseInterruption.test.ts`: final branch exit 0 (22 cases, including four successor subprocess boots).
-- `bun x tsc --noEmit --incremental false`: final exit 0.
-- `bun x eslint src/lib/agent/spawnCommand.ts src/lib/agent/spawnCommand.contention.test.ts src/lib/runtime/startup.ts src/lib/runtime/releaseInterruption.test.ts`: exit 0.
-- `git diff --check`: exit 0.
-- `bun scripts/privacy-publication-gate.ts --require-known-values --base origin/main --paths` followed by the four code and test files: exit 0 with committed known-value fingerprints.
+The admission tests use the real request handler and structured launcher with a fake runtime journal and engines. They cover a sixty-second outage, budget exhaustion, lost acknowledgement, answering-owner exit, account fallback, quota replay, owner changes during authorization and replies, and engine cleanup refusal. Fresh subprocesses prove that payloads and budgets survive process exits and that recovery produces one host and one first message.
 
-The initial focused trial exited 1 for each test file and 2 for typecheck; ESLint exited 0. The incorrect Cloud notice assertion and added fixture setup/type errors were fixed before the final green focused run. A first queued local admission was canceled before any test started (exit 241; child SIGTERM), then execution admission was placed on the remote runner.
+An external parent starts its admission deadline only after the child reports a waiting obligation. A real timer heartbeat must run before the next admission attempt. The parent rejects blocking and unbounded controls; a finite synchronous backoff also fails the heartbeat check. Startup has its own parent deadline. These cases use production backoff and fake transport, without replacing the successful case's clock or sleep.
 
-Main-source controls used the final tests in a throwaway remote export. `git restore --source=adce5764927f7e838f20070cd2968128912e861c -- src/lib/agent/spawnCommand.ts src/lib/runtime/startup.ts` exited 0 there. The same filtered contention command exited 1 (five expected failures), and the same filtered cut/release command exited 1 (six expected failures). The control batch exited 1 with `RAN_COUNT=3`; the final branch versions of both commands exited 0. These controls prove the missing retry and cut-recovery behavior on the baseline.
+The new cut tests drive the fake scheduler and delivery queue until admitted sends have durable outcomes. A held delivery remains valid beyond the old 400 ms drain; assertions run after completion. Later scheduled probes and a second fresh successor are drained before checking deduplication.
 
-The final fetch exited 0. Main advanced to `3dffc54e145fcba779e3ec82fdcff53030728da3` for catalog activation; its diff was inspected and none of the four code and test files changed. `git merge-tree --write-tree --name-only origin/main HEAD` exited 0. The verification diff matched the final committed source; `git status --short` and `git diff --check` exited 0 with no changes after the code commit. The workflow-path diff was empty.
+Verification is recorded in `docs/verification/direct-spawn-handover-tests.json`, including the complete 402-file importer manifest, source hashes, commands, per-file outcomes, baseline samples and controls. Static imports, dynamic imports and generated child programs were included. Runs used Bun 1.4.0, matching read-only dependencies, native detached baseline clones with the same origin, and a fresh private environment for each test file. Heavy commands ran serially through `gate-remote` and `scripts/gate-slot.sh`. The supplied gate wrapper and the exported wrapper's four execution files were verified byte-identical. Owned supervisors exited, their units became inactive and their cgroups were absent after the campaigns.
 
-`git add` of the four files and plain `git commit -F` with the prepared message exited 0. Hooks were enabled: whitespace, privacy and ESLint passed. The commit message includes `Refs #2150`, the Codex Cloud origin and machine attribution. The post-commit publication privacy check (`--require-known-values --check-commits --base origin/main`) exited 0. The same publication checker on this public report exited 0. Dependency setup (`bun install --frozen-lockfile --ignore-scripts`) exited 0.
+On the final fixture, the admission selection passed 41 cases with two helper skips; the cut selection passed 23 cases. Commands were `bun test --timeout=60000 --test-name-pattern 'direct spawn|direct admission|independently supervised' src/lib/agent/spawnCommand.contention.test.ts` and `bun test --timeout=60000 --test-name-pattern 'a direct .*cut checkpointed|a direct .*explicitly interrupted|a direct .*continuation|undated .*completion on a .*row' src/lib/runtime/releaseInterruption.test.ts`. Typecheck (`bun x tsc --noEmit --incremental false`), ESLint on all nine source and test files, whitespace and publication privacy passed. ESLint reported five unchanged unused-variable warnings. Seven old-source or mutation control runs produced their expected 15 failures, including the original base's admission and direct-cut failures and the disabled setup-expiry guard.
 
-Pre-admission payload persistence across an answering Viewer process exit remains follow-up work for #2150; this patch covers bounded admission retry and recovery of recorded busy conversations. No performance gain is claimed. No deployment or live state was used, no workflow was edited, and no push was performed.
+The full importer command was `bun test --timeout=60000 <file>`, with a separate 300-second parent bound for each explicit path. The primary branch sweep recorded 303 passing files, 98 failing files and one timeout. After whole-file reruns, the latest branch outcomes are 306 passing files, 95 failing files and one timeout. Each remaining named branch failure has at least two native baseline observations; the record retains between-tests errors and every earlier head outcome. Across the reconciled manifest and reruns there are 415 head observations and 516 native baseline observations. The initial baseline transport interruption was reconciled by resuming its remaining 202 paths after owned cleanup.
 
-This report is retained in `docs/verification/direct-spawn-handover.md`. The report-only commit also ran the repository hooks; `git diff --check` and the publication privacy check on the report exited 0. The stage summary field accepts 2,000 characters, so it links to this complete command/exit record.
+The production sweep used `c620ffab08942d5b597c8acb3c765fb50610f4eb`. The final fixture commit, `2f450857d1208dc4a76bf8222a7dac2d1cefff04`, changes only the contention test's outcome assertions: a caught launcher assertion must also fail the outer test. Its whole file and child processes, all focused cases, typecheck, lint and controls were rerun. The other 401 files retain their production-source observations; hashes and the exact one-file difference are recorded. The full release-interruption suite passed 153 cases, structured-spawn integration passed 142, and startup-finalization integration passed 23.
+
+Three initial head failures passed subsequent whole-file reruns. The cleanup fixture initially observed its expected-live child already gone before cleanup assertions; the log cannot distinguish a publication race from expiry of its four-second step. Two caller-lock cases completed their business operations and exited successfully but failed an empty-stderr assertion on schema-wait diagnostics. The quiet-owner case initially hit its test timeout and later emitted an assertion error. Two additional head runs of each file passed; fresh paired baseline runs also passed. Those observations remain in the record.
+
+Broader baseline limitations remain visible. `src/lib/mcp/maintainerGuard.integration.test.ts` fails during frozen-snapshot fixture setup, and `src/lib/mcp/retirementStatus.integration.test.ts` has matching fixture failures and an owned-child teardown error; both match two native baseline observations. `src/lib/pipelines/remoteActions.test.ts` reaches the external 300-second cap on branch and both baseline observations with the same failing assertion prefix; its remaining assertions are unverified. The complete contention file passes 53 cases with two helper skips and three baseline-confirmed credential/catalog failures. These broader failures concern existing behavior outside this change's acceptance cases.
+
+At the final upstream check, main remained at `97bdb94ea9dfe32dff8a7bf022eeb2f83d8f02b7`; its overlapping changes concern memory-cap propagation and publication repair. Open overlapping diffs were re-read, and the merge preview was clean. No upstream code or other open work was incorporated.
+
+No performance gain is claimed. Verification uses private state and fake engines. No deployment, live-state mutation, workflow edit or push is part of this change.
