@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { FISH_AUDIO_FREE_UNTIL, fishAudioFreeEnded, isFishAudioModel, type FishAudioModel } from "@/lib/fishAudio";
 import { configFilePath } from "@/lib/configDir";
+import { withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { readElevenLabsApiKey, readSonioxApiKey } from "@/lib/transcribeBackend";
 
 export type TtsBackend = "openai" | "elevenlabs" | "soniox" | "fishaudio";
@@ -50,10 +51,15 @@ export function resolveTtsBackend(): TtsBackend {
   return isTtsBackend(saved) ? saved : "openai";
 }
 
-export function writeTtsBackend(backend: TtsBackend): void {
-  const file = configFilePath("tts-backend");
+/* Each choice is written under its file's lock, which an install transfer
+   holds while it writes the same file, so the two never interleave. */
+function writeChoice(file: string, text: string): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${backend}\n`);
+  withFileTransactionSync(file, "the voice settings are busy", () => fs.writeFileSync(file, text));
+}
+
+export function writeTtsBackend(backend: TtsBackend): void {
+  writeChoice(configFilePath("tts-backend"), `${backend}\n`);
 }
 
 export function readOpenAiApiKey(): string | null {
@@ -65,9 +71,7 @@ export function readFishAudioApiKey(): string | null {
 }
 
 export function writeFishAudioModel(model: FishAudioModel): void {
-  const file = configFilePath("tts-model-fishaudio");
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${model}\n`);
+  writeChoice(configFilePath("tts-model-fishaudio"), `${model}\n`);
 }
 
 export function isTtsVoiceId(value: unknown): value is string {
@@ -76,9 +80,7 @@ export function isTtsVoiceId(value: unknown): value is string {
 
 export function writeTtsVoice(backend: TtsBackend, voice: string): void {
   if (!isTtsVoiceId(voice)) throw new Error("invalid voice id");
-  const file = configFilePath(`tts-voice-${backend}`);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${voice}\n`);
+  writeChoice(configFilePath(`tts-voice-${backend}`), `${voice}\n`);
 }
 
 export function ttsBackendInfo(now = Date.now()): TtsBackendInfo {

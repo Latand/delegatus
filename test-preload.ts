@@ -9,19 +9,21 @@ import { captureProcessIdentity } from "./src/lib/processIdentity";
 import { spawn } from "node:child_process";
 import { setHeadlessSpawnForTests } from "./src/lib/runtime/agentSignalSandbox";
 
-// Each Linux test runner needs its own kernel-owned tree. A nested runner must
-// not share its parent's lifetime: a short-lived intermediate can detach a
-// descendant before any polling observer sees it. Re-enter the existing gate
-// supervisor before test modules load, preserving Bun's exact command line.
-const admitted = process.platform !== "linux" || (Number(process.env.LLV_OWNED_TEST_RUNNER_PID) === process.pid
-  && fs.readFileSync("/proc/self/cgroup", "utf8").split("\n").some(line => line === `0::${process.env.LLV_OWNED_TEST_RUN_CGROUP}`));
+// Each Linux test runner enters its own service when a manager is available.
+// A nested runner cannot reuse its parent's admission. Without a manager the
+// owned runner binds portable admission to the command PID and warns about
+// polling limits. Re-enter before modules load, preserving Bun's command line.
+const admitted = process.platform !== "linux"
+  || Number(process.env.LLV_PORTABLE_TEST_RUNNER_PID) === process.pid
+  || (Number(process.env.LLV_OWNED_TEST_RUNNER_PID) === process.pid
+    && fs.readFileSync("/proc/self/cgroup", "utf8").split("\n").some(line => line === `0::${process.env.LLV_OWNED_TEST_RUN_CGROUP}`));
 if (!admitted) {
   const argv = fs.readFileSync("/proc/self/cmdline", "utf8").split("\0").filter(Boolean);
   const runner = Bun.spawn([process.execPath, path.resolve(import.meta.dir, "scripts/owned-runner.ts"), ...argv], {
     env: { ...process.env, LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)) }, stdin: "inherit", stdout: "inherit", stderr: "inherit",
   });
   process.on("SIGTERM", () => runner.kill("SIGTERM"));
-  process.on("SIGINT", () => runner.kill("SIGTERM"));
+  process.on("SIGINT", () => runner.kill("SIGINT"));
   process.exit(await runner.exited);
 }
 

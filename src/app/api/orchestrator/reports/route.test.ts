@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, beforeEach, expect, test } from "bun:test";
 import { NextRequest } from "next/server";
 
 /* The report log's read route (#2146): one project's bridge reports, a bounded
@@ -11,7 +11,6 @@ import { NextRequest } from "next/server";
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-report-log-route-"));
 const ORIGINAL_STATE = process.env.LLV_STATE_DIR;
 process.env.LLV_STATE_DIR = SANDBOX;
-fs.writeFileSync(path.join(SANDBOX, "project-remotes.json"), JSON.stringify({ schemaVersion: 1, remotes: { "repo-widgets": "github.com/acme/widgets" } }));
 
 const { GET } = await import("./route");
 const { appendBridgeReports, readBridgeChannel } = await import("@/lib/bridge/store");
@@ -26,14 +25,22 @@ afterAll(() => {
 const ORIGIN = "http://127.0.0.1:8899";
 const get = (query: string) => GET(new NextRequest(`${ORIGIN}/api/orchestrator/reports?${query}`));
 
-appendBridgeReports(Array.from({ length: 45 }, (_, index) => ({
-  key: `widgets-${index + 1}`,
-  class: (["completed", "failed", "blocked", "question", "review_verdict", "status"] as const)[index % 6],
-  at: new Date(Date.UTC(2026, 8, 24, 6, index)).toISOString(),
-  body: `widgets report ${index + 1}, PR #${2100 + index}`,
-  project: index === 3 ? "repo-other" : "repo-widgets",
-  targetSeatConversationId: "conversation_seat_widgets",
-})));
+beforeEach(() => {
+  /* The other case turns reports off. Seed a new database and settings file
+     for every case, including repeated or reordered runs. */
+  const state = fs.mkdtempSync(path.join(SANDBOX, "case-"));
+  process.env.LLV_STATE_DIR = state;
+  fs.writeFileSync(path.join(state, "project-remotes.json"), JSON.stringify({ schemaVersion: 1, remotes: { "repo-widgets": "github.com/acme/widgets" } }));
+  expect(readBridgeChannel()).toBeNull();
+  appendBridgeReports(Array.from({ length: 45 }, (_, index) => ({
+    key: `widgets-${index + 1}`,
+    class: (["completed", "failed", "blocked", "question", "review_verdict", "status"] as const)[index % 6],
+    at: new Date(Date.UTC(2026, 8, 24, 6, index)).toISOString(),
+    body: `widgets report ${index + 1}, PR #${2100 + index}`,
+    project: index === 3 ? "repo-other" : "repo-widgets",
+    targetSeatConversationId: "conversation_seat_widgets",
+  })));
+});
 
 test("the route pages one project's reports newest first with its GitHub repository", async () => {
   const response = await get("project=repo-widgets&limit=20");
