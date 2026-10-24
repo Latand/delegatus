@@ -27,7 +27,7 @@ test("development reads the config without relying on truncated showConfig stdou
     expect(nextConfig.experimental?.useTypeScriptCli).toBe(false);
     const parsed = await getTypeScriptConfiguration(ts, configPath);
     expect(parsed.options.strict).toBe(true);
-    expect(parsed.fileNames).toEqual([path.join(probe, "entry.ts")]);
+    expect(parsed.fileNames.map(file => path.relative(probe, file))).toEqual(["entry.ts"]);
     expect(configureNext(PHASE_PRODUCTION_BUILD).experimental?.useTypeScriptCli).toBeUndefined();
   } finally {
     fs.rmSync(probe, { recursive: true, force: true });
