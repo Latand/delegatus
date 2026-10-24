@@ -989,17 +989,22 @@ test("a report the seat filed under the project's old key, before the key was fo
   try {
     expect(persistProjectAliases([{ source: OLD, target: PROJECT, displayName: "Project" }])).toBe(true);
     const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "report-ledger-")), "seat-tick.json");
-    writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 6 * MINUTE).toISOString(), accounting: undefined }, stateFile);
+    writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 70 * MINUTE).toISOString(), accounting: undefined }, stateFile);
     const log: import("@/lib/bridge/types").BridgeReportV1[] = [];
-    const first = harness({ ...reportDeploys, pipelines: [settledLane], stateFile });
+    // Deliver the lane first so both report keys are owed across separate wakes.
+    const laneOnly = harness({ pipelines: [settledLane], stateFile });
+    laneOnly.deps.sources!.reports = reportPort(() => log);
+    await runSeatTickCheck(PROJECT, laneOnly.deps);
+    expect(readSeatTickState(PROJECT, stateFile).reportsOwed!.map((entry) => entry.key)).toEqual(["lane:pipeline_l:completed"]);
+    const first = harness({ ...reportDeploys, pipelines: [settledLane], stateFile, now: NOW + 6 * MINUTE });
     first.deps.sources!.reports = reportPort(() => log);
     await runSeatTickCheck(PROJECT, first.deps);
     expect(readSeatTickState(PROJECT, stateFile).reportsOwed!.map((entry) => entry.key).sort()).toEqual(["deploy:dddddddd:succeeded", "lane:pipeline_l:completed"]);
 
     /* The row as bridge_report stored it before the fix: the raw project and an
        id scoped by it, with no coversOwed to clear everything at once. */
-    log.push({ id: scopedReportId(OLD, "deploy:dddddddd:succeeded"), seq: 1, at: new Date(NOW + 2 * MINUTE).toISOString(), class: "completed", body: "", project: OLD, origin: { kind: "manager", conversationId: CONVERSATION, role: "orchestrator" }, covers: [scopedReportId(OLD, "lane:pipeline_l:completed")] });
-    const second = harness({ ...reportDeploys, pipelines: [settledLane, ...OPEN_LANE], stateFile, now: NOW + 5 * MINUTE });
+    log.push({ id: scopedReportId(OLD, "deploy:dddddddd:succeeded"), seq: 1, at: new Date(NOW + 8 * MINUTE).toISOString(), class: "completed", body: "", project: OLD, origin: { kind: "manager", conversationId: CONVERSATION, role: "orchestrator" }, covers: [scopedReportId(OLD, "lane:pipeline_l:completed")] });
+    const second = harness({ ...reportDeploys, pipelines: [settledLane, ...OPEN_LANE], stateFile, now: NOW + 11 * MINUTE });
     second.deps.sources!.reports = reportPort(() => log);
     await runSeatTickCheck(PROJECT, second.deps);
     const row = readSeatTickState(PROJECT, stateFile);
