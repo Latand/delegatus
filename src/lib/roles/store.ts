@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 
 import { statePath } from "@/lib/configDir";
 import { effortScale } from "@/lib/agent/efforts";
+import { validAgentMemoryMax } from "@/lib/runtime/agentMemoryConfig";
 import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 
 import { ROLE_DEFAULTS } from "./defaults";
@@ -16,9 +17,9 @@ import { ROLE_IDS, ROLE_VARIANT_IDS, SCHEMA_2_VARIANT_IDS, SCHEMA_3_VARIANT_IDS,
 
 /** The newest schema this build reads and writes. A file is written at the
     lowest schema that holds its rows (see RoleOverridesFile). */
-export const ROLE_OVERRIDES_SCHEMA_VERSION = 5;
+export const ROLE_OVERRIDES_SCHEMA_VERSION = 6;
 const ROLE_REGISTRY_REVISION_VERSION = 1;
-const READABLE_SCHEMA_VERSIONS: readonly unknown[] = [1, 2, 3, 4, 5];
+const READABLE_SCHEMA_VERSIONS: readonly unknown[] = [1, 2, 3, 4, 5, 6];
 
 /** Shipped runtime of each builder variant; a saved variant mapping merges over it. */
 export const BUILDER_VARIANT_DEFAULTS = ROLE_VARIANT_DEFAULTS.builder;
@@ -43,7 +44,8 @@ function isRoleId(value: unknown): value is RoleId {
 
 function isPartialConfig(value: unknown): value is Partial<RoleConfig> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  if (Object.keys(value).some((key) => key !== "engine" && key !== "model" && key !== "effort" && key !== "serviceTier")) return false;
+  if (Object.keys(value).some((key) => key !== "engine" && key !== "model" && key !== "effort" && key !== "serviceTier" && key !== "agentMemoryMaxBytes")) return false;
+  if (!validAgentMemoryMax((value as Partial<RoleConfig>).agentMemoryMaxBytes)) return false;
   const { engine, model, effort, serviceTier } = value as Partial<RoleConfig>;
   if (engine !== undefined && engine !== "claude" && engine !== "codex") return false;
   if (model !== undefined && (typeof model !== "string" || model.length > 128)) return false;
@@ -178,7 +180,8 @@ export function hasRoleOverrides(): boolean {
   return fs.existsSync(file);
 }
 
-function schemaVersionFor(overrides: Partial<Record<RoleId, RoleOverride>>): 1 | 2 | 3 | 4 | 5 {
+function schemaVersionFor(overrides: Partial<Record<RoleId, RoleOverride>>): 1 | 2 | 3 | 4 | 5 | 6 {
+  if (Object.values(overrides).some(row => row?.config?.agentMemoryMaxBytes !== undefined || Object.values(row?.variants ?? {}).some(config => config?.agentMemoryMaxBytes !== undefined))) return 6;
   if (Object.values(overrides).some(row => row?.config?.serviceTier || Object.values(row?.variants ?? {}).some(config => config?.serviceTier))) return 5;
   const variantKeys = Object.values(overrides).flatMap((override) => override?.variants ? Object.keys(override.variants) : []);
   const anyVariants = Object.values(overrides).some((override) => override?.variants !== undefined);
@@ -238,7 +241,7 @@ export type RoleMappingPatch = {
 };
 
 export function sameConfig(left: RoleConfig, right: RoleConfig): boolean {
-  return left.engine === right.engine && left.model === right.model && left.effort === right.effort && left.serviceTier === right.serviceTier;
+  return left.engine === right.engine && left.model === right.model && left.effort === right.effort && left.serviceTier === right.serviceTier && left.agentMemoryMaxBytes === right.agentMemoryMaxBytes;
 }
 
 function isFullConfig(value: unknown): value is RoleConfig {

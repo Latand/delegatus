@@ -94,6 +94,127 @@ those accounts has read its limits live on the new install. Anything that
 could not travel is on one list the operator works through. The validation is
 in §9.
 
+### Built
+
+Operator decisions of 2026-10-22: Q1 (a), Q2 (a), Q4 (a), Q5 (a), Q6 (a); Q3
+overridden: the bundle carries Delegatus memory only, engine memory is
+imported into Delegatus memory before export (`memory-source-switch.md`) and
+slice 3 is dropped. What the build settled differently from the text below:
+
+- The code is `src/lib/transfer/`. Sections are made of parts, one per store
+  (`sections.ts`); a record key is `<part>|<key>`. Project keys are remapped by
+  rewriting every `repo-…`/`dir-…` key in a record (`projectKeys.ts`).
+- The subscription API consent, the voice tool registry, relay targets,
+  Telegram chats and the machine worker limit wait in the import record and on
+  the redo list. The memory source travels only once the source settled it
+  (Delegatus memory with its engine import finished, or the engines' own
+  memory): it is written to a target that never chose, as that settled choice,
+  so the target starts no engine memory import; a target's own choice stays,
+  and a choice the source is still importing waits on the redo list.
+- Settings whose record holds several choices (project settings) merge per
+  choice: a field the target set stays, a field it never set arrives.
+- The shared memory index is not refreshed after an import: it is built from
+  engine memory files, which no longer travel.
+- Only the journals of the closed calls that travel go with them; an ongoing
+  call's journal and one no closed call cites stay on the source.
+- The secret guard also covers the finished header: environment values,
+  project names and remotes, account labels and notices.
+- The engine memory notice compares, on an install that already switched to
+  Delegatus memory, each engine memory file's content with the manifest of
+  the import that switch ran: a file added or changed since is named, with
+  the action that imports it (switch to the engines' memory and back). An
+  install that never switched names every engine memory file. Engine memory
+  is never read into the bundle.
+- `delegatus export` needs the running Viewer, like `import`; an export of an
+  install whose Viewer does not start is deferred.
+- File revisions in the dry run are content hashes, so a file restored by a
+  rolled-back import still matches its preview.
+- Apply holds the shared write lock of every file it writes from the revision
+  check through its commit or rollback, and checks each file again just before
+  writing it. Every product writer of those files takes the same lock for its
+  read-modify-write (shared memory, project, operator and «asks you»
+  settings, relay switches, the voice choices; worker limits, the memory
+  source and the voice companion store already did), so a setting changed
+  during an apply waits and lands on top of the import, or of the original
+  after a rollback. A file the dry run found absent is created only if it
+  still is (written aside under a name of the import, then linked into
+  place), so a writer that made it meanwhile keeps it, lock or no lock; a
+  file system that refuses links refuses the import rather than create the
+  file in place, and recovery removes what a stop left under the staging name. A target file that is a link, not a
+  regular file, or over 64 MiB is never opened for its content (its revision
+  is its kind alone): its records are skipped as `target-file-unreadable`.
+- The checkpoint is a hard link to each replaced file (a copy where links are
+  refused), kept beside the file under a name of the import, so putting it
+  back is a rename inside one directory that needs no free space and never
+  crosses a file system, wherever the state and config roots live; a full
+  disk during the writes leaves the originals in place. A rollback puts
+  back only what is still the import's: a file holding the import's bytes gets
+  its original back, a file a later writer rewrote keeps that writer's values
+  and loses only the import's own, and a file the import never reached is left
+  alone. The work after the commit (lesson known values, accounts) is recorded
+  in the import record and finished by recovery. A recovery that cannot settle
+  refuses the Viewer's activation; the journal stays for the next start. A
+  journal or an import listing that exists and cannot be read or decoded
+  (an I/O error, permissions, a damaged journal) is such a refusal, never read
+  as absent; only an import directory whose journal was never written holds
+  nothing to settle.
+- For an apply the serving Viewer takes the account mutation lock itself and
+  lends that hold to its worker, so the lock never passes to a waiting launch
+  between a worker's death and the recovery. After a failed apply the Viewer
+  runs recovery at once under that hold; a recovery that fails keeps the hold
+  and is retried (after 5 s, 30 s, 2 min, then every 10 min) until it settles,
+  answering the caller `recovery_pending` meanwhile, so launches and further
+  imports wait.
+- Each import record lists the bundle records it did not apply: those it
+  skipped, and conflicts where this install kept its own value. Importing the
+  same bundle again plans only the records no earlier import of it applied
+  (§4.8), so a newly mapped folder or «take the source's» still works, and a
+  record that arrived is left as this install now holds it: a rule edited
+  here since gets no second stored version. Such records count as skipped,
+  `already-imported`.
+- Accounts (slice 2, `src/lib/transfer/accounts.ts`): an account travels
+  when it is signed in or bound to a project. Its identity hash is salted
+  with the export id. On the target an account stands in for a source account
+  only when it is proven the same: the account an import of the same export
+  made, an account here signed into the identity this export reports (an
+  earlier import's account included), the target's own engine home while
+  signed out or signed into the same identity, or the same id signed into
+  the same identity. A row an earlier import left proves nothing by itself:
+  another install, or the source after a new login, can use the same id, and
+  each export salts its identity hash anew. A checklist row is keyed by the
+  source account and the account here, so a later import never inherits an
+  earlier row's state or confirmation; only the same export keeps them, and
+  an account proven by its login is read again before it is ready. Every other account
+  gets a fresh id, reserved before the commit by an empty home that every
+  account setup skips. The bindings and the checklist rows commit in the
+  import's own transaction, so a project is fenced to its accounts before any
+  of them exists; the accounts are then made through the existing account
+  setup under their reserved ids, and recovery or «Try again» finishes one that
+  failed or was cut short, making it once. An account that cannot be made here
+  (a Claude custom-provider account, whose token never travels) is bound under
+  an id no account can have, so its projects park. The checklist rows live in
+  the `transfer_accounts` collection; `POST /api/transfer/accounts` verifies
+  them with the `transfer-verify` live read, and a completed sign-in settles
+  its row at once. Usable needs that read's own observation: provenance
+  `live` with no stale mark, taken within two minutes of the check, naming a
+  plan and at least one window. A cached or carried reading, or one without
+  a plan, stays `read_failed` and switches no active account. A source identity that this install cannot read keeps the
+  row waiting, and nothing becomes active, until a read answers or the
+  operator confirms the account. The checklist is in the desktop accounts
+  dialog (inside its bounded account list; the dialog itself is bounded to the
+  window), on the phone's accounts screen and in the Copilot list, which
+  opens as the Claude and Codex account lists do, a flyout beside the rail
+  bounded by the room above its row and scrolling inside: opened inline in
+  the rail's footer it ran under the lower edge of a short window. Copilot
+  rows count as usable when the CLI config shows a signed-in user; no limit
+  read exists for them (§11), and the Copilot checklist says so.
+- Measured apply window for the learned rules of §1.10's shape (2,898 rules,
+  112 scopes, about 20 MB of history): 1.33 s in the worker, 1.62–1.63 s with
+  the worker's start, over three runs on the shared test server on
+  2026-10-23 (`src/lib/transfer/transferMeasure.test.ts` with
+  `LLV_TRANSFER_MEASURE=1`). The test applies in the real worker under the
+  Viewer's own deadline, so an apply that hangs is stopped and fails.
+
 ## 0. Earlier work this builds on
 
 `search_transcripts` (project-scoped, then unscoped; "export import memory
@@ -730,7 +851,11 @@ no launch is admitted against a half-imported account set. Order:
    declaration, voice settings and choices, the voice tool registry, call
    journals, engine memory files, new account homes.
 5. Commit every SQLite section and the import ledger row in one transaction
-   on `state.sqlite`. This commit is the point of no return.
+   on `state.sqlite`. This commit is the point of no return. The ledger row
+   is its witness: when the commit call throws, apply reads the row back
+   before it undoes anything, keeps an import whose row is there (a step after
+   COMMIT failed), and leaves the journal open for recovery when the database
+   cannot answer.
 6. Remove the checkpoint and mark the journal done.
 
 Every exit, and what it leaves:
@@ -777,7 +902,7 @@ three parts.
 
 | Per section | Compared |
 | --- | --- |
-| Every section | Records in the bundle = new + same + conflict + skipped, each listed by reason. Any difference fails the section in the report |
+| Every section | Records in the bundle = new + same + conflict + skipped, each skipped record listed by key and reason and each conflict by key and decision, kept in the import record. Any difference fails the section in the report |
 | `memory.role` per scope (after remap) | Source and target: rules, active rules, active code points, history entries. Every source active id is active on the target or kept as a version of a target rule; the target's active count is at least the source's; code points over the target are named for curation |
 | `accounts` | Every source account has a target row, with the same bindings after remap |
 | `memory.engine` | Files in the bundle = written + already present + waiting for a checkout |

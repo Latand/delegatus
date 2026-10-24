@@ -1,5 +1,24 @@
 import { expect, test } from "bun:test";
 import { scrubOwnerOutput } from "./ownerOutput";
+import { ownerTurnDiagnostic } from "./diagnostic";
+
+test("owner diagnostics scrub complete hostile input before clipping and fail closed", () => {
+  const secret = ["fixture", "diagnostic", "credential"].join("-");
+  const encoded = Array.from(secret, c => `%${c.charCodeAt(0).toString(16)}`).join("");
+  for (const input of [new Error(`launch refused ${secret} /srv/fixture/private.txt`),
+    `launch refused ${encoded}`, JSON.stringify({ password: secret }),
+    `launch refused -----BEGIN PRIVATE KEY-----\nfixture-material`,
+    "🙂".repeat(1030) + secret]) {
+    for (const source of ["exception", "launch", "observation"] as const) {
+      const diagnostic = ownerTurnDiagnostic(source, input, [secret]);
+      expect(diagnostic.source).toBe(source);
+      expect(Array.from(diagnostic.message).length).toBeLessThanOrEqual(1024);
+      for (const sensitive of [secret, encoded, "/srv/fixture/private.txt", "fixture-material"])
+        expect(diagnostic.message).not.toContain(sensitive);
+    }
+  }
+  expect(ownerTurnDiagnostic("exception", null).message).toContain("without further details");
+});
 
 test.each([
   ["reported message", "/ai а так працюєш?"],

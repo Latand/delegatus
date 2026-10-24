@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { stateDir } from "@/lib/configDir";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
+import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { stateDatabaseBusy, StateLockDeferredError, waitForStateLock } from "@/lib/state/lockWait";
 import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
@@ -18,6 +19,9 @@ const MAX_BYTES = 512 * 1024 * 1024;
 const WAIT_MS = 4_000;
 const SEARCH_MS = 11_000;
 const PREPARE_MS = 120_000;
+const searchIndexes = declaredIndexes([
+  "CREATE INDEX IF NOT EXISTS text_eviction ON texts(seq,path)",
+]);
 type Entry = ConversationCatalogEntry;
 type Metadata = { path: string; size: number; mtime: number; engine: string; sourceTitle: string; kind: string; title: string; displayed: string; project: string };
 type Hydrated = { entry: Entry; text: ConversationSearchText };
@@ -235,6 +239,7 @@ export class ConversationSearchProjection {
         const version = db.query<{ user_version: number }, []>("PRAGMA user_version").get()!.user_version;
         if (version !== 0 && version !== 1) throw new Error("unsupported conversation search projection version");
         if (version === 1) {
+          searchIndexes.install(db, path.dirname(this.filename));
           // Validate the persisted artifact without taking a writer lock.
           db.query("SELECT path,size,mtime,engine,sourceTitle,kind,title,displayed,project,displayFold,promptFold,projectFold,bytes,seq FROM texts LIMIT 0").all();
           if (db.query<{ count: number }, []>("SELECT count(*) AS count FROM meta WHERE rows>=0 AND bytes>=0 AND sequence>=0").get()!.count !== 1) throw new Error("invalid conversation search projection metadata");
@@ -246,7 +251,7 @@ export class ConversationSearchProjection {
         db.exec("CREATE TABLE IF NOT EXISTS meta(rows INTEGER NOT NULL,bytes INTEGER NOT NULL,sequence INTEGER NOT NULL)");
         db.exec("INSERT INTO meta SELECT 0,0,0 WHERE NOT EXISTS (SELECT 1 FROM meta)");
         db.exec("CREATE TABLE IF NOT EXISTS texts(path TEXT PRIMARY KEY,size INTEGER,mtime REAL,engine TEXT,sourceTitle TEXT,kind TEXT,title TEXT,displayed TEXT,project TEXT,displayFold TEXT,promptFold TEXT,projectFold TEXT,bytes INTEGER,seq INTEGER)");
-        db.exec("CREATE INDEX IF NOT EXISTS text_eviction ON texts(seq,path)");
+        searchIndexes.install(db, path.dirname(this.filename));
         db.exec("CREATE TRIGGER IF NOT EXISTS text_insert AFTER INSERT ON texts BEGIN UPDATE meta SET rows=rows+1,bytes=bytes+NEW.bytes; END");
         db.exec("CREATE TRIGGER IF NOT EXISTS text_update AFTER UPDATE ON texts BEGIN UPDATE meta SET bytes=bytes+NEW.bytes-OLD.bytes; END");
         db.exec("CREATE TRIGGER IF NOT EXISTS text_delete AFTER DELETE ON texts BEGIN UPDATE meta SET rows=rows-1,bytes=bytes-OLD.bytes; END");

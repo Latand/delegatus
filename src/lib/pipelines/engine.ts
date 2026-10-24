@@ -25,7 +25,9 @@ import { isAccountMutationContention } from "@/lib/accounts/contentionMessage";
 import { AccountCommitBusyError } from "@/lib/accounts/accountMutationContext";
 import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { waitForStateLock, stateDatabaseBusy, stateLockDeferral } from "@/lib/state/lockWait";
+import { validAgentMemoryMax, type AgentMemoryCap } from "@/lib/runtime/agentMemoryConfig";
 import { agentMemoryHeadroom, memoryKillText, type AgentMemoryKill } from "@/lib/runtime/agentMemory";
+import { agentMemoryScopes, PIPELINE_MEMORY_DEFAULT_ROLE, type AgentMemoryScopeInput } from "@/lib/runtime/agentMemorySettings";
 import { claudeHostEndText } from "@/lib/runtime/hostEndCause";
 import { cpuPriorityEnv, type CpuPrioritySource } from "@/lib/runtime/cpuPriority";
 import { CPU_PRESSURE_DETAIL_PREFIXES, cpuPressureHoldDetail, machineCpuPressureGate, machineCpuPressurePollMs, type CpuPressureHold } from "@/lib/runtime/cpuPressure";
@@ -204,6 +206,7 @@ import { PIPELINE_FAIL_EDGE_EXHAUSTIONS } from "./types";
 import { fencedBlocks, MAX_OUTPUT_CHARS, normalizeStageCompletion, parseStageVerdict, stageVerdictProse, stageVerdictRejectionReason, verdictRoutesAsFail, type ParsedStageVerdict, type StageCompletionInput } from "./verdict";
 
 export type PipelineStageSpawn = {
+  memoryCap?: AgentMemoryCap;
   launchId: string;
   conversationId: string;
   sessionId: string | null;
@@ -393,8 +396,10 @@ export interface PipelinePorts {
   conversationRuntime?(conversationId: string): LaunchRuntime | null;
   /** Fatal memory evidence from the latest terminal host generation. */
   conversationOutOfMemory?(conversationId: string): Promise<AgentMemoryKill | null>;
-  /** Null means the memory mechanism cannot measure headroom. */
-  memoryHeadroom?(priorLimitBytes: number): { availableBytes: number; requiredBytes: number } | null;
+  /** Null means the memory mechanism cannot measure headroom. `launch` names
+      the retry's project, role and stage profile, so the required headroom is
+      the scoped cap that retry will launch with. */
+  memoryHeadroom?(priorLimitBytes: number, launch?: AgentMemoryScopeInput): { availableBytes: number; requiredBytes: number } | null;
   /** Null means hosted, a timestamp means dead/absent since then, and undefined
       means the registry cannot provide authoritative host evidence. */
   conversationHostUnavailableSince?(conversationId: string): Promise<string | null | undefined>;
@@ -780,6 +785,9 @@ async function spawnPipelineAgent(
     sandbox,
     parentConversationId: parent.conversationId,
     title: input.title,
+    project: input.project,
+    ...(input.runtimeProfile.agentMemoryRoleParams ? { agentMemoryRoleParams: input.runtimeProfile.agentMemoryRoleParams } : {}),
+    ...(input.runtimeProfile.agentMemoryMaxBytes !== undefined ? { agentMemoryMaxBytes: input.runtimeProfile.agentMemoryMaxBytes } : {}),
     ...(input.cleanMemory ? { cleanMemory: true } : {}),
     ...(input.learnedRules ? { learnedRules: input.learnedRules } : {}),
   });
@@ -859,6 +867,7 @@ async function spawnPipelineAgent(
     const identityPublished = identityMaterializationFence(registry.readOnlySnapshot()).allowsReceipt(begun.receipt);
     return {
       launchId: begun.receipt.launchId,
+      memoryCap: begun.receipt.memoryCap,
       conversationId: begun.receipt.conversationId,
       sessionId: identityPublished ? begun.receipt.key?.sessionId ?? null : null,
       "transcript": identityPublished ? begun.receipt.artifactPath : null,
@@ -926,6 +935,7 @@ async function spawnPipelineAgent(
     paneId: null,
     accountId: begun.receipt.accountId ?? account.accountId,
     serviceTier,
+    ...(response.memoryCap ? { memoryCap: response.memoryCap } : {}),
   };
 }
 
@@ -1807,6 +1817,7 @@ export function defaultPipelinePorts(
       const identityPublished = identityFence().allowsReceipt(receipt, { structured: evidence.structured });
       return {
         state: receipt.state,
+        memoryCap: receipt.memoryCap,
         launchId: receipt.launchId,
         conversationId: receipt.conversationId,
         sessionId: identityPublished ? receipt.key?.sessionId ?? null : null,
@@ -2161,7 +2172,7 @@ export function defaultPipelinePorts(
     conversationRegistered: (conversationId) => conversationId.startsWith("conversation_")
       && Boolean(snapshot().conversations[conversationId as ViewerConversationId]),
     conversationRuntime: (conversationId) => conversationRuntime(snapshot(), conversationId),
-    memoryHeadroom: (priorLimitBytes) => agentMemoryHeadroom(Object.values(snapshot().entries).filter((entry) => entry.structuredHost && entry.status !== "dead" && entry.status !== "unhosted").length + 1, priorLimitBytes),
+    memoryHeadroom: (priorLimitBytes, launch) => agentMemoryHeadroom(Object.values(snapshot().entries).filter((entry) => entry.structuredHost && entry.status !== "dead" && entry.status !== "unhosted").length + 1, priorLimitBytes, launch ? agentMemoryScopes(launch) : undefined),
     conversationOutOfMemory: async (conversationId) => {
       const current = snapshot();
       const conversation = current.conversations[conversationId as ViewerConversationId];
@@ -3549,6 +3560,7 @@ function bindAttemptDefinition(stage: PipelineStage, attempt: PipelineStageAttem
   attempt.definition = {
     boundAt: ports.now(),
     stageDigest: stageDigest(stage),
+    ...(stage.agentMemoryMaxBytes !== undefined ? { agentMemoryMaxBytes: stage.agentMemoryMaxBytes } : {}),
     "prompt": stage.prompt,
     account: stage.account?.trim() || null,
     role: stage.role ? structuredClone(stage.role) : null,
@@ -3563,12 +3575,13 @@ function bindAttemptDefinition(stage: PipelineStage, attempt: PipelineStageAttem
 function attemptStage(stage: PipelineStage, attempt: PipelineStageAttempt | null | undefined): PipelineStage {
   const definition = attempt?.definition;
   if (!attempt || !definition) return stage;
-  const { account: _account, role: _role, sandbox: _sandbox, outputs: _outputs, ...identity } = stage;
+  const { account: _account, role: _role, sandbox: _sandbox, outputs: _outputs, agentMemoryMaxBytes: _memory, ...identity } = stage;
   return {
     ...identity,
     "prompt": definition.prompt,
     ...(definition.account ? { account: definition.account } : {}),
     ...(definition.role ? { role: definition.role } : {}),
+    ...(definition.agentMemoryMaxBytes !== undefined ? { agentMemoryMaxBytes: definition.agentMemoryMaxBytes } : {}),
     ...(definition.sandbox ? { sandbox: definition.sandbox } : {}),
     ...(definition.outputs ? { outputs: definition.outputs } : {}),
     effectiveRole: attempt.effectiveRole,
@@ -5003,63 +5016,89 @@ async function readRepairDelivery(pipeline: Pipeline, stage: PipelineStage, atte
   } catch { return failed ?? { operationId: repair.delivery?.operationId ?? null, state: "unavailable" as const, safeToReplace: false }; }
 }
 
-type RepairProducerEvidence = { conversationId: string; active: boolean | null;
+type RepairProducerEvidence = { conversationId: string | null; active: boolean | null; idle?: boolean;
   repairIdentity: string; durable: Awaited<ReturnType<typeof stageRepairEvidence>>; delivery?: import("./types").PipelineRepairDelivery };
 
-function publicationRepairIdentity(attempt: PipelineStageAttempt): string {
+function publicationRepairIdentity(pipeline: Pipeline, attempt: PipelineStageAttempt): string {
   const repair = attempt.publicationRepair;
-  return JSON.stringify([attempt.n, repair?.operationId, repair?.refusedAt, repair?.stageId, repair?.attempt]);
+  const worker = publicationRepairWorker(pipeline, attempt)?.attempt ?? attempt;
+  return JSON.stringify([attempt.n, worker.agentPath, worker.startedAt, attempt.completedAt,
+    repair?.operationId, repair?.refusedAt, repair?.stageId, repair?.attempt,
+    repair?.requestedAt, repair?.sendingAt, repair?.clientMessageId]);
 }
 
 async function readRepairProducerEvidence(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   ports: PipelinePorts): Promise<RepairProducerEvidence | undefined> {
   const worker = publicationRepairWorker(pipeline, attempt)?.attempt ?? attempt;
-  if (!worker.conversationId) return;
+  const repairIdentity = publicationRepairIdentity(pipeline, attempt);
+  if (!worker.conversationId) return { conversationId: null, repairIdentity, active: false, durable: null };
   const conversationId = worker.conversationId;
-  const repairIdentity = publicationRepairIdentity(attempt);
   const delivery = await readRepairDelivery(pipeline, stage, attempt, ports);
+  const interrupted = await Promise.resolve().then(() => ports.conversationTurnInterrupted?.(conversationId)).catch(() => null);
   const durable = await stageRepairEvidence(worker, ports);
-  const active = await ports.conversationAgentActive(conversationId);
-  return { conversationId, repairIdentity, delivery, durable, active };
+  const active = await ports.conversationAgentActive(conversationId).catch(() => null);
+  return { conversationId, repairIdentity, delivery, durable, active, idle: interrupted === "idle" };
 }
 
 function publicationRepairDeliveryDetail(repair: NonNullable<PipelineStageAttempt["publicationRepair"]>, delivery = repair.delivery): string {
   return `; operation ${delivery?.operationId ?? repair.clientMessageId ?? "unavailable"}; delivery ${delivery?.state ?? "unavailable"}`;
 }
 
-/** Failed sends and gone producers release the repair. Positive evidence of
- * a running or queued writer still guards against starting a second turn. */
+/** Current activity fences recovery even after expiry. An old queue or open
+ * transcript alone cannot keep a parked publication blocked indefinitely. */
 function publicationRepairProducerRefusal(pipeline: Pipeline, attempt: PipelineStageAttempt,
   evidence: RepairProducerEvidence | undefined, ports: PipelinePorts): string | null {
   const repair = attempt.publicationRepair;
   const worker = publicationRepairWorker(pipeline, attempt)?.attempt ?? attempt;
-  if (!worker.conversationId) return null;
+  const now = ports.now();
+  // A replacement may have passed without ever receiving a repair request.
+  // Its completed pass, rather than an earlier attempt's repair, bounds it.
+  const startedAt = repair?.refusedAt ?? attempt.completedAt ?? attempt.startedAt;
+  const age = Math.max(0, unixMs(now) - unixMs(startedAt));
+  const expired = age >= COMMIT_REPAIR_WAIT_MS;
+  const turn = `${repair?.stageId ?? pipeline.cursor?.stageId}/${worker.n}`;
   const delivery = evidence?.delivery ?? repair?.delivery;
   const suffix = repair ? publicationRepairDeliveryDetail(repair, delivery) : "";
-  const refusal = `the producer repair turn may still be running or queued${suffix}`;
-  if (evidence?.conversationId !== worker.conversationId || evidence.repairIdentity !== publicationRepairIdentity(attempt)) return refusal;
+  const refusal = `the producer repair turn may still be running or queued; turn ${turn}; age ${Math.floor(age / 1_000)}s${suffix}`;
+  const abandon = (why: string) => {
+    const reason = `Producer repair turn ${turn} abandoned at age ${Math.floor(age / 1_000)}s: ${why}`;
+    attempt.publicationRepairAbandonment ??= { at: now, reason };
+    if (repair) {
+      if (delivery) repair.delivery = delivery;
+      if (!repair.settledAt) {
+        repair.settledAt = now;
+        repair.outcome = { status: "rejected", reason };
+      }
+    }
+    return null;
+  };
+  if (!evidence || evidence.conversationId !== (worker.conversationId ?? null)
+    || evidence.repairIdentity !== publicationRepairIdentity(pipeline, attempt)) return refusal;
+  if (!worker.conversationId) return abandon("the producer has no conversation.");
   const { active, durable } = evidence;
-  const repairStartedAt = repair?.requestedAt ?? repair?.sendingAt;
+  const bounded = !passedStageCustodyPark(pipeline, attempt);
+  if (active === true) return refusal;
+  if (active === false && (repair || bounded)) return abandon("the producer is gone or idle.");
+  const background = liveBackgroundTasks(durable?.backgroundTasks ?? [], unixMs(now));
+  const progressAt = durable?.lastRecordAt ?? durable?.message?.ts;
+  if ((durable?.turn === "busy" && typeof progressAt === "number"
+    && unixMs(now) - progressAt < IDLE_TURN_QUIET_MS)
+    || background.some(task => unixMs(now) - task.startedAt < IDLE_TURN_QUIET_MS)) return refusal;
+  if (evidence.idle && bounded) return abandon("the producer host is idle with no recent repair work.");
+  if (expired && bounded) return abandon("the 20-minute repair window expired without a confirmed running producer.");
+  const repairStartedAt = repair?.requestedAt ?? repair?.sendingAt ?? (!repair ? attempt.completedAt : undefined);
   const finished = !!repairStartedAt && durable?.turn === "terminal"
     && (durable.message?.ts ?? 0) > (repair?.messageTs ?? 0)
     && (durable.lastRecordAt ?? durable.message?.ts ?? 0) >= unixMs(repairStartedAt);
   const failed = delivery?.state === "failed";
-  const noDispatch = delivery?.safeToReplace === true && delivery.state === "unreserved"
-    && evidence.delivery === delivery && !!repair
-    && unixMs(ports.now()) >= unixMs(repair.refusedAt) + COMMIT_REPAIR_WAIT_MS;
-  // An orphan can retain an open transcript turn and queued projection. The
-  // current host's affirmative death evidence supersedes those stale markers.
-  const gone = !!repair && active === false;
-  if (!gone && (active === true || durable?.turn === "busy" || ports.conversationDeliveryOutstanding?.(worker.conversationId)
-    || liveBackgroundTasks(durable?.backgroundTasks ?? [], unixMs(ports.now())).length > 0
-    || active !== false && !finished && !noDispatch && !failed)) return refusal;
+  if (durable?.turn === "busy" || ports.conversationDeliveryOutstanding?.(worker.conversationId)
+    || background.length > 0 || active !== false && !finished && !failed) return refusal;
   if (repair) {
     if (delivery) repair.delivery = delivery;
-    if (!repair.settledAt && (failed || noDispatch || active === false)) {
+    if (!repair.settledAt && (failed || finished)) {
       repair.settledAt = ports.now();
-      repair.outcome = { status: "rejected", reason: active === false && !failed && !noDispatch
-        ? "The recorded producer is gone; its publication repair is no longer pending."
-        : `The producer repair delivery ${delivery?.operationId ?? "was not reserved"} settled ${delivery?.state}.` };
+      repair.outcome = finished ? { status: "accepted" }
+        : { status: "rejected", reason: `The producer repair delivery ${delivery?.operationId ?? "was not reserved"} settled ${delivery?.state}.` };
     }
   }
   return repair && !repair.settledAt ? refusal : null;
@@ -5070,13 +5109,12 @@ function publicationRepairProducerRefusal(pipeline: Pipeline, attempt: PipelineS
 async function reconcileParkedPublicationRepair(pipeline: Pipeline, ports: PipelinePorts): Promise<boolean> {
   const stage = currentStage(pipeline);
   const attempt = stage && currentAttempt(pipeline, stage.id);
-  const repair = attempt?.publicationRepair;
-  if (pipeline.state !== "needs_decision" || !stage || !attempt || !repair
-    || !passedStagePublicationPark(pipeline, attempt) || repair.settledAt && repair.delivery?.state === "failed") return false;
-  const before = JSON.stringify(repair);
+  if (pipeline.state !== "needs_decision" || !stage || !attempt
+    || !passedStagePublicationPark(pipeline, attempt)) return false;
+  const before = JSON.stringify([attempt.publicationRepair, attempt.publicationRepairAbandonment]);
   const evidence = await readRepairProducerEvidence(pipeline, stage, attempt, ports);
   publicationRepairProducerRefusal(pipeline, attempt, evidence, ports);
-  return before !== JSON.stringify(repair);
+  return before !== JSON.stringify([attempt.publicationRepair, attempt.publicationRepairAbandonment]);
 }
 
 function stagePublicationRepairText(stage: PipelineStage, attempt: PipelineStageAttempt, repair: NonNullable<PipelineStageAttempt["publicationRepair"]>): string {
@@ -5821,7 +5859,8 @@ async function waitForMemory(pipeline: Pipeline, stage: PipelineStage, attempt: 
   const attempts = runFor(pipeline, stage.id)!.attempts;
   const kill = attempts[attempts.indexOf(attempt) - 1]?.outOfMemory;
   if (!kill) { delete attempt.memoryWait; return false; }
-  const headroom = ports.memoryHeadroom?.(kill.limitBytes);
+  const headroom = ports.memoryHeadroom?.(kill.limitBytes, { cwd: pipeline.worktreeDir, project: pipeline.project,
+    role: attempt.effectiveRole.roleId ?? PIPELINE_MEMORY_DEFAULT_ROLE, profile: pipelineStageRuntimeProfile(attemptStage(stage, attempt)) });
   if (!headroom || headroom.availableBytes >= headroom.requiredBytes) { delete attempt.memoryWait; pipeline.stateDetail = null; return false; }
   const next = nextBoundedWait(wait, wait.startedAt, now, MEMORY_WAIT_BUDGET);
   if (!next) { await park(pipeline, `${memoryKillText(kill)}; memory did not recover within 30 minutes`, attempt); return true; }
@@ -7127,6 +7166,7 @@ async function spawnRunStage(
     delete attempt.verdictRequest;
     delete attempt.backgroundWait;
     delete attempt.controllerWait;
+    if (spawned.memoryCap) attempt.memoryCap = spawned.memoryCap;
     attempt.launchId = spawned.launchId;
     attempt.conversationId = spawned.conversationId;
     attempt.sessionId = spawned.sessionId;
@@ -9561,6 +9601,7 @@ function reconcilePipelineEmbeddedFlows(pipeline: Pipeline, ports: PipelinePorts
 function clearStagedLaunchWait(pipeline: Pipeline, attempt: PipelineStageAttempt, receipt: PipelineSpawnReceipt): void {
   if (receipt.state !== "completed" || receipt.launchId !== attempt.launchId
     || receipt.conversationId !== attempt.conversationId) return;
+  if (receipt.memoryCap) attempt.memoryCap = structuredClone(receipt.memoryCap);
   const waiting = pipeline.stateDetail?.startsWith("waiting for the runtime host, attempt ");
   const parked = pipeline.state === "needs_decision" && isStructuredSpawnPark(pipeline, attempt);
   if (!waiting && !parked) return;
@@ -12191,6 +12232,9 @@ export function normalizeStages(
     if (stage.serviceTier !== undefined && stage.serviceTier !== null && typeof stage.serviceTier !== "string") {
       violations.push({ field: at("serviceTier"), message: "serviceTier must be a string or null", expected: "Codex catalog tier id, null to inherit" });
     }
+    if (!validAgentMemoryMax(stage.agentMemoryMaxBytes)) {
+      violations.push({ field: at("agentMemoryMaxBytes"), message: "agentMemoryMaxBytes must be null or integer bytes from 1 GiB through 1 TiB", expected: "integer bytes from 1 GiB through 1 TiB, null to inherit" });
+    }
     if (stage.sandbox !== undefined && stage.sandbox !== "full" && stage.sandbox !== "restricted") {
       violations.push({ field: at("sandbox"), message: `stage ${id} sandbox must be full or restricted`, expected: STAGE_SANDBOX_SHAPE });
     }
@@ -12249,6 +12293,7 @@ export function normalizeStages(
       ...(stage.model !== undefined ? { model: typeof stage.model === "string" ? stage.model.trim() || null : null } : {}),
       ...(stage.effort !== undefined ? { effort: typeof stage.effort === "string" ? stage.effort.trim() || null : null } : {}),
       ...(stage.serviceTier !== undefined ? { serviceTier: stage.serviceTier } : {}),
+      ...(stage.agentMemoryMaxBytes !== undefined ? { agentMemoryMaxBytes: stage.agentMemoryMaxBytes } : {}),
       ...(stage.access !== undefined ? { access: stage.access } : {}),
       ...(stage.sandbox !== undefined ? { sandbox: stage.sandbox } : {}),
       ...(outputs !== undefined ? { outputs } : {}),
@@ -12337,6 +12382,7 @@ function draftStageInputs(stages: PipelineStage[]): PipelineStageInput[] {
     ...(stage.model !== undefined ? { model: stage.model } : {}),
     ...(stage.effort !== undefined ? { effort: stage.effort } : {}),
     ...(stage.serviceTier !== undefined ? { serviceTier: stage.serviceTier } : {}),
+    ...(stage.agentMemoryMaxBytes !== undefined ? { agentMemoryMaxBytes: stage.agentMemoryMaxBytes } : {}),
     ...(stage.access !== undefined ? { access: stage.access } : {}),
     ...(stage.sandbox !== undefined ? { sandbox: stage.sandbox } : {}),
     ...(stage.outputs !== undefined ? { outputs: [...stage.outputs] } : {}),
@@ -14880,7 +14926,7 @@ export async function patchPipeline(
       // The accepted work is already committed. Retry its publication from
       // this cursor without claiming a new launch or closing its stage flow.
       if (stage && attempt && (passedStagePublicationPark(pipeline, attempt) || resumablePassedPublication(pipeline))) {
-        if (attempt.publicationRepair) {
+        if (attempt.publicationRepair || passedStagePublicationPark(pipeline, attempt)) {
           const repairRefusal = publicationRepairProducerRefusal(pipeline, attempt, decisionProducerEvidence, ports);
           if (repairRefusal) return { error: repairRefusal, status: 409 };
         }
@@ -15047,7 +15093,7 @@ export async function patchPipeline(
         if (!seenAttempt || !seenConversation) {
           return { error: "the stage's running attempt changed since this runtime was chosen; read the stage again before choosing", status: 409, code: "STAGE_CHANGED", field: seenAttempt ? "expectedConversationId" : "expectedAttempt" };
         }
-        if (req.role !== undefined || req.prompt !== undefined || req.access !== undefined) return { error: "role, prompt and access apply from the next attempt; send a separate override-stage", status: 400 };
+        if (req.role !== undefined || req.prompt !== undefined || req.access !== undefined || req.agentMemoryMaxBytes !== undefined) return { error: "role, prompt, access and memory cap apply from the next attempt; send a separate override-stage", status: 400 };
         if (req.applyNowCut !== undefined && req.applyNowCut !== "boundary" && req.applyNowCut !== "none") return { error: "applyNowCut must be boundary or none", status: 400 };
         const parkedSource = pipeline.state === "needs_decision" && live?.state === "needs_decision" && !live.report
           && (pendingRuntimeSwitchRetry(live) || live.providerWait?.condition.kind === "usage_limit" || !!live.conversationId && (ports.runtimeSwitchSourceUnavailable?.(live.conversationId)
@@ -15057,7 +15103,7 @@ export async function patchPipeline(
       }
       const reach = stageEditReach(pipeline, target.id);
       const changesRoleOrRuntime = req.role !== undefined || req.engine !== undefined || req.model !== undefined || req.effort !== undefined || req.serviceTier !== undefined;
-      if (!req.applyNow && !changesRoleOrRuntime && req.prompt === undefined && req.account === undefined) return { error: "override-stage needs at least one field to change", status: 400 };
+      if (!req.applyNow && !changesRoleOrRuntime && req.prompt === undefined && req.account === undefined && req.agentMemoryMaxBytes === undefined) return { error: "override-stage needs at least one field to change", status: 400 };
       /* Validate the runtime types up front: resolvePipelineRole treats a
          non-string, non-null model/effort as absent and silently uses the
          fallback, so a raw `model: 123` / `effort: false` would 200 with the old
@@ -15065,6 +15111,7 @@ export async function patchPipeline(
       if (req.engine !== undefined && req.engine !== "claude" && req.engine !== "codex") return { error: "engine must be claude or codex", status: 400 };
       if (req.model !== undefined && req.model !== null && typeof req.model !== "string") return { error: "model must be a string or null", status: 400 };
       if (req.effort !== undefined && req.effort !== null && typeof req.effort !== "string") return { error: "effort must be a string or null", status: 400 };
+      if (!validAgentMemoryMax(req.agentMemoryMaxBytes)) return { error: "agentMemoryMaxBytes must be null or integer bytes from 1 GiB through 1 TiB", status: 400 };
       if (req.serviceTier != null && typeof req.serviceTier !== "string") return { error: "serviceTier must be a string or null", status: 400 };
 
       /* Resolve the role/runtime combination through the same path creation uses
@@ -15127,6 +15174,7 @@ export async function patchPipeline(
         if (overrideSizingRefusal) return { error: overrideSizingRefusal.error, status: 400 };
       }
 
+      if (req.agentMemoryMaxBytes !== undefined) target.agentMemoryMaxBytes = req.agentMemoryMaxBytes;
       if (req.prompt !== undefined) {
         if (typeof req.prompt !== "string" || !req.prompt.trim()) return { error: "prompt must be a non-empty string", status: 400 };
         const prompt = req.prompt.trim();
@@ -15259,6 +15307,7 @@ export async function patchPipeline(
         req.model !== undefined ? "model" : null,
         req.effort !== undefined ? "effort" : null,
         req.serviceTier !== undefined ? "service tier" : null,
+        req.agentMemoryMaxBytes !== undefined ? "memory cap" : null,
         req.prompt !== undefined ? "prompt" : null,
         req.account !== undefined ? "account" : null,
       ].filter((field): field is string => field !== null);

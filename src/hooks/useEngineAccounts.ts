@@ -144,6 +144,8 @@ export type AccountOption = {
   /** Public endpoint configuration; the provider token never reaches this type. */
   provider?: { baseUrl: string; model: string; smallFastModel: string | null; customHeaderNames?: string[] };
   authPresent: boolean;
+  /** The current reset-aware selector's unpinned choice for this panel context. */
+  nextChosen?: boolean;
   authHealth?: AccountAuthHealth;
   /** Public subscription tier reported by the account read. */
   plan?: string | null;
@@ -583,7 +585,7 @@ function accountResponse(body: unknown, engine: Engine): EngineResponse {
     // The phase is authoritative for pending state (C3): a nonterminal login
     // keeps the row pending even when the server's raw `loginPending` lags.
     const loginPending = login ? NONTERMINAL_CLAUDE_LOGIN_PHASES.has(login.phase) : account.loginPending === true;
-    return { ...account, ...observedAccountFields(raw, account.authPresent), login, loginPending, projects: parseBoundProjects((raw as { projects?: unknown }).projects) };
+    return { ...account, nextChosen: (raw as { nextChosen?: unknown }).nextChosen === true, ...observedAccountFields(raw, account.authPresent), login, loginPending, projects: parseBoundProjects((raw as { projects?: unknown }).projects) };
   });
   return {
     active: section.active,
@@ -1347,6 +1349,13 @@ export function useEngineAccounts(engine: Engine): EngineAccountsState {
 export function useAccountIdentityVersion(engine: Engine): number {
   const store = stores[engine];
   return useSyncExternalStore(store.subscribe, () => store.getSnapshot().identityVersion, () => store.getSnapshot().identityVersion);
+}
+
+/** Moves whenever a fresh quota reading lands, for read-only views whose
+    result depends on the currently permitted account's reset window. */
+export function useAccountLimitsVersion(engine: Engine): number {
+  const store = stores[engine];
+  return useSyncExternalStore(store.subscribe, () => store.getSnapshot().limitsVersion, () => store.getSnapshot().limitsVersion);
 }
 
 /** The name an account goes by on every surface that names it: its label, or its

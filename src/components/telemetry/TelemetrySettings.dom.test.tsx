@@ -17,7 +17,7 @@ const originalFetch = globalThis.fetch;
 let root: Root | null = null;
 afterEach(async () => { if (root) await act(async () => root!.unmount()); root = null; document.body.innerHTML = ""; globalThis.fetch = originalFetch; });
 
-function holdPuts(stored: { enabled: boolean; locked: boolean; noticeDismissed: boolean }) {
+function holdPuts(stored: { enabled: boolean; locked: boolean; noticeDismissed: boolean; swarmRules?: boolean }) {
   const puts: unknown[] = [];
   let release: (response: Response) => void = () => {};
   globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -63,5 +63,22 @@ test("Got it hides the notice at once and a refusal shows it again with the erro
   expect(server.puts).toEqual([{ noticeDismissed: true }]);
   await server.answer(Response.json({ error: "read-only" }, { status: 500 }));
   expect(dismiss()).not.toBeUndefined();
+  expect(document.querySelector('[role="alert"]')?.textContent).toBe(translate("en", "telemetry.error"));
+});
+
+test("swarm consent starts off and a refused save restores it without changing ping consent", async () => {
+  const server = holdPuts({ enabled: false, locked: true, noticeDismissed: true, swarmRules: false });
+  await mount();
+  await act(async () => { openTelemetrySettings(); });
+  const swarm = document.querySelector<HTMLInputElement>("[data-swarm-setting] input")!;
+  expect(swarm.checked).toBe(false);
+  expect(swarm.disabled).toBe(false);
+  await act(async () => { swarm.click(); });
+  expect(swarm.checked).toBe(true);
+  expect(server.puts).toEqual([{ swarmRules: true }]);
+  await server.answer(Response.json({ error: "read-only" }, { status: 500 }));
+  expect(swarm.checked).toBe(false);
+  expect(toggle().checked).toBe(false);
+  expect(toggle().disabled).toBe(true);
   expect(document.querySelector('[role="alert"]')?.textContent).toBe(translate("en", "telemetry.error"));
 });
