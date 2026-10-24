@@ -31,7 +31,7 @@ import {
 } from "./structuredSpawn";
 import { spawnTransport } from "./spawnTransport";
 import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFence";
-import { findPipelineRecord } from "@/lib/pipelines/store";
+import { findPipelineRecord, withPipelineStartupAdmission } from "@/lib/pipelines/store";
 import { instanceCpuPrioritySource } from "./cpuAdmissionScope";
 import { cpuPriorityEnv } from "./cpuPriority";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
@@ -430,10 +430,13 @@ async function recoverCandidate(
             assertPipelineTurnAllowed(current!.conversationId, registry);
           };
           authorize();
-          const claim = await registry.deliveryWriteOrBusy({ label: "registry.reconnect-startup-host" }, () => {
-            authorize();
-            return registry.claimStructuredHost(current!.key, owner, { allowUnhosted: true, reconnectCodex: socketOwner });
-          });
+          const claim = await withPipelineStartupAdmission(async available => {
+            if (!available) throw new StructuredRecoveryHeldForUpdateError("pipeline authority is unavailable for native reconnect");
+            return registry.deliveryWriteOrBusy({ label: "registry.reconnect-startup-host" }, () => {
+              authorize();
+              return registry.claimStructuredHost(current!.key, owner, { allowUnhosted: true, reconnectCodex: socketOwner });
+            });
+          }, "reconnecting requested startup host", undefined, true);
           if (claim?.structuredHost && claim.claimOwner) {
             let host: CodexAppServerHost | undefined;
             const releaseConnection = async () => {

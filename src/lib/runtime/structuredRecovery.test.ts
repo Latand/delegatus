@@ -22,7 +22,8 @@ import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { statePath } from "@/lib/configDir";
 import { trackAccountLeases } from "@/lib/accounts/accountMutation.contention.fixture";
-import { buildPipeline, loadPipelines, savePipelines } from "@/lib/pipelines/store";
+import { buildPipeline, loadPipelines, savePipelines, withPipelineMutation } from "@/lib/pipelines/store";
+import { stateLockWaitsInFlight } from "@/lib/state/lockWait";
 import { cpuPriorityFromEnv, readCpuPriority } from "./cpuPriority";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { CodexAppServerHost } from "./codexAppServerHost";
@@ -38,7 +39,7 @@ const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-recovery-"
 process.env.LLV_STATE_DIR = path.join(sandbox, "state");
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
-for (const scenario of ["released", "foreign-owner", "failed-attachment", "revoked"] as const) test.skipIf(process.platform === "win32")(`startup recovery reconnects a verified live native host without spawning a successor (${scenario})`, async () => {
+for (const scenario of ["released", "foreign-owner", "failed-attachment", "revoked", "pipeline-busy"] as const) test.skipIf(process.platform === "win32")(`startup recovery reconnects a verified live native host without spawning a successor (${scenario})`, async () => {
   const cwd = fs.mkdtempSync(path.join(sandbox, "native-reconnect-"));
   const socketDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-rpc-"));
   fs.chmodSync(socketDirectory, 0o700);
@@ -88,13 +89,27 @@ for (const scenario of ["released", "foreign-owner", "failed-attachment", "revok
   if (scenario === "failed-attachment") adopt.mockRejectedValue(new Error("native attachment refused"));
   if (scenario === "revoked") adopt.mockImplementation(async () => { authorized = false; return host as never; });
   let spawned = 0;
+  const leaseEntered = Promise.withResolvers<void>();
+  const releaseLease = Promise.withResolvers<void>();
+  let heldLease: Promise<unknown> | undefined;
   try {
     await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true,
       watchdogIntervalMs: 0, settlementSweepMs: 0, hostlessSettleIntervalMs: 0 });
+    if (scenario === "pipeline-busy") {
+      heldLease = withPipelineMutation(async () => { leaseEntered.resolve(); await releaseLease.promise; });
+      await leaseEntered.promise;
+    }
     const pending = recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id,
       reconnectLiveHost: true, admissionGuard: () => { if (!authorized) throw new Error("reconnect authority revoked"); } }, { registry, client, transport: () => "structured", park: () => null,
       resolveAccount: () => ({ engine: "codex", accountId: "default", kind: "legacy", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
       spawn: async () => { spawned += 1; throw new Error("a live reconnect must not spawn"); } });
+    if (scenario === "pipeline-busy") {
+      for (let attempt = 0; attempt < 100 && !stateLockWaitsInFlight().some(wait => wait.callSite === "pipelines.startup-admission"); attempt += 1) await Bun.sleep(5);
+      expect(adopt).not.toHaveBeenCalled();
+      expect(registry.readOnlySnapshot().entries[`codex:${sessionId}`]!.claimOwner).toBe(originalClaim);
+      releaseLease.resolve();
+      await heldLease;
+    }
     if (scenario === "failed-attachment" || scenario === "revoked") {
       await expect(pending).rejects.toThrow(scenario === "revoked" ? "reconnect authority revoked" : "native attachment refused");
       expect(registry.readOnlySnapshot().entries[`codex:${sessionId}`]!.claimOwner).toBeNull();
@@ -121,6 +136,7 @@ for (const scenario of ["released", "foreign-owner", "failed-attachment", "revok
     await kickStructuredDeliveryQueue();
     expect(ledger.writes).toHaveLength(1);
   } finally {
+    releaseLease.resolve(); await heldLease;
     adopt.mockRestore();
     await bindStructuredDeliveryQueue([], { client: null });
     await new Promise<void>(resolve => server.close(() => resolve()));
