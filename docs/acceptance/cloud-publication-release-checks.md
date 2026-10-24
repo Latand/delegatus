@@ -255,3 +255,45 @@ Commands below retained the owned-runner preload and ran sequentially through `g
 | Repair verification collector | 0; ran-count 8, including both expected-failure controls. |
 
 The comparator probe added diagnostic logging only inside its scratch clone; it preserved every refusal condition. The assigned checkout contains no comparator change. Its five retained failures are the activation publication-detail assertion, controller CPU-ticket reconciliation, concurrent staged-identity replay, and the two routing cases recorded above.
+
+
+## Final touched-test verification
+
+The final resumption merged main at `fd7a0a14e75725b8d612237bf5a4413b0081e9a3` with a plain merge commit, `f6e7077e55ddd0eee86316331650e808fc90dac3`. These upstream changes add gate routing, park-proof scripts and documentation. They add no importer of either changed module. The four issue implementation/regression files and the activation fixture repair are byte-for-byte equal to `4a9fedb30`. The final documentation commit only extends this ledger.
+
+The complete unchanged publication hook ran against that merged executable tree through the remote owned runner, with private HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR and a closed Viewer control URL. It passed. Its planner selected 49 touched files; reconciliation against the completed head receipts found all 49, with no missing or duplicate file. Its Linux lane completed 17 files. The hook retained five named pre-existing failures and classified one CPU-polling timing failure as intermittent after fresh confirmation. It reported zero new failures and no incomplete runner or between-tests diagnostic.
+
+| Command | Exit / result |
+| --- | --- |
+| `gh issue view 2460 --comments --json number,title,body,comments` | 0; requirement reread. |
+| `gh issue view 2394 --comments --json number,title,body,comments` | 0; requirement reread. |
+| `git fetch origin main` | 0; captured main above. |
+| `git merge --no-ff origin/main -m 'Merge current main before final touched-test verification'` | 0; hooks enabled. |
+| `git diff --quiet 4a9fedb30 HEAD -- scripts/release-verify.ts scripts/release-verify.test.ts src/lib/pipelines/engine.ts src/lib/pipelines/parkedPublication.test.ts src/lib/pipelines/engine.activation.test.ts` | 0; prior regression and revert evidence still exercises identical files. |
+| `gate-remote -- env LLV_GATE_RUNNER=off LLV_OWNED_RUN_TIMEOUT_MS=1800000 bash scripts/gate-slot.sh bash .githooks/pre-push` | 0; privacy passed, types passed in 203 seconds, ESLint passed in 8 seconds, touched tests passed in 373 seconds, Linux backend and Linux tests passed. |
+| Hook command: `bun scripts/local-gate-tests.ts --base fd7a0a14e75725b8d612237bf5a4413b0081e9a3` with the hook's 49 explicit touched paths | 0; 49 complete head files, five complete initial baseline samples and fresh CPU-polling confirmations. Zero new failures, five pre-existing failures and one intermittent case. |
+| Hook selection reconciliation against its completed receipts | 0; 49 selected = 49 completed, plus 17 complete Linux files. |
+| Remote whole-file collector through `env LLV_GATE_RUNNER=off LLV_OWNED_RUN_TIMEOUT_MS=2400000 bash scripts/gate-slot.sh` | 255; SSH disconnected after 13 complete receipts. No final ran-count; the unfinished commands were rerun. |
+| Read-only cleanup probe after the disconnection | 0; the collector's private root was absent and no process retained a working directory under it. |
+| Remaining whole-file collector, same wrapper, separate SSH connections with `ControlMaster=no` and `ControlPath=none` | 0; final `ran-count=17`. Together the collectors produced 30 unique complete receipts. |
+| Receipt reconciliation, including complete JUnit failure lists and three observations per file and side | 0; 30 complete runs; every non-timing branch failure is present in its paired main run. |
+| `bun scripts/privacy-publication-gate.ts --require-known-values --check-commits --base fd7a0a14e75725b8d612237bf5a4413b0081e9a3 --paths docs/acceptance/cloud-publication-release-checks.md` with the committed fingerprint file | 0; final report privacy passed. |
+| `git diff --check` | 0; final report has no whitespace errors. |
+
+Each whole-file command below was `bun test --timeout=60000 ./<file> --reporter=junit --reporter-outfile=<private-report>`. The collectors used `setsid`, closed stdin, a 300000 ms owned-runner timeout, and fresh private HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR for every file and side. Main ran in a disposable detached Git clone pinned to the captured main commit, with the same origin. All runs retained the repository's ownership preload. Each cell lists the exits of rounds 1, 2 and 3 in order.
+
+| Explicit file | Branch exits | Main exits | Complete-file failure counts, branch / main |
+| --- | --- | --- | --- |
+| `src/lib/pipelines/engine.controllerPass.test.ts` | 0, 0, 0 | 0, 0, 0 | 0, 0, 0 / 0, 0, 0 |
+| `src/lib/pipelines/engine.ports.test.ts` | 1, 1, 1 | 1, 1, 1 | 1, 1, 1 / 1, 1, 1 |
+| `src/lib/pipelines/engine.activation.test.ts` | 1, 1, 1 | 1, 1, 1 | 1, 1, 1 / 6, 6, 6 |
+| `src/lib/pipelines/engine.routing.test.ts` | 1, 1, 1 | 1, 1, 1 | 2, 2, 2 / 2, 2, 2 |
+| `src/lib/pipelines/engine.cpuAdmissionPolling.test.ts` | 1, 0, 0 | 0, 0, 0 | 1, 0, 0 / 0, 0, 0 |
+
+The ports failure is `a concurrent pipeline replay and its recovery projections withhold staged identity (#1123)`. The activation failure shared by both trees is `an internal terminal pass an older build left waiting on publication closes without the network (#1692)`. Routing retains `a stage that keeps working after its turn ended keeps its host through the recovery tick and the deferred cursor write` and `a descendant that outlives the runtime's release is still signalled, and the attempt is replaced`. Each of those four assertions fails in all three whole-file runs on both trees. Main additionally retains the same five unreadable-ownership failures after the corruption fixture in every activation run; the repair removes those five without changing their assertions.
+
+The controller file passes all six whole-file controls, although the hook's filtered baseline comparison reproduced `a bounded reconciliation preserves another lane's CPU ticket and FIFO age` on both trees. The CPU-polling case, `expired pipeline heads start in FIFO with real spacing while their predecessor's commit hook waits`, misses its 1950 ms threshold once on the branch at about 1944 ms and passes the next two whole-file runs; all three main whole-file runs pass. These outcomes preserve the hook's intermittent classification and do not claim a matching whole-file timing failure on main. No timing assertion was weakened.
+
+For #2460, the explicit skip rechecks settled publication work at `src/lib/pipelines/engine.ts:11243`; its repaired and unrepaired hook regressions pass in the complete publication suite. Removing that production change made both regression cases fail, exit 1, as recorded above. For #2394, `scripts/release-verify.ts:160` reads exact manifests and dedicated dist-tags; its four regression modes pass, and removing the production change made all four fail, exit 1. Their source bytes did not change during this resumption.
+
+The authorized scope remains script-only. The publish and macOS workflow jobs still use `npm view` and need a separate maintainer-pushed workflow change; the seat owns that follow-up. #2394 remains open. No workflow file changed and no push, deployment or issue comment was made.
