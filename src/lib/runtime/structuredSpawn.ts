@@ -1,3 +1,4 @@
+import { assertProactiveTaskExecution, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
 import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import { assertSpawnMemoryAvailable } from "@/lib/agent/spawnMemory";
@@ -2641,12 +2642,19 @@ export async function recoverStagedStructuredLaunch(
         await persist({ ...recovery, reason: `original first-message lookup: ${message?.receipt.status ?? "absent; publication remains uncertain"}` });
         return read();
       }
+      assertProactiveTaskExecution([...(receipt.failureReporting?.taskIds ?? []),
+        ...proactiveConversationTaskIds([receipt.conversationId, receipt.parentConversationId], registry)]);
       if (!ownsHost || !host || !receipt.key || !receipt.artifactPath) throw new RuntimeHostUnavailableError("staged host is awaiting its original owner", "HOST_BUSY");
       if (continuation && !await continuation.owns()) return read();
       if (!current()) return read();
       let curatorAuthorize: () => void;
       try {
-        curatorAuthorize = await curatorReceiptAdmission(receipt, registry, options.curationSources);
+        const curator = await curatorReceiptAdmission(receipt, registry, options.curationSources);
+        curatorAuthorize = () => {
+          assertProactiveTaskExecution([...(receipt.failureReporting?.taskIds ?? []),
+            ...proactiveConversationTaskIds([receipt.conversationId, receipt.parentConversationId], registry)]);
+          curator();
+        };
         options.assertActive?.();
         curatorAuthorize();
       } catch (error) {
@@ -2731,6 +2739,14 @@ export async function spawnStructuredConversation(
   input: StructuredSpawnInput,
   dependencies: StructuredSpawnDependencies = {},
 ): Promise<SpawnResponse> {
+  const authorize = input.authorize;
+  input = { ...input, authorize: async () => {
+    assertProactiveTaskExecution([...(input.receipt.failureReporting?.taskIds ?? []),
+      ...proactiveConversationTaskIds([input.receipt.conversationId, input.receipt.parentConversationId], input.registry)]);
+    await authorize?.();
+    assertProactiveTaskExecution([...(input.receipt.failureReporting?.taskIds ?? []),
+      ...proactiveConversationTaskIds([input.receipt.conversationId, input.receipt.parentConversationId], input.registry)]);
+  } };
   const startHost = dependencies.startHost ?? defaultStartHost;
   const bindHost = dependencies.bindHost ?? defaultBindHost;
   const publishHost = dependencies.publishHost

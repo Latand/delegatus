@@ -3093,6 +3093,45 @@ test("publication releases the SQLite lease during Git and refuses an in-flight 
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
+test.each(["before-push", "after-confirm"] as const)("operator rejection fences publication and retains its real receipt: %s", async phase => {
+  const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
+  const { candidate, context, authority, NOW } = await import("@/lib/tasks/proactive.fixture");
+  const box = await publishSandbox();
+  try {
+    const { task } = await admitProactiveTask(candidate(`publication-${phase}`), context(), undefined, authority());
+    box.subject.taskIds = [task.id];
+    savePipelines([box.subject]);
+    const head = await box.commit("accepted.txt", "accepted outcome\n");
+    let effects = 0;
+    const untouched: ExecPort = async () => { effects++; throw new Error("fenced effect ran"); };
+    expect(await publishPipelineBranch(box.subject, untouched, { acceptedSha: head })).toMatchObject({ ok: false, error: expect.stringContaining("disabled") });
+    expect(effects).toBe(0);
+    await decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task), undefined, () => new Date(NOW).toISOString());
+    let rejected = false;
+    const racing: ExecPort = async (command, args, cwd, env, options) => {
+      const result = await realExec(command, args, cwd, env, options);
+      if (!rejected && (phase === "before-push" || args.includes("ls-remote") && result.stdout.startsWith(head))) {
+        await decideProactiveTask(task.id, "reject", "operator", proactiveDecisionToken(task));
+        rejected = true;
+      }
+      return result;
+    };
+    const result = await publishPipelineBranch(box.subject, racing, { acceptedSha: head });
+    expect(rejected).toBe(true);
+    if (phase === "before-push") {
+      expect(result).toMatchObject({ ok: false });
+      expect(await box.originHead()).toBe("");
+    } else {
+      expect(result).toMatchObject({ ok: true, remote: "published", sha: head });
+      expect(findPipelineRecord(box.subject.id)?.delivery?.operation).toMatchObject({ state: "settled", result: { ok: true, remote: "published" } });
+      expect(await box.originHead()).toBe(head);
+    }
+    expect(fs.readFileSync(path.join(box.subject.worktreeDir, "accepted.txt"), "utf8")).toBe("accepted outcome\n");
+    expect(await publishPipelineBranch(box.subject, untouched, { acceptedSha: head })).toMatchObject({ ok: false, error: expect.stringContaining("rejected") });
+    expect(effects).toBe(0);
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
 test("a same-owner adapter retry waits on its running reservation without executing Git (#1939)", async () => {
   const subject = pipeline();
   const head = "7".repeat(40);

@@ -72,7 +72,11 @@ export function gateToolFiles(root: string): string[] {
     seen.add(relative);
     const file = path.join(root, relative);
     if (!existsSync(file) || !statSync(file).isFile()) continue;
-    for (const imported of (file.endsWith(".tsx") ? tsx : ts).scanImports(readFileSync(file))) {
+    // Imported JSON remains an input, with no module imports to scan.
+    if (relative.endsWith(".json")) continue;
+    // The original interpreter line stays bound by fileFingerprint.
+    const source = readFileSync(file, "utf8").replace(/^#![^\r\n]*/, "");
+    for (const imported of (file.endsWith(".tsx") ? tsx : ts).scanImports(source)) {
       if (!imported.path.startsWith(".") && !imported.path.startsWith("@/")) continue;
       const target = imported.path.startsWith("@/") ? path.join(root, "src", imported.path.slice(2)) : path.resolve(path.dirname(file), imported.path);
       const resolved = [target, `${target}.ts`, `${target}.tsx`, `${target}.js`, path.join(target, "index.ts")]
