@@ -3,10 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
+import { FileTransactionBusyError, withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { isOpaqueProjectKey, projectDisplayName } from "@/lib/displayNames";
 import { translate, type Locale } from "@/lib/i18n/core";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { canonicalProject, projectAliasSnapshot, recordedProjectRemote } from "@/lib/projects/aliases";
+import { assertAgentMemoryMax, validAgentMemoryMax } from "@/lib/runtime/agentMemoryConfig";
 
 /*
  * Per-project settings (#2187 §4.1, docs/design/merge-policy-and-task-finishing.md).
@@ -74,6 +76,7 @@ export interface EffectiveReportTelegram {
 
 interface ProjectSettingsEntry {
   codexCloudEnvironmentId?: string;
+  agentMemoryMaxBytes?: number | null;
   mergeOnReview?: StoredSwitch;
   /** #2146: whether the project's orchestrator files bridge reports and the
       voice relay delivers them. Absent reads as on. */
@@ -125,6 +128,8 @@ function entryOf(value: unknown): ProjectSettingsEntry | null {
   const entry: ProjectSettingsEntry = {};
   const cloud = (value as Record<string, unknown>).codexCloudEnvironmentId;
   if (validCodexCloudEnvironmentId(cloud)) entry.codexCloudEnvironmentId = cloud.trim();
+  const memory = (value as Record<string, unknown>).agentMemoryMaxBytes;
+  if (validAgentMemoryMax(memory) && memory !== undefined) entry.agentMemoryMaxBytes = memory;
   for (const name of Object.keys(DEFAULTS) as ProjectSwitchName[]) {
     const stored = switchOf((value as Record<string, unknown>)[name]);
     if (stored) entry[name] = stored;
@@ -225,7 +230,18 @@ function writeProjects(projects: Record<string, ProjectSettingsEntry>): boolean 
   }
 }
 
+/** Each read-modify-write holds the file's lock, which an install transfer
+    holds while it writes the same file, so neither loses the other's entry. */
+function underFileLock<T>(operation: () => T, refused: T): T {
+  try { return withFileTransactionSync(settingsFile(), "project settings are busy", () => { cache = null; return operation(); }); }
+  catch (error) { if (error instanceof FileTransactionBusyError) return refused; throw error; }
+}
+
 function setSwitch(name: ProjectSwitchName, project: string, enabled: boolean, changedBy: string, now: string): ProjectSwitchSetting | null {
+  return underFileLock(() => setSwitchLocked(name, project, enabled, changedBy, now), null);
+}
+
+function setSwitchLocked(name: ProjectSwitchName, project: string, enabled: boolean, changedBy: string, now: string): ProjectSwitchSetting | null {
   const key = canonicalProject(project.trim());
   if (!key) return null;
   const projects = { ...readProjects() };
@@ -286,6 +302,7 @@ export function setReportTelegram(
   changedBy: string,
   now: string = new Date().toISOString(),
 ): ReportTelegramChoice | false {
+  return underFileLock((): ReportTelegramChoice | false => {
   const key = canonicalProject(project.trim());
   if (!key) return false;
   const projects = { ...readProjects() };
@@ -298,6 +315,7 @@ export function setReportTelegram(
   projects[key] = entry;
   if (!writeProjects(projects)) return false;
   return { ...entry.reportTelegram };
+  }, false);
 }
 
 /** The GitHub repository's name, capitalised, when the project has a GitHub
@@ -335,4 +353,19 @@ export function reportHeaderName(project: string, locale: Locale = "en"): string
 
 export function resetProjectSettingsForTests(): void {
   cache = null;
+}
+
+/** Null inherits the installation cap. Writes use the canonical project key. */
+export function projectAgentMemoryMax(project: string): number | null {
+  const projects = readProjects();
+  return (projects[canonicalProject(project.trim())] ?? projects[project.trim()])?.agentMemoryMaxBytes ?? null;
+}
+
+export function setProjectAgentMemoryMax(project: string, value: number | null): boolean {
+  assertAgentMemoryMax(value);
+  const key = canonicalProject(project.trim());
+  if (!key) return false;
+  const projects = { ...readProjects() };
+  projects[key] = { ...projects[key], agentMemoryMaxBytes: value };
+  return writeProjects(projects);
 }

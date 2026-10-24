@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -509,9 +509,34 @@ export async function touchedTests(root: string, baseRef: string, selected: read
 
 if (import.meta.main) {
   try {
-    const [, , flag, base, ...files] = process.argv;
+    const args = process.argv.slice(2);
+    const admitted = args[0] === "--admitted";
+    if (admitted) args.shift();
+    const [flag, base, ...files] = args;
     if (flag !== "--base" || !base) throw new Error("usage: local-gate-tests.ts --base <merge-base> <files...>");
-    if ((await touchedTests(process.cwd(), base, files)).introduced.length) process.exitCode = 1;
+    // Dispatch before isolation turns remote execution off. The hook already
+    // dispatches its admitted half; its isolated comparator and imported test
+    // API stay on that machine. The argument survives a fresh process, including
+    // local fallback, so no second dispatch can nest inside the first one.
+    if (!admitted && process.platform === "linux" && process.env.NODE_ENV !== "test" && process.env.LLV_GATE_RUNNER !== "off") {
+      const child = spawn("bash", [path.join(import.meta.dir, "gate-slot.sh"), process.execPath, import.meta.path, "--admitted", ...args], { stdio: "inherit" });
+      const forward = (signal: NodeJS.Signals) => {
+        if (child.exitCode === null && child.signalCode === null) child.kill(signal);
+      };
+      process.on("SIGTERM", forward);
+      process.on("SIGINT", forward);
+      try {
+        process.exitCode = await new Promise<number>((resolve, reject) => {
+          child.once("error", reject);
+          child.once("close", (code, signal) => resolve(code ?? (signal === "SIGINT" ? 130 : 143)));
+        });
+      } finally {
+        process.off("SIGTERM", forward);
+        process.off("SIGINT", forward);
+      }
+    } else {
+      if ((await touchedTests(process.cwd(), base, files)).introduced.length) process.exitCode = 1;
+    }
   } catch (error) {
     console.error(`touched-tests: ${error instanceof Error ? error.message : error}; gate error (blocking)`);
     process.exitCode = 1;

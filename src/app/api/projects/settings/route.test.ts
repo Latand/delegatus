@@ -1,3 +1,4 @@
+import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -41,6 +42,9 @@ test("cloud environment is off by default, persists, clears, and rejects malform
   // Other settings' writers must keep this field when they copy the entry.
   await put({ project, bridgeReports: false });
   expect((await (await get(project)).json()).codexCloudEnvironmentId).toBe("env-fixture");
+  const memoryCap = 4 * 2 ** 30;
+  expect((await put({ project, agentMemoryMaxBytes: memoryCap })).status).toBe(200);
+  expect(await (await get(project)).json()).toMatchObject({ codexCloudEnvironmentId: "env-fixture", agentMemoryMaxBytes: memoryCap });
   for (const value of [null, false, {}, "--option", "foreign/target", "x".repeat(129)]) {
     expect((await put({ project, codexCloudEnvironmentId: value })).status).toBe(400);
     expect((await (await get(project)).json()).codexCloudEnvironmentId).toBe("env-fixture");
@@ -58,14 +62,14 @@ test("cloud environment is off by default, persists, clears, and rejects malform
     const refused = await PUT(new NextRequest(`${ORIGIN}/api/projects/settings`, {
       method: "PUT", headers: { "content-type": "application/json", origin: ORIGIN, host: "127.0.0.1:8899",
         [VIEWER_SPAWN_CAPABILITY_HEADER]: Buffer.alloc(32, 1).toString("base64url") },
-      body: JSON.stringify({ project, codexCloudEnvironmentId: "foreign", bridgeReports: true }),
+      body: JSON.stringify({ project, codexCloudEnvironmentId: "foreign", bridgeReports: true, agentMemoryMaxBytes: null }),
     }));
     expect(refused.status).toBe(403);
     expect(await refused.json()).toMatchObject({ code: "operator_only" });
-    expect((await (await get(project)).json())).toMatchObject({ codexCloudEnvironmentId: "env-fixture", bridgeReports: { enabled: false } });
+    expect((await (await get(project)).json())).toMatchObject({ codexCloudEnvironmentId: "env-fixture", bridgeReports: { enabled: false }, agentMemoryMaxBytes: memoryCap });
   } finally { setCallerConversationResolverForTests(null); }
   expect((await put({ project, codexCloudEnvironmentId: "" })).status).toBe(200);
-  expect((await (await get(project)).json()).codexCloudEnvironmentId).toBe("");
+  expect(await (await get(project)).json()).toMatchObject({ codexCloudEnvironmentId: "", agentMemoryMaxBytes: memoryCap });
 });
 
 test("the setting reads off by default, turns on through PUT, and says when the project has no GitHub repository", async () => {
@@ -78,6 +82,16 @@ test("the setting reads off by default, turns on through PUT, and says when the 
   expect((await (await get("dir-no-remote")).json())).toMatchObject({ mergeOnReview: { enabled: false }, github: null });
   expect((await put({ project: "repo-with-github", mergeOnReview: "yes" })).status).toBe(400);
   expect((await get("")).status).toBe(400);
+});
+
+test("project memory caps validate, persist and reset through the operator route", async () => {
+  for (const cap of [0, -1, "8G", 2 ** 40 + 1, {}, false]) {
+    expect((await put({ project: "memory-project", agentMemoryMaxBytes: cap })).status).toBe(400);
+  }
+  expect((await put({ project: "memory-project", agentMemoryMaxBytes: 8 * 2 ** 30 })).status).toBe(200);
+  expect((await (await get("memory-project")).json()).agentMemoryMaxBytes).toBe(8 * 2 ** 30);
+  expect((await put({ project: "memory-project", agentMemoryMaxBytes: null })).status).toBe(200);
+  expect((await (await get("memory-project")).json()).agentMemoryMaxBytes).toBeNull();
 });
 
 /* #2146: Bridge reports read on by default, and a PUT carrying only that
@@ -266,4 +280,20 @@ test("a chat added by id is selectable with no update, and each project keeps it
     await service.remove();
     setTelegramBotServiceForTests(null);
   }
+});
+
+
+test("an agent cannot change a project cap through the operator route", async () => {
+  setCallerConversationResolverForTests(() => "conversation_memory_agent");
+  try {
+    const response = await PUT(new NextRequest(`${ORIGIN}/api/projects/settings`, {
+      method: "PUT", headers: { "content-type": "application/json", origin: ORIGIN,
+        host: "127.0.0.1:8899", "x-llv-spawn-capability": "a".repeat(43) },
+      body: JSON.stringify({ project: "agent-memory-project", agentMemoryMaxBytes: 8 * 2 ** 30 }),
+    }));
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: "operator_only", error: expect.stringContaining("operator-only") });
+    expect((await (await get("agent-memory-project")).json()).agentMemoryMaxBytes).toBeNull();
+  } finally { setCallerConversationResolverForTests(null); }
+  expect((await put({ project: "agent-memory-project", agentMemoryMaxBytes: 8 * 2 ** 30 })).status).toBe(200);
 });

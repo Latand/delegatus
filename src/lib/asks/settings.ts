@@ -3,6 +3,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 
 import { configFilePath, statePath } from "@/lib/configDir";
+import { FileTransactionBusyError, withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 
 /*
@@ -66,6 +67,13 @@ export function writeAsksYouSettings(
   now = new Date(),
   file = asksYouSettingsFile(),
 ): AsksYouSettings | false {
+  /* Under the file's lock, which an install transfer holds while it writes
+     the same file, so neither loses the other's value. */
+  try { return withFileTransactionSync(file, "asks-you settings are busy", () => writeLocked(change, now, file)); }
+  catch (error) { if (error instanceof FileTransactionBusyError) return false; throw error; }
+}
+
+function writeLocked(change: { enabled?: boolean; capUsd?: number }, now: Date, file: string): AsksYouSettings | false {
   const current = readAsksYouSettings(file);
   const cap = change.capUsd === undefined ? current.capUsd : validCap(change.capUsd);
   if (cap === null) return false;
