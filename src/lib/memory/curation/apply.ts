@@ -22,7 +22,7 @@ export interface CurationApply {
   merge?: { into: string; from: string[]; rule: string; why?: string; note: string }[];
   move?: { id: string; to: string; note?: string }[];
   split?: { id: string; parts: { to: string; rule: string; why?: string }[]; note: string }[];
-  archive?: { id: string; reason: CuratorReason; against?: string; where?: string; note: string }[];
+  archive?: { id: string; reason: CuratorReason | "budget"; against?: string; where?: string; note: string }[];
   adopt?: { candidate: string; occurrences: string[]; parts: { to: string; rule: string; why: string }[]; note: string }[];
   drop?: { candidate: string; occurrences: string[]; reason: CuratorReason; where?: string; note: string; forRoom?: boolean }[];
   defer?: { candidate: string; occurrences: string[] }[];
@@ -162,7 +162,7 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
       }
       work.set(item.into, { ...into, ...text(item.rule, item.why ?? into.why), note: item.note, mergedFrom: [...(into.mergedFrom ?? []), ...item.from] }); touched.add(item.into);
     }
-    const reasons: CuratorReason[] = ["task-specific", "stale", "in-code", "in-instructions", "no-reader", "contradicted", "duplicate"];
+    const reasons: (CuratorReason | "budget")[] = ["task-specific", "stale", "in-code", "in-instructions", "no-reader", "contradicted", "duplicate", "budget"];
     for (const item of input.archive ?? []) {
       const rule = dispose(item.id, true);
       if (moved.has(item.id) || mergedTargets.has(item.id) || !reasons.includes(item.reason)) refuse("CURATE_PARTITION", "archive needs one valid disposition");
@@ -196,6 +196,13 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
       const active = ids.map(id => work.get(id)!);
       if (scopeChars(active) > ROLE_MEMORY_BOUND) refuse("CURATE_BOUND", "the resulting scope exceeds its character bound");
       orders.set(item.scope, ids.slice().reverse());
+    }
+    for (const item of input.archive ?? []) if (item.reason === "budget") {
+      const archived = work.get(item.id)!;
+      const survivors = (orders.get(archived.scope) ?? []).map(id => work.get(id)!);
+      if (scopeChars([...survivors, archived]) <= ROLE_MEMORY_BOUND) {
+        refuse("CURATE_BUDGET", "restore guidance that fits after integration; budget archives require remaining scope pressure");
+      }
     }
     for (const [id, rule] of work) {
       if (rule.state === "active" && !ordered.has(id)) refuse("CURATE_PARTITION", "every active rule needs an order or disposition");

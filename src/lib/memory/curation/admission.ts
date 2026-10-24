@@ -112,7 +112,7 @@ export function settle(pass: CuratorPass, ports: CurationAdmissionPorts, failure
   // Final state releases the machine claim even if archive placement is unavailable.
   const next = patchPass(pass.id, { state: settledFailure ? "failed" : "succeeded", failure: settledFailure, endedAt: new Date(ports.sources.now()).toISOString(), ...(finalText ? { finalText } : {}) })!;
   const counts = readPass(next.id)?.counts ?? next.counts;
-  const detail = `curation: ${settledFailure ? `failed, ${settledFailure}` : `settled ${pass.id}, ${counts.calls} calls, ${counts.changed} rules changed`}`;
+  const detail = `curation: ${next.state === "failed" ? `failed, ${next.failure}` : `settled ${pass.id}, ${counts.calls} calls, ${counts.changed} rules changed`}`;
   try { (ports.archive ?? (p => archive(p, ports.sources)))(next); }
   catch { return `${detail}; archive placement pending`; }
   return detail;
