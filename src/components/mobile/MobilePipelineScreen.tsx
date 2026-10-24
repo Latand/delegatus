@@ -1,6 +1,6 @@
 "use client";
 
-import { Boxes, Check, CircleX, Eye, GitMerge, Pause, Play, RotateCcw, SkipForward, Undo2 } from "lucide-react";
+import { Boxes, Check, CircleX, Eye, FileDiff, GitMerge, Pause, Play, RotateCcw, SkipForward, Undo2 } from "lucide-react";
 
 import { ChevronRight } from "@/components/icons";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from "react";
@@ -41,6 +41,7 @@ import { humanizeDuration } from "../turnDuration";
 import { nowFragment, pipelineHiddenFromBoard } from "./mobileBoardModel";
 import { RECEIPT_MS, showReceipt, type ReceiptTimers } from "./MobileReceipt";
 import { WorkLinksPanel } from "@/components/workLinks/WorkLinkChips";
+import { LaneReviewPhoneSheet } from "@/components/laneReview/LaneReviewPhoneSheet";
 import { useWorkLinks } from "@/components/workLinks/workLinksContext";
 import { MobileSheet, MobileSheetDivider, MobileSheetRow } from "./MobileSheet";
 import { MobileShell, type MobileShellHost, type SheetRenderer } from "./MobileShell";
@@ -508,6 +509,7 @@ export function MobilePipelineScreen({
   const linked = pipelineLinkedTasks(pipeline, tasks, [...flows], files).filter((task) => task.id !== cameFromTask);
 
   const sheets: SheetRenderer = (name, close) => {
+    if (name === "changes") return <LaneReviewPhoneSheet pipelineId={pipeline.id} onClose={close} />;
     if (name === "links") {
       return (
         <MobileSheet name="links" title={t("workLinks.listTitle")} onClose={close}>
@@ -540,6 +542,13 @@ export function MobilePipelineScreen({
               );
             })}
             <LaneAnswerRows pipeline={pipeline} acting={acting} onAnswer={lane.answer} close={close} />
+            {/* The lane's changed files, read-only on the phone (docs/design/lane-diff-comments.md §7). */}
+            <MobileSheetRow
+              icon={<FileDiff className="h-[18px] w-[18px]" aria-hidden />}
+              label={t("laneReview.phoneRow")}
+              onSelect={() => nav.openSheet("changes")}
+              attrs={{ "data-mobile2-menu-row": "changes" }}
+            />
             <MobileSheetDivider />
             <MobileSheetRow
               icon={<Boxes className="h-[18px] w-[18px]" aria-hidden />}
