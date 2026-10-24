@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import WebSocket from "ws";
-import { HostedCloudError, hostedHttpFailure, hostedRpcFailure, type HostedCloudFailure } from "./cloudHostedErrors";
+import { HostedCloudError, hostedHttpFailure, hostedNetworkFailure, hostedRpcFailure, type HostedCloudFailure } from "./cloudHostedErrors";
 import { codexAccountBinary } from "@/lib/accounts/codexAppServer";
 import { signalDetachedProcessGroup } from "@/lib/processGroup";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
@@ -78,7 +78,33 @@ async function configuration(response: Response): Promise<Row> {
       chunks.push(value);
     }
     return row(JSON.parse(Buffer.concat(chunks).toString()));
-  } finally { await reader.cancel(); reader.releaseLock(); }
+  } finally {
+    // A broken stream's cancellation can reject with the same transport error.
+    // Preserve the read/parse result rather than replacing its cause.
+    try { await reader.cancel(); } catch { /* The reader is being released. */ }
+    reader.releaseLock();
+  }
+}
+
+async function catalogue(url: string, auth: Auth, scope: HostedCloudGuard, dependencies: HostedCloudDependencies): Promise<Row> {
+  guard(scope);
+  let response: Response;
+  try {
+    response = await dependencies.fetch(url, {
+      headers: { Authorization: `Bearer ${auth.token}`, "X-OpenAI-Product-Sku": "codex", ...(auth.account ? { "ChatGPT-Account-Id": auth.account } : {}) },
+      redirect: "error", signal: scope.signal,
+    });
+  } catch (error) { guard(scope); throw hostedNetworkFailure(error); }
+  guard(scope);
+  if (!response.ok) {
+    try { await response.body?.cancel(); } catch { /* The HTTP refusal is already decisive. */ }
+    throw hostedHttpFailure(response.status);
+  }
+  let detail: Row;
+  try { detail = await configuration(response); }
+  catch (error) { guard(scope); throw hostedNetworkFailure(error); }
+  guard(scope);
+  return detail;
 }
 
 /** Raw native auth responses and stderr never cross this boundary. No API-key fallback. */
@@ -255,14 +281,7 @@ export const hostedCloudDependencies: HostedCloudDependencies = {
 export async function resolveHostedCloudEnvironment(environmentId: string, auth: Auth, scope: HostedCloudGuard,
   dependencies: HostedCloudDependencies = hostedCloudDependencies): Promise<string> {
   requireCloud(/^(?:[A-Za-z0-9_-]+~)?asenvcfg_[A-Za-z0-9_-]+$/.test(environmentId), "environment must be an ASB configuration");
-  const response = await dependencies.fetch(`${ENDPOINT}/v1/environment-configs/${encodeURIComponent(environmentId)}`, {
-    headers: { Authorization: `Bearer ${auth.token}`, "X-OpenAI-Product-Sku": "codex", ...(auth.account ? { "ChatGPT-Account-Id": auth.account } : {}) },
-    redirect: "error", signal: scope.signal,
-  });
-  guard(scope);
-  if (!response.ok) { await response.body?.cancel(); throw hostedHttpFailure(response.status); }
-  const detail = await configuration(response);
-  guard(scope);
+  const detail = await catalogue(`${ENDPOINT}/v1/environment-configs/${encodeURIComponent(environmentId)}`, auth, scope, dependencies);
   requireCloud(detail.id === environmentId && Array.isArray(detail.repositories) && detail.repositories.length === 1, "environment configuration mismatch");
   const repository = row(detail.repositories[0]);
   let cwd = typeof repository.mount_path === "string" ? repository.mount_path : "";
@@ -271,14 +290,7 @@ export async function resolveHostedCloudEnvironment(environmentId: string, auth:
     // catalog and maps its full name to the default cloud workspace root.
     const id = text(repository.repository_id, "environment repository missing");
     guard(scope);
-    const response = await dependencies.fetch(`https://chatgpt.com/backend-api/wham/github/repositories/${encodeURIComponent(id)}`, {
-      headers: { Authorization: `Bearer ${auth.token}`, "X-OpenAI-Product-Sku": "codex", ...(auth.account ? { "ChatGPT-Account-Id": auth.account } : {}) },
-      redirect: "error", signal: scope.signal,
-    });
-    guard(scope);
-    if (!response.ok) { await response.body?.cancel(); throw hostedHttpFailure(response.status); }
-    const detail = await configuration(response);
-    guard(scope);
+    const detail = await catalogue(`https://chatgpt.com/backend-api/wham/github/repositories/${encodeURIComponent(id)}`, auth, scope, dependencies);
     const fullName = text(detail.repository_full_name, "repository name missing");
     requireCloud(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(fullName)
       && ![".", ".."].includes(fullName.split("/")[1]), "repository name invalid");

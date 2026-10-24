@@ -1,5 +1,64 @@
 # Cloud checks: verification
 
+## Canonical inputs and catalogue failures
+
+Recorded 2026-10-24 UTC. Comparison base:
+`0e4b449269ef16772b272d38bed1e06f8b6b4360`.
+The SHA-256 of `git diff --binary <comparison-base> -- scripts src/lib/pipelines/cloudHostedClient.ts src/lib/pipelines/cloudHostedErrors.ts`
+is `3b9f8246372a39e56f96734e53703689fb0f5ac4358c09a7b93593cc36c15056`.
+Documentation is outside that source digest.
+
+`scripts/gate-cache.ts:checkInputEnvironment` captures canonical values and
+declared absences. `scripts/local-gate.ts` supplies that manifest to the Cloud
+job. `scripts/cloud-checks.ts:cloudCheckInputs` maps tracked file references
+into the candidate checkout and refuses unsupported host inputs. The generated
+check process starts with a fresh environment, and its receipt binds the manifest
+digest. Both the command record and the coordinator require that binding.
+
+`src/lib/pipelines/cloudHostedClient.ts:catalogue` handles the environment and
+repository lookups through the same bounded reader and HTTP policy.
+`src/lib/pipelines/cloudHostedErrors.ts:hostedNetworkFailure` admits only known
+transient transport causes for retry. HTTP refusals, malformed bodies, TLS
+failures and unknown errors retain decisive results. Source upload commands
+require completed status, exit zero and their recorded turn before proceeding.
+
+Before the source repair, ten targeted regression cases failed on the comparison
+base: three input-verdict cases, four real catalogue reset cases and three
+unsuccessful upload cases. The input probe returned a false green when the local
+check exited 17. Catalogue failures returned 1 instead of the local exit 19.
+Unsuccessful uploads returned the local green instead of refusing.
+
+The repaired source was checked in a detached scratch export pinned to the
+comparison base and the captured `origin/main`. Its dependencies match the
+manifest and lockfile. Commands used the supplied `gate-slot.sh`, serially,
+with private HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR, a closed Viewer
+control URL and SSH runner dispatch disabled.
+
+| Explicit test file | Result |
+| --- | --- |
+| `scripts/cloud-checks.test.ts` | 94 passed |
+| `scripts/cloud-check-config.test.ts` | 8 passed |
+| `scripts/gate-cache.test.ts` | 13 passed |
+| `src/lib/pipelines/cloudHostedClient.test.ts` | 65 passed |
+
+The command for each file was `bun run test <file>`. The generated Cloud
+commands execute fixture repositories without network installs. Red, green and
+absent declared inputs match the local canonical environment, including tracked
+file remapping and quoted Unicode values. Missing and mismatched input bindings
+refuse. Both catalogue endpoints experience real connection and response-body
+resets: two attempts produce exactly one local run, preserving exit 19.
+Permanent catalogue refusals invoke no local checks. Declined and failed uploads,
+including exit-zero records, stop before further pages or a check turn; verified
+transfer outages preserve the retry and single-local policy. The six existing
+unconfigured hook cases still verify one local plan for default, Cloud and local
+selections, with red and green outcomes.
+
+`node_modules/.bin/tsc --noEmit --incremental false` and ESLint on all seven
+touched TypeScript files exit 0 without diagnostics. `git diff --check` passes.
+
+No live Cloud job or remote push is part of this verification. UI components
+remain for the separate UI stage.
+
 ## Unconfigured project publication repair
 
 Recorded 2026-10-24 following the operator's publication continuation. This

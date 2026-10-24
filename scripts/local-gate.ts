@@ -1,4 +1,4 @@
-import { AppServerCloudTransport, runCloudChecks } from "./cloud-checks";
+import { AppServerCloudTransport, cloudCheckInputs, runCloudChecks } from "./cloud-checks";
 import { cloudCheckConfig } from "./cloud-check-config";
 import { checkExecutionSettings } from "./cloud-check-settings";
 import { spawnSync } from "node:child_process";
@@ -935,7 +935,8 @@ async function main(mode: Mode, admitted = false): Promise<void> {
         git(root, ["bundle", "create", destination, "HEAD", `^${base}`]);
         const bundle = readFileSync(destination).toString("base64");
         console.error("pre-push: Cloud checks");
-        const code = await runCloudChecks({ head, tree, base, bundle, timeoutMs: Math.max(1, (deadline?.at ?? Date.now() + 15 * 60_000) - Date.now()) },
+        const inputs = cloudCheckInputs(root, process.env);
+        const code = await runCloudChecks({ head, tree, base, inputs, bundle, timeoutMs: Math.max(1, (deadline?.at ?? Date.now() + 15 * 60_000) - Date.now()) },
           new AppServerCloudTransport(config), async () => {
             console.error("pre-push: Cloud unavailable after confirmation; running the same checks locally once");
             await localChecks(cancel); return 0;

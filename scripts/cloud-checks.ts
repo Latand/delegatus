@@ -1,4 +1,8 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { realpathSync, statSync } from "node:fs";
+import path from "node:path";
+import { checkEnvironment, checkInputEnvironment } from "./gate-cache";
 import { HostedCloudError as CloudRpcError, hostedRpcFailure as rpcFailure } from "../src/lib/pipelines/cloudHostedErrors";
 import type { HostedCloudDependencies } from "../src/lib/pipelines/cloudHostedClient";
 import type { CloudCheckConfig } from "./cloud-check-config";
@@ -6,8 +10,9 @@ export { CloudRpcError, rpcFailure };
 
 /** Cloud and local execute the same admitted pre-push plan. Only infrastructure
  * failures permit a confirmed, single local fallback; check failures never do. */
-export interface CloudJob { head: string; tree: string; base: string; bundle: string; timeoutMs: number }
-export type CloudResult = { kind: "verdict"; head: string; tree: string; base: string; code: number }
+export type CloudCheckInputs = Record<string, string | null | { file: string }>;
+export interface CloudJob { head: string; tree: string; base: string; inputs: CloudCheckInputs; bundle: string; timeoutMs: number }
+export type CloudResult = { kind: "verdict"; head: string; tree: string; base: string; inputs: string; code: number }
   | { kind: "unavailable" | "cloud-limit" | "account-limit" | "invalid" };
 export interface CloudTransport { run(job: CloudJob, signal?: AbortSignal): Promise<CloudResult> }
 export async function runCloudChecks(job: CloudJob, transport: CloudTransport, local: () => Promise<number>, signal?: AbortSignal): Promise<number> {
@@ -16,7 +21,7 @@ export async function runCloudChecks(job: CloudJob, transport: CloudTransport, l
     if (signal?.aborted) return 75;
     const result = await transport.run({ ...job, timeoutMs: Math.max(1, until - Date.now()) }, signal);
     if (signal?.aborted) return 75;
-    if (result.kind === "verdict") return result.head === job.head && result.tree === job.tree && result.base === job.base
+    if (result.kind === "verdict") return result.head === job.head && result.tree === job.tree && result.base === job.base && result.inputs === cloudInputDigest(job.inputs)
       && Number.isInteger(result.code) && result.code >= 0 && result.code <= 255 ? result.code : 1;
     if (result.kind === "account-limit") return 75;
     if (result.kind === "invalid") return 1;
@@ -47,8 +52,64 @@ export async function connectCloud(config: CloudConfig, signal = new AbortContro
 }
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+
+function inputName(name: string): void {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || ["PATH", "HOME", "TMPDIR", "NODE_ENV", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_TMPDIR",
+    "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "LLV_LANG", "LLV_LAUNCHER_REEXEC", "LLV_LAUNCHER_CHECKOUT", "LLV_TOKEN", "LLV_DEBUG", "LLV_SKIP_HOOKS", "DELEGATUS_DEBUG"].includes(name)
+    || /^(?:XDG_|LLV_(?:STATE|INBOX|VIEWER|SIGNAL|CPU|OWNED)_|DELEGATUS_|GIT_(?:DIR|WORK_TREE|INDEX_FILE|COMMON_DIR|CONFIG(?:_COUNT|_PARAMETERS|_KEY_\d+|_VALUE_\d+)?)$)/.test(name)
+    || (name.startsWith("LLV_GATE_") && !["LLV_GATE_CHECK_ENV", "LLV_GATE_BUN"].includes(name))) {
+    throw new Error("Unsupported Cloud check input name");
+  }
+}
+
+/** Capture exactly the canonical scalar inputs. Tracked file references are
+ * remapped to the candidate checkout. Host files and compound path options
+ * cannot silently disappear or read a different Cloud file. */
+export function cloudCheckInputs(root: string, env: Partial<NodeJS.ProcessEnv>): CloudCheckInputs {
+  const canonical = checkInputEnvironment(checkEnvironment(env));
+  const result: CloudCheckInputs = {};
+  const repository = realpathSync(root);
+  for (const [name, value] of Object.entries(canonical)) {
+    inputName(name);
+    if (value === null) { Object.defineProperty(result, name, { value: null, enumerable: true }); continue; }
+    if (value.includes("\0")) throw new Error("Unsupported Cloud check input value");
+    let input: CloudCheckInputs[string] = value;
+    if (name === "SHELL" && /^\/bin\/(?:ba)?sh$/.test(value)) { /* Standard Cloud shell path. */ }
+    else if (path.isAbsolute(value)) {
+      try {
+        const file = realpathSync(value), relative = path.relative(repository, file);
+        if (!relative || relative.startsWith("..") || path.isAbsolute(relative) || !statSync(file).isFile()) throw new Error();
+        execFileSync("git", ["ls-files", "--error-unmatch", "--", relative], { cwd: root, stdio: "pipe" });
+        input = { file: relative.split(path.sep).join("/") };
+      } catch { throw new Error("Cloud check input is outside tracked files"); }
+    } else if (/(?:^|[=\s])(?:\/|[A-Za-z]:[\\/])/.test(value) || value.startsWith("\\\\")) throw new Error("Unsupported Cloud check input path");
+    Object.defineProperty(result, name, { value: input, enumerable: true });
+  }
+  return result;
+}
+
+export function cloudInputDigest(inputs: CloudCheckInputs): string {
+  const declared = Object.hasOwn(inputs, "LLV_GATE_CHECK_ENV") ? inputs.LLV_GATE_CHECK_ENV : null;
+  if (declared !== null && typeof declared !== "string") throw new Error("Invalid Cloud check input declaration");
+  for (const name of (declared ?? "").split(",").map(name => name.trim()).filter(Boolean)) {
+    inputName(name);
+    if (!Object.hasOwn(inputs, name)) throw new Error("Missing declared Cloud check input");
+  }
+  return createHash("sha256").update(JSON.stringify(Object.entries(inputs).sort(([a], [b]) => a.localeCompare(b)))).digest("hex");
+}
+
 export function cloudCommand(job: CloudJob, upload?: { directory: string; source: string }): string {
-  const receipt = `DELEGATUS_GATE ${job.head} ${job.tree} ${job.base}`;
+  const receipt = `DELEGATUS_GATE ${job.head} ${job.tree} ${job.base} ${cloudInputDigest(job.inputs)}`;
+  const inputs = Object.entries(job.inputs).map(([name, value]) => {
+    inputName(name);
+    if (value === null) return ""; // env -i also removes a Cloud environment's value.
+    if (typeof value === "string") return `${name}=${quote(value)}`;
+    if (!value.file || value.file.startsWith("/") || value.file.split("/").some(part => part === ".." || part === ".git")) throw new Error("Invalid Cloud input file");
+    return `${name}="$PWD"/${quote(value.file)}`;
+  }).filter(Boolean).join(" ");
+  const files = Object.values(job.inputs).filter((value): value is { file: string } => value !== null && typeof value === "object")
+    .map(value => `test -f "$PWD"/${quote(value.file)}`).join("\n");
+  const environment = `env -i PATH="$PATH" ${inputs} HOME="$root/home" XDG_CONFIG_HOME="$root/config" TMPDIR="$root/tmp" LLV_STATE_DIR="$root/state"`;
   return `set -eu
 root=$(mktemp -d)
 ${upload ? `upload=${quote(upload.directory)}\ntrap 'rm -rf "$root" "$upload"' EXIT` : `trap 'rm -rf "$root"' EXIT`}
@@ -60,10 +121,11 @@ cd "$root/repo"
 git checkout -q --detach ${quote(job.head)}
 git update-ref refs/remotes/origin/main ${quote(job.base)}
 test "$(git rev-parse HEAD^{tree})" = ${quote(job.tree)}
-bun install --frozen-lockfile --ignore-scripts
+${files}
 mkdir -p "$root/home" "$root/config" "$root/tmp" "$root/state"
+${environment} bun install --frozen-lockfile --ignore-scripts
 set +e
-HOME="$root/home" XDG_CONFIG_HOME="$root/config" TMPDIR="$root/tmp" LLV_STATE_DIR="$root/state" LLV_SKIP_HOOKS=0 LLV_GATE_PUSH_HEAD=${quote(job.head)} LLV_GATE_RUNNER=off LLV_GATE_EXECUTION=local DELEGATUS_AGENT_CPU=off bun scripts/local-gate.ts pre-push --admitted
+${environment} LLV_SKIP_HOOKS=0 LLV_GATE_PUSH_HEAD=${quote(job.head)} LLV_GATE_RUNNER=off LLV_GATE_EXECUTION=local DELEGATUS_AGENT_CPU=off bun scripts/local-gate.ts pre-push --admitted
 code=$?
 set -e
 test "$(git rev-parse HEAD^{tree})" = ${quote(job.tree)}
@@ -126,7 +188,7 @@ async function uploadBundle(rpc: CloudRpc, threadId: string, directory: string, 
     while (clock.now() < until && !signal?.aborted) {
       for await (const entry of commandEntries(rpc, threadId)) {
         if (entry.item?.type === "commandExecution" && isExactCommand(entry.item.command, command) && ["completed", "failed", "declined"].includes(entry.item.status)) {
-          if (entry.item.exitCode !== 0 || !entry.turnId) throw new CloudRpcError("Cloud source transfer failed", "unavailable");
+          if (entry.item.status !== "completed" || entry.item.exitCode !== 0 || !entry.turnId) throw new CloudRpcError("Cloud source transfer refused", "invalid");
           firstTurnId ??= entry.turnId;
           done = true; break;
         }
@@ -147,10 +209,10 @@ export class AppServerCloudTransport implements CloudTransport {
       const item = entry.item;
       if (entry.turnId !== turnId || item?.type !== "commandExecution" || !["completed", "failed", "declined"].includes(item.status)
         || !isExactCommand(item.command, command)) continue;
-      const match = item.aggregatedOutput?.match(/DELEGATUS_GATE ([a-f0-9]{40}) ([a-f0-9]{40}) ([a-f0-9]{40}) (\d+)\s*$/);
-      if (item.status !== "declined" && !(item.status === "failed" && item.exitCode === 0) && match && Number(match[4]) === item.exitCode) {
+      const match = item.aggregatedOutput?.match(/DELEGATUS_GATE ([a-f0-9]{40}) ([a-f0-9]{40}) ([a-f0-9]{40}) ([a-f0-9]{64}) (\d+)\s*$/);
+      if (item.status !== "declined" && !(item.status === "failed" && item.exitCode === 0) && match && Number(match[5]) === item.exitCode) {
         this.report(item.aggregatedOutput!);
-        return { kind: "verdict", head: match[1]!, tree: match[2]!, base: match[3]!, code: item.exitCode! };
+        return { kind: "verdict", head: match[1]!, tree: match[2]!, base: match[3]!, inputs: match[4]!, code: item.exitCode! };
       }
       // Terminal exact-command evidence is decisive before another page or RPC.
       return { kind: "invalid" };

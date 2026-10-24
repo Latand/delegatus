@@ -19,3 +19,20 @@ export function hostedHttpFailure(status: number): HostedCloudError {
     [401, 403, 429].includes(status) ? "account-limit"
       : [500, 502, 503, 504].includes(status) ? "unavailable" : "invalid");
 }
+
+/** A positive transport cause is required for retry. TLS, malformed payloads,
+ * redirects, unknown failures and explicit refusals remain decisive. */
+export function hostedNetworkFailure(error: unknown): HostedCloudError {
+  if (error instanceof HostedCloudError) return error;
+  const seen = new Set<unknown>();
+  while (error && typeof error === "object" && !seen.has(error) && seen.size < 8) {
+    seen.add(error);
+    const cause = error as { code?: unknown; cause?: unknown };
+    if (["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EAI_AGAIN", "ENETUNREACH", "EHOSTUNREACH", "EPIPE",
+      "ConnectionClosed", "UND_ERR_SOCKET", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT"].includes(String(cause.code))) {
+      return new HostedCloudError("Codex Cloud catalogue transport unavailable", "unavailable");
+    }
+    error = cause.cause;
+  }
+  return new HostedCloudError("Codex Cloud catalogue refused", "invalid");
+}

@@ -72,6 +72,18 @@ command checks the tree and tracked working files again before emitting its
 terminal receipt. Local publication rechecks the source after receiving it.
 A changed tree invalidates the result.
 
+The job also carries canonical check inputs from `checkEnvironment`, including
+values and explicit absences named by `LLV_GATE_CHECK_ENV`. Cloud starts the
+check process with a fresh environment, so its configured variables cannot
+replace or supply those inputs. PATH selects Cloud's installed tools; private
+state roots and placement settings belong to the executor. Absolute input file
+paths must resolve to tracked files and are remapped into the candidate checkout.
+External files, directories, compound absolute path options and declarations
+that override isolation or dispatch controls are refused before dispatch.
+These unsupported inputs supply no outage evidence. The receipt binds a digest
+of the input manifest along with the head, tree, base and exit code; a missing
+manifest entry or mismatched digest cannot authorize publication.
+
 `scripts/cloud-checks.ts` owns source transfer and command verdicts. It uses
 `src/lib/pipelines/cloudHostedClient.ts` for the same native ChatGPT sign-in,
 hosted connection, initialization, RPC correlation and environment catalog as
@@ -100,7 +112,7 @@ The current app-server WebSocket lifecycle is:
    check command.
 4. Paginated `thread/turns/list` state and `thread/items/list`
    command records. Only a completed command record with a matching head,
-   tree, base and exit code supplies the verdict. Model prose supplies none.
+   tree, base, input digest and exit code supplies the verdict. Model prose supplies none.
 
 The adapter is injectable. Tests use fake RPC and loopback WebSocket servers,
 without live Cloud calls. They exercise green and red commands, mismatched trees,
@@ -127,6 +139,11 @@ client RPCs, even when their independent IDs collide.
 Handshake HTTP 500, 502, 503 and 504 permit outage confirmation. HTTP 401, 403
 and 429 remain account refusals. Other HTTP statuses, including wrong-path and
 protocol refusals, are invalid configuration and never authorize local checks.
+The environment and repository catalogues follow the same HTTP policy.
+Known transient network causes during their fetch or body read permit retry;
+malformed bodies, TLS refusals and unknown errors remain decisive. An upload
+command that is declined, fails or lacks a successful exit blocks immediately.
+Verified transfer transport outages still permit retry and one local fallback.
 
 The existing publication deadline remains authoritative. Retry does not reset
 it. Local fallback uses normal local CPU admission and isolation with SSH

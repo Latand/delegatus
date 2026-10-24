@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { checkEnvironment, environmentFingerprint, GateCache, gateToolFiles, fileFingerprint, installedFingerprint, workingInputsFingerprint } from "./gate-cache";
+import { checkEnvironment, checkInputEnvironment, environmentFingerprint, GateCache, gateToolFiles, fileFingerprint, installedFingerprint, workingInputsFingerprint } from "./gate-cache";
 import { agentEnvironments } from "./local-gate.fixture";
 import { pipelinePublicationHookEnv } from "../src/lib/pipelines/git";
 import { systemBootEpoch } from "../src/lib/processIdentity";
@@ -11,6 +11,14 @@ const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 const fixture = () => { const root = mkdtempSync(path.join(tmpdir(), "gate-cache-")); roots.push(root); return root; };
 const valid = (value: unknown): value is { passed: true } => !!value && typeof value === "object" && "passed" in value && value.passed === true;
+
+test("portable input capture retains values and explicit absences without placement or authority", () => {
+  const inputs = checkInputEnvironment(checkEnvironment({
+    PATH: "/usr/bin", HOME: "/fixture/home", LANG: "C.UTF-8", NODE_OPTIONS: "--max-old-space-size=1024",
+    LLV_GATE_CHECK_ENV: "PROBE,ABSENT,constructor", PROBE: "value", LLV_GATE_PUSH_DEADLINE: "1000", LLV_TOKEN: "private",
+  }));
+  expect(inputs).toEqual({ LANG: "C.UTF-8", NODE_OPTIONS: "--max-old-space-size=1024", LLV_GATE_CHECK_ENV: "PROBE,ABSENT,constructor", PROBE: "value", ABSENT: null, constructor: null });
+});
 
 test("a raw environment keys every variable that would reach a check", () => {
   const base = { NODE_ENV: "test" as const };

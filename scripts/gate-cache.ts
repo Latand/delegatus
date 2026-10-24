@@ -120,6 +120,14 @@ export function checkEnvironment(env: Partial<NodeJS.ProcessEnv>): NodeJS.Proces
   return result;
 }
 
+/** Portable check inputs, including declared absences. Placement and private
+ * roots are supplied by each executor; PATH selects that executor's tools. */
+export function checkInputEnvironment(env: Partial<NodeJS.ProcessEnv>): Record<string, string | null> {
+  const declared = declaredInputs(env);
+  const names = new Set([...Object.keys(env).filter(name => KEYED.test(name) && name !== "PATH"), ...declared]);
+  return Object.fromEntries([...names].sort().map(name => [name, Object.hasOwn(env, name) ? env[name] ?? null : null]));
+}
+
 /** The host a check ran on, read from the signal boundary when there is one:
  * its host epoch is the host's boot epoch, so a sandboxed producer and the
  * Viewer publishing on that host agree. Per-run boundary fields never count.
