@@ -297,3 +297,19 @@ The controller file passes all six whole-file controls, although the hook's filt
 For #2460, the explicit skip rechecks settled publication work at `src/lib/pipelines/engine.ts:11243`; its repaired and unrepaired hook regressions pass in the complete publication suite. Removing that production change made both regression cases fail, exit 1, as recorded above. For #2394, `scripts/release-verify.ts:160` reads exact manifests and dedicated dist-tags; its four regression modes pass, and removing the production change made all four fail, exit 1. Their source bytes did not change during this resumption.
 
 The authorized scope remains script-only. The publish and macOS workflow jobs still use `npm view` and need a separate maintainer-pushed workflow change; the seat owns that follow-up. #2394 remains open. No workflow file changed and no push, deployment or issue comment was made.
+
+
+### Last main integration
+
+While the repeated controls ran, the shared remote-tracking ref advanced by two commits. A further plain merge incorporated main at `97bdb94ea9dfe32dff8a7bf022eeb2f83d8f02b7` in `a8b6ff3c5c1ebccab7d18f05f4eb16340319b2e6`. That main update preserves uncertain Claude credentials before automatic refusal and adjusts a native-compaction test deadline. It changes no issue implementation, regression, activation-cleanup or gate file. The 30 whole-file controls above remain explicitly pinned to their earlier baseline. The complete hook was run again against this last integrated tree and its new main baseline.
+
+| Command | Exit / result |
+| --- | --- |
+| `git merge --no-ff origin/main -m 'Merge current main account and native test updates'` | 0; hooks enabled. |
+| `git diff --quiet f6e7077e55 HEAD -- scripts/release-verify.ts scripts/release-verify.test.ts src/lib/pipelines/engine.ts src/lib/pipelines/parkedPublication.test.ts src/lib/pipelines/engine.activation.test.ts scripts/local-gate-tests.ts scripts/local-gate.ts scripts/gate-slot.sh` | 0; issue, fixture and gate files unchanged. |
+| `gate-remote -- env LLV_GATE_RUNNER=off LLV_OWNED_RUN_TIMEOUT_MS=1800000 bash scripts/gate-slot.sh bash .githooks/pre-push` using separate SSH connections | 0; privacy passed, types passed in 168 seconds, ESLint passed in 8 seconds, all 49 touched head files were complete, touched tests passed in 358 seconds, Linux backend passed and all 17 Linux files passed. |
+| Final hook receipt reconciliation | 0; the 49 selected files match 49 complete receipts. Zero new failures, the same five named pre-existing failures and the same CPU-polling intermittent classification. |
+| `bun scripts/privacy-publication-gate.ts --require-known-values --check-commits --base 97bdb94ea9dfe32dff8a7bf022eeb2f83d8f02b7 --paths docs/acceptance/cloud-publication-release-checks.md` with the committed fingerprint file | 0; completed ledger privacy passed. |
+| `git diff --check` | 0; completed ledger has no whitespace errors. |
+
+The last hook's baseline is `97bdb94ea9dfe32dff8a7bf022eeb2f83d8f02b7` and its executable tree is `a8b6ff3c5c1ebccab7d18f05f4eb16340319b2e6`. The final commit only adds this evidence. No production or test change followed the successful hook.
