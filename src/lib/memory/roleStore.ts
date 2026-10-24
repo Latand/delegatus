@@ -13,7 +13,8 @@ import { effectiveCurationSetting, readSeatTickSettings, seatTickSettingsPath } 
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized, stateDatabaseSignature, StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 
 import { appendRule, archivedRule, lessonPatternSource, retainRules, sameRule, scopeChars } from "./roleConsolidate";
-import { roleMemoryEnabled } from "./settings";
+import { roleMemoryEnabled, swarmRulesEnabled } from "./settings";
+import { swarmRulesForRole, swarmScope, SWARM_ROLE_IDS, SWARM_ROLE_BOUND, publicSwarmTextMatcher } from "./swarmPack";
 import { engineMemoryOff } from "./source";
 import { curationRevision, curationView } from "./curation/store";
 import { projectViewRows, projectViewRowsCooperatively, roleScopeKeys, roleViewVersion } from "./roleViewSource";
@@ -102,7 +103,7 @@ export function projectScope(project: string): string {
 /** A stored scope as it reads today, under its project's current key. */
 export function canonicalScope(scope: string): string {
   const kind = scopeKind(scope);
-  if (kind === "machine" || isCrossProjectRoleScope(scope)) return scope;
+  if (kind === "machine" || kind === "swarm" || isCrossProjectRoleScope(scope)) return scope;
   return kind === "role" ? roleScope(scopeProject(scope)!, scopeRole(scope)!) : projectScope(scopeProject(scope)!);
 }
 
@@ -116,9 +117,9 @@ function scopeResolver(): (scope: string) => string {
   };
 }
 
-/** The four scopes a stage reads: its role here, that role everywhere, the project and machine. */
+/** Local scopes plus the receiving role's public swarm scope, in render order. */
 export function readableScopes(project: string, roleId: string | null): string[] {
-  return [...(roleId ? [roleScope(project, roleId), crossProjectRoleScope(roleId)] : []), projectScope(project), MACHINE_SCOPE];
+  return [...(roleId ? [roleScope(project, roleId), crossProjectRoleScope(roleId), ...(swarmRulesEnabled() && SWARM_ROLE_IDS.some(role => role === roleId) ? [swarmScope(roleId)] : [])] : []), projectScope(project), MACHINE_SCOPE];
 }
 
 export class RoleMemoryRefusal extends Error {
@@ -201,6 +202,7 @@ export function learnedRulesSnapshot(project: string, roleId: string | null, max
   const resolve = scopeResolver();
   const byId = new Map(all.flatMap(row => row.kind === "rule" ? [[row.id, row] as const] : []));
   const scopes = readableScopes(project, roleId).map(scope => {
+    if (scopeKind(scope) === "swarm") return { scope, revisions: [], rules: swarmRulesForRole(roleId!) };
     const active = all.flatMap(row => row.kind === "scope" && resolve(row.scope) === scope ? row.active : [])
       .flatMap(id => { const found = byId.get(id); return found?.state === "active" && !found.versionOf ? [found] : []; });
     // Two aliased rows can exceed one scope's bound before an owner joins them.
@@ -300,7 +302,7 @@ function writeLessonAnswer(input: LessonWriteInput & { request?: Pick<LessonRequ
   const now = input.now ?? new Date().toISOString();
   const project = canonicalProject(input.source.project);
   if (project === "*" || Number(input.lessons.length > 0) + Number(input.rewrite !== undefined) + Number(input.none !== null) + Number(input.problem !== undefined) !== 1
-    || input.lessons.length > MAX_LESSONS_PER_ATTEMPT) throw new RoleMemoryRefusal("LESSON_INVALID", "give exactly one of none, rewrite, lesson or problem for a concrete project");
+    || input.lessons.length > MAX_LESSONS_PER_ATTEMPT || input.lessons.some(lesson => !["role", "project", "machine"].includes(lesson.scope))) throw new RoleMemoryRefusal("LESSON_INVALID", "give exactly one of none, rewrite, lesson or problem for a concrete project");
   joinMovedScopes(now);
   const result = roleMemoryCollection(true)!.boundedPatch(4096, (tx) => {
     const requested = input.request ? tx.get(requestKey(input.request.pipelineId, input.request.stageId, input.request.attempt)) : null;
@@ -585,14 +587,15 @@ function projectViewContext(project: string, now: number): {
   // File settings can change independently of SQLite.
   // A relocated settings store has its own SQLite authority.
   const settingsDatabase = path.join(path.dirname(settingsFile), "state.sqlite");
-  const guard = `${roleViewVersion()}:${settingsDatabase === file ? "" : stateDatabaseSignature(settingsDatabase)}:${[projectStoreSignature("project-aliases.json", path.dirname(file)), ...[path.join(path.dirname(file), "memory-source.json"), settingsFile].map(fileStamp)].join("|")}:${process.env.LLV_ROLE_MEMORY}`;
+  const swarm = swarmRulesEnabled();
+  const guard = `${roleViewVersion()}:${settingsDatabase === file ? "" : stateDatabaseSignature(settingsDatabase)}:${[projectStoreSignature("project-aliases.json", path.dirname(file)), ...[path.join(path.dirname(file), "memory-source.json"), settingsFile].map(fileStamp)].join("|")}:${process.env.LLV_ROLE_MEMORY}:${swarm}`;
   const memo = projectViews.get(memoKey);
   if (memo?.guard === guard && now >= memo.from && now < memo.until) {
     projectViews.delete(memoKey); projectViews.set(memoKey, memo);
     return { canonical, file, memoKey, guard, enabled: roleMemoryEnabled(), stamp: () => "", hit: timedProjectView(memo.value, now) };
   }
   const enabled = roleMemoryEnabled();
-  const stamp = () => `${databaseFileIdentity(file)}:${roleMemoryCollection()?.revision()}:${curationRevision()}:${enabled}:${JSON.stringify(projectAliasSnapshot().aliases)}:${JSON.stringify(effectiveCurationSetting(readSeatTickSettings(canonical)))}`;
+  const stamp = () => `${databaseFileIdentity(file)}:${roleMemoryCollection()?.revision()}:${curationRevision()}:${enabled}:${swarmRulesEnabled()}:${JSON.stringify(projectAliasSnapshot().aliases)}:${JSON.stringify(effectiveCurationSetting(readSeatTickSettings(canonical)))}`;
   const revision = stamp();
   if (memo?.stamp === revision && now >= memo.from && now < memo.until) {
     memo.guard = guard;
@@ -653,6 +656,11 @@ function buildProjectView(context: ReturnType<typeof projectViewContext>, now: n
       active: active.map((row) => view(row, now, rulesById, held?.history ?? [], ruleTasks(row.id))), left: left.map((row) => view(row, now, rulesById, held?.history ?? [], ruleTasks(row.id))),
     };
   });
+  if (swarmRulesEnabled()) for (const role of SWARM_ROLE_IDS) {
+    const active = swarmRulesForRole(role);
+    scopes.push({ scope: swarmScope(role), kind: "swarm", roleId: role, revision: 0, chars: scopeChars(active), bound: SWARM_ROLE_BOUND, addedToday: 0,
+      active: active.map(row => ({ ...view(row, now, rulesById, [], 0), fresh: false, awaitingCuration: false })), left: [] });
+  }
   const value = { project: canonical, enabled, scopes, curation: curationView(canonical, now, all.flatMap(row => row.kind === "scope" ? [row] : []), false) };
   if (stamp() !== buildRevision) throw new StateSnapshotChangedError();
   const bytes = Buffer.byteLength(JSON.stringify(value));
@@ -714,7 +722,11 @@ function readableRows(): { rows: RoleMemoryRow[]; signature: string } {
 
 function lessonTextsOf(all: readonly RoleMemoryRow[]): string[] {
   const texts = new Set<string>();
-  for (const row of all) if (row.kind === "rule") for (const text of [row.rule, row.why]) if (lessonPatternSource(text)) texts.add(text);
+  const publicText = publicSwarmTextMatcher();
+  for (const row of all) if (row.kind === "rule") {
+    if (!publicText(row.rule) && lessonPatternSource(row.rule)) texts.add(row.rule);
+    if (lessonPatternSource(row.why)) texts.add(row.why);
+  }
   return [...texts].sort((a, b) => b.length - a.length);
 }
 

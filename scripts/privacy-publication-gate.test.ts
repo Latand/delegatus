@@ -14,7 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { deflateSync } from "node:zlib";
 import { pathToFileURL } from "node:url";
 
@@ -33,6 +33,7 @@ import {
 } from "./privacy-publication-gate";
 
 import { runPrivacyTestProcess } from "./privacy-test-process";
+import { PRIVACY_GENERATOR_BUN_VERSION, privacyGeneratorRuntime } from "./privacy-generator-runtime";
 import { assertPrivacyWorkBound } from "./privacy-work-bound";
 
 const gate = join(import.meta.dir, "privacy-publication-gate.ts");
@@ -407,6 +408,34 @@ async function runGate(paths: string[], environment: Record<string, string> = {}
   return runGateArguments(["--paths", ...paths], environment);
 }
 
+test.serial("the configured generator runtime must match the provenance pin", () => {
+  const saved = process.env.LLV_PRIVACY_GENERATOR_BUN;
+  const directory = mkdtempSync(join(tmpdir(), "privacy-generator-runtime-"));
+  temporaryDirectories.push(directory);
+  const selected = join(directory, "pinned-bun");
+  installTool(directory, "pinned-bun", `printf '%s\\n' '${PRIVACY_GENERATOR_BUN_VERSION}'`);
+  installTool(directory, "wrong-bun", "printf '%s\\n' '0.0.0'");
+  try {
+    process.env.LLV_PRIVACY_GENERATOR_BUN = process.execPath;
+    if (Bun.version === PRIVACY_GENERATOR_BUN_VERSION) {
+      expect(privacyGeneratorRuntime()).toBe(process.execPath);
+    } else {
+      expect(() => privacyGeneratorRuntime()).toThrow(`requires Bun ${PRIVACY_GENERATOR_BUN_VERSION}`);
+    }
+    process.env.LLV_PRIVACY_GENERATOR_BUN = join(directory, "wrong-bun");
+    expect(() => privacyGeneratorRuntime()).toThrow(`requires Bun ${PRIVACY_GENERATOR_BUN_VERSION}`);
+    process.env.LLV_PRIVACY_GENERATOR_BUN = join(directory, "missing-bun");
+    expect(() => privacyGeneratorRuntime()).toThrow(`requires Bun ${PRIVACY_GENERATOR_BUN_VERSION}`);
+    process.env.LLV_PRIVACY_GENERATOR_BUN = selected;
+    expect(privacyGeneratorRuntime()).toBe(selected);
+    process.env.LLV_PRIVACY_GENERATOR_BUN = relative(process.cwd(), selected);
+    expect(privacyGeneratorRuntime()).toBe(selected);
+  } finally {
+    if (saved === undefined) delete process.env.LLV_PRIVACY_GENERATOR_BUN;
+    else process.env.LLV_PRIVACY_GENERATOR_BUN = saved;
+  }
+});
+
 test("prepared text keeps known-value configurations independent", async () => {
   const environment = {
     LLV_PRIVACY_KNOWN_VALUES: "", LLV_PRIVACY_KNOWN_VALUES_FILE: "",
@@ -445,7 +474,7 @@ function generatePrivacyPlaceholders(repositoryRoot: string) {
     readFileSync(join(import.meta.dir, "generate-privacy-placeholders.ts")),
   );
   return Bun.spawnSync({
-    cmd: [process.execPath, join(scriptsDirectory, "generate-privacy-placeholders.ts")],
+    cmd: [privacyGeneratorRuntime(), join(scriptsDirectory, "generate-privacy-placeholders.ts")],
     cwd: repositoryRoot,
     stderr: "pipe",
     stdout: "pipe",
@@ -2378,15 +2407,15 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       }>;
       expect(results.map((entry) => entry.source)).toEqual(sources);
       for (const entry of results) {
+        if (process.env.LLV_PRIVACY_TEST_TIMINGS === "1") console.error("privacy work " + JSON.stringify({
+          case: specimen.name, source: entry.source, small: entry.small.map(sample => sample.cpu), large: entry.large.map(sample => sample.cpu),
+        }));
         assertPrivacyWorkBound(entry.small.map(sample => sample.cpu), entry.large.map(sample => sample.cpu), entry.source);
         for (const { value } of [...entry.small, ...entry.large]) {
           expect(value.findings.length === 0, entry.source).toBe(specimen.pass);
           expect(value.findings.includes("known_value"), entry.source).toBe(!specimen.pass);
           expect(value.report).not.toContain(domain);
         }
-        if (process.env.LLV_PRIVACY_TEST_TIMINGS === "1") console.error("privacy work " + JSON.stringify({
-          case: specimen.name, source: entry.source, small: entry.small.map(sample => sample.cpu), large: entry.large.map(sample => sample.cpu),
-        }));
       }
     }, 660_000);
     // Read each immutable corpus across all configurations before moving to
@@ -2583,6 +2612,36 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       { name: "percent decoded", text: [...value].map((c) => `%${c.charCodeAt(0).toString(16)}`).join(""), contiguous: true },
       { name: "entity decoded", text: [...value].map((c) => `&#${c.charCodeAt(0)};`).join(""), contiguous: true },
     ];
+
+    test("the committed catalog distinguishes open-source prose from its configured value", async () => {
+      const directory = mkdtempSync(join(tmpdir(), "llv-privacy-open-source-"));
+      temporaryDirectories.push(directory);
+      const publication = "publication.md";
+      const catalog = join(import.meta.dir, "privacy-known-value-fingerprints.json");
+      const environment = {
+        LLV_PRIVACY_KNOWN_VALUES: "",
+        LLV_PRIVACY_KNOWN_VALUES_FILE: "",
+        LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: catalog,
+      };
+      await runGit(directory, ["init", "--quiet"]);
+      await runGit(directory, ["config", "user.name", "Fixture Tool"]);
+      await runGit(directory, ["config", "user.email", "noreply@example.invalid"]);
+      await runGit(directory, ["commit", "--quiet", "--allow-empty", "-m", "base"]);
+      writeFileSync(join(directory, publication), "Free and open source. Free and open-source.\n");
+      await runGit(directory, ["add", publication]);
+      await runGit(directory, ["commit", "--quiet", "-m", "Describe free and open source and open-source software"]);
+
+      const proseFile = await runGateArguments(["--repository", directory, "--paths", publication], environment, directory);
+      expect(proseFile.exitCode, proseFile.stdout.toString()).toBe(0);
+      const proseCommit = await runGateArguments(["--base", "HEAD~1", "--check-commits"], environment, directory);
+      expect(proseCommit.exitCode, proseCommit.stdout.toString()).toBe(0);
+
+      writeFileSync(join(directory, publication), `${["open", "source"].join("")}\n`);
+      const configuredValue = await runGateArguments(["--repository", directory, "--paths", publication], environment, directory);
+      expect(configuredValue.exitCode).toBe(1);
+      expect(configuredValue.stdout.toString()).toContain("known_value: 1\n");
+    }, 15000);
+
     for (const source of ["fingerprint", "raw file", "environment"] as const) {
       for (const exactOnly of [true, false]) {
         for (const spelling of spellings) {
