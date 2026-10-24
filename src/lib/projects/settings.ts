@@ -203,11 +203,14 @@ export function validCodexCloudEnvironmentId(value: unknown): value is string {
 }
 
 export function setCodexCloudEnvironmentId(project: string, value: string): boolean {
-  const key = canonicalProject(project.trim());
-  if (!key || !validCodexCloudEnvironmentId(value)) return false;
-  const projects = { ...readProjects() };
-  projects[key] = { ...projects[key], codexCloudEnvironmentId: value.trim() };
-  return writeProjects(projects);
+  if (!validCodexCloudEnvironmentId(value)) return false;
+  return underFileLock(() => {
+    const key = canonicalProject(project.trim());
+    if (!key) return false;
+    const projects = { ...readProjects() };
+    projects[key] = { ...projects[key], codexCloudEnvironmentId: value.trim() };
+    return writeProjects(projects);
+  }, false);
 }
 
 function writeProjects(projects: Record<string, ProjectSettingsEntry>): boolean {
