@@ -34,7 +34,7 @@ therefore stays 1000 for both processes. The installation's kernel cgroup
 reported weight 100 despite the configured 1000, and its actual cgroup was still
 under `app.slice`. This is an installation discrepancy: deployment must reconcile
 the configured and effective placement using the existing checkout procedure.
-This stage changed no live unit, controller, relay queue record or serving process.
+This stage changed no existing serving unit, controller, relay queue record or serving process.
 The real-manager test verifies the produced transient-unit properties; it does
 not claim to repair controller delegation on the running installation.
 
@@ -76,7 +76,7 @@ Checks used the installed wrapper from release `19bbd6d7c281`, Bun 1.4.0, and
 the pinned source base `97bdb94e`, on 2026-10-24. Final source/export comparison
 passed for all twelve changed executable files. Their SHA-256, hashing sorted
 repository-relative path, NUL and file bytes, is
-`de57b8221215c7aa6ae3af54983874713e030e793df13aba0bdc2e5b326cbf1c`.
+`83ee7b507476d86b1c4699b1472831a0e825c4a22c9bfd4f8413ef993a09c822`.
 The report and design documentation are excluded from that executable digest.
 
 The following are the commands inside the wrapper. Exit sequences show each
@@ -93,22 +93,25 @@ type, corrected before the final typecheck. The final test set below totals
 | `bun test src/lib/runtime/cpuAdmission.test.ts` | 1, 0 | 40 pass |
 | `bun test src/lib/runtime/cpuPressure.test.ts` | 0 | 8 pass |
 | `bun test src/lib/runtime/cpuPlacement.test.ts` | 0 | 7 pass |
-| `bun test scripts/gate-properties.test.ts` | 0, 0 | 2 pass against the real user manager, including command exit 37 |
+| `bun test scripts/gate-properties.test.ts` | 0, 0, 0 | 2 pass against the real user manager, including command exit 37 |
 | `bun test scripts/gate-slot.test.ts` | 1, 0 | 15 pass |
 | `bun test scripts/gate-slot.queue.test.ts` | 1, 0 | 10 pass |
 | `bun test bin/install-cpu-placement.test.ts` | 0 | 5 pass; serving weight 1000 retained |
 | `bun test src/lib/externalRelay/ownerStop.test.ts` | 1 | 23 pass, one pre-existing failure described below |
 | `bun test src/lib/externalRelay/ownerStop.test.ts -t 'unreadable ended turn\|retired continuation\|missing conversation\|missing current entry\|restarted production sweeper'` | 0 | 7 evidence cases pass |
-| `env DBUS_SESSION_BUS_ADDRESS=unix:path="$TMPDIR/absent-bus" bun test scripts/gate-properties.test.ts` | 0 | 2 clean skips |
+| `env DBUS_SESSION_BUS_ADDRESS=unix:path="$TMPDIR/absent-bus" bun test scripts/gate-properties.test.ts` | 0, 0 | 2 clean skips |
 | `bun test scripts/owned-runner.integration.test.ts -t 'actual gate runner (exit\|timeout)'` | 0 | 2 pass; real service exit/deadline cleanup preserves bystanders |
 | `node node_modules/typescript/bin/tsc --noEmit --incremental false` | 2 | New environment-parameter typing error identified |
-| `node node_modules/typescript/bin/tsc --noEmit --incremental --tsBuildInfoFile "$TMPDIR/verified.tsbuildinfo"` | 0 | Full typecheck passes; no prior build-info file existed |
+| `node node_modules/typescript/bin/tsc --noEmit --incremental --tsBuildInfoFile "$TMPDIR/verified.tsbuildinfo"` | 0, 0 | Full typecheck passes; no prior build-info file existed |
 | `bun scripts/build-gate.ts` | 0, 0 | Both final shipped gate entries bundle |
 | `bun "$TMPDIR/bundle-smoke.ts"` | 0, 0 | Bundled admission claims a private queue; bundled owned runner executes `/bin/true` |
 | `bash -n scripts/gate-slot.sh` | 0 | Shell syntax passes |
 | `git diff --check` | 0 on every invocation | No whitespace errors |
 
-ESLint ran twice, both exits 0, using this command (argument order differed):
+ESLint ran twice over all changed TypeScript files, both exits 0, using this
+command (argument order differed). After the probe safety correction,
+`node node_modules/eslint/bin/eslint.js scripts/gate-properties.test.ts`
+also exited 0:
 
 ```sh
 node node_modules/eslint/bin/eslint.js \
@@ -121,7 +124,7 @@ node node_modules/eslint/bin/eslint.js \
 ```
 
 The initial serial wrapper exited 1 because its diagnostic runs included the
-failures above; the corrected serial wrapper exited 0. All tests and probes
+failures above; both corrected serial wrappers exited 0. All tests and probes
 used private queue and state roots. No workflow file changed.
 
 ### Paired failures and regression proof
@@ -144,3 +147,10 @@ lease. Both old and new implementations retain their production guards.
 The full unchanged relay-suite failure is outside the CPU-gate change and is
 retained as separate evidence. The seven focused recovery cases exercise both
 settlement and the missing-evidence refusal that produces the repeated warning.
+
+The final property probe derives its unit name from a verified host process
+identity: namespace-local PIDs can coincide across lanes. `RuntimeMaxSec=5s`,
+`TimeoutStopSec=1s` and automatic collection bound its lifetime; it issues no
+manual unit stop. The probe was rerun with and without a reachable manager.
+The commits ran the launch-provided hooks: staged whitespace, privacy and
+ESLint passed with exit 0. Nothing was pushed.
