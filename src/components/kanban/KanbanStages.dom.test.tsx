@@ -278,6 +278,20 @@ const pane = (host: HTMLElement, stageId: string) => sheet(host)?.querySelector<
 const same = (actual: unknown, expected: unknown) => expect(actual === expected && expected !== null && expected !== undefined).toBe(true);
 const readerIn = (element: Element | null): string | null => element?.querySelector<HTMLElement>("[data-kanban-reader]")?.getAttribute("data-kanban-reader") ?? null;
 
+test("a pipeline card's one menu keeps Priority with its move, appearance and pipeline pages (#2276)", async () => {
+  const { host } = mount(searchPipeline());
+  await tick();
+  click(laneMenu(host));
+
+  const groups = [...host.querySelectorAll<HTMLElement>(".menu [data-cm-segments]")]
+    .map((group) => group.getAttribute("aria-label"));
+  const pages = [...host.querySelectorAll<HTMLElement>(".menu [data-cm-section]")]
+    .map((page) => page.querySelector(".lbl")?.firstChild?.textContent);
+
+  expect(groups).toEqual(["Move to", "Priority"]);
+  expect(pages).toEqual(["Appearance", "Pipeline actions", "More"]);
+});
+
 test("the lane row's head opens Stages; the pipeline actions are a page of the card's one ⋯, each with the engine's own refusal (#2148)", async () => {
   const { host } = mount(searchPipeline());
   await tick();

@@ -170,6 +170,15 @@ test("every density says what the desktop says: the stage names, the stage state
   expect(texts(screen, ".pb-loops li")).toEqual([`↺ ${t("kanban.loopRest", { from: "Verify", to: "Implement", count: 2 })}`]);
 });
 
+test("the column-balance reader finds every stage pill through its current name element (#2299)", () => {
+  const host = mount(<PipelineBlock summary={summarizePipeline(searchPipeline())} density="card" nowMs={NOW_MS} />);
+  const pills = [...host.querySelectorAll<HTMLElement>(".pb-pill[data-stage]")];
+
+  expect(pills.length).toBeGreaterThan(0);
+  expect(pills.map((pill) => pill.querySelector(".pb-name")?.textContent ?? null)).not.toContain(null);
+  expect(pills.map((pill) => pill.querySelector(".pb-name")?.textContent)).toEqual(["Implement", "Review", "Verify", "Merge"]);
+});
+
 test.each(["card", "task"] as const)("CPU waiting preserves %s work links and stage controls", density => {
   const pipeline = searchPipeline({ stateDetail: "Waiting for the CPU queue · 2nd · up to 7 min" });
   for (const lang of ["en", "uk"] as const) {

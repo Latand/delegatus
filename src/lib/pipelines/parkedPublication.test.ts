@@ -982,6 +982,24 @@ function missingDependencyFixture(h: ReturnType<typeof fixture>): string {
   return h.lane.lastPassedCommit;
 }
 
+test("a passed read-only stage with no node_modules publishes and advances", async () => {
+  const h = fixture();
+  try {
+    const head = missingDependencyFixture(h);
+    const gateRan = path.join(h.root, "publication-gate-ran");
+    fs.writeFileSync(h.hook, `#!/bin/sh\nset -eu\ntest -d node_modules/publication-fixture-dependency\ntouch '${gateRan}'\n`, { mode: 0o700 });
+    savePipelines([h.lane]);
+
+    expect(fs.existsSync(path.join(h.repo, "node_modules"))).toBe(false);
+    expect((await patchPipeline(h.lane.id, { action: "publish", acceptedSha: head }, h.ports)).error).toBeUndefined();
+    await h.tick();
+
+    expect(fs.existsSync(gateRan)).toBe(true);
+    expect(h.current()).toMatchObject({ state: "completed", publishedCommit: head });
+    expect(h.pushes()).toBe(1);
+  } finally { h.cleanup(); }
+});
+
 for (const [privacyFails, partial] of [[false, false], [true, false], [false, true]]) test(`read-only publication provisions missing dependencies and preserves the privacy hook (privacy failure: ${privacyFails}, partial installation: ${partial})`, async () => {
   const h = fixture();
   try {
