@@ -48,3 +48,11 @@ Independent review decks also remain members of their subject's primary task ban
 The final browser campaign passes both cases across all 20 combinations, producing 396 integration frames and 40 archive-reader frames. `integration.json` and `rendered.json` retain their measurements and final source/frame hashes. Only the browser driver and the new task-band test fixture changed after the complete importer comparison; both were checked again with final rendered coverage, the affected unit file, typecheck and lint. Product source stayed identical to the compared snapshot.
 
 `fix-visual-review.json` records visual inspection of all 436 final frames through 73 contact sheets, plus the eight full Viewer follow-ups. It reconciles every inspected frame with the committed frame digests and records the contact-sheet crops used for desktop surfaces.
+
+## Short viewport evidence
+
+The S6 integration case reveals the parent card, scrolls to the defining state, captures the painted frame, and then measures it. Each defining marker is checked in full against horizontal and vertical ancestor clips and hit tests along the line edges. Entirely offscreen ranges fail the check. Negative controls cover both viewport axes, ancestor clipping and a pinned bar covering part of a line.
+
+Fresh review, unfinished budget, answered question and conversion captures name their defining text. Archive-deck, verdict and task-history captures show their history opener. Each legacy round has a separate source frame before mouse or keyboard activation, plus a frame of the selected archive round.
+
+The regenerated `integration.json` and `rendered.json` describe 436 integration frames and 40 archive-reader frames across English and Ukrainian, light and dark, at 320, 390, 640, 1280 and 1440 pixels. The 640-pixel viewport is 320 pixels high. `short-viewport-review.json` records visual inspection of all 220 defining-state and navigation crops, plus 16 complete short-viewport frames, with their hashes and crop bounds. `short-viewport-checks.json` records the final commands and results for this correction. Earlier check and inspection records retain their original campaigns.

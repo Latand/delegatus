@@ -3,7 +3,7 @@
   "sourceDigests": {
     "src/components/flows/ReviewHistory.tsx": "fc5c09b9be2ab3a3d5c0cc7ccda7a0f9ec3f585864fff36b6a408b60c83c191b",
     "src/components/flows/RoundDeck.tsx": "4994bf5f561a253c157ee77197b4696f6400095e578978f009c3bc151e3aae7f",
-    "src/components/kanban/kanbanBoard.browser.test.tsx": "07b2b405e6fbc21e363612beab8ac2730138296c102c5354ad937acafabd7ac1"
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "11c5487c0f561ad1d015412be7ee8b301f57aa9fe1a17ca47236375456d3bc28"
   },
   "frameDigests": {
     "en-light-320.png": "6916dc8bdcbcc35050b28249620c0279248a5f99776e55bebbd2e3768f5acb00",
@@ -11,27 +11,27 @@
     "en-light-390.png": "0fc9a3e60884d25a42c784ff67c6106431ad18640768f19172887da99db8d576",
     "last-en-light-390.png": "06a8fa5f714ac4183d4da4a7e880529354046371c2760dc7e47dc4da9b39c87e",
     "en-light-640.png": "a7bbb66621ef3ecc20db9d2c0a9a540d60615098e4de728cdda6304a85cf9e8e",
-    "last-en-light-640.png": "f4fef297d9a025ca17fbef177a1dbd41d468dd153f4694d25610771331355809",
-    "en-light-1280.png": "eb965ab57c8193eee004fb40446ff5892941530423c6121b9b3af4ce814b5654",
-    "last-en-light-1280.png": "1003ffe3f8e46ed3921d809373749bcdb56502454f883ad1d760d7cb75e89805",
+    "last-en-light-640.png": "2d871825faae5365574d81cebe67d8ae573408d5e27ed80470be35991ff114d3",
+    "en-light-1280.png": "f5aa0968ca0f617cd70589da8909c8025ddc329077f1649c119c2f78babe1dd4",
+    "last-en-light-1280.png": "e418d1d708aeb875aeb5cbd94109f1799fc8eb5c909803b3b179cd3c5487861e",
     "en-light-1440.png": "731279506a94bcbbecf34ee5676bc8b2f6b4f8141a357c79186ab3c00d158e79",
     "last-en-light-1440.png": "de1e6db5e71d173d7bf93d65dc77f7db9fd262bf7ac4d426c16a95bd9ca1445c",
     "en-dark-320.png": "e9161ee719bc1b70e7a55d1aa2e255e9aa7664cf4091225eef5320c680a486ef",
     "last-en-dark-320.png": "eb45f684207349e13baf5753a1b57e042c5f1be0724589e12d530b3957b743a2",
     "en-dark-390.png": "fee4c51127fc49308ef498a7bfad7a4c902291e2cb6d7df95cd1fab1ee2b8517",
-    "last-en-dark-390.png": "29772bf31ba067b3da8469d4323b290997d1b27ab7744260223204f601ce21ad",
-    "en-dark-640.png": "dc3443a5bc133a6de4005d39e3bcf7de75ca8fe68a777ece6b20ce2a47f5db7e",
-    "last-en-dark-640.png": "cd860b7562b07a9c4d2d7174fe0c1b4c58736c29e726b51da33b694435cbb5ae",
+    "last-en-dark-390.png": "88fd178b3efc618f2fe3a71ffd8a1cc1fa698378c1808c4dac5c22917bc3fd43",
+    "en-dark-640.png": "8845175229360fb5135db2759d91495f5cb27991aab1aeb208e82016c1d7f3c1",
+    "last-en-dark-640.png": "ceca7e51b129339ddb4dff60f07e0a880be894df2ccc61bb065f92687c7e8256",
     "en-dark-1280.png": "0cd7baafe70db4aef593d97d7c4e8522d417d32b0f1901b74c3701d6d6f70737",
     "last-en-dark-1280.png": "50d69b898a8698cde47456c9560aa79817e8ca4c43fd1e21b77ca77b1635ea27",
-    "en-dark-1440.png": "6a2cc1eff6fbdd27318a8c5dce7901a7e9e7727e2a740a87a962f359f07992d3",
-    "last-en-dark-1440.png": "dd6919beca2c633606ad889c152b9d7f47e68d8adf243fcaa3c4ba5b4211d361",
+    "en-dark-1440.png": "cc6b501e4223c674ded03d67f9ad1955051633e38a6191aa9f70db0365645c3e",
+    "last-en-dark-1440.png": "77692b00b9dee2fce9d494eb709361a0bc36ee512e397eb60e9f2fe349b5f787",
     "uk-light-320.png": "e3228adec647711664c148487231d0886c86466e163d645e1501107fbe1335f9",
     "last-uk-light-320.png": "a83e2f44eddfe0b2d760218e590a87fcc4104f4713b8c5b554a0b88e3c46e7d5",
     "uk-light-390.png": "b632f924cdb58cf2ad20705e30bd169687a9c6f5f74721ed31bcc89d77544d2d",
     "last-uk-light-390.png": "381340d02ee93e588643036d4f4895e325c1d509ee6efcfac261dea0ba17489b",
     "uk-light-640.png": "df9b5614efc83ab8f016c5250368180a3c1a2781374573fdd20f204a5e291ed1",
-    "last-uk-light-640.png": "8d9130a359102ced431ee13f068d2681fd43acf2f30a9ea1a9431516fefe571c",
+    "last-uk-light-640.png": "bdca8d0badddcd7e162da46673f28d68fdd266a1fc0678c7c7fb1d6947ed4676",
     "uk-light-1280.png": "044b6b58311582a2be37d6f76099ef3fff321b472a387a6c0998e43c2a176d0c",
     "last-uk-light-1280.png": "0ac28b3f1e55fac116769a0399602f01d7c2718239cc3a311c3440a1c9a73e3e",
     "uk-light-1440.png": "a2af720db20ed5dedfb545e2983e8678132209940bea4962b9a2c1bcade3bde4",
@@ -45,7 +45,7 @@
     "uk-dark-1280.png": "3019376421a451e31536b6a5f9c60a4f4619475c052a8436e1acfb30e80512e0",
     "last-uk-dark-1280.png": "1caeb8cae04be2b58a8aeae15eb6feda25e1065757166bf83f4a83ce2be0c07e",
     "uk-dark-1440.png": "859975b6672012605258552c0fdd01c29fadfa68b592ce977b800f0574fd6fe9",
-    "last-uk-dark-1440.png": "1e6ed441ec4d8ac6d2ffb5810201999cb076d96510b5f1f17a36984ffb71561f"
+    "last-uk-dark-1440.png": "3cb6d2715271e3670935ccc78e13e4e3bb783f3c5ed637cd2423dbac06e13ba9"
   },
   "readings": [
     {

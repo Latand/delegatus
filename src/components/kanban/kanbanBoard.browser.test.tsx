@@ -9,7 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
-import type { Browser, LaunchOptions, Page } from "playwright-core";
+import type { Browser, LaunchOptions, Locator, Page } from "playwright-core";
 
 import { translate } from "@/lib/i18n";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
@@ -36807,6 +36807,77 @@ describe("sound captions", () => {
 });
 
 describe("retired review history", () => {
+  // Defining text is required even when it is wholly outside the scrollport.
+  // Hit-test the whole line: a pinned bar can cover only its top or bottom.
+  function requiredVisibility(el: Element) {
+    const failures: string[] = [];
+    const ranges: { text: string; left: number; right: number; top: number; bottom: number; clip: { left: number; right: number; top: number; bottom: number } }[] = [];
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode, owner = node.parentElement!;
+      if (!node.textContent?.trim() || owner.closest("option, .sr-only, [hidden]")) continue;
+      let visibleOwner: Element | null = owner;
+      while (visibleOwner && getComputedStyle(visibleOwner).display === "contents") visibleOwner = visibleOwner.parentElement;
+      if (!visibleOwner?.checkVisibility({ opacityProperty: true, visibilityProperty: true })) continue;
+      const range = document.createRange(); range.selectNodeContents(node);
+      for (const r of range.getClientRects()) {
+        if (!r.width || !r.height) continue;
+        const text = node.textContent.trim();
+        let left = 0, right = innerWidth, top = 0, bottom = innerHeight;
+        for (let parent: Element | null = owner; parent; parent = parent.parentElement) {
+          const style = getComputedStyle(parent), bounds = parent.getBoundingClientRect();
+          if (style.overflowX !== "visible") { left = Math.max(left, bounds.left + parent.clientLeft); right = Math.min(right, bounds.left + parent.clientLeft + parent.clientWidth); }
+          if (style.overflowY !== "visible") { top = Math.max(top, bounds.top + parent.clientTop); bottom = Math.min(bottom, bounds.top + parent.clientTop + parent.clientHeight); }
+        }
+        ranges.push({ text, left: r.left, right: r.right, top: r.top, bottom: r.bottom, clip: { left, right, top, bottom } });
+        if (r.left < left - 1 || r.right > right + 1 || r.top < top - 1 || r.bottom > bottom + 1) failures.push(`clipped: ${text}`);
+        for (const x of [r.left + Math.min(1, r.width / 2), (r.left + r.right) / 2, r.right - Math.min(1, r.width / 2)]) {
+          for (const y of [r.top + Math.min(1, r.height / 2), (r.top + r.bottom) / 2, r.bottom - Math.min(1, r.height / 2)]) {
+            const hit = document.elementFromPoint(x, y);
+            if (!hit || (!owner.contains(hit) && !hit.contains(owner))) failures.push(`covered: ${text}`);
+          }
+        }
+      }
+    }
+    const scrolls = [];
+    for (let parent: Element | null = el; parent; parent = parent.parentElement) {
+      if (parent.scrollHeight > parent.clientHeight || parent.scrollWidth > parent.clientWidth) scrolls.push({
+        tag: parent.tagName, class: parent.className, top: parent.scrollTop, left: parent.scrollLeft,
+        height: parent.clientHeight, scrollHeight: parent.scrollHeight,
+      });
+    }
+    return { ranges, scrolls, failures: [...new Set(failures)] };
+  }
+
+  browserTest("S6 defining text rejects offscreen, clipped and pinned-bar-covered lines", async () => {
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const page = await browser.newPage({ viewport: { width: 640, height: 320 } });
+      await page.setContent('<main style="position:absolute;top:100px;left:100px"><span>Required review state</span></main>');
+      const marker = page.locator("span");
+      expect((await marker.evaluate(requiredVisibility)).failures).toEqual([]);
+      for (const style of ["top:400px", "top:310px", "top:-100px", "left:700px", "left:630px", "left:-300px"]) {
+        await page.locator("main").evaluate((el, style) => el.setAttribute("style", `position:absolute;${style}`), style);
+        expect((await marker.evaluate(requiredVisibility)).failures.length).toBeGreaterThan(0);
+      }
+      for (const clip of ["height:8px", "width:12px"]) {
+        await page.locator("main").evaluate((el, clip) => el.setAttribute("style", `position:absolute;top:100px;left:100px;overflow:hidden;${clip}`), clip);
+        expect((await marker.evaluate(requiredVisibility)).failures.length).toBeGreaterThan(0);
+      }
+      await page.locator("main").evaluate(el => el.setAttribute("style", "position:absolute;top:100px;left:100px"));
+      const r = await marker.boundingBox();
+      await page.evaluate(r => {
+        const bar = document.createElement("div");
+        bar.id = "pinned";
+        bar.style.cssText = `position:fixed;z-index:2;left:0;right:0;top:${r!.y}px;height:4px;background:white`;
+        document.body.append(bar);
+      }, r);
+      expect((await marker.evaluate(requiredVisibility)).failures).toContain("covered: Required review state");
+      await page.locator("#pinned").evaluate(el => el.remove());
+      expect((await marker.evaluate(requiredVisibility)).failures).toEqual([]);
+    } finally { await browser.close(); }
+  });
+
   async function openRetiredFixture(...args: Parameters<typeof openFixture>) {
     const [browser, url, ...settings] = args;
     const opened = await openFixture(browser, "about:blank", ...settings);
@@ -36824,12 +36895,21 @@ describe("retired review history", () => {
     const sources = ["src/components/flows/ReviewHistory.tsx", "src/components/flows/RoundDeck.tsx", "src/components/flows/directReviewGroups.ts", "src/components/mobile/MobilePipelineScreen.tsx", "src/components/scheme/SchemeBoard.tsx", "src/components/scheme/nodes.tsx", "src/components/scheme/taskBands.ts", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts", "src/components/BranchPane.tsx", "src/components/LogFeed.tsx",
       "src/components/conversation/DeputyBlock.tsx", "src/components/conversation/OutboxBubbles.tsx", "src/components/kanban/StagesSheet.tsx",
       "src/components/pipelines/PipelineTemplatePicker.tsx", "src/components/pipelines/PipelineStrip.tsx", "src/components/pipelines/VerdictPopover.tsx", "src/components/tasks/TaskWorkflowPanel.tsx", "src/components/kanban/issue1695Evidence.fixture.tsx", "src/components/kanban/kanbanBoard.browser.test.tsx"];
-    async function capture(page: Page, name: string, selector: string) {
+    async function capture(page: Page, name: string, selector: string, defining?: Locator) {
       const element = page.locator(selector).filter({ visible: true }).first();
       await element.waitFor();
+      // Admit a content-visibility:auto card before resolving its child's
+      // scroll position. Its intrinsic placeholder can have different bounds.
       await element.scrollIntoViewIfNeeded();
-      // Scrolling admits content-visibility:auto descendants on the next paint.
       await element.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      // Keep the defining state in view; scrolling its taller lane afterward
+      // would put the state below the pinned footer again on a short phone.
+      if (defining) {
+        await defining.first().scrollIntoViewIfNeeded();
+        await element.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      }
+      // Screenshot completion proves a paint; measure that rendered state.
+      await page.screenshot({ path: path.join(out, name + ".png") });
       const measurement = await element.evaluate(el => {
         const box = el.getBoundingClientRect();
         const clipped: string[] = [];
@@ -36877,14 +36957,22 @@ describe("retired review history", () => {
               x: r.x, y: r.y, width: r.width, height: r.height };
           }) };
       });
-      await page.screenshot({ path: path.join(out, name + ".png") });
-      readings.push({ name, ...measurement });
-      fs.writeFileSync(path.join(out, name + ".json"), JSON.stringify(measurement, null, 2) + "\n");
+      const required = [];
+      if (defining) {
+        expect(await defining.count()).toBeGreaterThan(0);
+        for (const marker of await defining.all()) required.push(await marker.evaluate(requiredVisibility));
+      }
+      readings.push({ name, ...measurement, required });
+      fs.writeFileSync(path.join(out, name + ".json"), JSON.stringify({ ...measurement, required }, null, 2) + "\n");
       expect(measurement.box.x).toBeGreaterThanOrEqual(-1);
       expect(measurement.box.x + measurement.box.width).toBeLessThanOrEqual(measurement.viewport.width + 1);
       expect(measurement.textRanges).toBeGreaterThan(0);
       expect(measurement.clipped).toEqual([]);
       expect(measurement.covered).toEqual([]);
+      for (const marker of required) {
+        expect(marker.ranges.length).toBeGreaterThan(0);
+        expect(marker.failures).toEqual([]);
+      }
     }
     try {
       for (const lang of (process.env.LLV_S6_RENDER_SMOKE === "1" ? ["en"] : ["en", "uk"]) as ("en" | "uk")[]) for (const theme of (process.env.LLV_S6_RENDER_SMOKE === "1" ? ["light"] : ["light", "dark"]) as ("light" | "dark")[])
@@ -36990,6 +37078,7 @@ describe("retired review history", () => {
                     ? new Response(null, { status: 404 }) : original(input, init)) as typeof window.fetch;
                 });
                 const opener = deck.getByRole("button", { name: translate(lang, "reviewHistory.open"), exact: true });
+                await capture(page, tag + "-archive-deck-history", `[data-retained-deck="${kind}"]`, opener);
                 await opener.click();
                 await page.getByRole("status").filter({ hasText: translate(lang, "reviewHistory.missing") }).waitFor();
                 await capture(page, tag + "-missing-deck-history", "[data-review-history]");
@@ -37055,8 +37144,6 @@ describe("retired review history", () => {
               const r = button.getBoundingClientRect(); return { width: r.width, height: r.height };
             }));
             expect(targets.every(target => target.height >= (phone ? 44 : 24) && target.width >= 24)).toBe(true);
-            await review.scrollIntoViewIfNeeded();
-            await capture(page, tag + "-legacy-rounds", phone ? "[data-mobile2-past]" : '.pane[data-stage="review-api"][data-collapsed="0"]');
             await page.evaluate(() => {
               const original = window.fetch;
               window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -37069,12 +37156,14 @@ describe("retired review history", () => {
             });
             for (const n of [1, 2]) {
               const chip = phone ? chips.and(page.locator(`[data-review-round="${n}"]`)) : chips.nth(n - 1);
-              await chip.scrollIntoViewIfNeeded();
+              // Each source control gets its own scroll position; the phone's
+              // retained rounds need not fit together in a short scrollport.
+              await capture(page, tag + `-legacy-round-${n}-source`, phone ? "[data-mobile2-past]" : '.pane[data-stage="review-api"][data-collapsed="0"]', chip);
               if (n === 1) await chip.click(); else { await chip.focus(); await page.keyboard.press("Enter"); }
               const archive = page.locator("[data-review-history]");
               await archive.locator('nav button[aria-pressed="true"]').filter({ hasText: `R${n}` }).waitFor();
               expect(await archive.innerText()).toContain(n === 1 ? "REQUEST_CHANGES" : "APPROVE");
-              await capture(page, tag + `-legacy-round-${n}`, "[data-review-history]");
+              await capture(page, tag + `-legacy-round-${n}`, "[data-review-history]", archive.locator('nav button[aria-pressed="true"]'));
               await page.keyboard.press("Escape");
               expect(await chip.evaluate(el => el === document.activeElement)).toBe(true);
               expect(await sheet.isVisible()).toBe(true);
@@ -37096,13 +37185,11 @@ describe("retired review history", () => {
               const stage = page.locator('[data-pipeline-stage="review-api"]');
               await stage.scrollIntoViewIfNeeded();
               await stage.locator('button[aria-expanded]').click();
-              await capture(page, tag + "-verdict-evidence", '[role="dialog"]');
             } else {
               await page.locator("[data-task-workflow-panel]").waitFor();
-              await capture(page, tag + "-task-history", "[data-task-workflow-panel]");
             }
             const history = page.getByRole("button", { name: new RegExp(translate(lang, surface === "verdict" ? "pipelineVerdict.openFlow" : "reviewHistory.open")) }).first();
-            await history.scrollIntoViewIfNeeded();
+            await capture(page, tag + (surface === "verdict" ? "-verdict-evidence" : "-task-history"), surface === "verdict" ? '[role="dialog"]' : "[data-task-workflow-panel]", history);
             await history.click();
             await page.locator("[data-review-history]").getByRole("status").filter({ hasText: translate(lang, "reviewHistory.missing") }).waitFor();
             await capture(page, tag + `-${surface}-missing`, "[data-review-history]");
@@ -37132,14 +37219,14 @@ describe("retired review history", () => {
             await freshCard.waitFor();
             if (phone) await freshCard.locator("[data-phone-card-title]").click();
             const fresh = phone ? '[data-phone-task-lane="p-loops-review"]' : '.card[data-id="task:t-loops-review"]';
-            await page.locator(fresh).scrollIntoViewIfNeeded();
+            const activeReview = page.locator(fresh).locator(phone ? '.pb-stage[data-stage="review"] > .pb-stage-row' : '[data-stage="review"]');
             expect(await page.evaluate(() => {
               const record = (window as unknown as { evidence: { storedPipeline(id: string): Pipeline } }).evidence.storedPipeline("p-loops-review");
               const review = record.runs.find(run => run.stageId === "review")!;
               return review.attempts.length > 1 && review.attempts.at(-1)!.state === "running"
                 && record.stages.every(stage => stage.kind === "run");
             })).toBe(true);
-            await capture(page, tag + "-fresh-review-after-fix", fresh);
+            await capture(page, tag + "-fresh-review-after-fix", fresh, activeReview);
           });
 
           await check("answered question", async () => {
@@ -37163,7 +37250,7 @@ describe("retired review history", () => {
             const chronology = page.locator(answered).locator('[data-chronology-kind="decision-answered"]');
             await chronology.waitFor();
             await chronology.scrollIntoViewIfNeeded();
-            await capture(page, tag + "-resolved-question", answered);
+            await capture(page, tag + "-resolved-question", answered, chronology);
           });
 
           await check("spent budget", async () => {
@@ -37172,9 +37259,9 @@ describe("retired review history", () => {
             await stoppedCard.waitFor();
             if (phone) await stoppedCard.locator("[data-phone-card-title]").click();
             const stopped = phone ? '[data-phone-task-lane="p-stop-fix"]' : '.card[data-id="task:t-stop-fix"]';
-            await page.locator(stopped).scrollIntoViewIfNeeded();
-            expect(await page.locator(stopped).locator("[data-review-stop]").count()).toBeGreaterThan(0);
-            await capture(page, tag + "-spent-budget", stopped);
+            const reason = page.locator(stopped).locator("[data-review-stop]");
+            expect(await reason.count()).toBe(1);
+            await capture(page, tag + "-spent-budget", stopped, reason);
           });
 
           await check("conversion", async () => {
@@ -37201,7 +37288,7 @@ describe("retired review history", () => {
             await conversion.getByRole("button", { name: translate(lang, "groupOverride.legacyReview.preview"), exact: true }).click();
             const convert = conversion.getByRole("button", { name: translate(lang, "groupOverride.legacyReview.convert"), exact: true });
             await convert.waitFor();
-            await capture(page, tag + "-legacy-conversion", "[data-legacy-review]");
+            await capture(page, tag + "-legacy-conversion", "[data-legacy-review]", convert);
             await convert.click();
             await conversion.getByText(translate(lang, "groupOverride.legacyReview.converted"), { exact: true }).waitFor();
           });
