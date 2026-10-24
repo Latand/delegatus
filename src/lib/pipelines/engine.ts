@@ -5250,7 +5250,9 @@ async function retryPassedStageCommit(pipeline: Pipeline, ports: PipelinePorts):
   if (pipeline.state !== "needs_decision" || pipeline.cursor?.state !== "committing"
     || !attempt || attempt.verdict?.status !== "pass"
     || (attempt.commitRepair?.outcome?.status !== "rejected"
-      && !attempt.error?.startsWith("committing the passed stage:"))) return null;
+      && !attempt.error?.startsWith("committing the passed stage:")
+      && !passedStageCustodyPark(pipeline, attempt))) return null;
+  if (pipeline.delivery?.operation?.state === "running") return { error: "publisher is still in flight; reconcile before retrying settlement", status: 409 };
   if (attempt.conversationId) {
     const boundary = attempt.commitRepair?.requestedAt ?? attempt.commitRepair?.sendingAt;
     const durable = boundary ? await stageRepairEvidence(attempt, ports) : null;
@@ -11601,6 +11603,38 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
   return changed;
 }
 
+// A publisher waiting on CPU admission still holds its controller job. Full
+// job capacity must not hold other passed stages in committing indefinitely.
+// The pass receipt supplies the durable clock, including after boot.
+const STAGE_SETTLEMENT_ADMISSION_WAIT_MS = 15 * 60_000;
+
+async function parkUnadmittedStageSettlement(preview: Pipeline, ports: PipelinePorts): Promise<boolean> {
+  const attempt = preview.cursor && currentAttempt(preview, preview.cursor.stageId);
+  if (preview.state !== "running" || preview.cursor?.state !== "committing" || attempt?.verdict?.status !== "pass"
+    || pipelineControllerJobLanes().includes(preview.id) || preview.delivery?.operation?.state === "running") return false;
+  const acceptedAt = unixMs(attempt.report?.at ?? attempt.completedAt ?? attempt.startedAt ?? preview.createdAt);
+  const remaining = acceptedAt + STAGE_SETTLEMENT_ADMISSION_WAIT_MS - unixMs(ports.now());
+  if (remaining > 0) { ports.scheduleTick?.(remaining); return false; }
+  const fence = controllerTickFingerprint(preview);
+  return withPipelineMutation(async (pipelines, persist) => {
+    const current = pipelines.find(pipeline => pipeline.id === preview.id);
+    if (!current || controllerTickFingerprint(current) !== fence || pipelineControllerJobLanes().includes(current.id)) return false;
+    const recorded = currentAttempt(current, current.cursor!.stageId)!;
+    const detail = "no controller job became available for passed-stage settlement within 15 minutes; retry-stage to settle the preserved head";
+    // Pending means no executor was admitted. Retire this reservation under
+    // the same lane/epoch fence; a stale publisher can no longer consume it.
+    const operation = current.delivery?.operation;
+    if (operation?.state === "pending") {
+      operation.state = "settled";
+      operation.result = { ok: false, error: "publication admission superseded by the passed-stage settlement decision" };
+    }
+    if (recorded.state === "passed") await park(current, `publishing the passed stage: ${detail}`);
+    else await park(current, `settling the stage push: ${detail}\n${CUSTODY_ACCEPTANCE_RECOVERY}`, recorded);
+    await persist([current]);
+    return true;
+  });
+}
+
 async function drainPendingStaleControllerFlows(ports: PipelinePorts): Promise<void> {
   const pending = (await selectControllerPipelines("cleanup")).flatMap(pipeline =>
     (pipeline.pendingReviewFlowCleanup ?? []).map(flowId => ({ pipelineId: pipeline.id, flowId })));
@@ -11981,7 +12015,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         const attempt = stage && currentAttempt(lane, stage.id);
         if (lane.cursor?.state !== "committing" && !(stage?.kind === "review-loop" && attempt?.flowId && ports.getFlow(attempt.flowId)?.state === "approved")) continue;
         const jobPorts = { ...ports };
-        queueControllerJob(lane.id, () => withControllerPipelineScope([lane.id], async () => {
+        const admitted = queueControllerJob(lane.id, () => withControllerPipelineScope([lane.id], async () => {
           const changed = await settlePendingStageGit(jobPorts);
           const current = findPipelineRecord(lane.id);
           const operation = current?.delivery?.operation;
@@ -11991,6 +12025,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           }
           return changed;
         }));
+        if (!admitted) result.changed = await parkUnadmittedStageSettlement(lane, ports) || result.changed;
       }
     } else result.changed = await settlePendingStageGit(ports, settledGitIds) || result.changed;
     result.changed = await drainRuntimeSwitches(ports) || result.changed;
