@@ -6,18 +6,28 @@ export { credentialMask, maskedSlice, withoutSeparators } from "./credentialMask
 const PARTIAL = 12;
 const SEGMENT = String.raw`[^\s/\\"'<>|*?()\[\]{},;:]+`;
 const FILE_URL = /\bfile:\/\/[^\s"'<>)\]]+/gi;
-/** A home-relative path or an absolute one, a root file ("/secret.txt") and a
- * drive file ("C:\\private.txt") included, whatever its first segment is made
- * of ("/12345/private.txt"). A URL's path and a slash inside a word ("and/or",
- * "1/2") start after another character. A path after a colon is matched too
- * ("HOME:/home/…", "PATH=/usr/bin:/opt/…"): a URL's "scheme://" opens with two
- * slashes, which never start a path here. */
-const LOCAL_PATH = new RegExp(String.raw`(?<![\p{L}\p{N}_./\\~-])(?:~(?:[\\/]${SEGMENT})+|[A-Za-z]:(?:[\\/]${SEGMENT})+|(?:[\\/](?=[^\s/\\]*[\p{L}\p{N}])${SEGMENT})+)[\\/]?`, "gu");
+/** A path separator as text can carry it: a slash or a backslash, the doubled
+ * backslash and the escaped slash of JSON text ("C:\\\\Users", "\\/home"), a UNC
+ * opening ("\\\\server") and its JSON form, and a percent-encoded one ("%2Fhome"). */
+const SEP = String.raw`(?:\\{1,4}\/?|\/|%2[Ff]|%5[Cc])`;
+/** A home-relative path ("~/x", "~operator/x") or an absolute one, a root file
+ * ("/secret.txt"), a drive file ("C:\\private.txt") and a UNC path included,
+ * whatever its first segment is made of ("/12345/private.txt"). A URL's path and
+ * a slash inside a word ("and/or", "1/2") start after another character. A path
+ * after a colon is matched too ("HOME:/home/…", "PATH=/usr/bin:/opt/…"): a URL's
+ * "scheme://" opens with two slashes, which never start a path here. */
+const LOCAL_PATH = new RegExp(String.raw`(?<![\p{L}\p{N}_./\\~%-])(?:~[\p{L}\p{N}._-]*(?:${SEP}${SEGMENT})+|[A-Za-z]:(?:${SEP}${SEGMENT})+|(?:${SEP}(?=[^\s/\\]*[\p{L}\p{N}])${SEGMENT})+)(?:${SEP})?`, "gu");
+/** A path under a machine root, after any character ("log-/home/…", "v2/Users/…",
+ * "x_\\/home\\/…"), except inside a URL, whose own path may name the same words. */
+const ROOTED_PATH = new RegExp(String.raw`${SEP}(?:home|Users|root|etc|var|tmp|srv|opt|mnt|media|private|Volumes|run|usr|nix|snap|workspace|data)(?:${SEP}${SEGMENT})+(?:${SEP})?`, "gu");
+
+const URL_BEFORE = /\b[a-z][a-z0-9+.-]*:\/\/\S*$/iu;
 
 /** Machine, config, transcript and worktree paths say where this installation
  * lives. They never reach the voice provider, a card or speech. */
 export function withoutLocalPaths(text: string): string {
-  return text.replace(FILE_URL, "[path]").replace(LOCAL_PATH, "[path]");
+  return text.replace(FILE_URL, "[path]").replace(LOCAL_PATH, "[path]")
+    .replace(ROOTED_PATH, (path, at: number, whole: string) => URL_BEFORE.test(whole.slice(0, at).split(/[\s"'<>(),;]/u).at(-1) ?? "") ? path : "[path]");
 }
 
 /** Credential families an added tool's answer can carry beyond the shared
@@ -42,11 +52,19 @@ const NAMED_SECRET = new RegExp([
   String.raw`(["']?)(?!\[redacted\])[^\s"',}]{6,}`,
 ].join(""), "gi");
 
+/* A passphrase may hold spaces: after a key that names one, the whole quoted value, or the rest of the line up to
+   a separator, is the secret. */
+const PASSPHRASE = new RegExp([
+  String.raw`((?<![\w.-])[\w.-]{0,48}?(?:${["pass" + "word", "pass" + "phrase", "passwd", "pwd"].join("|")})[\w.-]{0,48}["']?`,
+  String.raw`[ \t]*[:=][ \t]*)`,
+  String.raw`(?:"[^"\n]+"|'[^'\n]+'|[^\s"',;}][^\n"',;}]*)`,
+].join(""), "gi");
+
 /** Text a provider, a model or a report supplied, before it is stored or
  * answered to the browser: no credential family and no active credential. */
 export function withoutCredentials(text: string, secrets: readonly string[]): string {
   const clean = hardenedRedact(text).replace(BOT_TOKEN, "[redacted]").replace(URL_PASSWORD, "$1[redacted]")
-    .replace(VENDOR_KEY, "[redacted]").replace(NAMED_SECRET, "$1$2[redacted]");
+    .replace(VENDOR_KEY, "[redacted]").replace(PASSPHRASE, "$1[redacted]").replace(NAMED_SECRET, "$1$2[redacted]");
   // A transcript arrives in fragments and is cut into segments, so a credential
   // can lie across a boundary: its beginning ends one text, its rest opens the next.
   return maskedSlice(clean, credentialSpans(clean, secrets, PARTIAL), 0, clean.length);

@@ -151,6 +151,7 @@ export function explicitDelegationRequest(utterance: string): GateVerdict {
   return { admit: true };
 }
 
+const WORD = /[\p{L}\p{N}']+/gu;
 /* A spoken yes to a confirmation that waits: "yes", "go ahead", "send it", "так", "давай", "відправляй". */
 const AGREEMENT = /(?<![\p{L}'])(?:yes|yeah|yep|yup|sure|ok|okay|agreed|confirm(?:ed)?|go ahead|do it|send it|please do|так|ага|авжеж|звісно|звичайно|гаразд|добре|давай|згоден|згодна|підтверджую|відправляй|надсилай|надішли|відправ|да|конечно|хорошо|согласен|подтверждаю|отправляй|отправь)(?![\p{L}'])/u;
 /* Every word a spoken yes may hold: the yes itself, and what it sends, to whom and when ("Yes, send it to the
@@ -170,7 +171,7 @@ const AGREEMENT_WORDS = new Set([
 export function spokenAgreement(utterance: string, also: readonly string[] = []): boolean {
   const all = gateSentences(utterance);
   return all.length > 0 && all.every((sentence) => AGREEMENT.test(sentence) && !sentence.includes("?")
-    && (sentence.match(/[\p{L}\p{N}']+/gu) ?? []).every((word) => AGREEMENT_WORDS.has(word) || also.includes(word)));
+    && (sentence.match(WORD) ?? []).every((word) => AGREEMENT_WORDS.has(word) || also.includes(word)));
 }
 
 /* A sending verb addressed to the orchestrator inside a clause of the operator's own words: "…and send it to the
@@ -196,14 +197,26 @@ const BARE_SEND_WORDS = new Set([...AGREEMENT_WORDS, "forward", "relay", "delive
  * verb whose target is the orchestrator, or a bare send that names nothing else ("Send it."). A sending verb that
  * belongs to another clause or object ("Look up how to forward ports", "I will send it myself later", "Передай привіт
  * мамі") is no ask. Read once an added tool's answer is in the backend's context (design §3.6). */
-export function spokenSendRequest(utterance: string): boolean {
+export function spokenSendRequest(utterance: string, options: { addressedOnly?: boolean } = {}): boolean {
   const all = gateSentences(utterance);
   if (!all.length || QUOTES.test(utterance)) return false;
   if (all.some((sentence) => sentence.includes("?") || NEGATION.test(sentence) || RETRACTION.test(sentence) || CONDITION.test(sentence)
     || FOLLOWUP_CONDITION.test(sentence) || TRAILING_CONDITION.test(sentence))) return false;
-  const bare = all.every((sentence) => (sentence.match(/[\p{L}\p{N}']+/gu) ?? []).every((word) => BARE_SEND_WORDS.has(word)))
+  const bare = !options.addressedOnly && all.every((sentence) => (sentence.match(WORD) ?? []).every((word) => BARE_SEND_WORDS.has(word)))
     && all.some((sentence) => SEND_IMPERATIVE.test(sentence));
   return bare || all.some((sentence) => ADDRESSED_SEND.test(sentence));
+}
+
+/** Whether words name an action by one of its own words that is no plain yes: "Yes, play it." names play, while
+ * "Yes, send it." names no added tool's action, whatever the tool is called. */
+export function namesAction(utterance: string, action: readonly string[]): boolean {
+  const own = action.filter((word) => !AGREEMENT_WORDS.has(word));
+  return gateSentences(utterance).some((sentence) => (sentence.match(WORD) ?? []).some((word) => own.includes(word)));
+}
+
+/** Whether speech holds a question that names an action ("Should Music play it?"). */
+export function asksAbout(speech: string, action: readonly string[]): boolean {
+  return gateSentences(speech).some((sentence) => sentence.includes("?") && (sentence.match(WORD) ?? []).some((word) => action.includes(word)));
 }
 
 /**
