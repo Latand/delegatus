@@ -1408,7 +1408,8 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       }
       // A concurrent request can observe the live publisher before its payload
       // commits. Leave that owner working; acceptance needs durable input.
-      if (structured && receipt.state === "starting" && !receipt.key && !receipt.pane && !receipt.queuedPinnedSpawn) {
+      if (structured && receipt.state === "starting" && !receipt.key && !receipt.pane
+        && !receipt.queuedPinnedSpawn && !receipt.hostSetupStartedAt) {
         return NextResponse.json({
           error: "The launch is still being prepared. Retry the same request.",
           code: "spawn_preparing", retryable: true,

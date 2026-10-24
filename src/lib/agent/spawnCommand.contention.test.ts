@@ -801,6 +801,9 @@ test.each(["pending", "setup", "setup-expired"] as const)("direct admission repl
           try {
             expect(second.spawnReceipt(launchId)).toMatchObject({ hostSetupStartedAt: new Date(clock).toISOString(), queuedPinnedSpawn: null });
           } finally { second.close(); }
+          const admittedReplay = await executeSpawnRequest(request(), dependencies);
+          expect(admittedReplay.status).toBe(202);
+          expect((await admittedReplay.json()).launchId).toBe(launchId);
           setupFresh = true;
           if (phase === "setup-expired") {
             clock += 5 * 60_000;
