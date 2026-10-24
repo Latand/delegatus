@@ -1,5 +1,126 @@
 Retained fixes for #2231, #2210 and #2203; dropped the #2226 draft.
 
+## Archived-ID PR-query follow-up
+
+The review found that explicit archived IDs disappeared when combined with a
+matching PR-number query. `src/lib/mcp/bindings.ts` now resolves requested IDs
+once through the hot-or-archive reader, then uses those records for PR matching
+and both paging paths. Ordinary lists retain their indexed selection path.
+The existing project authority check runs before these reads. PR candidates
+are filtered to that project before entering the cursor scope; row filters and
+cursor boundaries still apply afterward.
+
+The two new cases in `src/lib/mcp/bindings.test.ts` cover matching and
+nonmatching PR queries, project scope, state, closed visibility, update cutoff,
+missing and duplicate IDs, and continuation pages. They also assert one
+resolver call per unique requested ID and refuse any whole-registry read. A
+foreign record changes its PR between pages; the caller must still receive the
+next row from its own project. Before the fix,
+`bun test src/lib/mcp/bindings.test.ts --test-name-pattern "filters archived ids by PR query" --timeout=60000`
+fails both cases under the heavy-command wrapper and remote runner.
+
+The final source SHA-256 values are
+`b9d0facad27dc26b0235812113c8d7e877ed8614829bf2b3bead8efddba7263c`
+for `src/lib/mcp/bindings.ts` and
+`04411b8b00c2dfca0dbd57b39dd2b97d4968cba95aafccbb252f7f8223dfff00`
+for `src/lib/mcp/bindings.test.ts`. The final remote run used the pinned
+heavy-command wrapper, ownership preload and isolated roots. Its integrated
+export applies the retained patch, excluding this record, to
+`97bdb94ea9dfe32dff8a7bf022eeb2f83d8f02b7`, producing tree
+`fccf38830c7cdc0e759037859160adf03c4ebc31`.
+
+| Final variant | Command | Result |
+| --- | --- | --- |
+| Branch | `bun test src/lib/mcp/bindings.test.ts --timeout=60000` | 117 pass, 0 fail |
+| Project filter removed from PR matching | `bun test src/lib/mcp/bindings.test.ts --test-name-pattern "filters archived ids by PR query" --timeout=60000` | Both cases fail on the foreign-record cursor change |
+| Entire follow-up removed from product source | `bun test src/lib/mcp/bindings.test.ts --test-name-pattern "filters archived ids by PR query" --timeout=60000` | Both cases fail |
+| Branch | `bun x tsc --noEmit --incremental false` | Exit 0 |
+| Branch | `bun x eslint src/lib/mcp/bindings.ts src/lib/mcp/bindings.test.ts` | Exit 0 |
+| Integrated export | `bun test src/lib/mcp/bindings.test.ts --timeout=60000` | 118 pass, 0 fail |
+| Integrated export | `bun x tsc --noEmit --incremental false` | Exit 0 |
+| Integrated export | `bun x eslint src/lib/pipelines/store.ts src/lib/pipelines/store.test.ts src/lib/mcp/bindings.ts src/lib/mcp/bindings.test.ts src/lib/accounts/codexAppServer.test.ts src/app/api/agent/snapshot/route.test.ts src/lib/runtime/copilotAcpHost.integration.test.ts` | Exit 0 |
+| Branch | `bun test src/lib/mcp/pageCursors.integration.test.ts --timeout=60000` | 3 pass, 0 fail |
+| Branch and main, separately | `bun test src/lib/mcp/pullRequestReads.test.ts --timeout=60000` | Each: 4 pass, 3 fail; identical per-test outcomes |
+
+Both mutation controls restored the final source and verified both source
+hashes before types and lint. The PR-read failures are the existing query-alias
+continuation expectations at `src/lib/mcp/pullRequestReads.test.ts:63` in indexed,
+explicit and fallback modes. The ordinary-list bounded-materialization and
+project-fencing cases pass in that same file. An earlier scoped-control script
+stopped on a quote typo after its first two checks; the complete final run above
+replaces that partial execution.
+
+The initial follow-up run, before the foreign-record cursor regression was
+added, used these source SHA-256 values:
+`008ccbffa4eb0a873768ab66b9c0800f6564e3298548f6e6fa7240910afda642`
+for `src/lib/mcp/bindings.ts` and
+`a67082ce6d9f1585a65dbf2855ee4458ef2bd3580eec438106f26b92137d1675`
+for `src/lib/mcp/bindings.test.ts`. That remote run under the pinned
+heavy-command wrapper produced these results on 2026-10-24:
+
+| Variant | Command | Result |
+| --- | --- | --- |
+| Initial follow-up | `bun test src/lib/mcp/bindings.test.ts --timeout=60000` | 117 pass, 0 fail |
+| Follow-up product fix reverted | `bun test src/lib/mcp/bindings.test.ts --test-name-pattern "filters archived ids by PR query" --timeout=60000` | Both regression cases fail |
+| Initial follow-up | `bun x tsc --noEmit --incremental false` | Exit 0 |
+| Initial follow-up | `bun x eslint src/lib/mcp/bindings.ts src/lib/mcp/bindings.test.ts` | Exit 0 |
+| Integrated with captured main | `bun test src/lib/mcp/bindings.test.ts --timeout=60000` | 118 pass, 0 fail |
+| Integrated with captured main | `bun x tsc --noEmit --incremental false` | Exit 0 |
+| Integrated with captured main | `bun x eslint src/lib/pipelines/store.ts src/lib/pipelines/store.test.ts src/lib/mcp/bindings.ts src/lib/mcp/bindings.test.ts src/lib/accounts/codexAppServer.test.ts src/app/api/agent/snapshot/route.test.ts src/lib/runtime/copilotAcpHost.integration.test.ts` | Exit 0 |
+
+The integrated export applies the retained patch, excluding this verification
+record, to
+`fd7a0a14e75725b8d612237bf5a4413b0081e9a3`, producing tree
+`60998f02580a21e740e9c05f53a65f5e3e1b779d`. Reverted source was restored and
+both recorded source hashes checked before the remaining checks. The first
+follow-up campaign exposed an incorrect test expectation for resolver order;
+the final assertion follows the canonical sorted, deduplicated selectors.
+
+Main was rechecked at `97bdb94ea9dfe32dff8a7bf022eeb2f83d8f02b7`.
+The only product change since the tested integration revision adds an account
+credential diagnosis before spawn refusal; the other changes are tests and
+evidence. The retained patch still applies cleanly, producing private-index
+tree `fd3eede506544b460d4fbb5354db84ac8cc22e2c`. This additional apply check
+leaves the executed integration results above bound to the captured revision.
+
+
+The interrupted follow-up also ran 118 explicitly selected bindings importer
+files on the branch and on newer main
+`5ab558ee2e044fcf0965526e8d26af4a58146aad`: 236 unique file invocations.
+Nine files per side failed while loading modules, before JUnit output; their
+paired logs carry the same import diagnostics. The first remote-actions runs
+hit the five-minute process limit on both sides. Fresh ten-minute process
+limits, retaining the same 60-second test timeout, let both files finish:
+`bun test src/lib/pipelines/remoteActions.test.ts --timeout=60000` reports
+1 pass and 42 failures across 43 tests on each side. The legacy review-stage
+fixtures remain incompatible with the current pipeline format.
+
+That newer-main comparison spans independent main changes. The 18 assertion
+differences in these seven files were repeated with the final follow-up and
+with only that production follow-up removed; both variants reproduce the same
+named failures. Each invocation selected the differing test names with
+`--test-name-pattern` and retained `--timeout=60000`:
+
+| File | Named failures with follow-up | Named failures without follow-up |
+| --- | ---: | ---: |
+| `src/app/api/monitor/seat-tick/settings/route.test.ts` | 3 | 3 |
+| `src/lib/externalRelay/runner.test.ts` | 2 | 2 |
+| `src/lib/mcp/autonomy.test.ts` | 1 | 1 |
+| `src/lib/mcp/bridgeReportOrigin.test.ts` | 9 | 9 |
+| `src/lib/mcp/dismissAttention.test.ts` | 1 | 1 |
+| `src/lib/memory/roleEgressUnreadable.test.ts` | 1 | 1 |
+| `src/lib/orchestrator/ownerRelay.test.ts` | 1 | 1 |
+
+The autonomy control also repeats the owned-child teardown diagnostic with
+both variants. A signal-log diagnostic difference in
+`src/lib/mcp/retirementStatus.integration.test.ts` remains a supplemental note.
+The red supplemental results remain alongside the captured-base comparison
+below. The two initial extra paging
+invocations passed an empty test filter; Bun consumed the next CLI flag as the
+filter and ran no tests. Corrected invocations omit that option entirely.
+
+## Original batch verification
+
 Base: `adce5764927f7e838f20070cd2968128912e861c`. Retained diff SHA-256, excluding this record: `759a27d84ca3cdcc5e3601e9d545cfd0747de17376cf8ffeca916fd631c1436e`. Generated 2026-10-23T19:03:58+00:00.
 
 Refreshed main: `800a26ebc10ca2db855d12a71320f75c5f2fb955`. The retained patch applied cleanly through a private index (exit 0), producing scratch tree `a8de879d849308e9d167763c36489a43edb6fd4b`. Every retained file in that export was compared byte-for-byte with the tree. The assigned branch keeps its original base; this is an additional integration check. All twelve focused main/integrated file runs, the integrated typecheck, touched-file ESLint and the real-CLI cancellation case pass.
