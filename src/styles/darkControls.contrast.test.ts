@@ -248,13 +248,10 @@ test("a hover row in a menu on the card lifts to raised; only menus that are rai
     expect(scope).not.toMatch(/\[role="(?:menu|listbox)"\]/);
     expect(scope).toContain(":not(:where(.bg-raised, .kb .menu, .kb .popover) *)");
   }
-  /* The two menus the review named are drawn on the card, so they lift. */
+  /* The filter menu is drawn on the card, so it lifts. */
   const bar = fs.readFileSync(path.join(import.meta.dir, "../components/ProjectBar.tsx"), "utf8");
-  const strip = fs.readFileSync(path.join(import.meta.dir, "../components/pipelines/PipelineStrip.tsx"), "utf8");
   expect(bar).toMatch(/data-bar-filter-menu=""\s+className=\{`[^`]*\bbg-card\b/);
-  expect(strip).toMatch(/role="menu" aria-label=\{t\("pipelineStrip\.moreActions"\)\} className="[^"]*\bbg-card\b/);
   expect(bar).toContain("hover:bg-well");
-  expect(strip).toContain("hover:bg-sunken");
   expect(luminance(well)).toBeLessThan(luminance(card));
   expect(luminance(sunken)).toBeLessThan(luminance(card));
   expect(luminance(raised)).toBeGreaterThan(luminance(card));

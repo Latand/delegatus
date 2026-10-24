@@ -601,12 +601,13 @@ PR.
      `reasoning_effort` on every request;
   2. the Viewer MCP is attached: the stub saw a `viewer-…` tool in `tools`;
   3. send → `turn-started` → the turn completed;
-  4. **interrupt-and-resend**: a send during a slow turn settles
-     `interrupt-then-turn-started`, the transcript holds `abort
-     {reason: "user_initiated"}` followed by the resent `user.message`, and
-     the test logs cancel → prompt-return and cancel → resend-done in
-     milliseconds (the expectation from 1.2 §6 is under 50 ms; the assertion
-     bound is loose, 2 s, so load cannot flake it);
+  4. **interrupt-and-resend**: the CLI receives an initial streamed chunk
+     while the provider holds completion. For each delivery policy, the send
+     settles `interrupt-then-turn-started`, cancellation closes the held
+     response, and the resent turn completes. The test waits for the native
+     transcript's `abort {reason: "user_initiated"}` followed by the resent
+     `user.message`, then checks their order and counts. These verdicts use
+     protocol progress and durable records;
   5. `interrupt` alone ends the turn as `interrupted`;
   6. resume: the host is released, a new host is adopted on the same session
      id, one more turn is sent, and the stub again sees the launch effort;
