@@ -3275,7 +3275,7 @@ export class StructuredDeliveryQueue {
    * in recovery arrives unmarked and settles failed with every other failure,
    * since trying again there could reserve a second successor.
    */
-  private async recoverUnavailableHost(effect: Pick<DeliveryEffect, "conversationId" | "operationId"> & { origin?: MessageOrigin }, status?: StructuredOperationStatus | null): Promise<void> {
+  private async recoverUnavailableHost(effect: DeliveryEffect & { origin?: MessageOrigin }, status?: StructuredOperationStatus | null): Promise<void> {
     if (!this.recoverHost) return;
     try {
       const recovered = await this.recoverHost(effect.conversationId, {
