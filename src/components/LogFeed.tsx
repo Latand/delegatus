@@ -1437,7 +1437,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   else if (loadedFile !== null && loadedFile !== feedPath) setLoadedFile(null);
   const feedArrived = loadedFile !== null && loadedFile === feedPath && feedState !== "loading";
   /* Only what arrives fades in: a child the feed already drew beside its
-     skeleton (a question card, the reveal control) stays as it was, and rows
+     skeleton (the reveal control) stays as it was, and rows
      that come later are not part of the arrival. Marked before the arrival
      paints; the stylesheet's fade clears the mark when it ends. */
   const drawnWhileLoading = useRef<WeakSet<Element>>(new WeakSet());
@@ -2261,7 +2261,11 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                 ) : null}
               </div>
             )}
-            <ConversationAttention file={file} />
+            {/* Held while a compact feed loads: the card sits under the rows, so
+                it would be drawn below the skeleton and step up to the
+                transcript's end when the read lands. It arrives with the rows,
+                already where it rests. */}
+            {compact && feedState === "loading" ? null : <ConversationAttention file={file} />}
             {feed.items.length && !file.pendingQuestion && !file.waitingInput && endedQuestion ? (
               <div className="my-4 rounded-[8px] border border-border bg-sunken px-4 py-3 text-[13px] font-semibold text-muted">{endedQuestion}</div>
             ) : null}

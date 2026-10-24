@@ -511,8 +511,9 @@ body {
    loading (board task d5e2680a). Its feed skeleton stays out of sight for
    the first moment, so a quick read never flashes it, and what the read
    settles on fades in where it rests (`data-feed-enter`, LogFeed.tsx)
-   instead of swapping in for the skeleton; what the feed already drew beside
-   the skeleton, such as a question card, stays. Opacity only: the feed's scroll
+   instead of swapping in for the skeleton, the reply card with it (the feed
+   holds the card until then, so it is first drawn where it rests); what the
+   feed already drew beside the skeleton stays. Opacity only: the feed's scroll
    position and its rows are already final. Under reduced motion the
    skeleton still waits, without a fade, and the transcript appears at once. */
 @keyframes feed-enter {

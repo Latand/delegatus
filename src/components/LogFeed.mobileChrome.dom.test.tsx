@@ -334,19 +334,18 @@ describe("a first read's arrival", () => {
     expect(content().hasAttribute("data-feed-arrived")).toBe(true);
   });
 
-  test("only what arrives fades: a question card drawn beside the skeleton stays, and later rows are not marked", () => {
+  test("a reply card waits for the arrival and fades in with the rows; later rows are not marked", () => {
     const { show, content } = mount();
     const waiting = { ...file, waitingInput: { since: Date.parse(AT(0)), screenTail: "Proceed? (y/n)", target: "lane5:0.0", menu: null } } as FileEntry;
     tail = { lines: [], loading: true, error: null };
     show(waiting);
-    const card = content().querySelector("#question");
-    expect(card).toBeTruthy();
-    expect(card!.hasAttribute("data-feed-enter")).toBe(false);
+    expect(content().querySelector("#question")).toBeNull();
     tail = { lines: TRANSCRIPT, loading: false, error: null };
     show(waiting);
     expect(content().hasAttribute("data-feed-arrived")).toBe(true);
-    expect(content().querySelector("#question")).toBe(card);
-    expect(card!.hasAttribute("data-feed-enter")).toBe(false);
+    const card = content().querySelector("#question");
+    expect(card).toBeTruthy();
+    expect(card!.hasAttribute("data-feed-enter")).toBe(true);
     const rows = [...content().querySelectorAll(":scope > [data-feed-key]")];
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.every((row) => row.hasAttribute("data-feed-enter"))).toBe(true);
