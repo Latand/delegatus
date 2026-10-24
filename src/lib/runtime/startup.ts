@@ -2359,7 +2359,7 @@ async function adoptStructuredHostsPass(
     // A later row may throw after earlier hosts have launched and acquired
     // writer claims. Keep each handle before the batch can reject, so the
     // retry can publish it instead of waiting on its own engine forever.
-    let publicationTail = Promise.resolve();
+    const publicationTails = new Map<string, Promise<void>>();
     const onAdopted = (item: AdoptedStructuredHost) => {
       nextAdoptedHosts = retainAdoptedHosts(nextAdoptedHosts, [item]);
       rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
@@ -2381,16 +2381,17 @@ async function adoptStructuredHostsPass(
         return !!conversation && !conversation.supersededBy
           && conversation.generations.at(-1)?.id === item.key.sessionId;
       };
-      // Keep publication ordered, but let each ready host serve
-      // while the adopter continues through unrelated rows. A failed publish
-      // retains the adopted handle for the normal completion retry.
-      publicationTail = publicationTail.then(async () => {
+      // Keep a host's publications ordered without making another host wait
+      // for its health or journal reads. A failed publish retains the adopted
+      // handle for the normal completion retry.
+      const publication = (publicationTails.get(key) ?? Promise.resolve()).then(async () => {
         if (await owns()) await publishStructuredDeliveryHost(item, owns);
       }).catch(error => {
         console.warn("[structured hosts] early host publication deferred", {
           key, error: error instanceof Error ? error.message : String(error),
         });
       });
+      publicationTails.set(key, publication);
     };
     await reportProgress("adopting Codex hosts");
     const resolveCodexOwner = dependencies.resolveCodexOwner ?? ((entry: AgentRegistryEntry) =>
@@ -2662,7 +2663,7 @@ async function adoptStructuredHostsPass(
         && !heldHostKeys.has(sessionKeyId(item.key)),
     );
     await reportProgress("finalizing structured delivery");
-    await publicationTail;
+    await Promise.all(publicationTails.values());
     assertActive();
     /* `controllerBoundEarly` is exactly "this pass has a runtime client", so the
        only way past it is a viewer that cannot host at all. Rebinding there would

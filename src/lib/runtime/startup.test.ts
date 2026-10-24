@@ -1021,7 +1021,7 @@ for (const { fence, phase } of [
   }
 });
 
-test("a ready adopted host receives messages while another host is still being adopted", async () => {
+for (const earlierPublicationPending of [false, true]) test(`a ready adopted host receives messages while another host is still being adopted (earlier publication pending: ${earlierPublicationPending})`, async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-ready-host-"));
   const { artifactPath, conversation, registry, sessionId } = structuredRestartFixture(directory, "codex", "unhosted");
   const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
@@ -1032,6 +1032,22 @@ test("a ready adopted host receives messages while another host is still being a
   const host = Object.assign(new ObservedDeliveryHost(ledger), { onStateChange: () => () => {} });
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
+  const earlierKey = { engine: "codex" as const, sessionId: "cccccccc-cccc-0ccc-0ccc-cccccccccccc" };
+  const cursorEntered = Promise.withResolvers<void>();
+  if (earlierPublicationPending) {
+    const earlierPath = path.join(directory, `${earlierKey.sessionId}.jsonl`);
+    fs.writeFileSync(earlierPath, "");
+    const earlier = registry.ensureConversation("codex", earlierPath, null);
+    registry.upsert({ ...registry.readOnlySnapshot().entries[`codex:${sessionId}`]!, key: earlierKey, artifactPath: earlierPath });
+    projectHostedRestart(journal, "codex", earlier.id, earlierKey.sessionId, directory, earlierPath);
+    client.producerCursor = async (_kind, prefix) => {
+      if (prefix === `engine-host:codex:${earlierKey.sessionId}:`) {
+        cursorEntered.resolve();
+        await release.promise;
+      }
+      return 0;
+    };
+  }
   let finished = false;
   let startup: Promise<unknown> | undefined;
   try {
@@ -1039,6 +1055,12 @@ test("a ready adopted host receives messages while another host is still being a
       registry, client, orchestratorSeats: () => [], refreshTranscriptState: async () => {},
       pipelineEvidence: () => ({ settled: new Set(), deferred: new Set() }),
       adopt: async (_registry, _options, _env, _filter, _progress, hooks) => {
+        if (earlierPublicationPending) {
+          const earlier = registry.readOnlySnapshot().entries[`codex:${earlierKey.sessionId}`]!;
+          registry.upsert({ ...earlier, status: "idle", claimOwner: "fixture",
+            structuredHost: { ...earlier.structuredHost!, endpoint: "fake:adopted" } });
+          hooks?.onAdopted?.({ key: earlierKey, host: Object.assign(new FakeEngineHost(ledger), { onStateChange: () => () => {} }) as never });
+        }
         const entry = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!;
         registry.upsert({ ...entry, status: "idle", claimOwner: "fixture",
           structuredHost: { ...entry.structuredHost!, endpoint: "fake:adopted" } });
@@ -1049,6 +1071,7 @@ test("a ready adopted host receives messages while another host is still being a
       adoptClaude: async () => [],
     }).then(() => { finished = true; });
     await entered.promise;
+    if (earlierPublicationPending) await cursorEntered.promise;
     journal.executeOperation({ kind: "send", operationId: "ready-host-send", idempotencyKey: "ready-host-send",
       conversationId: conversation.id, text: "reach the ready host", policy: "queue" });
     const { kickStructuredDeliveryQueue } = await import("./structuredDeliverySignal");
