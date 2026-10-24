@@ -16,7 +16,7 @@ import { selectProjectAccount } from "./projectSelection";
 import { creditGuardBlock } from "./creditGuard";
 import { turboCreditExemptFor } from "./turboCreditExemption";
 import { refreshStaleExhaustion, type LiveLimitsDeps } from "./liveLimits";
-import { selectHealthyClaudeAccount } from "./spawnHealth";
+import { ClaudeCredentialUnavailableError, selectHealthyClaudeAccount } from "./spawnHealth";
 import { classifySpawnAccountAdmission, type SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
 import { readProviderMessageHealth } from "./claudeProviderHealth";
 
@@ -178,6 +178,13 @@ export async function resolveHealthySpawnAccount(
     automatic = selectProjectAccount({ ...selectionInput, observations: registry.quotaObservations(engine) });
   }
   if (named === null && automatic.kind !== "available") {
+    // Discovery cannot prove authentication when Keychain is unreadable.
+    // Preserve that diagnosis when capacity selection has no candidate, before
+    // its authPresent filter can hide the health pass's uncertainty refusal.
+    if (engine === "claude" && automatic.kind === "unavailable" && selectionInput.accounts.some(account =>
+      (allowed === null || allowed.has(account.id)) && "credentialState" in account && account.credentialState === "unknown")) {
+      throw new ClaudeCredentialUnavailableError();
+    }
     throw new ProjectAccountRefusedError(automatic, engine, project, appliedTier ? `serviceTier ${appliedTier} is offered by: ${labels}` : undefined);
   }
   if (named !== null) {
