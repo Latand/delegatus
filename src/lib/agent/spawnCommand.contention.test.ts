@@ -787,7 +787,7 @@ test.each(["pending", "setup", "setup-expired"] as const)("direct admission repl
     const { captureProcessIdentity } = await import("@/lib/processIdentity");
     let starts = 0;
     let messages = 0;
-    let setupFresh = false;
+    let setupOutcome: "fresh" | "expired" | null = null;
     const recovery = { now: () => clock, resolveSpawnAccount: dependencies.resolveSpawnAccount,
       spawnStructuredConversation: async (input: Parameters<typeof spawnStructuredConversation>[0]) => spawnStructuredConversation(input, {
         now: () => clock,
@@ -804,10 +804,11 @@ test.each(["pending", "setup", "setup-expired"] as const)("direct admission repl
           const admittedReplay = await executeSpawnRequest(request(), dependencies);
           expect(admittedReplay.status).toBe(202);
           expect((await admittedReplay.json()).launchId).toBe(launchId);
-          setupFresh = true;
+          setupOutcome = "fresh";
           if (phase === "setup-expired") {
             clock += 5 * 60_000;
             expect((await reconcileStructuredSpawnReplay(launchId, registry, client, { now: () => clock })).state).toBe("failed");
+            setupOutcome = "expired";
             throw new Error("fixture host setup reached its separate deadline");
           }
           const sessionId = input.spec.transcript ? path.basename(input.spec.transcript, ".jsonl")
@@ -830,7 +831,7 @@ test.each(["pending", "setup", "setup-expired"] as const)("direct admission repl
       }) };
     await recoverPendingStructuredSpawns(registry, client, recovery);
     expect(starts).toBe(1);
-    expect(setupFresh).toBe(true);
+    expect(setupOutcome).toBe(phase === "setup" ? "fresh" : "expired");
     expect(messages).toBe(phase === "setup" ? 1 : 0);
     expect(registry.spawnReceipt(launchId)!.state).toBe(phase === "setup" ? "completed" : "failed");
     await terminalizeStaleStructuredSpawns(registry, client, recovery);
