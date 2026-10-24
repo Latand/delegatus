@@ -1118,10 +1118,14 @@ export class StructuredDeliveryQueue {
           // explicit sends also take the normal fenced path. Automatic work
           // and configuration changes still wait for startup completion.
           const admitted: DeliveryEffect[] = [];
+          // Never send past a configuration change or another held effect
+          // that the ordinary per-conversation drain would process first.
+          const recoverSends = this.port.canRecoverDeferredTarget?.(conversationId)
+            && deferred.every(effect => (effect.kind === "send" && !effect.onlyIfIdle)
+              || (effect.kind === "kill" && !effect.onlyIfIdle));
           for (const effect of deferred) {
             if ((effect.kind === "kill" && !effect.onlyIfIdle)
-              || (effect.kind === "send" && !effect.onlyIfIdle
-                && this.port.canRecoverDeferredTarget?.(conversationId))) admitted.push(effect);
+              || (effect.kind === "send" && !effect.onlyIfIdle && recoverSends)) admitted.push(effect);
             else this.noteWait(effect, "startup", { wake: "event" });
           }
           const settleKilledReconfigures = async () => {

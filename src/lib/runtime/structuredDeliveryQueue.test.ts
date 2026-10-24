@@ -2067,7 +2067,7 @@ test("an expired explicit kill settles during startup deferral without terminati
   expect(transitions).toEqual([["expired-kill", "failed"]]);
 });
 
-test("startup recovery admits an explicit send while automatic continuation and configuration remain deferred", async () => {
+test("startup recovery does not let an explicit send overtake deferred configuration or automatic work", async () => {
   const statuses = new Map<string, string>();
   const sent: string[] = [];
   const effects: StructuredDeliveryEffect[] = [
@@ -2096,8 +2096,8 @@ test("startup recovery admits an explicit send while automatic continuation and 
   }));
 
   await queue.drain();
-  expect(sent).toEqual(["explicit"]);
-  expect(statuses.get("explicit")).toBe("delivered");
+  expect(sent).toEqual([]);
+  expect(statuses.has("explicit")).toBeFalse();
   expect(statuses.has("automatic")).toBeFalse();
   expect(statuses.has("configure")).toBeFalse();
 });
