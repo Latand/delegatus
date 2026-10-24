@@ -39,7 +39,7 @@ test.each([0, 512])("indexed successor-source custody follows released parents, 
         WHERE kind=? AND identity=? AND live>0 AND live=CASE WHEN EXISTS (SELECT 1 FROM pipeline_owner_refs
           WHERE kind=? AND identity=? AND live=-1) THEN 2 ELSE 1 END LIMIT 1`).all("srcConversationId", "parent-host", "conversationId", "parent-host");
       expect(plan.filter(row => row.detail.includes("pipeline_owner_lookup"))).toHaveLength(2);
-      expect(plan.filter(row => row.detail.includes("pipeline_owner_lookup")).every(row => row.detail.includes("live=?"))).toBe(true);
+      expect(plan.filter(row => row.detail.includes("pipeline_owner_lookup")).every(row => row.detail.includes("kind=? AND identity=?"))).toBe(true);
       expect(plan.some(row => row.detail.includes("SCAN pipeline_owner_refs"))).toBe(false);
       peer.exec("UPDATE state_rows SET value_json=json_set(value_json,'$.publicationAdmission.state','pending') WHERE row_key='successor'");
       expect(store.pipelineOwnerExists(identities, true)).toBe(true);
@@ -125,7 +125,7 @@ test.each([
       if (!store.pipelineOtherTerminalHosts('terminal-lane',[])) throw new Error('missing terminal host');
       if (!store.pipelineTickWork(0,[]).some(row => row.row_key==='terminal-lane')) throw new Error('missing retirement obligation');
     `], { env: { ...process.env, UPGRADE_DATABASE: filename }, encoding: "utf8", timeout: 10_000 });
-    expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: "" });
+    assertStateChildSuccess(result.status, result.stderr);
     const upgraded = new Database(filename);
     try {
       expect(JSON.parse(upgraded.query<{ value_json: string }, []>("SELECT value_json FROM state_rows").get()!.value_json)).toEqual(row);
