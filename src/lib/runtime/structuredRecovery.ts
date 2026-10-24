@@ -17,7 +17,7 @@ import type { MessageOrigin } from "./messageOrigin";
 
 import { accountPark, type AccountPark } from "./accountPark";
 import { runtimeHostClient, type RuntimeHostClient } from "./client";
-import { reconcileDeadStructuredRegistryHostOffLoop } from "./registry";
+import { bindCodexHostPersistence, reconcileDeadStructuredRegistryHostOffLoop } from "./registry";
 import { restartCutEvidenceHolds } from "./restartCutHold";
 import { assertPipelineTurnAllowed } from "./accountCreditGuard";
 import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
@@ -27,14 +27,21 @@ import {
   recoverStagedStructuredLaunch,
   RESUME_PUBLICATION_BOUND_MS,
   spawnStructuredConversation,
+  structuredHostCell,
 } from "./structuredSpawn";
 import { spawnTransport } from "./spawnTransport";
 import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFence";
-import { findPipelineRecord } from "@/lib/pipelines/store";
+import { findPipelineRecord, withPipelineStartupAdmission } from "@/lib/pipelines/store";
 import { instanceCpuPrioritySource } from "./cpuAdmissionScope";
 import { cpuPriorityEnv } from "./cpuPriority";
+import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
+import { verifiedCodexSocketOwner } from "./codexSocketTransport";
+import { CodexAppServerHost } from "./codexAppServerHost";
 
 export interface StructuredRecoveryRequest {
+  /** Internal startup delivery path: reconnect a verified native listener
+      when its previous Viewer released the writer, without a successor. */
+  reconnectLiveHost?: boolean;
   /** Fresh autonomous seat authority, re-read after recovery's lock waits. */
   admissionGuard?: DeliveryAdmissionGuard;
   /** Seat authority after reservation, independent of this launch's new identity. */
@@ -78,6 +85,8 @@ export interface StructuredRecoveryResult {
   path: string;
   conversationId: ViewerConversationId;
   spawned: boolean;
+  /** A live native listener was connected and published without a new process. */
+  reconnected?: boolean;
   /** Rechecked when a recovered conversation accepts its queued message. */
   admissionGuard?: DeliveryAdmissionGuard;
   /** Set when the live host handed back cannot accept a turn yet because the
@@ -406,6 +415,67 @@ async function recoverCandidate(
     let current = candidateFor(registry, request, Boolean(ownership), park);
     if (!current) return null;
     const client = dependencies.client === undefined ? runtimeHostClient() : dependencies.client;
+    if (request.reconnectLiveHost && !ownership && client && current.engine === "codex") {
+      const entry = registry.readOnlySnapshot().entries[sessionKeyId(current.key)];
+      const native = entry?.structuredHost;
+      const socketOwner = native?.process ? { endpoint: native.endpoint, process: native.process,
+        signalDomain: native.signalDomain, signalBoundary: native.signalBoundary } : null;
+      if (entry?.pendingAction === null && socketOwner && verifiedCodexSocketOwner(socketOwner)) {
+        const { publishStructuredDeliveryHost, structuredDeliveryHostForConversation } = await import("./structuredDeliveryController");
+        if (!structuredDeliveryHostForConversation(current.conversationId)) {
+          const account = (dependencies.resolveAccount ?? resolveContinuityAccount)(current.engine, current.accountId, current.project);
+          const authorize = () => {
+            assertRecoveryAdmission(request, registry);
+            request.authorityGuard?.();
+            request.admissionGuard?.();
+            assertRestartCutEvidenceDecided(current!.key);
+            assertPipelineTurnAllowed(current!.conversationId, registry);
+          };
+          authorize();
+          const claim = await withPipelineStartupAdmission(async available => {
+            if (!available) throw new StructuredRecoveryHeldForUpdateError("pipeline authority is unavailable for native reconnect");
+            return registry.deliveryWriteOrBusy({ label: "registry.reconnect-startup-host" }, () => {
+              authorize();
+              return registry.claimStructuredHost(current!.key, owner, { allowUnhosted: true, reconnectCodex: socketOwner });
+            });
+          }, "reconnecting requested startup host", undefined, true);
+          if (claim?.structuredHost && claim.claimOwner) {
+            let host: CodexAppServerHost | undefined;
+            const releaseConnection = async () => {
+              host?.detachForViewerRestart();
+              await registry.deliveryWriteOrBusy({ label: "registry.release-startup-reconnect" },
+                () => registry.releaseStructuredHostClaim(current!.key, claim.claimOwner!, claim.claimEpoch));
+            };
+            try {
+              authorize();
+              const retainedProtocolVersion = claim.structuredHost.protocolVersion;
+              host = await CodexAppServerHost.adopt(current.key.sessionId, {
+                cwd: current.spec.cwd, codexHome: account.home,
+                env: withoutUnsupportedApiCredentials(account.env), socketOwner,
+                initialEventCursor: claim.structuredHost.eventCursor,
+                readProtocolVersion: () => retainedProtocolVersion ?? "unknown",
+                memoryCell: structuredHostCell(registry, "codex", sessionKeyId(current.key), current.conversationId),
+              });
+              await bindCodexHostPersistence(registry, current.key, host, claim.claimOwner, claim.claimEpoch);
+              const owns = async () => {
+                authorize();
+                return registry.ownsStructuredHostClaim(current!.key, claim.claimOwner!, claim.claimEpoch)
+                  && registry.conversation(current!.conversationId)?.generations.at(-1)?.id === current!.key.sessionId;
+              };
+              await publishStructuredDeliveryHost({ key: current.key, host, writerEpoch: claim.claimEpoch }, owns);
+              const reconnected = structuredDeliveryHostForConversation(current.conversationId) === host;
+              if (!reconnected) await releaseConnection();
+              dependencies.requestDeliveryDrain?.();
+              return { ...liveHostResult(current), reconnected, ...(request.admissionGuard ? { admissionGuard: request.admissionGuard } : {}) };
+            } catch (error) {
+              try { await releaseConnection(); }
+              catch { console.error("[structured recovery] native reconnect claim cleanup is pending"); }
+              throw error;
+            }
+          }
+        }
+      }
+    }
     if (current.hostProcessLive && !current.hostLive
       && await settleParkedResumeFence(registry, current.key, client, dependencies)) {
       current = candidateFor(registry, request, Boolean(ownership), park);
@@ -705,7 +775,7 @@ export async function recoverDeadStructuredConversation(
       },
     });
   }
-  if (candidate.hostLive && !dependencies.ownership) return { ...liveHostResult(candidate), ...(admittedRequest.admissionGuard ? { admissionGuard: admittedRequest.admissionGuard } : {}) };
+  if (candidate.hostLive && !dependencies.ownership && !request.reconnectLiveHost) return { ...liveHostResult(candidate), ...(admittedRequest.admissionGuard ? { admissionGuard: admittedRequest.admissionGuard } : {}) };
   const recovery = recoverCandidate(admittedRequest, dependencies, registry, candidate);
   recoveries.set(recoveryKey, recovery);
   try {

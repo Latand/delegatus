@@ -162,6 +162,7 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
         refreshed.delivery = { ...structuredClone(optionsLaneDelivery), active: true, ownerId: refreshed.id,
           target: { ...optionsLaneDelivery.target, ...request.delivery, branch: request.delivery!.branch } };
         refreshed.refreshOf = { pipelineId: options.refreshOf.pipelineId, base: options.refreshOf.base };
+        refreshed.creationRequest = structuredClone(options.creationRequest);
         refreshed.srcConversationId = options.refreshOf.lineage.srcConversationId;
         byKey.set(options.creationRequest.key, refreshed);
         pipelines.set(refreshed.id, refreshed);
@@ -203,6 +204,7 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
     setBase: (value: string) => { baseTip = value; },
     setCreateMode: (value: typeof createMode) => { createMode = value; },
     add: (value: Pipeline) => { pipelines.set(value.id, value); },
+    remove: (id: string) => { pipelines.delete(id); },
     calls,
     prs,
     commits,
@@ -742,6 +744,7 @@ test("a main move refreshes only the queue head across repeated sweeps", async (
 test("a merged head releases the next refresh", async () => {
   const h = queuedRefreshes();
   await h.sweep();
+  h.pipeline("refresh-1").state = "completed";
   h.pipeline("refresh-1").merge = { ...h.merge("queued-0")!, state: "merged" };
   await h.sweep();
   expect(h.creates).toHaveLength(2);
@@ -774,6 +777,63 @@ test.each(["closed", "needs_decision"] as const)("a %s head refresh retains its 
   await h.sweep();
   expect(h.merge("queued-0")).toMatchObject({ state: "blocked", reason: state === "closed" ? MERGE_REASONS.refreshClosed : "Resolution needs a decision" });
   expect(h.creates).toHaveLength(2);
+});
+
+test.each(["closed", "needs_decision"] as const)("a hidden original releases its %s refresh with the failure reason", async state => {
+  const h = queuedRefreshes();
+  await h.sweep();
+  h.pipeline("queued-0").hiddenAt = iso(T0);
+  h.pipeline("refresh-1").state = state;
+  h.pipeline("refresh-1").stateDetail = "Resolution needs a decision";
+  await h.run(5 * MERGE_POLL_MS);
+  expect(h.merge("queued-0")).toMatchObject({ state: "blocked",
+    reason: state === "closed" ? MERGE_REASONS.refreshClosed : "Resolution needs a decision" });
+  expect(h.creates).toHaveLength(2);
+  expect((h.creates[1]!.request as CreatePipelineRequest).delivery?.pr).toBe(12);
+  expect(h.merge("queued-2")?.head).toBeNull();
+});
+
+test.each([1, 2])("closed originals retain their active refresh slots at concurrency %s", async refreshConcurrency => {
+  const h = queuedRefreshes();
+  Object.assign(h.ports, { refreshConcurrency });
+  await h.sweep();
+  for (let i = 0; i < refreshConcurrency; i++) h.pipeline(`queued-${i}`).state = "closed";
+  await h.run(5 * MERGE_POLL_MS);
+  expect(h.creates).toHaveLength(refreshConcurrency);
+  expect(h.merge(`queued-${refreshConcurrency}`)?.head).toBeNull();
+});
+
+test("an active refresh outside the head window still consumes capacity", async () => {
+  const h = queuedRefreshes();
+  await h.sweep();
+  h.pipeline("queued-0").merge!.requestedAt = iso(T0 + 100);
+  await h.run(5 * MERGE_POLL_MS);
+  expect(h.creates).toHaveLength(1);
+  expect(h.merge("queued-1")?.head).toBeNull();
+});
+
+test("an archived original preserves its completed refresh's queue position", async () => {
+  const h = queuedRefreshes();
+  await h.sweep();
+  const archived = structuredClone(h.pipeline("queued-0"));
+  h.remove(archived.id);
+  const ancestryReads: string[][] = [];
+  Object.assign(h.ports, { loadRefreshAncestors: (ids: readonly string[]) => {
+    ancestryReads.push([...ids]);
+    return ids.includes(archived.id) ? [archived] : [];
+  } });
+  const child = h.pipeline("refresh-1");
+  child.state = "completed";
+  child.closedAt = iso(T0 + 10 * MERGE_POLL_MS);
+  child.delivery!.active = false;
+  child.lastPassedCommit = "b".repeat(40);
+  Object.assign(h.prs.get(11)!, { head: child.lastPassedCommit, mergeStateStatus: "CLEAN", checks: [] });
+  h.advance(MERGE_POLL_MS);
+  await h.sweep();
+  expect(ancestryReads).toEqual([[archived.id]]);
+  expect(h.merge("refresh-1")?.state).toBe("waiting-checks");
+  expect(h.creates).toHaveLength(1);
+  expect(h.merge("queued-1")?.head).toBeNull();
 });
 
 test("a refreshed carrier keeps the head slot when main moves again", async () => {
