@@ -33,8 +33,8 @@ document.
 
 ## The answer in brief
 
-- **303 rows over 85 test files**: 2 delete-file, 79 delete-block, 154 trim,
-  68 keep. Review corrected the evidence-file deletion and the missed wording
+- **303 rows over 85 test files**: 2 delete-file, 77 delete-block, 157 trim,
+  67 keep. Review corrected the evidence-file deletion and the missed wording
   assertions; the final compiler counts are recorded under review fixes.
 - The heaviest files: `src/lib/orchestrator/prompt.test.ts` (39 rows that
   remove or trim), `src/lib/roles/registry.test.ts` (21),
@@ -208,7 +208,7 @@ are at `3736d5e4`.
 | 150-198 | run prompt renders task, previous output, spec, access, verdict, and nesting contracts | {{task}}/{{prev.output}}/spec/role substitution; verdict-contract wording; parseStageVerdict | **trim** | keep 179-181, 186, 193, 196, 197 (template substitution; spec, access and role id from the input; the DELEGATUS_MECHANICS block the wrapper composes; the verdict parser); drop 182-185, 187-189, 192, 194, 195 |
 | 200-231 | role-less prompts omit role identity and scaffolding | {{task}} substitution; pinned-task section present; role sections omitted without a role; fallback example | **trim** | keep 226, 227, 229, 230 (template substitution; sections for absent inputs are omitted); drop 228 |
 | 233-271 | a prompt without {{prev.output}} still receives the relayed previous output (#1678) | relay section placement, omission when empty, placement by template | **keep** | behaviour: relayed output is placed between the brief and the pinned task, omitted when blank, and left to a template that places it |
-| 276-316 | the stage prompt names stage_report as the one completion channel and the fenced block as its fallback | order of stage_report and fence; wording of the fallback condition; one fence | **delete-block** | all assertions read fixed wording (order and counts of authored phrases); nothing comes from input |
+| 276-316 | the stage prompt names stage_report as the one completion channel and the fenced block as its fallback | order of stage_report and fence; wording of the fallback condition; one fence | **trim** | keep 315 (the rendered prompt has exactly one JSON fence) and its rendering setup; drop 299-314 (completion-channel and fallback wording) |
 | 318-324 | no role scaffold instructs an unconditional fenced verdict (#1797) | scaffolds lack fence wording | **delete-block** | phrase lint over ROLE_DEFAULTS scaffolds |
 | 328-336 | a decision continuation says the answer governs and is relayed under a label that fits it | decision-input wording; relay label wording | **delete-block** | all assertions are authored wording |
 | 345-391 | every stage a lane renders names no stack and teaches one verdict vocabulary | legacy review conversion; fix-stage role; stack lint; marker counts; fix-prompt wording | **trim** | keep 355, 363, 365, 378, 379, 382 (conversion result, the 40-hex base commit rendered only in its 8-character form, fix role and runtime, findings relayed); drop 361, 362, 364, 366-373, 381, 383-390 |
@@ -283,7 +283,7 @@ are at `3736d5e4`.
 | 1154-1165 | delivery sends a v56 mandate's proposals to a decision form by exact match | v56 upgrade | **keep** | behaviour |
 | 1178-1194 | the mandate states the maintenance practice after the declared-outputs bullet | bullet wording, position and lint | **delete-block** | phrases and placement in a constant |
 | 1200-1218 | delivery gives a v57 mandate the maintenance practice and the current rule 16 by exact match | v57 upgrade | **keep** | behaviour |
-| 1224-1232 | the seat's mandate carries all sixteen working rules in their short form | short rules inside the mandate; numbering parity; phrases | **delete-block** | contents of constant texts |
+| 1224-1232 | the seat's mandate carries all sixteen working rules in their short form | short rules inside the mandate; numbering parity; phrases | **trim** | keep 1227-1229 (full/short rule numbering parity and sixteen rules); drop 1225-1226, 1230-1231 (constant inclusion, phrases and placement against authored wording) |
 | 1238-1260 | a seat's launch prompt carries the evidence and publication duties of rules 6 and 12 | roleSpawnPrompt carries the short rules once; duty phrases | **trim** | keep 1239-1243 (the launch built by roleSpawnPrompt holds the short rules once and not the full ones); drop 1244-1259 |
 
 ### `src/lib/roles/registry.test.ts`
@@ -370,7 +370,7 @@ are at `3736d5e4`.
 | 248-253 | an orchestrator pipeline stage carries the working rules and the worker limit | exact composition; a constant's ending wording | **trim** | keep 250, 251; drop 252 |
 | 259-269 | every shipped role and variant scaffold fits the stage cap untruncated | last working rule present; headroom under the cap | **keep** | size budget: rule 16 is the last rule, so its presence proves no truncation |
 | 274-305 | accepted text parameter values keep every rule whole or refuse the stage | overflow refusal; values rendered; scaffold end kept | **keep** | behaviour: parameter overflow and truncation |
-| 307-324 | a reviewer diff source past the stage cap is refused, a usual one keeps rules 13 to 16 | overflow refusal; value rendered; end kept | **keep** | behaviour |
+| 307-324 | a reviewer diff source past the stage cap is refused, a usual one keeps rules 13 to 16 | overflow refusal; value rendered; end kept; four instruction phrases | **trim** | keep overflow refusal, parameter rendering and suffix equality; drop 322 (the four authored rule-phrase assertions) |
 | 326-330 | pipeline role lookup ignores the retired orchestrator maxWorkers parameter | retired wording absent; scaffold unchanged by maxWorkers; default parallelN rendered | **trim** | keep 328, 329; drop 327 |
 | 332-344 | blank role params fall back to the registry default token value | default token rendered; empty parameter drops its line | **keep** | template rendering |
 | 346-356 | Builder domain=frontend keeps the canonical frontend scaffold guidance (parity with resolveRole) | FRONTEND_GUIDANCE present for frontend, absent otherwise; parity with resolveRole | **keep** | branch on domain and parity between two resolvers |
@@ -1429,8 +1429,8 @@ the deployment-continuation helper. Those assertions and the icon
 helper's unused returned client were removed. Idempotence, routing, state,
 schema, filesystem and protocol assertions remain.
 
-The corrected table has 303 rows across 85 files: two delete-file, 79
-delete-block, 154 trim and 68 keep. UI copy and i18n remain deferred.
+The corrected table has 303 rows across 85 files: two delete-file, 77
+delete-block, 157 trim and 67 keep. UI copy and i18n remain deferred.
 
 Focused verification uses Bun 1.4.0 on merged base
 `90d0ef7d853c6318cb143ffeb2e329ac8ccd21be` plus this patch. The manifest of the

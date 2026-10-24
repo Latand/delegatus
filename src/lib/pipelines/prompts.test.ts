@@ -220,6 +220,31 @@ test("a prompt without {{prev.output}} still receives the relayed previous outpu
   expect(scaffolded).not.toContain("Relayed by the controller");
 });
 
+test("the stage prompt renders exactly one JSON fence", () => {
+  const stage: PipelineStage = {
+    id: "build",
+    kind: "run",
+    role: { roleId: "builder" },
+    engine: "claude",
+    ["prompt"]: "Build {{task}}",
+    next: null,
+    effectiveRole: { roleId: "builder", engine: "claude", model: "opus", effort: "medium", access: "read-write", promptScaffold: null },
+  };
+  const pipeline = buildPipeline({
+    id: "12345678",
+    task: "pipeline support",
+    project: "viewer",
+    repoDir: "/repo",
+    stages: [stage],
+    srcPath: null,
+    srcConversationId: null,
+    now: "now",
+  });
+  const prompt = renderStagePrompt(pipeline, stage, stage.effectiveRole, "");
+
+  expect(prompt.split("```json").length - 1).toBe(1);
+});
+
 test("every stage a lane renders names no stack and teaches one verdict vocabulary", () => {
   const stage = (id: string, next: string | null, role: NonNullable<PipelineStage["role"]>, prompt: string): PipelineStage => {
     const resolved = resolvePipelineRole({ role }, "run", pipelineRoleLookup);

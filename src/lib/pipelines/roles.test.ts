@@ -290,7 +290,7 @@ test("accepted text parameter values keep every rule whole or refuse the stage",
   }
 });
 
-test("a reviewer diff source past the stage cap is refused, a usual one keeps rules 13 to 16", () => {
+test("a reviewer diff source past the stage cap is refused, a usual one keeps its suffix", () => {
   const range = `feature/${"a".repeat(240)}...feature/${"b".repeat(240)}`;
   for (const diffSource of [range, "x".repeat(2_000)]) {
     const params = { diffSource, lens: "correctness", parallelN: 1 };
@@ -305,7 +305,6 @@ test("a reviewer diff source past the stage cap is refused, a usual one keeps ru
   const resolved = resolvePipelineRole({ role: { roleId: "reviewer", params: { diffSource: usual } } }, "review-loop", pipelineRoleLookup);
   const scaffold = resolved.role?.promptScaffold ?? "";
   expect(scaffold).toContain(`Change under review: ${usual}`);
-  for (const rule of ["13. Read the newest answer before you act", "14. Date and list from the primary record", "15. An error reply, a timeout or a status is no proof", "16. Leave the checkout as you found it"]) expect(scaffold).toContain(rule);
   expect(scaffold).toEndWith(pipelineRoleLookup("reviewer")!.promptScaffold!.slice(-2_000));
 });
 

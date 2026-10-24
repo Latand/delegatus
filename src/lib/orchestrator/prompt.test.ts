@@ -225,29 +225,14 @@ test("any edit to the default mandate text moves its version (#2030)", () => {
   expect(new Set(Object.values(PROMPT_FINGERPRINTS)).size).toBe(versions.length);
 });
 
-/** The contract every seat tick wake ended with until #2030, copied verbatim
-    from `src/lib/monitor/report.ts` at the merge base, so a clause dropped or
-    reworded on its way into the mandate fails here rather than silently. */
-const SHIPPED_TICK_CONTRACT = [
-  "Handle the listed items first, then make ONE bounded pass over this project's whole board and act on what stands still: list_pipelines for lanes completed, parked or failed to spawn, the open pull requests their finished lanes left, list_flows, agent_activity with liveOnly for live and stalled agents, and open tasks with nothing running.",
-  "Record every outcome where it belongs — on the board card or on the pipeline — not only in this conversation.",
-  "If an item cannot be done, mark its task blocked with the reason. That is the stop, and it is the only one.",
-  "Do not schedule yourself. The Viewer ticks this seat; a self-scheduled monitor is refused practice.",
-  "This tick is yours to govern: seat_tick_settings turns it off, changes how often it wakes you, or turns it back on, per project, with a reason that shows on the board.",
-  "Do not wait on the operator inside this turn.",
-];
-
-/* Each shipped clause, and where the clock section now says it. The wording is
-   the mandate's own (a wake no longer quotes it), so this maps rule to rule. */
-const CLAUSE_IN_MANDATE: readonly [string, string][] = [
-  /* v30 dropped list_flows: the seat composes no review flows. */
-  [SHIPPED_TICK_CONTRACT[0]!, "then make ONE bounded pass over this project's whole board and act on what stands still: list_pipelines for lanes completed, parked or failed to spawn, the open pull requests their finished lanes left, agent_activity with liveOnly for live and stalled agents, and open tasks with nothing running."],
-  [SHIPPED_TICK_CONTRACT[1]!, "Record every outcome on the board card or the pipeline, not only in this conversation."],
-  /* v55 holds the task where it used to mark it blocked. */
-  [SHIPPED_TICK_CONTRACT[2]!, "set its task's hold with the reason: that is the stop, and the only one."],
-  [SHIPPED_TICK_CONTRACT[3]!, "So do not schedule yourself"],
-  [SHIPPED_TICK_CONTRACT[4]!, "seat_tick_settings turns the tick off or on, or changes how often it wakes you, per project, with a reason shown on the board."],
-  [SHIPPED_TICK_CONTRACT[5]!, "Never wait on the operator inside a wake's turn."],
+/* Delivery adds each current tick-contract clause once to a bespoke mandate. */
+const CLAUSE_IN_MANDATE: readonly string[] = [
+  "then make ONE bounded pass over this project's whole board and act on what stands still: list_pipelines for lanes completed, parked or failed to spawn, the open pull requests their finished lanes left, agent_activity with liveOnly for live and stalled agents, and open tasks with nothing running.",
+  "Record every outcome on the board card or the pipeline, not only in this conversation.",
+  "set its task's hold with the reason: that is the stop, and the only one.",
+  "So do not schedule yourself",
+  "seat_tick_settings turns the tick off or on, or changes how often it wakes you, per project, with a reason shown on the board.",
+  "Never wait on the operator inside a wake's turn.",
 ];
 
 test("every clause the tick contract carried lives in the mandate, and reaches every seat once (#2030)", () => {
@@ -255,7 +240,7 @@ test("every clause the tick contract carried lives in the mandate, and reaches e
      it the section, once. */
   const bespoke = "A seat's own mandate, carried through a rotation.";
   const delivered = orchestratorMandateForDelivery(bespoke);
-  for (const [, stated] of CLAUSE_IN_MANDATE) expect(delivered.split(stated)).toHaveLength(2);
+  for (const stated of CLAUSE_IN_MANDATE) expect(delivered.split(stated)).toHaveLength(2);
   expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
 });
 
@@ -801,6 +786,13 @@ test("delivery gives a v57 mandate the maintenance practice and the current rule
   expect(orchestratorMandateWithRoleTable(v57, null)).toBe(v57);
   /* A bespoke mandate without the outputs bullet gets no maintenance bullet. */
   expect(orchestratorMandateForDelivery("Coordinate. Audits are ours.")).not.toContain(MAINTENANCE_BULLET_START);
+});
+
+/* The short form retains the full form's rule numbering. */
+test("the seat's mandate carries all sixteen working rules in their short form", () => {
+  const numbers = (text: string) => text.split("\n").flatMap((line) => line.match(/^(\d+)\. /)?.[1] ?? []);
+  expect(numbers(WORKING_RULES_SHORT)).toEqual(numbers(WORKING_RULES));
+  expect(numbers(WORKING_RULES_SHORT)).toHaveLength(16);
 });
 
 /* The short form first shipped without what the memory delta added to rules 6
