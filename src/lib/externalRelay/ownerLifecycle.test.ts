@@ -425,7 +425,7 @@ test("a refused restart-budget write leaves the next sweep able to retry", async
 });
 
 /** Restart the real recovery entry point against the same isolated ledger. */
-async function deliveryProcess(directory: string, config: Record<string, unknown>) {
+async function deliveryProcess(directory: string, config: Record<string, unknown>, crashAfter?: Promise<void>) {
   const file = `${directory}/process.json`;
   await fs.promises.writeFile(file, JSON.stringify(config));
   const child = Bun.spawn([process.execPath, "src/lib/externalRelay/ownerLifecycle.fixture.ts", file], {
@@ -433,7 +433,14 @@ async function deliveryProcess(directory: string, config: Record<string, unknown
   const output = new Response(child.stdout).text(), errors = new Response(child.stderr).text();
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    expect(await Promise.race([child.exited, new Promise<never>((_, reject) => {
+    const finished = crashAfter ? (async () => {
+      await Promise.race([crashAfter, child.exited.then(() => { throw new Error("fixture exited before crash seam"); })]);
+      child.kill("SIGKILL");
+      await child.exited;
+      expect(child.signalCode).toBe("SIGKILL");
+      return 0;
+    })() : child.exited;
+    expect(await Promise.race([finished, new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new Error("delivery fixture exceeded parent deadline")), 20000);
     })])).toBe(0);
     expect(await errors).not.toMatch(/error:|Unhandled|TypeError/);
@@ -444,6 +451,85 @@ async function deliveryProcess(directory: string, config: Record<string, unknown
     await child.exited; await output; await errors;
   }
 }
+
+for (const response of ["crashed", "lost", "accepted", "refused", "already-completed"] as const)
+test(`recovered failure completion ${response} survives restart and deadline without a duplicate`, async () => {
+  const { readRunLedger, reserveRun, dropRun } = await import("./store");
+  const { answerRecorder, readAnswerRecord } = await import("./answers");
+  const relay = setupRelay();
+  const directory = await fs.promises.mkdtemp(`${process.env.TMPDIR}/orphan-completion-`);
+  const runDir = await fs.promises.mkdtemp(`${process.env.TMPDIR}/llv-external-relay-`);
+  const epoch = Date.parse("2026-10-24T15:00:00Z");
+  const request = { request_id: `orphan_completion_${response}` };
+  const answer = { action: "reply" as const, text: "Saved failure", reply_to: "m1" };
+  const clockFile = `${directory}/clock`;
+  await fs.promises.writeFile(clockFile, String(epoch));
+  let posted!: () => void, release!: () => void;
+  const dispatch = new Promise<void>(resolve => { posted = resolve; });
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  const visible: string[] = response === "already-completed" ? [answer.text] : [];
+  const routes: string[] = [];
+  let durableAtDispatch = false;
+  const service = await startTestRelay(async (req, payload) => {
+    const route = req.url!; routes.push(route);
+    if (route.endsWith("/complete")) {
+      durableAtDispatch = readRunLedger().runs.find(row => row.requestId === request.request_id)
+        ?.ownerTurn?.completionAttempt?.body.outcome === "answered";
+      await fs.promises.writeFile(clockFile, String(epoch + 3000));
+      if (response === "refused" || response === "already-completed") return {
+        status: 409, body: { error: { code: response === "refused" ? "lease_lost" : "already_completed" } },
+      };
+      visible.push((payload as { answer: { text: string } }).answer.text);
+      posted();
+      if (response === "crashed") await hold;
+      return response === "lost" ? { drop: true } : { body: { status: "ok" } };
+    }
+    if (route.endsWith("/send")) { visible.push((payload as { text: string }).text); return { body: cloneReceipt() }; }
+    return { body: { status: "ok" } };
+  });
+  relay.origin = service.origin; relay.api_base = `${service.origin}/api/relay/v1`;
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  const config = { relay, request, epoch, clockFile, phase: "finish" };
+  answerRecorder({ requestId: request.request_id, relayId: relay.id, targetId: "target_1",
+    targetName: "Target", claimedAt: null, chatKey: null, requester: null, input: {} })?.begin("codex", "auto", { owner: true, webSearch: true });
+  reserveRun({ requestId: request.request_id, leaseId: "fixture", relayId: relay.id, targetId: "target_1",
+    ownerPid: 2147483647, ownerIdentity: "gone", childPid: null, childIdentity: null, runDir,
+    startedAt: new Date(epoch - 1000).toISOString(), ownerTurn: { clientAttemptId: `relay-owner-${request.request_id}`,
+      cancel: "kill", confirmed: true, admissionComplete: true, delivery,
+      diagnostic: { source: "launch", message: "Fixture launch refused" },
+      failureReply: { answer, until: new Date(epoch + 2000).toISOString() } } }, 1);
+  try {
+    await deliveryProcess(directory, config, response === "crashed" ? dispatch : undefined);
+    release();
+    const uncertain = ["crashed", "lost", "already-completed"].includes(response);
+    const beforeRestart = readRunLedger().runs.find(row => row.requestId === request.request_id);
+    const retainedDirectory = fs.existsSync(runDir);
+    for (let restart = 0; restart < 2; restart++) {
+      expect(await deliveryProcess(directory, config)).not.toContain("fixture-launch:");
+    }
+    expect(visible).toEqual([answer.text]);
+    expect(durableAtDispatch).toBe(true);
+    expect(routes.filter(route => route.endsWith("/complete"))).toHaveLength(1);
+    expect(routes.filter(route => route.endsWith("/send"))).toHaveLength(response === "refused" ? 1 : 0);
+    const row = readRunLedger().runs.find(row => row.requestId === request.request_id);
+    if (uncertain) {
+      expect(beforeRestart?.ownerTurn?.completionAttempt?.body).toMatchObject({ outcome: "answered", answer });
+      expect(beforeRestart?.completionAccepted).toBeUndefined();
+      expect(beforeRestart?.ownerTurn?.lateAnswer).toBeUndefined();
+      expect(retainedDirectory).toBe(true);
+      expect(row?.ownerTurn?.completionAttempt).toBeDefined();
+    }
+    else {
+      expect(row).toBeUndefined();
+      expect(fs.existsSync(runDir)).toBe(false);
+      expect(readAnswerRecord(relay.id, "target_1", request.request_id)).toMatchObject({ outcome: "answered", delivery: "accepted", answer });
+    }
+  } finally {
+    release(); dropRun(request.request_id); await service.close();
+    await fs.promises.rm(runDir, { recursive: true, force: true });
+    await fs.promises.rm(directory, { recursive: true, force: true });
+  }
+}, 60000);
 
 for (const response of ["lost", "accepted", "refused"] as const)
 test(`normal completion ${response} across the deadline survives restart without a duplicate`, async () => {
@@ -492,6 +578,80 @@ test(`normal completion ${response} across the deadline survives restart without
     else expect(readRunLedger().runs.find(row => row.requestId === request.request_id)).toBeUndefined();
   } finally { dropRun(request.request_id); await service.close(); await fs.promises.rm(directory, { recursive: true, force: true }); }
 }, 60000);
+
+for (const seam of ["write-refused", "settlement-write-refused", "revoked", "competing-attempt", "competing-late-answer"] as const)
+test(`orphan failure completion preserves custody at ${seam}`, async () => {
+  const store = await import("./store");
+  const { sweepExternalRelayOrphans } = await import("./poller");
+  const relay = setupRelay();
+  const requestId = `orphan_custody_${seam}`;
+  const epoch = Date.parse("2026-10-24T15:00:00Z");
+  const runDir = await fs.promises.mkdtemp(`${process.env.TMPDIR}/llv-external-relay-`);
+  const body = { lease_id: "fixture", outcome: "answered" as const, duration_ms: 1000,
+    answer: { action: "reply" as const, text: "Saved failure", reply_to: "m1" } };
+  const posts: unknown[] = [], routes: string[] = [];
+  const service = await startTestRelay((req, payload) => {
+    posts.push(payload); routes.push(req.url!);
+    return { body: req.url?.endsWith("/send") ? cloneReceipt() : { status: "ok" } };
+  });
+  relay.origin = service.origin; relay.api_base = `${service.origin}/api/relay/v1`;
+  updateRelayStore(state => ({ ...state, relays: [relay] }));
+  store.reserveRun({ requestId, leaseId: "fixture", relayId: relay.id, targetId: "target_1",
+    ownerPid: 2147483647, ownerIdentity: "gone", childPid: null, childIdentity: null, runDir,
+    startedAt: new Date(epoch - 1000).toISOString(), ownerTurn: { clientAttemptId: `relay-owner-${requestId}`,
+      cancel: "kill", confirmed: true, admissionComplete: true, delivery,
+      diagnostic: { source: "launch", message: "Fixture launch refused" },
+      failureReply: { answer: body.answer, until: new Date(epoch + 60000).toISOString() } } }, 1);
+  const clock = spyOn(Date, "now").mockReturnValue(epoch);
+  const write = store.changeRunAsync;
+  let intercepted = false;
+  const writer = spyOn(store, "changeRunAsync").mockImplementation(async (id, update, until) => {
+    const first = !intercepted; intercepted = true;
+    if (first && seam === "write-refused") throw new Error("fixture completion custody write refused");
+    if (!first && seam === "settlement-write-refused") throw new Error("fixture completion settlement write refused");
+    if (first && seam === "competing-attempt") store.changeRun(requestId, row => ({ ...row,
+      ownerTurn: { ...row.ownerTurn!, completionAttempt: { body, files: [] } } }));
+    if (first && seam === "competing-late-answer") store.changeRun(requestId, row => ({ ...row,
+      ownerTurn: { ...row.ownerTurn!, lateAnswer: { body, files: [] } } }));
+    await write(id, update, until);
+    if (first && seam === "revoked") updateRelayStore(state => ({ ...state,
+      relays: state.relays.map(row => ({ ...row, paused: true })) }));
+  });
+  try {
+    if (seam === "write-refused") await expect(sweepExternalRelayOrphans()).rejects.toThrow("fixture completion custody write refused");
+    else if (seam === "settlement-write-refused") await expect(sweepExternalRelayOrphans()).rejects.toThrow("fixture completion settlement write refused");
+    else await sweepExternalRelayOrphans();
+    expect(posts).toEqual(seam === "settlement-write-refused" ? [body] : []);
+    expect(fs.existsSync(runDir)).toBe(true);
+    const held = store.readRunLedger().runs.find(row => row.requestId === requestId);
+    if (seam === "competing-attempt" || seam === "settlement-write-refused") expect(held?.ownerTurn?.completionAttempt?.body).toEqual(body);
+    else expect(held?.ownerTurn?.completionAttempt).toBeUndefined();
+    if (seam === "competing-late-answer") expect(held?.ownerTurn?.lateAnswer?.body).toEqual(body);
+    writer.mockRestore();
+    if (seam === "write-refused") {
+      await sweepExternalRelayOrphans();
+      expect(posts).toEqual([expect.objectContaining({ outcome: "answered", answer: body.answer })]);
+      expect(store.readRunLedger().runs.find(row => row.requestId === requestId)).toBeUndefined();
+    } else if (seam === "competing-attempt" || seam === "settlement-write-refused") {
+      clock.mockReturnValue(epoch + 61000);
+      await sweepExternalRelayOrphans();
+      expect(posts).toEqual(seam === "settlement-write-refused" ? [body] : []);
+      expect(store.readRunLedger().runs.find(row => row.requestId === requestId)?.ownerTurn?.completionAttempt?.body).toEqual(body);
+    } else if (seam === "competing-late-answer") {
+      clock.mockReturnValue(epoch + 61000);
+      await sweepExternalRelayOrphans();
+      expect(routes).toEqual(["/api/relay/v1/targets/target_1/send"]);
+      expect(posts).toEqual([expect.objectContaining({ text: body.answer.text })]);
+      expect(store.readRunLedger().runs.find(row => row.requestId === requestId)).toBeUndefined();
+    } else {
+      await sweepExternalRelayOrphans();
+      expect(posts).toEqual([{ lease_id: "fixture", outcome: "failed", reason: "install_restarted", detail: null }]);
+    }
+  } finally {
+    writer.mockRestore(); clock.mockRestore(); store.dropRun(requestId); await service.close();
+    await fs.promises.rm(runDir, { recursive: true, force: true });
+  }
+});
 
 test("multipart late delivery resumes after restart with receipts and the unresolved part's key", async () => {
   const { readRunLedger, reserveRun, dropRun } = await import("./store");

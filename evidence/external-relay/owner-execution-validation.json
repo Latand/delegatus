@@ -700,5 +700,190 @@
       "exit": 0
     },
     "eslint_warnings": 3
+  },
+  "orphan_recovery_fix_validation": {
+    "assembled_at_utc": "2026-10-24T18:18:25.082100+00:00",
+    "pre_fix_revision": "22461d49a6750cf377079e5799a828b2ed7f3bce",
+    "upstream_merged": "ee2b96e1489c5ecc4c33b2bd6aa85c199b5f8e50",
+    "inputs_sha256": {
+      "src/lib/externalRelay/poller.ts": "7c058afe555a1f2c83d6f2df532883d7b43333bfa781bb4d89a7ec4946327a7b",
+      "src/lib/externalRelay/ownerLifecycle.test.ts": "368f7a76ec8e4c93ec0b6532a30ca44241ac4786145a456e2f72d38339e07a99",
+      "src/lib/externalRelay/ownerLifecycle.fixture.ts": "af7947e37a02e262f317aa9cb14559de7cc43e6de816d1dd8253037632394b43"
+    },
+    "environment": {
+      "runtime": "Bun 1.4.0",
+      "execution": "pinned stage gate-slot.sh in local mode, one heavy command at a time",
+      "exports": "private stage scratch exports with matching frozen dependency inputs",
+      "isolated": [
+        "HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_DATA_HOME",
+        "TMPDIR",
+        "LLV_STATE_DIR"
+      ],
+      "viewer_control_url": "http://127.0.0.1:1"
+    },
+    "acceptance": [
+      "Orphan recovery persists completionAttempt under the ledger lock before posting the saved failure reply.",
+      "A process killed after remote posting leaves exactly one visible answer through two restarts past the request deadline; unresolved completion custody and its run directory remain.",
+      "A lost acknowledgement and already_completed refusal retain uncertain custody; accepted completions clean up without another delivery.",
+      "A definite lease refusal retains the saved reply for one later send after the deadline.",
+      "A failed custody write dispatches nothing; a failed settlement write keeps the attempt fenced.",
+      "Revocation after preparation prevents HTTP answer dispatch; competing completion and late-answer custody cannot be overwritten."
+    ],
+    "negative_control": {
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/lib/externalRelay/ownerLifecycle.test.ts",
+        "-t",
+        "recovered failure completion crashed"
+      ],
+      "started": "2026-10-24T18:01:58.204Z",
+      "finished": "2026-10-24T18:02:49.524Z",
+      "exit": 1,
+      "tests": {
+        "pass": 0,
+        "fail": 1
+      },
+      "source": "pre-fix revision with the new crash regression",
+      "visible_messages": 2,
+      "failure": "recovered failure completion crashed survives restart and deadline without a duplicate"
+    },
+    "checks": {
+      "final-lifecycle": {
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/externalRelay/ownerLifecycle.test.ts"
+        ],
+        "started": "2026-10-24T18:14:38.038Z",
+        "finished": "2026-10-24T18:17:29.127Z",
+        "exit": 0,
+        "tests": {
+          "pass": 29,
+          "fail": 0
+        }
+      },
+      "final-poller": {
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/externalRelay/poller.test.ts"
+        ],
+        "started": "2026-10-24T18:17:29.154Z",
+        "finished": "2026-10-24T18:17:40.603Z",
+        "exit": 0,
+        "tests": {
+          "pass": 30,
+          "fail": 0
+        }
+      },
+      "ownerLateDelivery": {
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/externalRelay/ownerLateDelivery.test.ts"
+        ],
+        "started": "2026-10-24T18:03:53.644Z",
+        "finished": "2026-10-24T18:04:00.993Z",
+        "exit": 0,
+        "tests": {
+          "pass": 26,
+          "fail": 0
+        }
+      },
+      "runner": {
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/externalRelay/runner.test.ts"
+        ],
+        "started": "2026-10-24T18:04:01.018Z",
+        "finished": "2026-10-24T18:06:56.126Z",
+        "exit": 1,
+        "tests": {
+          "pass": 318,
+          "skip": 4,
+          "fail": 2
+        }
+      },
+      "baseline-runner": {
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/externalRelay/runner.test.ts"
+        ],
+        "started": "2026-10-24T18:07:27.283Z",
+        "finished": "2026-10-24T18:11:03.222Z",
+        "exit": 1,
+        "tests": {
+          "pass": 318,
+          "skip": 4,
+          "fail": 2
+        }
+      },
+      "final-recovery": {
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/externalRelay/runner.test.ts",
+          "-t",
+          "fresh process recovers an abandoned diagnosed owner failure"
+        ],
+        "started": "2026-10-24T18:17:40.631Z",
+        "finished": "2026-10-24T18:17:44.219Z",
+        "exit": 0,
+        "tests": {
+          "pass": 4,
+          "fail": 0
+        }
+      },
+      "final-types": {
+        "command": [
+          "bunx",
+          "tsc",
+          "--noEmit"
+        ],
+        "started": "2026-10-24T18:17:44.242Z",
+        "finished": "2026-10-24T18:18:01.555Z",
+        "exit": 0
+      },
+      "final-lint": {
+        "command": [
+          "bunx",
+          "eslint",
+          "--no-cache",
+          "src/lib/externalRelay/poller.ts",
+          "src/lib/externalRelay/ownerLifecycle.test.ts"
+        ],
+        "started": "2026-10-24T18:18:01.582Z",
+        "finished": "2026-10-24T18:18:03.756Z",
+        "exit": 0
+      }
+    },
+    "runner_comparison": {
+      "matched_case_outcomes": 324,
+      "introduced_failures": 0,
+      "matching_failures": [
+        "owner en failure reply excludes interrupted answer parts",
+        "owner uk failure reply excludes interrupted answer parts"
+      ],
+      "cause": "document_forbidden_path in both full-file samples",
+      "note": "The full-file comparison preceded the final competing-late-answer guard. The final lifecycle and poller files and all four diagnosed-orphan runner cases were rerun after that guard."
+    },
+    "performance_gain_claimed": false,
+    "privacy_procedure": [
+      "Repository pre-commit staged privacy check with committed known-value fingerprints.",
+      "Normal commit-publication privacy check against origin/main."
+    ]
   }
 }

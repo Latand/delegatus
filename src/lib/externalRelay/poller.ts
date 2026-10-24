@@ -3,7 +3,7 @@ import { ownerTurnDiagnostic } from "./diagnostic";
 import { deliverOwnerLateAnswer } from "./ownerLateDelivery";
 import { ownerFailureAnswer, confirmOwnerStop, type OwnerRunPorts } from "./ownerRun";
 import { ownerRelayFailureReplyAuthorized } from "./ownerAuthority";
-import { changeRun, OWNER_RELEASED_CUSTODY_RETENTION_MS, ownerStopPending } from "./store";
+import { changeRun, changeRunAsync, OWNER_RELEASED_CUSTODY_RETENTION_MS, ownerStopPending } from "./store";
 import { sweepConversationsAsync } from "./conversations";
 import { readRelaySwitches } from "./switches";
 import fs from "node:fs";
@@ -18,7 +18,7 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { noteRelayOutcome, relayActivity } from "./activity";
 import { readAnswerRecord, pruneAnswerRecords, relayAnswersRoot, settleInterruptedAnswer, type RelayAnswerDelivery } from "./answers";
 import { discoverRelay, ExternalRelayError, fetchRelayTargets, isUnknownFeatureRefusal, relayCall } from "./client";
-import { requestSchema, RELAY_OWNER_TOOLS, RELAY_TOOLS_ON_DEMAND } from "./protocol";
+import { requestSchema, RELAY_OWNER_TOOLS, RELAY_TOOLS_ON_DEMAND, type ExternalRelayCompletion } from "./protocol";
 import { RELAY_MEDIA_ANY_DOCUMENT } from "./mediaInputValidation";
 import {
   advertisedSlots,
@@ -255,27 +255,53 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
     const answer = saved && Date.now() < Date.parse(saved.until)
       && ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId) ? saved.answer : null;
     if (relay) {
+      const body: ExternalRelayCompletion = answer
+        ? { lease_id: run.leaseId, outcome: "answered", answer, duration_ms: Math.max(0, Date.now() - Date.parse(run.startedAt)) }
+        : { lease_id: run.leaseId, outcome: "failed", reason: "install_restarted", detail: null };
+      if (answer) {
+        // Claim delivery custody under the ledger lock before the service can
+        // post. A crash or missing ACK must never authorize a later /send.
+        let claimed = false;
+        await changeRunAsync(run.requestId, row => {
+          if (!row.ownerTurn || row.completionAccepted || row.ownerTurn.completionAttempt || row.ownerTurn.lateAnswer) return row;
+          claimed = true;
+          return { ...row, ownerTurn: { ...row.ownerTurn, completionAttempt: { body, files: [] } } };
+        }, Date.now() + 5000);
+        if (!claimed) continue;
+      }
       try {
         await relayCall(
           relay.api_base,
           `/requests/${encodeURIComponent(run.requestId)}/complete`,
           "POST",
-          answer
-            ? { lease_id: run.leaseId, outcome: "answered", answer, duration_ms: Math.max(0, Date.now() - Date.parse(run.startedAt)) }
-            : {
-                lease_id: run.leaseId,
-                outcome: "failed",
-                reason: "install_restarted",
-                detail: null,
-              },
+          body,
           relay.credential,
+          { prepareBody: () => {
+            if (answer && !ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId))
+              throw new ExternalRelayError("cancelled", 401);
+            return body;
+          } },
         );
         delivery = "accepted";
       } catch (error) {
         // A terminal refusal proves this completion was not accepted; a
         // transient error leaves its delivery uncertain.
-        if (error instanceof ExternalRelayError && [400, 401, 404, 409, 413, 426].includes(error.status))
+        if (error instanceof ExternalRelayError && [400, 401, 404, 409, 413, 426].includes(error.status)
+          && !(answer && error.status === 409 && error.code === "already_completed"))
           delivery = "refused";
+      }
+      if (answer) {
+        await changeRunAsync(run.requestId, row => ({ ...row,
+          ...(delivery === "accepted" ? { completionAccepted: true as const } : {}),
+          ...(delivery === "unconfirmed" ? { capacityReleased: true as const } : {}),
+          ownerTurn: { ...row.ownerTurn!, ...(delivery !== "unconfirmed" ? { completionAttempt: undefined } : {}) },
+        }), Date.now() + 5000);
+        if (delivery !== "accepted") {
+          // Keep uncertain attempts fenced. A definite refusal leaves the
+          // saved reply eligible for late delivery once its deadline passes.
+          settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, delivery, held.conversationId, answer);
+          continue;
+        }
       }
     }
     removeRunDirectory(run.runDir);
