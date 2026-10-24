@@ -4382,7 +4382,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       ]) : [],
     });
     if (REPORT_AUTHOR_LONG_ROLE && page.entries[0]) {
-      page.entries[0].author = { kind: "agent", conversationId: "conversation_builder", role: "LongCustomRole".repeat(12) };
+      page.entries[0].author = { kind: "agent", conversationId: searchImpl1.conversationId!, role: "LongCustomRole".repeat(12) };
     }
     return json(page);
   }

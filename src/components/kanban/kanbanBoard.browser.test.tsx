@@ -13764,7 +13764,7 @@ describe("group chat adapted to report authors", () => {
     try {
       for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 915, 390]) for (const kind of ["manager", "long-role"] as const) {
         const phone = width === 390;
-        const conversation = kind === "manager" ? "conversation_orchestrator" : "conversation_builder";
+        const conversation = kind === "manager" ? "conversation_orchestrator" : "conversation_search-impl-1";
         const label = kind === "manager" ? translate(lang, "render.senderRoleOrchestrator") : "LongCustomRole".repeat(12);
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?report-author=${kind}`, { width, height: 900 }, theme, lang, "reduce", phone);
         try {
@@ -13774,7 +13774,12 @@ describe("group chat adapted to report authors", () => {
           } else {
             const toggle = page.locator("[data-kanban-seat] [data-report-log-toggle]");
             await toggle.waitFor();
-            if (await toggle.getAttribute("data-report-log-toggle") === "closed") await toggle.click();
+            if (await toggle.getAttribute("data-report-log-toggle") === "closed") {
+              const notificationDismiss = page.locator("[data-attention-toast-dismiss]");
+              await notificationDismiss.waitFor();
+              await notificationDismiss.click();
+              await toggle.click();
+            }
           }
           const row = page.locator("[data-report-entry]").first();
           await row.waitFor();

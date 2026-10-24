@@ -5,7 +5,48 @@
       "lang": "en",
       "theme": "light",
       "width": 1440,
-      "frame": "en-light-1440.png",
+      "kind": "manager",
+      "frame": "en-light-1440-manager.png",
+      "problems": [],
+      "scroll": 0,
+      "focus": "BODY"
+    },
+    {
+      "lang": "en",
+      "theme": "light",
+      "width": 1440,
+      "kind": "long-role",
+      "frame": "en-light-1440-long-role.png",
+      "problems": [],
+      "scroll": 0,
+      "focus": "BODY"
+    },
+    {
+      "lang": "en",
+      "theme": "light",
+      "width": 915,
+      "kind": "manager",
+      "frame": "en-light-915-manager.png",
+      "problems": [],
+      "scroll": 0,
+      "focus": "BUTTON"
+    },
+    {
+      "lang": "en",
+      "theme": "light",
+      "width": 915,
+      "kind": "long-role",
+      "frame": "en-light-915-long-role.png",
+      "problems": [],
+      "scroll": 0,
+      "focus": "BUTTON"
+    },
+    {
+      "lang": "en",
+      "theme": "light",
+      "width": 390,
+      "kind": "manager",
+      "frame": "en-light-390-manager.png",
       "problems": [],
       "scroll": 0,
       "focus": "BODY"
@@ -14,7 +55,8 @@
       "lang": "en",
       "theme": "light",
       "width": 390,
-      "frame": "en-light-390.png",
+      "kind": "long-role",
+      "frame": "en-light-390-long-role.png",
       "problems": [],
       "scroll": 0,
       "focus": "BODY"
@@ -23,7 +65,48 @@
       "lang": "en",
       "theme": "dark",
       "width": 1440,
-      "frame": "en-dark-1440.png",
+      "kind": "manager",
+      "frame": "en-dark-1440-manager.png",
+      "problems": [],
+      "scroll": 0,
+      "focus": "BODY"
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "width": 1440,
+      "kind": "long-role",
+      "frame": "en-dark-1440-long-role.png",
+      "problems": [],
+      "scroll": 0,
+      "focus": "BODY"
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "width": 915,
+      "kind": "manager",
+      "frame": "en-dark-915-manager.png",
+      "problems": [],
+      "scroll": 0,
+      "focus": "BUTTON"
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "width": 915,
+      "kind": "long-role",
+      "frame": "en-dark-915-long-role.png",
+      "problems": [],
+      "scroll": 0,
+      "focus": "BUTTON"
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "width": 390,
+      "kind": "manager",
+      "frame": "en-dark-390-manager.png",
       "problems": [],
       "scroll": 0,
       "focus": "BODY"
@@ -32,7 +115,8 @@
       "lang": "en",
       "theme": "dark",
       "width": 390,
-      "frame": "en-dark-390.png",
+      "kind": "long-role",
+      "frame": "en-dark-390-long-role.png",
       "problems": [],
       "scroll": 0,
       "focus": "BODY"
@@ -41,7 +125,48 @@
       "lang": "uk",
       "theme": "light",
       "width": 1440,
-      "frame": "uk-light-1440.png",
+      "kind": "manager",
+      "frame": "uk-light-1440-manager.png",
+      "problems": [],
+      "scroll": 0,
+      "focus": "BODY"
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "width": 1440,
+      "kind": "long-role",
+      "frame": "uk-light-1440-long-role.png",
+      "problems": [],
+      "scroll": 0,
+      "focus": "BODY"
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "width": 915,
+      "kind": "manager",
+      "frame": "uk-light-915-manager.png",
+      "problems": [],
+      "scroll": 0,
+      "focus": "BUTTON"
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "width": 915,
+      "kind": "long-role",
+      "frame": "uk-light-915-long-role.png",
+      "problems": [],
+      "scroll": 0,
+      "focus": "BUTTON"
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "width": 390,
+      "kind": "manager",
+      "frame": "uk-light-390-manager.png",
       "problems": [],
       "scroll": 0,
       "focus": "BODY"
@@ -50,7 +175,8 @@
       "lang": "uk",
       "theme": "light",
       "width": 390,
-      "frame": "uk-light-390.png",
+      "kind": "long-role",
+      "frame": "uk-light-390-long-role.png",
       "problems": [],
       "scroll": 0,
       "focus": "BODY"
@@ -59,7 +185,48 @@
       "lang": "uk",
       "theme": "dark",
       "width": 1440,
-      "frame": "uk-dark-1440.png",
+      "kind": "manager",
+      "frame": "uk-dark-1440-manager.png",
+      "problems": [],
+      "scroll": 0,
+      "focus": "BODY"
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1440,
+      "kind": "long-role",
+      "frame": "uk-dark-1440-long-role.png",
+      "problems": [],
+      "scroll": 0,
+      "focus": "BODY"
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "width": 915,
+      "kind": "manager",
+      "frame": "uk-dark-915-manager.png",
+      "problems": [],
+      "scroll": 0,
+      "focus": "BUTTON"
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "width": 915,
+      "kind": "long-role",
+      "frame": "uk-dark-915-long-role.png",
+      "problems": [],
+      "scroll": 0,
+      "focus": "BUTTON"
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "width": 390,
+      "kind": "manager",
+      "frame": "uk-dark-390-manager.png",
       "problems": [],
       "scroll": 0,
       "focus": "BODY"
@@ -68,23 +235,47 @@
       "lang": "uk",
       "theme": "dark",
       "width": 390,
-      "frame": "uk-dark-390.png",
+      "kind": "long-role",
+      "frame": "uk-dark-390-long-role.png",
       "problems": [],
       "scroll": 0,
       "focus": "BODY"
     }
   ],
-  "recordedAt": "2026-10-23T13:12:59.523954+00:00",
+  "recordedAt": "2026-10-24T00:02:19.468635+00:00",
   "baseRevision": "134a29c63d68d6934d6222c89d5103df3ab4721c",
+  "sourceParentRevision": "1ba7eb2fc6f9bb43adb84142c34625231fe1ad84",
+  "sourceOverlay": [
+    "src/components/kanban/issue1695Evidence.fixture.tsx",
+    "src/components/kanban/kanbanBoard.browser.test.tsx"
+  ],
   "sourceSha256": {
     "src/lib/bridge/reportLog.ts": "11387cfe5c9881e270f906ce136a3921c4d565b35e9a7b5fd715113e563aa5f4",
     "src/lib/bridge/reportLog.test.ts": "445cc41fec6b545bf834f985144208e1c85a3ecd5c90889f2b93c65cf74af90c",
-    "src/components/orchestrator/reportLog/ReportLog.tsx": "044fcf6cc2b79fa217482cf4e238cd11bd8660a8afc396acdb8593fb0daf855b",
-    "src/components/orchestrator/reportLog/ReportLog.dom.test.tsx": "6afdebc276188767431fd0b17bbd77e7531d742e19e7b410b077326941cb375a",
+    "src/components/orchestrator/reportLog/ReportLog.tsx": "69e58bbced6aaf719a266332443b7fd49a02a3e4a331c786eeab61ca45e18332",
+    "src/components/orchestrator/reportLog/ReportLog.dom.test.tsx": "9c447c1a405803e7238a266b842a61c205c637c388ff7dce8dc01f5af934dedd",
     "src/components/orchestrator/reportLog/reportLogEvidence.fixture.ts": "da7f993108569f7c89af9d33bda90c5e9327880f4e3458a016394842c467e1b4",
-    "src/components/kanban/kanbanBoard.browser.test.tsx": "efb554ec97f97384580832d58280ec0029150a583e59e7f6abb195b8057ee3dc"
+    "src/components/kanban/issue1695Evidence.fixture.tsx": "47318e726f88ca4111477bd54d581dd442022b85f7e2e913f84278894f5fbc6c",
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "df3750d1dca2ff7cd66d5b246d36f58d9a0a721fe0e43c15cd49af4a5a1c0db7"
   },
-  "command": "gate-remote -- env LLV_KANBAN_BROWSER_TEST=1 bun test --timeout=60000 src/components/kanban/kanbanBoard.browser.test.tsx -t 'group chat adapted to report authors'",
+  "command": "LLV_KANBAN_BROWSER_TEST=1 bun run test src/components/kanban/kanbanBoard.browser.test.tsx -t \"group chat adapted to report authors|#2146 the orchestrator\"",
+  "runner": "gate-remote and scripts/gate-slot.sh; isolated HOME, XDG_CONFIG_HOME, TMPDIR, LLV_STATE_DIR and closed Viewer control URL; SSH multiplexing disabled",
   "exitCode": 0,
-  "framesInspected": 8
+  "framesInspected": 24,
+  "capturedBetween": {
+    "from": "2026-10-24T00:00:08.728582+00:00",
+    "to": "2026-10-24T00:00:38.093411+00:00"
+  },
+  "regressionBeforeFix": {
+    "productRevision": "048f0e45a109ccb194c634a2237dbc0a13144ed1",
+    "exitCode": 1,
+    "observed": [
+      "row horizontal overflow",
+      "text outside row",
+      "viewport",
+      "horizontal clip",
+      "covered text"
+    ]
+  },
+  "setup": "At 915 px the existing notification is dismissed through its close control before Reports is opened. The custom role uses an existing worker conversation."
 }
