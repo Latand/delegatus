@@ -203,19 +203,67 @@ export function setActiveCopilotAccount(id: string): void {
   });
 }
 
-export function createManagedCopilotAccount(label: string): CopilotAccount {
+function cleanCopilotLabel(label: string): string {
   const clean = label.trim();
   if (!clean || clean.length > 80 || /[\u0000-\u001f\u007f]/.test(clean)) {
     throw new Error("account label must contain visible text and be at most 80 characters");
   }
+  return clean;
+}
+
+function nextCopilotAccountId(clean: string, registry: Registry, extra: ReadonlySet<string> = new Set()): string {
+  const taken = new Set([COPILOT_LEGACY_ACCOUNT_ID, ...registry.accounts.map((account) => account.id), ...(registry.retired ?? []).map((account) => account.id), ...extra]);
+  const base = clean.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "account";
+  let id = base;
+  for (let suffix = 1; taken.has(id) || !ACCOUNT_ID.test(id) || fs.existsSync(managedHome(id)); suffix += 1) {
+    id = `${base.slice(0, 32 - String(suffix).length - 1)}-${suffix}`;
+  }
+  return id;
+}
+
+/** An install transfer's reservation (docs/design/install-memory-transfer.md
+    §4.7): an id held by an empty home directory, which every id choice skips,
+    made later by `createManagedCopilotAccount(label, { id })`. */
+export function reserveManagedCopilotAccountId(label: string, taken: ReadonlySet<string> = new Set()): { id: string; home: string } {
+  const clean = cleanCopilotLabel(label);
+  return withAccountMutationLock(() => {
+    const id = nextCopilotAccountId(clean, readRegistry(), taken);
+    const home = managedHome(id);
+    fs.mkdirSync(path.dirname(home), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(home, { mode: 0o700 });
+    fs.chmodSync(home, 0o700);
+    return { id, home };
+  });
+}
+
+/** Gives back a reservation no account took: its home goes only while it is still empty. */
+export function releaseManagedCopilotAccountReservation(id: string): void {
+  if (!ACCOUNT_ID.test(id) || id === COPILOT_LEGACY_ACCOUNT_ID) return;
+  withAccountMutationLock(() => {
+    if (readRegistry().accounts.some((account) => account.id === id)) return;
+    try { fs.rmdirSync(managedHome(id)); } catch { /* gone, or no longer empty: kept */ }
+  });
+}
+
+export function createManagedCopilotAccount(label: string, options: { id?: string } = {}): CopilotAccount {
+  const clean = cleanCopilotLabel(label);
   return withAccountMutationLock(() => {
     const registry = readRegistry();
-    const taken = new Set([COPILOT_LEGACY_ACCOUNT_ID, ...registry.accounts.map((account) => account.id), ...(registry.retired ?? []).map((account) => account.id)]);
-    const base = clean.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "account";
-    let id = base;
-    for (let suffix = 1; taken.has(id) || !ACCOUNT_ID.test(id) || fs.existsSync(managedHome(id)); suffix += 1) {
-      id = `${base.slice(0, 32 - String(suffix).length - 1)}-${suffix}`;
-    }
+    let id: string;
+    if (options.id !== undefined) {
+      /* A reserved id: made once; an empty home a stopped first call left is taken over. */
+      id = options.id;
+      if (!ACCOUNT_ID.test(id) || id === COPILOT_LEGACY_ACCOUNT_ID || (registry.retired ?? []).some((account) => account.id === id)) throw new Error("the reserved Copilot account id is not usable");
+      const made = registry.accounts.find((account) => account.id === id);
+      if (made) {
+        if (made.label !== clean) throw new Error("the reserved Copilot account id belongs to another account");
+        return listCopilotAccounts().find((account) => account.id === id)!;
+      }
+      if (fs.existsSync(managedHome(id))) {
+        if (fs.readdirSync(managedHome(id)).length) throw new Error("the reserved Copilot account home is not empty");
+        fs.rmdirSync(managedHome(id));
+      }
+    } else id = nextCopilotAccountId(clean, registry);
     const home = managedHome(id);
     fs.mkdirSync(path.dirname(home), { recursive: true, mode: 0o700 });
     fs.mkdirSync(home, { mode: 0o700 });

@@ -609,6 +609,28 @@ test("an ordinary retry settles a recorded prefix from its failed predecessor", 
   }
 });
 
+test("an ordinary retry settles unpublished history receipted by an earlier passed attempt", async () => {
+  const f = await fixture();
+  const childLaunch = `stage-proof-passed-predecessor-retry-${nextFixture}`;
+  try {
+    const inherited = await f.commit("passed predecessor output");
+    const parent = { ...f.attempt, n: 1, state: "passed", completedAt: "2026-10-16T09:30:00.000Z",
+      verdict: { status: "pass", summary: "accepted by review" }, agentPath: "/stage/passed-predecessor.jsonl" } as PipelineStageAttempt;
+    Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, "2026-10-16T10:00:00.000Z"));
+    const child = { ...f.attempt, n: 2, launchId: childLaunch, startedAt: "2026-10-16T10:00:00.000Z",
+      completedAt: NOW, state: "passed", agentPath: "/stage/passed-predecessor-retry.jsonl" } as PipelineStageAttempt;
+    const head = await f.commit("retry output");
+    await f.push();
+    f.pipeline.runs = [{ stageId: "build", attempts: [parent, child] }] as never;
+
+    expect(await settleStageAttemptPush(f.pipeline, child, realExec, NOW)).toEqual({ ok: true, sha: head });
+    expect(await f.own("merge-base", "--is-ancestor", inherited, head)).toBe("");
+  } finally {
+    await fs.rm(stageGitReceiptDirectory(childLaunch), { recursive: true, force: true });
+    await f.close();
+  }
+});
+
 test("four host-loss attempts preserve their receipt ancestry", async () => {
   const f = await fixture();
   const attempts: PipelineStageAttempt[] = [];
