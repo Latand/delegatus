@@ -130,7 +130,7 @@ for (const scenario of ["released", "foreign-owner", "failed-attachment", "revok
     expect(result?.reconnected).toBeTrue();
     expect(adopt.mock.calls[0]?.[1].socketOwner).toMatchObject({ endpoint, process: identity });
     expect(adopt.mock.calls[0]?.[1].initialEventCursor).toBe(73);
-    expect(await adopt.mock.calls[0]?.[1].readProtocolVersion?.("unused", {})).toBe("fixture");
+    expect(await adopt.mock.calls[0]?.[1].readProtocolVersion?.("unused", { NODE_ENV: "test" })).toBe("fixture");
     expect(hasStructuredDeliveryHost(key)).toBeTrue();
     expect(spawned).toBe(0);
     expect(Object.keys(registry.readOnlySnapshot().receipts)).toHaveLength(0);
