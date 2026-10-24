@@ -219,3 +219,42 @@ test("the title and the pending verb follow the interface language, and switch w
   flushSync(() => root!.render(<McpCallCard event={event} availableConversationIds={new Set()} />));
   expect(title().textContent).toBe("Creating task: Audit MCP cards");
 });
+
+test("a rejected call whose action names an inherited property still renders its fallback title (#2250)", () => {
+  for (const toolName of ["pipeline_action", "flow_action", "conversation_action", "conversation_migration"]) {
+    for (const action of ["toString", "constructor", "__proto__"]) {
+      const container = render(toolEvent({
+        tool: toolName,
+        status: "err",
+        statusLabel: "error",
+        mcp: { serverName: "viewer", toolName, args: { action }, result: { error: "unknown action" } },
+      }), new Set());
+      const card = container.querySelector('[data-testid="mcp-call-card"]');
+      expect(card?.getAttribute("data-state")).toBe("error");
+      expect(container.querySelector("[data-mcp-title]")?.textContent).toMatch(/^(Updating pipeline|Updating flow|Controlling conversation|Migrating conversation migration)$/);
+    }
+  }
+});
+
+test("a delivery check names its receipt state in the interface language (#2250)", () => {
+  const receipt = (state: string) => toolEvent({
+    tool: "message_receipt",
+    status: "ok",
+    statusLabel: "ok",
+    mcp: { serverName: "viewer", toolName: "message_receipt", args: { operationId: "op-1" }, result: { operationId: "op-1", state } },
+  });
+  const title = (container: HTMLElement) => container.querySelector("[data-mcp-title]")?.textContent;
+  const english = { delivered: "delivered", failed: "failed", "in-flight": "in-flight" };
+  const ukrainian = { delivered: "доставлено", failed: "не доставлено", "in-flight": "доставляється" };
+  for (const [state, word] of Object.entries(english)) {
+    expect(title(render(receipt(state), new Set()))).toBe(`Checking delivery of op-1: ${word}`);
+  }
+  setLocale("uk");
+  try {
+    for (const [state, word] of Object.entries(ukrainian)) {
+      expect(title(render(receipt(state), new Set()))).toBe(`Перевірка доставки op-1: ${word}`);
+    }
+  } finally {
+    setLocale("en");
+  }
+});

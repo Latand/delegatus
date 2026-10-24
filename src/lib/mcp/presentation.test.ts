@@ -104,6 +104,41 @@ describe("describeMcpCall", () => {
     });
   });
 
+  test("an action named after an inherited property reads as the fallback in every action table (#2250)", () => {
+    const tables: Array<[string, Record<string, string>, { verb: string; title: string }, { verb: string; title: string }, [string, string, string]]> = [
+      ["pipeline_action", { pipelineId: "pipe-a" }, { verb: "Updating", title: "Updating pipeline pipe-a" }, { verb: "Оновлення", title: "Оновлення пайплайна pipe-a" }, ["resume", "Resuming pipeline pipe-a", "Відновлення пайплайна pipe-a"]],
+      ["flow_action", { flowId: "flow-a" }, { verb: "Updating", title: "Updating flow flow-a" }, { verb: "Оновлення", title: "Оновлення флоу flow-a" }, ["pause", "Pausing flow flow-a", "Пауза флоу flow-a"]],
+      ["conversation_action", { conversationId: "conversation_a" }, { verb: "Controlling", title: "Controlling conversation conversation_a" }, { verb: "Керування", title: "Керування розмовою conversation_a" }, ["kill", "Killing conversation conversation_a", "Примусова зупинка розмови conversation_a"]],
+      ["conversation_migration", { conversationId: "conversation_a" }, { verb: "Migrating", title: "Migrating conversation migration for conversation_a" }, { verb: "Міграція", title: "Міграція розмови для conversation_a" }, ["rollback", "Rolling back conversation migration for conversation_a", "Відкат міграції розмови для conversation_a"]],
+    ];
+    for (const [tool, args, english, ukrainian, [known, knownEnglish, knownUkrainian]] of tables) {
+      expect(describeMcpCall(tool, { ...args, action: known }).title).toBe(knownEnglish);
+      expect(describeMcpCall(tool, { ...args, action: known }, undefined, uk).title).toBe(knownUkrainian);
+      for (const action of ["frobnicate", "toString", "constructor", "__proto__", "hasOwnProperty", "valueOf"]) {
+        expect(describeMcpCall(tool, { ...args, action })).toMatchObject(english);
+        expect(describeMcpCall(tool, { ...args, action }, undefined, uk)).toMatchObject(ukrainian);
+      }
+    }
+  });
+
+  test("the receipt state inside a delivery check reads in the interface language (#2250)", () => {
+    const cases: Array<[string | undefined, string, string]> = [
+      ["delivered", "Checking delivery of op-1: delivered", "Перевірка доставки op-1: доставлено"],
+      ["failed", "Checking delivery of op-1: failed", "Перевірка доставки op-1: не доставлено"],
+      ["in-flight", "Checking delivery of op-1: in-flight", "Перевірка доставки op-1: доставляється"],
+      [undefined, "Checking delivery of op-1: unknown", "Перевірка доставки op-1: невідомо"],
+      /* A state the server does not name yet, or one shaped like an inherited
+         property, is drawn as written. */
+      ["parked", "Checking delivery of op-1: parked", "Перевірка доставки op-1: parked"],
+      ["toString", "Checking delivery of op-1: toString", "Перевірка доставки op-1: toString"],
+    ];
+    for (const [state, english, ukrainian] of cases) {
+      const result = state === undefined ? {} : { state };
+      expect(describeMcpCall("message_receipt", { operationId: "op-1" }, result).title).toBe(english);
+      expect(describeMcpCall("message_receipt", { operationId: "op-1" }, result, uk).title).toBe(ukrainian);
+    }
+  });
+
   test("unknown tools use a stable generic fallback", () => {
     expect(describeMcpCall("future_tool", { payload: "x" })).toEqual({
       icon: "tool",

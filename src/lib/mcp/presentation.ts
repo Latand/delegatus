@@ -28,7 +28,7 @@ const LINK_LABEL_KEYS: Record<string, "mcp.link.task" | "mcp.link.pipeline" | "m
 
 /** An entity chip's label in the interface language. */
 export function mcpLinkLabel(t: (key: (typeof LINK_LABEL_KEYS)[string]) => string, link: McpCallLink): string {
-  const key = LINK_LABEL_KEYS[link.label];
+  const key = Object.hasOwn(LINK_LABEL_KEYS, link.label) ? LINK_LABEL_KEYS[link.label] : undefined;
   return key ? t(key) : link.label;
 }
 
@@ -57,6 +57,21 @@ function record(value: unknown): Record<string, unknown> {
 function string(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
+
+/* An action's verb and title keys. The action comes from the call's own
+   arguments, so a name like `toString` or `__proto__` must miss the table and
+   read as the fallback instead of an inherited property. */
+function actionKeys(actions: Record<string, [MessageKey, MessageKey]>, action: string, fallback: [MessageKey, MessageKey]): [MessageKey, MessageKey] {
+  return Object.hasOwn(actions, action) ? actions[action] : fallback;
+}
+
+/* The receipt states `message_receipt` answers, read in the interface
+   language; a state outside them is drawn as written. */
+const RECEIPT_STATE_KEYS: Record<string, MessageKey> = {
+  delivered: "mcp.call.receiptState.delivered",
+  failed: "mcp.call.receiptState.failed",
+  "in-flight": "mcp.call.receiptState.inFlight",
+};
 
 function compact(value: string, limit = 120): string {
   const normalized = value.replace(/\s+/g, " ").trim();
@@ -147,7 +162,10 @@ export function describeMcpCall(
 
   if (toolName === "message_receipt") {
     const operationId = string(result.operationId) || string(args.operationId);
-    const state = string(result.state) || t("mcp.call.unknownState");
+    const rawState = string(result.state);
+    const state = !rawState
+      ? t("mcp.call.unknownState")
+      : Object.hasOwn(RECEIPT_STATE_KEYS, rawState) ? t(RECEIPT_STATE_KEYS[rawState]) : rawState;
     const conversationId = string(result.conversationId);
     return {
       icon: "message",
@@ -207,7 +225,7 @@ export function describeMcpCall(
       close: ["mcp.verb.closing", "mcp.call.pipeline.close"],
       delete: ["mcp.verb.deleting", "mcp.call.pipeline.delete"],
     };
-    const [verbKey, titleKey] = actions[action] ?? ["mcp.verb.updating", "mcp.call.pipeline.update"];
+    const [verbKey, titleKey] = actionKeys(actions, action, ["mcp.verb.updating", "mcp.call.pipeline.update"]);
     return {
       icon: "pipeline",
       verb: t(verbKey),
@@ -351,7 +369,7 @@ export function describeMcpCall(
       "another-round": ["mcp.verb.startingRound", "mcp.call.flow.anotherRound"],
       close: ["mcp.verb.closing", "mcp.call.flow.close"],
     };
-    const [verbKey, titleKey] = actions[action] ?? ["mcp.verb.updating", "mcp.call.flow.update"];
+    const [verbKey, titleKey] = actionKeys(actions, action, ["mcp.verb.updating", "mcp.call.flow.update"]);
     return {
       icon: "pipeline",
       verb: t(verbKey),
@@ -384,7 +402,7 @@ export function describeMcpCall(
       archive: ["mcp.verb.archiving", "mcp.call.conversation.archive"],
       unarchive: ["mcp.verb.unarchiving", "mcp.call.conversation.unarchive"],
     };
-    const [verbKey, titleKey] = actions[action] ?? ["mcp.verb.controlling", "mcp.call.conversation.control"];
+    const [verbKey, titleKey] = actionKeys(actions, action, ["mcp.verb.controlling", "mcp.call.conversation.control"]);
     return {
       icon: "message",
       verb: t(verbKey),
@@ -459,7 +477,7 @@ export function describeMcpCall(
       withdraw: ["mcp.verb.withdrawing", "mcp.call.migration.withdraw"],
       "keep-current": ["mcp.verb.releasingHeld", "mcp.call.migration.keepCurrent"],
     };
-    const [verbKey, titleKey] = actions[action] ?? ["mcp.verb.migrating", "mcp.call.migration.migrate"];
+    const [verbKey, titleKey] = actionKeys(actions, action, ["mcp.verb.migrating", "mcp.call.migration.migrate"]);
     return {
       icon: "conversation",
       verb: t(verbKey),
