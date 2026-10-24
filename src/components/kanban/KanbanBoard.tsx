@@ -2685,6 +2685,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const spawnRetryRef = useRef(props.onSpawnRetry);
   spawnRetryRef.current = props.onSpawnRetry;
   const spawnRetry = useCallback((file: FileEntry) => spawnRetryRef.current?.(file), []);
+  const closeConversation = useStableCallback((file: FileEntry) => props.onCloseConversation?.(file));
   const draftCloseRef = useRef(props.onDraftClose);
   draftCloseRef.current = props.onDraftClose;
   const draftSpawnedRef = useRef(props.onDraftSpawned);
@@ -3088,7 +3089,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         onLeave={leaveWindow}
         onMenu={openReaderMenu}
         onSpawnRetry={props.onSpawnRetry ? spawnRetry : undefined}
-        onCloseConversation={props.onCloseConversation}
+        onCloseConversation={props.onCloseConversation ? closeConversation : undefined}
       />
 
       {openMenu && menu.open ? (
