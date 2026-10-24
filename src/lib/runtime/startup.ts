@@ -49,6 +49,7 @@ import {
   completeStructuredDeliveryQueueStartup,
   publishStructuredDeliveryHost,
   updateStructuredStartupDeferral,
+  allowStructuredStartupRecovery,
   hasStructuredDeliveryController,
   hasStructuredDeliveryHost,
   handOverHostForDemotion,
@@ -2187,6 +2188,10 @@ async function adoptStructuredHostsPass(
   const readEvidence = () => (dependencies.pipelineEvidence ?? pipelineStartupEvidence)(registry);
   let pipelineEvidence = await admitState(async (available) =>
     available ? readEvidence() : pipelineStartupEvidence(registry, false));
+  if (controllerBoundEarly && !rowRetry) {
+    for (const id of pipelineEvidence.deferred) updateStructuredStartupDeferral(registry, id, true);
+    allowStructuredStartupRecovery(registry);
+  }
   {
     assertActive();
     const deferralSnapshot = startupSnapshot(registry);

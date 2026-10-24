@@ -939,6 +939,80 @@ test("startup socket recovery retains a partially adopted host and drains its he
   }
 });
 
+for (const fence of ["none", "cut", "pipeline"] as const) test(`an explicit send recovers its recipient while unrelated startup adoption is still pending (${fence})`, async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-recipient-recovery-"));
+  const { artifactPath, conversation, registry, sessionId } = structuredRestartFixture(directory, "codex", "unhosted");
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeJournalClient(journal);
+  projectHostedRestart(journal, "codex", conversation.id, sessionId, directory, artifactPath);
+  const key = { engine: "codex" as const, sessionId };
+  const ledger = createFakeDeliveryLedger();
+  const host = Object.assign(new ObservedDeliveryHost(ledger), { onStateChange: () => () => {} });
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const { holdRestartCutRow, releaseRestartCutRow } = await import("./restartCutHold");
+  const hostKey = `codex:${sessionId}`;
+  let recoveries = 0;
+  let startupFinished = false;
+  let startup: Promise<unknown> | undefined;
+  try {
+    await bindStructuredDeliveryQueue([], {
+      registry, client, deferStartupWork: true,
+      watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0,
+      recover: async () => {
+        recoveries += 1;
+        const entry = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!;
+        registry.upsert({ ...entry, status: "idle", claimOwner: "fixture",
+          structuredHost: { ...entry.structuredHost!, endpoint: "fake:recovered" } });
+        await publishStructuredDeliveryHost({ key, host });
+        return { target: null, path: entry.artifactPath, conversationId: conversation.id, spawned: true };
+      },
+    });
+    startup = adoptStructuredHostsAtStartup({
+      registry, client, orchestratorSeats: () => [], refreshTranscriptState: async () => {},
+      pipelineEvidence: () => ({ settled: new Set(), deferred: new Set(fence === "pipeline" ? [conversation.id] : []) }),
+      schedule: () => ({ unref() {} }),
+      adopt: async () => {
+        if (fence === "cut") holdRestartCutRow(hostKey);
+        entered.resolve(); await release.promise; return [];
+      },
+      adoptClaude: async () => [],
+    }).then(() => { startupFinished = true; });
+    await entered.promise;
+    journal.executeOperation({ kind: "send", operationId: "startup-recipient-send",
+      idempotencyKey: "startup-recipient-send", conversationId: conversation.id,
+      text: "receive this before unrelated recovery finishes", policy: "queue" });
+    const { kickStructuredDeliveryQueue } = await import("./structuredDeliverySignal");
+    await kickStructuredDeliveryQueue();
+    if (fence === "pipeline") {
+      expect(recoveries).toBe(0);
+      expect(ledger.writes).toHaveLength(0);
+      expect(journal.operationResult("startup-recipient-send")?.receipt.status).toBe("queued");
+      return;
+    }
+    if (fence === "cut") {
+      expect(recoveries).toBe(0);
+      expect(ledger.writes).toHaveLength(0);
+      releaseRestartCutRow(hostKey);
+      await kickStructuredDeliveryQueue();
+    }
+    await Promise.race([host.sent.promise, Bun.sleep(1_000)]);
+    expect(startupFinished).toBeFalse();
+    expect(recoveries).toBe(1);
+    expect(ledger.writes).toHaveLength(1);
+    expect(journal.operationResult("startup-recipient-send")?.receipt.status).toBe("delivered");
+    await kickStructuredDeliveryQueue();
+    expect(ledger.writes).toHaveLength(1);
+  } finally {
+    releaseRestartCutRow(hostKey);
+    release.resolve();
+    await startup;
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close(); registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 for (const engine of ["codex", "claude"] as const) test(`startup retains each ${engine} host when a later row fails within the same adoption batch`, async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-batch-"));
   const { registry, sessionId, conversation } = structuredRestartFixture(directory, engine, "unhosted");

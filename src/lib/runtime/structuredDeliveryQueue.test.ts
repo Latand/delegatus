@@ -2067,6 +2067,63 @@ test("an expired explicit kill settles during startup deferral without terminati
   expect(transitions).toEqual([["expired-kill", "failed"]]);
 });
 
+test("startup recovery admits an explicit send while automatic continuation and configuration remain deferred", async () => {
+  const statuses = new Map<string, string>();
+  const sent: string[] = [];
+  const effects: StructuredDeliveryEffect[] = [
+    { id: "explicit", kind: "runtime.send", eventSeq: 1, payload: {
+      operationId: "explicit", conversationId: "conversation-one", text: "operator message", policy: "queue",
+    } },
+    { id: "automatic", kind: "runtime.send", eventSeq: 2, payload: {
+      operationId: "automatic", conversationId: "conversation-one", text: "automatic continuation", policy: "queue",
+      onlyIfIdle: { revision: 1, writerClaim: "owner:one" },
+    } },
+    { id: "configure", kind: "runtime.reconfigure", eventSeq: 3, payload: {
+      operationId: "configure", conversationId: "conversation-one",
+      sessionKey: { engine: "codex", sessionId: "thread-one" }, model: "fixture-model", effort: "high", fast: false,
+    } },
+  ];
+  const queue = new StructuredDeliveryQueue({
+    deferTarget: () => true,
+    canRecoverDeferredTarget: () => true,
+    effects: async () => effects,
+    status: async id => ({ status: statuses.get(id) ?? "queued", revision: 1 }),
+    hostClaim: async () => "owner:one",
+    transition: async (id, status) => { statuses.set(id, status); },
+  }, () => host(async entry => {
+    sent.push(entry.id);
+    return { outcome: "turn-started", turnId: "operator-turn" };
+  }));
+
+  await queue.drain();
+  expect(sent).toEqual(["explicit"]);
+  expect(statuses.get("explicit")).toBe("delivered");
+  expect(statuses.has("automatic")).toBeFalse();
+  expect(statuses.has("configure")).toBeFalse();
+});
+
+test("startup recovery keeps a message queued when its predecessor is not registered yet", async () => {
+  let deferred = true;
+  let recoveryCalls = 0;
+  const statuses = new Map<string, string>();
+  const queue = new StructuredDeliveryQueue({
+    deferTarget: () => deferred,
+    canRecoverDeferredTarget: () => true,
+    effects: async () => [{ id: "waiting", kind: "runtime.send", eventSeq: 1, payload: {
+      operationId: "waiting", conversationId: "conversation-one", text: "keep this message", policy: "queue",
+    } }],
+    status: async id => ({ status: statuses.get(id) ?? "queued", revision: 1 }),
+    transition: async (id, status) => { statuses.set(id, status); },
+  }, () => null, undefined, undefined, async () => { recoveryCalls += 1; return false; });
+
+  await queue.drain();
+  expect(recoveryCalls).toBe(1);
+  expect(statuses.get("waiting")).toBe("queued");
+  deferred = false;
+  await queue.drain();
+  expect(statuses.get("waiting")).toBe("failed");
+});
+
 for (const deferredFirst of [false, true]) {
 for (const order of ["reconfigure-then-kill", "kill-then-reconfigure"] as const) {
   test(`a delivered kill fences a pending same-generation reconfigure admitted ${order}${deferredFirst ? " across startup deferral" : ""}`, async () => {
