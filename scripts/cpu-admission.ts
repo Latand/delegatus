@@ -1,9 +1,10 @@
+import { admissionLockWait } from "./cpu-admission-lock";
 import { cpuPriorityFromEnv } from "../src/lib/runtime/cpuPriority";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { CpuPressureGate, cpuPressurePolicy, DEFAULT_CPU_PRESSURE_POLICY, parseCpuPressure } from "../src/lib/runtime/cpuPressure";
-import { inheritedCpuSlot, machineCpuAdmissionQueue } from "../src/lib/runtime/cpuAdmission";
+import { inheritedCpuSlot, cpuAdmissionFile, CpuAdmissionQueue, CPU_QUEUE_SPACING_MS, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_UNPOLLED_MS } from "../src/lib/runtime/cpuAdmission";
 import { reportCpuWait } from "../src/lib/runtime/cpuAdmissionBudget";
 import { cpuQueueDetail } from "../src/lib/runtime/cpuQueueText";
 import { cpuOwnerIdentity, cpuOwnerStatus, cpuOwnerExited, signalSandboxContext } from "../src/lib/runtime/signalSandboxContext";
@@ -43,15 +44,13 @@ if (mode === "--watch-wait") {
   } finally { endWait(); }
   process.exit(0);
 }
-const queue = machineCpuAdmissionQueue();
 if (!key || !pid || !["--wait", "--claim"].includes(mode!)) throw new Error("cpu admission needs a mode, ticket and owner PID");
+// Capture the owner before opening can yield on a shared store lock.
 const owner = cpuOwnerIdentity(Number(pid));
 const priority = cpuPriorityFromEnv();
-if (mode === "--claim") {
-  const admitted = !queue.check(key, !pressure.check(), owner, true, priority);
-  queue.close();
-  process.exit(admitted ? 0 : 75);
-}
+const lockWait = admissionLockWait(Number(process.env.LLV_CPU_ADMISSION_LOCK_TIMEOUT_MS ?? 30_000));
+const endWait = reportCpuWait();
+let queue: CpuAdmissionQueue | undefined;
 function slotAvailable(): boolean {
   if (spawnSync("which", ["flock"], { stdio: "ignore" }).status !== 0) return true;
   const dir = process.env.LLV_GATE_LOCK_DIR ?? "/var/tmp";
@@ -61,19 +60,40 @@ function slotAvailable(): boolean {
   }
   return false;
 }
-const endWait = reportCpuWait();
-const cancel = () => { queue.cancel(key); endWait(); process.exit(130); };
-process.on("SIGTERM", cancel); process.on("SIGINT", cancel);
-const parentGuard = setInterval(() => {
+const cancel = () => {
+  // Dead command owners are reaped by the next successful queue check if
+  // this best-effort delete cannot obtain the store lock.
+  try { queue?.cancel(key); } catch { /* SQLite may still be locked. */ }
+  endWait(); queue?.close(); process.exit(130);
+};
+const checkOwner = () => {
   if (cpuOwnerStatus(owner) === "dead" || cpuOwnerExited(owner)) cancel();
-}, 100);
+};
+process.on("SIGTERM", cancel); process.on("SIGINT", cancel);
+const parentGuard = setInterval(checkOwner, 100);
 try {
-  let shown = "";
-  for (;;) {
-    const wait = queue.check(key, !pressure.check(), owner, false, priority);
-    if (!wait && slotAvailable()) break;
-    const text = wait ? cpuQueueDetail(wait.position, wait.remainingMs, wait.stalledMs, wait.priority) : "Waiting for a heavy command slot";
-    if (text !== shown) { console.error(`gate-slot: ${text}`); shown = text; }
-    await Bun.sleep(Number(process.env.LLV_GATE_POLL_SECONDS ?? 2) * 1000);
+  queue = await lockWait(() => {
+    checkOwner();
+    return new CpuAdmissionQueue(cpuAdmissionFile(), Date.now, CPU_QUEUE_SPACING_MS, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_UNPOLLED_MS,
+      { status: cpuOwnerStatus, exited: cpuOwnerExited }, 0);
+  });
+  const check = () => {
+    checkOwner();
+    return queue!.check(key, !pressure.check(), owner, mode === "--claim", priority);
+  };
+  if (mode === "--claim") {
+    process.exitCode = !await lockWait(check) ? 0 : 75;
+  } else {
+    let shown = "";
+    for (;;) {
+      const wait = await lockWait(check);
+      if (!wait && slotAvailable()) break;
+      const text = wait ? cpuQueueDetail(wait.position, wait.remainingMs, wait.stalledMs, wait.priority) : "Waiting for a heavy command slot";
+      if (text !== shown) { console.error(`gate-slot: ${text}`); shown = text; }
+      await Bun.sleep(Number(process.env.LLV_GATE_POLL_SECONDS ?? 2) * 1000);
+    }
   }
-} finally { clearInterval(parentGuard); endWait(); queue.close(); }
+} catch (error) {
+  console.error(`gate-slot: ${error instanceof Error ? error.message : error}`);
+  process.exitCode = 1;
+} finally { clearInterval(parentGuard); endWait(); queue?.close(); }
