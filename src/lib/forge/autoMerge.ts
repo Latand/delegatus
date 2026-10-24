@@ -55,6 +55,8 @@ export { MERGE_REASONS };
 
 export interface AutoMergePorts {
   now: () => number;
+  /** Concurrent PR refresh/check slots per repository, clamped to one or two. */
+  refreshConcurrency?: number;
   run: GithubRunner;
   /** Every GitHub merge goes through this. In a declared App repository it
       goes out as the Delegatus GitHub App, and one it cannot authenticate as the App throws and nothing is
@@ -463,7 +465,7 @@ async function refreshBaseBranch(read: Pipeline, forgeBase: string, ports: AutoM
   return base;
 }
 
-async function stepLane(read: Pipeline, ports: AutoMergePorts): Promise<void> {
+async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true): Promise<void> {
   const now = ports.now();
   const merge = structuredClone(read.merge!);
   const setting = ports.setting(read.project);
@@ -582,6 +584,15 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts): Promise<void> {
       bookkeeping(live);
       live.state = step.state;
       live.reason = step.reason;
+      live.nextReadAt = iso(now + MERGE_POLL_MS);
+    });
+    return;
+  }
+  if (!mayMerge) {
+    await commit(ports, read, (live) => {
+      bookkeeping(live);
+      live.state = "queued";
+      live.reason = null;
       live.nextReadAt = iso(now + MERGE_POLL_MS);
     });
     return;
@@ -854,9 +865,11 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
             live.nextReadAt = progress.nextReadAt;
           });
         }
+      } else if (refreshed?.state === "needs_decision") {
+        await commit(ports, pipeline, (live) => block(live, refreshed.stateDetail || "Refresh needs a decision", now));
       } else if (refreshed?.state === "closed") {
         await commit(ports, pipeline, (live) => block(live, MERGE_REASONS.refreshClosed, now));
-      } else if (!merge.refresh?.pipelineId) await startRefresh(pipeline, ports);
+      }
       continue;
     }
     const pr = merge.prNumber === null ? ports.pullRequestOf(pipeline) : { repository: merge.repository, number: merge.prNumber };
@@ -879,40 +892,61 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
       });
     }
   }
-  /* One lane at a time per repository, in completion order (§4.4 rule 5). */
-  const queueHeads = new Map<string, Pipeline>();
-  const queued: Pipeline[] = [];
-  for await (const pipeline of mergeRows(performanceSpans.sync("forge.auto-merge.read", ports.loadPipelines))) {
+  // A refresh and all its successors occupy the original PR's queue slot.
+  // Keep the original completion order even when its current carrier is newer.
+  const rows = performanceSpans.sync("forge.auto-merge.read", ports.loadPipelines);
+  const byId = new Map<string, Pipeline>();
+  const origin = (row: Pipeline): Pipeline => {
+    const seen = new Set<string>();
+    while (row.refreshOf && !seen.has(row.id)) {
+      seen.add(row.id);
+      const parent = byId.get(row.refreshOf.pipelineId);
+      if (!parent) break;
+      row = parent;
+    }
+    return row;
+  };
+  const queues = new Map<string, Map<string, Pipeline>>();
+  for await (const pipeline of mergeRows(rows)) {
     performanceSpans.sync("forge.auto-merge.queue", () => {
+      byId.set(pipeline.id, pipeline);
       const merge = pipeline.merge;
-      if (pipeline.state !== "completed" || !merge || !PIPELINE_MERGE_LIVE_STATES.has(merge.state) || merge.refresh?.pipelineId) return;
-      queued.push(pipeline);
-      const held = queueHeads.get(merge.repository);
-      if (!held || merge.requestedAt.localeCompare(held.merge!.requestedAt) < 0
-        || (merge.requestedAt === held.merge!.requestedAt && pipeline.id.localeCompare(held.id) < 0)) {
-        queueHeads.set(merge.repository, pipeline);
-      }
+      if (pipeline.state !== "completed" || !merge
+        || (!PIPELINE_MERGE_LIVE_STATES.has(merge.state) && merge.state !== "refreshing")) return;
+      const queue = queues.get(merge.repository) ?? new Map<string, Pipeline>();
+      queues.set(merge.repository, queue);
+      const key = merge.prNumber === null ? pipeline.id : String(merge.prNumber);
+      const held = queue.get(key);
+      if (!held || (held.merge?.refresh?.pipelineId && !merge.refresh?.pipelineId)) queue.set(key, pipeline);
     }, 1);
   }
-  for await (const pipeline of mergeRows(queued)) {
-    const head = queueHeads.get(pipeline.merge!.repository)!;
-    // Hidden lanes retain their historical queue position, and their skip
-    // diagnostic from admission still explains the visible card.
-    if (pipeline.hiddenAt) continue;
-    if (head.id !== pipeline.id) laneStatus(ports, pipeline.id, `queued behind ${head.id}`);
-  }
-  for await (const head of mergeRows(queueHeads.values())) {
-    const due = performanceSpans.sync("forge.auto-merge.queue", () => Date.parse(head.merge!.nextReadAt ?? ""), 1);
-    if (Number.isFinite(due) && due > now && !mergeWaitExpired(head.merge!, now)) {
-      if (!head.hiddenAt) laneStatus(ports, head.id, mergeStatus(head.merge!));
-      continue;
+  const limit = Math.max(1, Math.min(2, Math.floor(ports.refreshConcurrency ?? 1) || 1));
+  for await (const queue of mergeRows(queues.values())) {
+    const ordered = [...queue.values()].sort((left, right) => {
+      const a = origin(left), b = origin(right);
+      return (a.merge?.requestedAt ?? a.closedAt ?? "").localeCompare(b.merge?.requestedAt ?? b.closedAt ?? "")
+        || a.id.localeCompare(b.id);
+    });
+    for await (const pipeline of mergeRows(ordered.slice(limit))) {
+      if (!pipeline.hiddenAt) laneStatus(ports, pipeline.id, `queued behind ${ordered[0]!.id}`);
     }
-    try {
-      await stepLane(head, ports);
-    } catch (error) {
-      ports.log?.(`[auto merge] ${head.id}: step failed`, error);
-      if (mergeWaitExpired(head.merge!, ports.now())) {
-        await commit(ports, head, live => block(live, MERGE_REASONS.checksTimeout, ports.now()));
+    for (const [index, head] of ordered.slice(0, limit).entries()) {
+      if (head.merge!.state === "refreshing" || head.merge!.refresh?.pipelineId) {
+        if (!head.merge!.refresh?.pipelineId) await startRefresh(head, ports);
+        continue;
+      }
+      const due = performanceSpans.sync("forge.auto-merge.queue", () => Date.parse(head.merge!.nextReadAt ?? ""), 1);
+      if (Number.isFinite(due) && due > now && !mergeWaitExpired(head.merge!, now)) {
+        if (!head.hiddenAt) laneStatus(ports, head.id, mergeStatus(head.merge!));
+        continue;
+      }
+      try {
+        await stepLane(head, ports, index === 0);
+      } catch (error) {
+        ports.log?.(`[auto merge] ${head.id}: step failed`, error);
+        if (mergeWaitExpired(head.merge!, ports.now())) {
+          await commit(ports, head, live => block(live, MERGE_REASONS.checksTimeout, ports.now()));
+        }
       }
     }
   }
@@ -1104,6 +1138,7 @@ export function productionAutoMergePorts(overrides: Partial<AutoMergePorts> & Pi
   const run = overrides.run ?? githubRunner(os.tmpdir(), GH_TIMEOUT_MS);
   return {
     now: Date.now,
+    refreshConcurrency: Number(process.env.LLV_MERGE_REFRESH_CONCURRENCY ?? 1),
     run,
     write: forgeWriter(run, forgeAppWriter(os.tmpdir(), GH_TIMEOUT_MS)),
     prepareRead: overrides.loadPipelines === loadPipelinesForList ? async () => { await loadPipelinesForListAsync(); } : undefined,

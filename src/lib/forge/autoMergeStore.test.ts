@@ -926,6 +926,66 @@ describe("refresh retry recovery", () => {
     expect(JSON.parse(output)).toEqual({ error: null, lanes: [["refresh-child", "queued", "d".repeat(40)], ["refresh-parent", "queued", HEAD]] });
   });
 
+  test("a refresh holds its queue slot across process restarts and releases it on failure", async () => {
+    const { waiting } = await waitingRefresh("running");
+    const peer = missingPrLane("refresh-peer");
+    peer.closedAt = iso(T0);
+    peer.delivery!.target.pr = 8;
+    peer.workLinks = [{ kind: "pr", repository: REPO, number: 8, addedAt: iso(T0), addedBy: "operator" }];
+    savePipelines([...loadPipelines(), peer]);
+    const childRoot = fs.mkdtempSync(path.join(sandbox, "refresh-slot-restart-"));
+    for (const directory of ["home", "config", "tmp"]) fs.mkdirSync(path.join(childRoot, directory));
+    const script = `
+      const { productionAutoMergePorts, sweepAutoMerge } = await import("./src/lib/forge/autoMerge.ts");
+      const { loadPipelines } = await import("./src/lib/pipelines/store.ts");
+      const reads = [], starts = [];
+      const ports = productionAutoMergePorts({
+        now: () => ${T0 + 1_000}, loadPipelines, cachedState: () => null,
+        run: async args => {
+          if (args[0] === "pr" && args[1] === "view") {
+            reads.push(Number(args[2]));
+            return JSON.stringify({ state: "OPEN", isDraft: false, headRefOid: "${HEAD}", baseRefName: "main",
+              mergeable: "MERGEABLE", mergeStateStatus: "BEHIND", statusCheckRollup: [] });
+          }
+          if (args[1]?.includes("/reviews")) return "";
+          if (args.at(-1) === ".commit.sha") return "${"b".repeat(40)}";
+          if (args[1]?.includes("/branches/")) return "[]";
+          throw new Error("unexpected forge read");
+        },
+        write: async () => { throw new Error("unexpected forge write"); },
+        startRefresh: async request => {
+          starts.push(request.delivery.pr);
+          return { error: "fixture refresh refused" };
+        },
+      });
+      await sweepAutoMerge(ports);
+      console.log(JSON.stringify({ reads, starts, lanes: loadPipelines().map(lane => ({ id: lane.id, merge: lane.merge })) }));
+    `;
+    for (const failed of [false, true]) {
+      if (failed) {
+        const rows = loadPipelines();
+        rows.find(lane => lane.id === "refresh-child")!.state = "closed";
+        savePipelines(rows);
+      }
+      const child = Bun.spawn([process.execPath, "-e", script], {
+        cwd: process.cwd(), env: { ...process.env, HOME: path.join(childRoot, "home"), XDG_CONFIG_HOME: path.join(childRoot, "config"),
+          TMPDIR: path.join(childRoot, "tmp"), LLV_STATE_DIR: sandbox, LLV_STAGING: "1", LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" },
+        stdout: "pipe", stderr: "pipe",
+      });
+      const [output, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      expect(code, error).toBe(0);
+      const result = JSON.parse(output);
+      expect(result.reads).toEqual(failed ? [8] : []);
+      expect(result.starts).toEqual(failed ? [8] : []);
+      expect(result.lanes.find((lane: Pipeline) => lane.id === waiting.id).merge).toMatchObject(failed
+        ? { state: "blocked", reason: MERGE_REASONS.refreshClosed }
+        : { state: "refreshing", refresh: { pipelineId: "refresh-child" } });
+      expect(result.lanes.find((lane: Pipeline) => lane.id === peer.id).merge).toMatchObject(failed
+        ? { state: "blocked", reason: "Delegatus could not start the refresh: fixture refresh refused", reviewedHead: HEAD }
+        : { state: "queued", reviewedHead: HEAD, head: null });
+    }
+  });
+
   test.each(["completed", "closed"] as const)("a stale refreshing record on a %s lane cannot prevent a carrier on the same PR from queueing", async state => {
     const { waiting } = await waitingRefresh("closed");
     const closed = loadPipelines().find(lane => lane.id === waiting.id)!;
