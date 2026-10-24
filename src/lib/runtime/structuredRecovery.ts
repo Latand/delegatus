@@ -448,9 +448,12 @@ async function recoverCandidate(
             };
             try {
               authorize();
+              const retainedProtocolVersion = claim.structuredHost.protocolVersion;
               host = await CodexAppServerHost.adopt(current.key.sessionId, {
                 cwd: current.spec.cwd, codexHome: account.home,
                 env: withoutUnsupportedApiCredentials(account.env), socketOwner,
+                initialEventCursor: claim.structuredHost.eventCursor,
+                readProtocolVersion: () => retainedProtocolVersion ?? "unknown",
                 memoryCell: structuredHostCell(registry, "codex", sessionKeyId(current.key), current.conversationId),
               });
               await bindCodexHostPersistence(registry, current.key, host, claim.claimOwner, claim.claimEpoch);

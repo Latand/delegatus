@@ -57,7 +57,7 @@ for (const scenario of ["released", "foreign-owner", "failed-attachment", "revok
   const endpoint = `codex-unix:${socketPath}`;
   registry.upsert({ key, artifactPath, cwd, accountId: "default", launchProfile: emptyLaunchProfile({ cwd }),
     status: "idle", host: null, claimEpoch: 2, claimOwner: null, pendingAction: null,
-    structuredHost: { kind: "codex-app-server", endpoint, process: identity, eventCursor: 0,
+    structuredHost: { kind: "codex-app-server", endpoint, process: identity, eventCursor: 73,
       protocolVersion: "fixture", writerClaimEpoch: 2, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
   const foreign = scenario === "foreign-owner"
     ? ownFixtureTree(spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" })) : null;
@@ -79,7 +79,7 @@ for (const scenario of ["released", "foreign-owner", "failed-attachment", "revok
   const ledger = createFakeDeliveryLedger();
   const host = Object.assign(new FakeEngineHost(ledger), {
     health: async () => ({ status: "idle" as const, sessionKey: sessionId, endpoint, pid: identity.pid,
-      processStartIdentity: identity.startIdentity, eventCursor: 0, protocolVersion: "fixture",
+      processStartIdentity: identity.startIdentity, eventCursor: 73, protocolVersion: "fixture",
       activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null }),
     setWriterFence: () => {}, onStateChange: () => () => {},
     detachForViewerRestart: () => true,
@@ -129,6 +129,8 @@ for (const scenario of ["released", "foreign-owner", "failed-attachment", "revok
     expect(adopt).toHaveBeenCalledTimes(1);
     expect(result?.reconnected).toBeTrue();
     expect(adopt.mock.calls[0]?.[1].socketOwner).toMatchObject({ endpoint, process: identity });
+    expect(adopt.mock.calls[0]?.[1].initialEventCursor).toBe(73);
+    expect(await adopt.mock.calls[0]?.[1].readProtocolVersion?.("unused", {})).toBe("fixture");
     expect(hasStructuredDeliveryHost(key)).toBeTrue();
     expect(spawned).toBe(0);
     expect(Object.keys(registry.readOnlySnapshot().receipts)).toHaveLength(0);
