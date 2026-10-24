@@ -142,6 +142,9 @@ describe("global merge admission", () => {
   function spentReviewLane(id: string): Pipeline {
     const lane = completedLane(id);
     lane.stages[1]!.onFail = { to: "fix", maxRounds: 2 };
+    lane.stages[1]!.next = "ship";
+    lane.stages.push({ ...lane.stages[0]!, id: "ship", next: null });
+    lane.runs.push({ stageId: "ship", attempts: [{ ...lane.runs[0]!.attempts[0]! }] });
     lane.stages.push({ ...lane.stages[0]!, id: "fix", next: null });
     Object.assign(lane.runs[1]!.attempts[0]!, { state: "failed", budgetSpent: true });
     lane.runs.push({ stageId: "fix", attempts: [{ ...lane.runs[0]!.attempts[0]!,

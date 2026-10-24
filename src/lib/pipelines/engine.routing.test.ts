@@ -1183,12 +1183,13 @@ test.each([undefined, 7])("pipeline review default and explicit higher budget %s
   expect(patched.pipeline!.stages[1]!.onFail!.maxRounds).toBe(maxRounds ?? 3);
 });
 
-test("an omitted pipeline review budget runs three reviews and completes after the final fix", async () => {
+test("an omitted pipeline review budget runs three reviews and one terminal re-check", async () => {
   const h = movingHeadHarness();
   await create(h.ports, BUDGET_STAGES({ to: "build" }, null) as never);
   const { pipeline } = await driveWithController(h);
-  expect(pipeline.state).toBe("completed");
-  expect(pipeline.runs.find((run) => run.stageId === "critique")!.attempts).toHaveLength(3);
+  expect(pipeline.state).toBe("needs_decision");
+  expect(pipeline.reviewPending).toMatchObject({ terminalRecheck: true, attempt: 4 });
+  expect(pipeline.runs.find((run) => run.stageId === "critique")!.attempts).toHaveLength(4);
   expect(pipeline.runs.find((run) => run.stageId === "build")!.attempts).toHaveLength(4);
 });
 
