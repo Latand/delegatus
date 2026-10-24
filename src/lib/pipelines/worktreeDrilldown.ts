@@ -39,7 +39,7 @@ function sqliteDatabase(): typeof import("bun:sqlite").Database {
 }
 
 function validRow(row: RetainedWorktree): boolean {
-  return !!row && typeof row.checkout === "string" && !path.isAbsolute(row.checkout)
+  return !!row && typeof row.checkout === "string" && !path.posix.isAbsolute(row.checkout) && !path.win32.isAbsolute(row.checkout)
     && typeof row.reason === "string" && /^[a-z-]{1,64}$/.test(row.reason)
     && (row.task === null || typeof row.task === "string") && (row.pipelineId === null || typeof row.pipelineId === "string")
     && (row.repository === null || typeof row.repository === "string")
@@ -47,11 +47,16 @@ function validRow(row: RetainedWorktree): boolean {
     && (row.observedAt === null || timestamp(row.observedAt));
 }
 
-/** No filesystem lookup: sibling checkouts may legitimately start with ../. */
+/** No filesystem lookup: sibling checkouts may legitimately start with ../.
+ * Across volumes, prefer home-relative display, then elide the parent path. */
 export function relativeCheckout(checkout: string, repository?: string): string {
-  if (repository) return path.relative(repository, checkout).split(path.sep).join("/") || ".";
+  if (repository) {
+    const relative = path.relative(repository, checkout);
+    if (!path.isAbsolute(relative)) return relative.split(path.sep).join("/") || ".";
+  }
   const home = os.homedir();
   const relative = path.relative(home, checkout);
+  if (path.isAbsolute(relative)) return `…/${path.basename(checkout)}`;
   return `~/${relative.split(path.sep).join("/")}`;
 }
 

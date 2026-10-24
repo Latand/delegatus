@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -143,6 +143,58 @@ test("unrecorded values stay unknown and all checkouts are relative to repositor
   expect(relativeCheckout(path.join(root, "sibling"), path.join(root, "repository"))).toBe("../sibling");
   expect(relativeCheckout(path.join(os.homedir(), "checkouts", "tree"))).toBe("~/checkouts/tree");
   expect(relativeCheckout(root).startsWith("~/")).toBe(true);
+});
+
+test.each([
+  ["C:/repository", "C:/profile", "D:/private/checkouts/tree", "…/tree"],
+  ["C:/repository", "D:/profile", "D:/profile/checkouts/tree", "~/checkouts/tree"],
+  ["C:/repository", "D:/profile", "E:/private/checkouts/tree", "…/tree"],
+  ["C:/repository", "D:/profile", "C:/repository/worktrees/tree", "worktrees/tree"],
+  [undefined, "C:/profile", "D:/private/checkouts/tree", "…/tree"],
+  ["//server/share/repository", "C:/profile", "//other/share/private/tree", "…/tree"],
+] as const)("Windows display and persisted pages: repository=%s home=%s checkout=%s", (repository, home, checkout, display) => {
+  const snapshot = report(6);
+  snapshot.kept[2] = { path: checkout, repository, reason: "retention" };
+  const basename = path.win32.basename;
+  const relative = path.win32.relative;
+  const isAbsolute = path.win32.isAbsolute;
+  const separator = Object.getOwnPropertyDescriptor(path, "sep")!;
+  // Exercise the real producer and reader with Windows display semantics on
+  // every host. Filesystem joins retain the host's native scratch paths.
+  const mocks = [spyOn(path, "basename").mockImplementation(basename),
+    spyOn(path, "relative").mockImplementation(relative),
+    spyOn(path, "isAbsolute").mockImplementation(isAbsolute),
+    spyOn(os, "homedir").mockReturnValue(home)];
+  try {
+    Object.defineProperty(path, "sep", { ...separator, value: "\\" });
+    expect(relativeCheckout(checkout, repository)).toBe(display);
+    recordWorktreeSweep(snapshot);
+    const first = readWorktreePage(null);
+    expect(first.rows.map(row => row.checkout)).toEqual(["worktrees/checkout-0", "worktrees/checkout-1", display, "worktrees/checkout-3"]);
+    const last = readWorktreePage(first.nextCursor);
+    expect(last.rows.map(row => row.checkout)).toEqual(["worktrees/checkout-4", "worktrees/checkout-5"]);
+    expect(readWorktreePage(last.previousCursor)).toEqual(first);
+    const response = JSON.stringify([first, last]);
+    expect(response).not.toContain(checkout);
+    expect(response).not.toContain("private");
+    for (const row of [...first.rows, ...last.rows]) {
+      expect(path.win32.isAbsolute(row.checkout)).toBe(false);
+      expect(path.posix.isAbsolute(row.checkout)).toBe(false);
+    }
+  } finally {
+    Object.defineProperty(path, "sep", separator);
+    for (const mock of mocks) mock.mockRestore();
+  }
+});
+
+test.each(["C:/private/tree", "D:\\private\\tree", "//server/share/tree", "/private/tree"])("absolute checkout %s still refuses the whole page", checkout => {
+  recordWorktreeSweep(report(6));
+  const db = new Database(path.join(root, "worktree-drilldown.sqlite"));
+  try {
+    const row = readWorktreePage(null).rows[2]!;
+    db.prepare("UPDATE retained SET body = ? WHERE id = 3").run(JSON.stringify({ ...row, checkout }));
+  } finally { db.close(); }
+  rejects(null, 503, "unavailable");
 });
 
 test("an oversized row refuses the whole projection without losing its preceding snapshot", () => {

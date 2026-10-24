@@ -550,13 +550,16 @@ Open the resources panel from the existing memory/disk footer, then choose
 or no linked task), repository name, repository-relative checkout, recorded
 size, translated retention reason and, only when it differs from the report
 time, the decision's observation time. Sizes use the entry's MiB/GiB units.
-Checkouts without repository metadata are relative to home. An unvisited row
-keeps its earlier observation time; a row never observed shows that explicitly.
+Checkouts without repository metadata, or on another volume from the repository,
+are relative to home. If the checkout is also on another volume from home, only
+its final directory name is shown after `…/`; drive and parent paths stay private.
+An unvisited row keeps its earlier observation time; a row never observed shows
+that explicitly.
 Sizes follow the sweep's bounded accounting and may be partial or carried
 forward. The report time and dry-run mode are shown once, in the header.
 The dialog keeps one fixed height. While the next page loads the current rows
-stay, dimmed, with both pager buttons disabled in place. The pager shows only
-when a page has rows and more than one page exists; error, denied, loading and
+stay at full contrast, with both pager buttons disabled in place. The pager shows
+only when a page has rows and more than one page exists; error, denied, loading and
 empty states have none. A failed request (no connection) reads differently from
 a missing report.
 
