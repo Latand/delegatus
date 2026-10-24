@@ -266,15 +266,17 @@ test("acknowledgements, lock waits, reentry after a drain and completion failure
   } finally { clearTimeout(unlock); fs.rmSync(lock, { force: true }); releaseDrain(drainFile(), "reentry"); dropRun("nonrenew-blocker"); accountManager.resolveHeadlessSpawn = previous; await pending; await server.close(); }
 }, 20000);
 
-for (const recovery of [true, false]) test(`owner first-message hold ${recovery ? "recovers" : "fails at the fixed bound"} with queued progress`, async () => {
+for (const recovery of [true, false]) test(`owner first-message hold ${recovery ? "recovers" : "reaches the target cap"} with queued progress`, async () => {
   const beats: { progress: { label: string } | null }[] = [], stops: string[] = [];
   const server = await startTestRelay((req, body) => {
     if (req.url?.endsWith("/heartbeat")) beats.push(body as typeof beats[number]);
     return { body: { status: "ok" } };
   });
   const relay = paired(`${server.origin}/v1`); relay.targets[0]!.ownerTier = true;
+  relay.targets[0]!.hardCapMinutes = 5000 / 60_000;
   updateRelayStore(s => ({ ...s, relays: [relay] }));
-  const request = claim(`owner-hold-${recovery}`); request.input.requester.is_owner = true;
+  const request = { ...claim(`owner-hold-${recovery}`), liveness: { ...contextRequest.liveness, heartbeat_interval_s: 2 } };
+  request.input.requester.is_owner = true;
   const start = performance.now();
   try {
     const result = await runClaimedRequest(relay, request, undefined, { ownerPorts: {
@@ -284,9 +286,9 @@ for (const recovery of [true, false]) test(`owner first-message hold ${recovery 
     } });
     expect(beats[0]?.progress?.label).toBe("accepted");
     expect(beats.some(b => b.progress?.label === "queued")).toBe(true);
-    expect(result).toMatchObject(recovery ? { outcome: "answered", answer: { text: "Done" } } : { outcome: "failed", reason: "agent_error" });
+    expect(result).toMatchObject(recovery ? { outcome: "answered", answer: { text: "Done" } } : { outcome: "answered", answer: { text: expect.stringMatching(/ran out of time/i) } });
     expect(stops).toEqual(recovery ? [] : ["kill"]);
-    expect(performance.now() - start).toBeLessThan(5000);
+    expect(performance.now() - start).toBeLessThan(6500);
   } finally { await server.close(); }
 }, 10000);
 
@@ -294,7 +296,9 @@ test("capacity returning at the admission cutoff cannot start expired waiting wo
   let now = Date.now(); const clock = spyOn(Date, "now").mockImplementation(() => now);
   const server = await startTestRelay(() => ({ body: { status: "ok" } }));
   const relay = paired(`${server.origin}/v1`); reserveRun(blocker(relay, "cutoff-blocker"));
-  const pending = runClaimedRequest(relay, claim("cutoff-return", 11000), undefined, { command });
+  // Keep the service timestamp on the same clock as the mocked local cutoff.
+  const pending = runClaimedRequest(relay, { ...claim("cutoff-return", 11000),
+    deadline_at: new Date(now + 11000).toISOString() }, undefined, { command });
   try {
     await Bun.sleep(150); now += 1000; dropRun("cutoff-blocker");
     expect(await pending).toMatchObject({ outcome: "declined", reason: "busy" });

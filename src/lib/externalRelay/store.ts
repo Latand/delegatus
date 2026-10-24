@@ -100,7 +100,12 @@ export type RunRecord = {
   /** Present only on a full owner run, bound by the Viewer to its spawn receipt. */
   conversationId?: string;
   /** Durable custody survives a lost lease, cutoff, or Viewer restart. */
-  ownerTurn?: { diagnostic?: OwnerTurnDiagnostic; continuation?: { operationId: string }; clientAttemptId: string; prototype?: true; request?: { text: string; requestText: string | null }; bridgeReport?: OwnerBridgeContext; admissionComplete?: boolean; cancel?: "interrupt" | "kill"; confirmed?: boolean;
+  ownerTurn?: { rawRequest?: unknown; context?: import("./profile").OwnerInstruction; restartRetries?: 1; restartPending?: true;
+    delivery?: import("./protocol").OwnerDelivery;
+    lateAnswer?: { body: ExternalRelayCompletion; files: import("./attachments").StagedAttachment[];
+      clientKey?: string; payload?: import("./cloneSend").CloneSendInput; firstAttemptAt?: number; nextAttemptAt?: number;
+      status?: "retry" | "pending-delivery-context" | "uncertain" | "retry-expired" };
+    diagnostic?: OwnerTurnDiagnostic; continuation?: { operationId: string }; clientAttemptId: string; prototype?: true; request?: { text: string; requestText: string | null }; bridgeReport?: OwnerBridgeContext; admissionComplete?: boolean; cancel?: "interrupt" | "kill"; confirmed?: boolean;
     /** When the cutoff was first written; older rows fall back to startedAt. */
     cancelledAt?: string;
     /** The target slot was released while this custody record is retained. */
@@ -386,10 +391,13 @@ export async function reserveRunAsync(
   record: RunRecord,
   maxConcurrent: number | undefined,
   until: number,
+  replaceStoppedOwner = false,
 ): Promise<"added" | "duplicate" | "full"> {
   let outcome: "added" | "duplicate" | "full" = "full";
   await updateRunLedgerAsync((ledger) => {
-    if (ledger.runs.some((run) => run.requestId === record.requestId)) {
+    const previous = ledger.runs.find(run => run.requestId === record.requestId);
+    if (previous && !(replaceStoppedOwner && previous.ownerTurn?.confirmed
+      && record.ownerTurn?.restartRetries === 1 && previous.relayId === record.relayId && previous.targetId === record.targetId)) {
       outcome = "duplicate";
       return ledger;
     }
@@ -402,7 +410,7 @@ export async function reserveRunAsync(
     )
       return ledger;
     outcome = "added";
-    return { ...ledger, runs: [...ledger.runs, record] };
+    return { ...ledger, runs: [...ledger.runs.filter(run => run.requestId !== record.requestId), record] };
   }, until);
   return outcome;
 }

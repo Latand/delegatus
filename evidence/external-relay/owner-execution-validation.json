@@ -1,0 +1,339 @@
+{
+  "date": "2026-10-24",
+  "assembled_at_utc": "2026-10-24T15:25:25.287952+00:00",
+  "base_commit": "3736d5e434149f257061a94cb74b4c0806f152c8",
+  "upstream_checked": "20933a6d8cbe014f2bc59ee813a42ca5af189425",
+  "upstream_scope_changes": [],
+  "outcome": "pass",
+  "contract": {
+    "send_document": "CelestiaCompose docs/design/relay-send-as-clone.md sections 1.1–1.7 and 9 (read-only)",
+    "claim_context": "Optional owner_delivery with chat_id, trigger reply_to_message_id, and nullable message_thread_id; confirmed additive service contract for the next backend release.",
+    "route": "POST /api/relay/v1/targets/{target_id}/send",
+    "client": "src/lib/externalRelay/cloneSend.ts",
+    "authentication": "Existing pairing credential and relay v1 version headers.",
+    "payload": "Persisted SendMessage payload and client_key reused across retries and restarts; trigger reply and topic mapped directly.",
+    "media": "Text only; a note states when files were omitted.",
+    "missing_context": "Durable pending-delivery-context; log the status and send nothing.",
+    "rollout": "404 and unavailable responses retain the answer for retry. Explicit uncertainty and expired unresolved keys stay fenced to prevent duplicates."
+  },
+  "environment": {
+    "bun": "1.4.0",
+    "gate": "Stage-provided scripts/gate-slot.sh; local CPU admission; one heavy command at a time.",
+    "isolation": [
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "TMPDIR",
+      "LLV_STATE_DIR"
+    ],
+    "viewer_control": "Closed loopback port.",
+    "transports": "Port-0 fake services and stub agent ports; no live relay or agent service.",
+    "dependencies": "Manifest and lockfile matched the dependency source; installed pinned versions checked.",
+    "stateful_comparisons": "Project local-gate-tests.ts, one explicit file per invocation, against the starting commit."
+  },
+  "acceptance": {
+    "owner_deadline_and_files": "Owner work crosses the service deadline and sends text via the real clone HTTP client, including omission notes.",
+    "member_deadline": "A member carrying owner_delivery is still stopped at the service deadline.",
+    "restart": "Real processes are killed and restarted; one execution retry, preserved routing context, a durable 404 retry and one final answer.",
+    "second_restart": "An interrupted execution retry reports failure without another launch.",
+    "stable_key": "Lost acknowledgements and repeated delivery reuse the persisted payload and key.",
+    "agent_error": "Observation exit code and pre-transcript launch causes are retained in the local record and journal.",
+    "write_refusal": "Refusing the restart-budget write leaves the next sweep able to recover."
+  },
+  "tested_files": [
+    "src/lib/externalRelay/answers.test.ts",
+    "src/lib/externalRelay/cloneSend.test.ts",
+    "src/lib/externalRelay/hold.runner.test.ts",
+    "src/lib/externalRelay/ownerAnswer.test.ts",
+    "src/lib/externalRelay/ownerLateDelivery.test.ts",
+    "src/lib/externalRelay/ownerLifecycle.test.ts",
+    "src/lib/externalRelay/ownerTier.test.ts",
+    "src/lib/externalRelay/poller.test.ts",
+    "src/lib/externalRelay/protocol.test.ts",
+    "src/lib/externalRelay/requestWindow.test.ts",
+    "src/lib/externalRelay/runner.test.ts",
+    "src/lib/externalRelay/store.test.ts"
+  ],
+  "checks": [
+    {
+      "name": "baseline-ledger",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/lib/externalRelay/runner.test.ts",
+        "-t",
+        "^a persistent ledger read error still releases the local slot$"
+      ],
+      "exit": 0,
+      "tree": "base"
+    },
+    {
+      "name": "src/lib/externalRelay/ownerLifecycle.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/lib/externalRelay/ownerLifecycle.test.ts"
+      ],
+      "exit": 0,
+      "pass": 13,
+      "fail": 0
+    },
+    {
+      "name": "src/lib/externalRelay/ownerLateDelivery.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/lib/externalRelay/ownerLateDelivery.test.ts"
+      ],
+      "exit": 0,
+      "pass": 15,
+      "fail": 0
+    },
+    {
+      "name": "src/lib/externalRelay/cloneSend.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/lib/externalRelay/cloneSend.test.ts"
+      ],
+      "exit": 0,
+      "pass": 23,
+      "fail": 0
+    },
+    {
+      "name": "types",
+      "command": [
+        "bun",
+        "x",
+        "tsc",
+        "--noEmit",
+        "--incremental",
+        "false"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "eslint",
+      "command": [
+        "bun",
+        "node_modules/eslint/bin/eslint.js",
+        "src/lib/externalRelay/answers.ts",
+        "src/lib/externalRelay/cloneSend.test.ts",
+        "src/lib/externalRelay/cloneSend.ts",
+        "src/lib/externalRelay/diagnostic.ts",
+        "src/lib/externalRelay/hold.runner.test.ts",
+        "src/lib/externalRelay/ownerAnswer.ts",
+        "src/lib/externalRelay/ownerLateDelivery.test.ts",
+        "src/lib/externalRelay/ownerLateDelivery.ts",
+        "src/lib/externalRelay/ownerLifecycle.fixture.ts",
+        "src/lib/externalRelay/ownerLifecycle.test.ts",
+        "src/lib/externalRelay/ownerRun.ts",
+        "src/lib/externalRelay/ownerTier.test.ts",
+        "src/lib/externalRelay/poller.ts",
+        "src/lib/externalRelay/protocol.ts",
+        "src/lib/externalRelay/requestWindow.test.ts",
+        "src/lib/externalRelay/runner.test.ts",
+        "src/lib/externalRelay/runner.ts",
+        "src/lib/externalRelay/store.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "comparison-hold.runner",
+      "command": [
+        "bun",
+        "scripts/local-gate-tests.ts",
+        "--base",
+        "3736d5e434149f257061a94cb74b4c0806f152c8",
+        "src/lib/externalRelay/hold.runner.test.ts"
+      ],
+      "exit": 0,
+      "new_failures": 0,
+      "preexisting_failures": 11,
+      "head_green": false
+    },
+    {
+      "name": "comparison-ownerTier",
+      "command": [
+        "bun",
+        "scripts/local-gate-tests.ts",
+        "--base",
+        "3736d5e434149f257061a94cb74b4c0806f152c8",
+        "src/lib/externalRelay/ownerTier.test.ts"
+      ],
+      "exit": 0,
+      "new_failures": 0,
+      "preexisting_failures": 1,
+      "head_green": false
+    },
+    {
+      "name": "comparison-runner",
+      "command": [
+        "bun",
+        "scripts/local-gate-tests.ts",
+        "--base",
+        "3736d5e434149f257061a94cb74b4c0806f152c8",
+        "src/lib/externalRelay/runner.test.ts"
+      ],
+      "exit": 0,
+      "new_failures": 0,
+      "preexisting_failures": 0,
+      "head_green": true
+    },
+    {
+      "name": "comparison-protocol",
+      "command": [
+        "bun",
+        "scripts/local-gate-tests.ts",
+        "--base",
+        "3736d5e434149f257061a94cb74b4c0806f152c8",
+        "src/lib/externalRelay/protocol.test.ts"
+      ],
+      "exit": 0,
+      "new_failures": 0,
+      "preexisting_failures": 1,
+      "head_green": false
+    },
+    {
+      "name": "comparison-ownerAnswer",
+      "command": [
+        "bun",
+        "scripts/local-gate-tests.ts",
+        "--base",
+        "3736d5e434149f257061a94cb74b4c0806f152c8",
+        "src/lib/externalRelay/ownerAnswer.test.ts"
+      ],
+      "exit": 0,
+      "new_failures": 0,
+      "preexisting_failures": 0,
+      "head_green": true
+    },
+    {
+      "name": "privacy",
+      "command": [
+        "bun",
+        "scripts/privacy-publication-gate.ts",
+        "--repository",
+        ".",
+        "--require-known-values",
+        "--paths",
+        "docs/design/relay.md",
+        "docs/guide/telegram.md",
+        "evidence/external-relay/owner-execution-validation.json",
+        "src/lib/externalRelay/answers.ts",
+        "src/lib/externalRelay/cloneSend.test.ts",
+        "src/lib/externalRelay/cloneSend.ts",
+        "src/lib/externalRelay/diagnostic.ts",
+        "src/lib/externalRelay/hold.runner.test.ts",
+        "src/lib/externalRelay/ownerAnswer.ts",
+        "src/lib/externalRelay/ownerLateDelivery.test.ts",
+        "src/lib/externalRelay/ownerLateDelivery.ts",
+        "src/lib/externalRelay/ownerLifecycle.fixture.ts",
+        "src/lib/externalRelay/ownerLifecycle.test.ts",
+        "src/lib/externalRelay/ownerRun.ts",
+        "src/lib/externalRelay/ownerTier.test.ts",
+        "src/lib/externalRelay/poller.ts",
+        "src/lib/externalRelay/protocol.ts",
+        "src/lib/externalRelay/requestWindow.test.ts",
+        "src/lib/externalRelay/runner.test.ts",
+        "src/lib/externalRelay/runner.ts",
+        "src/lib/externalRelay/store.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "src/lib/externalRelay/requestWindow.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/lib/externalRelay/requestWindow.test.ts"
+      ],
+      "exit": 0,
+      "pass": 15,
+      "fail": 0
+    },
+    {
+      "name": "src/lib/externalRelay/answers.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/lib/externalRelay/answers.test.ts"
+      ],
+      "exit": 0,
+      "pass": 7,
+      "fail": 0
+    },
+    {
+      "name": "src/lib/externalRelay/poller.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/lib/externalRelay/poller.test.ts"
+      ],
+      "exit": 0,
+      "pass": 30,
+      "fail": 0
+    },
+    {
+      "name": "src/lib/externalRelay/store.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "src/lib/externalRelay/store.test.ts"
+      ],
+      "exit": 0,
+      "pass": 11,
+      "fail": 0
+    }
+  ],
+  "preexisting_failures": [
+    "src/lib/externalRelay/hold.runner.test.ts: two owner chains in one chat run together; a reply waits for only its chain",
+    "src/lib/externalRelay/hold.runner.test.ts: drain hold acknowledges, queues, then serves without taking execution capacity",
+    "src/lib/externalRelay/hold.runner.test.ts: drain hold acknowledges, queues, then declines busy at the bound without taking execution capacity",
+    "src/lib/externalRelay/hold.runner.test.ts: capacity hold acknowledges, queues, then serves without taking execution capacity",
+    "src/lib/externalRelay/hold.runner.test.ts: capacity hold acknowledges, queues, then declines busy at the bound without taking execution capacity",
+    "src/lib/externalRelay/hold.runner.test.ts: chat hold acknowledges, queues, then serves without taking execution capacity",
+    "src/lib/externalRelay/hold.runner.test.ts: chat hold acknowledges, queues, then declines busy at the bound without taking execution capacity",
+    "src/lib/externalRelay/hold.runner.test.ts: shrinking stall window 10s bounds unacknowledged admission",
+    "src/lib/externalRelay/hold.runner.test.ts: acknowledgements, lock waits, reentry after a drain and completion failures never renew the deadline",
+    "src/lib/externalRelay/hold.runner.test.ts: owner first-message hold recovers with queued progress",
+    "src/lib/externalRelay/hold.runner.test.ts: capacity returning at the admission cutoff cannot start expired waiting work",
+    "src/lib/externalRelay/ownerTier.test.ts: owner final answers refuse truncated JSON credentials",
+    "src/lib/externalRelay/protocol.test.ts: N1 preserves every pre-amendment v3 answer, compact, completion and X2 capture byte"
+  ],
+  "notes": [
+    "The full runner and owner-answer suites pass under the project comparison gate.",
+    "ESLint reports three existing unused-variable warnings.",
+    "No performance claim."
+  ],
+  "inputs_sha256": {
+    "docs/design/relay.md": "533d5a3bfec3e6e259b9bf56be3c9826296f3655a2457e03bd49ce8e292002a7",
+    "docs/guide/telegram.md": "3fdfe85700899cabe1dd9625eef6b0568d9756b1ce5c7833e42d9d8520403894",
+    "src/lib/externalRelay/answers.ts": "bb1cbd62d18e882b97081e63bce6b102e7e6ee644a33667c306fe7afef0f8e7c",
+    "src/lib/externalRelay/cloneSend.test.ts": "f90c401bfcaf42a9b41380f1a55c041f451841020e2e8f6e99de23bb2f2214b1",
+    "src/lib/externalRelay/cloneSend.ts": "da4f64d1da4cfe84d1b15e70846f2ebbac71f9b7db37404e4d23c2483235376e",
+    "src/lib/externalRelay/diagnostic.ts": "c392074f81c2077760a8276c671a6291bd4e54dd1eee186e67c6bd429ade265b",
+    "src/lib/externalRelay/hold.runner.test.ts": "8fc729365664522dd64671ac04456eb29a1690bf50fb06ad3af04147fe0e3a96",
+    "src/lib/externalRelay/ownerAnswer.ts": "c022f3af95274d01be66d846e9bb483493aab4232e35aee282a60f539f54edc1",
+    "src/lib/externalRelay/ownerLateDelivery.test.ts": "40af020c9c637d99738367476178d830f0441e23d971452b26c1bdc59467aaac",
+    "src/lib/externalRelay/ownerLateDelivery.ts": "879b9616ab5e14f272c2632ad36ca474d3fb87f666b72c225af3bb3abe6b10a9",
+    "src/lib/externalRelay/ownerLifecycle.fixture.ts": "d241033944b1b7e9e3027e075e9aff6964748983f6f1c6af072c94f04d83b9d2",
+    "src/lib/externalRelay/ownerLifecycle.test.ts": "da94497628675816ed2afbbf0ddd1508782d0a21c9de7317c3fe2d7fbf3669f0",
+    "src/lib/externalRelay/ownerRun.ts": "2ddd0523af6adcfbc7179562aade2efbf14ab3020b37cc8eb2439d05596b05f4",
+    "src/lib/externalRelay/ownerTier.test.ts": "e78e82a9fe2697258b17b960406097e1ade4d14e97b68eb829d2e58161ad6dfb",
+    "src/lib/externalRelay/poller.ts": "62d02b8dde45d227d1d41b421f9df16c0fd7894dd34da7d3edbe6d3e7ba85e5d",
+    "src/lib/externalRelay/protocol.ts": "a25babfa2a2040f17f37a17d686a7f0808f4c31b377df41bcc1f276545311b38",
+    "src/lib/externalRelay/requestWindow.test.ts": "d9e7743787ccf2de86540330cdb0deab1c6a7e4a206de3173dc818799b4eb176",
+    "src/lib/externalRelay/runner.test.ts": "5365a82aa28bd4a6beae745c5fac57a51c1f3d042139ff4903e2f5968d14eeed",
+    "src/lib/externalRelay/runner.ts": "05fc50881cff1be4eb54b31a4107fe8c01b8dd61bea1ebd073f0a82a40734184",
+    "src/lib/externalRelay/store.ts": "bf370f30dee12224e1eac302f4897b596abde603523a2b579487bf51597794ea"
+  },
+  "publication": "Commit in the assigned stage worktree with normal hooks; no push and no workflow changes."
+}
