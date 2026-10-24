@@ -1,3 +1,4 @@
+import { PipelineStrip } from "@/components/pipelines/PipelineStrip";
 import { RelayChatsView } from "@/components/externalRelay/RelayChats";
 import type { RelayChatsPayload } from "@/lib/externalRelay/relayChats";
 import { PipelineTemplatePicker } from "@/components/pipelines/PipelineTemplatePicker";
@@ -1751,6 +1752,8 @@ const stageChainPipelines: Pipeline[] = STAGE_CHAIN ? (() => {
   ];
 })() : [];
 
+const cloudCheckChoices = new Map<string, "cloud" | "local">();
+let projectCloudCheckChoice: "cloud" | "local" = "cloud";
 const pipelines: Pipeline[] = [
   ...wallPipelines,
   ...unstartedPipelines,
@@ -4525,6 +4528,16 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const id = decodeURIComponent(url.pathname.split("/")[3] ?? "");
     const index = pipelines.findIndex((entry) => entry.id === id);
     if (index < 0) return json({ error: "pipeline not found" }, 404);
+    if (url.pathname.endsWith("/checks")) {
+      if (method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        if (body.scope === "project") projectCloudCheckChoice = body.execution ?? "cloud";
+        else if (body.execution === null) cloudCheckChoices.delete(id);
+        else cloudCheckChoices.set(id, body.execution);
+      }
+      const override = cloudCheckChoices.get(id) ?? null;
+      return json({ project: projectCloudCheckChoice, override, effective: override ?? projectCloudCheckChoice });
+    }
     if (method === "GET") {
       evidence.pipelineReads.push(id);
       const read = pipelines[index]!;
@@ -5146,7 +5159,7 @@ const relayChainEvidence: RelayChatsPayload = { relays: [{ id: "fixture-relay", 
     engine: "claude", turns: 3, compactions: 0, createdAt: "2026-10-17T10:00:00Z", lastTurnAt: "2026-10-17T10:00:00Z", state: "idle", file: { ...files[0]!, path: `fixture-chain-${i}`, title: `Chain ${i}` } })) };
 createRoot(document.getElementById("root")!).render(SCENARIO === "workspaces-team" ? <TeamPage initialTab="workspaces" initialCreate={WORKSPACE_PARAMS.has("create")} />
   : SCENARIO === "workspaces-page" ? <WorkspacePage id={FIXTURE_WORKSPACE_IDS[(WORKSPACE_PARAMS.get("page") ?? "client") as keyof typeof FIXTURE_WORKSPACE_IDS]} />
-  : PIPELINE_INIT ? <PipelineTemplatePicker repoDir="/project" onCreate={async () => ({})} onCreated={() => {}} onClose={() => {}} /> : SCENARIO === "relay-chain-list" ? <RelayChatsView relayId="fixture-relay" payload={relayChainEvidence} /> : dockWidth === "440" || dockWidth === "360" ? (
+  : SCENARIO === "cloud-checks" ? <div className="p-6"><PipelineStrip pipeline={pipelines[0]!} mobile={innerWidth < 640} /></div> : PIPELINE_INIT ? <PipelineTemplatePicker repoDir="/project" onCreate={async () => ({})} onCreated={() => {}} onClose={() => {}} /> : SCENARIO === "relay-chain-list" ? <RelayChatsView relayId="fixture-relay" payload={relayChainEvidence} /> : dockWidth === "440" || dockWidth === "360" ? (
   <div className="flex h-full min-h-0">
     <OrchestratorDock project={PROJECT} projectName="Atlas" files={files} onClose={() => {}} />
     <div className="min-w-0 flex-1"><Viewer /></div>

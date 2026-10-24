@@ -67,6 +67,36 @@ import { prepareProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profile
 const browserTest = browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1");
 const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) };
 
+describe("Cloud check execution choices", () => {
+  browserTest("lane and project choices persist in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/cloud-checks");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=cloud-checks`, { width, height: 900 }, theme, lang, "reduce", width === 390);
+        try {
+          const more = page.getByRole("button", { name: translate(lang, "pipelineStrip.moreActions") }).filter({ visible: true }).first();
+          await more.click();
+          const lane = page.getByLabel(lang === "en" ? "Lane checks" : "Перевірки смуги", { exact: true });
+          await lane.selectOption("local");
+          await page.waitForFunction(() => document.querySelector<HTMLSelectElement>("[data-cloud-check-lane]")?.value === "local");
+          expect(await lane.inputValue()).toBe("local");
+          const project = page.getByLabel(lang === "en" ? "Project default" : "Типово для проєкту", { exact: true });
+          await project.selectOption("local");
+          await lane.selectOption("");
+          await page.waitForFunction(() => document.querySelector<HTMLSelectElement>("[data-cloud-check-lane]")?.value === "");
+          expect(await lane.inputValue()).toBe("");
+          expect(await project.inputValue()).toBe("local");
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}.png`) });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+  });
+});
+
 describe("legacy review follow-up navigation", () => {
   browserTest("retained follow-up tasks open from desktop and phone in both languages and themes", async () => {
     const out = path.resolve(".artifacts/legacy-review-follow-up");

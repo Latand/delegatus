@@ -1,3 +1,5 @@
+import { AppServerCloudTransport, runCloudChecks, type CloudConfig } from "./cloud-checks";
+import { checkExecutionSettings } from "./cloud-check-settings";
 import { spawnSync } from "node:child_process";
 import { closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -829,6 +831,9 @@ async function main(mode: Mode, admitted = false): Promise<void> {
   if (process.env.LLV_SKIP_HOOKS === "1") return;
   let deadline = pushDeadline(process.env, Date.now(), admitted);
   const root = git(process.cwd(), ["rev-parse", "--show-toplevel"]);
+  if (mode === "pre-push" && process.env.LLV_GATE_PUSH_HEAD && process.env.LLV_GATE_PUSH_HEAD !== git(root, ["rev-parse", "HEAD"])) {
+    throw new Error("pushed head differs from checkout");
+  }
   let base = mode === "pre-commit" ? git(root, ["merge-base", "HEAD", "origin/main"]) : "HEAD";
   const until = deadline?.at ?? Infinity;
   if (mode === "pre-push" && !admitted) {
@@ -909,10 +914,49 @@ async function main(mode: Mode, admitted = false): Promise<void> {
     const options = { root, deadline, logDir: sandbox, prepare, passes, ...(branch ? { ref: branch } : {}) };
     if (mode === "pre-push" && !admitted) {
       const privacy = (cancel?: AbortSignal) => runSteps(mode, steps.filter(step => step.name === "privacy"), { ...options, cancel });
-      const checks = (cancel: AbortSignal) => runAdmittedChecks(
-        ["bash", "scripts/gate-slot.sh", process.execPath, "scripts/local-gate.ts", "pre-push", "--admitted"], root, process.env, deadline, cancel);
-      if (steps.some(step => step.name !== "privacy")) await runPushPair(privacy, checks);
-      else await privacy();
+      const localChecks = (cancel: AbortSignal) => runAdmittedChecks(
+        ["bash", "scripts/gate-slot.sh", process.execPath, "scripts/local-gate.ts", "pre-push", "--admitted"], root,
+        { ...process.env, LLV_GATE_RUNNER: "off" }, deadline, cancel);
+      const execution = process.env.LLV_GATE_EXECUTION ?? (await checkExecutionSettings(root, process.env.LLV_GATE_LANE_ID, process.env.LLV_GATE_STAGE_ID)).effective;
+      if (execution !== "cloud" && execution !== "local") throw new Error("invalid check execution setting");
+      const privacyHead = git(root, ["rev-parse", "HEAD"]);
+      const checks = async (cancel: AbortSignal) => {
+        if (execution === "local") return localChecks(cancel);
+        const head = git(root, ["rev-parse", "HEAD"]);
+        if (head !== privacyHead) throw new Error("source changed during privacy checks");
+        const tree = git(root, ["rev-parse", "HEAD^{tree}"]);
+        // A moving or dirty checkout cannot be mistaken for the pushed tree.
+        if (git(root, ["status", "--porcelain", "--untracked-files=normal"])) throw new Error("Cloud publication checks require a clean checkout");
+        let config: CloudConfig | null = null;
+        if (process.env.LLV_GATE_CLOUD_CONFIG) {
+          try { config = JSON.parse(readFileSync(process.env.LLV_GATE_CLOUD_CONFIG, "utf8")) as CloudConfig; }
+          catch { throw new Error("Cloud check configuration could not be read"); }
+          if (!config || typeof config.url !== "string" || typeof config.environmentId !== "string" || !config.environmentId
+            || typeof config.cwd !== "string" || !config.cwd.startsWith("/") || config.cwd.includes("\0")) throw new Error("incomplete Cloud check configuration");
+          try { if (new URL(config.url).protocol !== "wss:") throw new Error(); }
+          catch { throw new Error("Cloud check configuration requires a secure WebSocket endpoint"); }
+        }
+        let bundle = "";
+        if (config) {
+          const destination = path.join(sandbox, "source.bundle");
+          git(root, ["bundle", "create", destination, "HEAD", `^${base}`]);
+          bundle = readFileSync(destination).toString("base64");
+        }
+        console.error("pre-push: Cloud checks");
+        const code = await runCloudChecks({ head, tree, base, bundle, timeoutMs: Math.max(1, (deadline?.at ?? Date.now() + 15 * 60_000) - Date.now()) },
+          new AppServerCloudTransport(config), async () => {
+            console.error("pre-push: Cloud unavailable after confirmation; running the same checks locally once");
+            await localChecks(cancel); return 0;
+          }, cancel);
+        if (git(root, ["rev-parse", "HEAD"]) !== head || git(root, ["status", "--porcelain", "--untracked-files=normal"])) throw new Error("source changed during Cloud checks");
+        if (code !== 0) throw new AdmittedGateFailed(code);
+      };
+      if (steps.some(step => step.name !== "privacy")) {
+        if (execution === "cloud") {
+          await privacy();
+          await checks(new AbortController().signal);
+        } else await runPushPair(privacy, checks);
+      } else await privacy();
     } else {
       await runSteps(mode, admitted ? steps.filter(step => step.name !== "privacy") : steps, options);
     }

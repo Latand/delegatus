@@ -36,6 +36,7 @@ import {
   compactStageOpenTarget,
   verdictStatusLabel,
 } from "./pipelineModel";
+import { PipelineCheckSettings } from "./PipelineCheckSettings";
 import { StagePlaceholderPane } from "./StagePlaceholderPane";
 import { VerdictPopover } from "./VerdictPopover";
 import { Z } from "@/components/layers";
@@ -780,6 +781,7 @@ export function PipelineStrip({
         {actionsOpen ? (
           <AnchoredActionMenu anchorRef={actionsTriggerRef}>
           <span role="menu" aria-label={t("pipelineStrip.moreActions")} className="flex min-w-[180px] flex-col gap-1 rounded-[10px] border border-border bg-card p-1.5 shadow-3">
+            <PipelineCheckSettings id={pipeline.id} />
             {pipeline.state === "needs_decision" ? (
               <button ref={firstActionRef} role="menuitem" type="button" disabled={busy} onClick={() => void mutate("skip-stage")} className="inline-flex min-h-9 items-center rounded-control px-2 text-left text-ui font-semibold text-secondary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{t("pipelineStrip.skipStage")}</button>
             ) : null}
