@@ -316,7 +316,7 @@ function LiveMcpRow({
         <span
           data-live-mcp-title
           className="min-w-[6rem] flex-1 basis-0 truncate font-semibold text-secondary"
-          title={description.title}
+          title={description.tooltip ?? description.title}
         >
           {description.title}
         </span>

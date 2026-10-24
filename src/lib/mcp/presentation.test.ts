@@ -150,21 +150,25 @@ describe("describeMcpCall", () => {
     }
   });
 
-  test("the receipt state inside a delivery check reads in the interface language (#2250)", () => {
-    const cases: Array<[string | undefined, string, string]> = [
-      ["delivered", "Checking delivery of op-1: delivered", "Перевірка доставки op-1: доставлено"],
-      ["failed", "Checking delivery of op-1: failed", "Перевірка доставки op-1: не доставлено"],
-      ["in-flight", "Checking delivery of op-1: in-flight", "Перевірка доставки op-1: доставляється"],
-      [undefined, "Checking delivery of op-1: unknown", "Перевірка доставки op-1: невідомо"],
+  test("a delivery check leads with its state and keeps the operation id in the tooltip (#2250)", () => {
+    const cases: Array<[string | undefined, string, string, string, string]> = [
+      ["delivered", "Delivered · delivery check", "Доставлено · перевірка доставки", "Checking delivery of op-1: delivered", "Перевірка доставки op-1: доставлено"],
+      ["failed", "Failed · delivery check", "Не доставлено · перевірка доставки", "Checking delivery of op-1: failed", "Перевірка доставки op-1: не доставлено"],
+      ["in-flight", "In-flight · delivery check", "Доставляється · перевірка доставки", "Checking delivery of op-1: in-flight", "Перевірка доставки op-1: доставляється"],
+      [undefined, "Unknown · delivery check", "Невідомо · перевірка доставки", "Checking delivery of op-1: unknown", "Перевірка доставки op-1: невідомо"],
       /* A state the server does not name yet, or one shaped like an inherited
          property, is drawn as written. */
-      ["parked", "Checking delivery of op-1: parked", "Перевірка доставки op-1: parked"],
-      ["toString", "Checking delivery of op-1: toString", "Перевірка доставки op-1: toString"],
+      ["parked", "parked · delivery check", "parked · перевірка доставки", "Checking delivery of op-1: parked", "Перевірка доставки op-1: parked"],
+      ["toString", "toString · delivery check", "toString · перевірка доставки", "Checking delivery of op-1: toString", "Перевірка доставки op-1: toString"],
     ];
-    for (const [state, english, ukrainian] of cases) {
+    for (const [state, english, ukrainian, englishTip, ukrainianTip] of cases) {
       const result = state === undefined ? {} : { state };
-      expect(describeMcpCall("message_receipt", { operationId: "op-1" }, result).title).toBe(english);
-      expect(describeMcpCall("message_receipt", { operationId: "op-1" }, result, uk).title).toBe(ukrainian);
+      const en = describeMcpCall("message_receipt", { operationId: "op-1" }, result);
+      const ua = describeMcpCall("message_receipt", { operationId: "op-1" }, result, uk);
+      expect([en.title, ua.title]).toEqual([english, ukrainian]);
+      expect([en.tooltip, ua.tooltip]).toEqual([englishTip, ukrainianTip]);
+      expect(en.title).not.toContain("op-1");
+      expect(ua.title).not.toContain("op-1");
     }
   });
 

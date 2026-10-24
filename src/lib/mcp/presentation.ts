@@ -36,6 +36,8 @@ export type McpCallDescription = {
   icon: McpCallIcon;
   verb: string;
   title: string;
+  /** The whole line for a hover, when the visible title leaves a detail out. */
+  tooltip?: string;
   subtitle: string;
   links: McpCallLink[];
 };
@@ -71,6 +73,13 @@ const RECEIPT_STATE_KEYS: Record<string, MessageKey> = {
   delivered: "mcp.call.receiptState.delivered",
   failed: "mcp.call.receiptState.failed",
   "in-flight": "mcp.call.receiptState.inFlight",
+};
+
+/* The same states as the opening word of a delivery check's title. */
+const RECEIPT_LEAD_KEYS: Record<string, MessageKey> = {
+  delivered: "mcp.call.receiptLead.delivered",
+  failed: "mcp.call.receiptLead.failed",
+  "in-flight": "mcp.call.receiptLead.inFlight",
 };
 
 function compact(value: string, limit = 120): string {
@@ -166,11 +175,18 @@ export function describeMcpCall(
     const state = !rawState
       ? t("mcp.call.unknownState")
       : Object.hasOwn(RECEIPT_STATE_KEYS, rawState) ? t(RECEIPT_STATE_KEYS[rawState]) : rawState;
+    const lead = !rawState
+      ? t("mcp.call.receiptLead.unknown")
+      : Object.hasOwn(RECEIPT_LEAD_KEYS, rawState) ? t(RECEIPT_LEAD_KEYS[rawState]) : rawState;
     const conversationId = string(result.conversationId);
+    /* The state leads the visible title so a phone's short row still tells a
+       delivered check from a failed one; the operation id (36 characters of
+       UUID) rides in the tooltip and the Details payload. */
     return {
       icon: "message",
       verb: t("mcp.verb.checking"),
-      title: t("mcp.call.messageReceipt", { operation: operationId || t("mcp.call.aSend"), state }),
+      title: t("mcp.call.receiptTitle", { state: lead }),
+      tooltip: t("mcp.call.messageReceipt", { operation: operationId || t("mcp.call.aSend"), state }),
       subtitle: string(result.reason),
       links: conversationId
         ? [{ kind: "conversation", id: conversationId, label: "Open conversation", href: `#c=${encodeURIComponent(conversationId)}` }]

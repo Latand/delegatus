@@ -236,23 +236,27 @@ test("a rejected call whose action names an inherited property still renders its
   }
 });
 
-test("a delivery check names its receipt state in the interface language (#2250)", () => {
+test("a delivery check leads with its receipt state in the interface language (#2250)", () => {
   const receipt = (state: string) => toolEvent({
     tool: "message_receipt",
     status: "ok",
     statusLabel: "ok",
     mcp: { serverName: "viewer", toolName: "message_receipt", args: { operationId: "op-1" }, result: { operationId: "op-1", state } },
   });
-  const title = (container: HTMLElement) => container.querySelector("[data-mcp-title]")?.textContent;
-  const english = { delivered: "delivered", failed: "failed", "in-flight": "in-flight" };
-  const ukrainian = { delivered: "доставлено", failed: "не доставлено", "in-flight": "доставляється" };
+  const title = (container: HTMLElement) => container.querySelector("[data-mcp-title]");
+  const english = { delivered: "Delivered", failed: "Failed", "in-flight": "In-flight" };
+  const ukrainian = { delivered: "Доставлено", failed: "Не доставлено", "in-flight": "Доставляється" };
   for (const [state, word] of Object.entries(english)) {
-    expect(title(render(receipt(state), new Set()))).toBe(`Checking delivery of op-1: ${word}`);
+    const row = title(render(receipt(state), new Set()));
+    expect(row?.textContent).toBe(`${word} · delivery check`);
+    expect(row?.getAttribute("title")).toBe(`Checking delivery of op-1: ${word.toLowerCase()}`);
   }
   setLocale("uk");
   try {
     for (const [state, word] of Object.entries(ukrainian)) {
-      expect(title(render(receipt(state), new Set()))).toBe(`Перевірка доставки op-1: ${word}`);
+      const row = title(render(receipt(state), new Set()));
+      expect(row?.textContent).toBe(`${word} · перевірка доставки`);
+      expect(row?.getAttribute("title")).toBe(`Перевірка доставки op-1: ${word.toLowerCase()}`);
     }
   } finally {
     setLocale("en");

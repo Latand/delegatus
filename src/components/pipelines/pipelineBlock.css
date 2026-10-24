@@ -151,7 +151,10 @@
    the tail keeps the width the row always gave it. */
 .kb .board.narrow .card.shelf .pblock .pb-tail { flex-shrink: 1; min-width: 0; margin-right: -4px; }
 .kb .board.narrow .card.shelf .pblock .pb-tail .pb-open { margin-right: 0; }
-.kb .board.narrow .card.shelf .pblock .pb-meta { flex-shrink: 1; min-width: 0; flex-wrap: wrap; justify-content: flex-end; }
+/* Word over age, one line each and no separator: a wrapped «word ·» left the
+   dot at the end of the first line and the age alone on the next. */
+.kb .board.narrow .card.shelf .pblock .pb-meta { flex-shrink: 1; min-width: 0; flex-direction: column; align-items: flex-end; gap: 0; }
+.kb .board.narrow .card.shelf .pblock .pb-meta .pb-sep { display: none; }
 .pblock .pb-graph { min-width: 0; }
 
 .pblock .stage-report { margin: 2px 0 0; font-size: var(--text-label); color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

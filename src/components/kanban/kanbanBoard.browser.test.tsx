@@ -8577,7 +8577,8 @@ describe("live turn rows on a phone", () => {
    server's. Each title must read exactly as the interface language writes it,
    in en and uk, light and dark, at a phone, a narrow reader and a desktop
    width; no chip, badge or mark may sit on a title, a cut title must end in an
-   ellipsis, and from the narrow reader up the receipt state word is whole.
+   ellipsis, and a delivery check opens with its state word, whole at every
+   width, with the operation id left to the tooltip.
 
      CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
        bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "MCP rows in the interface language"
@@ -8589,12 +8590,12 @@ describe("MCP rows in the interface language", () => {
   const CONVERSATION = "conversation-demo-7781";
   const SEND_TEXT = "Rebase on main and rerun the board driver";
   const SPAWN_SUBJECT = "codex high reviewer · Review the receipt titles";
-  const RECEIPTS = [["delivered", "mcp.call.receiptState.delivered"], ["failed", "mcp.call.receiptState.failed"], ["in-flight", "mcp.call.receiptState.inFlight"]] as const;
+  const RECEIPTS = [["delivered", "mcp.call.receiptLead.delivered"], ["failed", "mcp.call.receiptLead.failed"], ["in-flight", "mcp.call.receiptLead.inFlight"]] as const;
   const MIN_TARGET_PX = 24;
   const MIN_CONTRAST = 4.5;
 
   /* Every title row in the section: its text, how much of it is painted, where
-     the text after the last ": " ends, what sits beside it, and its contrast
+     the opening word of the title ends, what sits beside it, and its contrast
      against the background it is drawn on, ancestor opacity included. */
   const measure = `(() => {
     const canvas = document.createElement("canvas");
@@ -8644,9 +8645,9 @@ describe("MCP rows in the interface language", () => {
         whole.selectNodeContents(title);
         const textBox = whole.getBoundingClientRect();
         const tail = document.createRange();
-        const cut = text.lastIndexOf(": ");
-        tail.setStart(node, cut < 0 ? 0 : cut + 2);
-        tail.setEnd(node, text.length);
+        const cut = text.indexOf(" · ");
+        tail.setStart(node, 0);
+        tail.setEnd(node, cut < 0 ? text.length : cut);
         const tailBox = tail.getBoundingClientRect();
         const neighbours = [...title.parentElement.children, ...row.querySelectorAll("[aria-label]")]
           .filter((el) => el !== title && !title.contains(el) && !el.contains(title));
@@ -8701,10 +8702,10 @@ describe("MCP rows in the interface language", () => {
               await page.waitForTimeout(150);
               const tr = (key: Parameters<typeof translate>[1], params?: Record<string, string>) => translate(lang, key, params);
               const expected = [
-                ...RECEIPTS.map(([, key]) => tr("mcp.call.messageReceipt", { operation: OPERATION, state: tr(key) })),
+                ...RECEIPTS.map(([, key]) => tr("mcp.call.receiptTitle", { state: tr(key) })),
                 tr("mcp.call.sendMessageTo", { conversation: CONVERSATION, text: SEND_TEXT }),
                 tr("mcp.call.spawnAgent", { subject: SPAWN_SUBJECT }),
-                tr("mcp.call.messageReceipt", { operation: OPERATION, state: tr("mcp.call.unknownState") }),
+                tr("mcp.call.receiptTitle", { state: tr("mcp.call.receiptLead.unknown") }),
                 tr("mcp.call.sendMessageTo", { conversation: CONVERSATION, text: SEND_TEXT }),
                 tr("mcp.call.spawnAgent", { subject: SPAWN_SUBJECT }),
               ];
@@ -8740,8 +8741,10 @@ describe("MCP rows in the interface language", () => {
                 if (row.titleBottom > reading.viewportHeight) failures.push(`${name}: the title is below the first screen (${row.titleBottom} > ${reading.viewportHeight})`);
                 if (row.contrast < MIN_CONTRAST) failures.push(`${name}: title contrast ${row.contrast}:1`);
                 for (const target of row.targets) if (target < MIN_TARGET_PX) failures.push(`${name}: a ${target}px control`);
-                /* From the narrow reader up, the receipt state is read in full. */
-                if (!phone && index < 3 && (row.truncated || !row.tailWhole)) failures.push(`${name}: the receipt state is cut ("${row.text}", ${row.paintedShare}% painted)`);
+                /* The receipt state opens the title, so it is whole at every width,
+                   the phone included, and the operation id is not in the line. */
+                if (index < 3 && !row.tailWhole) failures.push(`${name}: the receipt state is cut ("${row.text}", ${row.paintedShare}% painted)`);
+                if (row.text.includes(OPERATION)) failures.push(`${name}: the operation id fills the title`);
               }
               if (reading.scrollWidth > width) failures.push(`${label}: the document scrolls sideways (${reading.scrollWidth} > ${width})`);
             } finally {
@@ -15691,8 +15694,12 @@ describe("narrow shelf card titles read as words", () => {
    *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "narrow shelf card titles"
    *
    * Gated, for every shelf card in view: the title spans the card's row beside
-   * its icon; the first line breaks between words; the card's controls sit
-   * whole inside the card, under nothing, and meet no title ink. Frames go to
+   * its icon and the one control that stays in the row; the first line breaks
+   * between words; the card's visible controls sit whole inside the card, under
+   * nothing, and meet no title ink; the title sits as close to the status line
+   * as a wide card's does; no line of a pipeline block's tail starts or ends
+   * with its separator and a state word meets no return counter. Hovering a
+   * card brings up the controls the row leaves out, whole and clickable. Frames go to
    * NARROW_SHELF_PNG_DIR (default `.artifacts/narrow-shelf-titles/`), never
    * into the repository, with `readings.json` beside them.
    */
@@ -15748,7 +15755,8 @@ describe("narrow shelf card titles read as words", () => {
                 const clip = box(clamp.getBoundingClientRect());
                 return [...range.getClientRects()].map(box).filter((r) => meets(r, clip));
               })();
-              const tools = [...card.querySelectorAll<HTMLElement>(".head > .tools > *")].filter((tool) => tool.getClientRects().length).map((tool) => {
+              /* A control at zero opacity is out of the way until the card is hovered or focused. */
+              const tools = [...card.querySelectorAll<HTMLElement>(".head > .tools > *")].filter((tool) => tool.getClientRects().length && Number(getComputedStyle(tool).opacity) > 0.01).map((tool) => {
                 const r = box(tool.getBoundingClientRect());
                 const hit = document.elementFromPoint((r.left + r.right) / 2, (r.top + r.bottom) / 2);
                 return {
@@ -15766,6 +15774,41 @@ describe("narrow shelf card titles read as words", () => {
                 iconWidth: Math.round(icon.getBoundingClientRect().width),
                 titleWidth: Math.round(title.getBoundingClientRect().width),
                 firstLine, midWord, tools,
+                /* The gap from the title's last ink to the card's next row. */
+                gapToState: (() => {
+                  const next = card.querySelector<HTMLElement>(":scope > .card-state, :scope > .motion-line");
+                  return next ? Math.round(next.getBoundingClientRect().top - Math.max(...ink.map((line) => line.bottom))) : null;
+                })(),
+                /* The pipeline block's tail (#2184): each laid-out line of its
+                   text, from per-character ranges, and the ink its state word
+                   shares with a return counter. */
+                tails: [...card.querySelectorAll<HTMLElement>(".pblock .pb-tail")].map((tail) => {
+                  const rows: Array<{ top: number; text: string }> = [];
+                  const walker = document.createTreeWalker(tail, NodeFilter.SHOW_TEXT);
+                  for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+                    const value = text.nodeValue ?? "";
+                    if (!value.trim() || !text.parentElement || getComputedStyle(text.parentElement).display === "none") continue;
+                    for (let index = 0; index < value.length; index++) {
+                      const range = document.createRange();
+                      range.setStart(text, index);
+                      range.setEnd(text, index + 1);
+                      const rect = range.getClientRects()[0];
+                      if (!rect || !value[index]!.trim()) continue;
+                      const row = rows.find((candidate) => Math.abs(candidate.top - rect.top) < 4);
+                      if (row) row.text += value[index]; else rows.push({ top: rect.top, text: value[index]! });
+                    }
+                  }
+                  return rows.sort((a, b) => a.top - b.top).map((row) => row.text);
+                }),
+                wordOnCounter: (() => {
+                  const ink = (selector: string) => [...card.querySelectorAll<HTMLElement>(selector)].flatMap((el) => {
+                    const range = document.createRange();
+                    range.selectNodeContents(el);
+                    return [...range.getClientRects()].map(box);
+                  });
+                  const counters = ink(".pret");
+                  return ink(".pstate-word").some((word) => counters.some((counter) => meets(word, counter)));
+                })(),
               };
             });
             return {
@@ -15781,14 +15824,46 @@ describe("narrow shelf card titles read as words", () => {
           if (reading.cards.length < 3) failures.push(`${label}: only ${reading.cards.length} shelf cards in view`);
           for (const card of reading.cards) {
             /* The title takes its row beside the icon, the 6 px gap and nothing else. */
-            if (card.titleWidth < card.rowWidth - card.iconWidth - 12) failures.push(`${label}: ${card.id} title ${card.titleWidth} px of a ${card.rowWidth} px row`);
+            /* Beside the icon, the 6 px gap and the ⋯ that stays in the row. */
+            if (card.titleWidth < card.rowWidth - card.iconWidth - 12 - 28) failures.push(`${label}: ${card.id} title ${card.titleWidth} px of a ${card.rowWidth} px row`);
             if (card.midWord) failures.push(`${label}: ${card.id} first line breaks inside a word: «${card.firstLine}»`);
+            for (const lines of card.tails) {
+              for (const line of lines) if (/^·|·$/.test(line)) failures.push(`${label}: ${card.id} a tail line starts or ends with a separator: «${line}»`);
+            }
+            if (card.gapToState !== null && card.gapToState > 16) failures.push(`${label}: ${card.id} title is ${card.gapToState} px above the status line`);
+            if (card.wordOnCounter) failures.push(`${label}: ${card.id} a state word meets a return counter`);
             for (const tool of card.tools) {
               if (!tool.inside) failures.push(`${label}: ${card.id} ${tool.label} leaves the card`);
               if (tool.covered) failures.push(`${label}: ${card.id} ${tool.label} is under something`);
               if (tool.onTitle) failures.push(`${label}: ${card.id} ${tool.label} meets the title`);
             }
           }
+          /* Hovered, a card shows all its controls, whole inside it and not under anything. */
+          const hovered = page.locator(".column .card.shelf:not(:has(.lock))").first();
+          await hovered.scrollIntoViewIfNeeded();
+          await hovered.hover();
+          await page.waitForTimeout(250);
+          const shown = await hovered.evaluate((card) => [...card.querySelectorAll<HTMLElement>(".head > .tools > *")].filter((tool) => tool.getClientRects().length).map((tool) => {
+            const r = tool.getBoundingClientRect();
+            const c = card.getBoundingClientRect();
+            const hit = document.elementFromPoint((r.left + r.right) / 2, (r.top + r.bottom) / 2);
+            return {
+              label: tool.getAttribute("aria-label") ?? tool.className,
+              opacity: Number(getComputedStyle(tool).opacity),
+              inside: r.left >= c.left - 0.5 && r.right <= c.right + 0.5 && r.top >= c.top - 0.5 && r.bottom <= c.bottom + 0.5,
+              covered: !(hit && (hit === tool || tool.contains(hit))),
+            };
+          }));
+          readings[`${label}-hover`] = shown;
+          if (shown.length < 3) failures.push(`${label}: a hovered card shows ${shown.length} controls`);
+          for (const tool of shown) {
+            if (tool.opacity < 1) failures.push(`${label}: hovered ${tool.label} is at opacity ${tool.opacity}`);
+            if (!tool.inside) failures.push(`${label}: hovered ${tool.label} leaves the card`);
+            if (tool.covered) failures.push(`${label}: hovered ${tool.label} is under something`);
+          }
+          await page.screenshot({ path: path.join(out, `${label}-hover.png`) });
+          await page.mouse.move(0, 0);
+          await page.waitForTimeout(250);
           if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
           await page.screenshot({ path: path.join(out, `${label}.png`) });
         } finally {
