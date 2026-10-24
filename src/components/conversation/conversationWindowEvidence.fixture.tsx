@@ -1127,6 +1127,9 @@ function mountRetiredOrchestrator(root: HTMLElement): void {
     const url = new URL(String(input), location.origin);
     if (init?.method === "POST" && /^\/api\/(?:tmux|runtime\/send|orchestrator\/message)$/.test(url.pathname)) sends += 1;
     if (url.pathname === "/api/orchestrator/seat") {
+      if (rotated && params.get("detailFailure") === "1" && url.searchParams.get("scope") !== "all") {
+        return Response.json({ error: "temporarily unavailable" }, { status: 503 });
+      }
       const current = rotated ? "conversation_current" : file.conversationId;
       return Response.json({
         seat: { project: file.project, conversationId: current, path: rotated ? "/fixtures/current.jsonl" : file.path,

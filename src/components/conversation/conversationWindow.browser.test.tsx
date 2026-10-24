@@ -36,6 +36,28 @@ const LAUNCH: LaunchOptions = {
 const FIXTURE = "src/components/conversation/conversationWindowEvidence.fixture.tsx";
 
 describe("retired orchestrator", () => {
+  browserTest("a failed detailed seat read preserves the phone's retired-recipient block", async () => {
+    const out = path.resolve(".artifacts/retired-orchestrator");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=retired-orchestrator&lang=uk&detailFailure=1`, { width: 390, height: 844 }, "dark", "uk");
+      try {
+        await page.locator("textarea").waitFor();
+        await page.evaluate(() => (window as unknown as { retiredOrchestrator: { rotate(): void } }).retiredOrchestrator.rotate());
+        const banner = page.locator("[data-retired-orchestrator]");
+        await banner.waitFor();
+        expect(await banner.getByRole("link").count()).toBe(0);
+        expect(await banner.innerText()).toContain(translate("uk", "retiredOrchestrator.unavailable"));
+        expect(await page.locator("[data-outbox-retry=retired-message]").isDisabled()).toBe(true);
+        expect(await page.locator("textarea").inputValue()).toBe("Unsent draft stays here");
+        expect(await page.evaluate(() => (window as unknown as { retiredOrchestrator: { sends(): number } }).retiredOrchestrator.sends())).toBe(0);
+        await page.screenshot({ path: path.join(out, "uk-dark-390-unavailable.png"), fullPage: true });
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); served.stop(); }
+  });
   browserTest("a rotated recipient keeps drafts and offers a current conversation link in every viewport", async () => {
     const out = path.resolve(".artifacts/retired-orchestrator");
     fs.mkdirSync(out, { recursive: true });

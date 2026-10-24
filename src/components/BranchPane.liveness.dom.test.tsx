@@ -11,6 +11,9 @@ import { bindStructuredDeliveryQueue, hasStructuredDeliveryHost } from "@/lib/ru
 import type { FileEntry } from "@/lib/types";
 import { resetOrchestratorSeatCacheForTests } from "./orchestrator/useOrchestratorSeat";
 import { enqueueOutbox, readOutbox, updateOutbox } from "./conversation/outbox";
+import { messageRowRecovery } from "./conversation/rowRecovery";
+import { composerSubmissionPayloads } from "@/lib/composerSubmissionPayloads";
+import { installComposerStorageForTests } from "@/test-helpers/composerStorage";
 
 class TestResizeObserver {
   observe() {}
@@ -95,6 +98,7 @@ mock.module("@/hooks/useLogTail", () => ({
 const { BranchPane } = await import("./BranchPane");
 const { appendComposerDraft } = await import("./TmuxComposer");
 const originalFetch = globalThis.fetch;
+const composerStorage = installComposerStorageForTests();
 
 const roots = new Set<Root>();
 
@@ -110,9 +114,11 @@ afterEach(async () => {
   resetOrchestratorSeatCacheForTests();
   globalThis.fetch = originalFetch;
   mobile = false;
+  composerStorage.reset();
 });
 
 afterAll(() => {
+  composerStorage.uninstall();
   mock.module("@/hooks/runtimeBus", () => actualRuntimeBus);
   mock.module("@/hooks/useLogTail", () => actualLogTail);
   dom.close();
@@ -154,18 +160,22 @@ function mount(file: FileEntry): HTMLElement {
   return host;
 }
 
-test("an open phone conversation follows seat retirement without losing the draft or retrying its failed message", async () => {
+for (const detailReadFails of [false, true]) test(`an open phone conversation retains retired-send fences and payloads (detail read fails: ${detailReadFails})`, async () => {
   mobile = true;
-  const file = liveLegacyFile({ conversationId: "conversation_previous", project: "viewer", engine: "claude" });
+  const file = liveLegacyFile({ conversationId: `conversation_previous_${detailReadFails}`, project: `viewer-${detailReadFails}`, engine: "claude" });
   let rotated = false;
-  let posts = 0;
+  const posts: string[] = [];
+  let detailedReads = 0;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    if (init?.method === "POST" && /^\/api\/(?:tmux|runtime\/send|orchestrator\/message)(?:\?|$)/.test(url)) posts += 1;
+    if (init?.method === "POST" && (/^\/api\/(?:tmux|runtime\/send|orchestrator\/message)(?:\?|$)/.test(url)
+      || /^\/api\/runtime\/operations\/[^/]+(?:\?|$)/.test(url))) posts.push(url);
     if (url.startsWith("/api/orchestrator/seat")) {
+      if (rotated && !url.includes("scope=all")) detailedReads += 1;
+      if (rotated && detailReadFails && !url.includes("scope=all")) return Response.json({ error: "temporarily unavailable" }, { status: 503 });
       const current = rotated ? "conversation_current" : file.conversationId;
       return Response.json({
-        seat: { project: "viewer", conversationId: current, path: rotated ? "/fixtures/current.jsonl" : file.path,
+        seat: { project: file.project, conversationId: current, path: rotated ? "/fixtures/current.jsonl" : file.path,
           state: "active", seatEpoch: 2, mandate: "fixture", intent: { clientRequestId: "fixture", mode: "existing", launchId: null, error: null } },
         exists: true, viewerMcpRegistered: true,
         previous: rotated ? [{ conversationId: file.conversationId, path: file.path, heldTo: "2026-01-01T00:00:00Z" }] : [],
@@ -177,16 +187,28 @@ test("an open phone conversation follows seat retirement without losing the draf
   }) as typeof fetch;
   enqueueOutbox(file.conversationId!, { id: "retired-message", text: "Saved operator message", images: 0, at: Date.now() });
   updateOutbox(file.conversationId!, "retired-message", { state: "failed", error: "recipient replaced", settledAt: Date.now() });
+  const retained = await composerSubmissionPayloads.retain({ conversationId: file.conversationId!, key: "retained-message" }, {
+    text: "Retained operator payload", images: [], files: [],
+  });
+  await composerSubmissionPayloads.seal(retained, { route: "runtime", body: { conversationId: file.conversationId, text: "Retained operator payload", idempotencyKey: "retained-message" } });
+  expect(await composerSubmissionPayloads.beginAttempt(retained)).toBeTrue();
+  expect(composerSubmissionPayloads.consumeAttempt(retained)).toBeTrue();
+  expect(await composerSubmissionPayloads.observe(retained, {
+    conversationId: file.conversationId!, idempotencyKey: "retained-message", operationId: "retained-operation", revision: 1,
+    status: "failed", resend: "safe", at: new Date().toISOString(),
+  })).toBeTrue();
   appendComposerDraft(file.conversationId!, "Unsent draft stays here");
   const host = mount(file);
   for (let i = 0; i < 20; i += 1) await Bun.sleep(5);
   expect(host.querySelector("[data-retired-orchestrator]")).toBeNull();
   rotated = true;
   document.dispatchEvent(new Event("visibilitychange"));
-  for (let i = 0; i < 40 && !host.querySelector("[data-retired-orchestrator]"); i += 1) await Bun.sleep(5);
+  for (let i = 0; i < 80 && (!host.querySelector("[data-retired-orchestrator]") || !detailedReads
+    || (!detailReadFails && !host.querySelector("[data-retired-orchestrator] a"))); i += 1) await Bun.sleep(5);
+  await Bun.sleep(20);
   const banner = host.querySelector("[data-retired-orchestrator]");
   expect(banner).not.toBeNull();
-  expect(banner!.querySelector("a")?.getAttribute("href")).toBe("#c=conversation_current");
+  expect(banner!.querySelector("a")?.getAttribute("href") ?? null).toBe(detailReadFails ? null : "#c=conversation_current");
   const textarea = host.querySelector("textarea") as HTMLTextAreaElement;
   expect(textarea.value).toBe("Unsent draft stays here");
   expect(host.querySelector('[data-testid="composer-send-blocked"] button')).toBeNull();
@@ -194,7 +216,15 @@ test("an open phone conversation follows seat retirement without losing the draf
   expect(retry).not.toBeNull();
   expect(retry.disabled).toBeTrue();
   retry.click();
-  expect(posts).toBe(0);
+  const payloadRetry = host.querySelector("[data-payload-retry]") as HTMLButtonElement;
+  expect(payloadRetry).not.toBeNull();
+  expect(payloadRetry.disabled).toBeTrue();
+  payloadRetry.click();
+  expect(messageRowRecovery(file.conversationId!)?.retryOperation).toBeDefined();
+  messageRowRecovery(file.conversationId!)!.retryOperation!("retained-message");
+  for (let i = 0; i < 10; i += 1) await Bun.sleep(5);
+  expect(posts).toEqual([]);
+  expect((await composerSubmissionPayloads.restore(retained))?.receipt?.status).toBe("failed");
   expect(readOutbox(file.conversationId!).find(entry => entry.id === "retired-message")).toMatchObject({
     text: "Saved operator message", state: "failed",
   });

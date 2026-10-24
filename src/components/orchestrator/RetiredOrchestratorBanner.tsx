@@ -36,7 +36,11 @@ export function useRetiredOrchestrator(file: FileEntry, enabled = true): Retired
   const current = matches(seats?.conversationIds, seats?.paths);
   const previous = !current && matches(seats?.previous?.conversationIds, seats?.previous?.paths);
   const read = useOrchestratorSeat(enabled && previous ? file.project : null);
-  return previous ? retiredOrchestratorFor(file, read.status, read.failed) : null;
+  if (!previous) return null;
+  // The shared response already proves retirement. An unavailable detailed
+  // read may withhold the destination, but cannot reopen the old recipient.
+  if (!read.status || read.failed) return { successorConversationId: null };
+  return retiredOrchestratorFor(file, read.status);
 }
 
 export function RetiredOrchestratorBanner({ retirement }: { retirement: RetiredOrchestrator }) {
