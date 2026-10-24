@@ -25,7 +25,11 @@ slow storage despite passing detector assertions. Cleanup errors still fail the
 suite and now name the cleanup test.
 
 Run privacy self-tests with the workflow's pinned Bun 1.3.3: the source-bound
-placeholder generator requires that runtime. Use
+placeholder generator requires that runtime. A native Bun 1.4.0 runner can
+instead set `LLV_PRIVACY_GENERATOR_BUN` to a Bun 1.3.3 executable (or provide
+`bun-1.3.3` on `PATH`). Both fixture generation and the gate's independent
+reproduction use that verified runtime; the test runner stays on native Bun.
+The generator pin and existing media provenance remain unchanged. Use
 `bash scripts/gate-slot.sh bun test scripts/privacy-publication-gate.test.ts`
 with isolated home, configuration, state and temporary directories.
 
