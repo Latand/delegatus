@@ -81,7 +81,8 @@ export function BarNeedsFilterProvider({ value, children }: { value: BarNeedsFil
 }
 
 /** At or above this width a bar that holds no board (the skeleton, the empty project) carries its
-    labels and the account switches; below it they are icons and the accounts move into ⋯. */
+    labels and the account switches; below it they are icons and the accounts move into ⋯, and a
+    shorter row takes the further steps by the board's rule. */
 export const BAR_WIDE_MIN = 1700;
 
 /**
@@ -91,17 +92,21 @@ export const BAR_WIDE_MIN = 1700;
  * width that keeps its placeholder whole, and the project name never truncates
  * while a step is left: the account switches move into ⋯, Orchestrator
  * keeps its icon, the needs-you chip keeps its dot and count, the
- * groups stand 8 px apart, and last the search may go under its placeholder.
+ * groups stand 8 px apart, the panel group and then `+` move into ⋯ as rows
+ * (a 640–700 px window, #1698), and last the search goes under its
+ * placeholder, which then leaves the field to its icon.
  */
-export const BAR_FIT_STEPS = ["accounts", "labels", "chip", "tight", "find"] as const;
+export const BAR_FIT_STEPS = ["accounts", "labels", "chip", "tight", "panels", "create", "find"] as const;
 export type BarFitStep = (typeof BAR_FIT_STEPS)[number];
+
+/* The texts the row keeps whole while a step is left: the project name and the status line's words. */
+const BAR_WHOLE = "h1, [data-bar-whole]";
 
 function barFits(bar: HTMLElement): boolean {
   if (bar.scrollWidth > bar.clientWidth + 0.5) return false;
-  const name = bar.querySelector<HTMLElement>("h1");
-  /* The name has no cap of its own: it is whole while the row has room, and it is cut only once
-     every step is taken and the search sits at its floor. */
-  return !name || name.scrollWidth <= name.clientWidth + 0.5;
+  /* They have no cap of their own: each is whole while the row has room, and is cut, with an
+     ellipsis, only once every step is taken and the search sits at its floor. */
+  return [...bar.querySelectorAll<HTMLElement>(BAR_WHOLE)].every((text) => text.scrollWidth <= text.clientWidth + 0.5);
 }
 
 /**
@@ -109,16 +114,17 @@ function barFits(bar: HTMLElement): boolean {
  * name is whole. The attribute is set here, never by React, so a render never
  * resets it between two measurements; the returned steps let React move what
  * lives outside the row (the accounts' rows in ⋯). `deps` name what changes the
- * row's width without changing its content or its box.
+ * row's width without changing its content or its box. `least` names how many
+ * steps the bar takes whatever room it has, read from the bar on each measure.
  */
-export function useBarFit(ref: RefObject<HTMLElement | null>, deps: readonly unknown[]): readonly BarFitStep[] {
+export function useBarFit(ref: RefObject<HTMLElement | null>, deps: readonly unknown[], least?: (bar: HTMLElement) => number): readonly BarFitStep[] {
   const [reached, setReached] = useState<readonly BarFitStep[]>([]);
   useLayoutEffect(() => {
     const bar = ref.current;
     if (!bar) return;
     let frame = 0;
     const fit = () => {
-      let count = 0;
+      let count = least?.(bar) ?? 0;
       for (; count <= BAR_FIT_STEPS.length; count += 1) {
         bar.setAttribute("data-fit", BAR_FIT_STEPS.slice(0, count).join(" "));
         if (barFits(bar)) break;
@@ -151,22 +157,6 @@ const BAR_ICON = "h-[15px] w-[15px] shrink-0";
 /** A row of the ⋯ menu. */
 export const BAR_MENU_ROW =
   "flex min-h-8 w-full items-center gap-2 rounded-[6px] px-2 text-left text-[12px] font-semibold text-primary hover:bg-well focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-default disabled:text-muted disabled:hover:bg-transparent";
-
-/** Whether a bar is wide enough for labelled controls, measured on the bar itself. */
-export function useBarWide(ref: RefObject<HTMLElement | null>): boolean {
-  const [wide, setWide] = useState(true);
-  useLayoutEffect(() => {
-    const element = ref.current;
-    if (!element) return;
-    const apply = () => setWide(element.getBoundingClientRect().width >= BAR_WIDE_MIN);
-    apply();
-    if (typeof ResizeObserver !== "function") return;
-    const observer = new ResizeObserver(apply);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [ref]);
-  return wide;
-}
 
 /**
  * The create group: one `+` opening a two-row menu (a task, an agent). The
@@ -289,11 +279,16 @@ export function BarFilterMenu({ reasons, active, onPick, needs: needsRow }: {
   );
 }
 
+/** The bar whose row has folded the panel group into ⋯, around `element`, if it has. */
+const foldedRow = (element: HTMLElement | null) => element?.closest<HTMLElement>('[data-fit~="panels"]') ?? null;
+
 /**
  * The recent agents: the last segment of the panel group, an icon with the
  * list under it. The list is every agent of the project, the newest first, so
  * the operator reaches it without leaving the board. `open` is the board's, so
- * a card's link to more conversations opens the same list.
+ * a card's link to more conversations opens the same list. On a short row the
+ * icon is folded into ⋯ (`panels`): the list then takes the focus as it opens,
+ * and Escape or its ✕ hands it back to ⋯, the control the operator came from.
  */
 export function BarRecentAgents({ open, onOpenChange, list }: {
   open: boolean;
@@ -304,11 +299,20 @@ export function BarRecentAgents({ open, onOpenChange, list }: {
   const { t } = useLocale();
   const container = useRef<HTMLSpanElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
+  const dismiss = useRef<HTMLButtonElement>(null);
   const [countSlot, setCountSlot] = useState<HTMLElement | null>(null);
   const close = useCallback(() => onOpenChange(false), [onOpenChange]);
   useOutsidePress(open, container, close);
+  const closeToTrigger = () => {
+    const row = foldedRow(container.current);
+    close();
+    (row ? row.querySelector<HTMLElement>("[data-bar-more]") : trigger.current)?.focus();
+  };
+  useEffect(() => {
+    if (open && foldedRow(container.current)) dismiss.current?.focus({ preventScroll: true });
+  }, [open]);
   return (
-    <span ref={container} className="bar-slot relative inline-flex shrink-0" data-bar-recent="" onKeyDown={open ? (event) => { handleOverlayEscape(event, () => { close(); trigger.current?.focus(); }); } : undefined}>
+    <span ref={container} className="bar-slot relative inline-flex shrink-0" data-bar-recent="" onKeyDown={open ? (event) => { handleOverlayEscape(event, closeToTrigger); } : undefined}>
       <button
         ref={trigger}
         type="button"
@@ -335,7 +339,7 @@ export function BarRecentAgents({ open, onOpenChange, list }: {
             <span className="min-w-0 truncate text-[12px] font-bold">{t("dash.recentAgents")}</span>
             <span ref={setCountSlot} className="inline-flex shrink-0" />
             <span aria-hidden className="min-w-0 flex-1" />
-            <button type="button" className="inline-flex shrink-0 items-center rounded-[8px] border border-border bg-canvas px-1.5 py-0.5 text-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" aria-label={t("common.close")} title={t("common.close")} onClick={close}>
+            <button ref={dismiss} type="button" data-bar-recent-close="" className="inline-flex shrink-0 items-center rounded-[8px] border border-border bg-canvas px-1.5 py-0.5 text-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" aria-label={t("common.close")} title={t("common.close")} onClick={closeToTrigger}>
               <X className="h-3 w-3" aria-hidden />
             </button>
           </div>
@@ -540,29 +544,34 @@ export function BarMenuSection({ id, title, icon, page = false, children }: { id
 /**
  * The same bar on the leaves the kanban board does not draw (the empty project,
  * the loading skeleton): the project's two ends around this leaf's status line
- * and its one search. Its steps follow its width: under `BAR_WIDE_MIN` the
- * accounts are in ⋯ and the panel toggles are icons.
+ * and its one search. Under `BAR_WIDE_MIN` the accounts are in ⋯ and the
+ * panel toggles are icons, as they always were on a normal desktop window; a
+ * shorter row then gives way by the board's rule (`useBarFit`), so it fits the
+ * same windows. It has no `+`, so that step gives nothing back here.
  */
+const barLeast = (bar: HTMLElement) => (bar.getBoundingClientRect().width >= BAR_WIDE_MIN ? 0 : BAR_FIT_STEPS.indexOf("labels") + 1);
+
 export function DashboardBar({ lead, status, find, trail }: {
   lead: () => ReactNode;
-  status: (wide: boolean) => ReactNode;
-  find: (wide: boolean) => ReactNode;
-  trail: (accountsInMenu: boolean) => ReactNode;
+  status: ReactNode;
+  find: ReactNode;
+  /** `fit`: the steps the row has taken, so ⋯ carries what left it. */
+  trail: (fit: readonly BarFitStep[]) => ReactNode;
 }) {
+  const { locale } = useLocale();
   const ref = useRef<HTMLDivElement>(null);
-  const wide = useBarWide(ref);
+  const fit = useBarFit(ref, [locale], barLeast);
   return (
     <div
       ref={ref}
       data-project-bar=""
-      data-fit={wide ? "" : "accounts labels"}
       className="flex h-12 shrink-0 items-center gap-4 border-b border-border bg-card px-4"
     >
-      <div className={`flex shrink items-center gap-2 ${wide ? "" : "min-w-12"}`} data-bar-group="where">{lead()}</div>
-      {status(wide)}
-      <span aria-hidden className="min-w-0 flex-1" />
-      {find(wide)}
-      <div className="flex shrink-0 items-center gap-4" data-bar-group="trail">{trail(!wide)}</div>
+      <div className="flex min-w-12 shrink items-center gap-2" data-bar-group="where">{lead()}</div>
+      {status}
+      <span aria-hidden className="min-w-0 flex-1" data-bar-spacer="" />
+      {find}
+      <div className="flex shrink-0 items-center gap-4" data-bar-group="trail">{trail(fit)}</div>
       <BarIslandSlot />
     </div>
   );

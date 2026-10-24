@@ -626,10 +626,6 @@ export const uk: Record<keyof typeof en, Message> = {
   "rail.duplicateProject": "Такий проєкт уже існує",
   "rail.createFailed": "Не вдалося створити проєкт",
 
-  "dash.branchesLive": { one: "{count} гілка працює", few: "{count} гілки працюють", many: "{count} гілок працюють", other: "{count} гілок працюють" },
-  "dash.trees": { one: "{count} дерево", few: "{count} дерева", many: "{count} дерев", other: "{count} дерев" },
-  "dash.recentConvos": { one: "{count} нещодавня розмова", few: "{count} нещодавні розмови", many: "{count} нещодавніх розмов", other: "{count} нещодавніх розмов" },
-  "dash.quietTrees": { one: "{count} тихе дерево", few: "{count} тихі дерева", many: "{count} тихих дерев", other: "{count} тихих дерев" },
   "dash.openProjects": "Відкрити список проєктів",
   "dash.createMenu": "Створити",
   "dash.moreMenu": "Більше дій",
