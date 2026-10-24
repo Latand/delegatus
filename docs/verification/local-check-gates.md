@@ -68,12 +68,12 @@ durable termination receipt or another identity-bound proof and restart/race
 coverage. The active relay lane also owns that area. This change retains the
 termination guard and reports the separate work explicitly.
 
-## Verification
+## Verification before publication repair
 
 Checks run serially through the prescribed installed gate wrapper in a scratch
 export, with private HOME, XDG directories, TMPDIR, state and test queue roots.
 Checks used the installed wrapper from release `19bbd6d7c281`, Bun 1.4.0, and
-the pinned source base `97bdb94e`, on 2026-10-24. Final source/export comparison
+the pinned source base `97bdb94e`, on 2026-10-24. At the original acceptance, source/export comparison
 passed for all twelve changed executable files. Their SHA-256, hashing sorted
 repository-relative path, NUL and file bytes, is
 `83ee7b507476d86b1c4699b1472831a0e825c4a22c9bfd4f8413ef993a09c822`.
@@ -154,3 +154,50 @@ identity: namespace-local PIDs can coincide across lanes. `RuntimeMaxSec=5s`,
 manual unit stop. The probe was rerun with and without a reachable manager.
 The commits ran the launch-provided hooks: staged whitespace, privacy and
 ESLint passed with exit 0. Nothing was pushed.
+
+## Publication repair
+
+The refusal at accepted commit `9294c1a4` named two assertions in
+`src/lib/runtime/cpuPlacement.scope.test.ts`. Both still expected gate CPU
+weight 100; the merger case also expected the old queue-bound log message.
+The repaired cases expect weight 10 and the measured-pressure reason while
+retaining their quota, memory, slice, slot and pressure-release assertions.
+
+Merged `origin/main` at `20933a6d8`. The sole conflict in
+`src/lib/runtime/cpuAdmission.ts` combines main's durable owner cleanup and
+post-commit decision logging with this branch's required-pressure parameter.
+Two new queue fixtures from main now supply explicit low PSI samples: empty
+PSI selects the production load fallback and cannot deterministically release
+a fixture on a busy machine. No check or hook was disabled.
+
+The following checks ran serially through the prescribed gate wrapper with
+private HOME, XDG directories, TMPDIR, state and queue roots. The real scope
+file assumes native host process IDs, as the publisher does. Its final runs
+used a bounded native user unit and the real owned runner, private state and
+CPU/I/O weights 10. Native units self-expire and collect.
+
+| Command / context | Exit | Result |
+| --- | --- | --- |
+| `git merge --no-commit origin/main` | 1 | One source conflict, resolved with both guards retained |
+| Main, native host: `bun test src/lib/runtime/cpuPlacement.scope.test.ts -t 'gate-slot runs a gate\|a merger gate runs'` | 0 | 2 pass |
+| Repaired merge, native host: `bun test src/lib/runtime/cpuPlacement.scope.test.ts` | 0 | 15 pass, including both refused cases and the tmux case |
+| `bun test scripts/gate-slot.queue.test.ts` | 0 | 12 pass |
+| `bun test src/lib/runtime/cpuAdmission.test.ts` | 0 | 47 pass, including main's owner recovery cases and the hard pressure fence |
+| `bun test scripts/gate-properties.test.ts` | 0 | 2 pass |
+| `node node_modules/typescript/bin/tsc --noEmit` | 0 | Full merged-tree typecheck |
+| `node node_modules/eslint/bin/eslint.js src/lib/runtime/cpuAdmission.ts src/lib/runtime/cpuAdmission.test.ts src/lib/runtime/cpuPlacement.scope.test.ts scripts/gate-slot.queue.test.ts` | 0 | All repair/merge TypeScript changes pass |
+| `git diff --cached --check` | 0 | Clean staged whitespace |
+
+The final repaired-tree set totals 76 passing cases; the two main cases are
+additional baseline observations. Initial stage-namespace scope probes exited
+1 on both main and head before reaching the intended weight comparison: the
+selected main cases returned 69, and the full head run also hit its tmux
+fixture deadline. The bounded native-host reruns above match the publication
+context and pass the complete file without weakening its assertions.
+
+The thirteen changed executable files relative to merged main match the
+verified export byte for byte. SHA-256 (sorted relative path, NUL, bytes):
+`4ce10996098160306608b2f0db68a421674b65ce69ff290f2a580b4cd3b41b94`.
+
+The merge preserves the accepted work and its ancestors. Workflow files remain
+unchanged, and this repair sends no push; publication belongs to the controller.

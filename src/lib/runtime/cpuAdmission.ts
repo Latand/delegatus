@@ -16,13 +16,22 @@ export const CPU_QUEUE_SPACING_MS = 2_000;
  * polled for this long stops counting ahead of others, for every release
  * sharing the file; it keeps its row. */
 export const CPU_QUEUE_UNPOLLED_MS = 60_000;
-/** An ownerless ticket unpolled for this long, and held by no fence, is removed. */
+/** An ownerless ticket unpolled for this long, and held by no fence, is
+ * removed; so is a ticket whose owner no kernel check here can prove alive. */
 export const CPU_QUEUE_ABANDONED_MS = 24 * 60 * 60_000;
 /** How long a head may stay past its bound, with nothing admitted, before the wait reads as stalled. */
 export const CPU_QUEUE_STALE_GRACE_MS = 60_000;
 /** `stalledMs` is set only while the head is past its bound and nothing is admitted. */
 export type CpuQueueWait = { since: number; position: number; remainingMs: number; priority?: TaskPriority; stalledMs?: number };
-type Ticket = { seq: number; fifo_seq: number; key: string; since: number; owner: string | null; priority: number; source: string | null };
+type Ticket = { seq: number; fifo_seq: number; key: string; since: number; owner: string | null; priority: number; source: string | null; polled: number | null };
+/** The queue judges owners with these; `log` receives one line for each ticket
+ * it removes or passes over because of its owner. */
+export type CpuOwnerObserver = { status(identity: ProcessIdentity): ProcessIdentityStatus; exited(identity: ProcessIdentity): boolean; log?(line: string): void };
+const logOwnerDecision = (line: string) => console.warn(`[cpu-admission] ${line}`);
+/** Every release's check stamps its own ticket through this trigger, owned or
+ * not, so even a release whose statements predate it shows that its owner is
+ * still there. */
+const TICKETS_POLL = "CREATE TRIGGER tickets_poll BEFORE INSERT ON tickets BEGIN UPDATE tickets SET polled = NEW.since WHERE key = NEW.key; DELETE FROM unpolled WHERE key = NEW.key; END";
 export type CpuSlotLease = { owner: ProcessIdentity; slot: string };
 
 /** A continuation retains its parent's admission only while the kernel
@@ -123,7 +132,7 @@ export function cpuAdmissionFile(isolatedStateDir?: string | null): string {
 export class CpuAdmissionQueue {
   private readonly db: Database;
   constructor(file: string, private readonly now = Date.now, private readonly spacingMs = CPU_QUEUE_SPACING_MS, private readonly maxWaitMs = CPU_QUEUE_MAX_WAIT_MS, private readonly unpolledMs = CPU_QUEUE_UNPOLLED_MS,
-    private readonly observer: { status(identity: ProcessIdentity): ProcessIdentityStatus; exited(identity: ProcessIdentity): boolean } = {
+    private readonly observer: CpuOwnerObserver = {
       status: processIdentityStatus, exited: identity => procBackend.processExited(identity.pid),
     }) {
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -187,6 +196,11 @@ export class CpuAdmissionQueue {
         UPDATE sqlite_sequence SET seq = (SELECT COUNT(*) FROM tickets) WHERE name = 'tickets';
       END`);
       this.db.exec("CREATE INDEX IF NOT EXISTS tickets_priority_seq ON tickets(priority, seq)");
+      // The poll trigger above stamped only ownerless tickets at first.
+      if (this.db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'tickets_poll'").get()?.sql !== TICKETS_POLL) {
+        this.db.exec("DROP TRIGGER IF EXISTS tickets_poll");
+        this.db.exec(TICKETS_POLL);
+      }
     }).immediate();
     // Repair a queue left in the inconsistent order produced by the earlier
     // priority implementation before any old or new checker can claim it.
@@ -207,7 +221,7 @@ export class CpuAdmissionQueue {
   /** Its owner holding or releasing a ticket shows the owner is there, as a
    * check does: a released stage is ahead of later work before its next tick. */
   private touch(key: string): void {
-    this.db.query("UPDATE tickets SET polled = ? WHERE key = ? AND owner IS NULL").run(this.now(), key);
+    this.db.query("UPDATE tickets SET polled = ? WHERE key = ?").run(this.now(), key);
   }
   /** Older gate helpers share this file and use fixed `seq`-ordered queries.
    * Keep that durable view in priority order so they cannot admit ahead of a
@@ -244,13 +258,34 @@ export class CpuAdmissionQueue {
     }).immediate();
   }
   check(key: string, pressureAllows: boolean, owner?: ProcessIdentity, consume = true, source?: CpuPrioritySource, requireLowPressure = false): CpuQueueWait | null {
-    return this.db.transaction(() => {
+    // Reported only once the transaction has committed what they describe.
+    const decisions: string[] = [];
+    const wait = this.db.transaction(() => {
       const now = this.now();
       // A release that predates polls released these from a hold since the last check.
       this.db.query("UPDATE tickets SET polled = ? WHERE owner IS NULL AND polled IS NULL").run(now);
       for (const row of this.db.query<Ticket, []>("SELECT * FROM tickets WHERE owner IS NOT NULL").all()) {
         const identity = parseSqliteJson(row.owner!, this.db) as ProcessIdentity;
-        if (this.observer.status(identity) === "dead" || this.observer.exited(identity)) this.cancel(row.key);
+        const status = this.observer.status(identity);
+        if (status === "dead" || this.observer.exited(identity)) {
+          this.cancel(row.key);
+          decisions.push(`removed ${row.key}: its owner process ${identity.pid} has exited`);
+          continue;
+        }
+        // An owner recorded in another PID namespace, or one the kernel will
+        // not describe, is never proven alive or dead here, so its polls stand
+        // for it as for an ownerless ticket. One the kernel shows alive keeps
+        // its place however long it waits.
+        if (status !== "unverified" || row.key === key) continue;
+        const quiet = now - (row.polled ?? row.since);
+        if (quiet > CPU_QUEUE_ABANDONED_MS) {
+          this.cancel(row.key);
+          decisions.push(`removed ${row.key}: its owner process ${identity.pid} cannot be verified from here and has not checked in for ${Math.round(quiet / 3_600_000)} h`);
+        } else if (quiet > this.unpolledMs && !this.db.query("SELECT 1 FROM suspended WHERE key = ?").get(row.key)) {
+          this.db.query("INSERT INTO suspended VALUES (?)").run(row.key);
+          this.db.query("INSERT INTO unpolled VALUES (?)").run(row.key);
+          decisions.push(`passed over ${row.key}: its owner process ${identity.pid} cannot be verified from here and has not checked in for ${Math.round(quiet / 1_000)} s; its next check returns it to its place`);
+        }
       }
       // The insert is the poll: tickets_poll stamps an existing row with `now`.
       this.db.query("INSERT OR IGNORE INTO tickets (key, since, owner) VALUES (?, ?, ?)").run(key, now, owner ? JSON.stringify(owner) : null);
@@ -315,6 +350,8 @@ export class CpuAdmissionQueue {
         ...(stalledMs > CPU_QUEUE_STALE_GRACE_MS ? { stalledMs } : {}),
       };
     }).immediate();
+    for (const line of decisions) (this.observer.log ?? logOwnerDecision)(line);
+    return wait;
   }
 }
 
