@@ -121,6 +121,35 @@ describe("describeMcpCall", () => {
     }
   });
 
+  test("a target kind or task status named after an inherited property is drawn as written (#2250)", () => {
+    /* Known values translate; unknown and inherited names stay readable. */
+    const kinds: Array<[string, string, string, string, string]> = [
+      ["task", "Asking to show a task", "Прохання показати: задача", "Clearing needs-you on a task", "Зняття позначки «Потрібні ви»: задача"],
+      ["frobnicate", "Asking to show a frobnicate", "Прохання показати: frobnicate", "Clearing needs-you on a frobnicate", "Зняття позначки «Потрібні ви»: frobnicate"],
+    ];
+    for (const kind of ["__proto__", "constructor", "toString", "hasOwnProperty", "valueOf"]) {
+      kinds.push([kind, `Asking to show a ${kind}`, `Прохання показати: ${kind}`, `Clearing needs-you on a ${kind}`, `Зняття позначки «Потрібні ви»: ${kind}`]);
+    }
+    for (const [kind, askEnglish, askUkrainian, clearEnglish, clearUkrainian] of kinds) {
+      const target = { kind };
+      expect(describeMcpCall("request_attention", { target }).title).toBe(askEnglish);
+      expect(describeMcpCall("request_attention", { target }, undefined, uk).title).toBe(askUkrainian);
+      expect(describeMcpCall("dismiss_attention", { target }).title).toBe(clearEnglish);
+      expect(describeMcpCall("dismiss_attention", { target }, undefined, uk).title).toBe(clearUkrainian);
+    }
+    const statuses: Array<[string, string, string]> = [
+      ["done", "Updating task task-a: done", "Оновлення задачі task-a: готово"],
+      ["parked", "Updating task task-a: parked", "Оновлення задачі task-a: parked"],
+    ];
+    for (const status of ["__proto__", "constructor", "toString", "hasOwnProperty", "valueOf"]) {
+      statuses.push([status, `Updating task task-a: ${status}`, `Оновлення задачі task-a: ${status}`]);
+    }
+    for (const [status, english, ukrainian] of statuses) {
+      expect(describeMcpCall("update_task", { taskId: "task-a", status }).title).toBe(english);
+      expect(describeMcpCall("update_task", { taskId: "task-a", status }, undefined, uk).title).toBe(ukrainian);
+    }
+  });
+
   test("the receipt state inside a delivery check reads in the interface language (#2250)", () => {
     const cases: Array<[string | undefined, string, string]> = [
       ["delivered", "Checking delivery of op-1: delivered", "Перевірка доставки op-1: доставлено"],

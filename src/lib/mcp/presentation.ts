@@ -128,7 +128,7 @@ export function describeMcpCall(
   const result = record(resultValue);
   /* An optional `: <scope>` after a title, the same in both languages. */
   const scoped = (value: string) => (value ? `: ${value}` : "");
-  const kindName = (kind: string) => (KIND_KEYS[kind] ? t(KIND_KEYS[kind]) : kind);
+  const kindName = (kind: string) => (Object.hasOwn(KIND_KEYS, kind) ? t(KIND_KEYS[kind]) : kind);
 
   if (toolName === "spawn_agent") {
     const profile = [string(args.model) || string(args.engine), string(args.effort), string(args.role)]
@@ -192,7 +192,7 @@ export function describeMcpCall(
   if (toolName === "update_task") {
     const id = entityId(result, "task") || string(args.taskId);
     const status = string(args.status);
-    const change = (TASK_STATUS_KEYS[status] ? t(TASK_STATUS_KEYS[status]) : status) || compact(string(args.text)) || t("mcp.call.taskDetails");
+    const change = (Object.hasOwn(TASK_STATUS_KEYS, status) ? t(TASK_STATUS_KEYS[status]) : status) || compact(string(args.text)) || t("mcp.call.taskDetails");
     return {
       icon: "task",
       verb: t("mcp.verb.updating"),
