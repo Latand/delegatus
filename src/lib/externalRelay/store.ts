@@ -102,9 +102,13 @@ export type RunRecord = {
   /** Durable custody survives a lost lease, cutoff, or Viewer restart. */
   ownerTurn?: { rawRequest?: unknown; context?: import("./profile").OwnerInstruction; restartRetries?: 1; restartPending?: true;
     delivery?: import("./protocol").OwnerDelivery;
+    /** Persisted before /complete; an absent ACK never authorizes /send. */
+    completionAttempt?: { body: ExternalRelayCompletion; files: import("./attachments").StagedAttachment[] };
     lateAnswer?: { body: ExternalRelayCompletion; files: import("./attachments").StagedAttachment[];
       clientKey?: string; payload?: import("./cloneSend").CloneSendInput; firstAttemptAt?: number; nextAttemptAt?: number;
-      status?: "retry" | "pending-delivery-context" | "uncertain" | "retry-expired" };
+      parts?: { payload: import("./cloneSend").CloneSendInput; firstAttemptAt?: number;
+        receipt?: Extract<import("./cloneSend").CloneSendResult, { kind: "sent" }> }[];
+      status?: "retry" | "pending-delivery-context" | "uncertain" | "retry-expired" | "refused" };
     diagnostic?: OwnerTurnDiagnostic; continuation?: { operationId: string }; clientAttemptId: string; prototype?: true; request?: { text: string; requestText: string | null }; bridgeReport?: OwnerBridgeContext; admissionComplete?: boolean; cancel?: "interrupt" | "kill"; confirmed?: boolean;
     /** When the cutoff was first written; older rows fall back to startedAt. */
     cancelledAt?: string;

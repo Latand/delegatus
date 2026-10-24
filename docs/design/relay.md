@@ -3374,8 +3374,10 @@ claim carrying these fields still has no owner execution or delivery authority.
 
 The exact `SendMessage` payload and a valid 8–64-character `client_key` are
 persisted before dispatch and reused on every retry, including after restart.
-Short text uses `parse_mode: null`; longer text is escaped for HTML and uses
-`parse_mode: "HTML"` within the send payload limits. `silent` is false. This v1
+Text uses `parse_mode: null` and is split at Unicode code point boundaries
+into at most 4,096 UTF-16 units per message. Each part has its own persisted key
+and receipt; recovery skips acknowledged parts and retries an unresolved part
+with its original payload and key. Literal markup is preserved. `silent` is false. This v1
 route carries text only: when files existed the text includes a note that files
 were omitted. The original answer and staged files remain in durable custody
 while delivery is pending. A validated `SentMessage` receipt acknowledges the
@@ -3385,8 +3387,11 @@ An unresolved send is retried only within Celestia's 24-hour key retention
 window; expiry leaves `retry-expired` for reconciliation. A service
 `send_uncertain` or `idempotency_conflict` leaves `uncertain` for operator
 reconciliation and stops automatic dispatch. Definite unused-key refusals can
-be retried with the same payload. A lost normal-completion response remains
-unconfirmed; it never starts a second `/send` message.
+be retried with the same payload; permanent text or format refusals retain
+`refused` custody and stop automatic dispatch. Normal completions persist
+`ownerTurn.completionAttempt` before dispatch. A lost response keeps that
+custody across restart and orphan sweeps, without execution retry or `/send`.
+Only confirmed non-delivery permits switching to the late-send route.
 
 Owner runs durably retain their request and owner context. Startup first stops
 and confirms the interrupted execution, then retries it once with a distinct

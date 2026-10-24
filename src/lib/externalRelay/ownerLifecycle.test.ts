@@ -423,3 +423,171 @@ test("a refused restart-budget write leaves the next sweep able to retry", async
     expect(store.readRunLedger().runs.find(row => row.requestId === raw.request_id)).toBeUndefined();
   } finally { writer.mockRestore(); selected.mockRestore(); wire.mockRestore(); store.dropRun(raw.request_id); }
 });
+
+/** Restart the real recovery entry point against the same isolated ledger. */
+async function deliveryProcess(directory: string, config: Record<string, unknown>) {
+  const file = `${directory}/process.json`;
+  await fs.promises.writeFile(file, JSON.stringify(config));
+  const child = Bun.spawn([process.execPath, "src/lib/externalRelay/ownerLifecycle.fixture.ts", file], {
+    env: { ...process.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const output = new Response(child.stdout).text(), errors = new Response(child.stderr).text();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    expect(await Promise.race([child.exited, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("delivery fixture exceeded parent deadline")), 20000);
+    })])).toBe(0);
+    expect(await errors).not.toMatch(/error:|Unhandled|TypeError/);
+    return await output;
+  } finally {
+    clearTimeout(timer);
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await child.exited; await output; await errors;
+  }
+}
+
+for (const response of ["lost", "accepted", "refused"] as const)
+test(`normal completion ${response} across the deadline survives restart without a duplicate`, async () => {
+  const { readRunLedger, dropRun } = await import("./store");
+  const relay = setupRelay();
+  const directory = await fs.promises.mkdtemp(`${process.env.TMPDIR}/completion-process-`);
+  const clockFile = `${directory}/clock`;
+  const epoch = Date.parse("2026-10-24T15:00:00Z");
+  await fs.promises.writeFile(clockFile, String(epoch));
+  const visible: string[] = [], routes: string[] = [];
+  let durableAtDispatch = false;
+  const service = await startTestRelay(async (req, payload) => {
+    const route = req.url!; routes.push(route);
+    if (route.endsWith("/complete")) {
+      const completion = payload as { answer: { text: string } };
+      durableAtDispatch = readRunLedger().runs.some(row => row.ownerTurn?.completionAttempt?.body.outcome === "answered");
+      await fs.promises.writeFile(clockFile, String(epoch + 3000));
+      if (response === "refused") return { status: 409, body: { error: { code: "lease_lost" } } };
+      visible.push(completion.answer.text);
+      return response === "lost" ? { drop: true } : { body: { status: "ok" } };
+    }
+    if (route.endsWith("/send")) { visible.push((payload as { text: string }).text); return { body: cloneReceipt() }; }
+    return { body: { status: "ok" } };
+  });
+  relay.origin = service.origin; relay.api_base = `${service.origin}/api/relay/v1`;
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  const request = { ...contextRequest, request_id: `complete_${response}_restart`,
+    deadline_at: new Date(epoch + 2000).toISOString(), owner_delivery: delivery,
+    input: { ...contextRequest.input, tools: [], requester: { ...contextRequest.input.requester, is_owner: true } } };
+  const config = { relay, request, epoch, clockFile };
+  try {
+    await deliveryProcess(directory, { ...config, phase: "complete-now" });
+    if (response === "lost") {
+      const row = readRunLedger().runs.find(row => row.requestId === request.request_id);
+      expect(row?.ownerTurn?.completionAttempt?.body).toMatchObject({ outcome: "answered", answer: { text: "Restart answer" } });
+      expect(row?.ownerTurn?.lateAnswer).toBeUndefined();
+    }
+    for (let restart = 0; restart < 2; restart++) {
+      expect(await deliveryProcess(directory, { ...config, phase: "finish" })).not.toContain("fixture-launch:");
+    }
+    expect(visible).toEqual(["Restart answer"]);
+    expect(durableAtDispatch).toBe(true);
+    expect(routes.filter(route => route.endsWith("/complete"))).toHaveLength(1);
+    expect(routes.filter(route => route.endsWith("/send"))).toHaveLength(response === "refused" ? 1 : 0);
+    if (response === "lost") expect(readRunLedger().runs.find(row => row.requestId === request.request_id)?.ownerTurn?.completionAttempt).toBeDefined();
+    else expect(readRunLedger().runs.find(row => row.requestId === request.request_id)).toBeUndefined();
+  } finally { dropRun(request.request_id); await service.close(); await fs.promises.rm(directory, { recursive: true, force: true }); }
+}, 60000);
+
+test("multipart late delivery resumes after restart with receipts and the unresolved part's key", async () => {
+  const { readRunLedger, reserveRun, dropRun } = await import("./store");
+  const relay = setupRelay();
+  const directory = await fs.promises.mkdtemp(`${process.env.TMPDIR}/multipart-process-`);
+  const runDir = await fs.promises.mkdtemp(`${process.env.TMPDIR}/llv-external-relay-`);
+  const text = "x".repeat(4095) + "😀<&>".repeat(1100);
+  const body = { lease_id: "fixture", outcome: "answered" as const, duration_ms: 121000,
+    answer: { action: "reply" as const, reply_to: "m1", text, format: "rich_markdown" as const } };
+  const request = { request_id: "multipart_process" };
+  const epoch = Date.parse("2026-10-24T15:00:00Z");
+  const payloads: { client_key: string; text: string; parse_mode: unknown }[] = [];
+  const visible = new Map<string, string>(), visits = new Map<string, number>();
+  const service = await startTestRelay((req, raw) => {
+    expect(req.url).toBe("/api/relay/v1/targets/target_1/send");
+    const part = raw as typeof payloads[number]; payloads.push(part);
+    const visit = (visits.get(part.client_key) ?? 0) + 1; visits.set(part.client_key, visit);
+    if (visible.size === 1 && !visible.has(part.client_key)) {
+      expect(readRunLedger().runs.find(row => row.requestId === request.request_id)?.ownerTurn?.lateAnswer?.parts?.[0]?.receipt?.kind).toBe("sent");
+    }
+    const isSecond = part.text.startsWith("😀");
+    if (isSecond && visit === 2) return { status: 409, body: { error: { code: "unrecognised" } } };
+    visible.set(part.client_key, part.text);
+    if (isSecond && visit === 1) return { drop: true };
+    return { body: cloneReceipt(100 + visible.size, visit > 1) };
+  });
+  relay.origin = service.origin; relay.api_base = `${service.origin}/api/relay/v1`;
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  reserveRun({ requestId: request.request_id, leaseId: "fixture", relayId: relay.id, targetId: "target_1",
+    ownerPid: 2147483647, ownerIdentity: "gone", childPid: null, childIdentity: null, runDir,
+    startedAt: new Date(epoch).toISOString(), capacityReleased: true,
+    ownerTurn: { clientAttemptId: "relay-owner-multipart", delivery, lateAnswer: { body, files: [] } } }, 1);
+  try {
+    await deliveryProcess(directory, { relay, request, epoch, phase: "finish" });
+    const saved = readRunLedger().runs.find(row => row.requestId === request.request_id)?.ownerTurn?.lateAnswer;
+    expect(saved?.parts?.[0]?.receipt?.kind).toBe("sent");
+    expect(saved?.parts?.[1]?.receipt).toBeUndefined();
+    expect(saved?.parts?.[1]?.firstAttemptAt).toBe(epoch);
+    const secondKey = saved!.parts![1]!.payload.client_key;
+    await deliveryProcess(directory, { relay, request, epoch: epoch + 31000, phase: "finish" });
+    await deliveryProcess(directory, { relay, request, epoch: epoch + 62000, phase: "finish" });
+    expect(payloads.filter(part => part.client_key === saved!.parts![0]!.payload.client_key)).toHaveLength(1);
+    const retries = payloads.filter(part => part.client_key === secondKey);
+    expect(retries).toHaveLength(3);
+    for (const retry of retries) expect(retry).toEqual(saved!.parts![1]!.payload);
+    expect([...visible.values()].join("")).toBe(text);
+    for (const part of payloads) { expect(part.text.length).toBeLessThanOrEqual(4096); expect(part.parse_mode).toBeNull(); }
+    expect(readRunLedger().runs.find(row => row.requestId === request.request_id)).toBeUndefined();
+  } finally { dropRun(request.request_id); await service.close();
+    await fs.promises.rm(directory, { recursive: true, force: true }); await fs.promises.rm(runDir, { recursive: true, force: true }); }
+}, 60000);
+
+test("permanent late-text refusal stays fenced after process restart", async () => {
+  const { reserveRun, readRunLedger, dropRun } = await import("./store");
+  const relay = setupRelay();
+  const directory = await fs.promises.mkdtemp(`${process.env.TMPDIR}/refusal-process-`);
+  const epoch = Date.parse("2026-10-24T15:00:00Z");
+  const request = { request_id: "permanent_process" };
+  let calls = 0;
+  const service = await startTestRelay(() => { calls++; return { status: 400, body: { error: { code: "text_too_long" } } }; });
+  relay.origin = service.origin; relay.api_base = `${service.origin}/api/relay/v1`;
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  reserveRun({ requestId: request.request_id, leaseId: "fixture", relayId: relay.id, targetId: "target_1",
+    ownerPid: 2147483647, ownerIdentity: "gone", childPid: null, childIdentity: null, runDir: "",
+    startedAt: new Date(epoch).toISOString(), capacityReleased: true,
+    ownerTurn: { clientAttemptId: "relay-owner-permanent", delivery, lateAnswer: { files: [], body: {
+      lease_id: "fixture", outcome: "answered", duration_ms: 121000, answer: { action: "reply", text: "Retained answer", reply_to: "m1" } } } } }, 1);
+  try {
+    for (const offset of [0, 31000, 62000]) await deliveryProcess(directory, { relay, request, epoch: epoch + offset, phase: "finish" });
+    expect(calls).toBe(1);
+    expect(readRunLedger().runs.find(row => row.requestId === request.request_id)?.ownerTurn?.lateAnswer?.status).toBe("refused");
+  } finally { dropRun(request.request_id); await service.close(); await fs.promises.rm(directory, { recursive: true, force: true }); }
+}, 60000);
+
+test("uncertain completion custody still confirms an interrupted host stop", async () => {
+  const { reserveRun, readRunLedger, dropRun, runHoldsCapacity } = await import("./store");
+  const { sweepExternalRelayOrphans } = await import("./poller");
+  const relay = setupRelay();
+  const requestId = "completion_stop_pending";
+  reserveRun({ requestId, leaseId: "fixture", relayId: relay.id, targetId: "target_1",
+    ownerPid: 2147483647, ownerIdentity: "gone", childPid: null, childIdentity: null, runDir: "",
+    startedAt: "2026-10-24T15:00:00Z", conversationId: "conversation_completion_stop",
+    ownerTurn: { clientAttemptId: "relay-owner-completion-stop", delivery, admissionComplete: true,
+      completionAttempt: { files: [], body: { lease_id: "fixture", outcome: "answered", duration_ms: 121000,
+        answer: { action: "reply", text: "Unconfirmed answer", reply_to: "m1" } } } } }, 1);
+  const stops: string[] = [];
+  const wire = spyOn(client, "relayCall").mockRejectedValue(new Error("unexpected delivery"));
+  const ports = { launch: async () => { throw new Error("unexpected execution retry"); },
+    observe: async () => ({ state: "ended" as const }), stop: async (id: string) => { stops.push(id); } };
+  try {
+    await sweepExternalRelayOrphans(ports);
+    await sweepExternalRelayOrphans(ports);
+    expect(stops).toEqual(["conversation_completion_stop"]);
+    const row = readRunLedger().runs.find(row => row.requestId === requestId)!;
+    expect(row.ownerTurn?.completionAttempt?.body).toMatchObject({ outcome: "answered" });
+    expect(row.ownerTurn?.confirmed).toBe(true); expect(runHoldsCapacity(row)).toBe(false);
+    expect(wire).not.toHaveBeenCalled();
+  } finally { wire.mockRestore(); dropRun(requestId); }
+});

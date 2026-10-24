@@ -127,6 +127,10 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
   assertStateStartupMutation(externalRelayFile("runs"), "external-relay-sweep");
   for (const run of readRunLedger().runs) {
     if (ownerRecoveries.has(run.requestId)) continue;
+    // /complete may already have posted the answer. Neither restarting execution
+    // nor /send can reconcile that request-scoped delivery without duplicating it.
+    if (run.ownerTurn?.completionAttempt && !run.completionAccepted && !ownerStopPending(run)
+      && (run.capacityReleased || run.ownerTurn.confirmed)) continue;
     if (run.ownerTurn?.lateAnswer && !run.completionAccepted && !ownerStopPending(run)) {
       if (relayRequestInFlight(run.requestId) || processMatches(run.ownerPid, run.ownerIdentity) && run.ownerPid !== process.pid) continue;
       const relay = readRelayStore().relays.find(item => item.id === run.relayId);
@@ -194,6 +198,7 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
     };
     // The accepted completion already reached the requester. Stop custody
     // only held capacity and files until the host confirmed the stop.
+    if (held.ownerTurn?.completionAttempt && !held.completionAccepted) continue;
     if (held.completionAccepted || held.capacityReleased) {
       removeRunDirectory(run.runDir);
       settle();

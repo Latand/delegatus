@@ -362,23 +362,37 @@ export async function runClaimedRequest(
         await changeRunAsync(requestId, row => ({ ...row,
           ownerTurn: { ...row.ownerTurn!, lateAnswer: { ...row.ownerTurn?.lateAnswer, body, files: stagedAttachments } } }), Date.now() + 5000);
       }
+      const initiallyLate = ownerPastWindow();
+      if (!initiallyLate && allowOwnerReply && recorded && body.outcome === "answered") {
+        await changeRunAsync(requestId, row => ({ ...row,
+          ownerTurn: { ...row.ownerTurn!, completionAttempt: { body, files: stagedAttachments } } }), Date.now() + 5000);
+      }
       completionInFlight = true;
       let sent: Awaited<ReturnType<typeof completeRelayRequest>>;
-      const initiallyLate = ownerPastWindow();
       try {
-        sent = ownerPastWindow() && body.outcome === "answered"
+        sent = initiallyLate && body.outcome === "answered"
           ? await deliverOwnerLateAnswer(relay, requestId, body, stagedAttachments, allowOwnerReply!)
           : transport
           ? await transport.complete(body, until, caps?.plainMax ?? 4000, ownerStatusReply ? "status" : failureReply ? "failure" : !!allowOwnerReply)
           : await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature, caps?.plainMax);
       } catch {
-        console.error("External relay helper completion unavailable; using Viewer transport");
-        sent = await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature, caps?.plainMax);
+        if (allowOwnerReply && body.outcome === "answered") {
+          console.error("Owner relay completion acknowledgement unavailable; delivery retained");
+          sent = { body, delivery: "unconfirmed" };
+        } else {
+          console.error("External relay helper completion unavailable; using Viewer transport");
+          sent = await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature, caps?.plainMax);
+        }
       } finally { completionInFlight = false; }
       if (!initiallyLate && ownerPastWindow() && body.outcome === "answered" && sent.delivery === "refused") {
         await changeRunAsync(requestId, row => ({ ...row,
-          ownerTurn: { ...row.ownerTurn!, lateAnswer: { ...row.ownerTurn?.lateAnswer, body, files: stagedAttachments } } }), Date.now() + 5000);
+          ownerTurn: { ...row.ownerTurn!, completionAttempt: undefined, lateAnswer: { ...row.ownerTurn?.lateAnswer, body, files: stagedAttachments } } }), Date.now() + 5000);
         sent = await deliverOwnerLateAnswer(relay, requestId, body, stagedAttachments, allowOwnerReply!);
+      }
+      if (!initiallyLate && allowOwnerReply && recorded && sent.delivery !== "unconfirmed") {
+        await changeRunAsync(requestId, row => ({ ...row,
+          ...(sent.delivery === "accepted" ? { completionAccepted: true as const } : {}),
+          ownerTurn: { ...row.ownerTurn!, completionAttempt: undefined } }), Date.now() + 5000);
       }
       const completion = sent.body;
       if (sent.delivery === "accepted") {
@@ -396,9 +410,13 @@ export async function runClaimedRequest(
         if (recorded && !capacityReleased) await recordAcceptedCompletion(requestId);
       }
       if (!ownerPastWindow() && caps?.rich && sent.body !== body) recorder?.annotateV2({ drops: [...answerDrops, {part:"answer",reason:"service_downgrade"}] });
-      if (ownerPastWindow() && body.outcome === "answered" && sent.delivery !== "accepted") {
+      if (initiallyLate && body.outcome === "answered" && sent.delivery !== "accepted") {
         await changeRunAsync(requestId, row => ({ ...row, ...(!ownerRunPending() && !ownerStopPending(row) ? { capacityReleased: true as const } : {}),
           ownerTurn: { ...row.ownerTurn!, lateAnswer: { ...row.ownerTurn?.lateAnswer, body, files: stagedAttachments } } }), Date.now() + 5000);
+      }
+      if (allowOwnerReply && recorded && sent.delivery === "unconfirmed") {
+        await changeRunAsync(requestId, row => ({ ...row,
+          ...(!ownerRunPending() && !ownerStopPending(row) ? { capacityReleased: true as const } : {}) }), Date.now() + 5000);
       }
       claimTerminal = sent.delivery !== "refused";
       terminalCompletion = claimTerminal ? completion : null;
@@ -1104,7 +1122,8 @@ export async function runClaimedRequest(
       callAbort.abort();
       if (ownerParts) {
         let keepFiles = true;
-        try { keepFiles = !!readRunLedger().runs.find(row => row.requestId === requestId)?.ownerTurn?.lateAnswer; }
+        try { const custody = readRunLedger().runs.find(row => row.requestId === requestId)?.ownerTurn;
+          keepFiles = !!(custody?.lateAnswer || custody?.completionAttempt); }
         catch { console.error("Owner relay late answer custody unreadable; staged files preserved"); }
         await ownerParts.dispose(keepFiles);
       }
@@ -1132,14 +1151,14 @@ export async function runClaimedRequest(
       try {
         const held = readRunLedger().runs.find(r => r.requestId === requestId);
         // Pending stops and released owner stops both keep their custody record.
-        const custodyPending = !!held?.ownerTurn?.lateAnswer || ownerRunPending() || !!held && ownerStopPending(held) || !!held?.ownerTurn?.released;
+        const custodyPending = !!held?.ownerTurn?.completionAttempt || !!held?.ownerTurn?.lateAnswer || ownerRunPending() || !!held && ownerStopPending(held) || !!held?.ownerTurn?.released;
         if (recorded && !custodyPending && !(completionAccepted && !capacityReleased)) await dropRunAsync(requestId, Date.now() + 5000);
       } catch (error) {
         console.error("External relay run ledger cleanup failed", error instanceof Error ? error.name : "unknown");
       }
       try {
         const held = readRunLedger().runs.find(r => r.requestId === requestId);
-        if (runDir && !held?.ownerTurn?.lateAnswer && !ownerRunPending() && !(held && ownerStopPending(held))) await fs.promises.rm(runDir, { recursive: true, force: true });
+        if (runDir && !held?.ownerTurn?.completionAttempt && !held?.ownerTurn?.lateAnswer && !ownerRunPending() && !(held && ownerStopPending(held))) await fs.promises.rm(runDir, { recursive: true, force: true });
       } catch (error) {
         console.error("External relay run directory cleanup failed", error instanceof Error ? error.name : "unknown");
       }
