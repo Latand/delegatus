@@ -195,9 +195,28 @@ selected main cases returned 69, and the full head run also hit its tmux
 fixture deadline. The bounded native-host reruns above match the publication
 context and pass the complete file without weakening its assertions.
 
-The thirteen changed executable files relative to merged main match the
+The fourteen changed executable files relative to merged main match the
 verified export byte for byte. SHA-256 (sorted relative path, NUL, bytes):
-`4ce10996098160306608b2f0db68a421674b65ce69ff290f2a580b4cd3b41b94`.
+`f20d9be5c133b88076c63648d74d151de82218ad4505ccf0f4c37b1a64d6ee5b`.
 
 The merge preserves the accepted work and its ancestors. Workflow files remain
 unchanged, and this repair sends no push; publication belongs to the controller.
+
+### Cold-install fixture correction
+
+Two full pre-push rehearsals on the merged tree exited 1 after all scope
+cases passed. Both reported an unidentified between-tests error from
+`scripts/local-gate.test.ts`. Direct runs of that file on the repaired tree
+and merged main each exited 0 with 69 passing cases; the single-file
+comparator also exited 0. A scratch diagnostic batch retained the raw error:
+the cold-install fixture timed out while waiting for measured load below
+0.75 per CPU, then its late cleanup opened an already removed pressure file.
+The fixture had written an empty PSI file to represent an idle machine.
+
+The fixture now writes explicit low PSI on release and cleanup, with a zero
+release window for this queue-budget scenario. Its high-pressure barrier,
+original-deadline assertion and owned-process cleanup assertions remain.
+All PSI override callers in the gate tests were checked; the other callers
+already use explicit measurements or intentionally test missing metrics.
+No production threshold or admission guard changed. Diagnostic logging was
+confined to scratch and removed before final verification.
