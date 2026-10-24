@@ -1795,6 +1795,37 @@ function hasEmailAddress(text: string, source?: EmailTextView["source"]): boolea
   return emailOccurrences(text, source).next().done !== true;
 }
 
+// This dictionary phrase identifies a private label in identity syntax or
+// when it is the entire publication, allowing its use inside ordinary prose.
+// Keep its digest here rather than matching it globally inside ordinary prose.
+const contextualIdentityDigest = "b829e805ab160bf10124b48da39c07eecc55bea7b9229820abbcc396ebf35cf1";
+const contextualIdentityPatterns = [
+  /(?:^|[^\p{L}\p{N}])(?:account(?:[_ -]?(?:id|name|label))?|id|label|user(?:[_ -]?(?:name|id))?|handle|host(?:name)?)[\s"'`]*[:=][\s"'`]*([\p{L}\p{N}._-]{4,512})(?![\p{L}\p{N}._-])/giu,
+  /(?:^|[^\p{L}\p{N}])account[\s"'`]+([\p{L}\p{N}._-]{4,512})(?![\p{L}\p{N}._-])/giu,
+  /(?:^|[/\\])accounts?[/\\](?:(?:claude|codex|copilot)[/\\])?([\p{L}\p{N}._-]{4,512})(?=$|[/\\\s"'`])/giu,
+  /(?<![\p{L}\p{N}._-])@([\p{L}\p{N}._-]{4,512})(?![\p{L}\p{N}._-])/giu,
+];
+function matchesStandaloneIdentity(sourceViews: string): boolean {
+  // Source views are already decoded and lowercased, separated by NUL rather
+  // than line breaks. A label on one line of a larger publication stays prose.
+  for (const source of sourceViews.split("\0")) {
+    const standalone = source.trim();
+    if (standalone.length === 10 && createHash("sha256").update(standalone).digest("hex") === contextualIdentityDigest) return true;
+  }
+  return false;
+}
+
+function matchesContextualIdentity(text: string, sourceViews: string): boolean {
+  if (matchesStandaloneIdentity(sourceViews)) return true;
+  for (const pattern of contextualIdentityPatterns) {
+    for (const match of text.matchAll(pattern)) {
+      const value = compactSensitiveText(match[1]);
+      if (value.length === 10 && createHash("sha256").update(value).digest("hex") === contextualIdentityDigest) return true;
+    }
+  }
+  return false;
+}
+
 export function sensitiveClasses(text: string): Set<FindingClass> {
   const prepared = preparedPrivacyText(text, () => {
     const normalized = normalizedSensitiveText(text);
@@ -1818,7 +1849,8 @@ export function sensitiveClasses(text: string): Set<FindingClass> {
     matchesKnownValue = knownValues.values.some((entry) => entry.exactOnly
       ? known.exactSearchable.includes(entry.primary)
       : normalizedText.includes(entry.primary))
-      || matchesKnownFingerprint(known.compact) || matchesKnownFingerprint(known.exactSearchable, true);
+      || matchesKnownFingerprint(known.compact) || matchesKnownFingerprint(known.exactSearchable, true)
+      || matchesContextualIdentity(known.searchable, known.exactSearchable);
     knownValueMatches.set(prepared, matchesKnownValue);
   }
   if (matchesKnownValue) {
@@ -1875,6 +1907,11 @@ function inspectText(path: string, kind: MediaKind | undefined): Set<FindingClas
       }
     }
     const findings = sensitiveClasses(views.join("\n"));
+    // Each decoded file view represents the whole publication. Keep that
+    // boundary for standalone labels while retaining the existing joint scan.
+    if (views.slice(1).some(view => matchesStandaloneIdentity(normalizedSensitiveText(view).exactSearchable))) {
+      findings.add("known_value");
+    }
     const extension = extname(path).toLowerCase();
     const textLike = textExtensions.has(extension) || textBasenames.has(basename(path));
     const controlBytes = contents.reduce((count, byte) => {

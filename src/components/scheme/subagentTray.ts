@@ -334,6 +334,16 @@ export interface ParentTray {
   expanded: boolean;
 }
 
+/** Shared controller contract for the desktop dashboard and mobile focus view. */
+export interface SubagentTrayApi {
+  trays: ReadonlyMap<string, ParentTray>;
+  foldedChildPaths: ReadonlySet<string>;
+  onToggleExpanded: (parentId: string, expanded: boolean) => void;
+  onOpenMember: (path: string) => void;
+  onUnfold: (id: string, path: string) => void;
+  onFoldChild: (id: string, path: string) => void;
+}
+
 export interface SubagentTrayInput {
   entries: readonly FileEntry[];
   /** Durable hand-fold pins, keyed by child conversation identity. */
