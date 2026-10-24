@@ -9362,6 +9362,9 @@ async function tickPipeline(
 ): Promise<boolean> {
   const before = performanceSpans.sync("controller.lane", () => controllerTickFingerprint(pipeline));
   const proactiveError = proactiveTaskExecutionError(pipeline.taskIds);
+  // Parking changes the publisher's control fence. Keep it intact until the
+  // active operation has recorded its actual receipt, then park on the next tick.
+  if (proactiveError && pipeline.delivery?.operation?.state === "running") return false;
   const attempt = pipeline.cursor && currentAttempt(pipeline, pipeline.cursor.stageId);
   if (proactiveError && (!attempt || ["pending", "passed", "failed", "needs_decision", "skipped"].includes(attempt.state))) {
     await park(pipeline, proactiveError);
@@ -9383,7 +9386,7 @@ async function tickPipeline(
     else await tickReviewStage(pipeline, stage, entries, ports, persist);
   }
   const settledAttempt = pipeline.cursor && currentAttempt(pipeline, pipeline.cursor.stageId);
-  if (proactiveError && pipeline.state !== "closed" && (!settledAttempt
+  if (proactiveError && pipeline.delivery?.operation?.state !== "running" && pipeline.state !== "closed" && (!settledAttempt
     || ["pending", "passed", "failed", "needs_decision", "skipped"].includes(settledAttempt.state))) await park(pipeline, proactiveError);
   return performanceSpans.sync("controller.lane", () => controllerTickFingerprint(pipeline) !== before);
 }
@@ -11478,6 +11481,8 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
   let changed = false;
   for (const preview of await selectControllerPipelines("running")) {
     if (preview.state !== "running" || preview.hiddenAt || preview.closedAt) continue;
+    // The active publisher owns this accepted head until its receipt settles.
+    if (preview.delivery?.operation?.state === "running") continue;
     const stage = currentStage(preview);
     const attempt = stage ? currentAttempt(preview, stage.id) : null;
     if (!stage || !attempt) continue;
