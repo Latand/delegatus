@@ -827,7 +827,7 @@ test("handoff-only owner prompts pin the immediate-answer and ten-minute guidanc
   const { createHash } = await import("node:crypto");
   const { ownerRequest } = await import("./toolLoop.fixture");
   const r = ownerRequest(); r.input.tools = r.input.tools!.filter(tool => tool.mode === "handoff");
-  // Pin the amended request-window guidance with the same handoff fixture.
+  // Pin the request window and promise dates with the same handoff fixture.
   expect(createHash("sha256").update(ownerRunPrompt(r, instruction(), 30)).digest("hex"))
-    .toBe("21d80986155f7432df0dd8ec7f932c70a16629a4c3f9c5bafdc40cf1c2444760");
+    .toBe("be74868380e7cb79d46cd8288af5bb48e14b85d834dc046f28ea9305024ecff6");
 });

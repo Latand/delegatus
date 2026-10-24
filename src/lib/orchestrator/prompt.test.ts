@@ -84,8 +84,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 58, and a v57 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(58);
+test("the default mandate is at version 59, and a v58 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(59);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -162,7 +162,8 @@ test("the default mandate is at version 58, and a v57 seat reads as stale", () =
   expect(orchestratorMandateStale(55)).toBe(true);
   expect(orchestratorMandateStale(56)).toBe(true);
   expect(orchestratorMandateStale(57)).toBe(true);
-  expect(orchestratorMandateStale(58)).toBe(false);
+  expect(orchestratorMandateStale(58)).toBe(true);
+  expect(orchestratorMandateStale(59)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("gives the shape, the outcome rule and what");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
@@ -243,6 +244,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   57: "928041c147b9f068a23674313b33c285c78555fa6a8afc0a89aeb20f49e99639",
   // v58 states the maintenance practice and ships #3083's working rule 16.
   58: "632ee54064e12e71db96a1ed427d0fc6f59566d6983d4b659429056ca7f4fb38",
+  59: "c47fcd928d937a62b5c0281d911849a45965e48196a1e0d49af7bd33849985b9",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -1013,8 +1015,17 @@ test("agent-facing review skills agree with the mandate's risk budget", () => {
   expect(reviewLoop).toContain("Unlimited review requires an explicit operator request and `roundLimit: 0`.");
 });
 
-test("the versioned mandate asks for a current status note in the operator's language", () => {
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Keep each task current: an update_task note whenever the situation changes (why it is parked, what or whom it waits for, what runs now), brief and in plain operator language.");
+test("the versioned mandate dates every promise and keeps its current status note", () => {
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Keep each task current: a brief note in plain operator language when the situation changes, and a dueAt for every promise you make: a task due by then, or an open step on a task due no later.");
+  const previous = "- Keep each task current: an update_task note whenever the situation changes (why it is parked, what or whom it waits for, what runs now), brief and in plain operator language.";
+  const current = ORCHESTRATOR_SYSTEM_PROMPT.split("\n").find(line => line.startsWith("- Keep each task current:"))!;
+  expect(Buffer.byteLength(current) - Buffer.byteLength(previous)).toBe(17);
+  const v58 = ORCHESTRATOR_SYSTEM_PROMPT.replace(current, previous);
+  expect(createHash("sha256").update(v58).digest("hex")).toBe(PROMPT_FINGERPRINTS[58]);
+  expect(orchestratorMandateUpgraded(v58)).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
+  expect(orchestratorMandateUpgraded(ORCHESTRATOR_SYSTEM_PROMPT)).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
+  expect(orchestratorMandateWithRoleTable(v58, null)).toBe(v58);
+
 });
 
 
