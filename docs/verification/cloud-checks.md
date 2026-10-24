@@ -1,5 +1,8 @@
 # Cloud checks: verification
 
+The publication repair below supersedes the original hook-test comparison for
+the publication environment.
+
 Verified 2026-10-24 13:05 UTC against main `e92a0ddde58e07ec491e64b96b4ca2c722ebab60`.
 The checks execute the working tree in a scratch export. The SHA-256 of
 `git diff --binary HEAD -- .githooks scripts src` is
@@ -116,3 +119,82 @@ root, with native desktop scrollbars enabled.
 component supplied in result 72. No lane-settings UI rewrite was made.
 `.github/workflows` is unchanged. No performance improvement is claimed by
 these checks.
+
+## Publication repair
+
+Repair verification completed 2026-10-24 14:06 UTC.
+
+Publication of the accepted `d141f70a286c6ce84692c7f6ac90a3b2d2de6c07`
+exposed inherited publication context in test fixtures. The publisher sets
+`LLV_GATE_PUSH_HEAD`, lane and stage selectors; `checkEnvironment` retains
+gate transport variables, and `isolatedEnvironment` passes them into each
+test process. Both the shared hook fixture and the comparator's separate
+fixture then inherited the enclosing repository's SHA. Their repositories
+have their own commits, so the new production guard refused their hooks
+before privacy, types, lint or receipt assertions could run.
+
+The common test preload now clears the enclosing publication's head, lane,
+stage and private Cloud configuration. Fixture hooks run their complete local
+check plan by default; Cloud tests explicitly choose Cloud execution. Production
+hook selection, transport and outgoing-head enforcement are unchanged.
+
+The source repair is identified by SHA-256
+`807168713db4968a71168a1f5301afd9f1aa428775078ab6a751eb66580dd8b8`
+of `git diff --binary d141f70a286c6ce84692c7f6ac90a3b2d2de6c07 -- test-preload.ts src/lib/testing/testGitIsolation.test.ts`.
+Documentation is excluded from that digest.
+
+### Reproduction and regression
+
+All runs use scratch exports, the supplied admission wrapper and isolated
+home, configuration, temporary and state roots. Checks execute serially.
+The canonical publication environment is constructed with `checkEnvironment`
+and `isolatedEnvironment`, then supplied with synthetic enclosing publication
+selectors. No live Cloud endpoint or operator state is used.
+
+- On the accepted source, the two Cloud hook cases fail with the enclosing
+  SHA. Removing only `LLV_GATE_PUSH_HEAD` makes both pass.
+- The unchanged-main hook case passes on base
+  `e92a0ddde58e07ec491e64b96b4ca2c722ebab60` and fails on the accepted
+  source under the same canonical environment.
+- The new regression fails before the preload repair and passes afterwards.
+  It starts a real test process with foreign publication selectors and Cloud
+  configuration, then runs the real fixture hook. The fixture's own outgoing
+  SHA succeeds through privacy. Incorrect checkout SHAs and conflicting push
+  input remain decisive refusals, with no further check effects.
+- After the repair, `src/lib/testing/testGitIsolation.test.ts` passes all
+  eight cases, `scripts/cloud-checks.test.ts` passes all 37, and the
+  unchanged-main hook case passes with the enclosing selectors present.
+
+Payloads for those checks are `bun run test <explicit-file>`; the focused
+hook case additionally uses
+`--test-name-pattern="pre-push hook on a branch behind main"`.
+
+### Paired hook-suite limits
+
+The complete hook files were also run separately on base and repaired source,
+with fresh isolation for every file and the same synthetic publication context.
+
+| File | Base pass / fail | Repaired pass / fail |
+| --- | ---: | ---: |
+| `scripts/local-gate-tests.test.ts` | 66 / 1 | 66 / 1 |
+| `scripts/local-gate.receipts.test.ts` | 2 / 6 | 2 / 6 |
+| `scripts/local-gate.test.ts` | 60 / 9, one error | 60 / 9, one error |
+
+Failing assertion names match on both sides. Nested hook checks in this stage's
+signal namespace refuse inherited CPU slot ownership; the lifecycle sample
+also has matching containment and between-tests cleanup failures. A separate
+native-service probe refused the caller's PID namespace before executing its
+command. No admission or containment guard was disabled to obtain a verdict.
+These runs establish the remaining stage-environment limitations and do not
+establish a complete native hook-suite pass. The controller's publication runs
+the repaired source under its own hook environment.
+
+### Final static and publication checks
+
+The tested export's two source files match the repair checkout byte for byte.
+The final compiler command is `bun node_modules/typescript/bin/tsc --noEmit`;
+lint is `bun node_modules/eslint/bin/eslint.js test-preload.ts src/lib/testing/testGitIsolation.test.ts`.
+Both exit 0 without diagnostics. `git diff --check HEAD` also exits 0.
+The privacy gate with committed known-value fingerprints passes on all three
+repair files. The repair uses the repository's enabled commit hooks and leaves
+the production hooks, lane-settings UI and workflows unchanged.
