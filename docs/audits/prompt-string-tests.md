@@ -1445,14 +1445,14 @@ LLV_STATE_DIR are private, and the Viewer control URL is verified closed.
 The untouched merged base is a clean detached checkout with the same dependencies.
 
 
-The final compiler scan covers 2,317 surviving test files and 29,029 test
-definitions. Against current main it counts 87 fewer definitions and 814 fewer
-assertion calls across 83 touched test paths; 81 paths retain tests. The scan
+The earlier compiler scan covered 2,317 surviving test files and 29,029 test
+definitions. Against that run's main revision it counted 87 fewer definitions
+and 814 fewer assertion calls across 83 touched test paths; 81 paths retain tests. The scan
 collected 4,362 keyword candidates and 594 additional literal-origin candidates
 from 46 producer files for classification. Input rendering, branches, stored
 text upgrades, protocol structure, budgets and redaction checks stay.
 
-Sixteen focused files ran on the final TypeScript patch. Twelve files passed;
+Sixteen focused files ran on that TypeScript patch. Twelve files passed;
 the four non-green files were also run whole on the captured merged base.
 Their case-failure identities match, and the icon file reproduces the same
 module-level assertion with expected true and received false before its tests.
@@ -1484,9 +1484,25 @@ The final `bun x tsc --noEmit --incremental false` passes. Scoped
 `bun scripts/eslint-changes.ts --base 90d0ef7d <14 changed TypeScript paths>`
 reports zero introduced errors and zero base errors on those paths. Whitespace
 checks pass. Main was fetched again and remains the revision already merged.
-The earlier read-only review's incomplete `src/lib/links/seatMessages.http.test.ts`
-comparison remains a verification limitation outside these focused reruns.
+Those focused reruns did not resolve the earlier read-only review's incomplete
+`src/lib/links/seatMessages.http.test.ts` comparison.
 
 The privacy gate passes across all 86 surviving touched paths with
 `--require-known-values --check-commits --base origin/main --paths <paths>`.
 The ordinary commit hooks repeat staged whitespace, privacy and scoped lint.
+
+## Structural review fixes
+
+The completion-channel test in `src/lib/pipelines/prompts.test.ts` retains its
+original rendering setup and single-JSON-fence assertion. The working-rules
+test in `src/lib/orchestrator/prompt.test.ts` retains its original numeric
+rule-count and full/short numbering-parity assertions. Both blocks are trimmed
+existing tests; their authored wording assertions were removed.
+
+The reviewer parameter test in `src/lib/pipelines/roles.test.ts` retains its
+overflow refusal, rendered input and suffix checks, with the four authored
+rule-phrase assertions removed. The tick-contract fixture now contains only
+the delivered clauses that its occurrence and idempotence checks use. Its
+obsolete original-clause data and ignored tuple column are gone. The three
+audit rows above classify these blocks as trim. No replacement tests were
+added.

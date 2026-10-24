@@ -196,7 +196,7 @@
      double it and stays out. */
   :root:not([data-theme="light"]) :is(.focus-visible\:ring-accent\/35, .focus-visible\:ring-accent\/40, .focus-visible\:ring-accent\/45, .focus-visible\:ring-accent\/50, .focus-visible\:ring-accent\/55, .focus-visible\:ring-accent\/60):focus-visible,
   :root:not([data-theme="light"]) .focus-within\:ring-accent\/40:focus-within,
-  :root:not([data-theme="light"]) .group:focus-visible .group-focus-visible\:ring-accent\/40 { --tw-ring-color: var(--color-accent); }
+  :root:not([data-theme="light"]) :is(.group-focus-visible\:ring-accent\/40, .group-focus-visible\:ring-accent\/60):is(.group:focus-visible *) { --tw-ring-color: var(--color-accent); }
   :root:not([data-theme="light"]) :is(.focus-visible\:ring-danger\/30, .focus-visible\:ring-danger\/40, .focus-visible\:ring-danger\/50):focus-visible { --tw-ring-color: var(--color-danger); }
   :root:not([data-theme="light"]) :is(.focus-visible\:ring-warning\/40, .focus-visible\:ring-warning\/50):focus-visible { --tw-ring-color: var(--color-warning); }
   :root:not([data-theme="light"]) .focus-within\:ring-info\/40:focus-within { --tw-ring-color: var(--color-info); }
@@ -427,7 +427,7 @@
    double it and stays out. */
 :root[data-theme="dark"] :is(.focus-visible\:ring-accent\/35, .focus-visible\:ring-accent\/40, .focus-visible\:ring-accent\/45, .focus-visible\:ring-accent\/50, .focus-visible\:ring-accent\/55, .focus-visible\:ring-accent\/60):focus-visible,
 :root[data-theme="dark"] .focus-within\:ring-accent\/40:focus-within,
-:root[data-theme="dark"] .group:focus-visible .group-focus-visible\:ring-accent\/40 { --tw-ring-color: var(--color-accent); }
+:root[data-theme="dark"] :is(.group-focus-visible\:ring-accent\/40, .group-focus-visible\:ring-accent\/60):is(.group:focus-visible *) { --tw-ring-color: var(--color-accent); }
 :root[data-theme="dark"] :is(.focus-visible\:ring-danger\/30, .focus-visible\:ring-danger\/40, .focus-visible\:ring-danger\/50):focus-visible { --tw-ring-color: var(--color-danger); }
 :root[data-theme="dark"] :is(.focus-visible\:ring-warning\/40, .focus-visible\:ring-warning\/50):focus-visible { --tw-ring-color: var(--color-warning); }
 :root[data-theme="dark"] .focus-within\:ring-info\/40:focus-within { --tw-ring-color: var(--color-info); }
