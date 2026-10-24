@@ -13,7 +13,7 @@ import { reportCardRefs, type ReportLogCard } from "./reportCardRefs";
 import { seatIdentityResolver } from "./seatIdentity";
 import { bridgeQuestionsForProject } from "./service";
 import { bridgeReportLogSignature, pageBridgeReports } from "./store";
-import type { BridgeReportClass } from "./types";
+import type { BridgeReportClass, BridgeReportOrigin } from "./types";
 
 export { reportCardRefs, type ReportLogCard };
 
@@ -32,6 +32,9 @@ export interface ReportLogEntry {
   body: string;
   /** Card ids in the body that name a card on this project's board. */
   cards: ReportLogCard[];
+  /** Recorded author; absent on legacy reports. The conversation is the
+      actual writer, including a deputy that reported under the seat. */
+  author?: Pick<BridgeReportOrigin, "kind" | "conversationId" | "role">;
 }
 
 /**
@@ -165,6 +168,11 @@ export function readProjectReportLog(
       /* Legacy confirmation rows never reach a page. */
       class: report.class as BridgeReportClass,
       body: report.body,
+      ...(report.origin ? { author: {
+        kind: report.origin.kind,
+        conversationId: report.origin.via?.deputy ?? report.origin.conversationId,
+        role: report.origin.role,
+      } } : {}),
       cards: [...new Map([...(report.cards ?? []).flatMap(id => known.has(id) ? [{ id, kind: known.get(id)! }] : []), ...reportCardRefs(report.body, known)].map(card => [card.id, card])).values()],
     })),
     nextBefore: page.nextBefore,
