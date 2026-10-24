@@ -40,6 +40,14 @@ beforeEach(async () => {
 afterEach(async () => { if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous; await fs.rm(root, { recursive: true, force: true }); resetProjectAliasesForTests(); });
 const ports = () => ({ hostProject: PROJECT, projectForSlug: () => PROJECT, writer: async () => ({ kind: "unknown" as const, roleId: null }) });
 const request = (delta = 0) => ({ importId: ID, previous: null, roots, at: at(delta) });
+function expectHelperDiagnostics(stderr: string) {
+  for (const line of stderr.trim().split("\n").filter(Boolean)) {
+    expect(line.startsWith("[blocking-wait] "), stderr).toBe(true);
+    expect(JSON.parse(line.slice("[blocking-wait] ".length))).toMatchObject({
+      site: "state-write-lock", stateWait: { reason: "sqlite", outcome: "success" },
+    });
+  }
+}
 async function backup(body = "Inspect current ownership before changing a running worker.\n") {
   await fs.writeFile(path.join(memory, "topic.md"), body);
   await fs.writeFile(path.join(memory, "MEMORY.md"), "- [Topic](topic.md)\n");
@@ -231,7 +239,8 @@ test("the fallback scan is durable across a fresh helper process and reversal le
   const code = `import {advanceMemoryImportWork} from ${JSON.stringify(path.join(import.meta.dir, "importLifecycle.ts"))}; await advanceMemoryImportWork(${JSON.stringify(request(30 * 60_000 + 11))},{hostProject:${JSON.stringify(PROJECT)},projectForSlug:()=>${JSON.stringify(PROJECT)},legacy:async()=>["legacy-claude"]});`;
   const child = Bun.spawn([process.execPath, "--eval", code], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-  expect({ stdout, stderr, exit }).toEqual({ stdout: "", stderr: "", exit: 0 });
+  expect({ stdout, exit }).toEqual({ stdout: "", exit: 0 });
+  expectHelperDiagnostics(stderr);
   expect(readImportCandidates(ID).candidates.some(c => c.body === late)).toBe(true);
   expect(readMemorySourceFile()?.phase).toBe("draining");
   expect(setMemorySource("engines", at(40 * 60_000))).toBeNull();
@@ -283,7 +292,8 @@ test("the orchestrator target rises only after its project's completed import re
   const code = `import {curatorBrief} from ${JSON.stringify(path.join(import.meta.dir, "curation/brief.ts"))}; console.log(curatorBrief(${JSON.stringify(PROJECT)}).includes("raised only this project's orchestrator"));`;
   const child = Bun.spawn([process.execPath, "--eval", code], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
   const [output, errors, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-  expect({ output: output.trim(), errors, exit }).toEqual({ output: "true", errors: "", exit: 0 });
+  expect({ output: output.trim(), exit }).toEqual({ output: "true", exit: 0 });
+  expectHelperDiagnostics(errors);
   expect(persistProjectAliases([{ source: PROJECT, target: "renamed-import-fixture", displayName: "Renamed fixture" }])).toBe(true);
   expect(curatorBrief("renamed-import-fixture")).toContain("raised only this project's orchestrator");
   joinMovedScopes(at(20));
