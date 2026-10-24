@@ -16,6 +16,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { deflateSync } from "node:zlib";
+import { pathToFileURL } from "node:url";
 
 import { auditGithubPublication, shouldFailGithubAudit } from "./privacy-github-audit";
 import { knownValueFingerprint } from "./generate-privacy-known-value-fingerprints";
@@ -2611,6 +2612,36 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       { name: "percent decoded", text: [...value].map((c) => `%${c.charCodeAt(0).toString(16)}`).join(""), contiguous: true },
       { name: "entity decoded", text: [...value].map((c) => `&#${c.charCodeAt(0)};`).join(""), contiguous: true },
     ];
+
+    test("the committed catalog distinguishes open-source prose from its configured value", async () => {
+      const directory = mkdtempSync(join(tmpdir(), "llv-privacy-open-source-"));
+      temporaryDirectories.push(directory);
+      const publication = "publication.md";
+      const catalog = join(import.meta.dir, "privacy-known-value-fingerprints.json");
+      const environment = {
+        LLV_PRIVACY_KNOWN_VALUES: "",
+        LLV_PRIVACY_KNOWN_VALUES_FILE: "",
+        LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: catalog,
+      };
+      await runGit(directory, ["init", "--quiet"]);
+      await runGit(directory, ["config", "user.name", "Fixture Tool"]);
+      await runGit(directory, ["config", "user.email", "noreply@example.invalid"]);
+      await runGit(directory, ["commit", "--quiet", "--allow-empty", "-m", "base"]);
+      writeFileSync(join(directory, publication), "Free and open source. Free and open-source.\n");
+      await runGit(directory, ["add", publication]);
+      await runGit(directory, ["commit", "--quiet", "-m", "Describe free and open source and open-source software"]);
+
+      const proseFile = await runGateArguments(["--repository", directory, "--paths", publication], environment, directory);
+      expect(proseFile.exitCode, proseFile.stdout.toString()).toBe(0);
+      const proseCommit = await runGateArguments(["--base", "HEAD~1", "--check-commits"], environment, directory);
+      expect(proseCommit.exitCode, proseCommit.stdout.toString()).toBe(0);
+
+      writeFileSync(join(directory, publication), `${["open", "source"].join("")}\n`);
+      const configuredValue = await runGateArguments(["--repository", directory, "--paths", publication], environment, directory);
+      expect(configuredValue.exitCode).toBe(1);
+      expect(configuredValue.stdout.toString()).toContain("known_value: 1\n");
+    }, 15000);
+
     for (const source of ["fingerprint", "raw file", "environment"] as const) {
       for (const exactOnly of [true, false]) {
         for (const spelling of spellings) {
@@ -4491,6 +4522,199 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(requests).toHaveLength(2);
     expect(requests.every((url) => url.startsWith("https://api.github.test/"))).toBe(true);
   });
+});
+
+describe("publication range resolution", () => {
+  const identity = { GIT_AUTHOR_NAME: "Fixture Tool", GIT_COMMITTER_NAME: "Fixture Tool",
+    GIT_AUTHOR_EMAIL: ["noreply", "fixture.invalid"].join("@"),
+    GIT_COMMITTER_EMAIL: ["noreply", "fixture.invalid"].join("@"),
+    GIT_AUTHOR_DATE: "2000-01-01T00:00:00Z", GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z" };
+
+  async function git(repo: string, ...args: string[]): Promise<string> {
+    const result = await runPrivacyTestProcess({ cmd: ["git", "-C", repo, ...args],
+      env: { ...process.env, ...identity }, stdout: "pipe", stderr: "pipe" });
+    expect(result.exitCode).toBe(0);
+    return result.stdout.toString().trim();
+  }
+
+  async function fixture(shallow = false) {
+    const root = mkdtempSync(join(tmpdir(), "llv-privacy-range-"));
+    temporaryDirectories.push(root);
+    const source = join(root, "source");
+    const candidate = join(root, "candidate");
+    mkdirSync(source);
+    await git(source, "init", "--quiet", "-b", "main");
+    await git(source, "commit", "--allow-empty", "--quiet", "-m", "baseline");
+    const fork = await git(source, "rev-parse", "HEAD");
+    await git(source, "checkout", "--quiet", "-b", "feature");
+    writeFileSync(join(source, "publication.txt"), "Synthetic publication.\n");
+    await git(source, "add", ".");
+    await git(source, "commit", "--quiet", "-m", "candidate work");
+    await git(source, "clone", "--quiet", "--single-branch", "--branch", "feature",
+      ...(shallow ? ["--depth", "1"] : []), pathToFileURL(source).href, candidate);
+    await git(source, "checkout", "--quiet", "main");
+    // This protected-base-only violation must never become a candidate finding.
+    await git(source, "commit", "--allow-empty", "--quiet", "-m",
+      `base advances ${["base-only", "personal.dev"].join("@")}`);
+    const base = await git(source, "rev-parse", "HEAD");
+    return { source, candidate, base, fork };
+  }
+
+  async function inspect(candidate: string, base: string) {
+    return runGateArguments(["--repository", candidate, "--require-known-values", "--check-commits", "--base", base], {
+      LLV_PRIVACY_KNOWN_VALUES: "synthetic protected marker",
+      LLV_PRIVACY_KNOWN_VALUES_FILE: "", LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: "",
+      LLV_PRIVACY_KNOWN_VALUES_FORMAT: "plain",
+    });
+  }
+
+  test("fetches a missing newer base in the candidate and reports the merge base", async () => {
+    const { candidate, base, fork } = await fixture();
+    const before = await inspect(candidate, fork);
+    expect(before.exitCode).toBe(0);
+    expect(before.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
+    const result = await inspect(candidate, base);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.toString()).toBe(`PRIVACY GATE: PASS\npublication_range: base is not an ancestor of HEAD; inspecting from merge-base ${fork}\n`);
+    expect(result.stderr.toString()).toBe("");
+    expect(await git(candidate, "rev-parse", "--verify", `${base}^{commit}`)).toBe(base);
+    // A restart must resolve the same range from the objects just fetched.
+    const again = await inspect(candidate, base);
+    expect(again.exitCode).toBe(0);
+    expect(again.stdout.toString()).toBe(result.stdout.toString());
+    await git(candidate, "merge", "--quiet", "--no-ff", "-m", "merge protected base", base);
+    const updated = await inspect(candidate, base);
+    expect(updated.exitCode).toBe(0);
+    expect(updated.stdout.toString()).toBe(before.stdout.toString());
+  }, 15000);
+
+  test("preserves file, message and merge boundary findings on a behind branch", async () => {
+    const { candidate, base, fork } = await fixture();
+    const address = ["someone", "personal.dev"].join("@");
+    writeFileSync(join(candidate, "publication.txt"), address + "\n");
+    await git(candidate, "add", ".");
+    const result = await runPrivacyTestProcess({ cmd: ["git", "-C", candidate, "commit", "--quiet", "-m", `candidate ${address}`],
+      env: { ...process.env, ...identity, GIT_AUTHOR_EMAIL: address }, stdout: "pipe", stderr: "pipe" });
+    expect(result.exitCode).toBe(0);
+    const current = await inspect(candidate, fork);
+    const behind = await inspect(candidate, base);
+    expect(current.exitCode).toBe(1);
+    expect(behind.exitCode).toBe(1);
+    const notice = `publication_range: base is not an ancestor of HEAD; inspecting from merge-base ${fork}\n`;
+    expect(behind.stdout.toString().replace(notice, "")).toBe(current.stdout.toString());
+    expect(behind.stdout.toString()).toContain("email_address: 3\n");
+    expect(behind.stdout.toString()).toContain("commit_message:");
+    expect(behind.stdout.toString()).toContain("merge_boundary:");
+    expect(behind.stdout.toString()).not.toContain(address);
+    await git(candidate, "merge", "--quiet", "--no-ff", "-m", "merge protected base", base);
+    const updated = await inspect(candidate, base);
+    expect(updated.exitCode).toBe(1);
+    expect(updated.stdout.toString()).toBe(current.stdout.toString());
+  }, 15000);
+
+  test("fetches shallow history before inspecting all candidate commits", async () => {
+    const { source, candidate, base } = await fixture(true);
+    await git(source, "checkout", "--quiet", "feature");
+    await git(source, "commit", "--allow-empty", "--quiet", "-m", "synthetic protected marker");
+    await git(source, "commit", "--allow-empty", "--quiet", "-m", "clean tip");
+    await git(candidate, "fetch", "--quiet", "--depth", "1", "origin", "feature");
+    await git(candidate, "checkout", "--quiet", "--detach", "FETCH_HEAD");
+    const result = await inspect(candidate, base);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout.toString()).toContain("known_value: 1\n");
+    expect(result.stdout.toString()).not.toContain("range unreadable");
+    expect(await git(candidate, "rev-parse", "--is-shallow-repository")).toBe("false");
+  }, 15000);
+
+  test("fails closed when a successful unshallow fetch leaves a shallow origin boundary", async () => {
+    const root = mkdtempSync(join(tmpdir(), "llv-privacy-shallow-origin-"));
+    temporaryDirectories.push(root);
+    const source = join(root, "source");
+    const origin = join(root, "origin");
+    const candidate = join(root, "candidate");
+    mkdirSync(source);
+    await git(source, "init", "--quiet", "-b", "protected");
+    await git(source, "commit", "--allow-empty", "--quiet", "-m", "fork");
+    const fork = await git(source, "rev-parse", "HEAD");
+    await git(source, "commit", "--allow-empty", "--quiet", "-m", "protected advance");
+    const base = await git(source, "rev-parse", "HEAD");
+    await git(source, "checkout", "--quiet", "--orphan", "feature");
+    const address = ["hidden", "personal.dev"].join("@");
+    await git(source, "commit", "--allow-empty", "--quiet", "-m", `hidden ${address}`);
+    await git(source, "commit", "--allow-empty", "--quiet", "-m", "synthetic protected marker");
+    await git(source, "commit", "--allow-empty", "--quiet", "-m", "feature work");
+    await git(source, "merge", "--quiet", "--no-ff", "--allow-unrelated-histories", "-m", "merge protected fork", fork);
+    const head = await git(source, "rev-parse", "HEAD");
+
+    const completeCandidate = join(root, "complete-candidate");
+    await git(source, "clone", "--quiet", "--single-branch", "--branch", "feature", pathToFileURL(source).href, completeCandidate);
+    const complete = await inspect(completeCandidate, base);
+    expect(complete.exitCode).toBe(1);
+    expect(complete.stdout.toString()).toContain("known_value: 1\n");
+    expect(complete.stdout.toString()).toContain("email_address: 1\n");
+    expect(complete.stdout.toString()).not.toContain(address);
+
+    await git(source, "clone", "--quiet", "--no-single-branch", "--depth=2", pathToFileURL(source).href, origin);
+    await git(origin, "symbolic-ref", "HEAD", "refs/heads/feature");
+    await git(source, "clone", "--quiet", "--single-branch", "--branch", "feature", "--depth=1",
+      pathToFileURL(origin).href, candidate);
+    expect(await git(origin, "rev-parse", "--is-shallow-repository")).toBe("true");
+    expect(await git(candidate, "rev-parse", "--is-shallow-repository")).toBe("true");
+
+    const result = await inspect(candidate, base);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout.toString()).toContain("publication_range: unreadable: candidate history remains shallow after fetch from origin\n");
+    expect(result.stdout.toString()).toContain("inspection_error: 1\n");
+    expect(result.stdout.toString()).not.toContain("configuration_error:");
+    expect(result.stdout.toString()).not.toContain("known_value:");
+    expect(result.stdout.toString()).not.toContain(address);
+    expect(await git(candidate, "rev-parse", "--is-shallow-repository")).toBe("true");
+    expect(await git(candidate, "rev-parse", "HEAD")).toBe(head);
+  }, 15000);
+
+  test("fails closed when shallow candidate history cannot be fetched", async () => {
+    const { candidate, fork } = await fixture(true);
+    await git(candidate, "remote", "set-url", "origin", join(candidate, "missing-origin"));
+    const result = await inspect(candidate, "HEAD");
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout.toString()).toContain("publication_range: unreadable: candidate history unavailable after fetch from origin\n");
+    expect(result.stdout.toString()).not.toContain(fork);
+    expect(result.stderr.toString()).toBe("");
+  }, 15000);
+
+  test("fails closed for unrelated histories", async () => {
+    const { candidate } = await fixture();
+    const tree = await git(candidate, "rev-parse", "HEAD^{tree}");
+    const unrelated = await git(candidate, "commit-tree", tree, "-m", "unrelated baseline");
+    const result = await inspect(candidate, unrelated);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout.toString()).toContain("publication_range: unreadable: no readable common ancestor between base and candidate HEAD\n");
+    expect(result.stderr.toString()).toBe("");
+  }, 15000);
+
+  test("does not fetch a revision supplied as an option or refspec", async () => {
+    const { candidate } = await fixture();
+    const before = await git(candidate, "show-ref");
+    for (const base of ["-upload-pack=hostile", "HEAD:refs/heads/injected"]) {
+      const result = await inspect(candidate, base);
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout.toString()).toContain("publication_range: unreadable: requested base cannot be resolved as a commit\n");
+      expect(result.stdout.toString()).not.toContain(base);
+      expect(result.stderr.toString()).toBe("");
+    }
+    expect(await git(candidate, "show-ref")).toBe(before);
+  }, 15000);
+
+  test("fails clearly when the requested object cannot be fetched", async () => {
+    const { candidate } = await fixture();
+    const missing = "f".repeat(40);
+    const result = await inspect(candidate, missing);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout.toString()).toContain("publication_range: unreadable: requested base object unavailable after fetch from origin\n");
+    expect(result.stdout.toString()).toContain("commit_message: range unreadable");
+    expect(result.stdout.toString()).toContain("merge_boundary: range unreadable");
+    expect(result.stderr.toString()).toBe("");
+  }, 15000);
 });
 
 describe("commitMessageFindings", () => {

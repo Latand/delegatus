@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
+import { FileTransactionBusyError, withFileTransactionSync } from "@/lib/state/fileTransaction";
 
 /*
  * The operator's own settings, installation-wide (docs/design/orchestrator-reports.md §4.2).
@@ -162,6 +163,13 @@ export interface OperatorSettingsUpdate {
  * Null on a failed write.
  */
 export function updateOperatorSettings(update: OperatorSettingsUpdate, now: string = new Date().toISOString()): OperatorSettings | null {
+  /* Under the file's lock, which an install transfer holds while it writes
+     the same file, so neither loses the other's value. */
+  try { return withFileTransactionSync(settingsFile(), "operator settings are busy", () => { cache = null; return updateLocked(update, now); }); }
+  catch (error) { if (error instanceof FileTransactionBusyError) return null; throw error; }
+}
+
+function updateLocked(update: OperatorSettingsUpdate, now: string): OperatorSettings | null {
   const current = readOperatorSettings();
   const next: OperatorSettings = { ...current };
   let changed = false;
