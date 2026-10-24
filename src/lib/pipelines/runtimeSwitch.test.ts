@@ -267,7 +267,6 @@ for (const engine of ["claude", "codex"] as const) for (const source of ["dead",
     expect(next).toMatchObject({ n: 2, state: "running", accountId: targetId, effectiveRole: { engine, model, effort } });
     expect(next!.effectiveRole.serviceTier ?? null).toBe(serviceTier);
     expect(next!.restartContext).toEqual({ previousAttempt: 1, transcriptPath: STAGE_TRANSCRIPT });
-    expect(h.spawnInputs[1]!.prompt).toContain("use its transcript for reference");
     expect(h.spawnInputs[1]).toMatchObject({ cwd: lane.worktreeDir, requestedAccountId: targetId, supersedes: STAGE_CONVERSATION });
   });
 }

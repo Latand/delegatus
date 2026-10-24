@@ -207,7 +207,6 @@ test.each(["expanded prompt", "role scaffold"] as const)("an oversized %s launch
     expect(fs.readFileSync(file!, "utf8")).toBe(expected);
     expect(fs.statSync(file!).mode & 0o777).toBe(0o600);
     expect(expected).toContain("Role prompt scaffold:");
-    expect(expected).toContain("Report this stage's completion with the Delegatus MCP tool stage_report");
     expect(expected).toContain(previous);
     expect((await git(worktree, "status", "--porcelain"))).toBe("");
     fs.writeFileSync(path.join(worktree, "result.txt"), "worker result\n");

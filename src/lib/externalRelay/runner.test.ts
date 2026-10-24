@@ -4308,7 +4308,7 @@ test.each([false, true])("owner reply chains reuse one conversation, learn bot a
       expect(await relayAnswerOp("conversation_chain_fixture", { format: "plain" })).toBeNull();
     }
     expect(launches).toBe(1); expect(readConversations()).toHaveLength(1);
-    expect(prompts[1]).not.toContain("<service_instructions>"); expect(prompts[1]).not.toContain("[You work for the owner");
+    expect(prompts[1]).not.toContain("<service_instructions>");
     expect(prompts[1]).not.toContain('"id":"turn-1"');
     expect(Buffer.byteLength(prompts[1]!)).toBeLessThan(Buffer.byteLength(prompts[0]!) / 10);
     expect(readAnswerRecord(paired.id, "target_1", current)?.chain).toMatchObject({ continued: true, promptBytes: Buffer.byteLength(prompts[2]!) });

@@ -78,7 +78,6 @@ test("the proactive slot delivers a proposal brief built from open issues", asyn
   const record = await runSeatTickCheck(PROJECT, rig.deps);
   expect(record!.verdict).toBe("proactive");
   expect(rig.sent[0]!.text).toContain("#1245 the native seat tick");
-  expect(rig.sent[0]!.text).toContain("post it as a single board card in inbox");
   expect(rig.written.at(-1)!.lastProposalAt).toBe(new Date(NOW).toISOString());
 });
 
@@ -465,7 +464,6 @@ test("a wake retained by transport identifies its snapshot when delivery is dela
   const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE, delivery: HELD });
   await runSeatTickCheck(PROJECT, rig.deps);
   expect(rig.sent[0]!.text).toContain(`Snapshot at ${new Date(NOW).toISOString()}`);
-  expect(rig.sent[0]!.text).toContain("seat_tick_settings");
   expect(rig.written.at(-1)!.outstandingWake!.text).toBe(rig.sent[0]!.text);
 });
 

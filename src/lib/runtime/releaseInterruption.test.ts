@@ -377,11 +377,6 @@ function continuationsIn(ledger: FakeDeliveryLedger): string[] {
 
 function expectDeploymentContinuation(text: string | undefined): void {
   expect(text).toContain("deployment interrupted your turn");
-  expect(text).toContain("Inspect your transcript");
-  expect(text).toContain("preserved work");
-  expect(text).toContain("Re-run any interrupted operation");
-  expect(text).toContain("Run long commands in the foreground");
-  expect(text).toContain("stage_report");
 }
 
 test.each(["claude", "codex"] as const)(

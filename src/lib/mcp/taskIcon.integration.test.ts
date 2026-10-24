@@ -52,7 +52,7 @@ async function protocol() {
   let sequence = 0;
   const call = async (name: string, args: Record<string, unknown>) =>
     (await client.callTool({ name, arguments: { clientRequestId: `icon-${Math.random().toString(36).slice(2)}-${++sequence}`, ...args } })).structuredContent as Answer;
-  return { client, call, close: async () => { await client.close(); await server.close(); receipts.close(); } };
+  return { call, close: async () => { await client.close(); await server.close(); receipts.close(); } };
 }
 
 const json = (method: string, body: Record<string, unknown>) =>
@@ -62,14 +62,6 @@ const stored = (id: string) => loadTasks().find((row) => row.id === id)!;
 test("create_task and update_task publish icon, tell agents to set it, and store the normalised name", async () => {
   const p = await protocol();
   try {
-    const { tools } = await p.client.listTools();
-    for (const name of ["create_task", "update_task"]) {
-      const tool = tools.find((candidate) => candidate.name === name)!;
-      const icon = (tool.inputSchema.properties as Record<string, { type?: unknown; description?: string }>).icon;
-      expect({ name, described: icon?.description?.includes("lucide") }).toEqual({ name, described: true });
-      expect({ name, told: tool.description?.includes("`icon`") }).toEqual({ name, told: true });
-    }
-
     const created = await p.call("create_task", { project: "icon-project", text: "Fix the crash", icon: "lucide:Bug" });
     expect(created).toMatchObject({ ok: true, task: { icon: "bug" } });
     expect(created.notes).toBeUndefined();

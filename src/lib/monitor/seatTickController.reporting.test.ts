@@ -105,7 +105,6 @@ describe("seat auto-rotation through production seams", () => {
     expect(successor.predecessorConversationId).toBe(f.original.conversationId);
     expect(successor.intent.clientRequestId).toStartWith("seat-autorotate-");
     expect(successor.mandate).toContain("Own the board and report results.");
-    expect(successor.mandate).toContain("conversation_messages");
     expect(successor.mandate).toContain(f.original.conversationId!);
     expect(JSON.stringify(f.settings())).toBe(f.settingsBefore);
     expect(f.cards()).toHaveLength(1); expect(f.cards()[0]!.status).toBe("done");

@@ -2,7 +2,8 @@
 
 Read-only audit for the lane that removes these tests. Base: `main` at
 `3736d5e434149f257061a94cb74b4c0806f152c8` (committed 2026-10-24 09:54 UTC).
-Every line number below refers to that commit.
+Table line numbers refer to that commit. The review corrections below update
+the classifications against the same source.
 
 ## Originating requirement
 
@@ -32,19 +33,19 @@ document.
 
 ## The answer in brief
 
-- **291 rows over 78 test files**: 3 delete-file, 79 delete-block, 137 trim,
-  72 keep. Applied, the verdicts remove about 789 assertion calls (a loop counts
-  once) from 75 files: 87 whole tests go, and 137 kept tests lose their phrase
-  lines.
+- **303 rows over 85 test files**: 2 delete-file, 79 delete-block, 154 trim,
+  68 keep. Review corrected the evidence-file deletion and the missed wording
+  assertions; the final compiler counts are recorded under review fixes.
 - The heaviest files: `src/lib/orchestrator/prompt.test.ts` (39 rows that
   remove or trim), `src/lib/roles/registry.test.ts` (21),
   `src/lib/mcp/schemaParity.test.ts` (15), `src/lib/pipelines/prompts.test.ts`
   (12), `src/lib/runtime/voicePersonaRole.test.ts` (11),
   `src/lib/runtime/voicePersona.test.ts` (9) and
   `src/lib/voiceCompanion/sessionConfig.test.ts` (8).
-- Whole files that go: `src/lib/roles/defaults.test.ts`,
-  `src/lib/memory/roleSeatRender.test.ts`, `scripts/first-message-design.test.ts`.
-- 73 more files were read whose string checks observe behaviour; they stay and
+- Whole files that go: `src/lib/roles/defaults.test.ts` and
+  `src/lib/memory/roleSeatRender.test.ts`. The filesystem loop in
+  `scripts/first-message-design.test.ts` stays.
+- 71 more files were read whose string checks observe behaviour; they stay and
   are listed with the reason.
 - UI copy and i18n: 169 files with 521 string-only blocks, listed at the end and
   left alone.
@@ -420,15 +421,15 @@ are at `3736d5e4`.
 |---|---|---|---|---|
 | 12-28 | owner sequential-write guidance is scoped to enabled owner-action claims | legacy prompts unchanged; guidance on with the switch and action tools, off without them | **trim** | keep 20, 21, 24-27 (a branch on the switch and on action tools; disabled output unchanged); drop 22-23 |
 | 30-50 | a request without requester_context gets the Phase 1 prompt unchanged | whole prompt equals the Phase 1 text | **keep** | rollout guard: a request without the new fields renders the pre-feature prompt byte for byte; same family as the switch-off hash pins below |
-| 52-71 | requester, memory and tool index arrive as escaped data with the hand-off rule | trust line names the present sections; requester and tools rendered; a field cannot close its section; hand-off wording | **trim** | keep 59-69 (sections named from what is present, data rendered, escaping, the hand-off rule appears with a hand-off tool); drop 70 |
-| 73-84 | no tool index, no hand-off: requester alone adds only its own section | sections and hand-off rule absent without tools | **keep** | the other side of the branch at 52-71 |
+| 52-71 | requester, memory and tool index arrive as escaped data with the hand-off rule | requester and tools rendered; a field cannot close its section; fixed trust and hand-off wording | **trim** | keep 62-69 (rendered input, escaping and tool index); drop 59-61 and 70 |
+| 73-84 | no tool index, no hand-off: requester alone adds only its own section | sections and hand-off marker absent without tools; fixed trust sentence | **trim** | keep 79-81, the structural branch at 52-71; drop 82 |
 | 86-91 | all slice 1 prompts match the pre-change e65e6603 hashes | SHA-256 of prompts for fixture requests | **keep** | rollout guard: fixtures/legacy-prompt-hashes.json is itself pinned by fixtures/relay_v1/owner-tools-off-v3-hashes.json and switches-off-2b-hashes.json (protocol.test.ts:60, 244); removing it breaks those pins |
 | 93-98 | action retry guidance accounts for post-execution denials | retired wording absent; new wording present | **delete-block** | phrases for one fixed input |
-| 100-112 | negotiated conversation turns trust only the formatting section alongside the answer frame | format data rendered; continuation omits the seen section; legacy request keeps its frame | **keep** | behaviour: continuation and negotiated-format branches |
-| 114-129 | owner continuation sends unseen data and refreshes changed instructions | sections omitted once seen; size; refreshed when tools change | **keep** | behaviour and size |
+| 100-112 | negotiated conversation turns trust only the formatting section alongside the answer frame | format data rendered; continuation omits the seen section; legacy request keeps its frame; fixed formatting guidance | **trim** | keep the data, continuation and paired legacy-frame branch checks; drop 104 and 108 |
+| 114-129 | owner continuation sends unseen data and refreshes changed instructions | sections omitted once seen; size; refreshed when tools change; fixed owner-frame prefix | **trim** | keep structure, refresh and size assertions; drop 123 |
 | 132-144 | owner continuation carries an unseen explicit reply alongside local outbound context | sections present or absent by seen state | **keep** | behaviour |
 | 146-165 | owner continuation never repeats seen reply context and prefers complete recovered rows | seen rows omitted; recovered row once | **keep** | behaviour |
-| 177-199 | owner continuation retains negotiated formatting beside service-tool guidance and refreshes a changed guide | sections by digest; tool names when the feature is on | **keep** | behaviour |
+| 177-199 | owner continuation retains negotiated formatting beside service-tool guidance and refreshes a changed guide | sections by digest; tool names when the feature is on; fixed trust sentence | **trim** | keep formatting data, digest and tool interface assertions; drop the fixed formatting-guidance sentence |
 
 ### `src/lib/externalRelay/runner.test.ts`
 
@@ -437,6 +438,25 @@ are at `3736d5e4`.
 | 251-300 | prototype owner control records the web decision without capacity or an agent, and concurrent replay adds nothing (%s) | decision record; delivery size; option label; seat instruction wording | **trim** | keep everything except 289; drop 289 (the "Read read_prototype_review" instruction) |
 | 2340-2461 | X4 six owner runs extend the existing X2 capture format | calls, waits, projections, call budget rendered; guidance wording | **trim** | keep all but 2422 and 2442; drop 2422, 2442 (guidance sentences asserted for one case) |
 | 2493-2521 | an exhausted unavailable replay preserves the completed ban's uncertainty with ${choice} | replay state; schema; guidance wording | **trim** | keep all but 2516; drop 2516 |
+| 4262 onward | owner reply chains reuse one conversation, learn bot answers and bind only the current authority (rich %s) | authority, cursor, seen rows, continuation size and a fixed owner-frame prefix | **trim** | keep the structural service-instruction absence, cursor, authority and size checks; drop the fixed owner-frame-prefix assertion |
+
+### `src/lib/externalRelay/mediaInput.test.ts`
+
+| Lines | Test | What it asserts | Verdict | Why; for trim, the lines to keep and drop |
+|---|---|---|---|---|
+| 71 onward | inbound document MIME cases | downloaded bytes, filesystem mode, rendered metadata, schema and disposal; fixed filename guidance | **trim** | keep the metadata, file, protocol and cleanup checks; drop the fixed filename-trust sentence |
+
+### `src/lib/pipelines/runtimeSwitch.test.ts`
+
+| Lines | Test | What it asserts | Verdict | Why; for trim, the lines to keep and drop |
+|---|---|---|---|---|
+| 220 onward | fresh runtime attempt preserves the dirty checkout | checkout, attempt state, runtime, restart context and one fixed reference instruction | **trim** | keep runtime switching, checkout and restart-context assertions; drop 270 |
+
+### `src/lib/mcp/taskIcon.integration.test.ts`
+
+| Lines | Test | What it asserts | Verdict | Why; for trim, the lines to keep and drop |
+|---|---|---|---|---|
+| 62 onward | create_task and update_task publish icon, tell agents to set it, and store the normalised name | icon persistence, normalization, updates and projections; two description phrases | **trim** | keep all task operations and their assertions; drop the description-only listTools setup and loop at 65-71 |
 
 ### `src/lib/externalRelay/ownerTier.test.ts`
 
@@ -744,10 +764,18 @@ are at `3736d5e4`.
 | 230-245 | overdue board tasks > priority then overdue age; seven overdue name five and defer two, with facts and seat policy | order, deferred count, item labels; policy wording in the reason | **trim** | keep all but 239-241; drop 239-241 |
 | 2428-2435 | waits routed to the seat > an ask wakes the seat on the next check, without waiting for the interval, and names the question and the way to answer | reason and item; a tool-call phrase in the reason detail | **trim** | keep 2430, 2433; drop 2434 |
 
+### `src/lib/monitor/seatTickController.agenda.test.ts`
+
+| Lines | Test | What it asserts | Verdict | Why; for trim, the lines to keep and drop |
+|---|---|---|---|---|
+| 76 onward | the proactive slot delivers a proposal brief built from open issues | proposal verdict, issue data, timestamp and a fixed board-card instruction | **trim** | keep verdict, input issue and timestamp; drop the fixed instruction sentence |
+| 460 onward | a wake retained by transport identifies its snapshot when delivery is delayed | snapshot timestamp and stored delivery text; a fixed tool-name instruction | **trim** | keep the timestamp and stored text equality; drop the tool-name assertion |
+
 ### `src/lib/monitor/seatTickController.reporting.test.ts`
 
 | Lines | Test | What it asserts | Verdict | Why; for trim, the lines to keep and drop |
 |---|---|---|---|---|
+| 101 onward | idle reported usage rotates through the normal command once, preserving handoff, lineage and project settings | rotation state, delivered input, settings, counts and a fixed tool-name instruction | **trim** | keep the original mandate input at 107, conversation identity at 109 and all state assertions; drop 108 |
 | 530-566 | a read and acted-on child is described by delivered-wake acknowledgement (#2346) | acknowledgement state machine; reason wording old and new | **trim** | keep all but 560-562; drop 560-562 |
 
 ### `src/lib/monitor/seatTickReports.test.ts`
@@ -786,6 +814,7 @@ are at `3736d5e4`.
 
 | Lines | Test | What it asserts | Verdict | Why; for trim, the lines to keep and drop |
 |---|---|---|---|---|
+| 378-385 | expectDeploymentContinuation helper | deployment notice kind; five fixed instructions | **trim** | keep the notice-kind marker and every caller’s dispatch, replay, event and authority assertions; drop the five guidance fragments |
 | 1225-1249 | a spawned agent whose turn a service restart cut is resumed once, and a second restart sends nothing more | one continuation; restart notice header; the cut event; an instruction sentence | **trim** | keep all but 1238; drop 1238 |
 
 ### `src/lib/runtime/startup.test.ts`
@@ -829,7 +858,7 @@ are at `3736d5e4`.
 
 | Lines | Test | What it asserts | Verdict | Why; for trim, the lines to keep and drop |
 |---|---|---|---|---|
-| 309-325 | a semantic conflict names its hunk on the successor and keeps the PR open | successor stages and states; the conflict instruction from the input; a review-command phrase | **trim** | keep all but 317; drop 317 |
+| 309-325 | a semantic conflict names its hunk on the successor and keeps the PR open | successor stages and states; fixed refresh and review instructions | **trim** | keep the fail edge, successor state, lineage and call counts; drop 314-317, including the instruction loop |
 | 646-684 | strict protection refreshes the next PR locally and waits for checks on its new head | local refresh, merge order, checks wait; refresh-prompt wording | **trim** | keep all but 664-665; drop 664-665 |
 
 ### `src/lib/links/seatMessages.http.test.ts`
@@ -842,6 +871,7 @@ are at `3736d5e4`.
 
 | Lines | Test | What it asserts | Verdict | Why; for trim, the lines to keep and drop |
 |---|---|---|---|---|
+| 163 onward | a large delivered stage prompt is backed by a private file | file-backed bytes, mode, input data, role section and fixed completion instruction | **trim** | keep file content, mode, input substitution, section marker and lifecycle checks; drop the fixed stage-report instruction sentence |
 | 280-299 | read-only stages preserve declared outputs and tell the agent their write boundary | outputs stored; output path in the prompt; an instruction phrase | **trim** | keep 294, 297; drop 298 |
 
 ### `src/lib/pipelines/legacyReviewDefinition.test.ts`
@@ -857,11 +887,29 @@ are at `3736d5e4`.
 | 5-17 | release template validates; capture and one-round visual and code reviews precede publishing | stage graph, fail edges, roles; publish-stage wording | **trim** | keep 7-11, 13, 16; drop 12, 14-15 |
 | 18-26 | each release reads current autonomy and asks when the effective approval gate is on | publish-stage wording; the approval reason from the input | **trim** | keep 25; drop 19-24 (the loop asserts only wording) |
 
+### `src/lib/orchestrator/operatorDecisionForms.test.ts`
+
+| Lines | Test | What it asserts | Verdict | Why; for trim, the lines to keep and drop |
+|---|---|---|---|---|
+| 5-24 | every delivered seat mandate asks operator decisions through a durable form | eleven mandate phrases, three retired phrases, delivery idempotence | **trim** | keep the input cases and idempotence assertion at 22; drop both wording loops at 8-21 |
+
+### `src/app/api/roles/route.test.ts`
+
+| Lines | Test | What it asserts | Verdict | Why; for trim, the lines to keep and drop |
+|---|---|---|---|---|
+| 62 onward | roles route returns all merged role definitions with scaffold previews and shipped runtimes | catalog schema, role configuration, scaffold equality and one deployer sentence | **trim** | keep schema, routing, configuration and shipped-scaffold assertions; drop 71-72 |
+
+### `src/lib/release/run.test.ts`
+
+| Lines | Test | What it asserts | Verdict | Why; for trim, the lines to keep and drop |
+|---|---|---|---|---|
+| 125-126 | release-run fixture create callback | create count, selected base and publish-prompt phrase | **trim** | keep the callback, create count, baseRef assertion and returned lane; drop the prompt assertion at 126 |
+
 ### `scripts/first-message-design.test.ts`
 
 | Lines | Test | What it asserts | Verdict | Why; for trim, the lines to keep and drop |
 |---|---|---|---|---|
-| 1-32 | (whole file: the first-message as-built record covers the durable seat hand-over) | mechanism names in a design doc section; named evidence files exist | **delete-file** | asserts that docs/design/first-bubble-no-raw-json.md names given mechanisms; the file-existence line only supports that doc claim |
+| 1-32 | the first-message as-built record covers the durable seat hand-over | mechanism names in a design doc section; evidence files can be read | **trim** | keep the existing filesystem loop at 25-31 and its readFileSync assertion at 30; drop the document read and all document-phrase assertions, including 29 |
 
 ### `scripts/setup-whisper.test.ts`
 
@@ -884,7 +932,6 @@ check no agent-facing wording. No row is needed.
 | File | Why its string checks stay |
 |---|---|
 | `src/lib/monitor/seatTickController.delivery.test.ts` | wake state machine; string checks read journal and card details (outcome text) and ids |
-| `src/lib/monitor/seatTickController.agenda.test.ts` | wake composition from agenda data, monitor note and operator instructions; markers show which branch rendered |
 | `src/lib/monitor/seatTickController.policy.test.ts` | policy and fences; journal and notice details; full against compact autonomy overlay compared in one block |
 | `src/lib/monitor/seatTickController.test.ts` | wake items and reasons rendered from lanes, deploys and reports |
 | `src/lib/monitor/seatTickController.catchUp.test.ts` | backlog window and timestamps rendered from data |
@@ -899,7 +946,6 @@ check no agent-facing wording. No row is needed.
 | `src/lib/orchestrator/rotationSettlement.test.ts` | rollback reasons and the handover naming the right predecessor |
 | `src/lib/orchestrator/ownerRelay.test.ts` | owner replies (human-facing) and refusal codes |
 | `src/lib/orchestrator/boardReportRun.test.ts` | delivery key and policy; report header with data |
-| `src/lib/orchestrator/operatorDecisionForms.test.ts` | no agent-facing phrase assertion |
 | `src/lib/orchestrator/seatChannel.test.ts` | no agent-facing phrase assertion |
 | `src/lib/orchestrator/deputyCommand.test.ts` | no agent-facing phrase assertion |
 | `src/lib/telegram/reportRunner.test.ts` | launch grants, privacy of account and dialog names, edited brief placed after the fixed preamble |
@@ -1272,7 +1318,8 @@ and stays:
 
 ## Removal implementation (2026-10-24)
 
-Applied every delete-file, delete-block and trim row above. The compiler inventory
+The initial removal applied the original audit classifications. The review fixes
+below correct those classifications. Its compiler inventory
 counts 88 fewer test definitions and 789 fewer assertion calls across 76 changed
 test files; 73 files retain behavioural tests. No tests were added. Unused
 helpers, imports and the unreferenced prototype-publication constant were removed;
@@ -1364,3 +1411,82 @@ The isolated full-file publication comparison reproduced the launcher error
 before the repair. Afterwards it reported zero new failures, two pre-existing
 assertion failures and no flaky diagnostics. The two upstream commits merged
 without conflicts; neither changes an audited test file or a workflow.
+
+
+## Review fixes (2026-10-24)
+
+Restored the original filesystem loop in `scripts/first-message-design.test.ts`.
+Its evidence reads remain independent of the document wording; both evidence
+records are unchanged. No replacement test was added.
+
+Removed the missed mandate and refresh instruction loops, the deployer preview
+sentence, the release publish sentence and the rotation tool-name sentence.
+The relay prompt checks retain their input rendering, escaping, paired legacy
+branch, continuation structure and size checks. The repository-wide recheck
+also found fixed wording in inbound media guidance, an owner continuation,
+runtime switching, MCP icon descriptions, proposal wakes, a stage handoff and
+the deployment-continuation helper. Those assertions and the icon
+helper's unused returned client were removed. Idempotence, routing, state,
+schema, filesystem and protocol assertions remain.
+
+The corrected table has 303 rows across 85 files: two delete-file, 79
+delete-block, 154 trim and 68 keep. UI copy and i18n remain deferred.
+
+Focused verification uses Bun 1.4.0 on merged base
+`90d0ef7d853c6318cb143ffeb2e329ac8ccd21be` plus this patch. The manifest of the
+14 changed TypeScript files has SHA-256
+`43691904f8a1e9a5555d89de02c3528ec19910d2a3a252a5f39ac6e1ff24645f`.
+Each manifest row is the file SHA-256, one space and its repository-relative
+path. Sort the rows lexically and hash their UTF-8 bytes with a newline after
+every row.
+Each test runs by explicit path with `bun run test <file>` through the supplied
+owned gate wrapper, one file at a time. HOME, XDG directories, TMPDIR and
+LLV_STATE_DIR are private, and the Viewer control URL is verified closed.
+The untouched merged base is a clean detached checkout with the same dependencies.
+
+
+The final compiler scan covers 2,317 surviving test files and 29,029 test
+definitions. Against current main it counts 87 fewer definitions and 814 fewer
+assertion calls across 83 touched test paths; 81 paths retain tests. The scan
+collected 4,362 keyword candidates and 594 additional literal-origin candidates
+from 46 producer files for classification. Input rendering, branches, stored
+text upgrades, protocol structure, budgets and redaction checks stay.
+
+Sixteen focused files ran on the final TypeScript patch. Twelve files passed;
+the four non-green files were also run whole on the captured merged base.
+Their case-failure identities match, and the icon file reproduces the same
+module-level assertion with expected true and received false before its tests.
+It supplies no passing behavioural coverage in either run.
+
+| File | Final pass / fail | Base comparison |
+|---|---:|---|
+| `scripts/first-message-design.test.ts` | 1 / 0 | restored original loop |
+| `src/lib/orchestrator/operatorDecisionForms.test.ts` | 4 / 0 | green |
+| `src/lib/forge/autoRefresh.test.ts` | 42 / 0 | green |
+| `src/app/api/roles/route.test.ts` | 13 / 0 | green |
+| `src/lib/release/run.test.ts` | 27 / 0 | green |
+| `src/lib/externalRelay/prompt.test.ts` | 11 / 0 | green |
+| `src/lib/externalRelay/mediaInput.test.ts` | 37 / 0 | green |
+| `src/lib/pipelines/runtimeSwitch.test.ts` | 167 / 0 | green |
+| `src/lib/externalRelay/runner.test.ts` | 318 / 2, four skips | 318 / 2, same failures and skips |
+| `src/lib/mcp/taskIcon.integration.test.ts` | 0 / 1, one setup error | same module-level assertion |
+| `src/lib/monitor/seatTickController.reporting.test.ts` | 24 / 28 | 24 / 28, same failure identities |
+| `src/lib/monitor/seatTick.test.ts` | 151 / 0 | green |
+| `src/lib/monitor/seatTickReports.test.ts` | 16 / 0 | green |
+| `src/lib/monitor/seatTickController.agenda.test.ts` | 76 / 6 | 76 / 6, same failure identities |
+| `src/lib/pipelines/engine.creation.test.ts` | 95 / 0, three skips | green |
+| `src/lib/runtime/releaseInterruption.test.ts` | 134 / 0 | green |
+
+Both evidence records pass the restored filesystem assertion. Moving each
+record aside in the scratch export, one at a time, makes that same assertion
+fail with ENOENT; each record was restored afterwards. No probe test was added.
+The final `bun x tsc --noEmit --incremental false` passes. Scoped
+`bun scripts/eslint-changes.ts --base 90d0ef7d <14 changed TypeScript paths>`
+reports zero introduced errors and zero base errors on those paths. Whitespace
+checks pass. Main was fetched again and remains the revision already merged.
+The earlier read-only review's incomplete `src/lib/links/seatMessages.http.test.ts`
+comparison remains a verification limitation outside these focused reruns.
+
+The privacy gate passes across all 86 surviving touched paths with
+`--require-known-values --check-commits --base origin/main --paths <paths>`.
+The ordinary commit hooks repeat staged whitespace, privacy and scoped lint.

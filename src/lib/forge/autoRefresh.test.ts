@@ -311,9 +311,6 @@ test("a semantic conflict names its hunk on the successor and keeps the PR open"
   await h.sweep();
   const request = h.creates[0]!.request as CreatePipelineRequest;
   expect(request.stages[0]!.onFail).toBeNull();
-  for (const instruction of ["needs_decision", "file:line", "@@", "git merge --abort", "Never guess", "noreply", "machine identity"]) {
-    expect(request.stages[0]!.prompt).toContain(instruction);
-  }
   h.pipeline("refresh-1").state = "needs_decision";
   h.pipeline("refresh-1").stateDetail = "src/example.ts:12 @@ -9,6 +9,7 @@ changes either side's behaviour";
   await h.run(30 * 60_000);
