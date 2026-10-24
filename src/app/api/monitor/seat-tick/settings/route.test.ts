@@ -199,9 +199,10 @@ test("HTTP and seat_tick_settings report maintenance paused while wakes are off"
   expect(written.status).toBe(200);
   const http = await written.json() as SeatTickSettingsAnswer;
   expect(http.maintenance).toMatchObject({ enabled: true, waitingOn: "wakes-off", pauseReason: "paused while wakes are off", nextRunAt: null, nextEligibleAt: null });
+  // Compare HTTP's complete shape with the full MCP projection.
   const tool = await viewerMcpBindings(undefined, undefined, {
     callerAttribution: () => ({ kind: "gateway", conversationId: null }), callerProject: () => PROJECT, authorizedSeats: () => [{ project: PROJECT, conversationId: SEAT_CONVERSATION, path: null }],
-  } as never).seat_tick_settings({ clientRequestId: "fixture-paused-maintenance-read", project: PROJECT });
+  } as never).seat_tick_settings({ clientRequestId: "fixture-paused-maintenance-read", project: PROJECT, verbose: true });
   expect(tool.maintenance).toMatchObject(http.maintenance);
 });
 
@@ -510,10 +511,11 @@ test("the answer agrees with the seat_tick_settings tool over the same record", 
 
 test("maintenance-only write needs no reason and exposes the same run records through HTTP and MCP", async () => {
   const project = "fixture-maintenance-route";
-  const written = await put({ project, maintenance: { enabled: true, intervalHours: "200" } });
+  const window = { timeZone: "Europe/Paris", weekdays: [1, 2, 3, 4, 5], startHour: 9, endHour: 17 };
+  const written = await put({ project, maintenance: { enabled: true, intervalHours: "200", window } });
   expect(written.status).toBe(200);
   const answer = await written.json();
-  expect(answer.maintenance).toMatchObject({ enabled: true, intervalHours: 168, lastRun: null, runsError: null });
+  expect(answer.maintenance).toMatchObject({ enabled: true, intervalHours: 168, window, missedWindowPolicy: "skip-and-coalesce", lastRun: null, runsError: null });
   const { claimMaintenanceRun, patchMaintenanceRun } = await import("@/lib/boardMaintenance/store");
   const result = claimMaintenanceRun({ project, now: Date.now(), intervalHours: 168, seat: { seatEpoch: 1, conversationId: "fixture-seat" }, repoDir: "/fixtures/repository" });
   if (!result.claimed) throw new Error(result.reason);
@@ -526,6 +528,28 @@ test("maintenance-only write needs no reason and exposes the same run records th
   const same = { ...http.maintenance };
   delete same.nextRunAt;
   expect(tool.maintenance).toMatchObject({ ...same, lastRunLog: { leftAlone: [{ taskId: "aabbccdd", reason: "open lane" }] } });
+});
+
+test("HTTP and MCP refuse invalid maintenance windows without changing durable settings", async () => {
+  const project = "fixture-window-validation";
+  const window = { timeZone: "Europe/Paris", weekdays: [1, 2, 3, 4, 5], startHour: 9, endHour: 17 };
+  expect((await put({ project, maintenance: { enabled: true, window } })).status).toBe(200);
+  const api = viewerMcpBindings(undefined, undefined, {
+    callerAttribution: () => ({ kind: "gateway", conversationId: null }), callerProject: () => project,
+    authorizedSeats: () => [{ project, conversationId: SEAT_CONVERSATION, path: null }],
+  } as never);
+  const before = readSeatTickSettings(project);
+  const revision = settingsRevision();
+  const invalid = [{ timeZone: "Invalid/Zone" }, { timeZone: "+02:00" }, { weekdays: [] }, { weekdays: [0] }, { startHour: 9.5 }, { startHour: 17 }, { endHour: 25 }];
+  for (const [i, patch] of invalid.entries()) {
+    const maintenance = { enabled: false, window: { ...window, ...patch } };
+    const response = await put({ project, maintenance });
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toContain("maintenance.window");
+    await expect(api.seat_tick_settings({ clientRequestId: `window-invalid-${i}`, project, maintenance })).rejects.toThrow("maintenance.window");
+    expect(readSeatTickSettings(project)).toEqual(before);
+    expect(settingsRevision()).toBe(revision);
+  }
 });
 
 test("the browser can enable automatic rotation without a why and records gateway attribution", async () => {

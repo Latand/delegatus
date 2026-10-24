@@ -13,6 +13,7 @@ import { maintenanceRuns, readMaintenanceProject, readMaintenanceRun, recordMain
 import type { TaskWorkEvidence } from "./evidence";
 import { composeStructuredFirstMessage } from "@/lib/runtime/structuredFirstMessage";
 import { setMergeOnReview } from "@/lib/projects/settings";
+import { defaultSeatTickSettings, writeSeatTickSettings } from "@/lib/monitor/seatTickSettings";
 let held: ReturnType<typeof sandbox>;
 afterEach(() => held?.restore());
 const tasks = () => loadTasks(statePath("tasks.json"));
@@ -25,6 +26,7 @@ function harness(archiveOverride = true, evidenceOrOverrides: TaskWorkEvidence[]
   let observation: MaintenanceObservation = { state: "running" };
   let response = { status: 202, body: { state: "starting", conversationId: ["conversation", "fixture-worker"].join("_"), launchId: "fixture-launch", path: "/fixtures/worker.jsonl" } as Record<string, unknown> };
   const sources: SeatTickSources = { ...defaultSeatTickSources(), now: () => now, tasks, pipelines: () => [{ repoDir: "/fixtures/repository", project: PROJECT, createdAt: new Date(NOW).toISOString() } as never], registry: () => registry, latestDeployment: () => ({ state: "ok", value: null }) };
+  sources.settings = project => ({ ...defaultSeatTickSettings(project), maintenance: { enabled: true, intervalHours: 3, updatedAt: new Date(NOW).toISOString(), setBy: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } } });
   const ports: BoardMaintenancePorts = { sources, evidence: async () => evidence, ...(archiveOverride ? { archive: run => { archived.push(run.runId); } } : {}), locale: () => "uk", timeZone: () => "UTC", launch: async body => { bodies.push(body); return response; }, observe: async () => observation };
   return { controller: productionBoardMaintenanceController(sources, { ...ports, ...overrides }), sources, registry, bodies, archived, run: () => readMaintenanceRun(readMaintenanceProject(PROJECT)!.currentRunId!)!, observe: (value: MaintenanceObservation) => { observation = value; }, respond: (value: typeof response) => { response = value; }, now: (value: number) => { now = value; } };
 }
@@ -362,4 +364,117 @@ test("a maintenance receipt arriving before its binding checkpoint remains recov
   h.observe({ state: "ended", conversationId: receipt.conversationId, launchId: receipt.launchId, finalText: "Verdict: pass" });
   holdUpdate(); await h.controller.reconcile(PROJECT);
   expect(maintenanceRuns(PROJECT)[0].state).toBe("succeeded"); expect(h.bodies).toHaveLength(0);
+});
+
+test("closed windows defer launches while a running turn still settles", async () => {
+  const h = harness();
+  const request = input();
+  request.settings.maintenance.window = { timeZone: "Etc/UTC", weekdays: [1, 2, 3, 4, 5], startHour: 9, endHour: 17 };
+  // Poll on a weekend after several missed intervals: no catch-up launch.
+  h.now(Date.parse("2026-10-10T12:00:00Z"));
+  expect(await h.controller.launchIfDue(request)).toContain("window");
+  expect(readMaintenanceProject(PROJECT)).toBeNull();
+  h.now(Date.parse("2026-10-12T09:00:00Z"));
+  await h.controller.launchIfDue(request);
+  await h.controller.launchIfDue(request);
+  expect(h.bodies).toHaveLength(1);
+  // A running turn still reconciles after the window closes.
+  h.now(Date.parse("2026-10-12T17:00:00Z"));
+  h.observe({ state: "ended", finalText: "Verdict: pass" });
+  await h.controller.reconcile(PROJECT);
+  expect(maintenanceRuns(PROJECT)[0].state).toBe("succeeded");
+  await h.controller.launchIfDue(request);
+  expect(h.bodies).toHaveLength(1);
+});
+
+for (const change of ["clock", "setting"]) test(`a window ${change} change during evidence preparation prevents dispatch`, async () => {
+  let release!: () => void;
+  let entered!: () => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const h = harness(true, { evidence: async () => { entered(); await pending; return []; } });
+  const open = { timeZone: "Etc/UTC", weekdays: [3], startHour: 12, endHour: 13 };
+  const original = h.sources.settings;
+  let window = open;
+  h.sources.settings = project => ({ ...original(project), maintenance: { ...input().settings.maintenance, window, updatedAt: new Date(NOW).toISOString(), setBy: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } } });
+  const request = input(); request.settings.maintenance.window = open;
+  const launch = h.controller.launchIfDue(request);
+  await ready;
+  if (change === "clock") h.now(NOW + 60 * 60_000);
+  else window = { ...open, weekdays: [4] };
+  release();
+  expect(await launch).toContain("window");
+  expect(h.bodies).toHaveLength(0);
+  window = { ...open, endHour: 14 };
+  await h.controller.reconcile(PROJECT);
+  expect(h.bodies).toHaveLength(1);
+});
+
+test("skip, coalescing and cooldown survive fresh controller processes", async () => {
+  held = sandbox();
+  const window = { timeZone: "Etc/UTC", weekdays: [1, 2, 3, 4, 5], startHour: 9, endHour: 17 };
+  writeSeatTickSettings(PROJECT, { ...defaultSeatTickSettings(PROJECT), maintenance: { enabled: true, intervalHours: 3, window, updatedAt: "2026-10-09T09:00:00.000Z", setBy: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } } });
+  const restart = async (at: string) => {
+    const program = `
+      import { productionBoardMaintenanceController } from "./src/lib/boardMaintenance/run";
+      import { defaultSeatTickSources } from "./src/lib/monitor/seatTickSources";
+      import { readSeatTickSettings, effectiveSeatTickSettings } from "./src/lib/monitor/seatTickSettings";
+      import { maintenanceRuns } from "./src/lib/boardMaintenance/store";
+      import { input, PROJECT } from "./src/lib/boardMaintenance/testFixture";
+      const now = Date.parse(${JSON.stringify(at)});
+      const sources = { ...defaultSeatTickSources(), now: () => now, tasks: () => [], pipelines: () => [{ project: PROJECT, repoDir: "/fixtures/repository" }], latestDeployment: () => ({ state: "ok", value: null }) };
+      let launches = 0;
+      const controller = productionBoardMaintenanceController(sources, { evidence: async () => [], archive: () => {}, locale: () => "en", timeZone: () => "UTC", observe: async () => ({ state: "ended", finalText: "Verdict: pass" }), launch: async () => { launches++; return { status: 202, body: { conversationId: "conversation_fixture_window", launchId: "fixture-window-launch" } }; } });
+      const request = input(); request.now = now; request.settings = effectiveSeatTickSettings(readSeatTickSettings(PROJECT), now, 300000);
+      await controller.reconcile(PROJECT);
+      await controller.launchIfDue(request); await controller.launchIfDue(request);
+      await controller.reconcile(PROJECT);
+      console.log(JSON.stringify({ launches, runs: maintenanceRuns(PROJECT).length }));
+    `;
+    const child = Bun.spawn([process.execPath, "-e", program], { cwd: process.cwd(), env: { ...process.env, LLV_STATE_DIR: held.dir }, stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    if (code !== 0) throw new Error(`maintenance child exited ${code}: ${stderr}`);
+    return JSON.parse(stdout);
+  };
+  expect(await restart("2026-10-10T12:00:00Z")).toEqual({ launches: 0, runs: 0 });
+  expect(await restart("2026-10-12T09:00:00Z")).toEqual({ launches: 1, runs: 1 });
+  expect(await restart("2026-10-12T09:30:00Z")).toEqual({ launches: 0, runs: 1 });
+  expect(await restart("2026-10-12T12:00:00Z")).toEqual({ launches: 1, runs: 2 });
+});
+
+test("a recovered undispatched claim stays held outside its current window", async () => {
+  const h = harness(); claim();
+  const settings = h.sources.settings;
+  h.sources.settings = project => ({ ...settings(project), maintenance: { enabled: true, intervalHours: 3, updatedAt: new Date(NOW).toISOString(), setBy: { kind: "gateway", conversationId: null, project: null, seatEpoch: null }, window: { timeZone: "Etc/UTC", weekdays: [1], startHour: 9, endHour: 17 } } });
+  expect(await h.controller.reconcile(PROJECT)).toContain("window");
+  expect(h.bodies).toHaveLength(0);
+});
+
+for (const mode of ["off", "malformed"]) test(`a ${mode} maintenance setting cannot dispatch a recovered claim`, async () => {
+  const h = harness(); const run = claim();
+  const { readSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+  const initial = h.sources.settings(PROJECT);
+  writeSeatTickSettings(PROJECT, { ...initial, maintenance: { ...initial.maintenance!, enabled: mode !== "off", window: mode === "off" ? null : { timeZone: "Invalid/Zone", weekdays: [1], startHour: 9, endHour: 17 } } });
+  h.sources.settings = readSeatTickSettings;
+  expect(await h.controller.reconcile(PROJECT)).toContain("maintenance is off");
+  expect(h.bodies).toHaveLength(0);
+  expect(tasks()).toHaveLength(0);
+  writeSeatTickSettings(PROJECT, initial);
+  await h.controller.reconcile(PROJECT);
+  expect(h.bodies).toHaveLength(1);
+  expect(h.bodies[0].clientAttemptId).toBe(run.runId);
+});
+
+test("a submitted receipt reconciles outside the window before its binding checkpoint", async () => {
+  const h = harness(); const run = claim();
+  const { patchMaintenanceRun } = await import("./store");
+  patchMaintenanceRun(run.runId, { state: "launching", launchedAt: new Date(NOW).toISOString() });
+  const receipt = { state: "starting", conversationId: "conversation_fixture_window_receipt", launchId: "fixture-window-receipt" };
+  h.registry.spawnReceiptForClientAttempt = id => id === run.clientAttemptId ? receipt as never : null;
+  const original = h.sources.settings;
+  h.sources.settings = project => ({ ...original(project), maintenance: { ...input().settings.maintenance, window: { timeZone: "Etc/UTC", weekdays: [1], startHour: 0, endHour: 1 }, updatedAt: new Date(NOW).toISOString(), setBy: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } } });
+  h.observe({ state: "ended", conversationId: receipt.conversationId, launchId: receipt.launchId, finalText: "Verdict: pass" });
+  await h.controller.reconcile(PROJECT);
+  expect(readMaintenanceRun(run.runId)!.state).toBe("succeeded");
+  expect(h.bodies).toHaveLength(0);
 });
