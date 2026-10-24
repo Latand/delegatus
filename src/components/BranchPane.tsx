@@ -131,8 +131,8 @@ interface Props {
   dragHandle?: React.HTMLAttributes<HTMLElement>;
   /** Hides the tmux composer: headless runs and finished review rounds take no input. */
   noComposer?: boolean;
-  /** A conversation the operator reads and nobody here acts on (a relay
-      chat's, which only the relay writes): no control strip and no composer. */
+  /** Archive and relay readers keep navigation and transcript disclosure,
+      with no transcript, host, account or delivery mutation controls. */
   readOnly?: boolean;
   /** Slim context bar pinned under the header (e.g. «Round 2 · ✖ REQUEST_CHANGES»). */
   banner?: React.ReactNode;
@@ -305,7 +305,7 @@ function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: 
       {tone.glow ? <span aria-hidden className="pane-attention-ring"><span className="pane-attention-comets" /></span> : null}
       {/* The favorited-state crown perched on the top edge (issue #224); lives on
           this unclipped wrapper so it can overhang the card frame from above. */}
-      {showFavorite ? <FavoriteCrownMarker id={cardId} touch={isMobile} /> : null}
+      {showFavorite && !readOnly ? <FavoriteCrownMarker id={cardId} touch={isMobile} /> : null}
       <section
         ref={paneRef}
         /* Text inside the column must stay selectable: the canvas drag-pan skips
@@ -358,15 +358,15 @@ function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: 
                 >
                   {titleOverride}
                 </span>
-              ) : file.renamable ? (
+              ) : file.renamable && !readOnly ? (
                 <SessionTitle file={file} displayMax={90} titleClassName="text-[12px] font-semibold" autoEditToken={autoEditToken} />
               ) : (
                 <span className="min-w-0 flex-1 truncate text-[12px] font-semibold" title={cleanTitle(file.title)}>
                   {cleanTitle(file.title, 90)}
                 </span>
               )}
-              {neverStarted ? null : <ProcessStatusControls file={file} compact />}
-              {showFavorite ? <FavoriteCrown id={cardId} cardRef={paneRef} /> : null}
+              {neverStarted || readOnly ? null : <ProcessStatusControls file={file} compact />}
+              {showFavorite && !readOnly ? <FavoriteCrown id={cardId} cardRef={paneRef} /> : null}
               <SpeakButton scope={file.path} header />
               {onToggleExpand ? (
                 <button
@@ -379,7 +379,7 @@ function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: 
                 </button>
               ) : null}
               {headerActions}
-              {file.spawn ? null : <DeleteFileButton file={file} onDeleted={onClose} />}
+              {file.spawn || readOnly ? null : <DeleteFileButton file={file} onDeleted={onClose} />}
               {onClose ? (
                 <button
                   className={"inline-flex shrink-0 items-center justify-center rounded-[8px] border border-border bg-canvas px-1.5 py-0.5 text-muted hover:border-danger/40 hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"}
@@ -443,7 +443,7 @@ function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: 
                     the id is read from the live transcript path so a migrated
                     conversation reflects its current account. OpenClaw skips it
                     for the same reason: the Viewer owns no OpenClaw account. */}
-                {file.engine === "shell" || file.engine === "openclaw" || file.engine === "copilot" ? null : (
+                {readOnly || file.engine === "shell" || file.engine === "openclaw" || file.engine === "copilot" ? null : (
                   <AccountBadge
                     engine={file.engine}
                     accountId={runtime?.session.accountId ?? file.spawn?.accountId ?? accountIdFromPath(file.path)}
@@ -476,19 +476,19 @@ function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: 
             currentLabel={liveMigration?.sourceLabel}
             error={liveMigration?.failure ?? null}
             actionError={recoveryError}
-            onRetry={recover ? () => void recover("retry") : undefined}
-            onKeep={recover ? () => void recover("rollback") : undefined}
+            onRetry={!readOnly && recover ? () => void recover("retry") : undefined}
+            onKeep={!readOnly && recover ? () => void recover("rollback") : undefined}
           />
         ) : null}
         {banner ?? null}
         {/* Dead-host banner (issue #247 §5): sits in the MigrationRibbon slot
             family, between the header and the feed. Owns recovery so the stale
             attention cards and composer stand down below. */}
-        {deadHost ? <DeadHostBanner file={file} /> : null}
+        {deadHost && !readOnly ? <DeadHostBanner file={file} /> : null}
         {/* Superseded-round banner (issue #383): same slot family; wins over
             the dead-host banner via surface classification and swaps recovery
             for navigation to the live successor plus the explicit fork. */}
-        {superseded ? <SupersededBanner file={file} /> : null}
+        {superseded && !readOnly ? <SupersededBanner file={file} /> : null}
         {chromeInMenu ? null : relatedTasks?.length && onOpenTask ? <TaskRelationStrip relations={relatedTasks} onOpenTask={onOpenTask} /> : null}
         {/* A launch's task arrives a poll after its pane: the strip's row is held, so the feed does not move when it lands. */}
         {!chromeInMenu && !relatedTasks?.length && onOpenTask && isLaunchedConversation(file) ? <div aria-hidden data-task-relations-slot className="min-h-9 shrink-0 pointer-coarse:min-h-[53px]" /> : null}
@@ -517,6 +517,7 @@ function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: 
           <MigrationDivider predecessorLabel={file.predecessorLabel} />
           <div data-composer-yields="" className="flex min-h-0 min-w-0 flex-1 flex-col">
             <LogFeed
+              readOnly={readOnly}
               file={file}
               showSvc={false}
               lineFilter=""
@@ -525,7 +526,7 @@ function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: 
               follow
               setFollow={noop}
               compact
-              onLaunchRetry={onSpawnRetry && file.spawn ? () => onSpawnRetry(file) : undefined}
+              onLaunchRetry={!readOnly && onSpawnRetry && file.spawn ? () => onSpawnRetry(file) : undefined}
               stepsMount={stepsMount}
             />
           </div>

@@ -6,7 +6,7 @@ import { createPortal } from "react-dom";
 
 import { currentRound } from "@/components/scheme/agentLinks";
 import { useModalLayer } from "@/components/modalLayer";
-import type { Flow } from "@/lib/flows/types";
+import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
 import { useLocale } from "@/lib/i18n";
 import type { Pipeline, PipelineAction, PipelineStage, PipelineStageAttempt } from "@/lib/pipelines/types";
 import type { StageSlot } from "@/components/scheme/layout";

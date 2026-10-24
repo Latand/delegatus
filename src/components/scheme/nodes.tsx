@@ -8,7 +8,7 @@ import { memo, useCallback, useEffect, useMemo, useState, type ComponentProps, t
 
 import { ChevronRight } from "@/components/icons";
 import { conversationIdentity } from "@/lib/accounts/identity";
-import type { Flow } from "@/lib/flows/types";
+import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
 import { useLocale } from "@/lib/i18n";
 import type { Activity, FileEntry } from "@/lib/types";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -20,8 +20,8 @@ import { NativeConversationPane } from "./NativeConversationPane";
 import { DormantView } from "@/components/conversation/DormantView";
 import { BranchPane, kindLabel } from "@/components/BranchPane";
 import { DraftAgentPane } from "@/components/DraftAgentPane";
-import { FlowDialog } from "@/components/flows/FlowDialog";
 import { activeLoopLeg, activeLoopRole, canStartFlow, verdictTone } from "@/components/flows/flowModel";
+import { openReviewHistory } from "@/components/flows/ReviewHistory";
 import { FlowHub } from "@/components/flows/FlowHub";
 import { PipelineHub } from "@/components/pipelines/PipelineHub";
 import { PipelineStrip } from "@/components/pipelines/PipelineStrip";
@@ -29,7 +29,7 @@ import { PipelineTemplatePicker } from "@/components/pipelines/PipelineTemplateP
 import { StagePlaceholderPane } from "@/components/pipelines/StagePlaceholderPane";
 import { StageCompletedCard } from "@/components/pipelines/StageCompletedCard";
 import { StageStatusRow } from "@/components/pipelines/StageStatusRow";
-import { STAGE_TONES, attemptStateLabel, attemptNavTarget, canSourcePipeline, canAddReviewAfter, createDraftPipeline, optimisticAddReview, optimisticAddStage, patchPipeline, pipelineStagePosition, pipelineStateLabel, renderableFlowIds, resolveStageNavFile, stageAttemptPlace, stageCardLabel, stageChipState, stageLabelTitle, pipelineStageByAgentPath, stagePaneTitleOf, type PipelineStagePane } from "@/components/pipelines/pipelineModel";
+import { STAGE_TONES, attemptStateLabel, attemptNavTarget, canSourcePipeline, canAddReviewAfter, createDraftPipeline, optimisticAddStage, patchPipeline, pipelineStagePosition, pipelineStateLabel, renderableFlowIds, resolveStageNavFile, stageAttemptPlace, stageCardLabel, stageChipState, stageLabelTitle, pipelineStageByAgentPath, stagePaneTitleOf, type PipelineStagePane } from "@/components/pipelines/pipelineModel";
 import { pushTaskToast } from "@/components/tasks/taskToast";
 import type { TaskRelation } from "@/components/tasks/taskRelations";
 import { MAX_PIPELINE_STAGES } from "@/lib/pipelines/limits";
@@ -1061,7 +1061,6 @@ const NodeChrome = memo(function NodeChrome({
   renderableFlows,
   linkedTasks,
   relatedTasks,
-  canFlow,
   canPipeline,
   onSelect,
   onOpenPath,
@@ -1131,7 +1130,6 @@ const NodeChrome = memo(function NodeChrome({
 }) {
   const { t } = useLocale();
   const [underOpen, setUnderOpen] = useState(false);
-  const [flowOpen, setFlowOpen] = useState(false);
   const [pipelineOpen, setPipelineOpen] = useState(false);
   const [badgesExpanded, setBadgesExpanded] = useState(false);
   /* Pointing at the check lifts this card out of the session's dim, so the
@@ -1160,7 +1158,7 @@ const NodeChrome = memo(function NodeChrome({
       data-pipeline-stage-state={pipelineStage ? stageChipState(pipelineStage.pipeline, pipelineStage.stage) : undefined}
       data-lasso-selected={marked ? "true" : undefined}
       data-select-check-hover={checkHover ? "true" : undefined}
-      className={`scheme-enter absolute ${badgesExpanded ? Z.popover : underOpen || flowOpen ? Z.lifted : ""}`}
+      className={`scheme-enter absolute ${badgesExpanded ? Z.popover : underOpen ? Z.lifted : ""}`}
       style={{ transform: `translate(${node.x}px, ${node.y}px)`, width: node.w, height: node.h, transition: MOVE_TRANSITION }}
     >
       {onToggleMember ? (
@@ -1209,19 +1207,8 @@ const NodeChrome = memo(function NodeChrome({
           flow eligibility (#93 AC3): it appears on any pipeline-source
           conversation — children and flow-hosting roots included — sitting in
           the controls row when free, or above the flow/pipeline strip when one is up. */}
-      {(canFlow || canPipeline) && !compact ? (
+      {canPipeline && !compact ? (
         <div className={`absolute left-0 z-[4] flex items-center gap-1.5 ${node.presentation ? "-top-16" : flow || boardStrip ? "-top-[92px]" : "-top-11"}`}>
-          {canFlow ? (
-            <button
-              data-scheme-ui
-              className="inline-flex h-7 items-center gap-1 rounded-full border border-border bg-card px-2.5 text-[11px] font-semibold text-muted shadow-1 hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-              aria-expanded={flowOpen}
-              title={t("scheme.flowTitle")}
-              onClick={() => setFlowOpen((value) => !value)}
-            >
-              <span className="text-[13px] leading-none text-accent">⟳</span> {t("scheme.flow")}
-            </button>
-          ) : null}
           {canPipeline ? (
             <button
               data-scheme-ui
@@ -1233,11 +1220,6 @@ const NodeChrome = memo(function NodeChrome({
               <span className="text-[13px] leading-none text-accent">⇢</span> {t("scheme.pipeline")}
             </button>
           ) : null}
-        </div>
-      ) : null}
-      {flowOpen ? (
-        <div className={`absolute left-0 top-[-8px] ${Z.popover} -translate-y-full`}>
-          <FlowDialog file={node.file} onClose={() => setFlowOpen(false)} />
         </div>
       ) : null}
       {/* The node's `⇢ pipeline` entry (#196): a successful repository admission
@@ -1436,8 +1418,8 @@ function EscapeToClose({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      const el = event.target as HTMLElement | null;
-      if (el && (["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) || el.isContentEditable)) return;
+      const el = event.target instanceof HTMLElement ? event.target : null;
+      if (el && (el.closest("dialog[open]") || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) || el.isContentEditable)) return;
       event.preventDefault();
       event.stopPropagation();
       onClose();
@@ -1549,7 +1531,7 @@ function StageSlotShell({ slot, lite, files, onSelect, onToggleDetails }: { slot
   const draft = pipeline.state === "draft";
   const last = slot.index === slot.total - 1;
   const canAdd = draft && !lite && pipeline.stages.length < MAX_PIPELINE_STAGES;
-  /* Add review stores a reviewer and its fix stage (#2187 §3.2), so it needs two free slots. */
+  /* Add review creates a native read-only stage; its fail edge is editable on the canvas. */
   const canAddReview = canAdd && canAddReviewAfter(pipeline, slot.index);
   const addAfter = (kind: "run" | "review-loop") => {
     if (busy) return;
@@ -1558,8 +1540,8 @@ function StageSlotShell({ slot, lite, files, onSelect, onToggleDetails }: { slot
     let n = pipeline.stages.length + 1;
     while (ids.has(`stage-${n}`)) n += 1;
     const index = slot.index + 1;
-    const stage = { id: `stage-${n}`, kind, prompt: index > 0 ? "{{prev.output}}" : "{{task}}", next: null };
-    const optimistic = kind === "review-loop" ? optimisticAddReview(pipeline, stage, index) : optimisticAddStage(pipeline, stage, index);
+    const stage = { id: `stage-${n}`, kind: "run" as const, ...(kind === "review-loop" ? { role: { roleId: "reviewer" as const }, access: "read-only" as const } : {}), prompt: index > 0 ? "{{prev.output}}" : "{{task}}", next: null };
+    const optimistic = optimisticAddStage(pipeline, stage, index);
     void patchPipeline(pipeline.id, "add-stage", { index, stage, after: pipeline.stages[slot.index]!.id }, optimistic).then((fail) => {
       if (fail) pushTaskToast("err", fail);
       setBusy(false);
@@ -1810,9 +1792,8 @@ export const NodesLayer = memo(function NodesLayer({
      deck, so focus the deck's latest round to reveal that reviewer; the node is
      removed. This is the same round-focus channel FlowStrip drives (#93 §2.2). */
   const openPipelineFlow = useCallback((flowId: string) => {
-    const flow = flows.find((candidate) => candidate.id === flowId);
-    if (flow) onFocusRound(flow.id, flow.rounds.at(-1)?.n ?? 1);
-  }, [flows, onFocusRound]);
+    openReviewHistory(flowId);
+  }, []);
 
   return (
     <div

@@ -182,12 +182,12 @@ describe("bulk eligibility", () => {
     expect(canBulkKill(schemeNode({ path: "/child", isRoot: false }))).toBe(false);
   });
 
-  test("flow eligibility delegates to active flow and file shape rules", () => {
+  test("retired flow creation is unavailable for every file shape", () => {
     const root = schemeNode({ path: "/root" });
     const child = schemeNode({ path: "/child", file: entry({ path: "/child", parent: "/root" }), isRoot: false });
     const active = new Map<string, Flow>([["/root", flow("/root")]]);
 
-    expect(canBulkFlow(root, new Map())).toBe(true);
+    expect(canBulkFlow(root, new Map())).toBe(false);
     expect(canBulkFlow(root, active)).toBe(false);
     expect(canBulkFlow(child, new Map())).toBe(false);
   });

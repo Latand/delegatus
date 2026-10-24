@@ -100,7 +100,7 @@ test("a review-loop verdict keeps direct transcript and flow navigation", () => 
     <VerdictPopover pipeline={pipeline([only])} stage={reviewStage} attempt={only} onClose={() => {}} onOpenPath={() => {}} onOpenFlow={() => {}} />,
   );
   expect(html).toContain("Open transcript");
-  expect(html).toContain("Open review");
+  expect(html).toContain("Review history");
 });
 
 test("a review-loop verdict displays the exact SHA supplied to its reviewer (#522)", () => {

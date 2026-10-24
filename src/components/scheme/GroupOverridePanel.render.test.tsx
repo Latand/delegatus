@@ -73,22 +73,13 @@ const pipelineGroup: SchemeGroup = {
   label: "Pipe one", x: 0, y: 0, w: 10, h: 10, pipeline,
 };
 
-test("the flow override panel exposes next-reviewer role, note, rounds and lifecycle controls", () => {
+test("an archived group exposes history without role, budget or lifecycle controls", () => {
   const html = renderToStaticMarkup(<GroupOverridePanel group={flowGroup} onClose={noop} />);
-  expect(html).toContain('data-group-override="flow"');
-  /* Change next-stage model/effort/engine (reseat the reviewer). */
-  expect(html).toContain("Next reviewer");
-  expect(html).toContain("Update reviewer");
-  expect(html).toContain("<option");
-  expect(html).toContain("codex");
-  /* Edit the next-round prompt note, seeded from the last round's ready note. */
-  expect(html).toContain("focus on error handling");
-  /* Extend / limit rounds. */
-  expect(html).toContain("+1 round");
-  expect(html).toContain("Round limit");
-  /* needs_decision surfaces retry-round; close is always present. */
-  expect(html).toContain("Retry round");
-  expect(html).toContain("Close");
+  expect(html).toContain("Review history");
+  expect(html).not.toContain("textarea");
+  expect(html).not.toContain("<option");
+  expect(html).not.toContain("Retry round");
+  expect(html).not.toContain("Round limit");
 });
 
 test("the pipeline override panel keeps only pipeline-level controls and points stage edits to the canvas (#507 F1)", () => {
@@ -154,9 +145,8 @@ test("a draft pipeline exposes metadata, a canvas pointer, Start, and discard co
   expect(html).not.toContain("Pause pipeline");
 });
 
-test.each(["gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol"])("reviewer override offers %s ultra", (model) => {
-  const group = { ...flowGroup, flow: { ...flow, roles: { ...flow.roles, reviewer: { engine: "codex" as const, model, effort: "ultra" } } } };
-  const html = renderToStaticMarkup(<GroupOverridePanel group={group} onClose={noop} />);
-  expect(html).toContain('value="ultra" selected=""');
-  expect(html).toContain('value="max"');
+test("a saved reviewer runtime cannot revive a retired override form", () => {
+  const html = renderToStaticMarkup(<GroupOverridePanel group={flowGroup} onClose={noop} />);
+  expect(html).not.toContain("Update reviewer");
+  expect(html).not.toContain("<select");
 });

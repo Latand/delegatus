@@ -120,6 +120,7 @@ export function ConversationMessageRow({
   switchHold = null,
   session = null,
   actions,
+  readOnly = false,
 }: {
   /**
    * The local record of the submission. Present while the delivery is still
@@ -134,6 +135,7 @@ export function ConversationMessageRow({
   switchHold?: SwitchHold | null;
   session?: OutboxSessionAxes | null;
   actions?: MessageRowActions;
+  readOnly?: boolean;
 }) {
   const coarse = useCoarsePointer();
   const [open, setOpen] = useState(false);
@@ -210,7 +212,7 @@ export function ConversationMessageRow({
           that can replay gets Retry, a payload that cannot comes back to the
           composer, and an operation only the server can settle gets the
           re-read under its original identity — never two of them. */}
-      {row.failure.action === "retry" ? (
+      {readOnly ? null : row.failure.action === "retry" ? (
         <button
           type="button"
           data-outbox-retry={entry!.id}
@@ -313,7 +315,7 @@ export function ConversationMessageRow({
             DO about a delivery nobody has confirmed. Check status asks the
             runtime again under THIS message's original key — the row's own id —
             and is the only thing an unconfirmed delivery is ever offered. */}
-        {row.recovery === "check" && actions?.onCheck ? (
+        {!readOnly && row.recovery === "check" && actions?.onCheck ? (
           <button
             type="button"
             data-outbox-check={entry.id}
@@ -329,7 +331,7 @@ export function ConversationMessageRow({
             nobody has established authorizes none at all (round-4 P2). */}
         {/* Ending the operation is the operator's decision that this message
             must not arrive. Only ever offered for one the server admitted. */}
-        {actions?.onDiscard && row.discardable ? (
+        {!readOnly && actions?.onDiscard && row.discardable ? (
           <button
             type="button"
             data-outbox-discard={entry.id}
@@ -340,7 +342,7 @@ export function ConversationMessageRow({
             {t("runtime.receipt.discard")}
           </button>
         ) : null}
-        {row.cancellable && actions ? (
+        {!readOnly && row.cancellable && actions ? (
           <button
             type="button"
             data-outbox-cancel={entry.id}
@@ -411,12 +413,14 @@ export function FeedMessageRow({
   switchHold = null,
   session = null,
   actions,
+  readOnly = false,
 }: {
   entry: OutboxEntry | null;
   canonical?: CanonicalMessage | null;
   switchHold?: SwitchHold | null;
   session?: OutboxSessionAxes | null;
   actions?: MessageRowActions;
+  readOnly?: boolean;
 }) {
   const { t } = useLocale();
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -435,6 +439,7 @@ export function FeedMessageRow({
       switchHold={switchHold}
       session={session}
       actions={actions}
+      readOnly={readOnly}
     />
   );
 }

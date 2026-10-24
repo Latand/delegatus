@@ -666,6 +666,33 @@ function deckScene(flowState: "approved" | "reviewing") {
   return { layout, band, deckKey, nodePath: node.path };
 }
 
+test.each([false, true])("a direct-review deck stays with its primary subject band, task linked: %s", linked => {
+  const anchor = file(0, "terminal");
+  const layout = base([anchor]);
+  const flow: import("../flows/reviewGroup").DirectReviewGroup = {
+    id: "direct-review::fixture", kind: "direct-review", project: "fixture", cwd: "/repo",
+    implementerPath: anchor.path, implementerConversationId: anchor.conversationId!,
+    roles: { implementer: { engine: "codex", model: null, effort: null }, reviewer: { engine: "codex", model: null, effort: null } },
+    state: "done_comment", stateDetail: null, rounds: [], createdAt: "2026-01-01T00:00:00Z", closedAt: null,
+  };
+  const deckKey = "deck::" + flow.id;
+  layout.decks = [{ key: deckKey, flow, rounds: [], x: 700, y: 100, w: 600, h: 810 }];
+  layout.byPath.set(deckKey, layout.decks[0]!);
+  const tasks = linked ? [task("a", "2026-01-01T00:00:00Z", [anchor]), task("b", "2026-01-02T00:00:00Z", [anchor])] : [];
+  const bands = buildTaskBands(layout, sources(tasks, [anchor]));
+  const owners = bands.filter(band => band.members.some(member => member.key === deckKey));
+  expect(owners).toHaveLength(1);
+  expect(owners[0]!.members.some(member => member.key === anchor.path)).toBe(true);
+  const placed = layoutTaskBands(layout, bands, { mode: "near", viewportWidth: 1440, reader: null,
+    expandedDecks: new Set([deckKey]), collapsedDecks: new Set() }).layout;
+  expect(placed.decks.map(deck => deck.key)).toEqual([deckKey]);
+  expect(placed.byPath.has(deckKey)).toBe(true);
+  // A retained deck never brings an absent subject back onto the board.
+  const missing = { ...layout, nodes: [], byPath: new Map([[deckKey, layout.decks[0]!]]) };
+  const missingBands = buildTaskBands(missing, sources([], []));
+  expect(missingBands.flatMap(band => band.members)).toEqual([]);
+});
+
 test("a review deck reserves its collapsed chip height by the operator's actual disclosure state (#1641)", () => {
   const { layout, band, deckKey } = deckScene("reviewing");
   const at = (collapsedDecks?: ReadonlySet<string>) =>

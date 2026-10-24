@@ -1,5 +1,5 @@
 import { canStartFlow } from "@/components/flows/flowModel";
-import type { Flow } from "@/lib/flows/types";
+import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
 
 import type { SchemeNode } from "./layout";
 

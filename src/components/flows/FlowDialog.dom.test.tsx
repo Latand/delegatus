@@ -1,119 +1,86 @@
 import { afterEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { createRoot } from "react-dom/client";
+import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { FlowDialog } from "./FlowDialog";
 import { BulkActionBar } from "@/components/scheme/BulkActionBar";
 import type { SchemeNode } from "@/components/scheme/layout";
 import type { FileEntry } from "@/lib/types";
+import { setLocale } from "@/lib/i18n";
 
-const dom = new Window();
-Object.assign(globalThis, { window: dom, document: dom.document, navigator: dom.navigator, HTMLElement: dom.HTMLElement });
+const dom = new Window({ url: "http://viewer.local" });
+Object.assign(globalThis, { window: dom, document: dom.document, navigator: dom.navigator, HTMLElement: dom.HTMLElement,
+  Node: dom.Node, Event: dom.Event, CustomEvent: dom.CustomEvent, localStorage: dom.localStorage });
 const realFetch = globalThis.fetch;
-afterEach(() => { globalThis.fetch = realFetch; document.body.replaceChildren(); });
+let root: Root | null = null;
+afterEach(() => { if (root) flushSync(() => root!.unmount()); root = null; globalThis.fetch = realFetch; document.body.replaceChildren(); setLocale("en"); });
+async function until(predicate: () => boolean) {
+  for (let n = 0; n < 100; n++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 1)); }
+  expect(predicate()).toBe(true);
+}
+const file = { path: "/example.jsonl", cwd: "/repo", projectRoot: "/repo", project: "demo", title: "Example", engine: "codex", root: "codex-sessions", kind: "session", fmt: "codex", activity: "idle" } as FileEntry;
+function mount(element: React.ReactNode) {
+  const host = document.createElement("div"); document.body.append(host); root = createRoot(host);
+  flushSync(() => root!.render(element)); return host;
+}
 
-test.each(["gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-luna"])("manual flow role offers %s supported tiers", async (model) => {
-  const role = { engine: "codex", model, effort: "max" };
-  globalThis.fetch = (async () => ({ json: async () => ({ presets: [{ name: "saved", implementer: role, reviewer: role }] }) })) as unknown as typeof fetch;
-  const host = document.createElement("div");
-  document.body.append(host);
-  const root = createRoot(host);
-  try {
-    flushSync(() => root.render(<FlowDialog file={{ path: "/example.jsonl" } as FileEntry} onClose={() => {}} />));
-    await Bun.sleep(10);
-    const button = host.querySelector('button[aria-expanded]')!;
-    flushSync(() => button.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event));
-    const selects = host.querySelectorAll('select[aria-label^="Reasoning effort:"]');
-    expect(selects.length).toBe(2);
-    for (const select of selects) {
-      expect((select as HTMLSelectElement).value).toBe("max");
-      expect(Boolean(select.querySelector('option[value="ultra"]'))).toBe(!model.endsWith("-luna"));
-    }
-  } finally { flushSync(() => root.unmount()); }
+test("the old creation entry creates an unstarted run graph without adopting the old conversation", async () => {
+  const writes: { url: string; body: Record<string, unknown> }[] = [];
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    if (url.includes("preflight")) return Response.json({ ok: true, repoDir: "/repo" });
+    if (init?.method === "POST") writes.push({ url, body: JSON.parse(String(init.body)) });
+    return Response.json({ pipeline: { id: "draft-one" } });
+  }) as unknown as typeof fetch;
+  mount(<FlowDialog file={file} onClose={() => {}} />);
+  await until(() => [...document.querySelectorAll("button")].some(button => button.textContent?.includes("Build") && !button.disabled));
+  const button = [...document.querySelectorAll("button")].find(button => button.textContent?.includes("Build") && !button.disabled)!;
+  flushSync(() => button.click());
+  await until(() => writes.length === 1);
+  expect(writes[0]!.url).toBe("/api/pipelines");
+  expect(writes[0]!.body.autoStart).toBe(false);
+  expect(writes[0]!.body.src).toBeUndefined();
+  expect(writes[0]!.body.taskIds).toBeUndefined();
+  const stages = writes[0]!.body.stages as { kind: string; onFail?: { maxRounds: number } }[];
+  expect(stages.every(stage => stage.kind === "run")).toBe(true);
+  expect(stages.find(stage => stage.onFail)?.onFail?.maxRounds).toBeGreaterThan(0);
+});
+
+test("failed repository admission leaves no enabled creation or flow write", async () => {
+  const writes: string[] = [];
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    if (init?.method && init.method !== "GET" && !url.includes("preflight")) writes.push(url);
+    return Response.json({ ok: false, code: "missing", path: "/repo" });
+  }) as unknown as typeof fetch;
+  mount(<FlowDialog file={file} onClose={() => {}} />);
+  await until(() => Boolean(document.querySelector("[role=alert]")) || document.body.textContent!.includes("exist"));
+  expect(writes).toEqual([]);
+  expect(document.querySelector('input[type="number"]')).toBeNull();
+  expect([...document.querySelectorAll("button")].some(button => button.textContent?.includes("Start") && !button.disabled)).toBe(false);
+});
+
+test("bulk selection offers one pipeline draft instead of a per-conversation flow launcher", () => {
+  globalThis.fetch = (async () => Response.json({})) as unknown as typeof fetch;
+  const host = mount(<BulkActionBar project="demo" nodes={[{ file } as SchemeNode]} flowsByImpl={new Map()} onRemove={() => {}} onFit={() => {}} onExit={() => {}} />);
+  expect(host.textContent!.toLowerCase()).toContain("pipeline");
+  expect(host.textContent).not.toContain("Start flows");
 });
 
 
-test.each([
-  ["gpt-6-astra", "ultra", "gpt-5.6-luna"],
-  ["gpt-6-astra", "max", "gpt-5.6-luna"],
-  ["gpt-6-sol", "ultra", "gpt-6-luna"],
-  ["gpt-6-sol", "max", "gpt-6-luna"],
-] as const)("manual role reconciles %s/%s to %s in the submitted payload", async (from, effort, to) => {
-  const role = { engine: "codex", model: from, effort };
-  const posts: Record<string, unknown>[] = [];
-  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
-    if (init?.method === "POST") posts.push(JSON.parse(String(init.body)));
-    return { ok: true, json: async () => ({ presets: [{ name: "saved", implementer: role, reviewer: role }] }) };
-  }) as unknown as typeof fetch;
-  const host = document.createElement("div");
-  document.body.append(host);
-  const root = createRoot(host);
-  try {
-    flushSync(() => root.render(<FlowDialog file={{ path: "/example.jsonl" } as FileEntry} onClose={() => {}} />));
-    await Bun.sleep(10);
-    flushSync(() => (host.querySelector('button[aria-expanded]') as HTMLButtonElement).click());
-    const model = host.querySelector('input[list]') as HTMLInputElement;
-    // happy-dom lacks React's text-input value tracker; use the input's handler.
-    const propsKey = Object.keys(model).find((key) => key.startsWith("__reactProps$"))!;
-    const props = (model as unknown as Record<string, { onChange: (event: unknown) => void }>)[propsKey]!;
-    flushSync(() => props.onChange({ target: { value: to } }));
-    expect(model.value).toBe(to);
-    const expected = effort === "ultra" ? null : effort;
-    expect((host.querySelector('select[aria-label^="Reasoning effort:"]') as HTMLSelectElement).value).toBe(expected ?? "");
-    flushSync(() => [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Start"))!.click());
-    expect(posts).toHaveLength(1);
-    expect(posts[0]).toMatchObject({ roles: { implementer: { model: to, effort: expected } } });
-  } finally { flushSync(() => root.unmount()); }
-});
-
-test.each([undefined, 7, ""])("flow form displays default 3 and submits selection %s", async (selection) => {
-  const role = { engine: "codex", model: "gpt-6.1-sol", effort: "medium" };
-  const posts: Record<string, unknown>[] = [];
-  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
-    if (init?.method === "POST") posts.push(JSON.parse(String(init.body)));
-    return { ok: true, json: async () => ({ presets: [{ name: "saved", implementer: role, reviewer: role }] }) };
-  }) as unknown as typeof fetch;
-  const host = document.createElement("div"); document.body.append(host);
-  const root = createRoot(host);
-  try {
-    flushSync(() => root.render(<FlowDialog file={{ path: "/example.jsonl" } as FileEntry} onClose={() => {}} />));
-    await Bun.sleep(10);
-    expect(host.textContent).toContain("default 3");
-    const input = host.querySelector('input[type="number"]') as HTMLInputElement;
-    expect(input.value).toBe("3");
-    if (selection !== undefined) {
-      const key = Object.keys(input).find((key) => key.startsWith("__reactProps$"))!;
-      const props = (input as unknown as Record<string, { onChange: (event: unknown) => void }>)[key]!;
-      flushSync(() => props.onChange({ target: { value: String(selection) } }));
-    }
-    flushSync(() => [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Start"))!.click());
-    expect(posts[0]!.roundLimit).toBe(selection === "" ? 3 : selection ?? 3);
-  } finally { flushSync(() => root.unmount()); }
-});
-
-test.each([undefined, 7, ""])("bulk form defaults to 3 and submits selection %s", async (selection) => {
-  const posts: Record<string, unknown>[] = [];
-  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
-    if (init?.method === "POST") posts.push(JSON.parse(String(init.body)));
-    return { ok: true, json: async () => ({ presets: [] }) };
-  }) as unknown as typeof fetch;
-  const node = { file: { path: "/example.jsonl", title: "Example", engine: "codex", root: "codex-sessions", kind: "session", fmt: "codex", activity: "idle" } } as SchemeNode;
-  const host = document.createElement("div"); document.body.append(host);
-  const root = createRoot(host);
-  try {
-    flushSync(() => root.render(<BulkActionBar project="demo" nodes={[node]} flowsByImpl={new Map()} onRemove={() => {}} onFit={() => {}} onExit={() => {}} />));
-    flushSync(() => [...host.querySelectorAll("button")].find((button) => button.textContent === "Flow 1/1")!.click());
-    await Bun.sleep(10);
-    expect(host.textContent).toContain("default 3");
-    const input = host.querySelector('input[type="number"]') as HTMLInputElement;
-    expect(input.value).toBe("3");
-    if (selection !== undefined) {
-      const key = Object.keys(input).find((key) => key.startsWith("__reactProps$"))!;
-      const props = (input as unknown as Record<string, { onChange: (event: unknown) => void }>)[key]!;
-      flushSync(() => props.onChange({ target: { value: String(selection) } }));
-    }
-    flushSync(() => [...host.querySelectorAll("button")].find((button) => button.textContent === "Start 1 flows")!.click());
-    await Bun.sleep(10);
-    expect(posts[0]!.roundLimit).toBe(selection === "" ? 3 : selection ?? 3);
-  } finally { flushSync(() => root.unmount()); }
+test("bulk picker portals its modal outside the transformed toolbar", async () => {
+  globalThis.fetch = (async () => Response.json({ ok: true, repoDir: "/repo" })) as unknown as typeof fetch;
+  let backgroundInputs = 0;
+  const host = mount(<div onClick={() => backgroundInputs++} onPointerDown={() => backgroundInputs++}>
+    <BulkActionBar project="demo" nodes={[{ file } as SchemeNode]} flowsByImpl={new Map()} onRemove={() => {}} onFit={() => {}} onExit={() => {}} />
+  </div>);
+  const entry = [...host.querySelectorAll("button")].find(button => button.textContent?.trim().endsWith("Pipeline"))!;
+  flushSync(() => entry.click());
+  await until(() => Boolean(document.querySelector('[data-pipeline-picker-state="ready"]')));
+  const picker = document.querySelector("[data-pipeline-picker-state]")!;
+  expect(picker.parentElement).toBe(document.body);
+  expect(host.contains(picker)).toBe(false);
+  expect(picker.querySelector("dialog")?.hasAttribute("open")).toBe(true);
+  backgroundInputs = 0;
+  picker.querySelector("input")!.dispatchEvent(new dom.PointerEvent("pointerdown", { bubbles: true }) as unknown as Event);
+  (picker.querySelector("input") as HTMLInputElement).click();
+  expect(backgroundInputs).toBe(0);
 });

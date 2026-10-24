@@ -23,6 +23,7 @@ Object.assign(globalThis, {
   HTMLInputElement: dom.HTMLInputElement,
   HTMLSelectElement: dom.HTMLSelectElement,
   Event: dom.Event,
+  CustomEvent: dom.CustomEvent,
   MouseEvent: dom.MouseEvent,
 });
 
@@ -81,98 +82,17 @@ test("the override panel opens in a foreground layer, not nested in a halo stack
   host.remove();
 });
 
-test("starting the next round from the panel submits the note via advance, not only retry (issue #118 review F2)", async () => {
-  /* A waiting_ready flow: the pending action is `advance` (creates the next
-     round), which is exactly the path the note must reach. The field is seeded
-     from the last round's ready note, and the textarea is bound to the same
-     state that the button sends. */
-  const seeded: SchemeGroup = {
-    ...flowGroup,
-    flow: { ...flowGroup.flow!, state: "waiting_ready", rounds: [{ n: 1, readyNote: "check the retry path" }] } as unknown as Flow,
-  };
-  const { host, root } = mount(<GroupOverridePanel group={seeded} onClose={() => undefined} />);
-  const textarea = host.querySelector("textarea") as HTMLTextAreaElement;
-  expect(textarea.value).toBe("check the retry path");
-
-  /* Click the pending action (waiting_ready → "Start review" → advance). */
-  const start = Array.from(host.querySelectorAll("button")).find((b) => b.textContent?.includes("Start review")) as HTMLButtonElement;
-  expect(start).toBeTruthy();
-  flushSync(() => start.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event));
-  await Promise.resolve();
-
-  const patch = calls.find((call) => call.url.includes("/api/flows/f1"));
-  expect(patch?.body).toMatchObject({ action: "advance", note: "check the retry path" });
-
-  flushSync(() => root.unmount());
-  host.remove();
-});
-
-test("an empty note field is still sent so a cleared note reaches the backend (issue #118 review Finding 2)", async () => {
-  /* The round has no note; the editor is empty. The advance must carry note:""
-     (field present) rather than omitting it, so the backend reads an explicit
-     clear instead of preserving a stale note. */
-  const empty: SchemeGroup = {
-    ...flowGroup,
-    flow: { ...flowGroup.flow!, state: "waiting_ready", rounds: [{ n: 1, readyNote: null }] } as unknown as Flow,
-  };
-  const { host, root } = mount(<GroupOverridePanel group={empty} onClose={() => undefined} />);
-  const textarea = host.querySelector("textarea") as HTMLTextAreaElement;
-  expect(textarea.value).toBe("");
-  const start = Array.from(host.querySelectorAll("button")).find((b) => b.textContent?.includes("Start review")) as HTMLButtonElement;
-  flushSync(() => start.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event));
-  await Promise.resolve();
-
-  const patch = calls.find((call) => call.url.includes("/api/flows/f1"));
-  expect(patch?.body).toEqual({ action: "advance", note: "" });
-
-  flushSync(() => root.unmount());
-  host.remove();
-});
-
-test("the note re-seeds when the current round changes across a poll, discarding a stale edit (issue #118 review)", () => {
-  /* Round 1 parked; operator types a note but does not submit. */
-  const round1: SchemeGroup = {
-    ...flowGroup,
-    flow: { ...flowGroup.flow!, state: "needs_decision", rounds: [{ n: 1, readyNote: "round-1 note" }] } as unknown as Flow,
-  };
-  const { host, root } = mount(<GroupOverridePanel group={round1} onClose={() => undefined} />);
-  const textarea = () => host.querySelector("textarea") as HTMLTextAreaElement;
-  expect(textarea().value).toBe("round-1 note");
-  const setter = Object.getOwnPropertyDescriptor(dom.HTMLTextAreaElement.prototype, "value")!.set!;
-  flushSync(() => {
-    setter.call(textarea(), "operator edit for round 1");
-    textarea().dispatchEvent(new dom.Event("input", { bubbles: true }) as unknown as Event);
-  });
-  expect(textarea().value).toBe("operator edit for round 1");
-
-  /* A poll advances the flow to round 2 (also parked). The stale round-1 edit
-     must NOT survive into round 2 — the field re-seeds from round 2. */
-  const round2: SchemeGroup = {
-    ...flowGroup,
-    flow: { ...flowGroup.flow!, state: "needs_decision", rounds: [{ n: 1, readyNote: "round-1 note" }, { n: 2, readyNote: "round-2 note" }] } as unknown as Flow,
-  };
-  flushSync(() => root.render(<GroupOverridePanel group={round2} onClose={() => undefined} />));
-  expect(textarea().value).toBe("round-2 note");
-
-  flushSync(() => root.unmount());
-  host.remove();
-});
-
-test("the next-round note editor is disabled where no action can save it (issue #118 review)", () => {
-  /* auto-mode fixing: the next round is created by the engine's marker, which
-     never reads this field — the editor must be disabled, not silently discard. */
-  const fixing: SchemeGroup = { ...flowGroup, flow: { ...flowGroup.flow!, state: "fixing", rounds: [{ n: 1, readyNote: null }] } as unknown as Flow };
-  const a = mount(<GroupOverridePanel group={fixing} onClose={() => undefined} />);
-  expect((a.host.querySelector("textarea") as HTMLTextAreaElement).disabled).toBe(true);
-  flushSync(() => a.root.unmount());
-  a.host.remove();
-
-  /* waiting_ready: Start review will persist the note, so the editor is live. */
-  const ready: SchemeGroup = { ...flowGroup, flow: { ...flowGroup.flow!, state: "waiting_ready", rounds: [] } as unknown as Flow };
-  const b = mount(<GroupOverridePanel group={ready} onClose={() => undefined} />);
-  expect((b.host.querySelector("textarea") as HTMLTextAreaElement).disabled).toBe(false);
-  flushSync(() => b.root.unmount());
-  b.host.remove();
+test.each(["waiting_ready", "reviewing", "relaying", "needs_decision", "paused", "approved"] as const)("a recorded %s group cannot send any flow mutation", state => {
+  const group = { ...flowGroup, flow: { ...flowGroup.flow!, state } };
+  const { host, root } = mount(<GroupOverridePanel group={group} onClose={() => undefined} />);
+  expect(host.querySelector("textarea")).toBeNull();
+  expect(host.querySelector("input")).toBeNull();
+  expect(host.querySelector("select")).toBeNull();
+  expect(host.textContent).toContain("Review history");
+  const button = [...host.querySelectorAll("button")].find(item => item.textContent === "Review history")!;
+  flushSync(() => button.click());
+  expect(calls.filter(call => call.url.includes("/api/flows"))).toEqual([]);
+  flushSync(() => root.unmount()); host.remove();
 });
 
 const pipelineGroup: SchemeGroup = {
@@ -309,31 +229,4 @@ test("a parked pipeline offers retry and skip", async () => {
   expect((calls.at(-1)?.body as { action?: string })?.action).toBe("retry-stage");
   flushSync(() => root.unmount());
   host.remove();
-});
-
-
-test.each([
-  ["gpt-6-astra", "ultra", "gpt-5.6-luna"],
-  ["gpt-6-astra", "max", "gpt-5.6-luna"],
-  ["gpt-6-sol", "ultra", "gpt-6-luna"],
-  ["gpt-6-sol", "max", "gpt-6-luna"],
-] as const)("reviewer override reconciles %s/%s to %s before PATCH", (from, effort, to) => {
-  const group: SchemeGroup = {
-    ...flowGroup,
-    flow: { ...flowGroup.flow!, roles: { ...flowGroup.flow!.roles, reviewer: { engine: "codex", model: from, effort } } },
-  };
-  const { host, root } = mount(<GroupOverridePanel group={group} onClose={() => undefined} />);
-  try {
-    const model = host.querySelector('input:not([type="number"])') as HTMLInputElement;
-    // happy-dom lacks React's text-input value tracker; use the input's handler.
-    const propsKey = Object.keys(model).find((key) => key.startsWith("__reactProps$"))!;
-    const props = (model as unknown as Record<string, { onChange: (event: unknown) => void }>)[propsKey]!;
-    flushSync(() => props.onChange({ target: { value: to } }));
-    expect(model.value).toBe(to);
-    const expected = effort === "ultra" ? null : effort;
-    expect((host.querySelectorAll("select")[1] as HTMLSelectElement).value).toBe(expected ?? "");
-    flushSync(() => [...host.querySelectorAll("button")].find((button) => button.textContent === "Update reviewer")!.click());
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.body).toMatchObject({ action: "set-roles", roles: { reviewer: { model: to, effort: expected } } });
-  } finally { flushSync(() => root.unmount()); }
 });
