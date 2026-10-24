@@ -1,0 +1,5436 @@
+{
+  "origin": "Codex Cloud result 08; inherited dispatch and active publication follow-up",
+  "baseline": "97bdb94ea9dfe32dff8a7bf022eeb2f83d8f02b7",
+  "generatedAt": "2026-10-24T10:32:22.948143+00:00",
+  "lateMainUpdate": {
+    "revision": "3736d5e434149f257061a94cb74b4c0806f152c8",
+    "changedFiles": [
+      "docs/privacy-publication.md",
+      "docs/verification/cloud-test-fixes.md",
+      "scripts/privacy-generator-runtime.ts",
+      "scripts/privacy-publication-gate.test.ts",
+      "scripts/privacy-publication-gate.ts",
+      "src/app/api/bridge/route.test.ts",
+      "src/app/api/monitor/seat-tick/settings/route.test.ts",
+      "src/app/api/orchestrator/reports/route.test.ts",
+      "src/lib/monitor/seatTickController.fixture.ts",
+      "src/lib/monitor/seatTickController.test.ts"
+    ],
+    "overlappingPaths": [],
+    "integration": "pending"
+  },
+  "scope": "Preparatory slice 3. Unadopted starts, allowance, discovery and UI unchanged.",
+  "procedure": {
+    "selection": "Static quoted imports plus generated child/eval programs; relative imports resolved from the test directory and child project root; remaining basename hits inspected.",
+    "isolation": [
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "XDG_CACHE_HOME",
+      "XDG_DATA_HOME",
+      "TMPDIR",
+      "LLV_STATE_DIR",
+      "CODEX_HOME",
+      "CLAUDE_CONFIG_DIR",
+      "LLV_CODEX_HOME",
+      "LLV_CLAUDE_HOME"
+    ],
+    "controlUrl": "closed loopback endpoint",
+    "remoteGate": {
+      "exit": 75,
+      "sshAttempts": 3,
+      "fallback": "Documented local fallback through the pinned gate-slot wrapper; one admission at a time."
+    },
+    "fileCommand": [
+      "setsid",
+      "--wait",
+      "$BUN",
+      "scripts/owned-runner.ts",
+      "--budget",
+      "305000",
+      "$BUN",
+      "scripts/owned-runner.ts",
+      "--budget",
+      "300000",
+      "$BUN",
+      "test",
+      "./<file>",
+      "--timeout=60000",
+      "--reporter=junit",
+      "--reporter-outfile=<owned-results>/report.xml"
+    ],
+    "longFile": "remoteActions.test.ts uses 905000/900000 ms outer/inner deadlines.",
+    "parser": "Project parseReport and compareTests; preserve file, suite, name, kind and duplicate occurrence.",
+    "workers": 4,
+    "serialControls": "Three whole-file runs per cut, one at a time."
+  },
+  "sourceSha256": {
+    "scripts/gate-cache.test.ts": "2f2e2c7e6f13d6b748aab917aa03c0c208d19b253449168ec872c0af6d02f421",
+    "scripts/gate-cache.ts": "a3ef01031cf95108581f1d0759d4d7c97668c6d5609a8e24c1528ce567274167",
+    "src/app/api/spawn/route.launcher.test.ts": "2bf4201d527f6862ca389eb0182a298accbd93f40bb87155fabcef1357aea188",
+    "src/app/api/tasks/[id]/proactive/route.test.ts": "563e01e04afcc5e310966416ea6e029f292d279b0cccd3a2f5bcea2a7e217a51",
+    "src/app/api/tasks/[id]/proactive/route.ts": "efc4ee81f5554cdcc74adfe9d6578b567e5389dddeb4dd30d0f239fa9c2a0542",
+    "src/lib/agent/registry.ts": "495433d5be9ab69dd67b1a8069a60cd938d8a79e2cc4331126ce1331420dc2db",
+    "src/lib/agent/spawnCommand.ts": "f1cf0e0340bf055113e8639005ed6dc1f5f842dce74229e9e16246e0e02bbac7",
+    "src/lib/forge/appWrite.test.ts": "84aab0230206a1dcc8d3c4eac5aefc40288bc2a324287c8bec5eadda1627c62d",
+    "src/lib/forge/appWrite.ts": "811415f4fd2078d9426c2815e869039646fc8b47e2e13bef9305d8b004d65c12",
+    "src/lib/forge/autoMerge.test.ts": "a38202cdfb8dc95a1392740e65ae7376f9c8dfa9b1901715b71c0a4b4c1e5ce5",
+    "src/lib/forge/autoMerge.ts": "c98a692404425ea337db50098ecce1a85c9e4bb8204aedd8b62ba6241afa37d7",
+    "src/lib/links/taskSync.test.ts": "c75b89e5b97d8c7a379c0f9d488853d5cc07fc5eb56a600cca12225ae75e6d60",
+    "src/lib/pipelines/engine.ts": "3d040fcd55f6ed2f447dc75a66f5af725962a9e85dc057cc9935eae4da907f5b",
+    "src/lib/pipelines/git.test.ts": "7d81b36ac6f911b26b1c60a14706a38260442850c88bcbefb5e4be02df933d12",
+    "src/lib/pipelines/git.ts": "e947bb772ce07bb0160b18666c67f3b83f9d1492d932fc043db39ae297c3c1d4",
+    "src/lib/runtime/structuredMessageDelivery.test.ts": "bfce312f029fd5a17536f73434f635144ee741083108c9ca229fbd4a7672742a",
+    "src/lib/runtime/structuredMessageDelivery.ts": "71be48a5d30b9a5b83013d2c241a0b0d72d1986079f3c94b1774d28e0b80ff3c",
+    "src/lib/runtime/structuredSpawn.ts": "7d4739c1be2647260ff34fb77ab367aab576ce36c96bafa64db820f52119acf1",
+    "src/lib/tasks/commands.ts": "b4daa1a6fb6205af1b9fbed6f58e2c738867e2673e560b76c4d2da52df49a182",
+    "src/lib/tasks/launchFailureReporting.ts": "c76a85623648807bd4321255755cba17d17cf162b6a98c2d1b6b94567a5d2694",
+    "src/lib/tasks/launchMembership.registry.test.ts": "e4847e19a0922386c4e4308a883c6c7c788a9e1c783c5ee8a3b69abfb172a88b",
+    "src/lib/tasks/launchMembership.test.ts": "cd3ecf473e2425072688adb4cb9cb486e2b0b32c9f9d0db0a171eed4a1a616e1",
+    "src/lib/tasks/launchMembership.ts": "eefb8e78d305cd8ecafaded4b03fac24b4ec90ea987b874525c83647c54f4a86",
+    "src/lib/tasks/membership.test.ts": "3ad9dc0de26d461734f72edf31bcedc0d2ea2ae39eddfd83508541a910512a02",
+    "src/lib/tasks/membership.ts": "2c6dc72b9ff8aae7bfda32971dd2d80d2d206a2bae80e668e6810df309aa12ce",
+    "src/lib/tasks/proactive.fixture.ts": "deabb71edcaf88068cb2aaddaedc27185465d38d1f565995f6cda6ee1384a40d",
+    "src/lib/tasks/proactive.ts": "38a941dd048b35059f730d3ef122fa92392cbf72147baf9ef0aa3f547abc79ac",
+    "src/lib/tasks/proactiveExecution.test.ts": "3fd1a707c51ecd577b6cb73741ada89ece0f129aa36e281c1cccc30ec80ea9ed",
+    "src/lib/tasks/proactiveExecution.ts": "26a678044733f16bc7623e4c770caba953bf1d109b871eef9d97382f2b33a092",
+    "src/lib/tmux.proactive.test.ts": "a161d9006623ee885c38c5ab2945042358a4009d4ba477e441785f6fceab9184",
+    "src/lib/tmux.ts": "d6ed38ef812a26cddb4d8c8132eab648563a066b11ea9701725708772f79acdb"
+  },
+  "selectedFiles": {
+    "scripts/local-gate.test.ts": [
+      "../src/lib/pipelines/git"
+    ],
+    "scripts/gate-cache.test.ts": [
+      "../src/lib/pipelines/git"
+    ],
+    "scripts/local-gate.receipts.test.ts": [
+      "../src/lib/pipelines/git"
+    ],
+    "src/lib/agent/spawnMemory.test.ts": [
+      "@/lib/tmux"
+    ],
+    "src/lib/agent/transcriptHost.test.ts": [
+      "@/lib/tmux"
+    ],
+    "src/lib/agent/spawnCommand.contention.test.ts": [
+      "./spawnCommand"
+    ],
+    "src/lib/agent/spawnCommand.locale.test.ts": [
+      "./spawnCommand"
+    ],
+    "src/lib/agent/spawnCommand.telegram.test.ts": [
+      "./spawnCommand"
+    ],
+    "src/lib/agent/registry.servingWriters.test.ts": [
+      "./spawnCommand"
+    ],
+    "src/lib/agent/spawnDeferral.test.ts": [
+      "./spawnCommand"
+    ],
+    "src/lib/agent/codexSpawnPolicy.test.ts": [
+      "@/lib/tmux"
+    ],
+    "src/lib/orchestrator/seatRecoveryBusy.test.ts": [
+      "@/lib/agent/spawnCommand"
+    ],
+    "src/lib/tmux.test.ts": [
+      "@/lib/tmux"
+    ],
+    "src/app/api/tmux/targets/route.test.ts": [
+      "@/lib/tmux"
+    ],
+    "src/app/api/spawn/route.launcher.test.ts": [
+      "@/lib/agent/spawnCommand"
+    ],
+    "src/app/api/spawn/route.binding.test.ts": [
+      "@/lib/agent/spawnCommand"
+    ],
+    "src/app/api/accounts/codex/route.test.ts": [
+      "@/lib/tmux"
+    ],
+    "src/lib/conversation/resumeLiveness.test.ts": [
+      "@/lib/tmux"
+    ],
+    "src/lib/delivery.test.ts": [
+      "./tmux"
+    ],
+    "src/lib/flows/engine.test.ts": [
+      "@/lib/tmux"
+    ],
+    "src/lib/monitor/seatTickController.reporting.test.ts": [
+      "@/lib/agent/spawnCommand"
+    ],
+    "src/lib/monitor/seatAutoRotation.spawn.test.ts": [
+      "@/lib/agent/spawnCommand"
+    ],
+    "src/lib/scanner/taskExtractionRetirement.test.ts": [
+      "@/lib/tmux"
+    ],
+    "src/lib/runtime/cpuPlacement.scope.test.ts": [
+      "@/lib/tmux"
+    ],
+    "src/lib/mcp/orchestratorTools.test.ts": [
+      "@/lib/agent/spawnCommand"
+    ],
+    "src/lib/mcp/spawnRecovery.integration.test.ts": [
+      "@/lib/agent/spawnCommand"
+    ],
+    "src/lib/pipelines/publication.test.ts": [
+      "./git"
+    ],
+    "src/lib/pipelines/stagePullRequest.test.ts": [
+      "./git"
+    ],
+    "src/lib/pipelines/engine.creation.test.ts": [
+      "./git"
+    ],
+    "src/lib/pipelines/git.test.ts": [
+      "./git"
+    ],
+    "src/lib/pipelines/stageCommitRepair.test.ts": [
+      "./git"
+    ],
+    "src/lib/pipelines/parkedPublication.test.ts": [
+      "./git"
+    ],
+    "src/lib/pipelines/engine.ports.test.ts": [
+      "@/lib/tmux"
+    ],
+    "src/lib/pipelines/engine.publication.test.ts": [
+      "./git"
+    ],
+    "src/lib/pipelines/repositoryInitialization.test.ts": [
+      "./git"
+    ],
+    "src/lib/pipelines/stageInput.test.ts": [
+      "./git"
+    ],
+    "src/lib/pipelines/engine.ports.part2.test.ts": [
+      "./git"
+    ],
+    "src/lib/pipelines/remoteActions.test.ts": [
+      "./git"
+    ],
+    "src/lib/pipelines/stagePublicationRepair.test.ts": [
+      "./git"
+    ],
+    "src/lib/accounts/migration/provider.test.ts": [
+      "@/lib/tmux"
+    ],
+    "src/lib/tmux.proactive.test.ts": [
+      "@/lib/tmux"
+    ],
+    "src/lib/telegram/reportSpawn.test.ts": [
+      "@/lib/agent/spawnCommand"
+    ],
+    "src/lib/forge/autoMerge.test.ts": [
+      "focused authority compatibility"
+    ],
+    "src/lib/forge/appWrite.test.ts": [
+      "focused authority compatibility"
+    ],
+    "src/lib/tasks/proactiveExecution.test.ts": [
+      "focused authority compatibility"
+    ],
+    "src/lib/tasks/launchMembership.registry.test.ts": [
+      "focused authority compatibility"
+    ],
+    "src/lib/tasks/membership.test.ts": [
+      "focused authority compatibility"
+    ],
+    "src/lib/tasks/launchMembership.test.ts": [
+      "focused authority compatibility"
+    ],
+    "src/app/api/tasks/[id]/proactive/route.test.ts": [
+      "focused authority compatibility"
+    ],
+    "src/app/api/spawn/route.test.ts": [
+      "transport integration compatibility"
+    ],
+    "src/lib/deliveryActuation.test.ts": [
+      "transport integration compatibility"
+    ],
+    "src/lib/deliveryPaneBufferError.test.ts": [
+      "transport integration compatibility"
+    ],
+    "src/lib/accounts/accountMutation.callers.test.ts": [
+      "@/lib/agent/spawnCommand"
+    ],
+    "src/lib/pipelines/engine.settlement.test.ts": [
+      "./src/lib/pipelines/git.ts"
+    ]
+  },
+  "coverage": {
+    "selectedFiles": 54,
+    "branchFilesRun": 54,
+    "mainFilesRun": 51,
+    "absentOnMain": [
+      "src/lib/tmux.proactive.test.ts",
+      "src/app/api/tasks/[id]/proactive/route.test.ts",
+      "src/lib/tasks/proactiveExecution.test.ts"
+    ],
+    "effectiveInvocations": 105,
+    "reportParsingRefusals": [
+      {
+        "side": "head",
+        "file": "scripts/local-gate.test.ts",
+        "code": 1,
+        "elapsedMs": 102134,
+        "passed": 0,
+        "error": "Error: unidentified error between tests",
+        "complete": false,
+        "batch": "gitReconciliation",
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "scripts/local-gate.test.ts",
+        "code": 1,
+        "elapsedMs": 85726,
+        "passed": 0,
+        "error": "Error: unidentified error between tests",
+        "complete": false,
+        "batch": "primary",
+        "failureSites": []
+      }
+    ],
+    "matchingFailures": 213,
+    "branchOnlyObservations": [
+      45,
+      47,
+      41,
+      42,
+      141
+    ]
+  },
+  "failureSites": [
+    {
+      "file": "scripts/local-gate.receipts.test.ts",
+      "suite": "",
+      "name": "a failed hook step is run again on retry",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "scripts/local-gate.receipts.test.ts",
+      "suite": "",
+      "name": "a stage agent's pass is reused by publication of the same tree, which reruns privacy",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "scripts/local-gate.receipts.test.ts",
+      "suite": "",
+      "name": "hook receipts invalidate base, tool and environment drift, and malformed records",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "scripts/local-gate.receipts.test.ts",
+      "suite": "",
+      "name": "identical clean hook processes reuse passed checks, while privacy and supply chain stay fresh",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "scripts/local-gate.receipts.test.ts",
+      "suite": "",
+      "name": "privacy, frozen install and advisory audit execute on both pushes of one dependency tree",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "scripts/local-gate.receipts.test.ts",
+      "suite": "",
+      "name": "prose-only skips name their reason and a subsequent code change runs the checks",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/app/api/spawn/route.launcher.test.ts",
+      "suite": "",
+      "name": "tmux parentConversationId authority is rechecked after spawn.intent: adopted",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/app/api/spawn/route.launcher.test.ts",
+      "suite": "",
+      "name": "tmux parentConversationId authority is rechecked after spawn.intent: edited",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/app/api/spawn/route.launcher.test.ts",
+      "suite": "",
+      "name": "tmux parentConversationId authority is rechecked after spawn.intent: rejected",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/app/api/spawn/route.test.ts",
+      "suite": "",
+      "name": "Claude selection handles a fallback race with automatic credential rotation",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/app/api/spawn/route.test.ts",
+      "suite": "",
+      "name": "Claude selection handles a fallback race with exhausted pin",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/app/api/spawn/route.test.ts",
+      "suite": "",
+      "name": "Claude selection handles a fallback race with exhausted pin fallback credential rotation",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/app/api/spawn/route.test.ts",
+      "suite": "",
+      "name": "Claude selection handles a fallback race with exhausted pin fallback revision churn",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/app/api/spawn/route.test.ts",
+      "suite": "",
+      "name": "Claude selection handles a fallback race with pin catalog change",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/app/api/spawn/route.test.ts",
+      "suite": "",
+      "name": "Claude selection handles a fallback race with pin credential removal",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/app/api/spawn/route.test.ts",
+      "suite": "",
+      "name": "Claude selection handles a fallback race with pin credential rotation",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/app/api/spawn/route.test.ts",
+      "suite": "",
+      "name": "Claude selection handles a fallback race with pin rejected refresh rotation",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/app/api/spawn/route.test.ts",
+      "suite": "",
+      "name": "Claude selection handles a fallback race with pin unreadable credential",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/app/api/spawn/route.test.ts",
+      "suite": "",
+      "name": "Claude selection handles a fallback race with unavailable pin",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/app/api/spawn/route.test.ts",
+      "suite": "",
+      "name": "Claude selection handles a fallback race with unavailable pin fallback credential rotation",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/app/api/spawn/route.test.ts",
+      "suite": "",
+      "name": "Claude selection handles a fallback race with unavailable pin fallback revision churn",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/app/api/spawn/route.test.ts",
+      "suite": "",
+      "name": "Viewer draft and per-project orchestrator seat pass public spawn admission",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/app/api/spawn/route.test.ts",
+      "suite": "",
+      "name": "a fresh process resolves and refreshes a persisted Claude account before one structured launch",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/app/api/spawn/route.test.ts",
+      "suite": "",
+      "name": "a pinned Claude health probe handles continuous unrelated writes before reserving once",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/app/api/spawn/route.test.ts",
+      "suite": "",
+      "name": "a pinned Claude health probe handles pinned catalog before reserving once",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/app/api/spawn/route.test.ts",
+      "suite": "",
+      "name": "a pinned Claude health probe handles pinned credential before reserving once",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/app/api/spawn/route.test.ts",
+      "suite": "",
+      "name": "a pinned Claude health probe handles pinned removed credential before reserving once",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/app/api/spawn/route.test.ts",
+      "suite": "",
+      "name": "a pinned Claude health probe handles pinned unreadable credential before reserving once",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/app/api/spawn/route.test.ts",
+      "suite": "",
+      "name": "a pinned Claude health probe handles unrelated refusal before reserving once",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/app/api/spawn/route.test.ts",
+      "suite": "",
+      "name": "a pinned Claude health probe handles unrelated refusal with fallback before reserving once",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/app/api/spawn/route.test.ts",
+      "suite": "",
+      "name": "a queued pinned account survives restart and launches exactly once on the pin after admission",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/app/api/spawn/route.test.ts",
+      "suite": "",
+      "name": "an automatic bound-project health revision race stays retryable and preserves the same request key",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/accounts/accountMutation.callers.test.ts",
+      "suite": "",
+      "name": "reportReplies.withdraw waits out a short foreign holder",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/accounts/accountMutation.callers.test.ts",
+      "suite": "",
+      "name": "reportReplies.withdraw waits out a short local-held holder",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/accounts/accountMutation.callers.test.ts",
+      "suite": "",
+      "name": "reportReplies.withdraw waits out a short local-queued holder",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/accounts/accountMutation.callers.test.ts",
+      "suite": "",
+      "name": "spawnCommand.fenceSpawnAdmissionRejection waits out a short foreign holder",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/accounts/accountMutation.callers.test.ts",
+      "suite": "",
+      "name": "spawnCommand.fenceSpawnAdmissionRejection waits out a short local-held holder",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/accounts/accountMutation.callers.test.ts",
+      "suite": "",
+      "name": "spawnCommand.fenceSpawnAdmissionRejection waits out a short local-queued holder",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/accounts/accountMutation.callers.test.ts",
+      "suite": "",
+      "name": "syncCompatibilityRouting waits out a short foreign holder",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/accounts/accountMutation.callers.test.ts",
+      "suite": "",
+      "name": "syncCompatibilityRouting waits out a short local-held holder",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/accounts/accountMutation.callers.test.ts",
+      "suite": "",
+      "name": "syncCompatibilityRouting waits out a short local-queued holder",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/registry.servingWriters.test.ts",
+      "suite": "",
+      "name": "account selection keeps catalog and routing aligned through a child-held writer (shared=false)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/registry.servingWriters.test.ts",
+      "suite": "",
+      "name": "account selection keeps catalog and routing aligned through a child-held writer (shared=true)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/registry.servingWriters.test.ts",
+      "suite": "",
+      "name": "actual launch account reconciliation waits and rereads the materialized receipt",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/registry.servingWriters.test.ts",
+      "suite": "",
+      "name": "demotion handoff admits its marker and obligation (noOwedTurn=false)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/registry.servingWriters.test.ts",
+      "suite": "",
+      "name": "spawn lineage repeats transcript provenance after a child-held writer",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/registry.servingWriters.test.ts",
+      "suite": "",
+      "name": "transcript identity admission rereads foreign liveness after waiting",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/registry.servingWriters.test.ts",
+      "suite": "",
+      "name": "transcript observation and resume rerun their admitted guards",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.contention.test.ts",
+      "suite": "",
+      "name": "seat credential capture leaves neighboring spawn, resume and send admission available",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.contention.test.ts",
+      "suite": "",
+      "name": "seat spawn revalidates catalog changed during credential capture before committing a baseline or receipt",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.contention.test.ts",
+      "suite": "",
+      "name": "seat spawn revalidates credentials changed during credential capture before committing a baseline or receipt",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "suite": "",
+      "name": "a codex relaunch where Telegram is not set up leaves the server out and asks nobody",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "suite": "",
+      "name": "a conflicting Codex account definition ends the granted launch with a named refusal",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "suite": "",
+      "name": "a message to a codex conversation whose host is gone reconnects Telegram and relaunches it with the tool",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "suite": "",
+      "name": "a message to a codex conversation whose host is gone relaunches it without Telegram while the connector is disconnected",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "suite": "",
+      "name": "a new codex agent starts without the tool while Telegram waits for the operator to sign in",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "suite": "",
+      "name": "a sign-out between admission and deferred host start starts the granted child without the tool",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "suite": "",
+      "name": "after a self-update a codex relaunch replaces the previous release's connector and starts with the tool",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "suite": "",
+      "name": "revoking the seat while a codex launch waits for Telegram to reconnect refuses the launch",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "suite": "",
+      "name": "the claude orchestrator rotates while Telegram ended the session",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "suite": "",
+      "name": "the claude orchestrator rotates while Telegram is connected",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "suite": "",
+      "name": "the claude orchestrator rotates while Telegram is not set up",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "suite": "",
+      "name": "the claude orchestrator rotates while the connector is down and comes back",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "suite": "",
+      "name": "the claude orchestrator rotates while the connector is down and stays down",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "suite": "",
+      "name": "the claude orchestrator rotates while the record was never published for the stored credential",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "suite": "",
+      "name": "the codex orchestrator rotates while Telegram ended the session",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "suite": "",
+      "name": "the codex orchestrator rotates while Telegram is connected",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "suite": "",
+      "name": "the codex orchestrator rotates while Telegram is not set up",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "suite": "",
+      "name": "the codex orchestrator rotates while the connector is down and comes back",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "suite": "",
+      "name": "the codex orchestrator rotates while the connector is down and stays down",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "suite": "",
+      "name": "the codex orchestrator rotates while the record was never published for the stored credential",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "suite": "",
+      "name": "the off deferred seat children reach both production hosts with Telegram",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "suite": "",
+      "name": "the off disconnected operator root launches without Telegram",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "suite": "",
+      "name": "the off production launch builder keeps seat-child Telegram grants",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "suite": "",
+      "name": "the off seat builder reaches both production hosts with Telegram",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "suite": "",
+      "name": "the off ungranted children reach both hosts without a Telegram token",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "suite": "",
+      "name": "the sqlite deferred seat children reach both production hosts with Telegram",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "suite": "",
+      "name": "the sqlite disconnected operator root launches without Telegram",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "suite": "",
+      "name": "the sqlite production launch builder keeps seat-child Telegram grants",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "suite": "",
+      "name": "the sqlite seat builder reaches both production hosts with Telegram",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "suite": "",
+      "name": "the sqlite ungranted children reach both hosts without a Telegram token",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "suite": "",
+      "name": "where Telegram is not set up, a codex child that asks for it starts without the grant",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnDeferral.test.ts",
+      "suite": "",
+      "name": "in-process deferred work logs a labelled reject without an unhandled failure",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnDeferral.test.ts",
+      "suite": "",
+      "name": "in-process deferred work logs a labelled throw without an unhandled failure",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnDeferral.test.ts",
+      "suite": "",
+      "name": "in-process spawn work yields to the loop and retains its operation label while awaiting",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/agent/spawnDeferral.test.ts",
+      "suite": "",
+      "name": "the pinned Next runtime identifies a missing request before registering any work",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/conversation/resumeLiveness.test.ts",
+      "suite": "",
+      "name": "a detector timeout after starting a legacy host settles resume, immediate send, and deliverability from one live record",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/delivery.test.ts",
+      "suite": "",
+      "name": "a legacy send to an unregistered transcript path reserves the same way, and an unknown pid is refused before anything is reserved or typed",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/delivery.test.ts",
+      "suite": "",
+      "name": "a resume that cannot build a command names the failing condition (issue #935)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/delivery.test.ts",
+      "suite": "",
+      "name": "a resume whose recorded account this machine no longer has asks the rule instead (#1279)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/delivery.test.ts",
+      "suite": "",
+      "name": "idle reconfiguration survives a transient host miss and resumes after verified termination",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/delivery.test.ts",
+      "suite": "",
+      "name": "message-triggered relaunches carry the stored MCP grant on both the direct and root-relay paths",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/delivery.test.ts",
+      "suite": "",
+      "name": "tmux Resume carries the stored ultrafast tier into the command",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/delivery.test.ts",
+      "suite": "",
+      "name": "tmux branch relay carries the root's ultrafast tier into its reopen command",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/delivery.test.ts",
+      "suite": "",
+      "name": "tmux message reopen resolves ultrafast with resumeFast=false",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/delivery.test.ts",
+      "suite": "",
+      "name": "tmux message reopen resolves ultrafast with resumeFast=true",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/delivery.test.ts",
+      "suite": "",
+      "name": "tmux message reopen resolves ultrafast with resumeFast=undefined",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/delivery.test.ts",
+      "suite": "",
+      "name": "tmux reconfigure effort only keeps ultrafast",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/delivery.test.ts",
+      "suite": "",
+      "name": "tmux reconfigure to Standard clears the durable tier and attach",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/mcp/orchestratorTools.test.ts",
+      "suite": "",
+      "name": "a definite message refusal after seat creation preserves both the cause and created recipient",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/mcp/orchestratorTools.test.ts",
+      "suite": "",
+      "name": "server 403 on seat creation retains its cause and closes the send as not executed",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/mcp/spawnRecovery.integration.test.ts",
+      "suite": "",
+      "name": "a foreign task refuses before the MCP claim and dispatch, and a corrected task can reuse the request id",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "suite": "",
+      "name": "a deploy admitted before a lost reply still wakes its idle seat exactly once (#2346)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "suite": "",
+      "name": "a recovered idle writer wakes its settled deploy before timeout and once across controller restart: closed-idle",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "suite": "",
+      "name": "an idle seat keeps its five-minute cadence for unchanged running children and lanes (#2346)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "suite": "",
+      "name": "delivered task obligations cannot hide a running child's recurring interval (#2346)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "suite": "",
+      "name": "quiet unparented and cold-inbox work explains interval eligibility in settings and the board (#2346)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "suite": "seat auto-rotation through production seams",
+      "name": "a fresh process reconciles a lost automatic request with a busy predecessor",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "suite": "seat auto-rotation through production seams",
+      "name": "a fresh process reconciles a lost automatic request with a idle predecessor",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "suite": "seat auto-rotation through production seams",
+      "name": "a fresh process reconciles a lost automatic request with a unknown predecessor",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "suite": "seat auto-rotation through production seams",
+      "name": "a large estimate waits until the transcript reports usage",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "suite": "seat auto-rotation through production seams",
+      "name": "a lost outcome write recovers the accepted key and finishes a refused card without a second rotation",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "suite": "seat auto-rotation through production seams",
+      "name": "a manual rotation winning between decision and command supersedes the automatic attempt",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "suite": "seat auto-rotation through production seams",
+      "name": "a provisional successor rollback is reported once and its failure card stays open until disabled",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "suite": "seat auto-rotation through production seams",
+      "name": "a turn starting during handoff digest defers automatic replacement until completion",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "suite": "seat auto-rotation through production seams",
+      "name": "a turn starting during usage read defers automatic replacement until completion",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "suite": "seat auto-rotation through production seams",
+      "name": "a turn starting while spawn is awaited keeps incumbent authority and reports one failed replacement",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "suite": "seat auto-rotation through production seams",
+      "name": "a turn-held attempt executed after an hour keeps a full cooldown after failed, including restart",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "suite": "seat auto-rotation through production seams",
+      "name": "a turn-held attempt executed after an hour keeps a full cooldown after rotated, including restart",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "suite": "seat auto-rotation through production seams",
+      "name": "a update-held attempt executed after an hour keeps a full cooldown after failed, including restart",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "suite": "seat auto-rotation through production seams",
+      "name": "a update-held attempt executed after an hour keeps a full cooldown after rotated, including restart",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "suite": "seat auto-rotation through production seams",
+      "name": "an update-held attempt waits on stalled/busy before replay",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "suite": "seat auto-rotation through production seams",
+      "name": "an update-held attempt waits on stalled/unknown before replay",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "suite": "seat auto-rotation through production seams",
+      "name": "an update-held launch replays its own pending intent and key at the next safe check",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "suite": "seat auto-rotation through production seams",
+      "name": "busy seat receives one steer-or-queue nudge at fifteen minutes and rotates only after the turn ends",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "suite": "seat auto-rotation through production seams",
+      "name": "failures keep the incumbent, report once per epoch and retry after the persisted cooldown",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "suite": "seat auto-rotation through production seams",
+      "name": "idle reported usage rotates through the normal command once, preserving handoff, lineage and project settings",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "suite": "seat auto-rotation through production seams",
+      "name": "panel reconciliation during spawn preserves a predecessor that started a turn",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "suite": "seat auto-rotation through production seams",
+      "name": "positive idle liveness corrects a stale busy registry turn at admission",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "suite": "seat auto-rotation through production seams",
+      "name": "seat tick launches its successor through the production spawn defer without a request scope",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "suite": "seat auto-rotation through production seams",
+      "name": "stalled seat with busy liveness keeps authority until positive idle evidence",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "suite": "seat auto-rotation through production seams",
+      "name": "stalled seat with unknown liveness keeps authority until positive idle evidence",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "suite": "seat auto-rotation through production seams",
+      "name": "wakes off withholds the busy nudge and still permits idle automatic rotation",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/orchestrator/seatRecoveryBusy.test.ts",
+      "suite": "",
+      "name": "SQLite busy throw then success preserves one pending intent",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/orchestrator/seatRecoveryBusy.test.ts",
+      "suite": "",
+      "name": "a failed receipt after SQLite busy stays pending through automatic recovery replay",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/orchestrator/seatRecoveryBusy.test.ts",
+      "suite": "",
+      "name": "a failed receipt after SQLite busy stays pending through designation replay",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/orchestrator/seatRecoveryBusy.test.ts",
+      "suite": "",
+      "name": "automatic host recovery retries SQLite busy before replacing its incumbent",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/orchestrator/seatRecoveryBusy.test.ts",
+      "suite": "",
+      "name": "real SQLite receipt retries transient membership contention without a terminal seat intent",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/orchestrator/seatRecoveryBusy.test.ts",
+      "suite": "",
+      "name": "the real spawn receipt stays replayable when its pinned queue write is busy",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/engine.ports.test.ts",
+      "suite": "",
+      "name": "a concurrent pipeline replay and its recovery projections withhold staged identity (#1123)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/git.test.ts",
+      "suite": "",
+      "name": "<between-tests error> error: expect(received).toBe(expected)",
+      "kind": "error"
+    },
+    {
+      "file": "src/lib/pipelines/git.test.ts",
+      "suite": "",
+      "name": "a real stale dirty checkout provisions from the freshly fetched origin/main tip",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/git.test.ts",
+      "suite": "",
+      "name": "closing a lane during a real publication probe fences its outcome",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/git.test.ts",
+      "suite": "",
+      "name": "closing a lane during a real publication push-reply fences its outcome",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/git.test.ts",
+      "suite": "",
+      "name": "rejection during an active push preserves its child and settles the actual refused receipt",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/git.test.ts",
+      "suite": "",
+      "name": "rejection during an active push preserves its child and settles the actual success receipt",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/parkedPublication.test.ts",
+      "suite": "",
+      "name": "isolated parked publication regressions",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "a blocked artifact parent produces a visible action refusal",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "a blocked artifact parent produces a visible repair refusal",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "a blocked artifact parent produces a visible stage refusal",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "a cancelled takeover preserves a newer pause and its detail",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "a controller output commit survives lost-reply before durable adoption",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "a controller output commit survives pause before durable adoption",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "a deferred skip preserves output ownership when paused after-write",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "a deferred skip preserves output ownership when paused before-write",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "a passed-stage retry acknowledges before checking its accepted local head",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "a paused lane cancels a remote check and preserves the pause",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "a queued publication is superseded by pause even after same-clock resume (%s)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "a queued publication is superseded by pause even after same-clock resume (%s)",
+      "kind": "test",
+      "occurrence": 1
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "a receipt that settles during remote verification cancels its retry",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "a remote review retry records pending work before remote Git answers",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "a routine mutation acknowledges an existing queued publication without executing Git",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "a same-clock pause and resume during one remote probe supersedes its retry",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "an accepted publication settles a unopenable locking refusal in the controller and journal",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "an accepted publication settles a unsupported locking refusal in the controller and journal",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "an old publication lock refusal preserves a newer reservation and lane detail",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "another pending action is refused before it can replace an admitted retry",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "compact MCP polling exposes a deferred publication failure while preserving operator detail",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "controller build Git does not hold the MCP mutation lease",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "controller review Git does not hold the MCP mutation lease",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "durable retry intent settles after a fresh controller loads it",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "explicit publication retries a settled probe failure and preserves pending admission",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "explicit publication retries a settled push failure and preserves pending admission",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "launch artifact work yields the pipeline lease to a newer pause",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "legacy publication records acceptance before observing its missing delivery claim",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "local committing stages progress with Git available and no flock utility",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "remote failure settles visibly without launching a review",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "repair-after-write artifact work yields the pipeline lease to a newer pause",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "repair-before-write artifact work yields the pipeline lease to a newer pause",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "review flow identity Git yields to a pause before the controller lease",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "review retry records pending intent before flow teardown and yields its lease",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "skip-stage durably acknowledges before its fenced Git check (failure)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "skip-stage durably acknowledges before its fenced Git check (owner)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "skip-stage durably acknowledges before its fenced Git check (pause)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "skip-stage durably acknowledges before its fenced Git check (success)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "superseded stage Git leaves the current task note untouched",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "takeover settlement survives restart after the ownership transaction (paused afterward: %s)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "takeover settlement survives restart after the ownership transaction (paused afterward: %s)",
+      "kind": "test",
+      "occurrence": 1
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "suite": "",
+      "name": "unsupported inherited locks settle visibly before any Git command",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/repositoryInitialization.test.ts",
+      "suite": "",
+      "name": "P2: repeated board preflight reuses the successful existing-repository Git probes",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCommitRepair.test.ts",
+      "suite": "",
+      "name": "a commit retry holds uncertain repair delivery until a later terminal turn proves it finished",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCommitRepair.test.ts",
+      "suite": "",
+      "name": "a controller deadline after file repair does not spend the repaired commit",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCommitRepair.test.ts",
+      "suite": "",
+      "name": "a crash after checkpointing a commit deadline preserves its automatic retry",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCommitRepair.test.ts",
+      "suite": "",
+      "name": "a hook refusal after a controller timeout still requests file repair",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCommitRepair.test.ts",
+      "suite": "",
+      "name": "a passed read-only stage whose output a pre-commit hook refuses repairs it in the same conversation and advances without the operator",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCommitRepair.test.ts",
+      "suite": "",
+      "name": "a passed read-write stage whose output a pre-commit hook refuses repairs it in the same conversation and advances without the operator",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCommitRepair.test.ts",
+      "suite": "",
+      "name": "a read-only commit deadline retries across ticks without a repair or a park",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCommitRepair.test.ts",
+      "suite": "",
+      "name": "a read-write commit deadline retries across ticks without a repair or a park",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCommitRepair.test.ts",
+      "suite": "",
+      "name": "a repair completed before the deadline is judged by completion evidence on a later tick",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCommitRepair.test.ts",
+      "suite": "",
+      "name": "a request a crash interrupted after the stage accepted it is replayed under the same id, and the repair the stage already finished advances the lane",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCommitRepair.test.ts",
+      "suite": "",
+      "name": "a request the surface admitted but could not acknowledge keeps its moment, and the repair the stage already finished advances the lane",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCommitRepair.test.ts",
+      "suite": "",
+      "name": "a stage without automatic repair retries its refused commit with the same outputs",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCommitRepair.test.ts",
+      "suite": "",
+      "name": "a successful read-only repair commit recovers after interrupted settlement without another commit",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCommitRepair.test.ts",
+      "suite": "",
+      "name": "a successful read-write repair commit recovers after interrupted settlement without another commit",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCommitRepair.test.ts",
+      "suite": "",
+      "name": "retry-stage retries a refused read-only settlement after tooling is fixed without rerunning the passed agent",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCommitRepair.test.ts",
+      "suite": "",
+      "name": "retry-stage retries a refused read-write settlement after tooling is fixed without rerunning the passed agent",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCommitRepair.test.ts",
+      "suite": "",
+      "name": "when the ancestry check fails after the repair committed, the park keeps the hook's output",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageCommitRepair.test.ts",
+      "suite": "",
+      "name": "when the pre-push hook refuses the repaired head, the park keeps the hook's output after its own cause",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageInput.test.ts",
+      "suite": "",
+      "name": "small stage inputs preserve the original renderer's bytes (9ba9dab1f0881e1323294d89054d3ef94a5bb1b04eb602bd950ba2a7a9be145f)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageInput.test.ts",
+      "suite": "",
+      "name": "small stage inputs preserve the original renderer's bytes (b99261e63378f3d373e76232582f92de1fd3aa68c515ba7dcc93442d7d822c12)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageInput.test.ts",
+      "suite": "",
+      "name": "small stage inputs preserve the original renderer's bytes (e9accc5d9b0c634b236fcc93159fab0a0d21489e6643414cc698136aa7b6d5cf)",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageInput.test.ts",
+      "suite": "",
+      "name": "stage composition leaves a hardlink in Git info/exclude and its external JSON byte-identical",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stageInput.test.ts",
+      "suite": "",
+      "name": "stage composition leaves a symlink in Git info/exclude and its external JSON byte-identical",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stagePublicationRepair.test.ts",
+      "suite": "",
+      "name": "an accepted head refused by pre-push repairs once on its branch, republishes through the hook and completes",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stagePublicationRepair.test.ts",
+      "suite": "",
+      "name": "an explicit publication retry can recover a declined repair without another repair turn",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/pipelines/stagePublicationRepair.test.ts",
+      "suite": "",
+      "name": "publication repair can rewrite its own refused metadata without restoring the refused commit as a parent",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/runtime/cpuPlacement.scope.test.ts",
+      "suite": "",
+      "name": "a caller pinned to one CPU and a gate give the work slice the same machine-wide quota",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/runtime/cpuPlacement.scope.test.ts",
+      "suite": "",
+      "name": "a merger gate runs in the work slice, on a shared slot, and waits out CPU pressure",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/runtime/cpuPlacement.scope.test.ts",
+      "suite": "",
+      "name": "a slice whose cpu controller is disabled refuses work in both implementations, before any work runs",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/runtime/cpuPlacement.scope.test.ts",
+      "suite": "",
+      "name": "gate-slot runs a gate in the work slice with the same quotas",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/runtime/cpuPlacement.scope.test.ts",
+      "suite": "",
+      "name": "tmux launches retain classified limits with the pane outside the private agent scope",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/tasks/launchMembership.registry.test.ts",
+      "suite": "",
+      "name": "a recovered structured launch tracks its off/done replacement task before a fresh failure",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/tasks/launchMembership.registry.test.ts",
+      "suite": "",
+      "name": "a recovered structured launch tracks its off/open replacement task before a fresh failure",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/tasks/launchMembership.registry.test.ts",
+      "suite": "",
+      "name": "a recovered structured launch tracks its sqlite/done replacement task before a fresh failure",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/tasks/launchMembership.registry.test.ts",
+      "suite": "",
+      "name": "a recovered structured launch tracks its sqlite/open replacement task before a fresh failure",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/tmux.proactive.test.ts",
+      "suite": "",
+      "name": "tmux adapter retains receipt authority across waits (edit): before-boot",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/tmux.proactive.test.ts",
+      "suite": "",
+      "name": "tmux adapter retains receipt authority across waits (edit): before-prompt",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/tmux.proactive.test.ts",
+      "suite": "",
+      "name": "tmux adapter retains receipt authority across waits (reject): before-boot",
+      "kind": "test",
+      "occurrence": 0
+    },
+    {
+      "file": "src/lib/tmux.proactive.test.ts",
+      "suite": "",
+      "name": "tmux adapter retains receipt authority across waits (reject): before-prompt",
+      "kind": "test",
+      "occurrence": 0
+    }
+  ],
+  "effectiveResults": [
+    {
+      "side": "base",
+      "file": "scripts/gate-cache.test.ts",
+      "code": 0,
+      "elapsedMs": 1248,
+      "passed": 10,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "base",
+      "file": "scripts/local-gate.receipts.test.ts",
+      "code": 1,
+      "elapsedMs": 17439,
+      "passed": 2,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        5,
+        3,
+        2,
+        0,
+        4,
+        1
+      ]
+    },
+    {
+      "side": "base",
+      "file": "scripts/local-gate.test.ts",
+      "code": 1,
+      "elapsedMs": 85726,
+      "passed": 0,
+      "error": "Error: unidentified error between tests",
+      "complete": false,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "base",
+      "file": "src/app/api/accounts/codex/route.test.ts",
+      "code": 0,
+      "elapsedMs": 10356,
+      "passed": 28,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "base",
+      "file": "src/app/api/spawn/route.binding.test.ts",
+      "code": 0,
+      "elapsedMs": 2152,
+      "passed": 12,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "base",
+      "file": "src/app/api/spawn/route.launcher.test.ts",
+      "code": 0,
+      "elapsedMs": 1501,
+      "passed": 4,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "base",
+      "file": "src/app/api/spawn/route.test.ts",
+      "code": 1,
+      "elapsedMs": 31596,
+      "passed": 70,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        31,
+        28,
+        29,
+        24,
+        25,
+        27,
+        26,
+        23,
+        10,
+        18,
+        11,
+        12,
+        19,
+        20,
+        9,
+        15,
+        13,
+        14,
+        17,
+        16,
+        21,
+        30,
+        22
+      ]
+    },
+    {
+      "side": "base",
+      "file": "src/app/api/tasks/[id]/proactive/route.test.ts",
+      "absent": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "base",
+      "file": "src/app/api/tmux/targets/route.test.ts",
+      "code": 0,
+      "elapsedMs": 602,
+      "passed": 2,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "base",
+      "file": "src/lib/accounts/accountMutation.callers.test.ts",
+      "code": 1,
+      "elapsedMs": 21145,
+      "passed": 24,
+      "complete": true,
+      "batch": "gitReconciliation",
+      "failureSites": [
+        38,
+        40,
+        39,
+        32,
+        34,
+        33,
+        35,
+        37,
+        36
+      ]
+    },
+    {
+      "side": "base",
+      "file": "src/lib/accounts/migration/provider.test.ts",
+      "code": 0,
+      "elapsedMs": 7289,
+      "passed": 49,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "base",
+      "file": "src/lib/agent/codexSpawnPolicy.test.ts",
+      "code": 0,
+      "elapsedMs": 17608,
+      "passed": 17,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "base",
+      "file": "src/lib/agent/registry.servingWriters.test.ts",
+      "code": 0,
+      "elapsedMs": 11167,
+      "passed": 23,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "base",
+      "file": "src/lib/agent/spawnCommand.contention.test.ts",
+      "code": 1,
+      "elapsedMs": 3119,
+      "passed": 12,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        48,
+        49,
+        50
+      ]
+    },
+    {
+      "side": "base",
+      "file": "src/lib/agent/spawnCommand.locale.test.ts",
+      "code": 0,
+      "elapsedMs": 803,
+      "passed": 1,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "base",
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "code": 1,
+      "elapsedMs": 18309,
+      "passed": 39,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        73,
+        78,
+        72,
+        77,
+        81,
+        71,
+        76,
+        74,
+        79,
+        75,
+        80,
+        54,
+        56,
+        58,
+        52,
+        53,
+        57,
+        51,
+        55,
+        60,
+        66,
+        61,
+        67,
+        62,
+        68,
+        63,
+        69,
+        64,
+        70,
+        59,
+        65
+      ]
+    },
+    {
+      "side": "base",
+      "file": "src/lib/agent/spawnDeferral.test.ts",
+      "code": 1,
+      "elapsedMs": 1007,
+      "passed": 3,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        85,
+        84,
+        83,
+        82
+      ]
+    },
+    {
+      "side": "base",
+      "file": "src/lib/agent/spawnMemory.test.ts",
+      "code": 0,
+      "elapsedMs": 855,
+      "passed": 12,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "base",
+      "file": "src/lib/agent/transcriptHost.test.ts",
+      "code": 0,
+      "elapsedMs": 1073,
+      "passed": 27,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "base",
+      "file": "src/lib/conversation/resumeLiveness.test.ts",
+      "code": 1,
+      "elapsedMs": 973,
+      "passed": 0,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        86
+      ]
+    },
+    {
+      "side": "base",
+      "file": "src/lib/delivery.test.ts",
+      "code": 1,
+      "elapsedMs": 5745,
+      "passed": 55,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        90,
+        88,
+        89,
+        91,
+        92,
+        96,
+        95,
+        94,
+        97,
+        98,
+        93,
+        87
+      ]
+    },
+    {
+      "side": "base",
+      "file": "src/lib/deliveryActuation.test.ts",
+      "code": 0,
+      "elapsedMs": 591,
+      "passed": 6,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "base",
+      "file": "src/lib/deliveryPaneBufferError.test.ts",
+      "code": 0,
+      "elapsedMs": 851,
+      "passed": 2,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "base",
+      "file": "src/lib/flows/engine.test.ts",
+      "code": 0,
+      "elapsedMs": 1273,
+      "passed": 5,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "base",
+      "file": "src/lib/forge/appWrite.test.ts",
+      "code": 0,
+      "elapsedMs": 683,
+      "passed": 10,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "base",
+      "file": "src/lib/forge/autoMerge.test.ts",
+      "code": 0,
+      "elapsedMs": 1616,
+      "passed": 67,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "base",
+      "file": "src/lib/mcp/orchestratorTools.test.ts",
+      "code": 1,
+      "elapsedMs": 3477,
+      "passed": 75,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        100,
+        99
+      ]
+    },
+    {
+      "side": "base",
+      "file": "src/lib/mcp/spawnRecovery.integration.test.ts",
+      "code": 1,
+      "elapsedMs": 2480,
+      "passed": 15,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        101
+      ]
+    },
+    {
+      "side": "base",
+      "file": "src/lib/monitor/seatAutoRotation.spawn.test.ts",
+      "code": 0,
+      "elapsedMs": 1689,
+      "passed": 4,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "base",
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "code": 1,
+      "elapsedMs": 215390,
+      "passed": 21,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        126,
+        129,
+        124,
+        130,
+        131,
+        110,
+        125,
+        115,
+        114,
+        111,
+        132,
+        113,
+        112,
+        123,
+        121,
+        122,
+        128,
+        116,
+        127,
+        107,
+        109,
+        108,
+        118,
+        117,
+        120,
+        119,
+        104,
+        106,
+        102,
+        105,
+        103
+      ]
+    },
+    {
+      "side": "base",
+      "file": "src/lib/orchestrator/seatRecoveryBusy.test.ts",
+      "code": 1,
+      "elapsedMs": 1801,
+      "passed": 6,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        133,
+        136,
+        138,
+        137,
+        135,
+        134
+      ]
+    },
+    {
+      "side": "base",
+      "file": "src/lib/pipelines/engine.creation.test.ts",
+      "code": 0,
+      "elapsedMs": 42456,
+      "passed": 95,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "base",
+      "file": "src/lib/pipelines/engine.ports.part2.test.ts",
+      "code": 0,
+      "elapsedMs": 65585,
+      "passed": 51,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "base",
+      "file": "src/lib/pipelines/engine.ports.test.ts",
+      "code": 1,
+      "elapsedMs": 108556,
+      "passed": 70,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        139
+      ]
+    },
+    {
+      "side": "base",
+      "file": "src/lib/pipelines/engine.publication.test.ts",
+      "code": 0,
+      "elapsedMs": 26020,
+      "passed": 24,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "base",
+      "file": "src/lib/pipelines/engine.settlement.test.ts",
+      "code": 0,
+      "elapsedMs": 137872,
+      "passed": 91,
+      "complete": true,
+      "batch": "gitReconciliation",
+      "failureSites": []
+    },
+    {
+      "side": "base",
+      "file": "src/lib/pipelines/git.test.ts",
+      "code": 1,
+      "elapsedMs": 139705,
+      "passed": 178,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        142,
+        143,
+        140,
+        140
+      ]
+    },
+    {
+      "side": "base",
+      "file": "src/lib/pipelines/parkedPublication.test.ts",
+      "code": 1,
+      "elapsedMs": 120638,
+      "passed": 0,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        146
+      ]
+    },
+    {
+      "side": "base",
+      "file": "src/lib/pipelines/publication.test.ts",
+      "code": 0,
+      "elapsedMs": 1063,
+      "passed": 25,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "base",
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "code": 1,
+      "elapsedMs": 308058,
+      "passed": 1,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        184,
+        181,
+        183,
+        182,
+        154,
+        153,
+        167,
+        173,
+        178,
+        177,
+        152,
+        151,
+        164,
+        163,
+        147,
+        149,
+        148,
+        165,
+        157,
+        158,
+        162,
+        180,
+        150,
+        186,
+        187,
+        171,
+        172,
+        174,
+        155,
+        161,
+        188,
+        185,
+        179,
+        175,
+        160,
+        170,
+        156,
+        166,
+        176,
+        159,
+        169,
+        168
+      ]
+    },
+    {
+      "side": "base",
+      "file": "src/lib/pipelines/repositoryInitialization.test.ts",
+      "code": 1,
+      "elapsedMs": 13678,
+      "passed": 39,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        189
+      ]
+    },
+    {
+      "side": "base",
+      "file": "src/lib/pipelines/stageCommitRepair.test.ts",
+      "code": 1,
+      "elapsedMs": 129667,
+      "passed": 56,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        204,
+        205,
+        201,
+        190,
+        196,
+        197,
+        193,
+        191,
+        192,
+        198,
+        194,
+        195,
+        202,
+        203,
+        199,
+        206,
+        200,
+        207
+      ]
+    },
+    {
+      "side": "base",
+      "file": "src/lib/pipelines/stageInput.test.ts",
+      "code": 1,
+      "elapsedMs": 2562,
+      "passed": 12,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        209,
+        210,
+        208,
+        212,
+        211
+      ]
+    },
+    {
+      "side": "base",
+      "file": "src/lib/pipelines/stagePublicationRepair.test.ts",
+      "code": 1,
+      "elapsedMs": 24610,
+      "passed": 8,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        213,
+        215,
+        214
+      ]
+    },
+    {
+      "side": "base",
+      "file": "src/lib/pipelines/stagePullRequest.test.ts",
+      "code": 0,
+      "elapsedMs": 232721,
+      "passed": 98,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "base",
+      "file": "src/lib/runtime/cpuPlacement.scope.test.ts",
+      "code": 1,
+      "elapsedMs": 71951,
+      "passed": 10,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        216,
+        219,
+        217,
+        218,
+        220
+      ]
+    },
+    {
+      "side": "base",
+      "file": "src/lib/scanner/taskExtractionRetirement.test.ts",
+      "code": 0,
+      "elapsedMs": 903,
+      "passed": 2,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "base",
+      "file": "src/lib/tasks/launchMembership.registry.test.ts",
+      "code": 1,
+      "elapsedMs": 2806,
+      "passed": 27,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        222,
+        221,
+        224,
+        223
+      ]
+    },
+    {
+      "side": "base",
+      "file": "src/lib/tasks/launchMembership.test.ts",
+      "code": 0,
+      "elapsedMs": 644,
+      "passed": 20,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "base",
+      "file": "src/lib/tasks/membership.test.ts",
+      "code": 0,
+      "elapsedMs": 669,
+      "passed": 22,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "base",
+      "file": "src/lib/tasks/proactiveExecution.test.ts",
+      "absent": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "base",
+      "file": "src/lib/telegram/reportSpawn.test.ts",
+      "code": 0,
+      "elapsedMs": 727,
+      "passed": 5,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "base",
+      "file": "src/lib/tmux.proactive.test.ts",
+      "absent": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "base",
+      "file": "src/lib/tmux.test.ts",
+      "code": 0,
+      "elapsedMs": 3231,
+      "passed": 38,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "head",
+      "file": "scripts/gate-cache.test.ts",
+      "code": 0,
+      "elapsedMs": 1680,
+      "passed": 11,
+      "complete": true,
+      "batch": "gitReconciliation",
+      "failureSites": []
+    },
+    {
+      "side": "head",
+      "file": "scripts/local-gate.receipts.test.ts",
+      "code": 1,
+      "elapsedMs": 24031,
+      "passed": 2,
+      "complete": true,
+      "batch": "gitReconciliation",
+      "failureSites": [
+        5,
+        3,
+        2,
+        0,
+        4,
+        1
+      ]
+    },
+    {
+      "side": "head",
+      "file": "scripts/local-gate.test.ts",
+      "code": 1,
+      "elapsedMs": 102134,
+      "passed": 0,
+      "error": "Error: unidentified error between tests",
+      "complete": false,
+      "batch": "gitReconciliation",
+      "failureSites": []
+    },
+    {
+      "side": "head",
+      "file": "src/app/api/accounts/codex/route.test.ts",
+      "code": 0,
+      "elapsedMs": 14563,
+      "passed": 28,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "head",
+      "file": "src/app/api/spawn/route.binding.test.ts",
+      "code": 0,
+      "elapsedMs": 4003,
+      "passed": 12,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "name": "route",
+      "file": "src/app/api/spawn/route.launcher.test.ts",
+      "code": 0,
+      "passed": 10,
+      "complete": true,
+      "side": "head",
+      "batch": "finalSeam",
+      "failureSites": []
+    },
+    {
+      "side": "head",
+      "file": "src/app/api/spawn/route.test.ts",
+      "code": 1,
+      "elapsedMs": 46497,
+      "passed": 70,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        31,
+        28,
+        29,
+        24,
+        25,
+        27,
+        26,
+        23,
+        10,
+        18,
+        11,
+        12,
+        19,
+        20,
+        9,
+        15,
+        13,
+        14,
+        17,
+        16,
+        21,
+        30,
+        22
+      ]
+    },
+    {
+      "side": "head",
+      "file": "src/app/api/tasks/[id]/proactive/route.test.ts",
+      "code": 0,
+      "elapsedMs": 5804,
+      "passed": 5,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "head",
+      "file": "src/app/api/tmux/targets/route.test.ts",
+      "code": 0,
+      "elapsedMs": 1593,
+      "passed": 2,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "head",
+      "file": "src/lib/accounts/accountMutation.callers.test.ts",
+      "code": 1,
+      "elapsedMs": 22049,
+      "passed": 24,
+      "complete": true,
+      "batch": "gitReconciliation",
+      "failureSites": [
+        38,
+        40,
+        39,
+        32,
+        34,
+        33,
+        35,
+        37,
+        36
+      ]
+    },
+    {
+      "side": "head",
+      "file": "src/lib/accounts/migration/provider.test.ts",
+      "code": 0,
+      "elapsedMs": 14484,
+      "passed": 49,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "head",
+      "file": "src/lib/agent/codexSpawnPolicy.test.ts",
+      "code": 0,
+      "elapsedMs": 29981,
+      "passed": 17,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "head",
+      "file": "src/lib/agent/registry.servingWriters.test.ts",
+      "code": 1,
+      "elapsedMs": 13110,
+      "passed": 19,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        45,
+        47,
+        41,
+        42
+      ]
+    },
+    {
+      "side": "head",
+      "file": "src/lib/agent/spawnCommand.contention.test.ts",
+      "code": 1,
+      "elapsedMs": 4757,
+      "passed": 12,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        48,
+        49,
+        50
+      ]
+    },
+    {
+      "side": "head",
+      "file": "src/lib/agent/spawnCommand.locale.test.ts",
+      "code": 0,
+      "elapsedMs": 1421,
+      "passed": 1,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "head",
+      "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+      "code": 1,
+      "elapsedMs": 33329,
+      "passed": 39,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        73,
+        78,
+        72,
+        77,
+        81,
+        71,
+        76,
+        74,
+        79,
+        75,
+        80,
+        54,
+        56,
+        58,
+        52,
+        53,
+        57,
+        51,
+        55,
+        60,
+        66,
+        61,
+        67,
+        62,
+        68,
+        63,
+        69,
+        64,
+        70,
+        59,
+        65
+      ]
+    },
+    {
+      "side": "head",
+      "file": "src/lib/agent/spawnDeferral.test.ts",
+      "code": 1,
+      "elapsedMs": 1435,
+      "passed": 3,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        85,
+        84,
+        83,
+        82
+      ]
+    },
+    {
+      "side": "head",
+      "file": "src/lib/agent/spawnMemory.test.ts",
+      "code": 0,
+      "elapsedMs": 1351,
+      "passed": 12,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "head",
+      "file": "src/lib/agent/transcriptHost.test.ts",
+      "code": 0,
+      "elapsedMs": 2010,
+      "passed": 27,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "head",
+      "file": "src/lib/conversation/resumeLiveness.test.ts",
+      "code": 1,
+      "elapsedMs": 1745,
+      "passed": 0,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        86
+      ]
+    },
+    {
+      "side": "head",
+      "file": "src/lib/delivery.test.ts",
+      "code": 1,
+      "elapsedMs": 8641,
+      "passed": 55,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        90,
+        88,
+        89,
+        91,
+        92,
+        96,
+        95,
+        94,
+        97,
+        98,
+        93,
+        87
+      ]
+    },
+    {
+      "side": "head",
+      "file": "src/lib/deliveryActuation.test.ts",
+      "code": 0,
+      "elapsedMs": 1083,
+      "passed": 6,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "head",
+      "file": "src/lib/deliveryPaneBufferError.test.ts",
+      "code": 0,
+      "elapsedMs": 1574,
+      "passed": 2,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "head",
+      "file": "src/lib/flows/engine.test.ts",
+      "code": 0,
+      "elapsedMs": 2244,
+      "passed": 5,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "head",
+      "file": "src/lib/forge/appWrite.test.ts",
+      "code": 0,
+      "elapsedMs": 1088,
+      "passed": 13,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "head",
+      "file": "src/lib/forge/autoMerge.test.ts",
+      "code": 0,
+      "elapsedMs": 3525,
+      "passed": 70,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "head",
+      "file": "src/lib/mcp/orchestratorTools.test.ts",
+      "code": 1,
+      "elapsedMs": 5112,
+      "passed": 75,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        100,
+        99
+      ]
+    },
+    {
+      "side": "head",
+      "file": "src/lib/mcp/spawnRecovery.integration.test.ts",
+      "code": 1,
+      "elapsedMs": 3402,
+      "passed": 15,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        101
+      ]
+    },
+    {
+      "side": "head",
+      "file": "src/lib/monitor/seatAutoRotation.spawn.test.ts",
+      "code": 0,
+      "elapsedMs": 2526,
+      "passed": 4,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "head",
+      "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+      "code": 1,
+      "elapsedMs": 222340,
+      "passed": 21,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        126,
+        129,
+        124,
+        130,
+        131,
+        110,
+        125,
+        115,
+        114,
+        111,
+        132,
+        113,
+        112,
+        123,
+        121,
+        122,
+        128,
+        116,
+        127,
+        107,
+        109,
+        108,
+        118,
+        117,
+        120,
+        119,
+        104,
+        106,
+        102,
+        105,
+        103
+      ]
+    },
+    {
+      "side": "head",
+      "file": "src/lib/orchestrator/seatRecoveryBusy.test.ts",
+      "code": 1,
+      "elapsedMs": 3147,
+      "passed": 6,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        133,
+        136,
+        138,
+        137,
+        135,
+        134
+      ]
+    },
+    {
+      "side": "head",
+      "file": "src/lib/pipelines/engine.creation.test.ts",
+      "code": 0,
+      "elapsedMs": 56082,
+      "passed": 95,
+      "complete": true,
+      "batch": "gitReconciliation",
+      "failureSites": []
+    },
+    {
+      "side": "head",
+      "file": "src/lib/pipelines/engine.ports.part2.test.ts",
+      "code": 0,
+      "elapsedMs": 88088,
+      "passed": 51,
+      "complete": true,
+      "batch": "gitReconciliation",
+      "failureSites": []
+    },
+    {
+      "side": "head",
+      "file": "src/lib/pipelines/engine.ports.test.ts",
+      "code": 1,
+      "elapsedMs": 104165,
+      "passed": 70,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        139
+      ]
+    },
+    {
+      "side": "head",
+      "file": "src/lib/pipelines/engine.publication.test.ts",
+      "code": 0,
+      "elapsedMs": 30552,
+      "passed": 24,
+      "complete": true,
+      "batch": "gitReconciliation",
+      "failureSites": []
+    },
+    {
+      "side": "head",
+      "file": "src/lib/pipelines/engine.settlement.test.ts",
+      "code": 0,
+      "elapsedMs": 114542,
+      "passed": 91,
+      "complete": true,
+      "batch": "gitReconciliation",
+      "failureSites": []
+    },
+    {
+      "side": "head",
+      "file": "src/lib/pipelines/git.test.ts",
+      "code": 1,
+      "elapsedMs": 160956,
+      "passed": 181,
+      "complete": true,
+      "batch": "gitReconciliation",
+      "failureSites": [
+        142,
+        143,
+        141,
+        140,
+        140
+      ]
+    },
+    {
+      "side": "head",
+      "file": "src/lib/pipelines/parkedPublication.test.ts",
+      "code": 1,
+      "elapsedMs": 120800,
+      "passed": 0,
+      "complete": true,
+      "batch": "gitReconciliation",
+      "failureSites": [
+        146
+      ]
+    },
+    {
+      "side": "head",
+      "file": "src/lib/pipelines/publication.test.ts",
+      "code": 0,
+      "elapsedMs": 652,
+      "passed": 25,
+      "complete": true,
+      "batch": "gitReconciliation",
+      "failureSites": []
+    },
+    {
+      "side": "head",
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "code": 1,
+      "elapsedMs": 306330,
+      "passed": 1,
+      "complete": true,
+      "batch": "gitReconciliation",
+      "failureSites": [
+        184,
+        181,
+        183,
+        182,
+        154,
+        153,
+        167,
+        173,
+        178,
+        177,
+        152,
+        151,
+        164,
+        163,
+        147,
+        149,
+        148,
+        165,
+        157,
+        158,
+        162,
+        180,
+        150,
+        186,
+        187,
+        171,
+        172,
+        174,
+        155,
+        161,
+        188,
+        185,
+        179,
+        175,
+        160,
+        170,
+        156,
+        166,
+        176,
+        159,
+        169,
+        168
+      ]
+    },
+    {
+      "side": "head",
+      "file": "src/lib/pipelines/repositoryInitialization.test.ts",
+      "code": 1,
+      "elapsedMs": 16813,
+      "passed": 39,
+      "complete": true,
+      "batch": "gitReconciliation",
+      "failureSites": [
+        189
+      ]
+    },
+    {
+      "side": "head",
+      "file": "src/lib/pipelines/stageCommitRepair.test.ts",
+      "code": 1,
+      "elapsedMs": 165671,
+      "passed": 56,
+      "complete": true,
+      "batch": "gitReconciliation",
+      "failureSites": [
+        204,
+        205,
+        201,
+        190,
+        196,
+        197,
+        193,
+        191,
+        192,
+        198,
+        194,
+        195,
+        202,
+        203,
+        199,
+        206,
+        200,
+        207
+      ]
+    },
+    {
+      "side": "head",
+      "file": "src/lib/pipelines/stageInput.test.ts",
+      "code": 1,
+      "elapsedMs": 2058,
+      "passed": 12,
+      "complete": true,
+      "batch": "gitReconciliation",
+      "failureSites": [
+        209,
+        210,
+        208,
+        212,
+        211
+      ]
+    },
+    {
+      "side": "head",
+      "file": "src/lib/pipelines/stagePublicationRepair.test.ts",
+      "code": 1,
+      "elapsedMs": 18431,
+      "passed": 8,
+      "complete": true,
+      "batch": "gitReconciliation",
+      "failureSites": [
+        213,
+        215,
+        214
+      ]
+    },
+    {
+      "side": "head",
+      "file": "src/lib/pipelines/stagePullRequest.test.ts",
+      "code": 0,
+      "elapsedMs": 296271,
+      "passed": 98,
+      "complete": true,
+      "batch": "gitReconciliation",
+      "failureSites": []
+    },
+    {
+      "side": "head",
+      "file": "src/lib/runtime/cpuPlacement.scope.test.ts",
+      "code": 1,
+      "elapsedMs": 71449,
+      "passed": 10,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        216,
+        219,
+        217,
+        218,
+        220
+      ]
+    },
+    {
+      "side": "head",
+      "file": "src/lib/scanner/taskExtractionRetirement.test.ts",
+      "code": 0,
+      "elapsedMs": 1875,
+      "passed": 2,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "head",
+      "file": "src/lib/tasks/launchMembership.registry.test.ts",
+      "code": 1,
+      "elapsedMs": 6697,
+      "passed": 30,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": [
+        222,
+        221,
+        224,
+        223
+      ]
+    },
+    {
+      "side": "head",
+      "file": "src/lib/tasks/launchMembership.test.ts",
+      "code": 0,
+      "elapsedMs": 1100,
+      "passed": 20,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "head",
+      "file": "src/lib/tasks/membership.test.ts",
+      "code": 0,
+      "elapsedMs": 1242,
+      "passed": 25,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "head",
+      "file": "src/lib/tasks/proactiveExecution.test.ts",
+      "code": 0,
+      "elapsedMs": 5370,
+      "passed": 10,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "side": "head",
+      "file": "src/lib/telegram/reportSpawn.test.ts",
+      "code": 0,
+      "elapsedMs": 1216,
+      "passed": 5,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    },
+    {
+      "name": "adapter",
+      "file": "src/lib/tmux.proactive.test.ts",
+      "code": 0,
+      "passed": 8,
+      "complete": true,
+      "side": "head",
+      "batch": "finalSeam",
+      "failureSites": []
+    },
+    {
+      "side": "head",
+      "file": "src/lib/tmux.test.ts",
+      "code": 0,
+      "elapsedMs": 4406,
+      "passed": 38,
+      "complete": true,
+      "batch": "primary",
+      "failureSites": []
+    }
+  ],
+  "batches": {
+    "primary": [
+      {
+        "side": "head",
+        "file": "scripts/gate-cache.test.ts",
+        "code": 0,
+        "elapsedMs": 2609,
+        "passed": 11,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/app/api/spawn/route.launcher.test.ts",
+        "code": 1,
+        "elapsedMs": 5012,
+        "passed": 7,
+        "complete": true,
+        "failureSites": [
+          6,
+          8,
+          7
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/lib/tmux.proactive.test.ts",
+        "code": 1,
+        "elapsedMs": 19223,
+        "passed": 4,
+        "complete": true,
+        "failureSites": [
+          227,
+          228,
+          225,
+          226
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/app/api/accounts/codex/route.test.ts",
+        "code": 0,
+        "elapsedMs": 14563,
+        "passed": 28,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/app/api/spawn/route.binding.test.ts",
+        "code": 0,
+        "elapsedMs": 4003,
+        "passed": 12,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "scripts/local-gate.receipts.test.ts",
+        "code": 1,
+        "elapsedMs": 35796,
+        "passed": 2,
+        "complete": true,
+        "failureSites": [
+          5,
+          3,
+          2,
+          0,
+          4,
+          1
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/app/api/tasks/[id]/proactive/route.test.ts",
+        "code": 0,
+        "elapsedMs": 5804,
+        "passed": 5,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/app/api/tmux/targets/route.test.ts",
+        "code": 0,
+        "elapsedMs": 1593,
+        "passed": 2,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/lib/accounts/migration/provider.test.ts",
+        "code": 0,
+        "elapsedMs": 14484,
+        "passed": 49,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/app/api/spawn/route.test.ts",
+        "code": 1,
+        "elapsedMs": 46497,
+        "passed": 70,
+        "complete": true,
+        "failureSites": [
+          31,
+          28,
+          29,
+          24,
+          25,
+          27,
+          26,
+          23,
+          10,
+          18,
+          11,
+          12,
+          19,
+          20,
+          9,
+          15,
+          13,
+          14,
+          17,
+          16,
+          21,
+          30,
+          22
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/lib/agent/codexSpawnPolicy.test.ts",
+        "code": 0,
+        "elapsedMs": 29981,
+        "passed": 17,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/lib/agent/spawnCommand.contention.test.ts",
+        "code": 1,
+        "elapsedMs": 4757,
+        "passed": 12,
+        "complete": true,
+        "failureSites": [
+          48,
+          49,
+          50
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/lib/agent/spawnCommand.locale.test.ts",
+        "code": 0,
+        "elapsedMs": 1421,
+        "passed": 1,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/lib/agent/registry.servingWriters.test.ts",
+        "code": 1,
+        "elapsedMs": 13110,
+        "passed": 19,
+        "complete": true,
+        "failureSites": [
+          45,
+          47,
+          41,
+          42
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/lib/agent/spawnDeferral.test.ts",
+        "code": 1,
+        "elapsedMs": 1435,
+        "passed": 3,
+        "complete": true,
+        "failureSites": [
+          85,
+          84,
+          83,
+          82
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/lib/agent/spawnMemory.test.ts",
+        "code": 0,
+        "elapsedMs": 1351,
+        "passed": 12,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/lib/agent/transcriptHost.test.ts",
+        "code": 0,
+        "elapsedMs": 2010,
+        "passed": 27,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/lib/conversation/resumeLiveness.test.ts",
+        "code": 1,
+        "elapsedMs": 1745,
+        "passed": 0,
+        "complete": true,
+        "failureSites": [
+          86
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/lib/delivery.test.ts",
+        "code": 1,
+        "elapsedMs": 8641,
+        "passed": 55,
+        "complete": true,
+        "failureSites": [
+          90,
+          88,
+          89,
+          91,
+          92,
+          96,
+          95,
+          94,
+          97,
+          98,
+          93,
+          87
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/lib/deliveryActuation.test.ts",
+        "code": 0,
+        "elapsedMs": 1083,
+        "passed": 6,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/lib/deliveryPaneBufferError.test.ts",
+        "code": 0,
+        "elapsedMs": 1574,
+        "passed": 2,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/lib/flows/engine.test.ts",
+        "code": 0,
+        "elapsedMs": 2244,
+        "passed": 5,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/lib/forge/appWrite.test.ts",
+        "code": 0,
+        "elapsedMs": 1088,
+        "passed": 13,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/lib/forge/autoMerge.test.ts",
+        "code": 0,
+        "elapsedMs": 3525,
+        "passed": 70,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/lib/mcp/orchestratorTools.test.ts",
+        "code": 1,
+        "elapsedMs": 5112,
+        "passed": 75,
+        "complete": true,
+        "failureSites": [
+          100,
+          99
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+        "code": 1,
+        "elapsedMs": 33329,
+        "passed": 39,
+        "complete": true,
+        "failureSites": [
+          73,
+          78,
+          72,
+          77,
+          81,
+          71,
+          76,
+          74,
+          79,
+          75,
+          80,
+          54,
+          56,
+          58,
+          52,
+          53,
+          57,
+          51,
+          55,
+          60,
+          66,
+          61,
+          67,
+          62,
+          68,
+          63,
+          69,
+          64,
+          70,
+          59,
+          65
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/lib/mcp/spawnRecovery.integration.test.ts",
+        "code": 1,
+        "elapsedMs": 3402,
+        "passed": 15,
+        "complete": true,
+        "failureSites": [
+          101
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/lib/monitor/seatAutoRotation.spawn.test.ts",
+        "code": 0,
+        "elapsedMs": 2526,
+        "passed": 4,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/lib/orchestrator/seatRecoveryBusy.test.ts",
+        "code": 1,
+        "elapsedMs": 3147,
+        "passed": 6,
+        "complete": true,
+        "failureSites": [
+          133,
+          136,
+          138,
+          137,
+          135,
+          134
+        ]
+      },
+      {
+        "side": "head",
+        "file": "scripts/local-gate.test.ts",
+        "code": 1,
+        "elapsedMs": 141876,
+        "passed": 0,
+        "error": "Error: unidentified error between tests",
+        "complete": false,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/lib/pipelines/engine.creation.test.ts",
+        "code": 0,
+        "elapsedMs": 68119,
+        "passed": 95,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/lib/pipelines/git.test.ts",
+        "code": 1,
+        "elapsedMs": 211490,
+        "passed": 180,
+        "complete": true,
+        "failureSites": [
+          142,
+          143,
+          145,
+          144,
+          140
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/lib/pipelines/engine.publication.test.ts",
+        "code": 0,
+        "elapsedMs": 30657,
+        "passed": 24,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/lib/pipelines/engine.ports.part2.test.ts",
+        "code": 0,
+        "elapsedMs": 114699,
+        "passed": 51,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/lib/pipelines/publication.test.ts",
+        "code": 0,
+        "elapsedMs": 636,
+        "passed": 25,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/lib/pipelines/engine.ports.test.ts",
+        "code": 1,
+        "elapsedMs": 104165,
+        "passed": 70,
+        "complete": true,
+        "failureSites": [
+          139
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/lib/pipelines/repositoryInitialization.test.ts",
+        "code": 1,
+        "elapsedMs": 13850,
+        "passed": 39,
+        "complete": true,
+        "failureSites": [
+          189
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+        "code": 1,
+        "elapsedMs": 222340,
+        "passed": 21,
+        "complete": true,
+        "failureSites": [
+          126,
+          129,
+          124,
+          130,
+          131,
+          110,
+          125,
+          115,
+          114,
+          111,
+          132,
+          113,
+          112,
+          123,
+          121,
+          122,
+          128,
+          116,
+          127,
+          107,
+          109,
+          108,
+          118,
+          117,
+          120,
+          119,
+          104,
+          106,
+          102,
+          105,
+          103
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/lib/pipelines/stageInput.test.ts",
+        "code": 1,
+        "elapsedMs": 2510,
+        "passed": 12,
+        "complete": true,
+        "failureSites": [
+          209,
+          210,
+          208,
+          212,
+          211
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/lib/pipelines/parkedPublication.test.ts",
+        "code": 1,
+        "elapsedMs": 120880,
+        "passed": 0,
+        "complete": true,
+        "failureSites": [
+          146
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/lib/pipelines/stagePublicationRepair.test.ts",
+        "code": 1,
+        "elapsedMs": 17621,
+        "passed": 8,
+        "complete": true,
+        "failureSites": [
+          213,
+          215,
+          214
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/lib/runtime/cpuPlacement.scope.test.ts",
+        "code": 1,
+        "elapsedMs": 71449,
+        "passed": 10,
+        "complete": true,
+        "failureSites": [
+          216,
+          219,
+          217,
+          218,
+          220
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/lib/scanner/taskExtractionRetirement.test.ts",
+        "code": 0,
+        "elapsedMs": 1875,
+        "passed": 2,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/lib/tasks/launchMembership.registry.test.ts",
+        "code": 1,
+        "elapsedMs": 6697,
+        "passed": 30,
+        "complete": true,
+        "failureSites": [
+          222,
+          221,
+          224,
+          223
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/lib/tasks/launchMembership.test.ts",
+        "code": 0,
+        "elapsedMs": 1100,
+        "passed": 20,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/lib/tasks/membership.test.ts",
+        "code": 0,
+        "elapsedMs": 1242,
+        "passed": 25,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/lib/tasks/proactiveExecution.test.ts",
+        "code": 0,
+        "elapsedMs": 5370,
+        "passed": 10,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/lib/telegram/reportSpawn.test.ts",
+        "code": 0,
+        "elapsedMs": 1216,
+        "passed": 5,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/lib/tmux.test.ts",
+        "code": 0,
+        "elapsedMs": 4406,
+        "passed": 38,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/lib/pipelines/stageCommitRepair.test.ts",
+        "code": 1,
+        "elapsedMs": 146923,
+        "passed": 56,
+        "complete": true,
+        "failureSites": [
+          204,
+          205,
+          201,
+          190,
+          196,
+          197,
+          193,
+          191,
+          192,
+          198,
+          194,
+          195,
+          202,
+          203,
+          199,
+          206,
+          200,
+          207
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/lib/pipelines/remoteActions.test.ts",
+        "code": 1,
+        "elapsedMs": 306116,
+        "passed": 1,
+        "complete": true,
+        "failureSites": [
+          184,
+          181,
+          183,
+          182,
+          154,
+          153,
+          167,
+          173,
+          178,
+          177,
+          152,
+          151,
+          164,
+          163,
+          147,
+          149,
+          148,
+          165,
+          157,
+          158,
+          162,
+          180,
+          150,
+          186,
+          187,
+          171,
+          172,
+          174,
+          155,
+          161,
+          188,
+          185,
+          179,
+          175,
+          160,
+          170,
+          156,
+          166,
+          176,
+          159,
+          169,
+          168
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/lib/pipelines/stagePullRequest.test.ts",
+        "code": 0,
+        "elapsedMs": 255293,
+        "passed": 98,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "src/lib/tmux.proactive.test.ts",
+        "absent": true,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "scripts/gate-cache.test.ts",
+        "code": 0,
+        "elapsedMs": 1248,
+        "passed": 10,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "src/app/api/spawn/route.launcher.test.ts",
+        "code": 0,
+        "elapsedMs": 1501,
+        "passed": 4,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "src/app/api/accounts/codex/route.test.ts",
+        "code": 0,
+        "elapsedMs": 10356,
+        "passed": 28,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "src/app/api/spawn/route.binding.test.ts",
+        "code": 0,
+        "elapsedMs": 2152,
+        "passed": 12,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "scripts/local-gate.receipts.test.ts",
+        "code": 1,
+        "elapsedMs": 17439,
+        "passed": 2,
+        "complete": true,
+        "failureSites": [
+          5,
+          3,
+          2,
+          0,
+          4,
+          1
+        ]
+      },
+      {
+        "side": "base",
+        "file": "src/app/api/tasks/[id]/proactive/route.test.ts",
+        "absent": true,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "src/app/api/tmux/targets/route.test.ts",
+        "code": 0,
+        "elapsedMs": 602,
+        "passed": 2,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "src/lib/accounts/migration/provider.test.ts",
+        "code": 0,
+        "elapsedMs": 7289,
+        "passed": 49,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "src/lib/agent/codexSpawnPolicy.test.ts",
+        "code": 0,
+        "elapsedMs": 17608,
+        "passed": 17,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "src/app/api/spawn/route.test.ts",
+        "code": 1,
+        "elapsedMs": 31596,
+        "passed": 70,
+        "complete": true,
+        "failureSites": [
+          31,
+          28,
+          29,
+          24,
+          25,
+          27,
+          26,
+          23,
+          10,
+          18,
+          11,
+          12,
+          19,
+          20,
+          9,
+          15,
+          13,
+          14,
+          17,
+          16,
+          21,
+          30,
+          22
+        ]
+      },
+      {
+        "side": "base",
+        "file": "src/lib/agent/spawnCommand.contention.test.ts",
+        "code": 1,
+        "elapsedMs": 3119,
+        "passed": 12,
+        "complete": true,
+        "failureSites": [
+          48,
+          49,
+          50
+        ]
+      },
+      {
+        "side": "base",
+        "file": "src/lib/agent/spawnCommand.locale.test.ts",
+        "code": 0,
+        "elapsedMs": 803,
+        "passed": 1,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "src/lib/agent/registry.servingWriters.test.ts",
+        "code": 0,
+        "elapsedMs": 11167,
+        "passed": 23,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "src/lib/agent/spawnDeferral.test.ts",
+        "code": 1,
+        "elapsedMs": 1007,
+        "passed": 3,
+        "complete": true,
+        "failureSites": [
+          85,
+          84,
+          83,
+          82
+        ]
+      },
+      {
+        "side": "base",
+        "file": "src/lib/agent/spawnMemory.test.ts",
+        "code": 0,
+        "elapsedMs": 855,
+        "passed": 12,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "src/lib/agent/transcriptHost.test.ts",
+        "code": 0,
+        "elapsedMs": 1073,
+        "passed": 27,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "src/lib/conversation/resumeLiveness.test.ts",
+        "code": 1,
+        "elapsedMs": 973,
+        "passed": 0,
+        "complete": true,
+        "failureSites": [
+          86
+        ]
+      },
+      {
+        "side": "base",
+        "file": "src/lib/delivery.test.ts",
+        "code": 1,
+        "elapsedMs": 5745,
+        "passed": 55,
+        "complete": true,
+        "failureSites": [
+          90,
+          88,
+          89,
+          91,
+          92,
+          96,
+          95,
+          94,
+          97,
+          98,
+          93,
+          87
+        ]
+      },
+      {
+        "side": "base",
+        "file": "src/lib/deliveryActuation.test.ts",
+        "code": 0,
+        "elapsedMs": 591,
+        "passed": 6,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "src/lib/deliveryPaneBufferError.test.ts",
+        "code": 0,
+        "elapsedMs": 851,
+        "passed": 2,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "src/lib/flows/engine.test.ts",
+        "code": 0,
+        "elapsedMs": 1273,
+        "passed": 5,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "src/lib/forge/appWrite.test.ts",
+        "code": 0,
+        "elapsedMs": 683,
+        "passed": 10,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "src/lib/agent/spawnCommand.telegram.test.ts",
+        "code": 1,
+        "elapsedMs": 18309,
+        "passed": 39,
+        "complete": true,
+        "failureSites": [
+          73,
+          78,
+          72,
+          77,
+          81,
+          71,
+          76,
+          74,
+          79,
+          75,
+          80,
+          54,
+          56,
+          58,
+          52,
+          53,
+          57,
+          51,
+          55,
+          60,
+          66,
+          61,
+          67,
+          62,
+          68,
+          63,
+          69,
+          64,
+          70,
+          59,
+          65
+        ]
+      },
+      {
+        "side": "base",
+        "file": "src/lib/forge/autoMerge.test.ts",
+        "code": 0,
+        "elapsedMs": 1616,
+        "passed": 67,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "src/lib/mcp/spawnRecovery.integration.test.ts",
+        "code": 1,
+        "elapsedMs": 2480,
+        "passed": 15,
+        "complete": true,
+        "failureSites": [
+          101
+        ]
+      },
+      {
+        "side": "base",
+        "file": "src/lib/mcp/orchestratorTools.test.ts",
+        "code": 1,
+        "elapsedMs": 3477,
+        "passed": 75,
+        "complete": true,
+        "failureSites": [
+          100,
+          99
+        ]
+      },
+      {
+        "side": "base",
+        "file": "src/lib/monitor/seatAutoRotation.spawn.test.ts",
+        "code": 0,
+        "elapsedMs": 1689,
+        "passed": 4,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "src/lib/orchestrator/seatRecoveryBusy.test.ts",
+        "code": 1,
+        "elapsedMs": 1801,
+        "passed": 6,
+        "complete": true,
+        "failureSites": [
+          133,
+          136,
+          138,
+          137,
+          135,
+          134
+        ]
+      },
+      {
+        "side": "base",
+        "file": "scripts/local-gate.test.ts",
+        "code": 1,
+        "elapsedMs": 85726,
+        "passed": 0,
+        "error": "Error: unidentified error between tests",
+        "complete": false,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "src/lib/pipelines/engine.creation.test.ts",
+        "code": 0,
+        "elapsedMs": 42456,
+        "passed": 95,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "src/lib/pipelines/git.test.ts",
+        "code": 1,
+        "elapsedMs": 139705,
+        "passed": 178,
+        "complete": true,
+        "failureSites": [
+          142,
+          143,
+          140,
+          140
+        ]
+      },
+      {
+        "side": "base",
+        "file": "src/lib/pipelines/engine.ports.part2.test.ts",
+        "code": 0,
+        "elapsedMs": 65585,
+        "passed": 51,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "src/lib/pipelines/engine.publication.test.ts",
+        "code": 0,
+        "elapsedMs": 26020,
+        "passed": 24,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "src/lib/pipelines/publication.test.ts",
+        "code": 0,
+        "elapsedMs": 1063,
+        "passed": 25,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "src/lib/pipelines/engine.ports.test.ts",
+        "code": 1,
+        "elapsedMs": 108556,
+        "passed": 70,
+        "complete": true,
+        "failureSites": [
+          139
+        ]
+      },
+      {
+        "side": "base",
+        "file": "src/lib/pipelines/repositoryInitialization.test.ts",
+        "code": 1,
+        "elapsedMs": 13678,
+        "passed": 39,
+        "complete": true,
+        "failureSites": [
+          189
+        ]
+      },
+      {
+        "side": "base",
+        "file": "src/lib/pipelines/parkedPublication.test.ts",
+        "code": 1,
+        "elapsedMs": 120638,
+        "passed": 0,
+        "complete": true,
+        "failureSites": [
+          146
+        ]
+      },
+      {
+        "side": "base",
+        "file": "src/lib/pipelines/stageInput.test.ts",
+        "code": 1,
+        "elapsedMs": 2562,
+        "passed": 12,
+        "complete": true,
+        "failureSites": [
+          209,
+          210,
+          208,
+          212,
+          211
+        ]
+      },
+      {
+        "side": "base",
+        "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+        "code": 1,
+        "elapsedMs": 215390,
+        "passed": 21,
+        "complete": true,
+        "failureSites": [
+          126,
+          129,
+          124,
+          130,
+          131,
+          110,
+          125,
+          115,
+          114,
+          111,
+          132,
+          113,
+          112,
+          123,
+          121,
+          122,
+          128,
+          116,
+          127,
+          107,
+          109,
+          108,
+          118,
+          117,
+          120,
+          119,
+          104,
+          106,
+          102,
+          105,
+          103
+        ]
+      },
+      {
+        "side": "base",
+        "file": "src/lib/pipelines/stagePublicationRepair.test.ts",
+        "code": 1,
+        "elapsedMs": 24610,
+        "passed": 8,
+        "complete": true,
+        "failureSites": [
+          213,
+          215,
+          214
+        ]
+      },
+      {
+        "side": "base",
+        "file": "src/lib/pipelines/stageCommitRepair.test.ts",
+        "code": 1,
+        "elapsedMs": 129667,
+        "passed": 56,
+        "complete": true,
+        "failureSites": [
+          204,
+          205,
+          201,
+          190,
+          196,
+          197,
+          193,
+          191,
+          192,
+          198,
+          194,
+          195,
+          202,
+          203,
+          199,
+          206,
+          200,
+          207
+        ]
+      },
+      {
+        "side": "base",
+        "file": "src/lib/scanner/taskExtractionRetirement.test.ts",
+        "code": 0,
+        "elapsedMs": 903,
+        "passed": 2,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "src/lib/runtime/cpuPlacement.scope.test.ts",
+        "code": 1,
+        "elapsedMs": 71951,
+        "passed": 10,
+        "complete": true,
+        "failureSites": [
+          216,
+          219,
+          217,
+          218,
+          220
+        ]
+      },
+      {
+        "side": "base",
+        "file": "src/lib/tasks/launchMembership.registry.test.ts",
+        "code": 1,
+        "elapsedMs": 2806,
+        "passed": 27,
+        "complete": true,
+        "failureSites": [
+          222,
+          221,
+          224,
+          223
+        ]
+      },
+      {
+        "side": "base",
+        "file": "src/lib/tasks/launchMembership.test.ts",
+        "code": 0,
+        "elapsedMs": 644,
+        "passed": 20,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "src/lib/tasks/proactiveExecution.test.ts",
+        "absent": true,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "src/lib/tasks/membership.test.ts",
+        "code": 0,
+        "elapsedMs": 669,
+        "passed": 22,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "src/lib/telegram/reportSpawn.test.ts",
+        "code": 0,
+        "elapsedMs": 727,
+        "passed": 5,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "src/lib/tmux.test.ts",
+        "code": 0,
+        "elapsedMs": 3231,
+        "passed": 38,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "src/lib/pipelines/remoteActions.test.ts",
+        "code": 1,
+        "elapsedMs": 308058,
+        "passed": 1,
+        "complete": true,
+        "failureSites": [
+          184,
+          181,
+          183,
+          182,
+          154,
+          153,
+          167,
+          173,
+          178,
+          177,
+          152,
+          151,
+          164,
+          163,
+          147,
+          149,
+          148,
+          165,
+          157,
+          158,
+          162,
+          180,
+          150,
+          186,
+          187,
+          171,
+          172,
+          174,
+          155,
+          161,
+          188,
+          185,
+          179,
+          175,
+          160,
+          170,
+          156,
+          166,
+          176,
+          159,
+          169,
+          168
+        ]
+      },
+      {
+        "side": "base",
+        "file": "src/lib/pipelines/stagePullRequest.test.ts",
+        "code": 0,
+        "elapsedMs": 232721,
+        "passed": 98,
+        "complete": true,
+        "failureSites": []
+      }
+    ],
+    "focused": [
+      {
+        "side": "head",
+        "file": "src/app/api/spawn/route.launcher.test.ts",
+        "code": 0,
+        "elapsedMs": 3204,
+        "passed": 10,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/lib/tmux.proactive.test.ts",
+        "code": 0,
+        "elapsedMs": 12936,
+        "passed": 8,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/lib/pipelines/git.test.ts",
+        "code": 1,
+        "elapsedMs": 162548,
+        "passed": 179,
+        "complete": true,
+        "failureSites": [
+          142,
+          143,
+          141,
+          145,
+          144,
+          140,
+          140
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/lib/agent/registry.servingWriters.test.ts",
+        "code": 1,
+        "elapsedMs": 11441,
+        "passed": 21,
+        "complete": true,
+        "failureSites": [
+          41,
+          44
+        ]
+      },
+      {
+        "side": "base",
+        "file": "src/lib/agent/registry.servingWriters.test.ts",
+        "code": 0,
+        "elapsedMs": 12017,
+        "passed": 23,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/lib/agent/registry.servingWriters.test.ts",
+        "code": 1,
+        "elapsedMs": 11442,
+        "passed": 21,
+        "complete": true,
+        "failureSites": [
+          41,
+          42
+        ]
+      },
+      {
+        "side": "base",
+        "file": "src/lib/agent/registry.servingWriters.test.ts",
+        "code": 1,
+        "elapsedMs": 13562,
+        "passed": 22,
+        "complete": true,
+        "failureSites": [
+          44
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/lib/agent/registry.servingWriters.test.ts",
+        "code": 1,
+        "elapsedMs": 15688,
+        "passed": 19,
+        "complete": true,
+        "failureSites": [
+          46,
+          41,
+          42,
+          44
+        ]
+      },
+      {
+        "side": "base",
+        "file": "src/lib/agent/registry.servingWriters.test.ts",
+        "code": 1,
+        "elapsedMs": 14152,
+        "passed": 19,
+        "complete": true,
+        "failureSites": [
+          46,
+          47,
+          42,
+          43
+        ]
+      }
+    ],
+    "gitReconciliation": [
+      {
+        "side": "head",
+        "file": "scripts/gate-cache.test.ts",
+        "code": 0,
+        "elapsedMs": 1680,
+        "passed": 11,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/lib/accounts/accountMutation.callers.test.ts",
+        "code": 1,
+        "elapsedMs": 22049,
+        "passed": 24,
+        "complete": true,
+        "failureSites": [
+          38,
+          40,
+          39,
+          32,
+          34,
+          33,
+          35,
+          37,
+          36
+        ]
+      },
+      {
+        "side": "head",
+        "file": "scripts/local-gate.receipts.test.ts",
+        "code": 1,
+        "elapsedMs": 24031,
+        "passed": 2,
+        "complete": true,
+        "failureSites": [
+          5,
+          3,
+          2,
+          0,
+          4,
+          1
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/lib/pipelines/engine.publication.test.ts",
+        "code": 0,
+        "elapsedMs": 30552,
+        "passed": 24,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/lib/pipelines/engine.creation.test.ts",
+        "code": 0,
+        "elapsedMs": 56082,
+        "passed": 95,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "scripts/local-gate.test.ts",
+        "code": 1,
+        "elapsedMs": 102134,
+        "passed": 0,
+        "error": "Error: unidentified error between tests",
+        "complete": false,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/lib/pipelines/engine.ports.part2.test.ts",
+        "code": 0,
+        "elapsedMs": 88088,
+        "passed": 51,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/lib/pipelines/publication.test.ts",
+        "code": 0,
+        "elapsedMs": 652,
+        "passed": 25,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/lib/pipelines/engine.settlement.test.ts",
+        "code": 0,
+        "elapsedMs": 114542,
+        "passed": 91,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "head",
+        "file": "src/lib/pipelines/repositoryInitialization.test.ts",
+        "code": 1,
+        "elapsedMs": 16813,
+        "passed": 39,
+        "complete": true,
+        "failureSites": [
+          189
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/lib/pipelines/git.test.ts",
+        "code": 1,
+        "elapsedMs": 160956,
+        "passed": 181,
+        "complete": true,
+        "failureSites": [
+          142,
+          143,
+          141,
+          140,
+          140
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/lib/pipelines/stageInput.test.ts",
+        "code": 1,
+        "elapsedMs": 2058,
+        "passed": 12,
+        "complete": true,
+        "failureSites": [
+          209,
+          210,
+          208,
+          212,
+          211
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/lib/pipelines/parkedPublication.test.ts",
+        "code": 1,
+        "elapsedMs": 120800,
+        "passed": 0,
+        "complete": true,
+        "failureSites": [
+          146
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/lib/pipelines/stagePublicationRepair.test.ts",
+        "code": 1,
+        "elapsedMs": 18431,
+        "passed": 8,
+        "complete": true,
+        "failureSites": [
+          213,
+          215,
+          214
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/lib/pipelines/stageCommitRepair.test.ts",
+        "code": 1,
+        "elapsedMs": 165671,
+        "passed": 56,
+        "complete": true,
+        "failureSites": [
+          204,
+          205,
+          201,
+          190,
+          196,
+          197,
+          193,
+          191,
+          192,
+          198,
+          194,
+          195,
+          202,
+          203,
+          199,
+          206,
+          200,
+          207
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/lib/pipelines/remoteActions.test.ts",
+        "code": 1,
+        "elapsedMs": 306330,
+        "passed": 1,
+        "complete": true,
+        "failureSites": [
+          184,
+          181,
+          183,
+          182,
+          154,
+          153,
+          167,
+          173,
+          178,
+          177,
+          152,
+          151,
+          164,
+          163,
+          147,
+          149,
+          148,
+          165,
+          157,
+          158,
+          162,
+          180,
+          150,
+          186,
+          187,
+          171,
+          172,
+          174,
+          155,
+          161,
+          188,
+          185,
+          179,
+          175,
+          160,
+          170,
+          156,
+          166,
+          176,
+          159,
+          169,
+          168
+        ]
+      },
+      {
+        "side": "head",
+        "file": "src/lib/pipelines/stagePullRequest.test.ts",
+        "code": 0,
+        "elapsedMs": 296271,
+        "passed": 98,
+        "complete": true,
+        "failureSites": []
+      },
+      {
+        "side": "base",
+        "file": "src/lib/accounts/accountMutation.callers.test.ts",
+        "code": 1,
+        "elapsedMs": 21145,
+        "passed": 24,
+        "complete": true,
+        "failureSites": [
+          38,
+          40,
+          39,
+          32,
+          34,
+          33,
+          35,
+          37,
+          36
+        ]
+      },
+      {
+        "side": "base",
+        "file": "src/lib/pipelines/engine.settlement.test.ts",
+        "code": 0,
+        "elapsedMs": 137872,
+        "passed": 91,
+        "complete": true,
+        "failureSites": []
+      }
+    ],
+    "finalSeam": [
+      {
+        "name": "adapter",
+        "file": "src/lib/tmux.proactive.test.ts",
+        "code": 0,
+        "passed": 8,
+        "complete": true,
+        "side": "head",
+        "failureSites": []
+      },
+      {
+        "name": "route",
+        "file": "src/app/api/spawn/route.launcher.test.ts",
+        "code": 0,
+        "passed": 10,
+        "complete": true,
+        "side": "head",
+        "failureSites": []
+      }
+    ]
+  },
+  "batchNotes": {
+    "primary": "Initial test-fixture rows and the final Git importer family are superseded by later complete file runs.",
+    "focused": "Route and adapter passed. Interim publication rows still refused timeout-wrapped confirmation and are superseded.",
+    "gitReconciliation": "All sixteen Git importers rerun after the final read allowlist change, plus the missed account caller. Only the two newly discovered files needed additional baseline runs; compare the combined effective table.",
+    "finalSeam": "Authority changes during the awaited identity read after load-buffer, immediately before paste; complete route and adapter files pass."
+  },
+  "newRegressions": {
+    "passed": 16,
+    "route": 6,
+    "adapter": 8,
+    "publication": 2,
+    "publicationEvidence": "Actual success and rejecting bare-remote hook both pass: signal remains active, receipt settles, later publication is fenced."
+  },
+  "mutation": {
+    "target": "src/lib/tmux.ts:748",
+    "change": "Remove only the authority check after the awaited pane identity read in sendText guard.",
+    "mutatedSourceSha256": "be8eb1770b63c8a8c44f6857266ee72fabac38b2f22b4a45053586d799e25971",
+    "result": {
+      "name": "mutation",
+      "file": "src/lib/tmux.proactive.test.ts",
+      "code": 1,
+      "passed": 0,
+      "complete": true,
+      "failureSites": [
+        228,
+        226
+      ]
+    },
+    "expectedFailures": 2
+  },
+  "serialTimingControls": [
+    {
+      "side": "head",
+      "file": "src/lib/agent/registry.servingWriters.test.ts",
+      "code": 1,
+      "elapsedMs": 11441,
+      "passed": 21,
+      "complete": true,
+      "failureSites": [
+        41,
+        44
+      ]
+    },
+    {
+      "side": "base",
+      "file": "src/lib/agent/registry.servingWriters.test.ts",
+      "code": 0,
+      "elapsedMs": 12017,
+      "passed": 23,
+      "complete": true,
+      "failureSites": []
+    },
+    {
+      "side": "head",
+      "file": "src/lib/agent/registry.servingWriters.test.ts",
+      "code": 1,
+      "elapsedMs": 11442,
+      "passed": 21,
+      "complete": true,
+      "failureSites": [
+        41,
+        42
+      ]
+    },
+    {
+      "side": "base",
+      "file": "src/lib/agent/registry.servingWriters.test.ts",
+      "code": 1,
+      "elapsedMs": 13562,
+      "passed": 22,
+      "complete": true,
+      "failureSites": [
+        44
+      ]
+    },
+    {
+      "side": "head",
+      "file": "src/lib/agent/registry.servingWriters.test.ts",
+      "code": 1,
+      "elapsedMs": 15688,
+      "passed": 19,
+      "complete": true,
+      "failureSites": [
+        46,
+        41,
+        42,
+        44
+      ]
+    },
+    {
+      "side": "base",
+      "file": "src/lib/agent/registry.servingWriters.test.ts",
+      "code": 1,
+      "elapsedMs": 14152,
+      "passed": 19,
+      "complete": true,
+      "failureSites": [
+        46,
+        47,
+        42,
+        43
+      ]
+    }
+  ],
+  "sourceChecks": {
+    "typecheck": {
+      "code": 0,
+      "args": [
+        "x",
+        "tsc",
+        "--noEmit"
+      ]
+    },
+    "eslint": {
+      "code": 0,
+      "args": [
+        "x",
+        "eslint",
+        "scripts/gate-cache.test.ts",
+        "scripts/gate-cache.ts",
+        "src/app/api/spawn/route.launcher.test.ts",
+        "src/app/api/tasks/[id]/proactive/route.test.ts",
+        "src/app/api/tasks/[id]/proactive/route.ts",
+        "src/lib/agent/registry.ts",
+        "src/lib/agent/spawnCommand.ts",
+        "src/lib/forge/appWrite.test.ts",
+        "src/lib/forge/appWrite.ts",
+        "src/lib/forge/autoMerge.test.ts",
+        "src/lib/forge/autoMerge.ts",
+        "src/lib/links/taskSync.test.ts",
+        "src/lib/pipelines/engine.ts",
+        "src/lib/pipelines/git.test.ts",
+        "src/lib/pipelines/git.ts",
+        "src/lib/runtime/structuredMessageDelivery.test.ts",
+        "src/lib/runtime/structuredMessageDelivery.ts",
+        "src/lib/runtime/structuredSpawn.ts",
+        "src/lib/tasks/commands.ts",
+        "src/lib/tasks/launchFailureReporting.ts",
+        "src/lib/tasks/launchMembership.registry.test.ts",
+        "src/lib/tasks/launchMembership.test.ts",
+        "src/lib/tasks/launchMembership.ts",
+        "src/lib/tasks/membership.test.ts",
+        "src/lib/tasks/membership.ts",
+        "src/lib/tasks/proactive.fixture.ts",
+        "src/lib/tasks/proactive.ts",
+        "src/lib/tasks/proactiveExecution.test.ts",
+        "src/lib/tasks/proactiveExecution.ts",
+        "src/lib/tmux.proactive.test.ts",
+        "src/lib/tmux.ts"
+      ]
+    },
+    "eslintWarnings": 11,
+    "warnings": "Existing declarations in registry.ts, taskSync.test.ts and engine.ts, unchanged in this follow-up."
+  },
+  "notes": [
+    "Four initial 50 ms timer assertions are branch-only in the primary sample. Serial whole-file failures vary on both cuts. Nonshared account selection remains 3/3 head versus 0/3 base in these controls; the earlier recorded campaign passed all 23 cases on both cuts.",
+    "The head-only stale dirty checkout failure executes a Git wrapper already deleted by delayed cleanup of preceding 30-second lane-close tests. Both lane-close timeouts and their between-test errors occur on main. The initial head run passed the following checkout case.",
+    "scripts/local-gate.test.ts reports 59 passes, ten named failures and one between-test error on each cut. The project parser refuses the unidentified between-test diagnostic; neither report counts as passing evidence.",
+    "Earlier broad evidence remains in authority-fixes.json and dispatch-preparation.json. No performance gain is claimed."
+  ],
+  "publicationPrivacyCommand": [
+    "bun",
+    "run",
+    "privacy:check"
+  ]
+}

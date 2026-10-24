@@ -1885,7 +1885,12 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
     const revalidate = () => {
       const current = findPipelineRecord(pipeline.id);
       if (!matches(current)) { identityChanged = true; abort.abort(); }
-      if (current && proactiveTaskExecutionError(current.taskIds)) { authorityRevoked = true; abort.abort(); }
+      if (current && proactiveTaskExecutionError(current.taskIds)) {
+        authorityRevoked = true;
+        // Revocation fences new work. An active push keeps its deadline and
+        // ownership cancellation, and must finish before its receipt settles.
+        if (!writeStarted) abort.abort();
+      }
     };
     const superseded = (): PipelinePublishResult => writeStarted
       ? { ok: true, sha: request.acceptedSha, remote: "unreachable", uncertain: true,
@@ -1930,6 +1935,14 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
     const fencedExec: ExecPort = async (command, args, cwd, env, options) => {
       revalidate();
       if (abort.signal.aborted) return { code: null, stdout: "", stderr: "publication superseded" };
+      // Only observations of the in-flight effect remain authorized. Never
+      // let reconciliation open another write after proactive revocation.
+      const remoteRead = command === "timeout" && args[0] === "--signal=KILL"
+        && args[1] === REMOTE_READ_TIMEOUT && args[2] === "git" && args[3] === "ls-remote";
+      const diagnosticRead = command === "git" && (args[0] === "merge-base" || args[0] === "diff");
+      if (authorityRevoked && !(writeStarted && (remoteRead || diagnosticRead))) {
+        return { code: null, stdout: "", stderr: "publication authority revoked" };
+      }
       fs.futimesSync(descriptor, new Date(), new Date());
       const preparingDependencies = command === "bun" && args[0] === "install";
       // The push runs the repository's pre-push gates; both leave the
