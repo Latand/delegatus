@@ -243,7 +243,7 @@ export class CpuAdmissionQueue {
       }
     }).immediate();
   }
-  check(key: string, pressureAllows: boolean, owner?: ProcessIdentity, consume = true, source?: CpuPrioritySource): CpuQueueWait | null {
+  check(key: string, pressureAllows: boolean, owner?: ProcessIdentity, consume = true, source?: CpuPrioritySource, requireLowPressure = false): CpuQueueWait | null {
     return this.db.transaction(() => {
       const now = this.now();
       // A release that predates polls released these from a hold since the last check.
@@ -294,7 +294,9 @@ export class CpuAdmissionQueue {
       // Display the durable worst-case bound even on a permissive sample.
       const budget = Math.max(0, this.maxWaitMs - (now - ticket.since));
       const priorBudget = ahead.since === null ? 0 : Math.max(0, this.maxWaitMs - (now - ahead.since));
-      if (position === 1 && spacing === 0 && (pressureAllows || budget === 0)) {
+      // Heavy gates must keep waiting under load even after the queue's stage
+      // fairness bound. Readiness and the final slot claim use the same guard.
+      if (position === 1 && spacing === 0 && (pressureAllows || !requireLowPressure && budget === 0)) {
         if (consume) {
           // Commands settle at their kernel slot claim. Stages retain a
           // recoverable admission until their own start checkpoint is read.

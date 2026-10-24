@@ -25,6 +25,22 @@ function fixture(unpolledMs = Number.POSITIVE_INFINITY) {
 }
 const FOREIGN = `stage:${"b".repeat(64)}:895e3de4:plan:1`, LIVE = `stage:${"0".repeat(64)}:762633d8:build:1`;
 
+test("heavy gate readiness and claims keep the pressure fence across process restart and the fairness bound", () => {
+  const f = fixture(), owner = captureProcessIdentity(process.pid);
+  const script = `const { CpuAdmissionQueue } = await import(process.argv[1]); const q = new CpuAdmissionQueue(process.argv[2], () => Number(process.argv[3])); try { process.stdout.write(JSON.stringify(q.check("command:heavy", process.argv[4] === "low", JSON.parse(process.argv[5]), process.argv[6] === "claim", undefined, true))); } finally { q.close(); }`;
+  const check = (at: number, low: boolean, claim: boolean) => {
+    const result = spawnSync(process.execPath, ["-e", script, path.join(import.meta.dir, "cpuAdmission.ts"), f.file, String(at), low ? "low" : "high", JSON.stringify(owner), claim ? "claim" : "peek"], { encoding: "utf8", env: process.env });
+    expect(result.status, result.stderr).toBe(0);
+    return JSON.parse(result.stdout);
+  };
+  expect(check(0, false, false)).toMatchObject({ position: 1, since: 0 });
+  expect(check(CPU_QUEUE_MAX_WAIT_MS + 1, false, false)).toMatchObject({ position: 1, since: 0 });
+  expect(check(CPU_QUEUE_MAX_WAIT_MS + 1, true, false)).toBeNull();
+  // Pressure can rise between readiness and the shell acquiring its slot.
+  expect(check(CPU_QUEUE_MAX_WAIT_MS + 1, false, true)).toMatchObject({ position: 1, since: 0 });
+  expect(check(CPU_QUEUE_MAX_WAIT_MS + 1, true, true)).toBeNull();
+});
+
 test("priority orders levels strictly and preserves FIFO within each level despite reverse polling", () => {
   const f = fixture(), q = f.open(), tasks = priorityTasks(f.file);
   const entries = [["low-first", "low"], ["normal-first", "normal"], ["high-first", "high"], ["low-second", "low"], ["normal-second", "normal"], ["high-second", "high"]] as const;
@@ -183,7 +199,10 @@ test("the gate helper inherits a publication's task binding through wait and fre
   const q = new CpuAdmissionQueue(path.join(directory, "admission.sqlite"), () => observerTime); queues.push(q);
   const owner = captureProcessIdentity(process.pid);
   const env = { ...process.env, ...cpuPriorityEnv(tasks.source(["first"])), LLV_GATE_LOCK_DIR: directory,
-    LLV_GATE_SLOTS: "1", LLV_GATE_SLOT_LEASE: "", DELEGATUS_CPU_PRESSURE: "off" };
+    LLV_GATE_SLOTS: "1", LLV_GATE_SLOT_LEASE: "", DELEGATUS_CPU_PRESSURE: "off",
+    // Both checkers stay in this PID namespace; the queue's default observer
+    // and its recorded owner use local identities, with no service handoff.
+    LLV_SIGNAL_SANDBOX: undefined };
   const run = async (mode: string) => {
     const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "../../../scripts/cpu-admission.ts"), mode, "command:publication-gate", String(process.pid)], { env, stdout: "pipe", stderr: "pipe" });
     const [out, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
