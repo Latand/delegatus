@@ -464,8 +464,8 @@ function OutcomeLine({ entryKey, outcome }: { entryKey: string; outcome: Outcome
           onClick={() => setOpen((value) => !value)}
           /* The chevron sits on the entry's first line. Its target grows by
              padding a negative margin takes back, so the row keeps its height:
-             24 px on the desktop's 16 px line, 44 px on the phone's 18 px line. */
-          style={PHONE ? { minWidth: 44, minHeight: 0, alignSelf: "flex-start", padding: "13px 0", margin: "-13px -8px -13px 0" } : { minWidth: 24, minHeight: 0, padding: "4px 0", margin: "-4px 0" }}
+             24 px on the desktop, 44 px on the phone, around the link's 16 px line. */
+          style={PHONE ? { minWidth: 44, minHeight: 0, alignSelf: "flex-start", padding: "14px 0", margin: "-14px -8px -14px 0" } : { minWidth: 24, minHeight: 0, padding: "4px 0", margin: "-4px 0" }}
         >
           <span aria-hidden className={`inline-block transition-transform motion-reduce:transition-none${open ? " rotate-90" : ""}`}>›</span>
         </button>,
@@ -531,7 +531,7 @@ function BriefRef({ entryKey, n }: { entryKey: string; n: number }) {
      too; a shorter entry keeps its own line and a 44 px target around it. */
   const tall = PHONE && Boolean(host.parentElement?.querySelector(".chronology-open"));
   const style = PHONE
-    ? (tall ? { minWidth: 44, minHeight: 44, alignSelf: "stretch" } : { minWidth: 44, minHeight: 0, padding: "13px 0", margin: "-13px 0" })
+    ? (tall ? { minWidth: 44, minHeight: 44, alignSelf: "stretch" } : { minWidth: 44, minHeight: 0, padding: "14px 0", margin: "-14px 0" })
     : { minWidth: 24, minHeight: 0, padding: "4px 0", margin: "-4px 0" };
   return createPortal(
     <a href={`#brief-${n}`} className="chronology-link justify-end whitespace-nowrap" style={style} data-proto-brief-ref={n} aria-label={WORDS.toPoint(n)}>↑ {WORDS.point(n)}</a>,
