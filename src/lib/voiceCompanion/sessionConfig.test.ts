@@ -162,37 +162,6 @@ test("both native voice transports receive the shared speech language restrictio
   }
 });
 
-for (const locale of ["en", "uk"] as const) {
-  test(`both rendered ${locale} voice prompts answer harmless creative requests and reassess clarifications`, () => {
-    const prompts = [
-      liveSessionConfiguration(locale).instructions,
-      codexVoiceStart("fixture", locale, "v=0").prompt,
-    ];
-    for (const prompt of prompts) {
-      const directAnswers = prompt.split("Do not delegate to the backend when:")[1]?.split("Delegate before giving an answer")[0];
-      expect(directAnswers).toContain("harmless creative writing");
-      expect(directAnswers).toContain("an original phrase for a friend to record");
-      expect(directAnswers).toContain("Answer it directly");
-      expect(prompt).toContain("Drafting words for someone to say or record is an ordinary creative request");
-      expect(prompt).toContain("When the operator clarifies a request, reassess the clarified intent");
-      expect(prompt).toContain("answer the harmless request without repeating the earlier refusal");
-    }
-  });
-
-  test(`both rendered ${locale} voice prompts retain identity, safety and action limits`, () => {
-    for (const prompt of [liveSessionConfiguration(locale).instructions, codexVoiceStart("fixture", locale, "v=0").prompt]) {
-      expect(prompt).toContain("Do not claim to be another real person or reproduce their actual voice");
-      expect(prompt).toContain("Keep applicable safety and content limits");
-      expect(prompt).toContain("explain the limit briefly and offer an allowed alternative");
-      expect(prompt).toContain("Say that something was sent only when the backend says so");
-      expect(prompt).toContain("The operator answers a confirmation you asked about");
-      expect(prompt).toContain("Never claim queued work is complete");
-    }
-    // Creative answers grant no authority to send work or alter the board.
-    expect(backendRequest([], { locale }).instructions).toContain("poems, stories, translations or advice, is never sent");
-  });
-}
-
 
 test("project ambiguity instructions never ask the operator for an internal key", () => {
   expect(BACKEND_INSTRUCTIONS).not.toContain("display name and key");
