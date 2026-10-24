@@ -621,7 +621,16 @@ const TOOL_RUN = [
 ].join("\n");
 const FAST_TTS = new URLSearchParams(location.search).has("fast-tts");
 const FAST_TTS_FEED = JSON.stringify({ type: "assistant", timestamp: iso(10), message: { role: "assistant", content: [{ type: "text", text: "The first sentence should start speaking immediately. The next sentences should arrive while the first one plays. A single tap in the conversation header starts reading the answer. A second tap stops the voice immediately. Starting another answer cancels the previous read. Highlighting follows the sentence that is being spoken." }] } }) + "\n";
-const FEED = FAST_TTS ? FAST_TTS_FEED : TOOLCARD ? `${BANDS}${TOOL_RUN}\n` : BANDS;
+const MARKDOWN_LINKS = new URLSearchParams(location.search).has("markdown-links");
+const linkLabel = localStorage.getItem("llv_lang") === "uk"
+  ? "Перевірити результати останнього незалежного ревʼю перед публікацією змін"
+  : "Check the results of the latest independent review before publishing changes";
+const linkUrl = `https://example.invalid/${"unbroken".repeat(10)}`;
+const linkPath = `src/${"unbroken".repeat(10)}.tsx`;
+const MARKDOWN_LINKS_FEED = record(0, "assistant", [{ type: "text", text:
+  `[${linkLabel}](https://example.invalid/review)\n\n${linkUrl}\n\n[${linkUrl}](${linkUrl})\n\n[${linkPath}](~/project/${linkPath}:42)`,
+}]) + "\n";
+const FEED = MARKDOWN_LINKS ? MARKDOWN_LINKS_FEED : FAST_TTS ? FAST_TTS_FEED : TOOLCARD ? `${BANDS}${TOOL_RUN}\n` : BANDS;
 const CHROME_PINNED_TASK = {
   id: "task-pinned", project: PROJECT, status: "assigned", placement: "unplaced", board: "shown",
   text: "You are this project's orchestrator in Delegatus. Keep every lane owned, read the board before every decision, and report what changed to the operator in plain words. Never leave a lane without an owner.",

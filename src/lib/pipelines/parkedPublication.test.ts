@@ -128,7 +128,7 @@ for (const suffix of ["proved", "unrecorded", "divergent"] as const) test(`publi
     const now = "2026-10-20T10:00:00.000Z";
     attempt.startedAt = now; attempt.completedAt = null; attempt.launchId = launchId;
     attempt.state = "needs_decision";
-    const guard = await prepareStageGitGuard(launchId, h.repo, realExec, now);
+    const guard = await prepareStageGitGuard(launchId, h.repo, realExec, now, async () => {});
     const identity = agentPublicationIdentityEnv({ ...process.env, ...guard });
     const env = { ...identity, ...guard, GIT_AUTHOR_DATE: now, GIT_COMMITTER_DATE: now };
     // An unrecorded head has no receipt: its object is written outside a
@@ -197,7 +197,7 @@ test("publish acceptedSha accepts a custody-parked head equal to the passed comm
     const now = "2026-10-20T10:00:00.000Z";
     attempt.startedAt = now; attempt.completedAt = null; attempt.launchId = launchId;
     attempt.state = "needs_decision";
-    await prepareStageGitGuard(launchId, h.repo, realExec, now);
+    await prepareStageGitGuard(launchId, h.repo, realExec, now, async () => {});
     const refusal = `stage push refused: commit ${"f".repeat(40)} was not created in the attempt worktree during this attempt; commit in the lane worktree and let Delegatus publish`;
     fs.writeFileSync(path.join(stageGitReceiptDirectory(launchId), "refused"), `${refusal}\n`);
     h.lane.lastPassedCommit = h.head;
