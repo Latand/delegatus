@@ -33,6 +33,7 @@ import {
 } from "@/lib/pipelines/stageChip";
 import { failEdgeMaxRounds, failEdgeRoundsUsed, pipelineReviewSummary, type PipelineReviewSummary } from "@/lib/pipelines/failEdgeBudget";
 
+import type { PipelineLinkRefusalCode, PipelineLinkSource } from "@/lib/pipelines/linkSource";
 import { PIPELINES_CHANGED_EVENT } from "./pipelineEvents";
 
 export { PIPELINES_CHANGED_EVENT };
@@ -1235,10 +1236,37 @@ export function draftStagesToInput(drafts: DraftStage[]): PipelineStageInput[] {
 export type PipelineClientResult = {
   pipeline?: Pipeline;
   error?: string;
+  /** The draft exists, and a follow-up step after its creation failed. */
+  warning?: string;
   code?: PipelineRepoPreflightErrorCode;
   field?: "repoDir";
   path?: string;
 };
+
+/** A resolved PR or issue link, and the linked task the draft joins (null: none). */
+export type PipelineDraftSource = { source: PipelineLinkSource; taskId: string | null };
+
+export type PipelineLinkClientResult =
+  | { ok: true; repoDir: string; source: PipelineLinkSource }
+  | { ok: false; code: PipelineLinkRefusalCode | "repository" | "failed"; error: string; params?: Record<string, string | number> };
+
+/** Reads a pasted PR or issue link against the picker's admitted checkout. */
+export async function resolvePipelineLinkSource(link: string, repoDir: string, signal?: AbortSignal): Promise<PipelineLinkClientResult> {
+  try {
+    const response = await fetch("/api/pipelines/source", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ link, repoDir }),
+      signal,
+    });
+    const json = (await response.json().catch(() => null)) as PipelineLinkClientResult | null;
+    if (json && typeof json === "object" && "ok" in json && (json.ok ? !!json.source : !!json.code)) return json;
+    return { ok: false, code: "failed", error: translate(getLocale(), "pipelineModel.failed", { status: response.status }) };
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    return { ok: false, code: "failed", error: translate(getLocale(), "common.serverUnavailable") };
+  }
+}
 
 export type PipelinePreflightClientResult = PipelineRepoPreflight & { error?: string };
 
@@ -1331,16 +1359,30 @@ export async function createDraftPipeline(
   /** Source transcript wired as stage 0's lineage (the node `⇢ pipeline` entry);
       its cwd also wins the repo resolution, like a handoff draft's does. */
   src?: string,
+  /** A pasted PR or issue (rank 4 of docs/research/competitors-2026-10.md):
+      its title, base, PR delivery and linked task. Still a draft. */
+  from?: PipelineDraftSource,
 ): Promise<PipelineClientResult> {
   const repoDir = (repoPrefill ?? "").trim();
   if (!repoDir) return { error: translate(getLocale(), "common.serverUnavailable") };
-  return createPipeline({
+  const created = await createPipeline({
     task: translate(getLocale(), "pipelineBuilder.untitledTask"),
     repoDir,
     stages: template ? templateStageInputs(template) : defaultDraftStageInputs(),
     ...(src ? { src } : {}),
+    ...(from ? { ...from.source.request, ...(from.taskId ? { taskIds: [from.taskId] } : {}) } : {}),
     autoStart: false,
   });
+  if (!created.pipeline || !from?.source.attachLink) return created;
+  const failure = await attachDraftLink(created.pipeline.id, from.source);
+  return failure ? { ...created, warning: failure } : created;
+}
+
+/** A new lane names nothing about an issue, so the issue is attached to the
+    draft; a failed attach is retried on the same draft. Null: attached. */
+export function attachDraftLink(pipelineId: string, source: Pick<PipelineLinkSource, "attachLink" | "kind">): Promise<string | null> {
+  if (!source.attachLink) return Promise.resolve(null);
+  return patchPipeline(pipelineId, "attach-link", { link: source.attachLink, kind: source.kind });
 }
 
 /**

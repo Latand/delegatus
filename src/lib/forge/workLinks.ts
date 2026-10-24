@@ -139,6 +139,13 @@ export function githubRepositoryOfRemote(remote: string | null | undefined): str
   return match ? repositoryName(match[1]!, match[2]!) : null;
 }
 
+/** The repository a delivery's `pr` number names: the upstream a fork's PR
+    was opened in, else the repository the delivery remote pushes to. */
+export function deliveryPullRequestRepository(target: { remote: string; prRepository?: string } | null | undefined): string | null {
+  if (!target) return null;
+  return (boundedRepository(target.prRepository) ? target.prRepository.toLowerCase() : null) ?? githubRepositoryOfRemote(target.remote);
+}
+
 const HOW_TO_ATTACH = "attach a pull request or issue as #123, 123, owner/repo#123 or a github.com pull or issue URL";
 
 /**

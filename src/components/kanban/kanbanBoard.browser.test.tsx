@@ -35645,6 +35645,103 @@ describe("pipeline repository initialization", () => {
   }, 120_000);
 });
 
+describe("pipeline from a PR or issue link", () => {
+  /* docs/research/competitors-2026-10.md rank 4: the template picker reads a
+     pasted link and shows what the draft will use; the draft's editor names
+     the PR it delivers to. Frames go to LLV_LINK_SOURCE_OUT, else .artifacts. */
+  browserTest("the picker shows the resolved repository, base, head and task, and the draft editor names its PR", async () => {
+    const out = path.resolve(process.env.LLV_LINK_SOURCE_OUT ?? ".artifacts/pipeline-link-source");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(out, "bundle"));
+    const browserTemp = fs.mkdtempSync(path.join(os.tmpdir(), "browser-"));
+    const browserTempFd = fs.openSync(browserTemp, "r");
+    const socketRoot = process.platform === "linux" ? "/proc/" + process.pid + "/fd/" + browserTempFd : browserTemp;
+    let browser: Browser | undefined;
+    const readings: unknown[] = [];
+    const cases = [
+      { name: "pr", link: "https://github.com/example/atlas/pull/41", state: "resolved" },
+      { name: "fork", link: "https://github.com/example/atlas/pull/42", state: "resolved" },
+      { name: "issue", link: "https://github.com/example/atlas/issues/7", state: "resolved" },
+      { name: "refused", link: "https://github.com/example/atlas/pull/9", state: "refused" },
+      { name: "attach", link: "https://github.com/example/atlas/issues/7", state: "resolved" },
+      { name: "editor", link: "", state: "" },
+    ] as const;
+    try {
+      browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: socketRoot } });
+      for (const width of [390, 1280]) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) for (const entry of cases) {
+        const height = width === 390 ? 844 : 900;
+        const { context, page, pageErrors } = await openFixture(browser, server.base + "?pipelinelink=" + (entry.name === "editor" || entry.name === "attach" ? entry.name : "picker"),
+          { width, height }, scheme, lang, "reduce", width === 390);
+        try {
+          let scope;
+          if (entry.name === "editor") {
+            scope = page.locator("[data-pipeline-editor]");
+            await scope.locator("[data-pipeline-editor-source]").waitFor();
+            expect(await scope.locator("[data-pipeline-editor-source]").innerText()).toContain("PR #41 · main ← feature/link-source-preview");
+          } else {
+            await page.locator('[data-pipeline-picker-state="ready"]').waitFor();
+            await page.locator("[data-pipeline-link-input]").fill(entry.link);
+            await page.locator(`[data-pipeline-link-state="${entry.state}"]`).waitFor();
+            scope = page.getByRole("dialog");
+            const preview = await page.locator(`[data-pipeline-link-state="${entry.state}"]`).innerText();
+            if (entry.name === "pr") {
+              expect(preview).toContain("feature/link-source-preview · 4f1c2a9");
+              expect(await page.locator("[data-pipeline-link-task] input[type='radio']").count()).toBe(3);
+              expect(await page.locator("[data-pipeline-link-task]").innerText()).toContain("Review the board's pull request flow on the phone");
+            }
+            if (entry.name === "fork") {
+              expect(await page.locator("[data-pipeline-link-fork]").innerText()).toContain("contributor/atlas");
+              expect(await page.locator("[data-pipeline-link-warning]").count()).toBe(1);
+            }
+            if (entry.name === "issue") expect(await page.locator("[data-pipeline-link-no-task]").count()).toBe(1);
+            /* The draft exists and attaching the issue failed: the reason stays with Retry and Open, and nothing can make a second draft. */
+            if (entry.name === "attach") {
+              await page.locator("button", { hasText: translate(lang, "pipelineTemplates.blank") }).click();
+              const alert = page.locator("[data-pipeline-link-attach-failed]");
+              await alert.waitFor();
+              expect(await alert.innerText()).toContain(translate(lang, "pipelineLink.attachFailed", { link: "example/atlas#7", error: "the pipeline store is busy; retry" }));
+              expect(await page.locator("[data-pipeline-link-attach-retry]").innerText()).toBe(translate(lang, "pipelineTemplates.retry"));
+              expect(await page.locator("[data-pipeline-link-attach-skip]").innerText()).toBe(translate(lang, "pipelineLink.openDraft"));
+              expect(await page.locator("[data-pipeline-link-input]").isDisabled()).toBe(true);
+            }
+            if (entry.name === "refused") expect(preview).toBe(translate(lang, "pipelineLink.refused.merged", { repository: "example/atlas", number: 9 }));
+            /* A resolved link enables the templates; a refused one keeps them off. */
+            const blank = page.locator("button", { hasText: translate(lang, "pipelineTemplates.blank") });
+            expect(await blank.isEnabled()).toBe(entry.state === "resolved" && entry.name !== "attach");
+          }
+          const text = await scope.innerText();
+          expect(text).not.toMatch(/pipelineLink\.|groupOverride\.|pipelineTemplates\./);
+          /* The whole surface sits in the viewport, and no line inside it is cut sideways. */
+          const geometry = await scope.evaluate((root) => {
+            const box = root.getBoundingClientRect();
+            const clipped = [...root.querySelectorAll("span, dd, dt, label, legend, div")]
+              .filter((node) => node.children.length === 0 && (node.textContent ?? "").trim() && node.scrollWidth > node.clientWidth + 1 && getComputedStyle(node).textOverflow !== "ellipsis")
+              .map((node) => (node.textContent ?? "").slice(0, 60));
+            return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, scrollHeight: root.scrollHeight, clientHeight: root.clientHeight, clipped };
+          });
+          expect(geometry.left).toBeGreaterThanOrEqual(0);
+          expect(geometry.right).toBeLessThanOrEqual(width + 1);
+          expect(geometry.top).toBeGreaterThanOrEqual(0);
+          expect(geometry.bottom).toBeLessThanOrEqual(height + 1);
+          expect(geometry.clipped).toEqual([]);
+          expect(pageErrors).toEqual([]);
+          const screenshot = `${width}-${scheme}-${lang}-${entry.name}.png`;
+          await page.screenshot({ path: path.join(out, screenshot) });
+          /* A sheet taller than the phone scrolls: its end gets its own frame. */
+          let end: string | null = null;
+          if (geometry.scrollHeight > geometry.clientHeight + 1) {
+            await scope.evaluate((root) => { root.scrollTop = root.scrollHeight; });
+            end = `${width}-${scheme}-${lang}-${entry.name}-end.png`;
+            await page.screenshot({ path: path.join(out, end) });
+          }
+          readings.push({ width, scheme, lang, case: entry.name, screenshot, end, geometry });
+        } finally { await context.close(); }
+      }
+    } finally { await browser?.close(); server.stop(); fs.closeSync(browserTempFd); fs.rmSync(browserTemp, { recursive: true, force: true }); }
+    fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
+  }, 300_000);
+});
+
 describe("saved decision delivery", () => {
   browserTest("C: the Decisions badge and panel retain saved answers until delivery", async () => {
     const out = path.resolve(".artifacts/answer-delivery/frames"); fs.mkdirSync(out, { recursive: true });

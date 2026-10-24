@@ -15,7 +15,7 @@ import path from "node:path";
 
 import { isDismissedBy } from "@/lib/attention/dismissalTypes";
 import { pipelineHasPullRequest } from "@/lib/forge/resolve";
-import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
+import { deliveryPullRequestRepository } from "@/lib/forge/workLinks";
 import { statePath } from "@/lib/configDir";
 import { canonicalProject, projectAliasSnapshot, projectAliasResolver } from "@/lib/projects/aliases";
 import { canonicalProjectKeys, replaceProjectKeySource } from "@/lib/projects/projectKeyIndex";
@@ -2013,7 +2013,7 @@ export async function createPipelineWithDelivery(pipeline: Pipeline, target: Pip
         return replay;
       }
     }
-    const pullRequestRepository = target.pr ? githubRepositoryOfRemote(target.remote) : null;
+    const pullRequestRepository = target.pr ? deliveryPullRequestRepository(target) : null;
     if (options.requireOwner && (comparison || tx.pipelineLookup({ ...target, active: true })
       || tx.hasUnfinishedPipeline({ repository: target.repository, branch: target.branch,
         ...(target.pr && pullRequestRepository ? { pullRequestRepository, prNumber: target.pr,

@@ -73,6 +73,17 @@ export function PipelineEditor({ pipeline, onClose, label = pipeline.task }: { p
           <label className="flex flex-col gap-1"><span className={fieldLabel}>{t("groupOverride.task")}</span><input className={inputBase} value={task} onChange={(event) => setTask(event.target.value)} /></label>
           <label className="flex flex-col gap-1"><span className={fieldLabel}>{t("groupOverride.spec")}</span><textarea className="min-h-[52px] w-full resize-y rounded-[8px] border border-border bg-canvas px-2 py-1.5 text-[11.5px] font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" value={spec} onChange={(event) => setSpec(event.target.value)} /></label>
           <label className="flex flex-col gap-1"><span className={fieldLabel}>{t("groupOverride.repoDir")}</span><input className={inputBase} value={repoDir} onChange={(event) => setRepoDir(event.target.value)} /></label>
+          {/* A draft prepared from a PR delivers to the PR's branch; Start takes its head then. */}
+          {pipeline.delivery?.target.pr ? (
+            <div data-pipeline-editor-source className="flex flex-col gap-1">
+              <span className={fieldLabel}>{t("groupOverride.source")}</span>
+              <span className="break-all text-[11.5px] font-semibold text-primary">{t("groupOverride.sourcePr", {
+                number: pipeline.delivery.target.pr,
+                base: pipeline.baseBranch || "main",
+                head: pipeline.delivery.target.branch.replace(/^refs\/heads\//, ""),
+              })}</span>
+            </div>
+          ) : null}
           <button className={primaryBtn} disabled={busy || !task.trim() || !repoDir.trim()} onClick={() => void run(t("groupOverride.savedDraft"), () => patchPipeline(pipeline.id, "update-draft", { task, spec, repoDir }))}>{t("groupOverride.saveDraft")}</button>
         </div>
       ) : null}

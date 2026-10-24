@@ -37,7 +37,7 @@ import { planBoardConvergence, planClose } from "./projectBoardMutations";
 import { reviewerCloseMutations } from "./reviewerAutoClose";
 import { isDirectReviewFlow } from "./flows/directReviewGroups";
 import { claimedReviewerDescendantPaths, isActiveFlow, resolveFlowMemberPaths } from "./flows/flowModel";
-import { compactPipelineArtifactPaths, compactPipelineLayoutFlows, createDraftPipeline, excludeCompactPipelineArtifacts, patchPipeline, pipelineFullPanePaths, pipelinesForProject, replaceCompactPipelineEphemeral, resolvePipelineMemberPaths, type PipelineTemplate } from "./pipelines/pipelineModel";
+import { compactPipelineArtifactPaths, compactPipelineLayoutFlows, createDraftPipeline, excludeCompactPipelineArtifacts, patchPipeline, pipelineFullPanePaths, pipelinesForProject, replaceCompactPipelineEphemeral, resolvePipelineMemberPaths, type PipelineDraftSource, type PipelineTemplate } from "./pipelines/pipelineModel";
 import { PipelineTemplatePicker } from "./pipelines/PipelineTemplatePicker";
 import { createProjectDashboardDerivation } from "./projectDashboardDerivation";
 import { buildSubagentTrays, subagentTraySignature } from "./scheme/subagentTray";
@@ -1370,9 +1370,9 @@ function ProjectDashboardView({
   /* `+ Пайплайн` (#136, #196, #388): the picker admits a repository before it
      creates a DRAFT. Its world-space PipelineGroup opens with the full role
      chain and shared editor before the first run. */
-  const addPipelineDraft = async (template: PipelineTemplate | null, repoDir: string) => {
+  const addPipelineDraft = async (template: PipelineTemplate | null, repoDir: string, from?: PipelineDraftSource) => {
     onUserNavigate?.();
-    return createDraftPipeline(project, repoDir, template ?? undefined);
+    return createDraftPipeline(project, repoDir, template ?? undefined, undefined, from);
   };
 
   /* The handoff handle under a pane: a draft that continues this conversation
