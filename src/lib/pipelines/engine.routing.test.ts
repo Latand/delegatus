@@ -5,6 +5,7 @@ import type { Flow, BoardTask, PipelinePorts } from "./engine.fixture";
 import { withPipelineMutation } from "./store";
 import { StaleControllerFlowError } from "./controllerSnapshot";
 import { setMachineCpuPressureForTests } from "@/lib/runtime/cpuPressure";
+import { spawnSync } from "node:child_process";
 
 async function continuationCloseFixture(marker: "actionAt" | "continuationRequestedAt" = "continuationRequestedAt") {
   const h = harness();
@@ -2443,6 +2444,124 @@ test("retry-stage leaves an idle host whose transcript is still growing, and sto
   expect(stops()).toEqual([`stop-host:build:1:${attempt.conversationId}`]);
   expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: "confirmed stalled attempt was stopped for retry" });
 });
+
+test("retry-stage accepts a gone host without waiting for its busy transcript to become silent", async () => {
+  const h = harness();
+  const pipeline = await create(h.ports, SILENT_RUN as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  // The last record is current, but the authoritative host reading says that
+  // no process remains. Silence is only a safeguard for a host that is idle.
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
+  const gone: PipelinePorts = { ...h.ports,
+    spawnReceipt: () => ({ state: "completed", conversationId: attempt.conversationId,
+      paneId: null, transcript: attempt.agentPath }) as ReturnType<PipelinePorts["spawnReceipt"]>,
+    conversationTurnInterrupted: async () => "dead" };
+
+  const result = await patchPipeline(pipeline.id,
+    { action: "retry-stage", expectedStageId: "build", expectedAttempt: 1 }, gone);
+
+  expect(result.error).toBeUndefined();
+  expect(h.calls).toContain(`stop-host:build:1:${attempt.conversationId}`);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "needs_decision",
+    error: "confirmed stalled attempt was stopped for retry" });
+});
+
+test("a usage-guard hold survives a controller process restart, then one replacement passes (#3158)", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-guard-restart-"));
+  // Each phase is a fresh controller process reading the same SQLite store.
+  // The quota observation ages while the four-hour reset remains in the future.
+  const program = `
+    import { test } from "bun:test";
+    const { harness, create, tickPipelines, loadPipelines, savePipelines, expect } = await import(${JSON.stringify(path.resolve("src/lib/pipelines/engine.fixture.ts"))});
+    const { accountQuotaVerdict } = await import(${JSON.stringify(path.resolve("src/lib/accounts/headlessSelection.ts"))});
+    const fixtureState = process.env.LLV_STATE_DIR;
+    test("restarted controller guard phase", async () => {
+    process.env.LLV_STATE_DIR = process.env.GUARD_STATE;
+    const phase = Number(process.env.GUARD_PHASE);
+    const h = harness();
+    const start = 1_000_000, reset = start + 4 * 3_600_000;
+    let now = phase === 0 ? start : phase === 1 ? start + 10 * 60_000 : reset + 60_000;
+    h.ports.now = () => new Date(now).toISOString();
+    const spawn = h.ports.spawnAgent;
+    h.ports.spawnAgent = async (input, reserved) => ({ ...await spawn(input, reserved), paneId: null });
+    if (phase === 0) {
+      await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }]);
+      await tickPipelines([], h.ports);
+      await tickPipelines([], h.ports);
+      const lane = loadPipelines()[0];
+      lane.stages[0].account = lane.runs[0].attempts[0].accountId = "account-a";
+      lane.runs[0].attempts[0].definition.account = "account-a";
+      savePipelines([lane]);
+    }
+    const observation = { engine: "codex", accountId: "account-a", authenticated: true,
+      authCheckedAt: new Date(phase === 2 ? now : start).toISOString(), observedAt: new Date(phase === 2 ? now : start).toISOString(), bootId: "fixture",
+      provenance: { source: "live", reason: null, staleSince: null },
+      limits: { session: null, weekly: { usedPercent: phase === 2 ? 20 : 100, resetsAt: reset / 1000 },
+        plan: "pro", capturedAt: (phase === 2 ? now : start) / 1000 } };
+    h.ports.allowedAccountIds = () => ["account-a"];
+    h.ports.accountQuota = (_engine, id, model) => accountQuotaVerdict([observation], id, now, model);
+    h.ports.accountExhausted = (_engine, id, model) => h.ports.accountQuota("codex", id, model).capacity === "exhausted";
+    h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { engine: "codex", accountId: "account-a", kind: "managed",
+      home: process.env.GUARD_STATE, transcriptRoot: process.env.GUARD_STATE, env: {} } });
+    const first = loadPipelines()[0].runs[0].attempts[0];
+    h.durableTurns.set(first.agentPath, { turn: "busy", message: null, lastRecordAt: start });
+    if (phase < 2) {
+      for (let tick = 0; tick < (phase === 0 ? 1 : 80); tick++) {
+        await tickPipelines([], h.ports);
+        const lane = loadPipelines()[0];
+        expect(lane.runs[0].attempts).toHaveLength(1);
+        now += 120_000;
+      }
+      expect(h.spawnInputs).toHaveLength(phase === 0 ? 1 : 0);
+    } else {
+      // Restarting the fixture also resets its fake launch counter. Reserve
+      // distinct identities for this process, as a real launcher does.
+      h.ports.spawnAgent = async (input, reserved) => {
+        const identity = { launchId: "launch-after-reset", conversationId: "conversation_after_reset", accountId: "account-a" };
+        h.spawnInputs.push(input);
+        await reserved(identity);
+        return { ...identity, sessionId: "session-after-reset", transcript: "/codex/after-reset.jsonl", paneId: null };
+      };
+      for (let tick = 0; tick < 3; tick++) await tickPipelines([], h.ports);
+      const lane = loadPipelines()[0];
+      expect(lane.runs[0].attempts).toHaveLength(2);
+      const replacement = lane.runs[0].attempts[1];
+      expect(replacement).toMatchObject({ launchId: "launch-after-reset", restartContext: { previousAttempt: 1, transcriptPath: first.agentPath } });
+      expect(h.spawnInputs).toHaveLength(1);
+      // Real Git receipt settlement of historical launchless parents is
+      // exercised by stageAttemptPush.test.ts alongside this controller case.
+      lane.delivery = { ...lane.delivery, active: false, publish: "disabled" };
+      savePipelines([lane]);
+      const finished = h.finish(replacement.agentPath, "pass");
+      h.messages.get(replacement.agentPath).ts = now + 1;
+      h.durableTurns.set(replacement.agentPath, { turn: "terminal", message: h.messages.get(replacement.agentPath) });
+      await tickPipelines([finished], h.ports);
+      expect(loadPipelines()[0].runs[0].attempts[1]).toMatchObject({ state: "passed", verdict: { status: "pass" } });
+    }
+    // The fixture's afterAll owns only its original root; the next process
+    // must read this phase's durable state before the parent removes it.
+    process.env.LLV_STATE_DIR = fixtureState;
+    });
+  `;
+  try {
+    const script = path.join(root, "guard.test.ts");
+    fs.writeFileSync(script, program);
+    for (const phase of [0, 1, 2]) {
+      const result = spawnSync(process.execPath, ["test", script, "--timeout", "60000"], {
+        cwd: process.cwd(), env: { ...process.env, GUARD_STATE: path.join(root, "state"), GUARD_PHASE: String(phase) },
+        encoding: "utf8", timeout: 60_000,
+      });
+      expect(result.status, `phase ${phase}: ${result.stderr}\n${result.stdout}`).toBe(0);
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 120_000);
 
 test("retry-stage names a pending delivery apart from an attempt that is not confirmed stalled (#2790)", async () => {
   const h = harness();

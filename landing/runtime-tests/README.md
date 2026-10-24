@@ -16,7 +16,7 @@ Only outbound HTTP is stubbed. Each test generates a synthetic RSA assertion,
 and all runtimes are disposed in `finally`. No real assertion is needed.
 
 The successful path checks both stats URLs, completed-key caching, real
-signature verification, and all twenty SQL calls across the two responses.
+signature verification, and all twenty-two SQL calls across the two responses.
 The other cases cover overlapping requests, invalid assertions, key selection,
 signature tampering, rejected methods, invalid key sets, HTTP failure, and
 redirects from both upstream services. The SQL redirect case checks that no
