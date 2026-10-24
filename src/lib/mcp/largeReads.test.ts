@@ -262,3 +262,25 @@ test.skipIf(process.platform !== "linux")("native peer proof crosses the Viewer'
     expect(fs.existsSync(hidden)).toBe(true);
   } finally { proof.close(); await reapFixtureChildren(); fs.rmSync(directory, { recursive: true, force: true }); }
 }, 15_000);
+
+test.each(["agent_activity", "agent_fleet"] as const)("%s preserves a Viewer JSON-RPC error instead of reporting malformed data", async name => {
+  fixture(async request => {
+    const body = await request.json() as { id: string };
+    return Response.json({ jsonrpc: "2.0", id: body.id,
+      error: { code: -32603, message: "delivery controller unavailable" } });
+  });
+  const service = await createProductionViewerMcpService(false, true);
+  const result = await service.callTool(name, {});
+  expect(result).toMatchObject({ ok: false, error: expect.stringContaining("JSON-RPC error -32603: delivery controller unavailable") });
+});
+
+test.each(["wrong-id", "invalid-code", "invalid-message"])("a %s JSON-RPC error remains a malformed response", async shape => {
+  fixture(async request => {
+    const body = await request.json() as { id: string };
+    return Response.json({ jsonrpc: "2.0", id: shape === "wrong-id" ? "another-request" : body.id,
+      error: { code: shape === "invalid-code" ? "-32603" : -32603,
+        message: shape === "invalid-message" ? null : "delivery controller unavailable" } });
+  });
+  const service = await createProductionViewerMcpService(false, true);
+  expect(await service.callTool("agent_fleet", {})).toMatchObject({ ok: false, error: expect.stringContaining("malformed response") });
+});
