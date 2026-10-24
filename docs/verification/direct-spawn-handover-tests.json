@@ -21781,5 +21781,302 @@
         }
       ]
     }
-  ]
+  ],
+  "reviewFix": {
+    "recordedUtc": "2026-10-24T11:28:07.008239+00:00",
+    "status": "verification-blocked",
+    "productionCommit": "4d17eaf60d7e22a2735b036a3a8e377a94520271",
+    "fixtureCommit": "e8c1b42705ef714b8104d7f3cd69d2ee27814847",
+    "sourceSha256": {
+      "src/lib/agent/registry.ts": "73af43a944ac6ba623bd799a1568761641c7524802f011c5c184cca8e2f87fe8",
+      "src/lib/runtime/structuredSpawn.ts": "eaddb832a9944cf375d8db910b43f77d5dd4daa7708e314316098d063e013d8a",
+      "src/lib/agent/spawnCommand.ts": "6360dbc2458bd64f4e11fc5d932155e785eb5e5bc7b383509cb22b2af04adc11",
+      "src/lib/agent/spawnCommand.contention.test.ts": "8f0c4d760ea0232afaa5ef8e4e6c6133614f5f6b24d1285ba85c9eb313ae4a44"
+    },
+    "completedObservations": [
+      {
+        "name": "control",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "--test-name-pattern",
+          "direct spawn uses real runtime admission: (legacy-recovered|fallback)|quota setup|staged fallback",
+          "src/lib/agent/spawnCommand.contention.test.ts"
+        ],
+        "exit": 1,
+        "seconds": 1.78,
+        "counts": {
+          "pass": 1,
+          "fail": 9
+        },
+        "sourceSha256": {
+          "src/lib/agent/registry.ts": "eb135a864724d2bfb7fa6aecebda6392cf0377a6fc4fa0daeb609b661d89e7ca",
+          "src/lib/runtime/structuredSpawn.ts": "c8088e9cae5dd84e46c9ce6905b7c38df8aad135df3c3bd962be18985d082b3a",
+          "src/lib/agent/spawnCommand.ts": "37c8f47ff5ccac2de0c4de4204b30d4f237d8c7821887071f2aafc3f6c8805f3",
+          "src/lib/agent/spawnCommand.contention.test.ts": "fd86eb2a433829130f6febcae6b23621a9dd04bfb8847ab279ffaf0c57c63850"
+        },
+        "complete": true
+      },
+      {
+        "name": "operation-control",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "--test-name-pattern",
+          "staged fallback account settlement fences writer evidence: foreign",
+          "src/lib/agent/spawnCommand.contention.test.ts"
+        ],
+        "exit": 1,
+        "seconds": 0.92,
+        "counts": {
+          "pass": 0,
+          "fail": 1
+        },
+        "sourceSha256": {
+          "src/lib/agent/registry.ts": "73af43a944ac6ba623bd799a1568761641c7524802f011c5c184cca8e2f87fe8",
+          "src/lib/runtime/structuredSpawn.ts": "eaddb832a9944cf375d8db910b43f77d5dd4daa7708e314316098d063e013d8a",
+          "src/lib/agent/spawnCommand.ts": "b3b19fddc8e345044bf5075cf0c94c66359a5d7aa02ab1ce2316b7edf49edbd7",
+          "src/lib/agent/spawnCommand.contention.test.ts": "fd86eb2a433829130f6febcae6b23621a9dd04bfb8847ab279ffaf0c57c63850"
+        },
+        "complete": true
+      },
+      {
+        "name": "focused",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "--test-name-pattern",
+          "direct spawn|direct admission|independently supervised|quota setup|staged fallback",
+          "src/lib/agent/spawnCommand.contention.test.ts"
+        ],
+        "exit": 1,
+        "seconds": 18.55,
+        "counts": {
+          "pass": 48,
+          "skip": 2,
+          "fail": 1
+        },
+        "sourceSha256": {
+          "src/lib/agent/registry.ts": "73af43a944ac6ba623bd799a1568761641c7524802f011c5c184cca8e2f87fe8",
+          "src/lib/runtime/structuredSpawn.ts": "eaddb832a9944cf375d8db910b43f77d5dd4daa7708e314316098d063e013d8a",
+          "src/lib/agent/spawnCommand.ts": "6360dbc2458bd64f4e11fc5d932155e785eb5e5bc7b383509cb22b2af04adc11",
+          "src/lib/agent/spawnCommand.contention.test.ts": "fd86eb2a433829130f6febcae6b23621a9dd04bfb8847ab279ffaf0c57c63850"
+        },
+        "complete": true
+      },
+      {
+        "name": "types",
+        "command": [
+          "bun",
+          "x",
+          "tsc",
+          "--noEmit",
+          "--incremental",
+          "false"
+        ],
+        "exit": 2,
+        "seconds": 261.01,
+        "counts": {},
+        "sourceSha256": {
+          "src/lib/agent/registry.ts": "73af43a944ac6ba623bd799a1568761641c7524802f011c5c184cca8e2f87fe8",
+          "src/lib/runtime/structuredSpawn.ts": "eaddb832a9944cf375d8db910b43f77d5dd4daa7708e314316098d063e013d8a",
+          "src/lib/agent/spawnCommand.ts": "6360dbc2458bd64f4e11fc5d932155e785eb5e5bc7b383509cb22b2af04adc11",
+          "src/lib/agent/spawnCommand.contention.test.ts": "fd86eb2a433829130f6febcae6b23621a9dd04bfb8847ab279ffaf0c57c63850"
+        },
+        "complete": true
+      },
+      {
+        "name": "lint",
+        "command": [
+          "bun",
+          "x",
+          "eslint",
+          "src/lib/agent/registry.ts",
+          "src/lib/runtime/structuredSpawn.ts",
+          "src/lib/agent/spawnCommand.ts",
+          "src/lib/agent/spawnCommand.contention.test.ts"
+        ],
+        "exit": 0,
+        "seconds": 7.1,
+        "counts": {},
+        "sourceSha256": {
+          "src/lib/agent/registry.ts": "73af43a944ac6ba623bd799a1568761641c7524802f011c5c184cca8e2f87fe8",
+          "src/lib/runtime/structuredSpawn.ts": "eaddb832a9944cf375d8db910b43f77d5dd4daa7708e314316098d063e013d8a",
+          "src/lib/agent/spawnCommand.ts": "6360dbc2458bd64f4e11fc5d932155e785eb5e5bc7b383509cb22b2af04adc11",
+          "src/lib/agent/spawnCommand.contention.test.ts": "fd86eb2a433829130f6febcae6b23621a9dd04bfb8847ab279ffaf0c57c63850"
+        },
+        "complete": true
+      },
+      {
+        "name": "contention",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/lib/agent/spawnCommand.contention.test.ts"
+        ],
+        "exit": 1,
+        "seconds": 21.0,
+        "counts": {
+          "pass": 60,
+          "skip": 2,
+          "fail": 4
+        },
+        "sourceSha256": {
+          "src/lib/agent/registry.ts": "73af43a944ac6ba623bd799a1568761641c7524802f011c5c184cca8e2f87fe8",
+          "src/lib/runtime/structuredSpawn.ts": "eaddb832a9944cf375d8db910b43f77d5dd4daa7708e314316098d063e013d8a",
+          "src/lib/agent/spawnCommand.ts": "6360dbc2458bd64f4e11fc5d932155e785eb5e5bc7b383509cb22b2af04adc11",
+          "src/lib/agent/spawnCommand.contention.test.ts": "fd86eb2a433829130f6febcae6b23621a9dd04bfb8847ab279ffaf0c57c63850"
+        },
+        "complete": true
+      },
+      {
+        "name": "registry",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/lib/agent/registry.test.ts"
+        ],
+        "exit": 0,
+        "seconds": 27.5,
+        "counts": {
+          "pass": 145,
+          "fail": 0
+        },
+        "sourceSha256": {
+          "src/lib/agent/registry.ts": "73af43a944ac6ba623bd799a1568761641c7524802f011c5c184cca8e2f87fe8",
+          "src/lib/runtime/structuredSpawn.ts": "eaddb832a9944cf375d8db910b43f77d5dd4daa7708e314316098d063e013d8a",
+          "src/lib/agent/spawnCommand.ts": "6360dbc2458bd64f4e11fc5d932155e785eb5e5bc7b383509cb22b2af04adc11",
+          "src/lib/agent/spawnCommand.contention.test.ts": "fd86eb2a433829130f6febcae6b23621a9dd04bfb8847ab279ffaf0c57c63850"
+        },
+        "complete": true
+      },
+      {
+        "name": "structured",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/lib/runtime/structuredSpawn.integration.test.ts"
+        ],
+        "exit": 0,
+        "seconds": 36.68,
+        "counts": {
+          "pass": 142,
+          "fail": 0
+        },
+        "sourceSha256": {
+          "src/lib/agent/registry.ts": "73af43a944ac6ba623bd799a1568761641c7524802f011c5c184cca8e2f87fe8",
+          "src/lib/runtime/structuredSpawn.ts": "eaddb832a9944cf375d8db910b43f77d5dd4daa7708e314316098d063e013d8a",
+          "src/lib/agent/spawnCommand.ts": "6360dbc2458bd64f4e11fc5d932155e785eb5e5bc7b383509cb22b2af04adc11",
+          "src/lib/agent/spawnCommand.contention.test.ts": "fd86eb2a433829130f6febcae6b23621a9dd04bfb8847ab279ffaf0c57c63850"
+        },
+        "complete": true
+      },
+      {
+        "name": "cuts",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/lib/runtime/releaseInterruption.test.ts"
+        ],
+        "exit": 0,
+        "seconds": 86.19,
+        "counts": {
+          "pass": 153,
+          "skip": 1,
+          "fail": 0
+        },
+        "sourceSha256": {
+          "src/lib/agent/registry.ts": "73af43a944ac6ba623bd799a1568761641c7524802f011c5c184cca8e2f87fe8",
+          "src/lib/runtime/structuredSpawn.ts": "eaddb832a9944cf375d8db910b43f77d5dd4daa7708e314316098d063e013d8a",
+          "src/lib/agent/spawnCommand.ts": "6360dbc2458bd64f4e11fc5d932155e785eb5e5bc7b383509cb22b2af04adc11",
+          "src/lib/agent/spawnCommand.contention.test.ts": "fd86eb2a433829130f6febcae6b23621a9dd04bfb8847ab279ffaf0c57c63850"
+        },
+        "complete": true
+      },
+      {
+        "name": "writers",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/lib/agent/registry.servingWriters.test.ts"
+        ],
+        "exit": 0,
+        "seconds": 11.01,
+        "counts": {
+          "pass": 23,
+          "skip": 4,
+          "fail": 0
+        },
+        "sourceSha256": {
+          "src/lib/agent/registry.ts": "73af43a944ac6ba623bd799a1568761641c7524802f011c5c184cca8e2f87fe8",
+          "src/lib/runtime/structuredSpawn.ts": "eaddb832a9944cf375d8db910b43f77d5dd4daa7708e314316098d063e013d8a",
+          "src/lib/agent/spawnCommand.ts": "6360dbc2458bd64f4e11fc5d932155e785eb5e5bc7b383509cb22b2af04adc11",
+          "src/lib/agent/spawnCommand.contention.test.ts": "fd86eb2a433829130f6febcae6b23621a9dd04bfb8847ab279ffaf0c57c63850"
+        },
+        "complete": true
+      }
+    ],
+    "finalFixtureCorrections": [
+      "Publish the fake hosted session before admitting its staged first message.",
+      "Provide the required null pipeline-source selector in the quota fixture."
+    ],
+    "remoteGate": {
+      "exit": 75,
+      "reason": "SSH runner unreachable after three attempts; a later health probe also failed."
+    },
+    "finalCampaign": {
+      "started": false,
+      "minimumObservedQueueWaitSeconds": 1325,
+      "manifestFiles": 402,
+      "perFileCommand": "bun test --timeout=60000 <file>",
+      "prefix": [
+        "focused admission and metadata cases",
+        "typecheck",
+        "ESLint on four changed files",
+        "operation-guard mutation control",
+        "pre-fix controls"
+      ],
+      "wrapperExit": 143,
+      "ownedAdmissionHelpersRemaining": 0,
+      "ownedTicketRowsRemaining": 0
+    },
+    "installedWrapper": {
+      "scripts/gate-slot.sh": {
+        "sourceSha256": "90096cb459c259ecb86ee385cfac9ad74d3bfca951f921a6a945f147a878c677",
+        "installedSha256": "772795bf07b2d0b9c8e7001bdabc084474be7e15983623ad99a849c40cc6f987",
+        "equal": false
+      },
+      "scripts/owned-runner.ts": {
+        "sourceSha256": "dfd89753fe6ea006af7ef850b26e7287468f58b78c36dcaca8e4f8a0befd79e9",
+        "installedSha256": "59fd4bfaad68c1ed13f0015fb12f22349c1bf71814587810b440b6f398296b47",
+        "equal": false
+      },
+      "scripts/cpu-admission.ts": {
+        "sourceSha256": "b508958f6998022c02511867b68ab539b159688b37f98cdc55829a332a8d7c64",
+        "installedSha256": "b508958f6998022c02511867b68ab539b159688b37f98cdc55829a332a8d7c64",
+        "equal": true
+      },
+      "scripts/gate-runner/client.ts": {
+        "sourceSha256": "293b431cfdcb7e0a4834c06354368dbd25091bd9a7de6e6e59e1d4b56539f230",
+        "installedSha256": "b46ee8ee24022aab9c7006f54ff2a02f5873afd9ce8a7dd76f0a361c48525842",
+        "equal": false
+      }
+    },
+    "notes": [
+      "The earlier importer sweep above retains its original source revisions; it does not verify this review fix.",
+      "The completed focused run has 48 passes, two helper skips and one staged fixture transition failure. Both handed regression cases and all seven new guard cases passed.",
+      "The completed typecheck reports the missing pipeline-source selector in the new quota fixture. That fixture is now corrected; final typecheck remains pending.",
+      "The completed full contention file has 60 passes, two skips and four failures: three credential/catalog failures also observed on the pre-fix revision, plus the staged fixture transition.",
+      "The final fixture, final typecheck, final focused run and full importer rerun did not start.",
+      "No performance gain is claimed. Tests used private state and fake engines."
+    ]
+  }
 }
