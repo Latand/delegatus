@@ -13,15 +13,14 @@
  * own classes and inserted into the real card:
  *
  *   0  today, for reference: nothing added;
- *   1  each agent or lane entry carries one line «Чому · Результат», folded to
- *      one line and opened with a tap;
+ *   1  an entry that needs it carries «Чому» and «Результат», a few words on a
+ *      line each, opened with its chevron into the full sentences;
  *   2  a «Підсумок» brief pinned at the top of the task; the timeline below
  *      stays as it is and its entries link to the brief's points;
  *   3  the timeline grouped into milestones by lane and stage, each with its
  *      why and its outcome; the single events fold inside.
  *
- * Query string: ?variant=0|1|2|3&device=desktop|phone&lang=uk|en&theme=light|dark
- * `&w=` sets the frame width for an in-between check (the viewport decides it).
+ * Query string: ?variant=0|1|2|3&device=desktop|phone&lang=uk|en&theme=light|dark[&all=1]
  */
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
@@ -40,6 +39,7 @@ import { chronologyEntryText } from "@/components/kanban/TaskChronology";
 import { taskChronology, type ChronologyEntry } from "@/components/kanban/taskChronologyModel";
 import { pastAttempts } from "@/components/kanban/pipelineGraph";
 import { stageDisplayName } from "@/components/pipelines/pipelineModel";
+import { buildBranchGroups } from "@/components/projectModel";
 
 /* ---------- what is drawn ---------- */
 
@@ -220,121 +220,102 @@ const attemptKey = (pipelineId: string, stageId: string, n: number) => `${pipeli
 
 /* ---------- what the variants add ---------- */
 
-/** Why an entry's work ran and what it concluded, for variant 1. Only entries an agent or a lane wrote carry one. */
-type Outcome = { why?: string; result: string; /** What the folded line says: the result in a few words. */ short: string };
+/** Why an entry's work ran and what it concluded, for variant 1. Folded,
+    each says a few words that fit whole on the narrowest card; opened, the
+    same lines say the full sentence in their place. «Чому» stands only on an
+    entry that left the default path (a fix, the main move, an extra lane, a
+    lane started after the merge); a result only where the entry's own words
+    and its neighbours do not already say it. */
+type Line = { short: string; full: string };
+type Outcome = { why?: Line; result?: Line };
 const OUTCOMES: Record<string, Outcome> = {
-  [`${A}:started`]: {
-    why: L("The task was taken into work", "Задачу взято в роботу"),
-    result: L(`PR #${PR} merged after 3 review rounds`, `PR #${PR} змерджено після 3 раундів перевірки`),
-    short: L(`PR #${PR} merged`, `PR #${PR} змерджено`),
-  },
   [attemptKey(A, "build", 1)]: {
-    result: L("Streaming writes in 5,000-row chunks and a retry on 503; the file format is unchanged", "Потоковий запис частинами по 5\u00a0000 рядків і повтор на 503; формат файлу той самий"),
-    short: L("streaming writes, a retry on 503", "потоковий запис, повтор на 503"),
-  },
-  [attemptKey(A, "review", 1)]: {
-    why: L("Checks the build", "Перевірка збірки"),
-    result: L("Rows come out twice after a retry; no retry test; no upload timeout", "Після повтору рядки дублюються; немає тесту на повтор; немає таймауту"),
-    short: L("duplicate rows, no test, no timeout", "дублі рядків, без тесту й таймауту"),
+    result: { short: L("streaming writes, a retry on 503", "потоковий запис, повтор на 503"), full: L("Rows stream in chunks of 5,000 instead of building the file in memory; an upload retries on 503. The file format is unchanged.", "Рядки пишуться потоком частинами по 5\u00a0000, а не збираються в пам’яті; вивантаження повторюється на 503. Формат файлу той самий.") },
   },
   [attemptKey(A, "fix", 1)]: {
-    why: L(`${stageName(A, "review")} round 1 found 3 issues`, `${stageName(A, "review")}, раунд 1, знайшов 3 зауваження`),
-    result: L("A retry resumes from the last confirmed chunk; a 503 test; a 30\u00a0s timeout per chunk", "Повтор продовжує з останньої підтвердженої частини; тест на 503; таймаут 30\u00a0с"),
-    short: L("no duplicates, a test, a timeout", "без дублів, тест, таймаут"),
-  },
-  [attemptKey(A, "review", 2)]: {
-    why: L("Checks the first fix", "Перевірка першого виправлення"),
-    result: L("The third retry fails with a different error", "Третій повтор падає з іншою помилкою"),
-    short: L("the third retry fails", "третій повтор падає"),
+    why: { short: L("duplicate rows, no test, no timeout", "дублі рядків, без тесту й таймауту"), full: L("Review round 1: a retry wrote its chunk again, so rows came out twice; no test covered the retry; uploads had no timeout.", "Review, раунд 1: повтор записував частину ще раз і рядки дублювались; тесту на повтор не було; вивантаження не мало таймауту.") },
+    result: { short: L("no duplicates, a test, a timeout", "без дублів, є тест і таймаут"), full: L("A retry resumes from the last confirmed chunk; a test for 503; a 30\u00a0s timeout per chunk.", "Повтор продовжує з останньої підтвердженої частини; додано тест на 503; таймаут 30\u00a0с на частину.") },
   },
   [attemptKey(A, "fix", 2)]: {
-    why: L(`${stageName(A, "review")} round 2 found 1 issue`, `${stageName(A, "review")}, раунд 2, знайшов 1 зауваження`),
-    result: L("The third retry waits 4\u00a0s, then gives a clear error; the test covers all three", "Третій повтор чекає 4\u00a0с і дає зрозумілу помилку; тест на всі три"),
-    short: L("all three retries work", "усі три повтори працюють"),
+    why: { short: L("the third retry failed", "третій повтор падав"), full: L("Review round 2: the test covered one retry only, and the third one failed with a different error.", "Review, раунд 2: тест перевіряв лише один повтор, а третій падав з іншою помилкою.") },
+    result: { short: L("all three retries work", "усі три повтори працюють"), full: L("Retries wait 1\u00a0→ 2\u00a0→ 4\u00a0s; after the third the person gets a clear error. The test covers all three.", "Повтори чекають 1\u00a0→ 2\u00a0→ 4\u00a0с; після третього людина бачить зрозумілу помилку. Тест покриває всі три.") },
   },
   [attemptKey(A, "review", 3)]: {
-    why: L("Checks the second fix", "Перевірка другого виправлення"),
-    result: L("No findings; 80k rows in 6\u00a0s, under 120\u00a0MB", "Без зауважень; 80\u00a0тис. рядків за 6\u00a0с, до 120\u00a0МБ"),
-    short: L("no findings", "без зауважень"),
+    result: { short: L("80k rows: 6\u00a0s, under 120\u00a0MB", "80\u00a0тис. рядків: 6\u00a0с, до 120\u00a0МБ"), full: L("No findings. An export of 80k rows took 6\u00a0s and stayed under 120\u00a0MB of memory.", "Зауважень немає. Експорт 80\u00a0тис. рядків тривав 6\u00a0с і зайняв до 120\u00a0МБ пам’яті.") },
   },
   [`${A}:merge:update:0`]: {
-    why: L(`main moved on: #${OTHER_PR} changed the same file`, `main пішов уперед: #${OTHER_PR} змінив той самий файл`),
-    result: L("Conflict: a lane to refresh the PR branch started", "Конфлікт — запущено лінію «Оновити гілку PR»"),
-    short: L(`a conflict with #${OTHER_PR}`, `конфлікт із #${OTHER_PR}`),
+    why: { short: L(`main moved on: #${OTHER_PR} changed upload.ts`, `main пішов уперед: #${OTHER_PR} змінив upload.ts`), full: L(`While PR #${PR} waited in the merge queue, #${OTHER_PR} (an upload rate limit) merged into main and changed src/export/upload.ts.`, `Поки PR #${PR} чекав у черзі на мердж, у main злили #${OTHER_PR} (обмеження швидкості вивантаження), і він змінив src/export/upload.ts.`) },
   },
   [`${B}:started`]: {
-    why: L(`PR #${PR} could not merge: a conflict with #${OTHER_PR} in upload.ts`, `PR #${PR} не зливався: конфлікт з #${OTHER_PR} в upload.ts`),
-    result: L("Conflict resolved; both changes kept", "Конфлікт розв’язано, обидві зміни збережено"),
-    short: L("conflict resolved", "конфлікт розв’язано"),
+    why: { short: L("the update hit a conflict", "оновлення дало конфлікт"), full: L(`PR #${PR} could not merge: updating it from main hit a conflict with #${OTHER_PR} in src/export/upload.ts, which needs an agent to resolve.`, `PR #${PR} не зливався: оновлення з main дало конфлікт з #${OTHER_PR} у src/export/upload.ts, і розв’язати його мав агент.`) },
   },
   [attemptKey(B, "refresh", 1)]: {
-    result: L(`upload.ts keeps both the rate limit from #${OTHER_PR} and the retry on 503`, `В upload.ts лишились і ліміт швидкості з #${OTHER_PR}, і повтор на 503`),
-    short: L("both changes kept", "обидві зміни збережено"),
-  },
-  [attemptKey(B, "review", 1)]: {
-    why: L("Checks the conflict resolution only", "Перевірка лише розв’язання конфлікту"),
-    result: L("The resolution is right; tests green", "Розв’язання правильне, тести зелені"),
-    short: L("the resolution is right", "розв’язання правильне"),
+    result: { short: L("both changes kept", "обидві зміни збережено"), full: L(`upload.ts keeps both the rate limit from #${OTHER_PR} and the retry on 503; tests green.`, `В upload.ts лишились і ліміт швидкості з #${OTHER_PR}, і повтор на 503; тести зелені.`) },
   },
   [`${C}:started`]: {
-    why: L("The PR merged; you approved the deploy", "PR змерджено; розгортання схвалили ви"),
-    result: L(`${RELEASE} on production`, `${RELEASE} на проді`),
-    short: L(`${RELEASE} on production`, `${RELEASE} на проді`),
-  },
-  [attemptKey(C, "deploy", 1)]: {
-    result: L(`${RELEASE} serves since 15:05; an 80k-row export on production passed, 118\u00a0MB`, `${RELEASE} працює з 15:05; експорт 80\u00a0тис. рядків на проді пройшов, 118\u00a0МБ`),
-    short: L(`${RELEASE} serves since 15:05`, `${RELEASE} працює з 15:05`),
+    why: { short: L("you approved the deploy", "розгортання схвалили ви"), full: L(`PR #${PR} merged at ${clock(AT.merged)}, and you approved deploying it.`, `PR #${PR} змерджено о ${clock(AT.merged)}, і ви схвалили розгортання.`) },
   },
 };
-/** The entry variant 1 shows open: the extra lane, whose reason is what the operator could not find. */
+/** The entry the «-all» frames show open: the extra lane, whose reason is what the operator could not find. */
 const OPEN_OUTCOME = `${B}:started`;
+/** A frame with `&all=1` opens «Earlier» and the extra lane's entry, so every line variant 1 adds is on screen. */
+const ALL = params.get("all") === "1";
 
 /** Variant 2's brief: numbered points the timeline entries point back to. */
 type BriefPoint = { n: number; text: string };
 const BRIEF: { heading: string; points: BriefPoint[] }[] = [
   { heading: L("What was done", "Що зроблено"), points: [
     { n: 1, text: L(
-      "CSV export no longer fails on large projects: the file is written as a stream in chunks of 5,000 rows instead of being built in memory.",
-      "Експорт CSV більше не падає на великих проєктах: файл пишеться потоком частинами по 5\u00a0000 рядків, а не збирається в пам’яті.",
+      "CSV export no longer fails on large projects: the file is written as a stream in chunks instead of being built in memory.",
+      "Експорт CSV більше не падає на великих проєктах: файл пишеться потоком частинами, а не збирається в пам’яті.",
     ) },
   ] },
   { heading: L("How it works now", "Як це працює тепер"), points: [
     { n: 2, text: L(
-      `An 80k-row export takes about 6\u00a0s and stays under 120\u00a0MB. When storage answers 503, the export retries the chunk up to 3 times (1\u00a0→ 2\u00a0→ 4\u00a0s) and resumes where it stopped; after the third failure the person sees «Storage is unavailable, try later». The file format did not change. Live since ${RELEASE}, 15:05.`,
-      `Експорт 80\u00a0тис. рядків триває близько 6\u00a0с і займає до 120\u00a0МБ. Якщо сховище відповідає 503, експорт повторює частину до 3 разів (1\u00a0→ 2\u00a0→ 4\u00a0с) і продовжує з місця збою; після третьої невдачі людина бачить «Сховище недоступне, спробуйте пізніше». Формат файлу не змінився. Працює з версії ${RELEASE}, 15:05.`,
+      `An 80k-row export takes about 6\u00a0s; the file format is the same. Live since ${RELEASE}, 15:05.`,
+      `Експорт 80\u00a0тис. рядків триває близько 6\u00a0с; формат файлу той самий. Працює з версії ${RELEASE}, 15:05.`,
+    ) },
+    { n: 3, text: L(
+      "If storage is down, the export tries again from where it stopped; after three failures the person sees «Storage is unavailable, try later».",
+      "Якщо сховище недоступне, експорт пробує ще раз з місця збою; після трьох невдач людина бачить «Сховище недоступне, спробуйте пізніше».",
     ) },
   ] },
   { heading: L("Key decisions", "Ключові рішення"), points: [
-    { n: 3, text: L(
-      "A retry resumes from the last confirmed chunk: a retry of the whole chunk wrote rows twice (found in review round 1).",
-      "Повтор продовжує з останньої підтвердженої частини: повтор цілої частини дублював рядки (знайдено в перевірці, раунд 1).",
-    ) },
     { n: 4, text: L(
-      "A 30\u00a0s timeout per chunk, so a storage that hangs does not hold the worker forever.",
-      "Таймаут 30\u00a0с на частину, щоб зависле сховище не тримало воркер вічно.",
+      "A retry resumes from the last confirmed chunk: retrying the whole chunk wrote rows twice (Review, round 1).",
+      "Повтор продовжує з останньої підтвердженої частини: повтор цілої частини дублював рядки (Review, раунд 1).",
     ) },
     { n: 5, text: L(
-      `The conflict with #${OTHER_PR} kept both changes: its upload rate limit and this retry. That needed an extra lane to refresh the PR branch.`,
+      "A 30\u00a0s timeout per chunk, so a storage that hangs does not hold the worker (Review, round 1).",
+      "Таймаут 30\u00a0с на частину, щоб зависле сховище не тримало воркер (Review, раунд 1).",
+    ) },
+    { n: 6, text: L(
+      "Up to three retries on 503, 1\u00a0→ 2\u00a0→ 4\u00a0s apart, then a clear message: the third retry used to fail with a different error (Review, round 2).",
+      "До трьох повторів на 503 з паузами 1\u00a0→ 2\u00a0→ 4\u00a0с, після них зрозуміле повідомлення: третій повтор падав з іншою помилкою (Review, раунд 2).",
+    ) },
+    { n: 7, text: L(
+      `The conflict with #${OTHER_PR} kept both changes: its upload rate limit and this retry. That took an extra lane to refresh the PR branch.`,
       `У конфлікті з #${OTHER_PR} збережено обидві зміни: його ліміт швидкості й цей повтор. Для цього запускали додаткову лінію «Оновити гілку PR».`,
     ) },
   ] },
   { heading: L("What is left", "Що лишилось"), points: [
-    { n: 6, text: L(
+    { n: 8, text: L(
       "Nothing required. Suggested: show the export's progress in the UI, as a separate task.",
       "Нічого обов’язкового. Пропозиція: показувати прогрес експорту в інтерфейсі, окремою задачею.",
     ) },
   ] },
 ];
 const BRIEF_BY = L(`written by the ${stageName(C, "deploy")} stage agent · ${clock(AT.note)}`, `написав агент етапу ${stageName(C, "deploy")} · ${clock(AT.note)}`);
-/** Which brief point each timeline entry backs. */
+/** Which brief point each timeline entry backs: every Review and Fix round
+    that changed something names the decision it led to. One entry per point
+    among neighbours, so two links never sit on adjacent short rows. */
 const BRIEF_REFS: Record<string, number> = {
   [attemptKey(A, "build", 1)]: 1,
-  [attemptKey(A, "review", 1)]: 3,
-  [attemptKey(A, "fix", 1)]: 3,
-  [attemptKey(A, "fix", 2)]: 2,
-  [`${A}:merge:update:0`]: 5,
-  [`${B}:started`]: 5,
-  [attemptKey(B, "refresh", 1)]: 5,
+  [attemptKey(A, "review", 1)]: 4,
+  [attemptKey(A, "fix", 1)]: 4,
+  [attemptKey(A, "review", 2)]: 6,
+  [attemptKey(A, "fix", 2)]: 6,
+  [`${B}:started`]: 7,
   [attemptKey(C, "deploy", 1)]: 2,
 };
 
@@ -346,10 +327,10 @@ function milestoneOf(entry: ChronologyEntry): MilestoneId {
   if (entry.pipelineId === A && (entry.stageId === "review" || entry.stageId === "fix")) return "review";
   return "build";
 }
-const MILESTONES: { id: MilestoneId; title: string; why: string; result: string }[] = [
+/** A milestone states why it ran only when it left the default path: a lane's first stage has none. */
+const MILESTONES: { id: MilestoneId; title: string; why?: string; result: string }[] = [
   {
     id: "build", title: stageName(A, "build"),
-    why: L("The task was taken into work: the first stage of the lane", "Задачу взято в роботу: перший етап лінії"),
     result: L("Streaming writes in 5,000-row chunks and a retry on 503; the file format is unchanged", "Потоковий запис частинами по 5\u00a0000 рядків і повтор на 503; формат файлу той самий"),
   },
   {
@@ -360,12 +341,12 @@ const MILESTONES: { id: MilestoneId; title: string; why: string; result: string 
   {
     id: "merge", title: L(`Merge PR #${PR} · extra lane`, `Мердж PR #${PR} · додаткова лінія`),
     why: L(`main moved on: #${OTHER_PR} changed the same file, so the «Refresh the PR branch» lane ran`, `main пішов уперед: #${OTHER_PR} змінив той самий файл, тому запускали лінію «Оновити гілку PR»`),
-    result: L(`Both changes kept; PR #${PR} merged at ${clock(AT.merged)}`, `Обидві зміни збережено; PR #${PR} змерджено о ${clock(AT.merged)}`),
+    result: L(`Both changes kept; PR #${PR} merged`, `Обидві зміни збережено; PR #${PR} змерджено`),
   },
   {
     id: "deploy", title: stageName(C, "deploy"),
-    why: L("The PR merged; you approved the deploy", "PR змерджено; розгортання схвалили ви"),
-    result: L(`${RELEASE} serves since 15:05; an 80k-row export on production passed, 118\u00a0MB`, `${RELEASE} працює з 15:05; експорт 80\u00a0тис. рядків на проді пройшов, 118\u00a0МБ`),
+    why: L("You approved the deploy", "Розгортання схвалили ви"),
+    result: L("The production export took 6\u00a0s and 118\u00a0MB", "Експорт на проді: 6\u00a0с, 118\u00a0МБ"),
   },
 ];
 /** The milestone variant 3 shows unfolded: the one with the extra lane. */
@@ -375,7 +356,10 @@ const WORDS = {
   why: L("Why", "Чому"),
   result: L("Result", "Результат"),
   brief: L("Summary", "Підсумок"),
-  toPoint: (n: number) => L(`Summary point ${n}`, `Пункт ${n} підсумку`),
+  /** A link's visible words name a summary point, so the digit never reads as a count. */
+  point: (n: number) => L(`item ${n}`, `п. ${n}`),
+  toPoint: (n: number) => L(`Summary item ${n}`, `Пункт ${n} підсумку`),
+  more: L("Why and result in full", "Чому і результат повністю"),
   events: (count: number) => (LANG === "uk"
     ? `${count} ${count % 10 === 1 && count % 100 !== 11 ? "подія" : [2, 3, 4].includes(count % 10) && ![12, 13, 14].includes(count % 100) ? "події" : "подій"}`
     : `${count} event${count === 1 ? "" : "s"}`),
@@ -401,7 +385,7 @@ function useInsertedHost(find: () => { parent: Element; before: Element | null }
     const observer = new MutationObserver(attempt);
     observer.observe(document.body, { childList: true, subtree: true });
     return () => observer.disconnect();
-  }, [find]);
+  }, [find, tag]);
   return host;
 }
 
@@ -425,36 +409,61 @@ function usePresses(selectors: readonly string[]) {
 const timelineSelector = PHONE ? "[data-phone-task-groups] section.chronology" : `[data-kanban-card="${CARD}"] section.chronology`;
 const entrySelector = (key: string) => `${timelineSelector} [data-chronology-entry="${CSS.escape(key)}"] .chronology-what`;
 
-/* ---------- variant 1: «Why · Result» on each entry ---------- */
+/* ---------- variant 1: «Why» and «Result» on each entry that needs them ---------- */
 
 function OutcomeLine({ entryKey, outcome }: { entryKey: string; outcome: Outcome }) {
-  const find = useMemo(() => () => {
+  const [open, setOpen] = useState(ALL && entryKey === OPEN_OUTCOME);
+  /* The lines sit right under the entry's words. On the phone an entry that
+     opens its conversation is a 44 px button with its words centred, so the
+     lines go inside it, under the words, and the button grows with them. */
+  const findLines = useMemo(() => () => {
     const what = document.querySelector(entrySelector(entryKey));
-    return what ? { parent: what, before: null } : null;
+    if (!what) return null;
+    const button = PHONE ? what.querySelector(":scope > .chronology-open") : null;
+    return button ? { parent: button, before: null } : { parent: what, before: null };
   }, [entryKey]);
-  const host = useInsertedHost(find);
-  if (!host) return null;
-  /* The result leads: it is what tells one entry from the next on a narrow card. */
-  const line = outcome.why ? `${WORDS.result}: ${outcome.short} · ${WORDS.why}: ${outcome.why}` : `${WORDS.result}: ${outcome.short}`;
-  return createPortal(
-    <details className="chronology-detail group" data-proto-outcome={entryKey} open={entryKey === OPEN_OUTCOME}>
-      <summary
-        style={{ width: "100%" }}
-        className={`flex min-w-0 list-none gap-1 [&::-webkit-details-marker]:hidden ${PHONE ? "min-h-11 items-center" : "min-h-6 items-center"}`}
-        aria-label={line}
-      >
-        <span aria-hidden className="inline-block shrink-0 text-muted transition-transform group-open:rotate-90 motion-reduce:transition-none" data-proto-chevron="">›</span>
-        <span className="min-w-0 flex-1 truncate" data-proto-outcome-line="">
-          <span className="font-semibold">{WORDS.result}:</span> {outcome.short}
-          {outcome.why ? <> · <span className="font-semibold">{WORDS.why}:</span> {outcome.why}</> : null}
-        </span>
-      </summary>
-      <dl className="m-0 mt-0.5 grid grid-cols-[max-content_minmax(0,1fr)] gap-x-2 gap-y-0.5 pb-1 text-secondary">
-        <dt className="font-semibold text-muted">{WORDS.result}</dt><dd className="m-0 text-primary">{outcome.result}</dd>
-        {outcome.why ? <><dt className="font-semibold text-muted">{WORDS.why}</dt><dd className="m-0 text-primary">{outcome.why}</dd></> : null}
-      </dl>
-    </details>,
-    host,
+  /* The chevron takes the entry's last column, where a stop's ⋯ goes: a finished task's entries have none. */
+  const findToggle = useMemo(() => () => {
+    const entry = document.querySelector(`${timelineSelector} [data-chronology-entry="${CSS.escape(entryKey)}"]`);
+    return entry ? { parent: entry, before: null } : null;
+  }, [entryKey]);
+  const lines = useInsertedHost(findLines, "span");
+  const toggle = useInsertedHost(findToggle, "span");
+  const id = `outcome-${entryKey.replace(/[^a-z0-9]+/gi, "-")}`;
+  const label = (word: string, line: Line) => (
+    <span className="block">
+      <span className="font-semibold">{word}:</span> <span className={open ? "text-primary" : undefined}>{open ? line.full : line.short}</span>
+    </span>
+  );
+  return (
+    <>
+      {lines ? createPortal(
+        /* Folded, each line says a few words; open, the same lines say the full sentence in their place. */
+        <span id={id} className="flex flex-col text-left font-normal" data-proto-outcome={entryKey} data-proto-outcome-open={open ? "1" : "0"}>
+          {outcome.why ? <span data-proto-outcome-why="">{label(WORDS.why, outcome.why)}</span> : null}
+          {outcome.result ? <span data-proto-outcome-result="">{label(WORDS.result, outcome.result)}</span> : null}
+        </span>,
+        lines,
+      ) : null}
+      {toggle ? createPortal(
+        <button
+          type="button"
+          className="chronology-link justify-center text-muted"
+          data-proto-outcome-toggle={entryKey}
+          aria-expanded={open}
+          aria-controls={id}
+          aria-label={WORDS.more}
+          onClick={() => setOpen((value) => !value)}
+          /* The chevron sits on the entry's first line. Its target grows by
+             padding a negative margin takes back, so the row keeps its height:
+             24 px on the desktop's 16 px line, 44 px on the phone's 18 px line. */
+          style={PHONE ? { minWidth: 44, minHeight: 0, alignSelf: "flex-start", padding: "13px 0", margin: "-13px -8px -13px 0" } : { minWidth: 24, minHeight: 0, padding: "4px 0", margin: "-4px 0" }}
+        >
+          <span aria-hidden className={`inline-block transition-transform motion-reduce:transition-none${open ? " rotate-90" : ""}`}>›</span>
+        </button>,
+        toggle,
+      ) : null}
+    </>
   );
 }
 
@@ -509,10 +518,18 @@ function BriefRef({ entryKey, n }: { entryKey: string; n: number }) {
   }, [entryKey]);
   const host = useInsertedHost(find, "span");
   if (!host) return null;
-  /* On the phone an entry that opens its conversation is a 44 px row with its words centred; any other entry's words sit on its first line. */
-  const top = PHONE && !host.parentElement?.querySelector(".chronology-open");
+  /* The link's words sit on the entry's first line, at the same size and line
+     height, so they share its baseline. The target grows by padding that a
+     negative margin takes back: the row keeps the height it has without the
+     link. On the phone an entry that opens its conversation is a 44 px row
+     with its words centred, so the link fills the row and centres its words
+     too; a shorter entry keeps its own line and a 44 px target around it. */
+  const tall = PHONE && Boolean(host.parentElement?.querySelector(".chronology-open"));
+  const style = PHONE
+    ? (tall ? { minWidth: 44, minHeight: 44, alignSelf: "stretch" } : { minWidth: 44, minHeight: 0, padding: "13px 0", margin: "-13px 0" })
+    : { minWidth: 24, minHeight: 0, padding: "4px 0", margin: "-4px 0" };
   return createPortal(
-    <a href={`#brief-${n}`} className={`chronology-link justify-end tabular-nums${top ? " !items-start" : ""}`} style={PHONE ? { minWidth: 44 } : { minWidth: 24, minHeight: 24 }} data-proto-brief-ref={n} aria-label={WORDS.toPoint(n)}>↑ {n}</a>,
+    <a href={`#brief-${n}`} className="chronology-link justify-end whitespace-nowrap" style={style} data-proto-brief-ref={n} aria-label={WORDS.toPoint(n)}>↑ {WORDS.point(n)}</a>,
     host,
   );
 }
@@ -543,7 +560,7 @@ function Milestones() {
               <span className="chronology-mark" style={{ background: "var(--color-success)" }} aria-hidden />
               <span className="chronology-what flex flex-col gap-0.5">
                 <span className="font-semibold text-primary">{milestone.title}</span>
-                <span><span className="font-semibold">{WORDS.why}:</span> {milestone.why}</span>
+                {milestone.why ? <span><span className="font-semibold">{WORDS.why}:</span> {milestone.why}</span> : null}
                 <span><span className="font-semibold">{WORDS.result}:</span> <span className="text-primary">{milestone.result}</span></span>
                 <details className="chronology-detail group" data-proto-milestone-events={events.length} open={milestone.id === OPEN_MILESTONE}>
                   <summary className={`list-none gap-1 [&::-webkit-details-marker]:hidden ${PHONE ? "" : "flex min-h-6 items-center"}`}>
@@ -572,16 +589,30 @@ function Milestones() {
 
 /* ---------- the screens ---------- */
 
+/* The task's nine stage conversations placed on the scene, as the Viewer keeps
+   every launched stage's conversation there: the phone lists the task's agents
+   from these groups, and the board card counts the same nine. */
+const GROUPS = buildBranchGroups(FILES, PROJECT, { now: NOW, expandedConversationPaths: new Set(FILES.map((file) => file.path)) });
+
 const EARLIER = `${timelineSelector} [data-chronology-earlier]`;
 const PRESSES: readonly string[] = [
   ...(PHONE ? [] : [`[data-kanban-card="${CARD}"] button.fold[aria-expanded="false"]`]),
-  /* Variants 1 and 2 show the whole timeline, so every entry's addition is on screen. */
-  ...(VARIANT === 1 || VARIANT === 2 ? [EARLIER] : []),
+  /* Variant 2 shows the whole timeline, so every link to the summary is on
+     screen; variant 1 keeps the timeline's own «Earlier» fold, and its «-all»
+     frames open it. */
+  ...(VARIANT === 2 || (VARIANT === 1 && ALL) ? [EARLIER] : []),
 ];
 
 function Additions({ variant }: { variant: Variant }) {
-  if (variant === 1) return <>{Object.entries(OUTCOMES).map(([key, outcome]) => <OutcomeLine key={key} entryKey={key} outcome={outcome} />)}</>;
-  if (variant === 2) return <><Brief />{Object.entries(BRIEF_REFS).map(([key, n]) => <BriefRef key={key} entryKey={key} n={n} />)}</>;
+  if (variant === 1) return (
+    <>
+      {Object.entries(OUTCOMES).map(([key, outcome]) => <OutcomeLine key={key} entryKey={key} outcome={outcome} />)}
+      {/* A phone entry that holds lines stacks them under its words, from the top, beside its time. */}
+      <style>{".chronology.phone .chronology-open:has([data-proto-outcome]) { flex-direction: column; align-items: flex-start; justify-content: flex-start; }"}</style>
+    </>
+  );
+  /* The brief takes the agent note's place: the note would say the release a second time. */
+  if (variant === 2) return <><Brief />{Object.entries(BRIEF_REFS).map(([key, n]) => <BriefRef key={key} entryKey={key} n={n} />)}<style>{`${PHONE ? "[data-proto-screen=phone]" : `[data-kanban-card="${CARD}"]`} [data-task-note] { display: none !important; }`}</style></>;
   if (variant === 3) return <><Milestones /><style>{`${timelineSelector}:not([data-proto-milestones]) { display: none !important; }`}</style></>;
   return null;
 }
@@ -592,7 +623,7 @@ function DesktopScreen() {
     <div className="flex h-dvh min-h-0 flex-col bg-canvas text-primary" data-proto-screen="desktop">
       <KanbanBoard
         project={PROJECT}
-        groups={[]}
+        groups={GROUPS}
         manual={[]}
         files={FILES}
         flows={[]}
@@ -622,7 +653,7 @@ function PhoneScreen() {
         taskId={TASK_ID}
         project={PROJECT}
         projectName={PROJECT}
-        groups={[]}
+        groups={GROUPS}
         manual={[]}
         files={FILES}
         flows={[]}
@@ -640,10 +671,10 @@ function PhoneScreen() {
 }
 
 const VARIANT_NAMES: Record<Variant, string> = {
-  0: "Як зараз: хронологія без підсумків (для порівняння)",
-  1: "«Чому» і «результат» у кожному записі хронології",
-  2: "«Підсумок» для людини вгорі задачі, хронологія посилається на його пункти",
-  3: "Хронологія етапами: чому запускався і чим закінчився кожен",
+  0: L("Today: the timeline without outcomes (for comparison)", "Як зараз: хронологія без підсумків (для порівняння)"),
+  1: L("«Why» and «Result» in the timeline entries that need them", "«Чому» і «результат» у записах хронології, де вони потрібні"),
+  2: L("A «Summary» for a person at the top of the task; the timeline links to its items", "«Підсумок» для людини вгорі задачі, хронологія посилається на його пункти"),
+  3: L("The timeline by milestones: why each ran and how it ended", "Хронологія етапами: чому запускався і чим закінчився кожен"),
 };
 
 function Frame({ children }: { children: ReactNode }) {
@@ -651,7 +682,7 @@ function Frame({ children }: { children: ReactNode }) {
     <>
       {/* The variant's number and name, printed on every frame; one line on the phone too. */}
       <header data-proto-header="" className="flex min-h-9 items-center gap-2 border-b border-border bg-sunken px-3 py-1.5 text-ui font-semibold text-primary">
-        <span className="shrink-0 rounded-full bg-accent-soft px-2 py-0.5 text-label font-bold text-accent">{VARIANT ? `Варіант ${VARIANT} з 3` : "Зараз"}</span>
+        <span className="shrink-0 rounded-full bg-accent-soft px-2 py-0.5 text-label font-bold text-accent">{VARIANT ? L(`Variant ${VARIANT} of 3`, `Варіант ${VARIANT} з 3`) : L("Today", "Зараз")}</span>
         <span className="min-w-0 flex-1 text-label [overflow-wrap:anywhere]">{VARIANT_NAMES[VARIANT]}</span>
       </header>
       {children}
