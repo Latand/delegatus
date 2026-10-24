@@ -22,7 +22,7 @@ import { PhoneStep, type PhoneStepOutcome } from "./PhoneStep";
 import { ProjectStep, type GuideProject } from "./ProjectStep";
 import { RelayStep } from "./RelayStep";
 import { TelegramReportsStep } from "./TelegramReportsStep";
-import { putOnboarding, unfinishedFirstRun, useOnboarding, type OnboardingMode } from "./useOnboarding";
+import { putOnboarding, unfinishedFirstRun, useOnboarding, type OnboardingMarkerStatus, type OnboardingMode } from "./useOnboarding";
 import { VoiceStep } from "./VoiceStep";
 
 /**
@@ -124,11 +124,14 @@ export function firstOpenStep(marker: Pick<OnboardingMarker, "steps"> | null): O
   return GUIDE.find((step) => marker?.steps[step] !== "done" && !(OPTIONAL.includes(step) && marker?.steps[step] === "skipped")) ?? GUIDE[0]!;
 }
 
-export function OnboardingDialog({ mode, initialStep, marker, onClose, projects = [], legacyState = false, checkMinutes = DEFAULT_CHECK_MINUTES, onCreateProject }: {
+export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pending", onClose, projects = [], legacyState = false, checkMinutes = DEFAULT_CHECK_MINUTES, onCreateProject }: {
   mode: OnboardingMode;
   /** Open the guide on this step (the QR popover opens it on Phone). */
   initialStep?: OnboardingStepId | null;
   marker: OnboardingMarker | null;
+  /** Whether `marker` came from a successful read; only a read one can make
+      this a first run that is offered the newcomer help. */
+  markerStatus?: OnboardingMarkerStatus;
   /** `steps` rides on the same write as the outcome. */
   onClose: (outcome: "dismissed" | "completed", steps?: Partial<Record<OnboardingStepId, OnboardingStepState>>) => void;
   /** The projects the rail lists, most recent first, with their folders. */
@@ -365,7 +368,7 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
       onCreate={create}
       onReadFirst={readFirst}
       onOpenSeat={openSeat}
-      newcomer={unfinishedFirstRun(marker)}
+      newcomer={unfinishedFirstRun(marker, markerStatus)}
     />
   ) : (
     <EnginesStep claude={claude} codex={codex} cli={cli} now={now} onRecheck={recheckAll} />
@@ -462,6 +465,7 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
         tabIndex={-1}
         data-onboarding-dialog={view}
         data-onboarding-current={view === "guide" ? current : undefined}
+        data-onboarding-marker={markerStatus}
         className={`fixed inset-0 ${Z.modal} flex flex-col bg-canvas outline-none`}
       >
         <header className="shrink-0 border-b border-border bg-raised pt-[env(safe-area-inset-top)]">
@@ -513,6 +517,7 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
         tabIndex={-1}
         data-onboarding-dialog={view}
         data-onboarding-current={view === "guide" ? current : undefined}
+        data-onboarding-marker={markerStatus}
         className={`flex ${checkTall ? "h-[820px]" : "h-[640px]"} max-h-[calc(100vh-96px)] w-[920px] max-w-full flex-col overflow-hidden rounded-[12px] border border-border bg-card shadow-2 outline-none`}
       >
         <header className="flex h-[52px] shrink-0 items-center gap-2 border-b border-border bg-raised px-4">
@@ -554,7 +559,7 @@ export function OnboardingHost({ projects, currentProject, onCreateProject }: {
   currentProject?: string | null;
   onCreateProject?: (name: string, root: string, options?: CreateProjectRequestOptions) => Promise<CreateProjectOutcome>;
 }) {
-  const { mode, step, opening, marker, legacyState, checkMinutes, close } = useOnboarding();
+  const { mode, step, opening, marker, markerStatus, legacyState, checkMinutes, close } = useOnboarding();
   if (!mode) return null;
   return (
     <OnboardingDialog
@@ -562,6 +567,7 @@ export function OnboardingHost({ projects, currentProject, onCreateProject }: {
       mode={mode}
       initialStep={step}
       marker={marker}
+      markerStatus={markerStatus}
       legacyState={legacyState}
       onClose={close}
       projects={projects}

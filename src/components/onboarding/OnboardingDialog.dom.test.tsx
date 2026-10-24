@@ -51,7 +51,7 @@ Object.assign(globalThis, {
     }
     /* The route answers every kept write with the marker it wrote. */
     if (url.includes("/api/onboarding")) {
-      if (init?.method !== "PUT") return json({ marker: null });
+      if (init?.method !== "PUT") return onboardingRead();
       if (onboardingRefusal) return json({ error: onboardingRefusal }, 500);
       return json({ marker: { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, steps: {}, lastHealth: null, walk: null } });
     }
@@ -65,6 +65,9 @@ Object.assign(globalThis, {
     return json({ claude: { active: "", accounts: [] }, codex: { active: "", accounts: [] } });
   },
 });
+
+/* What `GET /api/onboarding` answers; the host's marker cases set it. */
+let onboardingRead: () => Promise<Response> = () => json({ marker: null });
 
 /* What `/api/external-relay` answers; the relay step's cases set it. */
 let relayBody: unknown = { relays: [], pending: [], status: [] };
@@ -458,7 +461,7 @@ test("#2166: Create hands the project's draft a confirm on the chosen runtime an
   const root = createRoot(host);
   const closes: unknown[] = [];
   const projects = [{ project: "repo-todo", name: "todo-cli", cwd: "projects/todo-cli", conversations: 0 }];
-  flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="orchestrator" marker={null} projects={projects} onClose={(outcome, steps) => closes.push({ outcome, steps })} />));
+  flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="orchestrator" marker={null} markerStatus="read" projects={projects} onClose={(outcome, steps) => closes.push({ outcome, steps })} />));
   chooseProject(host, "orchestrator");
   expect(host.textContent).toContain("Create its orchestrator");
   expect(host.textContent).toContain("The orchestrator takes your requests");
@@ -992,7 +995,7 @@ test("a new install can choose the cheaper orchestrator without changing saved r
   const root = createRoot(host);
   const closes: unknown[] = [];
   const projects = [{ project: "repo-todo", name: "todo-cli", cwd: "projects/todo-cli", conversations: 0 }];
-  flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="orchestrator" marker={null} projects={projects} onClose={(outcome, steps) => closes.push({ outcome, steps })} />));
+  flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="orchestrator" marker={null} markerStatus="read" projects={projects} onClose={(outcome, steps) => closes.push({ outcome, steps })} />));
   chooseProject(host, "orchestrator");
   expect(host.textContent).toContain("Create its orchestrator");
   expect(host.textContent).toContain("The orchestrator takes your requests");
@@ -1033,7 +1036,7 @@ for (const [label, marker] of finishedMarkers) {
     document.body.appendChild(host);
     const root = createRoot(host);
     const projects = [{ project: "repo-todo", name: "todo-cli", cwd: "projects/todo-cli", conversations: 0 }];
-    flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="orchestrator" marker={marker} projects={projects} onClose={() => {}} />));
+    flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="orchestrator" marker={marker} markerStatus="read" projects={projects} onClose={() => {}} />));
     chooseProject(host, "orchestrator");
     await until(() => Boolean(host.querySelector<HTMLButtonElement>("[data-onboarding-orchestrator-create]:not([disabled])")) && (host.querySelector("[data-onboarding-orchestrator-runs-on]")?.textContent ?? "").includes("account Main"));
     expect(host.querySelector("[data-onboarding-orchestrator-create]:not([disabled])")).not.toBeNull();
@@ -1054,7 +1057,7 @@ test("a first run still in progress keeps the cost estimate and the cheaper choi
   const root = createRoot(host);
   const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { ...noSteps, engines: "done", project: "done" } } as const;
   const projects = [{ project: "repo-todo", name: "todo-cli", cwd: "projects/todo-cli", conversations: 0 }];
-  flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="orchestrator" marker={marker} projects={projects} onClose={() => {}} />));
+  flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="orchestrator" marker={marker} markerStatus="read" projects={projects} onClose={() => {}} />));
   chooseProject(host, "orchestrator");
   await until(() => Boolean(host.querySelector<HTMLButtonElement>("[data-onboarding-orchestrator-create]:not([disabled])")) && (host.querySelector("[data-onboarding-orchestrator-runs-on]")?.textContent ?? "").includes("account Main"));
   expect(host.querySelector("[data-onboarding-cost]")?.textContent).toContain("$0.60 for 100k uncached input + 10k output tokens");
@@ -1062,6 +1065,99 @@ test("a first run still in progress keeps the cost estimate and the cheaper choi
   flushSync(() => root.unmount());
   host.remove();
 });
+
+/* The host reads the marker itself: only a successful read can make the guide
+   a first run, so a read still pending or one that failed offers neither the
+   cost estimate nor the cheaper choice, and Create keeps the saved launch. */
+const onboardingGets = () => requests.filter((request) => request.method === "GET" && request.url.includes("/api/onboarding")).length;
+const savedLaunch = { engine: "claude", model: "opus", effort: "high", account: "default" };
+const helpShown = (host: HTMLElement) => ({ cost: Boolean(host.querySelector("[data-onboarding-cost]")), cheaper: Boolean(host.querySelector("[data-onboarding-cheaper]")) });
+
+async function openHostOnOrchestrator(read: () => Promise<Response>, status: "pending" | "failed" | "read") {
+  rolesBody = { roles: [] };
+  answerAccounts({ claude: { active: "default", cli: "found", accounts: [signedIn("default", "Main")] }, codex: { active: "default", cli: "found", accounts: [signedIn("default", "Main")] }, copilot: { active: "", accounts: [] } });
+  onboardingRead = read;
+  const { OnboardingHost } = await import("./OnboardingDialog");
+  const { openOnboarding } = await import("./useOnboarding");
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  const before = onboardingGets();
+  flushSync(() => root.render(<OnboardingHost projects={[{ project: "repo-todo", name: "todo-cli", cwd: "projects/todo-cli", conversations: 0 }]} />));
+  await until(() => onboardingGets() > before);
+  expect(onboardingGets()).toBe(before + 1);
+  flushSync(() => openOnboarding("guide", "orchestrator"));
+  await until(() => Boolean(host.querySelector(`[data-onboarding-marker=${status}]`)));
+  expect(host.querySelector("[data-onboarding-dialog]")?.getAttribute("data-onboarding-marker")).toBe(status);
+  chooseProject(host, "orchestrator");
+  await until(() => Boolean(host.querySelector<HTMLButtonElement>("[data-onboarding-orchestrator-create]:not([disabled])")) && (host.querySelector("[data-onboarding-orchestrator-runs-on]")?.textContent ?? "").includes("account Main"));
+  expect(host.querySelector("[data-onboarding-orchestrator-create]:not([disabled])")).not.toBeNull();
+  expect(host.querySelector("[data-onboarding-orchestrator-runs-on]")?.textContent).toContain("Claude · Opus");
+  const done = () => {
+    flushSync(() => root.unmount());
+    host.remove();
+    onboardingRead = () => json({ marker: null });
+  };
+  return { host, done };
+}
+
+async function createLaunches(host: HTMLElement): Promise<unknown[]> {
+  const { onOrchestratorDraftRequest, takePendingSeatConfirm } = await import("@/components/orchestrator/draftPrefill");
+  const launches: unknown[] = [];
+  const off = onOrchestratorDraftRequest((request) => launches.push(request));
+  flushSync(() => (host.querySelector("[data-onboarding-orchestrator-create]") as HTMLElement).click());
+  off();
+  takePendingSeatConfirm("repo-todo");
+  return launches;
+}
+
+const unreadMarkers = [
+  ["a refused marker read", () => json({ error: "marker unreadable" }, 500)],
+  ["an unreachable marker read", () => Promise.reject(new TypeError("fetch failed"))],
+  ["a marker read answered without a marker", () => json({ legacyState: false })],
+] as const;
+
+for (const [label, read] of unreadMarkers) {
+  test(`host: ${label} offers no newcomer help and keeps the saved launch`, async () => {
+    const { host, done } = await openHostOnOrchestrator(read, "failed");
+    expect(helpShown(host)).toEqual({ cost: false, cheaper: false });
+    expect(await createLaunches(host)).toEqual([{ project: "repo-todo", launch: savedLaunch, confirm: true }]);
+    done();
+  });
+}
+
+test("host: a marker read still pending offers no newcomer help until it answers a first run", async () => {
+  let answer: (response: Response) => void = () => {};
+  const held = new Promise<Response>((resolve) => { answer = resolve; });
+  const { host, done } = await openHostOnOrchestrator(() => held, "pending");
+  expect(helpShown(host)).toEqual({ cost: false, cheaper: false });
+  answer(new Response(JSON.stringify({ marker: null }), { status: 200, headers: { "content-type": "application/json" } }));
+  await until(() => Boolean(host.querySelector("[data-onboarding-marker=read]")) && Boolean(host.querySelector("[data-onboarding-cheaper]")));
+  expect(helpShown(host)).toEqual({ cost: true, cheaper: true });
+  done();
+});
+
+test("host: a marker read still pending keeps the saved launch", async () => {
+  const { host, done } = await openHostOnOrchestrator(() => new Promise<Response>(() => {}), "pending");
+  expect(helpShown(host)).toEqual({ cost: false, cheaper: false });
+  expect(await createLaunches(host)).toEqual([{ project: "repo-todo", launch: savedLaunch, confirm: true }]);
+  done();
+});
+
+const readMarkers = [
+  ["no marker yet", null, true],
+  ["a first run in progress", { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { ...noSteps, engines: "done" } }, true],
+  ...finishedMarkers.map(([label, marker]) => [label, marker, false] as const),
+] as const;
+
+for (const [label, marker, newcomer] of readMarkers) {
+  test(`host: a read marker, ${label}, ${newcomer ? "offers" : "offers no"} newcomer help`, async () => {
+    const { host, done } = await openHostOnOrchestrator(() => json({ marker }), "read");
+    expect(helpShown(host)).toEqual({ cost: newcomer, cheaper: newcomer });
+    if (!newcomer) expect(await createLaunches(host)).toEqual([{ project: "repo-todo", launch: savedLaunch, confirm: true }]);
+    done();
+  });
+}
 
 test("temporary path segments are excluded across platforms without hiding repository names containing temp", async () => {
   const { isGuideRepository } = await import("./ProjectStep");
