@@ -1375,7 +1375,7 @@ test.each(["json", "sqlite"] as const)("quota setup restores its title with curr
     registry.queuePinnedSpawn(begun.receipt.launchId, {
       version: 1, accountId: "account-a", retryAt: "2026-10-24T00:00:00.000Z", locale: "en",
       admissionDeadlineAt: "2026-10-24T00:10:00.000Z", prompt: "Continue the task", imageRefs: [],
-      parentArtifactPath: null,
+      parentArtifactPath: null, pipelineSourceConversationId: null,
       spec: { engine: "claude", command: "claude", cwd, windowName: "quota", launchProfile: { ...profile, readOnly: false } },
     }, "Waiting for capacity");
     const queued = registry.spawnReceipt(begun.receipt.launchId)!;
