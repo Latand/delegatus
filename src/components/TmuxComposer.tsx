@@ -148,6 +148,7 @@ import { VoiceFloatButton } from "./voice/VoiceFloatButton";
 import { isCachedDesignatedManagerConversation, isDesignatedManagerConversation } from "./voice/managerIdentity";
 import { viewerContextPrelude } from "./voice/viewerContextPrelude";
 import { useSeatParallelBusy } from "./orchestrator/useSeatParallelBusy";
+import { useRetiredOrchestrator } from "./orchestrator/RetiredOrchestratorBanner";
 import { publishSeatDeputy, useSeatProjectFor } from "./orchestrator/seatDeputies";
 import { parseSeatDeputyView } from "@/lib/orchestrator/deputyView";
 import {
@@ -1995,6 +1996,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   // scanner-shaped subagent, a shell task) means this surface exposes no message
   // path at all, so the whole composer stands down below (finding 2).
   const agentCapabilities = runtimeDependencies.useAgentCapabilities(file);
+  const retiredOrchestrator = useRetiredOrchestrator(file, viewActive && !pollPaused);
   const { caps, structuredSession, runtime } = agentCapabilities;
   /* The agent's own controls ride this composer's bottom row (operator,
      2026-10-11): Interrupt while a turn runs and «⋯ More actions». They act
@@ -3425,7 +3427,8 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   /* The dead row's Send cell is no longer a blanket refusal, so its verdict is
      read like every other surface's: enabled for a conversation the send path
      can raise, and disabled with the reason for one it cannot. */
-  const effectiveSendBlockedReason = sendBlockedReason
+  const effectiveSendBlockedReason = (retiredOrchestrator ? t("retiredOrchestrator.sendBlocked") : null)
+    ?? sendBlockedReason
     ?? (caps.controls.send.state === "disabled" ? t(caps.controls.send.reason) : null)
     ?? (unresolvedOwnership ? t("strip.resolving") : null);
   const spawnMode = target === null && !deliveryRoute && !unresolvedOwnership;
@@ -5974,7 +5977,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       /* Every blocked state keeps one recovery route (issue #499): Re-check
          forces a fresh runtime snapshot, which resolves an unresolved host,
          surfaces a recovered one, and reconciles a timed-out admission. */
-      onSendBlockedRecover={() => void runtimeDependencies.refreshRuntime()}
+      onSendBlockedRecover={retiredOrchestrator ? undefined : () => void runtimeDependencies.refreshRuntime()}
       receiptsHidden={!switchHeld && !payloadRecovery && !receiptsInRegion}
       receipts={switchHeld || payloadRecovery || unownedRuntimeReceipts.length ? <>{switchHeld}{payloadRecovery}{
         unownedRuntimeReceipts.length
@@ -5991,7 +5994,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
                 }
                 void runtimeDependencies.refreshRuntime().then(() => refreshPayloads());
               }}
-              actionsDisabled={busy || voiceSending || deadHostBlocksSend}
+              actionsDisabled={busy || voiceSending || deadHostBlocksSend || Boolean(retiredOrchestrator)}
               dismissed={dismissedReceipts}
               session={structuredSession
                 ? { host: structuredSession.session.host, turn: structuredSession.session.turn }

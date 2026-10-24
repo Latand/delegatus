@@ -35,6 +35,38 @@ const LAUNCH: LaunchOptions = {
 };
 const FIXTURE = "src/components/conversation/conversationWindowEvidence.fixture.tsx";
 
+describe("retired orchestrator", () => {
+  browserTest("a rotated recipient keeps drafts and offers a current conversation link in every viewport", async () => {
+    const out = path.resolve(".artifacts/retired-orchestrator");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [390, 1280]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=retired-orchestrator&lang=${lang}`, { width, height: 844 }, theme, lang);
+        try {
+          const draft = page.locator("textarea").first();
+          await draft.waitFor();
+          await page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>("textarea")?.value === "Unsent draft stays here");
+          await page.evaluate(() => (window as unknown as { retiredOrchestrator: { rotate(): void } }).retiredOrchestrator.rotate());
+          const banner = page.locator("[data-retired-orchestrator]");
+          await banner.waitFor();
+          expect(await banner.innerText()).toContain(translate(lang, "retiredOrchestrator.title"));
+          expect(await draft.inputValue()).toBe("Unsent draft stays here");
+          expect(await page.locator('[data-testid="composer-send-blocked"] button').count()).toBe(0);
+          expect(await page.locator("[data-outbox-retry=retired-message]").isDisabled()).toBe(true);
+          expect(await page.evaluate(() => (window as unknown as { retiredOrchestrator: { sends(): number } }).retiredOrchestrator.sends())).toBe(0);
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}.png`), fullPage: true });
+          await banner.getByRole("link").click();
+          expect(new URL(page.url()).hash).toBe("#c=conversation_current");
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); served.stop(); }
+  });
+});
+
 describe("scoped memory cap", () => {
   browserTest("the effective cap and clamp note fit every locale, theme and viewport", async () => {
     const out = path.resolve(".artifacts/memory-caps");

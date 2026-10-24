@@ -7264,4 +7264,9 @@ export const uk: Record<keyof typeof en, Message> = {
   "soundCaption.batch.yourMove": "Потрібні ви: {count}",
   "soundCaption.batch.fault": { one: "{count} збій", few: "{count} збої", many: "{count} збоїв", other: "{count} збою" },
   "soundCaption.openAria": "Відкрити: {label}",
+  "retiredOrchestrator.title": "Попередній оркестратор",
+  "retiredOrchestrator.body": "Ця розмова більше не керує проєктом. Ваші повідомлення й чернетки залишаються тут.",
+  "retiredOrchestrator.open": "Відкрити чинного оркестратора",
+  "retiredOrchestrator.unavailable": "Чинний оркестратор поки недоступний. Ця розмова залишається для перегляду.",
+  "retiredOrchestrator.sendBlocked": "Відкрийте чинного оркестратора, щоб надіслати повідомлення.",
 };

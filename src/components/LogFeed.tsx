@@ -373,6 +373,8 @@ interface Props {
   follow: boolean;
   setFollow: (follow: boolean) => void;
   compact?: boolean;
+  /** A known retired recipient keeps its messages readable without offering another send. */
+  sendBlockedReason?: string | null;
   /** Opens a fresh editable draft from a terminal structured launch receipt —
       wired through so the launch chips keep their retry inside the window. */
   onLaunchRetry?: () => void;
@@ -391,7 +393,7 @@ interface Props {
 export const JUMP_FADE_PX = 44;
 const JUMP_FADE = `linear-gradient(to bottom, #000 calc(100% - ${JUMP_FADE_PX}px), transparent)`;
 
-export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, setFollow, compact = false, onLaunchRetry, deputies: deputiesProp, stepsMount = null }: Props) {
+export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, setFollow, compact = false, sendBlockedReason = null, onLaunchRetry, deputies: deputiesProp, stepsMount = null }: Props) {
   /* Mobile v2 §3.4, §6: on the phone the transcript ends at the composer. The
      live-tail pill and the turn status bar below it are both gone — following
      is the feed's default and needs no pill, and elapsed time lives in the
@@ -1453,7 +1455,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     ? { label: migrationTargetName(liveMigration) }
     : null;
   const outboxSession = runtimeSession ? { host: runtimeSession.host, turn: runtimeSession.turn } : null;
-  const outboxActions = useOutboxRowActions(memoryKey ?? "", pendingOutbox);
+  const outboxActions = useOutboxRowActions(memoryKey ?? "", pendingOutbox, sendBlockedReason);
   /* The whole window, in one keyed list, in the canonical chronological order
      `orderedConversationTail` owns (round-1 P1#3): the transcript, then the
      launch/delivery chips, then the operator's own unconfirmed messages, then
