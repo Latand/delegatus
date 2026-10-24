@@ -36,9 +36,24 @@ function binding(accountId: string, project = ATLAS): AccountProjectBinding {
   return { engine: "claude", accountId, project, createdAt: new Date(NOW - 60_000).toISOString() };
 }
 
-test("a project with no binding keeps today's answer on both launch paths", () => {
-  /* The pipeline seam: the engine's active account, and no capacity arithmetic
-     — the throttled sample below is not even consulted. */
+test("unbound and bound unpinned work share reset ranking while a stage pin stays put", () => {
+  const reset = Math.floor(NOW / 1_000) + 86_400;
+  const input = { project: ATLAS, engine: "claude" as const, accounts: ACCOUNTS,
+    observations: [observation(RESERVED, 10, reset + 86_400), observation(SPARE, 50, reset)],
+    preferredId: RESERVED, now: NOW };
+  for (const bindings of [[], [binding(RESERVED), binding(SPARE)]]) {
+    for (const unbound of ["engine-default", "capacity"] as const) {
+      expect(selectProjectAccount({ ...input, bindings, unbound })).toEqual({ kind: "available", accountId: SPARE });
+      expect(selectProjectAccount({ ...input, bindings, unbound, requestedId: RESERVED })).toEqual({ kind: "available", accountId: RESERVED });
+    }
+  }
+  expect(selectProjectAccount({ ...input, bindings: [binding(RESERVED)] })).toEqual({ kind: "available", accountId: RESERVED });
+  expect(selectProjectAccount({ ...input, bindings: [binding(RESERVED)], requestedId: SPARE })).toEqual({
+    kind: "not_allowed", accountId: SPARE, allowedAccountIds: [RESERVED],
+  });
+});
+
+test("a project with no binding uses capacity on both unpinned launch paths", () => {
   expect(selectProjectAccount({
     project: ATLAS,
     engine: "claude",
@@ -47,7 +62,7 @@ test("a project with no binding keeps today's answer on both launch paths", () =
     bindings: [],
     preferredId: RESERVED,
     now: NOW,
-  })).toEqual({ kind: "available", accountId: RESERVED });
+  })).toEqual({ kind: "available", accountId: SPARE });
 
   /* The reviewer seam: rate-limit-aware across every account, as it always was. */
   expect(selectProjectAccount({

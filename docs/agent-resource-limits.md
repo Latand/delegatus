@@ -8,6 +8,45 @@ is the operator's view; the designs are
 
 ## Agent memory
 
+### Scoped caps
+
+The launch resolves the cap in this order: installation
+(`DELEGATUS_AGENT_MEMORY_MAX`, with `LLV_AGENT_MEMORY_MAX` as its alias),
+project `agentMemoryMaxBytes`, role config `agentMemoryMaxBytes`, then stage
+`agentMemoryMaxBytes`. An absent or null scoped value inherits. Scoped values
+are integer bytes from 1 GiB through 1 TiB; invalid submitted values are
+refused. Installation size strings retain their existing syntax and fallback.
+Project settings use the canonical project key, role variants inherit their
+role's cap, and the stage cap and the role variant selector travel with the
+durable launch profile through resume and recovery. A resume that names no
+stage cap keeps the conversation's; an explicit null clears it. Project and
+role defaults are read again at launch. A pipeline stage that names no role
+takes Builder's cap, at launch, in `create_pipeline` previews and in OOM
+recovery alike.
+A role's cap belongs to no engine or model: changing the row's model or engine
+in the Agents table, the banner's bulk move and the maintainer's picker keep
+it, and only the row's reset clears it.
+
+Every override is clamped to the existing machine agent budget after the
+installation's shared reserve. Scoped settings cannot alter that reserve,
+disable containment, or enlarge the shared slice/watchdog budget. A request
+above the budget launches at the budget with a visible clamping note.
+The launch receipt retains requested bytes, effective bytes, source and the
+note; `spawn_agent` returns that receipt's cap. Stage cards show the launch's
+effective cap and note. `create_pipeline` answers include stage cap previews,
+labelled as previews because machine conditions can change before launch.
+Memory mode `off` and unsupported/unmeasurable containment are reported as
+unenforced rather than displaying a numeric ceiling as enforced.
+
+This extends the installation-only planner and project/stage contracts checked
+on main at `6b5d8509` (`src/lib/runtime/agentMemory.ts`,
+`src/lib/projects/settings.ts`, `src/lib/pipelines/types.ts`). The child-OOM
+handling in `src/lib/pipelines/engine.ts` and
+`src/components/attention/decision.ts` remains: a nonfatal child kill leaves
+the agent active. A pipeline's automatic retry after a fatal child OOM waits
+for the headroom of the cap that retry launches with, resolved from the same
+project, role and stage scopes and clamped to the same budget.
+
 Before a structured, terminal or headless agent launch, Delegatus requires
 at least 2 GiB of available RAM. This floor leaves 1 GiB of headroom above
 the exhaustion observed in [#1211](https://github.com/Latand/delegatus/issues/1211).

@@ -63,14 +63,10 @@ export function rollupChecksWithIdentity(rollup: unknown): ReadCheck[] {
     if (!previous || check.at > previous.at) byIdentity.set(identity, check);
     else if (check.at === previous.at && check.verdict !== previous.verdict) byIdentity.set(identity, { ...check, verdict: "pending", ambiguous: true });
   }
-  const unresolved = new Map<string, number>();
-  for (const check of unproven) {
-    const identity = `${check.appId ?? "unknown"}\0${check.name}`;
-    unresolved.set(identity, (unresolved.get(identity) ?? 0) + 1);
-  }
-  const checks = [...byIdentity.values(), ...unproven.map(check => ({
-    ...check, verdict: (unresolved.get(`${check.appId ?? "unknown"}\0${check.name}`) ?? 0) > 1 ? "pending" as const : check.verdict,
-  }))];
+  // Missing provenance cannot prove a rerun supersedes another result. Keep
+  // every verdict: all-green duplicates are settled, and a failure or pending
+  // run remains effective regardless of the order gh returned them in.
+  const checks = [...byIdentity.values(), ...unproven];
   return checks
     .map(({ name, source, appId, workflow, verdict }) => ({ name, verdict, source, appId, workflow }))
     .sort((a, b) => a.name.localeCompare(b.name) || (a.source ?? "").localeCompare(b.source ?? "")
