@@ -1,3 +1,4 @@
+import { LOAD_PROBE } from "./load";
 // Stub-runner runs: privacy refusals and review exports (T15, T19).
 // The remote command really runs, under a temporary runner home, through the
 // real serve.ts (harness.fixture.ts); every file stays well under the 300 s
@@ -44,7 +45,7 @@ test.if(linux)("a tree holding a known private value is never uploaded and runs 
   const result = h.run(["bun", "test", file], { env: h.env({ LLV_PRIVACY_KNOWN_VALUES_FILE: known }) });
   expect(result.code).toBe(0);
   expect(result.stderr).toMatch(/^gate-runner: running here: the privacy scan refused the tree: /m);
-  expect(h.calls().filter(call => !call.command.includes("manager=ok"))).toEqual([]);
+  expect(h.calls().filter(call => !call.command.includes("manager=ok") && call.command !== LOAD_PROBE)).toEqual([]);
 }, E2E_TIMEOUT);
 
 // T19

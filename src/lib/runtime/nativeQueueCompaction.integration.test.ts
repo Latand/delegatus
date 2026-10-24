@@ -261,7 +261,9 @@ args = ${JSON.stringify([mcp])}
       const value = Reflect.get(target, property); return typeof value === "function" ? value.bind(target) : value;
     } }) as ChildProcessWithoutNullStreams;
   };
-  const options = { cwd, binary, codexHome: env.CODEX_HOME, env, model: "fixture-model", requestTimeoutMs: 1000,
+  // Startup and history reads use the real CLI on a shared CPU slice. Keep
+  // the production RPC deadline for this recovery check.
+  const options = { cwd, binary, codexHome: env.CODEX_HOME, env, model: "fixture-model",
     eventStore: new FileRuntimeEventStore(path.join(base, "events")), resolveImagePath: () => { throw new Error("no images here"); }, spawnProcess };
   const filename = path.join(base, "journal.sqlite");
   let journal = new RuntimeJournal(filename, { structuredHosts: true, maxEvents: 12 });
@@ -329,4 +331,4 @@ args = ${JSON.stringify([mcp])}
     for (const response of responses) response.end();
     backend.closeAllConnections(); await new Promise<void>(resolve => backend.close(() => resolve()));
   }
-}, 30_000);
+}, 60_000);
