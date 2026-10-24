@@ -1548,9 +1548,9 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       "--enable",
       "realtime_conversation",
     ];
-    options = { ...options, env: await repositoryPublicationSource(options.cwd, options.env ?? process.env) };
     let telegram: TelegramLaunchGrant;
     try {
+      options = { ...options, env: await repositoryPublicationSource(options.cwd, options.env ?? process.env) };
       telegram = await resolveTelegramLaunchGrant(
         subscriptionEnv(
           options.env ?? process.env,

@@ -840,11 +840,11 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         options = { ...options, memoryQueuePath };
       } catch { /* hook installation remains optional */ }
     }
-    options = { ...options, env: await repositoryPublicationSource(options.cwd, options.env ?? process.env) };
     const binary = options.binary ?? process.env.LLV_CLAUDE_BINARY ?? "claude";
     let env: NodeJS.ProcessEnv;
     let auth: ClaudeAuthStatus;
     try {
+      options = { ...options, env: await repositoryPublicationSource(options.cwd, options.env ?? process.env) };
       env = subscriptionEnv(
         options.env ?? process.env,
         options.claudeConfigDir,
