@@ -201,6 +201,12 @@
  * notice; then the third generation arrives and the reader must follow it
  * with neither archived row drawn beside it, at 1440 × 900 in en and uk.
  *
+ * With BOARD_CAPTURE_CASE=memory-source it frames the Settings row of the
+ * memory source switch on the desktop menu (docs/design/memory-source-switch.md
+ * §3.4) in every state at 1440 and 800 px, en and uk, light and dark, over the
+ * real `GET /api/memory/source` on seeded private state, and measures its state
+ * line from text ranges. MEMORY_SOURCE_RENDER_DIR names the frame directory.
+ *
  * With BOARD_CAPTURE_CASE=registry-history it opens the board over the
  * candidate performance gate's synthetic registry, 53,299 rows of
  * retained history (#2761), in eight real browser views that each pin their
@@ -7587,6 +7593,161 @@ async function linkingMain(): Promise<void> {
   console.log(`linking geometry: ${path.join(OUT_DIR, "linking.json")}`);
 }
 
+/** «Delegatus memory» on the desktop menu's Settings page (docs/design/memory-source-switch.md §3.4):
+ * every state of the memory source row at 1440 × 900 and 800 × 900, en and uk, light and dark, on the
+ * production build, on a project's board (whose Settings page also holds Shared memory) and at rest on the overview. Each state is real state in a private state directory of this driver
+ * (src/lib/memory/fixtures/sourceStates.ts), answered to the page through the real
+ * `GET /api/memory/source`; the press is held to frame the optimistic switch and refused to frame
+ * its rollback. The state line is measured from its text ranges: no line under the panel's or the
+ * window's edge, none clipped inside its box, none under the switch, its words the row's own, and the
+ * Settings page whole inside the window. MEMORY_SOURCE_RENDER_DIR names the frame directory. */
+async function memorySourceMain(): Promise<void> {
+  seedHome();
+  const evidenceDir = process.env.MEMORY_SOURCE_RENDER_DIR?.trim() || path.join(OUT_DIR, "memory-source");
+  fs.mkdirSync(evidenceDir, { recursive: true });
+  /* The driver's own state, apart from the server's, so no background import job moves a state while it is framed. */
+  const rowState = path.join(BASE, "memory-source-state");
+  fs.mkdirSync(rowState, { recursive: true, mode: 0o700 });
+  process.env.LLV_STATE_DIR = rowState;
+  const { GET } = await import("../src/app/api/memory/source/route");
+  const { MEMORY_SOURCE_FRAME_STATES, MEMORY_SOURCE_FRAME_ROW, MEMORY_SOURCE_FRAME_ON, seedMemorySourceState } = await import("../src/lib/memory/fixtures/sourceStates");
+  const { memorySourceLine } = await import("../src/components/memory/MemorySourceRow");
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const report: { commit: string; frames: Record<string, unknown>[]; failures: string[] } = { commit: captureCommit(), frames: [], failures: [] };
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  let releaseWrite: (() => void) | null = null;
+  let writes = 0;
+  let failReads = false;
+  try {
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    /* A fresh home opens the setup guide over the page; this case frames the menu, so the guide is finished and the walk skipped. */
+    const guide = await fetch(`${baseUrl}/api/onboarding`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ completed: true, walk: "skipped" }) });
+    if (!guide.ok) throw new Error(`the setup guide could not be marked done: ${guide.status}`);
+    /* The project's Settings page is the taller one (it adds Shared memory); the overview, where the row also stands, is framed at rest. */
+    const { project } = await waitForBoard(baseUrl, false);
+    browser = await chromium.launch({ executablePath: process.env.CHROME_BIN || undefined, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    for (const width of [1440, 800]) for (const lang of ["en", "uk"] as const) for (const colorScheme of ["light", "dark"] as const) {
+      const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme, reducedMotion: "reduce" });
+      await context.addInitScript(seedInit);
+      await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), lang);
+      const page = await context.newPage();
+      const pageErrors: string[] = [];
+      page.on("pageerror", (error) => pageErrors.push(error.message));
+      await page.route("**/api/operator/settings*", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, locale: { value: lang, source: "chosen" }, timeZone: null }) }));
+      await page.route("**/api/memory/source", async (route) => {
+        if (route.request().method() !== "PUT") {
+          if (failReads) return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "read_failed" }) });
+          const answer = await GET();
+          return route.fulfill({ status: answer.status, contentType: "application/json", headers: { "cache-control": "no-store" }, body: await answer.text() });
+        }
+        writes += 1;
+        await new Promise<void>((resolve) => { releaseWrite = resolve; });
+        return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "write_failed" }) });
+      });
+      try {
+        for (const [state, place] of [...MEMORY_SOURCE_FRAME_STATES.map((one) => [one, "project"] as const), ["unchosen", "overview"] as const]) {
+          const tag = `memory-source-${state}-${lang}-${colorScheme}-${width}${place === "overview" ? "-overview" : ""}`;
+          try {
+            await seedMemorySourceState(state);
+            failReads = state === "read-failed";
+            /* A fresh document each frame, named by its query: a goto that changes only the hash would keep the open menu. */
+            pageErrors.length = 0;
+            await page.goto(`${baseUrl}/?frame=${encodeURIComponent(tag)}${place === "overview" ? "" : `#p=${encodeURIComponent(project)}`}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+            await page.addStyleTag({ content: "[data-telemetry-notice] { display: none !important; }" });
+            await page.locator("[data-rail-menu]").first().click({ timeout: 60_000 });
+            await page.locator("[data-rail-menu-settings]").click();
+            const row = page.locator("[data-rail-menu-panel] [data-header-menu-memory-source]");
+            await row.waitFor();
+            const first = state === "pressed" ? "unchosen" : state === "refused" ? "active" : MEMORY_SOURCE_FRAME_ROW[state];
+            await page.waitForFunction((want) => document.querySelector("[data-header-menu-memory-source]")?.getAttribute("data-memory-source-state") === want, first, { timeout: 30_000 });
+            if (state === "pressed" || state === "refused") {
+              await row.locator("[data-memory-source-switch]").click();
+              await page.waitForFunction((want) => document.querySelector("[data-header-menu-memory-source]")?.getAttribute("data-memory-source-state") === want, state === "pressed" ? "preparing" : "engines");
+              if (state === "refused") {
+                for (let wait = 0; wait < 100 && !releaseWrite; wait++) await page.waitForTimeout(20);
+                (releaseWrite as (() => void) | null)?.(); releaseWrite = null;
+                await row.locator("[data-memory-source-failed]").waitFor();
+              }
+            }
+            await page.mouse.move(1, 890);
+            await page.waitForTimeout(150);
+            const geometry = await page.evaluate(() => {
+              const panel = document.querySelector<HTMLElement>("[data-rail-menu-panel]")!;
+              const host = panel.querySelector<HTMLElement>("[data-header-menu-memory-source]")!;
+              const line = host.querySelector<HTMLElement>("[data-memory-source-line]")!;
+              const title = host.querySelector<HTMLElement>("[data-memory-source-title]")!;
+              const control = host.querySelector<HTMLElement>("[data-memory-source-switch]")!;
+              const box = panel.getBoundingClientRect();
+              const bounds = { top: Math.max(box.top, 0), bottom: Math.min(box.bottom, innerHeight), left: Math.max(box.left, 0), right: Math.min(box.right, innerWidth) };
+              const rects = (element: HTMLElement) => {
+                const out: DOMRect[] = [];
+                const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+                for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                  if (!node.textContent?.trim()) continue;
+                  const range = document.createRange(); range.selectNodeContents(node);
+                  out.push(...[...range.getClientRects()].filter((rect) => rect.width && rect.height));
+                }
+                return out;
+              };
+              const lineRects = rects(line), titleRects = rects(title);
+              const cut = [...lineRects, ...titleRects].filter((rect) => rect.top < bounds.top - 0.5 || rect.bottom > bounds.bottom + 0.5 || rect.left < bounds.left - 0.5 || rect.right > bounds.right + 0.5).length;
+              const s = control.getBoundingClientRect();
+              const overlaps = [...lineRects, ...titleRects].filter((rect) => rect.left < s.right && rect.right > s.left && rect.top < s.bottom && rect.bottom > s.top).length;
+              /* A neighbouring row's text under this row's box would be drawn over. */
+              const r = host.getBoundingClientRect();
+              const neighbours = [...panel.querySelectorAll<HTMLElement>("[data-header-menu-page='settings'] > *")].filter((node) => node !== host)
+                .flatMap((node) => rects(node)).filter((rect) => rect.top < r.bottom - 0.5 && rect.bottom > r.top + 0.5 && rect.left < r.right && rect.right > r.left).length;
+              return {
+                rowState: host.getAttribute("data-memory-source-state"), checked: control.getAttribute("aria-checked"),
+                line: line.textContent ?? "", title: title.textContent ?? "", lines: new Set(lineRects.map((rect) => Math.round(rect.top))).size, cut, overlaps, neighbours,
+                lineClipped: line.scrollWidth > line.clientWidth + 1 || line.scrollHeight > line.clientHeight + 1,
+                switchInside: s.left >= bounds.left - 0.5 && s.right <= bounds.right + 0.5 && s.top >= bounds.top - 0.5 && s.bottom <= bounds.bottom + 0.5,
+                panel: { left: Math.round(box.left), top: Math.round(box.top), width: Math.round(box.width), height: Math.round(box.height) },
+                panelInView: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, panelOverflowX: panel.scrollWidth - panel.clientWidth,
+                rowHeight: Math.round(r.height), colour: getComputedStyle(line.querySelector("span:last-child") ?? line).color,
+              };
+            });
+            await page.screenshot({ path: path.join(evidenceDir, `${tag}.png`) });
+            const crop = `${tag}-crop.png`;
+            const x = Math.max(0, geometry.panel.left - 24), y = Math.max(0, geometry.panel.top - 24);
+            await page.screenshot({ path: path.join(evidenceDir, crop), clip: { x, y, width: Math.min(width - x, geometry.panel.width + 48), height: Math.min(900 - y, geometry.panel.height + 48) } });
+            const t = (name: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate(lang, name, params);
+            const view = state === "read-failed" ? null : await (await GET()).json();
+            const words = state === "read-failed" ? memorySourceLine(null, true, t, lang)
+                : memorySourceLine(state === "pressed" ? { choice: "delegatus", phase: "importing", import: { counts: null, remainingGenerations: 0, hold: null } } : view, false, t, lang);
+            const expected = state === "refused" ? `${t("memorySource.saveFailed")} ${words}` : words;
+            report.frames.push({ tag, state, place, lang, colorScheme, width, file: `${tag}.png`, crop, expected, pageErrors: [...pageErrors], ...geometry });
+            const fail = (message: string) => report.failures.push(`${tag}: ${message}`);
+            if (geometry.rowState !== MEMORY_SOURCE_FRAME_ROW[state]) fail(`row reads ${geometry.rowState}`);
+            if (geometry.line !== expected) fail(`line «${geometry.line}» is not «${expected}»`);
+            if (geometry.title !== t("memorySource.title")) fail(`title «${geometry.title}»`);
+            if (geometry.checked !== String(MEMORY_SOURCE_FRAME_ON[state])) fail(`switch reads ${geometry.checked}`);
+            if (geometry.cut) fail(`${geometry.cut} text lines cut by an edge`);
+            if (geometry.lineClipped) fail("the state line is clipped inside its box");
+            if (geometry.overlaps) fail(`the switch covers ${geometry.overlaps} text lines`);
+            if (geometry.neighbours) fail(`${geometry.neighbours} lines of another row lie under this row`);
+            if (!geometry.switchInside) fail("the switch leaves the panel");
+            if (!geometry.panelInView) fail(`the Settings page leaves the window ${JSON.stringify(geometry.panel)}`);
+            if (geometry.panelOverflowX > 1) fail(`the panel overflows sideways by ${geometry.panelOverflowX}`);
+            if (pageErrors.length) fail(pageErrors.join("; "));
+            console.log(`memory source row: ${tag}`);
+          } catch (error) {
+            report.failures.push(`${tag}: ${String(error).split("\n")[0]}`);
+            await page.screenshot({ path: path.join(evidenceDir, `failed-${tag}.png`) }).catch(() => {});
+          } finally { (releaseWrite as (() => void) | null)?.(); releaseWrite = null; }
+        }
+      } finally { await context.close(); }
+    }
+    if (writes !== 2 * 2 * 2 * 2) report.failures.push(`the presses sent ${writes} writes, expected one per pressed and refused frame`);
+  } finally { await browser?.close(); await stop(server); }
+  fs.writeFileSync(path.join(evidenceDir, "readings.json"), JSON.stringify(report, null, 2) + "\n");
+  if (report.failures.length) throw new Error(report.failures.join("; "));
+  console.log(`memory source row: ${report.frames.length} frames in ${evidenceDir}`);
+}
+
 /** Install ping disclosure and real Settings API at both product widths. */
 async function installPingMain(): Promise<void> {
   seedHome();
@@ -8507,6 +8668,7 @@ if (process.env.BOARD_CAPTURE_CASE === "registry-history") await registryHistory
 else if (process.env.BOARD_CAPTURE_CASE === "hydration") await hydrationMain();
 else if (process.env.BOARD_CAPTURE_CASE === "twice-switched-link") await twiceSwitchedLinkMain();
 else if (process.env.BOARD_CAPTURE_CASE === "install-ping") await installPingMain();
+else if (process.env.BOARD_CAPTURE_CASE === "memory-source") await memorySourceMain();
 else if (process.env.BOARD_CAPTURE_CASE === "header") await headerMain();
 else if (process.env.BOARD_CAPTURE_CASE === "self-update-auto") await selfUpdateAutoMain();
 else if (["self-update-install", "managed-update"].includes(process.env.BOARD_CAPTURE_CASE ?? "")) await selfUpdateInstallMain();

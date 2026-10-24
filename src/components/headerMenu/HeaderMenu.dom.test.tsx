@@ -41,6 +41,7 @@ globalThis.fetch = (async (input: unknown) => {
   const url = String(input);
   if (url.includes("/api/memory/settings")) return Response.json(working);
   if (url.endsWith("/api/keys")) return Response.json(KEYS);
+  if (url.includes("/api/memory/source")) return Response.json({ choice: null, phase: null });
   if (url.includes("/api/operator/worker-limit")) return Response.json({ machine: { value: 8 }, project: { key: "atlas", value: null, effective: 8, source: "machine" }, running: { here: 7, machine: 19 } });
   return Response.json({}, { status: 404 });
 }) as typeof fetch;
@@ -81,7 +82,7 @@ for (const lang of ["en", "uk"] as const) test(`${lang}: at rest, three cells an
   const settings = host.querySelector("[data-rail-menu-settings]")!;
   expect(settings.textContent).toContain(translate(lang, "headerMenu.settings"));
   expect(settings.querySelector("[data-memory-state]")!.textContent).toBe(translate(lang, "memoryState.short", { state: translate(lang, "memoryState.short.working") }));
-  expect(settings.textContent).toContain("11");
+  expect(settings.textContent).toContain("12");
   /* Nothing of the settings page shows at rest, and no entry appears twice. */
   expect(host.querySelector("[data-rail-menu-agent-mapping]")).toBeNull();
   expect(host.querySelector("[data-rail-menu-memory]")).toBeNull();
@@ -93,6 +94,11 @@ for (const lang of ["en", "uk"] as const) test(`${lang}: at rest, three cells an
   expect(document.activeElement).toBe(back);
   const page = host.querySelector("[data-header-menu-page='settings']")!;
   expect(page.querySelector("[data-rail-menu-memory] [data-memory-state]")!.textContent).toBe(translate(lang, "memoryState.working", { count: 61 }));
+  /* The installation's one memory stands right after Shared memory (memory-source-switch.md §3.4). */
+  const memorySource = page.querySelector("[data-header-menu-memory-source]")!;
+  expect(page.querySelector("[data-rail-menu-memory]")!.nextElementSibling).toBe(memorySource);
+  expect(memorySource.querySelector("[data-memory-source-title]")!.textContent).toBe(translate(lang, "memorySource.title"));
+  expect(memorySource.querySelector("[data-memory-source-line]")!.textContent).toBe(translate(lang, "memorySource.unchosen"));
   expect(page.querySelector("[data-rail-menu-keys]")!.textContent).toContain(translate(lang, "keys.title"));
   expect(page.querySelector("[data-rail-menu-keys] [data-keys-state]")!.textContent).toBe(translate(lang, "keys.rowState", { set: 2, total: 6 }));
   expect(page.querySelector("[data-rail-menu-agent-mapping]")!.textContent).toBe(translate(lang, "headerMenu.mapping"));
@@ -200,13 +206,14 @@ test("Help and learning opens in place under its own row", async () => {
   expect(host.querySelector("[data-rail-menu-interface-walk]")!.textContent).toBe(translate("en", "onboarding.menu.walk"));
 });
 
-test("the overview has no project: Settings carries no memory state and its page no memory row", async () => {
+test("the overview has no project: Settings carries no memory state and its page no memory row, but the installation's memory row", async () => {
   const host = await mount(<HeaderMenuPanel project={null} onClose={() => {}} />);
   const settings = host.querySelector("[data-rail-menu-settings]")!;
   expect(settings.querySelector("[data-memory-state]")).toBeNull();
-  expect(settings.textContent).toContain("10");
+  expect(settings.textContent).toContain("11");
   await click(settings);
   expect(host.querySelector("[data-rail-menu-memory]")).toBeNull();
+  expect(host.querySelector("[data-header-menu-memory-source] [data-memory-source-line]")!.textContent).toBe(translate("en", "memorySource.unchosen"));
   expect(host.querySelector("[data-rail-menu-keys]")).not.toBeNull();
 });
 
@@ -284,6 +291,11 @@ test("phone: create cells, the board's rows, the header's cells and rows, and th
   await click(sheet.querySelector("[data-mobile2-menu-row='settings']"));
   const page = [...sheet.querySelectorAll("[data-mobile2-menu-row]")].map((row) => row.getAttribute("data-mobile2-menu-row"));
   expect(page).toEqual(["back", "memory", "keys", "agent-mapping", "dictation", "voice-companion", "linked-settings", "external-relay", "ping"]);
+  /* The memory source row is drawn by the sheet as its own row, between Shared memory and Keys. */
+  const sourceRow = sheet.querySelector("[data-header-menu-memory-source]")!;
+  expect(sourceRow.querySelector("[data-memory-source-switch]")!.className).toContain("h-11");
+  expect(sheet.querySelector("[data-mobile2-menu-row='memory']")!.compareDocumentPosition(sourceRow) & 4).toBe(4);
+  expect(sourceRow.compareDocumentPosition(sheet.querySelector("[data-mobile2-menu-row='keys']")!) & 4).toBe(4);
   expect(sheet.textContent).toContain(translate("en", "mobile2.menu.sound"));
   await click(sheet.querySelector("[data-mobile2-menu-row='memory']"));
   expect(sheet.querySelector("[data-memory-page]")).not.toBeNull();
