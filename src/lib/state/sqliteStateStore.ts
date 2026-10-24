@@ -522,7 +522,9 @@ function openRawDatabase(filename: string): Database {
           db.exec("ALTER TABLE state_imports ADD COLUMN reconciled_sha256 TEXT");
         }
         installPipelineControllerIndex(db, path.dirname(filename));
-        installPipelineControllerSchedule(db, path.dirname(filename));
+        // Only a policy upgrade resets the scheduler. Missing indexes repair
+        // in place without changing existing queue clocks or cursors.
+        installPipelineControllerSchedule(db, path.dirname(filename), !pipelineControllerReferencesCurrent(db));
         installPipelineControllerReferences(db, path.dirname(filename));
         installPipelineEvidenceIndex(db, path.dirname(filename));
         db.exec("COMMIT");
@@ -1517,8 +1519,16 @@ export class SqliteStateCollection<T> {
   }
 
   pipelineOwnerExists(identities: readonly [string, string][], live: boolean): boolean {
-    return identities.some(([kind, identity]) => Boolean(sharedStateReadonlyDatabase(this.filename).query(`SELECT 1 FROM pipeline_owner_refs
-      WHERE kind=? AND identity=? ${live ? "AND live=1" : ""} LIMIT 1`).get(kind,identity)));
+    return identities.some(([kind, identity]) => {
+      const source = live ? kind === "srcConversationId" ? "conversationId" : kind === "srcPath" ? "agentPath" : null : null;
+      // Source publication (2) retains custody. A released operational attempt
+      // (-1) ends an idle creator's obligation to stay beside its successor.
+      const released = source ? `AND live=CASE WHEN EXISTS (SELECT 1 FROM pipeline_owner_refs
+        WHERE kind=? AND identity=? AND live=-1) THEN 2 ELSE 1 END` : "";
+      return Boolean(sharedStateReadonlyDatabase(this.filename).query(`SELECT 1 FROM pipeline_owner_refs
+        WHERE kind=? AND identity=? ${live ? "AND live>0" : ""} ${released} LIMIT 1`)
+        .get(kind, identity, ...(source ? [source, identity] : [])));
+    });
   }
 
   pipelineTickReady(now: number, excluded: readonly string[]): boolean {

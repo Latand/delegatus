@@ -13,6 +13,130 @@ import { assertStateChildSuccess } from "./stateChildResult.fixture";
 
 type Row = { key: string; value: number };
 
+test.each([0, 512])("indexed successor-source custody follows released parents, publication and peer replacement (%s retained owners)", history => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "controller-successor-owner-"));
+  const filename = path.join(dir, "state.sqlite");
+  type Owner = { key: string; state: string; runs: unknown[]; [field: string]: unknown };
+  const parent: Owner = { key: "parent", state: "completed", runs: [{ stageId: "build", attempts: [
+    { n: 1, state: "running", conversationId: "parent-host", agentPath: "parent-transcript" },
+  ] }] };
+  const successor: Owner = { key: "successor", state: "paused", srcConversationId: "parent-host", srcPath: "parent-transcript", runs: [] };
+  let decodes = 0;
+  const options = { collection: "pipelines", schemaVersion: 1, busyMessage: "busy", key: (row: Owner) => row.key,
+    decode: (raw: unknown) => { decodes++; return raw as Owner; }, clone: (row: Owner) => structuredClone(row) };
+  try {
+    initializeStateCollections(filename, [{ ...options, migrationId: "one", loadRecords: () => [
+      ...Array.from({ length: history }, (_, n): Owner => ({ key: `retained-${n}`, state: "paused", runs: [],
+        srcConversationId: "parent-host", srcPath: "parent-transcript" })), parent, successor,
+    ] }]);
+    const store = new SqliteStateCollection(filename, options), peer = new Database(filename);
+    try {
+      const identities: [string, string][] = [["srcConversationId", "parent-host"], ["srcPath", "parent-transcript"]];
+      const before = decodes;
+      expect(store.pipelineOwnerExists(identities, true)).toBe(false);
+      expect(store.pipelineOwnerExists([...identities, ...identities], true)).toBe(false);
+      const plan = peer.query<{ detail: string }, [string, string, string, string]>(`EXPLAIN QUERY PLAN SELECT 1 FROM pipeline_owner_refs
+        WHERE kind=? AND identity=? AND live>0 AND live=CASE WHEN EXISTS (SELECT 1 FROM pipeline_owner_refs
+          WHERE kind=? AND identity=? AND live=-1) THEN 2 ELSE 1 END LIMIT 1`).all("srcConversationId", "parent-host", "conversationId", "parent-host");
+      expect(plan.filter(row => row.detail.includes("pipeline_owner_lookup"))).toHaveLength(2);
+      expect(plan.filter(row => row.detail.includes("pipeline_owner_lookup")).every(row => row.detail.includes("live=?"))).toBe(true);
+      expect(plan.some(row => row.detail.includes("SCAN pipeline_owner_refs"))).toBe(false);
+      peer.exec("UPDATE state_rows SET value_json=json_set(value_json,'$.publicationAdmission.state','pending') WHERE row_key='successor'");
+      expect(store.pipelineOwnerExists(identities, true)).toBe(true);
+      // The preceding release's reader only recognizes live=1. Publication
+      // must retain custody through that reader during a release handover too.
+      for (const [kind, identity] of identities) expect(peer.query(`SELECT 1 FROM pipeline_owner_refs
+        WHERE kind=? AND identity=? AND live=1 LIMIT 1`).get(kind, identity)).toBeTruthy();
+      peer.exec("UPDATE state_rows SET value_json=json_remove(value_json,'$.publicationAdmission') WHERE row_key='successor'");
+      expect(store.pipelineOwnerExists(identities, true)).toBe(false);
+      peer.exec("UPDATE state_rows SET value_json=json_set(value_json,'$.state','running') WHERE row_key='parent'");
+      expect(store.pipelineOwnerExists(identities, true)).toBe(true);
+      peer.exec("UPDATE state_rows SET value_json=json_set(value_json,'$.state','completed') WHERE row_key='parent'");
+      expect(store.pipelineOwnerExists(identities, true)).toBe(false);
+      peer.exec("DELETE FROM state_rows WHERE row_key='parent'");
+      expect(store.pipelineOwnerExists(identities, true)).toBe(true);
+      expect(decodes).toBe(before);
+    } finally { peer.close(); }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("indexed superseded operational hosts remain terminal ahead of adopted helpers", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "controller-superseded-helper-"));
+  const filename = path.join(dir, "state.sqlite");
+  const row = { key: "owner", state: "paused", runs: [{ stageId: "build", attempts: [
+    { n: 1, state: "running", historical: false, conversationId: "superseded-host" },
+    { n: 2, state: "running", historical: false, conversationId: "current-host" },
+    { n: 3, state: "running", historical: true, conversationId: "helper-host" },
+  ] }] };
+  const options = { collection: "pipelines", schemaVersion: 1, busyMessage: "busy", key: (value: typeof row) => value.key,
+    decode: (raw: unknown) => raw as typeof row, clone: (value: typeof row) => structuredClone(value) };
+  try {
+    initializeStateCollections(filename, [{ ...options, migrationId: "one", loadRecords: () => [row] }]);
+    const store = new SqliteStateCollection(filename, options), peer = new Database(filename);
+    try {
+      const live = (id: string) => store.pipelineOwnerExists([["conversationId", id]], true);
+      expect(live("superseded-host")).toBe(false);
+      expect(store.pipelineOtherTerminalHosts("owner", [])).toBe(true);
+      expect(live("current-host")).toBe(true);
+      expect(live("helper-host")).toBe(true);
+      peer.exec("UPDATE state_rows SET value_json=json_set(value_json,'$.runs[0].attempts[2].historical',json('false')) WHERE row_key='owner'");
+      expect(live("current-host")).toBe(false);
+      expect(live("helper-host")).toBe(true);
+      peer.exec("UPDATE state_rows SET value_json=json_set(value_json,'$.runs[0].attempts[2].historical',json('true')) WHERE row_key='owner'");
+      expect(live("current-host")).toBe(true);
+    } finally { peer.close(); }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test.each([
+  ["completed", false], ["completed", true], ["closed", false], ["closed", true],
+] as const)("retirement upgrade re-enrols a %s host across restart (legacy receipts omitted: %s)", (state, omitted) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "controller-retirement-upgrade-"));
+  const filename = path.join(dir, "state.sqlite");
+  const row = { key: "terminal-lane", state, terminalReap: { settledAt: "done", ...(omitted ? {} : { settledAttempts: [] }) },
+    runs: [{ stageId: "build", attempts: [
+      { n: 1, state: "running", conversationId: "terminal-host", completedAt: null },
+      { n: 2, state: "passed", conversationId: "stamped-host", completedAt: "done" },
+    ] }] };
+  const options = { collection: "pipelines", schemaVersion: 1, busyMessage: "busy", key: (value: typeof row) => value.key,
+    decode: (raw: unknown) => raw as typeof row, clone: (value: typeof row) => structuredClone(value) };
+  try {
+    initializeStateCollections(filename, [{ ...options, migrationId: "one", loadRecords: () => [row] }]);
+    const db = new Database(filename);
+    try {
+      // Simulate the previously installed protocol, including its false clean
+      // receipt, stale live owner and missing scheduler obligation.
+      const trigger = db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE name='pipeline_ref_inputs_update'").get()!;
+      expect(trigger.sql).toContain("ORDER BY terminal DESC,position");
+      db.exec("DROP TRIGGER pipeline_ref_inputs_update");
+      db.exec(trigger.sql.replace("ORDER BY terminal DESC,position", "ORDER BY position"));
+      db.exec("UPDATE pipeline_attempt_refs SET terminal=0");
+      db.exec("UPDATE pipeline_owner_refs SET live=1");
+      db.exec("UPDATE state_rows SET controller_active=0");
+      db.exec("DELETE FROM pipeline_tick_work");
+    } finally { db.close(); }
+    const result = spawnSync(process.execPath, ["--eval", `
+      const { SqliteStateCollection } = await import(${JSON.stringify(path.resolve("src/lib/state/sqliteStateStore.ts"))});
+      const store = new SqliteStateCollection(process.env.UPGRADE_DATABASE, {
+        collection: 'pipelines', schemaVersion: 1, busyMessage: 'busy',
+        key: row => row.key, decode: row => row, clone: row => structuredClone(row),
+      });
+      if (store.pipelineOwnerExists([['conversationId','terminal-host']],true)) throw new Error('stale owner retained');
+      if (!store.pipelineOtherTerminalHosts('terminal-lane',[])) throw new Error('missing terminal host');
+      if (!store.pipelineTickWork(0,[]).some(row => row.row_key==='terminal-lane')) throw new Error('missing retirement obligation');
+    `], { env: { ...process.env, UPGRADE_DATABASE: filename }, encoding: "utf8", timeout: 10_000 });
+    expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: "" });
+    const upgraded = new Database(filename);
+    try {
+      expect(JSON.parse(upgraded.query<{ value_json: string }, []>("SELECT value_json FROM state_rows").get()!.value_json)).toEqual(row);
+      expect(upgraded.query("SELECT controller_active FROM state_rows").get()).toEqual({ controller_active: 1 });
+      expect(upgraded.query("SELECT n,terminal FROM pipeline_attempt_refs ORDER BY n").all()).toEqual([
+        { n: 1, terminal: 1 }, { n: 2, terminal: omitted ? 0 : 1 },
+      ]);
+    } finally { upgraded.close(); }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("bounded task project evidence seeks only selected projects and shares the write budget", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bounded-task-evidence-"));
   const filename = path.join(dir, "state.sqlite");
@@ -337,10 +461,10 @@ test("indexed host and flow owners match custody predicates and follow old-write
       { state: "settled", result: { ok: false, error: "refused" } }, { state: "settled", result: { ok: true, sha: "head", remote: "unreachable" } },
       { state: "settled", result: { ok: true, sha: "head", remote: "published", uncertain: true } },
       { state: "settled", result: { ok: true, sha: "head", remote: "published" }, executor: { finished: false } }];
-    for (const state of ["passed","failed","running","pending","reviewing","committing","needs_decision"]) for (const operation of operations) {
+    for (const historical of [false, true]) for (const state of ["passed","failed","running","pending","reviewing","committing","needs_decision"]) for (const operation of operations) {
       const row: OwnerRow = { key: "owner", state: "completed", srcConversationId: "source", srcPath: "source-path",
         ...(operation ? { delivery: { operation } } : {}),
-        runs: [{ stageId: "build", attempts: [{ n: 1, ...target, state, verdict: { status: "pass" }, completedAt: "done", flowId: "flow" }] }] };
+        runs: [{ stageId: "build", attempts: [{ n: 1, ...target, state, historical, verdict: { status: "pass" }, completedAt: "done", flowId: "flow" }] }] };
       store.boundedPatch(1, tx => tx.put(row));
       expect(store.pipelineOwnerExists([["flow","flow"]],false)).toBe(true);
       for (const [kind,identity] of Object.entries(target)) {
