@@ -36,6 +36,7 @@ import {
   releaseStructuredDeliveryHost,
 } from "./structuredDeliveryController";
 import { deliverHeldStructuredMessage, enqueueStructuredMessage } from "./structuredMessageDelivery";
+import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 
 /*
  * A Viewer release cuts every turn its structured hosts are running (#1835).
@@ -279,6 +280,7 @@ async function successorBoot(
     beforeAdoption?: () => void;
     /** The host ledger reader, for a case whose ledger moves under the read. */
     readHostTurnRecord?: typeof readHostTurnRecord;
+    beforeDelivery?: () => Promise<void>;
   } = {},
 ): Promise<{ adopted: string[]; error: unknown }> {
   const registry = options.registry ?? new AgentRegistry(registryFile);
@@ -318,6 +320,10 @@ async function successorBoot(
         }
         : undefined);
       const healthFails = options.healthFails;
+      if (options.beforeDelivery) {
+        const send = host.send.bind(host);
+        host.send = async entry => { await options.beforeDelivery!(); return send(entry); };
+      }
       if (healthFails) {
         const health = host.health.bind(host);
         host.health = async () => {
@@ -2072,10 +2078,10 @@ test("a transcript that stays corrupt is never recorded or adopted, until a wait
   });
 });
 
-test.each([
+test.each(([
   { engine: "claude", ledger: false }, { engine: "claude", ledger: true },
   { engine: "codex", ledger: false }, { engine: "codex", ledger: true },
-] as const)("an undated $engine completion of the turn the row names invents no cut (C5, D5, host ledger: $ledger)", async ({ engine, ledger: withLedger }) => {
+] as const).flatMap(item => (["live", "dead", "unhosted"] as const).map(status => ({ ...item, status }))))("an undated $engine completion on a $status row invents no cut (C5, D5, host ledger: $ledger)", async ({ engine, ledger: withLedger, status }) => {
   await withJournal(async (journal) => {
     const at = new Date(Date.now() - 60_000).toISOString();
     const records: Record<string, unknown>[] = engine === "claude"
@@ -2088,6 +2094,11 @@ test.each([
         { type: "event_msg", payload: { type: "task_complete", turn_id: CUT_TURN } },
       ];
     const cut = incumbentConversation(engine, cutSessionId(67), deadEngine(2_000_001_167), records);
+    if (status !== "live") {
+      const registry = new AgentRegistry(cut.registryFile);
+      const entry = registry.readOnlySnapshot().entries[cut.hostKey];
+      registry.upsert({ ...entry, status, structuredHost: { ...entry.structuredHost!, process: null } });
+    }
     /* The host recorded the turn's start and died before its end reached it. */
     if (withLedger) {
       appendHostLedger(cut, engine === "claude"
@@ -3191,4 +3202,148 @@ test("published release awaits the terminal registry checkpoint before acknowled
     try { expect(reopened.readOnlySnapshot().entries[`claude:${key.sessionId}`]?.claimOwner).toBeNull(); }
     finally { reopened.close(); }
   } finally { clearTimeout(timer); await holder.close(); journal.close(); registry.close(); }
+});
+
+test.each((["codex", "claude"] as const).flatMap(engine =>
+  (["dead", "unhosted"] as const).map(status => ({ engine, status })),
+))("a direct $engine cut checkpointed as $status resumes once", async ({ engine, status }) => {
+  await withJournal(async journal => {
+    const cut = incumbentConversation(engine, cutSessionId(170), deadEngine(2_000_001_270));
+    const registry = new AgentRegistry(cut.registryFile);
+    const entry = registry.readOnlySnapshot().entries[cut.hostKey];
+    registry.upsert({ ...entry, status, structuredHost: { ...entry.structuredHost!, process: null } });
+    const ledger = createFakeDeliveryLedger();
+    const boot = await successorBoot(cut.registryFile, journal, ledger);
+    expect(boot.error).toBeNull();
+    expect(boot.adopted).toEqual([cut.hostKey]);
+    await completeDirectDeliveries(journal);
+    expect(continuationsIn(ledger)).toHaveLength(1);
+    expect(restartContinuations(ledger)).toHaveLength(1);
+    expect(restartCuts(cut.registryFile)).toHaveLength(1);
+    expect((await successorBoot(cut.registryFile, journal, ledger)).error).toBeNull();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    await completeDirectDeliveries(journal);
+    expect(continuationsIn(ledger)).toHaveLength(1);
+    expect(registry.readOnlySnapshot().memberships[registry.conversationForPath(cut.artifactPath)!.id] ?? []).toEqual([]);
+  });
+});
+
+test("a direct continuation waits for delivery completion across scheduled turns", async () => {
+  await withJournal(async journal => {
+    const cut = incumbentConversation("claude", cutSessionId(173), deadEngine(2_000_001_273));
+    const registry = new AgentRegistry(cut.registryFile);
+    const entry = registry.readOnlySnapshot().entries[cut.hostKey];
+    registry.upsert({ ...entry, status: "dead", structuredHost: { ...entry.structuredHost!, process: null } });
+    const ledger = createFakeDeliveryLedger();
+    let entered!: () => void;
+    let release!: () => void;
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const boot = successorBoot(cut.registryFile, journal, ledger, { beforeDelivery: async () => {
+      entered();
+      await held;
+      // Producer latency deliberately exceeds the removed 400ms drain. Only
+      // the journal's delivery outcome decides when assertions may run.
+      await Bun.sleep(550);
+    } });
+    try {
+      await waiting;
+      const completion = completeDirectDeliveries(journal);
+      for (let turn = 0; turn < 20; turn++) await new Promise<void>(resolve => setImmediate(resolve));
+      expect(ledger.writes).toHaveLength(0);
+      release();
+      expect((await boot).error).toBeNull();
+      await completion;
+      await completeDirectDeliveries(journal);
+      expect(continuationsIn(ledger)).toHaveLength(1);
+    } finally { release(); await boot; registry.close(); }
+  });
+});
+
+test.each((["codex", "claude"] as const).flatMap(engine =>
+  (["dead", "unhosted"] as const).map(status => ({ engine, status })),
+))("a direct $engine turn explicitly interrupted before a $status checkpoint stays stopped", async ({ engine, status }) => {
+  await withJournal(async journal => {
+    const records = engine === "claude" ? interruptedClaudeTurn().records : codexTurnRollout(CUT_TURN);
+    const cut = incumbentConversation(engine, cutSessionId(172), deadEngine(2_000_001_272), records);
+    appendHostLedger(cut, [turnStarted(CUT_TURN), ...records.map(record => frameOf(record, CUT_TURN)), turnEnded(CUT_TURN, "interrupted")]);
+    const registry = new AgentRegistry(cut.registryFile);
+    const entry = registry.readOnlySnapshot().entries[cut.hostKey];
+    registry.upsert({ ...entry, status, structuredHost: { ...entry.structuredHost!, process: null } });
+    const ledger = createFakeDeliveryLedger();
+    expect((await successorBoot(cut.registryFile, journal, ledger)).error).toBeNull();
+    await completeDirectDeliveries(journal);
+    expect(continuationsIn(ledger)).toEqual([]);
+    expect(restartCuts(cut.registryFile)).toEqual([]);
+  });
+});
+
+/** Drive every admitted send to a durable outcome, including sends whose fake
+    host is held across later turns. The runner's parent bounds a hung test. */
+async function completeDirectDeliveries(journal: RuntimeJournal): Promise<void> {
+  for (;;) {
+    const probes = scheduledProbes.splice(0);
+    for (const probe of probes) probe.callback();
+    await kickStructuredDeliveryQueue(true);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    const pending = journal.effectBatch(100, ["runtime.send"]).some(effect => {
+      const id = effect.payload.operationId;
+      if (typeof id !== "string") throw new Error("send effect has no operation identity");
+      const status = journal.operationResult(id)?.receipt.status;
+      return status === "pending" || status === "queued" || status === "delivering";
+    });
+    if (!pending && scheduledProbes.length === 0) return;
+  }
+}
+
+// Each child loads fresh module state while sharing only the persisted fixture.
+test.skipIf(!process.env.LLV_DIRECT_CUT_FIXTURE)("direct deploy cut subprocess boot", async () => {
+  const fixture = JSON.parse(fs.readFileSync(process.env.LLV_DIRECT_CUT_FIXTURE!, "utf8")) as {
+    registryFile: string; journalFile: string; state: string; result: string;
+  };
+  process.env.LLV_STATE_DIR = fixture.state;
+  const journal = new RuntimeJournal(fixture.journalFile, { structuredHosts: true });
+  const ledger = createFakeDeliveryLedger();
+  try {
+    const boot = await successorBoot(fixture.registryFile, journal, ledger);
+    expect(boot.error).toBeNull();
+    await completeDirectDeliveries(journal);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    await completeDirectDeliveries(journal);
+    fs.writeFileSync(fixture.result, JSON.stringify({ writes: continuationsIn(ledger), cuts: restartCuts(fixture.registryFile).map(cut => cut.id) }));
+  } finally { journal.close(); }
+});
+
+test.each([
+  { engine: "codex", status: "dead" }, { engine: "claude", status: "unhosted" },
+] as const)("a direct $engine continuation remains deduplicated across successor process restarts", async ({ engine, status }) => {
+  const cut = incumbentConversation(engine, cutSessionId(171), deadEngine(2_000_001_271));
+  const registry = new AgentRegistry(cut.registryFile);
+  const entry = registry.readOnlySnapshot().entries[cut.hostKey];
+  registry.upsert({ ...entry, status, structuredHost: { ...entry.structuredHost!, process: null } });
+  registry.close();
+  const fixtureFile = path.join(directory, "direct-cut-fixture.json");
+  const resultFile = path.join(directory, "direct-cut-result.json");
+  fs.writeFileSync(fixtureFile, JSON.stringify({ registryFile: cut.registryFile,
+    journalFile: path.join(directory, "runtime.sqlite"), state: process.env.LLV_STATE_DIR, result: resultFile }));
+  const bootChild = async () => {
+    const child = Bun.spawn([process.execPath, "test", "--timeout=20000", "--test-name-pattern", "^direct deploy cut subprocess boot$", import.meta.path], {
+      env: { ...process.env, LLV_DIRECT_CUT_FIXTURE: fixtureFile }, stdin: "ignore", stdout: "ignore", stderr: "pipe",
+    });
+    const errors = new Response(child.stderr).text();
+    const timer = setTimeout(() => child.kill("SIGTERM"), 25_000);
+    try {
+      const code = await child.exited;
+      const stderr = await errors;
+      expect({ code, error: code === 0 ? "" : stderr }).toEqual({ code: 0, error: "" });
+      return JSON.parse(fs.readFileSync(resultFile, "utf8")) as { writes: string[]; cuts: string[] };
+    } finally { clearTimeout(timer); }
+  };
+  const first = await bootChild();
+  expect(first.writes).toHaveLength(1);
+  expect(first.writes[0]).toContain("Viewer restarted and severed your structured host mid-turn.");
+  expect(first.cuts).toHaveLength(1);
+  const second = await bootChild();
+  expect(second.writes).toEqual([]);
+  expect(second.cuts).toEqual(first.cuts);
 });

@@ -647,7 +647,12 @@ async function restartCutTargets(
        whole identity is compared: a predecessor whose pid this process was
        given is still a predecessor. An idle row is a Claude turn that ended. */
     if (!entry?.structuredHost || entry.host !== null) continue;
-    const live = entry.status === "live";
+    // A deploy can checkpoint the engine as gone before startup observes it.
+    // Its busy conversation still needs cut recognition; durable turn evidence
+    // below decides whether work was interrupted or completed.
+    const releasedBusy = (entry.status === "dead" || entry.status === "unhosted")
+      && conversation.turn.state === "busy";
+    const live = entry.status === "live" || releasedBusy;
     if (entry.structuredHost.process && verifiedCodexSocketOwner({ endpoint: entry.structuredHost.endpoint, process: entry.structuredHost.process })) continue;
     if (!live && !(entry.status === "idle" && conversation.engine === "claude")) continue;
     const claimant = entry.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;
