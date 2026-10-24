@@ -206,6 +206,19 @@ so two releases opening the file together never see part of it. On
 the machine queue for 1 h 45 min; nothing reconciled them, because each
 release reconciles only its own namespace.
 
+A command ticket ends with its owner, but only an owner the kernel can judge.
+One recorded in another PID namespace, such as a sandboxed gate that lost its
+signal-sandbox marker, reads as unverified forever: no PID lookup here can
+prove it alive or dead, and a head ticket left that way held the machine queue
+for more than six hours while lanes read "stalled". Its polls now stand for
+it as for a stage ticket. The poll trigger stamps owned tickets too, so a
+release that predates this records them as well. An unverified owner that has
+not checked in for 60 seconds is passed over, and after 24 hours removed. A
+dead owner is removed as before. Each of these writes one line naming the
+ticket and the reason. An owner the kernel shows alive keeps its place however
+long it stays silent. Passing a ticket over changes only the order: a start
+still needs its slot lock and the spacing.
+
 When the head is past its ten-minute bound and nothing has been admitted for
 a minute since, the wait no longer promises minutes: the state detail reads
 `Waiting for the CPU queue · 7th · stalled for 62 min · high priority`, the card says the

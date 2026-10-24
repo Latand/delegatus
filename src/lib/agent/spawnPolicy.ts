@@ -7,8 +7,7 @@ import { installMemoryHook } from "@/lib/memory/hook";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 
 import { viewerControlOrigin, viewerControlToken, VIEWER_CONTROL_TOKEN_ENV } from "@/lib/mcp/controlEndpoint";
-import { statePath } from "@/lib/configDir";
-import { readViewerGatewayConfig, VIEWER_GATEWAY_FILE } from "@/runtime-host/deploymentProxy";
+import { mcpHttpAccessToken, mcpHttpLoopbackBound, MCP_HTTP_ACCESS_HEADER, MCP_HTTP_ACCESS_ENV } from "@/lib/mcp/httpAccess";
 import { stableMcpRuntimeRoot } from "@/runtime-host/mcpRuntimeRelease";
 
 import { viewerMcpStateContext } from "../../../bin/mcp-state-paths.mjs";
@@ -200,18 +199,14 @@ function stableViewerPort(source: McpEnvironment): string {
 
 /**
  * Whether an agent can reach the endpoint through the Viewer's access gate.
- * With LLV_TOKEN configured every request needs it, and agents are launched
- * without it on purpose; the one thing that supplies it on their behalf is the
- * stable local entry, and only when the gateway file trusts that entry. Any
- * other shape keeps the launch on stdio rather than handing an agent a
- * connection every call of which would be refused.
+ * A keyed installation issues a separate credential in the MCP definition.
+ * It travels only to the installation's own explicitly loopback-bound listener. An override
+ * naming another port keeps stdio rather than sending it to another service.
  */
 function viewerMcpHttpAdmitted(source: McpEnvironment): boolean {
-  if (!source.LLV_TOKEN?.trim()) return true;
-  const port = stableViewerPort(source);
-  if (new URL(viewerMcpHttpUrl(source)).port !== port) return false;
-  const gateway = readViewerGatewayConfig(statePath(VIEWER_GATEWAY_FILE), Number(port));
-  return gateway.problem === null && gateway.config.localEntry === "trusted";
+  if (!source.LLV_TOKEN) return true;
+  return mcpHttpLoopbackBound(source)
+    && new URL(viewerMcpHttpUrl(source)).port === stableViewerPort(source);
 }
 
 const LOOPBACK_MCP_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
@@ -224,7 +219,8 @@ export function viewerMcpHttpUrl(source: McpEnvironment = process.env): string {
   if (configured) {
     try {
       const url = new URL(configured);
-      if (url.protocol === "http:" && LOOPBACK_MCP_HOSTS.has(url.hostname) && url.port) return url.href;
+      if (url.protocol === "http:" && LOOPBACK_MCP_HOSTS.has(url.hostname) && url.port
+        && url.pathname === "/api/mcp" && !url.username && !url.password && !url.search && !url.hash) return url.href;
     } catch { /* an unusable override falls back to the stable listener */ }
   }
   return `http://127.0.0.1:${stableViewerPort(source)}/api/mcp`;
@@ -233,25 +229,29 @@ export function viewerMcpHttpUrl(source: McpEnvironment = process.env): string {
 /**
  * The Claude `--mcp-config` entry for the shared endpoint. The capability is
  * written as a reference Claude expands from the agent's own environment, so
- * the file holds no secret and stays correct when a relaunch rotates the
- * capability. It rides in its own header: Authorization is what the stable
- * listener rewrites when it vouches for a loopback caller.
+ * it stays correct when a relaunch rotates the capability. A keyed install
+ * also writes its local MCP access credential to this owner-only definition.
+ * Authorization remains the stable listener's.
  */
 export function viewerMcpHttpClaudeEntry(source: McpEnvironment = process.env): JsonObject {
+  const access = viewerMcpHttpAdmitted(source) ? mcpHttpAccessToken(source) : null;
   return {
     type: "http",
     url: viewerMcpHttpUrl(source),
-    headers: { [VIEWER_SPAWN_CAPABILITY_HEADER]: `\${${VIEWER_SPAWN_CAPABILITY_ENV}}` },
+    headers: { [VIEWER_SPAWN_CAPABILITY_HEADER]: `\${${VIEWER_SPAWN_CAPABILITY_ENV}}`, ...(access ? { [MCP_HTTP_ACCESS_HEADER]: access } : {}) },
   };
 }
 
 /** The Codex `mcp_servers.viewer` table for the shared endpoint.
     `env_http_headers` maps a header to the environment variable Codex reads
     its value from (codex-cli 0.155.1). */
-export function viewerMcpHttpCodexEntry(source: McpEnvironment = process.env): JsonObject {
+export function viewerMcpHttpCodexEntry(source: McpEnvironment = process.env, accessFromEnv = false): JsonObject {
+  const access = viewerMcpHttpAdmitted(source) ? mcpHttpAccessToken(source) : null;
   return {
     url: viewerMcpHttpUrl(source),
-    env_http_headers: { [VIEWER_SPAWN_CAPABILITY_HEADER]: VIEWER_SPAWN_CAPABILITY_ENV },
+    env_http_headers: { [VIEWER_SPAWN_CAPABILITY_HEADER]: VIEWER_SPAWN_CAPABILITY_ENV,
+      ...(access && accessFromEnv ? { [MCP_HTTP_ACCESS_HEADER]: MCP_HTTP_ACCESS_ENV } : {}) },
+    ...(access && !accessFromEnv ? { http_headers: { [MCP_HTTP_ACCESS_HEADER]: access } } : {}),
   };
 }
 

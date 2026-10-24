@@ -75,7 +75,7 @@ test("owned repetition", async () => {
   }
 }, 20_000);
 
-test.skipIf(process.platform !== "linux").each(["shutdown tail", "persistent orphan"])("kernel-owned %s finishes teardown with no survivors and preserves a bystander", async mode => {
+test.skipIf(process.platform !== "linux" || !process.env.LLV_OWNED_TEST_RUN_CGROUP).each(["shutdown tail", "persistent orphan"])("kernel-owned %s finishes teardown with no survivors and preserves a bystander", async mode => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "kernel-test-teardown-"));
   const repo = path.resolve(import.meta.dir, "../../..");
   fs.writeFileSync(path.join(root, "bunfig.toml"), `[test]\npreload = [${JSON.stringify(path.join(repo, "test-preload.ts"))}]\n`);

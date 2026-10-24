@@ -3,8 +3,16 @@ import { statePath } from "@/lib/configDir";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import { writeJsonDurably } from "@/lib/state/durableJson";
+import { withFileTransactionSync } from "@/lib/state/fileTransaction";
 import metadata from "../../../package.json";
 import { memorySource } from "./source";
+import { preferences } from "@/lib/telemetry/store";
+
+/** Receiving public release text does not depend on install-ping consent. */
+export function swarmRulesEnabled(): boolean {
+  try { return roleMemoryEnabled() && preferences().swarmRules; }
+  catch { return false; }
+}
 
 /** The operator opted this repository in; every other project starts closed. */
 const ownProject = projectIdentityFromRemote(metadata.repository.url.replace(/^git\+/, ""), "/")?.project;
@@ -19,8 +27,11 @@ export function sharedMemoryEnabled(project: string): boolean {
   try { const key = canonicalProject(project); return settings()[key] ?? (Boolean(ownProject) && key === canonicalProject(ownProject!)); }
   catch { return false; }
 }
+/** Read and written under the file's lock, which an install transfer holds
+    while it writes the same file, so neither loses the other's value. */
 export function setSharedMemoryEnabled(project: string, enabled: boolean) {
-  writeJsonDurably(statePath("shared-memory-settings.json"), { ...settings(), [canonicalProject(project)]: enabled });
+  const file = statePath("shared-memory-settings.json");
+  withFileTransactionSync(file, "shared memory settings are busy", () => writeJsonDurably(file, { ...settings(), [canonicalProject(project)]: enabled }));
 }
 
 /** The text-free role selector remains durable while the engines are selected,
