@@ -72,6 +72,66 @@ test("disabled candidates, rejected recovery and helpers with unrelated explicit
   } finally { setAgentRegistryForTests(null); }
 });
 
+test.each(["parentConversationId", "reviewsConversationId"] as const)("retained %s authority survives detach, replay and registry recovery", async relation => {
+  const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("./proactive");
+  const { candidate, context, authority, NOW } = await import("./proactive.fixture");
+  const { proactiveConversationTaskIds } = await import("./proactiveExecution");
+  const { removeAssignment } = await import("./commands");
+  const { mutateTasks } = await import("./store");
+  saveTasks([]);
+  const registryName = `proactive-detached-${relation}`;
+  let registry = registryAt(registryName);
+  const candidateProject = `atlas-detached-${relation}`;
+  const { task: invented } = await admitProactiveTask({ ...candidate(`detached-${relation}`), project: candidateProject },
+    { ...context(), project: candidateProject }, undefined, authority());
+  await decideProactiveTask(invented.id, "adopt", "operator", proactiveDecisionToken(invented), undefined, () => new Date(NOW).toISOString());
+  const request = { engine: "codex" as const, cwd: stateDir, transport: "structured" as const,
+    origin: { kind: "operator" as const }, explicitProject: invented.project,
+    launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Preserve the filter" }) };
+  const owner = registry.beginSpawnRequest({ ...request, taskIds: [invented.id], clientAttemptId: `detached-owner-${relation}` });
+  if (owner.kind !== "created") throw new Error("expected worker reservation");
+  registry.failStructuredSpawn(owner.receipt.launchId, "fixture launch failed");
+  mutateTasks(tasks => {
+    const result = removeAssignment(tasks, invented.id, { conversationId: owner.receipt.conversationId }, new Date(NOW).toISOString(), { id: () => `detached-placeholder-${relation}` });
+    if (!result.ok) throw new Error(result.error);
+    return { tasks: result.tasks, result: null };
+  });
+  expect(loadTasks().find(row => row.id === invented.id)?.assignments).toEqual([]);
+  saveTasks([...loadTasks(), { ...task(`ordinary-${relation}`, "Accepted work"), project: invented.project }]);
+  const relatedRequest = { ...request, taskIds: [`ordinary-${relation}`],
+    [relation]: owner.receipt.conversationId, ...(relation === "reviewsConversationId" ? { role: "reviewer" } : {}),
+    clientAttemptId: `detached-related-${relation}` };
+  // Accepted scope may be reviewed after detach; its new receipt retains the
+  // authority even though its explicit board membership is ordinary work.
+  const related = registry.beginSpawnRequest(relatedRequest);
+  if (related.kind !== "created") throw new Error("expected related reservation");
+  expect(proactiveConversationTaskIds([related.receipt.conversationId], registry)).toEqual([invented.id]);
+  expect(registry.beginSpawnRequest(relatedRequest).kind).toBe("replay");
+  await registry.admitRecoveredLaunch(related.receipt);
+  expect(proactiveConversationTaskIds([related.receipt.conversationId], registry)).toEqual([invented.id]);
+  // A reservation whose membership write deferred has not copied the final
+  // admission yet. Recovery must retain its subject's authority anyway.
+  const waitingRequest = { ...relatedRequest, clientAttemptId: `detached-waiting-${relation}` };
+  injectStateWriteFaultForTests({ site: "commit", collection: "tasks", times: 1, error: new Error("SQLITE_BUSY: fixture membership deferred") });
+  try {
+    expect(() => registry.beginSpawnRequest(waitingRequest)).toThrow("SQLITE_BUSY");
+  } finally { injectStateWriteFaultForTests(null); }
+  const waiting = registry.spawnReceiptForClientAttempt(waitingRequest.clientAttemptId)!;
+  expect(waiting.membershipAdmitted).toBe(false);
+  expect(waiting.failureReporting?.taskIds).toEqual([invented.id]);
+  await decideProactiveTask(invented.id, "reject", "operator", proactiveDecisionToken(invented));
+  registry = registryAt(registryName);
+  expect(proactiveConversationTaskIds([owner.receipt.conversationId], registry)).toEqual([invented.id]);
+  expect(proactiveConversationTaskIds([related.receipt.conversationId], registry)).toEqual([invented.id]);
+  const before = loadTasks();
+  expect(() => registry.beginSpawnRequest({ ...relatedRequest, clientAttemptId: `detached-refused-${relation}` })).toThrow("rejected");
+  expect(() => registry.beginSpawnRequest(relatedRequest)).toThrow("rejected");
+  await expect(registry.admitRecoveredLaunch(related.receipt)).rejects.toThrow("rejected");
+  await expect(registry.admitRecoveredLaunch(owner.receipt)).rejects.toThrow("rejected");
+  await expect(registry.admitRecoveredLaunch(waiting)).rejects.toThrow("rejected");
+  expect(loadTasks()).toEqual(before);
+});
+
 test("a read-only launch has a named, described task before its first turn, including failure and replay", () => {
   saveTasks([]);
   const registry = registryAt("named-read-only");

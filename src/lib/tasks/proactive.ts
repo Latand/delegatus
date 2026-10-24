@@ -13,7 +13,8 @@ import type { BoardTask } from "./types";
 
 const DAY = 86_400_000;
 type Allowance = { key: string; kind: "allowance"; episode: string; used: number; admissions: number[] };
-type Candidate = { key: string; kind: "candidate"; taskId: string; rejected: boolean; decisionRevision?: number; adopted?: { at: string; taskId: string } };
+type Candidate = { key: string; kind: "candidate"; taskId: string; rejected: boolean; decisionRevision?: number;
+  adopted?: { at: string; taskId: string; scopeHash?: string; scopeRevision?: number } };
 type Row = Allowance | Candidate;
 const seed = { collection: "proactive_allowance", schemaVersion: 1, migrationId: "proactive-allowance-v1", key: (row: Row) => row.key, loadRecords: (): Row[] => [] };
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -48,7 +49,10 @@ function decode(value: unknown): Row | null {
   if (row.kind === "candidate") return typeof row.taskId === "string" && typeof row.rejected === "boolean"
     && (row.decisionRevision === undefined || Number.isSafeInteger(row.decisionRevision) && row.decisionRevision >= 0)
     && (row.adopted === undefined || (row.adopted !== null && typeof row.adopted === "object"
-      && row.adopted.taskId === row.taskId && typeof row.adopted.at === "string" && Number.isFinite(Date.parse(row.adopted.at)))) ? row : null;
+      && row.adopted.taskId === row.taskId && typeof row.adopted.at === "string" && Number.isFinite(Date.parse(row.adopted.at))
+      && (row.adopted.scopeHash === undefined && row.adopted.scopeRevision === undefined
+        || typeof row.adopted.scopeHash === "string" && /^[a-f0-9]{64}$/.test(row.adopted.scopeHash)
+          && typeof row.adopted.scopeRevision === "number" && Number.isSafeInteger(row.adopted.scopeRevision) && row.adopted.scopeRevision >= 0))) ? row : null;
   return row.kind === "allowance" && typeof row.episode === "string" && Number.isFinite(Date.parse(row.episode))
     && Number.isInteger(row.used) && row.used >= 0 && row.used <= 2
     && Array.isArray(row.admissions) && row.admissions.length <= 2 && row.admissions.every(Number.isFinite) ? row : null;
@@ -172,7 +176,10 @@ function readDecision(task: BoardTask, file: string): { rejected: boolean; adopt
       return row ? [row] : [];
     });
     if (!rows.length || rows.some(row => row.taskId !== task.id)) throw new Error("candidate receipt has no matching task; operator recovery required");
-    return { rejected: rows.some(row => row.rejected), adopted: rows.every(row => row.adopted?.taskId === task.id),
+    // Legacy receipts have no accepted scope and require a fresh operator decision.
+    const scopeHash = proactiveScopeHash(task);
+    return { rejected: rows.some(row => row.rejected), adopted: rows.every(row => row.adopted?.taskId === task.id
+      && row.adopted.scopeRevision === task.proactive!.scopeRevision && row.adopted.scopeHash === scopeHash),
       revision: Math.max(0, ...rows.map(row => row.decisionRevision ?? 0)) };
   } finally { store?.close(); }
 }
@@ -243,7 +250,7 @@ export async function decideProactiveTask(taskId: string, decision: "reject" | "
       const at = decision === "adopt" ? now() : null;
       if (at !== null && !Number.isFinite(Date.parse(at))) throw new Error("invalid proactive decision time");
       const records = rows.map(row => ({ ...row, rejected: decision === "reject" || row.rejected,
-        decisionRevision: revision, adopted: at ? { at, taskId } : undefined }));
+        decisionRevision: revision, adopted: at ? { at, taskId, scopeHash: expected.scopeHash, scopeRevision: expected.scopeRevision } : undefined }));
       return { records, result: task };
     }, file);
   } finally { store.close(); }

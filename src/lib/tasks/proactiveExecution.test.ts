@@ -89,6 +89,70 @@ test("rejection revokes an earlier adoption; adopting retained work preserves su
   expect(readProactiveAllowance(task.project, context().startedAt, NOW, file).rollingUsed).toBe(1);
 });
 
+test.each([false, true])("adoption accepts one scope revision; progress survives and edit/restore requires new consent (rejection history: %s)", async rejected => {
+  const { root, file, task } = await prepared();
+  const patch = (values: Parameters<typeof patchTask>[2]) => mutateTasks(tasks => {
+    const result = patchTask(tasks, task.id, values);
+    if (!result.ok) throw new Error(result.error);
+    return { tasks: result.tasks, result: null };
+  }, file);
+  const decisionAfterRestart = async () => {
+    const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "proactive.fixture.ts"), file, "filter", "decision"], {
+      env: { ...process.env, HOME: path.join(root, "home"), XDG_CONFIG_HOME: path.join(root, "config"), TMPDIR: root, LLV_STATE_DIR: path.join(root, "state") },
+      stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 15_000,
+    });
+    try {
+      const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      if (code !== 0) throw new Error(`child exit ${code}: ${err}`);
+      return JSON.parse(out.split("RESULT ")[1]!);
+    } finally {
+      if (child.exitCode === null) child.kill();
+      await child.exited;
+    }
+  };
+  // Keep rejection suppression durable even when the operator later accepts work.
+  if (rejected) await decideProactiveTask(task.id, "reject", "operator", file);
+  await decideProactiveTask(task.id, "adopt", "operator", file);
+  patch({ status: "done", note: "Retain the investigation artifacts" });
+  expect(proactiveExecutionError(loadTasks(file), file)).toBeNull();
+  expect(await decisionAfterRestart()).toMatchObject({ rejected, adopted: true });
+  const accepted = proactiveDecisionToken(loadTasks(file)[0]!, file);
+  for (const details of ["A different outcome", task.details]) {
+    patch({ details });
+    const current = loadTasks(file)[0]!;
+    expect(proactiveCandidateDecision(current, file)).toEqual({ rejected, adopted: false });
+    expect(() => assertProactiveTaskExecution([task.id], file)).toThrow(rejected ? "rejected" : "disabled");
+    expect(await decisionAfterRestart()).toMatchObject({ rejected, adopted: false });
+    expect(current.note?.text).toBe("Retain the investigation artifacts");
+  }
+  const restored = proactiveDecisionToken(loadTasks(file)[0]!, file);
+  expect(restored.scopeHash).toBe(accepted.scopeHash);
+  expect(restored.scopeRevision).toBe(accepted.scopeRevision + 2);
+  await decideProactiveTask(task.id, "adopt", "operator", file);
+  expect(proactiveExecutionError(loadTasks(file), file)).toBeNull();
+  expect(readProactiveAllowance(task.project, context().startedAt, NOW, file)).toEqual({ episodeUsed: 1, rollingUsed: 1 });
+  if (rejected) await expect(admitProactiveTask(candidate("filter"), context(), file, authority())).rejects.toThrow("rejected");
+});
+
+test("legacy adoption without an accepted scope requires a new operator decision", async () => {
+  const { file, task } = await prepared();
+  await decideProactiveTask(task.id, "adopt", "operator", file);
+  const store = new SqliteStateCollection<{ key: string; kind: string; adopted?: { at: string; taskId: string } }>(legacyDatabasePath(file), {
+    collection: "proactive_allowance", schemaVersion: 1, key: row => row.key,
+    busyMessage: "fixture adoption receipt is busy",
+    decode: value => value as { key: string; kind: string; adopted?: { at: string; taskId: string } }, clone: structuredClone,
+  });
+  try {
+    store.boundedPatch(8, tx => {
+      for (const row of store.snapshot()) if (row.adopted) tx.put({ ...row, adopted: { at: row.adopted.at, taskId: row.adopted.taskId } });
+    });
+  } finally { store.close(); }
+  expect(proactiveCandidateDecision(task, file)).toEqual({ rejected: false, adopted: false });
+  expect(proactiveExecutionError(loadTasks(file), file)).toContain("disabled");
+  await decideProactiveTask(task.id, "adopt", "operator", file);
+  expect(proactiveExecutionError(loadTasks(file), file)).toBeNull();
+});
+
 test("a delayed adoption cannot supersede rejection or accept a changed scope", async () => {
   const { file, task } = await prepared();
   const original = proactiveDecisionToken(task, file);

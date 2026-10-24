@@ -115,7 +115,8 @@ import { parseMessageOrigin, sameMessageOrigin } from "@/lib/runtime/messageOrig
 import { normalizePendingPermissions, normalizePendingToolUses, type PendingPermissionRequest, type PendingToolUse } from "@/lib/runtime/permissionRequests";
 import type { ProviderRetryEvidence } from "@/lib/runtime/engineHost";
 import { assertStructuredTextEnvelope, parseStructuredImageRefs, structuredContent, type StructuredImageRef } from "@/lib/runtime/structuredContent";
-import { admitRecoveredLaunch, admitReservedLaunch, settleFailedLaunch } from "@/lib/tasks/launchMembership";
+import { admitRecoveredLaunch, admitReservedLaunch, productionLaunchMembershipPorts, settleFailedLaunch } from "@/lib/tasks/launchMembership";
+import { proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
 import type { LaunchFailureReporting } from "@/lib/tasks/launchFailureReporting";
 
 export type AgentHostStatus = "starting" | "live" | "idle" | "handoff" | "unhosted" | "dead";
@@ -6531,7 +6532,7 @@ export class AgentRegistry {
       if (result.kind !== "created") return;
       if (input.transport === "structured") this.failStructuredSpawn(result.receipt.launchId, reason, { announce: false });
       else this.failSpawn(result.receipt.launchId, reason);
-    });
+    }, { ...productionLaunchMembershipPorts, retainedTaskIds: ids => proactiveConversationTaskIds(ids, this) });
   }
 
   beginSpawnRequest(input: SpawnRequest): SpawnBeginResult {
@@ -6552,7 +6553,8 @@ export class AgentRegistry {
   /** Recovery may replace a task deleted while the launch waited. Persist the
       newly admitted targets before execution or failure reporting can resume. */
   async admitRecoveredLaunch(receipt: SpawnReceipt): Promise<void> {
-    const admission = admitRecoveredLaunch(receipt);
+    const admission = admitRecoveredLaunch(receipt, { ...productionLaunchMembershipPorts,
+      retainedTaskIds: ids => proactiveConversationTaskIds(ids, this) });
     if (admission.ok) await this.deliveryWriteOrBusy({ label: "spawn.membership", operationId: receipt.launchId }, () =>
       this.recordSpawnMembership(receipt, admission.taskIds));
   }
@@ -6808,6 +6810,10 @@ export class AgentRegistry {
         }
       }
       const createdAt = now();
+      // Preserve related authority at reservation, before membership can wait
+      // or recovery can lose the request's reviewer/parent selectors.
+      const retainedTaskIds = [...new Set([conversationId, parentConversationId, reviewsConversationId].filter((id): id is ViewerConversationId => !!id)
+        .flatMap(id => registryReceiptsForConversation(file, id).flatMap(row => row.failureReporting?.taskIds ?? [])))];
       const receipt: SpawnReceipt = {
         launchId: crypto.randomUUID(),
         clientAttemptId: input.clientAttemptId ?? null,
@@ -6853,7 +6859,8 @@ export class AgentRegistry {
         delegationDepth: childDepth,
         rejection,
         membershipAdmitted: false,
-        failureReporting: { failedAt: rejection ? createdAt : null, lifecycle: false, notice: false, task: false },
+        failureReporting: { failedAt: rejection ? createdAt : null, lifecycle: false, notice: false, task: false,
+          ...(retainedTaskIds.length ? { taskIds: retainedTaskIds } : {}) },
         ...(rejection ? { failureAnnouncementSuppressed: true as const, failureRepairState: "handled" as const } : {}),
         launchProfile: profile,
         explicitProject,

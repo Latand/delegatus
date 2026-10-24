@@ -61,7 +61,7 @@ export interface MembershipInput {
   admit?: MembershipAdmission;
   /** Launch authority also follows related identities when an explicit target
       suppresses assignment inheritance. Failed assignments retain that history. */
-  admitRelated?: { identities: readonly MembershipIdentity[]; admit: MembershipAdmission };
+  admitRelated?: { identities: readonly MembershipIdentity[]; taskIds?: readonly string[]; admit: MembershipAdmission };
 }
 
 export type MembershipResult =
@@ -186,8 +186,12 @@ export function ensureTaskMembership(existing: readonly BoardTask[], input: Memb
   if (!hasIdentity(input.identity)) return { ok: false, error: "membership needs a launch, conversation or path identity", status: 400 };
   const relatedAdmission = input.admitRelated;
   if (relatedAdmission) {
-    const related = existing.filter(task => task.assignments.some(assignment =>
+    const retained = new Set(relatedAdmission.taskIds);
+    const related = existing.filter(task => retained.has(task.id) || task.assignments.some(assignment =>
       relatedAdmission.identities.some(identity => sameIdentity(assignment, identity))));
+    if ([...retained].some(id => !related.some(task => task.id === id))) {
+      return { ok: false, error: "retained task authority is unavailable; operator recovery required", status: 403, code: "PROACTIVE_EXECUTION_FENCED" };
+    }
     const refusal = relatedAdmission.admit(related);
     if (refusal) return { ok: false, ...refusal };
   }

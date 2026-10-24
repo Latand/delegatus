@@ -1,4 +1,4 @@
-import { proactiveExecutionError } from "./proactiveExecution";
+import { proactiveConversationTaskIds, proactiveExecutionError } from "./proactiveExecution";
 import { AccountCommitBusyError } from "@/lib/accounts/accountMutationContext";
 import { stateLockDeferral } from "@/lib/state/lockWait";
 import { appendLifecycleEvents } from "@/lib/lifecycle/journal";
@@ -165,10 +165,12 @@ export interface LaunchMembershipPorts {
   pipelineContext: (pipelineId: string) => PipelineLaunchContext | null;
   projectForCwd: (cwd: string) => string | null;
   seatIdentity?: (project: string) => MembershipIdentity | null;
+  retainedTaskIds?: (conversationIds: readonly string[]) => string[];
 }
 
 export const productionLaunchMembershipPorts: LaunchMembershipPorts = {
   commit: (input) => commitTaskMembership(input),
+  retainedTaskIds: proactiveConversationTaskIds,
   pipelineContext: (pipelineId) => {
     const pipeline = loadPipelinesForProjection().find((pipeline) => pipeline.id === pipelineId);
     return pipeline ? { taskIds: pipeline.taskIds, brief: pipeline.spec?.trim() || pipeline.task } : null;
@@ -197,9 +199,13 @@ export function admitReservedLaunch(
   try {
     const identities = [...new Set([launch.parentConversationId, launch.reviewsConversationId, receipt.conversationId]
       .filter((id): id is string => !!id))].map(conversationId => ({ conversationId }));
+    const taskIds = ports.retainedTaskIds?.(identities.map(identity => identity.conversationId)) ?? [];
     const input: MembershipInput = { ...launchMembershipInput(launch, receipt, ports.pipelineContext, ports.projectForCwd, ports.seatIdentity),
-      admit: launchAdmission, admitRelated: { identities, admit: proactiveAdmission } };
+      admit: launchAdmission, admitRelated: { identities, ...(taskIds.length ? { taskIds } : {}), admit: proactiveAdmission } };
     result = ports.commit(input);
+    // Receipt-owned targets survive detaching the visible assignment. Carry
+    // them into this launch so its dispatch, descendants and recovery stay fenced.
+    if (result.ok && taskIds.length) result = { ...result, taskIds: [...new Set([...result.taskIds, ...taskIds])] };
   } catch (error) {
     if (error instanceof AccountCommitBusyError || stateLockDeferral(error)) throw error;
     const code = error && typeof error === "object" && "code" in error ? error.code : null;
