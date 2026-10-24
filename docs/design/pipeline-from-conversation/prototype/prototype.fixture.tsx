@@ -149,13 +149,15 @@ function sourceTranscript(): string[] {
     )),
   ];
   if (!SOURCE_IS_BUILD) return done;
-  /* Variant 3: the Build stage's rules arrive as this conversation's newest message. */
+  /* Variant 3: the Build stage's rules arrive from the pipeline, drawn as the feed's
+     message card with its sender («від пайплайна»), never as the operator's bubble. */
+  const fromPipeline = (body: string) => `<agent-message from="${L("pipeline", "пайплайна")}">${body}</agent-message>`;
   return [
     ...done,
-    user(0.7, L(
+    user(0.7, fromPipeline(L(
       `Pipeline stage ${BUILD_NAME}. Task: CSV export fails on large projects. Finish what is left (a test for the retry after 503), keep the file format byte for byte, commit, and report to the pipeline. ${REVIEW_NAME} comes next.`,
       `Етап пайплайна ${BUILD_NAME}. Задача: експорт CSV падає на великих проєктах. Доробіть, що лишилось (тест на повтор після 503), формат файлу не міняйте, закомітьте і звітуйте пайплайну. Далі — ${REVIEW_NAME}.`,
-    )),
+    ))),
     said(0.4, L("Taking the Build stage: writing the test for the retry after 503.", "Беру етап Build: пишу тест на повтор після 503.")),
   ];
 }
@@ -223,7 +225,11 @@ function lane(): Pipeline {
   } as unknown as Pipeline;
 }
 
-const PIPELINES: Pipeline[] = STARTED ? [lane()] : [];
+/* Variant 3, screen 5: the conversation keeps its own name and costume after the start,
+   so the window there is drawn without the lane the product would read the stage's
+   title and builder costume from; the header gains the stage's name instead
+   (`StageHeaderName`). The window covers the board on that screen. */
+const PIPELINES: Pipeline[] = STARTED && !(SCREEN === 5 && VARIANT === 3) ? [lane()] : [];
 const FILES: FileEntry[] = [SOURCE, CHECKOUT, SEARCH, ...(STARTED && VARIANT !== 3 ? [BUILD] : [])];
 const TASKS: BoardTask[] = [
   task("t-csv", "assigned", `${TASK_TITLE}\n${L("The worker runs out of memory past 50k rows.", "Понад 50 тис. рядків воркер вилітає по пам’яті.")}`, [SOURCE], 6),
@@ -272,7 +278,7 @@ const WORDS = {
     3: L(`This agent becomes the ${BUILD_NAME} stage`, `Цей агент стає етапом ${BUILD_NAME}`),
   } satisfies Record<Variant, string>,
   title: L("Start pipeline", "Запустити пайплайн"),
-  from: L(`From «${SOURCE_TITLE}»`, `З розмови «${SOURCE_TITLE}»`),
+  from: L(`From “${SOURCE_TITLE}”`, `З розмови «${SOURCE_TITLE}»`),
   brief: L("Brief", "Опис задачі"),
   briefNote: L(`Taken from 7 messages up to ${CUTOFF}; edit it before starting. The unsent draft is not included.`, `Узято з 7 повідомлень до ${CUTOFF}; можна виправити перед стартом. Ненадіслану чернетку не взято.`),
   waitingTitle: L("The agent is still working", "Агент ще працює"),
@@ -311,9 +317,17 @@ const BRIEF = L(
   ].join("\n"),
 );
 
+/* Branch, checkout and file names are never broken across lines: each sits in a span that does not wrap, and the sentence wraps around it. */
+const WHOLE_NAMES = [NEW_BRANCH, BRANCH, "pipelines/csv-export-retry", WORKTREE_LABEL, ...DIRTY].sort((a, b) => b.length - a.length);
+const WHOLE_RE = new RegExp(`(${WHOLE_NAMES.map((name) => name.replace(/[.\\/]/g, "\\$&")).join("|")})`);
+function whole(text: string): ReactNode {
+  const parts = text.split(WHOLE_RE);
+  return parts.length === 1 ? text : parts.map((part, index) => (index % 2 ? <span key={index} className="whitespace-nowrap" data-proto-whole="">{part}</span> : part));
+}
+
 /** What each variant says about where the lane works: the decisive difference. */
 function whereRows(variant: Variant): { label: string; value: ReactNode; note?: string; warn?: boolean }[] {
-  const code = (text: string) => <code className="font-mono text-[12px] text-primary [overflow-wrap:anywhere]">{text}</code>;
+  const code = (text: string) => <code className="whitespace-nowrap font-mono text-[12px] text-primary">{text}</code>;
   if (variant === 2) {
     return [
       { label: WORDS.branch, value: <>{code(NEW_BRANCH)}</>, note: L(`New, from this conversation's last commit (${LAST_COMMIT_AT})`, `Нова, від останнього коміту розмови (${LAST_COMMIT_AT})`) },
@@ -337,15 +351,15 @@ function holdNote(variant: Variant): string {
 /** What the source conversation says about the lane once it started (screen 5, «4б»). */
 function afterWords(variant: Variant): { banner: string; locked: string | null } {
   if (variant === 1) return {
-    banner: L(`Pipeline «${TASK_TITLE}» works in this checkout`, `Пайплайн «${TASK_TITLE}» працює в цій робочій копії`),
-    locked: L("The pipeline holds this checkout: the conversation can only be read", "Пайплайн тримає цю робочу копію — розмову можна лише читати"),
+    banner: L(`Pipeline “${TASK_TITLE}” works in this checkout`, `Пайплайн «${TASK_TITLE}» працює в цій робочій копії`),
+    locked: L("Read-only while the pipeline runs", "Розмову можна лише читати, поки пайплайн працює"),
   };
   if (variant === 2) return {
-    banner: L(`Pipeline «${TASK_TITLE}» works on branch ${NEW_BRANCH}; this conversation stays on ${BRANCH}`, `Пайплайн «${TASK_TITLE}» працює в гілці ${NEW_BRANCH}; ця розмова лишається в ${BRANCH}`),
+    banner: L(`Pipeline “${TASK_TITLE}” works on branch ${NEW_BRANCH}; this conversation stays on ${BRANCH}`, `Пайплайн «${TASK_TITLE}» працює в гілці ${NEW_BRANCH}; ця розмова лишається в ${BRANCH}`),
     locked: null,
   };
   return {
-    banner: L(`This conversation is the ${BUILD_NAME} stage of pipeline «${TASK_TITLE}»`, `Ця розмова — етап ${BUILD_NAME} пайплайна «${TASK_TITLE}»`),
+    banner: L(`This conversation is the ${BUILD_NAME} stage of pipeline “${TASK_TITLE}”`, `Ця розмова — етап ${BUILD_NAME} пайплайна «${TASK_TITLE}»`),
     locked: null,
   };
 }
@@ -354,7 +368,7 @@ function AfterBanner({ variant }: { variant: Variant }) {
   return (
     <a href="#pipeline=pl_csv_export" data-proto-new="" data-proto-after="banner" className="flex min-h-7 min-w-0 shrink-0 items-start gap-1.5 border-b border-border bg-sunken px-3 py-1.5 text-label font-semibold text-primary hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
       <Workflow className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" aria-hidden />
-      <span className="min-w-0">{afterWords(variant).banner}</span>
+      <span className="min-w-0">{whole(afterWords(variant).banner)}</span>
     </a>
   );
 }
@@ -399,11 +413,12 @@ function StageChain({ variant }: { variant: Variant }) {
     <div className="flex flex-col gap-1">
       <span className="flex flex-wrap items-center gap-1" data-proto-stages="">
         {[BUILD_NAME, REVIEW_NAME, FIX_NAME].map((name, index) => (
+          /* Each arrow wraps with the chip before it, so no line starts with a bare arrow. */
           <span key={name} className="flex items-center gap-1">
-            {index ? <span className="text-label font-bold text-strong" aria-hidden>→</span> : null}
             <span className={`rounded-full px-2 py-0.5 text-caption font-semibold ${variant === 3 && index === 0 ? "bg-accent-soft text-accent" : "bg-sunken text-secondary"}`}>
               {name} · {who(index)}
             </span>
+            {index < 2 ? <span className="text-label font-bold text-strong" aria-hidden>→</span> : null}
           </span>
         ))}
       </span>
@@ -447,7 +462,7 @@ function PreviewBody({ variant, waiting }: { variant: Variant; waiting: boolean 
             <dt className="pt-px text-label font-semibold text-muted">{row.label}</dt>
             <dd className="flex min-w-0 flex-col">
               <span className={`text-ui font-semibold ${row.warn ? "text-warning" : "text-primary"}`}>{row.value}</span>
-              {row.note ? <span className="text-label text-muted [overflow-wrap:anywhere]">{row.note}</span> : null}
+              {row.note ? <span className="text-label text-muted">{whole(row.note)}</span> : null}
             </dd>
           </div>
         ))}
@@ -526,7 +541,7 @@ function useInsertedHost(find: () => { parent: Element; before: Element | null }
     const observer = new MutationObserver(() => { attempt(); });
     observer.observe(document.body, { childList: true, subtree: true });
     return () => observer.disconnect();
-  }, [find]);
+  }, [find, tag]);
   return host;
 }
 
@@ -578,10 +593,11 @@ function findPhoneMenuSpot() {
 
 /* ---------- the lane's link back to its conversation ---------- */
 
-function linkWords(variant: Variant): { line: string; state: string } {
-  if (variant === 1) return { line: L(`Continues «${SOURCE_TITLE}»`, `Продовжує розмову «${SOURCE_TITLE}»`), state: L("the conversation is read-only while the pipeline holds its checkout", "розмова лише для читання, поки пайплайн тримає її робочу копію") };
-  if (variant === 2) return { line: L(`Started from «${SOURCE_TITLE}»`, `Запущено з розмови «${SOURCE_TITLE}»`), state: L(`branch ${NEW_BRANCH}; the conversation keeps working on its own branch ${BRANCH}`, `гілка ${NEW_BRANCH}; розмова працює далі у своїй гілці ${BRANCH}`) };
-  return { line: L(`${BUILD_NAME} is the conversation «${SOURCE_TITLE}»`, `${BUILD_NAME} — це розмова «${SOURCE_TITLE}»`), state: L("same agent, now a stage", "той самий агент, тепер етап") };
+function linkWords(variant: Variant): { line: string; state: string | null } {
+  if (variant === 1) return { line: L(`Continues “${SOURCE_TITLE}”`, `Продовжує розмову «${SOURCE_TITLE}»`), state: L("the conversation is read-only while the pipeline holds its checkout", "розмова лише для читання, поки пайплайн тримає її робочу копію") };
+  if (variant === 2) return { line: L(`Started from “${SOURCE_TITLE}”`, `Запущено з розмови «${SOURCE_TITLE}»`), state: L(`branch ${NEW_BRANCH}; the conversation keeps working on its own branch ${BRANCH}`, `гілка ${NEW_BRANCH}; розмова працює далі у своїй гілці ${BRANCH}`) };
+  /* The Build chip already names the conversation; the line says who runs it. */
+  return { line: L(`The same agent that ran the conversation, now the ${BUILD_NAME} stage`, `Той самий агент, що вів розмову, тепер етап ${BUILD_NAME}`), state: null };
 }
 
 function LaneLink({ variant, phone }: { variant: Variant; phone: boolean }) {
@@ -592,8 +608,8 @@ function LaneLink({ variant, phone }: { variant: Variant; phone: boolean }) {
     <a href={`#c=${SOURCE_ID}`} data-proto-new="" data-proto-lane-link="" className="flex min-h-6 min-w-0 items-start gap-1 pt-1 text-label text-secondary hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
       <CornerDownRight className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
       <span className="min-w-0">
-        <span className="font-semibold text-primary">{words.line}</span>
-        <span className="text-muted"> · {words.state}</span>
+        <span className="font-semibold text-primary">{whole(words.line)}</span>
+        {words.state ? <span className="text-muted"> · {whole(words.state)}</span> : null}
       </span>
     </a>,
     host,
@@ -671,8 +687,20 @@ function DesktopScreen({ variant, screen }: { variant: Variant; screen: Screen }
       {screen >= 4 && variant === 3 ? <BuildChipName /> : null}
       {screen === 5 ? <DesktopAfterState variant={variant} /> : null}
       {screen === 5 && variant === 1 ? <style>{LOCKED_CSS}</style> : null}
+      {screen === 5 && variant === 3 ? <StageHeaderName /> : null}
     </div>
   );
+}
+
+/** Variant 3 after the start: the reader's header reads «Build · <the conversation's own title>», as the phone's bar does. */
+function StageHeaderName() {
+  const host = useInsertedHost(findReaderTitleSpot, "span");
+  if (!host) return null;
+  return createPortal(<span data-proto-new="" data-proto-stage-name="">{BUILD_NAME} · </span>, host);
+}
+function findReaderTitleSpot() {
+  const title = document.querySelector("[data-agent-window] .conv-head .ch-title");
+  return title ? { parent: title, before: title.firstChild as Element | null } : null;
 }
 
 /* Variant 1's composer is gone while the pipeline holds the checkout: the reader keeps its feed. */
@@ -765,7 +793,7 @@ const CAPTIONS: Record<Variant, Record<Screen, string>> = {
     2: "Агент ще дописує хід, тому вікно чекає і візьме опис задачі, щойно хід закінчиться.",
     3: "Перед стартом видно опис задачі з розмови (його можна правити), ту саму гілку й робочу копію з трьома незакоміченими файлами та етапи Build → Review → Fix.",
     4: "На картці задачі з’являється лінія пайплайна з посиланням на розмову; Build виконує новий агент у тій самій робочій копії.",
-    5: "Сама розмова тепер лише для читання: замість поля вводу написано, що пайплайн тримає її робочу копію.",
+    5: "Сама розмова тепер лише для читання: під заголовком — що пайплайн працює в її робочій копії, а замість поля вводу — що писати поки не можна.",
   },
   2: {
     1: "У меню розмови з’являється пункт «Запустити пайплайн»: він відкриє нову гілку від останнього коміту цієї розмови.",
@@ -778,8 +806,8 @@ const CAPTIONS: Record<Variant, Record<Screen, string>> = {
     1: "У меню розмови з’являється пункт «Запустити пайплайн»: цей самий агент стане першим етапом, Build.",
     2: "Агент ще дописує хід, тому вікно чекає: умови етапу він отримає лише після кінця ходу.",
     3: "Перед стартом видно опис задачі, ту саму гілку й робочу копію і що Build — це цей агент, а Review і Fix — нові агенти.",
-    4: "На картці задачі з’являється лінія, де етап Build названо цією розмовою, а Review і Fix потім виконають нові агенти.",
-    5: "Сама розмова стала етапом Build: у заголовку назва етапу, а останнє повідомлення — умови етапу від пайплайна.",
+    4: "На картці задачі з’являється лінія, де етап Build названо цією розмовою: його веде той самий агент, а Review і Fix потім виконають нові агенти.",
+    5: "Сама розмова стала етапом Build: у заголовку назва етапу, пайплайн надіслав умови етапу, і агент узявся до роботи.",
   },
 };
 /* Step 4 is two frames: the board, then the conversation after the start. */
@@ -802,7 +830,7 @@ function Strip() {
           <figure key={screen} className="flex flex-col gap-2" style={{ width }} data-proto-figure={screen}>
             <iframe title={`${VARIANT}.${LABELS[screen]}`} src={src(screen)} width={width} height={height} className="block rounded-[4px] border border-border bg-canvas" style={{ width, height }} />
             <figcaption className="text-body text-primary" style={{ maxWidth: width }}>
-              <b>{VARIANT}.{LABELS[screen]}</b> {CAPTIONS[VARIANT][screen]}
+              <b>{VARIANT}.{LABELS[screen]}</b> {whole(CAPTIONS[VARIANT][screen])}
             </figcaption>
           </figure>
         ))}

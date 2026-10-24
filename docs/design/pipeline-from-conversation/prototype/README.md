@@ -24,14 +24,16 @@ under each frame:
    publication.
 4. After the start, two frames:
    - 4а, the board: the task card's lane, with a line that links it back to
-     the conversation; in variant 3 the Build chip names the conversation;
+     the conversation; in variant 3 the Build chip names the conversation and
+     the line says the same agent now runs the Build stage;
    - 4б, the conversation itself, opened from the board: a line under its
      header names the pipeline, and what it may do now differs by variant.
      Variant 1: the composer is gone and a notice in its place says the
-     pipeline holds the checkout, so the conversation can only be read.
+     conversation is read-only while the pipeline runs.
      Variant 2: the composer stays and the line names both branches.
-     Variant 3: the header names the Build stage, and the stage's rules are the
-     newest message.
+     Variant 3: the conversation keeps its own title and avatar, its header
+     reads «Build · Повтор експорту CSV» on both devices, the stage's rules
+     arrive as a message card from the pipeline, and the agent's reply follows.
 
 ## What is the product and what is new
 
@@ -54,6 +56,11 @@ New, drawn with existing primitives and classes:
   footer on the phone; stage chips as the template picker draws them;
 - the lane's link line under the lane row, and in variant 3 the conversation's
   title on the Build chip;
+- in variant 3, the stage's rules as the feed's existing message card for an
+  `<agent-message>` record, which names its sender («від пайплайна»). On the
+  desktop the reader would title an adopted stage attempt from the lane's
+  card and give it the builder's costume, so screen 5 of variant 3 draws the
+  reader without the lane and adds the stage name to its header;
 - in the conversation after the start: the line under its header that names
   the pipeline, and variant 1's notice where the composer was.
 
@@ -96,4 +103,6 @@ Before each capture the text of every new element, menu, dialog and sheet was
 checked in every screen frame: no text range outside the viewport or cut by a
 clipping ancestor, no ellipsis, the brief textarea never scrolls, every new
 control at least 24 px (44 px on a coarse pointer) and clear of its
-neighbours, and each screen's defining element on its first screen.
+neighbours, and each screen's defining element on its first screen. Branch,
+checkout and file names sit in spans that never wrap, each stage arrow wraps
+with the chip before it, and the en strings use English quotes.
