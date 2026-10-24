@@ -190,24 +190,25 @@ test("automatic drain holds seat sweeps and release resumes the next sweep", asy
   stopSeatTick();
 });
 
-test("a check that outran its interval drops the next tick rather than queueing it", async () => {
+test("a pass that outran its interval still checks due projects on each callback", async () => {
   let fire = () => {};
   let sweeps = 0;
-  let release = () => {};
+  const releases: (() => void)[] = [];
   startSeatTick({
     scheduleInterval: (callback) => { fire = callback; return { unref() {} } as never; },
-    sweep: () => { sweeps += 1; return new Promise<void>((resolve) => { release = resolve; }); },
+    sweep: () => { sweeps += 1; return new Promise<void>((resolve) => { releases.push(resolve); }); },
     policy: DEFAULT_SEAT_TICK_POLICY,
     log: () => {},
   });
   fire();
   fire();
-  expect(sweeps).toBe(1);
-  release();
+  expect(sweeps).toBe(3);
+  releases.forEach(release => release());
   await Promise.resolve();
   await Promise.resolve();
   fire();
-  expect(sweeps).toBe(2);
+  expect(sweeps).toBe(4);
+  releases.forEach(release => release());
 });
 
 test("a wake drops a lane closed during gathering and carries the current monitor note", async () => {
@@ -288,7 +289,10 @@ test("a second state change during PR refresh leaves the alarm unsent", async ()
     rig.deps.sources!.settings = () => ({ ...defaultSeatTickSettings(PROJECT), enabled: false });
     return { ok: true, pullRequests: [] };
   };
-  expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "error", delivery: null });
+  // The bounded retry re-reads the disabled setting and ends quietly.
+  const record = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(record).toMatchObject({ verdict: "quiet", delivery: null });
+  expect(record!.detail).toContain("ticking is off for this project");
   expect(rig.sent).toEqual([]);
   expect(rig.written.every(state => state.lastWakeAt === OVERDUE.lastWakeAt)).toBe(true);
 });
@@ -351,7 +355,7 @@ test("a canceled successful PR refresh clears recovered outage accounting and st
 
   const canceled = await runSeatTickCheck(PROJECT, rig.deps);
   expect(canceled).toMatchObject({ verdict: "error", delivery: null });
-  expect(reads).toBe(2);
+  expect(reads).toBe(4);
   expect(rig.sent).toEqual([]);
   expect(readSeatTickState(PROJECT, stateFile).pullRequestGap).toBeNull();
 
