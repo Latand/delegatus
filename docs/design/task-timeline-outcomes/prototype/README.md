@@ -17,7 +17,13 @@ code changes.
 Each frame prints its variant number and name in a band above the screen, in
 the frame's language. `today-*` frames show the same task as the product draws
 it now, for comparison. `variant-1-*-all` frames open variant 1's «Раніше»
-fold and its extra-lane entry, so every line it adds is on screen.
+fold and its extra-lane entry, so every line it adds is on screen. Variant 3's
+default frames fold every milestone to «N подій»; `variant-3-*-all` frames
+open the Merge milestone, the one with the extra lane.
+
+On the phone all three variants put what they add first, under the title:
+variant 2 its brief, variants 1 and 3 the timeline. The finished lanes
+(«3 завершені»), the description, the agent note and the nine agents follow.
 
 ## What each variant says, and what it leaves out
 
@@ -27,15 +33,22 @@ fold and its extra-lane entry, so every line it adds is on screen.
   first review and a passed review have none. A result stands only where the
   entry's words and its neighbours do not already say it: no result on a lane
   start whose stage below states it, none on the deploy, which the agent note
-  states. Folded, each line fits whole in two lines on the 820 px card.
-- Variant 2 numbers one decision per reason, so every Review and Fix round
+  states; Build's result names the chunk size and the unchanged format, which
+  the lane's name above it does not. An opened line names no file and does not
+  restate the entry above it. Folded, each line fits whole in two lines on the
+  820 px card.
+- Variant 2 says each fact in one point: «how it works now» says what a person
+  sees, and the decisions say how and why (resuming from the last confirmed
+  chunk, the pauses between retries). It numbers one decision per reason, so every Review and Fix round
   that changed something links to the point that names why it ran: rounds 1
   to point 4, rounds 2 to point 6. Among neighbouring short rows only one
   entry links to a point (the extra lane's start, not the update or the
   Refresh beside it).
 - Variant 3 gives the Build milestone no «Чому» (the first stage of a lane
   always runs for the same reason), keeps the row's own time out of results,
-  and keeps the Deploy result to what the note does not say.
+  keeps the Deploy result to what the note does not say, and ends the Merge
+  result on the resolved conflict, since its last folded event says the PR
+  merged.
 
 ## The fixture
 
@@ -69,7 +82,7 @@ fixture's `Pipeline` records. What the variants add would come from:
 
 - `prototype.fixture.tsx`: the whole prototype. Query string:
   `?variant=0|1|2|3&device=desktop|phone&lang=uk|en&theme=light|dark`, plus
-  `&all=1` for variant 1's open frames. The window's size decides the width.
+  `&all=1` for the open frames of variants 1 and 3. The window's size decides the width.
   `variant=0` is today.
 - `prototype.css`: the product's `globals.css` plus this directory as a
   Tailwind source.
@@ -83,12 +96,20 @@ fixture's `Pipeline` records. What the variants add would come from:
   stage conversations on the scene, as the Viewer keeps launched stages there,
   so the phone lists the same nine the card counts. In variant 2, and in
   variant 1's `-all` frames, the timeline's own «Раніше · N» is pressed.
+  On the phone, variant 1 draws the product's `TaskChronology` first among the
+  task screen's groups, over the same entries the screen builds, and hides the
+  screen's own one further down; the checks compare the two entry lists.
 - New, drawn with the timeline's own classes (`chronology-link`,
   `chronology-entry`, `chronology-head`) and existing tokens: variant 1's
   lines and chevron, variant 2's brief section and its links, variant 3's
-  milestone list. On the phone the brief uses the phone timeline's card frame,
-  and variant 1's lines on an entry that opens its conversation sit inside its
-  44 px button, under its words. No new colour, font or card shape.
+  milestone list. On the phone the brief uses the phone timeline's card frame.
+  In variant 1 on the phone every entry that opens its conversation is drawn
+  one way: its words on its time's line and its lines under them, inside the
+  entry's button. The button's 44 px target is grown by padding that a
+  negative margin takes back, so an entry without lines keeps a plain row's
+  21 px pitch. At that pitch neighbouring targets overlap, and the later entry
+  takes the overlap, as the chevrons beside them already do. No new colour,
+  font or card shape.
 
 ## Building and rendering
 
@@ -123,5 +144,11 @@ variant 1's folded lines takes at most two lines, that its timeline is at most
 entry's words. Variant 2's links share their row's text baseline and leave the
 row's height as it is without them, and no brief point is longer than four
 lines at 1440 px. The chevrons and links have a 24 px target on the desktop and
-44 px on the phone, grown by padding that does not change the row. The same
-checks ran at 820 px, in the dark theme, and in English.
+44 px on the phone, grown by padding that does not change the row. On the
+phone, in a 390 × 844 viewport before it grows, the checks measured where
+variant 1's first «Чому»/«Результат» line and variant 3's first milestone
+result end (both must end within 844 px), that every variant 1 entry's words
+start on its time's line, and that every one-line entry without added lines,
+plain or opening a conversation, has the same pitch. Variant 3's default
+frames must have every milestone folded, its `-all` frames only Merge open.
+The same checks ran at 820 px, in the dark theme, and in English.

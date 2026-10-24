@@ -20,6 +20,9 @@
  *   3  the timeline grouped into milestones by lane and stage, each with its
  *      why and its outcome; the single events fold inside.
  *
+ * On the phone, variants 1 and 3 draw the timeline first among the task
+ * screen's groups, where variant 2 puts its brief.
+ *
  * Query string: ?variant=0|1|2|3&device=desktop|phone&lang=uk|en&theme=light|dark[&all=1]
  */
 
@@ -35,7 +38,7 @@ import { setRuntimeUiEnabledForTests } from "@/hooks/runtimeBus";
 import { KanbanBoard } from "@/components/kanban/KanbanBoard";
 import { MobileTaskScreen } from "@/components/mobile/MobileTaskScreen";
 import { getMobileNav } from "@/components/mobile/mobileNav";
-import { chronologyEntryText } from "@/components/kanban/TaskChronology";
+import { chronologyEntryText, TaskChronology } from "@/components/kanban/TaskChronology";
 import { taskChronology, type ChronologyEntry } from "@/components/kanban/taskChronologyModel";
 import { pastAttempts } from "@/components/kanban/pipelineGraph";
 import { stageDisplayName } from "@/components/pipelines/pipelineModel";
@@ -230,7 +233,7 @@ type Line = { short: string; full: string };
 type Outcome = { why?: Line; result?: Line };
 const OUTCOMES: Record<string, Outcome> = {
   [attemptKey(A, "build", 1)]: {
-    result: { short: L("streaming writes, a retry on 503", "потоковий запис, повтор на 503"), full: L("Rows stream in chunks of 5,000 instead of building the file in memory; an upload retries on 503. The file format is unchanged.", "Рядки пишуться потоком частинами по 5\u00a0000, а не збираються в пам’яті; вивантаження повторюється на 503. Формат файлу той самий.") },
+    result: { short: L("5,000-row chunks, the same format", "частини по 5\u00a0000, формат той самий"), full: L("Rows are written in chunks of 5,000 instead of building the file in memory. The file format is unchanged.", "Рядки пишуться частинами по 5\u00a0000, а не збираються в пам’яті. Формат файлу той самий.") },
   },
   [attemptKey(A, "fix", 1)]: {
     why: { short: L("duplicate rows, no test, no timeout", "дублі рядків, без тесту й таймауту"), full: L("Review round 1: a retry wrote its chunk again, so rows came out twice; no test covered the retry; uploads had no timeout.", "Review, раунд 1: повтор записував частину ще раз і рядки дублювались; тесту на повтор не було; вивантаження не мало таймауту.") },
@@ -247,7 +250,7 @@ const OUTCOMES: Record<string, Outcome> = {
     why: { short: L(`main moved on: #${OTHER_PR} changed upload.ts`, `main пішов уперед: #${OTHER_PR} змінив upload.ts`), full: L(`While PR #${PR} waited in the merge queue, #${OTHER_PR} (an upload rate limit) merged into main and changed src/export/upload.ts.`, `Поки PR #${PR} чекав у черзі на мердж, у main злили #${OTHER_PR} (обмеження швидкості вивантаження), і він змінив src/export/upload.ts.`) },
   },
   [`${B}:started`]: {
-    why: { short: L("the update hit a conflict", "оновлення дало конфлікт"), full: L(`PR #${PR} could not merge: updating it from main hit a conflict with #${OTHER_PR} in src/export/upload.ts, which needs an agent to resolve.`, `PR #${PR} не зливався: оновлення з main дало конфлікт з #${OTHER_PR} у src/export/upload.ts, і розв’язати його мав агент.`) },
+    why: { short: L("the update hit a conflict", "оновлення дало конфлікт"), full: L(`PR #${PR} could not merge: updating it from main hit a conflict, and an agent had to resolve it.`, `PR #${PR} не зливався: оновлення з main дало конфлікт, і розв’язати його мав агент.`) },
   },
   [attemptKey(B, "refresh", 1)]: {
     result: { short: L("both changes kept", "обидві зміни збережено"), full: L(`upload.ts keeps both the rate limit from #${OTHER_PR} and the retry on 503; tests green.`, `В upload.ts лишились і ліміт швидкості з #${OTHER_PR}, і повтор на 503; тести зелені.`) },
@@ -258,7 +261,7 @@ const OUTCOMES: Record<string, Outcome> = {
 };
 /** The entry the «-all» frames show open: the extra lane, whose reason is what the operator could not find. */
 const OPEN_OUTCOME = `${B}:started`;
-/** A frame with `&all=1` opens «Earlier» and the extra lane's entry, so every line variant 1 adds is on screen. */
+/** A frame with `&all=1` opens variant 1's «Earlier» and its extra lane's entry, so every line it adds is on screen, and variant 3's Merge milestone. */
 const ALL = params.get("all") === "1";
 
 /** Variant 2's brief: numbered points the timeline entries point back to. */
@@ -276,8 +279,8 @@ const BRIEF: { heading: string; points: BriefPoint[] }[] = [
       `Експорт 80\u00a0тис. рядків триває близько 6\u00a0с; формат файлу той самий. Працює з версії ${RELEASE}, 15:05.`,
     ) },
     { n: 3, text: L(
-      "If storage is down, the export tries again from where it stopped; after three failures the person sees «Storage is unavailable, try later».",
-      "Якщо сховище недоступне, експорт пробує ще раз з місця збою; після трьох невдач людина бачить «Сховище недоступне, спробуйте пізніше».",
+      "If storage is down, the export tries again by itself; after three failures the person sees «Storage is unavailable, try later».",
+      "Якщо сховище недоступне, експорт сам пробує знову; після трьох невдач людина бачить «Сховище недоступне, спробуйте пізніше».",
     ) },
   ] },
   { heading: L("Key decisions", "Ключові рішення"), points: [
@@ -290,8 +293,8 @@ const BRIEF: { heading: string; points: BriefPoint[] }[] = [
       "Таймаут 30\u00a0с на частину, щоб зависле сховище не тримало воркер (Review, раунд 1).",
     ) },
     { n: 6, text: L(
-      "Up to three retries on 503, 1\u00a0→ 2\u00a0→ 4\u00a0s apart, then a clear message: the third retry used to fail with a different error (Review, round 2).",
-      "До трьох повторів на 503 з паузами 1\u00a0→ 2\u00a0→ 4\u00a0с, після них зрозуміле повідомлення: третій повтор падав з іншою помилкою (Review, раунд 2).",
+      "Pauses of 1\u00a0→ 2\u00a0→ 4\u00a0s between retries, and the test covers all three: the third retry used to fail with a different error (Review, round 2).",
+      "Паузи між повторами 1\u00a0→ 2\u00a0→ 4\u00a0с, і тест покриває всі три: третій повтор падав з іншою помилкою (Review, раунд 2).",
     ) },
     { n: 7, text: L(
       `The conflict with #${OTHER_PR} kept both changes: its upload rate limit and this retry. That took an extra lane to refresh the PR branch.`,
@@ -341,7 +344,7 @@ const MILESTONES: { id: MilestoneId; title: string; why?: string; result: string
   {
     id: "merge", title: L(`Merge PR #${PR} · extra lane`, `Мердж PR #${PR} · додаткова лінія`),
     why: L(`main moved on: #${OTHER_PR} changed the same file, so the «Refresh the PR branch» lane ran`, `main пішов уперед: #${OTHER_PR} змінив той самий файл, тому запускали лінію «Оновити гілку PR»`),
-    result: L(`Both changes kept; PR #${PR} merged`, `Обидві зміни збережено; PR #${PR} змерджено`),
+    result: L("Both changes kept; the conflict resolved", "Обидві зміни збережено, конфлікт розв’язано"),
   },
   {
     id: "deploy", title: stageName(C, "deploy"),
@@ -349,7 +352,7 @@ const MILESTONES: { id: MilestoneId; title: string; why?: string; result: string
     result: L("The production export took 6\u00a0s and 118\u00a0MB", "Експорт на проді: 6\u00a0с, 118\u00a0МБ"),
   },
 ];
-/** The milestone variant 3 shows unfolded: the one with the extra lane. */
+/** The milestone variant 3's «-all» frames show unfolded: the one with the extra lane. Default frames fold every milestone. */
 const OPEN_MILESTONE: MilestoneId = "merge";
 
 const WORDS = {
@@ -405,8 +408,13 @@ function usePresses(selectors: readonly string[]) {
   }, [selectors]);
 }
 
-/** The task's own timeline: the card's on the desktop, the task screen's on the phone. */
-const timelineSelector = PHONE ? "[data-phone-task-groups] section.chronology" : `[data-kanban-card="${CARD}"] section.chronology`;
+/** On the phone, variants 1 and 3 draw the timeline first, where variant 2
+    puts its brief: what they add then starts on the first screen, above the
+    finished lanes, the description and the agents. */
+const PHONE_TIMELINE_FIRST = PHONE && (VARIANT === 1 || VARIANT === 3);
+/** The task's own timeline: the card's on the desktop, the task screen's on the phone (variant 1's drawn first). */
+const timelineSelector = !PHONE ? `[data-kanban-card="${CARD}"] section.chronology`
+  : VARIANT === 1 ? "[data-proto-phone-timeline] section.chronology" : "[data-phone-task-groups] section.chronology";
 const entrySelector = (key: string) => `${timelineSelector} [data-chronology-entry="${CSS.escape(key)}"] .chronology-what`;
 
 /* ---------- variant 1: «Why» and «Result» on each entry that needs them ---------- */
@@ -414,8 +422,8 @@ const entrySelector = (key: string) => `${timelineSelector} [data-chronology-ent
 function OutcomeLine({ entryKey, outcome }: { entryKey: string; outcome: Outcome }) {
   const [open, setOpen] = useState(ALL && entryKey === OPEN_OUTCOME);
   /* The lines sit right under the entry's words. On the phone an entry that
-     opens its conversation is a 44 px button with its words centred, so the
-     lines go inside it, under the words, and the button grows with them. */
+     opens its conversation is a button, so the lines go inside it, under its
+     words, and the button grows with them. */
   const findLines = useMemo(() => () => {
     const what = document.querySelector(entrySelector(entryKey));
     if (!what) return null;
@@ -497,10 +505,7 @@ function BriefBody() {
 
 function Brief() {
   const find = useMemo(() => () => {
-    if (PHONE) {
-      const groups = document.querySelector("[data-phone-task-groups]");
-      return groups ? { parent: groups, before: groups.firstElementChild } : null;
-    }
+    if (PHONE) return phoneGroupsStart();
     const card = document.querySelector(`[data-kanban-card="${CARD}"][data-collapsed="0"]`);
     /* Under the title and the state line: the first thing the open card says. */
     const after = card?.querySelector(":scope > .card-state, :scope > .card-meta-line");
@@ -536,8 +541,27 @@ function BriefRef({ entryKey, n }: { entryKey: string; n: number }) {
 
 /* ---------- variant 3: milestones ---------- */
 
+/** Where variants 1 and 3 put the timeline on the phone: first among the task screen's groups. */
+const phoneGroupsStart = () => {
+  const groups = document.querySelector("[data-phone-task-groups]");
+  return groups ? { parent: groups, before: groups.firstElementChild } : null;
+};
+
+/** Variant 1 on the phone: the product's own timeline drawn first, over the
+    same entries the task screen builds; the screen's own one, further down, is
+    hidden. */
+function PhoneTimelineFirst() {
+  const host = useInsertedHost(phoneGroupsStart);
+  return host ? createPortal(
+    <div data-proto-phone-timeline="">
+      <TaskChronology phone entries={ENTRIES} pipelines={PIPELINES} nowMs={NOW_MS} onOpen={() => undefined} />
+    </div>,
+    host,
+  ) : null;
+}
+
 function Milestones() {
-  const find = useMemo(() => () => {
+  const find = useMemo(() => PHONE ? phoneGroupsStart : () => {
     const real = document.querySelector(timelineSelector);
     return real ? { parent: real.parentElement!, before: real } : null;
   }, []);
@@ -562,7 +586,7 @@ function Milestones() {
                 <span className="font-semibold text-primary">{milestone.title}</span>
                 {milestone.why ? <span><span className="font-semibold">{WORDS.why}:</span> {milestone.why}</span> : null}
                 <span><span className="font-semibold">{WORDS.result}:</span> <span className="text-primary">{milestone.result}</span></span>
-                <details className="chronology-detail group" data-proto-milestone-events={events.length} open={milestone.id === OPEN_MILESTONE}>
+                <details className="chronology-detail group" data-proto-milestone-events={events.length} open={ALL && milestone.id === OPEN_MILESTONE}>
                   <summary className={`list-none gap-1 [&::-webkit-details-marker]:hidden ${PHONE ? "" : "flex min-h-6 items-center"}`}>
                     <span aria-hidden className="inline-block transition-transform group-open:rotate-90 motion-reduce:transition-none">›</span>
                     {WORDS.events(events.length)}
@@ -606,15 +630,24 @@ const PRESSES: readonly string[] = [
 function Additions({ variant }: { variant: Variant }) {
   if (variant === 1) return (
     <>
+      {PHONE ? <PhoneTimelineFirst /> : null}
       {Object.entries(OUTCOMES).map(([key, outcome]) => <OutcomeLine key={key} entryKey={key} outcome={outcome} />)}
-      {/* A phone entry that holds lines stacks them under its words, from the top, beside its time. */}
-      <style>{".chronology.phone .chronology-open:has([data-proto-outcome]) { flex-direction: column; align-items: flex-start; justify-content: flex-start; }"}</style>
+      {/* On the phone every entry that opens its conversation is drawn one
+          way: its words on its time's line, lines below them, and the 44 px
+          target grown by padding a negative margin takes back, so an entry
+          without lines keeps a plain row's pitch. */}
+      {PHONE ? <style>{".chronology.phone .chronology-open { flex-direction: column; align-items: flex-start; justify-content: flex-start; min-height: 0; padding: 13px 0; margin: -13px 0; }"}</style> : null}
     </>
   );
   /* The brief takes the agent note's place: the note would say the release a second time. */
   if (variant === 2) return <><Brief />{Object.entries(BRIEF_REFS).map(([key, n]) => <BriefRef key={key} entryKey={key} n={n} />)}<style>{`${PHONE ? "[data-proto-screen=phone]" : `[data-kanban-card="${CARD}"]`} [data-task-note] { display: none !important; }`}</style></>;
   if (variant === 3) return <><Milestones /><style>{`${timelineSelector}:not([data-proto-milestones]) { display: none !important; }`}</style></>;
   return null;
+}
+
+/** The task screen's own timeline, in its history group, gives way to the one drawn first. */
+function PhoneTimelineMoved() {
+  return PHONE_TIMELINE_FIRST ? <style>{"[data-phone-task-group=history] section.chronology { display: none !important; }"}</style> : null;
 }
 
 function DesktopScreen() {
@@ -687,6 +720,7 @@ function Frame({ children }: { children: ReactNode }) {
       </header>
       {children}
       <Additions variant={VARIANT} />
+      <PhoneTimelineMoved />
     </>
   );
 }
