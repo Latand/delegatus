@@ -242,7 +242,7 @@
       "focus": "BODY"
     }
   ],
-  "recordedAt": "2026-10-24T00:02:19.468635+00:00",
+  "recordedAt": "2026-10-24T00:12:41.944846+00:00",
   "baseRevision": "134a29c63d68d6934d6222c89d5103df3ab4721c",
   "sourceParentRevision": "1ba7eb2fc6f9bb43adb84142c34625231fe1ad84",
   "sourceOverlay": [
@@ -277,5 +277,172 @@
       "covered text"
     ]
   },
-  "setup": "At 915 px the existing notification is dismissed through its close control before Reports is opened. The custom role uses an existing worker conversation."
+  "setup": "At 915 px the existing notification is dismissed through its close control before Reports is opened. The custom role uses an existing worker conversation.",
+  "checks": {
+    "runtime": "Bun 1.4.0",
+    "typecheck": {
+      "command": "bun x tsc --noEmit --incremental false",
+      "exitCode": 0
+    },
+    "eslint": {
+      "command": "bun x eslint src/components/orchestrator/reportLog/ReportLog.tsx src/components/kanban/issue1695Evidence.fixture.tsx src/components/kanban/kanbanBoard.browser.test.tsx",
+      "exitCode": 0,
+      "unchangedWarnings": 1
+    },
+    "browser": {
+      "passedTests": 2,
+      "failedTests": 0,
+      "assertions": 104
+    },
+    "files": {
+      "commandTemplate": "bun scripts/local-gate-tests.ts --base 048f0e45a109ccb194c634a2237dbc0a13144ed1 <file>",
+      "selection": "Literal static and dynamic import closure, excluding browser drivers; includes the bridge report projection tests.",
+      "testFiles": [
+        "src/components/BoardSearchEntry.dom.test.tsx",
+        "src/components/BootShell.dom.test.tsx",
+        "src/components/EffortPills.slot.dom.test.tsx",
+        "src/components/OverviewBoard.catalog.render.test.tsx",
+        "src/components/OverviewBoard.firstRun.dom.test.tsx",
+        "src/components/OverviewBoard.kanban.dom.test.tsx",
+        "src/components/OverviewBoard.loading.dom.test.tsx",
+        "src/components/OverviewBoard.render.test.tsx",
+        "src/components/ProjectDashboard.backgroundTaskDock.dom.test.tsx",
+        "src/components/ProjectDashboard.empty.dom.test.tsx",
+        "src/components/ProjectDashboard.flash.dom.test.tsx",
+        "src/components/ProjectDashboard.headerBar.dom.test.tsx",
+        "src/components/ProjectDashboard.inlineCatalog.dom.test.tsx",
+        "src/components/ProjectDashboard.launchClaim.dom.test.tsx",
+        "src/components/ProjectDashboard.loadingStates.dom.test.tsx",
+        "src/components/ProjectDashboard.looseReader.dom.test.tsx",
+        "src/components/ProjectDashboard.mobileLaunchFocus.dom.test.tsx",
+        "src/components/ProjectDashboard.pipelineNavigation.dom.test.tsx",
+        "src/components/ProjectDashboard.searchLanding.dom.test.tsx",
+        "src/components/ProjectDashboard.seatTasks.dom.test.tsx",
+        "src/components/ProjectDashboard.selection.dom.test.tsx",
+        "src/components/ProjectDashboard.shelf.dom.test.tsx",
+        "src/components/ProjectDashboard.test.ts",
+        "src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+        "src/components/ProjectDashboard.viewSwitch.dom.test.tsx",
+        "src/components/TmuxComposer.liveRefreshFocus.dom.test.tsx",
+        "src/components/Viewer.catalogFailure.dom.test.tsx",
+        "src/components/Viewer.deepLink.dom.test.tsx",
+        "src/components/Viewer.mobileSwipe.dom.test.tsx",
+        "src/components/Viewer.needsYou.dom.test.tsx",
+        "src/components/Viewer.orchestratorDock.dom.test.tsx",
+        "src/components/Viewer.overviewPhone.dom.test.tsx",
+        "src/components/Viewer.railHidden.dom.test.tsx",
+        "src/components/Viewer.switching.dom.test.tsx",
+        "src/components/Viewer.test.ts",
+        "src/components/attention/AttentionHost.dom.test.tsx",
+        "src/components/attention/AttentionHost.phoneNotice.dom.test.tsx",
+        "src/components/decisions/DecisionColumn.dom.test.tsx",
+        "src/components/externalRelay/RelayChats.dom.test.tsx",
+        "src/components/kanban/seatAgentWindow.dom.test.tsx",
+        "src/components/kanban/seatFold.dom.test.tsx",
+        "src/components/mobile/MobileBoard.dom.test.tsx",
+        "src/components/mobile/MobileFocusView.badges.dom.test.tsx",
+        "src/components/mobile/MobileFocusView.conversation.dom.test.tsx",
+        "src/components/mobile/MobileFocusView.keyboardInset.dom.test.tsx",
+        "src/components/mobile/MobileFocusView.reviewDeckRole.dom.test.tsx",
+        "src/components/mobile/MobileFocusView.seen.dom.test.tsx",
+        "src/components/mobile/MobileFocusView.strip.dom.test.tsx",
+        "src/components/mobile/MobileFocusView.superseded.dom.test.tsx",
+        "src/components/mobile/MobileFocusView.viewport.dom.test.tsx",
+        "src/components/mobile/MobileKanban.dom.test.tsx",
+        "src/components/mobile/MobilePipelineScreen.actions.dom.test.tsx",
+        "src/components/mobile/MobilePipelineScreen.dom.test.tsx",
+        "src/components/mobile/MobilePipelinesScreen.dom.test.tsx",
+        "src/components/mobile/MobileRemoteTask.dom.test.tsx",
+        "src/components/mobile/MobileShell.board.dom.test.tsx",
+        "src/components/mobile/MobileShell.dom.test.tsx",
+        "src/components/mobile/MobileTaskScreen.dom.test.tsx",
+        "src/components/mobile/MobileTaskScreen.entry.dom.test.tsx",
+        "src/components/mobile/directReviewDeck.dom.test.tsx",
+        "src/components/mobile/mobileHeaderFit.dom.test.tsx",
+        "src/components/mobile/mobileOrchestratorControls.dom.test.tsx",
+        "src/components/mobile/mobileOrchestratorLeaves.dom.test.tsx",
+        "src/components/mobile/mobileSeatCard.dom.test.tsx",
+        "src/components/orchestrator/OrchestratorDock.dom.test.tsx",
+        "src/components/orchestrator/OrchestratorPanel.dom.test.tsx",
+        "src/components/orchestrator/dockOpenState.dom.test.tsx",
+        "src/components/orchestrator/reportLog/ReportLog.dom.test.tsx",
+        "src/components/orchestrator/seatComposerHoist.dom.test.tsx",
+        "src/components/prototypeReview/PrototypeReview.dom.test.tsx",
+        "src/components/session/SessionTitle.mobile.dom.test.tsx",
+        "src/components/workflows/legacyDraftPurge.dom.test.tsx",
+        "src/hooks/serverReach.dom.test.tsx",
+        "src/lib/bridge/reportLog.test.ts"
+      ],
+      "reportedRunCount": 74,
+      "exitCode": 0,
+      "greenFiles": 59,
+      "baseComparedFiles": 15,
+      "newFailures": 0,
+      "preexistingDiagnostics": 45,
+      "flaky": 0,
+      "preexistingByFile": [
+        {
+          "file": "src/components/OverviewBoard.kanban.dom.test.tsx",
+          "diagnostics": 1
+        },
+        {
+          "file": "src/components/ProjectDashboard.launchClaim.dom.test.tsx",
+          "diagnostics": 2
+        },
+        {
+          "file": "src/components/ProjectDashboard.looseReader.dom.test.tsx",
+          "diagnostics": 8
+        },
+        {
+          "file": "src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+          "diagnostics": 10
+        },
+        {
+          "file": "src/components/TmuxComposer.liveRefreshFocus.dom.test.tsx",
+          "diagnostics": 5
+        },
+        {
+          "file": "src/components/Viewer.switching.dom.test.tsx",
+          "diagnostics": 2
+        },
+        {
+          "file": "src/components/attention/AttentionHost.dom.test.tsx",
+          "diagnostics": 1
+        },
+        {
+          "file": "src/components/mobile/MobileFocusView.keyboardInset.dom.test.tsx",
+          "diagnostics": 2
+        },
+        {
+          "file": "src/components/mobile/MobileFocusView.strip.dom.test.tsx",
+          "diagnostics": 1
+        },
+        {
+          "file": "src/components/mobile/MobileKanban.dom.test.tsx",
+          "diagnostics": 1
+        },
+        {
+          "file": "src/components/mobile/MobilePipelineScreen.actions.dom.test.tsx",
+          "diagnostics": 1
+        },
+        {
+          "file": "src/components/mobile/MobilePipelineScreen.dom.test.tsx",
+          "diagnostics": 1
+        },
+        {
+          "file": "src/components/mobile/MobileShell.board.dom.test.tsx",
+          "diagnostics": 2
+        },
+        {
+          "file": "src/components/mobile/MobileTaskScreen.entry.dom.test.tsx",
+          "diagnostics": 3
+        },
+        {
+          "file": "src/components/mobile/mobileHeaderFit.dom.test.tsx",
+          "diagnostics": 5
+        }
+      ],
+      "completedAt": "2026-10-24T00:10:59.405755+00:00"
+    }
+  }
 }
