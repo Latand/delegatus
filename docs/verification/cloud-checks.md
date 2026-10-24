@@ -67,8 +67,15 @@ The final `node_modules/.bin/tsc --noEmit` and ESLint on all six touched
 TypeScript files exit 0 without diagnostics. The verified export's six source
 files match the stage checkout byte for byte. `bun run privacy:check` passes
 with committed fingerprints and `--check-commits --base origin/main`.
-`git diff --cached --check` also exits 0. Main was re-fetched before the commit
-and had no further changes to merge.
+`git diff --cached --check` also exits 0. This full privacy run completed
+before the final main reconciliation below.
+
+Main then advanced to `0c7f7a894`, landing the already integrated Cloud stage
+transport. The incoming transport is byte-identical to `67b0ff312`. Resolving
+its add/add conflict preserves the reviewed shared transport and leaves the
+verified source tree unchanged. After reconciliation, typecheck, all 65 hosted
+client tests, all 62 Cloud-check tests and ESLint on the resolved transport
+pass again. The main update is retained through a merge commit.
 
 No live Cloud job or push was performed. UI components remain for the separate
 UI stage.
