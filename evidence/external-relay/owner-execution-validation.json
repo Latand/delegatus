@@ -885,5 +885,166 @@
       "Repository pre-commit staged privacy check with committed known-value fingerprints.",
       "Normal commit-publication privacy check against origin/main."
     ]
+  },
+  "expired_handoff_and_parent_budget_validation": {
+    "assembled_at_utc": "2026-10-24T19:31:54.542373+00:00",
+    "pre_fix_revision": "30fb9b83f680085bf46e829596c151a4435c9ff7",
+    "upstream_merged": "ede220392c4eabc17318083700412348b30a637e",
+    "inputs_sha256": {
+      "src/lib/externalRelay/runner.ts": "7a70d5213ae5a68bf5a275e3ea688a850de94f9ff22f2f17b65bdc49c2d54126",
+      "src/lib/externalRelay/ownerLifecycle.fixture.ts": "3bf53921a0360a5d80ad386c10f2575977aa03c17de849bb06336962ee25d747",
+      "src/lib/externalRelay/ownerLifecycle.test.ts": "87b629ec910ea83d84f365b8bb71e5b07b7130349648bba68a66e95038fee19f",
+      "src/lib/externalRelay/hold.runner.test.ts": "208fa398c97b235c290ce7c92ebe74e2e4256ac8d078a4e28adc99d5dd3abcc7"
+    },
+    "environment": {
+      "runtime": "Bun 1.4.0",
+      "execution": "pinned stage gate-slot.sh, local mode, one heavy check at a time",
+      "exports": "private scratch exports with matching manifest and lockfile and checked installed dependency versions",
+      "isolated": [
+        "HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_DATA_HOME",
+        "TMPDIR",
+        "LLV_STATE_DIR"
+      ],
+      "viewer_control_url": "http://127.0.0.1:1"
+    },
+    "acceptance": [
+      "An owner handoff observed after the service deadline becomes a scrubbed explanatory reply, persisted before late-send dispatch.",
+      "A definite completion refusal that crosses the service deadline uses the same late delivery path and updates the saved answer record.",
+      "A 404 send refusal retains the explanation; two fresh recovery processes reuse the saved payload and key, yielding one visible outcome without another execution.",
+      "A timely handoff still declines to the service and makes no send call.",
+      "The child-process fixture covers recovery from queued first-message progress and target-cap expiry while observation never resolves.",
+      "The parent bounds startup separately from completion; a synchronously blocked child outlives its execution cap, is refused by the parent deadline, and is killed and reaped by its recorded handle."
+    ],
+    "checks": {
+      "types-final-v2": {
+        "tree": "final",
+        "command": [
+          "bunx",
+          "tsc",
+          "--noEmit"
+        ],
+        "started": "2026-10-24T19:20:47.044Z",
+        "finished": "2026-10-24T19:23:40.775Z",
+        "exit": 0
+      },
+      "lint-final": {
+        "tree": "final",
+        "command": [
+          "bunx",
+          "eslint",
+          "--no-cache",
+          "src/lib/externalRelay/runner.ts",
+          "src/lib/externalRelay/hold.runner.test.ts",
+          "src/lib/externalRelay/ownerLifecycle.fixture.ts",
+          "src/lib/externalRelay/ownerLifecycle.test.ts"
+        ],
+        "started": "2026-10-24T19:23:42.873Z",
+        "finished": "2026-10-24T19:24:40.950Z",
+        "exit": 0
+      },
+      "lifecycle-final-v2": {
+        "tree": "final",
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/externalRelay/ownerLifecycle.test.ts"
+        ],
+        "started": "2026-10-24T19:24:40.976Z",
+        "finished": "2026-10-24T19:25:32.866Z",
+        "exit": 0
+      },
+      "hold-comparison": {
+        "tree": "final",
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--base",
+          "30fb9b83f680085bf46e829596c151a4435c9ff7",
+          "src/lib/externalRelay/hold.runner.test.ts"
+        ],
+        "started": "2026-10-24T19:25:32.896Z",
+        "finished": "2026-10-24T19:27:21.065Z",
+        "exit": 0
+      },
+      "runner-comparison": {
+        "tree": "final",
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--base",
+          "30fb9b83f680085bf46e829596c151a4435c9ff7",
+          "src/lib/externalRelay/runner.test.ts"
+        ],
+        "started": "2026-10-24T19:27:21.092Z",
+        "finished": "2026-10-24T19:30:34.887Z",
+        "exit": 0
+      },
+      "negative-final": {
+        "tree": "base",
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/externalRelay/ownerLifecycle.test.ts",
+          "-t",
+          "owner handoff (after|refusal)"
+        ],
+        "started": "2026-10-24T19:30:43.885Z",
+        "finished": "2026-10-24T19:31:44.579Z",
+        "exit": 1
+      },
+      "publication-privacy": {
+        "command": [
+          "bun",
+          "scripts/privacy-publication-gate.ts",
+          "--require-known-values",
+          "--check-commits",
+          "--base",
+          "ede220392c4eabc17318083700412348b30a637e"
+        ],
+        "started": "2026-10-24T19:31:54.715Z",
+        "finished": "2026-10-24T19:32:07.572Z",
+        "exit": 0
+      }
+    },
+    "results": {
+      "lifecycle": {
+        "pass": 35,
+        "fail": 0
+      },
+      "runner": "complete full-file green head",
+      "hold_comparison": {
+        "introduced": 0,
+        "preexisting": 10,
+        "flaky": 0
+      },
+      "preexisting_assertions": [
+        "src/lib/externalRelay/hold.runner.test.ts: two owner chains in one chat run together; a reply waits for only its chain",
+        "src/lib/externalRelay/hold.runner.test.ts: drain hold acknowledges, queues, then serves without taking execution capacity",
+        "src/lib/externalRelay/hold.runner.test.ts: drain hold acknowledges, queues, then declines busy at the bound without taking execution capacity",
+        "src/lib/externalRelay/hold.runner.test.ts: capacity hold acknowledges, queues, then serves without taking execution capacity",
+        "src/lib/externalRelay/hold.runner.test.ts: capacity hold acknowledges, queues, then declines busy at the bound without taking execution capacity",
+        "src/lib/externalRelay/hold.runner.test.ts: chat hold acknowledges, queues, then serves without taking execution capacity",
+        "src/lib/externalRelay/hold.runner.test.ts: chat hold acknowledges, queues, then declines busy at the bound without taking execution capacity",
+        "src/lib/externalRelay/hold.runner.test.ts: shrinking stall window 10s bounds unacknowledged admission",
+        "src/lib/externalRelay/hold.runner.test.ts: acknowledgements, lock waits, reentry after a drain and completion failures never renew the deadline",
+        "src/lib/externalRelay/hold.runner.test.ts: capacity returning at the admission cutoff cannot start expired waiting work"
+      ],
+      "negative_control": {
+        "source": "pre-fix runner with final process regressions",
+        "expected_failures": 2,
+        "cause": "late answer custody is absent"
+      },
+      "lint_warnings": 0
+    },
+    "publication_privacy_procedure": [
+      "Run the repository publication privacy gate with committed known-value fingerprints against the merged upstream revision.",
+      "Commit with the repository pre-commit privacy and lint hooks enabled, then repeat commit-publication privacy."
+    ],
+    "performance_gain_claimed": false
   }
 }

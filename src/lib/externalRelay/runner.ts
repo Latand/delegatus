@@ -301,6 +301,16 @@ export async function runClaimedRequest(
         else await pendingBeat;
       }
       if (caps?.rich && leaseUnavailable) return null;
+      const explainExpiredHandoff = (): Extract<ExternalRelayCompletion, { outcome: "answered" }> | null => {
+        if (!ownerPastWindow() || !owner || !request || body.outcome !== "declined" || body.reason !== "handoff") return null;
+        // The service can no longer accept a handoff. Keep an explanation in
+        // the same durable delivery path as every other late owner answer.
+        stagedAttachments = [];
+        const answer = ownerFailureAnswer(request, owner, ownerTurnDiagnostic("observation",
+          "The service window closed before the handoff could be requested", [relay.credential]), [relay.credential]);
+        return answer ? { lease_id: leaseId, outcome: "answered", answer, duration_ms: Date.now() - deadline.receivedAt } : null;
+      };
+      body = explainExpiredHandoff() ?? body;
       if (recovery && ownerExecution && owner && (body.outcome === "declined" || body.outcome === "failed")) {
         const cause = ownerTurnDiagnostic("launch", `Owner retry could not start: ${body.reason}`, [relay.credential]);
         recordDiagnostic(cause);
@@ -384,6 +394,13 @@ export async function runClaimedRequest(
           sent = await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature, caps?.plainMax);
         }
       } finally { completionInFlight = false; }
+      if (sent.delivery === "refused" && body.outcome === "declined" && body.reason === "handoff") {
+        const explained = explainExpiredHandoff();
+        if (explained) {
+          body = explained;
+          recorder?.annotateV2({ outcome: "answered", answer: explained.answer });
+        }
+      }
       if (!initiallyLate && ownerPastWindow() && body.outcome === "answered" && sent.delivery === "refused") {
         await changeRunAsync(requestId, row => ({ ...row,
           ownerTurn: { ...row.ownerTurn!, completionAttempt: undefined, lateAnswer: { ...row.ownerTurn?.lateAnswer, body, files: stagedAttachments } } }), Date.now() + 5000);

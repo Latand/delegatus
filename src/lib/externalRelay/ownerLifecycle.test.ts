@@ -452,6 +452,145 @@ async function deliveryProcess(directory: string, config: Record<string, unknown
   }
 }
 
+for (const timing of ["before", "after", "refusal"] as const) test(`owner handoff ${timing}: preserves its outcome through restart`, async () => {
+  const late = timing !== "before";
+  const { readRunLedger, changeRun, dropRun } = await import("./store");
+  const { readAnswerRecord } = await import("./answers");
+  const relay = setupRelay();
+  const directory = await fs.promises.mkdtemp(`${process.env.TMPDIR}/handoff-process-`);
+  const epoch = Date.parse("2026-10-24T15:00:00Z");
+  const clockFile = `${directory}/clock`;
+  await fs.promises.writeFile(clockFile, String(epoch));
+  const request = { ...contextRequest, request_id: `handoff_process_${timing}`, owner_delivery: delivery,
+    deadline_at: new Date(epoch + 120000).toISOString(), answer: { ...contextRequest.answer, max_chars: 4000 },
+    input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } };
+  const sends: { client_key: string; text: string }[] = [], visible = new Map<string, string>();
+  const completions: unknown[] = [];
+  let supported = false;
+  const service = await startTestRelay(async (req, payload) => {
+    if (req.url?.endsWith("/complete")) {
+      completions.push(payload);
+      if (timing === "refusal") await fs.promises.writeFile(clockFile, String(epoch + 121000));
+      return late ? { status: 409, body: { error: { code: "lease_lost" } } } : { body: { status: "ok" } };
+    }
+    if (req.url?.endsWith("/send")) {
+      const body = payload as typeof sends[number]; sends.push(body);
+      if (!supported) return { status: 404, body: { error: { code: "not_found" } } };
+      visible.set(body.client_key, body.text); return { body: cloneReceipt() };
+    }
+    return { body: { status: "ok" } };
+  });
+  relay.origin = service.origin; relay.api_base = `${service.origin}/api/relay/v1`;
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  try {
+    await deliveryProcess(directory, { relay, request, epoch, clockFile, phase: "complete-now", finalText: "[handoff]",
+      observedAt: epoch + (timing === "after" ? 121000 : 1000) });
+    if (late) {
+      const saved = readRunLedger().runs.find(row => row.requestId === request.request_id)?.ownerTurn?.lateAnswer;
+      expect(saved?.body).toMatchObject({ outcome: "answered", answer: { action: "reply" } });
+      expect(saved?.body.outcome === "answered" && saved.body.answer.text).toMatch(/service window closed before the handoff/);
+      expect(saved?.status).toBe("retry");
+      expect(completions).toHaveLength(timing === "refusal" ? 1 : 0); expect(sends).toHaveLength(1); expect(visible.size).toBe(0);
+      supported = true;
+      changeRun(request.request_id, row => ({ ...row, ownerTurn: { ...row.ownerTurn!, lateAnswer: { ...row.ownerTurn!.lateAnswer!, nextAttemptAt: 0 } } }));
+      for (let restart = 0; restart < 2; restart++) {
+        expect(await deliveryProcess(directory, { relay, request, epoch, clockFile, phase: "finish" })).not.toContain("fixture-launch:");
+      }
+      expect(completions).toHaveLength(timing === "refusal" ? 1 : 0); expect(sends).toHaveLength(2); expect(sends[1]).toEqual(sends[0]);
+      expect([...visible.values()]).toEqual([sends[0]!.text]);
+      expect(sends[0]).toMatchObject(delivery);
+      expect(sends[0]!.text).toMatch(/Retry your request/);
+      expect(readAnswerRecord(relay.id, "target_1", request.request_id)).toMatchObject({ outcome: "answered", delivery: "accepted",
+        answer: { action: "reply", text: sends[0]!.text } });
+    } else {
+      expect(completions).toEqual([expect.objectContaining({ outcome: "declined", reason: "handoff" })]);
+      expect(sends).toEqual([]);
+    }
+    expect(readRunLedger().runs.find(row => row.requestId === request.request_id)).toBeUndefined();
+  } finally {
+    const row = readRunLedger().runs.find(row => row.requestId === request.request_id);
+    dropRun(request.request_id);
+    if (row?.runDir) await fs.promises.rm(row.runDir, { recursive: true, force: true });
+    await service.close(); await fs.promises.rm(directory, { recursive: true, force: true });
+  }
+}, 60000);
+
+for (const phase of ["cap-recover", "cap-unresponsive", "cap-stalled"] as const)
+test(`owner first-message hold in a child process: ${phase}`, async () => {
+  const { readRunLedger, dropRun } = await import("./store");
+  const { readAnswerRecord } = await import("./answers");
+  const relay = setupRelay(); relay.targets[0]!.hardCapMinutes = 5000 / 60000;
+  relay.features = ["progress_steps"];
+  const directory = await fs.promises.mkdtemp(`${process.env.TMPDIR}/cap-process-`);
+  const controlFile = `${directory}/control`;
+  await fs.promises.writeFile(controlFile, "hold");
+  const epoch = Date.parse("2026-10-24T15:00:00Z");
+  const request = { ...contextRequest, request_id: phase, owner_delivery: delivery,
+    deadline_at: new Date(epoch + 120000).toISOString(), answer: { ...contextRequest.answer, max_chars: 4000 },
+    liveness: { ...contextRequest.liveness, heartbeat_interval_s: 2 },
+    input: { ...contextRequest.input, tools: [], requester: { ...contextRequest.input.requester, is_owner: true } } };
+  const beats: { progress: { label: string } | null }[] = [];
+  const service = await startTestRelay(async (req, payload) => {
+    if (req.url?.endsWith("/heartbeat")) {
+      const beat = payload as typeof beats[number]; beats.push(beat);
+      if (phase === "cap-recover" && beat.progress?.label === "queued") await fs.promises.writeFile(controlFile, "finish");
+    }
+    return { body: { status: "ok" } };
+  });
+  relay.origin = service.origin; relay.api_base = `${service.origin}/api/relay/v1`;
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  const configFile = `${directory}/process.json`;
+  await fs.promises.writeFile(configFile, JSON.stringify({ relay, request, epoch, phase, controlFile }));
+  const child = Bun.spawn([process.execPath, "src/lib/externalRelay/ownerLifecycle.fixture.ts", configFile], {
+    env: { ...process.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  let output = "", ready!: () => void;
+  const readiness = new Promise<void>(resolve => { ready = resolve; });
+  const reading = (async () => {
+    const reader = child.stdout.getReader();
+    try { for (;;) {
+      const chunk = await reader.read(); if (chunk.done) break;
+      output += Buffer.from(chunk.value).toString();
+      if (output.includes(phase === "cap-stalled" ? "fixture-blocked" : "fixture-observing")) ready();
+    } } finally { reader.releaseLock(); }
+  })();
+  const errors = new Response(child.stderr).text();
+  const bounded = async <T,>(work: Promise<T>, ms: number, reason: string) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try { return await Promise.race([work, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(reason)), ms); })]); }
+    finally { clearTimeout(timer); }
+  };
+  try {
+    await bounded(Promise.race([readiness, child.exited.then(code => { throw new Error(`fixture exited before readiness: ${code}`); })]), 20000, "fixture startup deadline");
+    const completion = bounded(child.exited, 15000, "owner cap exceeded parent deadline");
+    if (phase === "cap-stalled") await expect(completion).rejects.toThrow("owner cap exceeded parent deadline");
+    else {
+      expect(await completion).toBe(0); await reading;
+      expect(beats[0]?.progress?.label).toBe("accepted");
+      expect(beats.some(beat => beat.progress?.label === "queued")).toBe(true);
+      const record = readAnswerRecord(relay.id, "target_1", request.request_id);
+      expect(record).toMatchObject({ outcome: "answered", delivery: "accepted", answer: { action: "reply" } });
+      if (phase === "cap-recover") {
+        expect(record?.answer?.text).toBe("Done"); expect(output).not.toContain("fixture-stop:");
+      } else {
+        expect(record?.diagnostic).toMatchObject({ source: "hard-cap", executionLimitMs: 5000 });
+        expect(record?.answer?.text).toMatch(/execution time limit/);
+        expect(output.match(/fixture-stop:kill/g)).toHaveLength(1);
+      }
+      expect(readRunLedger().runs.find(row => row.requestId === request.request_id)).toBeUndefined();
+    }
+  } finally {
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await child.exited; await reading;
+    const stderr = await errors;
+    const row = readRunLedger().runs.find(row => row.requestId === request.request_id);
+    dropRun(request.request_id);
+    if (row?.runDir) await fs.promises.rm(row.runDir, { recursive: true, force: true });
+    await service.close(); await fs.promises.rm(directory, { recursive: true, force: true });
+    expect(stderr).not.toMatch(/error:|Unhandled|TypeError/);
+    if (phase === "cap-stalled") expect(child.signalCode).toBe("SIGKILL");
+  }
+}, 60000);
+
 for (const response of ["crashed", "lost", "accepted", "refused", "already-completed"] as const)
 test(`recovered failure completion ${response} survives restart and deadline without a duplicate`, async () => {
   const { readRunLedger, reserveRun, dropRun } = await import("./store");
