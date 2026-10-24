@@ -37075,6 +37075,30 @@ describe("the board header fits a narrow 640–700 px window", () => {
     }
     const { cutText, scrollEdge } = await readCuts(page, panel, "");
     for (const cut of cutText) failures.push(`${tag}: in the ${name} menu «${cut.text}» is cut by ${cut.by} with no ellipsis`);
+    /* ⋯ tells its rows apart: no two share both their icon and their leading word. */
+    if (panel === "[data-bar-more-menu]") {
+      const twins = await page.evaluate((target) => {
+        const seen = new Map<string, string>();
+        const twin: string[] = [];
+        for (const row of document.querySelectorAll<HTMLElement>(`${target} button`)) {
+          if (!row.getClientRects().length) continue;
+          const icon = [...(row.querySelector("svg")?.classList ?? [])].find((name) => name.startsWith("lucide-")) ?? "";
+          const text = (row.textContent ?? "").trim();
+          if (!icon || !text) continue;
+          const key = `${icon}|${text.split(/\s+/)[0].toLowerCase()}`;
+          if (seen.has(key)) twin.push(`«${seen.get(key)}» and «${text.slice(0, 40)}» (${icon})`);
+          else seen.set(key, text.slice(0, 40));
+        }
+        return twin;
+      }, panel);
+      for (const twin of twins) failures.push(`${tag}: ⋯ has two rows with one icon and leading word: ${twin}`);
+    }
+    /* A list opened while the row has folded its icon ends at ⋯'s right edge, inside the window. */
+    if (panel === "[data-bar-recent-list]" && (await page.locator(`${bar}[data-fit~="panels"]`).count())) {
+      const more = await page.locator(`${bar} [data-bar-more]`).first().boundingBox();
+      const list = await page.locator(panel).first().boundingBox();
+      if (more && list && Math.abs(list.x + list.width - (more.x + more.width)) > 1) failures.push(`${tag}: the ${name} list ends at x=${(list.x + list.width).toFixed(1)}, ⋯ at x=${(more.x + more.width).toFixed(1)}`);
+    }
     return { ...box, scrollEdge };
   };
 
@@ -37273,6 +37297,37 @@ describe("the board header fits a narrow 640–700 px window", () => {
               const reading = await readHeader(page, LEAF_BAR);
               await page.screenshot({ path: path.join(OUT, `${name}-loading-bar.png`), clip: { x: 0, y: 0, width: viewport.width, height: 120 } });
               gateRow(leafTag, reading, viewport, failures);
+              /* The trail is the row's right end at every step, as on the board and at 1440 px. */
+              const trailEnd = Math.max(...reading.controls.map((control) => control.box.x + control.box.w));
+              if (trailEnd < viewport.width - 16.5) failures.push(`${leafTag}: the last control ends at x=${trailEnd.toFixed(1)}, ${(viewport.width - trailEnd).toFixed(1)}px short of the window's right edge (fit "${reading.bar.fit}")`);
+              /* What each step leaves of the row, so a step taken without need shows in the evidence. */
+              const stepTable = narrow ? await page.evaluate(([selector, all]) => {
+                const bar = document.querySelector<HTMLElement>(selector)!;
+                const was = bar.getAttribute("data-fit") ?? "";
+                const rows = [];
+                for (let count = 0; count <= all.length; count += 1) {
+                  bar.setAttribute("data-fit", all.slice(0, count).join(" "));
+                  const cut = [...bar.querySelectorAll<HTMLElement>("h1, [data-bar-whole]")].filter((text) => text.scrollWidth > text.clientWidth + 0.5).map((text) => text.textContent?.trim().slice(0, 20));
+                  const search = bar.querySelector<HTMLElement>('[data-testid="dash-search"]')?.getBoundingClientRect().width ?? 0;
+                  rows.push({ steps: count, scrollWidth: bar.scrollWidth, clientWidth: bar.clientWidth, search: Math.round(search), cut });
+                }
+                bar.setAttribute("data-fit", was);
+                return rows;
+              }, [LEAF_BAR, ["accounts", "labels", "chip", "tight", "panels", "create", "find"]] as const) : null;
+              /* No step is taken while the row would fit without it. */
+              const lastStep = reading.bar.fit.split(" ").filter(Boolean).pop();
+              if (narrow && lastStep && !["accounts", "labels"].includes(lastStep)) {
+                const fitsWithout = await page.evaluate(([selector, step]) => {
+                  const bar = document.querySelector<HTMLElement>(selector)!;
+                  const was = bar.getAttribute("data-fit") ?? "";
+                  bar.setAttribute("data-fit", was.split(" ").filter((token) => token && token !== step).join(" "));
+                  const whole = [...bar.querySelectorAll<HTMLElement>("h1, [data-bar-whole]")].every((text) => text.scrollWidth <= text.clientWidth + 0.5);
+                  const fits = bar.scrollWidth <= bar.clientWidth + 0.5 && whole;
+                  bar.setAttribute("data-fit", was);
+                  return fits;
+                }, [LEAF_BAR, lastStep] as const);
+                if (fitsWithout) failures.push(`${leafTag}: the row gave up «${lastStep}» although it fits without (fit "${reading.bar.fit}")`);
+              }
               /* A normal desktop window keeps the base's width policy: under 1700 px the accounts are in ⋯
                  and the toggles are icons, and only a narrow window takes the board's further steps. */
               const leafFit = reading.bar.fit.split(" ").filter(Boolean);
@@ -37288,7 +37343,7 @@ describe("the board header fits a narrow 640–700 px window", () => {
                 if (narrow) await page.screenshot({ path: path.join(OUT, `${name}-loading-menu-more.png`) });
                 await closeMenus(page, viewport, LEAF_BAR);
               } else failures.push(`${leafTag}: ⋯ is not on screen`);
-              frames[leafTag] = { viewport, ...reading, status, more };
+              frames[leafTag] = { viewport, ...reading, status, more, stepTable };
               if (pageErrors.length) failures.push(`${leafTag}: ${pageErrors.join(" | ")}`);
             } catch (error) {
               failures.push(`${leafTag}: ${String(error).split("\n")[0]}`);

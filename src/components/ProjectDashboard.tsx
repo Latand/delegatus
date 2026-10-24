@@ -1,6 +1,6 @@
 "use client";
 
-import { Archive, Bot, Check, GitMerge, Users, EyeOff, Info, LayoutGrid, ListTodo, ListTree, MessageSquarePlus, Network, Search, UserRound } from "lucide-react";
+import { Archive, Bot, Check, GitMerge, Users, EyeOff, Info, LayoutGrid, ListTodo, ListTree, MessageSquarePlus, Network, PanelRight, Search, UserRound } from "lucide-react";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { queueColumnOpen, useBoardState } from "@/hooks/useBoardState";
@@ -2103,8 +2103,8 @@ function ProjectDashboardView({
                     aria-pressed={orchestratorOpen}
                     onClick={() => { close(); (kanbanLeaf ? kanbanSeat.toggle : onToggleOrchestratorPanel)(); }}
                   >
-                    <Bot className="h-[15px] w-[15px] shrink-0" aria-hidden />
-                    {/* The toggle's own name: the seat's settings below are the section «Orchestrator». */}
+                    {/* The toggle's own name and a panel's icon: the seat's settings below are the section «Orchestrator», with the bot. */}
+                    <PanelRight className="h-[15px] w-[15px] shrink-0" aria-hidden />
                     <span className="min-w-0 flex-1">{t("orchPanel.toggleAria")}</span>
                     {orchestratorDot ? <span className="min-w-0 truncate text-[11px] font-normal text-muted">{orchestratorDot.label}</span> : null}
                     {orchestratorOpen ? <Check className="h-[15px] w-[15px] shrink-0 text-accent" aria-hidden /> : null}
@@ -2222,7 +2222,7 @@ function ProjectDashboardView({
               aria-label={t("search.open")}
               title={t("search.open")}
               onClick={onOpenSearch}
-              className="inline-flex h-8 min-w-[160px] max-w-[420px] flex-[1_8_240px] items-center gap-2 rounded-control border border-border bg-sunken px-2.5 text-left text-[12px] text-muted hover:border-accent/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              className="inline-flex h-8 min-w-[160px] max-w-[420px] flex-[1_100000_240px] items-center gap-2 rounded-control border border-border bg-sunken px-2.5 text-left text-[12px] text-muted hover:border-accent/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
             >
               <Search className="h-[15px] w-[15px] shrink-0" aria-hidden />
               {/* The bar's steps choose the words: the full wording, «Search» once the row lost its labels, the icon alone at the last step. */}

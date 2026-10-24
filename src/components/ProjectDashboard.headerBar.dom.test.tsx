@@ -594,6 +594,10 @@ test("what a short row gave up is a row of ⋯ that does the same: Orchestrator,
   /* Named as the toggle is, apart from the seat's own section «Orchestrator» further down. */
   expect(text(menu.querySelector("[data-bar-more-orchestrator]"))).toContain(en["orchPanel.toggleAria"]);
   expect(text(menu.querySelector('[data-bar-menu-head="seat"]'))).toContain(en["dash.menu.seat"]);
+  /* …and drawn with another icon, so the two rows named for the orchestrator are told apart by sight too. */
+  const iconOf = (row: Element | null) => row?.querySelector("svg")?.getAttribute("class") ?? "";
+  expect(iconOf(menu.querySelector("[data-bar-more-orchestrator]"))).not.toBe("");
+  expect(iconOf(menu.querySelector("[data-bar-more-orchestrator]"))).not.toBe(iconOf(menu.querySelector('[data-bar-menu-head="seat"]')));
 
   /* Recent agents: ⋯ closes and the list opens under the row, from the segment's own anchor. Its
      icon is folded away, so the list takes the focus, and Escape hands it back to ⋯. */

@@ -116,7 +116,7 @@
           "create"
         ],
         "recent": {
-          "x": 102,
+          "x": 134,
           "y": 44,
           "w": 440,
           "h": 560,
@@ -160,7 +160,7 @@
             "label": "Close"
           },
           "list": {
-            "x": 102,
+            "x": 134,
             "y": 44,
             "w": 440,
             "h": 560,
@@ -203,7 +203,7 @@
         "h": 48,
         "scrollWidth": 392,
         "clientWidth": 392,
-        "fit": "accounts labels chip tight panels create find"
+        "fit": "accounts labels chip tight"
       },
       "controls": [
         {
@@ -229,14 +229,23 @@
           "box": {
             "x": 382.7,
             "y": 7.5,
-            "w": 32,
+            "w": 106.6,
+            "h": 32
+          }
+        },
+        {
+          "label": "Orchestrator panel",
+          "box": {
+            "x": 497.3,
+            "y": 7.5,
+            "w": 33,
             "h": 32
           }
         },
         {
           "label": "More actions",
           "box": {
-            "x": 422.7,
+            "x": 538.3,
             "y": 7.5,
             "w": 32,
             "h": 32
@@ -245,7 +254,7 @@
         {
           "label": "3 waiting",
           "box": {
-            "x": 462.7,
+            "x": 578.3,
             "y": 7.5,
             "w": 45.7,
             "h": 32
@@ -264,12 +273,78 @@
       "scrollEdge": [],
       "status": "Loading…",
       "more": {
-        "x": 199,
+        "x": 314,
         "y": 44,
         "w": 256,
-        "h": 267,
+        "h": 226,
         "scrollEdge": []
-      }
+      },
+      "stepTable": [
+        {
+          "steps": 0,
+          "scrollWidth": 584,
+          "clientWidth": 392,
+          "search": 160,
+          "cut": [
+            "Loading…"
+          ]
+        },
+        {
+          "steps": 1,
+          "scrollWidth": 584,
+          "clientWidth": 392,
+          "search": 160,
+          "cut": [
+            "Loading…"
+          ]
+        },
+        {
+          "steps": 2,
+          "scrollWidth": 433,
+          "clientWidth": 392,
+          "search": 96,
+          "cut": [
+            "Loading…"
+          ]
+        },
+        {
+          "steps": 3,
+          "scrollWidth": 392,
+          "clientWidth": 392,
+          "search": 96,
+          "cut": [
+            "Loading…"
+          ]
+        },
+        {
+          "steps": 4,
+          "scrollWidth": 392,
+          "clientWidth": 392,
+          "search": 107,
+          "cut": []
+        },
+        {
+          "steps": 5,
+          "scrollWidth": 392,
+          "clientWidth": 392,
+          "search": 148,
+          "cut": []
+        },
+        {
+          "steps": 6,
+          "scrollWidth": 392,
+          "clientWidth": 392,
+          "search": 148,
+          "cut": []
+        },
+        {
+          "steps": 7,
+          "scrollWidth": 392,
+          "clientWidth": 392,
+          "search": 32,
+          "cut": []
+        }
+      ]
     },
     "640 en dark": {
       "viewport": {
@@ -387,7 +462,7 @@
           "create"
         ],
         "recent": {
-          "x": 102,
+          "x": 134,
           "y": 44,
           "w": 440,
           "h": 560,
@@ -431,7 +506,7 @@
             "label": "Close"
           },
           "list": {
-            "x": 102,
+            "x": 134,
             "y": 44,
             "w": 440,
             "h": 560,
@@ -474,7 +549,7 @@
         "h": 48,
         "scrollWidth": 392,
         "clientWidth": 392,
-        "fit": "accounts labels chip tight panels create find"
+        "fit": "accounts labels chip tight"
       },
       "controls": [
         {
@@ -500,14 +575,23 @@
           "box": {
             "x": 382.7,
             "y": 7.5,
-            "w": 32,
+            "w": 106.6,
+            "h": 32
+          }
+        },
+        {
+          "label": "Orchestrator panel",
+          "box": {
+            "x": 497.3,
+            "y": 7.5,
+            "w": 33,
             "h": 32
           }
         },
         {
           "label": "More actions",
           "box": {
-            "x": 422.7,
+            "x": 538.3,
             "y": 7.5,
             "w": 32,
             "h": 32
@@ -516,7 +600,7 @@
         {
           "label": "3 waiting",
           "box": {
-            "x": 462.7,
+            "x": 578.3,
             "y": 7.5,
             "w": 45.7,
             "h": 32
@@ -535,12 +619,78 @@
       "scrollEdge": [],
       "status": "Loading…",
       "more": {
-        "x": 199,
+        "x": 314,
         "y": 44,
         "w": 256,
-        "h": 267,
+        "h": 226,
         "scrollEdge": []
-      }
+      },
+      "stepTable": [
+        {
+          "steps": 0,
+          "scrollWidth": 584,
+          "clientWidth": 392,
+          "search": 160,
+          "cut": [
+            "Loading…"
+          ]
+        },
+        {
+          "steps": 1,
+          "scrollWidth": 584,
+          "clientWidth": 392,
+          "search": 160,
+          "cut": [
+            "Loading…"
+          ]
+        },
+        {
+          "steps": 2,
+          "scrollWidth": 433,
+          "clientWidth": 392,
+          "search": 96,
+          "cut": [
+            "Loading…"
+          ]
+        },
+        {
+          "steps": 3,
+          "scrollWidth": 392,
+          "clientWidth": 392,
+          "search": 96,
+          "cut": [
+            "Loading…"
+          ]
+        },
+        {
+          "steps": 4,
+          "scrollWidth": 392,
+          "clientWidth": 392,
+          "search": 107,
+          "cut": []
+        },
+        {
+          "steps": 5,
+          "scrollWidth": 392,
+          "clientWidth": 392,
+          "search": 148,
+          "cut": []
+        },
+        {
+          "steps": 6,
+          "scrollWidth": 392,
+          "clientWidth": 392,
+          "search": 148,
+          "cut": []
+        },
+        {
+          "steps": 7,
+          "scrollWidth": 392,
+          "clientWidth": 392,
+          "search": 32,
+          "cut": []
+        }
+      ]
     },
     "640 uk light": {
       "viewport": {
@@ -658,7 +808,7 @@
           "create"
         ],
         "recent": {
-          "x": 102,
+          "x": 134,
           "y": 44,
           "w": 440,
           "h": 560,
@@ -702,7 +852,7 @@
             "label": "Закрити"
           },
           "list": {
-            "x": 102,
+            "x": 134,
             "y": 44,
             "w": 440,
             "h": 560,
@@ -745,7 +895,7 @@
         "h": 48,
         "scrollWidth": 392,
         "clientWidth": 392,
-        "fit": "accounts labels chip tight panels create find"
+        "fit": "accounts labels chip tight panels"
       },
       "controls": [
         {
@@ -771,14 +921,14 @@
           "box": {
             "x": 420,
             "y": 7.5,
-            "w": 32,
+            "w": 110.4,
             "h": 32
           }
         },
         {
           "label": "Більше дій",
           "box": {
-            "x": 460,
+            "x": 538.3,
             "y": 7.5,
             "w": 32,
             "h": 32
@@ -787,7 +937,7 @@
         {
           "label": "3 чекають",
           "box": {
-            "x": 500,
+            "x": 578.3,
             "y": 7.5,
             "w": 45.7,
             "h": 32
@@ -806,12 +956,80 @@
       "scrollEdge": [],
       "status": "Завантаження…",
       "more": {
-        "x": 236,
+        "x": 314,
         "y": 44,
         "w": 256,
         "h": 267,
         "scrollEdge": []
-      }
+      },
+      "stepTable": [
+        {
+          "steps": 0,
+          "scrollWidth": 595,
+          "clientWidth": 392,
+          "search": 160,
+          "cut": [
+            "Завантаження…"
+          ]
+        },
+        {
+          "steps": 1,
+          "scrollWidth": 595,
+          "clientWidth": 392,
+          "search": 160,
+          "cut": [
+            "Завантаження…"
+          ]
+        },
+        {
+          "steps": 2,
+          "scrollWidth": 441,
+          "clientWidth": 392,
+          "search": 96,
+          "cut": [
+            "Завантаження…"
+          ]
+        },
+        {
+          "steps": 3,
+          "scrollWidth": 392,
+          "clientWidth": 392,
+          "search": 96,
+          "cut": [
+            "Завантаження…"
+          ]
+        },
+        {
+          "steps": 4,
+          "scrollWidth": 392,
+          "clientWidth": 392,
+          "search": 96,
+          "cut": [
+            "Завантаження…"
+          ]
+        },
+        {
+          "steps": 5,
+          "scrollWidth": 392,
+          "clientWidth": 392,
+          "search": 110,
+          "cut": []
+        },
+        {
+          "steps": 6,
+          "scrollWidth": 392,
+          "clientWidth": 392,
+          "search": 110,
+          "cut": []
+        },
+        {
+          "steps": 7,
+          "scrollWidth": 392,
+          "clientWidth": 392,
+          "search": 32,
+          "cut": []
+        }
+      ]
     },
     "640 uk dark": {
       "viewport": {
@@ -929,7 +1147,7 @@
           "create"
         ],
         "recent": {
-          "x": 102,
+          "x": 134,
           "y": 44,
           "w": 440,
           "h": 560,
@@ -973,7 +1191,7 @@
             "label": "Закрити"
           },
           "list": {
-            "x": 102,
+            "x": 134,
             "y": 44,
             "w": 440,
             "h": 560,
@@ -1016,7 +1234,7 @@
         "h": 48,
         "scrollWidth": 392,
         "clientWidth": 392,
-        "fit": "accounts labels chip tight panels create find"
+        "fit": "accounts labels chip tight panels"
       },
       "controls": [
         {
@@ -1042,14 +1260,14 @@
           "box": {
             "x": 420,
             "y": 7.5,
-            "w": 32,
+            "w": 110.4,
             "h": 32
           }
         },
         {
           "label": "Більше дій",
           "box": {
-            "x": 460,
+            "x": 538.3,
             "y": 7.5,
             "w": 32,
             "h": 32
@@ -1058,7 +1276,7 @@
         {
           "label": "3 чекають",
           "box": {
-            "x": 500,
+            "x": 578.3,
             "y": 7.5,
             "w": 45.7,
             "h": 32
@@ -1077,12 +1295,80 @@
       "scrollEdge": [],
       "status": "Завантаження…",
       "more": {
-        "x": 236,
+        "x": 314,
         "y": 44,
         "w": 256,
         "h": 267,
         "scrollEdge": []
-      }
+      },
+      "stepTable": [
+        {
+          "steps": 0,
+          "scrollWidth": 595,
+          "clientWidth": 392,
+          "search": 160,
+          "cut": [
+            "Завантаження…"
+          ]
+        },
+        {
+          "steps": 1,
+          "scrollWidth": 595,
+          "clientWidth": 392,
+          "search": 160,
+          "cut": [
+            "Завантаження…"
+          ]
+        },
+        {
+          "steps": 2,
+          "scrollWidth": 441,
+          "clientWidth": 392,
+          "search": 96,
+          "cut": [
+            "Завантаження…"
+          ]
+        },
+        {
+          "steps": 3,
+          "scrollWidth": 392,
+          "clientWidth": 392,
+          "search": 96,
+          "cut": [
+            "Завантаження…"
+          ]
+        },
+        {
+          "steps": 4,
+          "scrollWidth": 392,
+          "clientWidth": 392,
+          "search": 96,
+          "cut": [
+            "Завантаження…"
+          ]
+        },
+        {
+          "steps": 5,
+          "scrollWidth": 392,
+          "clientWidth": 392,
+          "search": 110,
+          "cut": []
+        },
+        {
+          "steps": 6,
+          "scrollWidth": 392,
+          "clientWidth": 392,
+          "search": 110,
+          "cut": []
+        },
+        {
+          "steps": 7,
+          "scrollWidth": 392,
+          "clientWidth": 392,
+          "search": 32,
+          "cut": []
+        }
+      ]
     },
     "670 en light": {
       "viewport": {
@@ -1214,7 +1500,7 @@
           "panels"
         ],
         "recent": {
-          "x": 132,
+          "x": 164,
           "y": 44,
           "w": 440,
           "h": 560,
@@ -1258,7 +1544,7 @@
             "label": "Close"
           },
           "list": {
-            "x": 132,
+            "x": 164,
             "y": 44,
             "w": 440,
             "h": 560,
@@ -1298,7 +1584,7 @@
         "h": 48,
         "scrollWidth": 422,
         "clientWidth": 422,
-        "fit": "accounts labels chip tight panels create find"
+        "fit": "accounts labels chip tight"
       },
       "controls": [
         {
@@ -1324,14 +1610,23 @@
           "box": {
             "x": 382.7,
             "y": 7.5,
-            "w": 32,
+            "w": 136.6,
+            "h": 32
+          }
+        },
+        {
+          "label": "Orchestrator panel",
+          "box": {
+            "x": 527.3,
+            "y": 7.5,
+            "w": 33,
             "h": 32
           }
         },
         {
           "label": "More actions",
           "box": {
-            "x": 422.7,
+            "x": 568.3,
             "y": 7.5,
             "w": 32,
             "h": 32
@@ -1340,7 +1635,7 @@
         {
           "label": "3 waiting",
           "box": {
-            "x": 462.7,
+            "x": 608.3,
             "y": 7.5,
             "w": 45.7,
             "h": 32
@@ -1359,12 +1654,78 @@
       "scrollEdge": [],
       "status": "Loading…",
       "more": {
-        "x": 199,
+        "x": 344,
         "y": 44,
         "w": 256,
-        "h": 267,
+        "h": 226,
         "scrollEdge": []
-      }
+      },
+      "stepTable": [
+        {
+          "steps": 0,
+          "scrollWidth": 584,
+          "clientWidth": 422,
+          "search": 160,
+          "cut": [
+            "Loading…"
+          ]
+        },
+        {
+          "steps": 1,
+          "scrollWidth": 584,
+          "clientWidth": 422,
+          "search": 160,
+          "cut": [
+            "Loading…"
+          ]
+        },
+        {
+          "steps": 2,
+          "scrollWidth": 433,
+          "clientWidth": 422,
+          "search": 96,
+          "cut": [
+            "Loading…"
+          ]
+        },
+        {
+          "steps": 3,
+          "scrollWidth": 422,
+          "clientWidth": 422,
+          "search": 96,
+          "cut": [
+            "Loading…"
+          ]
+        },
+        {
+          "steps": 4,
+          "scrollWidth": 422,
+          "clientWidth": 422,
+          "search": 137,
+          "cut": []
+        },
+        {
+          "steps": 5,
+          "scrollWidth": 422,
+          "clientWidth": 422,
+          "search": 178,
+          "cut": []
+        },
+        {
+          "steps": 6,
+          "scrollWidth": 422,
+          "clientWidth": 422,
+          "search": 178,
+          "cut": []
+        },
+        {
+          "steps": 7,
+          "scrollWidth": 422,
+          "clientWidth": 422,
+          "search": 32,
+          "cut": []
+        }
+      ]
     },
     "670 en dark": {
       "viewport": {
@@ -1496,7 +1857,7 @@
           "panels"
         ],
         "recent": {
-          "x": 132,
+          "x": 164,
           "y": 44,
           "w": 440,
           "h": 560,
@@ -1540,7 +1901,7 @@
             "label": "Close"
           },
           "list": {
-            "x": 132,
+            "x": 164,
             "y": 44,
             "w": 440,
             "h": 560,
@@ -1580,7 +1941,7 @@
         "h": 48,
         "scrollWidth": 422,
         "clientWidth": 422,
-        "fit": "accounts labels chip tight panels create find"
+        "fit": "accounts labels chip tight"
       },
       "controls": [
         {
@@ -1606,14 +1967,23 @@
           "box": {
             "x": 382.7,
             "y": 7.5,
-            "w": 32,
+            "w": 136.6,
+            "h": 32
+          }
+        },
+        {
+          "label": "Orchestrator panel",
+          "box": {
+            "x": 527.3,
+            "y": 7.5,
+            "w": 33,
             "h": 32
           }
         },
         {
           "label": "More actions",
           "box": {
-            "x": 422.7,
+            "x": 568.3,
             "y": 7.5,
             "w": 32,
             "h": 32
@@ -1622,7 +1992,7 @@
         {
           "label": "3 waiting",
           "box": {
-            "x": 462.7,
+            "x": 608.3,
             "y": 7.5,
             "w": 45.7,
             "h": 32
@@ -1641,12 +2011,78 @@
       "scrollEdge": [],
       "status": "Loading…",
       "more": {
-        "x": 199,
+        "x": 344,
         "y": 44,
         "w": 256,
-        "h": 267,
+        "h": 226,
         "scrollEdge": []
-      }
+      },
+      "stepTable": [
+        {
+          "steps": 0,
+          "scrollWidth": 584,
+          "clientWidth": 422,
+          "search": 160,
+          "cut": [
+            "Loading…"
+          ]
+        },
+        {
+          "steps": 1,
+          "scrollWidth": 584,
+          "clientWidth": 422,
+          "search": 160,
+          "cut": [
+            "Loading…"
+          ]
+        },
+        {
+          "steps": 2,
+          "scrollWidth": 433,
+          "clientWidth": 422,
+          "search": 96,
+          "cut": [
+            "Loading…"
+          ]
+        },
+        {
+          "steps": 3,
+          "scrollWidth": 422,
+          "clientWidth": 422,
+          "search": 96,
+          "cut": [
+            "Loading…"
+          ]
+        },
+        {
+          "steps": 4,
+          "scrollWidth": 422,
+          "clientWidth": 422,
+          "search": 137,
+          "cut": []
+        },
+        {
+          "steps": 5,
+          "scrollWidth": 422,
+          "clientWidth": 422,
+          "search": 178,
+          "cut": []
+        },
+        {
+          "steps": 6,
+          "scrollWidth": 422,
+          "clientWidth": 422,
+          "search": 178,
+          "cut": []
+        },
+        {
+          "steps": 7,
+          "scrollWidth": 422,
+          "clientWidth": 422,
+          "search": 32,
+          "cut": []
+        }
+      ]
     },
     "670 uk light": {
       "viewport": {
@@ -1778,7 +2214,7 @@
           "panels"
         ],
         "recent": {
-          "x": 132,
+          "x": 164,
           "y": 44,
           "w": 440,
           "h": 560,
@@ -1822,7 +2258,7 @@
             "label": "Закрити"
           },
           "list": {
-            "x": 132,
+            "x": 164,
             "y": 44,
             "w": 440,
             "h": 560,
@@ -1862,7 +2298,7 @@
         "h": 48,
         "scrollWidth": 422,
         "clientWidth": 422,
-        "fit": "accounts labels chip tight panels create find"
+        "fit": "accounts labels chip tight"
       },
       "controls": [
         {
@@ -1888,14 +2324,23 @@
           "box": {
             "x": 420,
             "y": 7.5,
-            "w": 32,
+            "w": 99.4,
+            "h": 32
+          }
+        },
+        {
+          "label": "Панель оркестратора",
+          "box": {
+            "x": 527.3,
+            "y": 7.5,
+            "w": 33,
             "h": 32
           }
         },
         {
           "label": "Більше дій",
           "box": {
-            "x": 460,
+            "x": 568.3,
             "y": 7.5,
             "w": 32,
             "h": 32
@@ -1904,7 +2349,7 @@
         {
           "label": "3 чекають",
           "box": {
-            "x": 500,
+            "x": 608.3,
             "y": 7.5,
             "w": 45.7,
             "h": 32
@@ -1923,12 +2368,78 @@
       "scrollEdge": [],
       "status": "Завантаження…",
       "more": {
-        "x": 236,
+        "x": 344,
         "y": 44,
         "w": 256,
-        "h": 267,
+        "h": 226,
         "scrollEdge": []
-      }
+      },
+      "stepTable": [
+        {
+          "steps": 0,
+          "scrollWidth": 595,
+          "clientWidth": 422,
+          "search": 160,
+          "cut": [
+            "Завантаження…"
+          ]
+        },
+        {
+          "steps": 1,
+          "scrollWidth": 595,
+          "clientWidth": 422,
+          "search": 160,
+          "cut": [
+            "Завантаження…"
+          ]
+        },
+        {
+          "steps": 2,
+          "scrollWidth": 441,
+          "clientWidth": 422,
+          "search": 96,
+          "cut": [
+            "Завантаження…"
+          ]
+        },
+        {
+          "steps": 3,
+          "scrollWidth": 422,
+          "clientWidth": 422,
+          "search": 96,
+          "cut": [
+            "Завантаження…"
+          ]
+        },
+        {
+          "steps": 4,
+          "scrollWidth": 422,
+          "clientWidth": 422,
+          "search": 99,
+          "cut": []
+        },
+        {
+          "steps": 5,
+          "scrollWidth": 422,
+          "clientWidth": 422,
+          "search": 140,
+          "cut": []
+        },
+        {
+          "steps": 6,
+          "scrollWidth": 422,
+          "clientWidth": 422,
+          "search": 140,
+          "cut": []
+        },
+        {
+          "steps": 7,
+          "scrollWidth": 422,
+          "clientWidth": 422,
+          "search": 32,
+          "cut": []
+        }
+      ]
     },
     "670 uk dark": {
       "viewport": {
@@ -2060,7 +2571,7 @@
           "panels"
         ],
         "recent": {
-          "x": 132,
+          "x": 164,
           "y": 44,
           "w": 440,
           "h": 560,
@@ -2104,7 +2615,7 @@
             "label": "Закрити"
           },
           "list": {
-            "x": 132,
+            "x": 164,
             "y": 44,
             "w": 440,
             "h": 560,
@@ -2144,7 +2655,7 @@
         "h": 48,
         "scrollWidth": 422,
         "clientWidth": 422,
-        "fit": "accounts labels chip tight panels create find"
+        "fit": "accounts labels chip tight"
       },
       "controls": [
         {
@@ -2170,14 +2681,23 @@
           "box": {
             "x": 420,
             "y": 7.5,
-            "w": 32,
+            "w": 99.4,
+            "h": 32
+          }
+        },
+        {
+          "label": "Панель оркестратора",
+          "box": {
+            "x": 527.3,
+            "y": 7.5,
+            "w": 33,
             "h": 32
           }
         },
         {
           "label": "Більше дій",
           "box": {
-            "x": 460,
+            "x": 568.3,
             "y": 7.5,
             "w": 32,
             "h": 32
@@ -2186,7 +2706,7 @@
         {
           "label": "3 чекають",
           "box": {
-            "x": 500,
+            "x": 608.3,
             "y": 7.5,
             "w": 45.7,
             "h": 32
@@ -2205,12 +2725,78 @@
       "scrollEdge": [],
       "status": "Завантаження…",
       "more": {
-        "x": 236,
+        "x": 344,
         "y": 44,
         "w": 256,
-        "h": 267,
+        "h": 226,
         "scrollEdge": []
-      }
+      },
+      "stepTable": [
+        {
+          "steps": 0,
+          "scrollWidth": 595,
+          "clientWidth": 422,
+          "search": 160,
+          "cut": [
+            "Завантаження…"
+          ]
+        },
+        {
+          "steps": 1,
+          "scrollWidth": 595,
+          "clientWidth": 422,
+          "search": 160,
+          "cut": [
+            "Завантаження…"
+          ]
+        },
+        {
+          "steps": 2,
+          "scrollWidth": 441,
+          "clientWidth": 422,
+          "search": 96,
+          "cut": [
+            "Завантаження…"
+          ]
+        },
+        {
+          "steps": 3,
+          "scrollWidth": 422,
+          "clientWidth": 422,
+          "search": 96,
+          "cut": [
+            "Завантаження…"
+          ]
+        },
+        {
+          "steps": 4,
+          "scrollWidth": 422,
+          "clientWidth": 422,
+          "search": 99,
+          "cut": []
+        },
+        {
+          "steps": 5,
+          "scrollWidth": 422,
+          "clientWidth": 422,
+          "search": 140,
+          "cut": []
+        },
+        {
+          "steps": 6,
+          "scrollWidth": 422,
+          "clientWidth": 422,
+          "search": 140,
+          "cut": []
+        },
+        {
+          "steps": 7,
+          "scrollWidth": 422,
+          "clientWidth": 422,
+          "search": 32,
+          "cut": []
+        }
+      ]
     },
     "700 en light": {
       "viewport": {
@@ -2342,7 +2928,7 @@
           "panels"
         ],
         "recent": {
-          "x": 162,
+          "x": 194,
           "y": 44,
           "w": 440,
           "h": 560,
@@ -2386,7 +2972,7 @@
             "label": "Close"
           },
           "list": {
-            "x": 162,
+            "x": 194,
             "y": 44,
             "w": 440,
             "h": 560,
@@ -2426,7 +3012,7 @@
         "h": 48,
         "scrollWidth": 452,
         "clientWidth": 452,
-        "fit": "accounts labels chip tight panels create find"
+        "fit": "accounts labels chip"
       },
       "controls": [
         {
@@ -2441,7 +3027,7 @@
         {
           "label": "Loading…",
           "box": {
-            "x": 320,
+            "x": 328,
             "y": 14.5,
             "w": 54.7,
             "h": 18
@@ -2450,16 +3036,25 @@
         {
           "label": "Search your messages (/)",
           "box": {
-            "x": 382.7,
+            "x": 414.7,
             "y": 7.5,
-            "w": 32,
+            "w": 110.6,
+            "h": 32
+          }
+        },
+        {
+          "label": "Orchestrator panel",
+          "box": {
+            "x": 541.3,
+            "y": 7.5,
+            "w": 33,
             "h": 32
           }
         },
         {
           "label": "More actions",
           "box": {
-            "x": 422.7,
+            "x": 590.3,
             "y": 7.5,
             "w": 32,
             "h": 32
@@ -2468,7 +3063,7 @@
         {
           "label": "3 waiting",
           "box": {
-            "x": 462.7,
+            "x": 638.3,
             "y": 7.5,
             "w": 45.7,
             "h": 32
@@ -2487,12 +3082,76 @@
       "scrollEdge": [],
       "status": "Loading…",
       "more": {
-        "x": 199,
+        "x": 366,
         "y": 44,
         "w": 256,
-        "h": 267,
+        "h": 226,
         "scrollEdge": []
-      }
+      },
+      "stepTable": [
+        {
+          "steps": 0,
+          "scrollWidth": 584,
+          "clientWidth": 452,
+          "search": 160,
+          "cut": [
+            "Loading…"
+          ]
+        },
+        {
+          "steps": 1,
+          "scrollWidth": 584,
+          "clientWidth": 452,
+          "search": 160,
+          "cut": [
+            "Loading…"
+          ]
+        },
+        {
+          "steps": 2,
+          "scrollWidth": 452,
+          "clientWidth": 452,
+          "search": 96,
+          "cut": [
+            "Loading…"
+          ]
+        },
+        {
+          "steps": 3,
+          "scrollWidth": 452,
+          "clientWidth": 452,
+          "search": 111,
+          "cut": []
+        },
+        {
+          "steps": 4,
+          "scrollWidth": 452,
+          "clientWidth": 452,
+          "search": 167,
+          "cut": []
+        },
+        {
+          "steps": 5,
+          "scrollWidth": 452,
+          "clientWidth": 452,
+          "search": 208,
+          "cut": []
+        },
+        {
+          "steps": 6,
+          "scrollWidth": 452,
+          "clientWidth": 452,
+          "search": 208,
+          "cut": []
+        },
+        {
+          "steps": 7,
+          "scrollWidth": 452,
+          "clientWidth": 452,
+          "search": 32,
+          "cut": []
+        }
+      ]
     },
     "700 en dark": {
       "viewport": {
@@ -2624,7 +3283,7 @@
           "panels"
         ],
         "recent": {
-          "x": 162,
+          "x": 194,
           "y": 44,
           "w": 440,
           "h": 560,
@@ -2668,7 +3327,7 @@
             "label": "Close"
           },
           "list": {
-            "x": 162,
+            "x": 194,
             "y": 44,
             "w": 440,
             "h": 560,
@@ -2708,7 +3367,7 @@
         "h": 48,
         "scrollWidth": 452,
         "clientWidth": 452,
-        "fit": "accounts labels chip tight panels create find"
+        "fit": "accounts labels chip"
       },
       "controls": [
         {
@@ -2723,7 +3382,7 @@
         {
           "label": "Loading…",
           "box": {
-            "x": 320,
+            "x": 328,
             "y": 14.5,
             "w": 54.7,
             "h": 18
@@ -2732,16 +3391,25 @@
         {
           "label": "Search your messages (/)",
           "box": {
-            "x": 382.7,
+            "x": 414.7,
             "y": 7.5,
-            "w": 32,
+            "w": 110.6,
+            "h": 32
+          }
+        },
+        {
+          "label": "Orchestrator panel",
+          "box": {
+            "x": 541.3,
+            "y": 7.5,
+            "w": 33,
             "h": 32
           }
         },
         {
           "label": "More actions",
           "box": {
-            "x": 422.7,
+            "x": 590.3,
             "y": 7.5,
             "w": 32,
             "h": 32
@@ -2750,7 +3418,7 @@
         {
           "label": "3 waiting",
           "box": {
-            "x": 462.7,
+            "x": 638.3,
             "y": 7.5,
             "w": 45.7,
             "h": 32
@@ -2769,12 +3437,76 @@
       "scrollEdge": [],
       "status": "Loading…",
       "more": {
-        "x": 199,
+        "x": 366,
         "y": 44,
         "w": 256,
-        "h": 267,
+        "h": 226,
         "scrollEdge": []
-      }
+      },
+      "stepTable": [
+        {
+          "steps": 0,
+          "scrollWidth": 584,
+          "clientWidth": 452,
+          "search": 160,
+          "cut": [
+            "Loading…"
+          ]
+        },
+        {
+          "steps": 1,
+          "scrollWidth": 584,
+          "clientWidth": 452,
+          "search": 160,
+          "cut": [
+            "Loading…"
+          ]
+        },
+        {
+          "steps": 2,
+          "scrollWidth": 452,
+          "clientWidth": 452,
+          "search": 96,
+          "cut": [
+            "Loading…"
+          ]
+        },
+        {
+          "steps": 3,
+          "scrollWidth": 452,
+          "clientWidth": 452,
+          "search": 111,
+          "cut": []
+        },
+        {
+          "steps": 4,
+          "scrollWidth": 452,
+          "clientWidth": 452,
+          "search": 167,
+          "cut": []
+        },
+        {
+          "steps": 5,
+          "scrollWidth": 452,
+          "clientWidth": 452,
+          "search": 208,
+          "cut": []
+        },
+        {
+          "steps": 6,
+          "scrollWidth": 452,
+          "clientWidth": 452,
+          "search": 208,
+          "cut": []
+        },
+        {
+          "steps": 7,
+          "scrollWidth": 452,
+          "clientWidth": 452,
+          "search": 32,
+          "cut": []
+        }
+      ]
     },
     "700 uk light": {
       "viewport": {
@@ -2906,7 +3638,7 @@
           "panels"
         ],
         "recent": {
-          "x": 162,
+          "x": 194,
           "y": 44,
           "w": 440,
           "h": 560,
@@ -2950,7 +3682,7 @@
             "label": "Закрити"
           },
           "list": {
-            "x": 162,
+            "x": 194,
             "y": 44,
             "w": 440,
             "h": 560,
@@ -2990,7 +3722,7 @@
         "h": 48,
         "scrollWidth": 452,
         "clientWidth": 452,
-        "fit": "accounts labels chip tight panels create find"
+        "fit": "accounts labels chip tight"
       },
       "controls": [
         {
@@ -3016,14 +3748,23 @@
           "box": {
             "x": 420,
             "y": 7.5,
-            "w": 32,
+            "w": 129.4,
+            "h": 32
+          }
+        },
+        {
+          "label": "Панель оркестратора",
+          "box": {
+            "x": 557.3,
+            "y": 7.5,
+            "w": 33,
             "h": 32
           }
         },
         {
           "label": "Більше дій",
           "box": {
-            "x": 460,
+            "x": 598.3,
             "y": 7.5,
             "w": 32,
             "h": 32
@@ -3032,7 +3773,7 @@
         {
           "label": "3 чекають",
           "box": {
-            "x": 500,
+            "x": 638.3,
             "y": 7.5,
             "w": 45.7,
             "h": 32
@@ -3051,12 +3792,78 @@
       "scrollEdge": [],
       "status": "Завантаження…",
       "more": {
-        "x": 236,
+        "x": 374,
         "y": 44,
         "w": 256,
-        "h": 267,
+        "h": 226,
         "scrollEdge": []
-      }
+      },
+      "stepTable": [
+        {
+          "steps": 0,
+          "scrollWidth": 595,
+          "clientWidth": 452,
+          "search": 160,
+          "cut": [
+            "Завантаження…"
+          ]
+        },
+        {
+          "steps": 1,
+          "scrollWidth": 595,
+          "clientWidth": 452,
+          "search": 160,
+          "cut": [
+            "Завантаження…"
+          ]
+        },
+        {
+          "steps": 2,
+          "scrollWidth": 452,
+          "clientWidth": 452,
+          "search": 96,
+          "cut": [
+            "Завантаження…"
+          ]
+        },
+        {
+          "steps": 3,
+          "scrollWidth": 452,
+          "clientWidth": 452,
+          "search": 96,
+          "cut": [
+            "Завантаження…"
+          ]
+        },
+        {
+          "steps": 4,
+          "scrollWidth": 452,
+          "clientWidth": 452,
+          "search": 129,
+          "cut": []
+        },
+        {
+          "steps": 5,
+          "scrollWidth": 452,
+          "clientWidth": 452,
+          "search": 170,
+          "cut": []
+        },
+        {
+          "steps": 6,
+          "scrollWidth": 452,
+          "clientWidth": 452,
+          "search": 170,
+          "cut": []
+        },
+        {
+          "steps": 7,
+          "scrollWidth": 452,
+          "clientWidth": 452,
+          "search": 32,
+          "cut": []
+        }
+      ]
     },
     "700 uk dark": {
       "viewport": {
@@ -3188,7 +3995,7 @@
           "panels"
         ],
         "recent": {
-          "x": 162,
+          "x": 194,
           "y": 44,
           "w": 440,
           "h": 560,
@@ -3232,7 +4039,7 @@
             "label": "Закрити"
           },
           "list": {
-            "x": 162,
+            "x": 194,
             "y": 44,
             "w": 440,
             "h": 560,
@@ -3272,7 +4079,7 @@
         "h": 48,
         "scrollWidth": 452,
         "clientWidth": 452,
-        "fit": "accounts labels chip tight panels create find"
+        "fit": "accounts labels chip tight"
       },
       "controls": [
         {
@@ -3298,14 +4105,23 @@
           "box": {
             "x": 420,
             "y": 7.5,
-            "w": 32,
+            "w": 129.4,
+            "h": 32
+          }
+        },
+        {
+          "label": "Панель оркестратора",
+          "box": {
+            "x": 557.3,
+            "y": 7.5,
+            "w": 33,
             "h": 32
           }
         },
         {
           "label": "Більше дій",
           "box": {
-            "x": 460,
+            "x": 598.3,
             "y": 7.5,
             "w": 32,
             "h": 32
@@ -3314,7 +4130,7 @@
         {
           "label": "3 чекають",
           "box": {
-            "x": 500,
+            "x": 638.3,
             "y": 7.5,
             "w": 45.7,
             "h": 32
@@ -3333,12 +4149,78 @@
       "scrollEdge": [],
       "status": "Завантаження…",
       "more": {
-        "x": 236,
+        "x": 374,
         "y": 44,
         "w": 256,
-        "h": 267,
+        "h": 226,
         "scrollEdge": []
-      }
+      },
+      "stepTable": [
+        {
+          "steps": 0,
+          "scrollWidth": 595,
+          "clientWidth": 452,
+          "search": 160,
+          "cut": [
+            "Завантаження…"
+          ]
+        },
+        {
+          "steps": 1,
+          "scrollWidth": 595,
+          "clientWidth": 452,
+          "search": 160,
+          "cut": [
+            "Завантаження…"
+          ]
+        },
+        {
+          "steps": 2,
+          "scrollWidth": 452,
+          "clientWidth": 452,
+          "search": 96,
+          "cut": [
+            "Завантаження…"
+          ]
+        },
+        {
+          "steps": 3,
+          "scrollWidth": 452,
+          "clientWidth": 452,
+          "search": 96,
+          "cut": [
+            "Завантаження…"
+          ]
+        },
+        {
+          "steps": 4,
+          "scrollWidth": 452,
+          "clientWidth": 452,
+          "search": 129,
+          "cut": []
+        },
+        {
+          "steps": 5,
+          "scrollWidth": 452,
+          "clientWidth": 452,
+          "search": 170,
+          "cut": []
+        },
+        {
+          "steps": 6,
+          "scrollWidth": 452,
+          "clientWidth": 452,
+          "search": 170,
+          "cut": []
+        },
+        {
+          "steps": 7,
+          "scrollWidth": 452,
+          "clientWidth": 452,
+          "search": 32,
+          "cut": []
+        }
+      ]
     },
     "1440 en light": {
       "viewport": {
@@ -3592,7 +4474,8 @@
         "w": 256,
         "h": 226,
         "scrollEdge": []
-      }
+      },
+      "stepTable": null
     },
     "1440 en dark": {
       "viewport": {
@@ -3846,7 +4729,8 @@
         "w": 256,
         "h": 226,
         "scrollEdge": []
-      }
+      },
+      "stepTable": null
     },
     "1440 uk light": {
       "viewport": {
@@ -4100,7 +4984,8 @@
         "w": 256,
         "h": 226,
         "scrollEdge": []
-      }
+      },
+      "stepTable": null
     },
     "1440 uk dark": {
       "viewport": {
@@ -4354,7 +5239,8 @@
         "w": 256,
         "h": 226,
         "scrollEdge": []
-      }
+      },
+      "stepTable": null
     }
   },
   "failures": []

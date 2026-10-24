@@ -158,18 +158,26 @@
 :is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="accounts"] [data-bar-group="where"] > :not(h1) { display: none; }
 :is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="labels"] [data-fit-label] { display: none; }
 [data-project-bar]:not([data-fit~="labels"]) [data-fit-short] { display: none; }
+/* With the word shortened to «Search», the leaf's find slot may shrink to what holds that word
+   before the chip, the groups' gaps or the panel group give anything up. */
+[data-project-bar][data-fit~="labels"] [data-testid="dash-search"] { min-width: 96px; }
 :is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="labels"] [data-orchestrator-toggle] { padding-left: 8px; padding-right: 8px; }
 :is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="chip"] [data-attention-chip-label] { display: none; }
-/* Tight, the groups stand 8 px apart, and the spacer, which has no width left by then, goes with its two gaps. */
+/* Tight, the groups stand 8 px apart, and the spacer goes with its two gaps. The board's search
+   fills what the spacer would hold; the leaf bar's find slot does not (at its last step it is a
+   32 px icon), so there the trail is pushed to the right edge instead, as at every other step. */
 :is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="tight"],
 :is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="tight"] [data-bar-group="trail"] { gap: 8px; }
 :is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="tight"] [data-bar-spacer] { display: none; }
+[data-project-bar][data-fit~="tight"] [data-bar-group="trail"] { margin-left: auto; }
 /* A 640–700 px window (#1698): the panel group's segments leave for rows of ⋯. The recent agents'
-   segment stays as an empty anchor beside ⋯, as tall as the control it held, so its list still
-   opens under the row's controls and clear of the name; the group takes back the gap it would leave. */
+   segment stays as an empty anchor, as tall as the control it held and as wide as ⋯, standing
+   where ⋯ stands, so its list opens under the row's controls and ends at ⋯'s right edge, clear
+   of the name; the group takes back the anchor's width and the gap it would leave. */
 :is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="panels"] [data-bar-group="panels"] { margin-right: -8px; }
+.kb .bar[data-bar="project"][data-fit~="panels"] [data-bar-group="panels"]:has([data-bar-recent]) { margin-right: -40px; }
 :is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="panels"] [data-bar-group="panels"] :is([data-orchestrator-toggle], [data-bar-recent-toggle]) { display: none; }
-:is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="panels"] [data-bar-recent] { height: 32px; }
+:is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="panels"] [data-bar-recent] { width: 32px; height: 32px; }
 /* Then `+` leaves for its two rows of ⋯. */
 .kb .bar[data-bar="project"][data-fit~="create"] .bar-slot:has(> [data-bar-group="create"]) { display: none; }
 /* The last step, on a window narrower than the board is made for: the field may go under its

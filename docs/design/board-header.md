@@ -199,7 +199,7 @@ Two steps now come between `tight` and `find`, in this order:
 
 | Step | The row gives up | Where it goes |
 |---|---|---|
-| `panels` | Orchestrator and the recent agents' segment | the first rows of ⋯ after `+`'s: «Orchestrator panel», the toggle's own name apart from the seat's section «Orchestrator» (pressed while the seat is open, with the collapsed seat's state word) and «Recent agents». The list still hangs under its segment, which stays as an empty anchor beside ⋯, as tall as the control it held, so the list opens under the row's controls. Opened from ⋯ it takes the focus (its ✕ first, then its agents by Tab), and Escape or ✕ hands the focus back to ⋯. A list open while the window narrows past this step stays open, and the focus its folded icon held moves to its ✕. |
+| `panels` | Orchestrator and the recent agents' segment | the first rows of ⋯ after `+`'s: «Orchestrator panel», the toggle's own name apart from the seat's section «Orchestrator» and with a panel icon, where the section keeps the bot (pressed while the seat is open, with the collapsed seat's state word) and «Recent agents». The list still hangs under its segment, which stays as an empty anchor standing where ⋯ stands, as tall and wide as ⋯, so the list opens under the row's controls and ends at ⋯'s right edge. Opened from ⋯ it takes the focus (its ✕ first, then its agents by Tab), and Escape or ✕ hands the focus back to ⋯. A list open while the window narrows past this step stays open, and the focus its folded icon held moves to its ✕. |
 | `create` | `+` | two rows of ⋯ at its top, the `+` menu's own: New task, New agent |
 
 `tight` also drops the spacer, whose width is zero by then, and with it two
@@ -216,7 +216,10 @@ The bar of a leaf without a board (the loading skeleton, the empty project)
 keeps its width policy: under 1700 px it takes `accounts` and `labels` whatever
 room it has, so a normal desktop window draws it as before. A shorter row then
 gives way by the board's rule (`useBarFit`) through the further steps; it has no
-`+`. Its find slot shows «Search your messages», «Search» after `labels`, the
+`+`. Its trail stays at the row's right end at every step (at `tight` the trail
+takes `margin-left: auto`, since the spacer is gone and the find slot is no
+longer elastic at its last step), and once the word is «Search» the find slot
+may shrink to 96 px before the chip, the gaps or the panel group give anything up. Its find slot shows «Search your messages», «Search» after `labels`, the
 icon alone at `find`.
 
 That bar also stopped saying «N branches running · N trees» (#1954): the desktop
