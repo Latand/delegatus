@@ -751,6 +751,12 @@ function childFixture(name: string, gitRepository = false, sqliteMode: "sqlite" 
         ...(options.memberships ? { memberships: options.memberships } : {}),
       });
       const child = observedChild ?? { id: begun.receipt.conversationId, generations: [] };
+      /* A materialized fixture child has finished launch actuation. Hand back
+         its claim so the reservation cannot keep a dead child hosted forever.
+         Unobserved reservations still model a launch that has not settled. */
+      if (observedChild && begun.receipt.admissionOwner) {
+        expect(registry.releaseSpawnActuation(begun.receipt.launchId, begun.receipt.admissionOwner).released).toBe(true);
+      }
       if (options.completedReceipt) {
         registry.completeSpawn(begun.receipt.launchId, {
           key: sessionKeyFromTranscript(engine, childPath)!,
