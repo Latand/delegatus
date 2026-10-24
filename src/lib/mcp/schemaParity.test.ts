@@ -734,7 +734,7 @@ test("create_pipeline publishes the stage contract in its tool definition", asyn
     const stage = stages?.items?.properties;
 
     expect(Object.keys(stage ?? {}).sort()).toEqual([
-      "access", "account", "agentMemoryMaxBytes", "effort", "engine", "id", "kind", "model", "next", "onFail", "outputs", "prompt", "role", "sandbox", "serviceTier",
+      "access", "account", "agentMemoryMaxBytes", "effort", "engine", "id", "kind", "model", "next", "onFail", "outputs", "prompt", "role", "runtime", "sandbox", "serviceTier",
     ]);
     expect(stage?.kind?.enum).toEqual(["run", "review-loop"]);
     expect(stage?.engine?.enum).toEqual(["claude", "codex"]);

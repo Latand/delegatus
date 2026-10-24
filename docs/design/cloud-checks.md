@@ -1,8 +1,8 @@
 # Pipeline checks in Codex Cloud
 
 Status: operator decisions accepted, 2026-10-24. The first implementation
-routes pre-push heavy checks through one Cloud job. Later work extends the same
-transport to explicitly selected stage and browser checks.
+routes pre-push heavy checks through one Cloud job. It shares the hosted
+connection with the Cloud stage runtime described in `cloud-stage-runtime.md`.
 
 ## Execution policy
 
@@ -70,10 +70,18 @@ command checks the tree and tracked working files again before emitting its
 terminal receipt. Local publication rechecks the source after receiving it.
 A changed tree invalidates the result.
 
-The transport is `scripts/cloud-checks.ts`. Its private JSON configuration is
-selected by `LLV_GATE_CLOUD_CONFIG` and contains `url`, optional authenticated
-`headers` and WebSocket `protocols`, `environmentId` and `cwd`. Credentials and environment routing values
-must stay out of repository documentation and fixtures.
+`scripts/cloud-checks.ts` owns source transfer and command verdicts. It uses
+`src/lib/pipelines/cloudHostedClient.ts` for the same native ChatGPT sign-in,
+hosted connection, initialization, RPC correlation and environment catalog as
+stage execution. The lane's project supplies `codexCloudEnvironmentId`; its
+Codex stage account, or the project's Codex account pool for other producers,
+supplies authentication. The catalog supplies the workspace directory.
+There is no separately configured endpoint or static credential file.
+
+Missing or invalid project setup blocks checks before dispatch. It supplies no
+outage evidence and cannot authorize local fallback. Publication pins its state
+root for this lookup with `LLV_GATE_STATE_DIR`; isolated child checks remove
+that variable. Direct hooks resolve their own managed project configuration.
 
 The current app-server WebSocket lifecycle is:
 
@@ -107,6 +115,14 @@ connection loss, reconnect once to interrupt the old job where possible. A
 confirmed transport outage still follows the retry and single local fallback
 rule; it never supplies a passing verdict. A missing command record after an
 otherwise completed turn is invalid evidence and blocks publication.
+A terminal exact-command record without a valid receipt blocks immediately,
+before another result page or turn read. A failed command cannot produce a
+successful receipt. Server requests and notifications cannot settle pending
+client RPCs, even when their independent IDs collide.
+
+Handshake HTTP 500, 502, 503 and 504 permit outage confirmation. HTTP 401, 403
+and 429 remain account refusals. Other HTTP statuses, including wrong-path and
+protocol refusals, are invalid configuration and never authorize local checks.
 
 The existing publication deadline remains authoritative. Retry does not reset
 it. Local fallback uses normal local CPU admission and isolation with SSH
@@ -120,8 +136,9 @@ The policy also places browser drivers in Cloud, including kanban and phone.
 Use the existing drivers, installed Chromium through `CHROME_BIN`, and the same
 language/theme cases. A Cloud time-limit interruption follows the confirmed
 retry and local fallback rule above. Browser frames remain required evidence
-for visual claims. The first slice changes the pre-push heavy half; explicit
-stage/browser dispatch still needs integration with this transport.
+for visual claims. This slice changes the pre-push heavy half; explicit browser
+check dispatch remains subsequent work. Read-only Cloud stages share the
+connection and retain their own stage-result policy.
 
 Broader stage dispatch must retain the same source binding, terminal command
 records, isolation, cancellation and fallback semantics. Add provider-specific

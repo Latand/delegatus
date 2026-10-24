@@ -104,6 +104,7 @@ test("only classified variables travel; credentials and local paths never do", (
   const out = scratch();
   const result = remoteEnvironment({
     GH_TOKEN: "t", LLV_TOKEN: "t", OPENROUTER_API_KEY: "k", LLV_PRIVACY_KNOWN_VALUES_FILE: "/secret", HOME: "/srv/x", SOME_UNKNOWN: "1",
+    LLV_GATE_STATE_DIR: "/fixture/installation-state",
     LLV_KANBAN_BROWSER_TEST: "1", NODE_OPTIONS: "--max-old-space-size=6144", PD_OUT: out, LLV_REPORTS_OUT: ".artifacts/r",
     BOARD_POLL_BASE_FILE: path.join(REPO, "fixtures", "x.json"),
   }, REPO, REPO);

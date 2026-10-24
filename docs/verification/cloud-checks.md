@@ -1,5 +1,71 @@
 # Cloud checks: verification
 
+## Backend repair verification
+
+Recorded 2026-10-24. This section supersedes the original transport and
+configuration evidence below. Main was merged by a merge commit. The reviewed
+Cloud stage implementation from PR #3302, revision `67b0ff312`, was integrated
+so stage execution and publication checks use one hosted connection.
+
+The comparison base is `6ebe5f6f68364fb87ba3cb6d62dbe31457ec664d`.
+The SHA-256 of `git diff --binary <base> -- .githooks scripts src test-preload.ts`
+is `5397e60f2248aabdb863ec5b5c03e143e7dca2d7abe86b36f1f10921c1004bcb`.
+Documentation and inherited evidence files are outside that source digest.
+
+The focused regressions verify all five backend findings:
+
+- Managed project settings and the project's Codex account selection supply
+  the environment and native authentication. A loopback hosted service receives
+  initialization, source transfer and the check command, returning its receipt.
+  Missing setup refuses after privacy without connecting or executing locally.
+- Terminal command failures and invalid receipts block before another turn
+  read or result page. A later connection failure cannot replace that refusal.
+- Stage execution and checks share native authentication, initialization,
+  environment catalog validation and RPC through `cloudHostedClient.ts`.
+- HTTP 400, 404, 426 and an unrecognized 418 refuse without local work. HTTP
+  503 produces two observed handshakes followed by exactly one local run.
+  A permanent refusal during outage recovery also blocks fallback.
+- Server requests with colliding IDs leave the genuine RPC response pending.
+  Frames with empty or null method values are excluded from responses too.
+
+Every heavy command ran serially through the stage-supplied `gate-slot.sh` in
+a scratch export, with fresh isolated HOME, XDG_CONFIG_HOME, TMPDIR and
+LLV_STATE_DIR, a closed Viewer control URL and `LLV_GATE_RUNNER=off`.
+The native authentication dependency was stubbed for loopback tests; no live
+Cloud job ran. UI components were left for the separate UI stage.
+
+| Check | Result |
+| --- | --- |
+| `node_modules/.bin/tsc --noEmit` | Exit 0 |
+| `node_modules/.bin/eslint` on all 29 touched TS files | Exit 0, no warnings |
+| `scripts/cloud-checks.test.ts` | 58 passed |
+| `scripts/cloud-check-config.test.ts` | 8 passed |
+| `src/lib/pipelines/cloudHostedClient.test.ts` | 65 passed |
+| `src/lib/pipelines/cloudStage.test.ts` | 11 passed |
+| `src/lib/pipelines/engine.cloud.test.ts` | 47 passed |
+| `src/lib/transfer/transferExits.test.ts` | 23 passed |
+| `src/lib/testing/testGitIsolation.test.ts` | 8 passed |
+| `scripts/gate-cache.test.ts` | 10 passed |
+| `src/lib/pipelines/git.test.ts`, `-t 'publication hands matching budgets'` | 6 passed, 174 filtered |
+| `src/lib/mcp/server.test.ts` | 101 passed |
+| `bun scripts/privacy-publication-gate.ts --staged --require-known-values` | Exit 0 |
+| `git diff --cached --check` | Exit 0 |
+
+Tests used `bun run test <explicit-file>` and the package's 60-second timeout.
+Fresh comparisons used `bun scripts/local-gate-tests.ts --base <base>` with
+explicit paths. The final comparison of `scripts/gate-runner/client.test.ts`,
+`src/app/api/projects/settings/route.test.ts` and `src/lib/mcp/schemaParity.test.ts`
+exited 0 with zero new failures and three pre-existing failures: environment
+inventory, forum-chat lookup and the create-pipeline schema description.
+
+The separate comparison including `scripts/local-gate.test.ts` also exited 0
+with zero new failures. That file remains incomplete on both head and base with
+the same between-tests runner error; this is no claim that its full lifecycle
+suite passed. Baseline reuse was disabled, so both comparisons sampled fresh
+isolated runs. The raw suites named here remain red on their existing sites.
+
+## Original implementation record
+
 The publication repair below supersedes the original hook-test comparison for
 the publication environment.
 

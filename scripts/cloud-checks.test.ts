@@ -30,8 +30,16 @@ test("Cloud time limits are confirmed before fallback", async () => {
 import { AppServerCloudTransport, CloudRpcError, cloudCommand, connectCloud, rpcFailure, type CloudRpc } from "./cloud-checks";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { WebSocketServer } from "ws";
-const config = { url: "wss://example.invalid", environmentId: "environment-fixture", cwd: "/workspace/repository" };
+import WebSocket, { WebSocketServer } from "ws";
+import type { HostedCloudDependencies } from "../src/lib/pipelines/cloudHostedClient";
+const account = { engine: "codex" as const, accountId: "fixture", kind: "managed" as const, home: "/fixture/account", transcriptRoot: "/fixture/transcripts", env: { NODE_ENV: "test" as const } };
+const config = { account, environmentId: "asenvcfg_fixture" };
+const cwd = "/workspace/repository";
+function dependencies(url: string, protocols = ["codex-app-server"]): HostedCloudDependencies {
+  return { authenticate: async selected => { expect(selected).toEqual(account); return { token: "fixture-auth" }; },
+    socket: () => new WebSocket(url, protocols, { handshakeTimeout: 1000 }),
+    fetch: async () => Response.json({ id: config.environmentId, repositories: [{ mount_path: cwd }] }), uuid: () => "fixture" };
+}
 function clock() {
   let now = 0;
   return { now: () => now, sleep: async (ms: number) => { now += ms; } };
@@ -40,9 +48,10 @@ function fakeRpc(output: string, code = 0) {
   const calls: { method: string; params: Record<string, unknown> }[] = [];
   let uploadCommand = "", command = "";
   const rpc: CloudRpc = {
+    cwd,
     async call(method, params) {
       calls.push({ method, params });
-      if (method === "thread/start") return { model: "gpt-6.1-sol", thread: { id: "thread-fixture", environments: [{ environmentConfigId: config.environmentId, cwd: config.cwd }] } };
+      if (method === "thread/start") return { model: "gpt-6.1-sol", thread: { id: "thread-fixture", environments: [{ environmentConfigId: config.environmentId, cwd: cwd }] } };
       if (method === "thread/shellCommand") { uploadCommand = String(params.command); return {}; }
       if (method === "turn/start") {
         const text = (params.input as { text: string }[])[0]!.text;
@@ -60,10 +69,9 @@ test("hosted launch uses the required Cloud profile and exact tree command", asy
   const fake = fakeRpc(`DELEGATUS_GATE ${job.head} ${job.tree} ${job.base} 0\n`);
   const transport = new AppServerCloudTransport(config, async () => fake.rpc);
   expect(await transport.run(job)).toEqual(verdict(0));
-  expect(fake.calls.find(call => call.method === "initialize")?.params).toMatchObject({ capabilities: { experimentalApi: true } });
   expect(fake.calls.find(call => call.method === "thread/start")?.params).toMatchObject({
     model: "gpt-6.1-sol", approvalPolicy: "never", sandbox: "danger-full-access", ephemeral: false, allowProviderModelFallback: false,
-    environments: [{ environmentConfigId: config.environmentId, cwd: config.cwd }],
+    environments: [{ environmentConfigId: config.environmentId, cwd: cwd }],
   });
   expect(fake.calls.find(call => call.method === "turn/start")?.params).toMatchObject({ threadId: "thread-fixture", sandboxPolicy: { type: "dangerFullAccess" } });
   expect(cloudCommand(job)).toContain("scripts/local-gate.ts pre-push --admitted");
@@ -135,7 +143,9 @@ test("a time-limited job must acknowledge termination before fallback", async ()
   fake.rpc.call = async (method, params) => {
     if (method === "turn/interrupt") { interrupted = true; return {}; }
     if (method === "thread/turns/list" && !interrupted) return { data: [{ id: "turn-fixture", status: "inProgress" }] };
-    return original(method, params);
+    const result = await original(method, params);
+    if (method === "thread/items/list" && params.turnId) (result.data as { item: { status: string } }[])[0]!.item.status = "inProgress";
+    return result;
   };
   expect(await new AppServerCloudTransport(config, async () => fake.rpc, () => {}, clock()).run(job)).toEqual({ kind: "cloud-limit" });
   expect(interrupted).toBe(true);
@@ -146,7 +156,9 @@ test("transport loss during interruption follows the confirmed outage path", asy
   fake.rpc.call = async (method, params) => {
     if (method === "turn/interrupt") throw new CloudRpcError("lost acknowledgement", "unavailable");
     if (method === "thread/turns/list") return { data: [{ id: "turn-fixture", status: "inProgress" }] };
-    return original(method, params);
+    const result = await original(method, params);
+    if (method === "thread/items/list" && params.turnId) (result.data as { item: { status: string } }[])[0]!.item.status = "inProgress";
+    return result;
   };
   expect(await new AppServerCloudTransport(config, async () => fake.rpc, () => {}, clock()).run(job)).toEqual({ kind: "unavailable" });
 });
@@ -232,7 +244,7 @@ for (const mismatch of ["model", "environment", "cwd"]) test(`a resolved ${misma
     if (method === "thread/start") return {
       model: mismatch === "model" ? "other-model" : "gpt-6.1-sol",
       thread: { id: "thread-fixture", environments: [{ environmentConfigId: mismatch === "environment" ? "other" : config.environmentId,
-        cwd: mismatch === "cwd" ? "/workspace/other" : config.cwd }] },
+        cwd: mismatch === "cwd" ? "/workspace/other" : cwd }] },
     };
     return original(method, params);
   };
@@ -269,14 +281,14 @@ for (const malformed of ["missing-data", "repeated-cursor", "page-limit"]) test(
   expect(pages).toBeLessThanOrEqual(100);
 });
 
-for (const [status, category] of [[401, "account-limit"], [403, "account-limit"], [429, "account-limit"], [503, "unavailable"]] as const) {
+for (const [status, category] of [[401, "account-limit"], [403, "account-limit"], [429, "account-limit"], [400, "invalid"], [404, "invalid"], [426, "invalid"], [418, "invalid"], [503, "unavailable"]] as const) {
   test(`real WebSocket handshake ${status} is classified as ${category}`, async () => {
     const server = createServer((_request, response) => { response.writeHead(status); response.end(); });
     server.listen(0, "127.0.0.1");
     await once(server, "listening");
     try {
       const address = server.address() as { port: number };
-      const error = await connectCloud({ ...config, url: `ws://127.0.0.1:${address.port}` }).then(() => null, error => error);
+      const error = await connectCloud(config, undefined, 5000, dependencies(`ws://127.0.0.1:${address.port}`)).then(() => null, error => error);
       expect(error).toBeInstanceOf(CloudRpcError);
       expect(error.category).toBe(category);
     } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
@@ -286,7 +298,12 @@ for (const [status, category] of [[401, "account-limit"], [403, "account-limit"]
 test("missing turn records are invalid evidence", async () => {
   const fake = fakeRpc("");
   const original = fake.rpc.call;
-  fake.rpc.call = async (method, params) => method === "thread/turns/list" ? {} : original(method, params);
+  fake.rpc.call = async (method, params) => {
+    if (method === "thread/turns/list") return {};
+    const result = await original(method, params);
+    if (method === "thread/items/list" && params.turnId) (result.data as { item: { status: string } }[])[0]!.item.status = "inProgress";
+    return result;
+  };
   let local = 0;
   expect(await runCloudChecks(job, new AppServerCloudTransport(config, async () => fake.rpc, () => {}, clock()), async () => { local++; return 0; })).toBe(1);
   expect(local).toBe(0);
@@ -308,6 +325,22 @@ test("an account refusal during outage recovery blocks fallback", async () => {
   expect([connections, local]).toEqual([2, 0]);
 });
 
+test("a permanent configuration refusal during outage recovery blocks fallback", async () => {
+  const fake = fakeRpc("");
+  const original = fake.rpc.call;
+  fake.rpc.call = async (method, params) => {
+    if (method === "turn/start") throw new CloudRpcError("lost acknowledgement", "unavailable");
+    return original(method, params);
+  };
+  let connections = 0, local = 0;
+  const transport = new AppServerCloudTransport(config, async () => {
+    if (++connections === 1) return fake.rpc;
+    throw new CloudRpcError("wrong endpoint", "invalid");
+  });
+  expect(await runCloudChecks(job, transport, async () => { local++; return 0; })).toBe(1);
+  expect([connections, local]).toEqual([2, 0]);
+});
+
 test("the real transport negotiates the configured app-server subprotocol", async () => {
   const server = createServer();
   const sockets = new WebSocketServer({ server, handleProtocols: protocols => protocols.has("codex-app-server") ? "codex-app-server" : false });
@@ -320,7 +353,7 @@ test("the real transport negotiates the configured app-server subprotocol", asyn
   let rpc: CloudRpc | undefined;
   try {
     const address = server.address() as { port: number };
-    rpc = await connectCloud({ ...config, url: `ws://127.0.0.1:${address.port}`, protocols: ["codex-app-server"] });
+    rpc = await connectCloud(config, undefined, 5000, dependencies(`ws://127.0.0.1:${address.port}`));
     expect(await rpc.call("probe", {})).toEqual({ protocol: "codex-app-server" });
   } finally {
     rpc?.close();
@@ -331,7 +364,144 @@ test("the real transport negotiates the configured app-server subprotocol", asyn
 
 test("invalid WebSocket configuration cannot enable local fallback", async () => {
   let local = 0;
-  const transport = new AppServerCloudTransport({ ...config, protocols: ["invalid protocol"] });
+  const transport = new AppServerCloudTransport(config, (config, signal, timeout) => connectCloud(config, signal, timeout, dependencies("ws://127.0.0.1:1", ["invalid protocol"])));
   expect(await runCloudChecks(job, transport, async () => { local++; return 0; })).toBe(1);
   expect(local).toBe(0);
+});
+
+test("missing Cloud setup refuses without connecting or invoking local checks", async () => {
+  let connects = 0, local = 0;
+  const transport = new AppServerCloudTransport(null, async () => { connects++; throw new CloudRpcError("lost", "unavailable"); });
+  expect(await runCloudChecks(job, transport, async () => { local++; return 0; })).toBe(1);
+  expect([connects, local]).toEqual([0, 0]);
+});
+
+for (const status of ["failed", "completed", "declined"]) test(`terminal ${status} without a receipt blocks before later transport loss`, async () => {
+  const fake = fakeRpc("pre-push: types: failed (1)", 1);
+  const original = fake.rpc.call;
+  let connects = 0, turnReads = 0, local = 0;
+  fake.rpc.call = async (method, params) => {
+    if (method === "thread/turns/list") { turnReads++; throw new CloudRpcError("lost", "unavailable"); }
+    const result = await original(method, params);
+    if (method === "thread/items/list" && params.turnId) (result.data as { item: { status: string } }[])[0]!.item.status = status;
+    return result;
+  };
+  const transport = new AppServerCloudTransport(config, async () => {
+    if (++connects === 1) return fake.rpc;
+    throw new CloudRpcError("lost", "unavailable");
+  });
+  expect(await runCloudChecks(job, transport, async () => { local++; return 0; })).toBe(1);
+  expect([connects, turnReads, local]).toEqual([1, 0, 0]);
+});
+
+test("terminal failed evidence blocks before reading a later command page", async () => {
+  const fake = fakeRpc("pre-push: types: failed (1)", 1);
+  const original = fake.rpc.call;
+  let lateReads = 0, local = 0;
+  fake.rpc.call = async (method, params) => {
+    if (method === "thread/items/list" && params.cursor) { lateReads++; throw new CloudRpcError("lost", "unavailable"); }
+    const result = await original(method, params);
+    return method === "thread/items/list" && params.turnId ? { ...result, nextCursor: "later" } : result;
+  };
+  expect(await runCloudChecks(job, new AppServerCloudTransport(config, async () => fake.rpc), async () => { local++; return 0; })).toBe(1);
+  expect([lateReads, local]).toEqual([0, 0]);
+});
+
+test("a failed command cannot supply a successful receipt", async () => {
+  const fake = fakeRpc(`DELEGATUS_GATE ${job.head} ${job.tree} ${job.base} 0\n`);
+  const original = fake.rpc.call;
+  fake.rpc.call = async (method, params) => {
+    const result = await original(method, params);
+    if (method === "thread/items/list" && params.turnId) (result.data as { item: { status: string } }[])[0]!.item.status = "failed";
+    return result;
+  };
+  let local = 0;
+  expect(await runCloudChecks(job, new AppServerCloudTransport(config, async () => fake.rpc), async () => { local++; return 0; })).toBe(1);
+  expect(local).toBe(0);
+});
+
+for (const status of [400, 404, 426, 418, 503]) test(`HTTP ${status} controls retry and local execution through the shared transport`, async () => {
+  let handshakes = 0, local = 0;
+  const server = createServer((_request, response) => { handshakes++; response.writeHead(status); response.end(); });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  try {
+    const address = server.address() as { port: number };
+    const transport = new AppServerCloudTransport(config, (config, signal, timeout) => connectCloud(config, signal, timeout, dependencies(`ws://127.0.0.1:${address.port}/wrong-path`)));
+    expect(await runCloudChecks(job, transport, async () => { local++; return 0; })).toBe(status === 503 ? 0 : 1);
+    expect([handshakes, local]).toEqual(status === 503 ? [2, 1] : [1, 0]);
+  } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+});
+
+for (const method of ["item/commandExecution/requestApproval", "", null]) test(`a server request with method ${String(method)} and a colliding id leaves the genuine RPC response pending`, async () => {
+  const server = createServer();
+  const sockets = new WebSocketServer({ server });
+  sockets.on("connection", socket => socket.on("message", bytes => {
+    const request = JSON.parse(String(bytes));
+    if (request.id === undefined || !request.method) return;
+    socket.send(JSON.stringify({ id: request.id, method, params: { threadId: "another-thread" } }));
+    socket.send(JSON.stringify({ id: request.id, result: { expected: "actual RPC response" } }));
+  }));
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  let rpc: CloudRpc | undefined;
+  try {
+    const address = server.address() as { port: number };
+    rpc = await connectCloud(config, undefined, 5000, dependencies(`ws://127.0.0.1:${address.port}`));
+    expect(await rpc.call("probe", {})).toEqual({ expected: "actual RPC response" });
+  } finally {
+    rpc?.close();
+    await new Promise<void>(resolve => sockets.close(() => resolve()));
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  }
+});
+
+test("managed default configuration contacts the hosted service and completes Cloud checks", async () => {
+  const fake = fakeRpc(`DELEGATUS_GATE ${job.head} ${job.tree} ${job.base} 0\n`);
+  let local = 0, authentications = 0, catalogReads = 0;
+  const server = createServer();
+  const sockets = new WebSocketServer({ server });
+  sockets.on("connection", socket => socket.on("message", async bytes => {
+    const request = JSON.parse(String(bytes));
+    if (request.id === undefined || !request.method) return;
+    const result = await fake.rpc.call(request.method, request.params);
+    socket.send(JSON.stringify({ id: request.id, result }));
+  }));
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  try {
+    const address = server.address() as { port: number };
+    const deps = dependencies(`ws://127.0.0.1:${address.port}`);
+    const auth = deps.authenticate, fetch = deps.fetch;
+    deps.authenticate = async (...args) => { authentications++; return auth(...args); };
+    deps.fetch = async (...args) => { catalogReads++; return fetch(...args); };
+    const { selectCloudCheckConfig } = await import("./cloud-check-config");
+    const selected = selectCloudCheckConfig("/fixture/checkout", undefined, undefined, {
+      lane: () => null, project: () => "repo-fixture", environment: () => config.environmentId,
+      account: () => ({ kind: "available", account }),
+    });
+    const transport = new AppServerCloudTransport(selected, (config, signal, timeout) => connectCloud(config, signal, timeout, deps), () => {});
+    expect(await runCloudChecks(job, transport, async () => { local++; return 0; })).toBe(0);
+    expect([authentications, catalogReads, local]).toEqual([1, 1, 0]);
+    expect(fake.calls.filter(call => call.method === "initialize")).toHaveLength(1);
+    expect(fake.calls.some(call => call.method === "turn/start")).toBe(true);
+  } finally {
+    await new Promise<void>(resolve => sockets.close(() => resolve()));
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  }
+});
+
+test("the Cloud pre-push hook refuses missing managed setup after privacy without local execution", () => {
+  const roots: string[] = [];
+  const fixture = createHookFixture(process.cwd(), roots);
+  try {
+    writeFileSync(path.join(fixture.dir, "example.ts"), "export const value = 2;\n");
+    fixture.git("commit", "-am", "Candidate");
+    const result = spawnSync("bash", [".githooks/pre-push"], { cwd: fixture.dir,
+      env: { ...fixture.env, LLV_GATE_EXECUTION: "cloud" }, encoding: "utf8" });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Cloud checks require the project's Codex Cloud environment");
+    expect(result.stderr).not.toContain("running the same checks locally");
+    expect(fixture.calls().filter(call => call.args[0] === "scripts/privacy-publication-gate.ts").length).toBeGreaterThan(0);
+  } finally { for (const root of roots) rmSync(root, { recursive: true, force: true }); }
 });

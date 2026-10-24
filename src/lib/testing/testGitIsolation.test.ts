@@ -15,7 +15,7 @@ test("preload isolates publication context while fixture hooks still enforce the
       import { rmSync } from "node:fs";
       import { createHookFixture } from ${JSON.stringify(path.join(repository, "scripts/local-gate.fixture.ts"))};
       test("fixture publication owns its context", () => {
-        for (const name of ["LLV_GATE_PUSH_HEAD", "LLV_GATE_LANE_ID", "LLV_GATE_STAGE_ID", "LLV_GATE_CLOUD_CONFIG"]) {
+        for (const name of ["LLV_GATE_PUSH_HEAD", "LLV_GATE_LANE_ID", "LLV_GATE_STAGE_ID", "LLV_GATE_CLOUD_CONFIG", "LLV_GATE_STATE_DIR"]) {
           expect(process.env[name]).toBeUndefined();
         }
         expect(process.env.LLV_GATE_EXECUTION).toBe("local");
@@ -43,7 +43,7 @@ test("preload isolates publication context while fixture hooks still enforce the
     `);
     const result = spawnSync(process.execPath, ["test", "./fixture.test.ts"], { cwd: root, encoding: "utf8", timeout: 30_000,
       env: { ...process.env, LLV_GATE_PUSH_HEAD: "a".repeat(40), LLV_GATE_LANE_ID: "outer-lane", LLV_GATE_STAGE_ID: "outer-stage",
-        LLV_GATE_EXECUTION: "cloud", LLV_GATE_CLOUD_CONFIG: path.join(root, "foreign-cloud.json") } });
+        LLV_GATE_EXECUTION: "cloud", LLV_GATE_STATE_DIR: path.join(root, "foreign-state"), LLV_GATE_CLOUD_CONFIG: path.join(root, "foreign-cloud.json") } });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(fs.existsSync(path.join(root, "foreign-cloud.json"))).toBe(false);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }

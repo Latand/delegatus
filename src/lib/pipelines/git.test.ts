@@ -2025,7 +2025,7 @@ for (const scenario of [
     fs.writeFileSync(path.join(hooks, "pre-push"), '#!/bin/sh\nprintf "# hook deadline %s\\n" "$LLV_GATE_PUSH_DEADLINE"\nprintf "# check context %s %s %s\\n" "$LLV_GATE_LANE_ID" "$LLV_GATE_STAGE_ID" "$LLV_GATE_PUSH_HEAD"\n'
       + (scenario.refused ? 'echo "fixture gate refusal" >&2\nexit 1\n' : 'exit 0\n'), { mode: 0o700 });
     await git(box.subject.worktreeDir, "config", "core.hooksPath", hooks);
-    let observed: { ms?: number; deadline?: string; output: string } | undefined;
+    let observed: { ms?: number; deadline?: string; state?: string; output: string } | undefined;
     const exec: ExecPort = async (command, args, cwd, env, options) => {
       if (scenario.unreadable && command === "git" && args[0] === "diff" && args.includes("--no-renames")) {
         return scenario.unreadable === "truncated"
@@ -2035,13 +2035,14 @@ for (const scenario of [
       const inner = command === "systemd-run" ? args.slice(args.indexOf("--") + 1) : [command, ...args];
       const result = await realExec(command, args, cwd, env, options);
       if (inner[0] === "git" && inner[1] === "push") observed = {
-        ms: options?.timeoutMs, deadline: env?.LLV_GATE_PUSH_DEADLINE, output: result.stdout + result.stderr,
+        ms: options?.timeoutMs, deadline: env?.LLV_GATE_PUSH_DEADLINE, state: env?.LLV_GATE_STATE_DIR, output: result.stdout + result.stderr,
       };
       return result;
     };
     const result = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
     expect(observed?.ms).toBe(scenario.ms);
     expect(observed?.deadline).toMatch(/^\d+$/);
+    expect(observed?.state).toBe(process.env.LLV_STATE_DIR!);
     expect(observed?.output).toContain("# hook deadline " + observed?.deadline);
     expect(observed?.output).toContain(`# check context ${box.subject.id} ${box.subject.cursor?.stageId ?? ""} ${head}`);
     expect(result.ok).toBe(!scenario.refused);

@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import WebSocket from "ws";
+import { HostedCloudError as CloudRpcError, hostedRpcFailure as rpcFailure } from "../src/lib/pipelines/cloudHostedErrors";
+import type { HostedCloudDependencies } from "../src/lib/pipelines/cloudHostedClient";
+import type { CloudCheckConfig } from "./cloud-check-config";
+export { CloudRpcError, rpcFailure };
 
 /** Cloud and local execute the same admitted pre-push plan. Only infrastructure
  * failures permit a confirmed, single local fallback; check failures never do. */
@@ -21,71 +24,27 @@ export async function runCloudChecks(job: CloudJob, transport: CloudTransport, l
   return signal?.aborted ? 75 : local();
 }
 
-export interface CloudConfig { url: string; headers?: Record<string, string>; protocols?: string[]; environmentId: string; cwd: string }
+export type CloudConfig = CloudCheckConfig;
 export interface CloudRpc {
+  cwd: string;
   call(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>>;
   close(): void;
 }
-export type ConnectCloud = (config: CloudConfig) => Promise<CloudRpc>;
+export type ConnectCloud = (config: CloudConfig, signal?: AbortSignal, timeoutMs?: number) => Promise<CloudRpc>;
 interface CloudClock { now(): number; sleep(ms: number): Promise<void> }
 const cloudClock: CloudClock = { now: () => Date.now(), sleep: ms => new Promise(resolve => setTimeout(resolve, ms)) };
-export class CloudRpcError extends Error {
-  constructor(message: string, readonly category: "unavailable" | "cloud-limit" | "account-limit" | "invalid") { super(message); }
-}
-export function rpcFailure(error: { code?: unknown; message?: unknown; data?: { code?: unknown; codexErrorInfo?: unknown } }): CloudRpcError {
-  const info = error.data?.codexErrorInfo;
-  const code = String(error.data?.code ?? (info && typeof info === "object" && Object.keys(info).length === 1 ? Object.keys(info)[0] : info) ?? error.code);
-  const category = ["usageLimitExceeded", "rateLimitExceeded", "accountLimitExceeded", "insufficientQuota", "sessionBudgetExceeded", "unauthorized"].includes(code) ? "account-limit"
-    : ["cloudCapacityExceeded", "environmentTimeLimitExceeded", "environmentUnavailable", "serverOverloaded"].includes(code) ? "cloud-limit"
-    : "invalid";
-  return new CloudRpcError("Cloud RPC refused", category);
-}
 
-
-/** The hosted endpoint and credentials belong to private configuration. */
-export const connectCloud: ConnectCloud = async config => {
-  let socket: WebSocket;
+/** Native ChatGPT authentication, environment resolution and RPC are shared
+ * with stage execution. Publication owns only transfer and verdict policy. */
+export async function connectCloud(config: CloudConfig, signal = new AbortController().signal, timeoutMs = 30_000,
+  dependencies?: HostedCloudDependencies): Promise<CloudRpc> {
+  const { openHostedCloudSession, resolveHostedCloudEnvironment } = await import("../src/lib/pipelines/cloudHostedClient");
+  const session = await openHostedCloudSession({ account: config.account, signal, assertCurrent: config.assertCurrent ?? (() => {}) }, timeoutMs, dependencies);
   try {
-    socket = new WebSocket(config.url, config.protocols ?? [], { headers: config.headers, handshakeTimeout: 15_000, maxPayload: 16 * 1024 * 1024, perMessageDeflate: false });
-  } catch { throw new CloudRpcError("Cloud configuration refused", "invalid"); }
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => { socket.terminate(); reject(new CloudRpcError("Cloud connection unavailable", "unavailable")); }, 15_000);
-    socket.addEventListener("open", () => { clearTimeout(timer); resolve(); }, { once: true });
-    socket.addEventListener("error", () => { clearTimeout(timer); reject(new CloudRpcError("Cloud connection unavailable", "unavailable")); }, { once: true });
-    socket.on("unexpected-response", (_request, response) => {
-      clearTimeout(timer);
-      response.resume(); socket.terminate();
-      reject(new CloudRpcError("Cloud handshake refused", [401, 403, 429].includes(response.statusCode ?? 0) ? "account-limit" : "unavailable"));
-    });
-  });
-  let id = 0;
-  const pending = new Map<number, { resolve: (value: Record<string, unknown>) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
-  socket.addEventListener("message", event => {
-    let message;
-    try { message = JSON.parse(String(event.data)); } catch { return; }
-    const waiter = pending.get(message.id);
-    if (!waiter) return;
-    pending.delete(message.id); clearTimeout(waiter.timer);
-    if (message.error) waiter.reject(rpcFailure(message.error));
-    else waiter.resolve(message.result ?? {});
-  });
-  socket.addEventListener("close", () => {
-    for (const waiter of pending.values()) { clearTimeout(waiter.timer); waiter.reject(new CloudRpcError("Cloud connection lost", "unavailable")); }
-    pending.clear();
-  });
-  return {
-    call(method, params) {
-      if (method === "initialized") { socket.send(JSON.stringify({ jsonrpc: "2.0", method, params })); return Promise.resolve({}); }
-      return new Promise((resolve, reject) => {
-        const request = ++id;
-        const timer = setTimeout(() => { pending.delete(request); reject(new CloudRpcError("Cloud RPC timed out", "unavailable")); }, 30_000);
-        pending.set(request, { resolve, reject, timer });
-        socket.send(JSON.stringify({ jsonrpc: "2.0", id: request, method, params }));
-      });
-    },
-    close() { socket.close(); },
-  };
-};
+    const cwd = await resolveHostedCloudEnvironment(config.environmentId, session.auth, session.scope, dependencies);
+    return { cwd, call: (method, params) => session.client.rpc(method, params), close: session.close };
+  } catch (error) { session.close(); throw error; }
+}
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 export function cloudCommand(job: CloudJob, upload?: { directory: string; source: string }): string {
@@ -135,17 +94,18 @@ function isExactCommand(actual: string, expected: string): boolean {
 }
 
 interface CommandEntry { turnId: string; item: { type: string; status: string; command: string; exitCode?: number; aggregatedOutput?: string } }
-async function commandEntries(rpc: CloudRpc, threadId: string, turnId?: string): Promise<CommandEntry[]> {
+async function* commandEntries(rpc: CloudRpc, threadId: string, turnId?: string): AsyncGenerator<CommandEntry> {
   let cursor: unknown;
   const seen = new Set<string>();
-  const entries: CommandEntry[] = [];
+  let count = 0;
   for (let pageCount = 0; pageCount < 100; pageCount++) {
     const page = await rpc.call("thread/items/list", { threadId, turnId, cursor });
     if (!Array.isArray(page.data)) throw new Error("Missing Cloud command records");
-    entries.push(...page.data as CommandEntry[]);
-    if (entries.length > 10_000) throw new Error("Cloud command record limit");
+    count += page.data.length;
+    if (count > 10_000) throw new Error("Cloud command record limit");
+    for (const entry of page.data as CommandEntry[]) yield entry;
     cursor = page.nextCursor;
-    if (!cursor) return entries;
+    if (!cursor) return;
     const key = JSON.stringify(cursor);
     if (seen.has(key)) throw new Error("Repeated Cloud result cursor");
     seen.add(key);
@@ -164,12 +124,14 @@ async function uploadBundle(rpc: CloudRpc, threadId: string, directory: string, 
     await rpc.call("thread/shellCommand", { threadId, command, timeoutMs: Math.max(1, until - clock.now()) });
     let done = false;
     while (clock.now() < until && !signal?.aborted) {
-      const entry = (await commandEntries(rpc, threadId)).find(value => value.item?.type === "commandExecution" && isExactCommand(value.item.command, command));
-      if (entry && ["completed", "failed", "declined"].includes(entry.item.status)) {
-        if (entry.item.exitCode !== 0 || !entry.turnId) throw new CloudRpcError("Cloud source transfer failed", "unavailable");
-        firstTurnId ??= entry.turnId;
-        done = true; break;
+      for await (const entry of commandEntries(rpc, threadId)) {
+        if (entry.item?.type === "commandExecution" && isExactCommand(entry.item.command, command) && ["completed", "failed", "declined"].includes(entry.item.status)) {
+          if (entry.item.exitCode !== 0 || !entry.turnId) throw new CloudRpcError("Cloud source transfer failed", "unavailable");
+          firstTurnId ??= entry.turnId;
+          done = true; break;
+        }
       }
+      if (done) break;
       await clock.sleep(100);
     }
     if (!done) throw new CloudRpcError("Cloud source transfer unavailable", "unavailable");
@@ -181,43 +143,43 @@ async function uploadBundle(rpc: CloudRpc, threadId: string, directory: string, 
 export class AppServerCloudTransport implements CloudTransport {
   constructor(private config: CloudConfig | null, private connect: ConnectCloud = connectCloud, private report: (output: string) => void = console.error, private clock: CloudClock = cloudClock) {}
   private async commandVerdict(rpc: CloudRpc, threadId: string, turnId: string, command: string): Promise<CloudResult | undefined> {
-    for (const entry of await commandEntries(rpc, threadId, turnId)) {
+    for await (const entry of commandEntries(rpc, threadId, turnId)) {
       const item = entry.item;
-      if (entry.turnId !== turnId || item?.type !== "commandExecution" || !["completed", "failed"].includes(item.status)
+      if (entry.turnId !== turnId || item?.type !== "commandExecution" || !["completed", "failed", "declined"].includes(item.status)
         || !isExactCommand(item.command, command)) continue;
       const match = item.aggregatedOutput?.match(/DELEGATUS_GATE ([a-f0-9]{40}) ([a-f0-9]{40}) ([a-f0-9]{40}) (\d+)\s*$/);
-      if (match && Number(match[4]) === item.exitCode) {
+      if (item.status !== "declined" && !(item.status === "failed" && item.exitCode === 0) && match && Number(match[4]) === item.exitCode) {
         this.report(item.aggregatedOutput!);
         return { kind: "verdict", head: match[1]!, tree: match[2]!, base: match[3]!, code: item.exitCode! };
       }
+      // Terminal exact-command evidence is decisive before another page or RPC.
+      return { kind: "invalid" };
     }
   }
   async run(job: CloudJob, signal?: AbortSignal): Promise<CloudResult> {
     if (signal?.aborted) return { kind: "invalid" };
-    if (!this.config) return { kind: "unavailable" };
+    if (!this.config) return { kind: "invalid" };
     const until = this.clock.now() + job.timeoutMs;
     let rpc: CloudRpc;
-    try { rpc = await this.connect(this.config); }
-    catch (error) { return { kind: error instanceof CloudRpcError ? error.category : "unavailable" }; }
+    try { rpc = await this.connect(this.config, signal, Math.max(1, until - this.clock.now())); }
+    catch (error) { return { kind: error instanceof CloudRpcError ? error.category : "invalid" }; }
     let threadId: string | undefined, turnId: string | undefined, terminal = false, timedOut = false;
     let terminalFailure: "invalid" | "cloud-limit" | "account-limit" | "unavailable" = "invalid";
     let turnRequested = false;
     try {
       if (signal?.aborted) return { kind: "invalid" };
-      await rpc.call("initialize", { clientInfo: { name: "delegatus-checks", version: "1" }, capabilities: { experimentalApi: true } });
-      await rpc.call("initialized", {});
       const started = await rpc.call("thread/start", {
         model: "gpt-6.1-sol", allowProviderModelFallback: false, approvalPolicy: "never",
         sandbox: "danger-full-access", serviceName: "codex_cloud", ephemeral: false,
-        environments: [{ environmentConfigId: this.config.environmentId, cwd: this.config.cwd }], deferredEnvironment: false,
+        environments: [{ environmentConfigId: this.config.environmentId, cwd: rpc.cwd }], deferredEnvironment: false,
       });
       threadId = (started.thread as { id?: string } | undefined)?.id;
       const environments = (started.thread as { environments?: { environmentConfigId?: string; cwd?: string }[] } | undefined)?.environments;
       if (!threadId || started.model !== "gpt-6.1-sol" || !Array.isArray(environments) || environments.length !== 1
-        || environments[0]?.cwd !== this.config.cwd
+        || environments[0]?.cwd !== rpc.cwd
         || (environments[0]?.environmentConfigId != null && environments[0].environmentConfigId !== this.config.environmentId)) return { kind: "invalid" };
       if (signal?.aborted) return { kind: "invalid" };
-      const upload = { directory: `${this.config.cwd.replace(/\/$/, "")}/.delegatus-check-${randomUUID()}`, source: this.config.cwd };
+      const upload = { directory: `${rpc.cwd.replace(/\/$/, "")}/.delegatus-check-${randomUUID()}`, source: rpc.cwd };
       const firstUploadTurn = await uploadBundle(rpc, threadId, upload.directory, job.bundle, until, this.clock, signal);
       // Revert conversation history, not files: source bytes must not enter the model context.
       await rpc.call("thread/revert", { threadId, beforeTurnId: firstUploadTurn });
@@ -261,12 +223,11 @@ export class AppServerCloudTransport implements CloudTransport {
         // A confirmed transport outage still follows the bounded local fallback.
         let recovery: CloudRpc | undefined;
         try {
-          recovery = await this.connect(this.config);
-          await recovery.call("initialize", { clientInfo: { name: "delegatus-checks", version: "1" }, capabilities: { experimentalApi: true } });
-          await recovery.call("initialized", {});
+          recovery = await this.connect(this.config, signal, Math.max(1, until - this.clock.now()));
           if (turnId) await recovery.call("turn/interrupt", { threadId, turnId });
         } catch (recoveryError) {
           if (recoveryError instanceof CloudRpcError && recoveryError.category === "account-limit") return { kind: "account-limit" };
+          if (!(recoveryError instanceof CloudRpcError) || recoveryError.category === "invalid") return { kind: "invalid" };
           // The coordinator confirms availability with its second attempt.
         }
         finally { recovery?.close(); }

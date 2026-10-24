@@ -1,3 +1,4 @@
+import { stateDir } from "@/lib/configDir";
 import { shortId } from "@/lib/shortIds";
 import { publicationFailurePhase } from "./publicationHistory";
 export { publicationFailurePhase } from "./publicationHistory";
@@ -2216,7 +2217,7 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
      limit for git to send the pack, so it ends with its own verdict or with
      a named missing one instead of being killed (scripts/local-gate.ts). */
   const pushEnv = { ...pipelinePublicationHookEnv(), ...lessons, ...engineForgeWriteEnv(),
-    LLV_GATE_LANE_ID: pipeline.id, LLV_GATE_PUSH_HEAD: acceptedSha,
+    LLV_GATE_LANE_ID: pipeline.id, LLV_GATE_PUSH_HEAD: acceptedSha, LLV_GATE_STATE_DIR: stateDir(),
     ...(pipeline.cursor?.stageId ? { LLV_GATE_STAGE_ID: pipeline.cursor.stageId } : {}),
     LLV_GATE_PUSH_DEADLINE: String(publicationHookDeadline(budget.ms, Date.now())) };
   const push = (await exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir, pushEnv, { timeoutMs: budget.ms }));

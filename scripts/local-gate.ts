@@ -1,4 +1,5 @@
-import { AppServerCloudTransport, runCloudChecks, type CloudConfig } from "./cloud-checks";
+import { AppServerCloudTransport, runCloudChecks } from "./cloud-checks";
+import { cloudCheckConfig } from "./cloud-check-config";
 import { checkExecutionSettings } from "./cloud-check-settings";
 import { spawnSync } from "node:child_process";
 import { closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -231,6 +232,7 @@ export function isolatedEnvironment(root: string, inherited: NodeJS.ProcessEnv):
     mkdirSync(env[key]!, { recursive: true });
   }
   delete env.LLV_STATE_OWNER;
+  delete env.LLV_GATE_STATE_DIR;
   delete env.LLV_INBOX_DIR;
   delete env.DELEGATUS_STATE_DIR;
   // A Viewer that pushes for a lane carries its own interface language, its
@@ -927,21 +929,10 @@ async function main(mode: Mode, admitted = false): Promise<void> {
         const tree = git(root, ["rev-parse", "HEAD^{tree}"]);
         // A moving or dirty checkout cannot be mistaken for the pushed tree.
         if (git(root, ["status", "--porcelain", "--untracked-files=normal"])) throw new Error("Cloud publication checks require a clean checkout");
-        let config: CloudConfig | null = null;
-        if (process.env.LLV_GATE_CLOUD_CONFIG) {
-          try { config = JSON.parse(readFileSync(process.env.LLV_GATE_CLOUD_CONFIG, "utf8")) as CloudConfig; }
-          catch { throw new Error("Cloud check configuration could not be read"); }
-          if (!config || typeof config.url !== "string" || typeof config.environmentId !== "string" || !config.environmentId
-            || typeof config.cwd !== "string" || !config.cwd.startsWith("/") || config.cwd.includes("\0")) throw new Error("incomplete Cloud check configuration");
-          try { if (new URL(config.url).protocol !== "wss:") throw new Error(); }
-          catch { throw new Error("Cloud check configuration requires a secure WebSocket endpoint"); }
-        }
-        let bundle = "";
-        if (config) {
-          const destination = path.join(sandbox, "source.bundle");
-          git(root, ["bundle", "create", destination, "HEAD", `^${base}`]);
-          bundle = readFileSync(destination).toString("base64");
-        }
+        const config = await cloudCheckConfig(root, process.env.LLV_GATE_LANE_ID, process.env.LLV_GATE_STAGE_ID);
+        const destination = path.join(sandbox, "source.bundle");
+        git(root, ["bundle", "create", destination, "HEAD", `^${base}`]);
+        const bundle = readFileSync(destination).toString("base64");
         console.error("pre-push: Cloud checks");
         const code = await runCloudChecks({ head, tree, base, bundle, timeoutMs: Math.max(1, (deadline?.at ?? Date.now() + 15 * 60_000) - Date.now()) },
           new AppServerCloudTransport(config), async () => {
