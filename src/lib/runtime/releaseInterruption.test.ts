@@ -36,6 +36,7 @@ import {
   releaseStructuredDeliveryHost,
 } from "./structuredDeliveryController";
 import { deliverHeldStructuredMessage, enqueueStructuredMessage } from "./structuredMessageDelivery";
+import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 
 /*
  * A Viewer release cuts every turn its structured hosts are running (#1835).
@@ -279,6 +280,7 @@ async function successorBoot(
     beforeAdoption?: () => void;
     /** The host ledger reader, for a case whose ledger moves under the read. */
     readHostTurnRecord?: typeof readHostTurnRecord;
+    beforeDelivery?: () => Promise<void>;
   } = {},
 ): Promise<{ adopted: string[]; error: unknown }> {
   const registry = options.registry ?? new AgentRegistry(registryFile);
@@ -318,6 +320,10 @@ async function successorBoot(
         }
         : undefined);
       const healthFails = options.healthFails;
+      if (options.beforeDelivery) {
+        const send = host.send.bind(host);
+        host.send = async entry => { await options.beforeDelivery!(); return send(entry); };
+      }
       if (healthFails) {
         const health = host.health.bind(host);
         host.health = async () => {
@@ -3210,14 +3216,47 @@ test.each((["codex", "claude"] as const).flatMap(engine =>
     const boot = await successorBoot(cut.registryFile, journal, ledger);
     expect(boot.error).toBeNull();
     expect(boot.adopted).toEqual([cut.hostKey]);
-    await settle(() => ledger.writes.length > 0);
+    await completeDirectDeliveries(journal);
     expect(continuationsIn(ledger)).toHaveLength(1);
     expect(restartContinuations(ledger)).toHaveLength(1);
     expect(restartCuts(cut.registryFile)).toHaveLength(1);
     expect((await successorBoot(cut.registryFile, journal, ledger)).error).toBeNull();
-    await settle(() => false, 30);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    await completeDirectDeliveries(journal);
     expect(continuationsIn(ledger)).toHaveLength(1);
     expect(registry.readOnlySnapshot().memberships[registry.conversationForPath(cut.artifactPath)!.id] ?? []).toEqual([]);
+  });
+});
+
+test("a direct continuation waits for delivery completion across scheduled turns", async () => {
+  await withJournal(async journal => {
+    const cut = incumbentConversation("claude", cutSessionId(173), deadEngine(2_000_001_273));
+    const registry = new AgentRegistry(cut.registryFile);
+    const entry = registry.readOnlySnapshot().entries[cut.hostKey];
+    registry.upsert({ ...entry, status: "dead", structuredHost: { ...entry.structuredHost!, process: null } });
+    const ledger = createFakeDeliveryLedger();
+    let entered!: () => void;
+    let release!: () => void;
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const boot = successorBoot(cut.registryFile, journal, ledger, { beforeDelivery: async () => {
+      entered();
+      await held;
+      // Producer latency deliberately exceeds the removed 400ms drain. Only
+      // the journal's delivery outcome decides when assertions may run.
+      await Bun.sleep(550);
+    } });
+    try {
+      await waiting;
+      const completion = completeDirectDeliveries(journal);
+      for (let turn = 0; turn < 20; turn++) await new Promise<void>(resolve => setImmediate(resolve));
+      expect(ledger.writes).toHaveLength(0);
+      release();
+      expect((await boot).error).toBeNull();
+      await completion;
+      await completeDirectDeliveries(journal);
+      expect(continuationsIn(ledger)).toHaveLength(1);
+    } finally { release(); await boot; registry.close(); }
   });
 });
 
@@ -3233,11 +3272,29 @@ test.each((["codex", "claude"] as const).flatMap(engine =>
     registry.upsert({ ...entry, status, structuredHost: { ...entry.structuredHost!, process: null } });
     const ledger = createFakeDeliveryLedger();
     expect((await successorBoot(cut.registryFile, journal, ledger)).error).toBeNull();
-    await settle(() => ledger.writes.length > 0, 150);
+    await completeDirectDeliveries(journal);
     expect(continuationsIn(ledger)).toEqual([]);
     expect(restartCuts(cut.registryFile)).toEqual([]);
   });
 });
+
+/** Drive every admitted send to a durable outcome, including sends whose fake
+    host is held across later turns. The runner's parent bounds a hung test. */
+async function completeDirectDeliveries(journal: RuntimeJournal): Promise<void> {
+  for (;;) {
+    const probes = scheduledProbes.splice(0);
+    for (const probe of probes) probe.callback();
+    await kickStructuredDeliveryQueue(true);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    const pending = journal.effectBatch(100, ["runtime.send"]).some(effect => {
+      const id = effect.payload.operationId;
+      if (typeof id !== "string") throw new Error("send effect has no operation identity");
+      const status = journal.operationResult(id)?.receipt.status;
+      return status === "pending" || status === "queued" || status === "delivering";
+    });
+    if (!pending && scheduledProbes.length === 0) return;
+  }
+}
 
 // Each child loads fresh module state while sharing only the persisted fixture.
 test.skipIf(!process.env.LLV_DIRECT_CUT_FIXTURE)("direct deploy cut subprocess boot", async () => {
@@ -3250,7 +3307,9 @@ test.skipIf(!process.env.LLV_DIRECT_CUT_FIXTURE)("direct deploy cut subprocess b
   try {
     const boot = await successorBoot(fixture.registryFile, journal, ledger);
     expect(boot.error).toBeNull();
-    await settle(() => ledger.writes.length > 0);
+    await completeDirectDeliveries(journal);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    await completeDirectDeliveries(journal);
     fs.writeFileSync(fixture.result, JSON.stringify({ writes: continuationsIn(ledger), cuts: restartCuts(fixture.registryFile).map(cut => cut.id) }));
   } finally { journal.close(); }
 });

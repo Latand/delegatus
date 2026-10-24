@@ -615,7 +615,7 @@ test.each(["recovered", "expired", "refused", "conflict", "revoked", "terminal",
   dependencies.defer = work => { deferred = work(); };
   dependencies.runtimeAdmissionRetry = {
     deadlineMs: 750,
-    now: () => 0,
+    now: () => slept,
     sleep: async ms => {
       slept += ms;
       if (outcome === "revoked") authorized = false;
@@ -660,46 +660,178 @@ test.each(["recovered", "expired", "refused", "conflict", "revoked", "terminal",
   expect(receipt.state === "failed").toBe(outcome !== "recovered" && outcome !== "released");
 });
 
-test.each(["recovered", "expired"] as const)("direct spawn uses real runtime admission: %s", async outcome => {
+async function realRuntimeAdmission(outcome: "recovered" | "expired" | "legacy-recovered" | "legacy-expired" | "legacy-busy" | "release-refused" | "defer-takeover" | "payload-takeover" | "owner-exit" | "startup-deferred" | "ack-lost" | "owner-released" | "settled" | "command-release" | "recovery-takeover" | "resolution-takeover" | "authorize-release" | "fallback" | "replayed-pin" | "cleanup" | "cleanup-refused" | "watchdog") {
+  const legacy = outcome === "legacy-recovered" || outcome === "legacy-expired" || outcome === "legacy-busy";
+  const expired = outcome === "expired" || outcome === "legacy-expired";
   const { RuntimeJournal } = await import("@/runtime-host/journal");
   const { RuntimeHostUnavailableError } = await import("@/lib/runtime/client");
-  const { ADMISSION_RETRY_DEADLINE_MS, spawnStructuredConversation } = await import("@/lib/runtime/structuredSpawn");
+  const { spawnStructuredConversation, recoverPendingStructuredSpawns, terminalizeStaleStructuredSpawns } = await import("@/lib/runtime/structuredSpawn");
+  const { DEPLOY_ADMISSION_BUDGET_MS } = await import("@/lib/runtime/admissionBudget");
   const { FakeEngineHost } = await import("@/lib/runtime/fixtures/fakeEngineHost");
   const { claudeTranscriptPath } = await import("./transcript");
   const { captureProcessIdentity } = await import("@/lib/processIdentity");
+  const processIdentity = await import("@/lib/processIdentity");
   const { procBackend } = await import("@/lib/proc");
-  const cwd = statePath(`real-direct-handover-${outcome}`);
+  const restart = process.env.LLV_ADMISSION_RESTART_FIXTURE
+    ? JSON.parse(fs.readFileSync(process.env.LLV_ADMISSION_RESTART_FIXTURE, "utf8")) as { cwd: string; result: string; ledger: string; phase: string; expired: boolean }
+    : null;
+  const cwd = restart?.cwd ?? statePath(`real-direct-handover-${outcome}`);
   fs.mkdirSync(cwd, { recursive: true });
   const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
   const dependencies = structuredRouteDependencies(cwd);
+  const { AgentRegistry } = await import("./registry");
+  const registry = new AgentRegistry(path.join(cwd, "agent-registry.json"));
+  dependencies.registry = () => registry;
+  if (outcome === "release-refused" || outcome === "legacy-busy") {
+    let refused = false;
+    const write = registry.deliveryWrite.bind(registry);
+    registry.deliveryWrite = (async (...args: Parameters<typeof registry.deliveryWrite>) => {
+      if (!refused && args[0].label === (outcome === "release-refused" ? "spawn.admission.release" : "spawn.begin-queued-admission")) {
+        refused = true;
+        return { acquired: false };
+      }
+      return write(...args);
+    }) as typeof registry.deliveryWrite;
+  }
+  if (outcome === "defer-takeover") {
+    let claimed = false;
+    const write = registry.deliveryWriteOrBusy.bind(registry);
+    registry.deliveryWriteOrBusy = (async (...args: Parameters<typeof registry.deliveryWriteOrBusy>) => {
+      const result = await write(...args);
+      if (!claimed && args[0].label === "spawn.defer-admission" && result === true) {
+        claimed = true;
+        expect(registry.claimStartingStructuredSpawn(args[0].operationId!).claimed).toBe(true);
+      }
+      return result;
+    }) as typeof registry.deliveryWriteOrBusy;
+  }
+  let terminalClaims = 0;
+  const fail = registry.failStructuredSpawnOffLoop.bind(registry);
+  registry.failStructuredSpawnOffLoop = async (...args) => {
+    const result = await fail(...args);
+    if (result.claimed) {
+      terminalClaims++;
+      if (restart) fs.appendFileSync(restart.ledger, "failed\n");
+    }
+    return result;
+  };
   const memory = spyOn(procBackend, "systemMemory").mockReturnValue({ ramTotal: 8 * 1024 ** 3, ramAvailable: 4 * 1024 ** 3, swapTotal: 0, swapUsed: 0 });
-  let clock = 0;
+  let clock = restart?.phase === "recover" ? (restart.expired ? 600_001 : 60_000) : 0;
+  const startedAt = Date.now();
+  const realDeadline = outcome === "watchdog" && process.env.LLV_ADMISSION_PROBE === "deadline";
+  const time = () => outcome === "watchdog" ? Date.now() : clock;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  let heartbeatTicks = 0;
   let starts = 0;
+  let cleanups = 0;
   let invocations = 0;
   let launchId = "";
+  let messages = 0;
+  let releaseOnce = true;
   const operations: string[] = [];
   let deferred: Promise<void> | undefined;
+  const takeOverAdmission = () => {
+    const receipt = registry.spawnRecoverySnapshot([launchId]).receipts[launchId];
+    registry.releaseStartingStructuredSpawn(launchId, receipt.admissionOwner!);
+    const capture = spyOn(processIdentity, "captureProcessIdentity").mockReturnValue({
+      ...captureProcessIdentity(process.pid), startIdentity: "fixture-successor-admission",
+    });
+    try { expect(registry.claimStartingStructuredSpawn(launchId).claimed).toBe(true); }
+    finally { capture.mockRestore(); }
+  };
+  if (outcome === "payload-takeover") {
+    const write = registry.deliveryWriteOrBusy.bind(registry);
+    registry.deliveryWriteOrBusy = (async (...args: Parameters<typeof registry.deliveryWriteOrBusy>) => {
+      if (args[0].label === "registry.queueStructuredAdmission") {
+        launchId = args[0].operationId!;
+        takeOverAdmission();
+      }
+      return write(...args);
+    }) as typeof registry.deliveryWriteOrBusy;
+  }
+  const resolveSpawnAccount = dependencies.resolveSpawnAccount;
+  dependencies.resolveSpawnAccount = (...args) => {
+    if (outcome === "resolution-takeover" && clock >= 60_000 && releaseOnce) {
+      releaseOnce = false;
+      takeOverAdmission();
+      throw new Error("account lookup refused after admission takeover");
+    }
+    return resolveSpawnAccount(...args);
+  };
   const client = {
     command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => {
       if (!command.operationId) throw new Error("fixture admission requires an operation id");
       operations.push(command.operationId);
-      if (outcome === "expired" || operations.length < 3) throw new RuntimeHostUnavailableError("runtime host is unavailable");
-      return journal.executeOperation(command);
+      if (outcome === "watchdog" && (operations.length === 1 || realDeadline)) {
+        if (operations.length === 1) {
+          process.stdout.write("ADMISSION_WAITING\n");
+          heartbeat = setInterval(() => { heartbeatTicks++; process.stdout.write("ADMISSION_HEARTBEAT\n"); }, 10);
+        }
+        throw new RuntimeHostUnavailableError("runtime host is unavailable");
+      }
+      if (outcome === "watchdog" && heartbeatTicks === 0) {
+        process.stdout.write("ADMISSION_LOOP_BLOCKED\n");
+        throw new Error("server loop did not run unrelated work during admission backoff");
+      }
+      if (outcome === "ack-lost" && clock < 60_000) {
+        journal.executeOperation(command);
+        throw new RuntimeHostUnavailableError("runtime host is unavailable");
+      }
+      if (outcome !== "watchdog" && (expired || clock < 60_000)) throw new RuntimeHostUnavailableError("runtime host is unavailable");
+      const result = journal.executeOperation(command);
+      if ((outcome === "command-release" || outcome === "recovery-takeover") && releaseOnce) {
+        releaseOnce = false;
+        if (outcome === "recovery-takeover") {
+          takeOverAdmission();
+          throw new RuntimeHostUnavailableError("reply lost after admission takeover");
+        }
+        const receipt = registry.spawnRecoverySnapshot([launchId]).receipts[launchId];
+        registry.releaseStartingStructuredSpawn(launchId, receipt.admissionOwner!);
+      }
+      return result;
     },
     transitionOperation: async (...args: Parameters<RuntimeHostClient["transitionOperation"]>) => journal.transitionOperation(...args),
     append: async (...args: Parameters<RuntimeHostClient["append"]>) => journal.append(...args),
+    operationStatus: async id => journal.operationResult(id),
+    effectBatch: async (kinds, after) => journal.effectBatch(100, kinds, after),
+    snapshot: async () => journal.snapshot(),
   } as RuntimeHostClient;
   dependencies.runtimeHostClient = () => client;
-  dependencies.defer = work => { deferred = work(); };
-  dependencies.runtimeAdmissionRetry = { now: () => clock, sleep: async ms => { clock += ms; } };
+  dependencies.defer = work => { if (!legacy && outcome !== "owner-exit" && (restart?.phase !== "accept" || restart.expired)) deferred = work(); };
+  dependencies.runtimeAdmissionRetry = outcome === "watchdog" ? (realDeadline ? { deadlineMs: 750 } : undefined) : { now: time, sleep: async ms => { clock += ms; } };
   dependencies.spawnStructuredConversation = async input => {
     invocations++;
     launchId = input.receipt.launchId;
-    return spawnStructuredConversation(input, {
-      now: () => clock,
-      sleep: async ms => { clock += ms; },
+    return spawnStructuredConversation({ ...input, ...(outcome === "authorize-release" ? { authorize: async () => {
+      await Promise.resolve();
+      if (releaseOnce) {
+        releaseOnce = false;
+        const second = new AgentRegistry(registry.filename);
+        try { second.releaseStartingStructuredSpawn(launchId, input.receipt.admissionOwner!); }
+        finally { second.close(); }
+      }
+    } } : {}) }, {
+      now: time,
+      ...(outcome === "watchdog" ? {} : { sleep: async (ms: number) => {
+        clock += ms;
+        if ((outcome === "owner-released" || outcome === "settled") && operations.length === 1) {
+          const second = new AgentRegistry(registry.filename);
+          try {
+            if (outcome === "settled") await second.failStructuredSpawnOffLoop(launchId, "settled by another writer");
+            else second.releaseStartingStructuredSpawn(launchId, input.receipt.admissionOwner!);
+          } finally { second.close(); }
+        }
+      } }),
       startHost: async () => {
         starts++;
+        expect(input.account.accountId).toBe("claude-test");
+        if (outcome === "cleanup" || outcome === "cleanup-refused") {
+          const { StructuredHostAdoptionCleanupError } = await import("@/lib/runtime/engineHost");
+          const host = new FakeEngineHost();
+          host.release = async () => { cleanups++; if (outcome === "cleanup-refused") throw new Error("fixture cleanup refused"); };
+          throw new StructuredHostAdoptionCleanupError("fixture host setup failed", host);
+        }
+        if (restart) fs.appendFileSync(restart.ledger, "host\n");
         const sessionId = input.spec.transcript ? path.basename(input.spec.transcript, ".jsonl")
           : ["21500000", "0000", "4000", "8000", "000000000001"].join("-");
         const transcript = input.spec.transcript ?? claudeTranscriptPath(cwd, sessionId, input.account.transcriptRoot);
@@ -717,28 +849,294 @@ test.each(["recovered", "expired"] as const)("direct spawn uses real runtime adm
         return () => {};
       },
       publishHost: async () => async () => {},
-      deliverFirst: async () => {},
+      deliverFirst: async input => {
+        messages++;
+        if (restart) fs.appendFileSync(restart.ledger, `spawn_${input.receipt.launchId}\n`);
+        expect(input.receipt.launchId).toBe(launchId);
+        expect(input.prompt).toContain("Continue the task");
+      },
     });
   };
   try {
-    const response = await executeSpawnRequest(new NextRequest("http://127.0.0.1/api/spawn", {
+    if (restart?.phase === "recover") {
+      const accepted = JSON.parse(fs.readFileSync(restart.result, "utf8")) as { launchId: string; conversationId: string; deadline: string; cause?: string };
+      launchId = accepted.launchId;
+      const options = { now: time, resolveSpawnAccount: dependencies.resolveSpawnAccount, spawnStructuredConversation: dependencies.spawnStructuredConversation };
+      await recoverPendingStructuredSpawns(registry, client, options);
+      await terminalizeStaleStructuredSpawns(registry, client, options);
+      const receipt = registry.spawnRecoverySnapshot([launchId]).receipts[launchId];
+      expect(String(receipt.conversationId)).toBe(accepted.conversationId);
+      expect(receipt.state).toBe(restart.expired ? "failed" : "completed");
+      if (restart.expired) expect(receipt.error).toBe(accepted.cause!);
+      expect(receipt.queuedPinnedSpawn).toBeNull();
+      return;
+    }
+    const request = () => new NextRequest("http://127.0.0.1/api/spawn", {
       method: "POST",
       headers: { origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", host: "127.0.0.1", "content-type": "application/json" },
-      body: JSON.stringify({ clientAttemptId: `attempt_real_direct_${outcome}`, title: "Runtime handover", engine: "claude", cwd, prompt: "Continue the task", mcpServers: [] }),
-    }), dependencies);
+      body: JSON.stringify({ clientAttemptId: `attempt_real_direct_${outcome}`, title: "Runtime handover", engine: "claude", cwd, prompt: "Continue the task", mcpServers: [], ...(outcome === "fallback" ? { accountId: "requested-account" } : legacy || outcome === "replayed-pin" ? { accountId: "claude-test" } : {}) }),
+    });
+    const response = await executeSpawnRequest(request(), dependencies);
     expect(response.status).toBe(202);
     await deferred;
-    expect(invocations).toBe(1);
+    if (restart?.phase === "accept") {
+      const body = await response.json();
+      const receipt = registry.spawnRecoverySnapshot([body.launchId]).receipts[body.launchId];
+      expect(receipt.accountPin).toBe(false);
+      expect(receipt.queuedPinnedSpawn?.prompt).toContain("Continue the task");
+      fs.writeFileSync(restart.result, JSON.stringify({ launchId: receipt.launchId, conversationId: receipt.conversationId,
+        deadline: receipt.queuedPinnedSpawn!.admissionDeadlineAt, cause: receipt.queuedPinnedSpawn!.lastAdmissionError }));
+      return;
+    }
+    if (outcome === "watchdog") {
+      if (realDeadline) {
+        const receipt = registry.spawnRecoverySnapshot([launchId]).receipts[launchId];
+        expect(receipt.state).toBe("starting");
+        const deadline = Date.parse(receipt.queuedPinnedSpawn!.admissionDeadlineAt!);
+        await new Promise(resolve => setTimeout(resolve, Math.max(1, deadline - Date.now() + 1)));
+        await recoverPendingStructuredSpawns(registry, client, { resolveSpawnAccount: dependencies.resolveSpawnAccount,
+          spawnStructuredConversation: dependencies.spawnStructuredConversation });
+        expect(registry.spawnRecoverySnapshot([launchId]).receipts[launchId].state).toBe("failed");
+        expect(terminalClaims).toBe(1);
+      }
+      expect(starts).toBe(realDeadline ? 0 : 1);
+      expect(messages).toBe(realDeadline ? 0 : 1);
+      expect(Date.now() - startedAt).toBeGreaterThanOrEqual(250);
+      process.stdout.write("ADMISSION_COMPLETED\n");
+      return;
+    }
+    const responseBody = await response.json();
+    launchId = responseBody.launchId;
+    let receipt = registry.spawnRecoverySnapshot([launchId]).receipts[launchId];
+    if (legacy) {
+      registry.queuePinnedSpawn(launchId, { ...receipt.queuedPinnedSpawn!, admissionDeadlineAt: undefined }, "Waiting for capacity");
+      registry.releaseStartingStructuredSpawn(launchId, receipt.admissionOwner!);
+      const options = { now: () => clock,
+        resolveSpawnAccount: dependencies.resolveSpawnAccount, resolvePinnedSpawnAdmission: dependencies.resolvePinnedSpawnAdmission,
+        spawnStructuredConversation: dependencies.spawnStructuredConversation };
+      await terminalizeStaleStructuredSpawns(registry, client, options);
+      if (outcome === "legacy-busy") {
+        const pending = registry.spawnRecoverySnapshot([launchId]).receipts[launchId];
+        expect(pending.state).toBe("starting");
+        expect(pending.queuedPinnedSpawn?.admissionDeadlineAt).toBeUndefined();
+        expect(pending.admissionOwner).toBeNull();
+        expect(operations).toHaveLength(0);
+        await terminalizeStaleStructuredSpawns(registry, client, options);
+      }
+      receipt = registry.spawnRecoverySnapshot([launchId]).receipts[launchId];
+    }
+    if (outcome === "settled") {
+      expect(receipt.state).toBe("failed");
+      expect(receipt.error).toBe("settled by another writer");
+      expect(receipt.queuedPinnedSpawn).toBeNull();
+      expect(starts).toBe(0);
+      expect(messages).toBe(0);
+      expect(operations).toHaveLength(1);
+      return;
+    }
+    expect(receipt.state).toBe("starting");
+    expect(receipt.accountPin).toBe(legacy || outcome === "fallback" || outcome === "replayed-pin");
+    if (outcome === "fallback") {
+      expect(receipt.accountId).toBe("requested-account");
+      expect(receipt.queuedPinnedSpawn?.launchAccountId).toBe("claude-test");
+    }
+    expect(receipt.queuedPinnedSpawn?.prompt).toContain("Continue the task");
+    expect(() => registry.queuePinnedSpawn(launchId, { ...receipt.queuedPinnedSpawn!, accountId: "different-account" }, "Launch")).toThrow("conflicts");
+    expect(() => registry.queuePinnedSpawn(launchId, { ...receipt.queuedPinnedSpawn!, admissionDeadlineAt: "invalid" }, "Launch")).toThrow("conflicts");
+    expect(receipt.queuedPinnedSpawn?.admissionDeadlineAt).toBe(new Date(DEPLOY_ADMISSION_BUDGET_MS).toISOString());
+    if (outcome !== "owner-exit" && outcome !== "defer-takeover" && outcome !== "payload-takeover") expect(receipt.admissionOwner).toBeNull();
+    if (outcome === "defer-takeover") expect(receipt.admissionOwner).toEqual(captureProcessIdentity(process.pid));
+    if (outcome === "payload-takeover") expect(receipt.admissionOwner?.startIdentity).toBe("fixture-successor-admission");
+    if (outcome === "replayed-pin") {
+      const healthy = dependencies.resolveHealthySpawnAccount;
+      dependencies.resolveHealthySpawnAccount = async (...args) => ({ ...await healthy(...args),
+        requestedAdmission: { kind: "retry-at", reason: "hard-limit", stale: false, retryAt: "2099-01-01T00:00:00.000Z" } });
+      const replay = await executeSpawnRequest(request(), dependencies);
+      expect(replay.status).toBe(202);
+      const current = registry.spawnRecoverySnapshot([launchId]).receipts[launchId];
+      expect(current.queuedPinnedSpawn).toEqual(receipt.queuedPinnedSpawn);
+    }
+    if (outcome === "owner-exit" || outcome === "defer-takeover" || outcome === "payload-takeover") {
+      expect(invocations).toBe(outcome === "defer-takeover" ? 1 : 0);
+      registry.releaseStartingStructuredSpawn(launchId, receipt.admissionOwner!);
+    } else {
+      expect(invocations).toBe(outcome === "legacy-busy" ? 2 : 1);
+      expect(clock).toBeLessThan(60_000);
+    }
+    const recovery = { now: () => clock, resolveSpawnAccount: dependencies.resolveSpawnAccount,
+      spawnStructuredConversation: dependencies.spawnStructuredConversation };
+    clock = 60_000;
+    let finalCause: string | undefined;
+    if (outcome === "startup-deferred") {
+      const commands = operations.length;
+      await recoverPendingStructuredSpawns(registry, client, { ...recovery, actuateQueuedSpawns: false });
+      expect(operations).toHaveLength(commands);
+      expect(starts).toBe(0);
+      expect(messages).toBe(0);
+      expect(registry.spawnRecoverySnapshot([launchId]).receipts[launchId].queuedPinnedSpawn).not.toBeNull();
+    }
+    await recoverPendingStructuredSpawns(registry, client, recovery);
+    if (outcome === "cleanup" || outcome === "cleanup-refused") {
+      const receipt = registry.spawnRecoverySnapshot([launchId]).receipts[launchId];
+      expect(receipt.state).toBe(outcome === "cleanup" ? "failed" : "starting");
+      if (outcome === "cleanup") expect(receipt.error).toBe("fixture host setup failed");
+      expect(receipt.queuedPinnedSpawn).toBeNull();
+      expect(starts).toBe(1);
+      expect(cleanups).toBe(1);
+      expect(messages).toBe(0);
+      await terminalizeStaleStructuredSpawns(registry, client, recovery);
+      expect(starts).toBe(1);
+      expect(cleanups).toBe(1);
+      return;
+    }
+    if (outcome === "command-release" || outcome === "recovery-takeover" || outcome === "resolution-takeover") {
+      expect(registry.spawnRecoverySnapshot([launchId]).receipts[launchId].state).toBe("starting");
+      expect(starts).toBe(0);
+      if (outcome === "recovery-takeover" || outcome === "resolution-takeover") {
+        const current = registry.spawnRecoverySnapshot([launchId]).receipts[launchId];
+        expect(current.admissionOwner?.startIdentity).toBe("fixture-successor-admission");
+        registry.releaseStartingStructuredSpawn(launchId, current.admissionOwner!);
+      }
+      await recoverPendingStructuredSpawns(registry, client, recovery);
+    }
+    if (expired) {
+      receipt = registry.spawnRecoverySnapshot([launchId]).receipts[launchId];
+      expect(receipt.state).toBe("starting");
+      expect(receipt.queuedPinnedSpawn?.admissionDeadlineAt).toBe(new Date(DEPLOY_ADMISSION_BUDGET_MS).toISOString());
+      finalCause = receipt.queuedPinnedSpawn?.lastAdmissionError;
+      clock = DEPLOY_ADMISSION_BUDGET_MS;
+      await recoverPendingStructuredSpawns(registry, client, recovery);
+    }
+    receipt = registry.spawnRecoverySnapshot([launchId]).receipts[launchId];
     expect(new Set(operations)).toEqual(new Set([launchId]));
-    expect(starts).toBe(outcome === "recovered" ? 1 : 0);
-    expect(clock).toBeLessThanOrEqual(ADMISSION_RETRY_DEADLINE_MS);
-    expect(clock).toBeGreaterThan(0);
-    const receipt = agentRegistry().spawnRecoverySnapshot([launchId]).receipts[launchId];
-    expect(receipt.state).toBe(outcome === "recovered" ? "completed" : "failed");
-    expect(operations.length).toBe(outcome === "recovered" ? 3 : 18);
-    expect(journal.snapshot().sessions.filter(row => row.conversationId === receipt.conversationId)).toHaveLength(outcome === "recovered" ? 1 : 0);
+    expect(starts).toBe(expired ? 0 : 1);
+    expect(messages).toBe(expired ? 0 : 1);
+    expect(receipt.state).toBe(expired ? "failed" : "completed");
+    if (expired) {
+      expect(finalCause).toBe("runtime host is unavailable");
+      expect(receipt.error).toBe(finalCause!);
+    }
+    expect(receipt.queuedPinnedSpawn).toBeNull();
+    await terminalizeStaleStructuredSpawns(registry, client, recovery);
+    expect(starts).toBe(expired ? 0 : 1);
+    expect(messages).toBe(expired ? 0 : 1);
+    expect(journal.snapshot().sessions.filter(row => row.conversationId === receipt.conversationId)).toHaveLength(expired ? 0 : 1);
+    expect(terminalClaims).toBe(expired ? 1 : 0);
   } finally {
     try { await deferred; }
-    finally { journal.close(); memory.mockRestore(); }
+    finally { clearInterval(heartbeat); journal.close(); registry.close(); memory.mockRestore(); }
   }
+}
+
+test.each(["recovered", "expired", "legacy-recovered", "legacy-expired", "legacy-busy", "release-refused", "defer-takeover", "payload-takeover", "owner-exit", "startup-deferred", "ack-lost", "owner-released", "settled", "command-release", "recovery-takeover", "resolution-takeover", "authorize-release", "fallback", "replayed-pin", "cleanup", "cleanup-refused"] as const)("direct spawn uses real runtime admission: %s", realRuntimeAdmission);
+
+// The parent bounds this real admission loop even when the child's event loop
+// cannot run a test timeout. Controls replace only the production timer seam.
+test.skipIf(!process.env.LLV_ADMISSION_PROBE)("direct admission watchdog child", async () => {
+  const mode = process.env.LLV_ADMISSION_PROBE;
+  const original = globalThis.setTimeout;
+  if (mode === "blocking" || mode === "blocking-backoff" || mode === "unbounded") {
+    globalThis.setTimeout = ((callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
+      if (delay === 250) {
+        if (mode === "blocking") Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+        if (mode === "blocking-backoff") {
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay);
+          callback(...args);
+          return original(() => {}, 0);
+        }
+        return original(() => {}, 60_000);
+      }
+      return original(callback, delay, ...args);
+    }) as typeof setTimeout;
+  }
+  try { await realRuntimeAdmission("watchdog"); }
+  finally { globalThis.setTimeout = original; }
+});
+
+test.each(["responsive", "deadline", "blocking", "blocking-backoff", "unbounded"] as const)("independently supervised direct admission: %s", async mode => {
+  let waiting = false;
+  let heartbeats = 0;
+  let completed = false;
+  let expired = false;
+  let blockedLoop = false;
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  const child = Bun.spawn([process.execPath, "test", "--timeout=20000", "--test-name-pattern", "^direct admission watchdog child$", import.meta.path], {
+    env: { ...process.env, LLV_ADMISSION_PROBE: mode }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+  });
+  const output = (async () => {
+    let pending = "";
+    const reader = child.stdout.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      pending += new TextDecoder().decode(value);
+      let end: number;
+      while ((end = pending.indexOf("\n")) >= 0) {
+        const line = pending.slice(0, end);
+        pending = pending.slice(end + 1);
+        if (line === "ADMISSION_WAITING") {
+          waiting = true;
+          deadline = setTimeout(() => { expired = true; child.kill("SIGKILL"); }, 1500);
+        }
+        if (line === "ADMISSION_HEARTBEAT") heartbeats++;
+        if (line === "ADMISSION_LOOP_BLOCKED") blockedLoop = true;
+        if (line === "ADMISSION_COMPLETED") { completed = true; clearTimeout(deadline); }
+      }
+    }
+  })();
+  const stderr = new Response(child.stderr).text();
+  const startupDeadline = setTimeout(() => { expired = true; child.kill("SIGKILL"); }, 15_000);
+  try {
+    const code = await child.exited;
+    const errors = await stderr;
+    await output;
+    expect({ waiting, errors: waiting ? "" : errors }).toEqual({ waiting: true, errors: "" });
+    expect(waiting).toBe(true);
+    if (mode === "responsive" || mode === "deadline") {
+      expect({ code, expired, errors: code === 0 ? "" : errors }).toEqual({ code: 0, expired: false, errors: "" });
+      expect(completed).toBe(true);
+      expect(heartbeats).toBeGreaterThan(0);
+    } else if (mode === "blocking-backoff") {
+      expect(expired).toBe(false);
+      expect(completed).toBe(false);
+      expect(blockedLoop).toBe(true);
+      expect(code).not.toBe(0);
+    } else {
+      expect(expired).toBe(true);
+      expect(completed).toBe(false);
+      if (mode === "blocking") expect(heartbeats).toBe(0);
+      else expect(heartbeats).toBeGreaterThan(0);
+    }
+  } finally { clearTimeout(deadline); clearTimeout(startupDeadline); }
+});
+
+
+test.skipIf(!process.env.LLV_ADMISSION_RESTART_FIXTURE)("direct admission restart child", async () => {
+  await realRuntimeAdmission("recovered");
+});
+
+test.each([{ outcome: "recovered", expired: false }, { outcome: "expired", expired: true }])("direct admission payload and budget survive real process exits: $outcome", async ({ expired }) => {
+  const cwd = statePath(`admission-restart-${expired}`);
+  fs.mkdirSync(cwd, { recursive: true });
+  const result = path.join(cwd, "accepted.json");
+  const ledger = path.join(cwd, "delivery.log");
+  const fixture = path.join(cwd, "fixture.json");
+  fs.writeFileSync(ledger, "");
+  for (const phase of ["accept", "recover", "recover"]) {
+    fs.writeFileSync(fixture, JSON.stringify({ cwd, result, ledger, phase, expired }));
+    const child = Bun.spawn([process.execPath, "test", "--timeout=20000", "--test-name-pattern", "^direct admission restart child$", import.meta.path], {
+      env: { ...process.env, LLV_ADMISSION_RESTART_FIXTURE: fixture }, stdin: "ignore", stdout: "ignore", stderr: "pipe",
+    });
+    const errors = new Response(child.stderr).text();
+    const timer = setTimeout(() => child.kill("SIGTERM"), 25_000);
+    try {
+      const code = await child.exited;
+      const stderr = await errors;
+      expect({ code, error: code === 0 ? "" : stderr }).toEqual({ code: 0, error: "" });
+    } finally { clearTimeout(timer); }
+  }
+  const accepted = JSON.parse(fs.readFileSync(result, "utf8")) as { launchId: string; deadline: string; cause?: string };
+  expect(accepted.deadline).toBe(new Date(600_000).toISOString());
+  expect(accepted.cause).toBe(expired ? "runtime host is unavailable" : undefined);
+  expect(fs.readFileSync(ledger, "utf8")).toBe(expired ? "failed\n" : `host\nspawn_${accepted.launchId}\n`);
 });

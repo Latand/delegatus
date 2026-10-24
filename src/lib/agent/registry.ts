@@ -251,11 +251,18 @@ function hasCompleteProcessIdentity(identity: ProcessIdentity | null): identity 
     && identity.bootEpoch.length > 0;
 }
 
-/** Complete durable input for an explicit-account launch waiting on a known
-    quota reset. Keeping the payload and retry deadline in one object lets the
-    registry publish or replace the queue atomically with its card copy. */
+/** Durable input for a quota-delayed pin or a direct structured admission.
+    The account is the one already admitted; retaining it does not add a pin.
+    Payload, retry deadline and card copy are published atomically. */
 export interface QueuedPinnedSpawn {
   version: 1;
+  /** Present for direct structured admission, including unpinned accounts.
+      Absolute and retained across owner exits and all retry generations. */
+  admissionDeadlineAt?: string;
+  lastAdmissionError?: string;
+  /** A degraded pin keeps accountId as routing authority while this generation
+      uses the already-admitted fallback. Legacy queues launch on accountId. */
+  launchAccountId?: string;
   retryAt: string;
   accountId: string;
   locale: "en" | "uk";
@@ -3990,6 +3997,11 @@ function normalizeQueuedPinnedSpawn(value: unknown, policy?: McpGrantPolicy): Qu
   const retryAt = typeof candidate.retryAt === "string" ? Date.parse(candidate.retryAt) : Number.NaN;
   const imageRefs = parseStructuredImageRefs(candidate.imageRefs ?? [], 16);
   if (candidate.version !== 1
+    || (candidate.admissionDeadlineAt !== undefined
+      && (typeof candidate.admissionDeadlineAt !== "string" || !Number.isFinite(Date.parse(candidate.admissionDeadlineAt))))
+    || (candidate.lastAdmissionError !== undefined && typeof candidate.lastAdmissionError !== "string")
+    || (candidate.launchAccountId !== undefined && (!candidate.admissionDeadlineAt
+      || typeof candidate.launchAccountId !== "string" || !candidate.launchAccountId))
     || !Number.isFinite(retryAt)
     || typeof candidate.accountId !== "string"
     || !candidate.accountId
@@ -4009,6 +4021,9 @@ function normalizeQueuedPinnedSpawn(value: unknown, policy?: McpGrantPolicy): Qu
   }
   return {
     version: 1,
+    ...(candidate.admissionDeadlineAt ? { admissionDeadlineAt: candidate.admissionDeadlineAt } : {}),
+    ...(candidate.lastAdmissionError ? { lastAdmissionError: candidate.lastAdmissionError.slice(0, 240) } : {}),
+    ...(candidate.launchAccountId ? { launchAccountId: candidate.launchAccountId } : {}),
     retryAt: new Date(retryAt).toISOString(),
     accountId: candidate.accountId,
     locale: candidate.locale,
@@ -6923,7 +6938,7 @@ export class AgentRegistry {
     });
   }
 
-  /** Atomically publishes or refreshes every durable part of a queued pin,
+  /** Atomically publishes or refreshes every durable part of a queued launch,
       including the card's deadline copy. A crash can therefore expose either
       the prior complete queue or the next complete queue, never a title-only
       receipt that pretends to be recoverable. */
@@ -6941,7 +6956,7 @@ export class AgentRegistry {
         || receipt.state !== "starting"
         || receipt.key
         || receipt.pane
-        || !receipt.accountPin
+        || (!receipt.accountPin && !(receipt.transport === "structured" && normalized.admissionDeadlineAt))
         || !receipt.accountId
         || normalized.accountId !== receipt.accountId
         || normalized.spec.engine !== receipt.engine
@@ -6951,6 +6966,35 @@ export class AgentRegistry {
       receipt.queuedPinnedSpawn = normalized;
       receipt.launchProfile = emptyLaunchProfile({ ...receipt.launchProfile, title: queuedTitle }, this.mcpGrantPolicy);
       return clone(receipt);
+    });
+  }
+
+  /** Defer unbound work and release its lease atomically. A later owner wins. */
+  deferStructuredSpawnAdmission(launchId: string, owner: ProcessIdentity, now: number, reason: string): boolean {
+    return this.mutate(file => {
+      const receipt = file.receipts[launchId];
+      const queued = receipt?.queuedPinnedSpawn;
+      if (!queued?.admissionDeadlineAt || receipt.transport !== "structured"
+        || receipt.state !== "starting" || receipt.key || receipt.pane
+        || !receipt.admissionOwner || !sameRecordedProcessIdentity(receipt.admissionOwner, owner)
+        || Date.parse(queued.admissionDeadlineAt) <= now) return false;
+      queued.retryAt = new Date(Math.min(now + 250, Date.parse(queued.admissionDeadlineAt))).toISOString();
+      queued.lastAdmissionError = reason.slice(0, 240);
+      receipt.admissionOwner = null;
+      return true;
+    });
+  }
+
+  /** The acknowledged runtime command now holds the payload. Retire admission
+      replay before host setup can create an engine whose cleanup is uncertain. */
+  beginStructuredHostSetup(launchId: string, owner: ProcessIdentity): void {
+    this.mutate(file => {
+      const receipt = file.receipts[launchId];
+      if (!receipt || receipt.state !== "starting" || receipt.key || receipt.pane
+        || !receipt.admissionOwner || !sameRecordedProcessIdentity(receipt.admissionOwner, owner)) {
+        throw new Error("structured spawn admission ownership changed");
+      }
+      if (receipt.queuedPinnedSpawn?.admissionDeadlineAt) receipt.queuedPinnedSpawn = null;
     });
   }
 
