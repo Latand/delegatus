@@ -19,7 +19,6 @@
   },
   "createdAt": "2026-10-24T02:06:17.023487+00:00",
   "priorEvidence": "evidence/package-installs-merge-verification.json",
-  "main": "19bbd6d7c28100e17de36a68eedad366446ee788",
   "retainedMerge": "edcbf9c3d89f4dafbda58762b2c939679b8abfbd",
   "conflicts": [
     {
@@ -128,7 +127,7 @@
       }
     }
   },
-  "sourceProofCoverage": "The resumed eleven branch files and final checks use the full frozen source digest. Earlier completed files retain their results from the same captured main revision and unchanged stage source.",
+  "sourceProofCoverage": "The source proofs and full typecheck cover the checkedMain snapshot. A later upstream-only evidence document and native integration fixture are listed as pending validation; all other product source is unchanged.",
   "interruptedCapture": {
     "exit": 255,
     "mainFilesCompleted": 22,
@@ -1118,7 +1117,8 @@
         "false"
       ],
       "exit": 0,
-      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "appliesToSourceDigest": "ba5e8d69d68d6838365f148b60299b9b25a98b4b36007e4b467f7a078d6d27f4"
     },
     {
       "command": [
@@ -1168,7 +1168,8 @@
         "test-preload.ts"
       ],
       "exit": 0,
-      "logSha256": "2981b4233d0bce6ede99b540dc05e2c1002289e63adc032ecb669b58c3108c4d"
+      "logSha256": "2981b4233d0bce6ede99b540dc05e2c1002289e63adc032ecb669b58c3108c4d",
+      "appliesToSourceDigest": "ba5e8d69d68d6838365f148b60299b9b25a98b4b36007e4b467f7a078d6d27f4"
     }
   ],
   "finalSourceHashes": {
@@ -2562,6 +2563,192 @@
       "exit": 143,
       "startedAt": "2026-10-24T00:46:26.529440+00:00",
       "finishedAt": "2026-10-24T02:05:25.128654+00:00"
+    },
+    {
+      "label": "workflow-scope-check",
+      "command": [
+        "git",
+        "diff",
+        "--name-only",
+        "origin/main",
+        "--",
+        ".github/workflows"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:06:46.914953+00:00",
+      "finishedAt": "2026-10-24T02:06:46.919982+00:00"
+    },
+    {
+      "label": "stage-checkpoint",
+      "command": [
+        "git",
+        "add",
+        "evidence/package-installs-merge-refresh.json"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:06:47.006610+00:00",
+      "finishedAt": "2026-10-24T02:06:47.018654+00:00"
+    },
+    {
+      "label": "staged-checkpoint-whitespace",
+      "command": [
+        "git",
+        "diff",
+        "--cached",
+        "--check"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:06:47.103228+00:00",
+      "finishedAt": "2026-10-24T02:06:47.112848+00:00"
+    },
+    {
+      "label": "commit-merge-checkpoint",
+      "command": [
+        "git",
+        "commit",
+        "-F",
+        "$STAGE_SCRATCH/resume/merge-message.txt"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:06:47.201735+00:00",
+      "finishedAt": "2026-10-24T02:06:54.653317+00:00"
+    },
+    {
+      "label": "original-head-ancestry",
+      "command": [
+        "git",
+        "merge-base",
+        "--is-ancestor",
+        "bf7c711e4c46dfba23899859cfbdac28b23199ac",
+        "HEAD"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:08:02.154313+00:00",
+      "finishedAt": "2026-10-24T02:08:02.159958+00:00"
+    },
+    {
+      "label": "committed-workflow-scope",
+      "command": [
+        "git",
+        "diff",
+        "--name-only",
+        "19bbd6d7c28100e17de36a68eedad366446ee788",
+        "HEAD",
+        "--",
+        ".github/workflows"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:08:02.160497+00:00",
+      "finishedAt": "2026-10-24T02:08:02.164824+00:00"
+    },
+    {
+      "label": "captured-main-ancestry",
+      "command": [
+        "git",
+        "merge-base",
+        "--is-ancestor",
+        "19bbd6d7c28100e17de36a68eedad366446ee788",
+        "HEAD"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:08:02.166889+00:00",
+      "finishedAt": "2026-10-24T02:08:02.171366+00:00"
+    },
+    {
+      "label": "post-commit-verification",
+      "command": [
+        "python3",
+        "$STAGE_SCRATCH/resume/post-commit.py"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:08:02.154313+00:00",
+      "finishedAt": "2026-10-24T02:08:02.569354+00:00"
+    },
+    {
+      "label": "final-publication-privacy",
+      "command": [
+        "bun",
+        "run",
+        "privacy:check"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:08:02.632358+00:00",
+      "finishedAt": "2026-10-24T02:09:11.048564+00:00"
+    },
+    {
+      "label": "final-origin-observation",
+      "command": [
+        "git",
+        "rev-parse",
+        "origin/main"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:09:59.721025+00:00",
+      "finishedAt": "2026-10-24T02:09:59.724642+00:00"
+    },
+    {
+      "label": "newer-main-scope",
+      "command": [
+        "git",
+        "diff",
+        "--stat",
+        "19bbd6d7c28100e17de36a68eedad366446ee788",
+        "origin/main"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:09:59.810152+00:00",
+      "finishedAt": "2026-10-24T02:09:59.815803+00:00"
+    },
+    {
+      "label": "final-worktree-status",
+      "command": [
+        "git",
+        "status",
+        "--short"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:09:59.900790+00:00",
+      "finishedAt": "2026-10-24T02:09:59.913890+00:00"
+    },
+    {
+      "label": "latest-main-files",
+      "command": [
+        "git",
+        "diff",
+        "--name-only",
+        "19bbd6d7c28100e17de36a68eedad366446ee788",
+        "origin/main"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:11:58.000070+00:00",
+      "finishedAt": "2026-10-24T02:11:58.004855+00:00"
+    },
+    {
+      "label": "latest-main-code-review",
+      "command": [
+        "git",
+        "diff",
+        "19bbd6d7c28100e17de36a68eedad366446ee788",
+        "origin/main",
+        "--",
+        "*.ts"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:11:58.086674+00:00",
+      "finishedAt": "2026-10-24T02:11:58.091798+00:00"
+    },
+    {
+      "label": "latest-main-merge",
+      "command": [
+        "git",
+        "merge",
+        "--no-ff",
+        "--no-commit",
+        "origin/main"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-24T02:11:58.171132+00:00",
+      "finishedAt": "2026-10-24T02:11:58.213280+00:00"
     }
   ],
   "shellCommandReceipts": [
@@ -3401,6 +3588,116 @@
       "exit": 0,
       "commandSha256": "ac9a79cbd72eab643dc65886f3b8c4fc53da20b6023f160b79ddf411db0ea175",
       "stdinSha256": "34f98c5facdf3c15b187db8e6d5a8117922560856ea97dad4dc9ab9d874f42c6"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "6ec90d020f3bc140a5a26bf4e997bc2cded4373351efc74a2448257be5a02274",
+      "stdinSha256": "20e5e4051495a134d1bca3a572ee604699f86e2ce630a20da3e9825a0d370872"
+    },
+    {
+      "command": "rtk proxy node \"$TMPDIR/resume/extract-commands.cjs\"",
+      "exit": 0,
+      "commandSha256": "617b3b394cf5ab04a004ff260fd35ff84a3b18074041516c705e45ae9735a777"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/checkpoint-report.py\"",
+      "exit": 0,
+      "commandSha256": "cb18da53a7df35eff4109c22ef8f0bb7b0285352789d916dfbc4b2110f74e291"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "2d284329806d33fa656f45982c033d4bac03aee7a27cc3067c3d178e03608a37",
+      "stdinSha256": "bbddc84d058d8d19318faf12a51fc99dff39e29a437a664a7f9f01cd5bb80722"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" workflow-scope-check git diff --name-only origin/main -- .github/workflows",
+      "exit": 0,
+      "commandSha256": "418e75549cffa0c5245b3813ffc1972a08dbea5a45a402fd7cf6164c3b7a4d18"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" stage-checkpoint git add evidence/package-installs-merge-refresh.json",
+      "exit": 0,
+      "commandSha256": "80673ff9142da922d020d648b322871b2a469e060bbe1f69afc2a9b0ec5ee6b6"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" staged-checkpoint-whitespace git diff --cached --check",
+      "exit": 0,
+      "commandSha256": "2baf45c6e94d694ec6747d2c90c6ba94666b90cdd896cd33d52c062d57ffa119"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" commit-merge-checkpoint git commit -F \"$TMPDIR/resume/merge-message.txt\"",
+      "exit": 0,
+      "session": 57034,
+      "commandSha256": "bc6e1f89153acb87a7e23d502ec35f7783fd786e1468963e83cacc2a71378b28"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" post-commit-verification python3 \"$TMPDIR/resume/post-commit.py\"",
+      "exit": 0,
+      "commandSha256": "820bce34cf0897d3271f2428cdd9dd19bb306395afd5752ab5880cb32e415e6c"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" original-head-ancestry git merge-base --is-ancestor bf7c711e4c46dfba23899859cfbdac28b23199ac HEAD",
+      "exit": 0,
+      "commandSha256": "914a27edf48af30257e166f56b8936264fc459711a2b1c040253828bd5203693"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" captured-main-ancestry git merge-base --is-ancestor 19bbd6d7c28100e17de36a68eedad366446ee788 HEAD",
+      "exit": 0,
+      "commandSha256": "0dc21b6ea01870d52b0645693f555a344fc3433408261b99293c5af86cb32a72"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" committed-workflow-scope git diff --name-only 19bbd6d7c28100e17de36a68eedad366446ee788 HEAD -- .github/workflows",
+      "exit": 0,
+      "commandSha256": "dd03365571da645a4cc8b0c2e84f01bfe13c56ab456104a87f460d9abbe0cf28"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" final-publication-privacy bun run privacy:check",
+      "exit": 0,
+      "session": 28332,
+      "commandSha256": "f80928ab983a7cc1a55298dbb39958fbdabdf08c8d2ddee7366c5ff1412666c4"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" final-origin-observation git rev-parse origin/main",
+      "exit": 0,
+      "commandSha256": "fefb38fbf0fd35166e3356bb238b4369317bdcca193722d5d5ac95011957db85"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" newer-main-scope git diff --stat 19bbd6d7c28100e17de36a68eedad366446ee788 origin/main",
+      "exit": 0,
+      "commandSha256": "31b2725c5325786617359af46f7bd8085c585c6720184d9b87d084336a38f993"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" final-worktree-status git status --short",
+      "exit": 0,
+      "commandSha256": "26a80dd76073f99e6b184388c5ae6e7c3ece5c03285fbaf1751e9162715daaed"
+    },
+    {
+      "command": "rtk proxy python3 -",
+      "exit": 0,
+      "commandSha256": "704e6c961eba3f27db40606ecab4b778f902f8564ab1623581382fb81963e2a9",
+      "stdinSha256": "d56a3dff4a6078f3c3d05e5e3e516ea58092135d61eaa02e8dfa61dbf909498f"
+    },
+    {
+      "command": "rtk proxy bun -e 'import fs from \"node:fs\"; import path from \"node:path\"; import {cpuOwnerStatus} from \"./src/lib/runtime/signalSandboxContext\";const p=path.join(process.env.TMPDIR!,\"resume/final-admission-head.json\");const r=JSON.parse(fs.readFileSync(p,\"utf8\"));console.log(JSON.stringify({normalHeadStatus:r?cpuOwnerStatus(JSON.parse(r.owner)):\"absent\"}));'",
+      "exit": 0,
+      "commandSha256": "a09ef097597f7d7b2a5ae661e29a1f5329eed447ff2dbe0459e63b9eb15025b5"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" latest-main-files git diff --name-only 19bbd6d7c28100e17de36a68eedad366446ee788 origin/main",
+      "exit": 0,
+      "commandSha256": "54947e8d8d370f3ed879c617eb8cd0be7964cbdeeb61e59dc7c2f7f17930ab73"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" latest-main-code-review git diff 19bbd6d7c28100e17de36a68eedad366446ee788 origin/main -- \"*.ts\"",
+      "exit": 0,
+      "commandSha256": "ac06c8c611fd4876f947a8b475d30b66bfa18fd3c7fd51a31087aee17173bd1b"
+    },
+    {
+      "command": "rtk proxy python3 \"$TMPDIR/resume/run.py\" latest-main-merge git merge --no-ff --no-commit origin/main",
+      "exit": 0,
+      "commandSha256": "268d12cfee847a21c1023aa2eb7601ad282b0ccf8d217b76b48c08254700104e"
     }
   ],
   "commandNotation": "$GATE_SLOT names the prescribed wrapper, $STAGE_SCRATCH the owned scratch directory, $GATE_RUNNER the runner, $ORIGIN_URL the existing repository remote, $BASH the shell, and $PAIRED_CHECK_DRIVER the inline serial test/check program. Here-document inputs are represented by SHA256; every shell invocation, test file command and exit is listed. Hook/commit and post-commit commands after this report's cutoff are reported in the stage summary.",
@@ -3417,5 +3714,24 @@
     "The current-main pair has one unresolved contention assertion; the same assertion failed in the earlier main campaign. The confirmation batch was cancelled before execution after verifying ownership and cleanup.",
     "Earlier paired remoteActions.test.ts invocations both reached their deadlines with matching observed failures and diagnostics; later unobserved cases are unverified.",
     "The prior full comparison retains shared main failures and has no remaining branch-only failed assertion."
-  ]
+  ],
+  "checkedMain": "19bbd6d7c28100e17de36a68eedad366446ee788",
+  "mergedMain": "97bdb94ea9dfe32dff8a7bf022eeb2f83d8f02b7",
+  "newerMainPendingChecks": [
+    "src/lib/runtime/nativeQueueCompaction.integration.test.ts on main and branch",
+    "typecheck of the latest merged fixture"
+  ],
+  "pendingContentionConfirmations": "Three whole-file observations per side; cancelled before execution behind the unverified admission head.",
+  "upstreamOnlyUpdate": {
+    "files": [
+      "evidence/native-queue-compaction-startup.md",
+      "src/lib/runtime/nativeQueueCompaction.integration.test.ts"
+    ],
+    "conflicts": [],
+    "sha256": {
+      "evidence/native-queue-compaction-startup.md": "8765186ecd37078be12497b1746ad131c7388212f239b2abacb2e5173acf1d50",
+      "src/lib/runtime/nativeQueueCompaction.integration.test.ts": "0815b74ef29f68070a9310801ea0bf1f71de0f2bfa8f8300ad6814e31512ffe2"
+    }
+  },
+  "finalSourceHashesCoverage": "Hashes of the previously checked inputs. Upstream-only hashes above identify the later unchecked fixture/evidence."
 }
