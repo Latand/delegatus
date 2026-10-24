@@ -158,6 +158,68 @@ test("the visual critic sits in the design and critique group on Opus high, and 
   }
 });
 
+/* #3054: the memory cap belongs to no engine or model, so editing the row's
+   runtime keeps the saved cap; only the row's reset clears it. */
+test("a saved role memory cap survives model and engine edits and the bulk move, and reset clears it", async () => {
+  const { mergeRoleDefinitions } = await import("@/lib/roles/store");
+  const { AgentMappingTable } = await import("./AgentMappingTable");
+  const cap = 6 * 2 ** 30;
+  const roles = mergeRoleDefinitions({ builder: { config: { engine: "codex", model: "gpt-6.1-sol", effort: "high", agentMemoryMaxBytes: cap } } })
+    .map((role) => ({ ...role, promptPreview: role.promptScaffold, shipped: { config: mergeRoleDefinitions({}).find((row) => row.id === role.id)!.config } }));
+  expect(roles.find((role) => role.id === "builder")!.config.agentMemoryMaxBytes).toBe(cap);
+  rolesBody = { roles };
+  requests.length = 0;
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  const lastRolesWrite = () => requests.filter((request) => request.method === "PUT" && request.url.includes("/api/roles")).at(-1)?.body as { overrides: Record<string, { config: unknown }> } | undefined;
+  const writes = () => requests.filter((request) => request.method === "PUT" && request.url.includes("/api/roles")).length;
+  try {
+    const both = { claude: { connected: true, account: null }, codex: { connected: true, account: null } };
+    flushSync(() => root.render(<AgentMappingTable statuses={both} layout="table" onConnect={() => {}} />));
+    await until(() => Boolean(host.querySelector("[data-mapping-row='builder']")));
+    /* Only the cap differs from the shipped row, and the row still reads as changed. */
+    expect(host.querySelector("[data-mapping-reset='builder']")).not.toBeNull();
+
+    const model = host.querySelectorAll("[data-mapping-row='builder'] select")[0] as HTMLSelectElement;
+    const other = [...model.options].map((option) => option.value).find((value) => value !== "gpt-6.1-sol")!;
+    flushSync(() => { model.value = other; model.dispatchEvent(new Event("change", { bubbles: true })); });
+    await until(() => writes() === 1);
+    expect(lastRolesWrite()!.overrides.builder!.config).toMatchObject({ engine: "codex", model: other, agentMemoryMaxBytes: cap });
+    await until(() => (host.querySelectorAll("[data-mapping-row='builder'] select")[0] as HTMLSelectElement).value === "gpt-6.1-sol");
+
+    flushSync(() => (host.querySelector("[data-mapping-row='builder'] [data-engine-segment='claude']") as HTMLButtonElement).click());
+    await until(() => writes() === 2);
+    expect(lastRolesWrite()!.overrides.builder!.config).toMatchObject({ engine: "claude", agentMemoryMaxBytes: cap });
+    await until(() => Boolean(host.querySelector("[data-mapping-reset='builder']")));
+
+    flushSync(() => (host.querySelector("[data-mapping-reset='builder']") as HTMLElement).click());
+    await until(() => writes() === 3);
+    expect(lastRolesWrite()).toEqual({ overrides: { builder: { config: null } } });
+  } finally {
+    flushSync(() => root.unmount());
+    host.remove();
+  }
+
+  /* With Codex out, the banner's bulk move carries the cap onto Claude too. */
+  requests.length = 0;
+  const bulkHost = document.createElement("div");
+  document.body.appendChild(bulkHost);
+  const bulkRoot = createRoot(bulkHost);
+  try {
+    const claudeOnly = { claude: { connected: true, account: null }, codex: { connected: false, account: null } };
+    flushSync(() => bulkRoot.render(<AgentMappingTable statuses={claudeOnly} layout="table" onConnect={() => {}} />));
+    await until(() => Boolean(bulkHost.querySelector("[data-mapping-move]")));
+    (bulkHost.querySelector("[data-mapping-move]") as HTMLButtonElement).click();
+    await until(() => writes() === 1);
+    expect(lastRolesWrite()!.overrides.builder!.config).toMatchObject({ engine: "claude", agentMemoryMaxBytes: cap });
+  } finally {
+    flushSync(() => bulkRoot.unmount());
+    bulkHost.remove();
+    rolesBody = { roles: [] };
+  }
+});
+
 /* Visual judgement runs on Claude, never Codex: its row offers no Codex segment
    to click, and with Claude out the banner moves every other Claude row. */
 test("the visual critic's row cannot move to Codex, alone or with the banner's bulk move", async () => {
