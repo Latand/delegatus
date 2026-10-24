@@ -135,11 +135,12 @@ export function McpCallCard({
   event: ToolEvent;
   availableConversationIds?: ReadonlySet<string>;
 }) {
+  const { t } = useLocale();
   const mcp = event.mcp;
   const result = mcp?.result;
   const description = useMemo(
-    () => describeMcpCall(mcp?.toolName ?? event.tool, mcp?.args ?? {}, result),
-    [event.tool, mcp?.args, mcp?.toolName, result],
+    () => describeMcpCall(mcp?.toolName ?? event.tool, mcp?.args ?? {}, result, t),
+    [event.tool, mcp?.args, mcp?.toolName, result, t],
   );
   const conversationAvailability = useConversationAvailability(availableConversationIds);
   const state = event.status === "run" ? "pending" : event.status === "err" ? "error" : "success";
@@ -181,7 +182,7 @@ export function McpCallCard({
               b2). The title claims the leftover width with a floor of its own (#1955),
               the entity chips give way first and cut their label with an ellipsis, and
               the whole text stays in the title tooltip and the Details disclosure. */}
-          <span data-mcp-title className="min-w-[6rem] flex-1 basis-0 truncate font-semibold text-secondary" title={description.title}>
+          <span data-mcp-title className="min-w-[6rem] flex-1 basis-0 truncate font-semibold text-secondary" title={description.tooltip ?? description.title}>
             {description.title}
           </span>
           {replayed ? <span data-testid="mcp-replay" className="shrink-0 rounded-full bg-accent-soft px-1.5 py-0.5 text-[10px] font-bold text-accent">Replay</span> : null}
