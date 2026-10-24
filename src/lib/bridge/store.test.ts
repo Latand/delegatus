@@ -54,6 +54,25 @@ function report(key: string, overrides: Partial<BridgeReportInput> = {}): Bridge
   };
 }
 
+test("the first report imports an absent channel before taking the report transaction and replays once", () => {
+  sandbox();
+  expect(appendBridgeReports([report("first")]).appended).toHaveLength(1);
+  expect(readBridgeChannel()).toBeNull();
+  expect(appendBridgeReports([report("first")])).toMatchObject({ appended: [], skipped: 1 });
+  expect(readBridgeReportLog().reports.map(row => row.seq)).toEqual([1]);
+});
+
+test("a malformed first report log refuses append and preserves its source bytes", () => {
+  sandbox();
+  const file = bridgeReportLogPath();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const source = JSON.stringify({ schemaVersion: 1, lastSeq: 1, reports: [{ seq: "one" }], retired: [] });
+  fs.writeFileSync(file, source);
+  expect(() => appendBridgeReports([report("refused")])).toThrow("malformed");
+  expect(fs.readFileSync(file, "utf8")).toBe(source);
+  expect(persistedBridgeReportRowsText()).toBe("[]");
+});
+
 test("the channel links the root identity to the manager record by name, never by conversation", () => {
   sandbox();
   const channel = openBridgeChannel(ROOT_ID);

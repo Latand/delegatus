@@ -1026,6 +1026,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
           plugins,
           permissionMode,
           title: title ?? requestProfileTitle,
+          ...(role.value ? { agentMemoryRoleParams: role.value.params } : {}),
           ...(explicitProject ? { project: explicitProject } : {}),
         }),
       };

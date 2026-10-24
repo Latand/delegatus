@@ -290,6 +290,11 @@ served API route has no declared decision or a project handler loses its gate.
 | `/api/transcribe/backend` | GET, POST | owner |
 | `/api/transcribe/key` | PUT | owner |
 | `/api/transcribe/token` | POST | owner |
+| `/api/transfer/accounts` | GET, POST | owner |
+| `/api/transfer/apply` | POST | owner |
+| `/api/transfer/export` | POST | owner |
+| `/api/transfer/preview` | POST | owner |
+| `/api/transfer/report` | GET | owner |
 | `/api/tts` | GET, POST | owner |
 | `/api/tts/backend` | GET, POST | owner |
 | `/api/tts/voices` | GET | owner |

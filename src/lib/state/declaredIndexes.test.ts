@@ -201,6 +201,19 @@ const otherStores = [
     const db = new Database(file, { create: true });
     try { new NativeQueueJournal(db); } finally { db.close(); }
   } },
+  { name: "attempt-temp", async open(file: string) {
+    const { AttemptTempStore } = await import("@/lib/runtime/attemptTempRetention");
+    new AttemptTempStore(file).close();
+  } },
+  { name: "conversation-search", async open(file: string) {
+    const { ConversationSearchProjection } = await import("@/lib/scanner/conversationSearchProjection");
+    const projection = new ConversationSearchProjection(file);
+    try { await projection.search([], "fixture"); } finally { projection.close(); }
+  } },
+  { name: "delivery-index-worker", file: "role-memory/delivery.sqlite", async open() {
+    const { prepareDeliveryLedgerIndexes } = await import("@/lib/memory/deliveryLedger");
+    await prepareDeliveryLedgerIndexes();
+  } },
 ];
 
 test.each(otherStores)("$name reopens with every declared index", async store => {
@@ -265,20 +278,48 @@ test("every persistent index declaration has a reopen fixture", () => {
   const covered = [
     "lib/state/sqliteStateStore.ts", "lib/state/pipelineControllerIndex.ts",
     "lib/state/pipelineControllerSchedule.ts", "lib/state/pipelineControllerReferences.ts", "lib/state/historyProjection.ts",
+    "lib/state/pipelineEvidenceIndex.ts",
     "lib/agent/sqliteRegistryStore.ts", "lib/agent/registryArchive.ts",
     "lib/activity/store.ts", "lib/activity/tokenStore.ts", "lib/team/store.ts",
     "lib/telegram/bot/store.ts", "lib/telegram/bot/outbound.ts", "lib/runtime/handoffQueueStore.ts",
     "lib/runtime/deliveryProgress.ts", "lib/mcp/server.ts", "lib/memory/index.ts",
     "lib/memory/deliveryLedger.ts", "lib/search/transcriptSearch.ts",
+    "lib/roleMemoryDeliveryIndex.worker.ts", "lib/runtime/attemptTempRetention.ts",
+    "lib/scanner/conversationSearchProjection.ts",
     "runtime-host/journal.ts", "runtime-host/journalSessionMetadata.ts", "runtime-host/nativeQueueJournal.ts",
     // Process-local :memory: projection: each construction creates its tables and indexes together.
     "lib/mcp/boardSelection.ts",
+    // The admission queue is owned by checkers, including MCP and tools. Its
+    // reopen coverage below exercises repair without Viewer startup authority.
+    "lib/runtime/cpuAdmission.ts",
   ];
   const sourceRoot = path.resolve(import.meta.dir, "../..");
   const declarations = [...new Bun.Glob("**/*.ts").scanSync(sourceRoot)].filter(file =>
     !/\.(?:test|fixture|seedChild|sqliteChild)\./.test(file)
     && /CREATE (?:UNIQUE )?INDEX /.test(fs.readFileSync(path.join(sourceRoot, file), "utf8")));
   expect(declarations.sort()).toEqual(covered.sort());
+});
+
+test("the checker-owned CPU queue repairs its index and preserves queued work", async () => {
+  const { CpuAdmissionQueue } = await import("@/lib/runtime/cpuAdmission");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "declared-cpu-indexes-"));
+  const filename = path.join(root, "queue.sqlite");
+  try {
+    new CpuAdmissionQueue(filename, () => 0).close();
+    const db = new Database(filename);
+    try { db.exec("INSERT INTO tickets(key,since,polled,priority,fifo_seq) VALUES ('fixture',0,0,1,1)"); }
+    finally { db.close(); }
+    const declared = indexes(filename);
+    expect(declared.length).toBeGreaterThan(0);
+    const before = data(filename);
+    for (const index of declared) {
+      const db = new Database(filename);
+      try { db.exec(`DROP INDEX "${index.name}"`); } finally { db.close(); }
+      new CpuAdmissionQueue(filename, () => 0).close();
+      expect(indexes(filename).find(row => row.name === index.name)).toEqual(index);
+      expect(data(filename)).toBe(before);
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 
@@ -314,6 +355,7 @@ test("fresh processes repair indexes only with startup authority", () => {
       ["state", "pipeline_tick_due"], ["state", "history_path"], ["state", "pipeline_attempt_current"],
       ["state", "state_rows_task_project"], ["registry", "registry_caller_agent_pid"],
       ["registry", "registry_generation_identities_entry"], ["journal", "session_host_activity"],
+      ["journal", "operations_retry_parent"],
     ]) {
       const filename = path.join(directory, `${kind}.sqlite`);
       const seed = run(kind!, filename, "viewer");
