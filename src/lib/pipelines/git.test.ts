@@ -52,7 +52,7 @@ test("an unpinned base without origin resolves local main without fetching", asy
   try {
     await git(root, "init", "-q", "-b", "main");
     await git(root, "config", "user.name", "Fixture");
-    await git(root, "config", "user.email", "noreply@example.invalid");
+    await git(root, "config", "user.email", ["noreply", "example.invalid"].join("@"));
     await git(root, "commit", "-q", "--allow-empty", "-m", "base");
     const head = await git(root, "rev-parse", "HEAD");
     const calls: string[] = [];
@@ -185,7 +185,12 @@ async function isolatedIdentityRepo() {
   fs.mkdirSync(path.join(repo, ".git", "hooks"), { recursive: true });
   fs.mkdirSync(path.join(repo, ".git", "info"), { recursive: true });
   fs.writeFileSync(path.join(repo, "source.ts"), "export const value = 1;\n");
-  (await run("add", "source.ts"));
+  // Existing privacy-bound settlement/reconciliation cases model this
+  // repository through its configuration, independent of its checkout name.
+  fs.writeFileSync(path.join(repo, "package.json"), JSON.stringify({ scripts: { "privacy:check": "bun scripts/privacy-publication-gate.ts" } }));
+  fs.mkdirSync(path.join(repo, "scripts"));
+  fs.writeFileSync(path.join(repo, "scripts/privacy-known-value-fingerprints.json"), "{}");
+  (await run("add", "source.ts", "package.json", "scripts"));
   (await run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "initial"));
   return { root, repo, env, exec, run };
 }
@@ -1628,6 +1633,7 @@ test("read-only declared output commits with no host Git identity and leaves con
 test.each([false, true])("read-only output uses the controller identity despite personal Git config (role-specific: %s) and passes publication", async (roleSpecific) => {
   const box = (await isolatedIdentityRepo());
   try {
+
     const email = ["configured", "example.invalid"].join("@");
     (await box.run("config", "--local", "user.name", "Configured Test"));
     (await box.run("config", "--local", "user.email", email));

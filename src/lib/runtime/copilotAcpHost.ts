@@ -41,6 +41,7 @@ import {
   type RuntimeEventStore,
 } from "./eventStore";
 import { withAgentConfigSandbox } from "./agentConfigSandbox";
+import { repositoryPublicationSource } from "@/lib/git/repositoryCommitIdentity";
 import { readCopilotTranscriptQuotaSnapshot } from "@/lib/limits/copilotTranscriptLimits";
 import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, runtimeImageStore } from "./runtimeImageStore";
 import { copilotModelsFromConfigOptions, writeCopilotModelCatalog } from "@/lib/agent/copilotModels";
@@ -420,6 +421,9 @@ export class CopilotAcpHost implements EngineHost {
     const releaseCleanup = () => { for (const cleanup of cleanups.splice(0)) { try { cleanup(); } catch { /* best effort */ } } };
     let child: ChildProcessWithoutNullStreams;
     try {
+      // Resolve repository policy before the child environment allowlist drops
+      // the identity binding. This path is shared by fresh starts and adopts.
+      options = { ...options, env: await repositoryPublicationSource(options.cwd, options.env ?? process.env) };
       const env = copilotChildEnv(options.env ?? process.env, options.copilotHome, options.providerEnv);
       const viewer = options.viewerMcpServer === undefined
         ? (options.mcpServers ?? ["viewer"]).includes("viewer") ? copilotViewerMcpServer(options.env ?? {}) : null

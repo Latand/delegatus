@@ -1,3 +1,4 @@
+import { REPOSITORY_IDENTITY, repositoryPublicationSource } from "@/lib/git/repositoryCommitIdentity";
 import { agentMemoryScopes } from "@/lib/runtime/agentMemorySettings";
 import { signalDomain, signalAgentDomain, spawnHeadlessSignalSandbox, headlessFixtureTransport } from "@/lib/runtime/agentSignalSandbox";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -319,7 +320,21 @@ export interface BuiltHeadlessCommand {
 }
 
 export async function prepareHeadlessPublication(built: BuiltHeadlessCommand, cwd: string): Promise<BuiltHeadlessCommand> {
-  if (!built.codexPublication) return built;
+  const source = await repositoryPublicationSource(cwd, built.env);
+  const identity = agentPublicationIdentityEnv(source);
+  built = { ...built, env: { ...source, ...identity } };
+  if (!built.codexPublication) {
+    const args = [...built.args];
+    const index = args.indexOf("--settings");
+    if (index >= 0) {
+      const value = args[index + 1];
+      const settings = JSON.parse(value.startsWith("{") ? value : fs.readFileSync(value, "utf8"));
+      const env = { ...settings.env, ...identity };
+      if (!source[REPOSITORY_IDENTITY]) delete env[REPOSITORY_IDENTITY];
+      args[index + 1] = JSON.stringify({ ...settings, env });
+    } else args.push("--settings", JSON.stringify({ env: identity }));
+    return { ...built, args };
+  }
   const policy = await readCodexShellPolicy(built.command, cwd, built.env, [], { ignoreUserConfig: true });
   return { ...built, args: [...built.args, ...agentCodexPublicationArgs(policy, built.env)] };
 }

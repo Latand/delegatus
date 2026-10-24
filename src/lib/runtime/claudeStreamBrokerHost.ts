@@ -1,3 +1,4 @@
+import { repositoryPublicationSource } from "@/lib/git/repositoryCommitIdentity";
 import { nativeProcessId, signalDomain, signalAgentDomain, signalBoundaryOff, spawnManagedEngine } from "./agentSignalSandbox";
 import { memoryField, memoryKillText } from "./agentMemoryState";
 import { CLAUDE_CHILD_EXITED, claudeHostEndText, HOST_END_REASON_MAX_CHARS, type HostEndCause } from "./hostEndCause";
@@ -843,6 +844,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     let env: NodeJS.ProcessEnv;
     let auth: ClaudeAuthStatus;
     try {
+      options = { ...options, env: await repositoryPublicationSource(options.cwd, options.env ?? process.env) };
       env = subscriptionEnv(
         options.env ?? process.env,
         options.claudeConfigDir,

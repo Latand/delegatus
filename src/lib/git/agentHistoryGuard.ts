@@ -45,7 +45,7 @@ function verifiedHook(target: string, body: Buffer, digest: string): boolean {
  * and config, and refuse branch-history replacements that discard another author.
  * This is a cooperative agent guard, not a sandbox against hostile shell code.
  */
-export function agentHistoryGuardEnv(source: AgentEnvironment, name: string, email: string): Record<string, string | undefined> {
+export function agentHistoryGuardEnv(source: AgentEnvironment, name: string, email: string, coauthor?: string): Record<string, string | undefined> {
   let count = Number(source.GIT_CONFIG_COUNT ?? 0);
   if (!Number.isSafeInteger(count) || count < 0 || count > 1024) throw new Error("Invalid agent Git environment");
   if (count > 0 && source.GIT_CONFIG_KEY_0 === undefined) throw new Error("Invalid agent Git environment");
@@ -62,13 +62,17 @@ export function agentHistoryGuardEnv(source: AgentEnvironment, name: string, ema
   const script = `#!/bin/sh
 set -eu
 refuse() {
-  echo "Delegatus: refusing to rewrite a commit whose author is not this machine identity; add a new commit on top instead." >&2
+  echo "Delegatus: refusing to rewrite a commit whose author is not this configured identity; add a new commit on top instead." >&2
   exit 1
 }
 check_author() {
   author=$(git show -s --no-show-signature --no-color --no-notes --format='%an%n%ae' "$1") || refuse
   [ "$author" = ${quote(name + "\n" + email)} ] || refuse
 }
+${coauthor ? `check_coauthor() {
+  count=$(git show -s --no-show-signature --no-color --no-notes --format=%B "$1" | git interpret-trailers --parse | grep -Fxc -- ${quote(coauthor)} || true)
+  [ "$count" = 1 ] || refuse
+}` : ""}
 hook=\${0##*/}
 if [ "$hook" = post-rewrite ] || [ "$hook" = reference-transaction ]; then input=$(cat); fi
 ${stageAttemptGuardScript()}
@@ -78,6 +82,16 @@ if [ "$hook" = prepare-commit-msg ]; then
   identity=$(git var GIT_AUTHOR_IDENT) || refuse
   [ "\${identity%>*}>" = ${quote(name + " <" + email + ">")} ] || refuse
   if picked=$(git rev-parse --verify -q CHERRY_PICK_HEAD); then check_author "$picked"; fi
+  ${coauthor ? `git interpret-trailers --in-place --if-exists addIfDifferent --trailer ${quote(coauthor)} "$1" || exit 1` : ""}
+fi
+if [ "$hook" = applypatch-msg ]; then
+  # git am owns this message hook; amend the mailbox message before commit
+  # creation. --no-verify skips this hook, so reference-transaction below
+  # independently refuses an unattributed commit.
+  :
+  ${coauthor ? `count=$(git interpret-trailers --parse "$1" | grep -Fxc -- ${quote(coauthor)} || true)
+  [ "$count" -le 1 ] || refuse
+  if [ "$count" = 0 ]; then git interpret-trailers --in-place --trailer ${quote(coauthor)} "$1" || exit 1; fi` : ""}
 fi
 if [ "$hook" = pre-applypatch ]; then
   # am keeps its author in the sequencer's quoted data, rather than exporting
@@ -104,8 +118,8 @@ if [ "$hook" = reference-transaction ]; then
       if [ -f "$applying" ]; then
         parents=$(git show -s --no-show-signature --no-color --no-notes --format=%P "$new") || refuse
         case "$old" in
-          *[!0]*) [ "$parents" != "$old" ] || check_author "$new" ;;
-          *) check_author "$new" ;;
+          *[!0]*) [ "$parents" != "$old" ] || { check_author "$new"; ${coauthor ? `check_coauthor "$new";` : ""} } ;;
+          *) check_author "$new"; ${coauthor ? `check_coauthor "$new";` : ""} ;;
         esac
       fi
       case "$old" in *[!0]*) ;; *) continue ;; esac

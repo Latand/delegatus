@@ -1,3 +1,4 @@
+import { repositoryPublicationSource } from "@/lib/git/repositoryCommitIdentity";
 import { nativeProcessId, signalDomain, signalAgentDomain, signalBoundaryOff, spawnManagedEngine } from "./agentSignalSandbox";
 import { engineMemoryOff } from "@/lib/memory/source";
 import { CodexSocketTransport, type CodexTransport, type CodexSocketOwner } from "./codexSocketTransport";
@@ -1549,6 +1550,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     ];
     let telegram: TelegramLaunchGrant;
     try {
+      options = { ...options, env: await repositoryPublicationSource(options.cwd, options.env ?? process.env) };
       telegram = await resolveTelegramLaunchGrant(
         subscriptionEnv(
           options.env ?? process.env,
