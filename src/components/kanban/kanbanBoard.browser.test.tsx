@@ -8569,6 +8569,196 @@ describe("live turn rows on a phone", () => {
 });
 
 
+/* #2250: Viewer MCP rows written in the interface language, read where they
+   have geometry. The `languages` section of `liveTurnRowsEvidence.fixture.tsx`
+   carries canonical cards for a delivery check in each receipt state the server
+   names (delivered, failed, in-flight), a canonical send and a running spawn,
+   and the live rows of the same calls, with an operation id shaped like the
+   server's. Each title must read exactly as the interface language writes it,
+   in en and uk, light and dark, at a phone, a narrow reader and a desktop
+   width; no chip, badge or mark may sit on a title, a cut title must end in an
+   ellipsis, and from the narrow reader up the receipt state word is whole.
+
+     CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+       bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "MCP rows in the interface language"
+
+   Frames go to MCP_LANGUAGE_PNG_DIR (default `.artifacts/mcp-language/`),
+   never committed. */
+describe("MCP rows in the interface language", () => {
+  const OPERATION = "op_3f2c9a71-5b8e-4d0a-9c61-2e7f4b8d1a05";
+  const CONVERSATION = "conversation-demo-7781";
+  const SEND_TEXT = "Rebase on main and rerun the board driver";
+  const SPAWN_SUBJECT = "codex high reviewer · Review the receipt titles";
+  const RECEIPTS = [["delivered", "mcp.call.receiptState.delivered"], ["failed", "mcp.call.receiptState.failed"], ["in-flight", "mcp.call.receiptState.inFlight"]] as const;
+  const MIN_TARGET_PX = 24;
+  const MIN_CONTRAST = 4.5;
+
+  /* Every title row in the section: its text, how much of it is painted, where
+     the text after the last ": " ends, what sits beside it, and its contrast
+     against the background it is drawn on, ancestor opacity included. */
+  const measure = `(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 1;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    const rgba = (css) => {
+      ctx.clearRect(0, 0, 1, 1);
+      ctx.fillStyle = "rgba(0,0,0,0)";
+      ctx.fillStyle = css;
+      ctx.fillRect(0, 0, 1, 1);
+      const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
+      return [r, g, b, a / 255];
+    };
+    const over = (top, under) => top.slice(0, 3).map((c, i) => c * top[3] + under[i] * (1 - top[3]));
+    const background = (node) => {
+      const layers = [];
+      for (let el = node; el; el = el.parentElement) {
+        const colour = rgba(getComputedStyle(el).backgroundColor);
+        if (colour[3] > 0) layers.push(colour);
+        if (colour[3] >= 1) break;
+      }
+      let base = rgba(getComputedStyle(document.documentElement).backgroundColor);
+      base = base[3] > 0 ? base.slice(0, 3) : [255, 255, 255];
+      for (const layer of layers.reverse()) base = over(layer, base);
+      return base;
+    };
+    const luminance = (rgb) => {
+      const [r, g, b] = rgb.map((c) => { const v = c / 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; });
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const opacity = (node) => { let o = 1; for (let el = node; el; el = el.parentElement) o *= Number(getComputedStyle(el).opacity); return o; };
+    const box = (el) => { const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height }; };
+    const section = document.querySelector("[data-mcp-language-case]");
+    const rows = [
+      ...[...section.querySelectorAll("[data-mcp-language-canonical] [data-testid=mcp-call-card]")].map((card) => ({ kind: "canonical", row: card.querySelector("summary"), title: card.querySelector("[data-mcp-title]") })),
+      ...[...section.querySelectorAll("[data-mcp-language-live] [data-live-mcp]")].map((row) => ({ kind: "live", row, title: row.querySelector("[data-live-mcp-title]") })),
+    ];
+    return {
+      viewportHeight: innerHeight,
+      scrollWidth: document.documentElement.scrollWidth,
+      text: section.innerText,
+      rows: rows.map(({ kind, row, title }) => {
+        const node = title.firstChild;
+        const text = node ? node.textContent : "";
+        const titleBox = box(title);
+        const whole = document.createRange();
+        whole.selectNodeContents(title);
+        const textBox = whole.getBoundingClientRect();
+        const tail = document.createRange();
+        const cut = text.lastIndexOf(": ");
+        tail.setStart(node, cut < 0 ? 0 : cut + 2);
+        tail.setEnd(node, text.length);
+        const tailBox = tail.getBoundingClientRect();
+        const neighbours = [...title.parentElement.children, ...row.querySelectorAll("[aria-label]")]
+          .filter((el) => el !== title && !title.contains(el) && !el.contains(title));
+        const overlaps = neighbours.flatMap((el) => {
+          const b = box(el);
+          const x = Math.min(b.right, titleBox.right) - Math.max(b.left, titleBox.left);
+          const y = Math.min(b.bottom, titleBox.bottom) - Math.max(b.top, titleBox.top);
+          return x > 0.5 && y > 0.5 ? [(el.textContent || el.getAttribute("aria-label") || el.tagName).trim().slice(0, 40)] : [];
+        });
+        const targets = [...row.querySelectorAll("a, button")].map((el) => box(el)).map((b) => Math.round(Math.min(b.width, b.height)));
+        const colour = rgba(getComputedStyle(title).color);
+        const fg = over([...colour.slice(0, 3), colour[3] * opacity(title)], background(title));
+        const bg = background(title);
+        const [hi, lo] = [luminance(fg), luminance(bg)].sort((a, b) => b - a);
+        const pending = row.querySelector("[role=status]");
+        return {
+          kind,
+          text,
+          truncated: title.scrollWidth > title.clientWidth + 0.5,
+          ellipsis: getComputedStyle(title).textOverflow === "ellipsis",
+          paintedShare: textBox.width ? Math.round(((Math.min(textBox.right, titleBox.right) - textBox.left) / textBox.width) * 100) : 0,
+          tailWhole: tailBox.right <= titleBox.right + 0.5 && tailBox.left >= titleBox.left - 0.5,
+          titleTop: Math.round(titleBox.top),
+          titleBottom: Math.round(titleBox.bottom),
+          titleWidth: Math.round(titleBox.width),
+          rowRight: Math.round(box(row).right),
+          overlaps,
+          targets,
+          contrast: Math.round(((hi + 0.05) / (lo + 0.05)) * 100) / 100,
+          pending: pending ? pending.getAttribute("aria-label") : null,
+        };
+      }),
+    };
+  })()`;
+
+  browserTest("canonical and live MCP titles read in en and uk, light and dark, from phone to desktop width", async () => {
+    const out = path.resolve(process.env.MCP_LANGUAGE_PNG_DIR ?? ".artifacts/mcp-language");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/conversation/liveTurnRowsEvidence.fixture.tsx");
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const width of [390, 900, 1440] as const) {
+        for (const scheme of ["light", "dark"] as const) {
+          for (const lang of ["en", "uk"] as const) {
+            const label = `${width}-${scheme}-${lang}`;
+            const phone = width === 390;
+            const { context, page, pageErrors } = await openFixture(browser, server.base, { width, height: phone ? 844 : 900 }, scheme, lang, "reduce", phone);
+            try {
+              await page.locator("[data-mcp-language-case] [data-live-mcp]").first().waitFor();
+              await page.waitForTimeout(150);
+              const tr = (key: Parameters<typeof translate>[1], params?: Record<string, string>) => translate(lang, key, params);
+              const expected = [
+                ...RECEIPTS.map(([, key]) => tr("mcp.call.messageReceipt", { operation: OPERATION, state: tr(key) })),
+                tr("mcp.call.sendMessageTo", { conversation: CONVERSATION, text: SEND_TEXT }),
+                tr("mcp.call.spawnAgent", { subject: SPAWN_SUBJECT }),
+                tr("mcp.call.messageReceipt", { operation: OPERATION, state: tr("mcp.call.unknownState") }),
+                tr("mcp.call.sendMessageTo", { conversation: CONVERSATION, text: SEND_TEXT }),
+                tr("mcp.call.spawnAgent", { subject: SPAWN_SUBJECT }),
+              ];
+              type Row = {
+                kind: string; text: string; truncated: boolean; ellipsis: boolean; paintedShare: number; tailWhole: boolean;
+                titleTop: number; titleBottom: number; titleWidth: number; rowRight: number; overlaps: string[]; targets: number[];
+                contrast: number; pending: string | null;
+              };
+              const reading = await page.evaluate(measure) as { viewportHeight: number; scrollWidth: number; text: string; rows: Row[] };
+              readings[label] = reading;
+              await page.screenshot({ path: path.join(out, `first-screen-${label}.png`) });
+              /* The rows reach the section's edge, so the frame is the whole
+                 window width around it rather than the section's own box. */
+              const section = await page.locator("[data-mcp-language-case]").boundingBox();
+              if (section) await page.screenshot({ path: path.join(out, `languages-${label}.png`), clip: { x: 0, y: Math.max(0, section.y - 4), width, height: section.height + 8 } });
+              if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+              const texts = reading.rows.map((row) => row.text);
+              if (JSON.stringify(texts) !== JSON.stringify(expected)) failures.push(`${label}: titles ${JSON.stringify(texts)} are not ${JSON.stringify(expected)}`);
+              /* The other language never leaks into a visible line. */
+              const foreign = lang === "uk"
+                ? /\b(Checking|Sending|Creating|delivered|failed|in-flight|unknown|delivery)\b/.exec(reading.text)
+                : /[А-Яа-яЄєІіЇїҐґ]/.exec(reading.text);
+              if (foreign) failures.push(`${label}: visible text carries "${foreign[0]}" from the other language`);
+              const pendings = reading.rows.map((row) => row.pending).filter(Boolean);
+              const wantPending = [`${tr("mcp.verb.creating")}…`, `${tr("mcp.verb.checking")}…`];
+              if (JSON.stringify(pendings) !== JSON.stringify(wantPending)) failures.push(`${label}: pending marks read ${JSON.stringify(pendings)}, not ${JSON.stringify(wantPending)}`);
+              for (const [index, row] of reading.rows.entries()) {
+                const name = `${label} ${row.kind} #${index}`;
+                if (row.overlaps.length) failures.push(`${name}: ${row.overlaps.join(", ")} sits on the title`);
+                if (row.truncated && !row.ellipsis) failures.push(`${name}: the title is cut without an ellipsis`);
+                if (row.titleWidth < 96) failures.push(`${name}: the title holds ${row.titleWidth}px`);
+                if (row.rowRight > width + 0.5) failures.push(`${name}: the row runs past the window (${row.rowRight} > ${width})`);
+                if (row.titleBottom > reading.viewportHeight) failures.push(`${name}: the title is below the first screen (${row.titleBottom} > ${reading.viewportHeight})`);
+                if (row.contrast < MIN_CONTRAST) failures.push(`${name}: title contrast ${row.contrast}:1`);
+                for (const target of row.targets) if (target < MIN_TARGET_PX) failures.push(`${name}: a ${target}px control`);
+                /* From the narrow reader up, the receipt state is read in full. */
+                if (!phone && index < 3 && (row.truncated || !row.tailWhole)) failures.push(`${name}: the receipt state is cut ("${row.text}", ${row.paintedShare}% painted)`);
+              }
+              if (reading.scrollWidth > width) failures.push(`${label}: the document scrolls sideways (${reading.scrollWidth} > ${width})`);
+            } finally {
+              await context.close();
+            }
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 300_000);
+});
+
 describe("#1972 stopped launches in the production task reader", () => {
   browserTest("closed launch dismisses from the board while the parked launch stays retryable", async () => {
     const out = path.resolve(".artifacts/stopped-launches");

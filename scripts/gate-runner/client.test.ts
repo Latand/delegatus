@@ -132,7 +132,7 @@ test("every environment variable the four drivers and scripts/local-gate*.ts rea
 // The kanban driver's frame directories travel as outputs, and their frames come back.
 test("the kanban driver's frame directories are remapped and their frames return to the requested roots", () => {
   const root = scratch();
-  const names = ["PIPELINE_RETURN_PNG_DIR", "NARROW_SHELF_PNG_DIR", "LLV_SOUND_CAPTIONS_OUT"];
+  const names = ["PIPELINE_RETURN_PNG_DIR", "NARROW_SHELF_PNG_DIR", "MCP_LANGUAGE_PNG_DIR", "LLV_SOUND_CAPTIONS_OUT"];
   const requested = Object.fromEntries(names.map(name => [name, path.join(scratch(), "evidence")]));
   for (const name of names) expect(envClass(name)).toBe("output-dir");
   expect(remoteEnvironment(requested, root, root)).toEqual({ env: {}, outputs: requested });
