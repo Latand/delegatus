@@ -1,6 +1,6 @@
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
 import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
-import { DEPLOY_ADMISSION_BUDGET_MS } from "./admissionBudget";
+import { DEPLOY_ADMISSION_BUDGET_MS, structuredSetupStartedAt } from "./admissionBudget";
 import { assertSpawnMemoryAvailable } from "@/lib/agent/spawnMemory";
 import { spawnDiagnosticErrorFor } from "@/lib/agent/spawnDiagnostics";
 import { AgentMemoryCell, planAgentMemory } from "./agentMemory";
@@ -864,7 +864,8 @@ export async function reconcileStructuredSpawnReplay(
     ? runtimeSession
     : null;
   const operationStartedAt = operation ? Date.parse(operation.receipt.at) : Number.NaN;
-  const stageStartedAt = Number.isFinite(operationStartedAt) ? operationStartedAt : Date.parse(current.createdAt);
+  const stageStartedAt = current.hostSetupStartedAt ? structuredSetupStartedAt(current)
+    : Number.isFinite(operationStartedAt) ? operationStartedAt : structuredSetupStartedAt(current);
   const ageMs = (options.now ?? Date.now)() - stageStartedAt;
   /* The five-minute ceiling is the spawn caller's durable setup contract. It
      covers host start, first-message delivery, and transcript publication as
@@ -1312,7 +1313,7 @@ export async function terminalizeStaleStructuredSpawns(
       }
       continue;
     }
-    const createdMs = Date.parse(receipt.createdAt);
+    const createdMs = structuredSetupStartedAt(receipt);
     if (!stagedLaunchRecovery(receipt) && (!Number.isFinite(createdMs) || now() - createdMs < timeoutMs)) continue;
     if (receipt.transport === "tmux") {
       const ownerlessPreSettlement = receipt.state === "starting"
@@ -1793,7 +1794,7 @@ async function recoverPendingStructuredSpawnPass(
     if (receipt.state === "starting" && !receipt.key && receipt.transport !== "tmux") {
       // A recent pre-identity launch with a live admission owner cannot be
       // terminalized by startingRecovery. Its owner retains responsibility.
-      const createdAt = Date.parse(receipt.createdAt);
+      const createdAt = structuredSetupStartedAt(receipt);
       if (receipt.admissionOwner && processIdentityStatus(receipt.admissionOwner) !== "dead"
         && (!Number.isFinite(createdAt) || (options.now ?? Date.now)() - createdAt < (options.timeoutMs ?? STALE_STRUCTURED_SPAWN_TIMEOUT_MS))) continue;
       const operation = await client.operationStatus(receipt.launchId);
@@ -1843,7 +1844,7 @@ async function recoverPendingStructuredSpawnPass(
       }
       continue;
     }
-    const createdAt = Date.parse(receipt.createdAt);
+    const createdAt = structuredSetupStartedAt(receipt);
     if (receipt.admissionOwner && processIdentityStatus(receipt.admissionOwner) !== "dead"
       && (!Number.isFinite(createdAt) || (options.now ?? Date.now)() - createdAt < (options.timeoutMs ?? STALE_STRUCTURED_SPAWN_TIMEOUT_MS))) continue;
     if (stagedLaunchRecovery(receipt)) {
@@ -2919,7 +2920,7 @@ export async function spawnStructuredConversation(
     if (foregroundAdmissionOwner && queuedAdmission?.admissionDeadlineAt) {
       await input.registry.deliveryWriteOrBusy({ label: "spawn.begin-host-setup", operationId }, () => {
         assertAdmissionCurrent();
-        input.registry.beginStructuredHostSetup(operationId, foregroundAdmissionOwner);
+        input.registry.beginStructuredHostSetup(operationId, foregroundAdmissionOwner, now());
       });
     }
     assertAdmissionCurrent();

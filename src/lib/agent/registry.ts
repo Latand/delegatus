@@ -4,6 +4,7 @@ import { StateLockDeferredError, stateLockAttempt, stateLockDeferral, waitForSta
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { normalizeHostMemory, type HostMemoryState } from "@/lib/runtime/agentMemoryState";
+import { structuredSetupStartedAt } from "@/lib/runtime/admissionBudget";
 import { normalizeHostEndCause, type HostEndCause } from "@/lib/runtime/hostEndCause";
 import { recordBlockingWait, withWaitCorrelation, type BlockingWaitCorrelation } from "@/lib/blockingWaits";
 import crypto from "node:crypto";
@@ -324,6 +325,8 @@ export interface SpawnReceipt {
   /** Admission-attested explicit Telegram grant from an operator seat. */
   telegramSeatGrant?: boolean;
   createdAt: string;
+  /** Runtime admission acknowledged; the host's setup ceiling starts here. */
+  hostSetupStartedAt?: string;
   state: "starting" | "pane-bound" | "host-verified" | "prompt-delivered" | "path-pending" | "completed" | "failed" | "conflicted";
   artifactPath: string | null;
   /** Tracks whether inventory has ever materialized the reserved artifact. */
@@ -4080,6 +4083,8 @@ function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnRe
     ...(value.identityWaveTitleBackfill === true ? { identityWaveTitleBackfill: true as const } : {}),
     pendingOrchestratorSeatIdentity: normalizePendingOrchestratorSeatIdentity(value.pendingOrchestratorSeatIdentity),
     transport: value.transport === "tmux" || value.transport === "structured" ? value.transport : null,
+    hostSetupStartedAt: typeof value.hostSetupStartedAt === "string" && Number.isFinite(Date.parse(value.hostSetupStartedAt))
+      ? value.hostSetupStartedAt : undefined,
     admissionOwner: value.admissionOwner
       && Number.isInteger(value.admissionOwner.pid)
       && value.admissionOwner.pid > 0
@@ -6987,14 +6992,17 @@ export class AgentRegistry {
 
   /** The acknowledged runtime command now holds the payload. Retire admission
       replay before host setup can create an engine whose cleanup is uncertain. */
-  beginStructuredHostSetup(launchId: string, owner: ProcessIdentity): void {
+  beginStructuredHostSetup(launchId: string, owner: ProcessIdentity, startedAt: number): void {
     this.mutate(file => {
       const receipt = file.receipts[launchId];
       if (!receipt || receipt.state !== "starting" || receipt.key || receipt.pane
         || !receipt.admissionOwner || !sameRecordedProcessIdentity(receipt.admissionOwner, owner)) {
         throw new Error("structured spawn admission ownership changed");
       }
-      if (receipt.queuedPinnedSpawn?.admissionDeadlineAt) receipt.queuedPinnedSpawn = null;
+      if (receipt.queuedPinnedSpawn?.admissionDeadlineAt) {
+        receipt.hostSetupStartedAt = new Date(startedAt).toISOString();
+        receipt.queuedPinnedSpawn = null;
+      }
     });
   }
 
@@ -7951,7 +7959,7 @@ export class AgentRegistry {
         // Recovery's journal read yielded. The current receipt and admission
         // owner decide inside this mutation, before any runtime failure write.
         const { now: recoveryNow, timeoutMs } = options.startingRecovery;
-        const createdAt = Date.parse(receipt.createdAt);
+        const createdAt = structuredSetupStartedAt(receipt);
         const withinSetupBound = !Number.isFinite(createdAt) || recoveryNow - createdAt < timeoutMs;
         if (receipt.state !== "starting" || receipt.key || receipt.queuedPinnedSpawn
           || (withinSetupBound && receipt.admissionOwner && this.ownerAlive(receipt.admissionOwner))) {

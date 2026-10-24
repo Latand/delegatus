@@ -660,6 +660,181 @@ test.each(["recovered", "expired", "refused", "conflict", "revoked", "terminal",
   expect(receipt.state === "failed").toBe(outcome !== "recovered" && outcome !== "released");
 });
 
+test.each([true, false])("direct admission concurrent replay waits for durable publication (runtime: %s)", async runtimeAvailable => {
+  const { AgentRegistry } = await import("./registry");
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const cwd = statePath(`direct-publication-replay-${runtimeAvailable}`);
+  fs.mkdirSync(cwd, { recursive: true });
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), () => true);
+  const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
+  const dependencies = structuredRouteDependencies(cwd);
+  dependencies.registry = () => registry;
+  let available = true;
+  const client = {
+    command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => journal.executeOperation(command),
+    transitionOperation: async (...args: Parameters<RuntimeHostClient["transitionOperation"]>) => journal.transitionOperation(...args),
+    append: async (...args: Parameters<RuntimeHostClient["append"]>) => journal.append(...args),
+    effectBatch: async (kinds, after) => journal.effectBatch(100, kinds, after),
+    snapshot: async () => journal.snapshot(), operationStatus: async (id: string) => journal.operationResult(id),
+  } as RuntimeHostClient;
+  dependencies.runtimeHostClient = () => available ? client : null;
+  dependencies.runtimeAdmissionRetry = { now: () => 0 };
+  let deferred = 0;
+  dependencies.defer = () => { deferred++; };
+  let stores = 0;
+  const storeImages = dependencies.storeImages;
+  dependencies.storeImages = images => { stores++; return storeImages(images); };
+  let entered!: () => void;
+  let release!: () => void;
+  const publishing = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let launchId = "";
+  const write = registry.deliveryWriteOrBusy.bind(registry);
+  registry.deliveryWriteOrBusy = (async (...args: Parameters<typeof registry.deliveryWriteOrBusy>) => {
+    if (args[0].label === "registry.queueStructuredAdmission") {
+      launchId = args[0].operationId!;
+      entered();
+      await held;
+    }
+    return write(...args);
+  }) as typeof registry.deliveryWriteOrBusy;
+  const request = () => new NextRequest("http://127.0.0.1/api/spawn", {
+    method: "POST", headers: { origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", host: "127.0.0.1", "content-type": "application/json" },
+    body: JSON.stringify({ clientAttemptId: `attempt_direct_publication_${runtimeAvailable}`, title: "Durable launch publication", engine: "claude", cwd, prompt: "Continue the task", mcpServers: [] }),
+  });
+  const { procBackend } = await import("@/lib/proc");
+  const memory = spyOn(procBackend, "systemMemory").mockReturnValue({ ramTotal: 8 * 1024 ** 3, ramAvailable: 4 * 1024 ** 3, swapTotal: 0, swapUsed: 0 });
+  let settled = false;
+  const primary = executeSpawnRequest(request(), dependencies).then(response => { settled = true; return response; });
+  try {
+    await Promise.race([publishing, primary.then(() => { throw new Error("launch did not reach its publication barrier"); })]);
+    const owner = registry.spawnReceipt(launchId)!.admissionOwner;
+    expect(owner).not.toBeNull();
+    expect(registry.claimStartingStructuredSpawn(launchId).claimed).toBe(false);
+    available = runtimeAvailable;
+    const replay = await executeSpawnRequest(request(), dependencies);
+    expect(replay.status).toBe(503);
+    expect(await replay.json()).toMatchObject({ code: "spawn_preparing", retryable: true, launchId });
+    expect(settled).toBe(false);
+    expect(registry.spawnReceipt(launchId)).toMatchObject({ state: "starting", admissionOwner: owner, queuedPinnedSpawn: null });
+    expect(deferred).toBe(0);
+    release();
+    const accepted = await primary;
+    expect(accepted.status).toBe(202);
+    expect((await accepted.json()).launchId).toBe(launchId);
+    const queue = registry.spawnReceipt(launchId)!.queuedPinnedSpawn;
+    expect(queue).toMatchObject({ prompt: "Continue the task", admissionDeadlineAt: new Date(600_000).toISOString() });
+    available = false;
+    const durableReplay = await executeSpawnRequest(request(), dependencies);
+    expect(durableReplay.status).toBe(202);
+    expect((await durableReplay.json()).launchId).toBe(launchId);
+    expect(registry.spawnReceipt(launchId)!.queuedPinnedSpawn).toEqual(queue);
+    expect(deferred).toBe(1);
+    expect(stores).toBe(1);
+  } finally {
+    release();
+    try { await primary; }
+    finally { memory.mockRestore(); journal.close(); registry.close(); }
+  }
+});
+
+test.each(["pending", "setup", "setup-expired"] as const)("direct admission replay preserves its budget past the host setup window: %s", async phase => {
+  const { AgentRegistry } = await import("./registry");
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { procBackend } = await import("@/lib/proc");
+  const cwd = statePath(`direct-replay-deployment-budget-${phase}`);
+  fs.mkdirSync(cwd, { recursive: true });
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"));
+  const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
+  const dependencies = structuredRouteDependencies(cwd);
+  dependencies.registry = () => registry;
+  const client = {
+    command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => journal.executeOperation(command),
+    transitionOperation: async (...args: Parameters<RuntimeHostClient["transitionOperation"]>) => journal.transitionOperation(...args),
+    append: async (...args: Parameters<RuntimeHostClient["append"]>) => journal.append(...args),
+    effectBatch: async (kinds, after) => journal.effectBatch(100, kinds, after),
+    snapshot: async () => journal.snapshot(), operationStatus: async (id: string) => journal.operationResult(id),
+  } as RuntimeHostClient;
+  dependencies.runtimeHostClient = () => client;
+  dependencies.defer = () => {};
+  let clock = Date.now();
+  dependencies.runtimeAdmissionRetry = { now: () => clock };
+  const time = spyOn(Date, "now").mockImplementation(() => clock);
+  const memory = spyOn(procBackend, "systemMemory").mockReturnValue({ ramTotal: 8 * 1024 ** 3, ramAvailable: 4 * 1024 ** 3, swapTotal: 0, swapUsed: 0 });
+  const request = () => new NextRequest("http://127.0.0.1/api/spawn", {
+    method: "POST", headers: { origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", host: "127.0.0.1", "content-type": "application/json" },
+    body: JSON.stringify({ clientAttemptId: `attempt_direct_replay_budget_${phase}`, title: "Replay during runtime handover", engine: "claude", cwd, prompt: "Continue the task", mcpServers: [] }),
+  });
+  try {
+    const accepted = await executeSpawnRequest(request(), dependencies);
+    expect(accepted.status).toBe(202);
+    const { launchId } = await accepted.json();
+    const original = registry.spawnReceipt(launchId)!;
+    registry.releaseStartingStructuredSpawn(launchId, original.admissionOwner!);
+    clock = Date.parse(original.createdAt) + 6 * 60_000;
+    expect(clock).toBeLessThan(Date.parse(original.queuedPinnedSpawn!.admissionDeadlineAt!));
+    const replay = await executeSpawnRequest(request(), dependencies);
+    expect(replay.status).toBe(202);
+    expect((await replay.json()).launchId).toBe(launchId);
+    expect(registry.spawnReceipt(launchId)).toMatchObject({ state: "starting", error: null, queuedPinnedSpawn: original.queuedPinnedSpawn });
+    expect(journal.snapshot().sessions).toHaveLength(0);
+    if (phase === "pending") return;
+    // The fixture discards replay's deferred executor to model its exit too.
+    registry.releaseStartingStructuredSpawn(launchId, registry.spawnReceipt(launchId)!.admissionOwner!);
+    const { spawnStructuredConversation, recoverPendingStructuredSpawns, terminalizeStaleStructuredSpawns, reconcileStructuredSpawnReplay } = await import("@/lib/runtime/structuredSpawn");
+    const { FakeEngineHost } = await import("@/lib/runtime/fixtures/fakeEngineHost");
+    const { claudeTranscriptPath } = await import("./transcript");
+    const { captureProcessIdentity } = await import("@/lib/processIdentity");
+    let starts = 0;
+    let messages = 0;
+    let setupFresh = false;
+    const recovery = { now: () => clock, resolveSpawnAccount: dependencies.resolveSpawnAccount,
+      spawnStructuredConversation: async (input: Parameters<typeof spawnStructuredConversation>[0]) => spawnStructuredConversation(input, {
+        now: () => clock,
+        startHost: async () => {
+          starts++;
+          // The old receipt is six minutes old while this actual setup is new.
+          await recoverPendingStructuredSpawns(registry, client, { now: () => clock });
+          await terminalizeStaleStructuredSpawns(registry, client, { now: () => clock });
+          expect((await reconcileStructuredSpawnReplay(launchId, registry, client, { now: () => clock })).state).toBe("starting");
+          const second = new AgentRegistry(registry.filename);
+          try {
+            expect(second.spawnReceipt(launchId)).toMatchObject({ hostSetupStartedAt: new Date(clock).toISOString(), queuedPinnedSpawn: null });
+          } finally { second.close(); }
+          setupFresh = true;
+          if (phase === "setup-expired") {
+            clock += 5 * 60_000;
+            expect((await reconcileStructuredSpawnReplay(launchId, registry, client, { now: () => clock })).state).toBe("failed");
+            throw new Error("fixture host setup reached its separate deadline");
+          }
+          const sessionId = input.spec.transcript ? path.basename(input.spec.transcript, ".jsonl")
+            : ["21500000", "0000", "4000", "8000", "000000000002"].join("-");
+          const transcript = input.spec.transcript ?? claudeTranscriptPath(cwd, sessionId, input.account.transcriptRoot);
+          fs.mkdirSync(path.dirname(transcript), { recursive: true });
+          fs.writeFileSync(transcript, JSON.stringify({ type: "user", message: { role: "user", content: "fixture" } }) + "\n");
+          return Object.assign(new FakeEngineHost(), { identity: { sessionId }, onStateChange: () => () => {} });
+        },
+        bindHost: async (registry, key, host, owner, epoch) => {
+          const health = await host.health();
+          registry.setStructuredHostClaimed(key, {
+            kind: "claude-broker", endpoint: health.endpoint, process: captureProcessIdentity(process.pid),
+            eventCursor: 0, protocolVersion: "fake", writerClaimEpoch: epoch, activeTurnRef: null, pendingAttention: [], activeFlags: [],
+          }, "idle", owner, epoch);
+          return () => {};
+        },
+        publishHost: async () => async () => {},
+        deliverFirst: async () => { messages++; },
+      }) };
+    await recoverPendingStructuredSpawns(registry, client, recovery);
+    expect(starts).toBe(1);
+    expect(setupFresh).toBe(true);
+    expect(messages).toBe(phase === "setup" ? 1 : 0);
+    expect(registry.spawnReceipt(launchId)!.state).toBe(phase === "setup" ? "completed" : "failed");
+    await terminalizeStaleStructuredSpawns(registry, client, recovery);
+    expect(starts).toBe(1);
+  } finally { time.mockRestore(); memory.mockRestore(); journal.close(); registry.close(); }
+});
+
 async function realRuntimeAdmission(outcome: "recovered" | "expired" | "legacy-recovered" | "legacy-expired" | "legacy-busy" | "release-refused" | "defer-takeover" | "payload-takeover" | "owner-exit" | "startup-deferred" | "ack-lost" | "owner-released" | "settled" | "command-release" | "recovery-takeover" | "resolution-takeover" | "authorize-release" | "fallback" | "replayed-pin" | "cleanup" | "cleanup-refused" | "watchdog") {
   const legacy = outcome === "legacy-recovered" || outcome === "legacy-expired" || outcome === "legacy-busy";
   const expired = outcome === "expired" || outcome === "legacy-expired";

@@ -1380,12 +1380,16 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       let initialMessage: SpawnResponse["initialMessage"] | undefined;
       const runtimeClient = structured ? dependencies.runtimeHostClient() : null;
       if (runtimeClient && !queuedUntil) {
-        try {
-          const reconciled = await reconcileStructuredSpawnReplay(receipt.launchId, registry, runtimeClient);
-          receipt = reconciled;
-          initialMessage = reconciled.initialMessage;
-        } catch {
-          /* The durable registry receipt remains available during runtime resynchronization. */
+        // Queued admission retains its deployment deadline. Host-setup
+        // reconciliation starts after runtime acknowledgement retires it.
+        if (!receipt.queuedPinnedSpawn?.admissionDeadlineAt) {
+          try {
+            const reconciled = await reconcileStructuredSpawnReplay(receipt.launchId, registry, runtimeClient);
+            receipt = reconciled;
+            initialMessage = reconciled.initialMessage;
+          } catch {
+            /* The durable registry receipt remains available during runtime resynchronization. */
+          }
         }
         const admission = (await registry.deliveryWriteOrBusy({ label: "registry.claimStartingStructuredSpawn" }, registry.claimStartingStructuredSpawn.bind(registry, receipt.launchId)));
         receipt = admission.receipt;
@@ -1401,6 +1405,15 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
           }
           deferStructuredSpawn({ ...receipt, admissionOwner: admission.receipt.admissionOwner }, runtimeClient, receipt.queuedPinnedSpawn!.imageRefs);
         }
+      }
+      // A concurrent request can observe the live publisher before its payload
+      // commits. Leave that owner working; acceptance needs durable input.
+      if (structured && receipt.state === "starting" && !receipt.key && !receipt.pane && !receipt.queuedPinnedSpawn) {
+        return NextResponse.json({
+          error: "The launch is still being prepared. Retry the same request.",
+          code: "spawn_preparing", retryable: true,
+          launchId: receipt.launchId, conversationId: receipt.conversationId,
+        }, { status: 503 });
       }
       if (receipt.artifactPath
         && identityMaterializationFence(registry.readOnlySnapshot()).allowsReceipt(receipt, { structured })) {
