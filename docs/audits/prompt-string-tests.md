@@ -1350,3 +1350,17 @@ Final additional checks:
 - `bun scripts/privacy-publication-gate.ts --base origin/main
   --require-known-values --paths <surviving touched paths>`: pass.
   The ordinary commit hooks repeat staged whitespace, privacy and scoped lint.
+
+## Publication repair (2026-10-24)
+
+The retirement integration fixture still expected the packaged stdio client to
+call the deployment route directly. Its request to `/api/mcp` threw inside the
+HTTP handler while the client call remained pending, producing a later launcher
+error and an owned-child teardown failure. The fixture now serves the production
+MCP HTTP handler and records its host's verified process identity. No test or
+assertion was added or removed by this repair.
+
+The isolated full-file publication comparison reproduced the launcher error
+before the repair. Afterwards it reported zero new failures, two pre-existing
+assertion failures and no flaky diagnostics. The two upstream commits merged
+without conflicts; neither changes an audited test file or a workflow.
