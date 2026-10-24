@@ -206,6 +206,7 @@ export async function provisionPipelineWorktree(pipeline: Pipeline, exec: ExecPo
   if (base.code !== 0 || !base.stdout.trim()) return failure("resolving the pipeline base ref", base);
   if (base.stdout.trim() !== pipeline.baseRef) return { ok: false, error: "the pipeline worktree does not match its persisted base" };
   recordWorktreeProvenance(pipeline.worktreeDir, { creator: "pipeline", id: pipeline.id });
+  await prepareStageToolchain(pipeline, exec);
   return { ok: true, sha: pipeline.baseRef, baseBranch: pipeline.baseBranch };
 }
 
@@ -434,6 +435,8 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
   // The worktree sweep removes only checkouts with a record of who made them.
   // The pipeline's own record names this path too, so a failed write keeps it sweepable.
   recordWorktreeProvenance(pipeline.worktreeDir, { creator: "pipeline", id: pipeline.id });
+  await prepareStageToolchain(pipeline, (command, args, cwd) => exec(command, args, cwd, signal));
+  if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
   return { ok: true, sha: base.stdout.trim(), baseBranch: pipeline.baseBranch };
 }
 
@@ -760,10 +763,10 @@ function stageToolchainRelease(pipeline: Pipeline): (() => void) | undefined {
   } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
 }
 
-/** Settlement runs after the agent's turn, including read-only turns which
-    never installed dependencies. Share the parent checkout's installed tools
-    for the commit through an absent, ignored node_modules. Remove our link
-    afterward so a later install cannot write into the parent checkout.
+/** Provisioning shares the parent checkout's installed tools before the agent
+    can make its first hooked commit. Settlement retries this for older lanes
+    and read-only turns, then removes the borrowed link after its commit so a
+    later install cannot write into the parent checkout.
     Preserve any local install or unrelated link, including dangling links. */
 async function prepareStageToolchain(pipeline: Pipeline, exec: ExecPort): Promise<(() => void) | undefined> {
   if (path.resolve(pipeline.repoDir) === path.resolve(pipeline.worktreeDir)) return;
