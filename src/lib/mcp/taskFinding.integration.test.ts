@@ -42,12 +42,6 @@ test("published finding schemas, recurrence, receipts and key updates through MC
   const answer = (result: Awaited<ReturnType<typeof call>>) => result.structuredContent as { task: BoardTask; matched?: boolean; code?: string; changedFields: string[] };
   const input = { project: "mcp-findings", text: "Keep the original wording", findingKey: "socket:timeout", note: "First seen" };
   try {
-    const { tools } = await client.listTools();
-    for (const name of ["create_task", "update_task"]) {
-      const properties = tools.find(tool => tool.name === name)!.inputSchema.properties as Record<string, { description?: string }>;
-      expect(properties.findingKey.description).toContain("200");
-      expect(properties.findingKey.description).toContain("never synced");
-    }
     const initial = answer(await call("create_task", input));
     const repeatArgs = { ...input, text: "Reporter title", note: "Repeated", clientRequestId: "repeat-receipt" };
     const repeat = answer(await call("create_task", repeatArgs));

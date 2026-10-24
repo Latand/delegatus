@@ -161,7 +161,6 @@ test("the §6 example: a finished lane's open pull request, running lanes, close
   const text = report.text;
 
   expect(lines(text)[0]).toBe("[Delegatus] Board maintenance report — project-a, seat epoch 16, as of 2026-09-27 20:00 UTC");
-  expect(text).toContain("Read-only: computed by Delegatus from the board, lanes, agent liveness and GitHub at that time. Nothing was changed. Verify each item before you act on it.");
   expect(text).toContain('Seat tick: off since 2026-09-26: "1". Evidence unavailable: none.');
   expect(text).toContain("Counts: 5 open tasks (4 assigned, 0 blocked, 1 inbox), 2 open lanes, 2 open pull requests, 2 agents live, 0 stalled.");
   expect(text).toContain("Notices on the board: «This project's seat tick is not on its default settings».");
@@ -444,7 +443,6 @@ test("no recorded priority: one neutral line and the newest three, never a sugge
   const text = composeBoardReport(facts({ github: { kind: "ranked", ranking }, pullRequests: { ok: true, pullRequests: [] } })).text;
   expect(text).toContain("8. GitHub issues (4 open)\nNo recorded priority on 4 of them (read: Project Priority and Urgency fields, priority labels, milestones).\nNewest without a recorded priority: #12, #13, #11.");
   expect(text).not.toMatch(/Worth starting|Highest ranked|Ranked by/);
-  expect(text).not.toMatch(/\b(add|adding|apply|applying|consider|should)\b[^\n]*\b(label|labels|field|fields)\b/i);
 });
 
 test("nothing at tier 1 or above: the top three are headed Highest ranked with their tier shown", () => {

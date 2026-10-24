@@ -1235,7 +1235,6 @@ test("a spawned agent whose turn a service restart cut is resumed once, and a se
     expect(writes).toHaveLength(1);
     expect(writes[0]).toStartWith("Viewer restarted and severed your structured host mid-turn.");
     expect(writes[0]).toContain("The interrupted turn's last transcript event is tool-call");
-    expect(writes[0]).toContain("Re-run any interrupted operation");
 
     const second = await successorBoot(cut.registryFile, journal, ledger);
     expect(second.error).toBeNull();

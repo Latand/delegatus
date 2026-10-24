@@ -72,7 +72,6 @@ test("update_task publishes board membership, and every published value lands in
     const board = (tools.find(tool => tool.name === "update_task")!.inputSchema.properties as Record<string, { enum?: string[]; description?: string }>).board;
     expect(board).toBeDefined();
     expect(board.enum?.slice().sort()).toEqual(["hidden", "shown"]);
-    expect(board.description ?? "").toContain("board");
 
     const created = await call("create_task", { project: "fixture-project", text: "band membership" });
     expect(created.ok).toBe(true);

@@ -75,9 +75,6 @@ test("spawn_agent advertises the deployer's top-level confirmation and its calle
   try {
     const tool = (await client.listTools()).tools.find((candidate) => candidate.name === "spawn_agent")!;
     expect(tool.inputSchema.properties).toHaveProperty("confirm");
-    expect(tool.description).toContain('confirm: "deploy"');
-    expect(tool.description).toContain("designated orchestrator seat");
-    expect(tool.description).toContain("operator's own session");
     const response = await client.callTool({ name: "spawn_agent", arguments: deployArgs() });
     expect(response.isError).not.toBe(true);
     expect(response.structuredContent).toMatchObject({ ok: true, conversationId: "conversation_deployer" });

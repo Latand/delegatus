@@ -295,7 +295,6 @@ test("read-only stages preserve declared outputs and tell the agent their write 
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   expect(h.spawnInputs[0]?.prompt).toContain("reports/audit.md");
-  expect(h.spawnInputs[0]?.prompt).toContain("Do not commit");
 });
 
 test("declared outputs reject traversal, Git metadata, and duplicate normalized paths", async () => {

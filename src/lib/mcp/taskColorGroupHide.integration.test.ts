@@ -82,7 +82,6 @@ test("update_task publishes the colour names and the hide, and both land in the 
     const properties = tools.find((tool) => tool.name === "update_task")!.inputSchema.properties as Record<string, { enum?: string[]; type?: string; description?: string }>;
     expect(properties.color?.enum).toEqual(["none", "coral", "amber", "lime", "teal", "sky", "violet", "pink", "slate"]);
     expect(properties.hide?.type).toBe("boolean");
-    expect(properties.hide?.description ?? "").toContain("TASK_HIDE_PROTECTED");
 
     const created = await p.call("create_task", { project: "color-project", text: "Colour me" });
     const coloured = await p.call("update_task", { taskId: created.task.id, color: "violet" });

@@ -136,13 +136,9 @@ test("mint carries Delegatus identity, project, mandate character, registry capa
   for (const locale of ["en", "uk"] as const) {
     const provider = new OpenAILiveProvider((async (_url, init) => {
       const { session } = JSON.parse(String(init!.body));
-      expect(session.instructions).toStartWith("You are Delegatus, the voice of this Delegatus installation.");
       expect(session.instructions).toContain("project in view, Example project");
       expect(session.instructions).toContain(character);
       expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(character);
-      expect(session.instructions).toContain("masculine forms");
-      expect(session.instructions).toContain("language the operator speaks");
-      expect(session.instructions).not.toContain("Reply in Ukrainian");
       const section = session.instructions.split("Backend tools:\n")[1].split("\n\n")[0];
       expect(section).toBe(COMPANION_TOOL_REGISTRY.map(entry => `- ${entry.capability}`).join("\n"));
       for (const entry of COMPANION_TOOL_REGISTRY) expect(section).not.toContain(entry.name);

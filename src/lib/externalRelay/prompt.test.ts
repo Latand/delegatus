@@ -19,8 +19,6 @@ test("owner sequential-write guidance is scoped to enabled owner-action claims",
   try {
     expect(legacy.map(prompt)).toEqual(before);
     expect(prompt(owner)).toContain("further distinct owner writes requested in <request>");
-    expect(prompt(owner)).toContain("Never resend an action that returned ok");
-    expect(prompt(owner)).toContain("at most three retries");
     owner.input.tools = owner.input.tools!.filter((tool) => tool.effect !== "action");
     expect(prompt(owner)).not.toContain("further distinct owner writes");
   } finally { setRelaySwitch("relay:owner_tools:enabled", false); }
@@ -67,7 +65,6 @@ test("requester, memory and tool index arrive as escaped data with the hand-off 
   expect(prompt.match(/<\/short_term_memory>/g)).toHaveLength(1);
   expect(prompt).toContain(`"name":"restrict_member","summary":"Mute a participant","mode":"handoff"`);
   expect(prompt).toContain(`"handoff" posts nothing and hands this message back to the service`);
-  expect(prompt).toContain("You cannot call any of those tools.");
 });
 
 test("no tool index, no hand-off: requester alone adds only its own section", () => {
@@ -88,13 +85,6 @@ test("all slice 1 prompts match the pre-change e65e6603 hashes", () => {
     ...serviceClaims.map((item) => ({ name: item.name, request: item.body.request }))];
   for (const item of cases)
     expect(createHash("sha256").update(answerPrompt(requestSchema.parse(item.request))).digest("hex")).toBe(legacyHashes[item.name as keyof typeof legacyHashes]);
-});
-
-test("action retry guidance accounts for post-execution denials", () => {
-  const prompt = toolRoundPrompt(x1Request("actions_admin"), 2,
-    { results: [], callsLeft: 0, final: true, actionSent: true });
-  expect(prompt).not.toContain("unless its result was error or denied");
-  expect(prompt).toContain("An action denial may hide a completed effect: finish without further calls.");
 });
 
 test("negotiated conversation turns trust only the formatting section alongside the answer frame", () => {

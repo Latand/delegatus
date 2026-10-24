@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { ORCHESTRATOR_WITHOUT_MANDATE_RULES, ROLE_DEFAULTS, WORKING_RULES, WORKING_RULES_SHORT } from "@/lib/roles/defaults";
+import { ORCHESTRATOR_WITHOUT_MANDATE_RULES, ROLE_DEFAULTS, WORKING_RULES } from "@/lib/roles/defaults";
 import { FRONTEND_GUIDANCE, resolveRole } from "@/lib/roles/registry";
 import { ROLE_VARIANT_IDS } from "@/lib/roles/types";
 import { VARIANT_PARAMS } from "@/lib/roles/paramConfig";
@@ -17,18 +17,6 @@ const REGISTRY_LOOKUP = (roleId: string) => {
   if (roleId === "reviewer") return { engine: "codex" as const, model: "gpt-5.6-sol", effort: "xhigh", access: "read-only" as const, promptScaffold: "Reviewer guidance" };
   return null;
 };
-
-test("builder isolation keeps edits and commits in its assigned worktree", () => {
-  const variants: Record<string, string>[] = [{}, { mode: "apply-fixes" }];
-  for (const params of variants) {
-    const scaffold = pipelineRoleLookup("builder", params)?.promptScaffold ?? "";
-    expect(scaffold).toContain("Edit, stage and commit in the assigned worktree");
-    expect(scaffold).toContain("Use scratch exports for builds, tests, probes and renders");
-    expect(scaffold).not.toContain("work, build, probe and render in a scratch export");
-  }
-  expect(WORKING_RULES_SHORT).toContain("Edit, stage and commit in the assigned worktree");
-  expect(WORKING_RULES_SHORT).not.toContain("work in a scratch export");
-});
 
 test("role references resolve registry defaults and stage overrides", () => {
   const lookup = () => ({
@@ -174,7 +162,6 @@ test("a visual-critic stage resolves read-only on the role's Claude Opus runtime
   const resolved = resolvePipelineRole({ role: { roleId: "visual-critic" } }, "run", pipelineRoleLookup);
   expect(resolved.error).toBeUndefined();
   expect(resolved.role).toMatchObject({ roleId: "visual-critic", engine: "claude", model: "opus", effort: "high", access: "read-only" });
-  expect(resolved.role?.promptScaffold).toStartWith("You are a Visual-critic.");
   expect(resolved.role?.promptScaffold).toContain("Safety fences:");
   expect(resolvePipelineRole({ role: { roleId: "visual-critic" }, effort: "xhigh" }, "run", pipelineRoleLookup).role).toMatchObject({ effort: "xhigh", access: "read-only" });
 });
@@ -249,7 +236,6 @@ test("an orchestrator pipeline stage carries the working rules and the worker li
   const scaffold = pipelineRoleLookup("orchestrator", { mode: "standard" })?.promptScaffold ?? "";
   expect(scaffold.split(WORKING_RULES)).toHaveLength(2);
   expect(scaffold).toBe(`You are the Orchestrator. Mode: standard.\n\n${ORCHESTRATOR_WITHOUT_MANDATE_RULES}\n\nSafety fences:\n- Act on Delegatus only through its MCP tools, launching with your own transcript as src lineage.\n- Workers start in fresh, empty sessions; never fork one.`);
-  expect(ORCHESTRATOR_WITHOUT_MANDATE_RULES).toEndWith("each running lane and each live spawned agent counts as one.");
 });
 
 /* A stage stores its scaffold at the store cap (MAX_SCAFFOLD_LENGTH), and an
@@ -324,7 +310,6 @@ test("a reviewer diff source past the stage cap is refused, a usual one keeps ru
 });
 
 test("pipeline role lookup ignores the retired orchestrator maxWorkers parameter", () => {
-  expect(pipelineRoleLookup("orchestrator")?.promptScaffold).not.toContain("keep at most");
   expect(pipelineRoleLookup("orchestrator", { maxWorkers: 1 })?.promptScaffold).toBe(pipelineRoleLookup("orchestrator")?.promptScaffold);
   expect(pipelineRoleLookup("reviewer")?.promptScaffold).toContain("Run 1 independent pass(es)");
 });

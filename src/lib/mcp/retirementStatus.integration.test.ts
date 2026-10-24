@@ -142,8 +142,6 @@ test("served schema teaches automatic launch identity and bounded pagination", a
     const tool = (await f.client.listTools()).tools.find(tool => tool.name === "deployment_status")!;
     const properties = tool.inputSchema.properties as Record<string, { description?: string }>;
     for (const name of ["kind", "project", "callerLaunchId", "limit", "cursor"]) expect(properties[name]).toBeDefined();
-    expect(properties.callerLaunchId!.description).toContain("Optional");
-    expect(tool.description).toContain("designated seat");
     expect(tool.inputSchema.required ?? []).not.toContain("callerLaunchId");
   } finally { await f.close(); }
 });

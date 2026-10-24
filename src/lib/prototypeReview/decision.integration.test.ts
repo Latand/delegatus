@@ -296,7 +296,6 @@ test.each(["custom", "numbered-reservation", "numbered-custom", "continuation-co
     expect([...words]).toHaveLength(20_000);
     expect(isPrototypeReplica(prototypeReviewReplica(task), task.id, task.project)).toBe(true);
     expect(Buffer.byteLength(saved.delivery.text)).toBeLessThanOrEqual(32_000);
-    expect(saved.delivery.text).toContain("Read read_prototype_review");
     expect(saved.delivery.text).not.toContain("\uFFFD");
   }
   if (kind === "long-unicode") {

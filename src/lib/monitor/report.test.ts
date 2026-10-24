@@ -38,7 +38,6 @@ test("a wake says why, lists the items, and names the mandate section holding it
   /* The line that fenced a seat to its agenda is gone (#1749), and nothing
      replaces the assertion: the wording of what stands in its place is the
      operator's to change without a test to update. */
-  expect(text).not.toContain("Act on the listed items only");
   /* A seat whose mandate may not state the contract gets its clauses. */
   expectContractClauses(text);
   /* One whose delivered mandate states them (#2030) gets a line naming the
@@ -87,8 +86,6 @@ test("the skipped-child summary describes the children, not an outcome they may 
   expect(text).toContain("(3 spawned child(ren) not listed: their last activity predates this seat's designation, or an earlier seat epoch already harvested them.)");
   expect(text).toContain("(2 more spawned child(ren) whose transcript Delegatus cannot resolve, named by a later wake.)");
   expect(text).toContain("(1 spawned child(ren) not listed: nothing has changed about them since the wake that showed them.)");
-  expect(text).not.toContain("their outcomes predate");
-  expect(text).not.toContain("harvest their outcome");
 });
 
 test("the proposal brief asks for one ranked card and forbids opening issues or lanes from it", () => {
@@ -100,10 +97,7 @@ test("the proposal brief asks for one ranked card and forbids opening issues or 
     slot: "20693",
   });
   expect(text).toContain("#1245 the native seat tick [design, monitor]");
-  expect(text).toContain("ONE ranked list of at most 5 actions");
-  expect(text).toContain("single board card in inbox");
   expect(text).toContain(`monitor-ref: ${seatTickProposalRef("20693")}`);
-  expect(text).toContain("Open no GitHub issue and start no pipeline from this");
 });
 
 /* ------------------------------------------------------------------------- *
@@ -189,7 +183,6 @@ test("a wake carries the project's own monitor prompt beside what the tick deriv
   expect(text).toContain("interval: the wake interval elapsed while work is open");
   expect(text).toContain("[pipeline] pipeline_a1 — ship the exporter — running");
   expect(text).toContain("the last deployment ended rolled-back");
-  expect(text).not.toContain("Act on the listed items only");
   expectContractClauses(text);
   /* And the contract has the last word, so a prompt cannot read as the thing
      that governs what the turn may do. */

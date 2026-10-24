@@ -201,7 +201,6 @@ test("update_task publishes the line edits", async () => {
     const tool = tools.find((candidate) => candidate.name === "update_task")!;
     const properties = tool.inputSchema.properties as Record<string, { description?: string }>;
     for (const name of ["replaceLine", "removeLine", "appendLine"]) expect(properties[name]).toBeDefined();
-    expect(tool.description ?? "").toContain("replaceLine");
   } finally {
     await p.close();
   }

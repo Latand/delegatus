@@ -236,9 +236,6 @@ describe("overdue board tasks", () => {
     expect(decision.verdict.items.map(item => item.id)).toEqual(["high-old", "high-new", "normal", "normal-2", "normal-3"]);
     const reason = decision.verdict.reasons.find(reason => reason.kind === "overdue-task")!;
     expect(reason.detail).toContain("2 more await a later wake");
-    expect(reason.detail).toContain("high next day, normal +3 days, low +7 days");
-    expect(reason.detail).toContain("open over 7 days");
-    expect(reason.detail).toContain("without reminding the operator");
     expect(decision.verdict.reasons.some(reason => reason.kind === "unstarted-task")).toBe(false);
     expect(decision.verdict.items[0]!.label).toContain("overdue 2d 4h · open 9d · high · moved 0×");
     expect(decision.verdict.items[0]!.label).toContain("first due");
@@ -2431,7 +2428,6 @@ describe("waits routed to the seat", () => {
     if (decision.verdict.kind !== "wake") throw new Error("expected a wake");
     const items = decision.verdict.items.filter((item) => item.kind === "ask");
     expect(items).toEqual([expect.objectContaining({ kind: "ask", id: "conversation_deployer", askKey: "reason:ask-1", label: ask.label })]);
-    expect(decision.verdict.reasons[0]!.detail).toContain("dismiss_attention escalate");
   });
 
   test("a delivered ask is not shown again to the same seat, a newer ask is, and a successor seat is shown what its predecessor was", () => {

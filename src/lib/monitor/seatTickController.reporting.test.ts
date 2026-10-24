@@ -557,9 +557,6 @@ test("a read and acted-on child is described by delivered-wake acknowledgement (
   expect(f.acknowledged()).toEqual([]);
   const rig = idleWakeRig(f, () => clock);
   expect((await runSeatTickCheck(f.project, rig.deps))!.reasons).toContain("child-terminal");
-  expect(rig.sent[0]!.text).not.toContain("outcome unharvested");
-  expect(rig.sent[0]!.text).toContain("not yet announced by a delivered seat-tick wake");
-  expect(rig.sent[0]!.text).toContain("Reading the transcript alone does not acknowledge");
   expect(f.acknowledged()).toContain(child.id);
   clock += 5 * MINUTE;
   expect((await runSeatTickCheck(f.project, rig.deps))!.reasons).not.toContain("child-terminal");

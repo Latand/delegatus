@@ -111,7 +111,6 @@ test("off preserves the exact four-scope block; on inserts the fifth scope after
   expect(on.scopes.map(entry => entry.scope)).toEqual([`role:${PROJECT}:builder`, "role:*:builder", "swarm:builder", `project:${PROJECT}`, "machine"]);
   expect(on.block).toContain("1 role · 1 swarm · 0 project · 0 machine");
   expect(on.block).toContain("Swarm rules · Builder on every install");
-  expect(on.block).toContain("are public");
   expect(scopeChars(on.candidates[2].rules)).toBeLessThanOrEqual(4000);
   const block = await learnedRulesForLaunchProfile(profile, start());
   expect(block).toBe(on.block);
@@ -337,8 +336,6 @@ test("the curator sees usage even for no-lesson answers and can retire guidance 
   expect(page).toMatchObject({ swarmReceiving: true, swarm: [{ id: entry().id, rule: TEXT, readOnly: true }] });
   applyCuration(pass, { scopes: [{ scope: local.scope, revision: page.revision, order: [] }], archive: [{ id: local.id, reason: "in-instructions", where: `swarm:${entry().id}`, note: "The receiving pack holds the same action and conditions." }] }, NOW);
   expect(projectView(PROJECT).scopes.find(scope => scope.scope === local.scope)?.left[0]).toMatchObject({ id: local.id, reason: "in-instructions", where: `swarm:${entry().id}` });
-  expect(curatorBrief(PROJECT)).toContain("swarm:<id> as where");
-  expect(curatorBrief(PROJECT)).toContain("applied and misled counts");
 });
 
 test.each(["missing", "other-role", "in-code", "stale", "disabled", "withdrawn", "project", "machine"])("curator refuses %s swarm evidence atomically", async scenario => {

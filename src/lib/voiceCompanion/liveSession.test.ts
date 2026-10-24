@@ -981,7 +981,6 @@ test("the Live backend answers board questions with read tools and the prompt ke
   f.provider.replay(s.providerId, said("What is on the board?", 0), delegationCreated("question", 900));
   await f.service.drain(s.sessionId);
   expect(f.sends()).toBe(0);
-  expect(f.provider.requests[0].instructions).toContain("Send only an explicit operator request");
   await f.service.close(s.sessionId);
 });
 

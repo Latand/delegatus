@@ -286,7 +286,6 @@ test.each(["enabled", "disabled", "long-reservation"])("prototype owner control 
     if (kind === "long-reservation") {
       expect(Buffer.byteLength(decision.delivery.text)).toBeLessThanOrEqual(32_000);
       expect(decision.delivery.text).toContain("recommended with reservation");
-      expect(decision.delivery.text).toContain("Read read_prototype_review");
       expect(decision.delivery.text).not.toContain("\uFFFD");
     } else expect(decision.delivery.text).toBe(prototypeDecisionText(task, round, decision));
     expect(readAnswerRecord(paired.id, "target_1", request.request_id)?.profile).toMatchObject({ owner: true, prototype: round.id });
@@ -2419,7 +2418,6 @@ test("X4 six owner runs extend the existing X2 capture format", async () => {
         expect(run.calls.map((call) => "tool" in call && call.tool)).toEqual([
           "owner_list_grids", "owner_create_grid", "owner_create_grid", "owner_attach_grid_chats", "owner_activate_clone", "owner_activate_clone"]);
         expect(run.calls[4]).toEqual(run.calls[5]); expect(waits).toEqual([7000]);
-        expect(run.rounds[1].prompt).toContain("further distinct owner writes requested");
         expect(projectionsOf(run, 3).at(-1).output).toBe("");
         expect(run.rounds[4].prompt).toContain("11 calls are left.");
         expect(projectionsOf(run, 4).at(-1).output).toBe((calls.at(-1)!.attempts.at(-1)!.response as ToolCallResult).output);
@@ -2439,7 +2437,6 @@ test("X4 six owner runs extend the existing X2 capture format", async () => {
         expect(projection).not.toHaveProperty("confirmation_id"); expect(projection).not.toHaveProperty("expires_at");
         expect(run.rounds[1].prompt).not.toContain("confirmation_owner_x4");
         expect(run.rounds[1].prompt).not.toContain("2026-10-10T00:10:00Z");
-        expect(run.rounds[1].prompt).toContain("nothing you can call confirms it");
         expect(run.rounds[1].schema).toEqual(answerSchema);
       }
       // The regeneration command selects this test alone. Refuse malformed
@@ -2513,7 +2510,6 @@ for (const choice of ["reply", "call", "handoff", "ignore"])
     expect(new Set(run.calls.map((body) => JSON.stringify(body))).size).toBe(1);
     expect(projectionsOf(run)[0]).toMatchObject({ status: "denied", code: "unavailable", effect: "action", execution_unknown: true });
     expect(run.rounds[1].schema).toEqual(replyAnswerSchema);
-    expect(run.rounds[1].prompt).toContain("execution_unknown means the action may have happened");
     expect(run.rounds).toHaveLength(2);
     expect(run.record!.toolCalls![0]).toMatchObject({ status: "denied", code: "unavailable", replayed: true, local: false });
     expect(run.completion).toMatchObject(choice === "reply" ? { outcome: "answered" } : { outcome: "failed", reason: "invalid_answer" });

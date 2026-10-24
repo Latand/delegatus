@@ -61,7 +61,6 @@ for (const enabled of [true, false]) test(`launch brief reads this project's mer
   expect(setMergeOnReview("other-project", !enabled, "fixture", new Date(NOW).toISOString())).not.toBeNull();
   await h.controller.launchIfDue(input());
   expect(String(h.bodies[0].prompt)).toContain(`Project mergeOnReview: ${enabled ? "on" : "off"}`);
-  expect(String(h.bodies[0].prompt)).toContain("Never reopen an existing Done task only because deployment is pending or unread");
 });
 test("card exists before spawn, with icon, colour, description and task binding in body", async () => {
   const h = harness(); await h.controller.launchIfDue(input());

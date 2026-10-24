@@ -1269,3 +1269,84 @@ and stays:
 - **Trimming string checks on runtime outcome text** (refusal wording, journal
   and card details, spoken replies). Out of scope: those checks observe
   behaviour the pinned specification keeps.
+
+## Removal implementation (2026-10-24)
+
+Applied every delete-file, delete-block and trim row above. The compiler inventory
+counts 88 fewer test definitions and 789 fewer assertion calls across 76 changed
+test files; 73 files retain behavioural tests. No tests were added. Unused
+helpers, imports and the unreferenced prototype-publication constant were removed;
+the stored-mandate and relay fixtures remain in use. AGENTS.md carries one line
+about checking behaviour. The workflows are unchanged.
+
+The remote gate returned exit 75 after three SSH connection timeouts. Its
+documented local fallback is used, one command at a time through the owned gate
+wrapper, from a scratch export. Every test file gets fresh HOME, XDG directories,
+TMPDIR and LLV_STATE_DIR, with LLV_VIEWER_CONTROL_URL on a closed loopback port.
+
+The implementation review also found the unlisted handoff-only owner-prompt
+hash in `src/lib/externalRelay/ownerTier.test.ts` (original lines 826–833). It
+freezes amended guidance wording and has no stored-format or switch-off reader,
+so that test is removed under the same rule as the stage-input hash.
+
+### Verification of the removal
+
+Checks ran on Bun 1.4.0. The head selection is every surviving changed test file,
+by explicit path: `bun run test <file>` (the project script sets the case timeout
+to 60 seconds). All 73 files have completed records: 52 green files, 2,280 passes,
+115 failures and seven skips. Every failing file was then run whole on the
+original `3736d5e4` base with the same dependency graph, wrapper and isolation.
+There are no head-only test failure identities; module-level setup failures also
+match their base assertion and expected/received values.
+
+| Failing file | Head pass / fail | Base pass / fail |
+|---|---:|---:|
+| `src/lib/externalRelay/ownerOutboundContext.test.ts` | 17 / 5 | 17 / 5 |
+| `src/lib/externalRelay/ownerTier.test.ts` | 52 / 1 | 53 / 1 |
+| `src/lib/externalRelay/runner.test.ts` | 318 / 2 | 318 / 2 |
+| `src/lib/links/seatMessages.http.test.ts` | 6 / 18 | 6 / 18 |
+| `src/lib/mcp/autoUpdates.test.ts` | 16 / 4 | 17 / 4 |
+| `src/lib/mcp/reportTools.test.ts` | 5 / 1 | 5 / 1 |
+| `src/lib/mcp/retirementStatus.integration.test.ts` | 3 / 16 | 3 / 16 |
+| `src/lib/mcp/retryStageLaunch.integration.test.ts` | 2 / 4 | 2 / 4 |
+| `src/lib/mcp/spawnDeployer.test.ts` | 15 / 2 | 15 / 2 |
+| `src/lib/mcp/stdio.integration.test.ts` | 36 / 17 | 36 / 17 |
+| `src/lib/mcp/taskBoardVisibility.integration.test.ts` | 0 / 1 | 0 / 1 |
+| `src/lib/mcp/taskColor.integration.test.ts` | 0 / 1 | 0 / 1 |
+| `src/lib/mcp/taskColorGroupHide.integration.test.ts` | 0 / 1 | 0 / 1 |
+| `src/lib/mcp/taskDetails.integration.test.ts` | 0 / 1 | 0 / 1 |
+| `src/lib/mcp/taskLineEdits.integration.test.ts` | 0 / 1 | 0 / 1 |
+| `src/lib/mcp/taskPriority.integration.test.ts` | 0 / 1 | 0 / 1 |
+| `src/lib/memory/roleLane.test.ts` | 2 / 1 | 2 / 1 |
+| `src/lib/monitor/seatTickController.reporting.test.ts` | 21 / 31 | 21 / 31 |
+| `src/lib/pipelines/stageInput.test.ts` | 15 / 2 | 12 / 5 |
+| `src/lib/runtime/startup.test.ts` | 148 / 4 | 148 / 4 |
+| `src/lib/voiceCompanion/tools.test.ts` | 11 / 1 | 11 / 1 |
+
+The base's three additional `stageInput` failures are the whole-prompt hash
+assertions removed by its trim. Six task integration files stop at the same
+module-level state-root assertion on both versions. `roleLane` and
+`retirementStatus` also report the same owned-child teardown failures.
+The HTTP file's failed cases emit secondary teardown network errors: 15 on the
+head, 13 on the base. The socket/connection/server-exit diagnostics vary after
+case timeouts; its six passing cases and 18 failing test identities match.
+These runs retain the baseline's setup and teardown limitations.
+
+The source and fixture literal inventory found no new retained test input;
+only the stage-input test title changes to describe its remaining checks.
+Agent-facing production strings retain their bytes apart from deleting the
+unread constant.
+A refreshed main changes 14 files from the audit base and none of the audited
+test files. No workflow file was changed.
+
+Final additional checks:
+
+- `bun x tsc --noEmit --incremental false`: pass on the final source.
+- `bun scripts/eslint-changes.ts --base 3736d5e4 <touched TypeScript paths>`:
+  zero introduced errors across 76 files; 27 existing base errors in
+  `src/lib/mcp/answerSizes.test.ts` remain nonblocking under the project gate.
+- ESLint's unused-declaration diagnostics compared with the original base:
+  zero introduced unused declarations.
+- `bun scripts/privacy-publication-gate.ts --base origin/main
+  --require-known-values --paths <surviving touched paths>`: pass.
+  The ordinary commit hooks repeat staged whitespace, privacy and scoped lint.

@@ -32,11 +32,10 @@ const VERIFIER_FENCES = [
      governs repository mutation only, so the rule has to be stated;
    - 13 to 16 and the second halves of 6, 8 and 12 are the learned-rule
      classes that two or more projects or roles taught (role-memory-to-prompts.md §2.2).
-   PROCESS_CLEANUP_MARKER is what the tests pin, so the wording around it can
-   change. Where the stages' Delegatus tools carry a principle (search_transcripts
+   Where the stages' Delegatus tools carry a principle (search_transcripts
    for 3, needs_decision for 4 and 7, $TMPDIR for 16), the launch path says so
    once: the stage wrapper and the spawn line. */
-export const PROCESS_CLEANUP_MARKER = "stop only the processes you started yourself";
+const PROCESS_CLEANUP_MARKER = "stop only the processes you started yourself";
 export const WORKING_RULES_HEADING = "Working rules (every role, every project)";
 export const WORKING_RULES = [
   WORKING_RULES_HEADING,
@@ -183,14 +182,11 @@ attention: <task id> | <the unresolved question and the next step it blocks, in 
 left: <task id> | <why you left it alone>
 An attention line carries two or three real alternatives and a final waits: field naming the blocked next step. Apply existing rules and the seat's mandate before asking. Daily digests, corrected statuses, old tasks, missing assignees and other routine maintenance outcomes use left lines and go only to the report. Write no attention line when nothing waits for the operator's answer. Questions about tasks are the normal result of a completed run, so such a run finishes with pass. Finish with fail only when you could not complete the pass, for example because the board or the forge could not be read, and say what stopped you. Use needs_decision only when the run itself cannot go on without the operator.`;
 
-/** Prototype lanes are built by the seat and read by every prototype-capable
-    stage from the stage wrapper, which renders at every launch. */
-export const PROTOTYPE_PUBLICATION_RULE = "For prototype work, render numbered variants with names, descriptions and a frame directory in your report. The lane is prototype → visual-critic (onFail proto-fix, maxRounds 2, onExhausted advance) → publish. Only its publish stage calls publish_prototype_review after the critic passes or its findings are fixed; omit taskId.";
 // #2518 — a seat that meets a Delegatus failure holds the evidence and had no
 // sanctioned way to report it; filing by itself would put private data into a
 // public repository. The reporter judges, the tool offers hints, and nobody but the
-// operator approves. ISSUE_REPORT_SCRUB_RULE is what the test pins.
-export const ISSUE_REPORT_SCRUB_RULE =
+// operator approves.
+const ISSUE_REPORT_SCRUB_RULE =
   "The report is public, so it carries none of these: hostnames, domains, IP addresses, ports, local paths, usernames, account names, emails, project or repository names other than Delegatus, conversation, task or pipeline ids, people's names, secrets, usage or plan data, or quotes from the operator's conversations. Describe a thing by its kind (\"a second project\", \"account A\", \"a builder stage\") and say in your own words what a message said. Attach no image: say what the screen showed, and note that a screenshot may follow once the operator has redacted it.";
 const ISSUE_REPORTER_BODY = `You are an Issue-reporter. The brief describes something Delegatus did wrong, and the operator has agreed that a report may be prepared. You prepare it and return a preview. You never publish.
 
@@ -207,13 +203,12 @@ Verdict: pass with the preview, or with the duplicate issue's number; needs_deci
 // The operator, 2026-10-06: the last check of a UI lane looks only at the
 // rendered screens and finds every ugliness and every piece of information that
 // should not be shown. Started from the screenshot check a seat wrote for a
-// prototype review lane; VISUAL_CRITIC_CLASSES and VISUAL_CRITIC_UNFRAMED are
-// what the test pins. A screen the critic cannot see is the operator's call: a
+// prototype review lane. A screen the critic cannot see is the operator's call: a
 // finding without a frame would send the lane to driver work. Which drivers
 // render a project's screens is the project's own instruction files' to say.
-export const VISUAL_CRITIC_UNFRAMED =
+const VISUAL_CRITIC_UNFRAMED =
   "needs_decision with no findings, naming each surface and what stopped its frames; what the frames you did produce show goes in the summary.";
-export const VISUAL_CRITIC_CLASSES =
+const VISUAL_CRITIC_CLASSES =
   "Ugliness: misalignment, clipping, overlap, cramped or uneven spacing, wrong emphasis, inconsistent colours or sizes, visual noise. Information the operator does not need to see: technical text, ids, paths, counters, debug detail, a fact shown twice. Unclear use: clutter, no clear place to click or no single main action, many identical elements side by side.";
 const VISUAL_CRITIC_BODY = `You are a Visual-critic. You judge only the rendered screens of the change the brief names; when it names none, of the commits in this worktree since the base commit the stage or the brief names. Do not review code, tests or architecture.
 

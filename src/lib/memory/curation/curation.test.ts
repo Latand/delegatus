@@ -20,7 +20,7 @@ import { curatorCallerOf } from "./guard";
 import { readCuration } from "./read";
 import { productionCurationController } from "./run";
 import { permitCuratorTool } from "@/lib/mcp/toolAllowlist";
-import { CURATOR_CHECKLIST } from "./brief";
+
 import { reconcileSeatTick, runSeatTickCheck } from "@/lib/monitor/seatTickController";
 import { emptySeatTickState } from "@/lib/monitor/types";
 import { writeSeatTickState } from "@/lib/monitor/seatTickState";
@@ -769,7 +769,6 @@ test("the v1 row kinds and optional metadata survive an apply, and clean curator
   expect(rows.some(r => r.kind === "rule" && r.versionOf === one)).toBe(true);
   expect(rows.some(r => r.kind === "scope" && r.scope === "role:*:builder" && r.active.includes(one))).toBe(true);
   expect(roleIsClean("curator")).toBe(true);
-  for (const outcome of ["task-specific", "stale", "in-code", "in-instructions", "no-reader", "contradicted"]) expect(CURATOR_CHECKLIST).toContain(outcome);
 });
 test("a direct health check has no curator; tick hooks run around gathering and failures reach the journal", async () => {
   fixture(); const registry = new AgentRegistry(path.join(dir, "registry.json"));
