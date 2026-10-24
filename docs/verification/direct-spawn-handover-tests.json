@@ -1445,7 +1445,7 @@
           "a cross-process SQLite pipeline commit invalidates a warm files projection",
           "project query changes reuse one global scan snapshot",
           "issue 1168: the seat's open bridge ask rides the files payload and clears on the answering directive",
-          "issue 1168: a seat rekeyed since it filed keeps one identity — the ask reaches its card and the directive still clears it",
+          "issue 1168: a seat rekeyed since it filed keeps one identity \u2014 the ask reaches its card and the directive still clears it",
           "a burst of concurrent and rapid sequential polls over an unchanged corpus causes one build",
           "a project-scoped burst keeps its own representation without rebuilding the unscoped one"
         ],
@@ -1470,7 +1470,7 @@
             "a cross-process SQLite pipeline commit invalidates a warm files projection",
             "project query changes reuse one global scan snapshot",
             "issue 1168: the seat's open bridge ask rides the files payload and clears on the answering directive",
-            "issue 1168: a seat rekeyed since it filed keeps one identity — the ask reaches its card and the directive still clears it",
+            "issue 1168: a seat rekeyed since it filed keeps one identity \u2014 the ask reaches its card and the directive still clears it",
             "a burst of concurrent and rapid sequential polls over an unchanged corpus causes one build",
             "a project-scoped burst keeps its own representation without rebuilding the unscoped one"
           ],
@@ -1496,7 +1496,7 @@
             "a cross-process SQLite pipeline commit invalidates a warm files projection",
             "project query changes reuse one global scan snapshot",
             "issue 1168: the seat's open bridge ask rides the files payload and clears on the answering directive",
-            "issue 1168: a seat rekeyed since it filed keeps one identity — the ask reaches its card and the directive still clears it",
+            "issue 1168: a seat rekeyed since it filed keeps one identity \u2014 the ask reaches its card and the directive still clears it",
             "a burst of concurrent and rapid sequential polls over an unchanged corpus causes one build",
             "a project-scoped burst keeps its own representation without rebuilding the unscoped one"
           ],
@@ -1518,7 +1518,7 @@
             "a cross-process SQLite pipeline commit invalidates a warm files projection",
             "project query changes reuse one global scan snapshot",
             "issue 1168: the seat's open bridge ask rides the files payload and clears on the answering directive",
-            "issue 1168: a seat rekeyed since it filed keeps one identity — the ask reaches its card and the directive still clears it",
+            "issue 1168: a seat rekeyed since it filed keeps one identity \u2014 the ask reaches its card and the directive still clears it",
             "a burst of concurrent and rapid sequential polls over an unchanged corpus causes one build",
             "a project-scoped burst keeps its own representation without rebuilding the unscoped one"
           ],
@@ -1669,7 +1669,7 @@
           "fail": 1
         },
         "failed": [
-          "a fenced attempt is described whole — record, journal answer and exits — without ending the send or leaking the payload"
+          "a fenced attempt is described whole \u2014 record, journal answer and exits \u2014 without ending the send or leaking the payload"
         ],
         "complete": true,
         "betweenTests": false,
@@ -1685,7 +1685,7 @@
             "fail": 1
           },
           "failed": [
-            "a fenced attempt is described whole — record, journal answer and exits — without ending the send or leaking the payload"
+            "a fenced attempt is described whole \u2014 record, journal answer and exits \u2014 without ending the send or leaking the payload"
           ],
           "complete": true,
           "betweenTests": false,
@@ -1702,7 +1702,7 @@
             "fail": 1
           },
           "failed": [
-            "a fenced attempt is described whole — record, journal answer and exits — without ending the send or leaking the payload"
+            "a fenced attempt is described whole \u2014 record, journal answer and exits \u2014 without ending the send or leaking the payload"
           ],
           "complete": true,
           "betweenTests": false,
@@ -1715,7 +1715,7 @@
             "fail": 1
           },
           "failed": [
-            "a fenced attempt is described whole — record, journal answer and exits — without ending the send or leaking the payload"
+            "a fenced attempt is described whole \u2014 record, journal answer and exits \u2014 without ending the send or leaking the payload"
           ],
           "complete": true,
           "betweenTests": false,
@@ -10924,11 +10924,11 @@
           "claude-code receives JSON once through the stable launcher and keeps liveness diagnostics",
           "a managed stdio server never opens local receipts even while that database is locked",
           "a launched stdio server releases repeated large read answers without loading its domain stores",
-          "send: acceptance, lost response, original-key recovery — one recipient delivery, across process restart",
+          "send: acceptance, lost response, original-key recovery \u2014 one recipient delivery, across process restart",
           "lookup before acceptance stays unknown, late acceptance is then found, and a late original response never regresses the terminal answer",
           "spoofing and concurrency: another caller, a changed payload, and two processes racing one key",
-          "send: admitted, response lost BEFORE the recipient acts, original-key recovery across MCP and host restart — one recipient delivery",
-          "send: a delayed 409 after recovery already proved delivery never regresses the answer — across MCP restart, one recipient delivery",
+          "send: admitted, response lost BEFORE the recipient acts, original-key recovery across MCP and host restart \u2014 one recipient delivery",
+          "send: a delayed 409 after recovery already proved delivery never regresses the answer \u2014 across MCP restart, one recipient delivery",
           "send_message: proxy errors after actual effect recover the original identity across process restart",
           "path-only send: late registration after binding, lost response, and restart retain one delivery",
           "send_message: incomplete successful JSON recovers admission before execution and across restart",
@@ -10956,11 +10956,11 @@
             "claude-code receives JSON once through the stable launcher and keeps liveness diagnostics",
             "a managed stdio server never opens local receipts even while that database is locked",
             "a launched stdio server releases repeated large read answers without loading its domain stores",
-            "send: acceptance, lost response, original-key recovery — one recipient delivery, across process restart",
+            "send: acceptance, lost response, original-key recovery \u2014 one recipient delivery, across process restart",
             "lookup before acceptance stays unknown, late acceptance is then found, and a late original response never regresses the terminal answer",
             "spoofing and concurrency: another caller, a changed payload, and two processes racing one key",
-            "send: admitted, response lost BEFORE the recipient acts, original-key recovery across MCP and host restart — one recipient delivery",
-            "send: a delayed 409 after recovery already proved delivery never regresses the answer — across MCP restart, one recipient delivery",
+            "send: admitted, response lost BEFORE the recipient acts, original-key recovery across MCP and host restart \u2014 one recipient delivery",
+            "send: a delayed 409 after recovery already proved delivery never regresses the answer \u2014 across MCP restart, one recipient delivery",
             "send_message: proxy errors after actual effect recover the original identity across process restart",
             "path-only send: late registration after binding, lost response, and restart retain one delivery",
             "send_message: incomplete successful JSON recovers admission before execution and across restart",
@@ -10989,11 +10989,11 @@
             "claude-code receives JSON once through the stable launcher and keeps liveness diagnostics",
             "a managed stdio server never opens local receipts even while that database is locked",
             "a launched stdio server releases repeated large read answers without loading its domain stores",
-            "send: acceptance, lost response, original-key recovery — one recipient delivery, across process restart",
+            "send: acceptance, lost response, original-key recovery \u2014 one recipient delivery, across process restart",
             "lookup before acceptance stays unknown, late acceptance is then found, and a late original response never regresses the terminal answer",
             "spoofing and concurrency: another caller, a changed payload, and two processes racing one key",
-            "send: admitted, response lost BEFORE the recipient acts, original-key recovery across MCP and host restart — one recipient delivery",
-            "send: a delayed 409 after recovery already proved delivery never regresses the answer — across MCP restart, one recipient delivery",
+            "send: admitted, response lost BEFORE the recipient acts, original-key recovery across MCP and host restart \u2014 one recipient delivery",
+            "send: a delayed 409 after recovery already proved delivery never regresses the answer \u2014 across MCP restart, one recipient delivery",
             "send_message: proxy errors after actual effect recover the original identity across process restart",
             "path-only send: late registration after binding, lost response, and restart retain one delivery",
             "send_message: incomplete successful JSON recovers admission before execution and across restart",
@@ -11019,11 +11019,11 @@
             "claude-code receives JSON once through the stable launcher and keeps liveness diagnostics",
             "a managed stdio server never opens local receipts even while that database is locked",
             "a launched stdio server releases repeated large read answers without loading its domain stores",
-            "send: acceptance, lost response, original-key recovery — one recipient delivery, across process restart",
+            "send: acceptance, lost response, original-key recovery \u2014 one recipient delivery, across process restart",
             "lookup before acceptance stays unknown, late acceptance is then found, and a late original response never regresses the terminal answer",
             "spoofing and concurrency: another caller, a changed payload, and two processes racing one key",
-            "send: admitted, response lost BEFORE the recipient acts, original-key recovery across MCP and host restart — one recipient delivery",
-            "send: a delayed 409 after recovery already proved delivery never regresses the answer — across MCP restart, one recipient delivery",
+            "send: admitted, response lost BEFORE the recipient acts, original-key recovery across MCP and host restart \u2014 one recipient delivery",
+            "send: a delayed 409 after recovery already proved delivery never regresses the answer \u2014 across MCP restart, one recipient delivery",
             "send_message: proxy errors after actual effect recover the original identity across process restart",
             "path-only send: late registration after binding, lost response, and restart retain one delivery",
             "send_message: incomplete successful JSON recovers admission before execution and across restart",
@@ -22078,5 +22078,130 @@
       "The final fixture, final typecheck, final focused run and full importer rerun did not start.",
       "No performance gain is claimed. Tests used private state and fake engines."
     ]
+  },
+  "continuationVerification": {
+    "recordedUtc": "2026-10-24T20:08:33.165244+00:00",
+    "status": "prefix-complete-importers-pending",
+    "head": "ee2be343506a5fa483650d0826569f03a0445fec",
+    "tree": "787913b9af1d801183bbb76992a80c73137b41e7",
+    "sourceSha256": {
+      "src/lib/agent/registry.ts": "73af43a944ac6ba623bd799a1568761641c7524802f011c5c184cca8e2f87fe8",
+      "src/lib/agent/spawnCommand.ts": "6360dbc2458bd64f4e11fc5d932155e785eb5e5bc7b383509cb22b2af04adc11",
+      "src/lib/agent/spawnCommand.contention.test.ts": "8f0c4d760ea0232afaa5ef8e4e6c6133614f5f6b24d1285ba85c9eb313ae4a44",
+      "src/lib/runtime/structuredSpawn.ts": "eaddb832a9944cf375d8db910b43f77d5dd4daa7708e314316098d063e013d8a",
+      "src/lib/runtime/admissionBudget.ts": "897cdc532c92ec74c3da4bfc5fb593bbfe2cd84cf8ab2f4ef3ae13bd902eccd3",
+      "src/lib/pipelines/engine.ts": "00bf2067baadd24e91aa1a520bda1a456e8b50e3642308fdebd98b635ae27aab",
+      "src/lib/runtime/startup.ts": "e1c231b3932e75a1946f9421a10e86654d950ed70149145dcb506baf56692efb",
+      "src/lib/runtime/releaseInterruption.test.ts": "bb62120579c66a07f2812c321f132587967abd2ef4f62a0c7d33f5046270fdac",
+      "src/app/api/spawn/route.test.ts": "41738be7b261f73b0d82bca979e678ebf5e5cab9d7848d077ed25564ad63cbf7"
+    },
+    "driverSha256": {
+      "launch-final.ts": "24437948203c8831cd45ed353bcdd4dc9981826e238a602dd94e67ed5717d33d",
+      "verify-final.ts": "fbc52f1248cd6a4fdf8f1540f4cf669f00945879deac0b11d637b823ffbcb654",
+      "launch-importers.ts": "a98692997c526281cc7e7f5c6cde5522e46959d38a653999f7b42d668c9101f1",
+      "verify-supplement.ts": "bfa6db923321b20fd5258032d2ab07e150ebc8ad14d0281ff18ba424c4224b62",
+      "verify-importers.ts": "1bd9c873085aaf1d3f5fdbb8436d0d443c75eb9a2566bbc292039f301edd4544"
+    },
+    "dependencyVersions": {
+      "typescript": "5.9.3",
+      "eslint": "10.9.1",
+      "next": "16.4.1"
+    },
+    "wrapperSha256": "772795bf07b2d0b9c8e7001bdabc084474be7e15983623ad99a849c40cc6f987",
+    "completedChecks": [
+      {
+        "name": "focused",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "--test-name-pattern",
+          "direct spawn|direct admission|independently supervised|quota setup|staged fallback",
+          "src/lib/agent/spawnCommand.contention.test.ts"
+        ],
+        "exit": 0,
+        "seconds": 18.026,
+        "counts": {
+          "pass": 49,
+          "skip": 2,
+          "fail": 0
+        },
+        "complete": true,
+        "failed": []
+      },
+      {
+        "name": "types",
+        "command": [
+          "bun",
+          "x",
+          "tsc",
+          "--noEmit",
+          "--incremental",
+          "false"
+        ],
+        "exit": 0,
+        "seconds": 248.045,
+        "counts": {},
+        "complete": true,
+        "failed": []
+      },
+      {
+        "name": "lint",
+        "command": [
+          "bun",
+          "x",
+          "eslint",
+          "src/lib/agent/registry.ts",
+          "src/lib/runtime/structuredSpawn.ts",
+          "src/lib/agent/spawnCommand.ts",
+          "src/lib/agent/spawnCommand.contention.test.ts"
+        ],
+        "exit": 0,
+        "seconds": 3.562,
+        "counts": {},
+        "complete": true,
+        "failed": []
+      },
+      {
+        "name": "contention",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "src/lib/agent/spawnCommand.contention.test.ts"
+        ],
+        "exit": 1,
+        "seconds": 18.998,
+        "counts": {
+          "pass": 61,
+          "skip": 2,
+          "fail": 3
+        },
+        "complete": true,
+        "failed": [
+          "seat credential capture leaves neighboring spawn, resume and send admission available",
+          "seat spawn revalidates catalog changed during credential capture before committing a baseline or receipt",
+          "seat spawn revalidates credentials changed during credential capture before committing a baseline or receipt"
+        ]
+      }
+    ],
+    "remoteGate": {
+      "exit": 75,
+      "reason": "The remote gate runner was retired; serial local checks use the supplied gate-slot wrapper."
+    },
+    "remaining": [
+      "minimum SQLite guard cases",
+      "pre-fix regression control",
+      "fresh original-base contention comparison",
+      "final-source 402-file importer campaign"
+    ],
+    "upstream": {
+      "commit": "0c7f7a894ce3a4d4ff2b99fb806f837192f403f3",
+      "mergePreviewExit": 1,
+      "conflicts": [
+        "src/lib/pipelines/engine.ts:1"
+      ],
+      "note": "Concurrent Cloud-stage imports overlap the admission-budget import. No upstream changes were incorporated."
+    }
   }
 }
