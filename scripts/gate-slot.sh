@@ -122,7 +122,8 @@ if [[ $reuse_code != 75 ]]; then exit "$reuse_code"; fi
 # (docs/design/remote-gate-runner.md §8.3). The runner file sits under the
 # passwd home, which agents' private HOME and XDG_CONFIG_HOME do not hide. The
 # client either exits with the remote verdict or writes "here", and the command
-# is then admitted and run on this machine as before.
+# is then admitted and run on this machine as before. A saturation decision
+# is advisory: it skips no pressure, queue, slot or containment checks below.
 runner_client="$(dirname "${BASH_SOURCE[0]}")/gate-runner/client.ts"
 if [[ ${LLV_GATE_RUNNER:-} != off && ${NODE_ENV:-} != test && -f $runner_client && $(uname -s 2>/dev/null) == Linux ]] \
   && [[ -n ${LLV_GATE_RUNNER:-} || -n ${LLV_GATE_RUNNER_CONFIG:-} || -f "$(getent passwd "$(id -u)" | cut -d: -f6)/.config/delegatus/gate-runner.json" ]]; then

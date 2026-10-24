@@ -646,6 +646,21 @@ so a local run carries no extra process. Everything else is the client's job,
    - `systemctl --user show-environment` status;
    - the mirror's `refs/heads/main`.
 
+   Before capture and dispatch, a separate, uncached probe reads the one-minute
+   load and online CPU count. At load >= 1.5 per remote CPU, the client chooses
+   local execution only if local load is below 0.75 per CPU, CPU pressure is
+   below the configured release threshold (or pressure admission is disabled),
+   no unsuspended admission tickets are waiting, admission spacing has elapsed,
+   and a gate slot is available. The admission database is read without changing
+   tickets; stale tickets conservatively keep work remote. The client prints
+   and logs both loads and the reason, without marking a saturated runner
+   unhealthy. Missing or malformed load/admission signals keep the remote route;
+   a failed SSH load probe uses the existing unavailable-runner fallback.
+   This decision reserves nothing: the wrapper still performs all local
+   admission and containment checks. It occurs before shipment or any remote
+   execution, so it cannot run a check twice. `LLV_GATE_RUNNER=off` skips both
+   probes and keeps the command local as before.
+
    Healthy means:
    - the Bun version equals the version running the client
      (`Bun.version`);
