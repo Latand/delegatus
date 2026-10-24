@@ -2155,6 +2155,13 @@ function pipelineSettledForArchive(pipeline: Pipeline, nowMs: number): boolean {
   if (pipeline.unconfirmedHosts?.length) return false;
   if (["completed", "closed"].includes(pipeline.state) && !pipeline.closeTeardown && !pipeline.terminalReap?.settledAt
     && pipelineHasRecordedHost(pipeline)) return false;
+  /* The task-finish sweep reads the hot collection and records its durable
+     outcome on the marked lane. Keep that lane visible to the sweep while any
+     linked mark is unresolved, including while another lane on the task is
+     still open. Once every mark has a finish receipt, ordinary archival is
+     safe (and a task reopened afterwards intentionally stays open). */
+  const finishedTasks = new Set((pipeline.taskFinishes ?? []).map((finish) => finish.taskId));
+  if (pipeline.state === "completed" && (pipeline.finishesTaskIds ?? []).some((taskId) => pipeline.taskIds.includes(taskId) && !finishedTasks.has(taskId))) return false;
   /* Closed records archive on closedAt. A discarded draft now closes like
      anything else (#1274), but records discarded before that fix are hidden
      with no closedAt at all, so their hiddenAt still stands in. Anything still

@@ -903,6 +903,49 @@ test("settled pipelines archive out of the hot registry and stay readable", asyn
   }
 });
 
+test("a completed lane waiting to finish its marked task stays hot past the archive age", async () => isolatedDelivery(async () => {
+  const pipeline = buildPipeline({
+    id: "marked-waiting", task: "Finish the shared task", project: "fixture", repoDir: "/repo",
+    stages: [{ id: "build", kind: "run", prompt: "build", next: null,
+      effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } }],
+    srcPath: null, srcConversationId: null, now: "2026-07-01T00:00:00.000Z",
+  });
+  pipeline.state = "completed";
+  pipeline.closedAt = "2026-07-02T00:00:00.000Z";
+  pipeline.cursor = null;
+  pipeline.taskIds = ["task-shared"];
+  pipeline.finishesTaskIds = ["task-shared"];
+  pipeline.taskFinishWaits = [{ taskId: "task-shared", since: pipeline.closedAt, open: ["other-lane"] }];
+  savePipelines([pipeline]);
+
+  expect(await archiveSettledPipelines(Date.parse("2026-07-10T00:00:00.000Z"))).toBe(0);
+  expect(loadPipelines().map((row) => row.id)).toEqual([pipeline.id]);
+  expect(loadArchivedPipelines()).toEqual([]);
+
+  // Every linked mark needs a receipt, including when only one task has settled.
+  pipeline.taskIds.push("task-second");
+  pipeline.finishesTaskIds.push("task-second", "task-unlinked");
+  pipeline.taskFinishes = [{ taskId: "task-shared", at: "2026-07-09T00:00:00.000Z", outcome: "moved" }];
+  savePipelines([pipeline]);
+  expect(await archiveSettledPipelines(Date.parse("2026-07-10T00:00:00.000Z"))).toBe(0);
+  pipeline.taskFinishes.push({ taskId: "task-second", at: "2026-07-09T00:00:00.000Z", outcome: "already-done" });
+  savePipelines([pipeline]);
+  expect(await archiveSettledPipelines(Date.parse("2026-07-10T00:00:00.000Z"))).toBe(1);
+  expect(loadPipelines()).toEqual([]);
+  expect(findPipelineRecord(pipeline.id)?.taskFinishes).toEqual(pipeline.taskFinishes);
+
+  // A cancelled lane cannot finish tasks; its marks must not prevent archival.
+  const cancelled = deliveryFixture("marked-cancelled");
+  cancelled.state = "closed";
+  cancelled.closedAt = pipeline.closedAt;
+  cancelled.cursor = null;
+  cancelled.taskIds = ["task-shared"];
+  cancelled.finishesTaskIds = ["task-shared"];
+  savePipelines([cancelled]);
+  expect(await archiveSettledPipelines(Date.parse("2026-07-10T00:00:00.000Z"))).toBe(1);
+  expect(loadPipelines()).toEqual([]);
+}));
+
 test("pipeline archival rolls back failures and publishes one cross-collection snapshot", async () => {
   const previous = process.env.LLV_STATE_DIR;
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipelines-archive-atomic-"));
