@@ -1162,6 +1162,12 @@ async function actuateQueuedPinnedSpawn(
     throw error;
   }
   assertActive();
+  if (response?.path && receipt.accountId !== account.accountId) {
+    const { recordActualSpawnAccountOffLoop } = await import("@/lib/agent/spawnCommand");
+    assertActive();
+    await recordActualSpawnAccountOffLoop(registry, admissionClaim.receipt, account.accountId, response.path);
+    assertActive();
+  }
   if (claimedQueue.parentArtifactPath && response?.path) {
     try {
       rememberHandoffChild(response.path, claimedQueue.parentArtifactPath);

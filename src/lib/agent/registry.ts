@@ -7000,6 +7000,10 @@ export class AgentRegistry {
         throw new Error("structured spawn admission ownership changed");
       }
       if (receipt.queuedPinnedSpawn?.admissionDeadlineAt) {
+        receipt.launchProfile = emptyLaunchProfile({
+          ...receipt.launchProfile,
+          title: receipt.queuedPinnedSpawn.spec.launchProfile?.title,
+        }, this.mcpGrantPolicy);
         receipt.hostSetupStartedAt = new Date(startedAt).toISOString();
         receipt.queuedPinnedSpawn = null;
       }
@@ -7368,6 +7372,14 @@ export class AgentRegistry {
       receipt.queuedPinnedSpawn = null;
     }
 
+    // The structured launcher supplies the host's account at staging; the
+    // receipt keeps the requested pin. Later evidence retains this operation's
+    // recorded account rather than choosing another one from a snapshot.
+    let actualAccountId = receipt.accountId;
+    if (receipt.transport === "structured" && entry.structuredHostOperationId === launchId) {
+      actualAccountId = prior?.structuredHostOperationId === launchId && prior.artifactPath === entry.artifactPath
+        ? prior.accountId : entry.accountId ?? receipt.accountId;
+    }
     const createdAt = now();
     const conversation = existingConversation ?? {
       id: receipt.conversationId,
@@ -7430,7 +7442,7 @@ export class AgentRegistry {
       if (continued) {
         if (!conversation.continuityPaths.includes(continued.path)) conversation.continuityPaths.push(continued.path);
         continued.path = entry.artifactPath;
-        continued.accountId = receipt.accountId ?? continued.accountId;
+        continued.accountId = actualAccountId ?? continued.accountId;
         continued.launchProfile = { ...continued.launchProfile, ...receipt.launchProfile };
       } else {
         const previous = conversation.generations.at(-1);
@@ -7438,7 +7450,7 @@ export class AgentRegistry {
         conversation.generations.push({
           id: nativeId,
           path: entry.artifactPath,
-          accountId: receipt.accountId,
+          accountId: actualAccountId,
           launchProfile: receipt.launchProfile,
           historyHash: null,
           host: null,
@@ -7476,7 +7488,7 @@ export class AgentRegistry {
       conversation.generations.push({
         id: nativeGenerationId(entry.artifactPath),
         path: entry.artifactPath,
-        accountId: receipt.accountId,
+        accountId: actualAccountId,
         launchProfile: receipt.launchProfile,
         historyHash: null,
         host: null,
@@ -7512,7 +7524,7 @@ export class AgentRegistry {
 
     const full: AgentRegistryEntry = {
       ...entry,
-      accountId: receipt.accountId,
+      accountId: actualAccountId,
       launchProfile: receipt.launchProfile,
       updatedAt: createdAt,
     };
@@ -7674,9 +7686,10 @@ export class AgentRegistry {
         storedEvidence = entry;
       }
       if (storedEvidence && (storedEvidence.structuredHost?.process || storedEvidence.claimOwner)
-        && receipt.accountId !== storedEvidence.accountId) {
-        // Settlement attributes an entry to the receipt's birth account. A
-        // stale or unknown account cannot rebind an already-owned writer.
+        && receipt.accountId !== storedEvidence.accountId
+        && (receipt.transport !== "structured" || storedEvidence.structuredHostOperationId !== launchId)) {
+        // Only this launch's staged writer can retain an admitted fallback.
+        // A stale receipt cannot rebind another operation's owned writer.
         return { kind: "conflict", receipt: clone(receipt), code: "spawn_identity_conflict" };
       }
       /* Runtime snapshots prove delivery and session identity, while the

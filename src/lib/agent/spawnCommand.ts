@@ -1600,12 +1600,13 @@ export async function recordActualSpawnAccountOffLoop(
     entry?.structuredHostOperationId, entry?.structuredHost?.writerClaimEpoch, entry?.structuredHost?.process]);
   const expectedCustody = custody(priorEntry);
   await registry.deliveryWriteBatchOrBusy({ label: "registry.spawn-actual-account", operationId: receipt.launchId }, () => {
-    const snapshot = registry.readOnlySnapshot();
+    const snapshot = registry.spawnRecoverySnapshot([receipt.launchId]);
     const materialized = snapshot.receipts[receipt.launchId];
     if (!materialized?.key || materialized.artifactPath !== agentPath) return;
     const entry = snapshot.entries[sessionKeyId(materialized.key)];
-    const conversation = snapshot.conversations[materialized.conversationId];
+    const conversation = registry.conversation(materialized.conversationId);
     if (!entry || !conversation || conversation.generations.at(-1)?.path !== agentPath
+      || (typeof entry.structuredHostOperationId === "string" && entry.structuredHostOperationId !== receipt.launchId)
       || materialized.conversationId !== prior?.conversationId || custody(entry) !== expectedCustody) return;
     registry.reconcileConversations([{
       engine: materialized.engine,

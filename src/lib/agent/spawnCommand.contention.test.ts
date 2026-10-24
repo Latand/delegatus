@@ -839,9 +839,10 @@ test.each(["pending", "setup", "setup-expired"] as const)("direct admission repl
   } finally { time.mockRestore(); memory.mockRestore(); journal.close(); registry.close(); }
 });
 
-async function realRuntimeAdmission(outcome: "recovered" | "expired" | "legacy-recovered" | "legacy-expired" | "legacy-busy" | "release-refused" | "defer-takeover" | "payload-takeover" | "owner-exit" | "startup-deferred" | "ack-lost" | "owner-released" | "settled" | "command-release" | "recovery-takeover" | "resolution-takeover" | "authorize-release" | "fallback" | "replayed-pin" | "cleanup" | "cleanup-refused" | "watchdog") {
+async function realRuntimeAdmission(outcome: "recovered" | "expired" | "legacy-recovered" | "legacy-expired" | "legacy-busy" | "release-refused" | "defer-takeover" | "payload-takeover" | "owner-exit" | "startup-deferred" | "ack-lost" | "owner-released" | "settled" | "command-release" | "recovery-takeover" | "resolution-takeover" | "authorize-release" | "fallback" | "fallback-staged" | "replayed-pin" | "cleanup" | "cleanup-refused" | "watchdog") {
   const legacy = outcome === "legacy-recovered" || outcome === "legacy-expired" || outcome === "legacy-busy";
   const expired = outcome === "expired" || outcome === "legacy-expired";
+  const fallback = outcome === "fallback" || outcome === "fallback-staged";
   const { RuntimeJournal } = await import("@/runtime-host/journal");
   const { RuntimeHostUnavailableError } = await import("@/lib/runtime/client");
   const { spawnStructuredConversation, recoverPendingStructuredSpawns, terminalizeStaleStructuredSpawns } = await import("@/lib/runtime/structuredSpawn");
@@ -1033,6 +1034,7 @@ async function realRuntimeAdmission(outcome: "recovered" | "expired" | "legacy-r
         if (restart) fs.appendFileSync(restart.ledger, `spawn_${input.receipt.launchId}\n`);
         expect(input.receipt.launchId).toBe(launchId);
         expect(input.prompt).toContain("Continue the task");
+        if (outcome === "fallback-staged") return "held";
       },
     });
   };
@@ -1053,7 +1055,7 @@ async function realRuntimeAdmission(outcome: "recovered" | "expired" | "legacy-r
     const request = () => new NextRequest("http://127.0.0.1/api/spawn", {
       method: "POST",
       headers: { origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", host: "127.0.0.1", "content-type": "application/json" },
-      body: JSON.stringify({ clientAttemptId: `attempt_real_direct_${outcome}`, title: "Runtime handover", engine: "claude", cwd, prompt: "Continue the task", mcpServers: [], ...(outcome === "fallback" ? { accountId: "requested-account" } : legacy || outcome === "replayed-pin" ? { accountId: "claude-test" } : {}) }),
+      body: JSON.stringify({ clientAttemptId: `attempt_real_direct_${outcome}`, title: "Runtime handover", engine: "claude", cwd, prompt: "Continue the task", mcpServers: [], ...(fallback ? { accountId: "requested-account" } : legacy || outcome === "replayed-pin" ? { accountId: "claude-test" } : {}) }),
     });
     const response = await executeSpawnRequest(request(), dependencies);
     expect(response.status).toBe(202);
@@ -1114,11 +1116,12 @@ async function realRuntimeAdmission(outcome: "recovered" | "expired" | "legacy-r
       return;
     }
     expect(receipt.state).toBe("starting");
-    expect(receipt.accountPin).toBe(legacy || outcome === "fallback" || outcome === "replayed-pin");
-    if (outcome === "fallback") {
+    expect(receipt.accountPin).toBe(legacy || fallback || outcome === "replayed-pin");
+    if (fallback) {
       expect(receipt.accountId).toBe("requested-account");
       expect(receipt.queuedPinnedSpawn?.launchAccountId).toBe("claude-test");
     }
+    const expectedTitle = fallback ? receipt.queuedPinnedSpawn!.spec.launchProfile!.title : "Runtime handover";
     expect(receipt.queuedPinnedSpawn?.prompt).toContain("Continue the task");
     expect(() => registry.queuePinnedSpawn(launchId, { ...receipt.queuedPinnedSpawn!, accountId: "different-account" }, "Launch")).toThrow("conflicts");
     expect(() => registry.queuePinnedSpawn(launchId, { ...receipt.queuedPinnedSpawn!, admissionDeadlineAt: "invalid" }, "Launch")).toThrow("conflicts");
@@ -1178,6 +1181,21 @@ async function realRuntimeAdmission(outcome: "recovered" | "expired" | "legacy-r
       }
       await recoverPendingStructuredSpawns(registry, client, recovery);
     }
+    if (outcome === "fallback-staged") {
+      const staged = registry.spawnRecoverySnapshot([launchId]);
+      const pending = staged.receipts[launchId];
+      expect(pending.state).toBe("path-pending");
+      expect(staged.entries[`claude:${pending.key!.sessionId}`].accountId).toBe("claude-test");
+      expect(registry.conversation(pending.conversationId)!.generations.at(-1)?.accountId).toBe("claude-test");
+      // The original first message lands after the launcher returned its staged response.
+      journal.executeOperation({ kind: "send", operationId: `spawn_message_${launchId}`,
+        idempotencyKey: `spawn_${launchId}`, conversationId: pending.conversationId, text: "Continue the task" });
+      journal.transitionOperation(`spawn_message_${launchId}`, "delivered");
+      const { recoverStagedStructuredLaunch } = await import("@/lib/runtime/structuredSpawn");
+      const { stagedLaunchRecovery } = await import("@/lib/runtime/stagedRecovery");
+      const progress = stagedLaunchRecovery(pending)!;
+      await recoverStagedStructuredLaunch(launchId, registry, client, { now: () => progress.nextTryAt });
+    }
     if (expired) {
       receipt = registry.spawnRecoverySnapshot([launchId]).receipts[launchId];
       expect(receipt.state).toBe("starting");
@@ -1196,6 +1214,20 @@ async function realRuntimeAdmission(outcome: "recovered" | "expired" | "legacy-r
       expect(receipt.error).toBe(finalCause!);
     }
     expect(receipt.queuedPinnedSpawn).toBeNull();
+    expect(receipt.launchProfile.title).toBe(expectedTitle);
+    if (!expired) {
+      const snapshot = registry.spawnRecoverySnapshot([launchId]);
+      const entry = snapshot.entries[`claude:${receipt.key!.sessionId}`];
+      const conversation = registry.conversation(receipt.conversationId)!;
+      expect(entry.launchProfile?.title).toBe(expectedTitle);
+      expect(conversation.generations.at(-1)?.launchProfile.title).toBe(expectedTitle);
+      expect(entry.accountId).toBe("claude-test");
+      expect(conversation.generations.at(-1)?.accountId).toBe("claude-test");
+      if (fallback) {
+        expect(receipt.accountId).toBe("requested-account");
+        expect(conversation.pinnedAccountId).toBe("requested-account");
+      }
+    }
     await terminalizeStaleStructuredSpawns(registry, client, recovery);
     expect(starts).toBe(expired ? 0 : 1);
     expect(messages).toBe(expired ? 0 : 1);
@@ -1207,7 +1239,7 @@ async function realRuntimeAdmission(outcome: "recovered" | "expired" | "legacy-r
   }
 }
 
-test.each(["recovered", "expired", "legacy-recovered", "legacy-expired", "legacy-busy", "release-refused", "defer-takeover", "payload-takeover", "owner-exit", "startup-deferred", "ack-lost", "owner-released", "settled", "command-release", "recovery-takeover", "resolution-takeover", "authorize-release", "fallback", "replayed-pin", "cleanup", "cleanup-refused"] as const)("direct spawn uses real runtime admission: %s", realRuntimeAdmission);
+test.each(["recovered", "expired", "legacy-recovered", "legacy-expired", "legacy-busy", "release-refused", "defer-takeover", "payload-takeover", "owner-exit", "startup-deferred", "ack-lost", "owner-released", "settled", "command-release", "recovery-takeover", "resolution-takeover", "authorize-release", "fallback", "fallback-staged", "replayed-pin", "cleanup", "cleanup-refused"] as const)("direct spawn uses real runtime admission: %s", realRuntimeAdmission);
 
 // The parent bounds this real admission loop even when the child's event loop
 // cannot run a test timeout. Controls replace only the production timer seam.
@@ -1318,4 +1350,94 @@ test.each([{ outcome: "recovered", expired: false }, { outcome: "expired", expir
   expect(accepted.deadline).toBe(new Date(600_000).toISOString());
   expect(accepted.cause).toBe(expired ? "runtime host is unavailable" : undefined);
   expect(fs.readFileSync(ledger, "utf8")).toBe(expired ? "failed\n" : `host\nspawn_${accepted.launchId}\n`);
+});
+
+test.each(["json", "sqlite"] as const)("quota setup restores its title with current restrictions and ownership: %s", async storage => {
+  const { AgentRegistry } = await import("./registry");
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const { captureProcessIdentity } = await import("@/lib/processIdentity");
+  const cwd = statePath(`quota-setup-title-${storage}`);
+  fs.mkdirSync(cwd, { recursive: true });
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined,
+    { sqliteMode: storage === "json" ? "off" : "sqlite" });
+  try {
+    const profile = emptyLaunchProfile({ cwd, title: "Continue queued work", readOnly: true, mcpServers: [] });
+    const begun = registry.beginSpawnRequest({ engine: "claude", cwd, transport: "structured",
+      accountId: "account-a", accountPin: true, launchProfile: profile });
+    if (begun.kind !== "created") throw new Error("fixture reservation failed");
+    const owner = begun.receipt.admissionOwner!;
+    expect(owner).not.toBeNull();
+    registry.queuePinnedSpawn(begun.receipt.launchId, {
+      version: 1, accountId: "account-a", retryAt: "2026-10-24T00:00:00.000Z", locale: "en",
+      admissionDeadlineAt: "2026-10-24T00:10:00.000Z", prompt: "Continue the task", imageRefs: [],
+      parentArtifactPath: null,
+      spec: { engine: "claude", command: "claude", cwd, windowName: "quota", launchProfile: { ...profile, readOnly: false } },
+    }, "Waiting for capacity");
+    const queued = registry.spawnReceipt(begun.receipt.launchId)!;
+    expect(() => registry.beginStructuredHostSetup(begun.receipt.launchId,
+      { ...captureProcessIdentity(process.pid), startIdentity: "different-owner" }, 1)).toThrow("ownership changed");
+    expect(registry.spawnReceipt(begun.receipt.launchId)).toEqual(queued);
+    registry.beginStructuredHostSetup(begun.receipt.launchId, owner, 2);
+    const admitted = registry.spawnReceipt(begun.receipt.launchId)!;
+    expect(admitted.queuedPinnedSpawn).toBeNull();
+    expect(admitted.hostSetupStartedAt).toBe(new Date(2).toISOString());
+    expect(admitted.launchProfile).toEqual({ ...queued.launchProfile, title: "Continue queued work" });
+    expect(admitted.launchProfile.readOnly).toBe(true);
+  } finally { registry.close(); }
+});
+
+test.each(["own", "foreign", "forged", "takeover", "transport"] as const)("staged fallback account settlement fences writer evidence: %s", async evidence => {
+  const { AgentRegistry } = await import("./registry");
+  const { recordActualSpawnAccountOffLoop } = await import("./spawnCommand");
+  const { captureProcessIdentity } = await import("@/lib/processIdentity");
+  const cwd = statePath(`staged-fallback-account-${evidence}`);
+  fs.mkdirSync(cwd, { recursive: true });
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"));
+  try {
+    const begun = registry.beginSpawnRequest({ engine: "claude", cwd, transport: evidence === "transport" ? "tmux" : "structured",
+      accountId: "account-a", accountPin: true, launchProfile: { cwd, title: "Continue fallback work" } });
+    if (begun.kind !== "created") throw new Error("fixture reservation failed");
+    const key = { engine: "claude" as const, sessionId: ["21500000", "0000", "4000", "8000", "000000000002"].join("-") };
+    const artifactPath = path.join(cwd, `${key.sessionId}.jsonl`);
+    const staged = registry.stageStructuredSpawn(begun.receipt.launchId, {
+      key, cwd, artifactPath, accountId: "account-b", status: "idle", host: null,
+      structuredHost: { kind: "claude-broker", endpoint: "fake", process: captureProcessIdentity(process.pid),
+        eventCursor: 0, protocolVersion: "fake", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+      claimEpoch: 1, claimOwner: "fixture-writer", pendingAction: "spawn",
+    });
+    if (staged.kind !== "settled") throw new Error(staged.code);
+    if (evidence !== "transport") {
+      expect(staged.entry.accountId).toBe("account-b");
+      expect(staged.conversation.generations.at(-1)?.accountId).toBe("account-b");
+    }
+    if (evidence === "takeover") {
+      const write = registry.deliveryWriteBatchOrBusy.bind(registry);
+      registry.deliveryWriteBatchOrBusy = (async (...args: Parameters<typeof registry.deliveryWriteBatchOrBusy>) => {
+        const entry = registry.spawnRecoverySnapshot([begun.receipt.launchId]).entries[`claude:${key.sessionId}`];
+        registry.upsert({ ...entry, claimOwner: "successor-writer", claimEpoch: 2,
+          structuredHost: { ...entry.structuredHost!, writerClaimEpoch: 2 } });
+        return write(...args);
+      }) as typeof registry.deliveryWriteBatchOrBusy;
+    }
+    if (evidence === "foreign") registry.upsert({ ...registry.spawnRecoverySnapshot([begun.receipt.launchId]).entries[`claude:${key.sessionId}`], structuredHostOperationId: "different-operation" });
+    await recordActualSpawnAccountOffLoop(registry, begun.receipt,
+      evidence === "takeover" || evidence === "foreign" ? "account-c" : "account-b", artifactPath);
+    if (evidence === "takeover") {
+      const snapshot = registry.spawnRecoverySnapshot([begun.receipt.launchId]);
+      expect(snapshot.entries[`claude:${key.sessionId}`]).toMatchObject({ accountId: "account-b", claimOwner: "successor-writer", claimEpoch: 2 });
+      expect(registry.conversation(begun.receipt.conversationId)!.generations.at(-1)?.accountId).toBe("account-b");
+      return;
+    }
+    const before = registry.spawnRecoverySnapshot([begun.receipt.launchId]);
+    const actual = before.entries[`claude:${key.sessionId}`];
+    const result = registry.recoverStructuredSpawnFromEvidence(begun.receipt.launchId,
+      evidence === "forged" ? { ...actual, accountId: "account-c" } : undefined);
+    expect(result.kind).toBe(evidence === "foreign" || evidence === "transport" ? "conflict" : "settled");
+    const after = registry.spawnRecoverySnapshot([begun.receipt.launchId]);
+    if (evidence === "foreign" || evidence === "transport") expect(after).toEqual(before);
+    expect(after.entries[`claude:${key.sessionId}`].accountId).toBe("account-b");
+    expect(registry.conversation(begun.receipt.conversationId)!.generations.at(-1)?.accountId).toBe("account-b");
+    expect(registry.conversation(begun.receipt.conversationId)!.pinnedAccountId).toBe("account-a");
+    expect(after.receipts[begun.receipt.launchId].accountId).toBe("account-a");
+  } finally { registry.close(); }
 });
