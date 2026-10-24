@@ -2189,6 +2189,7 @@ async function adoptStructuredHostsPass(
   let pipelineEvidence = await admitState(async (available) =>
     available ? readEvidence() : pipelineStartupEvidence(registry, false));
   if (controllerBoundEarly && !rowRetry) {
+    assertActive();
     for (const id of pipelineEvidence.deferred) updateStructuredStartupDeferral(registry, id, true);
     allowStructuredStartupRecovery(registry);
   }
