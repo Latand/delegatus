@@ -3,5 +3,10 @@
     "id": "GHSA-vfj7-8cjw-p6xm",
     "reason": "Fixed locally by patches/braces-3.0.3.patch, ported from upstream tree 28d440b5dd449dbf1fe6f3506cf94ecca4d02660. Revalidated on 2026-10-19 with the same facts: npm latest remains 3.0.3, the advisory has no patched release, and all 10 installed-package nesting, AST, parent-cycle and ordinary-behavior regressions pass. Remove patch and advisory metadata when upstream ships a fixed release; tracked by issue #2496.",
     "expires": "2026-10-26"
+  },
+  {
+    "id": "GHSA-834v-8h66-3h79",
+    "reason": "happy-dom is a devDependency used only by DOM unit tests; no shipped code imports it. The advisory is in its ECMAScript module compiler, which runs only when a Window enables enableJavaScriptEvaluation (off by default in 20.x, set nowhere in this repository) or when a test calls evaluateModule (no caller). The only fixed release, 21.0.4, also replaces the CSS engine and adds native Web Animations; on 2026-10-24 it failed 54 tests in five DOM files that pass on 20.10.6 (columnLayoutAnimation, useColumnDwell, KanbanBoard, SeatReports, voiceCompanionProduct). Remove this entry when those tests are ported to happy-dom 21.",
+    "expires": "2026-11-07"
   }
 ]
