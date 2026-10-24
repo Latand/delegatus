@@ -1,5 +1,6 @@
 "use client";
 
+import { AgentMemoryCapNote } from "@/components/AgentMemoryCapNote";
 import { Flag, Link2, Settings } from "lucide-react";
 import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
@@ -1019,6 +1020,7 @@ function ScreenBlock(props: PipelineBlockProps & {
         data-stage-current={isCurrent ? "1" : undefined}
       >
         {control}
+        <AgentMemoryCapNote cap={latestAttempt(pipeline, stage.id)?.memoryCap} />
         {isCurrent || agent.target || agent.earlier.length ? (
           <div className="pb-stage-body">
             {agent.question ? <p className="pb-latest whitespace-pre-wrap" data-stage-question={stage.id}>{agent.question}</p> : null}

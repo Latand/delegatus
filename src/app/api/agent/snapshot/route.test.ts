@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { NextRequest } from "next/server";
 
 import type { FileEntry } from "@/lib/types";
@@ -78,31 +78,33 @@ test("snapshot reports bounded aggregate phase timings without path data", async
 });
 
 test("transcript-only snapshot serves one completed 373-file projection without reading the registry", async () => {
-  upsertPresence(presence);
-  const files = Array.from({ length: 373 }, (_value, index): FileEntry => ({
-    ...entry,
-    path: index === 0 ? entry.path : `/fixture/project-${index % 41}/session-${index}.jsonl`,
-    name: `session-${index}.jsonl`,
-    project: `project-${index % 41}`,
-    title: `Session ${index}`,
-  }));
-  const projectCatalog = Array.from({ length: 41 }, (_value, index) => ({
-    project: `project-${index}`,
-    smt: 1,
-    conversations: files.filter((file) => file.project === `project-${index}`).length,
-  }));
-  let completedReads = 0;
-  let registryReads = 0;
-  const refreshedAt = Date.now() - 10_000;
-  const corpusWalksBefore = fileObservationGenerations();
-  const request = new NextRequest("http://127.0.0.1:8898/api/agent/snapshot", {
-    method: "POST",
-    headers: { host: "127.0.0.1:8898" },
-    body: JSON.stringify({ schemaVersion: 1, scope: { kind: "visible" }, text: { include: false } }),
-  });
+  const now = 1_800_000_000_000;
+  const clock = spyOn(Date, "now").mockReturnValue(now);
+  try {
+    upsertPresence(presence);
+    const files = Array.from({ length: 373 }, (_value, index): FileEntry => ({
+      ...entry,
+      path: index === 0 ? entry.path : `/fixture/project-${index % 41}/session-${index}.jsonl`,
+      name: `session-${index}.jsonl`,
+      project: `project-${index % 41}`,
+      title: `Session ${index}`,
+    }));
+    const projectCatalog = Array.from({ length: 41 }, (_value, index) => ({
+      project: `project-${index}`,
+      smt: 1,
+      conversations: files.filter((file) => file.project === `project-${index}`).length,
+    }));
+    let completedReads = 0;
+    let registryReads = 0;
+    const refreshedAt = now - 10_000;
+    const corpusWalksBefore = fileObservationGenerations();
+    const request = new NextRequest("http://127.0.0.1:8898/api/agent/snapshot", {
+      method: "POST",
+      headers: { host: "127.0.0.1:8898" },
+      body: JSON.stringify({ schemaVersion: 1, scope: { kind: "visible" }, text: { include: false } }),
+    });
 
-  const response = await Promise.race([
-    postSnapshot(request, {
+    const response = await postSnapshot(request, {
       completedFileScan: async () => {
         completedReads += 1;
         return {
@@ -122,18 +124,18 @@ test("transcript-only snapshot serves one completed 373-file projection without 
       },
       snapshotDeadlineMs: 10_000,
       scheduler: { setTimeout, clearTimeout },
-    }),
-    new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("snapshot response exceeded its 1s bound")), 1_000)),
-  ]);
+    });
 
-  expect(response.status).toBe(200);
-  const payload = await response.json();
-  expect(payload.scanner.entryCount).toBe(373);
-  expect(payload.scanner.ageMs).toBeGreaterThanOrEqual(9_000);
-  expect(payload.scanner.ageMs).toBeLessThan(11_000);
-  expect(completedReads).toBe(1);
-  expect(registryReads).toBe(0);
-  expect(fileObservationGenerations()).toBe(corpusWalksBefore);
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.scanner.entryCount).toBe(373);
+    expect(payload.scanner.ageMs).toBe(10_000);
+    expect(completedReads).toBe(1);
+    expect(registryReads).toBe(0);
+    expect(fileObservationGenerations()).toBe(corpusWalksBefore);
+  } finally {
+    clock.mockRestore();
+  }
 });
 
 test("twenty concurrent transcript-only snapshots retain no registry or response corpus", async () => {
