@@ -1187,9 +1187,14 @@ async function realRuntimeAdmission(outcome: "recovered" | "expired" | "legacy-r
       expect(pending.state).toBe("path-pending");
       expect(staged.entries[`claude:${pending.key!.sessionId}`].accountId).toBe("claude-test");
       expect(registry.conversation(pending.conversationId)!.generations.at(-1)?.accountId).toBe("claude-test");
-      // The original first message lands after the launcher returned its staged response.
-      journal.executeOperation({ kind: "send", operationId: `spawn_message_${launchId}`,
+      // Publish the fake host before acknowledging its original first message.
+      await client.append({ scope: { type: "session", id: pending.conversationId }, kind: "session-status",
+        payload: { conversationId: pending.conversationId, sessionKey: pending.key, hostKind: "claude-broker",
+          host: "hosted", turn: "idle", provenance: "structured", accountId: "claude-test", cwd,
+          artifactPath: pending.artifactPath, capabilities: { steer: true, structuredAttention: true }, activeTurnId: null } });
+      const message = journal.executeOperation({ kind: "send", operationId: `spawn_message_${launchId}`,
         idempotencyKey: `spawn_${launchId}`, conversationId: pending.conversationId, text: "Continue the task" });
+      expect(message.receipt.status).toBe("queued");
       journal.transitionOperation(`spawn_message_${launchId}`, "delivered");
       const { recoverStagedStructuredLaunch } = await import("@/lib/runtime/structuredSpawn");
       const { stagedLaunchRecovery } = await import("@/lib/runtime/stagedRecovery");
