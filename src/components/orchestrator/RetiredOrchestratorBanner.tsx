@@ -13,18 +13,21 @@ export interface RetiredOrchestrator {
 }
 
 export function retiredOrchestratorFor(
-  file: Pick<FileEntry, "conversationId" | "path">,
+  file: Pick<FileEntry, "conversationId" | "path" | "project">,
   status: OrchestratorSeatStatus | null,
   failed = false,
+  knownPrevious = false,
 ): RetiredOrchestrator | null {
-  if (!status) return null;
+  if (!status) return knownPrevious ? { successorConversationId: null } : null;
   const current = status.seat;
-  if ((file.conversationId && current?.conversationId === file.conversationId)
-    || current?.path === file.path) return null;
+  const sameConversation = Boolean((file.conversationId && current?.conversationId === file.conversationId)
+    || current?.path === file.path);
+  if (!knownPrevious && !failed && sameConversation) return null;
   const previous = status.previous?.some(seat =>
     (file.conversationId && seat.conversationId === file.conversationId) || seat.path === file.path);
-  if (!previous) return null;
-  return { successorConversationId: !failed && status.exists ? current?.conversationId ?? null : null };
+  if (!previous && !knownPrevious) return null;
+  return { successorConversationId: !sameConversation && !failed && status.exists && current?.project === file.project
+    ? current.conversationId ?? null : null };
 }
 
 /** The shared seat poll already supplies the board's historical identities.
@@ -37,10 +40,9 @@ export function useRetiredOrchestrator(file: FileEntry, enabled = true): Retired
   const previous = !current && matches(seats?.previous?.conversationIds, seats?.previous?.paths);
   const read = useOrchestratorSeat(enabled && previous ? file.project : null);
   if (!previous) return null;
-  // The shared response already proves retirement. An unavailable detailed
-  // read may withhold the destination, but cannot reopen the old recipient.
-  if (!read.status || read.failed) return { successorConversationId: null };
-  return retiredOrchestratorFor(file, read.status);
+  // The shared response names every former seat; the detail history is only
+  // a recent page. Neither a missing record nor that page can undo retirement.
+  return retiredOrchestratorFor(file, read.status, read.failed, true);
 }
 
 export function RetiredOrchestratorBanner({ retirement }: { retirement: RetiredOrchestrator }) {

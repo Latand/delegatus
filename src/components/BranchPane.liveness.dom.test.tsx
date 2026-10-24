@@ -160,9 +160,10 @@ function mount(file: FileEntry): HTMLElement {
   return host;
 }
 
-for (const detailReadFails of [false, true]) test(`an open phone conversation retains retired-send fences and payloads (detail read fails: ${detailReadFails})`, async () => {
+for (const detailState of ["current", "failed", "empty", "older-than-page"] as const) test(`an open phone conversation retains retired-send fences and payloads (${detailState})`, async () => {
   mobile = true;
-  const file = liveLegacyFile({ conversationId: `conversation_previous_${detailReadFails}`, project: `viewer-${detailReadFails}`, engine: "claude" });
+  const detailReadFails = detailState === "failed" || detailState === "empty";
+  const file = liveLegacyFile({ conversationId: `conversation_previous_${detailState}`, project: `viewer-${detailState}`, engine: "claude" });
   let rotated = false;
   const posts: string[] = [];
   let detailedReads = 0;
@@ -172,13 +173,15 @@ for (const detailReadFails of [false, true]) test(`an open phone conversation re
       || /^\/api\/runtime\/operations\/[^/]+(?:\?|$)/.test(url))) posts.push(url);
     if (url.startsWith("/api/orchestrator/seat")) {
       if (rotated && !url.includes("scope=all")) detailedReads += 1;
-      if (rotated && detailReadFails && !url.includes("scope=all")) return Response.json({ error: "temporarily unavailable" }, { status: 503 });
+      if (rotated && detailState === "failed" && !url.includes("scope=all")) return Response.json({ error: "temporarily unavailable" }, { status: 503 });
+      if (rotated && detailState === "empty" && !url.includes("scope=all")) return Response.json({ seat: null, exists: false });
       const current = rotated ? "conversation_current" : file.conversationId;
       return Response.json({
         seat: { project: file.project, conversationId: current, path: rotated ? "/fixtures/current.jsonl" : file.path,
           state: "active", seatEpoch: 2, mandate: "fixture", intent: { clientRequestId: "fixture", mode: "existing", launchId: null, error: null } },
         exists: true, viewerMcpRegistered: true,
-        previous: rotated ? [{ conversationId: file.conversationId, path: file.path, heldTo: "2026-01-01T00:00:00Z" }] : [],
+        previous: rotated && detailState !== "older-than-page"
+          ? [{ conversationId: file.conversationId, path: file.path, heldTo: "2026-01-01T00:00:00Z" }] : [],
         all: { conversationIds: [current], paths: [rotated ? "/fixtures/current.jsonl" : file.path],
           previous: { conversationIds: rotated ? [file.conversationId] : [], paths: rotated ? [file.path] : [] } },
       });
