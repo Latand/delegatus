@@ -187,14 +187,25 @@ test.each([
   }
 });
 
-test.each(["C:/private/tree", "D:\\private\\tree", "//server/share/tree", "/private/tree"])("absolute checkout %s still refuses the whole page", checkout => {
+test.skipIf(process.platform === "win32")("POSIX checkout names that resemble Windows paths remain readable", () => {
+  const snapshot = report(6);
+  snapshot.kept[1]!.path = path.join(root, "repository", "C:", "tree");
+  snapshot.kept[2]!.path = path.join(root, "repository", "\\tree");
+  recordWorktreeSweep(snapshot);
+  expect(readWorktreePage(null).rows.map(row => row.checkout)).toEqual(["worktrees/checkout-0", "C:/tree", "\\tree", "worktrees/checkout-3"]);
+});
+
+test.each(["C:/private/tree", "D:\\private\\tree", "//server/share/tree", "/private/tree"])("Windows absolute checkout %s still refuses the whole page", checkout => {
   recordWorktreeSweep(report(6));
   const db = new Database(path.join(root, "worktree-drilldown.sqlite"));
   try {
     const row = readWorktreePage(null).rows[2]!;
     db.prepare("UPDATE retained SET body = ? WHERE id = 3").run(JSON.stringify({ ...row, checkout }));
   } finally { db.close(); }
-  rejects(null, 503, "unavailable");
+  const isAbsolute = path.win32.isAbsolute;
+  const guard = spyOn(path, "isAbsolute").mockImplementation(isAbsolute);
+  try { rejects(null, 503, "unavailable"); }
+  finally { guard.mockRestore(); }
 });
 
 test("an oversized row refuses the whole projection without losing its preceding snapshot", () => {

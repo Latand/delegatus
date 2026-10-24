@@ -39,7 +39,7 @@ function sqliteDatabase(): typeof import("bun:sqlite").Database {
 }
 
 function validRow(row: RetainedWorktree): boolean {
-  return !!row && typeof row.checkout === "string" && !path.posix.isAbsolute(row.checkout) && !path.win32.isAbsolute(row.checkout)
+  return !!row && typeof row.checkout === "string" && !path.isAbsolute(row.checkout)
     && typeof row.reason === "string" && /^[a-z-]{1,64}$/.test(row.reason)
     && (row.task === null || typeof row.task === "string") && (row.pipelineId === null || typeof row.pipelineId === "string")
     && (row.repository === null || typeof row.repository === "string")
