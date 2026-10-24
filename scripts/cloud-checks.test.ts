@@ -189,18 +189,6 @@ test("source bytes upload in bounded chunks and never enter the model prompt", a
 });
 
 import { createHookFixture } from "./local-gate.fixture";
-test("the Cloud hook refuses a dirty source before dispatch or local fallback", () => {
-  const roots: string[] = [];
-  const fixture = createHookFixture(process.cwd(), roots);
-  try {
-    writeFileSync(path.join(fixture.dir, "example.ts"), "export const value = 2;\n");
-    const result = spawnSync("bash", [".githooks/pre-push"], { cwd: fixture.dir, env: { ...fixture.env, LLV_GATE_EXECUTION: "cloud" }, encoding: "utf8" });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Cloud publication checks require a clean checkout");
-    expect(result.stderr).not.toContain("running the same checks locally");
-  } finally { for (const root of roots) rmSync(root, { recursive: true, force: true }); }
-});
-
 
 test("a completed command is decisive while the model turn is still running", async () => {
   const fake = fakeRpc(`DELEGATUS_GATE ${job.head} ${job.tree} ${job.base} 0\n`);
@@ -252,7 +240,7 @@ for (const mismatch of ["model", "environment", "cwd"]) test(`a resolved ${misma
   expect(fake.calls.some(call => call.method === "thread/shellCommand")).toBe(false);
 });
 
-test("a privacy refusal prevents Cloud dispatch and local fallback", () => {
+test("an unconfigured hook preserves the local privacy refusal", () => {
   const roots: string[] = [];
   const fixture = createHookFixture(process.cwd(), roots);
   try {
@@ -260,7 +248,8 @@ test("a privacy refusal prevents Cloud dispatch and local fallback", () => {
     const result = spawnSync("bash", [".githooks/pre-push"], { cwd: fixture.dir,
       env: { ...fixture.env, LLV_GATE_EXECUTION: "cloud", HOOK_FAIL: "scripts/privacy-publication-gate.ts" }, encoding: "utf8" });
     expect(result.status).not.toBe(0);
-    expect(fixture.calls().map(call => call.args[0])).toEqual(["scripts/privacy-publication-gate.ts"]);
+    expect(fixture.calls().some(call => call.args[0] === "scripts/privacy-publication-gate.ts")).toBe(true);
+    expect(result.stderr).toContain("pre-push: privacy");
     expect(result.stderr).not.toContain("pre-push: Cloud checks");
   } finally { for (const root of roots) rmSync(root, { recursive: true, force: true }); }
 });
@@ -480,7 +469,7 @@ test("managed default configuration contacts the hosted service and completes Cl
       lane: () => null, project: () => "repo-fixture", environment: () => config.environmentId,
       account: () => ({ kind: "available", account }),
     });
-    const transport = new AppServerCloudTransport(selected, (config, signal, timeout) => connectCloud(config, signal, timeout, deps), () => {});
+    const transport = new AppServerCloudTransport(selected!, (config, signal, timeout) => connectCloud(config, signal, timeout, deps), () => {});
     expect(await runCloudChecks(job, transport, async () => { local++; return 0; })).toBe(0);
     expect([authentications, catalogReads, local]).toEqual([1, 1, 0]);
     expect(fake.calls.filter(call => call.method === "initialize")).toHaveLength(1);
@@ -491,17 +480,32 @@ test("managed default configuration contacts the hosted service and completes Cl
   }
 });
 
-test("the Cloud pre-push hook refuses missing managed setup after privacy without local execution", () => {
+for (const selection of ["default", "cloud", "local"]) for (const failure of [false, true]) test(`unconfigured ${selection} pre-push runs the local plan once: ${failure ? "red" : "green"}`, () => {
   const roots: string[] = [];
   const fixture = createHookFixture(process.cwd(), roots);
   try {
     writeFileSync(path.join(fixture.dir, "example.ts"), "export const value = 2;\n");
     fixture.git("commit", "-am", "Candidate");
-    const result = spawnSync("bash", [".githooks/pre-push"], { cwd: fixture.dir,
-      env: { ...fixture.env, LLV_GATE_EXECUTION: "cloud" }, encoding: "utf8" });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Cloud checks require the project's Codex Cloud environment");
-    expect(result.stderr).not.toContain("running the same checks locally");
-    expect(fixture.calls().filter(call => call.args[0] === "scripts/privacy-publication-gate.ts").length).toBeGreaterThan(0);
+    // This routing fixture records check commands; native admission has its own suites.
+    // Its caller already owns the test run's gate and lifetime.
+    const routing = path.join(fixture.dir, ".git", "routing-shims");
+    mkdirSync(routing);
+    writeFileSync(path.join(routing, "bash"), '#!/bin/bash\nif [[ "$1" == scripts/gate-slot.sh ]]; then shift; exec "$@"; fi\nexec /bin/bash "$@"\n', { mode: 0o755 });
+    writeFileSync(path.join(fixture.dir, ".git", "commands.jsonl"), "");
+    const env: NodeJS.ProcessEnv = { ...fixture.env, ...(failure ? { HOOK_FAIL: "tsc" } : {}) };
+    env.PATH = `${routing}${path.delimiter}${env.PATH}`;
+    if (selection === "default") delete env.LLV_GATE_EXECUTION;
+    else env.LLV_GATE_EXECUTION = selection;
+    const result = spawnSync("bash", [".githooks/pre-push"], { cwd: fixture.dir, env, encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(failure ? 1 : 0);
+    expect(result.stderr).not.toContain("pre-push: Cloud checks");
+    expect(result.stderr).not.toContain("Cloud unavailable");
+    const calls = fixture.calls();
+    expect(calls.filter(call => call.args[0] === "scripts/privacy-publication-gate.ts")).toHaveLength(1);
+    expect(calls.filter(call => call.args[0] === "tsc")).toHaveLength(1);
+    if (!failure) {
+      expect(calls.some(call => call.args[0] === "scripts/eslint-changes.ts")).toBe(true);
+      expect(calls.some(call => call.args[0] === "scripts/local-gate-tests.ts")).toBe(true);
+    }
   } finally { for (const root of roots) rmSync(root, { recursive: true, force: true }); }
 });

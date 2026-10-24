@@ -28,7 +28,7 @@ test("a direct hook and a Claude stage select through the project's Codex pool",
   expect(selections).toEqual([[lane.project, null], [lane.project, null]]);
 });
 
-for (const environment of ["", "bad environment", "environment-legacy"]) test(`missing or invalid setup refuses before account selection: ${environment || "absent"}`, () => {
+for (const environment of ["bad environment", "environment-legacy"]) test(`invalid setup refuses before account selection: ${environment}`, () => {
   let accounts = 0;
   expect(() => selectCloudCheckConfig(lane.worktreeDir, "lane", "build", sources({
     environment: () => environment, account: () => { accounts++; return { kind: "available", account }; },
@@ -36,11 +36,19 @@ for (const environment of ["", "bad environment", "environment-legacy"]) test(`m
   expect(accounts).toBe(0);
 });
 
-test("unknown lanes, foreign checkouts, unknown stages and unknown projects refuse", () => {
+test("unconfigured projects select local checks before account selection", () => {
+  let accounts = 0;
+  const unconfigured = sources({ environment: () => "", account: () => { accounts++; throw new Error("must not select an account"); } });
+  expect(selectCloudCheckConfig(lane.worktreeDir, "lane", "build", unconfigured)).toBeNull();
+  expect(selectCloudCheckConfig(lane.worktreeDir, undefined, undefined, unconfigured)).toBeNull();
+  expect(selectCloudCheckConfig(lane.worktreeDir, undefined, undefined, { ...unconfigured, project: () => null })).toBeNull();
+  expect(accounts).toBe(0);
+});
+
+test("unknown lanes, foreign checkouts and unknown stages refuse", () => {
   expect(() => selectCloudCheckConfig(lane.worktreeDir, "missing", undefined, sources({ lane: () => null }))).toThrow("lane checkout");
   expect(() => selectCloudCheckConfig("/fixture/other", "lane", undefined, sources())).toThrow("lane checkout");
   expect(() => selectCloudCheckConfig(lane.worktreeDir, "lane", "missing", sources())).toThrow("lane stage");
-  expect(() => selectCloudCheckConfig(lane.worktreeDir, undefined, undefined, sources({ project: () => null }))).toThrow("managed project");
 });
 
 test("project account refusals and exhaustion cannot select another account", () => {
@@ -57,10 +65,12 @@ test("resolved configuration rechecks environment and account authority", () => 
     environment: () => environment,
     account: () => allowed ? { kind: "available", account } : { kind: "unavailable", allowedAccountIds: [] },
   }));
-  selected.assertCurrent!();
+  selected!.assertCurrent!();
+  environment = "";
+  expect(() => selected!.assertCurrent!()).toThrow("configuration changed");
   environment = "asenvcfg_other";
-  expect(() => selected.assertCurrent!()).toThrow("configuration changed");
+  expect(() => selected!.assertCurrent!()).toThrow("configuration changed");
   environment = "asenvcfg_fixture";
   allowed = false;
-  expect(() => selected.assertCurrent!()).toThrow("account unavailable");
+  expect(() => selected!.assertCurrent!()).toThrow("account unavailable");
 });

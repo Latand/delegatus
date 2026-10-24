@@ -921,15 +921,16 @@ async function main(mode: Mode, admitted = false): Promise<void> {
         { ...process.env, LLV_GATE_RUNNER: "off" }, deadline, cancel);
       const execution = process.env.LLV_GATE_EXECUTION ?? (await checkExecutionSettings(root, process.env.LLV_GATE_LANE_ID, process.env.LLV_GATE_STAGE_ID)).effective;
       if (execution !== "cloud" && execution !== "local") throw new Error("invalid check execution setting");
+      const config = execution === "cloud" && steps.some(step => step.name !== "privacy")
+        ? await cloudCheckConfig(root, process.env.LLV_GATE_LANE_ID, process.env.LLV_GATE_STAGE_ID) : null;
       const privacyHead = git(root, ["rev-parse", "HEAD"]);
       const checks = async (cancel: AbortSignal) => {
-        if (execution === "local") return localChecks(cancel);
+        if (!config) return localChecks(cancel);
         const head = git(root, ["rev-parse", "HEAD"]);
         if (head !== privacyHead) throw new Error("source changed during privacy checks");
         const tree = git(root, ["rev-parse", "HEAD^{tree}"]);
         // A moving or dirty checkout cannot be mistaken for the pushed tree.
         if (git(root, ["status", "--porcelain", "--untracked-files=normal"])) throw new Error("Cloud publication checks require a clean checkout");
-        const config = await cloudCheckConfig(root, process.env.LLV_GATE_LANE_ID, process.env.LLV_GATE_STAGE_ID);
         const destination = path.join(sandbox, "source.bundle");
         git(root, ["bundle", "create", destination, "HEAD", `^${base}`]);
         const bundle = readFileSync(destination).toString("base64");
@@ -943,7 +944,7 @@ async function main(mode: Mode, admitted = false): Promise<void> {
         if (code !== 0) throw new AdmittedGateFailed(code);
       };
       if (steps.some(step => step.name !== "privacy")) {
-        if (execution === "cloud") {
+        if (config) {
           await privacy();
           await checks(new AbortController().signal);
         } else await runPushPair(privacy, checks);

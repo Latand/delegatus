@@ -13,14 +13,15 @@ export interface CloudCheckConfigSources {
 /** Share stage execution's project environment and account-pool selection.
  * A missing setup never supplies evidence of a service outage. */
 export function selectCloudCheckConfig(root: string, laneId: string | undefined, stageId: string | undefined,
-  sources: CloudCheckConfigSources): CloudCheckConfig {
+  sources: CloudCheckConfigSources): CloudCheckConfig | null {
   const lane = laneId ? sources.lane(laneId) : null;
   if (laneId && (!lane || path.resolve(lane.worktreeDir) !== path.resolve(root))) throw new Error("Cloud checks require the current lane checkout");
   const stage = stageId ? lane?.stages.find(stage => stage.id === stageId) : undefined;
   if (stageId && !stage) throw new Error("Cloud checks require a current lane stage");
   const project = lane?.project ?? sources.project(root);
-  if (!project) throw new Error("Cloud checks require a managed project");
+  if (!project) return null;
   const environmentId = sources.environment(project);
+  if (!environmentId) return null;
   if (!/^(?:[A-Za-z0-9_-]+~)?asenvcfg_[A-Za-z0-9_-]+$/.test(environmentId)) throw new Error("Cloud checks require the project's Codex Cloud environment");
   // A Claude producer does not name a Codex account. Codex producers preserve
   // their explicit choice; automatic choices stay within the project's pool.
@@ -30,13 +31,13 @@ export function selectCloudCheckConfig(root: string, laneId: string | undefined,
   if (selected.kind !== "available") throw new Error(`Cloud checks account ${selected.kind}`);
   return { environmentId, account: selected.account, assertCurrent: () => {
     const current = selectCloudCheckConfig(root, laneId, stageId, sources);
-    if (current.environmentId !== environmentId || current.account.accountId !== selected.account.accountId
+    if (!current || current.environmentId !== environmentId || current.account.accountId !== selected.account.accountId
       || current.account.home !== selected.account.home) throw new Error("Cloud checks configuration changed");
   } };
 }
 
-export async function cloudCheckConfig(root: string, laneId?: string, stageId?: string): Promise<CloudCheckConfig> {
-  // This hook reads the installation's managed settings after privacy passes.
+export async function cloudCheckConfig(root: string, laneId?: string, stageId?: string): Promise<CloudCheckConfig | null> {
+  // This hook reads the installation's managed settings before choosing checks.
   // Claim before importing any module that resolves those settings at load.
   if (process.env.LLV_GATE_STATE_DIR) process.env.LLV_STATE_DIR = process.env.LLV_GATE_STATE_DIR;
   await import("../src/lib/state/owner/tool");

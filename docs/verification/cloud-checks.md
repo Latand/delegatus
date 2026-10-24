@@ -1,5 +1,78 @@
 # Cloud checks: verification
 
+## Unconfigured project publication repair
+
+Recorded 2026-10-24 following the operator's publication continuation. This
+section supersedes the earlier missing-setup refusal. Projects without a Cloud
+environment use the existing local check plan immediately. Configured projects
+retain the shared hosted transport, decisive verdicts and confirmed outage policy.
+
+Main was merged by a merge commit. The repair base is
+`c9bd352a51e2ec532cc3902f3612fe8eaa37570b`.
+The SHA-256 of `git diff --binary <repair-base> -- scripts` is
+`305ad935eeee2364e341be71774d57fec571155ff5f1f742388e39e077cd20ca`.
+
+`scripts/cloud-check-config.ts` returns an unconfigured result before selecting
+an account. `scripts/local-gate.ts` then runs its existing concurrent privacy
+and admitted-check pair, without creating a Cloud job or retrying. Invalid
+configured bindings, account refusals and revoked configuration still refuse.
+The project settings reader supplies the binding; lane and stage selectors
+supply the producer context. Direct hooks and lane publication share this path.
+
+The shared transport's larger import graph also exposed receipt-scanner failures
+on JSON and executable shebangs. `scripts/gate-cache.ts` retains data files as
+fingerprinted inputs, scans imports only in source files, and removes the
+shebang only from the parser input. Fingerprints still read the original bytes.
+Malformed source continues to refuse.
+
+### Focused checks and reproduction
+
+All test commands used the supplied `gate-slot.sh`, serially, from a scratch
+export with isolated HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR, a closed
+Viewer control URL and `LLV_GATE_RUNNER=off`. The borrowed dependencies match
+the manifest and lockfile, including TypeScript, ESLint and WebSocket packages.
+
+| Test file | Result |
+| --- | --- |
+| `scripts/cloud-check-config.test.ts` | 8 passed |
+| `scripts/cloud-checks.test.ts` | 62 passed |
+| `scripts/gate-cache.test.ts` | 12 passed |
+| `src/lib/pipelines/cloudHostedClient.test.ts` | 65 passed |
+| `scripts/local-gate.test.ts`, selected planning/isolation/no-change cases | 4 passed, 65 filtered |
+
+Commands were `bun run test <explicit-file>`. The four local-gate cases used
+`--test-name-pattern='^commit plan|^the fetch before planning|^state isolation|^pre-push hook on a branch behind main'`.
+
+The selector regression fails on the repair base with the reported missing
+environment refusal. The six unconfigured hook cases also fail on that source:
+default and explicit Cloud selections refuse the missing environment; explicit
+local selection reaches the receipt-scanner failure. On the repaired source,
+all six pass. Their command records verify one privacy invocation and one type
+check for default, Cloud and local selections, with matching green and red
+results and no Cloud dispatch or outage retries. These routing fixtures use
+command-recording check shims and a fixture-local admission stub. Native
+admission is covered separately; the containing test run uses the real wrapper.
+
+Both new receipt-scanner tests fail on the repair base. The repaired tests
+verify data fingerprint invalidation, shebang import traversal and malformed
+source refusal. A read-only probe also traverses the real 370-file gate graph.
+
+The separate `privacy refusal stops running admitted checks and their detached
+helper` lifecycle case fails before its PID file is created. A fresh run on a
+clean detached checkout of the repair base reproduces the same missing-file
+failure. The native lifecycle case remains unverified in this environment; no
+full pass of the local-gate lifecycle suite is claimed.
+
+The final `node_modules/.bin/tsc --noEmit` and ESLint on all six touched
+TypeScript files exit 0 without diagnostics. The verified export's six source
+files match the stage checkout byte for byte. `bun run privacy:check` passes
+with committed fingerprints and `--check-commits --base origin/main`.
+`git diff --cached --check` also exits 0. Main was re-fetched before the commit
+and had no further changes to merge.
+
+No live Cloud job or push was performed. UI components remain for the separate
+UI stage.
+
 ## Backend repair verification
 
 Recorded 2026-10-24. This section supersedes the original transport and

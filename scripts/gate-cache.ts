@@ -71,8 +71,10 @@ export function gateToolFiles(root: string): string[] {
     if (seen.has(relative)) continue;
     seen.add(relative);
     const file = path.join(root, relative);
-    if (!existsSync(file) || !statSync(file).isFile()) continue;
-    for (const imported of (file.endsWith(".tsx") ? tsx : ts).scanImports(readFileSync(file))) {
+    // Data imports remain receipt inputs, but only source files have imports to scan.
+    if (!existsSync(file) || !statSync(file).isFile() || !/\.[cm]?[jt]sx?$/.test(file)) continue;
+    const source = readFileSync(file, "utf8").replace(/^#![^\r\n]*/, "");
+    for (const imported of (/\.[jt]sx$/.test(file) ? tsx : ts).scanImports(source)) {
       if (!imported.path.startsWith(".") && !imported.path.startsWith("@/")) continue;
       const target = imported.path.startsWith("@/") ? path.join(root, "src", imported.path.slice(2)) : path.resolve(path.dirname(file), imported.path);
       const resolved = [target, `${target}.ts`, `${target}.tsx`, `${target}.js`, path.join(target, "index.ts")]

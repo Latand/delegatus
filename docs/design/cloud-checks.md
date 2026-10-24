@@ -6,7 +6,8 @@ connection with the Cloud stage runtime described in `cloud-stage-runtime.md`.
 
 ## Execution policy
 
-Cloud is the default for a project. Each lane can inherit that default or choose
+Cloud is the default for a project with an environment configured. Projects
+without one run the existing local checks. Each lane can inherit that default or choose
 Cloud or local execution. A stage can override its lane. The lane action menu exposes
 lane and project settings. MCP's `pipeline_checks` tool changes those settings and
 stage overrides using `scope: stage` with `stageId`; the voice companion can ask
@@ -42,7 +43,8 @@ runner dispatch. It does not provision or re-enable a rented server.
 
 The pre-push hook requires local privacy to pass before sending source to Cloud.
 Privacy uses the existing trusted inputs and retains its refusal text.
-Explicit local execution retains concurrent privacy and heavy checks.
+Local execution, including an unconfigured project, retains concurrent privacy
+and heavy checks.
 The heavy half selects Cloud unless the stage, lane, project or command requests
 local execution. Types, changed-file lint, touched tests and the selected push
 checks run together through the existing admitted pre-push entry point.
@@ -78,10 +80,12 @@ Codex stage account, or the project's Codex account pool for other producers,
 supplies authentication. The catalog supplies the workspace directory.
 There is no separately configured endpoint or static credential file.
 
-Missing or invalid project setup blocks checks before dispatch. It supplies no
-outage evidence and cannot authorize local fallback. Publication pins its state
-root for this lookup with `LLV_GATE_STATE_DIR`; isolated child checks remove
-that variable. Direct hooks resolve their own managed project configuration.
+A project without a Cloud environment binding runs the existing local check
+plan immediately, without Cloud attempts or outage retries. Cloud is the default
+where an environment is configured. Invalid configured setup blocks checks before
+dispatch; it supplies no outage evidence and cannot authorize local fallback.
+Publication pins its state root for this lookup with `LLV_GATE_STATE_DIR`;
+isolated child checks remove that variable. Direct hooks resolve their own managed project configuration.
 
 The current app-server WebSocket lifecycle is:
 
