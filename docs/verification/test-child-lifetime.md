@@ -666,20 +666,20 @@ Long-lived fixture entry points with no spawn call of their own also bind to the
 
 ## Platform containment contract
 
-Two independent reviews reproduced a detached descendant escaping the portable guardian between observations of its short-lived parent. The portable branch provides identity-safe cleanup of recorded processes with bounded interruption and cleanup, but cannot establish ownership of every descendant at birth. Its empty ledger performs no host-wide scans. Linux runs use their service cgroup instead of this guardian.
+Two independent reviews reproduced a detached descendant escaping the portable guardian between observations of its short-lived parent. The portable branch provides identity-safe cleanup of recorded processes with bounded interruption and cleanup, but cannot establish ownership of every descendant at birth. Its empty ledger performs no host-wide scans. Linux runs use their service cgroup when a user manager is reachable and the portable guardian otherwise.
 
-The accepted contract keeps the strong lifetime guarantee on Linux and refuses Linux admission when native containment is unavailable. macOS and Windows continue with the portable guardian as best effort, with one warning per owning run that a detached descendant can escape between guardian polls. Both the slot wrapper and direct test preload use the same policy; nested runners inherit the warning marker. The marker never enables portable admission on Linux.
+The accepted contract keeps the strong lifetime guarantee for Linux systemd runs. Linux without a reachable user manager, macOS, and Windows use the portable guardian as best effort, with one warning per owning run that a detached descendant can escape between guardian polls. Both the slot wrapper and direct test preload use the same policy; nested runners inherit the warning marker. Linux portable admission binds the command PID explicitly, so the preload does not re-enter the runner, and its teardown uses the ledger instead of reading an unavailable cgroup.
 
-The policy regression was written first and failed before the implementation. Parameterized macOS and Windows policy tests check permitted admission and a single explicit warning; a Linux policy test checks refusal even with an inherited marker. The actual Linux gate refusal and service lifetime regressions remain in place. Native macOS and Windows execution was unavailable on this Linux machine; policy coverage does not establish native execution coverage. The accepted portable limitation requires no further containment review rounds.
+Parameterized Linux, macOS and Windows policy tests check permitted admission and a single explicit warning. `scripts/owned-runner.integration.test.ts` exercises missing systemd executables and an unreachable private bus through direct tests, the owned runner and the slot wrapper. It checks private roots, inherited native admission, deadlines, TERM, INT, hard owner death, test death and supervising-process death while preserving a recorded bystander. The portable runner keeps automatic fallback in the owning process and watches its recorded supervisor. A guardian interrupted by an enclosing guardian finishes its ledger cleanup before exiting. `scripts/verify-viewer-runtime.test.ts` also drives the direct CLI through portable admission and verifies that its served process and detached worker have ended. Native macOS and Windows execution was unavailable on the verification machine; policy coverage does not establish native execution coverage.
 
 
-After the platform decision, fresh isolated runs passed all six slot/admission
+Before Linux portable admission, fresh isolated runs passed all six slot/admission
 checks, all nine actual Linux runner lifetime cases, all three real-fixture
 lifetime cases and the idle-CPU regression (19 tests across four named files).
 The lifetime probes again preserved same-argv bystanders and the enclosing
 ownership checks reported zero survivors. The final incremental typecheck
 passed after giving the synthetic policy environments the project's required
-NODE_ENV field. No further independent review round was started; the shared
+NODE_ENV field. No further independent review round was started; the previous
 policy, inherited warning marker, Linux refusal and documentation received a
 focused read-only self-review.
 

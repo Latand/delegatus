@@ -12,6 +12,7 @@ import { privacyMarkupSpans, stripPrivacyHtml } from "./privacy-markup";
 import { fingerprintNegativeCache } from "./privacy-fingerprint-cache";
 import { canonicalSensitiveText, decodeSensitiveText } from "../src/lib/privacy/canonicalText";
 import { mailboxPattern } from "../src/lib/privacy/mailbox";
+import { privacyGeneratorRuntime } from "./privacy-generator-runtime";
 import { staticSensitiveClasses } from "../src/lib/privacy/staticDetectors";
 
 export { canonicalSensitiveText };
@@ -208,7 +209,73 @@ function maskApprovedPublicValues(text: string): string {
   // Treat '#' in entities, member access or a private declaration as syntax.
   // Unclosed block comments and quoted tokens consume their remaining span once;
   // retrying a closing-delimiter search at each inner opener is quadratic.
-  const literals = text.matchAll(/(?<=(?:^|[=(:,;!&|?{*%^~<>]|(?<!\+)\+|(?<!-)-|(?<![.#\p{L}\p{N}_$])(?<!\.(?:[\s\p{Default_Ignorable_Code_Point}]|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*[\r\n\u2028\u2029])*)(?:return|throw|case|yield|await|typeof|void|delete|in|instanceof|of|else|do)\b)(?:[\t\n\v\f\r ]|\/\*[\s\S]*?\*\/)*)\/(?![/*])(?:\\[^\r\n]|\[(?:\\[^\r\n]|[^\]\\\r\n])*(?:\]|(?=[\r\n]|$))|[^/\\\[\r\n])+(?:\/[a-z]*|(?=[\r\n]|$))|\/\*[\s\S]*?(?:\*\/|$)|\/\/[^\r\n\u2028\u2029]*|(?<![.&])#(?!(?:[xX][0-9a-fA-F]+|[0-9]+);|[\p{L}_$][\p{L}\p{N}_$]*\s*[=(;?.\[])[^\r\n]*|(?<![\p{L}\p{N}_$])--[^\r\n]*|"(?:\\(?:[\s\S]|$)|[^"\\\r\n\0])*(?:"|(?=[\r\n\0]|$))|(?<![\p{L}\p{N}_])(?:[uUrRbBfF]{1,2})?'(?:\\(?:[\s\S]|$)|[^'\\\r\n\0])*(?:'|(?=[\r\n\0]|$))|`(?:\\(?:[\s\S]|$)|[^`\\\0])*(?:`|(?=\0|$))/gu);
+  // Combining regex literals with quotes/comments exceeds the CPU growth
+  // bound for large unclosed tokens under Bun 1.4. Read the same alternatives at
+  // each possible opener, advancing past every complete token once.
+  const regexContext = /(?<=(?:^|[=(:,;!&|?{*%^~<>]|(?<!\+)\+|(?<!-)-|(?<![.#\p{L}\p{N}_$])(?<!\.(?:[\s\p{Default_Ignorable_Code_Point}]|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*[\r\n\u2028\u2029])*)(?:return|throw|case|yield|await|typeof|void|delete|in|instanceof|of|else|do)\b)(?:[\t\n\v\f\r ]|\/\*[\s\S]*?\*\/)*)/uy;
+  const regexBodyPart = /\\[^\r\n]|[^/\\\[\r\n]+/uy;
+  function regexClassEnd(source: string, start: number): number | null {
+    for (let index = start + 1; index < source.length; index += 1) {
+      if (source[index] === "]") return index + 1;
+      if (source[index] === "\r" || source[index] === "\n") return index;
+      if (source[index] === "\\") {
+        if (index + 1 === source.length || source[index + 1] === "\r" || source[index + 1] === "\n") return null;
+        index += 1;
+      }
+    }
+    return source.length;
+  }
+  const regexEnd = /\/[a-z]*|(?=[\r\n]|$)/uy;
+  function regexToken(source: string, start: number): RegExpExecArray | null {
+    const bodyStart = start + 1;
+    if (source[bodyStart] === "/" || source[bodyStart] === "*") return null;
+    let end = bodyStart;
+    while (end < source.length) {
+      if (source[end] === "[") {
+        const classEnd = regexClassEnd(source, end);
+        if (classEnd === null) break;
+        end = classEnd;
+      } else {
+        regexBodyPart.lastIndex = end;
+        const found = regexBodyPart.exec(source);
+        if (!found) break;
+        end += found[0].length;
+      }
+    }
+    if (end === bodyStart) return null;
+    regexEnd.lastIndex = end;
+    const ending = regexEnd.exec(source);
+    if (!ending) return null;
+    return Object.assign([source.slice(start, end + ending[0].length)] as RegExpExecArray, { index: start, input: source });
+  }
+  const otherLiteral = /\/\*[\s\S]*?(?:\*\/|$)|\/\/[^\r\n\u2028\u2029]*|(?<![.&])#(?!(?:[xX][0-9a-fA-F]+|[0-9]+);|[\p{L}_$][\p{L}\p{N}_$]*\s*[=(;?.\[])[^\r\n]*|(?<![\p{L}\p{N}_$])--[^\r\n]*|"(?:\\(?:[\s\S]|$)|[^"\\\r\n\0])*(?:"|(?=[\r\n\0]|$))|(?<![\p{L}\p{N}_])(?:[uUrRbBfF]{1,2})?'(?:\\(?:[\s\S]|$)|[^'\\\r\n\0])*(?:'|(?=[\r\n\0]|$))|`(?:\\(?:[\s\S]|$)|[^`\\\0])*(?:`|(?=\0|$))/uy;
+  const rawLiteral = /"(?:\\[\s\S]|[^"\\\r\n\0])*(?:"|(?=[\r\n\0]|$))|(?<![\p{L}\p{N}_])'(?:\\[\s\S]|[^'\\\r\n\0])*(?:'|(?=[\r\n\0]|$))|`(?:\\[\s\S]|[^`\\\0])*(?:`|(?=\0|$))/uy;
+  function* literalMatches(source = text, comments = true): Generator<RegExpExecArray, undefined, number | undefined> {
+    const openers = /\/|#|--|"|(?<![\p{L}\p{N}_])(?:[uUrRbBfF]{1,2})?'|`/gu;
+    for (let opener = openers.exec(source); opener; opener = openers.exec(source)) {
+      let token: RegExpExecArray | null = null;
+      if (opener[0] === "/") {
+        regexContext.lastIndex = opener.index;
+        if (regexContext.test(source)) {
+          token = regexToken(source, opener.index);
+        }
+      }
+      if (!token) {
+        const other = comments ? otherLiteral : rawLiteral;
+        other.lastIndex = opener.index;
+        token = other.exec(source);
+      }
+      if (token) {
+        openers.lastIndex = token.index + token[0].length;
+        const restart = yield token;
+        if (restart !== undefined) openers.lastIndex = restart;
+      } else {
+        openers.lastIndex = opener.index + 1;
+      }
+    }
+    return undefined;
+  }
+  const literals = literalMatches();
   let literal = literals.next().value;
   let previousLiteralEnd = 0;
   let syntaxCursor = 0;
@@ -514,28 +581,29 @@ function maskApprovedPublicValues(text: string): string {
   // closing delimiter or the character outside it. Quoted contents are
   // opaque; enclosing groups still belong to every value inside the quote.
   const rawComments = [...rawTriviaEnds].map(([last, start]) => ({ start, end: last + 1 }));
-  const rawQuotePattern = /(?<=(?:^|[=(:,;!&|?{*%^~<>]|(?<!\+)\+|(?<!-)-|(?<![.#\p{L}\p{N}_$])(?<!\.(?:[\s\p{Default_Ignorable_Code_Point}]|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*[\r\n\u2028\u2029])*)(?:return|throw|case|yield|await|typeof|void|delete|in|instanceof|of|else|do)\b)(?:[\t\n\v\f\r ]|\/\*[\s\S]*?\*\/)*)\/(?![/*])(?:\\[^\r\n]|\[(?:\\[^\r\n]|[^\]\\\r\n])*(?:\]|(?=[\r\n]|$))|[^/\\\[\r\n])+(?:\/[a-z]*|(?=[\r\n]|$))|"(?:\\[\s\S]|[^"\\\r\n\0])*(?:"|(?=[\r\n\0]|$))|(?<![\p{L}\p{N}_])'(?:\\[\s\S]|[^'\\\r\n\0])*(?:'|(?=[\r\n\0]|$))|`(?:\\[\s\S]|[^`\\\0])*(?:`|(?=\0|$))/gu;
   function* rawQuoteMatches(): Generator<RegExpMatchArray> {
     let start = 0;
-    const contextualQuote = new RegExp(rawQuotePattern.source, "uy");
     // A comment's unmatched quote ends at that comment, so it cannot swallow
     // the next real call. Keep quotes within comments for their own raw spans.
     for (const comment of [...rawComments, { start: text.length, end: text.length }]) {
       for (const end of [comment.start, comment.end]) {
         const segment = text.slice(start, end);
-        const quotes = new RegExp(rawQuotePattern.source, rawQuotePattern.flags);
-        for (let quote = quotes.exec(segment); quote; quote = quotes.exec(segment)) {
+        const quotes = literalMatches(segment, false);
+        let next = quotes.next();
+        while (!next.done) {
+          const quote = next.value;
           if (quote[0].startsWith("/")) {
             // Segmentation fences unmatched comment quotes, but cannot turn a
             // property after that comment into a statement-start keyword.
-            contextualQuote.lastIndex = start + quote.index;
-            if (!contextualQuote.exec(text)) {
-              quotes.lastIndex = quote.index + 1;
+            regexContext.lastIndex = start + quote.index;
+            if (!regexContext.test(text) || !regexToken(text, start + quote.index)) {
+              next = quotes.next(quote.index + 1);
               continue;
             }
           }
           quote.index += start;
           yield quote;
+          next = quotes.next();
         }
         start = end;
       }
@@ -1106,12 +1174,72 @@ function gitPaths(repository: string, arguments_: string[]): { error: boolean; p
   };
 }
 
-function changedPaths(arguments_: string[], repository: string): { error: boolean; paths: string[] } {
+type PublicationRange = { base: string; error: boolean; notices: string[] };
+
+/** Resolve in the inspection repository, which may lag the trusted checkout. */
+function publicationRange(repository: string, requestedBase: string): PublicationRange {
+  const git = (args: string[], fetching = false) => Bun.spawnSync({
+    cmd: ["git", "-C", repository, ...args],
+    env: { ...withoutUnsupportedApiCredentials(process.env), GIT_TERMINAL_PROMPT: "0" },
+    stdout: "pipe", stderr: "pipe", timeout: fetching ? 30_000 : 10_000,
+  });
+  const unreadable = (reason: string): PublicationRange => ({
+    base: requestedBase, error: true, notices: [`publication_range: unreadable: ${reason}`],
+  });
+  const commit = (ref: string): string | undefined => {
+    const result = git(["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`]);
+    const hash = result.stdout.toString().trim();
+    return result.exitCode === 0 && COMMIT_HASH.test(hash) ? hash : undefined;
+  };
+  const head = commit("HEAD");
+  if (!head) return unreadable("candidate HEAD object unavailable");
+  let base = commit(requestedBase);
+  if (!base) {
+    // CI supplies an immutable object id. Never interpret a supplied revision
+    // expression as a fetch refspec, URL or option, or fetch in the trusted tree.
+    if (!COMMIT_HASH.test(requestedBase)) return unreadable("requested base cannot be resolved as a commit");
+    git(["fetch", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head", "origin", requestedBase], true);
+    base = commit(requestedBase);
+    if (!base) return unreadable("requested base object unavailable after fetch from origin");
+  }
+  const shallow = git(["rev-parse", "--is-shallow-repository"]);
+  if (shallow.exitCode !== 0) return unreadable("cannot determine candidate history completeness");
+  const shallowState = shallow.stdout.toString().trim();
+  if (shallowState !== "true" && shallowState !== "false") {
+    return unreadable("cannot determine candidate history completeness");
+  }
+  if (shallowState === "true") {
+    // A readable merge base alone cannot prove a shallow branch's complete
+    // commit set. Recover both sides before any message or identity read.
+    const fetched = git(["fetch", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head",
+      "--unshallow", "origin", base, head], true);
+    if (fetched.exitCode !== 0) return unreadable("candidate history unavailable after fetch from origin");
+    const recoveredShallow = git(["rev-parse", "--is-shallow-repository"]);
+    if (recoveredShallow.exitCode !== 0) return unreadable("cannot verify candidate history completeness after fetch from origin");
+    const recoveredState = recoveredShallow.stdout.toString().trim();
+    if (recoveredState === "true") {
+      return unreadable("candidate history remains shallow after fetch from origin");
+    }
+    if (recoveredState !== "false") return unreadable("cannot verify candidate history completeness after fetch from origin");
+  }
+  const result = git(["merge-base", "--all", base, head]);
+  const bases = result.stdout.toString().trim().split("\n");
+  if (result.exitCode !== 0 || !bases.every((hash) => COMMIT_HASH.test(hash))) {
+    return unreadable("no readable common ancestor between base and candidate HEAD");
+  }
+  if (bases.length !== 1) return unreadable("multiple merge bases require an explicit ancestor base");
+  const ancestor = git(["merge-base", "--is-ancestor", base, head]);
+  if (ancestor.exitCode !== 0 && ancestor.exitCode !== 1) return unreadable("cannot verify base ancestry");
+  return { base: bases[0], error: false, notices: ancestor.exitCode === 1
+    ? [`publication_range: base is not an ancestor of HEAD; inspecting from merge-base ${bases[0]}`] : [] };
+}
+
+function changedPaths(arguments_: string[], repository: string, resolvedBase?: string): { error: boolean; paths: string[] } {
   const baseIndex = arguments_.indexOf("--base");
   const base = baseIndex === -1 ? "origin/main" : arguments_[baseIndex + 1];
   if (!base || base.startsWith("--")) return { error: true, paths: [] };
   const commands = [
-    ["diff", "--name-only", "--diff-filter=ACMRT", "-z", `${base}...HEAD`],
+    ["diff", "--name-only", "--diff-filter=ACMRT", "-z", `${resolvedBase ?? base}...HEAD`],
     ["diff", "--name-only", "--diff-filter=ACMRT", "-z"],
     ["diff", "--cached", "--name-only", "--diff-filter=ACMRT", "-z"],
     ["ls-files", "--others", "--exclude-standard", "-z"],
@@ -1964,7 +2092,7 @@ function reproduceTrustedGenerator(generatorBytes: Buffer): Map<string, Reproduc
     const isolatedGenerator = join(scriptsDirectory, "generate-privacy-placeholders.ts");
     writeFileSync(isolatedGenerator, generatorBytes);
     const generation = Bun.spawnSync({
-      cmd: [process.execPath, isolatedGenerator],
+      cmd: [privacyGeneratorRuntime(), isolatedGenerator],
       cwd: temporaryRoot,
       env: withoutUnsupportedApiCredentials(process.env),
       stderr: "pipe",
@@ -2275,7 +2403,7 @@ export function inspectPaths(
 
 export function formatPrivacyReport(findings: Map<FindingClass, number>, notices: string[] = []): string {
   if (findings.size === 0) {
-    return "PRIVACY GATE: PASS\n";
+    return ["PRIVACY GATE: PASS", ...notices, ""].join("\n");
   }
   const lines = ["PRIVACY GATE: FAIL"];
   for (const [finding, count] of [...findings].sort(([left], [right]) => left.localeCompare(right))) {
@@ -2740,25 +2868,32 @@ if (import.meta.main) {
   const arguments_ = process.argv.slice(2);
   const repositoryArgument = argumentValue(arguments_, "--repository");
   const inspectionRoot = repositoryArgument ? resolve(repositoryArgument) : (repositoryRoot ?? resolve("."));
-  const trustedBase = argumentValue(arguments_, "--base") ?? "origin/main";
+  const requestedBase = argumentValue(arguments_, "--base") ?? "origin/main";
   const repositoryPath = safePath(inspectionRoot);
   const repositoryError = repositoryPath.status !== "safe" || !repositoryPath.metadata?.isDirectory();
   const explicitPaths = requestedPaths(arguments_);
+  const range = !repositoryError && (explicitPaths === undefined || arguments_.includes("--check-commits"))
+    ? publicationRange(inspectionRoot, requestedBase)
+    : { base: requestedBase, error: false, notices: [] };
+  const trustedBase = range.base;
   const selection = explicitPaths === undefined
-    ? changedPaths(arguments_, inspectionRoot)
+    ? changedPaths(arguments_, inspectionRoot, trustedBase)
     : {
       error: explicitPaths.length === 0,
       paths: explicitPaths.map((path) => isAbsolute(path) ? path : resolve(inspectionRoot, path)),
     };
-  const notices: string[] = [];
+  const notices: string[] = [...range.notices];
   const pathFindings = inspectPaths(
     selection.paths,
-    selection.error || repositoryError,
+    false,
     arguments_.includes("--require-known-values"),
     inspectionRoot,
     trustedBase,
     notices,
   );
+  if (selection.error || repositoryError || range.error) {
+    pathFindings.set("inspection_error", (pathFindings.get("inspection_error") ?? 0) + 1);
+  }
   if (arguments_.includes("--check-commits")) {
     for (const [finding, count] of commitMessageFindings(inspectionRoot, trustedBase, notices)) {
       pathFindings.set(finding, (pathFindings.get(finding) ?? 0) + count);

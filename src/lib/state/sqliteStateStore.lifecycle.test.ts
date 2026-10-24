@@ -102,13 +102,36 @@ test("reopening repairs every core index before indexed queries can run", () => 
       ).all();
       const complete = schema();
       const indexes = complete.filter(row => row.type === "index" && ["state_rows", "state_changes"].includes(row.tbl_name) && !row.name.startsWith("sqlite_autoindex_"));
-      expect(indexes.filter(row => row.name.startsWith("state_rows_task_"))).toHaveLength(10);
+      expect(indexes.filter(row => row.name.startsWith("state_rows_task_"))).toHaveLength(11);
       expect(indexes.some(row => row.name === "state_rows_task_finding")).toBe(true);
+      expect(indexes.some(row => row.name === "state_rows_task_due")).toBe(true);
       for (const { name } of indexes) {
         db.exec(`DROP INDEX "${name}"`);
         initializeStateCollections(filename, seed);
         expect(schema()).toEqual(complete);
       }
+      db.exec("DROP INDEX state_rows_task_due");
+      db.exec(`CREATE INDEX state_rows_task_due ON state_rows(
+        json_extract(value_json,'$.project'),
+        round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000), row_key)
+        WHERE collection='tasks' AND json_valid(value_json)
+          AND json_type(value_json,'$.dueAt')='text' AND json_type(value_json,'$.status')='text'
+          AND json_extract(value_json,'$.status') <> 'done'`);
+      initializeStateCollections(filename, seed);
+      expect(db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE name='state_rows_task_due'").get()!.sql)
+        .toContain("coalesce(json_extract(value_json,'$.machine'),'')");
+      db.exec("DROP INDEX state_rows_task_due");
+      db.exec(`CREATE INDEX state_rows_task_due ON state_rows(
+        json_extract(value_json,'$.project'), coalesce(json_extract(value_json,'$.machine'),''),
+        CASE json_extract(value_json,'$.priority') WHEN 'high' THEN 0 WHEN 'low' THEN 2 ELSE 1 END,
+        max(round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000),
+          coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0)), row_key)
+        WHERE collection='tasks' AND json_valid(value_json)
+          AND json_type(value_json,'$.dueAt')='text' AND json_type(value_json,'$.status')='text'
+          AND json_extract(value_json,'$.status') <> 'done'`);
+      initializeStateCollections(filename, seed);
+      expect(db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE name='state_rows_task_due'").get()!.sql)
+        .not.toContain("max(");
       // A ready database opens without requesting SQLite's writer lock.
       db.exec("BEGIN IMMEDIATE");
       try { initializeStateCollections(filename, seed); }

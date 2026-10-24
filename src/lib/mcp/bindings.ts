@@ -1,3 +1,4 @@
+import { previewAgentMemoryCap, PIPELINE_MEMORY_DEFAULT_ROLE } from "@/lib/runtime/agentMemorySettings";
 import { readSelf } from "@/lib/links/self";
 import { readFileConfirmationLink } from "@/lib/telegram/bot/fileConfirmationContract";
 import { FLOW_ARCHIVE, FLOW_RETIREMENT, STAGE_RETIREMENT, FlowRetiredError } from "@/lib/flows/retirement";
@@ -248,7 +249,7 @@ import {
 import { resolveProjectAttribution } from "@/lib/session/projectResolution";
 import { overlaySessionTitles } from "@/lib/session/titleProjection";
 import { linkedContext, withOwnership } from "@/lib/links/linked";
-import { applyAssignmentPatches, createTask, patchTask, type CreateTaskInput, type PatchTaskInput } from "@/lib/tasks/commands";
+import { applyAssignmentPatches, createTask, patchTask, taskDuePatch, type CreateTaskInput, type PatchTaskInput } from "@/lib/tasks/commands";
 import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
 import { recordAuthors, type RecordAuthor } from "@/lib/team";
 import { pipelineWorkLinks, pullRequestSummary, taskWorkLinkContext, taskWorkLinks } from "@/lib/forge/resolve";
@@ -1029,10 +1030,19 @@ export interface ViewerMcpDomainDependencies {
  * No second resolution scheme: `projectForCwd` IS `projectInfoFromCwd`.
  */
 function productionCallerProject(): string | null {
+  const snapshot = agentRegistry().readOnlySnapshot();
+  const conversation = productionCallerConversation(snapshot);
+  return conversation ? callerProjectFromSnapshot(snapshot, conversation.id) : null;
+}
+
+/** The same authenticated conversation that supplies the project also carries
+    the model used to judge that caller's next unpinned account. */
+function productionCallerConversation(snapshot: RegistrySnapshot) {
   const authority = attentionCallerAuthority(attentionCallerSources());
   const conversationId = authority.kind === "root" || authority.kind === "worker" ? authority.conversationId : null;
-  if (!conversationId) return null;
-  return callerProjectFromSnapshot(agentRegistry().readOnlySnapshot(), conversationId);
+  return conversationId
+    ? readOnlyConversationLookupFromSnapshot(snapshot).conversation(conversationId as `conversation_${string}`)
+    : null;
 }
 
 /**
@@ -1802,6 +1812,7 @@ async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies,
     launchId: result.launchId,
     state: result.state,
     initialMessage: result.initialMessage,
+    ...(result.memoryCap ? { memoryCap: result.memoryCap } : {}),
     ...(typeof result.runtime === "string" ? { runtime: result.runtime } : {}),
     /* Whether a brief still needs its own "report back" line. Only a
        structured launch ends its turns where a notice is owed from, so a tmux
@@ -2260,7 +2271,18 @@ async function refineBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
   }), omittedRecordCount: fullAnswer(args) ? 0 : result.refined.length, ...answerHint(args, "get_task(taskId) or update_task with full:true returns the full task.") };
 }
 
+/** Reads only: deterministic date refusals must precede the MCP receipt claim. */
+function admitTaskDuePatch(args: McpToolArgs): void {
+  if (args.refine !== undefined || !Object.hasOwn(args, "dueAt") && !Object.hasOwn(args, "dueTz")) return;
+  const taskId = required(args, "taskId");
+  const task = taskSelectionSource()?.read(taskId);
+  if (!task) return; // The ordinary command owns the missing-task refusal.
+  const result = taskDuePatch(task, args as PatchTaskInput, new Date().toISOString(), { actor: "agent" });
+  if (!result.ok) throw new McpUnadmittedRefusal(result.error, { code: result.code ?? "TASK_INVALID_FIELD", field: result.field, status: result.status });
+}
+
 async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  admitTaskDuePatch(args);
   const maintainer = maintenanceCaller(dependencies);
   const caller = attributionOf(dependencies);
   if (args.refine !== undefined) {
@@ -2310,7 +2332,11 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
     if (outcome.ok) changedFields = changedFieldNames(before, outcome.task);
     return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };
   });
-  if (!result.ok) throw new McpToolRefusal(result.error, { code: result.code ?? (result.status === 404 ? "TASK_NOT_FOUND" : "TASK_INVALID_FIELD"), field: result.field, status: result.status });
+  if (!result.ok) {
+    // patchTask's date refusals return before the transaction publishes tasks.
+    const Refusal = result.code?.startsWith("TASK_DUE_") ? McpUnadmittedRefusal : McpToolRefusal;
+    throw new Refusal(result.error, { code: result.code ?? (result.status === 404 ? "TASK_NOT_FOUND" : "TASK_INVALID_FIELD"), field: result.field, status: result.status });
+  }
   logMaintenanceWrite(maintainer, "update_task", prior, result.task, changedFields);
   return { ...taskAcknowledgement(result.task, args, changedFields), ...(result.notes ? { notes: result.notes } : {}), ...taskTextLanguageWarnings(args.text, dependencies) };
 }
@@ -2346,6 +2372,14 @@ function deliveryAcknowledgement(pipeline: import("@/lib/pipelines/types").Pipel
       : "This repository has no delivery remote: accepted heads stay on the local lane branch and reviews read the local head. After a remote is added, pipeline_action set-delivery-remote makes this lane publish." } : {}),
     ownerId: delivery.ownerId, epoch: delivery.epoch, active: delivery.active,
     ...(delivery.disposition === "comparison" ? { conflict: `Target owned by ${delivery.ownerId} at epoch ${delivery.epoch}; comparison lane created with Viewer publication disabled` } : {}) };
+}
+
+function pipelineMemoryCaps(pipeline: Pipeline) {
+  const liveAgents = agentRegistry().liveStructuredHostCount() + 1;
+  return pipeline.stages.map(stage => ({ stageId: stage.id, preview: true,
+    ...previewAgentMemoryCap({ cwd: pipeline.worktreeDir ?? pipeline.repoDir, project: pipeline.project,
+      role: stage.effectiveRole.roleId ?? PIPELINE_MEMORY_DEFAULT_ROLE, profile: { agentMemoryMaxBytes: stage.agentMemoryMaxBytes,
+        agentMemoryRoleParams: stage.role?.params } }, liveAgents) }));
 }
 
 const PIPELINE_CREATION_QUEUED_NOTE = "Pipeline state is not writable right now (a Viewer deployment is handing over, or the store is busy), so this pipeline is queued under the pipelineId above. The serving release stores and starts it on its next controller pass; get_pipeline answers once it is stored. Do not create it again.";
@@ -2444,6 +2478,7 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, d
   if (result.queued) {
     return redactPayload({
       ...pipelineAcknowledgement(result.pipeline),
+      memoryCaps: pipelineMemoryCaps(result.pipeline),
       ...(result.repositoryInitialization ? { repositoryInitialization: result.repositoryInitialization } : {}),
       queued: true,
       queuedBecause: result.queued.reason,
@@ -2457,6 +2492,7 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, d
      had just sent them — a median 10 KB per create. get_pipeline reads it. */
   return redactPayload({
     ...pipelineAcknowledgement(result.pipeline),
+    memoryCaps: pipelineMemoryCaps(result.pipeline),
     ...(result.repositoryInitialization ? { repositoryInitialization: result.repositoryInitialization } : {}),
     ...(result.pipeline.delivery ? { delivery: deliveryAcknowledgement(result.pipeline) } : {}),
     ...(result.warnings?.length ? { warnings: result.warnings } : {}),
@@ -5329,10 +5365,12 @@ async function accountProjectBindingTool(args: McpToolArgs, dependencies: Viewer
 /** The same records `GET /api/accounts` projects its limit rows from. */
 function productionAccountLimitsSource(): Omit<AccountLimitsInput, "engine" | "accountId"> {
   const snapshot = agentRegistry().readOnlySnapshot();
+  const caller = productionCallerConversation(snapshot);
+  const project = caller ? callerProjectFromSnapshot(snapshot, caller.id) : null;
   return {
     accounts: {
-      claude: listClaudeAccounts().map((account) => ({ accountId: account.id })),
-      codex: listCodexAccounts().map((account) => ({ accountId: account.id })),
+      claude: listClaudeAccounts().map((account) => ({ accountId: account.id, authPresent: account.authPresent })),
+      codex: listCodexAccounts().map((account) => ({ accountId: account.id, authPresent: account.authPresent })),
       copilot: listCopilotAccounts().map((account) => ({ accountId: account.id })),
     },
     active: {
@@ -5341,6 +5379,9 @@ function productionAccountLimitsSource(): Omit<AccountLimitsInput, "engine" | "a
       copilot: snapshot.engineRouting.copilot.activeAccountId ?? activeCopilotAccountId(),
     },
     observations: snapshot.quotaObservations,
+    project,
+    bindings: project ? accountProjectBindings() : [],
+    model: caller?.generations.at(-1)?.launchProfile.model ?? null,
     now: Date.now(),
   };
 }
@@ -5958,9 +5999,23 @@ async function listPipelines(
   const scope = { project: boardReadProject(args, dependencies), states, includeClosed: args.includeClosed === true,
     ids: stringSet(args.ids), query: normalizedBoardQuery(text(args.query)), updatedSince: sinceTime(args.updatedSince),
     queryIds: undefined as string[] | undefined };
+  // Resolve explicit ids once so PR matching and paging share the same
+  // hot-or-archive records without traversing either collection.
+  const requested = scope.ids.length && dependencies.readPipelineRecord
+    ? new Map(scope.ids.flatMap(id => {
+      const row = dependencies.readPipelineRecord!(id);
+      return row ? [[id, row] as const] : [];
+    }))
+    : undefined;
   const number = pullRequestQuery(scope.query);
-  if (number !== null) scope.queryIds = pipelineReferenceRows(dependencies, scope.project).filter(row => pipelineMatchesPr(row, number)).map(row => row.id).sort();
-  const source = dependencies.pipelineSelectionSource?.();
+  if (number !== null) scope.queryIds = (requested ? [...requested.values()] : pipelineReferenceRows(dependencies, scope.project))
+    .filter(row => (!scope.project || canonicalProject(row.project) === scope.project) && pipelineMatchesPr(row, number)).map(row => row.id).sort();
+  const hotSource = dependencies.pipelineSelectionSource?.();
+  // Explicit ids share get_pipeline's hot-or-archive lookup. Keep ordinary
+  // lists on their scalar selection index and materialize only requested rows.
+  const source = hotSource && requested
+    ? { ...hotSource, read: (id: string) => requested.get(id) ?? null }
+    : hotSource;
   /* #2059: the compact row names its PR in one string, the full forms carry
      every resolved link. */
   const project = (source: Pipeline) => {
@@ -5972,7 +6027,9 @@ async function listPipelines(
   };
   const page = source ? boardSelection(source.filename, "pipelines").page(source, scope, args.cursor,
     Math.max(1, Math.min(200, integer(args.limit, PIPELINE_LIST_DEFAULT_LIMIT))), project)
-    : await listPageAsync(dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines, {
+    : await listPageAsync(requested
+      ? [...requested.values()]
+      : dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines, {
     scope, cursor: args.cursor, limit: Math.max(1, Math.min(200, integer(args.limit, PIPELINE_LIST_DEFAULT_LIMIT))),
     identity: pipeline => ({ id: pipeline.id, time: pipeline.createdAt ?? "" }),
     matches: pipeline => (!scope.project || canonicalProject(pipeline.project) === scope.project)
@@ -8012,6 +8069,7 @@ async function recoverSpawn(
       facts: {
         state: receipt.state,
         launched: receipt.state === "completed",
+        ...(receipt.memoryCap ? { memoryCap: receipt.memoryCap } : {}),
         ...(receipt.rejection ? { rejection: receipt.rejection.code } : {}),
       },
       ...(ownership ? { ownership } : {}),
@@ -8024,7 +8082,7 @@ async function recoverSpawn(
     evidence: "spawn-receipt",
     reason: `launch receipt is ${receipt.state}`,
     ids,
-    facts: { state: receipt.state },
+    facts: { state: receipt.state, ...(receipt.memoryCap ? { memoryCap: receipt.memoryCap } : {}) },
     ...(ownership ? { ownership } : {}),
   };
 }
@@ -8067,7 +8125,7 @@ export function viewerMcpRecoverableTools(
         const pipeline = pipelineDeliveryLookup({ requestKey: binding.downstreamKey });
         if (!pipeline) return { outcome: "unknown", evidence: "pipeline-row", reason: RECOVERY_ABSENT_REASON, ids: {} };
         return { outcome: "settled", evidence: "pipeline-row", reason: null,
-          ids: { pipelineId: pipeline.id }, facts: { ...pipelineAcknowledgement(pipeline), delivery: deliveryAcknowledgement(pipeline) } };
+          ids: { pipelineId: pipeline.id }, facts: { ...pipelineAcknowledgement(pipeline), memoryCaps: pipelineMemoryCaps(pipeline), delivery: deliveryAcknowledgement(pipeline) } };
       },
     },
     spawn_agent: {
@@ -8130,7 +8188,7 @@ export function viewerMcpBindings(
     send_message: (args, context) => sendMessage(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
     message_receipt: (args) => messageReceipt(args),
     create_task: orchestratorProjectBinding(domainDependencies, (args) => createBoardTask(args, domainDependencies), true, true, true),
-    update_task: (args) => updateBoardTask(args, domainDependencies),
+    update_task: Object.assign((args: McpToolArgs) => updateBoardTask(args, domainDependencies), { prepareAdmission: admitTaskDuePatch }),
     create_pipeline: (args, context) => unadmittedBeforeMutation(async () => (await createPipeline(args, context, domainDependencies))),
     pipeline_action: Object.assign(
       (args: McpToolArgs) => unadmittedBeforeMutation(() => pipelineAction(args, domainDependencies)),

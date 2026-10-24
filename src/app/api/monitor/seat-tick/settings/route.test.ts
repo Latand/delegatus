@@ -35,11 +35,13 @@ const RESTORE = {
   LLV_SEAT_TICK_STATE_FILE: process.env.LLV_SEAT_TICK_STATE_FILE,
   LLV_SEAT_TICK_AUDIT_FILE: process.env.LLV_SEAT_TICK_AUDIT_FILE,
   LLV_RUNTIME_HOST_SOCKET: process.env.LLV_RUNTIME_HOST_SOCKET,
+  LLV_CODEX_HOME: process.env.LLV_CODEX_HOME,
 };
 process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 process.env.HOME = SANDBOX;
 process.env.XDG_CONFIG_HOME = path.join(SANDBOX, "config");
 process.env.TMPDIR = path.join(SANDBOX, "tmp");
+process.env.LLV_CODEX_HOME = path.join(SANDBOX, "codex");
 /* A Viewer-spawned session inherits the live runtime host's socket; nothing
    here may reach outside this process. */
 delete process.env.LLV_RUNTIME_HOST_SOCKET;
@@ -80,7 +82,9 @@ beforeEach(() => {
   /* Its own directory: the settings live in the `state.sqlite` beside it. */
   settingsFile = path.join(SANDBOX, "settings", id, "seat-tick-settings.json");
   process.env.LLV_SEAT_TICK_SETTINGS_FILE = settingsFile;
-  process.env.LLV_SEAT_TICK_STATE_FILE = path.join(SANDBOX, "state", `tick-${id}.json`);
+  /* The active tick file uses its directory's state.sqlite, regardless of
+     its basename. A distinct filename alone shares the previous case's row. */
+  process.env.LLV_SEAT_TICK_STATE_FILE = path.join(SANDBOX, "state", id, "tick.json");
   process.env.LLV_SEAT_TICK_AUDIT_FILE = path.join(SANDBOX, "journal", `${id}.ndjson`);
   fs.rmSync(path.join(process.env.LLV_STATE_DIR!, "orchestrator-seats.json"), { force: true });
 });
@@ -200,7 +204,7 @@ test("HTTP and seat_tick_settings report maintenance paused while wakes are off"
   const http = await written.json() as SeatTickSettingsAnswer;
   expect(http.maintenance).toMatchObject({ enabled: true, waitingOn: "wakes-off", pauseReason: "paused while wakes are off", nextRunAt: null, nextEligibleAt: null });
   const tool = await viewerMcpBindings(undefined, undefined, {
-    callerAttribution: () => ({ kind: "gateway", conversationId: null }), callerProject: () => PROJECT, authorizedSeats: () => [],
+    callerAttribution: () => ({ kind: "gateway", conversationId: null }), callerProject: () => PROJECT, authorizedSeats: () => [{ project: PROJECT, conversationId: SEAT_CONVERSATION, path: null }],
   } as never).seat_tick_settings({ clientRequestId: "fixture-paused-maintenance-read", project: PROJECT });
   expect(tool.maintenance).toMatchObject(http.maintenance);
 });
@@ -479,7 +483,7 @@ test("the answer agrees with the seat_tick_settings tool over the same record", 
   const body = await (await get(`?project=${PROJECT}`)).json() as SeatTickSettingsAnswer;
   const bindings = viewerMcpBindings(undefined, undefined, {
     callerAttribution: () => ({ kind: "gateway", conversationId: null }),
-    authorizedSeats: () => [],
+    authorizedSeats: () => [{ project: PROJECT, conversationId: SEAT_CONVERSATION, path: null }],
     callerProject: () => PROJECT,
     readTickSettings: (project: string) => readSeatTickSettings(project, settingsFile),
   } as never);
@@ -521,7 +525,7 @@ test("maintenance-only write needs no reason and exposes the same run records th
   const http = await (await get(`?project=${project}`)).json();
   expect(http.maintenance.lastRun).toMatchObject({ taskId: "fixture-card", state: "failed", failure: { kind: "no-account" } });
   const tool = await viewerMcpBindings(undefined, undefined, {
-    callerAttribution: () => ({ kind: "gateway", conversationId: null }), callerProject: () => project, authorizedSeats: () => [],
+    callerAttribution: () => ({ kind: "gateway", conversationId: null }), callerProject: () => project, authorizedSeats: () => [{ project, conversationId: SEAT_CONVERSATION, path: null }],
   } as never).seat_tick_settings({ clientRequestId: "fixture-maintenance-read", project, verbose: true });
   const same = { ...http.maintenance };
   delete same.nextRunAt;
