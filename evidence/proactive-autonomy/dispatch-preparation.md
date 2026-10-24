@@ -28,3 +28,5 @@ Verification used baseline `f348d75bd0012871867ebc63908a69b7b9e65b1c`, isolated 
 | Ordinary source commits with repository hooks | 0 | All six source/integration commits passed hooks |
 
 `evidence/proactive-autonomy/dispatch-preparation.json` records each explicit file command and exit code, failures, comparison keys, source digests, run timestamps, diagnostic conditions and earlier superseded runs. The standard bootstrap failure remains visible. Current main `62235181a310ad5783cb0fc0342721772efa7b54` was then integrated. All 23 prior source/test hashes remain identical. The three tests changed by that advance and all 11 landing runtime cases passed on both current main and the integrated branch. Privacy, typecheck and touched-file ESLint passed again on the merged tree. The full 232/234-file campaign remains pinned to its recorded earlier revisions.
+
+The authority fix round is recorded in `evidence/proactive-autonomy/authority-fixes.md` and its paired JSON ledger. It binds adoption to accepted scope, preserves detached review-subject authority through recovery, and rechecks merge authority after credential waits.
