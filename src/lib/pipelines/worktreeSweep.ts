@@ -21,6 +21,7 @@ import type { WorktreeSweepCache } from "./worktreeSweepCache";
 import { pipelineActivitySettled, type Pipeline } from "./types";
 import { pipelineLiteralGitEnv } from "./git";
 import { readWorktreeProvenance } from "./worktreeProvenance";
+import { recordWorktreeDrilldown } from "./worktreeDrilldown";
 
 /**
  * Removes the worktrees whose work is merged (#2202), and finished ones whose
@@ -220,7 +221,9 @@ export type WorktreeRemoval = {
   pipelineId?: string;
 };
 
-export type WorktreeKept = { path: string; reason: WorktreeKeptReason; detail?: string; pipelineId?: string; bytes?: number; firstSettledAt?: string };
+export type WorktreeKept = { path: string; reason: WorktreeKeptReason; detail?: string; pipelineId?: string; bytes?: number; firstSettledAt?: string;
+  /** Advisory display metadata, preserved when a later slice defers this row. */
+  repository?: string; observedAt?: string };
 
 export type WorktreeSweepReport = {
   at: string;
@@ -246,7 +249,7 @@ export type WorktreeSweepReport = {
 export type GitRun = (args: string[], cwd: string) => Promise<ExecResult>;
 
 export type SweptPipeline = Pick<Pipeline, "id" | "state" | "repoDir" | "worktreeDir" | "branch" | "delivery"> &
-  Partial<Pick<Pipeline, "closeTeardown" | "closeReport" | "activationCloseRequested" | "baseRef" | "closedAt">> & {
+  Partial<Pick<Pipeline, "task" | "closeTeardown" | "closeReport" | "activationCloseRequested" | "baseRef" | "closedAt">> & {
     runs?: Pipeline["runs"];
   };
 
@@ -1042,7 +1045,8 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
   let recentWritesDue: number | undefined;
   /** `retryBy`: a failed read or a transient refusal. The next hourly sweep
       rechecks the row, or the earlier time its verdict can change. */
-  const keep = (kept: WorktreeKept, retryBy?: number) => {
+  const keep = (kept: WorktreeKept, retryBy?: number, observed = true) => {
+    if (observed) kept.observedAt = new Date(now()).toISOString();
     if (kept.reason === "recent-writes" && recentWritesDue !== undefined) dueAt.set(kept.path, recentWritesDue);
     // Live holders leave no registration trace; the next hourly sweep rechecks
     // them so the retention clock starts when they let go.
@@ -1134,6 +1138,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
   const pending = new Set(priorProgress?.pending ?? []);
   const visited = new Set<string>();
   const discovered = new Set<string>();
+  const repositoryByCheckout = new Map<string, string>();
   const selected = new Set<string>();
   ports.phase?.("discovery");
 
@@ -1200,6 +1205,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
     for (const entry of ordered) {
       const directory = resolve(entry.path);
       discovered.add(directory);
+      repositoryByCheckout.set(directory, root);
       const owners = ownersOf(ownersAtStart, directory);
       const fingerprint = JSON.stringify([entry.head, entry.branch, entry.locked, entry.prunable,
         owners.map(owner => [owner.id, owner.state, pipelineHoldsCheckout(owner), latestTerminalTime([owner])])]);
@@ -1657,7 +1663,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
   // count as fresh proof and cannot enter the removal path in this slice.
   for (const directory of discovered) if (!visited.has(directory)) {
     const previous = previouslyKept.get(directory);
-    keep(previous ? { ...previous } : { path: directory, reason: "deferred" });
+    keep(previous ? { ...previous } : { path: directory, reason: "deferred" }, undefined, false);
   }
   for (const root of Object.keys(progress.cursors ?? {})) if (!roots.has(root)) delete progress.cursors![root];
   const due: Record<string, number> = {};
@@ -1672,6 +1678,8 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
   const seenKept = new Set<string>();
   ports.phase?.("accounting");
   for (const kept of report.kept) {
+    kept.repository ??= repositoryByCheckout.get(kept.path);
+    kept.pipelineId ??= ownersOf(ownersAtStart, kept.path)[0]?.id;
     // Accounting is advisory and bounded independently of retirement. A cache
     // eviction never schedules a full walk of every retained tree.
     const measured = visited.has(kept.path) && !spent();
@@ -1911,9 +1919,15 @@ export async function productionWorktreeSweepPorts(
 }
 
 /** The last sweep in full, at `state/worktree-sweep-report.json`. */
-export function recordWorktreeSweep(report: WorktreeSweepReport): void {
+export function recordWorktreeSweep(report: WorktreeSweepReport, pipelines: readonly SweptPipeline[] = []): void {
   fs.mkdirSync(path.dirname(REPORT_FILE()), { recursive: true, mode: 0o700 });
   writeJsonDurably(REPORT_FILE(), report);
+  try { recordWorktreeDrilldown(report, pipelines); }
+  catch (error) {
+    // A derived display artifact cannot interrupt retirement, cache persistence
+    // or the next slice. The next sweep retries from its own kept rows.
+    console.error("[worktree sweep] drilldown projection failed; the next sweep will retry", error instanceof Error ? error.message : String(error));
+  }
 }
 
 /** The production sweep: mode from the environment, report to the state directory. */
@@ -1936,7 +1950,7 @@ export async function runWorktreeSweep(
     return null;
   }
   const report = await sweepMergedWorktrees(ports);
-  recordWorktreeSweep(report);
+  recordWorktreeSweep(report, ports.pipelines);
   console.log(summarizeWorktreeSweep(report));
   return report;
 }

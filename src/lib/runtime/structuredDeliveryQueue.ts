@@ -629,7 +629,10 @@ function reconfigureEffect(effect: StructuredDeliveryEffect): StructuredReconfig
 function deliveryEffect(effect: StructuredDeliveryEffect): DeliveryEffect | null {
   if (effect.kind === "runtime.native-queue") {
     try {
-      const command = parseRuntimeCommand("native-queue", effect.payload) as NativeQueueCommand;
+      // Effects were admitted before they were persisted. Parse them with the
+      // narrow legacy compatibility allowance rather than rejecting an
+      // already-admitted colon-delimited idempotency key as fresh API input.
+      const command = parseRuntimeCommand("native-queue", effect.payload, { durableReplay: true }) as NativeQueueCommand;
       if (!command.operationId) return null;
       return { ...command, operationId: command.operationId, eventSeq: effect.eventSeq };
     } catch { return null; }

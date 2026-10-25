@@ -151,6 +151,88 @@ export function explicitDelegationRequest(utterance: string): GateVerdict {
   return { admit: true };
 }
 
+const WORD = /[\p{L}\p{N}']+/gu;
+/* A spoken yes to a confirmation that waits: "yes", "go ahead", "send it", "так", "давай", "відправляй". */
+const AGREEMENT = /(?<![\p{L}'])(?:yes|yeah|yep|yup|sure|ok|okay|agreed|confirm(?:ed)?|go ahead|do it|send it|please do|так|ага|авжеж|звісно|звичайно|гаразд|добре|давай|згоден|згодна|підтверджую|відправляй|надсилай|надішли|відправ|да|конечно|хорошо|согласен|подтверждаю|отправляй|отправь)(?![\p{L}'])/u;
+/* Every word a spoken yes may hold: the yes itself, and what it sends, to whom and when ("Yes, send it to the
+   orchestrator now."). Any other word answers something else ("Так, а що зараз грає?", "Давай подивимось…"). */
+const AGREEMENT_WORDS = new Set([
+  "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "agreed", "confirm", "confirmed", "go", "ahead", "do", "send", "please", "right", "away",
+  "it", "this", "that", "the", "request", "message", "to", "orchestrator", "now", "delegatus",
+  "так", "ага", "авжеж", "звісно", "звичайно", "гаразд", "добре", "давай", "згоден", "згодна", "підтверджую", "відправляй", "надсилай", "надішли", "відправ",
+  "будь", "ласка", "це", "його", "її", "оркестратору", "зараз", "делегатусе",
+  "да", "конечно", "хорошо", "согласен", "подтверждаю", "отправляй", "отправь", "пожалуйста", "это", "его", "сейчас",
+]);
+
+/** Whether the operator's own words agree to send a request that waits for them, and say nothing else: every
+ * sentence is a yes, no word declines, takes it back, makes it conditional or asks something, and no sentence is a
+ * question. Read where text the operator did not speak may have asked the backend to answer for them (design
+ * docs/design/voice-extensible-tools.md §3.6). `also` names the words of the action being agreed to ("Yes, play it."). */
+export function spokenAgreement(utterance: string, also: readonly string[] = []): boolean {
+  const all = gateSentences(utterance);
+  return all.length > 0 && all.every((sentence) => AGREEMENT.test(sentence) && !sentence.includes("?")
+    && (sentence.match(WORD) ?? []).every((word) => AGREEMENT_WORDS.has(word) || also.includes(word)));
+}
+
+/* A sending verb addressed to the orchestrator inside a clause of the operator's own words: "…and send it to the
+   orchestrator", "pass the summary on to our orchestrator", "…і передай це оркестратору", or an asking verb with the
+   orchestrator as its object at the start of a clause ("…and tell the orchestrator", "…і попроси оркестратора"). */
+const SEND_VERB = String.raw`(?:send|forward|relay|deliver|pass|give|hand)`;
+const CLAUSE = String.raw`(?:^|[,;:—–]\s*|\b(?:and|then|also)\s+)(?:please\s+)?`;
+const EN_SENT = String.raw`${CLAUSE}${SEND_VERB}\s+(?:[\p{L}\p{N}'-]+\s+){0,5}?(?:(?:on|over|along)\s+)?to\s+${EN_TARGET}`;
+const EN_TOLD = String.raw`${CLAUSE}(?:(?:ask|tell|message|have)\s+${EN_TARGET}|let\s+${EN_TARGET}\s+know\b)`;
+const UK_CLAUSE = String.raw`(?:^|[,;:—–]\s*|(?:^|\s)(?:і|й|та|а\s+потім|потім|також)\s+)(?:будь\s+ласка,?\s+)?`;
+const UK_SENT = String.raw`${UK_CLAUSE}(?:передай|надішли|відправ|перешли|скажи|напиши|доручи)(?:те)?\s+(?:[\p{L}\p{N}'-]+\s+){0,5}?(?:(?:нашому|моєму|цьому)\s+)?оркестратору${UK_END}`;
+const UK_TOLD = String.raw`${UK_CLAUSE}(?:попроси|запитай|спитай)(?:те)?\s+(?:[ув]\s+)?(?:(?:нашого|мого|цього)\s+)?оркестратора${UK_END}`;
+const ADDRESSED_SEND = new RegExp(`${EN_SENT}|${EN_TOLD}|${UK_SENT}|${UK_TOLD}`, "u");
+/* A bare send in answer to an offer: the sending verb, what it points at and politeness, nothing else ("Send it.",
+   "Forward this.", "Pass it on.", "Відправ.", "Передай це."). A verb with any other object is no ask to send. */
+const SEND_IMPERATIVE = /(?<![\p{L}'])(?:send|forward|relay|deliver|pass|відправ(?:те|ляй|ляйте)?|надішли(?:те)?|надсилай(?:те)?|передай(?:те)?|перешли(?:те)?|пересилай(?:те)?|отправь(?:те)?|отправляй(?:те)?)(?![\p{L}'])/u;
+const BARE_SEND_WORDS = new Set([...AGREEMENT_WORDS, "forward", "relay", "deliver", "pass", "on", "along", "them", "these", "and", "just",
+  "відправте", "відправляй", "відправляйте", "надішліть", "надсилайте", "передай", "передайте", "перешли", "перешліть", "пересилай", "пересилайте", "отправьте", "отправляйте"]);
+
+/** Whether the operator's own words ask to send something to the orchestrator, in a form the strict grammar of
+ * `explicitDelegationRequest` does not cover ("Check what is playing and send it to the orchestrator."), with no
+ * sentence that negates, takes it back, makes it conditional or asks something. The send must be addressed: a sending
+ * verb whose target is the orchestrator, or a bare send that names nothing else ("Send it."). A sending verb that
+ * belongs to another clause or object ("Look up how to forward ports", "I will send it myself later", "Передай привіт
+ * мамі") is no ask. Read once an added tool's answer is in the backend's context (design §3.6). */
+export function spokenSendRequest(utterance: string, options: { addressedOnly?: boolean } = {}): boolean {
+  const all = gateSentences(utterance);
+  if (!all.length || QUOTES.test(utterance)) return false;
+  if (all.some((sentence) => sentence.includes("?") || NEGATION.test(sentence) || RETRACTION.test(sentence) || CONDITION.test(sentence)
+    || FOLLOWUP_CONDITION.test(sentence) || TRAILING_CONDITION.test(sentence))) return false;
+  const bare = !options.addressedOnly && all.every((sentence) => (sentence.match(WORD) ?? []).every((word) => BARE_SEND_WORDS.has(word)))
+    && all.some((sentence) => SEND_IMPERATIVE.test(sentence));
+  return bare || all.some((sentence) => ADDRESSED_SEND.test(sentence));
+}
+
+/** The words that name an action: a tool's own words that are neither a yes nor a bare send ("play" in music__play).
+ * A tool whose own words are all such ("send_message") is named by its server's title instead. */
+export function actionWords(tool: readonly string[], title: readonly string[]): string[] {
+  const own = (words: readonly string[]) => words.filter(word => !BARE_SEND_WORDS.has(word));
+  const named = own(tool);
+  return named.length ? named : own(title);
+}
+
+/** Whether words name an action by one of its action words: "Yes, play it." names play, while "Yes, send it." names
+ * no added tool's action, whatever the tool is called. */
+export function namesAction(utterance: string, action: readonly string[]): boolean {
+  return gateSentences(utterance).some((sentence) => (sentence.match(WORD) ?? []).some((word) => action.includes(word)));
+}
+
+const loose = (text: string) => text.normalize("NFC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+/** Whether speech holds a question about doing one action with these arguments: one question names an action word and
+ * carries every argument ("Should Music play Fixture two?"). A question that offers the orchestrator a request is
+ * about that request, and one that names no action word ("Do you like this music?") or other arguments asks about
+ * something else. */
+export function asksAbout(speech: string, action: readonly string[], args: readonly string[] = []): boolean {
+  const spoken = args.map(loose).filter(Boolean);
+  return gateSentences(speech).some((sentence) => sentence.includes("?") && !ORCHESTRATOR.test(sentence)
+    && (sentence.match(WORD) ?? []).some((word) => action.includes(word))
+    && spoken.every((arg) => ` ${loose(sentence)} `.includes(` ${arg} `)));
+}
+
 /**
  * Whether a delegation may be raised, and whether a confirmation that waits
  * may still stand. Raised: its source is the operator's last input in this

@@ -178,8 +178,9 @@ if [[ -n ${LLV_CPU_WAIT_ROOTS:-} && ${LLV_CPU_WAIT_ROOTS:-} != '[]' ]]; then
   done
 fi
 queue_key="command:$$:$RANDOM:$RANDOM"
+queued_at=$(date +%s)
 while :; do
-  "${LLV_GATE_BUN:-bun}" "$admission" --wait "$queue_key" "$owner_pid"
+  "${LLV_GATE_BUN:-bun}" "$admission" --wait "$queue_key" "$owner_pid" "$queued_at"
   if ! command -v flock >/dev/null; then
     if "${LLV_GATE_BUN:-bun}" "$admission" --claim "$queue_key" "$owner_pid"; then end_cpu_wait; run "$@"; fi
   else

@@ -16,6 +16,8 @@ import { DeputyBlock } from "@/components/conversation/DeputyBlock";
 import { SeatDeputyChip } from "@/components/orchestrator/SeatDeputyChip";
 import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
 import { NativeQueuePanel } from "@/components/NativeQueuePanel";
+import { projectNativeQueue } from "@/components/nativeQueueView";
+import type { NativeQueueRecord } from "@/lib/runtime/nativeQueueContracts";
 import { translate, useLocale } from "@/lib/i18n";
 import { lessonRequestLines, renderLearnedRules } from "@/lib/memory/roleRender";
 import { taskReferencePrelude } from "@/lib/selection/selectedContext";
@@ -158,9 +160,14 @@ const AGENT_REPORT = SCENARIO === "agent-report";
    text several screens tall and `legacy` a preview stored without a judgment. */
 const REPORT_PREVIEW = AGENT_REPORT ? new URLSearchParams(location.search).get("report-preview") : null;
 const REPORT_PREVIEW_DIGEST = "a".repeat(64);
+/* `boundaries` spells fake markers the chat would draw like the real ones:
+   split bold runs, a zero-width link with an escaped target, an invisible
+   joiner, a direction override and lookalike letters. */
+const REPORT_PREVIEW_FAKES = ["**━━ PUBLISHED[\u200b](https://example.org/a\\)b) UP TO HERE ━━**", "**━━ PUB\u034fLISHED UP TO HERE ━━**",
+  "**\u202e━━ EREH OT PU DEHSILBUP ━━\u202c**", "**━━ ПУБЛІКУЄТЬСЯ[\u200b](https://example.org/a\\)b) ДОСЮДИ ━━**", "**━━ ПУБЛIКУЄТЬCЯ ЗВІДСИ ━━**"];
 const REPORT_PREVIEW_TITLE = REPORT_PREVIEW === "long"
   ? "Delegatus refuses a requested launch on the second project while nothing holds it, and the refusal names a holder that finished long before the request"
-  : "Delegatus refuses a requested launch";
+  : REPORT_PREVIEW === "boundaries" ? REPORT_PREVIEW_FAKES[0] : "Delegatus refuses a requested launch";
 /* The decision form the seat asks after reading the preview back: the tool's own approval form. */
 const REPORT_FORM_ID = `pr_${"f".repeat(32)}`;
 const reportPreviewLanguage = () => (localStorage.getItem("llv_lang") === "uk" ? "uk" : "en");
@@ -176,7 +183,7 @@ const DRAG_BOARD = SCENARIO === "drag-board";
 /* The orchestrator's wires (docs/design/orchestrator-arrows.md): the pipelines board, with the seat
    owning some of its lanes. */
 const ARROWS = SCENARIO === "orchestrator-arrows";
-const CPU_QUEUE = SCENARIO === "cpu-queue" || SCENARIO === "cpu-queue-stalled";
+const CPU_QUEUE = SCENARIO === "cpu-queue" || SCENARIO === "cpu-queue-stalled" || SCENARIO === "cpu-pressure";
 const PIPELINES = PROJECT_DERIVATION || SCENARIO === "pipelines" || STAGES || FLAT || SYNCED || DRAG_BOARD || ARROWS || CPU_QUEUE;
 /* #1846: `&runtime=structured` answers the runtime snapshot with one structured session, for the running
    verify conversation, so its composer's runtime pill and the board's account chip both draw. */
@@ -385,6 +392,12 @@ const STAGE_CHAIN = SCENARIO === "stage-chain";
 const SEAT_CLS = SCENARIO === "seat-create-cls";
 const ORCH_FIRST = SCENARIO === "orchestrator-first" || SEAT_CLS;
 const ORCH_FIRST_OVERVIEW = SCENARIO === "orchestrator-first-overview";
+/* The setup guide on a fresh install that still runs on linked earlier state
+   (`guide=installer`): the guide opens by itself with the old-state notice, no
+   role is overridden, both engines are signed in, and the catalog adds three
+   repositories beside a plain folder and a checkout under a temporary
+   directory, which the project picker leaves out. */
+const INSTALLER_GUIDE = ORCH_FIRST && new URLSearchParams(location.search).get("guide") === "installer";
 /* The seat case opens as the create draft and leaves it when Confirm is pressed. */
 const FM_SEAT = FIRST_MESSAGE && FM_CASE === "s";
 const NO_SEAT = ORCH_FIRST || ORCH_FIRST_OVERVIEW || FM_SEAT;
@@ -478,6 +491,7 @@ const MERGE_SETTING = { enabled: new URLSearchParams(location.search).get("merge
    report log beside the seat's chat, empty with `?reports=empty`. */
 const BRIDGE_SETTING = { enabled: new URLSearchParams(location.search).get("bridge") !== "off" };
 const REPORTS_EMPTY = new URLSearchParams(location.search).get("reports") === "empty";
+const REPORT_AUTHOR_LONG_ROLE = new URLSearchParams(location.search).get("report-author") === "long-role";
 /* "Asks you" (docs/research/attention-classifier.md §7): the switch on, the
    export explorer ended its turn asking the operator, and the seat's report
    log carries that ask and an older one. Every other scene answers the switch
@@ -579,6 +593,15 @@ const flowOf = (id: string) => (PIPELINES ? { flowId: id } : {});
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
 const MIN = 60;
+const INSTALLER_PROJECTS = INSTALLER_GUIDE ? [
+  { project: `repo-${"1".repeat(32)}`, displayName: "atlas-api", projectRoot: "/repo/atlas-api", conversations: 4, smt: now - 30 * MIN },
+  { project: `repo-${"2".repeat(32)}`, displayName: "harbor-docs", projectRoot: "/repo/harbor-docs", conversations: 2, smt: now - 2 * 60 * MIN },
+  { project: `repo-${"3".repeat(32)}`, displayName: "ledger-export", projectRoot: "/repo/ledger-export", conversations: 1, smt: now - 26 * 60 * MIN },
+  { project: `dir-${"4".repeat(32)}`, displayName: "notes", projectRoot: "/repo/notes", conversations: 1, smt: now - 40 * MIN },
+  { project: `repo-${"5".repeat(32)}`, displayName: "scratch-checkout", projectRoot: "/tmp/scratch-checkout", conversations: 1, smt: now - 10 * MIN },
+] : [];
+/* The guide preselects no project and lists repositories only, so the Telegram step's case picks this one first. */
+const TELEGRAM_REPOSITORY = { project: `repo-${"6".repeat(32)}`, displayName: "atlas", projectRoot: "/repo/atlas", conversations: 1, smt: now - MIN };
 const REV = (n: number) => `task-v1:00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
 function conversation(id: string, title: string, over: Record<string, unknown> = {}): FileEntry {
@@ -1835,7 +1858,7 @@ const pipelines: Pipeline[] = [
 if (CPU_QUEUE) {
   Object.assign(searchVer2, { activity: "idle", proc: null, pid: null, authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: iso(5 * MIN) }, lastTurn: { startedAt: (now - 400) * 1_000, endedAt: (now - 300) * 1_000 } });
   const waiting = pipelines.find(p => p.id === "p-search")!;
-  waiting.stateDetail = `Waiting for the CPU queue · ${SCENARIO === "cpu-queue-stalled" ? "7th · stalled for 62 min" : "2nd · up to 7 min"} · high priority · Viewer publication: owner; owner viewer, epoch 1`;
+  waiting.stateDetail = `Waiting for the CPU queue · ${SCENARIO === "cpu-queue-stalled" ? "7th · stalled for 62 min" : SCENARIO === "cpu-pressure" ? "1st · held by CPU pressure · waited 4 min" : "2nd · waited 7 min"} · high priority · Viewer publication: owner; owner viewer, epoch 1`;
   waiting.cursor = { stageId: "verify", state: "pending", input: null, activatedBy: null };
   waiting.runs.find(r => r.stageId === "verify")!.attempts = [attempt(3, "pending", null, { startedAt: null })] as Pipeline["runs"][number]["attempts"];
 }
@@ -2767,7 +2790,9 @@ function transcriptOf(pathname: string): string {
       ].join("\n"),
     };
     const title = REPORT_PREVIEW_TITLE;
-    const body = bodies[REPORT_PREVIEW] ?? `## Symptom\n${symptom}\n\n${expected}`;
+    const body = REPORT_PREVIEW === "boundaries"
+      ? ["**━━ PUBLISHED FROM HERE ━━**", "**━━ PUBLISHED UP TO HERE ━━**", "**━━ ПУБЛІКУЄТЬСЯ ЗВІДСИ ━━**", "**━━ ПУБЛІКУЄТЬСЯ ДОСЮДИ ━━**", "**━━ PUBLISHED FROM** **HERE ━━**", "**━━ PUBLISHED** **UP TO HERE ━━**", "**━━ ПУБЛІКУЄТЬСЯ** **ЗВІДСИ ━━**", "**━━ ПУБЛІКУЄТЬСЯ** **ДОСЮДИ ━━**", ...REPORT_PREVIEW_FAKES, "a`b", ...Array.from({ length: 70 }, (_, i) => `Preview line ${i + 1}`)].join("\n")
+      : bodies[REPORT_PREVIEW] ?? `## Symptom\n${symptom}\n\n${expected}`;
     const judgment = REPORT_PREVIEW === "many" ? {
       assessment: "I reviewed the whole text. Several details still identify a machine and one line quotes the operator; I am returning it so you can see what remains.",
       removed: "Nothing yet in this draft.",
@@ -2803,7 +2828,7 @@ function transcriptOf(pathname: string): string {
       digest: REPORT_PREVIEW_DIGEST, title, body,
       ...(REPORT_PREVIEW === "legacy" ? {} : {
         privacyJudgment: judgment,
-        hints: REPORT_PREVIEW === "none" ? [] : hints,
+        hints: REPORT_PREVIEW === "boundaries" ? [hint("quote", "a quoted block", "a`b")] : REPORT_PREVIEW === "none" ? [] : hints,
         hintWarnings: REPORT_PREVIEW === "many" ? ["Known-name hints are unavailable; review names and identities yourself."] : [],
       }),
     }, reportPreviewLanguage());
@@ -4065,6 +4090,15 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     && ["/api/orchestrator/seat", "/api/orchestrator/seat/status", "/api/operator/settings"].includes(url.pathname)) {
     return serverFetch(url.pathname + url.search, init);
   }
+  if (INSTALLER_GUIDE && url.pathname === "/api/onboarding") {
+    const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, steps: {}, lastHealth: null, walk: null };
+    if (method === "PUT") return json({ marker: { ...marker, ...(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>), steps: {} } });
+    return json({ marker, legacyState: true, seatTickCheckMinutes: 10 });
+  }
+  if (INSTALLER_GUIDE && url.pathname === "/api/roles") return json({ roles: [] });
+  if (INSTALLER_GUIDE && url.pathname === "/api/accounts" && method === "GET") {
+    return json({ ...accountsBody, claude: { ...accountsBody.claude, cli: "found" }, codex: { ...accountsBody.codex, cli: "found" } });
+  }
   if (ACCOUNT_PICKER && url.pathname === "/api/accounts" && method === "GET") {
     const held = Number(PICKER_PARAMS.get("pickerdelay") ?? 0);
     if (held > 0) await new Promise((resolve) => setTimeout(resolve, held));
@@ -4296,13 +4330,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       : NEEDS_FILTER
       ? { files: needsFiles, projectCatalog: [{ project: PROJECT, conversations: needsFiles.length, smt: now }], flows: [], pipelines: needsPipelines, tasks: needsTasks }
       : ORCH_FIRST || (FM_SEAT && !fm.confirmed)
-      ? { files: SEAT_CLS ? files : [], projectCatalog: [{ project: PROJECT, conversations: SEAT_CLS ? files.length : 0, smt: now }], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
+      ? { files: SEAT_CLS ? files : [], projectCatalog: [{ project: PROJECT, conversations: SEAT_CLS ? files.length : 0, smt: now }, ...INSTALLER_PROJECTS], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
       : {
         files: shown,
         projectCatalog: [...new Set(shown.map((file) => file.project))].filter((project) => !railCatalog.some((entry) => entry.project === project)).map((project) => {
           const own = shown.filter((file) => file.project === project);
           return { project, conversations: own.length, smt: Math.max(...own.map((file) => file.mtime)) };
-        }).concat(railCatalog),
+        }).concat(railCatalog, TELEGRAM_STEP ? [TELEGRAM_REPOSITORY] : []),
         ...(RAIL ? { crownedProjects: [LEDGER, "harbor-docs"] } : {}),
         flows: OVERVIEW_QUIET ? [] : flows,
         pipelines: OVERVIEW_QUIET ? [] : pipelines,
@@ -4400,13 +4434,17 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       ...pipelines.map((pipeline) => [pipeline.id, "pipeline"] as const),
     ]);
     /* A seat created a moment ago (the walk's scene) has filed nothing yet. */
-    return json(reportLogFixturePage(url, {
+    const page = reportLogFixturePage(url, {
       project: PROJECT, github: "acme/atlas", enabled: BRIDGE_SETTING.enabled, knownCards: known, empty: REPORTS_EMPTY || ORCH_WALK,
       asks: ASKS_YOU ? asksYouFixtureLines(now * 1_000, [
         { conversationId: exportExplore.conversationId!, path: exportExplore.path, role: "architect", title: exportExplore.title, gist: EXPORT_ASK_GIST, minutesAgo: 7 },
         { conversationId: searchImpl1.conversationId!, path: searchImpl1.path, role: "builder", title: searchImpl1.title, gist: "Лишити старий індекс ще на добу чи прибрати його одразу після перемикання?", minutesAgo: 170 },
       ]) : [],
-    }));
+    });
+    if (REPORT_AUTHOR_LONG_ROLE && page.entries[0]) {
+      page.entries[0].author = { kind: "agent", conversationId: searchImpl1.conversationId!, role: "LongCustomRole".repeat(12) };
+    }
+    return json(page);
   }
   /* "Asks you": the installation's switch and this month's spend. */
   if (url.pathname === "/api/asks-you") {
@@ -4909,7 +4947,48 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   /* The rail's footer, so the frames that fold it away (#1802) have something
      to fold: invented machine figures and one invented limit window. */
-  if (url.pathname.startsWith("/api/resources")) {
+  if (url.pathname === "/api/resources/worktrees") {
+    const state = new URLSearchParams(location.search).get("worktree-state");
+    if (state === "loading") return new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+    });
+    if (state === "offline") throw new TypeError("Fixture connection unavailable");
+    if (state === "unavailable" || state === "denied" || state === "changed")
+      return Response.json({ error: state }, { status: state === "denied" ? 403 : state === "changed" ? 409 : 503 });
+    const at = "2026-10-23T10:00:00.000Z";
+    const respond = () => {
+      const start = Number(url.searchParams.get("cursor") ?? 0);
+      /* `variant`: a dry-run report holding the strings the ordinary rows do not reach (a pipeline id instead of a task, a checkout with no repository, an unrecorded size and time, a twelve-digit size, the longest reasons). */
+      if (state === "variant") {
+        const rows = [
+          { task: null, pipelineId: "lane-7f3a2c91", repository: "atlas", checkout: "worktrees/export-1", reason: "not-created-by-delegatus", bytes: 987654321098, observedAt: at },
+          { task: L("Keep the unpublished export and its source evidence for the audit", "Зберегти неопублікований експорт і його докази для аудиту"), pipelineId: "lane-2", repository: null, checkout: "~/.agents/tools/atlas-feature-with-a-very-long-sibling-checkout-name", reason: "changed-during-inspection", bytes: 3145728, observedAt: "2026-10-22T09:00:00.000Z" },
+          { task: null, pipelineId: null, repository: "atlas", checkout: "worktrees/export-3", reason: "ignored-files", bytes: null, observedAt: null },
+          { task: L("Preserve checkout 4", "Зберегти робоче дерево 4"), pipelineId: "lane-4", repository: "atlas", checkout: "worktrees/export-4", reason: "holds-worktree", bytes: 12 * 1073741824, observedAt: at },
+        ];
+        return json({ at, mode: "dry-run", total: rows.length, start: 0, rows, previousCursor: null, nextCursor: null });
+      }
+      const rows = state === "empty" ? [] : Array.from({ length: 10 }, (_, index) => ({
+        task: index === 1 ? null : L(`Preserve checkout ${index + 1}`, `Зберегти робоче дерево ${index + 1}`),
+        pipelineId: index === 1 ? null : `lane-${index + 1}`,
+        repository: "atlas",
+        checkout: index === 2 ? "../checkouts/retain-the-unpublished-export-and-its-source-evidence" : `worktrees/export-${index + 1}`,
+        reason: (["open-pipeline", "not-created-by-delegatus", "local-only-commits", "ignored-files", "retention"] as const)[index % 5],
+        bytes: index === 4 ? null : (index + 1) * 1048576,
+        // Fresh sweep decisions follow the report clock by milliseconds or seconds.
+        observedAt: index === 4 ? null : index === 2 ? "2026-10-23T09:59:59.999Z" : `2026-10-23T10:00:0${index % 2}.${String(index + 1).padStart(3, "0")}Z`,
+      }));
+      return json({ at, mode: "on", total: rows.length, start, rows: rows.slice(start, start + 4),
+        previousCursor: start ? String(Math.max(0, start - 4)) : null, nextCursor: start + 4 < rows.length ? String(start + 4) : null });
+    };
+    /* `hold`: the page request stays pending until the driver calls `__releaseWorktreePage`, so a frame can be taken while the next page loads. */
+    if (state === "hold") return new Promise<Response>((resolve, reject) => {
+      (window as unknown as { __releaseWorktreePage: () => void }).__releaseWorktreePage = () => resolve(respond());
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+    });
+    return respond();
+  }
+  if (url.pathname === "/api/resources") {
     const diskRole = new URLSearchParams(location.search).get("disk-role");
     const diskWarning = new URLSearchParams(location.search).get("disk-level") === "warning";
     const host = (target: string, title: string, over: Record<string, unknown>) => ({
@@ -4917,6 +4996,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       rssBytes: 600 * 1024 ** 2, swapBytes: 0, procCount: 3, model: "opus", role: "builder", conversationId: null, stage: "implement", ownership: "owned", seat: false, turnBusy: false, ...over,
     });
     return json({
+      ...(new URLSearchParams(location.search).has("worktree-state") ? { worktreeSweep: {
+        at: "2026-10-23T10:00:00.000Z", mode: "on", summary: "", removed: 0, removedBytes: 0, trimmedBytes: 0,
+        keptCounts: { "local-only-commits": 10 }, keptBytes: { "local-only-commits": 78 * 1048576 }, waitsForDecision: 10, waitsForDecisionBytes: 78 * 1048576,
+      } } : {}),
       ...(diskRole ? { diskPressure: {
         at: iso(0), episode: iso(MIN), warningBytes: 10 * 1024 ** 3, criticalBytes: 2 * 1024 ** 3,
         /* `all`: one 256 GiB volume under state, worktrees and temp, with every consumer measured; `disk-level=warning` leaves it above the admission threshold. */
@@ -4997,6 +5080,30 @@ const queueTaskPreview = <div className="p-3"><NativeQueuePanel
   error={null} thread={{ model: null, effort: null }} cardId="conversation_task_queue" mintKey={() => "task-queue-edit"}
   submit={async () => ({ ok: true })} onRefresh={() => {}} t={(key, params) => translate(UK ? "uk" : "en", key, params)}
 /><div className="mt-3"><SeatDeputyChip deputy={taskDeputy} /><DeputyBlock deputy={taskDeputy} /></div></div>;
+/* The consumed entry is gone from Codex's queue and has no proof yet; a second entry with the same words is still held there.
+   The panel's view is the production projection of journal-shaped records, so the acknowledgement hint is the real one. */
+const proofAfter = new URLSearchParams(location.search).get("proof") === "after";
+const proofRecord = (id: string, overrides: Partial<NativeQueueRecord> = {}): NativeQueueRecord => ({
+  entryId: `entry-${id}`, conversationId: "conversation_proof_queue", binding: { threadId: "thread-proof", accountId: "account-a" },
+  clientUserMessageId: `client-${id}`, nativeSubmissionId: `native-${id}`, revision: 1,
+  versions: [{ revision: 1, operationId: `entry-${id}`, text: "Check the memory profile", images: [], contentDigest: `digest-${id}` }],
+  profilePolicy: "thread-at-dispatch", state: "queued", mutationOperationId: null, dispatchedRevision: null, dispatchedTurnId: null,
+  proof: null, reason: null, ...overrides });
+const proofView = projectNativeQueue({
+  turn: "running", activeTurnId: "turn-proof",
+  entries: [
+    proofAfter ? proofRecord("a", { state: "delivered", dispatchedRevision: 1, dispatchedTurnId: "turn-proof",
+      proof: { threadId: "thread-proof", clientUserMessageId: "client-a", revision: 1, turnId: "turn-proof", itemId: "item-a", input: [{ type: "text", text: "Check the memory profile" }] } })
+      : proofRecord("a"),
+    proofRecord("b"),
+  ],
+  native: { threadId: "thread-proof", stale: false, items: [{ id: "native-b", clientUserMessageId: "client-b", input: [{ type: "text", text: "Check the memory profile" }] }] },
+});
+const queueProofPreview = <div className="p-3"><NativeQueuePanel
+  view={proofView}
+  unresolved={[]} error={null} thread={{ model: null, effort: null }} cardId="conversation_proof_queue" mintKey={() => "proof-queue-edit"}
+  submit={async () => ({ ok: true })} onRefresh={() => {}} t={(key, params) => translate(UK ? "uk" : "en", key, params)}
+/></div>;
 /* The companion over the real Viewer. The simulator's one effect is `dispatch`, which here makes the delegated
    message appear in the seat's transcript; the orchestrator's answer joins it when the simulator reports one.
    The page gives up the strip the companion docks into, as a host surface is asked to. */
@@ -5180,7 +5287,7 @@ createRoot(document.getElementById("root")!).render(SCENARIO === "workspaces-tea
   <div className="bg-panel" style={{ width: diskDensity === "full" ? "100%" : 248, marginTop: "auto" }}>
     <ResourcesFooter density={diskDensity === "full" ? "full" : diskDensity === "detail" ? "detail" : "line"} />
   </div>
-) : SCENARIO === "task-queue-preview" ? queueTaskPreview : SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
+) : SCENARIO === "task-queue-preview" ? queueTaskPreview : SCENARIO === "native-queue-proof" ? queueProofPreview : SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
   new URLSearchParams(location.search).has("mapping") ? <div className="p-6"><AgentMappingTable statuses={{ claude: { connected: true, account: null }, codex: { connected: true, account: null } }} layout={innerWidth < 640 ? "card" : "table"} onConnect={() => {}} /></div> : <div className="p-6" style={{ paddingTop: 400 }}>
     <RuntimePill file={{ ...searchVer2, engine: "codex", root: "codex-sessions", model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" }} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />
   </div>

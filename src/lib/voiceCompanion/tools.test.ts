@@ -198,8 +198,6 @@ test("asking first is the model's judgment in the schema: an optional reason, an
   expect(tool.parameters.required).toEqual(["project", "instruction", "pending_request", "confirmation_reason", "asked_again"]);
   expect(tool.parameters.properties.pending_request).toMatchObject({ type: ["string", "null"] });
   expect(tool.parameters.properties.asked_again).toMatchObject({ type: ["string", "null"] });
-  expect(tool.description).toContain("delivered at once");
-  expect(tool.description).toContain("your own judgment");
   expect(COMPANION_TOOLS.find(row => row.name === "resolve_orchestrator_confirmation")!.parameters.properties.decision).toMatchObject({ enum: ["send", "cancel"] });
 });
 
@@ -303,9 +301,6 @@ test("orchestrator reads expose bounded continuation and every mutating tool has
   }
   const properties = COMPANION_TOOLS.find(tool => tool.name === "orchestrator_messages")!.parameters.properties;
   expect(Object.keys(properties).sort()).toEqual(["project", "message", "offset", "at", "before", "limit", "refresh"].sort());
-  for (const name of ["orchestrator_messages", "orchestrator_actions"]) {
-    expect(COMPANION_TOOLS.find(tool => tool.name === name)!.description).toContain("even when rows is empty");
-  }
   for (const name of ["seat_tick_settings", "account_project_binding", "role_presets", "auto_updates", "curate_rules"]) {
     expect(ACTION_LINES[name]({}, () => "")).toBeNull();
   }

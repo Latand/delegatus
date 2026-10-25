@@ -1,3 +1,4 @@
+import { assertProactiveTaskExecution, proactiveTaskExecutionError, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
 import { settledPublicationForHead } from "./publicationEvidence";
 import { codexCloudEnvironmentId } from "@/lib/projects/settings";
 import { CLOUD_STAGE_TIMEOUT_MS, cloudPollDelay, cloudStageConfigurationError, cloudServiceTierError, cloudTransportError, validCloudTaskReference, validCloudThreadReference, type CloudStageClient, type CloudStageAttempt } from "./cloudStage";
@@ -43,7 +44,7 @@ import path from "node:path";
 
 import { activeDrain, type DrainLease } from "@/lib/selfUpdate/drain";
 import { withConversationActuation } from "@/lib/deliveryActuation";
-import { tierOffers, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
+import { codexServiceTierRefusal, tierOffers, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
 import { listCodexAccounts } from "@/lib/accounts/codex";
 import { accountManager, AccountAuthenticationRequiredError, ProjectAccountRefusedError, resolveProjectSpawnAfterLiveRead } from "@/lib/accounts/manager";
 import { validateMigrationTargetRoot } from "@/lib/accounts/migration/targetRoot";
@@ -104,7 +105,7 @@ import { captureProcessIdentity, processIdentityMayRun, processIdentityStatus, t
 import { parseReview, type ReviewFinding } from "@/lib/review";
 import { spawnStructuredConversation, stagedLaunchRecovery, recoverStagedStructuredLaunch, releaseFailedStagedLaunchContinuation, STAGED_RECOVERY_MAX_CHECKS, STAGED_RECOVERY_BUDGET_MS, type StagedLaunchRecovery } from "@/lib/runtime/structuredSpawn";
 import { projectForCwd } from "@/lib/scanner/describe";
-import { loadTasks } from "@/lib/tasks/store";
+import { loadTasks, loadTasksByIds } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 import { claudeProjectRootFor, codexSessionRootFor } from "@/lib/scanner/roots";
 import { isShellCommand } from "@/lib/status";
@@ -671,7 +672,7 @@ function stageAccountRefusal(
       if ("refusal" in read) return read.refusal;
       const accounts = listCodexAccounts().filter(account => (read.pool === null || read.pool.includes(account.id)) && (!requested || account.id === requested));
       const offers = tierOffers(accounts, stage.effectiveRole.model!, tier);
-      if (!offers.offering.length) violations.push({ field: `stages[${index}].serviceTier`, message: `no account in this project's pool offers serviceTier ${tier}; offered: ${offers.offered.join(", ") || "none"}`, expected: "tier offered by the stage model/account" });
+      if (!offers.offering.length) violations.push({ field: `stages[${index}].serviceTier`, message: codexServiceTierRefusal(accounts, stage.effectiveRole.model!, tier, requested), expected: "tier offered by the stage model/account" });
     }
     if (!requested || !ports.allowedAccountIds) continue;
     const engine = stage.effectiveRole.engine;
@@ -749,7 +750,7 @@ async function spawnPipelineAgent(
   const offers = desiredTier ? tierOffers(candidates, input.role.model!, desiredTier) : null;
   const required = input.role.serviceTierSource !== "role-default";
   if (offers && !offers.offering.length) {
-    if (required) throw new CodexServiceTierUnavailableError(`no account in this project's pool offers serviceTier ${desiredTier} for ${input.role.model}; offered: ${offers.offered.join(", ") || "none"}`);
+    if (required) throw new CodexServiceTierUnavailableError(codexServiceTierRefusal(candidates, input.role.model!, desiredTier!, input.requestedAccountId));
     serviceTier = null;
   }
   const request = {
@@ -2323,6 +2324,7 @@ export function defaultPipelinePorts(
     },
     transcriptPresent: (pathname) => Boolean(pathname) && fs.existsSync(pathname),
     resumeSeveredTurn: async (input) => {
+      assertProactiveTaskExecution(proactiveConversationTaskIds([input.conversationId]));
       const result = await enqueueStructuredMessage({
         path: input.transcriptPath,
         conversationId: input.conversationId,
@@ -2334,7 +2336,8 @@ export function defaultPipelinePorts(
            feed labels it as one rather than as the operator's. */
         origin: delegatusMessageOrigin("pipeline", input.project, input.cwd),
         ...(input.cohortAt ? { cohortAt: input.cohortAt } : {}),
-      }, input.continuationAllowed ? { idleContinuationAllowed: input.continuationAllowed } : {});
+      }, { ...(input.continuationAllowed ? { idleContinuationAllowed: input.continuationAllowed } : {}),
+        authorizeDispatch: () => assertProactiveTaskExecution(proactiveConversationTaskIds([input.conversationId])) });
       if (result?.ok !== true) {
         input.onRefused?.(result?.error ?? "structured delivery is disabled or the conversation uses a legacy host", result?.admission);
         if (result?.transportUncertain === true) input.onUncertain?.();
@@ -6764,6 +6767,7 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
             const current = live && runFor(live, run.stageId)?.attempts.find((item) => item.n === attempt.n);
             if (!live || hasRetiredStage(live.stages) || !current || activationFence(live) !== activation.fence
               || JSON.stringify(current) !== expectedAttempt) throw new ActivationSuperseded();
+            assertProactiveTaskExecution(live.taskIds);
             live.state = claimed.state;
             live.stateDetail = claimed.stateDetail;
             live.cursor = structuredClone(claimed.cursor);
@@ -7064,12 +7068,14 @@ async function spawnRunStage(
       }
       await persist();
       try {
+        assertProactiveTaskExecution(findPipelineRecord(pipeline.id)?.taskIds ?? pipeline.taskIds);
         spawned = await ports.spawnAgent({
           ...spawnInput,
           clientAttemptId: callId,
           ...(memory.learnedRules ? { learnedRules: memory.learnedRules } : {}),
           ...(memory.cleanMemory ? { cleanMemory: true } : {}),
         }, async (reservation) => {
+          assertProactiveTaskExecution(findPipelineRecord(pipeline.id)?.taskIds ?? pipeline.taskIds);
           if (attempt.activation) attempt.activation.phase = "dispatching";
           attempt.launchId = reservation.launchId;
           attempt.conversationId = reservation.conversationId;
@@ -7079,6 +7085,7 @@ async function spawnRunStage(
              recorded before the agent is actuated. */
           adoptPipelineFallbackTask(pipeline, tasksForBinding());
           await persist();
+          assertProactiveTaskExecution(findPipelineRecord(pipeline.id)?.taskIds ?? pipeline.taskIds);
         }, preparePrompt);
         break;
       } catch (error) {
@@ -7560,6 +7567,7 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
         continue;
       }
       const dispatchCheckpoint = async (account = record.rollback ? record.from : record.to) => {
+        assertProactiveTaskExecution(findPipelineRecord(pipeline.id)?.taskIds ?? pipeline.taskIds);
         const ignored = record.mode === "handoff" ? [switchOperationKey(record, "stop"), switchOperationKey(record, "stop-launch")] : [];
         for (const conversationId of new Set([record.from.conversationId, attempt.conversationId].filter((id): id is string => !!id))) {
           if (await ports.runtimeSwitchKilled?.(conversationId, record.requestedAt, ignored)) {
@@ -7590,6 +7598,7 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
           await checkpoint(); throw new RuntimeSwitchSuperseded();
         }
         await checkpoint();
+        assertProactiveTaskExecution(findPipelineRecord(pipeline.id)?.taskIds ?? pipeline.taskIds);
       };
       const outside: PipelinePorts = { ...ports,
         exec: async (...args) => { await dispatchCheckpoint(); return await ports.exec(...args); },
@@ -8111,7 +8120,9 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
       const account = resolution.account;
       const assertCurrent = () => {
         if (abort.signal.aborted) throw new Error("Codex Cloud operation timed out");
-        if (!sameCloudIntent(reader.read(), stageId, n, expected, authority)) throw new Error("Codex Cloud operation superseded");
+        const currentLane = reader.read();
+        if (!sameCloudIntent(currentLane, stageId, n, expected, authority)) throw new Error("Codex Cloud operation superseded");
+        assertProactiveTaskExecution(currentLane?.taskIds ?? []);
         const request = { project: pipeline.project, requestedId: account.accountId, model: attempt.effectiveRole.model, requireCapacity: false };
         const current = ports.resolveProjectSpawn?.("codex", request) ?? accountManager.resolveProjectSpawn("codex", request);
         if (current.kind !== "available") throw new Error(`Codex Cloud account ${current.kind}`);
@@ -9632,6 +9643,15 @@ async function tickPipeline(
   provisioned: Map<string, PipelineProvisionOutcome>,
 ): Promise<boolean> {
   const before = performanceSpans.sync("controller.lane", () => controllerTickFingerprint(pipeline));
+  const proactiveError = proactiveTaskExecutionError(pipeline.taskIds);
+  // Parking changes the publisher's control fence. Keep it intact until the
+  // active operation has recorded its actual receipt, then park on the next tick.
+  if (proactiveError && pipeline.delivery?.operation?.state === "running") return false;
+  const attempt = pipeline.cursor && currentAttempt(pipeline, pipeline.cursor.stageId);
+  if (proactiveError && (!attempt || ["pending", "passed", "failed", "needs_decision", "skipped"].includes(attempt.state))) {
+    await park(pipeline, proactiveError);
+    return performanceSpans.sync("controller.lane", () => controllerTickFingerprint(pipeline) !== before);
+  }
   if (pipeline.state === "provisioning") {
     /* Nothing slow runs here any more (#1799): the fetch and the worktree add
        happened in the pre-pass, outside this lease, and all that is left is
@@ -9647,6 +9667,9 @@ async function tickPipeline(
     }
     else await tickReviewStage(pipeline, stage, entries, ports, persist);
   }
+  const settledAttempt = pipeline.cursor && currentAttempt(pipeline, pipeline.cursor.stageId);
+  if (proactiveError && pipeline.delivery?.operation?.state !== "running" && pipeline.state !== "closed" && (!settledAttempt
+    || ["pending", "passed", "failed", "needs_decision", "skipped"].includes(settledAttempt.state))) await park(pipeline, proactiveError);
   return performanceSpans.sync("controller.lane", () => controllerTickFingerprint(pipeline) !== before);
 }
 
@@ -11522,7 +11545,7 @@ async function applySkippedStage(pipeline: Pipeline, stage: PipelineStage, attem
     setCursorState(pipeline, stage.id, "committing");
     const published = queuePipelinePublication(pipeline, ports.exec, {
       acceptedSha: sha, publishedSha: pipeline.publishedCommit ?? null,
-    });
+    }, true);
     if (!published.ok) {
       await park(pipeline, `publishing the skipped stage: ${published.error}`, attempt);
     } else if (published.remote === "unavailable") {
@@ -11740,6 +11763,8 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
   let changed = false;
   for (const preview of await selectControllerPipelines("running")) {
     if (preview.state !== "running" || preview.hiddenAt || preview.closedAt) continue;
+    // A revoked grant cannot change the active publisher's control fence.
+    if (preview.delivery?.operation?.state === "running" && proactiveTaskExecutionError(preview.taskIds)) continue;
     const stage = currentStage(preview);
     const attempt = stage ? currentAttempt(preview, stage.id) : null;
     if (!stage || !attempt) continue;
@@ -11758,6 +11783,7 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
     if (version() !== rowVersion || controllerTickFingerprint(reader.read()!) !== fingerprint) continue;
     const matches = (current: Pipeline | null) => current !== null && version() === rowVersion
       && ownership.current() && controllerTickFingerprint(current) === fingerprint
+      && !(current.delivery?.operation?.state === "running" && proactiveTaskExecutionError(current.taskIds))
       && (!attempt.flowId || JSON.stringify(ports.getFlow(attempt.flowId)) === flowFingerprint);
     const lock = path.join(pipelineArtifactsDir(preview.id), "remote-action.lock");
     let descriptor: number | null;
@@ -13125,6 +13151,9 @@ export async function createPipelineFromRequest(
   ports: PipelinePorts = defaultPipelinePorts(),
   options: CreatePipelineOptions = {},
 ): Promise<PipelineMutationResult> {
+  const proactiveError = proactiveTaskExecutionError([...(Array.isArray(req.taskIds) ? req.taskIds.filter((id): id is string => typeof id === "string") : []),
+    ...(options.ensureTask?.proactive ? [options.ensureTask.id] : [])]);
+  if (proactiveError) return { error: proactiveError, status: 403 };
   if (options.creationRequest) {
     const replay = pipelineDeliveryLookup({ requestKey: options.creationRequest.key });
     if (replay) {
@@ -13183,7 +13212,10 @@ export async function createPipelineFromRequest(
      the caller can fix by editing fields, so it answers alone as it always did. */
   if (!creator.lineage && taskSpawn) return { error: creator.error, status: creator.status };
   if (!creator.lineage) violations.push({ field: "src", message: creator.error ?? "pipeline creator lineage is required; pass src", expected: PIPELINE_SRC_ROOT_GUIDANCE });
-  const taskIds = [...new Set((req.taskIds ?? []).map((taskId) => taskId.trim()))];
+  const taskIds = [...new Set([...(req.taskIds ?? []).map((taskId) => taskId.trim()),
+    ...proactiveConversationTaskIds([creator.lineage?.srcConversationId])])];
+  const inheritedProactiveError = proactiveTaskExecutionError(taskIds);
+  if (inheritedProactiveError) return { error: inheritedProactiveError, status: 403 };
   const requestedRepoDir = typeof req.repoDir === "string" ? req.repoDir.trim() : "";
   if (!requestedRepoDir) violations.push({ field: "repoDir", message: "repoDir is required", expected: "absolute path of a project folder" });
   /* A draft (autoStart:false) may be created empty and assembled on the canvas
@@ -14688,6 +14720,7 @@ export async function patchPipeline(
     } else if (req.action === "unlink-task") {
       const taskId = typeof req.taskId === "string" ? req.taskId.trim() : "";
       if (!taskId) return { error: "taskId is required", status: 400 };
+      if (loadTasksByIds(new Set([taskId])).some(task => task.proactive)) return { error: "invented work retains its original task provenance", status: 403 };
       pipeline.taskIds = pipeline.taskIds.filter((candidate) => candidate !== taskId);
       setFinishesTask(pipeline, taskId, false);
     } else if (req.action === "start") {
@@ -15527,7 +15560,8 @@ export async function patchPipeline(
         if (!model || !effort) return { error: "apply now requires a resolved model and effort; select them explicitly", status: 400 };
         const preferredId = generation?.accountId ?? null;
         const serviceTier = turboTierOnly && req.serviceTier === null ? null : target.effectiveRole.serviceTier ?? null;
-        const offers = engine === "codex" && serviceTier ? tierOffers(listCodexAccounts(), model, serviceTier) : null;
+        const tierAccounts = engine === "codex" && serviceTier ? listCodexAccounts() : [];
+        const offers = engine === "codex" && serviceTier ? tierOffers(tierAccounts, model, serviceTier) : null;
         // A pool offering the tier does not prove the preferred account offers it.
         const unavailableIds = [
           ...usageLimitsOn(live, engine).filter(item => !providerAccountRecovered(pipeline, { ...live, effectiveRole: { ...live.effectiveRole, engine, model } }, item.accountId, item.limitedAt ?? null, item.resetsAt, ports)).map(item => item.accountId),
@@ -15540,11 +15574,24 @@ export async function patchPipeline(
         /* Returning a tier changes no account and dispatches no turn. Capacity
            admission must not prevent undo after the paid approval ends. */
         if (ports.resolveProjectSpawn && !(turboTierOnly && req.applyNowCut === "none")) {
-          const resolution = ports.resolveProjectSpawn(engine, { project: pipeline.project, model, requestedId: turboTierOnly ? preferredId : target.account, preferredId, unavailableIds });
-          if (resolution.kind !== "available" || !allowed(resolution.account.accountId)) return { error: "no allowed target account is available", status: 409 };
+          const requestedId = turboTierOnly ? preferredId : target.account;
+          const resolution = ports.resolveProjectSpawn(engine, { project: pipeline.project, model, requestedId, preferredId, unavailableIds });
+          if (resolution.kind !== "available" || !allowed(resolution.account.accountId)) {
+            if (resolution.kind === "unavailable" && offers) {
+              const evaluated = tierAccounts.filter(account => allowed(account.id)
+                && resolution.allowedAccountIds.includes(account.id) && (!requestedId || account.id === requestedId));
+              if (evaluated.length && evaluated.every(account => offers.lacking.includes(account.id))) return {
+                error: codexServiceTierRefusal(evaluated, model, serviceTier!, requestedId), status: 409,
+              };
+            }
+            return { error: "no allowed target account is available", status: 409 };
+          }
           accountId = resolution.account.accountId;
           migrationTarget = resolution.account;
         }
+        if (allowed(accountId) && offers?.lacking.includes(accountId!)) return {
+          error: codexServiceTierRefusal(tierAccounts.filter(account => account.id === accountId), model, serviceTier!, accountId, "selected"), status: 409,
+        };
         if (!allowed(accountId) || unavailableIds.includes(accountId!) || (offers && !offers.offering.includes(accountId!))) return { error: "no allowed target account is available", status: 409 };
         const to = { engine, model, effort,
           serviceTier, accountId, accountPinned: !!target.account };

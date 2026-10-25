@@ -16,6 +16,7 @@ const COPY = {
     assessment: "Assessment", removed: "Removed", harmless: "Harmless hints and reasons", uncertainties: "Uncertainties",
     legacy: "No agent judgment was recorded for this preview. Read the whole text before approving.",
     hints: "Detector hints",
+    unrecorded: "Detector hints were not recorded. Read the whole text.",
     none: "None found. A clean result proves nothing; read the whole text.",
     inTitle: "title", line: "body, line", lines: "body, lines", decoded: "decoded form",
     warning: "Warning",
@@ -29,6 +30,7 @@ const COPY = {
     assessment: "Оцінка", removed: "Вилучено", harmless: "Нешкідливі підказки та причини", uncertainties: "Сумніви",
     legacy: "Для цього перегляду оцінку агента не записано. Прочитайте весь текст перед схваленням.",
     hints: "Підказки детекторів",
+    unrecorded: "Підказки детекторів не записано. Прочитайте весь текст.",
     none: "Нічого не знайдено. Чистий результат нічого не доводить; прочитайте весь текст.",
     inTitle: "назва", line: "текст, рядок", lines: "текст, рядки", decoded: "розкодований вигляд",
     warning: "Попередження",
@@ -51,10 +53,37 @@ const UK: Record<string, string> = {
   "Known-name hints are unavailable; review names and identities yourself.": "Підказки щодо відомих імен недоступні; перевірте імена й особи самостійно.",
 };
 
-/* Inline code is the one form the chat renders character for character. It
-   cannot hold a backtick or a line break, so those sit between the pieces. */
+/* A delimiter longer than every embedded run preserves literal backticks. */
 const verbatim = (text: string) => text.trim().split("\n").filter((line) => line.trim())
-  .map((line) => line.trim().split("`").map((piece) => (piece ? `\`${piece}\`` : "")).join("`")).join(" ↵ ");
+  .map((line) => {
+    const value = line.trim();
+    const length = Math.max(0, ...(value.match(/`+/g) ?? []).map((run) => run.length)) + 1;
+    const fence = "`".repeat(length);
+    const padding = value.startsWith("`") || value.endsWith("`") ? " " : "";
+    return `${fence}${padding}${value}${padding}${fence}`;
+  }).join(" ↵ ");
+
+/* Boundary-like report lines are quoted, so only the preview's own markers
+   have the unquoted boundary style. A line is read as the chat draws it:
+   link and image targets (with the chat's own escapes), emphasis and code
+   delimiters, invisible characters and combining marks are dropped,
+   compatibility forms are folded and a letter matches its lookalikes in the
+   other scripts, so a marker split across runs or spelled with other
+   characters is still caught. A direction control can redraw any text as a
+   marker, so a line holding one is always quoted. The publication bytes stay
+   untouched. */
+const LOOKALIKES = ["AАΑ", "BВΒ", "CСϹ", "DԁԀ", "EЕΕ", "HНΗ", "IІΙӀl1", "KКΚ", "MМΜ", "NΝ", "OОΟ0", "PРΡ", "SЅ", "TТΤ", "XХΧ", "YУΥ", "ЗZ3"];
+const letter = (char: string) => {
+  const group = LOOKALIKES.find((members) => members.includes(char.toUpperCase()));
+  return char === " " ? "\\s*" : `[${group ?? char}]`;
+};
+const MARKER_RE = new RegExp([COPY.en.from, COPY.en.to, COPY.uk.from, COPY.uk.to]
+  .map((marker) => [...marker].map(letter).join("")).join("|"), "iu");
+const MD_TARGET = String.raw`\((?:\\.|[^)\s\\])+\)`;
+const drawnText = (line: string) => line.replace(new RegExp(String.raw`!?\[([^\]]*)\]${MD_TARGET}`, "g"), "$1")
+  .normalize("NFKC").replace(/[*_`~|\\]|[\p{Cf}\p{DI}\p{M}]/gu, "");
+const distinguishBoundaries = (text: string) => text.split("\n").map((line) =>
+  /\p{Bidi_C}/u.test(line) || MARKER_RE.test(drawnText(line)) ? `> ${line}` : line).join("\n");
 
 /* The chat draws an unclosed code fence to the end of the message, which
    would swallow the closing marker and everything after it. */
@@ -80,18 +109,22 @@ export function issueReportPreviewText(preview: PreviewText, language: IssueRepo
   }
   const place = (hint: IssueReportFinding) => (hint.where === "title" ? copy.inTitle
     : `${hint.lines.length > 1 ? copy.lines : copy.line} ${hint.lines.join(", ")}`) + (hint.reading === "decoded" ? `, ${copy.decoded}` : "");
+  /* Quoting moves a line out of the chat's fence parsing, so the fence is
+     counted on the lines as drawn. */
+  const title = distinguishBoundaries(preview.title);
+  const body = distinguishBoundaries(preview.body);
   return [
     copy.heading, `${copy.digest}: ${shortId(preview.digest)}`, "",
     `**━━ ${copy.from} ━━**`,
-    `> ${copy.title}`, preview.title,
-    `> ${copy.body}`, preview.body, ...(leavesFenceOpen(preview.body) ? ["```"] : []),
+    `> ${copy.title}`, title,
+    `> ${copy.body}`, body, ...(leavesFenceOpen(`${title}\n${body}`) ? ["```"] : []),
     `**━━ ${copy.to} ━━**`,
     copy.below, "",
     `**${copy.judgment}**`,
     judgment ? `${copy.assessment}: ${judgment.assessment}\n${copy.removed}: ${judgment.removed}\n${copy.harmless}: ${judgment.harmlessHints}\n${copy.uncertainties}: ${judgment.uncertainties}`
       : copy.legacy,
     "", `**${copy.hints}**`,
-    ...(spans.size ? [...spans.values()].map(({ hint, labels }) => `- ${labels.join(", ")} · ${place(hint)}: ${verbatim(hint.span.text)}`) : [copy.none]),
+    ...(spans.size ? [...spans.values()].map(({ hint, labels }) => `- ${labels.join(", ")} · ${place(hint)}: ${verbatim(hint.span.text)}`) : [preview.hints === undefined ? copy.unrecorded : copy.none]),
     ...(preview.hintWarnings?.length ? ["", ...preview.hintWarnings.map((warning) => `${copy.warning}: ${local(warning)}`)] : []),
     "", copy.closing,
   ].join("\n");
