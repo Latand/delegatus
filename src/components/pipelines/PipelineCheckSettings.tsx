@@ -1,9 +1,7 @@
 "use client";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
-import { Check, ChevronLeft, ChevronRight } from "@/components/icons";
-import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { MessageKey, TFunction } from "@/lib/i18n";
 import type { Pipeline } from "@/lib/pipelines/types";
-import { stageChipLabel } from "./pipelineModel";
 
 /*
  * Where a lane's heavy checks run (docs/design/cloud-checks.md): the project
@@ -92,7 +90,7 @@ export interface CheckTerms {
   laneHeading: MessageKey;
   stageInherit: MessageKey;
 }
-export const STRIP_CHECK_TERMS: CheckTerms = { laneHeading: "pipelineStrip.checksLane", stageInherit: "pipelineStrip.checksStageInherit" };
+export const BOARD_CHECK_TERMS: CheckTerms = { laneHeading: "pipelineStrip.checksLane", stageInherit: "pipelineStrip.checksStageInherit" };
 
 export interface CheckChoice { key: string; label: string; checked: boolean; execution: CheckExecution | null }
 export interface CheckChoiceGroup { scope: CheckScope; heading: string; choices: CheckChoice[] }
@@ -124,94 +122,4 @@ export function checkRowValue(t: TFunction, read: CheckSettingsRead): string {
   if (read.kind === "loading") return t("pipelineStrip.checksLoading");
   if (read.kind === "failed") return t("pipelineStrip.checksRetry");
   return checkValueLabel(t, read.settings.effective);
-}
-
-const ROW = "flex min-h-9 w-full items-center gap-2 rounded-control px-2 text-left text-ui font-semibold hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50";
-
-/**
- * The board's ⋯ menu, with the checks row first: «Checks · Cloud» opens the
- * checks face in place of the lane's actions (`children`), as the runtime
- * pill's submenus do, and its back row returns to them.
- */
-export function PipelineCheckMenu({ pipeline, firstRef, children }: {
-  pipeline: Pipeline;
-  firstRef: RefObject<HTMLButtonElement | null>;
-  children: ReactNode;
-}) {
-  const { t } = useLocale();
-  const [face, setFace] = useState<"actions" | "checks">("actions");
-  const stageId = publishingStage(pipeline);
-  const checks = usePipelineChecks(pipeline.id, stageId, true);
-  const backRef = useRef<HTMLButtonElement>(null);
-  const switched = useRef(false);
-  useLayoutEffect(() => {
-    if (!switched.current) return;
-    (face === "checks" ? backRef : firstRef).current?.focus();
-  }, [face, firstRef]);
-  const show = (next: "actions" | "checks") => { switched.current = true; setFace(next); };
-  const value = checkRowValue(t, checks.read);
-  if (face === "actions") {
-    return <>
-      <button
-        ref={firstRef}
-        type="button"
-        role="menuitem"
-        aria-haspopup="menu"
-        aria-label={t("pipelineStrip.checksAria", { value })}
-        aria-busy={checks.read.kind === "loading" || undefined}
-        aria-disabled={checks.read.kind === "loading" || undefined}
-        data-pipeline-checks-row={checks.read.kind}
-        onClick={() => {
-          if (checks.read.kind === "failed") checks.reload();
-          else if (checks.read.kind === "ready") show("checks");
-        }}
-        className={`${ROW} text-secondary`}
-      >
-        <span className="min-w-0 flex-1 truncate">{t("pipelineStrip.checks")}</span>
-        <span className={`shrink-0 text-caption ${checks.read.kind === "failed" ? "text-accent" : "text-muted"}`}>{value}</span>
-        {checks.read.kind === "ready" ? <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden /> : null}
-      </button>
-      {checks.read.kind === "failed" ? <span role="alert" data-pipeline-checks-error="load" className="px-2 pb-1 text-caption font-semibold text-danger">{t("pipelineStrip.checksLoadFailed")}</span> : null}
-      {children}
-    </>;
-  }
-  /* The stage as the strip's own chip names it. */
-  const stage = stageId ? pipeline.stages.find((entry) => entry.id === stageId) : undefined;
-  const stageName = stageId ? (stage ? stageChipLabel(t, stage) : stageId) : null;
-  return <>
-    <button
-      ref={backRef}
-      type="button"
-      role="menuitem"
-      aria-label={t("pipelineStrip.checksBack")}
-      data-pipeline-checks-back=""
-      onClick={() => show("actions")}
-      className={`${ROW} gap-1 text-secondary`}
-    >
-      <ChevronLeft className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />
-      {t("pipelineStrip.checks")}
-    </button>
-    {checks.read.kind === "ready" ? checkChoiceGroups(t, STRIP_CHECK_TERMS, checks.read.settings, stageName).map((group) => (
-      <span key={group.scope} role="group" aria-labelledby={`checks-${pipeline.id}-${group.scope}`} data-pipeline-checks-group={group.scope} className="flex flex-col border-t border-border pt-1">
-        <span id={`checks-${pipeline.id}-${group.scope}`} title={group.heading} className="truncate px-2 py-1 text-caption font-semibold text-muted">{group.heading}</span>
-        {group.choices.map((choice) => (
-          <button
-            key={choice.key}
-            type="button"
-            role="menuitemradio"
-            aria-checked={choice.checked}
-            disabled={checks.saving}
-            data-pipeline-checks-choice={`${group.scope}:${choice.key}`}
-            onClick={() => { if (!choice.checked) void checks.save(group.scope, choice.execution); }}
-            className={`${ROW} ${choice.checked ? "text-primary" : "text-secondary"}`}
-          >
-            <span className="min-w-0 flex-1 truncate">{choice.label}</span>
-            {choice.checked ? <Check className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden /> : null}
-          </button>
-        ))}
-      </span>
-    )) : null}
-    {checks.read.kind === "failed" ? <span role="alert" data-pipeline-checks-error="load" className="px-2 pb-1 text-caption font-semibold text-danger">{t("pipelineStrip.checksLoadFailed")}</span> : null}
-    {checks.saveFailed ? <span role="alert" data-pipeline-checks-error="save" className="px-2 pb-1 text-caption font-semibold text-danger">{t("pipelineStrip.checksSaveFailed")}</span> : null}
-  </>;
 }

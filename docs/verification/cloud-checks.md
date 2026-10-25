@@ -403,3 +403,46 @@ Both exit 0 without diagnostics. `git diff --check HEAD` also exits 0.
 The privacy gate with committed known-value fingerprints passes on all three
 repair files. The repair uses the repository's enabled commit hooks and leaves
 the production hooks, lane-settings UI and workflows unchanged.
+
+## Refresh onto main after the scheme board retirement
+
+Main retired `PipelineStrip` with the rest of the scheme board (#3282), and
+`src/components/scheme/retiredSchemeBoard.test.ts` keeps it out. Its only
+production caller was the unreachable scheme board, so the desktop checks
+menu this change had added there never rendered. The refresh keeps main's
+deletion and moves the menu onto the live kanban board:
+
+- The lane's ⋯ actions (`pipelineMenu` in
+  `src/components/kanban/KanbanBoard.tsx`), on the card's ⋯ page and on a lane
+  with no task, hold a Checks row after Attach. It opens
+  `src/components/kanban/PipelineChecksPopover.tsx` over the same anchor, as a
+  stage's Choose account opens its picker, in the account picker's styles.
+  The popover reads on opening, shows no choice while the read is pending or
+  failed, offers Retry, keeps a pick open and shows the route's answer, and
+  keeps load and save refusals apart in danger ink. Escape returns focus to
+  the ⋯ button. `KanbanPopover` gained an optional `reflow` value that places
+  it again when content arrives after opening.
+- `PipelineCheckMenu` left `src/components/pipelines/PipelineCheckSettings.tsx`;
+  the hook and the choice helpers stay, shared with the phone sheet.
+- The three checks cases of `PipelineStrip.dom.test.tsx` moved to
+  `src/components/kanban/KanbanStages.dom.test.tsx` against the real board.
+  The strip's own menu placement tests left with the strip.
+- `Cloud check execution choices` in `kanbanBoard.browser.test.tsx` opens the
+  popover from a task card's ⋯ at 1440 and 768. At 390 the phone's ⋯ sheet
+  holds the row, which `phone lane checks` in
+  `src/components/mobile/issue1671Evidence.browser.test.tsx` frames. The row
+  floor follows the board's own 32px menu rows (`.kb .menu button`).
+
+Results on the refreshed tree (main at e5c6c0468), each run with private HOME,
+XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR and a closed Viewer control URL:
+
+| Check | Result |
+| --- | --- |
+| `tsc --noEmit` | Exit 0 |
+| `scripts/eslint-changes.ts --base origin/main` on the changed sources | 0 errors introduced |
+| `scripts/local-gate-tests.ts --base origin/main`, 17 touched files | 1 reported new: a second between-tests copy of the pre-existing `git.test.ts` publication timeout; the cascaded test passes alone |
+| Same, 11 board files after the popover change | 0 new failures, 3 pre-existing |
+| `KanbanStages.dom.test.tsx` direct | Head 43 / 2, main 40 / 2; the same two terminal-budget tests fail on both |
+| `KanbanBoard.dom.test.tsx` direct | Head 18 / 2 three times, main 18 / 2; the same dwell and balance tests |
+| `Cloud check execution choices` | 1 pass; 40 frames, en and uk, light and dark, every frame inspected; with the error rule removed the colour assertion fails |
+| `phone lane checks` | 1 pass; 36 frames at 390 and 360 |

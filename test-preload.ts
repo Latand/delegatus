@@ -30,6 +30,9 @@ if (!admitted) {
 // Bun preserves an ambient NODE_ENV. Pin the test runtime before JSX modules load.
 Object.assign(process.env, { NODE_ENV: "test" });
 
+// DOM nodes print as one line, so a failed element comparison stays a failure (#2182).
+await import("./src/test-helpers/domInspect");
+
 /*
  * One temp root per file repetition, removed after its children finish (#1957).
  *

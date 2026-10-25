@@ -1,4 +1,3 @@
-import { PipelineStrip } from "@/components/pipelines/PipelineStrip";
 import { createChecksFixtureRoute, type ChecksFixtureMode } from "@/components/pipelines/pipelineChecksFixture";
 import { RelayChatsView } from "@/components/externalRelay/RelayChats";
 import type { RelayChatsPayload } from "@/lib/externalRelay/relayChats";
@@ -1753,12 +1752,16 @@ const stageChainPipelines: Pipeline[] = STAGE_CHAIN ? (() => {
   ];
 })() : [];
 
-/* `?scenario=cloud-checks`: one running lane whose stage carries its own
-   checks choice; `checks=` frames the read and write failures, `strip=bottom`
-   stands the strip 160px above the window's bottom edge. */
-const CLOUD_CHECK_PARAMS = new URLSearchParams(location.search);
-const cloudChecks = createChecksFixtureRoute((CLOUD_CHECK_PARAMS.get("checks") ?? "ok") as ChecksFixtureMode, { lanes: { "lane-cloud-checks": "local" }, stages: { "lane-cloud-checks implement": "cloud" } });
+/* `?scenario=cloud-checks`: one running lane on its task's card, whose stage
+   carries its own checks choice; `checks=` frames the read and write failures. */
+const CLOUD_CHECKS = SCENARIO === "cloud-checks";
+const cloudChecks = createChecksFixtureRoute((new URLSearchParams(location.search).get("checks") ?? "ok") as ChecksFixtureMode, { lanes: { "lane-cloud-checks": "local" }, stages: { "lane-cloud-checks implement": "cloud" } });
+/* The cloud-checks scenario's lane: it stands on «implement», whose own choice differs from the lane's. */
+const cloudChecksPipelines: Pipeline[] = CLOUD_CHECKS ? [pipeline("lane-cloud-checks", "Run heavy checks in Codex Cloud", "t-cloud-checks", "running",
+  [stage("implement", "builder", "review"), stage("review", "reviewer", null)], [],
+  { stageId: "implement", state: "running", input: null, activatedBy: null })] : [];
 const pipelines: Pipeline[] = [
+  ...cloudChecksPipelines,
   ...wallPipelines,
   ...unstartedPipelines,
   ...stageChainPipelines,
@@ -1828,10 +1831,6 @@ const pipelines: Pipeline[] = [
     ],
     { stageId: "review", state: "reviewing", input: null, activatedBy: null })] : []),
 ];
-/* The cloud-checks scenario's lane: it stands on «implement», whose own choice differs from the lane's. */
-const cloudChecksLane = pipeline("lane-cloud-checks", "Run heavy checks in Codex Cloud", "t-cloud-checks", "running",
-  [stage("implement", "builder", "review"), stage("review", "reviewer", null)], [],
-  { stageId: "implement", state: "running", input: null, activatedBy: null });
 
 if (CPU_QUEUE) {
   Object.assign(searchVer2, { activity: "idle", proc: null, pid: null, authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: iso(5 * MIN) }, lastTurn: { startedAt: (now - 400) * 1_000, endedAt: (now - 300) * 1_000 } });
@@ -2137,6 +2136,7 @@ const tasks: BoardTask[] = [
     task("t-finish-hold", "assigned", L("Merge when the review passes", "Мердж, коли ревʼю пройдено"), L("The setting, the runner, and its docs.", "Налаштування, мердж і документація."), 50 * MIN),
     task("t-finish-done", "done", L("Conversation: wider agent replies", "Ширші відповіді агентів"), "", 75 * MIN),
   ] : []),
+  ...(CLOUD_CHECKS ? [task("t-cloud-checks", "assigned", L("Run heavy checks in Codex Cloud", "Важкі перевірки в Codex Cloud"), "", 5 * MIN)] : []),
   ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "An edge at rest, one fired once, a spent budget in flight, a lane parked on a spent budget, and two edges into one stage.", 3 * MIN)] : []),
 ];
 
@@ -4014,6 +4014,10 @@ const WORKSPACE_PARAMS = new URLSearchParams(location.search);
 const WORKSPACES = SCENARIO?.startsWith("workspaces") ? workspacesFixture({
   uk: UK,
   member: WORKSPACE_PARAMS.has("member"),
+  manager: WORKSPACE_PARAMS.has("manager"),
+  refuseMembership: WORKSPACE_PARAMS.has("membership-refused"),
+  refuseInvite: WORKSPACE_PARAMS.has("invite-refused"),
+  failMembershipReadOnce: WORKSPACE_PARAMS.has("membership-unavailable"),
   projects: [{ project: PROJECT, displayName: "Atlas", smt: now - 20 * MIN }, ...railCatalog.map(({ project, displayName, smt }) => ({ project, displayName, smt }))],
   placed: { client: [LEDGER, "harbor-docs"], research: [MESH], long: [RAIL_LONG] },
 }) : null;
@@ -5159,9 +5163,9 @@ function VoicePanelScene() {
 const relayChainEvidence: RelayChatsPayload = { relays: [{ id: "fixture-relay", name: "Example relay", origin: "https://relay.example" }], chats:
   (["member", "admin", "owner"] as const).map((authority, i) => ({ id: `chain-${i}`, relayId: "fixture-relay", relayName: "Example relay", targetId: "fixture-target", targetName: "Support bot", chatKey: "fixture-chat-chain-key", authority,
     engine: "claude", turns: 3, compactions: 0, createdAt: "2026-10-17T10:00:00Z", lastTurnAt: "2026-10-17T10:00:00Z", state: "idle", file: { ...files[0]!, path: `fixture-chain-${i}`, title: `Chain ${i}` } })) };
-createRoot(document.getElementById("root")!).render(SCENARIO === "workspaces-team" ? <TeamPage initialTab="workspaces" initialCreate={WORKSPACE_PARAMS.has("create")} />
+createRoot(document.getElementById("root")!).render(SCENARIO === "workspaces-team" ? <TeamPage initialTab={WORKSPACE_PARAMS.has("members") ? "members" : "workspaces"} initialCreate={WORKSPACE_PARAMS.has("create")} />
   : SCENARIO === "workspaces-page" ? <WorkspacePage id={FIXTURE_WORKSPACE_IDS[(WORKSPACE_PARAMS.get("page") ?? "client") as keyof typeof FIXTURE_WORKSPACE_IDS]} />
-  : SCENARIO === "cloud-checks" ? <div className="p-6" style={CLOUD_CHECK_PARAMS.get("strip") === "bottom" ? { position: "fixed", left: 0, right: 0, bottom: 136 } : undefined}><PipelineStrip pipeline={cloudChecksLane} mobile={innerWidth < 640} /></div> : PIPELINE_INIT ? <PipelineTemplatePicker repoDir="/project" onCreate={async () => ({})} onCreated={() => {}} onClose={() => {}} /> : SCENARIO === "relay-chain-list" ? <RelayChatsView relayId="fixture-relay" payload={relayChainEvidence} /> : dockWidth === "440" || dockWidth === "360" ? (
+  : PIPELINE_INIT ? <PipelineTemplatePicker repoDir="/project" onCreate={async () => ({})} onCreated={() => {}} onClose={() => {}} /> : SCENARIO === "relay-chain-list" ? <RelayChatsView relayId="fixture-relay" payload={relayChainEvidence} /> : dockWidth === "440" || dockWidth === "360" ? (
   <div className="flex h-full min-h-0">
     <OrchestratorDock project={PROJECT} projectName="Atlas" files={files} onClose={() => {}} />
     <div className="min-w-0 flex-1"><Viewer /></div>

@@ -1,9 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 
+import { workspaceScope } from "@/lib/team/workspaceAccess";
 import type { WorkspacesView } from "@/lib/team/contract";
 import { crossOrigin, readJson, requireMember, requireOwner, teamErrorResponse, teamJson } from "@/lib/team/http";
 import { existingTeamStore } from "@/lib/team/store";
-import { createWorkspace, requestWorkspaceOptions, workspaceCatalog, workspaceDirectory } from "@/lib/team/workspaces";
+import { createWorkspace, requestWorkspaceOptions, workspaceCatalog } from "@/lib/team/workspaces";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,12 +21,17 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const authed = requireMember(req);
     if (authed instanceof NextResponse) return authed;
     const options = requestWorkspaceOptions();
+    const scope = workspaceScope(store, authed.live.member.id);
     const view: WorkspacesView = {
       mode: "team",
       canManage: authed.live.member.role === "owner",
-      workspaces: workspaceDirectory(store, options).workspaces,
+      managedWorkspaceIds: scope.workspaces.filter(workspace => ["owner", "manager"].includes(scope.role(workspace.id))).map(workspace => workspace.id),
+      workspaces: scope.workspaces,
     };
-    if (req.nextUrl.searchParams.get("catalog") === "1") view.catalog = workspaceCatalog(options);
+    if (req.nextUrl.searchParams.get("catalog") === "1") {
+      const catalog = workspaceCatalog(options);
+      view.catalog = { ...catalog, projects: catalog.projects.filter(row => scope.access(row.project) !== "none") };
+    }
     return teamJson(view);
   } catch (error) {
     return teamErrorResponse(error);

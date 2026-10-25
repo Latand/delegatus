@@ -8,8 +8,9 @@ connection with the Cloud stage runtime described in `cloud-stage-runtime.md`.
 
 Cloud is the default for a project with an environment configured. Projects
 without one run the existing local checks. Each lane can inherit that default or choose
-Cloud or local execution. A stage can override its lane. The lane action menu exposes
-lane and project settings. MCP's `pipeline_checks` tool changes those settings and
+Cloud or local execution. A stage can override its lane. On the kanban board the
+lane's ⋯ actions hold a Checks row that opens the stage, lane and project choices
+over the same anchor; the phone's ⋯ sheet holds the same row. MCP's `pipeline_checks` tool changes those settings and
 stage overrides using `scope: stage` with `stageId`; the voice companion can ask
 the project's orchestrator to use that tool. Settings live in the repository's
 local Git configuration, shared by its worktrees. Stage choices take precedence over

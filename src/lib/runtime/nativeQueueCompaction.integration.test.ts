@@ -261,17 +261,19 @@ args = ${JSON.stringify([mcp])}
       const value = Reflect.get(target, property); return typeof value === "function" ? value.bind(target) : value;
     } }) as ChildProcessWithoutNullStreams;
   };
-  // Startup and history reads use the real CLI on a shared CPU slice. Keep
-  // the production RPC deadline for this recovery check.
-  const options = { cwd, binary, codexHome: env.CODEX_HOME, env, model: "fixture-model",
+  // Startup, dispatch and history reads all wait on the real CLI. Use the
+  // production RPC budget for each; compaction correctness has no five-second
+  // dispatch requirement. The whole-test bound also leaves room for cleanup.
+  const requestTimeoutMs = 30_000;
+  const options = { cwd, binary, codexHome: env.CODEX_HOME, env, model: "fixture-model", requestTimeoutMs,
     eventStore: new FileRuntimeEventStore(path.join(base, "events")), resolveImagePath: () => { throw new Error("no images here"); }, spawnProcess };
   const filename = path.join(base, "journal.sqlite");
   let journal = new RuntimeJournal(filename, { structuredHosts: true, maxEvents: 12 });
   let host: import("./codexAppServerHost").CodexAppServerHost | undefined;
   const registry = new AgentRegistry(path.join(base, "agent-registry.json"));
-  const until = async (predicate: () => boolean | Promise<boolean>) => {
-    const deadline = Date.now() + 5000;
-    while (!await predicate()) { if (Date.now() >= deadline) throw new Error("native fixture deadline"); await new Promise(resolve => setTimeout(resolve, 20)); }
+  const until = async (waitingFor: string, predicate: () => boolean | Promise<boolean>) => {
+    const deadline = Date.now() + requestTimeoutMs;
+    while (!await predicate()) { if (Date.now() >= deadline) throw new Error(`native fixture deadline waiting for ${waitingFor}`); await new Promise(resolve => setTimeout(resolve, 20)); }
   };
   try {
     host = await CodexAppServerHost.start(options);
@@ -287,7 +289,7 @@ args = ${JSON.stringify([mcp])}
     await publish();
     const dispatched = composerSend(registry, journal, conversationId, generation.id, "dispatched-key", "historical audit request Привіт 🌍");
     await executor.execute(dispatched.command);
-    await until(() => responses.length === 1);
+    await until("the first model request", () => responses.length === 1);
     await publish();
     const waiting = composerSend(registry, journal, conversationId, generation.id, "waiting-key", "still waiting behind the turn");
     await executor.execute(waiting.command);
@@ -311,7 +313,7 @@ args = ${JSON.stringify([mcp])}
     expect(Object.fromEntries(journal.nativeQueueRead(conversationId).map(entry => [entry.entryId, JSON.stringify(entry)]))).toEqual(before);
     hideCanonicalClient = null;
 
-    await until(async () => {
+    await until("canonical history to settle the dispatched entry", async () => {
       await executor.reconcile(conversationId);
       return journal.nativeQueueRead(conversationId).find(entry => entry.entryId === dispatched.operationId)?.state === "delivered";
     });

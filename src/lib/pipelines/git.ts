@@ -1847,7 +1847,8 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       }
       if (pipeline.delivery && pipeline.delivery.epoch !== current.delivery.epoch) return { error: "delivery epoch changed; reload the owner before publishing" };
       const previous = current.delivery.operation;
-      if (pipeline.delivery?.operation?.state === "pending" && previous?.id !== pipeline.delivery.operation.id) {
+      if (pipeline.delivery?.operation?.state === "pending"
+        && (previous?.id !== pipeline.delivery.operation.id || previous.state !== "pending")) {
         return { error: `publisher ${current.id} at epoch ${current.delivery.epoch} has a newer reservation; reload before publishing` };
       }
       if (previous?.state === "running") return { waiting: pipelinePublicationInFlight(current) };
