@@ -500,6 +500,48 @@ test("lane churn during every PR refresh still wakes the seat in one check", asy
   expect(rig.sent).toHaveLength(1);
 });
 
+test("local commits from a finished lane wake the seat without waiting on GitHub", async () => {
+  const repo = path.join(SANDBOX, "local-finished-lane");
+  fs.mkdirSync(repo, { recursive: true });
+  const git = (args: string[]) => {
+    const result = Bun.spawnSync(["git", ...args], { cwd: repo, stdout: "pipe", stderr: "pipe",
+      env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
+    if (result.exitCode !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr.toString()}`);
+    return result.stdout.toString().trim();
+  };
+  git(["init", "-b", "main"]);
+  git(["config", "user.name", "Seat Tick Fixture"]);
+  git(["config", "user.email", "fixture"]);
+  fs.writeFileSync(path.join(repo, "work.txt"), "base\n");
+  git(["add", "work.txt"]);
+  git(["commit", "-m", "base"]);
+  git(["switch", "-c", "finished-lane"]);
+  fs.writeFileSync(path.join(repo, "work.txt"), "local lane work\n");
+  git(["commit", "-am", "finished lane work"]);
+  const tip = git(["rev-parse", "HEAD"]);
+  expect(git(["remote"])).toBe("");
+
+  for (const adapter of ["hung", "failed"] as const) {
+    const rig = harness({ pipelines: [...FINISHED_LANE, ...OPEN_LANE], state: OVERDUE,
+      stateFile: path.join(SANDBOX, `local-finished-${adapter}.json`) });
+    const [finished, ...others] = rig.deps.sources!.pipelines() as never as Array<Record<string, unknown>>;
+    rig.deps.sources!.pipelines = () => [{ ...finished, repoDir: repo, branch: "finished-lane", baseBranch: "main", lastPassedCommit: tip }, ...others] as never;
+    rig.deps.sources!.openPullRequests = adapter === "hung"
+      ? () => new Promise(() => {})
+      : async () => ({ ok: false, unavailable: "command-failed" });
+    rig.deps.workBudgetMs = 2_000;
+
+    const started = performance.now();
+    const record = await runSeatTickCheck(PROJECT, rig.deps);
+    expect(performance.now() - started).toBeLessThan(2_000);
+    expect(record).toMatchObject({ verdict: "wake" });
+    expect(record!.detail).toContain(adapter === "hung" ? "timed-out" : "command-failed");
+    expect(rig.sent).toHaveLength(1);
+    expect(rig.sent[0]!.text).toContain("local commits");
+    expect(rig.sent[0]!.text).toContain(tip.slice(0, 12));
+  }
+});
+
 test("a churn wake delivered before process exit is settled once after restart and credits only named lanes", async () => {
   const directory = fs.mkdtempSync(path.join(SANDBOX, "churn-restart-"));
   const stateFile = path.join(directory, "tick.json");
