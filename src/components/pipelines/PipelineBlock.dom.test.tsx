@@ -554,3 +554,23 @@ test("the flag on the lane row: finishes the task, finished it, and finishes it 
   const screenWaits = mount(<PipelineBlock summary={done({ finishesTaskIds: [TASK], taskFinishWaits: [{ taskId: TASK, since: iso(30), open: ["p-a", "p-b"] }] })} density="task" taskId={TASK} nowMs={NOW_MS} onOpenStage={() => {}} />);
   expect(screenWaits.querySelector('p[data-pipeline-finish="waits"]')?.textContent).toBe("завершить задачу, коли закінчаться ще 2 пайплайни");
 });
+
+test("screen stage rows disclose only the latest attempt memory cap", () => {
+  for (const cap of [
+    { limitBytes: 8 * 2 ** 30, requestedBytes: 12 * 2 ** 30, source: "stage" as const, enforced: true, clamped: true },
+    { limitBytes: null, requestedBytes: null, source: "automatic" as const, enforced: false, clamped: false },
+    undefined,
+  ]) {
+    const pipeline = searchPipeline();
+    const attempts = pipeline.runs.find(run => run.stageId === "implement")!.attempts;
+    attempts[0]!.memoryCap = { limitBytes: 4 * 2 ** 30, requestedBytes: 4 * 2 ** 30, source: "stage", enforced: true, clamped: false };
+    attempts[1]!.memoryCap = cap;
+    const host = mount(<PipelineBlock summary={summarizePipeline(pipeline)} density="screen" nowMs={NOW_MS} />);
+    click(host.querySelector("[data-passed-fold]"));
+    const note = host.querySelector('[data-stage="implement"] [data-agent-memory-cap]');
+    expect(note?.textContent ?? null).toBe(cap === undefined ? null : cap.enforced
+      ? `${translate("en", "agentMemory.cap", { size: 8 })} ${translate("en", "agentMemory.clamped", { size: 12 })}`
+      : translate("en", "agentMemory.unenforced"));
+    expect(host.querySelector('[data-stage="review"] [data-agent-memory-cap]')).toBeNull();
+  }
+});

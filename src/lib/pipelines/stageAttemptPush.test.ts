@@ -88,6 +88,38 @@ test.each(["before", "after"] as const)("PR-base successor settles a merge of ma
   } finally { await f.close(); }
 });
 
+test("a pushed stage head is proved before controller staging can sweep scratch files or name an ignored artifact directory (#2631)", async () => {
+  const f = await fixture();
+  try {
+    f.pipeline.repoDir = f.lane;
+    await fs.writeFile(path.join(f.lane, ".gitignore"), ".artifacts/\n");
+    await fs.mkdir(path.join(f.lane, ".artifacts"));
+    await fs.writeFile(path.join(f.lane, ".artifacts", "kept.txt"), "tracked despite the directory ignore\n");
+    await f.own("add", ".gitignore");
+    await f.own("add", "-f", ".artifacts/kept.txt");
+    await f.own("commit", "-m", "stage result");
+    const head = await f.own("rev-parse", "HEAD");
+    await f.push();
+    await fs.writeFile(path.join(f.lane, "stage.log"), "scratch output\n");
+    const calls: string[][] = [];
+    const exec: typeof realExec = async (command, args, cwd, env, options) => {
+      calls.push([command, ...args]);
+      return realExec(command, args, cwd, env, options);
+    };
+
+    const settled = await commitAndAdoptStageBranch(f.pipeline, "build", exec, () => [f.pipeline], undefined,
+      () => {}, null, undefined, undefined, f.attempt, NOW);
+
+    expect(calls.some(([command, action]) => command === "git" && action === "add")).toBe(false);
+    expect(settled).toEqual({ ok: false,
+      error: "settling the stage push: adoption requires a clean owned lane branch; both tips are preserved" });
+    expect(await f.own("diff", "--cached", "--name-only")).toBe("");
+    expect(await fs.readFile(path.join(f.lane, "stage.log"), "utf8")).toBe("scratch output\n");
+    expect(await f.own("rev-parse", "HEAD")).toBe(head);
+    expect(await f.git(f.remote, "rev-parse", "refs/heads/pipeline/proof")).toBe(head);
+  } finally { await f.close(); }
+});
+
 test.each(["local", "pushed", "repair"] as const)("PR-base successor refuses a foreign merge parent during %s settlement", async mode => {
   const f = await fixture(false, true, {});
   try {

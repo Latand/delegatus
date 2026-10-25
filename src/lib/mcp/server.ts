@@ -3923,6 +3923,8 @@ const agentMemoryMaxSchema = z.number().int().min(2 ** 30).max(2 ** 40).nullable
   .describe("Agent memory cap in bytes, 1 GiB through 1 TiB; null inherits. Launch clamps to the shared machine budget.");
 
 const pipelineStageSchema = z.object({
+  runtime: z.literal("codex-cloud").optional()
+    .describe("Run reviewer/verifier in Codex Cloud on the published lane branch. Requires engine codex, an explicit model, a capable current-cloud transport and the project's codexCloudEnvironmentId setting. Omitted keeps local execution. Builder/fix stages are not supported."),
   agentMemoryMaxBytes: agentMemoryMaxSchema,
   /* Bounds here stay exactly as wide as the engine's: it trims before it
      checks, so a padded id it accepts must not be refused at the door. */

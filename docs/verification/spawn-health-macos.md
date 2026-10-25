@@ -1,4 +1,4 @@
-# macOS spawn-health timeout
+# macOS spawn-health verification
 
 Observed on 2026-10-16; comparison base: `02f9301fc323`.
 
@@ -90,3 +90,70 @@ and owned runner. Both include the failure-cleanup cases above. TypeScript
 gate against the comparison base also pass.
 
 Test-source SHA-256: `518e8a728c7e67675e30613ae8c8bf7b22d85eba7f6dcf3614cdb43390f6ed21`.
+
+## Credential uncertainty diagnosis (2026-10-23)
+
+The `darwin-identity` job of [train run 39998260621](https://github.com/Latand/delegatus/actions/runs/39998260621/job/120567496678)
+reports 69 passes, seven failures and one filtered test under Bun 1.3.3.
+The train's tree is identical to comparison base `800a26ebc10c`
+(`f8a417c1a1621cc8177615b44449a69058f87a6c`). This workflow runs on pull
+requests; its latest historical main-branch run succeeded, so the merged
+train supplies the current main-equivalent failure evidence.
+[PR run 40003327841](https://github.com/Latand/delegatus/actions/runs/40003327841)
+repeats the seven failures.
+
+At 17:51:12.978 UTC, the train log shows the final assertion at
+`src/lib/accounts/spawnHealth.test.ts:212` expecting
+`credential store is unavailable` and receiving the generic project-account
+unavailable refusal. All four requested-account cases fail there, after their
+earlier named-account uncertainty and healthy-fallback checks passed. At
+17:51:13.740 UTC, the first unrelated-uncertainty case fails the same way at
+line 289; the other two discovery variants follow. Each failing case finishes
+in 133–211 ms. This failure is separate from the historical timeout above.
+These cases inject credential states through mocks, including simulated
+Keychain responses; the log does not establish a live Keychain access failure.
+
+On macOS, `readClaudeCredentials` preserves a denied, locked or timed-out
+Keychain read as `unknown`; only status 44 proves the item absent.
+`credentialPresence` copies that state into the catalog while setting
+`authPresent` to false. The direct spawn caller passes that catalog through
+`selectProjectAccount` and `selectHeadlessAccount`, whose authentication filter
+removes those candidates. Its early generic refusal therefore bypasses
+`selectHealthyClaudeAccount`, which already preserves credential uncertainty.
+The platform assumption being corrected is that an unconfirmed Keychain read
+can be diagnosed like proven absence. The defect also reproduces on Linux:
+the unmodified base has the identical seven failures under Bun 1.4.0.
+
+`src/lib/accounts/manager.ts` now preserves `ClaudeCredentialUnavailableError`
+when automatic selection is unavailable and the discovery snapshot contains an
+unknown Claude credential inside the project's permitted pool. Named selection,
+capacity exhaustion, excluded candidates, unsafe credentials and proven absence
+retain their existing checks. The change uses the existing snapshot and adds
+no credential read, await, launch or state write. No performance gain is claimed.
+The direct consumer is `spawnCommand.ts`, reached by the spawn route and its
+board, MCP and scheduled callers; their shared pool and health checks remain
+the authority. No schema, persistence contract or workflow changes are needed.
+
+All original assertions remain. Nine additional cases cover unknown, unsafe
+and absent credentials across unbound, allowed and excluded pools, asserting
+the refusal type and that no provider request occurs. With the original product
+code, the two permitted-unknown cases fail and the other seven pass.
+
+Heavy commands below use the installed `scripts/gate-slot.sh` wrapper with
+`LLV_GATE_RUNNER=off`; `gate-remote` supplies a scratch checkout and private
+HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR, with a closed Viewer control URL.
+
+| Command | State | Exit | Result |
+| --- | --- | --- | --- |
+| `gh run view 39998260621 --log-failed` | Merged train | 0 | Seven failures at the final automatic-selection assertions |
+| `gh run view 40003327841 --log-failed` | Later PR | 0 | Same seven failures |
+| `gate-remote -- bun test src/lib/accounts/spawnHealth.test.ts` | Unmodified base | 1 | 70 pass, seven fail |
+| `gate-remote -- bun test src/lib/accounts/spawnHealth.test.ts -t "automatic Claude credential"` | New regressions, original product code | 1 | Seven pass, two fail |
+| `gate-remote -- bun test src/lib/accounts/spawnHealth.test.ts` | Fixed product and tests | 0 | 86 pass, zero fail |
+| `gate-remote -- bunx tsc --noEmit --incremental false` | Fixed product and tests | 0 | No diagnostics |
+| `gate-remote -- bunx eslint src/lib/accounts/manager.ts src/lib/accounts/spawnHealth.test.ts` | Fixed product and tests | 0 | No diagnostics |
+| `bun scripts/privacy-publication-gate.ts --base 800a26ebc10ca2db855d12a71320f75c5f2fb955 --require-known-values --paths src/lib/accounts/manager.ts src/lib/accounts/spawnHealth.test.ts docs/verification/spawn-health-macos.md` | Fixed product, tests and verification note | 0 | Publication privacy passes; repeated by the commit hook |
+| `git diff --check` | Final diff | 0 | No whitespace errors |
+
+The fixed source has been exercised on Linux. A new macOS verdict requires
+publication and CI; this stage does not push.

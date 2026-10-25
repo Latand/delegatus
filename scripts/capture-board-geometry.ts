@@ -242,6 +242,7 @@ import { createTailscaleStub, STUB_DNS_NAME } from "../src/test-helpers/tailscal
 import { createCaptureDirectory } from "./capture-directory";
 import { idleCheck, idleUpdate, stoppedProcess, MANAGED_STEPS, pendingSteps, type Snapshot } from "../src/lib/selfUpdate/types";
 import { clearRoleOverrides, loadRoleOverrides, saveRoleOverrides } from "../src/lib/roles/store";
+import { StateLockDeferredError } from "../src/lib/state/lockWait";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 /* The commit the record was captured from. A `git archive` export has no repository, so the caller
@@ -753,6 +754,20 @@ const BIN_DIR = path.join(HOME, ".bun", "bin");
 const CLAUDE_CREDENTIALS = path.join(HOME, ".claude", ".credentials.json");
 const CODEX_CREDENTIALS = path.join(HOME, ".codex", "auth.json");
 
+/* The production server works in the same state store as this walk. A write
+   the store defers while the server holds it is tried again for up to 10 s;
+   thrown, it ended the whole case between two combinations (#2245). */
+async function whenStateFree<T>(write: () => T): Promise<T> {
+  for (const until = Date.now() + 10_000; ;) {
+    try {
+      return write();
+    } catch (error) {
+      if (!(error instanceof StateLockDeferredError) || Date.now() > until) throw error;
+      await Bun.sleep(100);
+    }
+  }
+}
+
 function fakeCli(name: "claude" | "codex", present: boolean): void {
   const file = path.join(BIN_DIR, name);
   if (!present) { fs.rmSync(file, { force: true }); return; }
@@ -852,11 +867,11 @@ function measureOnboarding(phone: boolean) {
       rows: el.querySelectorAll("[data-mobile2-account]").length,
       addRow: el.querySelector("[data-mobile2-account-add]") !== null,
     }])),
-    filledButtons: Array.from(dialog.querySelectorAll<HTMLElement>("button")).filter((el) => el.classList.contains("bg-accent") && el.getBoundingClientRect().width > 0).map((el) => (el.textContent ?? "").trim()),
+    filledButtons: Array.from(dialog.querySelectorAll<HTMLElement>("button")).filter((el) => el.classList.contains("bg-brand") && el.getBoundingClientRect().width > 0).map((el) => (el.textContent ?? "").trim()),
     /* The phone pager lays every page out side by side; only the page on screen competes for the eye. */
     filledOnScreen: Array.from(dialog.querySelectorAll<HTMLElement>("button")).filter((el) => {
       const r = el.getBoundingClientRect();
-      return el.classList.contains("bg-accent") && r.width > 0 && r.left >= -1 && r.right <= window.innerWidth + 1;
+      return el.classList.contains("bg-brand") && r.width > 0 && r.left >= -1 && r.right <= window.innerWidth + 1;
     }).map((el) => (el.textContent ?? "").trim()),
     /* The band sits inside the phone's horizontal pager: on screen means inside the viewport's width. */
     tourBandOnScreen: (() => {
@@ -937,8 +952,8 @@ function measureOnboarding(phone: boolean) {
       /* Everything the failure block paints, for stray markdown marks. */
       failureAll: dialog.querySelector("[data-health-failure]")?.textContent ?? null,
       actionLabel: dialog.querySelector("[data-health-action]")?.textContent ?? null,
-      /* Filled accent buttons on screen, the footer's included: one at a time. */
-      filledAccents: Array.from(dialog.querySelectorAll<HTMLElement>("button")).filter((el) => el.classList.contains("bg-accent")).map((el) => el.dataset.onboardingPrimary !== undefined ? "footer" : el.dataset.healthStart !== undefined ? "start" : el.textContent ?? ""),
+      /* Filled brand buttons on screen, the footer's included: one at a time. */
+      filledAccents: Array.from(dialog.querySelectorAll<HTMLElement>("button")).filter((el) => el.classList.contains("bg-brand")).map((el) => el.dataset.onboardingPrimary !== undefined ? "footer" : el.dataset.healthStart !== undefined ? "start" : el.textContent ?? ""),
       startFilled: (() => {
         const start = dialog.querySelector<HTMLElement>("[data-health-start]");
         return start ? getComputedStyle(start).backgroundColor === getComputedStyle(dialog.querySelector<HTMLElement>("[data-onboarding-primary]") ?? start).backgroundColor : null;
@@ -1041,7 +1056,7 @@ async function captureOnboarding(): Promise<void> {
   const tailscale = createTailscaleStub({ root: BASE });
   const resetInstall = async (codexInstalled: boolean) => {
     fs.rmSync(path.join(STATE_DIR, "onboarding.json"), { force: true });
-    clearRoleOverrides();
+    await whenStateFree(clearRoleOverrides);
     claudeSignedIn(true);
     /* Codex holds a credential while its command is missing: the card must
        still read Not installed, and its roles stay blocked (#1876 P1). */
@@ -1313,7 +1328,7 @@ async function captureOnboarding(): Promise<void> {
                §5): the row says what it was, and Restore puts it back through
                the ordinary mapping write, which clears the notice. */
             const retirementId = "2026-09-builder-frontend-opus-xhigh";
-            saveRoleOverrides({}, { [retirementId]: { at: "2100-01-02T10:00:00.000Z", reset: { row: "builder:frontend", from: { engine: "claude", model: "opus", effort: "xhigh" } } } });
+            await whenStateFree(() => saveRoleOverrides({}, { [retirementId]: { at: "2100-01-02T10:00:00.000Z", reset: { row: "builder:frontend", from: { engine: "claude", model: "opus", effort: "xhigh" } } } }));
             await page.reload({ waitUntil: "domcontentloaded" });
             await openStep("agents");
             await page.waitForSelector('[data-mapping-retired="builder:frontend"]', { timeout: 60_000 });
@@ -1332,7 +1347,7 @@ async function captureOnboarding(): Promise<void> {
               restored = loadRoleOverrides();
             }
             must(restored.overrides.builder?.variants?.frontend?.effort === "xhigh" && restored.retirements?.[retirementId] !== undefined && restored.retirements[retirementId]!.reset === undefined, `${tag}: after Restore the stored mapping is ${JSON.stringify(restored)}`);
-            clearRoleOverrides();
+            await whenStateFree(clearRoleOverrides);
             await page.unroute("**/api/accounts");
             codexSignedIn(false);
             fakeCli("codex", false);

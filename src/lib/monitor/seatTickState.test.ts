@@ -100,6 +100,18 @@ test("recovered authentication notice debt survives persistence and a new seat e
   expect(readSeatTickState("viewer", file).authNoticesOwed).toEqual([notice]);
 });
 
+test("memory problem credit debt survives persistence and a new seat epoch", () => {
+  const file = path.join(SANDBOX, "memory-problem-credit.json");
+  const debt = { shown: ["problem-version"], recipient: { conversationId: CONVERSATION, seatEpoch: 7 } };
+  writeSeatTickState("viewer", { ...row, itemsShown: debt.shown, memoryProblemCreditOwed: debt }, file);
+  const reopened = readSeatTickState("viewer", file);
+  expect(reopened.memoryProblemCreditOwed).toEqual(debt);
+  const successor = seatTickStateForEpoch(reopened, 8);
+  expect(successor.memoryProblemCreditOwed).toEqual(debt);
+  writeSeatTickState("viewer", successor, file);
+  expect(readSeatTickState("viewer", file).memoryProblemCreditOwed).toEqual(debt);
+});
+
 test("one project's write leaves the others' rows alone", () => {
   const file = path.join(SANDBOX, "multi.json");
   writeSeatTickState("viewer", row, file);
