@@ -9,6 +9,101 @@ Verification date: 2026-10-23 (UTC). A final fetch observed main at
 of this slice’s files or maintenance implementation. The command table identifies
 the exact native main revision tested above.
 
+## IANA data correction (2026-10-25)
+
+The independent review found that Bun 1.4.0's Intl data still placed
+`Africa/Casablanca` at UTC+01 after Morocco's return to UTC on 2026-09-20.
+The [IANA release notes](https://data.iana.org/time-zones/tzdb/NEWS) and
+[Africa rules](https://data.iana.org/time-zones/tzdb/africa) document the change.
+`src/lib/boardMaintenance/window.ts` now validates names and calculates local
+weekdays and hours using the full IANA 2026e data bundled by pinned
+`moment-timezone` 0.6.5. Its release is documented in the
+[upstream changelog](https://github.com/moment/moment-timezone/releases/tag/0.6.5).
+The launch predicates and next-run estimate therefore share the same rules.
+
+The published-name set preserves aliases and case-insensitive names while
+refusing unknown names and prototype-property names. Settings writers, legacy
+imports and SQLite readers continue through `normalizeMaintenanceWindow`.
+The settings shape, defaults, partial edits, expiry, launch guards and dispatch
+rechecks keep the contract described below. Updating the dependency and lockfile
+refreshes the time-zone rules without changing the Bun pin.
+
+New regressions cover both Moroccan zones before and after the change,
+Casablanca controller admission and dispatch, the exposed `nextRunAt`, recent
+Canadian permanent offsets, aliases and invalid names. The original window
+implementation from `ef8fe7e0398d45e414a94a15751b5ac9c65ec1e0` was first
+tested with the new regressions: both Moroccan-zone tests, the answer test and
+the controller test failed with the reported early opening. With the corrected
+implementation all these cases pass.
+
+The follow-up used a detached scratch export with that HEAD and its
+`origin/main` pinned to `daf1468fee0513605fafed6d286e5b05174e9895`.
+Each check used `checkEnvironment` followed by `isolatedEnvironment`, including
+private HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR roots and a closed Viewer
+control URL. All heavy commands ran sequentially under the supplied installed
+gate-slot wrapper at normal priority. The retired remote runner was unused.
+The installed interpreter and Dockerfile pin both name Bun 1.4.0.
+
+The standard comparator completed all nine explicit files with **0 new
+failures and 2 pre-existing failures**, freshly reproduced on the base. The
+pre-existing assertions remain the oversized-send refusal in
+`src/lib/mcp/originalKeySendRecovery.test.ts` and pipeline stage-contract
+description in `src/lib/mcp/schemaParity.test.ts`.
+
+```sh
+bash "$GATE_SLOT" bun scripts/local-gate-tests.ts \
+  --base adce5764927f7e838f20070cd2968128912e861c \
+  src/lib/boardMaintenance/window.test.ts \
+  src/lib/boardMaintenance/answer.test.ts \
+  src/lib/boardMaintenance/run.test.ts \
+  src/lib/monitor/seatTickSettings.test.ts \
+  src/lib/monitor/seatTickSettings.sqlite.test.ts \
+  src/lib/monitor/seatTick.test.ts \
+  src/app/api/monitor/seat-tick/settings/route.test.ts \
+  src/lib/mcp/originalKeySendRecovery.test.ts \
+  src/lib/mcp/schemaParity.test.ts
+```
+
+A separate `TZ=Pacific/Honolulu bun run test
+src/lib/boardMaintenance/window.test.ts` completed with 11 passing tests and no
+failures. It includes existing missing-hour, repeated-hour, fractional-offset
+and boundary cases. The original importer campaign below remains the record
+for the initial Codex Cloud slice.
+
+| Other follow-up command | Exit / result |
+| --- | --- |
+| `bun install --frozen-lockfile --ignore-scripts` | 0 |
+| `bunx --no-install tsc --noEmit --incremental false` | 0 |
+| `bunx --no-install eslint` on the four changed TypeScript files | 0 |
+| `bun scripts/supply-chain-check.ts --lockfile-only --base HEAD` | 0 |
+| `bun run test scripts/audit-with-retry.test.ts` | 0; 38 pass |
+| `bun run test scripts/supply-chain-check.test.ts` | 0; 3 pass |
+| `bun scripts/build-mcp.ts` | 0 |
+| `bun build src/lib/boardMaintenance/window.ts --target=bun --outfile=dist/maintenance-window.js` | 0 |
+| Probe the compiled module at the three reported instants | 0; false, true, `2026-10-25T02:00:00.000Z` |
+| `bun scripts/supply-chain-check.ts --audit-only`, corrected dependency graph | 1; three existing advisories |
+| The same audit, original HEAD manifest and lockfile | 1; the same three advisories |
+
+The audit reports GHSA-27r3-jxmh-p828 (`body-parser`), GHSA-834v-8h66-3h79
+(`happy-dom`) and GHSA-mrhx-c7xc-m3w5 (`zod`) on both graphs. No advisory was
+reported for the two added packages. The audit remains red; this correction
+does not change those existing dependency versions. A final fetch observed main
+at `a3c67ba559e983909cbc7a246203ec4079c648f2`; changes since the captured
+`daf1468f` affect report-log code, fixtures, tests and documentation, with no
+overlap in this correction's files. Workflow files are unchanged.
+
+The following hashes identify the corrected source inputs and supersede the
+corresponding original hashes below:
+
+| Follow-up input | SHA-256 |
+| --- | --- |
+| `package.json` | `e4592e2307062419b14a8df12e5b61ba9765960ae879f6891c070694e9570f3f` |
+| `bun.lock` | `563bf2d4360aa10701cf524fa21e546a3a64f53a249d8f2a32a35f0efea87f66` |
+| `src/lib/boardMaintenance/window.ts` | `2bc1b08f3a5b38800bf000f08884300bf43ffb459a342a6ab3747b8920a4f4d9` |
+| `src/lib/boardMaintenance/window.test.ts` | `e746317f3663c3d770e66d030389e1225d8ca8e4700fa48ea4290af194c54c0e` |
+| `src/lib/boardMaintenance/answer.test.ts` | `ec897e07f7e7900d2e1f28e44796993ded6190bfe125a704457e30b7ed8ee648` |
+| `src/lib/boardMaintenance/run.test.ts` | `0aa931966b556a1485fa8722ede27e58294d295e782610a9adf5c666fa97f48f` |
+
 ## Input and fixes
 
 The supplied `03.diff` is 29,703 bytes. Its SHA-256 matches `03.meta.json`:

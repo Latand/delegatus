@@ -47,6 +47,20 @@ test("window read exposes the next controller wake after a missed weekend and DS
   });
 });
 
+test("next wake follows Casablanca's permanent UTC rules under the pinned runtime", () => {
+  held = sandbox();
+  const settings = input().settings;
+  settings.maintenance.window = { timeZone: "Africa/Casablanca", weekdays: [7], startHour: 2, endHour: 3 };
+  const now = Date.parse("2026-10-25T00:00:00Z");
+  expect(boardMaintenanceAnswer(PROJECT, settings, { ...ports, now, lastCheckAt: new Date(now).toISOString() })).toMatchObject({
+    waitingOn: "window", nextRunAt: "2026-10-25T02:00:00.000Z",
+  });
+  const open = Date.parse("2026-10-25T02:30:00Z");
+  expect(boardMaintenanceAnswer(PROJECT, settings, { ...ports, now: open, lastCheckAt: new Date(open).toISOString() })).toMatchObject({
+    waitingOn: null, nextRunAt: "2026-10-25T02:35:00.000Z",
+  });
+});
+
 test("next wake skips a missing weekly hour and aligns fractional-offset openings to controller checks", () => {
   held = sandbox();
   const settings = input().settings;

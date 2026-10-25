@@ -54,6 +54,7 @@
     "entities": "^8.0.0",
     "highlight.js": "^11.11.1",
     "lucide-react": "^1.23.0",
+    "moment-timezone": "0.6.5",
     "next": "16.4.1",
     "pdfjs-dist": "^6.2.108",
     "qrcode": "^1.5.4",

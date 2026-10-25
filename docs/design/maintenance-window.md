@@ -20,6 +20,10 @@ curation timer keeps its own settings. Existing settings without a window retain
 their cadence.
 
 Hours follow the named IANA zone at each real instant, including DST changes.
+Validation and scheduling use the full IANA data shipped by the pinned
+`moment-timezone` dependency (currently 2026e). Updating that dependency and its
+lockfile refreshes the rules independently of the supported Bun runtime's Intl
+data. This includes Morocco's return to permanent UTC on 2026-09-20.
 Missing hours have no opening; repeated hours are both eligible. The existing
 elapsed-time cooldown and durable run claim still prevent duplicate launches.
 The bounded lookahead includes a second weekly opening when a clock change

@@ -366,6 +366,25 @@ test("a maintenance receipt arriving before its binding checkpoint remains recov
   expect(maintenanceRuns(PROJECT)[0].state).toBe("succeeded"); expect(h.bodies).toHaveLength(0);
 });
 
+test("Casablanca launch admission and dispatch follow permanent UTC", async () => {
+  const h = harness();
+  const request = input();
+  const window = { timeZone: "Africa/Casablanca", weekdays: [7], startHour: 2, endHour: 3 };
+  request.settings.maintenance.window = window;
+  const original = h.sources.settings;
+  h.sources.settings = project => {
+    const settings = original(project);
+    return { ...settings, maintenance: { ...settings.maintenance!, window } };
+  };
+  h.now(Date.parse("2026-10-25T01:30:00Z"));
+  expect(await h.controller.launchIfDue(request)).toContain("window");
+  expect(readMaintenanceProject(PROJECT)).toBeNull();
+  expect(h.bodies).toHaveLength(0);
+  h.now(Date.parse("2026-10-25T02:30:00Z"));
+  await h.controller.launchIfDue(request);
+  expect(h.bodies).toHaveLength(1);
+});
+
 test("closed windows defer launches while a running turn still settles", async () => {
   const h = harness();
   const request = input();
