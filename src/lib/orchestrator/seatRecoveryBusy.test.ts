@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 
 import { executeOrchestratorRotation, executeOrchestratorSeatRequest, type SeatCommandDependencies } from "./seatCommand";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor } from "./seats";
@@ -146,7 +147,7 @@ test("the real spawn receipt stays replayable when its pinned queue write is bus
     new NextRequest("http://127.0.0.1/api/spawn", {
       method: "POST",
       headers: {
-        origin: "http://127.0.0.1", host: "127.0.0.1", "sec-fetch-site": "same-origin",
+        origin: "http://127.0.0.1", host: "127.0.0.1", "sec-fetch-site": "same-origin", cookie: `llv_operator=${soloBrowserSession()}`,
         "content-type": "application/json",
       },
       body: JSON.stringify(body),
@@ -232,7 +233,7 @@ test("real SQLite receipt retries transient membership contention without a term
     new NextRequest("http://127.0.0.1/api/spawn", {
       method: "POST",
       headers: {
-        origin: "http://127.0.0.1", host: "127.0.0.1", "sec-fetch-site": "same-origin",
+        origin: "http://127.0.0.1", host: "127.0.0.1", "sec-fetch-site": "same-origin", cookie: `llv_operator=${soloBrowserSession()}`,
         "content-type": "application/json",
       },
       body: JSON.stringify(body),

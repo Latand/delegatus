@@ -1,3 +1,4 @@
+import { withoutOperatorCredentials } from "@/lib/agent/operatorCredentials";
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -19,7 +20,7 @@ export async function readCodexShellPolicy(binary: string, cwd: string, env: Nod
   // `exec --ignore-user-config` omits the account's config.toml. A metadata
   // probe needs no auth, so an empty home gives its config reader that view.
   const metadataHome = options.ignoreUserConfig ? fs.mkdtempSync(path.join(os.tmpdir(), "codex-policy-home-")) : null;
-  const probeEnv = metadataHome ? { ...env, CODEX_HOME: metadataHome } : env;
+  const probeEnv = withoutOperatorCredentials(metadataHome ? { ...env, CODEX_HOME: metadataHome } : env);
   try {
     if (testReader) return await testReader(binary, cwd, probeEnv, args);
     const result = await new Promise<string | null>((resolve) => {

@@ -8,7 +8,7 @@ import { foreignAccountHolder } from "@/lib/accounts/accountMutation.fixture";
 import { defaultModelFor } from "@/lib/agent/models";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { spawnAdmissionBodyDigest } from "@/lib/agent/spawnIdentity";
-import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
+import { OPERATOR_CORRECTION_RULE, ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { resolveSpawnRole } from "@/lib/roles/registry";
 import { saveRoleOverrides } from "@/lib/roles/store";
 import { procBackend } from "@/lib/proc";
@@ -152,6 +152,15 @@ test("seat command publishes pre-admission evidence for validation and target re
   }
 });
 
+test.each([undefined, "", " ", "\n\t"])("a missing or blank mandate %j is refused before the correction upgrade", async (mandate) => {
+  const { deps, recorded } = dependencies();
+  const result = await executeOrchestratorSeatRequest({ ...spawnRequest(), mandate }, deps);
+  expect(result).toEqual({ status: 400, body: { error: "mandate is required", admission: "refused" } });
+  expect(recorded.spawns).toEqual([]);
+  expect(recorded.deliveries).toEqual([]);
+  expect(orchestratorSeatFor("proj-a")).toMatchObject({ active: null, pending: null, history: [] });
+});
+
 interface Recorded {
   spawns: Record<string, unknown>[];
   deliveries: { conversationId: string; clientMessageId: string; text: string }[];
@@ -291,7 +300,7 @@ test("spawn mode designates and injects together: mandate rides the spawn prompt
   expect(String(recorded.spawns[0]!.prompt)).toStartWith("own the board");
   const { active, pending } = orchestratorSeatFor("proj-a");
   expect(active?.conversationId).toBe(NEW_ID);
-  expect(active?.mandate).toBe("own the board");
+  expect(active?.mandate).toBe(`own the board\n\n${OPERATOR_CORRECTION_RULE}`);
   expect(pending).toBeNull();
 });
 
@@ -450,7 +459,7 @@ test("a completed seat replay repairs a failed registry stamp without revalidati
   expect(recorded.deliveries).toHaveLength(1);
 });
 
-test("a caller-edited current-version mandate receives the status directive without changing stored text", async () => {
+test("a caller-edited current-version mandate stores the correction duty and receives the status directive once", async () => {
   const { deps, recorded } = dependencies();
   const mandate = "custom current-version mandate";
   const result = await executeOrchestratorSeatRequest({
@@ -463,8 +472,9 @@ test("a caller-edited current-version mandate receives the status directive with
   const delivered = String(recorded.spawns[0]!.prompt);
   expect(delivered).toStartWith(mandate);
   expect(delivered.split(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE)).toHaveLength(2);
+  expect(delivered.split(OPERATOR_CORRECTION_RULE)).toHaveLength(2);
   expect(orchestratorSeatFor("proj-a").active).toMatchObject({
-    mandate,
+    mandate: `${mandate}\n\n${OPERATOR_CORRECTION_RULE}`,
     promptVersion: ORCHESTRATOR_PROMPT_VERSION,
   });
 });
@@ -647,9 +657,10 @@ test("selecting an EXISTING conversation delivers a caller-edited current-versio
   });
   expect(recorded.deliveries[0]!.text).toStartWith("updated mandate");
   expect(recorded.deliveries[0]!.text.split(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE)).toHaveLength(2);
+  expect(recorded.deliveries[0]!.text.split(OPERATOR_CORRECTION_RULE)).toHaveLength(2);
   expect(orchestratorSeatFor("proj-a").active).toMatchObject({
     conversationId: OLD_ID,
-    mandate: "updated mandate",
+    mandate: `updated mandate\n\n${OPERATOR_CORRECTION_RULE}`,
     promptVersion: ORCHESTRATOR_PROMPT_VERSION,
   });
 });

@@ -1,5 +1,5 @@
 import { configForParams, listRoles, roleFenceBlock, roleScaffoldBody, validateRoleParams } from "@/lib/roles/registry";
-import { ORCHESTRATOR_WITHOUT_MANDATE_RULES } from "@/lib/roles/defaults";
+import { OPERATOR_CORRECTION_RULE, ORCHESTRATOR_WITHOUT_MANDATE_RULES } from "@/lib/roles/defaults";
 import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/store";
 import { codexLaunchTier } from "@/lib/accounts/codexServiceTiers";
 import { effortScale } from "@/lib/agent/efforts";
@@ -72,6 +72,10 @@ export const pipelineRoleLookup: PipelineRoleLookup = (roleId, params, project =
   /* The trim stays for an operator override stored near the cap. A cut that
      only the supplied text values cause is reported instead, so the stage is
      refused before its scaffold is stored without the end of its rules. */
+  const trimmedBody = body.slice(0, budget);
+  // Stored overrides can fill the cap before the shared working rules begin.
+  const storedBody = trimmedBody.includes(OPERATOR_CORRECTION_RULE)
+    ? trimmedBody : `${OPERATOR_CORRECTION_RULE}\n\n${body}`.slice(0, budget);
   const supplied = definition.parameters.filter((parameter) => parameter.kind === "text" && parameters[parameter.key] !== defaultRoleParameterValue(parameter));
   const parameterOverflow = body.length > budget && supplied.length > 0
     && render({ ...parameters, ...Object.fromEntries(supplied.map((parameter) => [parameter.key, defaultRoleParameterValue(parameter)])) }).length <= budget
@@ -84,7 +88,7 @@ export const pipelineRoleLookup: PipelineRoleLookup = (roleId, params, project =
        back to the base config. */
     ...configForParams(definition, parameters),
     access: definition.capabilities.includes("read-only") ? "read-only" : "read-write",
-    promptScaffold: `${body.slice(0, budget)}${fences}`,
+    promptScaffold: `${storedBody}${fences}`,
     ...(parameterOverflow ? { parameterOverflow } : {}),
   };
 };

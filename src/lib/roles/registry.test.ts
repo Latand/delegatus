@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
-import { BUILDER_FINISH_LINE, FIX_ROUND_FINISH_LINE, RENDERED_RULES, WORKING_RULES } from "./defaults";
+import { OPERATOR_CORRECTION_RULE, BUILDER_FINISH_LINE, FIX_ROUND_FINISH_LINE, RENDERED_RULES, WORKING_RULES } from "./defaults";
+import { defaultRoleParameterValue } from "./parameters";
 import { variantForParams } from "./paramConfig";
 import type { RoleParamValues } from "./types";
 import { ORCHESTRATOR_TASK_OWNERSHIP_HEADING } from "@/lib/orchestrator/prompt";
@@ -340,4 +341,17 @@ test("spawning a visual critic takes a Claude runtime and refuses Codex", () => 
   expect(resolveRole("visual-critic", {}, { engine: "codex", model: "gpt-6.1-sol" })).toEqual({ ok: false, error: "visual-critic runs on claude only" });
   const architect = resolveSpawnRole({ role: "architect", engine: "codex", model: "gpt-6.1-sol" });
   expect(architect.ok && architect.value?.config.engine).toBe("codex");
+});
+
+const correctionInstruction = OPERATOR_CORRECTION_RULE;
+
+test("every role receives the correction duty, including stored scaffold overrides", () => {
+  for (const definition of listRoles()) {
+    const params = Object.fromEntries(definition.parameters.map(parameter => [parameter.key, defaultRoleParameterValue(parameter)]));
+    for (const source of [definition, { ...definition, promptScaffold: "A stored role scaffold." }]) {
+      const scaffold = roleScaffoldBody(source, params);
+      const prompt = roleSpawnPrompt({ role: source.id, scaffold }, "Handle the operator message.");
+      expect(prompt.split(correctionInstruction)).toHaveLength(2);
+    }
+  }
 });

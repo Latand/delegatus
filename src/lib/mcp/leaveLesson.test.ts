@@ -63,9 +63,9 @@ function pipeline(): Pipeline {
   } as unknown as Pipeline;
 }
 
-function serviceAs(conversationId: string, replaced = false, record = pipeline()) {
+function serviceAs(conversationId: string, replaced = false, record = pipeline(), role: string | null = null) {
   const bindings = viewerMcpBindings(undefined, undefined, {
-    callerAttribution: () => ({ kind: "agent", conversationId, role: null }),
+    callerAttribution: () => ({ kind: conversationId === "conversation_seat" ? "manager" : "agent", conversationId, role }),
     callerProject: () => PROJECT,
     authorizedSeats: () => [{ project: PROJECT, conversationId: "conversation_seat" }],
     reportStageCompletion: async () => ({
@@ -364,4 +364,53 @@ test("rewrite hints disclose only active rules in the caller's readable scopes",
     expect(lessonRequest(record.id, "fix", 1)?.rewrote).toBeUndefined();
     expect(await service.callTool("leave_lesson", { clientRequestId: "authority-none", none: "The existing authority guard covers this case." })).toMatchObject({ ok: true });
   } finally { process.env.LLV_STATE_DIR = previous; }
+});
+
+
+test("corrections are accepted mid-turn for builders and clean reviewers without spending the closing request", async () => {
+  const record = pipeline();
+  record.runs[0].attempts[0].state = "running";
+  for (const conversation of ["conversation_fix", "conversation_review"]) {
+    const api = serviceAs(conversation, false, record);
+    const args = { clientRequestId: `correction-${conversation}`, correction: true, lesson: { scope: "role", rule: "Before implementing a request, confirm the intended output and compare the result with that output.", why: "The operator corrected a result built for the wrong output." } };
+    const result = await api.callTool("leave_lesson", args);
+    expect(result).toMatchObject({ ok: true });
+    expect(await api.callTool("leave_lesson", args)).toMatchObject({ ok: true, replayed: true });
+    const id = (result.left as { id: string }[])[0].id;
+    const stored = projectView(PROJECT).scopes.flatMap(scope => [...scope.active, ...scope.left]).find(row => row.id === id);
+    expect(stored).toMatchObject({ operatorCorrection: true, tasks: 1 });
+    const stageId = conversation === "conversation_fix" ? "fix" : "review";
+    expect(lessonRequest(record.id, stageId, 1)).toBeNull();
+    expect(await api.callTool("leave_lesson", { ...args, clientRequestId: `second-${conversation}`, lesson: { ...args.lesson, rule: "When a request names an existing artifact, inspect that artifact before choosing a replacement format." } })).toMatchObject({ ok: true });
+  }
+  const api = serviceAs("conversation_fix", false, record);
+  expect(await api.callTool("stage_report", { clientRequestId: "correction-closing", verdict: "pass" })).toMatchObject({ ok: true });
+  expect(await api.callTool("leave_lesson", { clientRequestId: "correction-closing-answer", none: "The corrections already captured the reusable practices." })).toMatchObject({ ok: true });
+});
+
+test("correction admission refuses empty answers and unknown callers, and accepts corrections of settled results", async () => {
+  for (const answer of [{ none: "No lesson." }, { problem: { statement: "A mismatch", evidence: "Observed a mismatch" } }]) {
+    expect(TOOL_INPUT_SCHEMAS.leave_lesson.safeParse({ clientRequestId: "invalid-correction", correction: true, ...answer }).success).toBe(false);
+  }
+  const args = { correction: true, lesson: { scope: "project", rule: RULE, why: "The operator corrected the requested output shape." } };
+  expect(await call("conversation_unknown", "leave_lesson", args)).toMatchObject({ ok: false, details: { code: "LESSON_NOT_AN_ATTEMPT" } });
+  const ambiguous = pipeline();
+  ambiguous.runs[0].attempts[0].conversationId = "conversation_fix";
+  expect(await serviceAs("conversation_fix", false, ambiguous).callTool("leave_lesson", { clientRequestId: "ambiguous-correction", ...args })).toMatchObject({ ok: false, details: { code: "LESSON_AMBIGUOUS" } });
+  const record = pipeline();
+  record.runs[1].attempts[0].state = "passed";
+  expect(await serviceAs("conversation_fix", false, record).callTool("leave_lesson", { clientRequestId: "settled-correction", ...args })).toMatchObject({ ok: true });
+  record.runs[1].attempts[0].historical = true;
+  expect(await serviceAs("conversation_fix", false, record, "builder").callTool("leave_lesson", { clientRequestId: "historical-correction", ...args })).toMatchObject({ ok: true });
+  expect(await serviceAs("conversation_seat").callTool("leave_lesson", { clientRequestId: "seat-correction", ...args })).toMatchObject({ ok: true });
+});
+
+
+test("a registered role outside a pipeline can leave an operator correction without a closing request", async () => {
+  const args = { correction: true, lesson: { scope: "project", rule: RULE, why: "The operator corrected the intended output of the task." } };
+  const result = await serviceAs("conversation_scheduled", false, pipeline(), "curator").callTool("leave_lesson", { clientRequestId: "scheduled-correction", ...args });
+  expect(result).toMatchObject({ ok: true });
+  const rows = projectView(PROJECT).scopes.flatMap(scope => [...scope.active, ...scope.left]);
+  expect(rows.find(row => row.id === (result.left as { id: string }[])[0].id)).toMatchObject({ operatorCorrection: true, stageId: "conversation" });
+  expect(await serviceAs("conversation_scheduled", false, pipeline(), "curator").callTool("leave_lesson", { clientRequestId: "scheduled-ordinary", lesson: args.lesson })).toMatchObject({ ok: false, details: { code: "LESSON_NOT_AN_ATTEMPT" } });
 });

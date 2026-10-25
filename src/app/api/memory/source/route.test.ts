@@ -1,3 +1,4 @@
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -24,7 +25,7 @@ afterEach(async () => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 function request(body: unknown, headers: Record<string, string> = {}) {
-  return new NextRequest("http://localhost/api/memory/source", { method: "PUT", headers: { "Content-Type": "application/json", Origin: "http://localhost", host: "localhost", ...headers }, body: JSON.stringify(body) });
+  return new NextRequest("http://localhost/api/memory/source", { method: "PUT", headers: { cookie: `llv_operator=${soloBrowserSession()}`, "Content-Type": "application/json", Origin: "http://localhost", host: "localhost", ...headers }, body: JSON.stringify(body) });
 }
 test("GET is uncached and an operator PUT starts importing without accepting a supplied phase or roots", async () => {
   const response = await GET(); expect(response.headers.get("Cache-Control")).toBe("no-store");
@@ -51,7 +52,7 @@ test("only the operator's same-origin write can select engines; import evidence 
 });
 test("invalid bodies and an engines-first choice change nothing", async () => {
   for (const value of [null, [], {}, { source: "other" }, { source: true }]) expect((await PUT(request(value))).status).toBe(400);
-  expect((await PUT(new NextRequest("http://localhost/api/memory/source", { method: "PUT", headers: { Origin: "http://localhost", host: "localhost" }, body: "{" }))).status).toBe(400);
+  expect((await PUT(new NextRequest("http://localhost/api/memory/source", { method: "PUT", headers: { cookie: `llv_operator=${soloBrowserSession()}`, Origin: "http://localhost", host: "localhost" }, body: "{" }))).status).toBe(400);
   expect((await PUT(request({ source: "engines" }))).status).toBe(409);
   expect(readMemorySourceFile()).toBeNull();
 });

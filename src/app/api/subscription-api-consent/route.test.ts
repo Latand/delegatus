@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { GET, PUT } from "./route";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/capabilityHeader";
 import { claimInstall, createInvite, redeemJoin } from "@/lib/team/members";
@@ -16,7 +17,7 @@ function isolated() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "consent-route-")); roots.push(root); process.env.LLV_STATE_DIR = root; return root;
 }
 function request(body?: unknown, extra: Record<string, string> = {}) {
-  return new NextRequest("http://127.0.0.1/api/subscription-api-consent", { method: body === undefined ? "GET" : "PUT", headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin", ...extra }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  return new NextRequest("http://127.0.0.1/api/subscription-api-consent", { method: body === undefined ? "GET" : "PUT", headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "sec-fetch-site": "same-origin", ...extra }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
 }
 test("operator consent starts off, saves exactly a boolean, and can be revoked", async () => {
   isolated(); expect(await (await GET(request())).json()).toMatchObject({ enabled: false });

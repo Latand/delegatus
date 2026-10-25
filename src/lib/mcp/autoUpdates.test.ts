@@ -10,6 +10,7 @@ import { NextRequest } from "next/server";
 import { POST as autoRoute } from "@/app/api/self-update/auto/route";
 import { GET as snapshotRoute } from "@/app/api/self-update/route";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_ENV } from "@/lib/agent/spawnPolicy";
 import type { ViewerDeploymentStatus } from "@/lib/runtime/contracts";
@@ -238,7 +239,7 @@ async function once(attribution: CallerAttribution, args: Record<string, unknown
 
 /** What the Update dialog reads: the snapshot route, as the operator's page. */
 async function dialog(): Promise<Snapshot> {
-  const response = await fetch(new URL("/api/self-update", controlOrigin), { headers: { origin: controlOrigin, "sec-fetch-site": "same-origin" } });
+  const response = await fetch(new URL("/api/self-update", controlOrigin), { headers: { origin: controlOrigin, "sec-fetch-site": "same-origin", cookie: `llv_operator=${soloBrowserSession()}` } });
   return await response.json() as Snapshot;
 }
 
@@ -246,7 +247,7 @@ async function dialog(): Promise<Snapshot> {
 async function dialogSwitch(body: Record<string, unknown>): Promise<number> {
   const response = await fetch(new URL("/api/self-update/auto", controlOrigin), {
     method: "POST",
-    headers: { origin: controlOrigin, "sec-fetch-site": "same-origin", "content-type": "application/json" },
+    headers: { origin: controlOrigin, "sec-fetch-site": "same-origin", cookie: `llv_operator=${soloBrowserSession()}`, "content-type": "application/json" },
     body: JSON.stringify(body),
   });
   return response.status;

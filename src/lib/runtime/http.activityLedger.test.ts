@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 
 import { recordOperatorRequest, readRequests } from "@/lib/activity/requestLedger";
 import type { RegistryFile } from "@/lib/agent/registry";
@@ -23,12 +24,12 @@ const PHONE = "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTM
 let ledgerDir: string;
 let reports: string[];
 
-/** A Viewer page's request, which a browser stamps with `sec-fetch-site`;
-    `browser: false` is a script's, which carries none. */
+/** A Viewer page's request, which carries the session cookie its navigation
+    opened; `browser: false` is a script's, which carries none. */
 function request(body: unknown, headers: Record<string, string> = {}, browser = true): NextRequest {
   return new NextRequest("http://127.0.0.1/api/runtime/send", {
     method: "POST",
-    headers: { host: "127.0.0.1", "content-type": "application/json", "user-agent": PHONE, ...(browser ? { "sec-fetch-site": "same-origin" } : {}), ...headers },
+    headers: { host: "127.0.0.1", "content-type": "application/json", "user-agent": PHONE, ...(browser ? { cookie: `llv_operator=${soloBrowserSession()}`, "sec-fetch-site": "same-origin" } : {}), ...headers },
     body: JSON.stringify(body),
   });
 }

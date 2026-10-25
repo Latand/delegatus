@@ -147,10 +147,13 @@ test("a near-limit override scaffold composes with fences inside the store cap",
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-roles-cap-"));
   process.env.LLV_STATE_DIR = sandbox;
   try {
-    saveRoleOverrides({ reviewer: { promptScaffold: "x".repeat(MAX_SCAFFOLD_LENGTH) } });
-    const resolved = pipelineRoleLookup("reviewer");
-    expect(resolved?.promptScaffold?.length).toBeLessThanOrEqual(MAX_SCAFFOLD_LENGTH);
-    expect(resolved?.promptScaffold).toContain("Safety fences:");
+    for (const role of ["reviewer", "orchestrator"] as const) {
+      saveRoleOverrides({ [role]: { promptScaffold: "x".repeat(MAX_SCAFFOLD_LENGTH) } });
+      const resolved = pipelineRoleLookup(role);
+      expect(resolved?.promptScaffold?.length).toBeLessThanOrEqual(MAX_SCAFFOLD_LENGTH);
+      expect(resolved?.promptScaffold).toContain("Safety fences:");
+      expect(resolved?.promptScaffold).toContain("call leave_lesson that turn: correction:true, lesson");
+    }
   } finally {
     if (previous === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previous;
