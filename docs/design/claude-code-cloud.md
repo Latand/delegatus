@@ -1,8 +1,9 @@
 # Claude Code cloud: a second cloud runtime for pipeline stages and checks
 
 Status: proposed. First written 2026-10-24; revised 2026-10-25 with the
-operator's answers and their 06:22 UTC correction. Design only; no product code
-changes here.
+operator's answers and their 06:22 UTC correction, then again the same day for
+run recovery, follow-up receipts and the launch contract when L1 is unusable.
+Design only; no product code changes here.
 
 Made from `main` at `e28d793c` (2026-10-25). That `main` contains PR #3302
 (merged as `0c7f7a89`) and PR #3330 (merged as `16f00de7`). The first revision
@@ -71,10 +72,10 @@ Claude Code cloud tasks run on the subscription login, which is Claude's
 default mode. They use an API key only when one is explicitly selected as the
 default, and an API-key path was never supported here. This design therefore
 has subscription-authenticated cloud sessions only. Every call authenticates
-with the claude.ai login the account already holds, and both launch paths start
-from it: the scheduled-task run that the CLI's own `/schedule run` makes (L1),
-and `claude --cloud` (formerly `--remote`) from the logged-in CLI (L3) (1.3,
-3).
+with the claude.ai login the account already holds. Stages launch through the
+scheduled-task run that the CLI's own `/schedule run` makes (L1). `claude
+--cloud` (formerly `--remote`) from the logged-in CLI (L3) runs on the same
+login and serves only S0, to open probe sessions and for U9 (1.3, 3).
 
 Decisions of 2026-10-24 that still stand, recorded for Codex Cloud in
 `docs/design/cloud-checks.md`: the cloud is trusted and may receive source
@@ -104,6 +105,15 @@ follow-up command `claude -p --cloud <session-id>`. Anthropic documents no API
 that reads a hosted session's result. The installed CLI reads one,
 `GET /v1/code/sessions/{id}/events`. Both HTTP calls are in the same risk class
 as the Codex desktop protocol the operator already accepted for Codex Cloud.
+
+Neither call has an idempotency key, so each effect is bound to its attempt by
+evidence read back from the session itself. A run counts as the attempt's own
+only when its answer names it, or when its own events carry the attempt's
+nonce. Each follow-up part counts as delivered only when the CLI reported it
+queued, or when the events show it. An outcome that no evidence settles stays
+unknown: Delegatus never adopts another session for it and never sends the
+same run call or part a second time. If S0 shows that a run cannot be bound
+this way, the Claude provider stays not ready and stages run on this machine.
 
 The session clones the published lane branch through a GitHub connection that
 can read and cannot write. Every session proves that before it receives its
@@ -172,7 +182,7 @@ scheduled task "begins in auto mode unless auto mode is unavailable".
 
 | Surface | What the documentation says | Usable here |
 | --- | --- | --- |
-| `claude --cloud "<task>"` | Creates a session for the current repository and clones its GitHub remote at the current branch. From "a github.com repository that the Claude GitHub App isn't installed on, Claude Code bundles your local repository … This applies even if you connected GitHub with `/web-setup`" (D1) | Interactively, from the logged-in CLI: the fallback launch L3. With `-p` it is refused (D5): "Claude Code rejects `--bg`, and rejects `--cloud` with a task description, with an error naming the conflict" |
+| `claude --cloud "<task>"` | Creates a session for the current repository and clones its GitHub remote at the current branch. From "a github.com repository that the Claude GitHub App isn't installed on, Claude Code bundles your local repository … This applies even if you connected GitHub with `/web-setup`" (D1) | Interactively, from the logged-in CLI: launch L3, used only by S0 (3). With `-p` it is refused (D5): "Claude Code rejects `--bg`, and rejects `--cloud` with a task description, with an error naming the conflict" |
 | `claude -p "<message>" --cloud <session-id> --output-format json` | "The CLI queues the message into the session and exits without waiting for a reply." The message may come on stdin. Prints `{ok, session_id, url}`, or `{ok: false, session_id, error}`; configuration errors go to stderr without JSON; `stream-json` is not supported (D1) | Yes, for an existing session, on the subscription login |
 | Scheduled task **Run now**, and `/schedule run` in the CLI | "Click **Run now** to start a run immediately without waiting for the next scheduled time." "Run `/schedule list` … or `/schedule run` to start one immediately." `/schedule` "requires a claude.ai subscription login." Text supplied with Run now arrives wrapped as untrusted, like fire text (D3) | The feature is documented; its HTTP call is not. The installed CLI makes it as `POST /v1/code/triggers/{trigger_id}/run` with the account's login (1.11). **Chosen** |
 | `claude -p … --environment ccpool_…` | Creates a session and exits (D7) | No: self-hosted environments only, "public beta on Team and Enterprise plans" (D8) |
@@ -372,7 +382,8 @@ S0 answers each row. The budget is about six short sessions on one account
 | U8 | Which CLI call refreshes an expired access token without side effects, and how two concurrent refreshes behave | Compare `expiresAt` in the credential file before and after `claude auth status --json` and after a `claude -p --cloud` send | No session |
 | U9 | Can a session start from a tree that is not on GitHub, for the decisive pre-push checks? | `CCR_FORCE_BUNDLE=1 claude --cloud "<task>"` from a throwaway repository with no remote, under a pseudo-terminal with `--debug api`; record the creation call and whether events carry exit codes | E |
 | U10 | How a run waiting on an auto-mode permission prompt shows in status | Ask the session for an action that matches an ask rule | A |
-| U11 | What the run call answers (session id or not), whether it accepts body text and where that text appears, and whether `list_runs` lists the run within seconds | Run once with a nonce in the body; list immediately and after 30 seconds. If the call is unusable, start session A with `claude --cloud` from the logged-in CLI under a pseudo-terminal and record the creation call (L3) | A |
+| U11 | What the run call answers (session id or not); whether body text reaches the session verbatim, in which event and field; how long until `list_runs` lists the run. The delay is recorded only: no design step concludes from an empty list that no session exists | Run once with a nonce in the body; read the answer, then `get_run_log` and the first events page for the nonce; list immediately, after 30 seconds and after five minutes. The record states whether L1 can bind a run to its attempt (4.4 step 4). If the call is unusable, start session A with `claude --cloud` from the logged-in CLI under a pseudo-terminal and record the creation call (L3) | A |
+| U15 | Receipts for follow-ups: does a message queued with `claude -p --cloud` appear in the events as a user event with its text whole, how soon after `{ok: true}`, and which `{ok: false}` errors and stderr failures leave nothing queued? What does a send killed by its deadline leave? | Send three short parts with distinct headers and read the events after each; send one with an invalid session id and one with the login file unreadable; kill one send one second after start, then read the events for five minutes | A |
 | U12 | Does a diff exported as numbered base64 blocks come back whole, and does it survive the VM pausing between export and read? | Session C makes a small change, exports it, idles past the pause, then gets one follow-up; compare digests | C |
 | U13 | How many sessions run at once on one Max account | Start session D while C is running | D |
 | U14 | The task record: fields naming its repository, environment, model, connectors and triggers; whether a task can exist with no trigger | `GET /v1/code/triggers/{id}` on the task the operator created | No session |
@@ -482,7 +493,7 @@ is written, and slice S6 moves the check transport's sequence onto the client.
 
 | Step | Option | Benefit | Cost |
 | --- | --- | --- | --- |
-| Launch | **L1, task run on the subscription login**: `POST /v1/code/triggers/{id}/run`, as `/schedule run` does | Subscription login only. The feature (Run now, `/schedule run`) and its caps are documented, and the shipped CLI exposes the call as a tool with a written contract. The run clones the published lane from GitHub, so merge-base history is intact and a read-only connection suffices | The HTTP shape is undocumented (U11). One task per account, created on claude.ai. Its model is fixed unless U2 holds. No idempotency key, so runs are single-flight per task and reconciled through `list_runs` |
+| Launch | **L1, task run on the subscription login**: `POST /v1/code/triggers/{id}/run`, as `/schedule run` does | Subscription login only. The feature (Run now, `/schedule run`) and its caps are documented, and the shipped CLI exposes the call as a tool with a written contract. The run clones the published lane from GitHub, so merge-base history is intact and a read-only connection suffices | The HTTP shape is undocumented (U11). One task per account, created on claude.ai. Its model is fixed unless U2 holds. No idempotency key, and Run now on claude.ai starts runs of the same task outside Delegatus (D3), so a run is bound to its attempt only by its answer or by the attempt's nonce in its own events; an unbound outcome stays unknown and is never sent again |
 | Launch | L2, `POST /v1/sessions` as `claude --cloud` does | Environment and model per call | Undocumented. With the GitHub App left uninstalled, `--cloud` bundles the local repository, and this repository's branch bundle is at the 100 MB limit |
 | Launch | L3, `claude --cloud "<task>"` (formerly `--remote`) from the logged-in CLI, driven through a pseudo-terminal | Documented command on the subscription login | Interactive only (D5); fragile to drive; bundles for the same reason as L2 |
 | Read | **R1, `GET /v1/code/sessions/{id}` and `…/events` on the login** | The only automatable reader for hosted sessions; the shipped CLI reads runs with it | Undocumented (U3); the log is "condensed" |
@@ -492,10 +503,22 @@ is written, and slice S6 moves the check transport's sequence onto the client.
 
 Recommended: L1 to launch, documented `claude -p --cloud` follow-ups for the
 probe, the input and the export request, R1 to read and D1 to return the diff.
-If S0 shows the L1 call unusable, launch falls to L3, then L2, all on the same
-login.
-S0 gates all of it. If U3, U4 or U12 fails, decision 4 applies: Claude cloud
-keeps review and verify stages, which need only the final message.
+S0 gates all of it.
+
+- **L1 usable** (U11): the run call answers with the session id, or its body
+  text reaches the session's events verbatim, so 4.4 step 4 can bind a run to
+  its attempt. S3 builds the provider on L1.
+- **L1 unusable** (refused, or a run that can be bound neither way): the
+  Claude provider is not built for stages. S3 is not started, Claude's
+  capabilities stay false, the runtime control shows Claude cloud disabled with
+  the reason "Claude cloud launch not available", and every Claude stage runs on
+  this machine as today. L3 stays S0's own way to open probe sessions. A stage
+  launch over L3 or L2 would need its own design and is deferred (6): L3 cannot
+  run under `-p` (D5) and both bundle a repository whose branch bundle sits at
+  the 100 MB limit. S1, S2, S4's Codex half, S5 (Claude shown not ready) and
+  S6 are still built; S3, S4's Claude half and S7 are not.
+- **U3, U4 or U12 fails:** decision 4 applies. Claude cloud keeps review and
+  verify stages, which need only the final message.
 
 ## 4. Design
 
@@ -546,7 +569,8 @@ export type CloudCapabilities = { readOnlyStages: boolean; writeStages: boolean;
 export type CloudReference =
   | { provider: "codex"; threadId: string; turnId: string; hosted?: { environmentId: string; cwd: string; model: string } }
   | { provider: "claude"; sessionId: string; taskId: string; nonce: string; probe: "pending" | "refused";
-      parts: number; delivered: number; eventsCursor: string | null };
+      parts: number; delivered: number; sending: { part: number; since: string; outcome: "pending" | "unknown" } | null;
+      eventsCursor: string | null };
 
 export interface CloudStageClient {
   readonly provider: CloudProviderId;
@@ -577,8 +601,9 @@ export interface CloudStageClient {
   they are. One `cloudLabel(provider)` helper names the provider in messages,
   replacing the literal "Codex Cloud".
 - Capabilities start as: Codex, read-only stages yes (PR #3302), write stages
-  after S4, checks yes through the check runner. Claude, each one only after S0
-  and the account's readiness record have proven it.
+  after S4, checks yes through the check runner. Claude: read-only and write
+  stages only after S0 and the account's readiness record have proven them;
+  checks stay false (4.10).
 
 ### 4.3 Attempt record and states
 
@@ -593,14 +618,17 @@ export interface CloudStageClient {
   collecting → completed | failed | fallen-back`. `delivering` covers Claude's
   write probe and multi-part input (`reference.probe` tells them apart);
   `collecting` covers the diff export.
-- `submittingAt: string`, `retries: number`, `failureClass?:
-  CloudFailureClass`, and `fallback?: { cause: "unavailable" | "cloud-limit" |
-  "not-ready"; detail: string; at: string; abandoned: "stopped" |
-  "unsupported" | null }`.
+- `nonce: string`, generated and persisted at `reserved`, before any call.
+- `submittingAt: string`, `submitOutcome?: "unknown"` with `unknownSince:
+  string`, `retries: number`, `failureClass?: CloudFailureClass`, and
+  `fallback?: { cause: "unavailable" | "cloud-limit" | "not-ready"; detail:
+  string; at: string; abandoned: "stopped" | "unsupported" | null;
+  lateSession: string | null }`.
 
 The phase is durable, so a restart resumes at the recorded step. A
-`submitting` record without a receipt is ambiguous: Claude reconciles it through
-`list_runs` (4.4); Codex keeps refusing resubmission.
+`submitting` record without a receipt is ambiguous: Claude reconciles it only
+by the attempt's nonce (4.4 step 4) and never submits again; Codex keeps
+refusing resubmission.
 
 ### 4.4 The Claude provider
 
@@ -657,25 +685,57 @@ task enabled, zero connectors and this repository.
    project's accounts that have a task and a ready record. The engine binds the
    attempt, as in PR #3302, and records `{ provider: "claude", phase:
    "reserved", target: taskId, branch, headSha, deadlineAt, nonce }`.
-2. `phase = "submitting"` and `submittingAt` are persisted before the call. One
-   run call is in flight per task: a second attempt for the same task waits for
-   the first one's receipt. A durable `submitting` record on that task holds the
-   flight across a restart.
-3. `POST /v1/code/triggers/{taskId}/run` on the login, with the body U11
-   settles: the line `Delegatus stage <pipeline>/<stage> attempt <n>, nonce
-   <nonce>` when the call accepts text, else empty. Answers: a session id stores
-   it and moves to `delivering`. 429 (the task's 30 per hour) is
-   `cloud-limit`, with `Retry-After` when sent. 5xx and network failures are
-   `unavailable`. 401 is `account-limit`, so the existing account hold asks for
-   the login to be renewed. 400, 403 and 404 (task missing, paused or turned
-   off after 72 hours without GitHub) are `CloudNotReady`.
-4. When no answer arrives, or the answer lacks the id, list `GET
-   /v1/code/sessions?trigger_id=<taskId>` and adopt the newest run created
-   after `submittingAt` that no attempt holds. The single flight makes that run
-   unambiguous. When nothing is listed within two minutes, no session was
-   created (`list_runs` lists every run that created one), and the attempt
-   submits again once. A session that appears later receives no assignment and
-   ends itself.
+2. `phase = "submitting"` and `submittingAt` are persisted before the call.
+   Each attempt makes the run call at most once, and each nonce is sent in
+   exactly one run call. Runs of the same task may overlap: Run now on
+   claude.ai, a schedule, or another attempt may start one at any moment (D3).
+   Step 4 binds by nonce, so nothing depends on Delegatus being the only
+   starter.
+3. `POST /v1/code/triggers/{taskId}/run` on the login, with the body `Delegatus
+   stage <pipeline>/<stage> attempt <n>, nonce <nonce>`. Answers:
+   - A session id stores it and moves to `delivering`.
+   - A refusal answer means no session exists. The CLI's tool contract states
+     that "a fire that was skipped or refused before a session existed
+     (routine paused, a fire cap or a 429 on run, …) … leaves no row" (1.11),
+     and S0 records the answers it sees. 429 (the task's 30 per hour) is
+     `cloud-limit`, with `Retry-After` when sent. 401 is `account-limit`, so
+     the existing account hold asks for the login to be renewed. 400, 403 and
+     404 (task missing, paused or turned off after 72 hours without GitHub) are
+     `CloudNotReady`. A connection that never opened (DNS failure, connection
+     refused) sent nothing and is `unavailable`. Only these outcomes allow
+     4.8's retry, which makes a new run call with a new nonce.
+   - Anything else leaves the outcome unknown: a 5xx, a reset or timeout after
+     the request was written, a 2xx without a session id, or a restart that
+     finds `submitting` with no recorded answer. The engine persists
+     `submitOutcome: "unknown"` and `unknownSince` and goes to step 4. It never
+     makes a second run call for this attempt.
+4. Reconciling an unknown outcome binds only by the nonce, and only when U11
+   showed that body text reaches the session's events. Each due tick lists
+   `GET /v1/code/sessions?trigger_id=<taskId>` and keeps the runs created at
+   or after `submittingAt` minus a 60-second clock allowance. For each
+   candidate it has not checked yet, at most five per tick, it reads the
+   prompt event that U11 names. Candidate ids already checked are kept on the
+   attempt, so a tick reads only new candidates.
+   - Exactly one candidate carries the attempt's nonce: adopt it and move to
+     `delivering`.
+   - A run without the nonce is someone else's (Run now, a schedule, another
+     attempt). It is never adopted and never receives a part.
+   - Two or more carry the nonce: adopt none; the outcome stays unknown.
+   - No match: the outcome stays unknown. An empty or nonce-free list proves
+     nothing, because no source bounds how soon a created run becomes visible
+     (U11 records the delay only).
+   - The attempt keeps reconciling for ten minutes from `unknownSince`. After
+     that it falls back to this machine as confirmed `unavailable` (4.8),
+     without a retry: a second run call could start a second session. When U11
+     showed that body text does not reach the events, the window is skipped and
+     the fallback is immediate.
+   - A run carrying the nonce that appears after the fallback is recorded in
+     `fallback.lateSession`, cancelled where U7 proved `cancel`, and sent
+     nothing. The saved prompt makes a run that receives no assignment end its
+     first turn at once. Later attempts have other nonces, so none of them
+     adopts it.
+   - The unknown state, the checked candidates and the late session are
+     persisted on the attempt, so all of this holds across a restart.
 5. `delivering`, probe first. Part 0 asks for exactly two commands: the U5
    refs request and the U5 comment request, through `gh api` and the proxy.
    `deliver` reads their harness-recorded results from events and matches the
@@ -693,12 +753,36 @@ task enabled, zero connectors and this repository.
    runs under `claudeManagedEnvironment(home)` (`src/lib/accounts/claude.ts:944`)
    from a scratch working directory, with a 25-second deadline inside the
    controller job's 30-second bound, a process-group kill, and spawned from the
-   main thread. `delivered` is persisted after each `{ok: true}`. Parts carry
-   `Input part i/N, nonce <nonce>` headers and the session ignores repeats, so a
-   send that timed out is retried safely. These follow-ups arrive as the
-   account's own messages; text in the run call arrives marked untrusted (D3),
-   which is why it carries only the header.
-8. The phase moves to `polling`.
+   main thread. These follow-ups arrive as the account's own messages; text in
+   the run call arrives marked untrusted (D3), which is why it carries only the
+   header.
+8. Every follow-up (the probe, `/model`, `/effort` and each part) is sent at
+   most once unless its refusal is proven. Delivery does not rely on the model
+   ignoring repeats:
+   - Each part, the probe included, starts with the header `Input part i/N,
+     nonce <nonce>, sha256 <digest of the part>`. A slash command cannot
+     carry a header; its receipt is a user event with exactly that text after
+     the previous follow-up's receipt (U2, U15). Before the CLI is spawned,
+     `reference.sending = { part: i, since, outcome: "pending" }` is persisted.
+   - `{ok: true}` persists `delivered = i + 1` and clears `sending`.
+   - A refusal that S0 recorded as leaving nothing queued (U15: an `{ok:
+     false}` error or a stderr configuration failure of that kind) clears
+     `sending`. The next tick sends that part once more; a second refusal is
+     classified by 4.8.
+   - Everything else is unknown: the deadline kill, an exit without parsable
+     JSON, an `{ok: false}` error S0 did not classify, or a restart that finds
+     `sending` set. The engine sets `outcome: "unknown"` and spawns no CLI.
+     Each poll then reads the events after `eventsCursor` for a user event
+     whose text starts with that part's header and whose digest matches. This
+     is the receipt. A matching event persists `delivered = i + 1`, clears
+     `sending` and continues with the next part.
+   - No receipt within ten minutes of `since`: the part is not sent again. The
+     attempt falls back as confirmed `unavailable` (4.8), and the
+     session is abandoned with `cancel` where U7 proved it. A missing receipt
+     never counts as proof that the part was not queued.
+   - When U15 shows that queued follow-ups do not appear whole in the events,
+     an unknown send has no receipt to wait for and falls back at once.
+9. The phase moves to `polling`.
 
 **Poll and read**
 
@@ -803,7 +887,7 @@ cloudFallbackDecision(attempt, failure)`, using the classes checks already use:
 
 | Class | Claude examples | Codex examples | Before a receipt | After a receipt |
 | --- | --- | --- | --- | --- |
-| `unavailable` | Run call 5xx or network failure, "Session creation failed", setup script failed, checkout of the head failed | Socket refused or lost, `environmentUnavailable` | One retry after 60 seconds, or `Retry-After` up to 15 minutes. A second failure confirms | Confirmed: fall back |
+| `unavailable` | Run call whose connection never opened (DNS failure, connection refused), "Session creation failed", setup script failed, checkout of the head failed; an unknown run or send outcome left unresolved (4.4 steps 4 and 8) | Socket refused or lost, `environmentUnavailable` | One retry after 60 seconds, or `Retry-After` up to 15 minutes. A second failure confirms. An unknown outcome is never retried: it confirms when its window ends | Confirmed: fall back |
 | `cloud-limit` | Run call 429 (task's hourly cap); "limit on cloud sessions running at once"; deadline; VM stopped the task; VM reclaimed before export; probe or permission wait over ten minutes | `cloudCapacityExceeded`, `environmentTimeLimitExceeded`, deadline | As `unavailable`. A `Retry-After` beyond 15 minutes confirms at once | Confirmed: fall back |
 | `CloudNotReady` | No task for the account, task paused or off, connectors attached, training not confirmed off, probe answered 422 | Environment setting cleared | Fall back at once, raise an attention item naming the setup to fix, mark the provider not ready for the project | Same |
 | `account-limit` | Subscription usage window spent; 401 on the login | `usageLimitExceeded`, `unauthorized` | No local fallback (2026-10-24). The account hold re-resolves among accounts that have a ready task, else waits for the reset like a local stage | Same |
@@ -815,6 +899,11 @@ the existing local path (the run-stage tick past the cloud branch) with the same
 engine, model, effort, account policy and accepted head. Nothing a cloud run
 produced is applied. A wrong verdict, an unparseable final message or a red
 check is the stage's own result and never triggers fallback.
+
+A retry is a new run call with a new nonce. It is made only after an outcome
+that proves no session exists (4.4 step 3). An unknown outcome is never
+retried, so a lost answer can neither start a second session nor hand the
+attempt someone else's.
 
 ### 4.9 In pipelines and on the board
 
@@ -846,7 +935,8 @@ check is the stage's own result and never triggers fallback.
   from `cloud.result`. Opening the link needs the browser signed in to that
   account.
 - **Checks.** `PipelineChecksPopover.tsx` and `PipelineCheckSettings.tsx` show a
-  Claude choice only when `capabilities.checks` holds (4.10).
+  Claude choice disabled with its reason, since no slice builds Claude checks
+  (4.10).
 - **Where.** Desktop board, pipeline strip and hub, and the phone pipeline
   screen (`src/components/mobile/MobilePipelineScreen.tsx`), in en and uk,
   light and dark. Over MCP, the pipeline record, and so `get_pipeline` with
@@ -861,11 +951,15 @@ check is the stage's own result and never triggers fallback.
 - **The decisive pre-push gate** keeps Codex Cloud as its default (decision 5;
   `cloud-check-settings.ts:27`). It needs the tree before it is published, and
   evidence produced by the harness itself, independent of model text. For
-  Claude both depend on U9. S6 accepts `claude-cloud` for checks only when
-  `capabilities.checks` is true. Until then the settings show the choice
-  disabled, with its reason.
-- One setting vocabulary: checks accept `local | codex-cloud | claude-cloud`,
-  and a stored `cloud` reads as `codex-cloud`. The choice stays in git config,
+  Claude both depend on U9, and a tree that is not on GitHub can reach a
+  session only as a bundle, through L3 or L2. No slice builds that launch:
+  U9 is an S0 observation, and a Claude check job is deferred (6) until a
+  design built on S0's answer adds one. Claude's `capabilities.checks` stays
+  false, and the check settings show the Claude choice disabled with the
+  reason "Claude cloud checks not available".
+- One setting vocabulary for checks, `local | codex-cloud | claude-cloud`; a
+  stored `cloud` reads as `codex-cloud`, and `claude-cloud` is refused with the
+  reason above. The choice stays in git config,
   where PR #3330 put it so the pre-push hook can read it.
 
 ### 4.11 Hot paths
@@ -874,8 +968,9 @@ check is the stage's own result and never triggers fallback.
   in PR #3302. `controllerPass.ts` indexes due times, so a tick does no
   per-attempt scan.
 - A poll reads one session record and one events page after the stored cursor;
-  the work scales with new events. `list_runs` runs only for an ambiguous
-  submit, and the readiness reads at most once an hour per account.
+  the work scales with new events. `list_runs` runs only for an unknown
+  submit and reads the prompt event of at most five unchecked candidates per
+  tick. The readiness reads run at most once an hour per account.
 - CLI sends are child processes with a deadline and process-group cleanup,
   spawned from the main thread, at most one per attempt at a time.
 - Every new controller job carries a monitor operation label, for example
@@ -912,13 +1007,13 @@ check is the stage's own result and never triggers fallback.
 
 | Slice | Depends on | Work | Acceptance |
 | --- | --- | --- | --- |
-| **S0. Observation spike** | Decisions 1 to 3 (answered 2026-10-25); the operator's setup steps 1 to 4 of 4.4 on one account, and step 1 on the other | No-session steps first: U0, U8, U14, and the local U5 calibration. Then sessions A to E on the one account, F only as a repeat (1.12). Scratch tooling lives in a durable folder outside the repository, named in the task details. Commit `evidence/claude-code-cloud.json` (request and response shapes with ids and tokens removed, timings, sizes, model and status values) and update §1.12 and §3 of this document | Every U row has an observed answer or "not available" with its evidence. At most six sessions, counted from `list_runs` and the send log. Every call used the account's subscription login, read from its own login files. Nothing written to GitHub; if a probe push wrongly succeeds, the ref is deleted, reported, and the spike stops. The record states whether results come back whole, which decides decision 4 |
+| **S0. Observation spike** | Decisions 1 to 3 (answered 2026-10-25); the operator's setup steps 1 to 4 of 4.4 on one account, and step 1 on the other | No-session steps first: U0, U8, U14, and the local U5 calibration. Then sessions A to E on the one account, F only as a repeat (1.12). Scratch tooling lives in a durable folder outside the repository, named in the task details. Commit `evidence/claude-code-cloud.json` (request and response shapes with ids and tokens removed, timings, sizes, model and status values) and update §1.12 and §3 of this document | Every U row has an observed answer or "not available" with its evidence. At most six sessions, counted from `list_runs` and the send log. Every call used the account's subscription login, read from its own login files. Nothing written to GitHub; if a probe push wrongly succeeds, the ref is deleted, reported, and the spike stops. The record states whether results come back whole, which decides decision 4. It states one launch verdict, "L1 usable" or "L1 unusable" with its evidence (§3): usable needs the session id in the run answer or the body nonce found verbatim in the run's events (U11). It states which follow-up outcomes carry a receipt: whether queued text appears whole in the events and which `{ok: false}` and stderr failures leave nothing queued (U15) |
 | **S1. One cloud-stage seam** | None open (PR #3302 is on `main`) | 4.1 to 4.3 plus 4.5: runtime union, provider registry, the moved failure vocabulary and `CloudNotReady`, provider-neutral messages, the extended attempt record with old-record reads, `deliver`; apply result 73's composer without its transport and use it for Codex cloud stages | Existing `cloudStage`, `cloudHostedClient`, `engine.cloud` and `scripts/cloud-checks` tests pass. A fake `claude` client proves engine-based dispatch and account resolution. For the same stage, the cloud parts joined equal the local composed input apart from the runtime lines. Codex cloud stages carry learned rules. One stage-side `thread/start` sender exists under `src/` |
 | **S2. Fallback to this machine** | S1 | 4.8 for stage attempts of both providers | Fake providers raise each class and `CloudNotReady` before and after a receipt. Tests assert the attempt transitions, exactly one local start on the same head, none for `account-limit`, `invalid` failing the attempt, a late cloud result ignored after fallback, and resumption across a real-process restart (`fixtures/cloudStageRestart.ts`) |
-| **S3. Claude provider, review and verify** | S0 (U1, U3, U5, U11 answered), S1; S2 recommended | 4.4: settings, readiness record, run call, single flight, probe, parts, polling | Fake HTTP and CLI tests: the run call carries the login and no other credential; 429 is `cloud-limit` with `Retry-After`; 401 is `account-limit`; 404 is `CloudNotReady`; an unanswered run is adopted from the list; no second run for a task while one is in flight; a fake probe answering 422 sends no part and turns the provider off; no probe result in ten minutes is `cloud-limit`; parts go on stdin, in order; a task listing a connector is refused. A scan of records, logs and spawned argument lists shows no token. One live review stage on a published lane head, with operator approval, settles with its verdict |
+| **S3. Claude provider, review and verify** | S0 with the verdict "L1 usable" (U1, U3, U5, U11, U15 answered), S1, S2. With "L1 unusable" this slice is not started (§3) | 4.4: settings, readiness record, run call, nonce reconciliation, probe, parts with receipts, polling | Fake HTTP and CLI tests: the run call carries the login and no other credential; 429 is `cloud-limit` with `Retry-After`; 401 is `account-limit`; 404 is `CloudNotReady`. Lost run answers, each against a fake that counts run calls and sent parts: a lost answer whose own run appears in the list is adopted by its nonce; a foreign Run now run created after `submittingAt`, alone or listed before the own run, is never adopted and receives no part; two candidates carrying the nonce adopt none; the own run appearing only after the ten-minute window is recorded as `lateSession` and receives nothing, and the next attempt does not adopt it; a 5xx answer is unknown; in every case the run call count is one. Lost sends: the CLI queues part i and then hangs to its deadline, or answers with its JSON lost, or the process restarts before `delivered` is persisted. The receipt in the events advances `delivered` with no second send. With no receipt, the part is never sent again, and the attempt falls back after its window. A refusal recorded as leaving nothing queued is sent once more. The fake session counts how often it received each part and the assignment: every count is one. The unknown run, the checked candidates and `sending` survive a real-process restart (`fixtures/cloudStageRestart.ts`). A fake probe answering 422 sends no part and turns the provider off; no probe result in ten minutes is `cloud-limit`; parts go on stdin, in order; a task listing a connector is refused. A scan of records, logs and spawned argument lists shows no token. One live review stage on a published lane head, with operator approval, settles with its verdict |
 | **S4. Diff return and apply** | S1 for Codex; S3 and S0's whole-output answer for Claude | 4.6 for both providers, or for Codex alone under decision 4; lift `cloudStageConfigurationError` to builder and fix where `writeStages` holds | Checksum mismatch, path escape, outside symlink and submodule change are refused; a privacy-violating line in a cloud diff fails the settlement commit like a local stage; a reclaimed VM before export falls back; one live build stage per built provider settles through publication |
 | **S5. Pipelines, board and guide** | S1; Claude states after S3 | 4.9, the Settings rows for both providers (task id, readiness, «Check»), and the user guide in `docs/guide/pipelines.md` and `docs/guide/configuration.md` | Rendered evidence through `kanbanBoard.browser.test.tsx` (one describe block over the existing fixture) and the phone driver: every phase, "not ready" and the default-not-ready line, en and uk, light and dark, at the board's named widths, every frame inspected. The choice reaches the stage over the UI and over MCP, and a refused write rolls back in place |
-| **S6. Checks on the shared seam** | S1; Claude part only if U9 holds | Move `AppServerCloudTransport`'s thread and turn sequence onto `cloudHostedClient.ts`; settle the setting vocabulary; a Claude check job when `capabilities.checks` holds | One Codex Cloud thread and turn sequence in the repository. PR #3330's tests pass. A stored `cloud` value keeps working. Claude checks are refused with a reason while unproven; when proven, negative controls (type error, lint error, new assertion) are red on Claude exactly as locally |
+| **S6. Checks on the shared seam** | S1 | Move `AppServerCloudTransport`'s thread and turn sequence onto `cloudHostedClient.ts`; settle the setting vocabulary, `claude-cloud` included as a refused value (4.10) | One Codex Cloud thread and turn sequence in the repository. PR #3330's tests pass. A stored `cloud` value keeps working. `claude-cloud` is refused for checks with the reason "Claude cloud checks not available" over the UI, MCP and git config, and the hook then runs the checks as the stored fallback says |
 | **S7. Default runtime (decision 5)** | S3 for the visual critic with U6's driver answer; S4's Claude half for frontend builders; S5 | 4.12 | Tests: a new visual-critic stage gets `claude-cloud` when ready and no runtime with the reason when not; `runtime: "local"` is respected; stored stages keep their runtime when readiness flips; a frontend builder gets it only with `writeStages`; a Codex-bound frontend builder and a prototype-mode builder are unchanged; the checks default stays Codex Cloud |
 
 The runtime host is not touched by any slice. The Viewer's controller jobs do
@@ -934,9 +1029,14 @@ the cloud I/O.
   compute.
 - A write-capable GitHub connection with a ruleset on `claude/**`, and a private
   scratch repository as the diff channel: decision 2 chose read-only.
-- Starting sessions from local bundles (`claude --cloud` or `POST /v1/sessions`)
-  for stages: the branch bundle sits at the 100 MB limit. Bundles stay only in
-  U9, for checks.
+- Launching stages or checks over L3 (`claude --cloud`) or L2 (`POST
+  /v1/sessions`), including as a replacement when S0 finds L1 unusable. L3
+  cannot run under `-p` (D5). Both bundle the local repository while the GitHub
+  App is not installed, and the branch bundle sits at the 100 MB limit. S0 uses
+  L3 only to open its own sessions and for U9. Its answers are the input to a
+  later design, which would add the launch, its receipt and its recovery to the
+  same provider seam. Until then a Claude check job is not built (4.10), and
+  with L1 unusable Claude stages run on this machine (§3).
 - Ultrareview as a stage: usage-credit billing and a different output contract.
 - GitHub Actions as a runtime: inputs and outputs pass through a public
   repository.
@@ -958,7 +1058,7 @@ the cloud I/O.
 | --- | --- |
 | «Менять … где? Там де ти задачу»: chosen where the task's pipeline is set up | 4.1 and 4.9: a stage field in the existing runtime control, over MCP and through the seat for voice |
 | «Cloud code … C-L-A-U-D» | 4.4: an Anthropic-hosted Claude Code session started as a scheduled-task run |
-| «чтобы там выполнялось всё … для кода» | Review and verify (S3), build and fix (S4), heavy checks in verify stages (4.10) and the decisive gate when U9 holds (S6) |
+| «чтобы там выполнялось всё … для кода» | Review and verify (S3), build and fix (S4), heavy checks in verify stages (4.10) and the decisive gate on Codex Cloud (S6); a Claude gate waits for a design built on U9's answer (4.10, 6) |
 | «чтобы парсить» | 4.4 and 4.6: final message and verdict read back, diff reassembled and verified |
 | «встраивать пайплайны» | The stage runs inside the normal graph, verdicts and fail edges (4.6) |
 | «кодекс cloud … или даже вместе» | 4.1 and 4.2: per-stage provider, mixed in one pipeline, one interface |
