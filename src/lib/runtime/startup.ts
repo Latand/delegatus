@@ -49,6 +49,7 @@ import {
   completeStructuredDeliveryQueueStartup,
   publishStructuredDeliveryHost,
   updateStructuredStartupDeferral,
+  allowStructuredStartupRecovery,
   hasStructuredDeliveryController,
   hasStructuredDeliveryHost,
   handOverHostForDemotion,
@@ -2170,6 +2171,14 @@ async function adoptStructuredHostsPass(
       deferStartupWork: true,
     });
   }
+  const readEvidence = () => (dependencies.pipelineEvidence ?? pipelineStartupEvidence)(registry);
+  if (controllerBoundEarly && !rowRetry) {
+    const recoveryEvidence = await admitState(async (available) =>
+      available ? readEvidence() : pipelineStartupEvidence(registry, false));
+    assertActive();
+    for (const id of recoveryEvidence.deferred) updateStructuredStartupDeferral(registry, id, true);
+    allowStructuredStartupRecovery(registry);
+  }
   if (!resumeDeferred) markStructuredHostStartupProgress({
     phase: "refreshing transcripts",
     completedHosts: 0,
@@ -2184,9 +2193,13 @@ async function adoptStructuredHostsPass(
   // Read under the existing lease, then release before any host or transcript I/O.
   // Each writer claim below re-resolves pipeline evidence in its own short hold.
   assertActive();
-  const readEvidence = () => (dependencies.pipelineEvidence ?? pipelineStartupEvidence)(registry);
   let pipelineEvidence = await admitState(async (available) =>
     available ? readEvidence() : pipelineStartupEvidence(registry, false));
+  if (controllerBoundEarly && !rowRetry) {
+    assertActive();
+    for (const id of pipelineEvidence.deferred) updateStructuredStartupDeferral(registry, id, true);
+    allowStructuredStartupRecovery(registry);
+  }
   {
     assertActive();
     const deferralSnapshot = startupSnapshot(registry);
@@ -2229,7 +2242,8 @@ async function adoptStructuredHostsPass(
     /* Pending work makes a terminal conversation adoption-eligible. Clear any
        provably dead wrapper before that decision so its stale writer fence
        cannot block the startup recovery path. */
-    await reconcileDeadStructuredRegistryHostsOffLoop(registry, (entry) => orchestratorHostKeys.has(sessionKeyId(entry.key))
+    await reconcileDeadStructuredRegistryHostsOffLoop(registry, (entry) => hasStructuredDeliveryHost(entry.key)
+      || orchestratorHostKeys.has(sessionKeyId(entry.key))
       || interruptionHostKeys.has(sessionKeyId(entry.key))
       || (resumeDeferred !== null && !resumeDeferred.has(sessionKeyId(entry.key)))
       || deferredHostKeys.has(sessionKeyId(entry.key))
@@ -2274,6 +2288,7 @@ async function adoptStructuredHostsPass(
       // its per-row progress callback would discard that partial result.
       try { assertActive(); } catch { return false; }
       return (!resumeDeferred || resumeDeferred.has(sessionKeyId(entry.key)))
+        && !hasStructuredDeliveryHost(entry.key)
         && !delayedRows.has(sessionKeyId(entry.key))
         && !retainedHostKeys.has(sessionKeyId(entry.key))
         && !skippedHostKeys.has(sessionKeyId(entry.key))
@@ -2344,9 +2359,39 @@ async function adoptStructuredHostsPass(
     // A later row may throw after earlier hosts have launched and acquired
     // writer claims. Keep each handle before the batch can reject, so the
     // retry can publish it instead of waiting on its own engine forever.
+    const publicationTails = new Map<string, Promise<void>>();
     const onAdopted = (item: AdoptedStructuredHost) => {
       nextAdoptedHosts = retainAdoptedHosts(nextAdoptedHosts, [item]);
       rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
+      if (!controllerBoundEarly || rowRetry) return;
+      const key = sessionKeyId(item.key);
+      const captured = startupSnapshot(registry).entries[key];
+      if (!captured?.structuredHost || !captured.claimOwner) return;
+      const claimOwner = captured.claimOwner;
+      const claimEpoch = captured.claimEpoch;
+      const writerEpoch = captured.structuredHost.writerClaimEpoch;
+      const owns = async (): Promise<boolean> => {
+        try { assertActive(); } catch { return false; }
+        if (heldHostKeys.has(key) || deferredHostKeys.has(key) || skippedHostKeys.has(key)) return false;
+        const current = startupSnapshot(registry).entries[key];
+        if (!current?.structuredHost || current.status === "dead" || current.status === "unhosted"
+          || current.claimOwner !== claimOwner || current.claimEpoch !== claimEpoch
+          || current.structuredHost.writerClaimEpoch !== writerEpoch) return false;
+        const conversation = registry.conversationForPath(current.artifactPath);
+        return !!conversation && !conversation.supersededBy
+          && conversation.generations.at(-1)?.id === item.key.sessionId;
+      };
+      // Keep a host's publications ordered without making another host wait
+      // for its health or journal reads. A failed publish retains the adopted
+      // handle for the normal completion retry.
+      const publication = (publicationTails.get(key) ?? Promise.resolve()).then(async () => {
+        if (await owns()) await publishStructuredDeliveryHost(item, owns);
+      }).catch(error => {
+        console.warn("[structured hosts] early host publication deferred", {
+          key, error: error instanceof Error ? error.message : String(error),
+        });
+      });
+      publicationTails.set(key, publication);
     };
     await reportProgress("adopting Codex hosts");
     const resolveCodexOwner = dependencies.resolveCodexOwner ?? ((entry: AgentRegistryEntry) =>
@@ -2522,7 +2567,7 @@ async function adoptStructuredHostsPass(
     rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
     const candidateHostKeys = new Set(nextAdoptedHosts.map((item) => sessionKeyId(item.key)));
     const shouldRetainCandidateOrAdopt: StructuredHostAdoptionFilter = (entry) =>
-      candidateHostKeys.has(sessionKeyId(entry.key))
+      hasStructuredDeliveryHost(entry.key) || candidateHostKeys.has(sessionKeyId(entry.key))
       || codexBootAdoptionRetired(entry)
       /* A row this boot could not read a transcript for is left exactly as it
          was. The demotion below retires a skipped row — it releases the endpoint,
@@ -2618,6 +2663,8 @@ async function adoptStructuredHostsPass(
         && !heldHostKeys.has(sessionKeyId(item.key)),
     );
     await reportProgress("finalizing structured delivery");
+    await Promise.all(publicationTails.values());
+    assertActive();
     /* `controllerBoundEarly` is exactly "this pass has a runtime client", so the
        only way past it is a viewer that cannot host at all. Rebinding there would
        retire a publication this pass has no client to replace — and every spawn

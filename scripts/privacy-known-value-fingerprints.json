@@ -8,11 +8,6 @@
       "sha256": "f1855008865db4a472e383a04e0b39b7d0ad4660654301c1fe9dc3a3e5b3d408"
     },
     {
-      "length": 10,
-      "sha256": "b829e805ab160bf10124b48da39c07eecc55bea7b9229820abbcc396ebf35cf1",
-      "exactOnly": true
-    },
-    {
       "length": 12,
       "sha256": "28fe3addd231b430e39ec89e66d98dffa86ff782e700c395a784220406a21e11"
     },

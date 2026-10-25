@@ -119,16 +119,193 @@ function fixture() {
     cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
-for (const suffix of ["proved", "unrecorded", "divergent"] as const) test(`publish without acceptedSha retries a custody-parked stage (${suffix})`, async () => {
+for (const recovery of ["automatic", "retry-stage", "publish"] as const) for (const shape of ["old-publication", "no-publication"] as const) test(`a passed unsettled committing stage settles (${shape}, ${recovery})`, async () => {
   const h = fixture();
-  const launchId = `parked-successor-${suffix}`;
+  const saturated = recovery !== "automatic";
+  const { settlePipelineControllerJobs, startPipelineControllerJob, PIPELINE_CONTROLLER_MAX_JOBS } = await import("./controllerJobs");
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  try {
+    h.git("push", "-q", "origin", `HEAD:refs/heads/${h.lane.branch}`);
+    const previous = h.head;
+    const attempt = h.lane.runs[0]!.attempts[0]!;
+    const now = "2026-10-20T10:00:00.000Z";
+    attempt.startedAt = now; attempt.completedAt = null;
+    attempt.launchId = `unsettled-${shape}-${recovery}`;
+    attempt.state = "committing";
+    const guard = await prepareStageGitGuard(attempt.launchId, h.repo, realExec, now, async () => {});
+    const identity = agentPublicationIdentityEnv({ ...process.env, ...guard });
+    const made = await realExec("git", ["commit", "--allow-empty", "-m", "accepted stage output"], h.repo,
+      { ...identity, ...guard, GIT_AUTHOR_DATE: now, GIT_COMMITTER_DATE: now });
+    expect(made.code, made.stderr).toBe(0);
+    const head = h.git("rev-parse", "HEAD");
+    h.lane.lastPassedCommit = previous; h.lane.publishedCommit = previous;
+    h.lane.state = "running"; h.lane.stateDetail = "Viewer publication: owner"; h.lane.createdAt = now;
+    attempt.report = { seq: 1, at: now, actor: { kind: "agent", role: "worker", conversationId: "stage-owner" },
+      verdict: { status: "pass" }, summary: "Accepted stage output", calls: 1,
+      provenance: { state: "complete", head, branch: h.lane.branch, uncommitted: [], outputs: [], pullRequest: null, pullRequestState: "absent" } };
+    savePipelines([h.lane]);
+    let clock = "2026-10-20T10:01:00.000Z";
+    const ports = { ...h.ports, now: () => clock };
+    if (shape === "old-publication") {
+      expect((await patchPipeline(h.lane.id, { action: "publish" }, ports)).error).toBeUndefined();
+      expect(h.current().delivery!.operation).toMatchObject({ state: "pending", sha: previous });
+    }
+    const queued = h.current();
+    const { tickPipelinesController } = await import("./controllerPass");
+    if (saturated) {
+      for (let n = 0; n < PIPELINE_CONTROLLER_MAX_JOBS; n++) {
+        expect(startPipelineControllerJob(`held-publication-${n}`, () => held, async () => "unchanged")).toBe(true);
+      }
+      // A fresh pass waits; the persisted report, rather than an in-memory
+      // counter, also bounds admission in a replacement controller process.
+      await tickPipelinesController([], ports);
+      expect(h.current().state).toBe("running");
+      clock = "2026-10-20T10:15:00.000Z";
+      const script = `const { defaultPipelinePorts } = await import(${JSON.stringify(path.join(import.meta.dir, "engine.ts"))});
+        const { tickPipelinesController } = await import(${JSON.stringify(path.join(import.meta.dir, "controllerPass.ts"))});
+        const { startPipelineControllerJob, settlePipelineControllerJobs, PIPELINE_CONTROLLER_MAX_JOBS } = await import(${JSON.stringify(path.join(import.meta.dir, "controllerJobs.ts"))});
+        const { registerPipelineTick } = await import(${JSON.stringify(path.join(import.meta.dir, "controllerSignal.ts"))});
+        registerPipelineTick(async () => {});
+        let release; const held = new Promise(resolve => { release = resolve; });
+        try {
+          for (let n = 0; n < PIPELINE_CONTROLLER_MAX_JOBS; n++) startPipelineControllerJob('held-' + n, () => held, async () => 'unchanged');
+          await tickPipelinesController([], { ...defaultPipelinePorts(), now: () => ${JSON.stringify(clock)},
+            conversationAgentActive: async () => false, stageHostResident: async () => false, paneAgentAlive: async () => false });
+        } finally { release(); await settlePipelineControllerJobs(); }`;
+      const restarted = await realExec(process.execPath, ["-e", script], process.cwd(), process.env, { timeoutMs: 30_000 });
+      expect(restarted.code, restarted.stderr).toBe(0);
+      expect(h.current().state).toBe("needs_decision");
+      expect(h.current().lastPassedCommit).toBe(previous);
+      expect(h.current().publishedCommit).toBe(previous);
+      expect(h.current().stateDetail).toContain("settling the stage push:");
+      expect(h.current().delivery!.operation?.state).not.toBe("pending");
+      if (shape === "old-publication") {
+        const { publishPipelineBranch } = await import("./git");
+        const stale = await publishPipelineBranch(queued, ports.exec, { acceptedSha: previous });
+        expect(stale).toMatchObject({ ok: false, error: expect.stringContaining("newer reservation") });
+        expect(h.current().delivery!.operation?.state).toBe("settled");
+      }
+      expect(h.git("rev-parse", "HEAD")).toBe(head);
+      expect(h.pushes()).toBe(0);
+      release(); await settlePipelineControllerJobs();
+      const stranger = { kind: "agent" as const, role: "worker", conversationId: "other-lane" };
+      expect((await patchPipeline(h.lane.id, { action: "publish", acceptedSha: head }, ports, stranger)).status).toBe(403);
+      expect((await patchPipeline(h.lane.id, { action: "retry-stage", expectedStageId: "other" }, ports)).code).toBe("STAGE_CHANGED");
+      expect((await patchPipeline(h.lane.id, { action: "retry-stage", expectedStageId: "build", expectedAttempt: attempt.n + 1 }, ports)).code).toBe("STAGE_CHANGED");
+      const request = recovery === "retry-stage"
+        ? { action: "retry-stage" as const, expectedStageId: "build", expectedAttempt: attempt.n }
+        : { action: "publish" as const, acceptedSha: head };
+      expect((await patchPipeline(h.lane.id, request, ports)).error).toBeUndefined();
+    }
+    for (let n = 0; n < 4; n++) {
+      await tickPipelinesController([], ports);
+      await settlePipelineControllerJobs();
+    }
+    expect(h.current()).toMatchObject({ state: "completed", lastPassedCommit: head, publishedCommit: head });
+    expect(h.current().delivery!.operation).toMatchObject({ state: "settled", sha: head });
+    expect(h.pushes()).toBe(1);
+  } finally { release(); await settlePipelineControllerJobs(); h.cleanup(); }
+});
+
+test("admission expiry preserves an executing publisher and an owned settlement job", async () => {
+  const h = fixture();
+  const { startPipelineControllerJob, settlePipelineControllerJobs, PIPELINE_CONTROLLER_MAX_JOBS } = await import("./controllerJobs");
+  const { tickPipelinesController } = await import("./controllerPass");
+  const { publishPipelineBranch } = await import("./git");
+  let release!: () => void, entered!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const writing = new Promise<void>(resolve => { entered = resolve; });
+  let publication: ReturnType<typeof publishPipelineBranch> | undefined;
+  try {
+    h.lane.state = "running"; h.lane.stateDetail = "Viewer publication: owner";
+    h.lane.lastPassedCommit = h.head;
+    const attempt = h.lane.runs[0]!.attempts[0]!;
+    attempt.state = "committing"; attempt.startedAt = "2026-10-20T10:00:00.000Z"; attempt.completedAt = null;
+    savePipelines([h.lane]);
+    const ports = { ...h.ports, now: () => "2026-10-20T11:00:00.000Z" };
+    for (let n = 0; n < PIPELINE_CONTROLLER_MAX_JOBS; n++) {
+      expect(startPipelineControllerJob(n === 0 ? h.lane.id : `owned-job-${n}`, () => held, async () => "unchanged")).toBe(true);
+    }
+    await tickPipelinesController([], ports);
+    expect(h.current().state).toBe("running");
+    release(); await settlePipelineControllerJobs();
+    const publisherHeld = new Promise<void>(resolve => { release = resolve; });
+    publication = publishPipelineBranch(h.current(), async (...args: Parameters<typeof realExec>) => {
+      if (args[0] === "git" && args[1][0] === "push") { entered(); await publisherHeld; }
+      return h.ports.exec(...args);
+    }, { acceptedSha: h.head });
+    // Await the dispatch boundary, never elapsed time, and keep a bounded
+    // failure if the publisher refuses before reaching it.
+    await Promise.race([writing, publication.then(result => { throw new Error(JSON.stringify(result)); })]);
+    const operation = h.current().delivery!.operation!;
+    expect(operation.state).toBe("running");
+    for (let n = 0; n < PIPELINE_CONTROLLER_MAX_JOBS; n++) {
+      expect(startPipelineControllerJob(`publisher-peer-${n}`, () => publisherHeld, async () => "unchanged")).toBe(true);
+    }
+    await tickPipelinesController([], ports);
+    expect(h.current().state).toBe("running");
+    expect(h.current().delivery!.operation!.id).toBe(operation.id);
+    expect(h.current().delivery!.operation!.state).toBe("running");
+    release();
+    expect(await publication).toMatchObject({ ok: true, remote: "published" });
+  } finally { release(); await publication; await settlePipelineControllerJobs(); h.cleanup(); }
+});
+
+for (const change of ["epoch", "pause"] as const) test(`admission expiry refuses a lane changed before its mutation (${change})`, async () => {
+  const h = fixture();
+  const store = await import("./store");
+  const mutate = store.withPipelineMutation;
+  const { tickPipelinesController } = await import("./controllerPass");
+  const { startPipelineControllerJob, settlePipelineControllerJobs, PIPELINE_CONTROLLER_MAX_JOBS } = await import("./controllerJobs");
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let raced = false;
+  let mutation: ReturnType<typeof spyOn> | undefined;
+  try {
+    h.lane.state = "running"; h.lane.stateDetail = "Viewer publication: owner";
+    const attempt = h.lane.runs[0]!.attempts[0]!;
+    attempt.state = "committing"; attempt.startedAt = "2026-10-20T10:00:00.000Z"; attempt.completedAt = null;
+    savePipelines([h.lane]);
+    const ports = { ...h.ports, now: () => "2026-10-20T11:00:00.000Z" };
+    expect((await patchPipeline(h.lane.id, { action: "publish" }, ports)).error).toBeUndefined();
+    const reservation = h.current().delivery!.operation!.id;
+    for (let n = 0; n < PIPELINE_CONTROLLER_MAX_JOBS; n++) {
+      expect(startPipelineControllerJob(`racing-job-${n}`, () => held, async () => "unchanged")).toBe(true);
+    }
+    // Interpose a real peer write after selection and before the expiry's
+    // mutation lease. The expiry must retain that writer's epoch or pause.
+    mutation = spyOn(store, "withPipelineMutation").mockImplementationOnce(async (apply, observe) => {
+      await mutate(async (rows, persist) => {
+        const lane = rows.find(row => row.id === h.lane.id)!;
+        if (change === "epoch") {
+          lane.delivery!.epoch++;
+          lane.delivery!.operation = { id: "epoch-successor", epoch: lane.delivery!.epoch, sha: lane.lastPassedCommit, state: "pending" };
+        }
+        else { lane.state = "paused"; lane.pausedState = "running"; }
+        await persist([lane]); raced = true;
+      });
+      return mutate(apply, observe);
+    });
+    await tickPipelinesController([], ports);
+    expect(raced).toBe(true);
+    expect(h.current().state).toBe(change === "pause" ? "paused" : "running");
+    expect(h.current().delivery!.epoch).toBe(change === "epoch" ? 2 : 1);
+    expect(h.current().delivery!.operation).toMatchObject({ id: change === "epoch" ? "epoch-successor" : reservation, state: "pending" });
+    expect(h.pushes()).toBe(0);
+  } finally { mutation?.mockRestore(); release(); await settlePipelineControllerJobs(); h.cleanup(); }
+});
+
+for (const action of ["publish", "retry-stage"] as const) for (const suffix of ["proved", "unrecorded", "divergent"] as const) test(`${action} without acceptedSha retries a custody-parked stage (${suffix})`, async () => {
+  const h = fixture();
+  const launchId = `parked-successor-${action}-${suffix}`;
   try {
     h.git("push", "-q", "origin", `${h.passed}:refs/heads/${h.lane.branch}`);
     const attempt = h.lane.runs[0]!.attempts[0]!;
     const now = "2026-10-20T10:00:00.000Z";
     attempt.startedAt = now; attempt.completedAt = null; attempt.launchId = launchId;
     attempt.state = "needs_decision";
-    const guard = await prepareStageGitGuard(launchId, h.repo, realExec, now);
+    const guard = await prepareStageGitGuard(launchId, h.repo, realExec, now, async () => {});
     const identity = agentPublicationIdentityEnv({ ...process.env, ...guard });
     const env = { ...identity, ...guard, GIT_AUTHOR_DATE: now, GIT_COMMITTER_DATE: now };
     // An unrecorded head has no receipt: its object is written outside a
@@ -150,7 +327,7 @@ for (const suffix of ["proved", "unrecorded", "divergent"] as const) test(`publi
     h.lane.stateDetail = `settling the stage push: commit ${tip} does not descend from the pipeline base; both tips are preserved`;
     savePipelines([h.lane]);
     const ports = { ...h.ports, now: () => "2026-10-20T11:00:00.000Z" };
-    expect((await patchPipeline(h.lane.id, { action: "publish" }, ports)).error).toBeUndefined();
+    expect((await patchPipeline(h.lane.id, { action }, ports)).error).toBeUndefined();
     for (let n = 0; n < 3; n++) await tickPipelines([], ports);
     if (suffix === "proved") {
       expect(h.current()).toMatchObject({ lastPassedCommit: head, publishedCommit: head, state: "completed" });
@@ -197,7 +374,7 @@ test("publish acceptedSha accepts a custody-parked head equal to the passed comm
     const now = "2026-10-20T10:00:00.000Z";
     attempt.startedAt = now; attempt.completedAt = null; attempt.launchId = launchId;
     attempt.state = "needs_decision";
-    await prepareStageGitGuard(launchId, h.repo, realExec, now);
+    await prepareStageGitGuard(launchId, h.repo, realExec, now, async () => {});
     const refusal = `stage push refused: commit ${"f".repeat(40)} was not created in the attempt worktree during this attempt; commit in the lane worktree and let Delegatus publish`;
     fs.writeFileSync(path.join(stageGitReceiptDirectory(launchId), "refused"), `${refusal}\n`);
     h.lane.lastPassedCommit = h.head;

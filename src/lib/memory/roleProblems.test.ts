@@ -14,6 +14,8 @@ import { input, NOW, PROJECT } from "@/lib/boardMaintenance/testFixture";
 import { applyCuration, revertCuratorPass } from "./curation/apply";
 import { claimPass, patchPass } from "./curation/store";
 import { CURATION_INTERVAL_MS } from "./roleTypes";
+import { drainFilesResponseWorker } from "@/lib/scanner/filesResponseWorker";
+import { stopWorktreeSweepWorker } from "@/lib/pipelines/worktreeSweepWorker";
 
 let root: string;
 let previous: string | undefined;
@@ -22,7 +24,10 @@ beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-memory-problems-"));
   process.env.LLV_STATE_DIR = root;
 });
-afterEach(() => {
+afterEach(async () => {
+  // The production controller starts resident rule-report and disk-pressure workers.
+  await drainFilesResponseWorker("role problems test teardown");
+  await stopWorktreeSweepWorker();
   if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
   fs.rmSync(root, { recursive: true, force: true });
 });
