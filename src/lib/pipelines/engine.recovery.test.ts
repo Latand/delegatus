@@ -308,6 +308,41 @@ const CALLBACK_EXIT = "Codex callback listener failed before dispatch: exited wi
 const CALLBACK_SIGNAL = "Codex callback listener failed before dispatch: exited on signal SIGTERM; stderr: EADDRINUSE: callback bind refused";
 const CALLBACK_TIMEOUT = "Codex callback listener failed before dispatch: timed out after 10000ms; stderr: callback bind pending";
 
+test("issue 3066: a repeated diagnosed callback startup failure remains an automatic launch retry", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const advance = frozenWallClock(h);
+  const scheduled: number[] = [];
+  let launches = 0;
+  h.ports.spawnAgent = async (_input, onReserved) => {
+    launches++;
+    await onReserved({ launchId: `launch-callback-${launches}`, conversationId: `conversation_callback_${launches}` });
+    throw new Error(CALLBACK_EXIT);
+  };
+  h.ports.spawnReceipt = launchId => failedReceipt(launchId,
+    launchId.replace("launch-callback-", "conversation_callback_"), CALLBACK_EXIT);
+  h.ports.claimSpawnRetry = () => "claimed";
+  h.ports.scheduleTick = delayMs => { scheduled.push(delayMs); };
+  h.ports.sleep = forbiddenSleep;
+
+  await tickPipelines([], h.ports);
+  expect(scheduled).toEqual([1_000]);
+  advance(scheduled.at(-1)!);
+  await tickPipelines([], h.ports);
+
+  const pipeline = loadPipelines()[0]!;
+  expect(launches).toBe(2);
+  expect(pipeline).toMatchObject({ state: "running", cursor: { stageId: "plan", state: "pending" } });
+  expect(pipeline.runs[0]!.attempts).toHaveLength(1);
+  expect(pipeline.runs[0]!.attempts[0]!.retiredLaunches).toEqual([
+    expect.objectContaining({ launchId: "launch-callback-1", error: CALLBACK_EXIT }),
+    expect.objectContaining({ launchId: "launch-callback-2", error: CALLBACK_EXIT }),
+  ]);
+  expect(pipeline.runs[0]!.attempts[0]!.controllerWait).toMatchObject({ rounds: 2 });
+  expect(scheduled).toEqual([1_000, 2_000]);
+});
+
 test.skipIf(!process.env.LLV_CALLBACK_REPLAY_FILE)("callback persisted budget checkpoint", async () => {
   const checkpoint = JSON.parse(fs.readFileSync(process.env.LLV_CALLBACK_REPLAY_FILE!, "utf8"));
   const h = harness();

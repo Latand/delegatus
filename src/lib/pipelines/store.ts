@@ -1,3 +1,4 @@
+import { cloudStageConfigurationError, isCloudStageAttempt } from "./cloudStage";
 import { projectStoreSignature } from "@/lib/projects/persistence";
 import { isPublicationRecovery, mergePublicationRecovery, publicationInterrupted, PUBLICATION_RETRY_DELAYS_MS, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
 import { deepFreeze } from "@/lib/deepFreeze";
@@ -318,6 +319,7 @@ function isAttempt(value: unknown, index: number): boolean {
   const attempt = value as Record<string, unknown>;
   return (
     attempt.n === index + 1 && isSetupResult(attempt.setup) &&
+    (attempt.cloud === undefined || isCloudStageAttempt(attempt.cloud)) &&
     (attempt.decisionAnswerId === undefined || (typeof attempt.decisionAnswerId === "string" && attempt.decisionAnswerId.length > 0 && attempt.decisionAnswerId.length <= 200)) &&
     (attempt.historical === undefined || typeof attempt.historical === "boolean") &&
     (attempt.legacyReview === undefined || (attempt.legacyReview === true && attempt.historical === true)) &&
@@ -461,7 +463,9 @@ function isAttemptDefinition(value: unknown): boolean {
   if (typeof value !== "object" || Array.isArray(value)) return false;
   const definition = value as Record<string, unknown>;
   const role = definition.role;
-  return validAgentMemoryMax(definition.agentMemoryMaxBytes) && typeof definition.boundAt === "string"
+  return (definition.runtime === undefined || definition.runtime === "codex-cloud")
+    && validAgentMemoryMax(definition.agentMemoryMaxBytes)
+    && typeof definition.boundAt === "string"
     && typeof definition.stageDigest === "string"
     && typeof definition.prompt === "string"
     && isNullableString(definition.account)
@@ -688,6 +692,7 @@ function isStage(value: unknown): value is PipelineStage {
     )) &&
     isEffectiveRole(stage.effectiveRole)
   )) return false;
+  if (cloudStageConfigurationError(stage as PipelineStage)) return false;
   const effective = stage.effectiveRole;
   const referencedRoleId = role === undefined ? null : (role as { roleId: EffectivePipelineRole["roleId"] }).roleId;
   if (stage.outputs !== undefined && effective.access !== "read-only") return false;
@@ -2162,6 +2167,13 @@ export function archivedPipelinesRevision(): number {
 
 function pipelineSettledForArchive(pipeline: Pipeline, nowMs: number): boolean {
   if (!pipelineActivitySettled(pipeline)) return false;
+  /* The task-finish sweep reads the hot collection and records its durable
+     outcome on the marked lane. Keep that lane visible to the sweep while any
+     linked mark is unresolved, including while another lane on the task is
+     still open. Once every mark has a finish receipt, ordinary archival is
+     safe (and a task reopened afterwards intentionally stays open). */
+  const finishedTasks = new Set((pipeline.taskFinishes ?? []).map((finish) => finish.taskId));
+  if (pipeline.state === "completed" && (pipeline.finishesTaskIds ?? []).some((taskId) => pipeline.taskIds.includes(taskId) && !finishedTasks.has(taskId))) return false;
   /* Closed records archive on closedAt. A discarded draft now closes like
      anything else (#1274), but records discarded before that fix are hidden
      with no closedAt at all, so their hiddenAt still stands in. Anything still

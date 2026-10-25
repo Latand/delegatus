@@ -1,5 +1,7 @@
 "use client";
 
+import { AgentMemoryCapNote } from "@/components/AgentMemoryCapNote";
+import { StageSetupResult } from "@/components/pipelines/StageSetupResult";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { Flow } from "@/lib/flows/types";
@@ -503,6 +505,10 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
       {draft && (outcome === "undelivered" || (outcome === "ended-before-start" && !neverRan)) ? (
         <DraftLeftover kind={outcome === "undelivered" ? "undelivered" : "ended"} draft={draft} draftKey={draftKey} name={name} drafts={props.drafts} onOpenConversation={recorded ? () => props.onOpenRecorded(recorded) : null} />
       ) : null}
+      {/* The setup result belongs to the attempt the pane shows, numbered as
+          the attempt chooser above numbers it. */}
+      {shown ? <StageSetupResult setup={shown.setup} stageId={stage.id} attempt={attempts.indexOf(shown) + 1 || shown.n} /> : null}
+      <AgentMemoryCapNote cap={shown?.memoryCap} />
       {body}
     </section>
   );

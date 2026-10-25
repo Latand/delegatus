@@ -1,3 +1,4 @@
+import { LOAD_PROBE } from "./load";
 // Stub-runner runs: a verdict the command cannot forge, and history that never
 // leaves this machine unscanned (T24, T25).
 // The remote command really runs, under a temporary runner home, through the
@@ -64,7 +65,7 @@ test.if(linux)("a private value one lane commit added and a later one deleted ke
   expect(result.code).toBe(0);
   expect(result.stderr).toMatch(/^gate-runner: running here: the privacy scan refused the tree: /m);
   expect(result.stderr).not.toMatch(RUNNING);
-  expect(h.calls().filter(call => !call.command.includes("manager=ok"))).toEqual([]);
+  expect(h.calls().filter(call => !call.command.includes("manager=ok") && call.command !== LOAD_PROBE)).toEqual([]);
   // Without the known value the same history goes.
   fs.rmSync(path.join(h.cache, "runner-health.json"));
   const clean = h.run(["bun", "test", file]);

@@ -57,8 +57,17 @@ Object.assign(globalThis, {
 });
 Object.defineProperty(dom.HTMLElement.prototype, "clientWidth", { configurable: true, get: () => 1000 });
 (dom as unknown as { matchMedia: (query: string) => unknown }).matchMedia = (query: string) => ({ matches: false, media: query, addEventListener() {}, removeEventListener() {} });
+/* The checks route (docs/design/cloud-checks.md), answered by the test that reads it. */
+type ChecksCall = { url: string; method: string; body: unknown };
+let checksRoute: ((call: ChecksCall) => Promise<Response> | Response) | null = null;
+const checksCalls: ChecksCall[] = [];
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = String(input);
+  if (url.startsWith("/api/pipelines/") && url.split("?")[0]!.endsWith("/checks") && checksRoute) {
+    const call = { url, method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : null };
+    checksCalls.push(call);
+    return checksRoute(call);
+  }
   let body: unknown = {};
   if (url.startsWith("/api/logs")) {
     const { reqs } = JSON.parse(String(init?.body ?? "{}")) as { reqs: Array<{ id: string }> };
@@ -73,6 +82,8 @@ const { KanbanBoard } = await import("./KanbanBoard");
 
 const roots: Root[] = [];
 afterEach(() => {
+  checksRoute = null;
+  checksCalls.length = 0;
   for (const root of roots.splice(0)) flushSync(() => root.unmount());
   document.body.replaceChildren();
   localStorage.clear();
@@ -298,6 +309,7 @@ test("the lane row's head opens Stages; the pipeline actions are a page of the c
   expect(menuLabels(host).slice(1)).toEqual([
     ["Expand stages", false, null],
     ["Attach PR or issue to the pipeline…", false, null],
+    ["Checks", false, null],
     ["Pause", false, "The pipeline does not advance until you resume it."],
     ["Retry a stage", true, "Only while the pipeline waits on a stage for a decision"],
     ["Skip a stage", true, "Only while the pipeline waits on a stage for a decision"],
@@ -544,6 +556,33 @@ test("attempt tabs number the stage's own attempts, not the record's n", async (
   click(tabs[0]!);
   await tick();
   expect(readerIn(pane(host, "verify"))).toBe(idOf(verify1));
+});
+
+/* The pane shows the project setup of the attempt it shows, numbered as its
+   attempt tabs number it, and the tabs switch the failed setup for its retry. */
+test("a stage pane shows the setup of the attempt it shows; attempt tabs switch it", async () => {
+  const setup = (state: "failed" | "passed") => ({ command: ["sh", "scripts/setup.sh"], cwd: "web", hash: "a".repeat(64), state,
+    startedAt: iso(7300), completedAt: iso(7290), code: state === "passed" ? 0 : 7,
+    stdout: "Preparing dependencies", stderr: state === "failed" ? "Dependency unavailable" : "" });
+  const record = searchPipeline({
+    runs: searchPipeline().runs.map((run) => (run.stageId === "implement"
+      ? { ...run, attempts: [{ ...run.attempts[0]!, setup: setup("failed") }, { ...run.attempts[1]!, n: 4, setup: setup("passed") }] }
+      : run)),
+  } as Partial<Pipeline>);
+  const { host } = mount(record);
+  await tick();
+  click(card(host).querySelector("[data-open-stages]"));
+  await tick();
+  const results = () => [...pane(host, "implement")!.querySelectorAll<HTMLElement>("[data-stage-setup]")];
+  expect(results().map((result) => result.querySelector("summary")?.textContent)).toEqual(["Stage implement · attempt 2 · Project setup · Ready"]);
+  expect(results()[0]!.hasAttribute("open")).toBe(false);
+  click(pane(host, "implement")!.querySelector('[data-attempt="1"]'));
+  await tick();
+  expect(results().map((result) => result.querySelector("summary")?.textContent)).toEqual(["Stage implement · attempt 1 · Project setup · Failed · review output and retry stage"]);
+  for (const text of ["Working directory: web", "\"sh\" \"scripts/setup.sh\"", "Exit code: 7", "Preparing dependencies\nDependency unavailable"])
+    expect(results()[0]!.textContent).toContain(text);
+  /* A stage whose attempts ran no setup draws none. */
+  expect(pane(host, "verify")!.querySelector("[data-stage-setup]")).toBeNull();
 });
 
 test("a pane's actions offer retry and skip only for the stage the pipeline waits on", async () => {
@@ -1180,4 +1219,131 @@ test.each(["running", "passed", "failed", "needs_decision"] as const)("desktop s
   const reader = host.querySelector(`[data-kanban-reader="${idOf(verify2)}"]`);
   expect(reader).toBeTruthy();
   expect(reader!.closest('[data-stages-sheet]')).toBeNull();
+});
+
+test("stage memory follows the displayed attempt and stays absent for legacy attempts", async () => {
+  const pipeline = searchPipeline();
+  const attempts = pipeline.runs.find(run => run.stageId === "verify")!.attempts;
+  attempts[0]!.memoryCap = { limitBytes: 8 * 2 ** 30, requestedBytes: 12 * 2 ** 30, source: "stage", enforced: true, clamped: true };
+  attempts[1]!.memoryCap = { limitBytes: null, requestedBytes: null, source: "automatic", enforced: false, clamped: false };
+  const { host } = mount(pipeline);
+  await tick();
+  click(card(host).querySelector("[data-open-stages]"));
+  const note = () => pane(host, "verify")!.querySelector("[data-agent-memory-cap]")?.textContent;
+  expect(note()).toBe("Memory cap: containment is off or unavailable.");
+  click(pane(host, "verify")!.querySelector('[data-attempt="1"]'));
+  expect(note()).toContain("8");
+  expect(note()).toContain("12");
+  expect(pane(host, "review")!.querySelector("[data-agent-memory-cap]")).toBeNull();
+  click(pane(host, "verify")!.querySelector('[data-attempt="2"]'));
+  expect(note()).toBe("Memory cap: containment is off or unavailable.");
+});
+
+/* Where the lane's heavy checks run (docs/design/cloud-checks.md): the lane's
+   «Checks» row opens its choices over the same anchor, read from the route
+   the phone and the MCP tool use. */
+const settings = (value: Record<string, unknown>) => new Response(JSON.stringify(value), { status: 200, headers: { "content-type": "application/json" } });
+const checksPopover = () => document.querySelector<HTMLElement>("[data-pipeline-checks]");
+const choices = () => [...(checksPopover()?.querySelectorAll<HTMLElement>("[data-pipeline-checks-choice]") ?? [])].map((item) => [item.getAttribute("data-pipeline-checks-choice"), item.textContent, item.getAttribute("aria-checked")]);
+async function openChecks(host: HTMLElement) {
+  click(laneMenu(host));
+  click(menuItem(host, "Checks"));
+  await tick();
+  await tick();
+}
+
+test("the lane's Checks row opens the publishing stage's override and the value each inherited choice resolves to; a pick stays open and Escape returns to the ⋯", async () => {
+  let state: Record<string, unknown> = { project: "cloud", override: "local", stageOverride: "cloud", effective: "cloud" };
+  checksRoute = (call) => {
+    if (call.method === "POST") state = { project: "cloud", override: "local", stageOverride: null, effective: "local" };
+    return settings(state);
+  };
+  const { host } = mount(searchPipeline());
+  await tick();
+  await openChecks(host);
+  /* The menu gave way to the choices, read for the stage the lane stands on. */
+  expect(host.querySelector(".menu")).toBeNull();
+  expect(checksCalls[0]).toEqual({ url: "/api/pipelines/p-search/checks?stageId=verify", method: "GET", body: null });
+  expect(checksPopover()!.getAttribute("data-pipeline-checks-row")).toBe("ready");
+  /* The title stands once and the answer only as the checked choice: no «Checks | Cloud» block under it. */
+  expect(checksPopover()!.querySelector(".acct-now")).toBeNull();
+  expect(checksPopover()!.textContent!.match(/Checks/g)).toHaveLength(1);
+  expect([...checksPopover()!.querySelectorAll("[data-pipeline-checks-group] > .acct-lbl")].map((heading) => heading.textContent)).toEqual([expect.stringMatching(/^Stage .+/), "This pipeline", "Project default"]);
+  expect(choices()).toEqual([
+    ["stage:inherit", "Use pipeline choice (Local)", "false"], ["stage:cloud", "Cloud", "true"], ["stage:local", "Local", "false"],
+    ["lane:inherit", "Use project default (Cloud)", "false"], ["lane:cloud", "Cloud", "false"], ["lane:local", "Local", "true"],
+    ["project:cloud", "Cloud", "true"], ["project:local", "Local", "false"],
+  ]);
+  /* The answer moves focus to the stage's checked choice. */
+  expect(document.activeElement?.getAttribute("data-pipeline-checks-choice")).toBe("stage:cloud");
+  click(checksPopover()!.querySelector('[data-pipeline-checks-choice="stage:inherit"]'));
+  await tick();
+  await tick();
+  expect(checksCalls[1]).toEqual({ url: "/api/pipelines/p-search/checks", method: "POST", body: { scope: "stage", execution: null, stageId: "verify" } });
+  expect(checksPopover()!.querySelector('[data-pipeline-checks-choice="stage:inherit"]')?.getAttribute("aria-checked")).toBe("true");
+  /* A checked choice sends nothing. */
+  click(checksPopover()!.querySelector('[data-pipeline-checks-choice="stage:inherit"]'));
+  await tick();
+  expect(checksCalls).toHaveLength(2);
+  key(document.activeElement, "Escape");
+  await tick();
+  expect(checksPopover()).toBeNull();
+  same(document.activeElement, laneMenu(host));
+});
+
+test("a lane with no stage to publish offers only the lane and project choices", async () => {
+  checksRoute = () => settings({ project: "local", override: null, effective: "local" });
+  const { host } = mount(searchPipeline({ cursor: null } as Partial<Pipeline>));
+  await tick();
+  await openChecks(host);
+  expect(checksCalls[0]?.url).toBe("/api/pipelines/p-search/checks");
+  expect([...checksPopover()!.querySelectorAll("[data-pipeline-checks-group]")].map((group) => group.getAttribute("data-pipeline-checks-group"))).toEqual(["lane", "project"]);
+  expect(checksPopover()!.querySelector('[data-pipeline-checks-choice="lane:inherit"]')?.textContent).toBe("Use project default (Local)");
+});
+
+test("a pending, refused or malformed read shows no choice, Retry reads again, and load and save failures read apart", async () => {
+  let release: (response: Response) => void = () => {};
+  checksRoute = () => new Promise<Response>((resolve) => { release = resolve; });
+  const { host } = mount(searchPipeline());
+  await tick();
+  await openChecks(host);
+  const line = checksPopover()!.querySelector("[data-pipeline-checks-state]")!;
+  expect([checksPopover()!.getAttribute("data-pipeline-checks-row"), line.textContent, line.getAttribute("aria-busy")]).toEqual(["loading", "Loading…", "true"]);
+  expect(checksPopover()!.textContent!.match(/Checks/g)).toHaveLength(1);
+  expect(choices()).toEqual([]);
+  release(new Response("{}", { status: 500 }));
+  await tick();
+  await tick();
+  expect(checksPopover()!.getAttribute("data-pipeline-checks-row")).toBe("failed");
+  expect(checksPopover()!.querySelector('[data-pipeline-checks-error="load"]')?.textContent).toBe("Could not load the check settings");
+  expect(choices()).toEqual([]);
+  /* Retry is the one control, so it takes focus, and reads again. */
+  const retry = checksPopover()!.querySelector<HTMLElement>("[data-pipeline-checks-retry]")!;
+  same(document.activeElement, retry);
+  checksRoute = () => settings({ project: "cloud", override: null, stageOverride: null, effective: "cloud" });
+  click(retry);
+  await tick();
+  await tick();
+  expect(checksCalls).toHaveLength(2);
+  expect(checksPopover()!.getAttribute("data-pipeline-checks-row")).toBe("ready");
+  key(document.activeElement, "Escape");
+  await tick();
+
+  for (const body of [{ project: "cloud", effective: "cloud" }, { project: "toString", override: null, effective: "cloud" }]) {
+    checksRoute = () => settings(body);
+    await openChecks(host);
+    expect(checksPopover()!.getAttribute("data-pipeline-checks-row")).toBe("failed");
+    expect(choices()).toEqual([]);
+    key(document.activeElement, "Escape");
+    await tick();
+  }
+
+  checksRoute = (call) => (call.method === "POST" ? new Response("{}", { status: 409 }) : settings({ project: "cloud", override: null, stageOverride: null, effective: "cloud" }));
+  await openChecks(host);
+  click(checksPopover()!.querySelector('[data-pipeline-checks-choice="lane:local"]'));
+  await tick();
+  await tick();
+  expect(checksPopover()!.querySelector('[data-pipeline-checks-error="save"]')?.textContent).toBe("Could not save the check choice");
+  expect(checksPopover()!.querySelector('[data-pipeline-checks-error="load"]')).toBeNull();
+  expect(checksPopover()!.querySelector('[data-pipeline-checks-choice="lane:inherit"]')?.getAttribute("aria-checked")).toBe("true");
 });

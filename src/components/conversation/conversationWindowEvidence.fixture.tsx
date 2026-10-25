@@ -2,7 +2,6 @@
 
 import { TelegramFileConfirmation } from "@/components/telegram/TelegramFileConfirmation";
 import { StagePlaceholderPane } from "@/components/pipelines/StagePlaceholderPane";
-import { VerdictPopover } from "@/components/pipelines/VerdictPopover";
 import { MobilePipelineScreen } from "@/components/mobile/MobilePipelineScreen";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
 import type { StageSlot } from "@/components/scheme/layout";
@@ -10,9 +9,12 @@ import type { FileConfirmationView } from "@/lib/telegram/bot/fileConfirmationCo
 
 
 import { DeputyBlock } from "./DeputyBlock";
-import { StageStatusRow } from "@/components/pipelines/StageStatusRow";
-import { SLOT_ROW_H } from "@/components/scheme/layout";
-import { StageCompletedCard } from "@/components/pipelines/StageCompletedCard";
+import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
+import { StagesSheet } from "@/components/kanban/StagesSheet";
+import { summarizePipeline } from "@/components/kanban/pipelineSummary";
+import { ReaderPlacement } from "@/components/kanban/KanbanReaders";
+import { StageDrafts } from "@/components/kanban/stageDrafts";
+import type { PipelinePorts } from "@/components/kanban/pipelinePorts";
 import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
 
 /**
@@ -1876,13 +1878,26 @@ if (root && requested === "memory-cap") {
     source: "stage", clamped: !unenforced, enforced: !unenforced,
   } };
   const pipeline = { id: "memory-demo", task: "Scoped agent memory", project: "demo", state: "completed", stages: [stage],
-    runs: [{ stageId: "build", attempts: [attempt] }], cursor: null };
+    runs: [{ stageId: "build", attempts: [attempt] }], cursor: null } as unknown as Pipeline;
   const slot = { key: "memory-demo", pipeline, stage, attempt, index: 0, total: 1, presentation: "completed" } as unknown as StageSlot;
-  createRoot(root).render(<main className="min-h-dvh w-full overflow-y-auto bg-canvas p-3 text-primary"><div className="mx-auto flex max-w-2xl flex-col gap-3">
-    <div data-memory-surface="completed" className="h-[250px] shrink-0"><StageCompletedCard slot={slot} /></div>
-    <div data-memory-surface="placeholder" className="h-[350px] shrink-0"><StagePlaceholderPane slot={slot} interactive={false} /></div>
-    <div data-memory-surface="row" className="shrink-0" style={{ height: SLOT_ROW_H + 72 }}><StageStatusRow slot={slot} expanded={false} /></div>
-  </div></main>);
+  const summary = summarizePipeline(pipeline);
+  const ports: PipelinePorts = {
+    read: async () => ({ pipeline, stageDigests: {}, revision: "fixture" }),
+    patch: async () => ({ ok: true, pipeline }), refresh: () => {},
+  };
+  const noop = () => {};
+  const surface = params.get("surface") ?? "stages";
+  createRoot(root).render(<main className="kb min-h-dvh w-full overflow-y-auto bg-canvas p-3 text-primary">
+    {surface === "stages" ? <div data-memory-surface="stages" className="fixed inset-0"><StagesSheet
+      title={pipeline.task} summary={summary}
+      panes={[{ stage: pipeline.stages[0]!, folded: false, attempts: pipeline.runs[0]!.attempts, shown: pipeline.runs[0]!.attempts[0]!, file: null, readerKey: null }]}
+      flowsById={new Map()} initialFocus="build" windowReader={null} placement={new ReaderPlacement()}
+      drafts={new StageDrafts(() => ADMITTED_AT)} ports={ports} onFold={noop} onFoldMany={noop} onChooseAttempt={noop}
+      onStageMenu={noop} onOpenRecorded={noop} onLeaveWindow={noop} onClose={noop}
+    /></div> : surface === "placeholder"
+      ? <div data-memory-surface="placeholder" className="mx-auto h-[350px] max-w-2xl"><StagePlaceholderPane slot={slot} interactive={false} /></div>
+      : <div data-memory-surface="screen" className="mx-auto max-w-2xl"><PipelineBlock summary={summary} density="screen" nowMs={ADMITTED_AT} /></div>}
+  </main>);
 }
 else if (root && requested === "file-confirmation") mountFileConfirmation(root);
 else if (root && requested === "project-setup") {
@@ -1909,7 +1924,7 @@ else if (root && requested === "project-setup") {
     x: 0, y: 0, w: 720, h: 760 } as StageSlot;
   createRoot(root).render(<main data-setup-fixture data-setup-host={host} className="h-full min-h-0 min-w-0 bg-canvas text-primary">
     {host === "mobile" ? <MobilePipelineScreen pipeline={pipeline} files={[]} now={Date.parse("2026-10-23T10:01:00Z") / 1000} onOpenConversation={() => {}} />
-      : host === "verdict" ? <div className="p-4"><VerdictPopover pipeline={pipeline} stage={stage} attempt={attempts[1]!} onClose={() => {}} /></div>
+      : host === "stages" ? <div className="kb fixed inset-0"><SetupStagesSheet pipeline={pipeline} /></div>
       : <div className="h-[800px] max-w-3xl p-4"><StagePlaceholderPane slot={slot} interactive={false} /></div>}
   </main>);
 }
@@ -1929,6 +1944,25 @@ else if (root && requested === "delivery-stalled") {
   createRoot(root).render(<Fixture id={requested} />);
 }
 
+
+/** The board's stage sheet over the setup lane; its attempt chooser switches
+    the shown attempt as the board does. */
+function SetupStagesSheet({ pipeline }: { pipeline: Pipeline }) {
+  const attempts = pipeline.runs[0]!.attempts;
+  const [shown, setShown] = useState(attempts.at(-1)!.n);
+  const ports: PipelinePorts = {
+    read: async () => ({ pipeline, stageDigests: {}, revision: "fixture" }),
+    patch: async () => ({ ok: true, pipeline }), refresh: () => {},
+  };
+  const noop = () => {};
+  return <StagesSheet
+    title={pipeline.task} summary={summarizePipeline(pipeline)}
+    panes={[{ stage: pipeline.stages[0]!, folded: false, attempts, shown: attempts.find(attempt => attempt.n === shown)!, file: null, readerKey: null }]}
+    flowsById={new Map()} initialFocus="build" windowReader={null} placement={new ReaderPlacement()}
+    drafts={new StageDrafts(() => ADMITTED_AT)} ports={ports} onFold={noop} onFoldMany={noop} onChooseAttempt={(_stage, n) => setShown(n)}
+    onStageMenu={noop} onOpenRecorded={noop} onLeaveWindow={noop} onClose={noop}
+  />;
+}
 
 function InboxFixture() {
   const data = JSON.parse(params.get("batch")!) as { text: string; messages: Record<string, import("@/lib/runtime/messageOrigin").DeliveredMessageProvenance> };

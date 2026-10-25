@@ -1,3 +1,4 @@
+import { stateDir } from "@/lib/configDir";
 import { shortId } from "@/lib/shortIds";
 export { preparePipelineSetup } from "./setupRecipe";
 import { publicationFailurePhase } from "./publicationHistory";
@@ -1847,7 +1848,8 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       }
       if (pipeline.delivery && pipeline.delivery.epoch !== current.delivery.epoch) return { error: "delivery epoch changed; reload the owner before publishing" };
       const previous = current.delivery.operation;
-      if (pipeline.delivery?.operation?.state === "pending" && previous?.id !== pipeline.delivery.operation.id) {
+      if (pipeline.delivery?.operation?.state === "pending"
+        && (previous?.id !== pipeline.delivery.operation.id || previous.state !== "pending")) {
         return { error: `publisher ${current.id} at epoch ${current.delivery.epoch} has a newer reservation; reload before publishing` };
       }
       if (previous?.state === "running") return { waiting: pipelinePublicationInFlight(current) };
@@ -2217,6 +2219,8 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
      limit for git to send the pack, so it ends with its own verdict or with
      a named missing one instead of being killed (scripts/local-gate.ts). */
   const pushEnv = { ...pipelinePublicationHookEnv(), ...lessons, ...engineForgeWriteEnv(),
+    LLV_GATE_LANE_ID: pipeline.id, LLV_GATE_PUSH_HEAD: acceptedSha, LLV_GATE_STATE_DIR: stateDir(),
+    ...(pipeline.cursor?.stageId ? { LLV_GATE_STAGE_ID: pipeline.cursor.stageId } : {}),
     LLV_GATE_PUSH_DEADLINE: String(publicationHookDeadline(budget.ms, Date.now())) };
   const push = (await exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir, pushEnv, { timeoutMs: budget.ms }));
   if (push.code === null) return { ok: true, sha: acceptedSha, remote: "unreachable", uncertain: true, detail: "remote write was interrupted; reconcile its outcome" };
