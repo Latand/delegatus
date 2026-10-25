@@ -35,9 +35,11 @@ import { OfficialVoiceCompanionAdapter } from "@/lib/voiceCompanion/liveAdapter"
 import { getRuntimeBus } from "@/hooks/runtimeBus";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import type { Pipeline } from "@/lib/pipelines/types";
+import { attachVoiceOutput, openVoiceMicrophone, type VoiceMicrophone } from "@/lib/audio/voiceDevices";
 import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import type { FileEntry } from "@/lib/types";
+import { createChecksFixtureRoute, type ChecksFixtureMode } from "@/components/pipelines/pipelineChecksFixture";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
 
 /* `?synced=1` (docs/design/synced-task-card.md §8): the kanban scene's project is a linked one
@@ -181,6 +183,9 @@ const MENU_STATE = new URLSearchParams(location.search).get("menu-state");
 const VOICE_SCENE = new URLSearchParams(location.search).get("voice");
 const VOICE_LONG = new URLSearchParams(location.search).has("voice-long");
 const phoneVoice = { starts: [] as string[], projects: [] as Array<string | null>, closes: 0, sessionRequests: 0 };
+const VOICE_DEVICES = new URLSearchParams(location.search).has("dev");
+let microphone: VoiceMicrophone | null = null;
+let detachOutput: (() => void) | null = null;
 Object.assign(window, { phoneVoice });
 if (VOICE_SCENE === "sim" || VOICE_SCENE === "reads" || VOICE_SCENE === "history") {
   const uk = localStorage.getItem("llv_lang") === "uk";
@@ -191,11 +196,17 @@ if (VOICE_SCENE === "sim" || VOICE_SCENE === "reads" || VOICE_SCENE === "history
     });
     return {
       mode: simulated.mode,
-      start: (options) => { phoneVoice.starts.push(options.project); return simulated.start(options); },
+      start: async (options) => {
+        phoneVoice.starts.push(options.project);
+        /* `&dev=<state>` (docs/design/voice-device-picker.md): the driver stubs `navigator.mediaDevices`, and a start opens the
+           microphone through the product's own `openVoiceMicrophone` and gives an audio element to `attachVoiceOutput`, as a real call does. */
+        if (VOICE_DEVICES) { microphone = await openVoiceMicrophone({}); detachOutput = attachVoiceOutput(new Audio()); }
+        return simulated.start(options);
+      },
       setProject: async (project) => { phoneVoice.projects.push(project); },
       subscribe: (emit) => simulated.subscribe(emit),
       command: (command) => simulated.command(command),
-      close: () => { phoneVoice.closes += 1; return simulated.close(); },
+      close: () => { phoneVoice.closes += 1; microphone?.release(); microphone = null; detachOutput?.(); detachOutput = null; return simulated.close(); },
       ...(VOICE_SCENE === "reads" ? { transcript: async () => (await serverFetch("/evidence/voice-transcript")).json() } : {}),
       ...(VOICE_SCENE === "history" ? (() => {
         /* The requests went to the fixture's own running orchestrator, so its link opens a conversation the phone knows. */
@@ -245,9 +256,10 @@ const files: FileEntry[] = [
     activity: "live", proc: "running", pid: 4_401, mtime: now - 20,
     /* A real launch model, not a one-word one: the bar line has to hold
        `fable-5-1 · high` beside the state phrase and the account (#1795). */
-    model: "fable-5-1", effort: "high",
+    model: new URLSearchParams(location.search).get("model") || "fable-5-1", effort: "high",
     ...reviewerLineage,
     lastTurn: { startedAt: (now - 400) * 1_000, endedAt: null },
+    ...(new URLSearchParams(location.search).has("wake") ? { pendingWakeup: { fireAt: Date.now() + 12 * 60_000, reason: "check the rollout" } } : {}),
     ...(MENU_STATE === "limit" ? { rateLimit: { source: "account", accountId: "reserve-account-7", window: "session", resetAt: now + 40 * 60 } } : {}),
     ...(MENU_STATE === "held" ? { migration: { intentId: "intent-menu-held", trigger: "manual", phase: "waiting-turn", targetAccountId: "relief", heldDeliveries: 12, failure: null } } : {}),
     /* `?launch=1`: the running conversation waits on an answer, so the focus
@@ -543,6 +555,11 @@ const evidence = {
   pipelineAnswerDelayMs: 0,
 };
 Object.assign(window, { evidence });
+/* The lane ⋯ sheet's checks choice: «lane-decision» stands on «implement»,
+   whose own Cloud differs from the lane's Local; `?checks=` frames the read
+   and write failures. */
+const phoneChecks = createChecksFixtureRoute((new URLSearchParams(location.search).get("checks") ?? "ok") as ChecksFixtureMode, { lanes: { "lane-decision": "local" }, stages: { "lane-decision implement": "cloud" } });
+Object.assign(window, { phoneCheckPosts: phoneChecks.posts });
 
 /* No log stream in the fixture: the source fails at once, the way a Viewer
    behind a proxy that drops SSE does, and the bus falls back to the file poll
@@ -611,7 +628,16 @@ const TOOL_RUN = [
 ].join("\n");
 const FAST_TTS = new URLSearchParams(location.search).has("fast-tts");
 const FAST_TTS_FEED = JSON.stringify({ type: "assistant", timestamp: iso(10), message: { role: "assistant", content: [{ type: "text", text: "The first sentence should start speaking immediately. The next sentences should arrive while the first one plays. A single tap in the conversation header starts reading the answer. A second tap stops the voice immediately. Starting another answer cancels the previous read. Highlighting follows the sentence that is being spoken." }] } }) + "\n";
-const FEED = FAST_TTS ? FAST_TTS_FEED : TOOLCARD ? `${BANDS}${TOOL_RUN}\n` : BANDS;
+const MARKDOWN_LINKS = new URLSearchParams(location.search).has("markdown-links");
+const linkLabel = localStorage.getItem("llv_lang") === "uk"
+  ? "Перевірити результати останнього незалежного ревʼю перед публікацією змін"
+  : "Check the results of the latest independent review before publishing changes";
+const linkUrl = `https://example.invalid/${"unbroken".repeat(10)}`;
+const linkPath = `src/${"unbroken".repeat(10)}.tsx`;
+const MARKDOWN_LINKS_FEED = record(0, "assistant", [{ type: "text", text:
+  `[${linkLabel}](https://example.invalid/review)\n\n${linkUrl}\n\n[${linkUrl}](${linkUrl})\n\n[${linkPath}](~/project/${linkPath}:42)`,
+}]) + "\n";
+const FEED = MARKDOWN_LINKS ? MARKDOWN_LINKS_FEED : FAST_TTS ? FAST_TTS_FEED : TOOLCARD ? `${BANDS}${TOOL_RUN}\n` : BANDS;
 const CHROME_PINNED_TASK = {
   id: "task-pinned", project: PROJECT, status: "assigned", placement: "unplaced", board: "shown",
   text: "You are this project's orchestrator in Delegatus. Keep every lane owned, read the board before every decision, and report what changed to the operator in plain words. Never leave a lane without an owner.",
@@ -1867,6 +1893,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/tmux" && method === "POST") {
     evidence.runtimeRequests.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
     return json(STRUCTURED ? { ok: true, structured: true } : { ok: true, outcome: "pending", operationId: "reconfigure-evidence" });
+  }
+  if (url.pathname.startsWith("/api/pipelines/") && url.pathname.endsWith("/checks")) {
+    const answer = await phoneChecks.answer(decodeURIComponent(url.pathname.split("/")[3] ?? ""), method, url.searchParams, init?.body ? String(init.body) : null);
+    return json(answer.body, answer.status);
   }
   if (url.pathname.startsWith("/api/pipelines/") && method === "PATCH") {
     const id = decodeURIComponent(url.pathname.split("/").pop() ?? "");

@@ -160,10 +160,13 @@ alias the operator defined with `gh alias set` is not expanded.
   asks for a credential before any hook runs, which is why this is done in
   front of `git` and not in `pre-push`. A push the shim cannot start the helper
   for is refused. A git alias that stands for `push` is not expanded.
-- **The engine** (`src/lib/forge/autoMerge.ts`) merges and updates a branch
-  through `AutoMergePorts.write`: `forgeAppWriter` for a declared repository,
+- **The engine** (`src/lib/forge/autoMerge.ts`) merges through
+  `AutoMergePorts.write`: `forgeAppWriter` for a declared repository,
   the plain `gh` runner for any other. A refusal blocks the merge with the
-  refusal as its reason. The push that publishes a lane's branch
+  refusal as its reason. A behind or conflicting branch refreshes through an
+  owned pipeline that merges the base locally under the enforced machine
+  identity and publishes through the gate; the runner never calls GitHub
+  update-branch. The push that publishes a lane's branch
   (`src/lib/pipelines/git.ts`) and the push and `gh pr create` that finish a
   workflow (`src/lib/workflows/provision.ts`) run with `engineForgeWriteEnv()`,
   the same push rewrite and the same `gh` and `git` shims.
@@ -456,7 +459,8 @@ share one set of slots; `LLV_GATE_LOCK_DIR` overrides the directory. Stage start
 the head can start under sustained pressure, with two seconds between admissions.
 A test, a driver or any instance on a state directory of its own queues its
 stage starts in `<state>/cpu-gate`, never in the machine queue; a stage ticket
-nobody polls for a minute is passed over.
+nobody polls for a minute is passed over, and so is a command ticket whose
+owner the kernel cannot verify once it stops checking in.
 Queue waits are excluded from hook and command execution budgets. On Linux a
 gate then runs in its own scope in
 `delegatus-agents-work.slice` with a 300% CPU quota; without a reachable user
@@ -467,14 +471,18 @@ refuses with exit 69 unless `DELEGATUS_AGENT_CPU=off`
 (`LLV_OWNED_RUN_TIMEOUT_MS`, default fifteen minutes) and a kernel watchdog. A recorded caller start
 identity detects a hard-killed wrapper; detached descendants stay owned by the
 service. Surviving children fail the command before the manager reaps them.
-Linux requires a reachable user systemd manager. A stage agent in a signal
+When no user systemd manager is reachable (including a container with a
+read-only cgroup mount), Linux uses the identity-bound portable guardian and
+announces that fallback on stderr. It preserves private test state, the spawn
+ledger, bounded cleanup and the final identity check, but a descendant that
+detaches between guardian polls can escape. A stage agent in a signal
 domain gets the same service and limits: the service runs its command inside
 the agent's own namespaces. Only without a reachable manager does such a gate
 run in a leaf of the agent's scope, under the agent's memory cap, and it says
-so on stderr. macOS and Windows use an
+so on stderr. Portable runs use an
 independent identity-bound guardian with best-effort execution and one warning
-per owning run; a detached child can escape between guardian polls. The strong
-lifetime guarantee applies to Linux native containment, as recorded in
+per owning run; a detached child can escape between guardian polls. The stronger
+kernel lifetime guarantee applies only to Linux native containment, as recorded in
 `docs/verification/test-child-lifetime.md`.
 An existing `NODE_OPTIONS` is preserved. Production builds cap page-data
 workers at two to fit the gate's three-CPU quota. The Viewer build and its

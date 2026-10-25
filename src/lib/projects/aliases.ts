@@ -84,8 +84,8 @@ export function projectAliasKeys(project: string): string[] {
 }
 
 /** Resolve a batch against one alias snapshot without filesystem reads per row. */
-export function projectAliasResolver(): (project: string) => string {
-  const { aliases } = readSnapshot();
+export function projectAliasResolver(snapshot: ProjectAliasSnapshot = readSnapshot()): (project: string) => string {
+  const { aliases } = snapshot;
   return (project) => resolveAlias(project, aliases);
 }
 

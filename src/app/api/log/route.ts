@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import fs from "node:fs/promises";
 
 import { NextRequest, NextResponse } from "next/server";
@@ -30,7 +31,7 @@ const deletionSafetyDependencies: DeletionSafetyDependencies = {
  *    the client can walk backwards page by page to the file start. `bytes`
  *    asks for a larger page than a tail window; the server caps it.
  */
-export async function GET(
+async function workspaceGET(
   req: NextRequest,
 ): Promise<NextResponse<LogChunk | ApiError>> {
   const path = req.nextUrl.searchParams.get("path") ?? "";
@@ -79,7 +80,7 @@ export async function GET(
  * the CLI keeps writing into an unlinked inode and the entry resurrects in a
  * confusing half-alive state.
  */
-export async function DELETE(req: NextRequest): Promise<NextResponse<{ ok: true } | ApiError>> {
+async function workspaceDELETE(req: NextRequest): Promise<NextResponse<{ ok: true } | ApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
   const target = req.nextUrl.searchParams.get("path") ?? "";
@@ -102,3 +103,7 @@ export async function DELETE(req: NextRequest): Promise<NextResponse<{ ok: true 
   }
   return NextResponse.json({ ok: true });
 }
+
+export const GET = workspaceRoute("/api/log", workspaceGET);
+
+export const DELETE = workspaceRoute("/api/log", workspaceDELETE);

@@ -5,7 +5,7 @@ import { writeAuto, initialAuto } from "./selfUpdate/auto";
 import { writeDrain } from "./selfUpdate/drain";
 import { expect, test, spyOn } from "bun:test";
 import { loopProgressProbe } from "./agent/registryLockHolderFixture";
-import { checkStateDatabasesBeforeStores, createViewerStartupBarrier, startCurrentReleaseControllers } from "./viewerInstrumentation";
+import { checkStateDatabasesBeforeStores, createViewerStartupBarrier, registerViewerRuntime, settleInterruptedTransfers, startCurrentReleaseControllers } from "./viewerInstrumentation";
 
 test("retirement cannot checkpoint ahead of the real activation worker or accept its late result", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "activation-retirement-"));
@@ -129,4 +129,20 @@ test("a seat-channel startup failure leaves saved-answer delivery running", asyn
     loadPrototypeDelivery: async () => ({ startPrototypeDeliveryWorker: () => { started.push("answers"); } }),
   });
   expect(started).toEqual(["pipeline", "answers"]);
+});
+
+test("an install transfer that cannot be settled refuses activation before any launch or host is admitted", async () => {
+  await expect(settleInterruptedTransfers(async () => { throw new Error("the checkpoint copy is missing"); }))
+    .rejects.toThrow("activation refused: an interrupted install transfer could not be settled (the checkpoint copy is missing)");
+  await settleInterruptedTransfers(async () => []);
+  /* Awaited, and never caught, ahead of the registry, the operator capability,
+     the structured hosts and every controller that admits work. */
+  const source = registerViewerRuntime.toString();
+  const step = source.indexOf("settleInterruptedTransfers()");
+  expect(step).toBeGreaterThan(-1);
+  for (const later of ["prepareReadOnlySnapshot", "completeViewerRuntimeActivation(", "startCurrentReleaseControllers"]) {
+    const at = source.indexOf(later);
+    expect(at).toBeGreaterThan(step);
+  }
+  expect(source.slice(Math.max(0, step - 200), step + 80)).not.toMatch(/catch/);
 });

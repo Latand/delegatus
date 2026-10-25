@@ -9,24 +9,29 @@ import { captureProcessIdentity } from "./src/lib/processIdentity";
 import { spawn } from "node:child_process";
 import { setHeadlessSpawnForTests } from "./src/lib/runtime/agentSignalSandbox";
 
-// Each Linux test runner needs its own kernel-owned tree. A nested runner must
-// not share its parent's lifetime: a short-lived intermediate can detach a
-// descendant before any polling observer sees it. Re-enter the existing gate
-// supervisor before test modules load, preserving Bun's exact command line.
-const admitted = process.platform !== "linux" || (Number(process.env.LLV_OWNED_TEST_RUNNER_PID) === process.pid
-  && fs.readFileSync("/proc/self/cgroup", "utf8").split("\n").some(line => line === `0::${process.env.LLV_OWNED_TEST_RUN_CGROUP}`));
+// Each Linux test runner enters its own service when a manager is available.
+// A nested runner cannot reuse its parent's admission. Without a manager the
+// owned runner binds portable admission to the command PID and warns about
+// polling limits. Re-enter before modules load, preserving Bun's command line.
+const admitted = process.platform !== "linux"
+  || Number(process.env.LLV_PORTABLE_TEST_RUNNER_PID) === process.pid
+  || (Number(process.env.LLV_OWNED_TEST_RUNNER_PID) === process.pid
+    && fs.readFileSync("/proc/self/cgroup", "utf8").split("\n").some(line => line === `0::${process.env.LLV_OWNED_TEST_RUN_CGROUP}`));
 if (!admitted) {
   const argv = fs.readFileSync("/proc/self/cmdline", "utf8").split("\0").filter(Boolean);
   const runner = Bun.spawn([process.execPath, path.resolve(import.meta.dir, "scripts/owned-runner.ts"), ...argv], {
     env: { ...process.env, LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)) }, stdin: "inherit", stdout: "inherit", stderr: "inherit",
   });
   process.on("SIGTERM", () => runner.kill("SIGTERM"));
-  process.on("SIGINT", () => runner.kill("SIGTERM"));
+  process.on("SIGINT", () => runner.kill("SIGINT"));
   process.exit(await runner.exited);
 }
 
 // Bun preserves an ambient NODE_ENV. Pin the test runtime before JSX modules load.
 Object.assign(process.env, { NODE_ENV: "test" });
+
+// DOM nodes print as one line, so a failed element comparison stays a failure (#2182).
+await import("./src/test-helpers/domInspect");
 
 /*
  * One temp root per file repetition, removed after its children finish (#1957).
@@ -48,8 +53,11 @@ Object.assign(process.env, { NODE_ENV: "test" });
 // Keep newly generated guards in this run too.
 for (const key of Object.keys(process.env)) {
   if (/^GIT_(?:CONFIG(?:_|$)|DIR$|WORK_TREE$|COMMON_DIR$|INDEX_FILE$|OBJECT_DIRECTORY$|ALTERNATE_OBJECT_DIRECTORIES$|IMPLICIT_WORK_TREE$|GRAFT_FILE$|NO_REPLACE_OBJECTS$|REPLACE_REF_BASE$|PREFIX$|SHALLOW_FILE$)/.test(key)
-    || /^LLV_(?:AGENT_GIT_GUARD_DIR|STAGE_GIT_RECEIPT|STAGE_GIT_WORKTREE|GATE_CPU_PRIORITY_SOURCE)$/.test(key)) delete process.env[key];
+    || /^LLV_(?:AGENT_GIT_GUARD_DIR|STAGE_GIT_RECEIPT|STAGE_GIT_WORKTREE|GATE_CPU_PRIORITY_SOURCE|GATE_PUSH_HEAD|GATE_LANE_ID|GATE_STAGE_ID|GATE_CLOUD_CONFIG|GATE_STATE_DIR)$/.test(key)) delete process.env[key];
 }
+// Fixture repositories own their heads and settings. An enclosing publication's
+// Cloud endpoint and selectors must not reach them; Cloud tests opt in explicitly.
+process.env.LLV_GATE_EXECUTION = "local";
 process.env.GIT_CONFIG_NOSYSTEM = "1";
 
 /*

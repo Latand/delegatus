@@ -678,10 +678,11 @@ export function buildSchemeLayout(
     /* Settled work reserves ONE row (#658); everything still ahead — pending,
        active, or a parked decision — keeps the full card footprint. */
     const collapsedRow = stageRowCollapsible(plan.pipeline, stage, presentation);
-    const height = collapsedRow ? SLOT_ROW_H : SLOT_H;
+    const rowHeight = (row: SlotStage) => SLOT_ROW_H + ((row.attempt ?? latestAttempt(plan.pipeline, row.stage.id))?.memoryCap ? 72 : 0);
+    const height = collapsedRow ? rowHeight(slotStage) : SLOT_H;
     /* The badge sits on the seam the two adjacent surfaces share, so a mixed
        row/card pair keeps the arrow on the chain rather than under it. */
-    const previousHeight = previous && stageRowCollapsible(plan.pipeline, previous.stage, previous.presentation) ? SLOT_ROW_H : SLOT_H;
+    const previousHeight = previous && stageRowCollapsible(plan.pipeline, previous.stage, previous.presentation) ? rowHeight(previous) : SLOT_H;
     const slot: StageSlot = {
       key: stageSlotKey(plan.pipeline.id, stage.id),
       pipeline: plan.pipeline,

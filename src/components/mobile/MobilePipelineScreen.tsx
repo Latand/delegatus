@@ -1,8 +1,8 @@
 "use client";
 
-import { Boxes, Check, CircleX, Eye, FileDiff, GitMerge, Pause, Play, RotateCcw, SkipForward, Undo2 } from "lucide-react";
+import { Boxes, Check, CircleX, Eye, FileDiff, GitMerge, ListChecks, Pause, Play, RotateCcw, SkipForward, Undo2 } from "lucide-react";
 
-import { ChevronRight } from "@/components/icons";
+import { ChevronLeft, ChevronRight } from "@/components/icons";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 
 import { useLocale } from "@/lib/i18n";
@@ -34,6 +34,7 @@ import {
   type StageNavTarget,
 } from "../pipelines/pipelineModel";
 import { PipelineBlock, PipelineStateLine } from "../pipelines/PipelineBlock";
+import { checkChoiceGroups, checkRowValue, publishingStage, usePipelineChecks, type CheckTerms } from "../pipelines/PipelineCheckSettings";
 import { blockAgeSeconds, type PipelineAnswer } from "../pipelines/pipelineBlockModel";
 import { StagePlaceholderPane } from "../pipelines/StagePlaceholderPane";
 import type { StageSlot } from "../scheme/layout";
@@ -233,6 +234,9 @@ const ACTION_ICON = {
      the lane's agents. */
   archive: CircleX,
 } as const;
+
+/** The phone names a lane «lane» (Close lane), so its checks face does too. */
+const PHONE_CHECK_TERMS: CheckTerms = { laneHeading: "mobile2.pipeline.checksLane", stageInherit: "mobile2.pipeline.checksStageInherit" };
 
 /** The board's pipeline answers on the phone's receipt: the desktop's words,
     its Retry or Check again as the receipt's action, a refusal in danger. */
@@ -476,10 +480,14 @@ export function MobilePipelineScreen({
   useSheetSelection("stage", configStage !== null);
   /* The ⋯ sheet opens on the lane's own actions; its «Board menu» row turns
      it into the board's menu, and closing it resets the face. */
-  const [menuFace, setMenuFace] = useState<"pipeline" | "board">("pipeline");
+  const [menuFace, setMenuFace] = useState<"pipeline" | "board" | "checks">("pipeline");
   useEffect(() => {
     if (navState.sheet !== "menu") setMenuFace("pipeline");
   }, [navState.sheet]);
+  /* Where the lane's checks run, read each time the ⋯ sheet opens: its
+     «Checks» row opens the same choices the board's ⋯ menu offers. */
+  const checkStage = publishingStage(pipeline);
+  const checks = usePipelineChecks(pipeline.id, checkStage, navState.sheet === "menu");
 
   const held = lane.held(pipeline);
   const acting = lane.acting(pipeline);
@@ -551,12 +559,61 @@ export function MobilePipelineScreen({
             />
             <MobileSheetDivider />
             <MobileSheetRow
+              icon={<ListChecks className="h-[18px] w-[18px]" aria-hidden />}
+              label={t("pipelineStrip.checks")}
+              ariaLabel={t("pipelineStrip.checksAria", { value: checkRowValue(t, checks.read) })}
+              disabled={checks.read.kind === "loading"}
+              trailing={<>
+                <span className={`text-caption font-semibold ${checks.read.kind === "failed" ? "text-accent" : "text-muted"}`}>{checkRowValue(t, checks.read)}</span>
+                {checks.read.kind === "ready" ? <ChevronRight className="h-4 w-4" aria-hidden /> : null}
+              </>}
+              onSelect={() => {
+                if (checks.read.kind === "failed") checks.reload();
+                else if (checks.read.kind === "ready") setMenuFace("checks");
+              }}
+              attrs={{ "data-mobile2-menu-row": "checks", "data-pipeline-checks-row": checks.read.kind }}
+            />
+            {checks.read.kind === "failed" ? <p role="alert" data-pipeline-checks-error="load" className="px-4 pb-1 text-label font-semibold text-danger">{t("pipelineStrip.checksLoadFailed")}</p> : null}
+            <MobileSheetRow
               icon={<Boxes className="h-[18px] w-[18px]" aria-hidden />}
               label={t("mobile2.pipeline.boardMenu")}
               trailing={<ChevronRight className="h-4 w-4" aria-hidden />}
               onSelect={() => setMenuFace("board")}
               attrs={{ "data-mobile2-menu-row": "board" }}
             />
+          </div>
+        </MobileSheet>
+      );
+    }
+    if (name === "menu" && menuFace === "checks") {
+      return (
+        <MobileSheet name="menu" title={t("pipelineStrip.checks")} onClose={close}>
+          <div role="menu" aria-label={t("pipelineStrip.checks")} className="flex flex-col" data-mobile2-pipeline-checks={pipeline.id}>
+            <MobileSheetRow
+              icon={<ChevronLeft className="h-[18px] w-[18px]" aria-hidden />}
+              label={t("mobile2.pipeline.checksBack")}
+              onSelect={() => setMenuFace("pipeline")}
+              attrs={{ "data-mobile2-menu-row": "back", "data-pipeline-checks-back": "" }}
+            />
+            {checks.read.kind === "ready" ? checkChoiceGroups(t, PHONE_CHECK_TERMS, checks.read.settings, checkStage ? names.get(checkStage) ?? checkStage : null).map((group) => (
+              <div key={group.scope} role="group" aria-labelledby={`phone-checks-${pipeline.id}-${group.scope}`} data-pipeline-checks-group={group.scope}>
+                <MobileSheetDivider />
+                <p id={`phone-checks-${pipeline.id}-${group.scope}`} className="truncate px-4 pb-0.5 pt-1.5 text-label font-semibold text-secondary">{group.heading}</p>
+                {group.choices.map((choice) => (
+                  <MobileSheetRow
+                    key={choice.key}
+                    label={choice.label}
+                    checked={choice.checked}
+                    disabled={checks.saving}
+                    trailing={choice.checked ? <Check className="h-4 w-4 text-accent" aria-hidden /> : null}
+                    onSelect={() => { if (!choice.checked) void checks.save(group.scope, choice.execution); }}
+                    attrs={{ "data-pipeline-checks-choice": `${group.scope}:${choice.key}` }}
+                  />
+                ))}
+              </div>
+            )) : null}
+            {checks.read.kind === "failed" ? <p role="alert" data-pipeline-checks-error="load" className="px-4 py-1 text-label font-semibold text-danger">{t("pipelineStrip.checksLoadFailed")}</p> : null}
+            {checks.saveFailed ? <p role="alert" data-pipeline-checks-error="save" className="px-4 py-1 text-label font-semibold text-danger">{t("pipelineStrip.checksSaveFailed")}</p> : null}
           </div>
         </MobileSheet>
       );
