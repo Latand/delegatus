@@ -258,6 +258,7 @@ const files: FileEntry[] = [
     model: new URLSearchParams(location.search).get("model") || "fable-5-1", effort: "high",
     ...reviewerLineage,
     lastTurn: { startedAt: (now - 400) * 1_000, endedAt: null },
+    ...(new URLSearchParams(location.search).has("wake") ? { pendingWakeup: { fireAt: Date.now() + 12 * 60_000, reason: "check the rollout" } } : {}),
     ...(MENU_STATE === "limit" ? { rateLimit: { source: "account", accountId: "reserve-account-7", window: "session", resetAt: now + 40 * 60 } } : {}),
     ...(MENU_STATE === "held" ? { migration: { intentId: "intent-menu-held", trigger: "manual", phase: "waiting-turn", targetAccountId: "relief", heldDeliveries: 12, failure: null } } : {}),
     /* `?launch=1`: the running conversation waits on an answer, so the focus

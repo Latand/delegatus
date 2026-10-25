@@ -224,11 +224,11 @@ test("the bar carries the title on one line and a meta line under it, with `stag
   await settle();
 
   expect(barTitle()).toBe("Rebuild the board status projection");
-  /* The state phrase leads the meta line and never truncates: it is the one
-     thing on the line that must survive any width (2026-08 findings 3 and 4). */
+  /* The state phrase leads the meta line and is the one thing on it that survives any width, its
+     leading word first (2026-08 findings 3 and 4). */
   const state = dom.document.querySelector("[data-mobile2-chat-state]") as unknown as HTMLElement;
-  expect(state.className).toContain("shrink-0");
-  expect(state.className).toContain("whitespace-nowrap");
+  /* The state phrase is the last cell to yield: it ends in an ellipsis rather than leave the line. */
+  expect(state.className).toContain("truncate");
   expect(state.className).toContain("text-success");
   /* The model and its reasoning tier are ONE reading (#1795); on a line too narrow they end in an
      ellipsis, so the line's edge never slices a word.
@@ -240,6 +240,9 @@ test("the bar carries the title on one line and a meta line under it, with `stag
   expect(model.className).toContain("min-w-0");
   expect(model.className).toContain("truncate");
   expect(model.className).not.toContain("shrink-0");
+  /* The identity is one group the line wraps out whole when it has no room for its floor. */
+  expect(model.parentElement!.hasAttribute("data-mobile2-chat-identity")).toBe(true);
+  expect(state.parentElement!.className).toContain("flex-wrap");
   expect(state.parentElement!.querySelector("[data-mobile2-chat-account]")).toBeNull();
   const accountCell = dom.document.querySelector("[data-mobile2-chat-account]") as unknown as HTMLElement;
   /* Beside the title, which is the elastic cell there. */

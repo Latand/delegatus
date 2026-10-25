@@ -1938,6 +1938,7 @@ const REVIEW_ROW_PREFIX = translate("en", "mobile2.chat.reviewOf", { title: "" }
 /** What the bar's meta line actually says, cell by cell, and whether any cell
     is showing less than its text — the line the account was crowding out. */
 const headerReading = (page: Page) => page.evaluate(() => {
+  const line = document.querySelector("[data-mobile2-chat-state]")?.parentElement ?? null;
   const cell = (selector: string) => {
     const element = document.querySelector(selector);
     if (!element) return null;
@@ -1948,9 +1949,10 @@ const headerReading = (page: Page) => page.evaluate(() => {
       /* Chromium rounds a truncating box down by up to a pixel. */
       cut: element.scrollWidth > element.clientWidth + 1,
       ellipsis: getComputedStyle(element).textOverflow === "ellipsis" && getComputedStyle(element).overflow === "hidden",
+      /* A cell the line wrapped out of its one visible row is in the DOM and not drawn. */
+      drawn: line ? box.top >= line.getBoundingClientRect().top - 0.5 && box.bottom <= line.getBoundingClientRect().bottom + 0.5 : false,
     };
   };
-  const line = document.querySelector("[data-mobile2-chat-state]")?.parentElement ?? null;
   return {
     line: line ? { width: Math.round(line.getBoundingClientRect().width * 10) / 10, text: line.textContent ?? "" } : null,
     state: cell("[data-mobile2-chat-state]"),
@@ -2018,6 +2020,7 @@ async function sheetSurface(
   check("the header names the state, the model with its tier, and the account", Boolean(header.state && header.model && header.account));
   check("the state phrase is whole", header.state?.cut === false);
   check("the model and its tier are whole or end in an ellipsis", header.model?.cut === false || header.model?.ellipsis === true);
+  check("the model and its tier are drawn on the line", header.model?.drawn === true);
   check("the account the conversation runs on is the one it names", (header.account?.text ?? "").includes(account));
   /* An ordinary account id has to be READABLE, not merely present in the DOM:
      `@ spare` rendered as `@ s…` and the first evidence pass called that a pass
@@ -2318,7 +2321,7 @@ browserTest("#1846: a pick on the phone names the next account whole on the titl
           if (parts.runs?.shown && parts.runs.cut) fail(`the running account shows cut: ${JSON.stringify(parts.runs)}`);
           if (account.length <= 8 && !parts.runs?.shown) fail(`short ids both fit: ${JSON.stringify(parts.runs)}`);
           /* The model gives way before anything else on the line and ends in an ellipsis; the line's edge never slices it. */
-          if (after.model?.cut && after.model.ellipsis !== true) fail(`the model and its tier are whole or end in an ellipsis: ${JSON.stringify(after.model)}`);
+          if (!after.model || (after.model.cut && after.model.ellipsis !== true)) fail(`the model and its tier are whole or end in an ellipsis: ${JSON.stringify(after.model)}`);
           if (JSON.stringify(sent.reconfigures) !== JSON.stringify([next]) || sent.selects !== 0) fail(`requests ${JSON.stringify(sent)}`);
           if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
           await page.close();
@@ -12879,8 +12882,14 @@ describe("phone composer tools row", () => {
 
 /*
  * The phone bar's meta line never cuts a word without an ellipsis (seat finding from the 1.16.0 critique:
- * «● done · 30m ago · ✳ Opus 5.5 · h»). At 360, 390 and 416 px, with the launch model and with a long one,
- * every cell of the line is either whole inside the line or, for the model cell, ends in an ellipsis:
+ * «● done · 30m ago · ✳ Opus 5.5 · h»). At 360, 375, 390, 403 and 416 px, in en and uk, in the running, question,
+ * done (no effort), returned (with effort), held and limit states, with the launch model and a long one, what the
+ * line DRAWS is measured from the text:
+ *
+ *   - the identity (separator, engine mark, model) is whole, or its model ends in a drawn ellipsis with room for a
+ *     readable head, or the whole group is out of the line together;
+ *   - the state phrase is whole, or ends in an ellipsis after its leading word, and then the identity is gone;
+ *   - nothing else on the line sticks out of it.
  *
  *   LLV_SWIPE_BROWSER_TEST=1 LLV_META_LINE_SHOTS=<dir outside the repo> bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "meta line"
  */
@@ -12892,46 +12901,100 @@ browserTest("the phone bar's meta line never cuts a word without an ellipsis", a
   const browser = await launchChromium();
   const failures: string[] = [];
   const results: unknown[] = [];
+  const LONG = "claude-opus-5-5-preview-extended-context-2026";
+  const states = [
+    { name: "running", query: "account=spare", hash: "conversation_running", models: ["opus-5-5", LONG] },
+    { name: "question", query: "account=spare&launch=1", hash: "conversation_running", models: ["opus-5-5", LONG] },
+    { name: "done", query: "account=spare", hash: "conversation_done-2", models: [""] },
+    { name: "wake", query: "account=spare&wake=1", hash: "conversation_running", models: ["opus-5-5"] },
+    { name: "returned", query: "account=spare&queue-recovery=1", hash: "conversation_running", models: ["opus-5-5"] },
+    { name: "held", query: "account=spare&menu-state=held", hash: "conversation_running", models: ["opus-5-5"] },
+    { name: "limit", query: "account=spare&menu-state=limit", hash: "conversation_running", models: ["opus-5-5"] },
+  ];
   try {
-    for (const width of [360, 390, 416]) {
-      for (const model of ["opus-5-5", "claude-opus-5-5-preview-extended-context-2026"]) {
+    for (const locale of ["en", "uk"] as const) {
+      for (const width of [360, 375, 390, 403, 416]) {
         const context = await browser.newContext({ viewport: { width, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: "dark" });
         try {
-          const page = await context.newPage();
-          await page.goto(`${base}/?account=spare&model=${model}#c=conversation_running`);
-          await page.waitForSelector("[data-mobile2-chat-model]", { timeout: 20_000 });
-          await pause(page, 600);
-          const reading = await page.evaluate(() => {
-            const modelCell = document.querySelector("[data-mobile2-chat-model]") as HTMLElement;
-            const line = modelCell.parentElement!;
-            const lineBox = line.getBoundingClientRect();
-            const cells = [...line.children].map((child) => {
-              const box = child.getBoundingClientRect();
-              return { text: child.textContent ?? "", left: box.left, right: box.right, width: box.width };
-            }).filter((cell) => cell.width > 0);
-            const modelBox = modelCell.getBoundingClientRect();
-            const range = document.createRange();
-            range.selectNodeContents(modelCell);
-            const style = getComputedStyle(modelCell);
-            const stateCell = document.querySelector("[data-mobile2-chat-state]") as HTMLElement;
-            return {
-              line: { left: lineBox.left, right: lineBox.right },
-              cells,
-              model: { text: modelCell.textContent ?? "", width: modelBox.width, need: range.getBoundingClientRect().width, textOverflow: style.textOverflow, overflow: style.overflow },
-              state: { cut: stateCell.scrollWidth > stateCell.clientWidth + 1 },
-            };
-          });
-          const key = `${width}-${model.length > 12 ? "long" : "short"}`;
-          results.push({ key, reading });
-          const fail = (what: string) => failures.push(`${key}: ${what}`);
-          for (const cell of reading.cells) {
-            if (cell.right > reading.line.right + 0.5 || cell.left < reading.line.left - 0.5) fail(`a cell sticks out of the line and is sliced by it: ${JSON.stringify(cell)}`);
+          await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+          for (const state of states) {
+            for (const model of state.models) {
+              const page = await context.newPage();
+              try {
+                await page.goto(`${base}/?${state.query}${model ? `&model=${model}` : ""}#c=${state.hash}`);
+                await page.waitForSelector("[data-mobile2-chat-state]", { timeout: 20_000 });
+                await pause(page, 500);
+                const reading = await page.evaluate(() => {
+                  const stateCell = document.querySelector("[data-mobile2-chat-state]") as HTMLElement;
+                  const line = stateCell.parentElement!;
+                  const lineBox = line.getBoundingClientRect();
+                  const inside = (box: DOMRect) => box.width > 0 && box.top >= lineBox.top - 0.5 && box.bottom <= lineBox.bottom + 0.5;
+                  const outside = (box: DOMRect) => box.top >= lineBox.bottom - 0.5;
+                  /** The width a head of the text takes in this cell's own font, with the ellipsis. */
+                  const headWidth = (cell: HTMLElement, head: string) => {
+                    const probe = document.createElement("span");
+                    const style = getComputedStyle(cell);
+                    Object.assign(probe.style, { position: "absolute", visibility: "hidden", whiteSpace: "nowrap", font: style.font, letterSpacing: style.letterSpacing });
+                    probe.textContent = `${head}\u2026`;
+                    line.appendChild(probe);
+                    const width = probe.getBoundingClientRect().width;
+                    probe.remove();
+                    return width;
+                  };
+                  const cut = (cell: HTMLElement) => cell.scrollWidth > cell.clientWidth + 1;
+                  const ellipsis = (cell: HTMLElement) => getComputedStyle(cell).textOverflow === "ellipsis" && getComputedStyle(cell).overflow === "hidden";
+                  const headOf = (text: string) => {
+                    const word = text.trim().split(/\s+/)[0] ?? "";
+                    return word.slice(0, 4);
+                  };
+                  const modelCell = line.querySelector("[data-mobile2-chat-model]") as HTMLElement | null;
+                  /* The line's own child that holds the model: the group, or the model cell itself. */
+                  const identity = modelCell ? ([...line.children].find((child) => child.contains(modelCell)) as HTMLElement) : null;
+                  const identityBox = identity?.getBoundingClientRect() ?? null;
+                  const children = [...line.children].map((child) => {
+                    const box = child.getBoundingClientRect();
+                    return { text: child.textContent ?? "", inside: inside(box), outside: outside(box), sticksOut: box.right > lineBox.right + 0.5 || box.left < lineBox.left - 0.5 };
+                  });
+                  /* The row holds the line and the pending self-wake chip, which the line's clip never touches. */
+                  const row = line.parentElement!;
+                  const rowBox = row.getBoundingClientRect();
+                  const rowCells = [...row.children].map((child) => {
+                    const box = child.getBoundingClientRect();
+                    return { text: child.textContent ?? "", sliced: box.right > rowBox.right + 0.5 || box.left < rowBox.left - 0.5 || box.top < rowBox.top - 0.5 || box.bottom > rowBox.bottom + 0.5 };
+                  });
+                  return {
+                    rowCells,
+                    chip: row.querySelector("[data-wakeup]") !== null,
+                    line: { width: lineBox.width },
+                    state: { text: stateCell.textContent ?? "", cut: cut(stateCell), ellipsis: ellipsis(stateCell), width: stateCell.clientWidth, head: headWidth(stateCell, headOf(stateCell.textContent ?? "")), inside: inside(stateCell.getBoundingClientRect()) },
+                    identity: identity && identityBox ? { drawn: inside(identityBox), gone: outside(identityBox) } : null,
+                    model: modelCell ? { text: modelCell.textContent ?? "", cut: cut(modelCell), ellipsis: ellipsis(modelCell), width: modelCell.clientWidth, head: headWidth(modelCell, headOf(modelCell.textContent ?? "")) } : null,
+                    children,
+                  };
+                });
+                const key = `${state.name}-${locale}-${width}${model ? `-${model.length > 12 ? "long" : "short"}` : ""}`;
+                results.push({ key, reading });
+                const fail = (what: string) => failures.push(`${key}: ${what}`);
+                if (state.name === "wake" && !reading.chip) fail("the pending self-wake chip is not on the row");
+                for (const cell of reading.rowCells) if (cell.sliced) fail(`a cell of the row is sliced by it: ${JSON.stringify(cell)}`);
+                if (!reading.state.inside) fail(`the state phrase is not on the line: ${JSON.stringify(reading.state)}`);
+                if (reading.state.cut && !(reading.state.ellipsis && reading.state.width >= reading.state.head - 0.5)) fail(`the state phrase is cut without an ellipsis after its leading word: ${JSON.stringify(reading.state)}`);
+                for (const child of reading.children) {
+                  if (child.inside ? child.sticksOut : !child.outside) fail(`a cell is sliced by the line: ${JSON.stringify(child)}`);
+                }
+                if (reading.identity) {
+                  if (!reading.identity.drawn && !reading.identity.gone) fail(`the identity is partly out of the line: ${JSON.stringify(reading.identity)}`);
+                  if (reading.identity.drawn && reading.model) {
+                    if (reading.model.cut && !(reading.model.ellipsis && reading.model.width >= reading.model.head - 0.5)) fail(`the model is cut without room for a head and an ellipsis: ${JSON.stringify(reading.model)}`);
+                    if (reading.state.cut) fail("the identity is drawn beside a state phrase that has to be cut");
+                  }
+                } else fail("no identity on the line");
+                if (shots) await page.locator("[data-mobile2-chat-title]").first().screenshot({ path: path.join(shots, `${label}-${key}.png`) });
+              } finally {
+                await page.close();
+              }
+            }
           }
-          const cutModel = reading.model.need > reading.model.width + 0.5;
-          if (cutModel && !(reading.model.textOverflow === "ellipsis" && reading.model.overflow === "hidden")) fail(`the model is cut without an ellipsis: ${JSON.stringify(reading.model)}`);
-          if (reading.state.cut) fail("the state phrase is cut");
-          if (shots) await page.locator("[data-mobile2-chat-title]").first().screenshot({ path: path.join(shots, `${label}-${key}.png`) });
-          await page.close();
         } finally {
           await context.close();
         }
@@ -12943,4 +13006,4 @@ browserTest("the phone bar's meta line never cuts a word without an ellipsis", a
   }
   if (shots) fs.writeFileSync(path.join(shots, `${label}-readings.json`), `${JSON.stringify({ results, failures }, null, 2)}\n`);
   expect(failures).toEqual([]);
-}, 300_000);
+}, 1_200_000);
