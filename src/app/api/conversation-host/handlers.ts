@@ -1,3 +1,4 @@
+import { dispatchConversationMessage } from "@/lib/conversation/messageDispatch";
 import { prepareMessageFiles } from "@/lib/longMessageFile";
 import type { MessageTextAttachment } from "@/lib/messageTextAttachment";
 /**
@@ -25,7 +26,8 @@ import type { MessageTextAttachment } from "@/lib/messageTextAttachment";
  */
 import { NextRequest, NextResponse } from "next/server";
 
-import type { DeliveryOutcome } from "@/lib/delivery";
+import type { ConversationMessage, DeliveryOutcome } from "@/lib/delivery";
+import type { StructuredMessageRequest } from "@/lib/runtime/structuredMessageDelivery";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
 import type { AccountChoiceActor } from "@/lib/accounts/accountOverrides";
 import { callerConversationId, directOperatorActivityAuthority, operatorBrowserRequest } from "@/lib/agent/operatorAuthority";
@@ -604,31 +606,22 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
   };
   const attachmentField = () => (filePaths.length ? { filePaths, ...(textAttachment ? { textAttachment } : {}) } : {});
 
-  if (structuredHostsEnabled()) {
+  const structuredEnabled = structuredHostsEnabled();
+  if (structuredEnabled) {
     const revoked = actorRejection(); if (revoked) return revoked;
-    const structured = await dependencies.enqueueStructuredMessage({
-      path: filePath,
-      ...(conversationId ? { conversationId } : {}),
-      ...(typeof body.clientMessageId === "string" ? { clientMessageId: body.clientMessageId.slice(0, 128) } : {}),
-      // Only admission's authenticated durable send can choose a relay replay
-      // operation; caller-supplied operation IDs grant no such authority.
-      ...(relay?.operationId ? { operationId: relay.operationId } : {}),
-      text: payloadText.trim(),
-      ...(policy ? { policy } : {}),
-      images,
-      ...(origin ? { origin } : {}),
-    });
-    if (structured) {
-      recordDeliveryIngress(structured.operationId, ingressAt);
-      await releaseAttachments(structuredAttachmentOutcome(structured));
-      if (structured.ok) settleMessageAuthor(authorClaim);
-      const { status, ...response } = structured.ok ? { ...structured, status: 200 } : structured;
-      return NextResponse.json({ ...response, ...attachmentField() }, { status });
-    }
   }
-
-  const revoked = actorRejection(); if (revoked) return revoked;
-  const outcome = await dependencies.deliverConversationMessage({
+  const selected = await dispatchConversationMessage({
+    path: filePath,
+    ...(conversationId ? { conversationId } : {}),
+    ...(typeof body.clientMessageId === "string" ? { clientMessageId: body.clientMessageId.slice(0, 128) } : {}),
+    // Only admission's authenticated durable send can choose a relay replay
+    // operation; caller-supplied operation IDs grant no such authority.
+    ...(relay?.operationId ? { operationId: relay.operationId } : {}),
+    text: payloadText.trim(),
+    ...(policy ? { policy } : {}),
+    images,
+    ...(origin ? { origin } : {}),
+  } satisfies StructuredMessageRequest, {
     pid: hasPid ? pid : null,
     path: filePath,
     ...(conversationId ? { conversationId } : {}),
@@ -642,7 +635,23 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
     ...(typeof body.model === "string" ? { resumeModel: body.model } : {}),
     ...(typeof body.effort === "string" ? { resumeEffort: body.effort } : {}),
     ...(typeof body.fast === "boolean" ? { resumeFast: body.fast } : {}),
+  } satisfies ConversationMessage, {
+    structured: request => structuredEnabled ? dependencies.enqueueStructuredMessage(request) : Promise.resolve(null),
+    legacy: async (request): Promise<DeliveryOutcome | NextResponse<ApiError>> => {
+      const revoked = actorRejection();
+      return revoked ?? dependencies.deliverConversationMessage(request);
+    },
   });
+  if (selected.transport === "structured") {
+    const structured = selected.result;
+    recordDeliveryIngress(structured.operationId, ingressAt);
+    await releaseAttachments(structuredAttachmentOutcome(structured));
+    if (structured.ok) settleMessageAuthor(authorClaim);
+    const { status, ...response } = structured.ok ? { ...structured, status: 200 } : structured;
+    return NextResponse.json({ ...response, ...attachmentField() }, { status });
+  }
+  const outcome = selected.result;
+  if (outcome instanceof NextResponse) return outcome;
   recordDeliveryIngress(outcome.operationId, ingressAt);
   /* `started` actuation is the uncertain case the image path also keeps: the
      agent may already hold the message, so its attachments stay readable. */

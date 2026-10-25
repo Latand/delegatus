@@ -181,3 +181,35 @@ test("a reference reaches every owner bound to its conversation, path or key, an
   expect(index.names({ conversationId: "conversation_elsewhere", artifactPath: "/sessions/continuity.jsonl" })).toBe(true);
   expect(index.names({ conversationId: "conversation_elsewhere", sessionKey: { engine: "codex", sessionId: "earlier" } })).toBe(true);
 });
+
+
+test("claim owners retain legacy pid/start equality across boot metadata", () => {
+  for (const startIdentity of [null, START]) {
+    for (const bootEpoch of [undefined, null, "boot-current", "boot-earlier"]) {
+      const entry = structured(42, { status: "dead",
+        claimOwner: `structured-host:${JSON.stringify({ pid: 42, startIdentity, bootEpoch })}` });
+      entry.structuredHost!.process = { pid: 42, startIdentity, bootEpoch };
+      expect(entryOwners(entry, probe(true)).owners.map((owner) => owner.role)).toEqual(["host"]);
+      entry.claimOwner = claimOwner(42, "other");
+      expect(entryOwners(entry, probe(true)).owners.map((owner) => owner.role)).toEqual(["host", "setup"]);
+      entry.claimOwner = claimOwner(43, startIdentity);
+      expect(entryOwners(entry, probe(true)).owners.map((owner) => owner.role)).toEqual(["host", "setup"]);
+    }
+  }
+});
+
+
+test("receipt custody retains legacy equality when boot metadata disagrees", () => {
+  for (const startIdentity of [null, START]) {
+    for (const bootEpoch of [undefined, null, "boot-current", "boot-earlier"]) {
+      const entry = structured(42);
+      entry.structuredHost!.process = { pid: 42, startIdentity, bootEpoch: "boot-current" };
+      const launched = receipt({ state: "completed", verifiedHost: {
+        agent: { pid: 42, startIdentity, bootEpoch },
+      } as never });
+      const census = registryOwners(registry({ entries: { "codex:session": entry }, receipts: { launch: launched } }), [], probe(true));
+      expect(census.owners).toHaveLength(1);
+      expect(census.owners[0]!.custody).toContain("conversation_host");
+    }
+  }
+});
