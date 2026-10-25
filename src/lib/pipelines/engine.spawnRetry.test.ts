@@ -40,7 +40,7 @@ async function unreservedPark(replacement = true) {
     close: () => { registry.close(); setAgentRegistryForTests(null); } };
 }
 
-test.each([false, true])("retry-stage starts a fresh attempt after a proven unreserved park (replacement: %s)", async replacement => {
+test.each([{ replacement: false }, { replacement: true }])("retry-stage starts a fresh attempt after a proven unreserved park: %j", async ({ replacement }) => {
   const f = await unreservedPark(replacement);
   try {
     expect((await patchPipeline(f.lane.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: f.attempt.n }, f.h.ports)).error).toBeUndefined();
@@ -110,7 +110,7 @@ test("retry-stage refuses when durable spawn receipts cannot be read", async () 
   } finally { seam.mockRestore(); f.close(); }
 });
 
-test.each([false, true])("retry-stage reads durable admission evidence after a controller restart (receipt: %s)", async receipt => {
+test.each([{ receipt: false }, { receipt: true }])("retry-stage reads durable admission evidence after a controller restart: %j", async ({ receipt }) => {
   const f = await unreservedPark();
   let restartedRegistry: InstanceType<typeof AgentRegistry> | undefined;
   let registryClosed = false;
