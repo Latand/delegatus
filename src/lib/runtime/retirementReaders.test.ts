@@ -5,7 +5,7 @@ import path from "node:path";
 import { AgentRegistry, normalizeRegistry, type RegistryFile } from "@/lib/agent/registry";
 import { SqliteAgentRegistryStore, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
 import { runStructuredHostRetirementSweep } from "./structuredHostRetirement";
-import { pipelineStartupMemberships, pipelineStartupMembershipsAsync, startupConversationRows } from "./startup";
+import { adoptStructuredHostsAtStartup, pipelineStartupMemberships, pipelineStartupMembershipsAsync, startupConversationRows } from "./startup";
 import { demoteSkippedStructuredRegistryHosts, reconcileDeadStructuredRegistryHostsOffLoop } from "./registry";
 import { determined } from "./determinable";
 
@@ -225,6 +225,29 @@ test("repeated host progress keeps the startup selection valid while a later mem
     peer.mutate(file => { file.memberships["conversation_reader_0"]![0]!.containerId = "new-owner"; }, false);
     expect(registryStartupSelectionUnchanged(view)).toBe(false);
   } finally { peer.close(); store.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("startup does not prepare an unused snapshot before asking for pipeline evidence", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-evidence-preparation-"));
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const prepare = registry.prepareReadOnlySnapshot.bind(registry);
+  let refreshed = false, unrelatedPreparations = 0, initialPreparations = 0;
+  const observed = spyOn(registry, "prepareReadOnlySnapshot").mockImplementation((...args) => {
+    if (refreshed) unrelatedPreparations++;
+    else initialPreparations++;
+    return prepare(...args);
+  });
+  const boundary = new Error("pipeline evidence boundary reached");
+  try {
+    await expect(adoptStructuredHostsAtStartup({
+      registry, client: null, orchestratorSeats: () => [],
+      refreshTranscriptState: async () => { refreshed = true; },
+      pipelineEvidence: () => { throw boundary; },
+    })).rejects.toBe(boundary);
+    expect(refreshed).toBe(true);
+    expect(initialPreparations).toBe(2);
+    expect(unrelatedPreparations).toBe(0);
+  } finally { observed.mockRestore(); registry.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 
