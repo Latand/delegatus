@@ -3,7 +3,7 @@ import { performanceSpans } from "@/lib/performanceSpans";
 import { yieldToRuntime } from "@/lib/cooperative";
 import { withControllerPipelineScope } from "@/lib/pipelines/controllerScope";
 import os from "node:os";
-import { refreshAdmission, refreshRequest, refreshReservation, type RefreshLineage, type RefreshOptions } from "./autoRefresh";
+import { refreshAdmission, refreshRequest, refreshReservation, refreshWasRequested, type RefreshLineage, type RefreshOptions } from "./autoRefresh";
 import { realExec } from "@/lib/workflows/provision";
 
 import { githubRunner, type GithubRunner } from "@/lib/monitor/githubEvidence";
@@ -537,7 +537,12 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true):
           return;
         }
         const reserved = await commit(ports, read, (live, current) => {
-          if (!refreshAdmission(current, ports.loadPipelines(), ports.setting(current.project))) { block(live, refreshRefusal, now); return; }
+          const pipelines = ports.loadPipelines();
+          if (!refreshAdmission(current, pipelines, ports.setting(current.project))) { block(live, refreshRefusal, now); return; }
+          if (refreshWasRequested(current, pipelines, base, view!.headRefOid)) {
+            block(live, failedCheck ? refreshRefusal : MERGE_REASONS.refreshSameBase, now);
+            return;
+          }
           live.state = "refreshing";
           live.reason = null;
           live.nextReadAt = null;

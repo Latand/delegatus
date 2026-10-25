@@ -37,6 +37,13 @@ export function refreshReservation(lane: Pipeline, base: string, head: string, n
     requestedAt: new Date(now).toISOString(), pipelineId: null };
 }
 
+/** A reservation belongs to the PR/head/base even when another lane carries
+ * the queue next. Retained reservations also survive scheduler restarts. */
+export function refreshWasRequested(lane: Pipeline, pipelines: readonly Pipeline[], base: string, head: string): boolean {
+  return pipelines.some(({ merge }) => merge?.repository === lane.merge!.repository
+    && merge.prNumber === lane.merge!.prNumber && merge.refresh?.base === base && merge.refresh.head === head);
+}
+
 /** Rebuilt solely from the durable reservation so a replay keeps its facts. */
 export function refreshRequest(lane: Pipeline, legacyBase = "main"): CreatePipelineRequest {
   const merge = lane.merge!;

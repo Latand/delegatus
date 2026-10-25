@@ -93,7 +93,8 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
   let cached: PullRequestState | null = null;
   let createMode: "ok" | "throw" | "lost" | "refuse" = "ok";
   const creates: Array<{ request: unknown; options: unknown }> = [];
-  const byKey = new Map<string, Pipeline>();
+  const byKey = new Map([...pipelines.values()].filter(pipeline => pipeline.creationRequest)
+    .map(pipeline => [pipeline.creationRequest!.key, pipeline]));
   const fail = (stderr: string) => Object.assign(new Error("Command failed: gh"), { stderr });
 
   const run = async (args: string[]): Promise<string> => {
@@ -326,6 +327,112 @@ test("a green PR behind main merges under soft protection without refreshing", a
   expect(h.creates).toEqual([]);
   expect(h.merges()).toHaveLength(1);
   expect(h.calls.some(args => args[1]?.includes("/compare/"))).toBe(false);
+});
+
+test("completed lanes on one PR share the refresh bound across a process restart", async () => {
+  const verifyBound = async (h: ReturnType<typeof harness>, existingCreations: number) => {
+    await h.run(10 * MERGE_POLL_MS);
+    expect(h.creates).toHaveLength(existingCreations);
+    expect(h.merge("second")).toMatchObject({ state: "blocked", reason: 'check "ci" failed' });
+    expect(h.merge("second")!.refresh).toBeUndefined();
+    expect(h.writes).toEqual([]);
+
+    // Retry the stopped carrier after a genuinely new main revision arrives.
+    h.setBase("3".repeat(40));
+    Object.assign(h.merge("second")!, { state: "queued", attempts: 1, reason: null, blockedAt: null,
+      readFailures: 0, nextReadAt: null, head: null, headSeenAt: null, lastChecks: null, updatedAt: iso(h.now()) });
+    await h.sweep();
+    expect(h.creates).toHaveLength(existingCreations + 1);
+    expect(h.merge("second")).toMatchObject({ state: "refreshing", refresh: { base: "3".repeat(40), head: HEAD_A, pipelineId: "refresh-2" } });
+    expect(h.writes).toEqual([]);
+  };
+  if (process.env.SHARED_REFRESH_RESTART_FIXTURE) {
+    const stored = JSON.parse(fs.readFileSync(process.env.SHARED_REFRESH_RESTART_FIXTURE, "utf8")) as { lanes: Pipeline[]; pr: PullRequest };
+    const h = harness({ mergeBase: MAIN_1, lanes: stored.lanes, prs: stored.lanes.map(() => stored.pr) });
+    h.setBase(MAIN_2);
+    await verifyBound(h, 0);
+    return;
+  }
+  const second = finished();
+  second.id = "second";
+  second.delivery!.ownerId = second.id;
+  const pr = conflicting();
+  pr.checks = [red("ci")];
+  const h = harness({ mergeBase: MAIN_1, lanes: [finished(), second], prs: [pr, pr] });
+  h.setBase(MAIN_2);
+  await h.sweep();
+  expect(h.creates).toHaveLength(1);
+  expect(h.merge("finished")!.refresh).toMatchObject({ base: MAIN_2, head: HEAD_A });
+  h.pipeline("refresh-1").state = "completed";
+  h.pipeline("refresh-1").delivery!.active = false;
+  Object.assign(pr, { mergeStateStatus: "CLEAN", mergeable: "MERGEABLE" });
+
+  const fixture = path.join(sandbox, "shared-refresh-restart.json");
+  fs.writeFileSync(fixture, JSON.stringify({ lanes: h.ports.loadPipelines(), pr }));
+  const child = Bun.spawn([process.execPath, "test", import.meta.path, "--test-name-pattern",
+    "^completed lanes on one PR share the refresh bound across a process restart$"], {
+    env: { ...process.env, SHARED_REFRESH_RESTART_FIXTURE: fixture }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+  });
+  const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(exit, `${stdout}\n${stderr}`).toBe(0);
+  resetAutoMergeForTests();
+  await verifyBound(h, 1);
+});
+
+test.each(["same", "repository", "PR", "head", "base"] as const)("a retained refresh reservation distinguishes the %s tuple", async difference => {
+  const h = harness({ mergeBase: MAIN_1, lanes: [finished()], prs: [conflicting()] });
+  h.setBase(MAIN_2);
+  await h.sweep();
+  expect(h.creates).toHaveLength(1);
+  for (const id of ["finished", "refresh-1"]) {
+    Object.assign(h.pipeline(id), { state: "closed", hiddenAt: iso(T0) });
+    h.pipeline(id).delivery!.active = false;
+  }
+  const previous = h.merge("finished")!;
+  if (difference === "repository") previous.repository = "acme/other";
+  if (difference === "PR") previous.prNumber = 12;
+  if (difference === "head") previous.refresh!.head = "b".repeat(40);
+  if (difference === "base") previous.refresh!.base = "3".repeat(40);
+  const next = finished();
+  next.id = "next";
+  next.delivery!.ownerId = next.id;
+  h.add(next);
+  Object.assign(h.prs.get(11)!, { mergeStateStatus: "CLEAN", mergeable: "MERGEABLE", checks: [red("ci")] });
+  await h.sweep();
+  expect(h.creates).toHaveLength(difference === "same" ? 1 : 2);
+  expect(h.merge("next")!.state).toBe(difference === "same" ? "blocked" : "refreshing");
+  expect(h.writes).toEqual([]);
+});
+
+test.each(["base read", "comparison", "reservation"])("a matching reservation arriving during %s prevents another refresh", async seam => {
+  const prior = harness({ lanes: [finished()], prs: [conflicting()] });
+  prior.setBase(MAIN_2);
+  await prior.sweep();
+  const reserved = structuredClone(prior.pipeline("finished"));
+  Object.assign(reserved, { id: "previous", state: "closed", hiddenAt: iso(T0) });
+  const h = harness({ mergeBase: MAIN_1, lanes: [finished()], prs: [openPr(11, { checks: [red("ci")] })] });
+  h.setBase(MAIN_2);
+  const run = h.ports.run;
+  let compared = false;
+  h.ports.run = async args => {
+    const raw = await run(args);
+    if (seam === "base read" && args.at(-1) === ".commit.sha") h.add(reserved);
+    if (args[1]?.includes("/compare/")) {
+      compared = true;
+      if (seam === "comparison") h.add(reserved);
+    }
+    return raw;
+  };
+  const mutate = h.ports.mutate;
+  h.ports.mutate = async (id, change) => {
+    if (compared && seam === "reservation") h.add(reserved);
+    return mutate(id, change);
+  };
+  await h.sweep();
+  expect(h.merge("finished")).toMatchObject({ state: "blocked", reason: 'check "ci" failed' });
+  expect(h.merge("finished")!.refresh).toBeUndefined();
+  expect(h.creates).toEqual([]);
+  expect(h.writes).toEqual([]);
 });
 
 test.each(["unreadable", "malformed"])("a %s ancestry comparison takes the bounded read-failure path", async mode => {
