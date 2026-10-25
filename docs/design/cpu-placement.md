@@ -23,7 +23,7 @@ user@<uid>.service
       └─ delegatus-agents-work.slice CPUWeight=100, CPUQuota=75% of the online CPUs
          ├─ delegatus-agent-*.scope  pipeline and flow hosts, headless runs, work tmux panes: CPUWeight=100, CPUQuota=300%
          ├─ delegatus-work-*.scope   publication install and push, workflow setup
-         └─ run-*.scope              gates from scripts/gate-slot.sh
+         └─ delegatus-gate-*.service  gates: CPUWeight=10, IOWeight=10
 ```
 
 The quota period is 20 ms throughout. On a 24-CPU machine the kernel reads a
@@ -46,8 +46,8 @@ pipeline scopes there are.
 | Account-migration successors (Codex and Claude) | `publishCodexSuccessorHost` and `publishClaudeSuccessorHost` in `src/lib/accounts/migration/provider.ts`, through `structuredHostCell` | by the conversation's membership, as above | as above |
 | Headless runs: flow reviewers, the external relay agent, the handoff digest | `launchDetached` in `src/lib/agent/headless.ts` | `delegatus-agents-work.slice/delegatus-agent-headless-<id>.scope` | weight 100, 300% |
 | Every command an agent runs: tools, MCP servers, subagents, test runs, detached and orphaned children | descendants of the host process | the host's scope (cgroup membership survives reparenting) | the host's |
-| Gates: hook steps marked capped, `scripts/local-gate.ts`, anything an agent runs through `scripts/gate-slot.sh` | `scripts/gate-slot.sh` | `delegatus-agents-work.slice/delegatus-gate-<id>.service`, also for an agent in a signal domain, whose command enters the agent's namespaces | weight 100, 300%, `MemoryMax=8G` |
-| Merger gates: every local gate, the bisect runs and the trusted privacy checks of `scripts/merge-batch.ts` | `gateCommand` and `trustedPrivacy`, through the `gate-slot.sh` beside the script | `delegatus-agents-work.slice/delegatus-gate-<id>.service`, also for an agent in a signal domain, whose command enters the agent's namespaces | weight 100, 300%, `MemoryMax=8G` |
+| Gates: hook steps marked capped, `scripts/local-gate.ts`, anything an agent runs through `scripts/gate-slot.sh` | `scripts/gate-slot.sh` | `delegatus-agents-work.slice/delegatus-gate-<id>.service`, also for an agent in a signal domain, whose command enters the agent's namespaces | CPU weight 10, I/O weight 10, 300%, `MemoryMax=8G` |
+| Merger gates: every local gate, the bisect runs and the trusted privacy checks of `scripts/merge-batch.ts` | `gateCommand` and `trustedPrivacy`, through the `gate-slot.sh` beside the script | `delegatus-agents-work.slice/delegatus-gate-<id>.service`, also for an agent in a signal domain, whose command enters the agent's namespaces | CPU weight 10, I/O weight 10, 300%, `MemoryMax=8G` |
 | Workflow setup (`bun install` in the built-in template, any command a template names) | `startSetup` in `src/lib/workflows/provision.ts` | `delegatus-agents-work.slice/delegatus-work-workflow-setup-<id>.scope` | weight 100, 300% |
 | Pipeline publication: `bun install --frozen-lockfile` and `git push` with every pre-push hook | `fencedExec` in `src/lib/pipelines/git.ts` | `delegatus-agents-work.slice/delegatus-work-publish-{install,push}-<id>.scope` | weight 100, 300% |
 | Package install of a packaged release | `realPorts().run` in `src/lib/selfUpdate/steps.ts` | `delegatus-agents-work.slice/delegatus-work-update-package-<id>.scope` | weight 100, 300% |
@@ -148,11 +148,31 @@ After gate admission, the test preload drops that binding before fixtures run,
 so their priority reads stay inside their own state roots.
 Starvation handling and per-stage urgency remain follow-ups.
 
-The head starts when pressure allows it, or once its own queue wait reaches ten
-minutes.
-Admissions are separated by two seconds, including when pressure never drops.
-The pressure sensor holds at `some avg10` of 30% and releases after ten seconds
-below 20%; a failed sample permits the head. CPU quotas still bound admitted work.
+Stage and workflow admission retains its ten-minute fairness bound. A local
+heavy check requires a permissive measured sample at readiness and again when
+it claims a free slot, even after ten minutes and after its helper restarts.
+Its ticket records that rule (`low_pressure`). A ticket past its own bound that
+does not need low pressure passes such tickets, so a check held by pressure
+never holds a stage beyond the stage's bound. Checks keep FIFO among themselves.
+The gate samples PSI asynchronously; if PSI is unreadable or malformed, it
+requires the one-minute load divided by online CPUs to be below 0.75. If both
+metrics are unavailable, it waits. `DELEGATUS_CPU_PRESSURE=off` explicitly
+disables sampling. A stable reason is logged once per hold; polling yields
+the event loop. Nested commands retain their validated parent's slot.
+Admissions remain separated by two seconds.
+
+Every local `delegatus-gate-*.service` starts with `CPUWeight=10` and
+`IOWeight=10`, including commands launched directly through `owned-runner.ts`,
+CPU-placement opt-outs and namespace handoffs. These properties are independent
+of the work slice's existing weight 100 and quotas. The serving unit's installed
+weight stays 1000; a runtime host owned by that unit shares its weight.
+`scripts/gate-properties.test.ts` passes the produced arguments to the real
+user manager and checks the unit's reported properties, or skips if no manager
+is reachable. Kernel enforcement still requires delegated controllers, as
+described above.
+The stage/workflow pressure sensor holds at `some avg10` of 30% and releases
+after ten seconds below 20%; its failed sample permits the head. Heavy checks
+use the stricter measurement policy above. CPU quotas still bound admitted work.
 The displayed time is a worst-case bound from the durable queue clock, including
 spacing; a permissive sample does not make that bound jump when pressure rises.
 
