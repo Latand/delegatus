@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
 import { readProjectReportLog } from "@/lib/bridge/reportLog";
@@ -16,7 +17,7 @@ const headers = { "Cache-Control": "no-store" };
  * the ask lines back; `limit` is clamped to the page bound; `since=<revision>`
  * answers `unchanged` when the log has not moved.
  */
-export async function GET(request: NextRequest): Promise<NextResponse> {
+async function workspaceGET(request: NextRequest): Promise<NextResponse> {
   const parameters = request.nextUrl.searchParams;
   const project = parameters.get("project")?.trim() ?? "";
   if (!project || project.length > 256) {
@@ -40,3 +41,5 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "BRIDGE_UNAVAILABLE", message: error instanceof Error ? error.message : String(error) }, { status: 500, headers });
   }
 }
+
+export const GET = workspaceRoute("/api/orchestrator/reports", workspaceGET);

@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
 import { resumeSpecFor, resumeSpecForSession, type AgentEngine } from "@/lib/agent/cli";
@@ -107,7 +108,7 @@ function resolveLaunchPath(launchId: string, files: FileEntry[]): NextResponse<A
  * Pure lookup: no spawning, no viewer-side pane. Works on live, finished, and
  * dead-host conversations alike (the dead-host escape hatch, §5/§6).
  */
-export async function GET(req: NextRequest): Promise<NextResponse<AttachCommand | ApiError>> {
+async function workspaceGET(req: NextRequest): Promise<NextResponse<AttachCommand | ApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
 
@@ -175,3 +176,5 @@ export async function GET(req: NextRequest): Promise<NextResponse<AttachCommand 
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }
 }
+
+export const GET = workspaceRoute("/api/attach-command", workspaceGET);

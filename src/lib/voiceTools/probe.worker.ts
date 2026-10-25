@@ -8,7 +8,8 @@ import Ajv from "ajv";
 import { constants } from "node:fs";
 import path from "node:path";
 import * as fs from "node:fs/promises";
-import { assertSecretDestinations, type SecretPolicies, digest, launchShapingEnv, packageLaunch, validateCatalog, voiceToolBounds, type VoiceToolServer } from "./contracts";
+import { assertSecretDestinations, type SecretPolicies, digest, launchShapingEnv, packageLaunch, validateCatalog, voiceToolBounds, type VoiceToolServer, type ContainmentReason } from "./contracts";
+import { stdioContainment } from "./containment";
 import { verifyEntry } from "./entry";
 
 let received = 0;
@@ -19,6 +20,7 @@ for await (const chunk of process.stdin) {
   input.push(chunk);
 }
 const request = JSON.parse(Buffer.concat(input).toString("utf8")) as {
+  confirmUncontained?: ContainmentReason;
   name: string; server: VoiceToolServer; secrets: Record<string, string>; policies?: SecretPolicies; home: string;
   /** Chosen by the Viewer (hub.ts): the launcher's absolute path, an empty Bun config and an empty folder. */
   launch: { executable: string; config: string; runDir: string; runRoot: string; stateDirectory: string } | null;
@@ -29,10 +31,8 @@ function isWithin(root: string, candidate: string): boolean {
   const relative = path.relative(path.resolve(root), path.resolve(candidate));
   return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
 }
-async function sandboxLayout(launch: { runRoot: string; stateDirectory: string }) {
-  if (process.platform !== "linux" || path.resolve(launch.stateDirectory) === path.parse(launch.stateDirectory).root) return null;
-  const executable = await resolveSandboxExecutable();
-  if (!executable) return null;
+async function sandboxLayout(launch: { runRoot: string; stateDirectory: string }, executable: string) {
+  if (path.resolve(launch.stateDirectory) === path.parse(launch.stateDirectory).root) return null;
   const base = ["/run", "/tmp"].find(candidate => !isWithin(launch.stateDirectory, candidate) && !isWithin(candidate, launch.stateDirectory));
   if (!base) return null;
   const runDir = path.join(base, "delegatus-voice-tools");
@@ -40,17 +40,7 @@ async function sandboxLayout(launch: { runRoot: string; stateDirectory: string }
   await fs.mkdir(path.join(launch.runRoot, ".home"), { recursive: true, mode: 0o700 });
   return { executable, base, runDir, home, mapPath: (file: string) => isWithin(launch.runRoot, file) ? path.join(runDir, path.relative(launch.runRoot, file)) : file };
 }
-async function resolveSandboxExecutable(): Promise<string | null> {
-  for (const candidate of ["/usr/bin/bwrap", "/bin/bwrap"]) {
-    try {
-      if (!(await fs.stat(candidate)).isFile()) continue;
-      await fs.access(candidate, constants.X_OK);
-      return await fs.realpath(candidate);
-    }
-    catch { /* Try the next system installation path. */ }
-  }
-  return null;
-}
+let containmentReason: ContainmentReason | undefined;
 let wireBytes = 0;
 function count(bytes: number) { wireBytes += bytes; if (wireBytes > voiceToolBounds.wireBytes) throw new Error("CATALOG_BOUNDS"); }
 
@@ -68,8 +58,12 @@ class BoundedStdio implements Transport {
     await verifyEntry(request.server);
     const launch = request.launch;
     if (!launch || ![launch.executable, launch.config, launch.runDir, launch.runRoot, launch.stateDirectory].every(file => path.isAbsolute(file))) throw new Error("START_FAILED");
-    const sandbox = await sandboxLayout(launch).catch(() => null);
-    if (!sandbox) throw new Error("START_FAILED");
+    const availability = await stdioContainment();
+    const sandbox = availability.executable ? await sandboxLayout(launch, availability.executable).catch(() => null) : null;
+    if (!sandbox) {
+      containmentReason = availability.reason ?? "LAYOUT_UNAVAILABLE";
+      if (request.confirmUncontained !== containmentReason) throw new Error("CONTAINMENT_REQUIRED");
+    }
     const inherit = (names: string[]) => Object.fromEntries(names.flatMap(name => process.env[name] ? [[name, process.env[name]]] : []));
     // The proposal schema refuses launch variables (contracts.ts); a request that still carries one
     // drops it here, and the platform's own variables and the private home win over the rest.
@@ -102,7 +96,7 @@ class BoundedStdio implements Transport {
     // The sandbox can then hide the entire state tree without exposing sibling state files.
     if (entry) {
       const realEntry = await fs.realpath(entry);
-      if (isWithin(launch.stateDirectory, realEntry)) {
+      if (sandbox && isWithin(launch.stateDirectory, realEntry)) {
         const staged = path.join(launch.runDir, `entry${path.extname(realEntry) || ".mjs"}`);
         await fs.copyFile(realEntry, staged, constants.COPYFILE_EXCL);
         await verifyEntry({ ...request.server, entryFile: { path: staged, sha256: request.server.entryFile!.sha256 } });
@@ -120,30 +114,38 @@ class BoundedStdio implements Transport {
         args = args.map(value => value === request.server.entryFile!.path ? realEntry : value);
       }
     }
-    args = args.map(value => {
-      if (value === `--config=${launch.config}`) return `--config=${sandbox.mapPath(launch.config)}`;
-      return isWithin(launch.runRoot, value) ? sandbox.mapPath(value) : value;
-    });
-    const cwd = transport.cwd ?? request.home;
-    const realCwd = await fs.realpath(cwd).catch(() => cwd);
-    const childCwd = isWithin(launch.stateDirectory, realCwd) ? path.join(sandbox.runDir, "cwd") : realCwd;
-    let targetExecutable = await fs.realpath(launch.executable);
-    if (isWithin(launch.stateDirectory, targetExecutable)) {
-      const stagedExecutable = path.join(launch.runRoot, ".launcher");
-      await fs.copyFile(targetExecutable, stagedExecutable, constants.COPYFILE_EXCL);
-      targetExecutable = sandbox.mapPath(stagedExecutable);
+    let child: ChildProcess;
+    if (sandbox) {
+      args = args.map(value => {
+        if (value === `--config=${launch.config}`) return `--config=${sandbox.mapPath(launch.config)}`;
+        return isWithin(launch.runRoot, value) ? sandbox.mapPath(value) : value;
+      });
+      const cwd = transport.cwd ?? request.home;
+      const realCwd = await fs.realpath(cwd).catch(() => cwd);
+      const childCwd = isWithin(launch.stateDirectory, realCwd) ? path.join(sandbox.runDir, "cwd") : realCwd;
+      let targetExecutable = await fs.realpath(launch.executable);
+      if (isWithin(launch.stateDirectory, targetExecutable)) {
+        const stagedExecutable = path.join(launch.runRoot, ".launcher");
+        await fs.copyFile(targetExecutable, stagedExecutable, constants.COPYFILE_EXCL);
+        targetExecutable = sandbox.mapPath(stagedExecutable);
+      }
+      const sandboxArgs = ["--die-with-parent", "--unshare-user", "--unshare-pid", "--unshare-ipc", "--unshare-uts",
+        "--ro-bind", "/", "/", "--tmpfs", sandbox.base, "--dir", sandbox.runDir, "--bind", launch.runRoot, sandbox.runDir];
+      const hidesTmp = !isWithin(sandbox.base, "/tmp");
+      if (hidesTmp) sandboxArgs.push("--tmpfs", "/tmp");
+      const hidesState = isWithin(sandbox.base, launch.stateDirectory) || (hidesTmp && isWithin("/tmp", launch.stateDirectory));
+      if (!hidesState) sandboxArgs.push("--tmpfs", launch.stateDirectory);
+      sandboxArgs.push("--proc", "/proc", "--dev", "/dev", "--chdir", childCwd, "--", targetExecutable, ...args);
+      // The sandboxed process gets only a private run directory and home. Root is
+      // read-only, and the complete Delegatus state path is overlaid before exec.
+      Object.assign(env, { HOME: sandbox.home, XDG_CONFIG_HOME: path.join(sandbox.home, ".config"), XDG_CACHE_HOME: path.join(sandbox.home, ".cache"), TMPDIR: sandbox.home });
+      child = spawn(sandbox.executable, sandboxArgs, { cwd: "/", env, stdio: ["pipe", "pipe", "ignore"] });
+    } else {
+      // The owner confirmed this exact unavailable-platform reason for this run.
+      // Environment scrubbing still applies; filesystem and network access are unrestricted.
+      child = spawn(launch.executable, args, { cwd: transport.cwd ?? request.home, env, stdio: ["pipe", "pipe", "ignore"] });
     }
-    const sandboxArgs = ["--die-with-parent", "--unshare-user", "--unshare-pid", "--unshare-ipc", "--unshare-uts",
-      "--ro-bind", "/", "/", "--tmpfs", sandbox.base, "--dir", sandbox.runDir, "--bind", launch.runRoot, sandbox.runDir];
-    const hidesTmp = !isWithin(sandbox.base, "/tmp");
-    if (hidesTmp) sandboxArgs.push("--tmpfs", "/tmp");
-    const hidesState = isWithin(sandbox.base, launch.stateDirectory) || (hidesTmp && isWithin("/tmp", launch.stateDirectory));
-    if (!hidesState) sandboxArgs.push("--tmpfs", launch.stateDirectory);
-    sandboxArgs.push("--proc", "/proc", "--dev", "/dev", "--chdir", childCwd, "--", targetExecutable, ...args);
-    // The sandboxed process gets only a private run directory and home. Root is
-    // read-only, and the complete Delegatus state path is overlaid before exec.
-    Object.assign(env, { HOME: sandbox.home, XDG_CONFIG_HOME: path.join(sandbox.home, ".config"), XDG_CACHE_HOME: path.join(sandbox.home, ".cache"), TMPDIR: sandbox.home });
-    const child = this.child = spawn(sandbox.executable, sandboxArgs, { cwd: "/", env, stdio: ["pipe", "pipe", "ignore"] });
+    this.child = child;
     this.closed = new Promise(resolve => { child.once("close", () => { this.onclose?.(); resolve(); }); });
     let buffer = Buffer.alloc(0);
     child.stdout!.on("data", (chunk: Buffer) => {
@@ -258,7 +260,7 @@ try {
   answer = { code: "OK", catalog: { digest: digest(catalog), fetchedAt: new Date().toISOString(), tools: catalog } };
 } catch (error) {
   const message = error instanceof Error ? error.message : "";
-  answer = { code: ["START_FAILED", "CATALOG_BOUNDS", "SECRET_ECHO", "SECRET_DESTINATION", "ENTRY_CHANGED"].includes(message) ? message : "PROTOCOL_ERROR" };
+  answer = { code: ["CONTAINMENT_REQUIRED", "START_FAILED", "CATALOG_BOUNDS", "SECRET_ECHO", "SECRET_DESTINATION", "ENTRY_CHANGED"].includes(message) ? message : "PROTOCOL_ERROR", ...(containmentReason ? { containmentReason } : {}) };
 } finally {
   // The parent deadline also owns close; a peer cannot extend it during shutdown.
   await client?.close().catch(() => undefined);

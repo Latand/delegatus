@@ -1940,6 +1940,7 @@ describe("MCP tool service", () => {
         "create_task",
         "update_task",
         "create_pipeline",
+        "pipeline_checks",
         "pipeline_action",
         "stage_report",
         "leave_lesson",

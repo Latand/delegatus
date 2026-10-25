@@ -197,3 +197,69 @@ test("shows no token number while the call runs or when the transcript gave none
   expect(render(toolEvent(), new Set()).querySelector("[data-context-tokens]")).toBeNull();
   expect(render(toolEvent({ status: "ok" }), new Set()).querySelector("[data-context-tokens]")).toBeNull();
 });
+
+test("the title and the pending verb follow the interface language, and switch with it (#2250)", () => {
+  const event = toolEvent({
+    tool: "create_task",
+    mcp: { serverName: "viewer", toolName: "create_task", args: { project: "viewer", text: "Audit MCP cards" }, result: null },
+  });
+  const container = render(event, new Set());
+  const title = () => container.querySelector<HTMLElement>("[data-mcp-title]")!;
+  const pending = () => container.querySelector<HTMLElement>("[role=status]")!;
+  expect(title().textContent).toBe("Creating task: Audit MCP cards");
+  expect(pending().getAttribute("aria-label")).toBe("Creating…");
+  setLocale("uk");
+  try {
+    flushSync(() => root!.render(<McpCallCard event={event} availableConversationIds={new Set()} />));
+    expect(title().textContent).toBe("Створення задачі: Audit MCP cards");
+    expect(title().getAttribute("title")).toBe("Створення задачі: Audit MCP cards");
+    expect(pending().getAttribute("aria-label")).toBe("Створення…");
+  } finally {
+    setLocale("en");
+  }
+  flushSync(() => root!.render(<McpCallCard event={event} availableConversationIds={new Set()} />));
+  expect(title().textContent).toBe("Creating task: Audit MCP cards");
+});
+
+test("a rejected call whose action names an inherited property still renders its fallback title (#2250)", () => {
+  for (const toolName of ["pipeline_action", "flow_action", "conversation_action", "conversation_migration"]) {
+    for (const action of ["toString", "constructor", "__proto__"]) {
+      const container = render(toolEvent({
+        tool: toolName,
+        status: "err",
+        statusLabel: "error",
+        mcp: { serverName: "viewer", toolName, args: { action }, result: { error: "unknown action" } },
+      }), new Set());
+      const card = container.querySelector('[data-testid="mcp-call-card"]');
+      expect(card?.getAttribute("data-state")).toBe("error");
+      expect(container.querySelector("[data-mcp-title]")?.textContent).toMatch(/^(Updating pipeline|Updating flow|Controlling conversation|Migrating conversation migration)$/);
+    }
+  }
+});
+
+test("a delivery check leads with its receipt state in the interface language (#2250)", () => {
+  const receipt = (state: string) => toolEvent({
+    tool: "message_receipt",
+    status: "ok",
+    statusLabel: "ok",
+    mcp: { serverName: "viewer", toolName: "message_receipt", args: { operationId: "op-1" }, result: { operationId: "op-1", state } },
+  });
+  const title = (container: HTMLElement) => container.querySelector("[data-mcp-title]");
+  const english = { delivered: "Delivered", failed: "Failed", "in-flight": "In-flight" };
+  const ukrainian = { delivered: "Доставлено", failed: "Не доставлено", "in-flight": "Доставляється" };
+  for (const [state, word] of Object.entries(english)) {
+    const row = title(render(receipt(state), new Set()));
+    expect(row?.textContent).toBe(`${word} · delivery check`);
+    expect(row?.getAttribute("title")).toBe(`Checking delivery of op-1: ${word.toLowerCase()}`);
+  }
+  setLocale("uk");
+  try {
+    for (const [state, word] of Object.entries(ukrainian)) {
+      const row = title(render(receipt(state), new Set()));
+      expect(row?.textContent).toBe(`${word} · перевірка доставки`);
+      expect(row?.getAttribute("title")).toBe(`Перевірка доставки op-1: ${word.toLowerCase()}`);
+    }
+  } finally {
+    setLocale("en");
+  }
+});

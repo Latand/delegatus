@@ -1,7 +1,8 @@
 // Reconciliation and deploy settlement retain the original path so existing
 // main-side failures keep their test identities after the suite split.
-import { describe, expect, spyOn, test, fs, path, spawn, SANDBOX, SESSIONS, runSeatTickCheck, SEAT_TICK_WAKE_UNRESOLVED_REF, startSeatTick, stopSeatTick, writeDrain, drainFile, releaseDrain, DEFAULT_SEAT_TICK_POLICY, defaultSeatTickSettings, settleRecordFromJournal, readSeatTickState, writeSeatTickState, SeatTickAccounting, FileRuntimeEventStore, statePath, AgentRegistry, setAgentRegistryForTests, emptyLaunchProfile, emptySeatTickState, PROJECT, CONVERSATION, SUCCESSOR, NOW, MINUTE, pipelineRecord, harness, OVERDUE, RECENT, outstandingWake, OPEN_LANE, HELD, childFixture, childRig, ago, ownLane, ageTranscript, sweepRegistryRow, agendaOf, endedTurnUnderADeadHost, STANDING_BOARD, unresolvedCardsOn, standingProject, MIGRATION_REFUSAL, REPORT_SHA, reportDeploys, settledLane, reportPort } from "./seatTickController.fixture";
+import { describe, expect, spyOn, test, fs, path, SANDBOX, runSeatTickCheck, SEAT_TICK_WAKE_UNRESOLVED_REF, startSeatTick, stopSeatTick, writeDrain, drainFile, releaseDrain, DEFAULT_SEAT_TICK_POLICY, defaultSeatTickSettings, settleRecordFromJournal, readSeatTickState, writeSeatTickState, SeatTickAccounting, FileRuntimeEventStore, statePath, AgentRegistry, setAgentRegistryForTests, emptyLaunchProfile, emptySeatTickState, PROJECT, CONVERSATION, SUCCESSOR, NOW, MINUTE, pipelineRecord, harness, OVERDUE, RECENT, OPEN_LANE, HELD, childFixture, childRig, ago, ownLane, ageTranscript, sweepRegistryRow, agendaOf, endedTurnUnderADeadHost, STANDING_BOARD, unresolvedCardsOn, standingProject, MIGRATION_REFUSAL, REPORT_SHA, reportDeploys, settledLane, reportPort } from "./seatTickController.fixture";
 import type { SeatTickControllerDependencies, SeatTickProjectState, AgentLivenessRecord, ConversationMessage, DeliveryOutcome } from "./seatTickController.fixture";
+import { projectIdentityFromRemote } from "@/lib/projects/identity";
 
 
 test("one child with a failed and a finished turn is one line carrying its latest state (#1783)", async () => {
@@ -134,7 +135,7 @@ test("a child whose last record predates the seat by weeks is skipped on the har
   expect(fixture.acknowledged()).toEqual([]);
 });
 
-test("an unreadable child is listed when it finished and named once when it stalled (#1783, #1881)", async () => {
+test("unreadable children report both the ended turn and the abandoned launch once (#1783, #1881)", async () => {
   const fixture = childFixture("unresolvable-child-both-paths");
   /* Spawned an hour ago — nothing about either of these is old — and neither
      transcript is one this Viewer can read: one is outside every scanner root,
@@ -149,12 +150,13 @@ test("an unreadable child is listed when it finished and named once when it stal
   const first = childRig(fixture, { seat, pipelines: [ownLane(fixture)] });
   expect(await runSeatTickCheck(fixture.project, first.deps)).toMatchObject({ verdict: "wake", reasons: ["own-lane-settled", "child-terminal"] });
   expect(fixture.row().stalledSeen).toEqual([`child:${owed.id}`, `child:${stalled.id}`]);
-  /* The ended turn is owed and listed with its reason (#1881). The open turn
-     under a dead host is not work, and is named beside the agenda with why. */
+  /* The ended turn is owed and listed with its reason (#1881). With neither
+     host custody nor a transcript/ledger left, the other launch has its own
+     terminal failure receipt; it must be announced too (#3148). */
   const shown = first.sent[0]!.text;
   expect(shown).toContain(`${owed.id} — unscanned worker — spawned child failed, transcript not readable: its transcript path is outside every folder Delegatus scans`);
-  expect(shown).toContain(`- ${stalled.id} — vanished worker: the transcript file is no longer on disk`);
-  expect(fixture.acknowledged()).toEqual([owed.id]);
+  expect(shown).toContain(`${stalled.id} — vanished worker — spawned child failed, transcript not readable: the transcript file is no longer on disk`);
+  expect(fixture.acknowledged().sort()).toEqual([owed.id, stalled.id].sort());
 
   /* Named once: the next check neither lists nor names either of them. */
   const second = childRig(fixture, { now: fixture.now + 61 * MINUTE, seat, pipelines: [ownLane(fixture)] });
@@ -283,21 +285,22 @@ test("a stall one seat was shown is shown again to the seat that succeeds it (#1
 
 test("a board whose only children are ineligible ends quiet rather than raising an interval wake (#1783)", async () => {
   const fixture = childFixture("ineligible-children-quiet");
-  /* The production shape with the lane taken away: two workers whose hosts
-     died over an open turn, one last written to twenty-five days before the
-     designation and one whose transcript no scanner root holds. Nothing else
+  /* An old dead worker and an unreadable live worker. A missing transcript
+     with no host custody would instead be a terminal launch failure (#3148),
+     which is owed work and belongs to the preceding test. Nothing else is
      on the board — no lane, no task, no signal. */
   const aged = fixture.spawn({ title: "august stall", turn: "busy", host: "dead" });
   ageTranscript(fixture, aged.path, 25 * 24 * 60);
-  const unreadable = fixture.spawn({ title: "vanished stall", turn: "busy", host: "dead", transcript: "missing" });
+  const unreadable = fixture.spawn({ title: "unreadable worker", turn: "busy", host: "live", transcript: "missing" });
   fixture.seed();
 
   const seat = { ...fixture.seat, designatedAt: ago(fixture, 120) };
   const first = childRig(fixture, { seat });
-  /* The stall memory saw both, so the check below is the one on which the
-     stall path would speak — and the one the interval clause spoke on. */
+  /* The old worker is still observed as stalled; the unreadable live worker
+     is excluded from the interval agenda independently of stall memory. */
   expect(await runSeatTickCheck(fixture.project, first.deps)).toMatchObject({ verdict: "quiet" });
-  expect(fixture.row().stalledSeen).toEqual([`child:${aged.id}`, `child:${unreadable.id}`]);
+  expect(fixture.row().stalledSeen).toEqual([`child:${aged.id}`]);
+  expect(first.sent.some(message => message.text.includes(unreadable.id))).toBe(false);
   expect(first.sent).toEqual([]);
 
   const second = childRig(fixture, { now: fixture.now + 61 * MINUTE, seat });
@@ -314,7 +317,7 @@ test("one eligible child beside the ineligible ones still raises the interval wa
      alive: the clause the fix narrows must still let this one through. */
   const aged = fixture.spawn({ title: "august stall", turn: "busy", host: "dead" });
   ageTranscript(fixture, aged.path, 25 * 24 * 60);
-  const unreadable = fixture.spawn({ title: "vanished stall", turn: "busy", host: "dead", transcript: "missing" });
+  const unreadable = fixture.spawn({ title: "unreadable worker", turn: "busy", host: "live", transcript: "missing" });
   const live = fixture.spawn({ title: "build the exporter", turn: "busy", host: "live" });
   fixture.seed();
 
@@ -982,28 +985,36 @@ test("a wake whose delivery was queued and is credited a check later is settled 
 test("a report the seat filed under the project's old key, before the key was folded, discharges the owed outcome", async () => {
   const { scopedReportId } = await import("@/lib/bridge/store");
   const { persistProjectAliases, resetProjectAliasesForTests } = await import("@/lib/projects/aliases");
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(SANDBOX, "report-alias-"));
   const OLD = `${PROJECT}-before-origin`;
-  expect(persistProjectAliases([{ source: OLD, target: PROJECT, displayName: "Project" }])).toBe(true);
   try {
+    expect(persistProjectAliases([{ source: OLD, target: PROJECT, displayName: "Project" }])).toBe(true);
     const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "report-ledger-")), "seat-tick.json");
-    writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 6 * MINUTE).toISOString(), accounting: undefined }, stateFile);
+    writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 70 * MINUTE).toISOString(), accounting: undefined }, stateFile);
     const log: import("@/lib/bridge/types").BridgeReportV1[] = [];
-    const first = harness({ ...reportDeploys, pipelines: [settledLane], stateFile });
+    // Deliver the lane first so both report keys are owed across separate wakes.
+    const laneOnly = harness({ pipelines: [settledLane], stateFile });
+    laneOnly.deps.sources!.reports = reportPort(() => log);
+    await runSeatTickCheck(PROJECT, laneOnly.deps);
+    expect(readSeatTickState(PROJECT, stateFile).reportsOwed!.map((entry) => entry.key)).toEqual(["lane:pipeline_l:completed"]);
+    const first = harness({ ...reportDeploys, pipelines: [settledLane], stateFile, now: NOW + 6 * MINUTE });
     first.deps.sources!.reports = reportPort(() => log);
     await runSeatTickCheck(PROJECT, first.deps);
     expect(readSeatTickState(PROJECT, stateFile).reportsOwed!.map((entry) => entry.key).sort()).toEqual(["deploy:dddddddd:succeeded", "lane:pipeline_l:completed"]);
 
     /* The row as bridge_report stored it before the fix: the raw project and an
        id scoped by it, with no coversOwed to clear everything at once. */
-    log.push({ id: scopedReportId(OLD, "deploy:dddddddd:succeeded"), seq: 1, at: new Date(NOW + 2 * MINUTE).toISOString(), class: "completed", body: "", project: OLD, origin: { kind: "manager", conversationId: CONVERSATION, role: "orchestrator" }, covers: [scopedReportId(OLD, "lane:pipeline_l:completed")] });
-    const second = harness({ ...reportDeploys, pipelines: [settledLane, ...OPEN_LANE], stateFile, now: NOW + 5 * MINUTE });
+    log.push({ id: scopedReportId(OLD, "deploy:dddddddd:succeeded"), seq: 1, at: new Date(NOW + 8 * MINUTE).toISOString(), class: "completed", body: "", project: OLD, origin: { kind: "manager", conversationId: CONVERSATION, role: "orchestrator" }, covers: [scopedReportId(OLD, "lane:pipeline_l:completed")] });
+    const second = harness({ ...reportDeploys, pipelines: [settledLane, ...OPEN_LANE], stateFile, now: NOW + 11 * MINUTE });
     second.deps.sources!.reports = reportPort(() => log);
     await runSeatTickCheck(PROJECT, second.deps);
     const row = readSeatTickState(PROJECT, stateFile);
     expect(row.reportsOwed).toEqual([]);
     expect(row.reportSeenAt).toBe(log[0]!.at);
   } finally {
-    fs.rmSync(path.join(process.env.LLV_STATE_DIR!, "project-aliases.json"), { force: true });
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
     resetProjectAliasesForTests();
   }
 });
@@ -1108,6 +1119,8 @@ test("a wake's journal settlement waits for the lock off the loop, and a write t
 // Authentication recovery drives the actual transcript, selector, seat command,
 // bridge and Telegram service. Only process launch and bot HTTP are replaced.
 describe("seat authentication recovery through production seams", () => {
+  const REMOTE = "https://example.invalid/fixtures/seat-auth.git";
+  const PROJECT = projectIdentityFromRemote(REMOTE, SANDBOX)!.project;
   const AUTH_AT = "2026-10-08T00:05:00.000Z";
   const AUTH_TS = Date.parse(AUTH_AT);
   const ERROR_TEXT = "Failed to authenticate: OAuth session expired and could not be refreshed";
@@ -1130,6 +1143,11 @@ describe("seat authentication recovery through production seams", () => {
   }
 
   async function makeAuthFixture(dir: string, allowed: boolean, engine: "claude" | "codex", history: boolean) {
+    // Rotation resolves the predecessor's cwd through the real project gate.
+    fs.mkdirSync(path.join(dir, ".git"));
+    fs.writeFileSync(path.join(dir, ".git", "HEAD"), "ref: refs/heads/main\n");
+    fs.writeFileSync(path.join(dir, ".git", "config"), `[remote "origin"]\n  url = ${REMOTE}\n`);
+    expect((await import("@/lib/scanner/describe")).projectForCwd(dir)).toBe(PROJECT);
     const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
     const { BINDINGS_SOURCE } = await import("@/lib/accounts/accountsStore");
     const { seedAccountSource, persistedAccountSource } = await import("@/lib/accounts/accountsStoreFixture");
@@ -1138,7 +1156,9 @@ describe("seat authentication recovery through production seams", () => {
     const { defaultSeatTickSources } = await import("./seatTickSources");
     const { setReportTelegram } = await import("@/lib/projects/settings");
     const { writeSeatTickSettings, readSeatTickSettingsFile } = await import("./seatTickSettings");
-    const { readBridgeReportLog } = await import("@/lib/bridge/store");
+    const { readBridgeReportLog, readBridgeChannel } = await import("@/lib/bridge/store");
+    // Startup imports channels before a report opens its write transaction.
+    expect(readBridgeChannel()).toBeNull();
     const { loadTasks } = await import("@/lib/tasks/store");
     const { TelegramBotService, productionTelegramBotDependencies } = await import("@/lib/telegram/bot/service");
     const { FakeBotTransport, fakeBotToken, ok } = await import("@/lib/telegram/bot/fakeTransport");
@@ -1257,6 +1277,9 @@ describe("seat authentication recovery through production seams", () => {
       const active = orchestratorSeatFor(PROJECT).active!;
       const activeTranscript = registry.conversation(active.conversationId! as Parameters<typeof registry.conversation>[0])?.generations.at(-1)?.path ?? active.path ?? transcript;
       const script = `
+        // This restart checks durable authentication state. Give diagnostic
+        // timing its own fixed clock so storage descheduling cannot add stderr.
+        Object.defineProperty(performance, "now", { value: () => 0 });
         ${credentialReader ?? ""}
         const { recoverSeatAuthentication } = await import("./src/lib/monitor/seatAuthRecovery");
         const { readSeatTurnOutcome } = await import("./src/lib/monitor/seatAuthIncident");
@@ -1617,6 +1640,7 @@ describe("seat authentication recovery through production seams", () => {
   test("first failure rotates once to the allowed account with handoff and one independent notice", async () => {
     await authFixture(true, async (f) => {
       await f.check();
+      expect(f.row().authIncident?.rotation).toMatchObject({ state: "rotated" });
       expect(f.spawns).toHaveLength(1); expect(f.spawns[0]!.accountId).toBe(f.b.id);
       expect(f.spawns[0]!.prompt).toContain("Automatic rotation after authentication failure");
       expect(f.seat().seatEpoch).toBe(f.original.seatEpoch + 1);

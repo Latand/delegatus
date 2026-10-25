@@ -1,4 +1,4 @@
-import { gatingWindows } from "./migration/quotaPolicy";
+import { AUTO_BALANCE_THRESHOLD, gatingWindows } from "./migration/quotaPolicy";
 import type { DurableQuotaObservation } from "./migration/contracts";
 import { creditGuardBlock } from "./creditGuard";
 
@@ -12,7 +12,7 @@ export type HeadlessAccountSelection =
 type SelectableAccount = { id: string; authPresent: boolean };
 
 type Capacity =
-  | { kind: "available"; remaining: number }
+  | { kind: "available"; remaining: number; resetsAt: number | null }
   /** `passedResetsAt`: every exhausted window named a reset and the latest
       has already passed, though the reading is still fresh. */
   | { kind: "exhausted"; resetsAt: number | null; passedResetsAt?: number }
@@ -35,7 +35,7 @@ function capacity(observation: DurableQuotaObservation | undefined, now: number,
      preserving the account as a fallback while its next probe is pending. */
   if (!authFresh || (!observationFresh && !copilotTranscript)) return { kind: "unknown" };
   if (!observation.authenticated) return observationFresh ? { kind: "unavailable" } : { kind: "unknown" };
-  if (paidCredits) return { kind: "available", remaining: 0 };
+  if (paidCredits) return { kind: "available", remaining: 0, resetsAt: null };
   /* The provider's own word that the limit is reached holds without a window
      to read beside it (a workspace member's reading can carry none); it names
      no reset, and holds only while the live reading is fresh. */
@@ -70,7 +70,11 @@ function capacity(observation: DurableQuotaObservation | undefined, now: number,
     && !(observation.provenance.source === "transcript" && observationFresh && remaining <= 0)) return { kind: "unknown" };
   /* The provider's own word that the limit is reached outranks windows that
      still show room; it holds only while the reading is fresh, like they do. */
-  if (remaining > 0 && !reached) return { kind: "available", remaining };
+  if (remaining > 0 && !reached) {
+    const binding = windows.filter((window) => 100 - window.usedPercent === remaining);
+    return { kind: "available", remaining, resetsAt: binding.every((window) => window.resetsAt !== null && window.resetsAt > nowSeconds)
+      ? Math.max(...binding.map((window) => window.resetsAt!)) : null };
+  }
   if (!exhaustedWindows.length) return { kind: "exhausted", resetsAt: null };
   if (copilotTranscript && exhaustedWindows.some((window) => window.resetsAt === null || window.resetsAt <= nowSeconds)) return { kind: "unknown" };
   if (exhaustedWindows.some((window) => window.resetsAt === null)) return { kind: "exhausted", resetsAt: null };
@@ -100,6 +104,15 @@ export function accountQuotaVerdict(observations: DurableQuotaObservation[], acc
  * headroom wins, then an account whose quota is unknown. Exhaustion is only
  * reported when every authenticated account has a fresh zero-capacity sample
  * or is held by the paid-credit guard.
+ *
+ * Within each retry tier, accounts above the existing balance threshold (25%
+ * remaining in EVERY governing window) spend their soonest binding reset first.
+ * The binding window has the least headroom; tied binding windows use their
+ * latest reset. If any adequately provisioned candidate lacks a future binding
+ * reset, that whole group uses headroom order. This is a total order even with
+ * three accounts and partial reset data. Equal resets, or no adequate account,
+ * use most headroom, then the routing preference, then account id. No capacity
+ * is refused by this ranking; smaller balances remain available fallbacks.
  */
 export function selectHeadlessAccount(
   accounts: SelectableAccount[],
@@ -122,8 +135,18 @@ export function selectHeadlessAccount(
   for (const attempted of [false, true]) {
     const tier = candidates.filter((candidate) => excluded.has(candidate.account.id) === attempted);
     const available = tier
-      .flatMap((candidate) => candidate.capacity.kind === "available" ? [{ ...candidate, remaining: candidate.capacity.remaining }] : [])
-      .sort((left, right) => right.remaining - left.remaining || Number(right.account.id === preferredId) - Number(left.account.id === preferredId) || left.account.id.localeCompare(right.account.id));
+      .flatMap((candidate) => candidate.capacity.kind === "available" ? [{ account: candidate.account, ...candidate.capacity }] : []);
+    const adequate = available.filter((candidate) => candidate.remaining > AUTO_BALANCE_THRESHOLD);
+    const resetOrder = adequate.length > 0 && adequate.every((candidate) => candidate.resetsAt !== null);
+    available.sort((left, right) => {
+      const leftAdequate = left.remaining > AUTO_BALANCE_THRESHOLD;
+      const rightAdequate = right.remaining > AUTO_BALANCE_THRESHOLD;
+      return Number(rightAdequate) - Number(leftAdequate)
+        || (resetOrder && leftAdequate && rightAdequate ? left.resetsAt! - right.resetsAt! : 0)
+        || right.remaining - left.remaining
+        || Number(right.account.id === preferredId) - Number(left.account.id === preferredId)
+        || left.account.id.localeCompare(right.account.id);
+    });
     if (available[0]) return { kind: "available", accountId: available[0].account.id };
     const unknown = tier
       .filter((candidate) => candidate.capacity.kind === "unknown")
