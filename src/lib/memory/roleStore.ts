@@ -51,8 +51,10 @@ function retentionPolicy(project: string) {
   const enabled = roleMemoryEnabled() && settings.enabled && effectiveCurationSetting(settings).enabled;
   return {
     get canCurate() { return enabled && !passIsLive(machinePassAuthority()); },
-    evidence: (active: readonly RoleMemoryRule[]) => {
-      const all = roleMemoryCollection()?.snapshot() ?? [];
+    evidence: (active: readonly RoleMemoryRule[], pending?: LessonRequestRow | null) => {
+      const stored = roleMemoryCollection()?.snapshot() ?? [];
+      // The current answer's validated application marks are not committed yet.
+      const all = pending ? stored.map(row => row.kind === "request" && key(row) === key(pending) ? pending : row) : stored;
       const byId = new Map(all.flatMap(row => row.kind === "rule" ? [[row.id, row] as const] : []));
       // Succession can combine duplicate task lineages in this write. Its
       // transaction is not yet visible to the snapshot reader.
@@ -332,7 +334,7 @@ function writeLessonAnswer(input: LessonWriteInput & { request?: Pick<LessonRequ
   if (project === "*" || Number(input.lessons.length > 0) + Number(input.rewrite !== undefined) + Number(input.none !== null) + Number(input.problem !== undefined) !== 1
     || input.lessons.length > MAX_LESSONS_PER_ATTEMPT || input.lessons.some(lesson => !["role", "project", "machine"].includes(lesson.scope))) throw new RoleMemoryRefusal("LESSON_INVALID", "give exactly one of none, rewrite, lesson or problem for a concrete project");
   joinMovedScopes(now);
-  const policy = retentionPolicy(project);
+  const basePolicy = retentionPolicy(project);
   const result = roleMemoryCollection(true)!.boundedPatch(4096, (tx) => {
     const requested = input.request ? tx.get(requestKey(input.request.pipelineId, input.request.stageId, input.request.attempt)) : null;
     const request = requested?.kind === "request" ? requested : null;
@@ -347,6 +349,10 @@ function writeLessonAnswer(input: LessonWriteInput & { request?: Pick<LessonRequ
       if (input.applied !== undefined) request.applied = [...applied];
       if (input.misled !== undefined) request.misled = [...misled];
     }
+    const policy = {
+      get canCurate() { return basePolicy.canCurate; },
+      evidence: (active: readonly RoleMemoryRule[]) => basePolicy.evidence(active, request),
+    };
     if (input.problem && request) {
       tx.put({ ...request, problem: input.problem });
       return { left: [], none: null, problem: input.problem };

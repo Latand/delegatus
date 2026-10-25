@@ -13,7 +13,7 @@ import { input as tickInput } from "@/lib/boardMaintenance/testFixture";
 import { roleIsClean } from "../eligibility";
 import { ROLE_MEMORY_BOUND, CURATION_INTERVAL_MS, type RoleMemoryRule, type RuleSource } from "../roleTypes";
 import { scopeChars } from "../roleConsolidate";
-import { canonicalScope, joinMovedScopes, leaveLessons, newRuleId, projectView, recordLessonRequest, learnedRulesBlock, roleMemoryCollection, roleScope, projectScope, restoreRule, deleteRule, storedLessonTexts } from "../roleStore";
+import { canonicalScope, joinMovedScopes, leaveLessons, newRuleId, projectView, recordLessonRequest, learnedRulesBlock, learnedRulesSnapshot, roleMemoryCollection, roleScope, projectScope, restoreRule, deleteRule, storedLessonTexts } from "../roleStore";
 import { applyCuration, revertCuratorPass, type CurationApply } from "./apply";
 import { claimPass, readPassAuthority, currentPassAuthority, machinePassAuthority, passForConversationAuthority, currentPass, curationPanelRuns, curationStatus, curationView, machinePass, patchPass, readPass, type CuratorPass } from "./store";
 import { curatorCallerOf } from "./guard";
@@ -34,6 +34,7 @@ import { loadTasks } from "@/lib/tasks/store";
 import { admitReservedLaunch } from "@/lib/tasks/launchMembership";
 import { groupHideState } from "@/lib/tasks/groupHide";
 import { commitTaskMembership } from "@/lib/tasks/membership";
+import { recordMemoryDelivery } from "../deliveryLedger";
 
 const PROJECT = "curation-fixture";
 const NOW = Date.parse("2026-10-11T00:00:00Z");
@@ -1248,6 +1249,31 @@ test("a busy curator permits emergency eviction by evidence while keeping the re
   expect(row(incoming.id).state).toBe("active");
   expect(row(ids[1])).toMatchObject({ state: "archived", reason: "budget" });
   expect(row(ids[2]).state).toBe("active");
+});
+
+test.each(["unapplied", "applied"])("emergency retention credits application marks reported with the new lesson: %s", async usage => {
+  const applied = usage === "applied";
+  const scope = roleScope(PROJECT, "builder");
+  const ids = Array.from({ length: 39 }, (_, i) => fixture(scope, {
+    id: `r_${i.toString(16).padStart(16, "0")}`, createdAt: at(i),
+    rule: `Preserve condition category ${i}: ${"check durable evidence ".repeat(20)}`.slice(0, 300),
+  }));
+  const source: RuleSource = { project: PROJECT, pipelineId: "application-evidence", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_application" };
+  recordLessonRequest({ ...source, at: at() });
+  roleMemoryCollection()!.boundedPatch(2, tx => {
+    const request = tx.get("q:application-evidence:build:1");
+    if (request?.kind !== "request") throw Error("request missing");
+    tx.put({ ...request, ruleIds: ids });
+  });
+  pass();
+  const incomingSource = { ...source, pipelineId: "application-append" };
+  recordLessonRequest({ ...incomingSource, at: at(2000) });
+  await recordMemoryDelivery({ engine: "codex", conversationId: incomingSource.conversationId, attempt: incomingSource, cwd: dir, nativeMemoryEnabled: false }, false,
+    () => learnedRulesSnapshot(PROJECT, "builder"));
+  const incoming = leaveLessons({ source: incomingSource, request: incomingSource, lessons: [{ scope: "role", rule: "Preserve new conditions until the curator can integrate them with existing guidance.", why }], none: null, applied: applied ? [ids[0]] : [], now: at(2000) }).left[0];
+  expect(incoming.archived).toEqual([ids[applied ? 1 : 0]]);
+  expect(row(ids[applied ? 0 : 1]).state).toBe("active");
+  expect(row(ids[applied ? 1 : 0])).toMatchObject({ state: "archived", reason: "budget" });
 });
 
 test("the one-time sweep includes old archives across projects and keeps per-scope receipts across restart", async () => {
