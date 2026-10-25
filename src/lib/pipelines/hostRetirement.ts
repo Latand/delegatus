@@ -2,9 +2,22 @@ import type { RuntimeEngine, RuntimeProviderRecoveryRef } from "@/lib/runtime/co
 import { durableStageTurnEvidence } from "./durableEvidence";
 import { liveBackgroundTasks } from "./backgroundTasks";
 import { classifyProviderCondition } from "./providerConditions";
+import { pipelineAttemptMayBeWorking } from "./attemptWorking";
 import type { Pipeline, PipelineStageAttempt, PipelineStageHostRef } from "./types";
 
 type RecoveryTarget = { conversationId: string; sessionId: string; agentPath: string | null; engine: RuntimeEngine };
+
+/** Terminal lanes and replaced attempts no longer own future work. Runtime
+    idleness still has to be proved before any recorded host is stopped. */
+export function pipelineAttemptReleased(pipeline: Pipeline, attempt: PipelineStageAttempt, latest: PipelineStageAttempt | undefined): boolean {
+  // An adopted helper keeps its own live-work evidence until reconciliation
+  // settles it. Merely appending one never supersedes the operational stage.
+  return !attempt.historical && (pipeline.state === "completed" || pipeline.state === "closed"
+    || (!!latest && !latest.historical && latest.n !== attempt.n));
+}
+
+// Dependency-free so the controller scope can share it without its imports.
+export { pipelineAttemptMayBeWorking };
 
 /** Fresh pipeline ownership for an engine-issued recovery. A ref never grants
     authority to a source owner, publication, or a different/current attempt. */
@@ -65,24 +78,44 @@ export function pipelineHostHasLiveWork(
   const sameConversation = (id: string | null) => !!id && !!target.conversationId
     && resolveConversation(id) === resolveConversation(target.conversationId);
   const samePath = (value: string | null) => !!value && !!target.agentPath && value === target.agentPath;
+  // Creating a successor does not keep a finished stage resident. Its live
+  // runtime turn, accepted work, publication and any operational owner still
+  // protect it independently. Proof is re-read on every actuation boundary.
+  let releasedConversation = false, releasedPath = false;
+  for (const pipeline of pipelines) {
+    if (pipelinePublicationHoldsHost(pipeline)) continue;
+    for (const run of pipeline.runs) {
+      const latest = run.attempts.findLast(attempt => !attempt.historical);
+      for (const attempt of run.attempts) {
+        if (!pipelineAttemptReleased(pipeline, attempt, latest)
+          || attempt.activation && attempt.activation.phase !== "settled") continue;
+        releasedConversation ||= sameConversation(attempt.conversationId);
+        releasedPath ||= samePath(attempt.agentPath);
+      }
+    }
+  }
   for (const pipeline of pipelines) {
     const publishing = pipelinePublicationHoldsHost(pipeline);
-    if ((sameConversation(pipeline.srcConversationId) || samePath(pipeline.srcPath))
-      && (publishing || !["completed", "closed"].includes(pipeline.state))) return true;
-    for (const run of pipeline.runs) for (const attempt of run.attempts) {
-      const matches = sameConversation(attempt.conversationId) || samePath(attempt.agentPath)
-        || (!!target.paneId && attempt.paneId === target.paneId)
-        || (!!target.launchId && attempt.launchId === target.launchId)
-        || (!!target.sessionId && attempt.sessionId === target.sessionId);
-      if (!matches) continue;
-      // The production callback supplies this object only after proving the cut
-      // and re-reading the same pipeline snapshot. Publication keeps custody.
-      if (!publishing && attempt === recoveryAttempt) continue;
-      // Completion stamps can survive a restart/resume. A running owner still
-      // holds the host, even with an older verdict on the same attempt.
-      if (publishing || ["pending", "spawning", "running", "reviewing", "committing"].includes(attempt.state)
-        || !(attempt.verdict || attempt.completedAt)
-        || (attempt.activation && attempt.activation.phase !== "settled")) return true;
+    const sourceConversation = sameConversation(pipeline.srcConversationId), sourcePath = samePath(pipeline.srcPath);
+    if ((publishing && (sourceConversation || sourcePath))
+      || (!["completed", "closed"].includes(pipeline.state)
+        && ((sourceConversation && !releasedConversation) || (sourcePath && !releasedPath)))) return true;
+    for (const run of pipeline.runs) {
+      const latest = run.attempts.findLast(attempt => !attempt.historical);
+      for (const attempt of run.attempts) {
+        const matches = sameConversation(attempt.conversationId) || samePath(attempt.agentPath)
+          || (!!target.paneId && attempt.paneId === target.paneId)
+          || (!!target.launchId && attempt.launchId === target.launchId)
+          || (!!target.sessionId && attempt.sessionId === target.sessionId);
+        if (!matches) continue;
+        // The production callback supplies this object only after proving the cut
+        // and re-reading the same pipeline snapshot. Publication keeps custody.
+        if (!publishing && attempt === recoveryAttempt) continue;
+        // Completion stamps can survive a restart/resume. A running owner still
+        // holds the host, even with an older verdict on the same attempt.
+        if (publishing || (!pipelineAttemptReleased(pipeline, attempt, latest) && pipelineAttemptMayBeWorking(attempt))
+          || (attempt.activation && attempt.activation.phase !== "settled")) return true;
+      }
     }
   }
   return false;
