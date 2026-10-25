@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 /**
  * Linked boards on the agent surface (docs/design/linked-installs.md M.4):
  * `list_tasks` and `get_task` answer the machine that runs a task as a label,
@@ -66,8 +67,8 @@ test("list_tasks and get_task answer the owner as a label and runsHere; create_t
     expect(full.sync).toBeUndefined();
     expect(((await call("list_tasks", { project: "fixture-project", full: true })).tasks as Record<string, unknown>[]).find((task) => task.id === "task-peer")?.sync).toBeUndefined();
 
-    expect((await call("create_task", { project: "fixture-project", text: "Made here", machine: "here" })).ok).toBe(true);
-    const refused = await client.callTool({ name: "create_task", arguments: { clientRequestId: `ownership-${++sequence}`, project: "fixture-project", text: "Made elsewhere", machine: PEER } });
+    expect((await call("create_task", withTaskDue({ project: "fixture-project", text: "Made here", machine: "here" }))).ok).toBe(true);
+    const refused = await client.callTool({ name: "create_task", arguments: withTaskDue({ clientRequestId: `ownership-${++sequence}`, project: "fixture-project", text: "Made elsewhere", machine: PEER }) });
     expect(refused.isError).toBe(true);
   } finally {
     await client.close();
