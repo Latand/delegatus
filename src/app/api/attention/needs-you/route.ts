@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import type { NextRequest } from "next/server";
 import { agentRegistry } from "@/lib/agent/registry";
 import { callerConversationId } from "@/lib/agent/operatorAuthority";
@@ -21,4 +22,6 @@ const handler = needsYouHandler({
       seats: authorizedManagerSeats(productionManagerAuthoritySources()), maintainer: maintainerCallerOf(id, snapshot) };
   }, read: readNeedsYou,
 });
-export function POST(request: NextRequest) { return handler(request); }
+function workspacePOST(request: NextRequest) { return handler(request); }
+
+export const POST = workspaceRoute("/api/attention/needs-you", workspacePOST);

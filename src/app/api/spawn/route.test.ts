@@ -2359,6 +2359,8 @@ test.each([
 });
 
 test("a fresh process resolves and refreshes a persisted Claude account before one structured launch", async () => {
+  // Reserve five seconds for reaping before the test's outer deadline.
+  const fixtureSignal = AbortSignal.timeout(15_000);
   const sandbox = fs.mkdtempSync(path.join(routeSandbox, "production-resolver-reboot-"));
   const stateDir = path.join(sandbox, "state");
   const accountsRoot = path.join(sandbox, "accounts", "claude");
@@ -2477,30 +2479,39 @@ test("a fresh process resolves and refreshes a persisted Claude account before o
     },
     stdout: "pipe",
     stderr: "pipe",
+    signal: fixtureSignal,
+    killSignal: "SIGKILL",
   });
-  const [exit, stdout, stderr] = await Promise.all([
-    child.exited,
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-  ]);
+  try {
+    const [exit, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
 
-  expect({ exit, stderr: unexpectedSpawnStderr(stderr) }).toEqual({ exit: 0, stderr: "" });
-  expect(JSON.parse(stdout)).toEqual({
-    status: 202,
-    body: expect.objectContaining({
-      launched: false,
-      state: "starting",
-      conversationId: expect.stringMatching(/^conversation_/),
-    }),
-    refreshRequests: 1,
-    usageRequests: 1,
-    structuredSpawns: 1,
-    launchedAccount: "rebooted",
-    "accessToken": "synthetic-current-access",
-  });
+    expect({ exit, stderr: unexpectedSpawnStderr(stderr) }).toEqual({ exit: 0, stderr: "" });
+    expect(JSON.parse(stdout)).toEqual({
+      status: 202,
+      body: expect.objectContaining({
+        launched: false,
+        state: "starting",
+        conversationId: expect.stringMatching(/^conversation_/),
+      }),
+      refreshRequests: 1,
+      usageRequests: 1,
+      structuredSpawns: 1,
+      launchedAccount: "rebooted",
+      "accessToken": "synthetic-current-access",
+    });
+  } finally {
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await child.exited;
+  }
 }, 20_000);
 
 test("fresh processes rescue one orphaned immediate structured admission exactly once", async () => {
+  // Admission and both concurrent recovery children share one bounded lifetime.
+  const fixtureSignal = AbortSignal.timeout(15_000);
   const sandbox = fs.mkdtempSync(path.join(routeSandbox, "orphaned-structured-admission-"));
   const stateDir = path.join(sandbox, "state");
   const cwd = path.join(sandbox, "workspace");
@@ -2618,30 +2629,41 @@ test("fresh processes rescue one orphaned immediate structured admission exactly
       },
       stdout: "pipe",
       stderr: "pipe",
+      signal: fixtureSignal,
+      killSignal: "SIGKILL",
     });
-    const [exit, stdout, stderr] = await Promise.all([
-      child.exited,
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-    ]);
-    /* The child names the deprecated JSON mode on purpose; its warning is expected. */
-    // Racing recovery can defer the task lease's post-commit release. The
-    // responses, persisted receipt and single effect below still prove rescue.
-    const unexpected = unexpectedSpawnStderr(stderr).split("\n")
-      .filter(line => line !== "[state lease] abandoned tasks: Error: state writer is busy during account commit").join("\n");
-    expect({ exit, stderr: unexpected }).toEqual({ exit: 0, stderr: "" });
-    return JSON.parse(stdout) as {
-      status: number;
-      body: { launchId: string; conversationId: string; state: string };
-      deferred: number;
-      receiptState: string | null;
-    };
+    try {
+      const [exit, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+      /* The child names the deprecated JSON mode on purpose; its warning is expected. */
+      // Racing recovery can defer the task lease's post-commit release. The
+      // responses, persisted receipt and single effect below still prove rescue.
+      const unexpected = unexpectedSpawnStderr(stderr).split("\n")
+        .filter(line => line !== "[state lease] abandoned tasks: Error: state writer is busy during account commit").join("\n");
+      expect({ exit, stderr: unexpected }).toEqual({ exit: 0, stderr: "" });
+      return JSON.parse(stdout) as {
+        status: number;
+        body: { launchId: string; conversationId: string; state: string };
+        deferred: number;
+        receiptState: string | null;
+      };
+    } finally {
+      if (child.exitCode === null) child.kill("SIGKILL");
+      await child.exited;
+    }
   };
 
   const admitted = await run("admit");
   expect(admitted).toMatchObject({ status: 202, deferred: 1, receiptState: "starting" });
 
-  const recovered = await Promise.all([run("recover"), run("recover")]);
+  const recoveryRuns = await Promise.allSettled([run("recover"), run("recover")]);
+  const recovered = recoveryRuns.map(result => {
+    if (result.status === "rejected") throw result.reason;
+    return result.value;
+  });
   const effects = fs.existsSync(effectsPath)
     ? fs.readFileSync(effectsPath, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { effect: string })
     : [];

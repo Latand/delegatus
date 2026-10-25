@@ -8,7 +8,7 @@ import { isTerminalHighSignalEvent } from "@/lib/lifecycle/vocabulary";
 
 import { seatTickRetryGuardRef, seatTickSourceGapRef, ORCHESTRATOR_ALERT_REF, SEAT_TICK_SETTINGS_REF } from "./cards";
 import { evidenceStallReason } from "./classify";
-import { seatTickReminders, taskHasBlocker, reminderDeliveredVersion, pauseReminderReady, recentReminderVersion } from "./seatTickReminders";
+import { seatTickReminders, taskHasBlocker, taskIsOverdue, reminderDeliveredVersion, pauseReminderReady, recentReminderVersion } from "./seatTickReminders";
 import type { EffectiveSeatTickSettings } from "./seatTickSettings";
 import {
   SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT,
@@ -66,14 +66,13 @@ import {
  *   plane cannot answer for at all — is not a turn the tick may wait behind
  *   forever, because the seat's own dead host is exactly the condition a wake
  *   exists to clear.
- * - **Every wake waits out the project's wake interval.** One hour by default,
- *   with no exception and no reason allowed to jump it: a terminal lane event
- *   is the FIRST thing the next wake carries, never a reason to raise one
- *   early. The bound is what the ADR's cost argument rests on — one resume per
- *   project per interval. What sets the interval is the project's own recorded
- *   settings (#1275, and the ADR amendment it carries): the seat governs its
- *   own tick, deliberately and with the reason on the record, and a project
- *   nobody configured runs on the default hour exactly as before.
+ * - **Ordinary wakes wait out the project's wake interval.** One hour by
+ *   default, with the terminal lane event first among its reasons. An
+ *   unannounced deploy the seat started has its own settlement deadline and
+ *   can become due while the ordinary interval is still quiet. What sets the
+ *   ordinary interval is the project's own recorded settings (#1275, and the
+ *   ADR amendment it carries): a project nobody configured runs on the default
+ *   hour exactly as before.
  * - **Nothing here creates or wakes anything.** The decision names what is
  *   owed; the controller sends it, re-reads the seat epoch before it does, and
  *   only a delivered send advances a stamp. The one thing a check may settle on
@@ -838,8 +837,9 @@ function elapsed(since: string | null, now: number, window: number): boolean {
 }
 
 /**
- * The one gate every wake passes, exported so the gather can apply the SAME
- * clause rather than a second copy of it.
+ * The ordinary wake interval gate, exported so the gather can apply the same
+ * clause rather than a second copy of it. Deploy settlement carries a
+ * separate deadline flag into the decision.
  *
  * It reads `lastWakeAt`, which the project keeps across a rotation, so an
  * incoming seat inherits the bound rather than a clean slate the predecessor's
@@ -1251,8 +1251,9 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   const autonomous = autonomyActive(input.settings.autonomy, input.now);
   const endReports = pendingAutonomyReports(input.settings, input.now);
   const reminders = seatTickReminders(input);
-  const unstarted = input.tasks.filter((task) => isUnstarted(task, input.now, input.policy.backlogAfterMs)
-    || autonomous && !task.accepted && !taskHasBlocker(task, input.now) && task.status === "inbox" && !task.owned && !task.runsOn);
+  const overdueIds = new Set((input.overdueTasks ?? []).map(task => task.id));
+  const unstarted = input.tasks.filter((task) => !overdueIds.has(task.id) && !taskIsOverdue(task, input.now) && (isUnstarted(task, input.now, input.policy.backlogAfterMs)
+    || autonomous && !task.accepted && !taskHasBlocker(task, input.now) && task.status === "inbox" && !task.owned && !task.runsOn));
   const backlog = input.tasks.filter((task) => !task.accepted && !taskHasBlocker(task, input.now) && task.status === "assigned" && !task.owned && !task.runsOn).length - unstarted.filter(task => task.status === "assigned").length;
   const openWork = hasOpenWork(input);
   /* The bound shortens while the seat's own children are moving (#1881): a
@@ -1277,7 +1278,8 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   const childInterval = childrenSettled
     ? SEAT_TICK_SETTLED_CHILD_WAKE_INTERVAL_MS
     : liveChildren.length > 0 ? SEAT_TICK_RUNNING_CHILD_WAKE_INTERVAL_MS : Number.POSITIVE_INFINITY;
-  const wakeDue = seatTickWakeDue(input.state.lastWakeAt, input.now, Math.min(input.settings.wakeIntervalMs, childInterval));
+  const wakeDue = input.deploySettlementWakeDue === true
+    || seatTickWakeDue(input.state.lastWakeAt, input.now, Math.min(input.settings.wakeIntervalMs, childInterval));
 
   const observed: SeatTickProjectState = { ...base, stalledSeen: stalledNow };
 
@@ -1399,7 +1401,8 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
       const more = permissions.length > 1 ? ` and ${permissions.length - 1} more` : "";
       candidates.push({ kind: "permission-request", detail: `a turn waits on an unanswered tool permission request${more}` });
     }
-    if (unstarted.length > 0 || reminders.some(item => item.kind === "task")) {
+    if (reminders.some(item => item.reminderKind === "overdue")) candidates.push({ kind: "overdue-task", detail: "overdue board work" });
+    if (unstarted.length > 0 || reminders.some(item => item.reminderKind === "task")) {
       /* The excluded count travels with the reason so a seat reading "2" beside
          a board showing twenty-nine assigned cards can see why, rather than
          concluding the tick cannot count. */
@@ -1450,7 +1453,8 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   const forReason = (kind: SeatTickWakeReasonKind): SeatTickItem[] => all.filter(item => {
     switch (kind) {
       case "unmerged-pr": return item.kind === "pull-request";
-      case "unstarted-task": return item.kind === "task";
+      case "unstarted-task": return item.kind === "task" && item.reminderKind !== "overdue";
+      case "overdue-task": return item.reminderKind === "overdue";
       case "permission-request": return item.kind === "permission";
       case "release-settled": return item.kind === "signal" && item.id.startsWith("release-settled:");
       case "release-blocked": return item.kind === "signal" && item.id.startsWith("release-blocked:");
@@ -1463,7 +1467,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
       default: return false;
     }
   });
-  const versionedReasons = new Set<SeatTickWakeReasonKind>(["unmerged-pr", "unstarted-task", "own-lane-settled", "stalled", "interval", "permission-request", "worker-ask", "disk-pressure", "release-settled", "release-blocked"]);
+  const versionedReasons = new Set<SeatTickWakeReasonKind>(["unmerged-pr", "unstarted-task", "overdue-task", "own-lane-settled", "stalled", "interval", "permission-request", "worker-ask", "disk-pressure", "release-settled", "release-blocked"]);
   const cards: SeatTickCard[] = [];
   const reasons: SeatTickWakeReason[] = [];
   let guardHeld = 0;
@@ -1488,10 +1492,12 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
     if (reason.kind === "unmerged-pr") {
       const first = input.pullRequests.find(pr => `#${pr.number}` === pending[0]?.id)!;
       reasons.push({ ...reason, detail: `pull request #${first.number}${pending.length > 1 ? ` and ${pending.length - 1} more` : ""} left open by a lane that finished${first.lastFixUnreviewed ? "; last fix not re-reviewed" : ""}${first.mergeBlocked ? `; merge stopped: ${first.mergeBlocked}` : ""}` });
-    } else if (reason.kind === "own-lane-settled" || reason.kind === "unstarted-task" || reason.kind === "stalled") {
+    } else if (reason.kind === "own-lane-settled" || reason.kind === "unstarted-task" || reason.kind === "overdue-task" || reason.kind === "stalled") {
       const named = pending.slice(0, input.policy.itemsPerWake).map(item => `${item.kind === "pull-request" ? `${item.id}: ` : ""}${item.label.replace(/\s+/g, " ").slice(0, 200)}`).join("; ");
       const more = pending.length > input.policy.itemsPerWake ? `; ${pending.length - input.policy.itemsPerWake} more ${seatTickCatchUp(input) ? "included in this catch-up" : "await a later wake"}` : "";
-      reasons.push({ ...reason, detail: `${named}${more}${reason.kind === "unstarted-task" && backlog > 0 ? `; ${backlog} older than the backlog bound` : ""}` });
+      const duePolicy = reason.kind === "overdue-task" ? "; start or finish it, hold with an until, close with a note, or move dueAt with dueReason. Move horizon: high next day, normal +3 days, low +7 days; open over 7 days: use the next shorter horizon and raise priority one level. Handle dates without reminding the operator." : "";
+      const dueCount = reason.kind === "overdue-task" && (input.overdueTasks?.length ?? 0) === 51 ? "; 50 or more overdue tasks" : "";
+      reasons.push({ ...reason, detail: `${named}${more}${dueCount}${duePolicy}${reason.kind === "unstarted-task" && backlog > 0 ? `; ${backlog} older than the backlog bound` : ""}` });
     } else reasons.push(reason);
   }
 
@@ -2045,7 +2051,7 @@ function wakeItems(context: {
     }
     else items.push(reminder);
   }
-  for (const entry of context.unstarted) task(entry);
+  for (const entry of context.unstarted) if (!items.some(item => item.kind === "task" && item.id === entry.id)) task(entry);
   for (const entry of unmovedLanes) laneStall(entry);
   for (const entry of unmovedChildren) childStall(entry);
   /* On an interval wake the open lanes are the agenda; they carry no reason of

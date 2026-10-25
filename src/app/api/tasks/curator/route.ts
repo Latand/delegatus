@@ -1,3 +1,4 @@
+import { workspaceRoute, requestWorkspaceScope, filterWorkspaceRows, workspaceDenied } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
 import { listFiles } from "@/lib/scanner";
@@ -26,14 +27,14 @@ function intParam(value: string | null, fallback: number, max: number): number {
   return Math.min(parsed, max);
 }
 
-export async function GET(req: NextRequest): Promise<NextResponse | NextResponse<ApiError>> {
+async function workspaceGET(req: NextRequest): Promise<NextResponse | NextResponse<ApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
 
   const hours = hoursParam(req.nextUrl.searchParams.get("hours"), 1, 24);
   const context = intParam(req.nextUrl.searchParams.get("context"), 4, 12);
   const project = req.nextUrl.searchParams.get("project")?.trim() || null;
-  const files = await listFiles();
+  const files = filterWorkspaceRows(requestWorkspaceScope(req), await listFiles());
   const now = new Date();
   const lookbackMs = hours * 60 * 60 * 1000;
   const inputs = collectTaskCuratorInputs(files, { now, lookbackMs, contextMessages: context, project });
@@ -56,7 +57,7 @@ export async function GET(req: NextRequest): Promise<NextResponse | NextResponse
   });
 }
 
-export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; created: unknown[]; skipped: unknown[] } | ApiError>> {
+async function workspacePOST(req: NextRequest): Promise<NextResponse<{ ok: true; created: unknown[]; skipped: unknown[] } | ApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
 
@@ -71,10 +72,20 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; c
   }
 
   const hours = typeof body.hours === "number" && Number.isFinite(body.hours) && body.hours > 0 ? Math.min(body.hours, 72) : 6;
-  const files = await listFiles();
+  const files = filterWorkspaceRows(requestWorkspaceScope(req), await listFiles());
+  const scope = requestWorkspaceScope(req);
+  if (scope && !scope.owner) {
+    const inputs = collectTaskCuratorInputs(files.filter(file => scope.canAct(file.project)), { now: new Date(), lookbackMs: hours * 60 * 60 * 1000, contextMessages: 4 });
+    const allowed = new Set(inputs.map(input => input.id));
+    if (body.proposals.some(proposal => !proposal || typeof proposal !== "object" || typeof (proposal as TaskCuratorProposal).inputId !== "string" || !allowed.has((proposal as TaskCuratorProposal).inputId as string))) return workspaceDenied();
+  }
   const result = applyTaskCuratorProposals(files, body.proposals as TaskCuratorProposal[], {
     now: new Date(),
     lookbackMs: hours * 60 * 60 * 1000,
   });
   return NextResponse.json({ ok: true, created: result.created.map((task) => taskForResponse(req, task)), skipped: result.skipped });
 }
+
+export const GET = workspaceRoute("/api/tasks/curator", workspaceGET);
+
+export const POST = workspaceRoute("/api/tasks/curator", workspacePOST, true);

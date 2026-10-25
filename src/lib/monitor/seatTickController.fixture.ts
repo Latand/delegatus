@@ -159,8 +159,6 @@ function harness(options: {
   state?: Partial<SeatTickProjectState>;
   delivery?: DeliveryOutcome;
   deliveryThrows?: boolean;
-  /** Swaps the seat after the decision, the way a rotation lands mid-check. */
-  rotateBeforeSend?: { conversationId: string; seatEpoch: number; path: string | null } | null;
   /** What the layer holding a retained wake says has become of it. */
   wakeState?: SeatTickWakeState;
   /** What taking that wake back out of the holder's queue achieves. */
@@ -223,7 +221,6 @@ function harness(options: {
   const withdrawn: { wake: SeatTickOutstandingWake; reason: string }[] = [];
   const livenessReads: { project?: string; conversationId?: string }[] = [];
   const result: Harness = { deps: {}, sent, journal, cards, written, withdrawn, liveness: livenessReads, snapshots: 0, seat: options.seat === undefined ? { conversationId: CONVERSATION, seatEpoch: 7, path: null } : options.seat };
-  let reads = 0;
   const localStateFile = options.stateFile ?? path.join(fs.mkdtempSync(path.join(SANDBOX, "controller-state-")), "seat-tick.json");
   if (!options.stateFile) writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: result.seat?.seatEpoch ?? null, ...options.state, accounting: undefined }, localStateFile);
 
@@ -269,14 +266,7 @@ function harness(options: {
     },
     proposalIssues: async () => [{ number: 1245, title: "the native seat tick", labels: ["design"], updatedAt: null }],
     sources: {
-      seatFor: () => {
-        reads += 1;
-        /* Reads one and two are the opening reconcile and the gather; every
-           read after them is the re-check the send takes, which is where a
-           rotation must be caught. */
-        const seat = reads > 2 && options.rotateBeforeSend !== undefined ? options.rotateBeforeSend : result.seat;
-        return { active: seat as never, pending: null, history: [] };
-      },
+      seatFor: () => ({ active: result.seat as never, pending: null, history: [] }),
       ...(options.seatEverHeld === undefined ? {} : { seatEverHeld: () => options.seatEverHeld! }),
       activeSeats: () => [PROJECT],
       pipelines: () => pipelines as never,
@@ -751,6 +741,12 @@ function childFixture(name: string, gitRepository = false, sqliteMode: "sqlite" 
         ...(options.memberships ? { memberships: options.memberships } : {}),
       });
       const child = observedChild ?? { id: begun.receipt.conversationId, generations: [] };
+      /* A materialized fixture child has finished launch actuation. Hand back
+         its claim so the reservation cannot keep a dead child hosted forever.
+         Unobserved reservations still model a launch that has not settled. */
+      if (observedChild && begun.receipt.admissionOwner) {
+        expect(registry.releaseSpawnActuation(begun.receipt.launchId, begun.receipt.admissionOwner).released).toBe(true);
+      }
       if (options.completedReceipt) {
         registry.completeSpawn(begun.receipt.launchId, {
           key: sessionKeyFromTranscript(engine, childPath)!,

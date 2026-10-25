@@ -1,0 +1,587 @@
+{
+  "version": 1,
+  "sourceBase": "bf1c00247d496184b51c598a92e7cf4501185ae5",
+  "sourceSha256": {
+    "scripts/local-gate-tests.ts": "52e32e0c759aebdb0d154086d8a450ae2ff6a01e5bbc7a4c9285f5c94f9d2cc1",
+    "scripts/local-gate.ts": "55ec48f370a919aa77db56cc58b609c351911c532c731d5f4313537f9032326c",
+    "scripts/gate-slot.sh": "bf4afbb6746b195ffcee17a18b5a48c48205b07a728c00a79d704298406f1650",
+    "scripts/gate-runner/client.ts": "293b431cfdcb7e0a4834c06354368dbd25091bd9a7de6e6e59e1d4b56539f230",
+    "scripts/gate-runner/serve.ts": "d678250a646b13b598569c699b58ce2a9876365442b29c7ce5cac3d9bcedd2d8",
+    "src/lib/pipelines/git.ts": "416cd2b39f24a4ab51cb19982e8a607e93eec0dce8bb2ea4e80d66dd50462d76"
+  },
+  "scope": "Placement rehearsal using private fixture checkouts, the configured runner and real SSH; no ref published. No throughput or latency claim.",
+  "fixture": {
+    "testPath": "gate-runner-fixture/placement.test.ts",
+    "body": "test('stable baseline failure', async () => { await Bun.sleep(800); expect(1).toBe(2); });",
+    "change": "One comment against a base containing the same failing test. TypeScript includes only this fixture, retaining the repository alias. No workflow edits.",
+    "isolation": "Private HOME, XDG config/cache, state, temp and gate-cache roots. Viewer control points to a closed port.",
+    "before": "Starting-revision comparator and wrapper copied into the fixture before its base commit.",
+    "after": "Final comparator and wrapper copied into the fixture before its base commit.",
+    "publication": "Apply pipelinePublicationHookEnv to the fixture environment, then invoke .githooks/pre-push directly."
+  },
+  "unitCount": "Distinct Starting/Started delegatus-gate service ids in the user journal between start/end, filtered to this fixture owned-runner path; includes completed units, excludes other lanes.",
+  "diagnosis": {
+    "decisionLog": "A pre-push fell back at 11:12:08Z during a lost-verdict cooldown ending 11:15Z. A remote pre-push passed at 11:26:34Z.",
+    "journalWindow": "2026-10-23T11:15:00Z/2026-10-23T11:22:00Z",
+    "journalObservation": "Comparator file-runner services were local in this window; the baseline CLI rehearsal separately proves the direct-entry bypass. Existing fallback jobs keep running locally after cooldown expiry.",
+    "configuredDispatch": "Direct hooks already dispatched before isolation. Wrapping their unadmitted parent disabled dispatch; the direct comparator CLI never dispatched."
+  },
+  "decisionFileObservations": {
+    "unadmittedPrePushParent": {
+      "at": "2026-10-23T12:06:04.811Z",
+      "value": "here",
+      "decision": "ineligible",
+      "reason": "not a command shape the runner takes"
+    }
+  },
+  "runs": [
+    {
+      "sourceSha256": {
+        "scripts/gate-slot.sh": "90096cb459c259ecb86ee385cfac9ad74d3bfca951f921a6a945f147a878c677",
+        "scripts/local-gate-tests.ts": "a687a874923e7f8c3e8b8c519c800133188bc0c9da173af6084eacd1df76bf41"
+      },
+      "fixtureBase": "181dfa137c9d0fd9ab0e34d1276611048be452dc",
+      "agentSignalSandbox": true,
+      "decisions": [
+        {
+          "at": "2026-10-23T12:40:28.506Z",
+          "decision": "remote",
+          "reason": "exit 0",
+          "shape": "pre-push",
+          "treeKind": "git"
+        }
+      ],
+      "route": "agent-hook",
+      "version": "before",
+      "sample": 1,
+      "command": "bun scripts/local-gate.ts pre-push",
+      "code": 0,
+      "localUnits": 0,
+      "remoteRunIds": [
+        "ee7c90db2996"
+      ],
+      "start": "2026-10-23T12:40:05.262Z",
+      "end": "2026-10-23T12:40:28.522Z",
+      "load": [
+        "14.70",
+        "17.91",
+        "19.01"
+      ],
+      "comparison": "0 new failures, 1 pre-existing failure",
+      "privacy": "passed locally before dispatch",
+      "remoteTreePrefix": "fb78aad638a9"
+    },
+    {
+      "sourceSha256": {
+        "scripts/gate-slot.sh": "90096cb459c259ecb86ee385cfac9ad74d3bfca951f921a6a945f147a878c677",
+        "scripts/local-gate-tests.ts": "a687a874923e7f8c3e8b8c519c800133188bc0c9da173af6084eacd1df76bf41"
+      },
+      "fixtureBase": "181dfa137c9d0fd9ab0e34d1276611048be452dc",
+      "agentSignalSandbox": true,
+      "decisions": [
+        {
+          "at": "2026-10-23T12:40:45.055Z",
+          "decision": "remote",
+          "reason": "exit 0",
+          "shape": "pre-push",
+          "treeKind": "git"
+        }
+      ],
+      "route": "agent-hook",
+      "version": "before",
+      "sample": 2,
+      "command": "bun scripts/local-gate.ts pre-push",
+      "code": 0,
+      "localUnits": 0,
+      "remoteRunIds": [
+        "13ab916afbc5"
+      ],
+      "start": "2026-10-23T12:40:28.553Z",
+      "end": "2026-10-23T12:40:45.068Z",
+      "load": [
+        "13.59",
+        "17.50",
+        "18.86"
+      ],
+      "comparison": "0 new failures, 1 pre-existing failure",
+      "privacy": "passed locally before dispatch",
+      "remoteTreePrefix": "fb78aad638a9"
+    },
+    {
+      "sourceSha256": {
+        "scripts/gate-slot.sh": "bf4afbb6746b195ffcee17a18b5a48c48205b07a728c00a79d704298406f1650",
+        "scripts/local-gate-tests.ts": "52e32e0c759aebdb0d154086d8a450ae2ff6a01e5bbc7a4c9285f5c94f9d2cc1"
+      },
+      "fixtureBase": "5c3984853d73ad3ff9138555fe726c52bc68d100",
+      "agentSignalSandbox": true,
+      "decisions": [
+        {
+          "at": "2026-10-23T12:41:08.455Z",
+          "decision": "remote",
+          "reason": "exit 0",
+          "shape": "pre-push",
+          "treeKind": "git"
+        }
+      ],
+      "route": "agent-hook",
+      "version": "after",
+      "sample": 1,
+      "command": "bun scripts/local-gate.ts pre-push",
+      "code": 0,
+      "localUnits": 0,
+      "remoteRunIds": [
+        "7534f59506e9"
+      ],
+      "start": "2026-10-23T12:40:46.541Z",
+      "end": "2026-10-23T12:41:08.464Z",
+      "load": [
+        "12.09",
+        "16.82",
+        "18.60"
+      ],
+      "comparison": "0 new failures, 1 pre-existing failure",
+      "privacy": "passed locally before dispatch",
+      "remoteTreePrefix": "c1a5c741e633"
+    },
+    {
+      "sourceSha256": {
+        "scripts/gate-slot.sh": "bf4afbb6746b195ffcee17a18b5a48c48205b07a728c00a79d704298406f1650",
+        "scripts/local-gate-tests.ts": "52e32e0c759aebdb0d154086d8a450ae2ff6a01e5bbc7a4c9285f5c94f9d2cc1"
+      },
+      "fixtureBase": "5c3984853d73ad3ff9138555fe726c52bc68d100",
+      "agentSignalSandbox": true,
+      "decisions": [
+        {
+          "at": "2026-10-23T12:41:29.326Z",
+          "decision": "remote",
+          "reason": "exit 0",
+          "shape": "pre-push",
+          "treeKind": "git"
+        }
+      ],
+      "route": "agent-hook",
+      "version": "after",
+      "sample": 2,
+      "command": "bun scripts/local-gate.ts pre-push",
+      "code": 0,
+      "localUnits": 0,
+      "remoteRunIds": [
+        "73579f9e3d56"
+      ],
+      "start": "2026-10-23T12:41:08.472Z",
+      "end": "2026-10-23T12:41:29.335Z",
+      "load": [
+        "10.48",
+        "16.15",
+        "18.34"
+      ],
+      "comparison": "0 new failures, 1 pre-existing failure",
+      "privacy": "passed locally before dispatch",
+      "remoteTreePrefix": "c1a5c741e633"
+    },
+    {
+      "sourceSha256": {
+        "scripts/gate-slot.sh": "90096cb459c259ecb86ee385cfac9ad74d3bfca951f921a6a945f147a878c677",
+        "scripts/local-gate-tests.ts": "a687a874923e7f8c3e8b8c519c800133188bc0c9da173af6084eacd1df76bf41"
+      },
+      "fixtureBase": "ef27a6959fb53824118a8a63109c810e40b24b7e",
+      "agentSignalSandbox": true,
+      "decisions": [
+        {
+          "at": "2026-10-23T12:41:30.600Z",
+          "decision": "ineligible",
+          "reason": "not a command shape the runner takes",
+          "shape": "-",
+          "treeKind": "git"
+        }
+      ],
+      "route": "wrapped-agent-hook",
+      "version": "before",
+      "sample": 1,
+      "command": "bash scripts/gate-slot.sh bun scripts/local-gate.ts pre-push",
+      "code": 0,
+      "localUnits": 7,
+      "remoteRunIds": [],
+      "start": "2026-10-23T12:41:30.546Z",
+      "end": "2026-10-23T12:41:36.927Z",
+      "load": [
+        "10.84",
+        "16.13",
+        "18.32"
+      ],
+      "comparison": "0 new failures, 1 pre-existing failure",
+      "privacy": "passed locally before dispatch"
+    },
+    {
+      "sourceSha256": {
+        "scripts/gate-slot.sh": "90096cb459c259ecb86ee385cfac9ad74d3bfca951f921a6a945f147a878c677",
+        "scripts/local-gate-tests.ts": "a687a874923e7f8c3e8b8c519c800133188bc0c9da173af6084eacd1df76bf41"
+      },
+      "fixtureBase": "ef27a6959fb53824118a8a63109c810e40b24b7e",
+      "agentSignalSandbox": true,
+      "decisions": [
+        {
+          "at": "2026-10-23T12:41:36.990Z",
+          "decision": "ineligible",
+          "reason": "not a command shape the runner takes",
+          "shape": "-",
+          "treeKind": "git"
+        }
+      ],
+      "route": "wrapped-agent-hook",
+      "version": "before",
+      "sample": 2,
+      "command": "bash scripts/gate-slot.sh bun scripts/local-gate.ts pre-push",
+      "code": 0,
+      "localUnits": 7,
+      "remoteRunIds": [],
+      "start": "2026-10-23T12:41:36.932Z",
+      "end": "2026-10-23T12:41:43.322Z",
+      "load": [
+        "12.57",
+        "16.34",
+        "18.36"
+      ],
+      "comparison": "0 new failures, 1 pre-existing failure",
+      "privacy": "passed locally before dispatch"
+    },
+    {
+      "sourceSha256": {
+        "scripts/gate-slot.sh": "bf4afbb6746b195ffcee17a18b5a48c48205b07a728c00a79d704298406f1650",
+        "scripts/local-gate-tests.ts": "52e32e0c759aebdb0d154086d8a450ae2ff6a01e5bbc7a4c9285f5c94f9d2cc1"
+      },
+      "fixtureBase": "affea3aeff497f809c342c538e42ed966610a44f",
+      "agentSignalSandbox": true,
+      "decisions": [
+        {
+          "at": "2026-10-23T12:42:24.141Z",
+          "decision": "remote",
+          "reason": "exit 0",
+          "shape": "pre-push",
+          "treeKind": "git"
+        }
+      ],
+      "route": "wrapped-agent-hook",
+      "version": "after",
+      "sample": 1,
+      "command": "bash scripts/gate-slot.sh bun scripts/local-gate.ts pre-push",
+      "code": 0,
+      "localUnits": 1,
+      "remoteRunIds": [
+        "7357967f583b"
+      ],
+      "start": "2026-10-23T12:41:44.671Z",
+      "end": "2026-10-23T12:42:24.164Z",
+      "load": [
+        "12.91",
+        "16.00",
+        "18.17"
+      ],
+      "comparison": "0 new failures, 1 pre-existing failure",
+      "privacy": "passed locally before dispatch",
+      "remoteTreePrefix": "c1a5c741e633"
+    },
+    {
+      "sourceSha256": {
+        "scripts/gate-slot.sh": "bf4afbb6746b195ffcee17a18b5a48c48205b07a728c00a79d704298406f1650",
+        "scripts/local-gate-tests.ts": "52e32e0c759aebdb0d154086d8a450ae2ff6a01e5bbc7a4c9285f5c94f9d2cc1"
+      },
+      "fixtureBase": "affea3aeff497f809c342c538e42ed966610a44f",
+      "agentSignalSandbox": true,
+      "decisions": [
+        {
+          "at": "2026-10-23T12:42:45.193Z",
+          "decision": "remote",
+          "reason": "exit 0",
+          "shape": "pre-push",
+          "treeKind": "git"
+        }
+      ],
+      "route": "wrapped-agent-hook",
+      "version": "after",
+      "sample": 2,
+      "command": "bash scripts/gate-slot.sh bun scripts/local-gate.ts pre-push",
+      "code": 0,
+      "localUnits": 1,
+      "remoteRunIds": [
+        "87173f05d292"
+      ],
+      "start": "2026-10-23T12:42:24.173Z",
+      "end": "2026-10-23T12:42:45.226Z",
+      "load": [
+        "13.05",
+        "15.81",
+        "18.06"
+      ],
+      "comparison": "0 new failures, 1 pre-existing failure",
+      "privacy": "passed locally before dispatch",
+      "remoteTreePrefix": "c1a5c741e633"
+    },
+    {
+      "sourceSha256": {
+        "scripts/gate-slot.sh": "90096cb459c259ecb86ee385cfac9ad74d3bfca951f921a6a945f147a878c677",
+        "scripts/local-gate-tests.ts": "a687a874923e7f8c3e8b8c519c800133188bc0c9da173af6084eacd1df76bf41"
+      },
+      "fixtureBase": "efb4a9f199912c9101292ad912a0839886b00c39",
+      "agentSignalSandbox": true,
+      "decisions": [],
+      "route": "comparator",
+      "version": "before",
+      "sample": 1,
+      "command": "bun scripts/local-gate-tests.ts --base HEAD ./gate-runner-fixture/placement.test.ts",
+      "code": 0,
+      "localUnits": 2,
+      "remoteRunIds": [],
+      "start": "2026-10-23T12:42:46.602Z",
+      "end": "2026-10-23T12:42:51.316Z",
+      "load": [
+        "13.29",
+        "15.81",
+        "18.05"
+      ],
+      "comparison": "0 new failures, 1 pre-existing failure",
+      "privacy": "no upload attempted"
+    },
+    {
+      "sourceSha256": {
+        "scripts/gate-slot.sh": "90096cb459c259ecb86ee385cfac9ad74d3bfca951f921a6a945f147a878c677",
+        "scripts/local-gate-tests.ts": "a687a874923e7f8c3e8b8c519c800133188bc0c9da173af6084eacd1df76bf41"
+      },
+      "fixtureBase": "efb4a9f199912c9101292ad912a0839886b00c39",
+      "agentSignalSandbox": true,
+      "decisions": [],
+      "route": "comparator",
+      "version": "before",
+      "sample": 2,
+      "command": "bun scripts/local-gate-tests.ts --base HEAD ./gate-runner-fixture/placement.test.ts",
+      "code": 0,
+      "localUnits": 2,
+      "remoteRunIds": [],
+      "start": "2026-10-23T12:42:51.326Z",
+      "end": "2026-10-23T12:42:56.301Z",
+      "load": [
+        "12.95",
+        "15.70",
+        "18.00"
+      ],
+      "comparison": "0 new failures, 1 pre-existing failure",
+      "privacy": "no upload attempted"
+    },
+    {
+      "sourceSha256": {
+        "scripts/gate-slot.sh": "bf4afbb6746b195ffcee17a18b5a48c48205b07a728c00a79d704298406f1650",
+        "scripts/local-gate-tests.ts": "52e32e0c759aebdb0d154086d8a450ae2ff6a01e5bbc7a4c9285f5c94f9d2cc1"
+      },
+      "fixtureBase": "23981c9fcd10f22feef272422d46b458cc7d5201",
+      "agentSignalSandbox": true,
+      "decisions": [
+        {
+          "at": "2026-10-23T12:43:22.860Z",
+          "decision": "remote",
+          "reason": "exit 0",
+          "shape": "local-gate-tests",
+          "treeKind": "git"
+        }
+      ],
+      "route": "comparator",
+      "version": "after",
+      "sample": 1,
+      "command": "bun scripts/local-gate-tests.ts --base HEAD ./gate-runner-fixture/placement.test.ts",
+      "code": 0,
+      "localUnits": 0,
+      "remoteRunIds": [
+        "a618ad4d9de6"
+      ],
+      "start": "2026-10-23T12:42:57.532Z",
+      "end": "2026-10-23T12:43:22.872Z",
+      "load": [
+        "12.75",
+        "15.41",
+        "17.83"
+      ],
+      "comparison": "0 new failures, 1 pre-existing failure",
+      "privacy": "passed before upload",
+      "remoteTreePrefix": "c1a5c741e633"
+    },
+    {
+      "sourceSha256": {
+        "scripts/gate-slot.sh": "bf4afbb6746b195ffcee17a18b5a48c48205b07a728c00a79d704298406f1650",
+        "scripts/local-gate-tests.ts": "52e32e0c759aebdb0d154086d8a450ae2ff6a01e5bbc7a4c9285f5c94f9d2cc1"
+      },
+      "fixtureBase": "23981c9fcd10f22feef272422d46b458cc7d5201",
+      "agentSignalSandbox": true,
+      "decisions": [
+        {
+          "at": "2026-10-23T12:43:39.446Z",
+          "decision": "remote",
+          "reason": "exit 0",
+          "shape": "local-gate-tests",
+          "treeKind": "git"
+        }
+      ],
+      "route": "comparator",
+      "version": "after",
+      "sample": 2,
+      "command": "bun scripts/local-gate-tests.ts --base HEAD ./gate-runner-fixture/placement.test.ts",
+      "code": 0,
+      "localUnits": 0,
+      "remoteRunIds": [
+        "300dd75f7ef7"
+      ],
+      "start": "2026-10-23T12:43:22.878Z",
+      "end": "2026-10-23T12:43:39.457Z",
+      "load": [
+        "13.70",
+        "15.49",
+        "17.81"
+      ],
+      "comparison": "0 new failures, 1 pre-existing failure",
+      "privacy": "passed before upload",
+      "remoteTreePrefix": "c1a5c741e633"
+    },
+    {
+      "sourceSha256": {
+        "scripts/gate-slot.sh": "90096cb459c259ecb86ee385cfac9ad74d3bfca951f921a6a945f147a878c677",
+        "scripts/local-gate-tests.ts": "a687a874923e7f8c3e8b8c519c800133188bc0c9da173af6084eacd1df76bf41"
+      },
+      "fixtureBase": "f7f0a43e9268cc29e63d8617ccb9663588f2d1d8",
+      "agentSignalSandbox": false,
+      "decisions": [
+        {
+          "at": "2026-10-23T12:44:00.213Z",
+          "decision": "remote",
+          "reason": "exit 0",
+          "shape": "pre-push",
+          "treeKind": "git"
+        }
+      ],
+      "route": "publication",
+      "version": "before",
+      "sample": 1,
+      "command": "bash .githooks/pre-push",
+      "code": 0,
+      "localUnits": 0,
+      "remoteRunIds": [
+        "772d4e2248de"
+      ],
+      "start": "2026-10-23T12:43:41.173Z",
+      "end": "2026-10-23T12:44:00.227Z",
+      "load": [
+        "13.99",
+        "15.45",
+        "17.75"
+      ],
+      "comparison": "0 new failures, 1 pre-existing failure",
+      "privacy": "passed locally before dispatch",
+      "remoteTreePrefix": "fb78aad638a9"
+    },
+    {
+      "sourceSha256": {
+        "scripts/gate-slot.sh": "90096cb459c259ecb86ee385cfac9ad74d3bfca951f921a6a945f147a878c677",
+        "scripts/local-gate-tests.ts": "a687a874923e7f8c3e8b8c519c800133188bc0c9da173af6084eacd1df76bf41"
+      },
+      "fixtureBase": "f7f0a43e9268cc29e63d8617ccb9663588f2d1d8",
+      "agentSignalSandbox": false,
+      "decisions": [
+        {
+          "at": "2026-10-23T12:44:18.237Z",
+          "decision": "remote",
+          "reason": "exit 0",
+          "shape": "pre-push",
+          "treeKind": "git"
+        }
+      ],
+      "route": "publication",
+      "version": "before",
+      "sample": 2,
+      "command": "bash .githooks/pre-push",
+      "code": 0,
+      "localUnits": 0,
+      "remoteRunIds": [
+        "889d651662ab"
+      ],
+      "start": "2026-10-23T12:44:00.237Z",
+      "end": "2026-10-23T12:44:18.244Z",
+      "load": [
+        "13.33",
+        "15.22",
+        "17.63"
+      ],
+      "comparison": "0 new failures, 1 pre-existing failure",
+      "privacy": "passed locally before dispatch",
+      "remoteTreePrefix": "fb78aad638a9"
+    },
+    {
+      "sourceSha256": {
+        "scripts/gate-slot.sh": "bf4afbb6746b195ffcee17a18b5a48c48205b07a728c00a79d704298406f1650",
+        "scripts/local-gate-tests.ts": "52e32e0c759aebdb0d154086d8a450ae2ff6a01e5bbc7a4c9285f5c94f9d2cc1"
+      },
+      "fixtureBase": "becacbbebbfe1e93b2627a82c459bd39eba17a8f",
+      "agentSignalSandbox": false,
+      "decisions": [
+        {
+          "at": "2026-10-23T12:44:38.145Z",
+          "decision": "remote",
+          "reason": "exit 0",
+          "shape": "pre-push",
+          "treeKind": "git"
+        }
+      ],
+      "route": "publication",
+      "version": "after",
+      "sample": 1,
+      "command": "bash .githooks/pre-push",
+      "code": 0,
+      "localUnits": 0,
+      "remoteRunIds": [
+        "0334d4020b6f"
+      ],
+      "start": "2026-10-23T12:44:20.071Z",
+      "end": "2026-10-23T12:44:38.157Z",
+      "load": [
+        "13.33",
+        "15.10",
+        "17.53"
+      ],
+      "comparison": "0 new failures, 1 pre-existing failure",
+      "privacy": "passed locally before dispatch",
+      "remoteTreePrefix": "c1a5c741e633"
+    },
+    {
+      "sourceSha256": {
+        "scripts/gate-slot.sh": "bf4afbb6746b195ffcee17a18b5a48c48205b07a728c00a79d704298406f1650",
+        "scripts/local-gate-tests.ts": "52e32e0c759aebdb0d154086d8a450ae2ff6a01e5bbc7a4c9285f5c94f9d2cc1"
+      },
+      "fixtureBase": "becacbbebbfe1e93b2627a82c459bd39eba17a8f",
+      "agentSignalSandbox": false,
+      "decisions": [
+        {
+          "at": "2026-10-23T12:45:00.081Z",
+          "decision": "remote",
+          "reason": "exit 0",
+          "shape": "pre-push",
+          "treeKind": "git"
+        }
+      ],
+      "route": "publication",
+      "version": "after",
+      "sample": 2,
+      "command": "bash .githooks/pre-push",
+      "code": 0,
+      "localUnits": 0,
+      "remoteRunIds": [
+        "187678241629"
+      ],
+      "start": "2026-10-23T12:44:38.165Z",
+      "end": "2026-10-23T12:45:00.095Z",
+      "load": [
+        "12.88",
+        "14.88",
+        "17.41"
+      ],
+      "comparison": "0 new failures, 1 pre-existing failure",
+      "privacy": "passed locally before dispatch",
+      "remoteTreePrefix": "c1a5c741e633"
+    }
+  ]
+}

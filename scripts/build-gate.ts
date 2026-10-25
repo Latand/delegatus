@@ -5,6 +5,11 @@ const root = process.cwd();
 const output = path.join(root, "dist/gate");
 fs.mkdirSync(output, { recursive: true });
 fs.copyFileSync(path.join(root, "scripts/gate-slot.sh"), path.join(output, "gate-slot.sh"));
+// Ship the same credential-free native queue/app-server fixture CI exercises.
+for (const [entry, name] of [["src/lib/runtime/nativeCodexQueue.test.ts", "codex-probe.test.ts"], ["scripts/codex-update.ts", "codex-update.ts"]]) {
+  const result = await Bun.build({ entrypoints: [path.join(root, entry)], target: "bun", format: "esm", naming: name, outdir: output, external: ["bun:test"] });
+  if (!result.success) throw new AggregateError(result.logs, `Could not bundle ${name}`);
+}
 for (const name of ["owned-runner", "cpu-admission", "test-child-guardian"]) {
   const result = await Bun.build({ entrypoints: [path.join(root, `scripts/${name}.ts`)], target: "bun", format: "esm", naming: `${name}.ts`, outdir: output });
   if (!result.success) throw new AggregateError(result.logs, `Could not bundle ${name}`);
