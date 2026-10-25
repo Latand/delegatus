@@ -289,12 +289,13 @@ test("demotion reads only its own host while a peer advances registry progress",
     for (const history of [10, 100]) {
       const directory = path.join(root, String(history)); fs.mkdirSync(directory);
       const filename = path.join(directory, "registry.sqlite");
-      const seed = new SqliteAgentRegistryStore(filename, { initialSnapshot: seeded(directory, history), normalize: normalizeRegistry }); seed.close();
+      const initial = seeded(directory, history);
+      const seed = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry }); seed.close();
       let reads = 0, healthReads = 0;
       const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, {
         sqliteMode: "sqlite", onSqliteRowPayloadRead: (collection, count) => { if (collection === "conversations") reads += count; },
       });
-      const peer = new SqliteAgentRegistryStore(filename, { normalize: normalizeRegistry });
+      const peer = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry });
       const owner = captureProcessIdentity(process.pid);
       const current = { status: "idle" as const, sessionKey: "reader-0", endpoint: "fixture", pid: owner.pid,
         processStartIdentity: owner.startIdentity, eventCursor: 0, protocolVersion: null,
