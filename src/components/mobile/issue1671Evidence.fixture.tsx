@@ -39,6 +39,7 @@ import { attachVoiceOutput, openVoiceMicrophone, type VoiceMicrophone } from "@/
 import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import type { FileEntry } from "@/lib/types";
+import { createChecksFixtureRoute, type ChecksFixtureMode } from "@/components/pipelines/pipelineChecksFixture";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
 
 /* `?synced=1` (docs/design/synced-task-card.md §8): the kanban scene's project is a linked one
@@ -553,6 +554,11 @@ const evidence = {
   pipelineAnswerDelayMs: 0,
 };
 Object.assign(window, { evidence });
+/* The lane ⋯ sheet's checks choice: «lane-decision» stands on «implement»,
+   whose own Cloud differs from the lane's Local; `?checks=` frames the read
+   and write failures. */
+const phoneChecks = createChecksFixtureRoute((new URLSearchParams(location.search).get("checks") ?? "ok") as ChecksFixtureMode, { lanes: { "lane-decision": "local" }, stages: { "lane-decision implement": "cloud" } });
+Object.assign(window, { phoneCheckPosts: phoneChecks.posts });
 
 /* No log stream in the fixture: the source fails at once, the way a Viewer
    behind a proxy that drops SSE does, and the bus falls back to the file poll
@@ -1877,6 +1883,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/tmux" && method === "POST") {
     evidence.runtimeRequests.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
     return json(STRUCTURED ? { ok: true, structured: true } : { ok: true, outcome: "pending", operationId: "reconfigure-evidence" });
+  }
+  if (url.pathname.startsWith("/api/pipelines/") && url.pathname.endsWith("/checks")) {
+    const answer = await phoneChecks.answer(decodeURIComponent(url.pathname.split("/")[3] ?? ""), method, url.searchParams, init?.body ? String(init.body) : null);
+    return json(answer.body, answer.status);
   }
   if (url.pathname.startsWith("/api/pipelines/") && method === "PATCH") {
     const id = decodeURIComponent(url.pathname.split("/").pop() ?? "");

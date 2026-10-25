@@ -10783,6 +10783,151 @@ describe("phone ⋯ menus", () => {
   }, 3_600_000);
 });
 
+describe("phone lane checks", () => {
+  /* The lane ⋯ sheet's checks face, read from the page: every choice's height,
+     every text range against the sheet and the window, and which are checked. */
+  const readChecks = (page: Page) => page.evaluate(() => {
+    const sheet = document.querySelector<HTMLElement>('[data-mobile2-sheet="menu"]');
+    if (!sheet) return null;
+    const box = sheet.getBoundingClientRect();
+    const cut: string[] = [];
+    /* The rows; the sheet's title is the lane's name, which the header truncates by design. */
+    const rows = sheet.querySelector("[data-mobile2-pipeline-menu], [data-mobile2-pipeline-checks]") ?? sheet;
+    const walker = document.createTreeWalker(rows, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!node.textContent?.trim()) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const rect = range.getBoundingClientRect();
+      if (rect.left < Math.max(0, box.left) || rect.right > Math.min(innerWidth, box.right) || rect.top < box.top || rect.bottom > Math.min(innerHeight, box.bottom)) cut.push(node.textContent.trim());
+    }
+    const choices = Array.from(sheet.querySelectorAll<HTMLElement>("[data-pipeline-checks-choice], [data-pipeline-checks-row], [data-pipeline-checks-back]")).map((row) => ({
+      choice: row.getAttribute("data-pipeline-checks-choice"), text: row.textContent ?? "", checked: row.getAttribute("aria-checked"), role: row.getAttribute("role"), height: row.getBoundingClientRect().height,
+    }));
+    return { cut, rows: choices, scrollX: scrollX, wider: document.documentElement.scrollWidth - innerWidth };
+  });
+  type Reading = NonNullable<Awaited<ReturnType<typeof readChecks>>>;
+  const problems = (reading: Reading) => [
+    ...reading.cut.map((text) => `«${text}» is cut`),
+    ...reading.rows.filter((row) => row.height < 44).map((row) => `«${row.text}» is ${row.height}px tall`),
+    ...(reading.wider > 0 || reading.scrollX !== 0 ? [`the page scrolls sideways by ${reading.wider}px`] : []),
+  ];
+  const BAR_MENU = '[data-mobile2-bar] [data-mobile2-open="menu"]';
+  const laneScreen = async (page: Page) => {
+    await page.locator('[data-phone-card="task:t-data"]').click({ timeout: 20_000 });
+    await page.locator('[data-phone-task-lane="lane-decision"] [data-open-stages]').click({ timeout: 20_000 });
+    await page.waitForSelector('[data-mobile2-pipeline="lane-decision"]', { timeout: 20_000 });
+  };
+
+  browserTest("the lane ⋯ sheet offers the stage, lane and project checks choice at 390 and 360 in en and uk, light and dark, and it persists", async () => {
+    const out = path.resolve(".artifacts/phone-pipeline-checks");
+    fs.mkdirSync(out, { recursive: true });
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    const failures: string[] = [];
+    try {
+      for (const width of [390, 360] as const) for (const lang of ["en", "uk"] as const) for (const scheme of SCHEMES) {
+        const t = (key: Parameters<typeof translate>[1], params?: Record<string, string>) => translate(lang, key, params);
+        const key = `${width}-${lang}-${scheme}`;
+        const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 740 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme, reducedMotion: "reduce" });
+        await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        try {
+          await page.goto(`${base}/?kanban=1#p=atlas`);
+          await laneScreen(page);
+          const row = page.locator('[data-mobile2-sheet="menu"] [data-pipeline-checks-row]');
+          const openMenu = async () => {
+            await page.locator(BAR_MENU).first().click({ timeout: 20_000 });
+            await page.waitForSelector('[data-mobile2-sheet="menu"] [data-pipeline-checks-row="ready"]', { timeout: 10_000 });
+            await pause(page, 350);
+          };
+          await openMenu();
+          expect(await row.getAttribute("aria-label")).toBe(t("pipelineStrip.checksAria", { value: t("pipelineStrip.checksCloud") }));
+          expect(await page.locator('[data-mobile2-sheet="menu"] [data-mobile2-pipeline-action="archive"]').innerText()).toBe(t("mobile2.pipeline.archive"));
+          for (const problem of problems((await readChecks(page))!)) failures.push(`${key} menu: ${problem}`);
+          await page.screenshot({ path: path.join(out, `${key}-menu.png`) });
+          await row.click();
+          await page.waitForSelector('[data-mobile2-sheet="menu"] [data-pipeline-checks-group]');
+          await pause(page, 350);
+          const face = (await readChecks(page))!;
+          for (const problem of problems(face)) failures.push(`${key} checks: ${problem}`);
+          expect(face.rows.filter((entry) => entry.choice).map((entry) => [entry.choice, entry.text, entry.role, entry.checked])).toEqual([
+            ["stage:inherit", t("mobile2.pipeline.checksStageInherit", { value: t("pipelineStrip.checksLocal") }), "menuitemradio", "false"],
+            ["stage:cloud", t("pipelineStrip.checksCloud"), "menuitemradio", "true"], ["stage:local", t("pipelineStrip.checksLocal"), "menuitemradio", "false"],
+            ["lane:inherit", t("pipelineStrip.checksLaneInherit", { value: t("pipelineStrip.checksCloud") }), "menuitemradio", "false"],
+            ["lane:cloud", t("pipelineStrip.checksCloud"), "menuitemradio", "false"], ["lane:local", t("pipelineStrip.checksLocal"), "menuitemradio", "true"],
+            ["project:cloud", t("pipelineStrip.checksCloud"), "menuitemradio", "true"], ["project:local", t("pipelineStrip.checksLocal"), "menuitemradio", "false"],
+          ]);
+          expect(await page.locator('[data-mobile2-sheet="menu"] [data-pipeline-checks-group="lane"]').innerText()).toContain(t("mobile2.pipeline.checksLane"));
+          await page.screenshot({ path: path.join(out, `${key}-checks.png`) });
+          await page.locator('[data-pipeline-checks-choice="stage:inherit"]').click();
+          await page.waitForSelector('[data-pipeline-checks-choice="stage:inherit"][aria-checked="true"]');
+          await page.locator('[data-pipeline-checks-choice="project:local"]').click();
+          await page.waitForSelector('[data-pipeline-checks-choice="project:local"][aria-checked="true"]');
+          await page.locator('[data-mobile2-sheet="menu"] [data-mobile2-close]').click();
+          await page.waitForSelector('[data-mobile2-sheet="menu"]', { state: "detached", timeout: 10_000 });
+          await pause(page, 400);
+          await openMenu();
+          expect(await row.getAttribute("aria-label")).toBe(t("pipelineStrip.checksAria", { value: t("pipelineStrip.checksLocal") }));
+          await row.click();
+          await page.waitForSelector('[data-mobile2-sheet="menu"] [data-pipeline-checks-group]');
+          await pause(page, 350);
+          const after = (await readChecks(page))!;
+          expect(after.rows.filter((entry) => entry.checked === "true").map((entry) => entry.choice)).toEqual(["stage:inherit", "lane:local", "project:local"]);
+          for (const problem of problems(after)) failures.push(`${key} after: ${problem}`);
+          await page.screenshot({ path: path.join(out, `${key}-after.png`) });
+          expect(await page.evaluate(() => (window as unknown as { phoneCheckPosts: unknown[] }).phoneCheckPosts)).toEqual([
+            { lane: "lane-decision", scope: "stage", execution: null, stageId: "implement" },
+            { lane: "lane-decision", scope: "project", execution: "local", stageId: "implement" },
+          ]);
+          /* The back row returns to the lane's actions. */
+          await page.locator('[data-mobile2-sheet="menu"] [data-pipeline-checks-back]').click();
+          await page.waitForSelector('[data-mobile2-pipeline-menu="lane-decision"]');
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      for (const lang of ["en", "uk"] as const) for (const scheme of SCHEMES) for (const mode of ["pending", "refused", "save-refused"] as const) {
+        const key = `390-${lang}-${scheme}-${mode}`;
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme, reducedMotion: "reduce" });
+        await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+        const page = await context.newPage();
+        try {
+          await page.goto(`${base}/?kanban=1&checks=${mode}#p=atlas`);
+          await laneScreen(page);
+          await page.locator(BAR_MENU).first().click({ timeout: 20_000 });
+          const row = page.locator('[data-mobile2-sheet="menu"] [data-pipeline-checks-row]');
+          if (mode === "pending") {
+            await page.waitForSelector('[data-pipeline-checks-row="loading"]');
+            await pause(page, 400);
+            expect(await row.innerText()).toContain(translate(lang, "pipelineStrip.checksLoading"));
+          } else if (mode === "refused") {
+            await page.waitForSelector('[data-pipeline-checks-row="failed"]');
+            expect(await row.innerText()).toContain(translate(lang, "pipelineStrip.checksRetry"));
+            expect(await page.locator('[data-mobile2-sheet="menu"] [data-pipeline-checks-error="load"]').innerText()).toBe(translate(lang, "pipelineStrip.checksLoadFailed"));
+          } else {
+            await page.waitForSelector('[data-pipeline-checks-row="ready"]');
+            await row.click();
+            await page.locator('[data-pipeline-checks-choice="lane:cloud"]').click();
+            await page.waitForSelector('[data-mobile2-sheet="menu"] [data-pipeline-checks-error="save"]');
+            expect(await page.locator('[data-mobile2-sheet="menu"] [data-pipeline-checks-error="save"]').innerText()).toBe(translate(lang, "pipelineStrip.checksSaveFailed"));
+            expect(await page.locator('[data-pipeline-checks-choice="lane:local"]').getAttribute("aria-checked")).toBe("true");
+          }
+          await pause(page, 350);
+          for (const problem of problems((await readChecks(page))!)) failures.push(`${key}: ${problem}`);
+          await page.screenshot({ path: path.join(out, `${key}.png`) });
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ failures }, null, 2));
+      expect(failures).toEqual([]);
+    } finally {
+      await browser.close();
+      stop();
+    }
+  }, 1_800_000);
+});
+
 describe("phone voice head", () => {
   /*
    * The voice companion's head on the phone (docs/design/phone-voice-head-build.md, the operator's variant 1 of

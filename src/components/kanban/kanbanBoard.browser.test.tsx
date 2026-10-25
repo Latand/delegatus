@@ -68,31 +68,131 @@ const browserTest = browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1");
 const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) };
 
 describe("Cloud check execution choices", () => {
-  browserTest("lane and project choices persist in both languages and themes", async () => {
+  /* The ⋯ menu and its checks face, read from the page: the menu's box and
+     every text range inside it against the window's 8px gutter, each choice's
+     height, and which choices are checked. */
+  const readMenu = (page: Page) => page.evaluate(() => {
+    const menu = document.querySelector<HTMLElement>('[data-pipeline-action-menu] [role="menu"]');
+    if (!menu) return null;
+    const box = menu.getBoundingClientRect();
+    const texts: Array<{ text: string; top: number; bottom: number; left: number; right: number }> = [];
+    const walker = document.createTreeWalker(menu, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!node.textContent?.trim()) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const rect = range.getBoundingClientRect();
+      texts.push({ text: node.textContent.trim(), top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right });
+    }
+    const rows = Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitem"], [role="menuitemradio"]')).map((row) => ({
+      role: row.getAttribute("role"), choice: row.getAttribute("data-pipeline-checks-choice"), text: row.textContent ?? "",
+      checked: row.getAttribute("aria-checked"), height: row.getBoundingClientRect().height,
+    }));
+    return {
+      box: { top: box.top, bottom: box.bottom, left: box.left, right: box.right }, scrolls: menu.scrollHeight - menu.clientHeight,
+      texts, rows, focused: document.activeElement?.textContent ?? null,
+    };
+  });
+  type Reading = NonNullable<Awaited<ReturnType<typeof readMenu>>>;
+  const outside = (reading: Reading, viewport: { width: number; height: number }) => {
+    const problems: string[] = [];
+    const { box } = reading;
+    if (box.left < 8 || box.top < 8 || box.right > viewport.width - 8 || box.bottom > viewport.height - 8) problems.push(`menu ${JSON.stringify(box)} leaves the 8px gutter`);
+    if (reading.scrolls > 0) problems.push(`menu scrolls ${reading.scrolls}px`);
+    for (const text of reading.texts) if (text.top < box.top || text.bottom > box.bottom || text.left < box.left || text.right > box.right) problems.push(`«${text.text}» is cut`);
+    for (const row of reading.rows) if (row.height < 36) problems.push(`«${row.text}» is ${row.height}px tall`);
+    return problems;
+  };
+
+  browserTest("lane, stage and project choices stay inside the window, read in both languages and themes, and persist", async () => {
     const out = path.resolve(".artifacts/cloud-checks");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
     const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
+    const failures: string[] = [];
+    const readings: Array<Record<string, unknown>> = [];
     try {
-      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 390]) {
-        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=cloud-checks`, { width, height: 900 }, theme, lang, "reduce", width === 390);
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 768, 390]) for (const strip of ["top", "bottom"] as const) {
+        const viewport = { width, height: 900 };
+        const key = `${lang}-${theme}-${width}-${strip}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=cloud-checks${strip === "bottom" ? "&strip=bottom" : ""}`, viewport, theme, lang, "reduce", width === 390);
+        const t = (k: Parameters<typeof translate>[1], params?: Record<string, string>) => translate(lang, k, params);
         try {
           const more = page.getByRole("button", { name: translate(lang, "pipelineStrip.moreActions") }).filter({ visible: true }).first();
-          await more.click();
-          const lane = page.getByLabel(lang === "en" ? "Lane checks" : "Перевірки смуги", { exact: true });
-          await lane.selectOption("local");
-          await page.waitForFunction(() => document.querySelector<HTMLSelectElement>("[data-cloud-check-lane]")?.value === "local");
-          expect(await lane.inputValue()).toBe("local");
-          const project = page.getByLabel(lang === "en" ? "Project default" : "Типово для проєкту", { exact: true });
-          await project.selectOption("local");
-          await lane.selectOption("");
-          await page.waitForFunction(() => document.querySelector<HTMLSelectElement>("[data-cloud-check-lane]")?.value === "");
-          expect(await lane.inputValue()).toBe("");
-          expect(await project.inputValue()).toBe("local");
-          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}.png`) });
+          const row = page.locator('[data-pipeline-checks-row]');
+          const open = async () => { await more.click(); await page.waitForSelector('[data-pipeline-checks-row="ready"]'); };
+          await open();
+          const actions = (await readMenu(page))!;
+          for (const problem of outside(actions, viewport)) failures.push(`${key} actions: ${problem}`);
+          if (actions.focused !== `${t("pipelineStrip.checks")}${t("pipelineStrip.checksCloud")}`) failures.push(`${key}: opening focuses «${actions.focused}»`);
+          expect(await row.getAttribute("aria-label")).toBe(t("pipelineStrip.checksAria", { value: t("pipelineStrip.checksCloud") }));
+          await page.screenshot({ path: path.join(out, `${key}-actions.png`) });
+          await row.click();
+          await page.waitForSelector("[data-pipeline-checks-group]");
+          const face = (await readMenu(page))!;
+          for (const problem of outside(face, viewport)) failures.push(`${key} checks: ${problem}`);
+          /* The stage's own Cloud wins over the lane's Local, and each inherited choice names its value. */
+          expect(face.rows.filter((entry) => entry.role === "menuitemradio").map((entry) => [entry.choice, entry.text, entry.checked])).toEqual([
+            ["stage:inherit", t("pipelineStrip.checksStageInherit", { value: t("pipelineStrip.checksLocal") }), "false"],
+            ["stage:cloud", t("pipelineStrip.checksCloud"), "true"], ["stage:local", t("pipelineStrip.checksLocal"), "false"],
+            ["lane:inherit", t("pipelineStrip.checksLaneInherit", { value: t("pipelineStrip.checksCloud") }), "false"],
+            ["lane:cloud", t("pipelineStrip.checksCloud"), "false"], ["lane:local", t("pipelineStrip.checksLocal"), "true"],
+            ["project:cloud", t("pipelineStrip.checksCloud"), "true"], ["project:local", t("pipelineStrip.checksLocal"), "false"],
+          ]);
+          await page.screenshot({ path: path.join(out, `${key}-checks.png`) });
+          /* Clear the stage's choice and move the project default: the stage now publishes with the lane's Local. */
+          await page.locator('[data-pipeline-checks-choice="stage:inherit"]').click();
+          await page.waitForSelector('[data-pipeline-checks-choice="stage:inherit"][aria-checked="true"]');
+          await page.locator('[data-pipeline-checks-choice="project:local"]').click();
+          await page.waitForSelector('[data-pipeline-checks-choice="project:local"][aria-checked="true"]');
+          await page.keyboard.press("Escape");
+          await page.waitForSelector('[data-pipeline-action-menu]', { state: "detached" });
+          await open();
+          expect(await row.getAttribute("aria-label")).toBe(t("pipelineStrip.checksAria", { value: t("pipelineStrip.checksLocal") }));
+          await row.click();
+          await page.waitForSelector("[data-pipeline-checks-group]");
+          const after = (await readMenu(page))!;
+          expect(after.rows.filter((entry) => entry.checked === "true").map((entry) => entry.choice)).toEqual(["stage:inherit", "lane:local", "project:local"]);
+          expect(after.rows.find((entry) => entry.choice === "lane:inherit")?.text).toBe(t("pipelineStrip.checksLaneInherit", { value: t("pipelineStrip.checksLocal") }));
+          for (const problem of outside(after, viewport)) failures.push(`${key} after: ${problem}`);
+          await page.screenshot({ path: path.join(out, `${key}-after.png`) });
+          readings.push({ key, actions: actions.box, checks: face.box, rows: face.rows.map((entry) => [entry.text, Math.round(entry.height)]) });
           expect(pageErrors).toEqual([]);
         } finally { await context.close(); }
       }
+      /* A read held open, a refused read and a refused write each have their own words. */
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 390]) for (const mode of ["pending", "refused", "save-refused"] as const) {
+        const viewport = { width, height: 900 };
+        const key = `${lang}-${theme}-${width}-${mode}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=cloud-checks&strip=bottom&checks=${mode}`, viewport, theme, lang, "reduce", width === 390);
+        try {
+          await page.getByRole("button", { name: translate(lang, "pipelineStrip.moreActions") }).filter({ visible: true }).first().click();
+          const row = page.locator("[data-pipeline-checks-row]");
+          if (mode === "pending") {
+            await page.waitForSelector('[data-pipeline-checks-row="loading"]');
+            await page.waitForTimeout(400);
+            expect(await row.innerText()).toContain(translate(lang, "pipelineStrip.checksLoading"));
+            expect(await page.locator('[role="menuitemradio"]').count()).toBe(0);
+          } else if (mode === "refused") {
+            await page.waitForSelector('[data-pipeline-checks-row="failed"]');
+            expect(await row.innerText()).toContain(translate(lang, "pipelineStrip.checksRetry"));
+            expect(await page.locator('[data-pipeline-checks-error="load"]').innerText()).toBe(translate(lang, "pipelineStrip.checksLoadFailed"));
+          } else {
+            await page.waitForSelector('[data-pipeline-checks-row="ready"]');
+            await row.click();
+            await page.locator('[data-pipeline-checks-choice="lane:cloud"]').click();
+            await page.waitForSelector('[data-pipeline-checks-error="save"]');
+            expect(await page.locator('[data-pipeline-checks-error="save"]').innerText()).toBe(translate(lang, "pipelineStrip.checksSaveFailed"));
+            expect(await page.locator('[data-pipeline-checks-choice="lane:local"]').getAttribute("aria-checked")).toBe("true");
+          }
+          const reading = (await readMenu(page))!;
+          for (const problem of outside(reading, viewport)) failures.push(`${key}: ${problem}`);
+          await page.screenshot({ path: path.join(out, `${key}.png`) });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ failures, readings }, null, 2));
+      expect(failures).toEqual([]);
     } finally { await browser.close(); server.stop(); }
   });
 });

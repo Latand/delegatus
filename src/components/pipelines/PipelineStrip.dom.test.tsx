@@ -325,8 +325,9 @@ test("the overflow menu focuses its first action and Escape restores trigger foc
 
   const menu = dom.document.body.querySelector('[role="menu"]') as unknown as HTMLElement;
   const first = menu.querySelector('[role="menuitem"]') as HTMLButtonElement;
-  expect(first.textContent).toContain("Close pipeline");
-  expect(dom.document.activeElement?.getAttribute("role")).toBe("menuitem");
+  /* The checks row comes first, so opening never lands on the destructive Close row. */
+  expect(first.textContent).toContain("Checks");
+  expect(dom.document.activeElement).toBe(first as unknown as typeof dom.document.activeElement);
 
   flushSync(() => window.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as unknown as Event));
   await settleStable();
@@ -344,7 +345,7 @@ test("the overflow trigger regains focus after a menu action settles (#388)", as
   flushSync(() => trigger.click());
   await settleStable();
 
-  const close = dom.document.body.querySelector('[role="menuitem"]') as unknown as HTMLButtonElement;
+  const close = Array.from(dom.document.body.querySelectorAll('[role="menuitem"]')).find((item) => item.textContent === "Close pipeline") as unknown as HTMLButtonElement;
   flushSync(() => close.click());
   await settleStable();
 
@@ -362,4 +363,110 @@ test("the mobile rail keeps queued and waiting labels inside isolated overflow (
   expect(host.querySelector('[data-stage-presentation="queued"]')?.textContent).toContain("Queued");
   expect(host.querySelector('[data-stage-presentation="waiting"]')?.textContent).toContain("Waiting");
   expect(host.querySelector('[data-stage-compact="true"]')).toBeNull();
+});
+
+/* The checks choice in the ⋯ menu (docs/design/cloud-checks.md): one route
+   answers the board, the phone and the MCP tool. */
+type ChecksCall = { url: string; method: string; body: unknown };
+function checksRoute(answer: (call: ChecksCall) => Promise<Response> | Response): ChecksCall[] {
+  const calls: ChecksCall[] = [];
+  globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const call = { url: String(input), method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : null };
+    calls.push(call);
+    return answer(call);
+  }) as unknown as typeof fetch;
+  return calls;
+}
+const settings = (value: Record<string, unknown>) => new Response(JSON.stringify(value), { status: 200, headers: { "content-type": "application/json" } });
+async function openMenu(host: HTMLElement): Promise<HTMLElement> {
+  const trigger = host.querySelector('[aria-label="More pipeline actions"]') as HTMLButtonElement;
+  flushSync(() => trigger.click());
+  await settleStable();
+  await settleStable();
+  return dom.document.body.querySelector('[role="menu"]') as unknown as HTMLElement;
+}
+const choices = (menu: HTMLElement) => Array.from(menu.querySelectorAll('[role="menuitemradio"]')).map((item) => [item.getAttribute("data-pipeline-checks-choice"), item.textContent, item.getAttribute("aria-checked")]);
+const click = (element: Element | null) => flushSync(() => (element as unknown as HTMLButtonElement).click());
+
+test("the checks face shows the publishing stage's override and the value each inherited choice resolves to", async () => {
+  let state: Record<string, unknown> = { project: "cloud", override: "local", stageOverride: "cloud", effective: "cloud" };
+  const calls = checksRoute((call) => {
+    if (call.method === "POST") state = { project: "cloud", override: "local", stageOverride: null, effective: "local" };
+    return settings(state);
+  });
+  const host = mountStable();
+  const menu = await openMenu(host);
+  expect(calls[0]).toEqual({ url: "/api/pipelines/pipeline-388/checks?stageId=build", method: "GET", body: null });
+  const row = menu.querySelector("[data-pipeline-checks-row]") as HTMLElement;
+  expect(row.getAttribute("aria-label")).toBe("Checks: Cloud");
+  click(row);
+  await settleStable();
+  expect(dom.document.activeElement?.getAttribute("data-pipeline-checks-back")).toBe("");
+  expect(menu.textContent).not.toContain("Close pipeline");
+  expect(Array.from(menu.querySelectorAll("[data-pipeline-checks-group] > span:first-child")).map((heading) => heading.textContent)).toEqual(["Stage build", "This pipeline", "Project default"]);
+  expect(choices(menu)).toEqual([
+    ["stage:inherit", "Use pipeline choice (Local)", "false"], ["stage:cloud", "Cloud", "true"], ["stage:local", "Local", "false"],
+    ["lane:inherit", "Use project default (Cloud)", "false"], ["lane:cloud", "Cloud", "false"], ["lane:local", "Local", "true"],
+    ["project:cloud", "Cloud", "true"], ["project:local", "Local", "false"],
+  ]);
+  click(menu.querySelector('[data-pipeline-checks-choice="stage:inherit"]'));
+  await settleStable();
+  await settleStable();
+  expect(calls[1]).toEqual({ url: "/api/pipelines/pipeline-388/checks", method: "POST", body: { scope: "stage", execution: null, stageId: "build" } });
+  expect(menu.querySelector('[data-pipeline-checks-choice="stage:inherit"]')?.getAttribute("aria-checked")).toBe("true");
+  click(menu.querySelector("[data-pipeline-checks-back]"));
+  await settleStable();
+  expect((menu.querySelector("[data-pipeline-checks-row]") as HTMLElement).getAttribute("aria-label")).toBe("Checks: Local");
+  expect(dom.document.activeElement?.hasAttribute("data-pipeline-checks-row")).toBe(true);
+});
+
+test("a lane with no stage to publish offers only the lane and project choices", async () => {
+  const calls = checksRoute(() => settings({ project: "local", override: null, effective: "local" }));
+  const menu = await openMenu(mountStable({ ...stableHeaderPipeline(), cursor: null }));
+  expect(calls[0]?.url).toBe("/api/pipelines/pipeline-388/checks");
+  click(menu.querySelector("[data-pipeline-checks-row]"));
+  await settleStable();
+  expect(Array.from(menu.querySelectorAll("[data-pipeline-checks-group]")).map((group) => group.getAttribute("data-pipeline-checks-group"))).toEqual(["lane", "project"]);
+  expect(menu.querySelector('[data-pipeline-checks-choice="lane:inherit"]')?.textContent).toBe("Use project default (Local)");
+});
+
+test("a pending, refused or malformed read shows no choice, and load and save failures read apart", async () => {
+  let release: (response: Response) => void = () => {};
+  checksRoute(() => new Promise<Response>((resolve) => { release = resolve; }));
+  let menu = await openMenu(mountStable());
+  let row = menu.querySelector("[data-pipeline-checks-row]") as HTMLElement;
+  expect([row.getAttribute("data-pipeline-checks-row"), row.textContent, row.getAttribute("aria-disabled")]).toEqual(["loading", "ChecksLoading…", "true"]);
+  click(row);
+  await settleStable();
+  expect(menu.querySelector('[role="menuitemradio"]')).toBeNull();
+  release(new Response("{}", { status: 500 }));
+  await settleStable();
+  await settleStable();
+  row = menu.querySelector("[data-pipeline-checks-row]") as HTMLElement;
+  expect(row.getAttribute("data-pipeline-checks-row")).toBe("failed");
+  expect(row.textContent).toContain("Retry");
+  expect(menu.querySelector('[data-pipeline-checks-error="load"]')?.textContent).toBe("Could not load the check settings");
+  flushSync(() => root!.unmount());
+  root = null;
+  dom.document.body.replaceChildren();
+
+  for (const body of [{ project: "cloud", effective: "cloud" }, { project: "toString", override: null, effective: "cloud" }]) {
+    checksRoute(() => settings(body));
+    menu = await openMenu(mountStable());
+    expect(menu.querySelector("[data-pipeline-checks-row]")?.getAttribute("data-pipeline-checks-row")).toBe("failed");
+    flushSync(() => root!.unmount());
+    root = null;
+    dom.document.body.replaceChildren();
+  }
+
+  checksRoute((call) => (call.method === "POST" ? new Response("{}", { status: 409 }) : settings({ project: "cloud", override: null, stageOverride: null, effective: "cloud" })));
+  menu = await openMenu(mountStable());
+  click(menu.querySelector("[data-pipeline-checks-row]"));
+  await settleStable();
+  click(menu.querySelector('[data-pipeline-checks-choice="lane:local"]'));
+  await settleStable();
+  await settleStable();
+  expect(menu.querySelector('[data-pipeline-checks-error="save"]')?.textContent).toBe("Could not save the check choice");
+  expect(menu.querySelector('[data-pipeline-checks-error="load"]')).toBeNull();
+  expect(menu.querySelector('[data-pipeline-checks-choice="lane:inherit"]')?.getAttribute("aria-checked")).toBe("true");
 });

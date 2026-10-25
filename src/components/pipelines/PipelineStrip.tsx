@@ -36,7 +36,7 @@ import {
   compactStageOpenTarget,
   verdictStatusLabel,
 } from "./pipelineModel";
-import { PipelineCheckSettings } from "./PipelineCheckSettings";
+import { PipelineCheckMenu } from "./PipelineCheckSettings";
 import { StagePlaceholderPane } from "./StagePlaceholderPane";
 import { VerdictPopover } from "./VerdictPopover";
 import { Z } from "@/components/layers";
@@ -133,31 +133,64 @@ function AnchoredVerdict({ anchorRef, children }: { anchorRef: RefObject<HTMLEle
   );
 }
 
+/* The menu keeps this far from every window edge. */
+const MENU_GUTTER = 8;
+const MENU_GAP = 6;
+
+/** Where the ⋯ menu stands, from its own rendered size: below the trigger when
+    it fits there, else above it, else on the taller side with its height
+    bounded; right-aligned to the trigger and clamped inside the gutter. */
+export function actionMenuPlacement(anchor: { top: number; bottom: number; right: number }, menu: { width: number; height: number }, viewport: { width: number; height: number }) {
+  const below = viewport.height - MENU_GUTTER - (anchor.bottom + MENU_GAP);
+  const above = anchor.top - MENU_GAP - MENU_GUTTER;
+  const downward = menu.height <= below || (menu.height > above && below >= above);
+  const room = Math.max(0, downward ? below : above);
+  const height = Math.min(menu.height, room);
+  const left = Math.max(MENU_GUTTER, Math.min(viewport.width - MENU_GUTTER - menu.width, anchor.right - menu.width));
+  return { left, top: downward ? anchor.bottom + MENU_GAP : anchor.top - MENU_GAP - height, maxHeight: room };
+}
+
 function AnchoredActionMenu({ anchorRef, children }: { anchorRef: RefObject<HTMLButtonElement | null>; children: ReactNode }) {
-  const [position, setPosition] = useState({ left: -9999, top: 0, above: false });
+  const contentRef = useRef<HTMLSpanElement>(null);
+  const [position, setPosition] = useState<{ left: number; top: number; maxHeight: number } | null>(null);
   useLayoutEffect(() => {
     const measure = () => {
       const anchor = anchorRef.current;
-      if (!anchor) return;
-      const rect = anchor.getBoundingClientRect();
-      const above = window.innerHeight - rect.bottom < 108;
-      setPosition({
-        left: Math.max(8, Math.min(window.innerWidth - 188, rect.right - 180)),
-        top: above ? rect.top - 6 : rect.bottom + 6,
-        above,
-      });
+      const menu = contentRef.current?.firstElementChild as HTMLElement | null | undefined;
+      if (!anchor || !menu) return;
+      /* The menu's whole size, not the bounded one: its scrollHeight plus its borders. */
+      const size = { width: menu.offsetWidth, height: menu.scrollHeight + menu.offsetHeight - menu.clientHeight };
+      const next = actionMenuPlacement(anchor.getBoundingClientRect(), size, { width: window.innerWidth, height: window.innerHeight });
+      setPosition((current) => (current && current.left === next.left && current.top === next.top && current.maxHeight === next.maxHeight ? current : next));
     };
     measure();
+    /* The checks row loads after opening and its face replaces the actions, so
+       the menu changes size while open; a bounded box does not resize when its
+       content grows, so a change to the content measures again too. */
+    const resized = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
+    const changed = typeof MutationObserver === "function" ? new MutationObserver(measure) : null;
+    const inner = contentRef.current?.firstElementChild;
+    if (resized && inner) resized.observe(inner);
+    if (changed && contentRef.current) changed.observe(contentRef.current, { childList: true, subtree: true, characterData: true });
     window.addEventListener("scroll", measure, true);
     window.addEventListener("resize", measure);
     return () => {
+      resized?.disconnect();
+      changed?.disconnect();
       window.removeEventListener("scroll", measure, true);
       window.removeEventListener("resize", measure);
     };
   }, [anchorRef]);
   if (typeof document === "undefined") return null;
   return createPortal(
-    <span className={`fixed ${Z.popover}`} style={{ left: position.left, top: position.top, transform: position.above ? "translateY(-100%)" : undefined }}>
+    <span
+      ref={contentRef}
+      data-pipeline-action-menu=""
+      className={`fixed ${Z.popover} flex flex-col`}
+      /* Its own width, never the room left of the window's edge, so a wider face is measured whole.
+         Off-screen until measured, and still visible, so opening can focus its first row. */
+      style={position ? { left: position.left, top: position.top, maxHeight: position.maxHeight, width: "max-content" } : { left: -9999, top: 0, width: "max-content" }}
+    >
       {children}
     </span>,
     document.body,
@@ -780,12 +813,13 @@ export function PipelineStrip({
         </button>
         {actionsOpen ? (
           <AnchoredActionMenu anchorRef={actionsTriggerRef}>
-          <span role="menu" aria-label={t("pipelineStrip.moreActions")} className="flex min-w-[180px] flex-col gap-1 rounded-[10px] border border-border bg-card p-1.5 shadow-3">
-            <PipelineCheckSettings id={pipeline.id} />
+          <span role="menu" aria-label={t("pipelineStrip.moreActions")} className="flex min-h-0 min-w-[180px] max-w-[calc(100vw-16px)] flex-col gap-1 overflow-y-auto rounded-[10px] border border-border bg-card p-1.5 shadow-3">
+            <PipelineCheckMenu pipeline={pipeline} firstRef={firstActionRef}>
             {pipeline.state === "needs_decision" ? (
-              <button ref={firstActionRef} role="menuitem" type="button" disabled={busy} onClick={() => void mutate("skip-stage")} className="inline-flex min-h-9 items-center rounded-control px-2 text-left text-ui font-semibold text-secondary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{t("pipelineStrip.skipStage")}</button>
+              <button role="menuitem" type="button" disabled={busy} onClick={() => void mutate("skip-stage")} className="inline-flex min-h-9 items-center rounded-control px-2 text-left text-ui font-semibold text-secondary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{t("pipelineStrip.skipStage")}</button>
             ) : null}
-            <button ref={pipeline.state === "needs_decision" ? undefined : firstActionRef} role="menuitem" type="button" disabled={busy} onClick={() => void mutate(draft ? "delete" : "close")} className="inline-flex min-h-9 items-center rounded-control px-2 text-left text-ui font-semibold text-danger hover:bg-danger-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{t(draft ? "pipelineStrip.discard" : "pipelineStrip.close")}</button>
+            <button role="menuitem" type="button" disabled={busy} onClick={() => void mutate(draft ? "delete" : "close")} className="inline-flex min-h-9 items-center rounded-control px-2 text-left text-ui font-semibold text-danger hover:bg-danger-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{t(draft ? "pipelineStrip.discard" : "pipelineStrip.close")}</button>
+            </PipelineCheckMenu>
           </span>
           </AnchoredActionMenu>
         ) : null}

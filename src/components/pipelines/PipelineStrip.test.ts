@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { verdictPlacement } from "./PipelineStrip";
+import { actionMenuPlacement, verdictPlacement } from "./PipelineStrip";
 
 const viewport = { width: 1000, height: 800 };
 const content = { width: 260, height: 200 };
@@ -62,5 +62,32 @@ describe("verdictPlacement (#93 finding: popover never renders off-screen)", () 
     expect(p.below).toBe(true);
     expect(p.top).toBeGreaterThanOrEqual(8);
     expect(p.top + tall.height).toBeLessThanOrEqual(viewport.height - 8);
+  });
+});
+
+describe("actionMenuPlacement: the ⋯ menu stays inside an 8px gutter at its rendered size", () => {
+  const inside = (p: { left: number; top: number; maxHeight: number }, menu: { width: number; height: number }, view: { width: number; height: number }) => {
+    const height = Math.min(menu.height, p.maxHeight);
+    expect(p.left).toBeGreaterThanOrEqual(8);
+    expect(p.left + menu.width).toBeLessThanOrEqual(view.width - 8);
+    expect(p.top).toBeGreaterThanOrEqual(8);
+    expect(p.top + height).toBeLessThanOrEqual(view.height - 8);
+  };
+  const menu = { width: 220, height: 420 };
+  for (const view of [{ width: 1440, height: 900 }, { width: 768, height: 900 }, { width: 390, height: 900 }]) {
+    test(`at ${view.width}: below a trigger near the top, above one 160px from the bottom`, () => {
+      const top = actionMenuPlacement({ top: 40, bottom: 68, right: view.width - 24 }, menu, view);
+      expect(top.top).toBe(74);
+      inside(top, menu, view);
+      const bottom = actionMenuPlacement({ top: view.height - 160, bottom: view.height - 132, right: view.width - 2 }, menu, view);
+      expect(bottom.top + menu.height).toBe(view.height - 166);
+      inside(bottom, menu, view);
+    });
+  }
+  test("a menu taller than both sides takes the taller side and is bounded to it", () => {
+    const view = { width: 390, height: 500 };
+    const p = actionMenuPlacement({ top: 300, bottom: 328, right: 380 }, menu, view);
+    expect(p).toEqual({ left: 160, top: 8, maxHeight: 286 });
+    inside(p, menu, view);
   });
 });

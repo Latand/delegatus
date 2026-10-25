@@ -12,7 +12,7 @@ execFileSync("git", ["init", "-q", root]);
 savePipelines([buildPipeline({ id: "lane-fixture", task: "Check the source", project: "fixture", repoDir: root,
   stages: [{ id: "build", kind: "run", prompt: "Check source", next: null, effectiveRole: { roleId: null, engine: "codex", model: "gpt-6.1-sol", effort: "high", access: "read-write", promptScaffold: null } }], srcPath: null, srcConversationId: null, now: "2026-10-24T00:00:00.000Z" })]);
 const context = { params: Promise.resolve({ id: "lane-fixture" }) };
-const request = (body?: unknown) => new NextRequest("http://localhost/api/pipelines/lane-fixture/checks", body === undefined ? undefined : {
+const request = (body?: unknown, search = "") => new NextRequest(`http://localhost/api/pipelines/lane-fixture/checks${search}`, body === undefined ? undefined : {
   method: "POST", headers: { host: "localhost", "content-type": "application/json", origin: "http://localhost" }, body: JSON.stringify(body),
 });
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -52,4 +52,25 @@ test("stage overrides validate lane membership and preserve the lane choice", as
   }
   expect(await (await GET(request(), context)).json()).toMatchObject({ override: "local", effective: "local" });
   expect(await (await POST(request({ scope: "stage", stageId: "build", execution: null }), context)).json()).toMatchObject({ stageOverride: null, effective: "local" });
+});
+
+test("the UI reads and writes with the publishing stage and sees the value that stage publishes with", async () => {
+  await POST(request({ scope: "project", execution: "cloud" }), context);
+  await POST(request({ scope: "lane", execution: "local" }), context);
+  await POST(request({ scope: "stage", stageId: "build", execution: "cloud" }), context);
+  expect(await (await GET(request(undefined, "?stageId=build"), context)).json()).toEqual({ project: "cloud", override: "local", stageOverride: "cloud", effective: "cloud" });
+  /* A lane or project write that names the stage answers with the stage's view and leaves the stage's choice alone. */
+  expect(await (await POST(request({ scope: "lane", execution: "cloud", stageId: "build" }), context)).json()).toEqual({ project: "cloud", override: "cloud", stageOverride: "cloud", effective: "cloud" });
+  expect(await (await POST(request({ scope: "project", execution: "local", stageId: "build" }), context)).json()).toEqual({ project: "local", override: "cloud", stageOverride: "cloud", effective: "cloud" });
+  const { checkExecutionSettings } = await import("../../../../../../scripts/cloud-check-settings");
+  expect((await checkExecutionSettings(root, "lane-fixture", "build")).effective).toBe("cloud");
+  for (const search of ["?stageId=foreign", "?stageId=constructor", "?stageId=__proto__", "?stageId="]) {
+    expect((await GET(request(undefined, search), context)).status).toBe(400);
+  }
+  for (const stageId of ["foreign", "constructor", "__proto__", 7]) {
+    expect((await POST(request({ scope: "lane", execution: "local", stageId }), context)).status).toBe(400);
+  }
+  expect(await (await GET(request(undefined, "?stageId=build"), context)).json()).toEqual({ project: "local", override: "cloud", stageOverride: "cloud", effective: "cloud" });
+  await POST(request({ scope: "stage", stageId: "build", execution: null }), context);
+  expect(await (await GET(request(undefined, "?stageId=build"), context)).json()).toEqual({ project: "local", override: "cloud", stageOverride: null, effective: "cloud" });
 });
