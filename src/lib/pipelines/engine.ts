@@ -43,7 +43,7 @@ import path from "node:path";
 
 import { activeDrain, type DrainLease } from "@/lib/selfUpdate/drain";
 import { withConversationActuation } from "@/lib/deliveryActuation";
-import { tierOffers, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
+import { codexServiceTierRefusal, tierOffers, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
 import { listCodexAccounts } from "@/lib/accounts/codex";
 import { accountManager, AccountAuthenticationRequiredError, ProjectAccountRefusedError, resolveProjectSpawnAfterLiveRead } from "@/lib/accounts/manager";
 import { validateMigrationTargetRoot } from "@/lib/accounts/migration/targetRoot";
@@ -79,7 +79,7 @@ import type { CreateFlowRequest, Flow, FlowEngine, RoleConfig } from "@/lib/flow
 import type { DismissedBy } from "@/lib/attention/dismissalTypes";
 import { OPERATOR_PAUSE_RESUME_ACTOR, pauseResumeDetail, type PauseResumeActor } from "@/lib/pauseResumeActor";
 import { isRuntimeHostTransportFailure, runtimeHostClient, type RuntimeHostClient } from "@/lib/runtime/client";
-import { structuredHostsEnabled, supervisedRuntimeHostUnavailableReason } from "@/lib/runtime/flags";
+import { runtimeHostSocket, structuredHostsEnabled, supervisedRuntimeHostUnavailableReason } from "@/lib/runtime/flags";
 import { readHostTurnRecord } from "@/lib/runtime/eventStore";
 import { restartCutEvidenceUnresolved } from "@/lib/runtime/restartCutHold";
 import { conversationTurnLiveness, outstandingDeliverySince, readHostProcessEvidence, type TurnLivenessDependencies } from "@/lib/runtime/liveness";
@@ -671,7 +671,7 @@ function stageAccountRefusal(
       if ("refusal" in read) return read.refusal;
       const accounts = listCodexAccounts().filter(account => (read.pool === null || read.pool.includes(account.id)) && (!requested || account.id === requested));
       const offers = tierOffers(accounts, stage.effectiveRole.model!, tier);
-      if (!offers.offering.length) violations.push({ field: `stages[${index}].serviceTier`, message: `no account in this project's pool offers serviceTier ${tier}; offered: ${offers.offered.join(", ") || "none"}`, expected: "tier offered by the stage model/account" });
+      if (!offers.offering.length) violations.push({ field: `stages[${index}].serviceTier`, message: codexServiceTierRefusal(accounts, stage.effectiveRole.model!, tier, requested), expected: "tier offered by the stage model/account" });
     }
     if (!requested || !ports.allowedAccountIds) continue;
     const engine = stage.effectiveRole.engine;
@@ -749,7 +749,7 @@ async function spawnPipelineAgent(
   const offers = desiredTier ? tierOffers(candidates, input.role.model!, desiredTier) : null;
   const required = input.role.serviceTierSource !== "role-default";
   if (offers && !offers.offering.length) {
-    if (required) throw new CodexServiceTierUnavailableError(`no account in this project's pool offers serviceTier ${desiredTier} for ${input.role.model}; offered: ${offers.offered.join(", ") || "none"}`);
+    if (required) throw new CodexServiceTierUnavailableError(codexServiceTierRefusal(candidates, input.role.model!, desiredTier!, input.requestedAccountId));
     serviceTier = null;
   }
   const request = {
@@ -899,7 +899,9 @@ async function spawnPipelineAgent(
   let roleMemoryRevision = "";
   try {
     const guard = await performanceSpans.wait("pipeline.git-guard-prepare", () =>
-      prepareStageGitGuard(begun.receipt.launchId, input.cwd, realExec, new Date().toISOString()));
+      prepareStageGitGuard(begun.receipt.launchId, input.cwd, realExec, new Date().toISOString(), () =>
+        onReserved({ launchId: begun.receipt.launchId, conversationId: begun.receipt.conversationId,
+          accountId: begun.receipt.accountId ?? account.accountId })));
     guardedAccount = { ...account, env: { ...account.env, ...guard, ...cpuPriorityEnv(instanceCpuPrioritySource(findPipelineRecord(input.membership.containerId!)?.taskIds ?? [])) } };
     // The same reservation callback rechecks durable activation after setup
     // yielded. A pause or ownership change still prevents native dispatch.
@@ -1400,10 +1402,16 @@ export async function stopSettledPipelineStageWriter(
   }
 }
 
-/** Why this process could not use the runtime command channel; every report
-    the identity path produces ends with it, so the operator can tell a
-    socketless caller from a host that answered. */
-const NO_CONTROL_CHANNEL = "this process has no structured control channel (LLV_RUNTIME_HOST_SOCKET is unset), so no runtime host generation could be asked";
+/** Which control channel this process had; every report the identity path
+    produces ends with it, so the operator can tell a socketless caller (the
+    MCP host process) from the Viewer. The Viewer runs pipeline recovery with
+    the socket set, and its own structured delivery controller holds the
+    engine hosts it started, so the runtime host has none to end. */
+function controlChannelNote(): string {
+  return runtimeHostSocket()
+    ? "the Viewer's structured delivery controller holds the engine host; the runtime host holds none"
+    : "this process has no structured control channel (LLV_RUNTIME_HOST_SOCKET is unset), so no runtime host generation could be asked";
+}
 
 /**
  * Ends a stage host from a process that has no channel to any runtime host
@@ -1445,7 +1453,7 @@ async function stopStageHostByRecordedIdentity(
   const registry = agentRegistry();
   const refused = (reason: string): PipelineStageStopResult => ({
     outcome: "failed",
-    error: `${reason}; nothing was signalled; ${NO_CONTROL_CHANNEL}`,
+    error: `${reason}; nothing was signalled; ${controlChannelNote()}`,
   });
   if (!target.conversationId?.startsWith("conversation_")) {
     return refused("unresolved ownership: the attempt records no conversation id to bind the host to");
@@ -1530,7 +1538,7 @@ async function stopStageHostByRecordedIdentity(
   if (outcome.ok) {
     return {
       outcome: "stopped",
-      detail: `ended host pid ${ref.pid} by its recorded identity (${outcome.via}); ${generation}; ${NO_CONTROL_CHANNEL}`,
+      detail: `ended host pid ${ref.pid} by its recorded identity (${outcome.via}); ${generation}; ${controlChannelNote()}`,
     };
   }
   const named = outcome.remaining.length > 0 ? `; still running: ${outcome.remaining.join(", ")}` : "";
@@ -1542,7 +1550,7 @@ async function stopStageHostByRecordedIdentity(
       : outcome.remaining.map((pid) => ({ pid, startIdentity: null }));
     return {
       outcome: "unresolved",
-      error: `${outcome.error} (pid ${ref.pid}${named}); ${generation}; ${NO_CONTROL_CHANNEL}`,
+      error: `${outcome.error} (pid ${ref.pid}${named}); ${generation}; ${controlChannelNote()}`,
       survivors,
     };
   }
@@ -2027,7 +2035,17 @@ export function defaultPipelinePorts(
         if (!receipt.key || sessionKeyId(receipt.key) !== sessionKeyId(probe.key) || receipt.artifactPath !== probe.transcriptPath) {
           return { outcome: "failed", error: "the recorded launch is no longer the current stage host generation" };
         }
-        return stopStageHostByRecordedIdentity(target, probe, dependencies.termination ?? {}, () => {
+        /* Once the stop has released the host or signalled it, the row, the
+           claim and the transcript move because of the stop itself: the
+           exiting host writes its last record and its binding gives the claim
+           up. Reading that as a new launch parked failed startups whose host
+           was already gone, so from the first effect on the ladder runs to its
+           end on the identity and row checks alone; the transcript is judged
+           again once the stop settles. */
+        let effectStarted = false;
+        const root = writer?.structuredHost?.process ?? null;
+        let stopped = await stopStageHostByRecordedIdentity(target, probe, dependencies.termination ?? {}, () => {
+          if (effectStarted) return null;
           const current = target.launchId ? registry.spawnReceipt(target.launchId) : null;
           const snapshot = registry.readOnlySnapshot();
           const entry = receipt.key ? snapshot.entries[sessionKeyId(receipt.key)] : null;
@@ -2040,7 +2058,27 @@ export function defaultPipelinePorts(
             return { status: 409, error: "stage launch changed or wrote its transcript before termination" };
           }
           return null;
-        });
+        }, undefined, () => { effectStarted = true; });
+        /* A stop that ends refused or unresolved has still finished when the
+           recorded host is proven gone (its pid absent, or that pid now names
+           another process), every process it captured is gone, the row names
+           nothing that may still run and no newer writer claimed it. Nothing
+           more is signalled here. */
+        const settledRow = receipt.key ? registry.readOnlySnapshot().entries[sessionKeyId(receipt.key)] : null;
+        if ((stopped.outcome === "failed" || stopped.outcome === "unresolved") && root
+          && terminationIdentityStatus(root) === "dead" && !probe.resident()
+          && (!settledRow || settledRow.claimEpoch === writer?.claimEpoch
+            && (settledRow.claimOwner === null || settledRow.claimOwner === writer?.claimOwner))
+          && (stopped.outcome === "failed" || stopped.survivors.every(survivor => terminationIdentityStatus(survivor) === "dead"))) {
+          stopped = { outcome: "stopped", detail: `recorded host pid ${root.pid} is proven gone: ${stopped.error}` };
+        }
+        if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") return stopped;
+        const settledStamp = stageArtifactStamp(receipt.artifactPath);
+        if (settledStamp === stamp) return stopped;
+        if (settledStamp === undefined || settledStamp === null) return { outcome: "failed", error: "stage launch artifact became unreadable while its host stopped" };
+        const settledEvidence = await durableStageTurnEvidence(receipt.engine, receipt.artifactPath!);
+        return provesNoNativeStageTurn(settledEvidence) ? stopped
+          : { outcome: "failed", error: "stage launch wrote native turn evidence while its host stopped" };
       })
       : options?.onlyIfIdle
       ? retirePipelineStageAgent(target, { providerRecovery: options.providerRecovery })
@@ -11484,7 +11522,7 @@ async function applySkippedStage(pipeline: Pipeline, stage: PipelineStage, attem
     setCursorState(pipeline, stage.id, "committing");
     const published = queuePipelinePublication(pipeline, ports.exec, {
       acceptedSha: sha, publishedSha: pipeline.publishedCommit ?? null,
-    });
+    }, true);
     if (!published.ok) {
       await park(pipeline, `publishing the skipped stage: ${published.error}`, attempt);
     } else if (published.remote === "unavailable") {
@@ -15489,7 +15527,8 @@ export async function patchPipeline(
         if (!model || !effort) return { error: "apply now requires a resolved model and effort; select them explicitly", status: 400 };
         const preferredId = generation?.accountId ?? null;
         const serviceTier = turboTierOnly && req.serviceTier === null ? null : target.effectiveRole.serviceTier ?? null;
-        const offers = engine === "codex" && serviceTier ? tierOffers(listCodexAccounts(), model, serviceTier) : null;
+        const tierAccounts = engine === "codex" && serviceTier ? listCodexAccounts() : [];
+        const offers = engine === "codex" && serviceTier ? tierOffers(tierAccounts, model, serviceTier) : null;
         // A pool offering the tier does not prove the preferred account offers it.
         const unavailableIds = [
           ...usageLimitsOn(live, engine).filter(item => !providerAccountRecovered(pipeline, { ...live, effectiveRole: { ...live.effectiveRole, engine, model } }, item.accountId, item.limitedAt ?? null, item.resetsAt, ports)).map(item => item.accountId),
@@ -15502,11 +15541,24 @@ export async function patchPipeline(
         /* Returning a tier changes no account and dispatches no turn. Capacity
            admission must not prevent undo after the paid approval ends. */
         if (ports.resolveProjectSpawn && !(turboTierOnly && req.applyNowCut === "none")) {
-          const resolution = ports.resolveProjectSpawn(engine, { project: pipeline.project, model, requestedId: turboTierOnly ? preferredId : target.account, preferredId, unavailableIds });
-          if (resolution.kind !== "available" || !allowed(resolution.account.accountId)) return { error: "no allowed target account is available", status: 409 };
+          const requestedId = turboTierOnly ? preferredId : target.account;
+          const resolution = ports.resolveProjectSpawn(engine, { project: pipeline.project, model, requestedId, preferredId, unavailableIds });
+          if (resolution.kind !== "available" || !allowed(resolution.account.accountId)) {
+            if (resolution.kind === "unavailable" && offers) {
+              const evaluated = tierAccounts.filter(account => allowed(account.id)
+                && resolution.allowedAccountIds.includes(account.id) && (!requestedId || account.id === requestedId));
+              if (evaluated.length && evaluated.every(account => offers.lacking.includes(account.id))) return {
+                error: codexServiceTierRefusal(evaluated, model, serviceTier!, requestedId), status: 409,
+              };
+            }
+            return { error: "no allowed target account is available", status: 409 };
+          }
           accountId = resolution.account.accountId;
           migrationTarget = resolution.account;
         }
+        if (allowed(accountId) && offers?.lacking.includes(accountId!)) return {
+          error: codexServiceTierRefusal(tierAccounts.filter(account => account.id === accountId), model, serviceTier!, accountId, "selected"), status: 409,
+        };
         if (!allowed(accountId) || unavailableIds.includes(accountId!) || (offers && !offers.offering.includes(accountId!))) return { error: "no allowed target account is available", status: 409 };
         const to = { engine, model, effort,
           serviceTier, accountId, accountPinned: !!target.account };

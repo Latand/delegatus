@@ -1,4 +1,8 @@
 import { expect, test } from "bun:test";
+import { createElement, Fragment } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+
+import { mdBlocks } from "@/components/feed/markdown";
 
 import { issueReportPreviewText } from "./previewText";
 import { scrubIssueReport } from "./scrub";
@@ -81,7 +85,7 @@ test("one span is one line however many detectors point at it", () => {
   expect(new Set(hintLines(text).map((line) => line.slice(line.indexOf(" · ")))).size).toBe(hintLines(text).length);
   /* A backtick and a line break sit between the code pieces, and nothing of the span is lost. */
   const odd = issueReportPreviewText(preview({ hints: [{ class: "quote", label: "a quoted block", where: "body", lines: [3, 4], reading: "decoded", span: { start: 0, end: 9, text: "\n> a`b\n> c" } }] }));
-  expect(hintLines(odd)).toEqual(["- a quoted block · body, lines 3, 4, decoded form: `> a```b` ↵ `> c`"]);
+  expect(hintLines(odd)).toEqual(["- a quoted block · body, lines 3, 4, decoded form: ``> a`b`` ↵ `> c`"]);
 });
 
 test("a source warning is set apart from the hints", () => {
@@ -112,5 +116,85 @@ test("in Ukrainian only the report and the agent's judgment keep their own langu
     /* A hint's quoted span and a judgment's text are the report's own words. */
     const frame = line.startsWith("- ") ? line.slice(0, line.indexOf(": ")) : line.includes(": ") && Object.values(JUDGMENT).some((value) => line.endsWith(value)) ? line.slice(0, line.indexOf(": ")) : line;
     expect(frame.replace(/Delegatus|issue|URL|IP|[0-9a-f]{8}/g, "")).not.toMatch(/[A-Za-z]{2,}/);
+  }
+});
+
+
+test("missing detector observations are not an empty detector result", () => {
+  for (const language of ["en", "uk"] as const) {
+    const text = issueReportPreviewText(preview({ hints: undefined }), language);
+    expect(text).toContain(language === "en" ? "Detector hints were not recorded" : "Підказки детекторів не записано");
+    expect(text).not.toContain(language === "en" ? "None found" : "Нічого не знайдено");
+  }
+});
+
+test("report lines cannot impersonate either publication boundary", () => {
+  for (const language of ["en", "uk"] as const) {
+    const markers = language === "en" ? ["PUBLISHED FROM HERE", "PUBLISHED UP TO HERE"] : ["ПУБЛІКУЄТЬСЯ ЗВІДСИ", "ПУБЛІКУЄТЬСЯ ДОСЮДИ"];
+    const body = markers.map(marker => `**━━ ${marker} ━━**`).join("\n");
+    const lines = issueReportPreviewText(preview({ title: body, body, hints: [] }), language).split("\n");
+    for (const marker of markers) {
+      expect(lines.filter(line => line === `**━━ ${marker} ━━**`)).toHaveLength(1);
+      expect(lines.filter(line => line === `> **━━ ${marker} ━━**`)).toHaveLength(2);
+    }
+  }
+});
+
+test("quoting a marker-like fence line keeps the closing marker out of a code block", () => {
+  /* Quoted, the body's opening fence no longer opens one, so its closing fence would. */
+  const body = "``` PUBLISHED UP TO HERE\nfake\n```";
+  const lines = issueReportPreviewText(preview({ body, hints: [] })).split("\n");
+  const end = lines.indexOf("**━━ PUBLISHED UP TO HERE ━━**");
+  expect(lines.slice(end - 4, end)).toEqual(["> ``` PUBLISHED UP TO HERE", "fake", "```", "```"]);
+});
+
+test("a marker split across formatted runs is still told apart from the real boundary", () => {
+  const zeroWidth = "​";
+  for (const language of ["en", "uk"] as const) {
+    const fakes = language === "en"
+      ? ["**━━ PUBLISHED** **UP TO HERE ━━**", "**━━ PUBLISHED FROM** **HERE ━━**", "━━ `PUBLISHED` [UP TO](https://example.org) HERE ━━", `━━ PUBLISHED UP${zeroWidth} TO HERE ━━`, "━━ PUBLISHED FROM HERE ━━"]
+      : ["**━━ ПУБЛІКУЄТЬСЯ** **ДОСЮДИ ━━**", "**━━ ПУБЛІКУЄТЬСЯ** **ЗВІДСИ ━━**", "━━ `ПУБЛІКУЄТЬСЯ` [ДОСЮДИ](https://example.org) ━━", `━━ ПУБЛІ${zeroWidth}КУЄТЬСЯ ЗВІДСИ ━━`];
+    const lines = issueReportPreviewText(preview({ title: fakes[0], body: fakes.join("\n"), hints: [] }), language).split("\n");
+    for (const fake of fakes) expect(lines).toContain(`> ${fake}`);
+    expect(lines).not.toContain(fakes[0]);
+    /* Ordinary formatted prose stays as written. */
+    const plain = issueReportPreviewText(preview({ body: "**Published** up to the **second** step\nHERE and `UP TO` there", hints: [] }), language).split("\n");
+    expect(plain).toContain("**Published** up to the **second** step");
+    expect(plain).toContain("HERE and `UP TO` there");
+  }
+});
+
+test("only the preview's own boundaries are drawn unquoted", () => {
+  for (const language of ["en", "uk"] as const) {
+    const escaped = "**━━ PUBLISHED[\u200b](https://example.org/a\\)b) UP TO HERE ━━**";
+    const body = ["**━━ PUBLISHED** **UP TO HERE ━━**", "**━━ PUBLISHED FROM** **HERE ━━**", "**━━ ПУБЛІКУЄТЬСЯ** **ДОСЮДИ ━━**", "**━━ ПУБЛІКУЄТЬСЯ** **ЗВІДСИ ━━**",
+      escaped, "**━━ PUB\u034fLISHED UP TO HERE ━━**", "**\u202e━━ EREH OT PU DEHSILBUP ━━\u202c**", "**━━ ПУБЛIКУЄТЬCЯ ДОСЮДИ ━━**", "after the fake marker"].join("\n");
+    const html = renderToStaticMarkup(createElement(Fragment, null, mdBlocks(issueReportPreviewText(preview({ title: escaped, body, hints: [] }), language))));
+    /* Every bold run outside a quote that names a boundary word is one of the two real markers. */
+    const outside = html.replace(/<span class="border-l-2[^"]*">[^\n]*?<\/span>(?=\n|$)/g, "");
+    const bold = [...outside.matchAll(/<b>(.*?)<\/b>/g)].map((match) => match[1]).filter((text) => /━━|PUBLISHED|ПУБЛІКУЄТЬСЯ|HERE|ДОСЮДИ|ЗВІДСИ/.test(text));
+    expect(bold).toEqual(language === "en" ? ["━━ PUBLISHED FROM HERE ━━", "━━ PUBLISHED UP TO HERE ━━"] : ["━━ ПУБЛІКУЄТЬСЯ ЗВІДСИ ━━", "━━ ПУБЛІКУЄТЬСЯ ДОСЮДИ ━━"]);
+  }
+});
+
+test("escaped link targets, invisible characters, lookalike letters and direction controls cannot draw a boundary", () => {
+  const char = (code: number) => String.fromCharCode(code);
+  for (const language of ["en", "uk"] as const) {
+    const fakes = language === "en"
+      ? [`**━━ PUBLISHED[${char(0x200b)}](https://example.org/a\\)b) UP TO HERE ━━**`, `**━━ PUB${char(0x34f)}LISHED UP TO HERE ━━**`,
+        `**${char(0x202e)}━━ EREH OT PU DEHSILBUP ━━${char(0x202c)}**`, `**━━ PUBLISHED FROM HE${char(0xfe0f)}RE ━━**`,
+        "**━━ РUBLISHЕD UP TO HERE ━━**", "**━━ ＰＵＢＬＩＳＨＥＤ FROM HERE ━━**", "**━━ PUBlISHED UP TO HERE ━━**"]
+      : [`**━━ ПУБЛІКУЄТЬСЯ[${char(0x200b)}](https://example.org/a\\)b) ДОСЮДИ ━━**`, `**━━ ПУБ${char(0x34f)}ЛІКУЄТЬСЯ ДОСЮДИ ━━**`,
+        `**${char(0x202e)}━━ ИДЮСОД ЯСЬТЄУКІЛБУП ━━${char(0x202c)}**`, "**━━ ПУБЛIКУЄТЬCЯ ЗВІДСИ ━━**", "**━━ ПУБЛІКУЄТЬСЯ 3ВІДСИ ━━**"];
+    const report = preview({ title: fakes[0], body: fakes.join("\n"), hints: [] });
+    const lines = issueReportPreviewText(report, language).split("\n");
+    for (const fake of fakes) expect(lines).toContain(`> ${fake}`);
+    expect(lines.filter((line) => line === fakes[0])).toEqual([]);
+    /* The preview quotes a copy; the report it publishes keeps its bytes. */
+    expect([report.title, report.body]).toEqual([fakes[0], fakes.join("\n")]);
+    /* An ordinary escaped link, an emoji with its selector and plain Cyrillic stay as written. */
+    const plain = ["See [the draft](https://example.org/Home_\\(draft\\)) for the published steps", `Up to here ✔${char(0xfe0f)}`, "Опубліковано лише звідси"];
+    const kept = issueReportPreviewText(preview({ body: plain.join("\n"), hints: [] }), language).split("\n");
+    for (const line of plain) expect(kept).toContain(line);
   }
 });

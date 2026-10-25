@@ -1,3 +1,4 @@
+import { captureTaskDueFrames } from "@/components/kanban/issue1695BrowserHarness";
 import { staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
@@ -59,6 +60,79 @@ const runningPath = (account: string) => `/state/agent-log-viewer/shared/account
 const RUNNING_PATH = runningPath("spare");
 const VIEWPORTS = [{ width: 390, height: 844 }, { width: 430, height: 932 }] as const;
 const SCHEMES = ["light", "dark"] as const;
+
+describe("phone markdown links", () => {
+  browserTest("readable labels wrap at words and unbroken targets fit the phone", async () => {
+    const out = path.resolve(process.env.LLV_LINKS_OUT ?? ".artifacts/phone-markdown-links");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, "src/components/mobile/issue1671Evidence.fixture.tsx");
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"] });
+    const readings: Array<Record<string, unknown>> = [];
+    const sources = Object.fromEntries([
+      "src/components/feed/markdown.tsx", "src/components/mobile/issue1671Evidence.fixture.tsx", "src/components/mobile/issue1671Evidence.browser.test.tsx",
+    ].map(file => [file, new Bun.CryptoHasher("sha256").update(fs.readFileSync(file)).digest("hex")]));
+    try {
+      for (const width of [360, 390, 430]) for (const scheme of SCHEMES) for (const locale of ["en", "uk"] as const) {
+        // One complete answer opens at the bottom of the feed; focus stays on the page.
+        const { page, context, pageErrors } = await openFixture(browser,
+          "about:blank", { width, height: 844 }, scheme, locale, "reduce", true);
+        try {
+          const epoch = Date.UTC(2026, 9, 23, 12);
+          await page.clock.setFixedTime(epoch);
+          await page.goto(`${served.base}?markdown-links=1#c=conversation_running`);
+          const label = page.locator('a[href="https://example.invalid/review"]');
+          await label.waitFor();
+          await page.evaluate(() => document.fonts.ready);
+          const links = await page.locator('a[href="https://example.invalid/review"], a[href^="https://example.invalid/unbroken"], a[data-file-link]').evaluateAll(elements => elements.map(element => {
+            const text = element.textContent ?? "";
+            const node = element.firstChild!;
+            const range = document.createRange();
+            const splitWords: string[] = [];
+            for (const match of text.matchAll(/\S+/g)) {
+              range.setStart(node, match.index!); range.setEnd(node, match.index! + match[0].length);
+              if (new Set([...range.getClientRects()].filter(rect => rect.width > 0).map(rect => Math.round(rect.top))).size > 1) splitWords.push(match[0]);
+            }
+            let clipped = 0;
+            let covered = 0;
+            const lines = new Set<number>();
+            for (let offset = 0; offset < text.length; offset++) {
+              if (/\s/.test(text[offset]!)) continue;
+              range.setStart(node, offset); range.setEnd(node, offset + 1);
+              const rect = range.getBoundingClientRect();
+              lines.add(Math.round(rect.top));
+              let cut = rect.left < -0.5 || rect.right > innerWidth + 0.5 || rect.top < -0.5 || rect.bottom > innerHeight + 0.5;
+              for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+                const style = getComputedStyle(ancestor), box = ancestor.getBoundingClientRect();
+                if (/(auto|scroll|hidden|clip)/.test(style.overflowX) && (rect.left < box.left - 0.5 || rect.right > box.right + 0.5)) cut = true;
+                if (/(auto|scroll|hidden|clip)/.test(style.overflowY) && (rect.top < box.top - 0.5 || rect.bottom > box.bottom + 0.5)) cut = true;
+              }
+              if (cut) clipped++;
+              const hit = document.elementFromPoint((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2);
+              if (!hit || !element.contains(hit)) covered++;
+            }
+            const style = getComputedStyle(element);
+            return { text, title: element.getAttribute("title"), splitWords, lines: lines.size, clipped, covered, wordBreak: style.wordBreak, overflowWrap: style.overflowWrap };
+          }));
+          const file = `${locale}-${scheme}-${width}.png`;
+          await page.screenshot({ path: path.join(out, file) });
+          readings.push({ locale, scheme, width, file, links, pageErrors });
+          fs.mkdirSync("evidence/phone-markdown-links", { recursive: true });
+          fs.writeFileSync("evidence/phone-markdown-links/geometry.json", JSON.stringify({ sources, readings }, null, 2) + "\n");
+          expect(pageErrors).toEqual([]);
+          expect(links).toHaveLength(4);
+          expect(links[0]!.splitWords).toEqual([]);
+          expect(links[2]!.title).toBe(links[2]!.text);
+          for (const link of links) {
+            expect(link.lines).toBeGreaterThan(1);
+            expect(link.clipped, `${locale}/${scheme}/${width}: ${link.text}`).toBe(0);
+            expect(link.covered, `${locale}/${scheme}/${width}: ${link.text}`).toBe(0);
+          }
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); served.stop(); }
+  }, 180_000);
+});
 
 describe("machine worker limit", () => {
   browserTest("machine worker limit: phone setting, seat face and popover in both languages and themes", async () => {
@@ -1938,6 +2012,7 @@ const REVIEW_ROW_PREFIX = translate("en", "mobile2.chat.reviewOf", { title: "" }
 /** What the bar's meta line actually says, cell by cell, and whether any cell
     is showing less than its text — the line the account was crowding out. */
 const headerReading = (page: Page) => page.evaluate(() => {
+  const line = document.querySelector("[data-mobile2-chat-state]")?.parentElement ?? null;
   const cell = (selector: string) => {
     const element = document.querySelector(selector);
     if (!element) return null;
@@ -1947,9 +2022,11 @@ const headerReading = (page: Page) => page.evaluate(() => {
       width: Math.round(box.width * 10) / 10,
       /* Chromium rounds a truncating box down by up to a pixel. */
       cut: element.scrollWidth > element.clientWidth + 1,
+      ellipsis: getComputedStyle(element).textOverflow === "ellipsis" && getComputedStyle(element).overflow === "hidden",
+      /* A cell the line wrapped out of its one visible row is in the DOM and not drawn. */
+      drawn: line ? box.top >= line.getBoundingClientRect().top - 0.5 && box.bottom <= line.getBoundingClientRect().bottom + 0.5 : false,
     };
   };
-  const line = document.querySelector("[data-mobile2-chat-state]")?.parentElement ?? null;
   return {
     line: line ? { width: Math.round(line.getBoundingClientRect().width * 10) / 10, text: line.textContent ?? "" } : null,
     state: cell("[data-mobile2-chat-state]"),
@@ -2016,7 +2093,8 @@ async function sheetSurface(
   await shot("header");
   check("the header names the state, the model with its tier, and the account", Boolean(header.state && header.model && header.account));
   check("the state phrase is whole", header.state?.cut === false);
-  check("the model and its tier are whole", header.model?.cut === false);
+  check("the model and its tier are whole or end in an ellipsis", header.model?.cut === false || header.model?.ellipsis === true);
+  check("the model and its tier are drawn on the line", header.model?.drawn === true);
   check("the account the conversation runs on is the one it names", (header.account?.text ?? "").includes(account));
   /* An ordinary account id has to be READABLE, not merely present in the DOM:
      `@ spare` rendered as `@ s…` and the first evidence pass called that a pass
@@ -2316,7 +2394,8 @@ browserTest("#1846: a pick on the phone names the next account whole on the titl
           /* The running account is either whole beside it or not drawn at all — never a sliver. */
           if (parts.runs?.shown && parts.runs.cut) fail(`the running account shows cut: ${JSON.stringify(parts.runs)}`);
           if (account.length <= 8 && !parts.runs?.shown) fail(`short ids both fit: ${JSON.stringify(parts.runs)}`);
-          if (after.model?.cut !== false) fail(`the model and its tier are whole: ${JSON.stringify(after.model)}`);
+          /* The model gives way before anything else on the line and ends in an ellipsis; the line's edge never slices it. */
+          if (!after.model || (after.model.cut && after.model.ellipsis !== true)) fail(`the model and its tier are whole or end in an ellipsis: ${JSON.stringify(after.model)}`);
           if (JSON.stringify(sent.reconfigures) !== JSON.stringify([next]) || sent.selects !== 0) fail(`requests ${JSON.stringify(sent)}`);
           if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
           await page.close();
@@ -10783,6 +10862,151 @@ describe("phone ⋯ menus", () => {
   }, 3_600_000);
 });
 
+describe("phone lane checks", () => {
+  /* The lane ⋯ sheet's checks face, read from the page: every choice's height,
+     every text range against the sheet and the window, and which are checked. */
+  const readChecks = (page: Page) => page.evaluate(() => {
+    const sheet = document.querySelector<HTMLElement>('[data-mobile2-sheet="menu"]');
+    if (!sheet) return null;
+    const box = sheet.getBoundingClientRect();
+    const cut: string[] = [];
+    /* The rows; the sheet's title is the lane's name, which the header truncates by design. */
+    const rows = sheet.querySelector("[data-mobile2-pipeline-menu], [data-mobile2-pipeline-checks]") ?? sheet;
+    const walker = document.createTreeWalker(rows, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!node.textContent?.trim()) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const rect = range.getBoundingClientRect();
+      if (rect.left < Math.max(0, box.left) || rect.right > Math.min(innerWidth, box.right) || rect.top < box.top || rect.bottom > Math.min(innerHeight, box.bottom)) cut.push(node.textContent.trim());
+    }
+    const choices = Array.from(sheet.querySelectorAll<HTMLElement>("[data-pipeline-checks-choice], [data-pipeline-checks-row], [data-pipeline-checks-back]")).map((row) => ({
+      choice: row.getAttribute("data-pipeline-checks-choice"), text: row.textContent ?? "", checked: row.getAttribute("aria-checked"), role: row.getAttribute("role"), height: row.getBoundingClientRect().height,
+    }));
+    return { cut, rows: choices, scrollX: scrollX, wider: document.documentElement.scrollWidth - innerWidth };
+  });
+  type Reading = NonNullable<Awaited<ReturnType<typeof readChecks>>>;
+  const problems = (reading: Reading) => [
+    ...reading.cut.map((text) => `«${text}» is cut`),
+    ...reading.rows.filter((row) => row.height < 44).map((row) => `«${row.text}» is ${row.height}px tall`),
+    ...(reading.wider > 0 || reading.scrollX !== 0 ? [`the page scrolls sideways by ${reading.wider}px`] : []),
+  ];
+  const BAR_MENU = '[data-mobile2-bar] [data-mobile2-open="menu"]';
+  const laneScreen = async (page: Page) => {
+    await page.locator('[data-phone-card="task:t-data"]').click({ timeout: 20_000 });
+    await page.locator('[data-phone-task-lane="lane-decision"] [data-open-stages]').click({ timeout: 20_000 });
+    await page.waitForSelector('[data-mobile2-pipeline="lane-decision"]', { timeout: 20_000 });
+  };
+
+  browserTest("the lane ⋯ sheet offers the stage, lane and project checks choice at 390 and 360 in en and uk, light and dark, and it persists", async () => {
+    const out = path.resolve(".artifacts/phone-pipeline-checks");
+    fs.mkdirSync(out, { recursive: true });
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    const failures: string[] = [];
+    try {
+      for (const width of [390, 360] as const) for (const lang of ["en", "uk"] as const) for (const scheme of SCHEMES) {
+        const t = (key: Parameters<typeof translate>[1], params?: Record<string, string>) => translate(lang, key, params);
+        const key = `${width}-${lang}-${scheme}`;
+        const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 740 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme, reducedMotion: "reduce" });
+        await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        try {
+          await page.goto(`${base}/?kanban=1#p=atlas`);
+          await laneScreen(page);
+          const row = page.locator('[data-mobile2-sheet="menu"] [data-pipeline-checks-row]');
+          const openMenu = async () => {
+            await page.locator(BAR_MENU).first().click({ timeout: 20_000 });
+            await page.waitForSelector('[data-mobile2-sheet="menu"] [data-pipeline-checks-row="ready"]', { timeout: 10_000 });
+            await pause(page, 350);
+          };
+          await openMenu();
+          expect(await row.getAttribute("aria-label")).toBe(t("pipelineStrip.checksAria", { value: t("pipelineStrip.checksCloud") }));
+          expect(await page.locator('[data-mobile2-sheet="menu"] [data-mobile2-pipeline-action="archive"]').innerText()).toBe(t("mobile2.pipeline.archive"));
+          for (const problem of problems((await readChecks(page))!)) failures.push(`${key} menu: ${problem}`);
+          await page.screenshot({ path: path.join(out, `${key}-menu.png`) });
+          await row.click();
+          await page.waitForSelector('[data-mobile2-sheet="menu"] [data-pipeline-checks-group]');
+          await pause(page, 350);
+          const face = (await readChecks(page))!;
+          for (const problem of problems(face)) failures.push(`${key} checks: ${problem}`);
+          expect(face.rows.filter((entry) => entry.choice).map((entry) => [entry.choice, entry.text, entry.role, entry.checked])).toEqual([
+            ["stage:inherit", t("mobile2.pipeline.checksStageInherit", { value: t("pipelineStrip.checksLocal") }), "menuitemradio", "false"],
+            ["stage:cloud", t("pipelineStrip.checksCloud"), "menuitemradio", "true"], ["stage:local", t("pipelineStrip.checksLocal"), "menuitemradio", "false"],
+            ["lane:inherit", t("pipelineStrip.checksLaneInherit", { value: t("pipelineStrip.checksCloud") }), "menuitemradio", "false"],
+            ["lane:cloud", t("pipelineStrip.checksCloud"), "menuitemradio", "false"], ["lane:local", t("pipelineStrip.checksLocal"), "menuitemradio", "true"],
+            ["project:cloud", t("pipelineStrip.checksCloud"), "menuitemradio", "true"], ["project:local", t("pipelineStrip.checksLocal"), "menuitemradio", "false"],
+          ]);
+          expect(await page.locator('[data-mobile2-sheet="menu"] [data-pipeline-checks-group="lane"]').innerText()).toContain(t("mobile2.pipeline.checksLane"));
+          await page.screenshot({ path: path.join(out, `${key}-checks.png`) });
+          await page.locator('[data-pipeline-checks-choice="stage:inherit"]').click();
+          await page.waitForSelector('[data-pipeline-checks-choice="stage:inherit"][aria-checked="true"]');
+          await page.locator('[data-pipeline-checks-choice="project:local"]').click();
+          await page.waitForSelector('[data-pipeline-checks-choice="project:local"][aria-checked="true"]');
+          await page.locator('[data-mobile2-sheet="menu"] [data-mobile2-close]').click();
+          await page.waitForSelector('[data-mobile2-sheet="menu"]', { state: "detached", timeout: 10_000 });
+          await pause(page, 400);
+          await openMenu();
+          expect(await row.getAttribute("aria-label")).toBe(t("pipelineStrip.checksAria", { value: t("pipelineStrip.checksLocal") }));
+          await row.click();
+          await page.waitForSelector('[data-mobile2-sheet="menu"] [data-pipeline-checks-group]');
+          await pause(page, 350);
+          const after = (await readChecks(page))!;
+          expect(after.rows.filter((entry) => entry.checked === "true").map((entry) => entry.choice)).toEqual(["stage:inherit", "lane:local", "project:local"]);
+          for (const problem of problems(after)) failures.push(`${key} after: ${problem}`);
+          await page.screenshot({ path: path.join(out, `${key}-after.png`) });
+          expect(await page.evaluate(() => (window as unknown as { phoneCheckPosts: unknown[] }).phoneCheckPosts)).toEqual([
+            { lane: "lane-decision", scope: "stage", execution: null, stageId: "implement" },
+            { lane: "lane-decision", scope: "project", execution: "local", stageId: "implement" },
+          ]);
+          /* The back row returns to the lane's actions. */
+          await page.locator('[data-mobile2-sheet="menu"] [data-pipeline-checks-back]').click();
+          await page.waitForSelector('[data-mobile2-pipeline-menu="lane-decision"]');
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      for (const lang of ["en", "uk"] as const) for (const scheme of SCHEMES) for (const mode of ["pending", "refused", "save-refused"] as const) {
+        const key = `390-${lang}-${scheme}-${mode}`;
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme, reducedMotion: "reduce" });
+        await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+        const page = await context.newPage();
+        try {
+          await page.goto(`${base}/?kanban=1&checks=${mode}#p=atlas`);
+          await laneScreen(page);
+          await page.locator(BAR_MENU).first().click({ timeout: 20_000 });
+          const row = page.locator('[data-mobile2-sheet="menu"] [data-pipeline-checks-row]');
+          if (mode === "pending") {
+            await page.waitForSelector('[data-pipeline-checks-row="loading"]');
+            await pause(page, 400);
+            expect(await row.innerText()).toContain(translate(lang, "pipelineStrip.checksLoading"));
+          } else if (mode === "refused") {
+            await page.waitForSelector('[data-pipeline-checks-row="failed"]');
+            expect(await row.innerText()).toContain(translate(lang, "pipelineStrip.checksRetry"));
+            expect(await page.locator('[data-mobile2-sheet="menu"] [data-pipeline-checks-error="load"]').innerText()).toBe(translate(lang, "pipelineStrip.checksLoadFailed"));
+          } else {
+            await page.waitForSelector('[data-pipeline-checks-row="ready"]');
+            await row.click();
+            await page.locator('[data-pipeline-checks-choice="lane:cloud"]').click();
+            await page.waitForSelector('[data-mobile2-sheet="menu"] [data-pipeline-checks-error="save"]');
+            expect(await page.locator('[data-mobile2-sheet="menu"] [data-pipeline-checks-error="save"]').innerText()).toBe(translate(lang, "pipelineStrip.checksSaveFailed"));
+            expect(await page.locator('[data-pipeline-checks-choice="lane:local"]').getAttribute("aria-checked")).toBe("true");
+          }
+          await pause(page, 350);
+          for (const problem of problems((await readChecks(page))!)) failures.push(`${key}: ${problem}`);
+          await page.screenshot({ path: path.join(out, `${key}.png`) });
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ failures }, null, 2));
+      expect(failures).toEqual([]);
+    } finally {
+      await browser.close();
+      stop();
+    }
+  }, 1_800_000);
+});
+
 describe("phone voice head", () => {
   /*
    * The voice companion's head on the phone (docs/design/phone-voice-head-build.md, the operator's variant 1 of
@@ -12871,6 +13095,89 @@ describe("team workspaces slice (a) on the phone", () => {
 });
 
 // docs/design/telegram-multi-bot.md: keep multiple bots inside the Telegram panel.
+browserTest("digest preview boundaries and literal hints stay distinct without a floating reply row", async () => {
+  const out = path.resolve(".artifacts/digest-preview");
+  fs.mkdirSync(out, { recursive: true });
+  const server = await serveEvidenceFixture(out);
+  const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, headless: true, args: ["--no-sandbox"] });
+  try {
+    for (const width of [390, 1440]) for (const lang of ["en", "uk"] as const) for (const scheme of SCHEMES) {
+      const phone = width === 390;
+      const { page, context } = await openFixture(browser, `${server.base}?scenario=agent-report&report-preview=boundaries`, { width, height: 900 }, scheme, lang, "reduce", phone);
+      try {
+        if (phone) await page.locator("[data-mobile2-seat-open]").click();
+        const preview = page.locator("[data-tts-message]").filter({ hasText: lang === "en" ? "PREVIEW" : "ПОПЕРЕДНІЙ ПЕРЕГЛЯД" }).first();
+        await preview.waitFor();
+        const marker = lang === "en" ? "PUBLISHED UP TO HERE" : "ПУБЛІКУЄТЬСЯ ДОСЮДИ";
+        const boundaries = preview.locator("b").filter({ hasText: marker });
+        /* The zero-width link drops out of the match text, so its title and body copies count with the plain fake. */
+        expect(await boundaries.count()).toBe(lang === "en" ? 4 : 3);
+        expect(await boundaries.evaluateAll(nodes => nodes.filter(node => !node.closest(".border-l-2")).length)).toBe(1);
+        /* Markers split across bold runs are quoted too: only the preview's own two keep the unquoted style. */
+        const drawn = await preview.locator("b").evaluateAll(nodes => nodes
+          .filter(node => /━━|PUBLISHED|ПУБЛІКУЄТЬСЯ|HERE|ЗВІДСИ|ДОСЮДИ/.test(node.textContent ?? ""))
+          .map(node => ({ text: node.textContent, quoted: Boolean(node.closest(".border-l-2")), color: getComputedStyle(node).color })));
+        const own = lang === "en" ? ["━━ PUBLISHED FROM HERE ━━", "━━ PUBLISHED UP TO HERE ━━"] : ["━━ ПУБЛІКУЄТЬСЯ ЗВІДСИ ━━", "━━ ПУБЛІКУЄТЬСЯ ДОСЮДИ ━━"];
+        expect(drawn.filter(run => !run.quoted).map(run => run.text)).toEqual(own);
+        for (const split of ["━━ PUBLISHED", "UP TO HERE ━━", "━━ PUBLISHED FROM", "HERE ━━", "━━ ПУБЛІКУЄТЬСЯ", "ЗВІДСИ ━━", "ДОСЮДИ ━━"]) {
+          expect(drawn.some(run => run.quoted && run.text === split)).toBe(true);
+        }
+        /* Escaped link targets, an invisible joiner, a direction override and lookalike letters are quoted too; the
+           first is also the title. */
+        for (const fake of ["━━ PUBLISHED\u200b UP TO HERE ━━", "━━ PUB\u034fLISHED UP TO HERE ━━", "\u202e━━ EREH OT PU DEHSILBUP ━━\u202c", "━━ ПУБЛІКУЄТЬСЯ\u200b ДОСЮДИ ━━", "━━ ПУБЛIКУЄТЬCЯ ЗВІДСИ ━━"]) {
+          expect(drawn.filter(run => run.text === fake).map(run => run.quoted)).toEqual(fake.startsWith("━━ PUBLISHED\u200b") ? [true, true] : [true]);
+        }
+        const ownColor = drawn.find(run => !run.quoted)!.color;
+        expect(drawn.filter(run => run.quoted && run.color === ownColor)).toEqual([]);
+        expect(await preview.locator("span.cursor-copy").filter({ hasText: "a`b" }).innerText()).toBe("a`b");
+        const move = await boundaries.first().evaluate(node => {
+          let feed = node.parentElement;
+          while (feed && !(/auto|scroll/.test(getComputedStyle(feed).overflowY) && feed.scrollHeight > feed.clientHeight + 1)) feed = feed.parentElement;
+          if (!feed) throw new Error("missing preview scroller");
+          const frame = feed.getBoundingClientRect();
+          return { x: frame.left + frame.width / 2, y: frame.top + frame.height / 2,
+            by: node.getBoundingClientRect().top - frame.top - frame.height / 2 };
+        });
+        await page.mouse.move(move.x, move.y);
+        await page.mouse.wheel(0, move.by);
+        await page.waitForTimeout(250);
+        expect(await boundaries.first().evaluate(node => {
+          const rect = node.getBoundingClientRect();
+          const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+          return hit === node || node.contains(hit);
+        })).toBe(true);
+        await page.screenshot({ path: path.join(out, `${width}-${lang}-${scheme}-boundaries.png`) });
+        await page.waitForTimeout(250);
+        const fromEnd = await preview.evaluate(node => {
+          let feed = node.parentElement;
+          while (feed && !(/auto|scroll/.test(getComputedStyle(feed).overflowY) && feed.scrollHeight > feed.clientHeight + 1)) feed = feed.parentElement;
+          if (!feed) throw new Error("missing preview scroller");
+          feed.scrollTop = (feed.scrollHeight - feed.clientHeight) / 2;
+          return feed.scrollHeight - feed.clientHeight - feed.scrollTop;
+        });
+        expect(fromEnd).toBeGreaterThan(200);
+        expect(await page.locator("[data-reply-suggestions], [data-reply-suggestion]").count()).toBe(0);
+        await page.screenshot({ path: path.join(out, `${width}-${lang}-${scheme}.png`) });
+        /* The hint's inline code keeps its one backtick; no doubled run is drawn. */
+        const hintCode = preview.locator("span.cursor-copy").filter({ hasText: "a`b" });
+        await hintCode.scrollIntoViewIfNeeded();
+        await page.waitForTimeout(250);
+        expect(await preview.innerText()).not.toContain("``");
+        await page.screenshot({ path: path.join(out, `${width}-${lang}-${scheme}-hint.png`) });
+      } finally { await context.close(); }
+    }
+    for (const lang of ["en", "uk"] as const) {
+      const { page, context } = await openFixture(browser, `${server.base}?scenario=agent-report&report-preview=legacy`, { width: 390, height: 900 }, "light", lang, "reduce", true);
+      try {
+        await page.locator("[data-mobile2-seat-open]").click();
+        const preview = page.locator("[data-tts-message]").filter({ hasText: lang === "en" ? "PREVIEW" : "ПОПЕРЕДНІЙ ПЕРЕГЛЯД" }).first();
+        await preview.waitFor();
+        expect(await preview.innerText()).toContain(lang === "en" ? "Detector hints were not recorded" : "Підказки детекторів не записано");
+      } finally { await context.close(); }
+    }
+  } finally { await browser.close(); server.stop(); }
+}, 180_000);
+
 describe("Telegram multiple bots", () => {
   browserTest("Telegram multiple bots settings and refused chats", async () => {
     const { captureTelegramMultiBot, serveEvidenceFixture } = await import("@/components/kanban/issue1695BrowserHarness");
@@ -13020,5 +13327,145 @@ describe("phone composer tools row", () => {
       fs.writeFileSync("evidence/phone-composer-tools/row.json", JSON.stringify(readings, null, 2) + "\n");
       expect(failures).toEqual([]);
     } finally { await browser.close(); served.stop(); }
+  }, 300_000);
+});
+
+/*
+ * The phone bar's meta line never cuts a word without an ellipsis (seat finding from the 1.16.0 critique:
+ * «● done · 30m ago · ✳ Opus 5.5 · h»). At 360, 375, 390, 403 and 416 px, in en and uk, in the running, question,
+ * done (no effort), returned (with effort), held and limit states, with the launch model and a long one, what the
+ * line DRAWS is measured from the text:
+ *
+ *   - the identity (separator, engine mark, model) is whole, or its model ends in a drawn ellipsis with room for a
+ *     readable head, or the whole group is out of the line together;
+ *   - the state phrase is whole, or ends in an ellipsis after its leading word, and then the identity is gone;
+ *   - nothing else on the line sticks out of it.
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 LLV_META_LINE_SHOTS=<dir outside the repo> bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "meta line"
+ */
+browserTest("the phone bar's meta line never cuts a word without an ellipsis", async () => {
+  const shots = process.env.LLV_META_LINE_SHOTS ? path.resolve(process.env.LLV_META_LINE_SHOTS) : null;
+  const label = process.env.LLV_META_LINE_LABEL ?? "after";
+  if (shots) fs.mkdirSync(shots, { recursive: true });
+  const { base, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const failures: string[] = [];
+  const results: unknown[] = [];
+  const LONG = "claude-opus-5-5-preview-extended-context-2026";
+  const states = [
+    { name: "running", query: "account=spare", hash: "conversation_running", models: ["opus-5-5", LONG] },
+    { name: "question", query: "account=spare&launch=1", hash: "conversation_running", models: ["opus-5-5", LONG] },
+    { name: "done", query: "account=spare", hash: "conversation_done-2", models: [""] },
+    { name: "wake", query: "account=spare&wake=1", hash: "conversation_running", models: ["opus-5-5"] },
+    { name: "returned", query: "account=spare&queue-recovery=1", hash: "conversation_running", models: ["opus-5-5"] },
+    { name: "held", query: "account=spare&menu-state=held", hash: "conversation_running", models: ["opus-5-5"] },
+    { name: "limit", query: "account=spare&menu-state=limit", hash: "conversation_running", models: ["opus-5-5"] },
+  ];
+  try {
+    for (const locale of ["en", "uk"] as const) {
+      for (const width of [360, 375, 390, 403, 416]) {
+        const context = await browser.newContext({ viewport: { width, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: "dark" });
+        try {
+          await context.addInitScript((lang) => localStorage.setItem("llv_lang", lang), locale);
+          for (const state of states) {
+            for (const model of state.models) {
+              const page = await context.newPage();
+              try {
+                await page.goto(`${base}/?${state.query}${model ? `&model=${model}` : ""}#c=${state.hash}`);
+                await page.waitForSelector("[data-mobile2-chat-state]", { timeout: 20_000 });
+                await pause(page, 500);
+                const reading = await page.evaluate(() => {
+                  const stateCell = document.querySelector("[data-mobile2-chat-state]") as HTMLElement;
+                  const line = stateCell.parentElement!;
+                  const lineBox = line.getBoundingClientRect();
+                  const inside = (box: DOMRect) => box.width > 0 && box.top >= lineBox.top - 0.5 && box.bottom <= lineBox.bottom + 0.5;
+                  const outside = (box: DOMRect) => box.top >= lineBox.bottom - 0.5;
+                  /** The width a head of the text takes in this cell's own font, with the ellipsis. */
+                  const headWidth = (cell: HTMLElement, head: string) => {
+                    const probe = document.createElement("span");
+                    const style = getComputedStyle(cell);
+                    Object.assign(probe.style, { position: "absolute", visibility: "hidden", whiteSpace: "nowrap", font: style.font, letterSpacing: style.letterSpacing });
+                    probe.textContent = `${head}\u2026`;
+                    line.appendChild(probe);
+                    const width = probe.getBoundingClientRect().width;
+                    probe.remove();
+                    return width;
+                  };
+                  const cut = (cell: HTMLElement) => cell.scrollWidth > cell.clientWidth + 1;
+                  const ellipsis = (cell: HTMLElement) => getComputedStyle(cell).textOverflow === "ellipsis" && getComputedStyle(cell).overflow === "hidden";
+                  const headOf = (text: string) => {
+                    const word = text.trim().split(/\s+/)[0] ?? "";
+                    return word.slice(0, 4);
+                  };
+                  const modelCell = line.querySelector("[data-mobile2-chat-model]") as HTMLElement | null;
+                  /* The line's own child that holds the model: the group, or the model cell itself. */
+                  const identity = modelCell ? ([...line.children].find((child) => child.contains(modelCell)) as HTMLElement) : null;
+                  const identityBox = identity?.getBoundingClientRect() ?? null;
+                  const children = [...line.children].map((child) => {
+                    const box = child.getBoundingClientRect();
+                    return { text: child.textContent ?? "", inside: inside(box), outside: outside(box), sticksOut: box.right > lineBox.right + 0.5 || box.left < lineBox.left - 0.5 };
+                  });
+                  /* The row holds the line and the pending self-wake chip, which the line's clip never touches. */
+                  const row = line.parentElement!;
+                  const rowBox = row.getBoundingClientRect();
+                  const rowCells = [...row.children].map((child) => {
+                    const box = child.getBoundingClientRect();
+                    return { text: child.textContent ?? "", sliced: box.right > rowBox.right + 0.5 || box.left < rowBox.left - 0.5 || box.top < rowBox.top - 0.5 || box.bottom > rowBox.bottom + 0.5 };
+                  });
+                  return {
+                    rowCells,
+                    chip: row.querySelector("[data-wakeup]") !== null,
+                    line: { width: lineBox.width },
+                    state: { text: stateCell.textContent ?? "", cut: cut(stateCell), ellipsis: ellipsis(stateCell), width: stateCell.clientWidth, head: headWidth(stateCell, headOf(stateCell.textContent ?? "")), inside: inside(stateCell.getBoundingClientRect()) },
+                    identity: identity && identityBox ? { drawn: inside(identityBox), gone: outside(identityBox) } : null,
+                    model: modelCell ? { text: modelCell.textContent ?? "", cut: cut(modelCell), ellipsis: ellipsis(modelCell), width: modelCell.clientWidth, head: headWidth(modelCell, headOf(modelCell.textContent ?? "")) } : null,
+                    children,
+                  };
+                });
+                const key = `${state.name}-${locale}-${width}${model ? `-${model.length > 12 ? "long" : "short"}` : ""}`;
+                results.push({ key, reading });
+                const fail = (what: string) => failures.push(`${key}: ${what}`);
+                if (state.name === "wake" && !reading.chip) fail("the pending self-wake chip is not on the row");
+                for (const cell of reading.rowCells) if (cell.sliced) fail(`a cell of the row is sliced by it: ${JSON.stringify(cell)}`);
+                if (!reading.state.inside) fail(`the state phrase is not on the line: ${JSON.stringify(reading.state)}`);
+                if (reading.state.cut && !(reading.state.ellipsis && reading.state.width >= reading.state.head - 0.5)) fail(`the state phrase is cut without an ellipsis after its leading word: ${JSON.stringify(reading.state)}`);
+                for (const child of reading.children) {
+                  if (child.inside ? child.sticksOut : !child.outside) fail(`a cell is sliced by the line: ${JSON.stringify(child)}`);
+                }
+                if (reading.identity) {
+                  if (!reading.identity.drawn && !reading.identity.gone) fail(`the identity is partly out of the line: ${JSON.stringify(reading.identity)}`);
+                  if (reading.identity.drawn && reading.model) {
+                    if (reading.model.cut && !(reading.model.ellipsis && reading.model.width >= reading.model.head - 0.5)) fail(`the model is cut without room for a head and an ellipsis: ${JSON.stringify(reading.model)}`);
+                    if (reading.state.cut) fail("the identity is drawn beside a state phrase that has to be cut");
+                  }
+                } else fail("no identity on the line");
+                if (shots) await page.locator("[data-mobile2-chat-title]").first().screenshot({ path: path.join(shots, `${label}-${key}.png`) });
+              } finally {
+                await page.close();
+              }
+            }
+          }
+        } finally {
+          await context.close();
+        }
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  if (shots) fs.writeFileSync(path.join(shots, `${label}-readings.json`), `${JSON.stringify({ results, failures }, null, 2)}\n`);
+  expect(failures).toEqual([]);
+}, 1_200_000);
+
+
+describe("new task default deadline", () => {
+  browserTest("default, picked and reset deadlines render in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/task-due-composer/phone");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"], ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try { await captureTaskDueFrames(browser, server.base, out, true); }
+    finally { await browser.close(); server.stop(); }
   }, 300_000);
 });

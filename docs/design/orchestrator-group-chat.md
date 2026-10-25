@@ -1,5 +1,32 @@
 # Orchestrator Group Chat — UX/UI design (issues #338 + #182 phase-2 retarget)
 
+## Current direction — 2026-10-23
+
+The product-scope decision of 2026-10-21 adapts this plan to the current
+orchestrator seat and report journal. The July room design below remains the
+historical proposal; its six slices need this adaptation before implementation.
+
+The first adapted slice adds recorded authors and conversation links to the
+existing report log on desktop and phone. The project report page projects
+the bridge report's server-authenticated origin: orchestrator, agent role,
+gateway or unidentified caller. A deputy's report links to the deputy that
+wrote it. Earlier seat reports keep their recorded conversation after rotation.
+Legacy reports without an origin keep their existing appearance; reports
+without an identified conversation carry no conversation link. Report bodies,
+question resolution, paging and delivery keep their existing contracts.
+
+Acceptance: author labels use the selected language; identified authors open
+through the existing conversation hash route; legacy and unidentified entries
+never acquire an invented sender link; desktop and phone remain readable in
+both languages and themes. Reading the log performs no delivery or launch.
+
+Deferred: the floating pill and room shell, member roster and presence,
+mention routing, plan/completion enforcement, stop controls, new receipts and
+push behaviour. Those features require later slices over the current seat;
+this slice adds no room store or provider singletons.
+
+---
+
 Design date 2026-07-17, grounded in worktree base `6fa8f12d` (production
 reality). This spec covers the **group chat room** that the #182 phase-2 pill +
 overlay now opens (owner retarget comment on #182, 2026-07-17) under the #338
