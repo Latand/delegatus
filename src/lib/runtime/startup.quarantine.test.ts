@@ -177,6 +177,7 @@ test.skipIf(process.platform === "win32").each(["missing-rollout", "transient"])
     const { statePath } = await import("@/lib/configDir");
     const card = loadTasks(statePath("tasks.json")).find(task => task.text.includes(key));
     expect(card?.text).toContain("adoption-failed");
+    expect(card?.dueAt).toBeUndefined(); expect(card?.dueTz).toBeUndefined();
     expect(refreshes).toBe(1);
     // Neither quarantine nor a failed attach retires the live owner.
     expect(registry.readOnlySnapshot().entries[key]!.structuredHost?.process?.pid).toBe(process.pid);

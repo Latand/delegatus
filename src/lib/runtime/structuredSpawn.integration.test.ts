@@ -5959,12 +5959,13 @@ test("issue 367: a post-kill relaunch that exhausts admission never leaves a liv
 /** A Claude child that exited terminally: the CLI printed its diagnostic and
     died before the broker could deliver anything (issue #1071). */
 class TerminallyExitedClaudeHost extends RoundTripHost {
+  diagnostic = "No conversation found with session ID: <redacted>";
   override async health(): Promise<HostState> {
     return { ...(await super.health()), status: "dead" };
   }
 
   terminalExitReason(): string | null {
-    return terminalClaudeExitReason("No conversation found with session ID: <redacted>");
+    return terminalClaudeExitReason(this.diagnostic);
   }
 }
 
@@ -6029,8 +6030,11 @@ test("issue 1071: a retried fresh launch keeps its pre-allocated id until the se
     .toEqual({ kind: "resume", sessionId });
 });
 
-test("issue 1071: a terminal CLI exit fails the launch receipt instead of leaving it queued", async () => {
-  const sessionId = crypto.randomUUID();
+test.each([
+  { diagnostic: "No conversation found with session ID: <redacted>", reason: "no conversation with this session id", suffix: "000000001071" },
+  { diagnostic: "--dangerously-skip-permissions cannot be used with root/sudo privileges", reason: "the Claude CLI refused bypass permissions under root", suffix: "000000003205" },
+])("a terminal CLI exit fails the launch receipt with its cause: $reason", async ({ diagnostic, reason, suffix }) => {
+  const sessionId = `00000000-0000-4000-8000-${suffix}`;
   const cwd = path.join(sandbox, `terminal-exit-${sessionId}`);
   fs.mkdirSync(cwd, { recursive: true });
   const artifactPath = path.join(cwd, `${sessionId}.jsonl`);
@@ -6039,6 +6043,7 @@ test("issue 1071: a terminal CLI exit fails the launch receipt instead of leavin
   const client = runtimeClient(journal);
   const launchProfile = emptyLaunchProfile({ cwd });
   const host = new TerminallyExitedClaudeHost("claude", artifactPath, sessionId);
+  host.diagnostic = diagnostic;
   const begun = beginLegacySpawnFixture(registry, {
     engine: "claude",
     cwd,
@@ -6067,16 +6072,16 @@ test("issue 1071: a terminal CLI exit fails the launch receipt instead of leavin
         );
       },
       processIdentity: () => ({ pid: process.pid, startIdentity: "terminal-exit-host" }),
-    })).rejects.toThrow("no conversation with this session id");
+    })).rejects.toThrow(reason);
 
     const failed = registry.snapshot().receipts[begun.receipt.launchId]!;
     expect(failed.state).toBe("failed");
-    expect(failed.error).toContain("no conversation with this session id");
+    expect(failed.error).toContain(reason);
     /* The caller reads a terminal, retry-safe receipt and can resubmit. */
     expect(spawnResponseForReceipt(failed, failed.artifactPath, { structured: true }))
       .toMatchObject({ state: "failed", initialMessage: "failed", retrySafe: true });
     expect((await client.operationStatus(begun.receipt.launchId))?.receipt)
-      .toMatchObject({ status: "failed", reason: expect.stringContaining("no conversation with this session id") });
+      .toMatchObject({ status: "failed", reason: expect.stringContaining(reason) });
   } finally {
     journal.close();
   }
