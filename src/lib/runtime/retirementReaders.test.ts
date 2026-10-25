@@ -201,10 +201,30 @@ test("selection validation covers every membership input and refuses a lost or c
       db.run("DELETE FROM registry_changes");
       expect(registryStartupSelectionUnchanged(view)).toBe(false);
       view=(await store.prepareReadOnlySnapshot()).file;
-      db.transaction(()=>{ for(let i=0;i<129;i++) db.run("INSERT INTO registry_changes(collection,row_key) VALUES ('meta','selection-fixture')"); })();
+      db.transaction(()=>{ for(let i=0;i<129;i++) db.run("INSERT INTO registry_changes(collection,row_key) VALUES ('meta',?)", `selection-fixture-${i}`); })();
       expect(registryStartupSelectionUnchanged(view)).toBe(false);
     } finally {db.close();store.close();}
   } finally {fs.rmSync(root,{recursive:true,force:true});}
+});
+
+test("repeated host progress keeps the startup selection valid while a later membership change still refuses it", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-progress-selection-"));
+  const filename = path.join(root, "registry.sqlite");
+  const initial = seeded(root, 8);
+  const store = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry });
+  const peer = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry });
+  try {
+    const view = (await store.prepareReadOnlySnapshot()).file;
+    for (let index = 0; index < 192; index++) peer.mutate(file => {
+      file.entries["codex:reader-0"]!.updatedAt = new Date(Date.UTC(2026, 9, 22) + index * 1000).toISOString();
+    }, false);
+    expect(registryStartupSelectionUnchanged(view)).toBe(true);
+    for (let index = 0; index < 192; index++) peer.mutate(file => {
+      file.entries["codex:reader-0"]!.updatedAt = new Date(Date.UTC(2026, 9, 23) + index * 1000).toISOString();
+    }, false);
+    peer.mutate(file => { file.memberships["conversation_reader_0"]![0]!.containerId = "new-owner"; }, false);
+    expect(registryStartupSelectionUnchanged(view)).toBe(false);
+  } finally { peer.close(); store.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 

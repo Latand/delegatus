@@ -3133,16 +3133,14 @@ export class SqliteAgentRegistryStore {
           const first = this.db.query<{ seq: number }, []>("SELECT COALESCE(MIN(seq),0) AS seq FROM registry_changes").get()!.seq;
           if (last < startupSelectionChecked || first > startupSelectionChecked + 1) return false;
           if (last === startupSelectionChecked) return true;
+          // Progress can rewrite one host many times while a view prepares.
+          // Bound the rows to revalidate after deduplicating their journal events.
           const changes = this.db.query<{ collection: RowCollection; row_key: string }, [number]>(
-            "SELECT collection,row_key FROM registry_changes WHERE seq>? ORDER BY seq LIMIT 129").all(startupSelectionChecked);
+            "SELECT DISTINCT collection,row_key FROM registry_changes WHERE seq>? LIMIT 129").all(startupSelectionChecked);
           if (changes.length > 128) return false;
           const read = this.db.query<{ value_json: string }, [string, string]>(`SELECT value_json FROM ${this.recordsSource} WHERE collection=? AND row_key=?`);
-          const seen = new Set<string>();
           for (const change of changes) {
             if (!startupSelectionCollections.has(change.collection)) continue;
-            const key = JSON.stringify([change.collection, change.row_key]);
-            if (seen.has(key)) continue;
-            seen.add(key);
             const raw = read.get(change.collection,change.row_key);
             this.onRowPayloadRead?.(change.collection,raw ? 1 : 0);
             const current = raw ? parseSqliteJson(raw.value_json,this.db) : undefined;
