@@ -1,3 +1,4 @@
+import { withHostStopOrigin } from "./hostExit";
 import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { seatRecipientVerdict, seatRecipientVerdictAsync, setSeatChannelNativeWithdrawal } from "@/lib/orchestrator/seatChannel";
 import { conversationIdsResolvingTo, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
@@ -1284,6 +1285,7 @@ export async function bindStructuredDeliveryQueue(
           process: retirementEntry.structuredHost?.process ?? null,
         } : null;
         const outcome = await terminateStructuredHostTree(ref, {
+          stopOrigin: { path: onlyIfIdle ? "idle-delivery-retirement" : "delivery-kill-action", operationId: authority?.operationId ?? conversationId },
           retainedSurvivors,
           registryCustody: retirementCustody,
           authorize,
@@ -1952,7 +1954,7 @@ export async function bindStructuredDeliveryQueue(
     try {
       await detachRegistration(id, registered);
     } finally {
-      await registered.host.release();
+      await withHostStopOrigin({ path: "structured-delivery-release", operationId: id }, () => registered.host.release());
       await flushStructuredHostPersistence(registered.host);
     }
     return true;
@@ -1992,7 +1994,7 @@ export async function bindStructuredDeliveryQueue(
     } : null;
     const registered = takeRegistration(id, current.host);
     if (!registered) return false;
-    await registered.host.release();
+    await withHostStopOrigin({ path: "structured-delivery-termination", operationId: id }, () => registered.host.release());
     (await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" },
       () => registry.terminateStructuredHost(key, undefined, [], capturedCustody)));
     await detachRegistration(id, registered);
@@ -2337,7 +2339,7 @@ export async function releaseStructuredDeliveryHost(key: SessionKey): Promise<bo
   unpublishedLaunchHosts.delete(id);
   const release = Promise.resolve().then(async () => {
     try {
-      await pending.release();
+      await withHostStopOrigin({ path: "unpublished-host-release", operationId: id }, () => pending.release());
       await flushStructuredHostPersistence(pending.host);
       return true;
     }
@@ -2689,7 +2691,7 @@ export async function releaseStructuredDeliveryHostsForDemotion(
   }));
   const outcomes = await Promise.allSettled(registrations
     .filter(({ key }) => !unrecorded.has(sessionKeyId(key)))
-    .map(({ key }) => release(key)));
+    .map(({ key }) => withHostStopOrigin({ path: "deploy-cut", operationId: options.boundary ?? sessionKeyId(key) }, () => release(key))));
   const failures = [
     ...recordFailures,
     ...outcomes.flatMap((outcome) => outcome.status === "rejected" ? [outcome.reason] : []),

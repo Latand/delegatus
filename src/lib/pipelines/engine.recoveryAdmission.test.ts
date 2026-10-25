@@ -58,7 +58,7 @@ test("a host that worked on after an earlier stop of ours and is then found dead
   h.advanceWallClock(6 * 60_000);
   await tickPipelines([entry(attempt.agentPath!)], sameBoot("dead"));
   const lane = loadPipelines()[0]!;
-  expect(lane.runs[0]!.attempts[0]!.error).toBe("stage host was lost while its turn was open; replaced by a fresh stage attempt");
+  expect(lane.runs[0]!.attempts[0]!.error).toBe("stage host was lost while its turn was open (exit: status unavailable; no Delegatus stop recorded); replaced by a fresh stage attempt");
   expect(lane.runs[0]!.attempts[1]!.restartContext).toMatchObject({ cause: "host-lost" });
   expect(lane.runs[0]!.attempts[0]!.restartRecovery!.stopped).toBeUndefined();
 });
@@ -125,7 +125,7 @@ test.each([
   await tickPipelines([entry(replacement.agentPath!)], sameBoot(second));
   const parkedLane = loadPipelines()[0]!;
   expect(parkedLane.state).toBe("needs_decision");
-  expect(parkedLane.stateDetail).toBe(parked);
+  expect(parkedLane.stateDetail).toBe(parked + (second === "dead" ? "; exit: status unavailable; no Delegatus stop recorded" : ""));
   expect(parkedLane.stateDetail).not.toContain("too");
   expect(parkedLane.stateDetail).not.toContain("again");
   expect(parkedLane.stateDetail).not.toContain("restart");
@@ -639,4 +639,19 @@ test.each(["claude", "codex"] as const)("a fresh allowed %s account replaces an 
   expect(f.h.spawnInputs[1]!.requestedAccountId).toBe("account-c");
   expect(f.h.spawnInputs[1]!.unavailableAccountIds).toContain(SPARE_ACCOUNT);
   expect(f.sends).toHaveLength(0);
+});
+
+test("a lost stage names its exit and sender in the attempt error and lane detail", async () => {
+  const h = harness();
+  await runningStructuredStage(h);
+  const attempt = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(attempt.startedAt!) + 1 });
+  await tickPipelines([entry(attempt.agentPath!)], { ...h.ports,
+    restartRecoveryBootId: () => "exit-evidence-boot",
+    restartRecoveryBootStartedAt: () => Date.parse(attempt.startedAt!) - 60_000,
+    conversationTurnInterrupted: async () => "dead",
+    conversationHostEnded: () => "exit: signal SIGKILL; no Delegatus stop recorded" });
+  const lane = loadPipelines()[0]!;
+  expect(lane.runs[0]!.attempts[0]!.error).toContain("exit: signal SIGKILL; no Delegatus stop recorded");
+  expect(lane.stateDetail).toContain("exit: signal SIGKILL; no Delegatus stop recorded");
 });

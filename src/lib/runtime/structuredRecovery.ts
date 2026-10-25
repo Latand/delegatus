@@ -1,3 +1,4 @@
+import { withHostStopOrigin } from "./hostExit";
 import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
@@ -515,7 +516,7 @@ async function recoverCandidate(
         writerClaimEpoch: releasedEntry.structuredHost?.writerClaimEpoch ?? null,
         process: releasedEntry.structuredHost?.process ?? null,
       } : null;
-      await ownership.releaseHost(releasedKey);
+      await withHostStopOrigin({ path: "structured-recovery", operationId: ownership.operationId }, () => ownership.releaseHost(releasedKey));
       await assertOwnership();
       await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" }, () => {
         request.authorityGuard?.();
@@ -701,7 +702,7 @@ async function recoverCandidate(
           writerClaimEpoch: successorEntry.structuredHost?.writerClaimEpoch ?? null,
           process: successorEntry.structuredHost?.process ?? null,
         } : null;
-        await ownership?.releaseHost(current.key);
+        await withHostStopOrigin({ path: "structured-recovery-successor-cleanup", operationId: ownership?.operationId ?? begun.receipt.launchId }, () => ownership?.releaseHost(current.key));
         await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" }, () => {
           request.authorityGuard?.();
           ownership?.assertCurrent?.();

@@ -9,7 +9,7 @@ import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIden
 const binary = process.env.LLV_CODEX_BINARY ?? "codex";
 const version = spawnSync(binary, ["--version"], { encoding: "utf8", timeout: 5_000 }).stdout?.trim();
 
-for (const mode of ["exit", "wrapped", "large", "boundary", "secret", "signal", "wrappedsignal", "missing", "timeout", "ownership", "success", "chatty", "managedexit", "shimexit", "managedsecret", "throwkey", "throwclipped"] as const) {
+for (const mode of ["exit", "wrapped", "large", "boundary", "secret", "signal", "wrappedsignal", "missing", "timeout", "ownership", "success", "chatty", "managedexit", "shimexit", "managedsecret", "throwkey", "throwclipped", "observedexit", "observedsignal"] as const) {
   test.skipIf(process.platform !== "linux")(`callback startup ${mode} preserves a bounded redacted cause on repeated launches`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "callback-"));
     try {
@@ -28,6 +28,14 @@ for (const mode of ["exit", "wrapped", "large", "boundary", "secret", "signal", 
           })]);
           expect(child.exitCode, await stderr).toBe(0);
           const message = JSON.parse(await output).error as string;
+          if (mode === "observedexit" || mode === "observedsignal") {
+            const { observed, evidence } = JSON.parse(message);
+            const expected = mode === "observedexit" ? { code: 23, signal: null } : { code: null, signal: "SIGKILL" };
+            expect(observed).toEqual(expected);
+            expect(evidence.exit).toMatchObject(expected);
+            expect(evidence.stop).toBeNull();
+            continue;
+          }
           if (mode === "success") {
             expect(message).toBe("connected: probe");
             continue;

@@ -1,3 +1,5 @@
+import { readHostExit } from "./hostExit";
+import { captureProcessIdentity } from "@/lib/processIdentity";
 // An owned process boundary lets the parent independently bound startup and teardown.
 import fs from "node:fs";
 import path from "node:path";
@@ -33,10 +35,11 @@ const peer = `
     process.exit(23);
   }
   if (mode === "signal" || mode === "wrappedsignal") process.kill(process.pid, "SIGTERM");
-  if (mode === "success" || mode === "chatty") {
+  if (mode === "success" || mode === "chatty" || mode.startsWith("observed")) {
     const server = Bun.serve({ unix: file,
       fetch(request, server) { return server.upgrade(request) ? undefined : new Response("fixture"); },
       websocket: { message(socket, message) {
+        if (String(message) === "exit23") process.exit(23);
         if (String(message) === "flood") {
           // A chatty listener: far more than any storage bound.
           const chunk = "f".repeat(65536);
@@ -65,6 +68,7 @@ const peer = `
 `;
 let sink: number | undefined;
 let peerProcess: ChildProcessWithoutNullStreams | undefined;
+let peerClosed = false;
 try {
   let command0 = mode === "missing" ? path.join(root!, "missing-binary") : process.execPath;
   const env0: NodeJS.ProcessEnv = { ...process.env, PEER_MODE: mode, PEER_MARKER: marker };
@@ -98,6 +102,7 @@ try {
     fs.rmSync(diagnostic, { force: true });
     peerProcess = base(command, args, mode === "wrapped" || mode === "chatty"
       ? { ...options, env: { ...options.env, NODE_ENV: options.env?.NODE_ENV ?? "test", LLV_SIGNAL_DIAGNOSTIC: diagnostic } } : options);
+    peerProcess.once("close", () => { peerClosed = true; });
     // The retained descriptor outlives the diagnostic name the transport unlinks.
     if (mode === "chatty") sink = fs.openSync(fs.readlinkSync(diagnostic), "r");
     if (mode === "wrapped") {
@@ -132,12 +137,22 @@ try {
       await Bun.sleep(300);
       detail += `; sink ${afterConnected}/${sinkSize()}`;
     }
+    if (mode?.startsWith("observed")) {
+      const exited = new Promise<{code:number|null; signal:string|null}>(resolve => transport.once("exit", (code, signal) => resolve({code, signal})));
+      if (mode === "observedsignal") peerProcess!.kill("SIGKILL");
+      else transport.stdin.write("exit23\n");
+      const observed = await exited;
+      const evidence = readHostExit(captureProcessIdentity(transport.pid, undefined, transport.startIdentity));
+      detail = JSON.stringify({ observed, evidence });
+    }
     process.stdout.write(JSON.stringify({ error: detail }));
   } finally {
     transport.disconnect();
-    const stopped = new Promise<void>(resolve => peerProcess!.once("close", () => resolve()));
-    transport.kill("SIGKILL");
-    await stopped;
+    if (!peerClosed) {
+      const stopped = new Promise<void>(resolve => peerProcess!.once("close", () => resolve()));
+      if (peerProcess!.exitCode === null && peerProcess!.signalCode === null) transport.kill("SIGKILL");
+      await stopped;
+    }
   }
 } catch (error) {
   process.stdout.write(JSON.stringify({ error: (error as Error).message }));

@@ -1,3 +1,4 @@
+import { hostExitProcess, recordHostStop } from "./hostExit";
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync, spawn, type ChildProcess, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
@@ -264,6 +265,8 @@ export function tickAgentMemoryWatchdogs(cells: Iterable<AgentMemoryCell> = watc
 }
 
 export class AgentMemoryCell {
+  private exitProcess: import("@/lib/processIdentity").ProcessIdentity | null = null;
+  setExitProcess(process: import("@/lib/processIdentity").ProcessIdentity | null): void { this.exitProcess = process; }
   private state: Omit<HostMemoryState, "mechanism"> & { mechanism: AgentMemoryPlan["mechanism"] };
   private readonly listeners = new Set<() => void>();
   private watcher: fs.FSWatcher | null = null;
@@ -478,6 +481,8 @@ export class AgentMemoryCell {
     // Do not run listeners between the final ownership check and the signal.
     this.recordKill(limit, target.pid === this.pid, victim.name, 1, false);
     this.killedThisTick.add(target.pid);
+    if (target.pid === this.pid || target.pid === this.exitProcess?.pid) recordHostStop(this.exitProcess ?? hostExitProcess(this.pid ?? undefined, target.identity), "SIGKILL", "agent-memory-enforcement");
+    if (!this.canSignal(target)) return;
     try { (this.ports.kill ?? ((pid) => process.kill(pid, "SIGKILL")))(target.pid); } catch { /* The sampled process may have already exited. */ }
     this.notify();
   }
@@ -497,6 +502,7 @@ export class AgentMemoryCell {
   }
   private reap(): void {
     if (this.plan.mechanism === "scope" && this.plan.unit) {
+      recordHostStop(this.exitProcess, "SIGKILL", "agent-memory-scope-reap");
       try { (this.ports.runner ?? run)("systemctl", ["--user", "kill", "--signal=SIGKILL", this.plan.unit]); } catch { /* An empty scope has already been collected. */ }
     } else {
       for (const sample of this.lastSample) if (this.canSignal(sample)) {

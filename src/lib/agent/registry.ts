@@ -147,6 +147,7 @@ export interface TmuxHostEvidence {
 }
 
 export interface StructuredHostColumns {
+  exitProcess?: ProcessIdentity;
   signalDomain?: AgentSignalDomain;
   /** Why this host's engine runs without the signal boundary, if it does. */
   signalBoundary?: SignalBoundaryOff;
@@ -220,6 +221,8 @@ export interface AgentRegistryEntry {
   host: TmuxHostEvidence | null;
   /** Structured hosting metadata lives beside legacy tmux evidence during migration. */
   structuredHost?: StructuredHostColumns | null;
+  /** Original identity retained after the host columns are retired. */
+  hostExitProcess?: ProcessIdentity;
   /** Exact process identities left alive by a partial structured-host kill. */
   structuredTerminationSurvivors?: ProcessIdentity[];
   /** Names the newest capture of those identities. A capture withdrawn after
@@ -2219,6 +2222,7 @@ function normalizeStructuredHost(value: unknown): StructuredHostColumns | null {
   }
   return {
     kind: host.kind,
+    ...(host.exitProcess ? { exitProcess: host.exitProcess } : {}),
     ...(signalDomain ? { signalDomain } : {}),
     ...(normalizeSignalBoundaryOff(host.signalBoundary) ? { signalBoundary: normalizeSignalBoundaryOff(host.signalBoundary)! } : {}),
     endpoint: typeof host.endpoint === "string" ? host.endpoint : "",
@@ -2276,6 +2280,7 @@ function normalizeEntry(value: AgentRegistryEntry, policy?: McpGrantPolicy): Age
     ...(value.launchProfile ? { launchProfile: emptyLaunchProfile(value.launchProfile, policy) } : {}),
     host: value.host && typeof value.host === "object" && value.host.kind === "tmux" ? value.host : null,
     structuredHost: normalizeStructuredHost(value.structuredHost),
+    ...(value.structuredHost?.exitProcess ? { hostExitProcess: value.structuredHost.exitProcess } : {}),
     ...(terminationSurvivors === undefined ? {} : { structuredTerminationSurvivors: terminationSurvivors }),
   };
 }
@@ -8046,7 +8051,10 @@ export class AgentRegistry {
         : entry;
       const changedHostPaths = activeHostPathsChangedByEntry(file, keyId, replacement);
       const readinessBefore = migrationReadinessSignature(file, entry.key.engine, changedHostPaths);
-      const full = { ...replacement, ...(survivors.length > 0 ? { structuredTerminationSurvivors: survivors } : {}), updatedAt: now() };
+      const full = { ...replacement,
+        ...(requestedHost?.exitProcess ?? requestedHost?.process ?? existing?.hostExitProcess
+          ? { hostExitProcess: requestedHost?.exitProcess ?? requestedHost?.process ?? existing!.hostExitProcess } : {}),
+        ...(survivors.length > 0 ? { structuredTerminationSurvivors: survivors } : {}), updatedAt: now() };
       file.entries[keyId] = full;
       advanceMigrationScopeRevision(file, entry.key.engine, readinessBefore, changedHostPaths);
       return clone(full);
@@ -8077,6 +8085,7 @@ export class AgentRegistry {
       };
       const changedHostPaths = activeHostPathsChangedByEntry(file, keyId, replacement);
       const readinessBefore = migrationReadinessSignature(file, key.engine, changedHostPaths);
+      entry.hostExitProcess = structuredHost?.exitProcess ?? structuredHost?.process ?? entry.structuredHost?.exitProcess ?? entry.structuredHost?.process ?? entry.hostExitProcess;
       entry.structuredHost = structuredHost ? normalizeStructuredHost(structuredHost) : null;
       if (status) entry.status = status;
       entry.updatedAt = now();
@@ -8117,6 +8126,7 @@ export class AgentRegistry {
       const replacement = {
         ...entry,
         host: null,
+        hostExitProcess: entry.structuredHost?.exitProcess ?? current ?? entry.hostExitProcess,
         structuredHost: domain ? { ...entry.structuredHost!, endpoint: "stdio:released", process: null, activeTurnRef: null,
           pendingAttention: [], activeFlags: [], signalDomain: { ...domain, retired: true as const } } : null,
         structuredTerminationSurvivors: [],
@@ -8415,6 +8425,7 @@ export class AgentRegistry {
       const changedHostPaths = activeHostPathsChangedByEntry(file, keyId, replacement);
       const readinessBefore = migrationReadinessSignature(file, key.engine, changedHostPaths);
       entry.structuredHost = replacement.structuredHost;
+      if (normalizedHost?.exitProcess) entry.hostExitProcess = normalizedHost.exitProcess;
       entry.status = status;
       entry.pendingAction = replacement.pendingAction;
       if (releaseClaim) entry.claimOwner = null;

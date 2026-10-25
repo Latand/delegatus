@@ -1,3 +1,4 @@
+import { hostExitProcess, observeHostExit, recordHostStop, withHostStopOrigin } from "./hostExit";
 import { nativeProcessId, signalDomain, signalAgentDomain, signalBoundaryOff, spawnManagedEngine } from "./agentSignalSandbox";
 import { memoryField, memoryKillText } from "./agentMemoryState";
 import type { AgentMemoryCell } from "./agentMemory";
@@ -306,6 +307,7 @@ export class CopilotAcpHost implements EngineHost {
   private readonly signalProcess: ProcessSignal;
   private readonly processIdentity: (pid: number) => string | null;
   private readonly childStartIdentity: string | null;
+  private readonly exitProcess: import("@/lib/processIdentity").ProcessIdentity | null;
   private readonly subscribers = new Set<Subscriber>();
   private readonly events: RuntimeEvent[] = [];
   private readonly pending = new Map<number, PendingRequest>();
@@ -358,6 +360,9 @@ export class CopilotAcpHost implements EngineHost {
     this.signalProcess = options.signalProcess ?? process.kill;
     this.processIdentity = options.processIdentity ?? ((pid) => procBackend.processIdentity(pid));
     this.childStartIdentity = nativeProcessId(child) ? this.processIdentity(nativeProcessId(child)!) : null;
+    this.exitProcess = signalDomain(child)?.native ?? hostExitProcess(nativeProcessId(child), this.childStartIdentity);
+    this.memoryCell?.setExitProcess(this.exitProcess);
+    observeHostExit(child, this.exitProcess);
     this.releaseCleanup = options.releaseCleanup ?? null;
     this.cursor = options.initialEventCursor ?? 0;
     /* ACP advertises `promptCapabilities.image`; images ride `session/prompt`
@@ -454,7 +459,7 @@ export class CopilotAcpHost implements EngineHost {
       return host;
     } catch (error) {
       try {
-        await host.release();
+        await withHostStopOrigin({ path: "copilot-startup-cleanup", operationId: host.identity.sessionId }, () => host.release());
       } catch (cleanupError) {
         throw new StructuredHostAdoptionCleanupError(safeError(error), host, { cause: cleanupError });
       }
@@ -744,6 +749,7 @@ export class CopilotAcpHost implements EngineHost {
       endpoint: pid ? `stdio:${pid}` : "stdio:released",
       pid,
       processStartIdentity: pid ? this.processIdentity(pid) : null,
+      ...(this.exitProcess ? { exitProcess: this.exitProcess } : {}),
       ...(signalDomain(this.child) ? { signalDomain: signalDomain(this.child) } : {}),
       ...(signalBoundaryOff(this.child) ? { signalBoundary: signalBoundaryOff(this.child) } : {}),
       eventCursor: this.cursor,
@@ -1023,7 +1029,12 @@ export class CopilotAcpHost implements EngineHost {
         || this.childStartIdentity !== expected.startIdentity
         || this.processIdentity(pid) !== expected.startIdentity) return false;
     }
-    return signalAgentDomain(this.child, signal) ?? signalDetachedProcessGroup(this.child, signal, this.signalProcess);
+    const record = () => recordHostStop(this.exitProcess, signal, this.dead ? "copilot-host-fault" : "copilot-host-release");
+    const protectedSignal = signalAgentDomain(this.child, signal, record);
+    if (protectedSignal !== undefined) return protectedSignal;
+    record();
+    if (expected && this.processIdentity(expected.pid) !== expected.startIdentity) return false;
+    return signalDetachedProcessGroup(this.child, signal, this.signalProcess);
   }
 
   private startTermination(): boolean {
@@ -1037,6 +1048,7 @@ export class CopilotAcpHost implements EngineHost {
       return true;
     }
     if (this.terminationStarted || this.reaped) return true;
+    recordHostStop(this.exitProcess, "EOF", "copilot-host-release");
     try { this.child.stdin.end(); } catch { /* already closed */ }
     if (!this.signalReleaseGroup("SIGTERM")) return false;
     this.terminationStarted = true;

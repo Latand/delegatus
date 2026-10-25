@@ -1,3 +1,4 @@
+import { recordHostStop, withHostStopOrigin } from "./hostExit";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
 import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import { assertSpawnMemoryAvailable } from "@/lib/agent/spawnMemory";
@@ -401,6 +402,8 @@ async function terminateVerifiedStructuredSpawnProcess(expected: ProcessIdentity
   const matches = () => procBackend.processIdentity(expected.pid) === expected.startIdentity;
   if (!matches()) return true;
   for (const signal of ["SIGTERM", "SIGKILL"] as const) {
+    recordHostStop(expected, signal, "stale-structured-spawn-reap");
+    if (!matches()) return true;
     if (!signalProcessGroup(expected.pid, signal)) {
       try { process.kill(expected.pid, signal); }
       catch { return !matches(); }
@@ -605,7 +608,7 @@ async function failStructuredLaunchAndReap(
           && entryBeforeTermination.claimOwner === null;
       if (stillOwned) {
         try {
-          const terminated = await (options.terminateHostProcess ?? terminateVerifiedStructuredSpawnProcess)(cleanup.process);
+          const terminated = await withHostStopOrigin({ path: "stale-structured-spawn-reap", operationId: launchId }, () => (options.terminateHostProcess ?? terminateVerifiedStructuredSpawnProcess)(cleanup.process!));
           if (!terminated && cleanup.process.pid !== process.pid) {
             spawnDiagnosticErrorFor(failure.receipt?.clientAttemptId, "[spawn] staged host termination remained unconfirmed", {
               launchId,
@@ -2319,8 +2322,8 @@ async function terminalHostExitReason(host: SpawnedStructuredHost | null): Promi
   return host.terminalExitReason?.() ?? "structured spawn host exited before its first message";
 }
 
-async function cleanupHost(host: SpawnedStructuredHost | null, binding: HostBinding): Promise<void> {
-  await host?.release();
+async function cleanupHost(host: SpawnedStructuredHost | null, binding: HostBinding, operationId: string): Promise<void> {
+  await withHostStopOrigin({ path: "structured-spawn-failure-cleanup", operationId }, () => host?.release());
   let unregisterError: unknown = null;
   try {
     await binding.unregister();
@@ -2857,7 +2860,7 @@ export async function spawnStructuredConversation(
     void startingHost.then(async (lateHost) => {
       if (!durableSetupTimedOut) return;
       try {
-        await lateHost.release();
+        await withHostStopOrigin({ path: "structured-spawn-late-cleanup", operationId: input.receipt.launchId }, () => lateHost.release());
       } catch (error) {
         spawnDiagnosticErrorFor(input.receipt.clientAttemptId, "[spawn] late structured host could not be released after setup timeout", {
           launchId: input.receipt.launchId,
@@ -2970,7 +2973,7 @@ export async function spawnStructuredConversation(
       release: async () => {
         launchReleased = true;
         stagedContinuations.delete(operationId);
-        await cleanupHost(host, binding);
+        await cleanupHost(host, binding, input.receipt.launchId);
       },
     });
     binding.unregister = await withinDurableSetup(publishAuthorized());
@@ -3126,7 +3129,7 @@ export async function spawnStructuredConversation(
     }
     let cleanupError: unknown = null;
     try {
-      await cleanupHost(host, binding);
+      await cleanupHost(host, binding, input.receipt.launchId);
     } catch (failure) {
       cleanupError = failure;
     }

@@ -237,13 +237,15 @@ export function nativeProcessId(child: SignalDomainHandle): number | undefined {
 
 /** TERM reaches the verified native process. Escalation ends the owned PID
  * namespace, including descendants that changed session or were reparented. */
-export function signalAgentDomain(child: SignalDomainHandle, signal: NodeJS.Signals): boolean | undefined {
+export function signalAgentDomain(child: SignalDomainHandle, signal: NodeJS.Signals, beforeSignal?: () => void): boolean | undefined {
   const domain = signalDomain(child);
   if (!domain) return undefined;
   const target = signal === "SIGKILL" ? domain.init : domain.native;
   const status = processIdentityStatus(target);
   if (status === "dead") return true;
   if (status !== "alive" || namespaceOf(target.pid, "pid") !== domain.pidNamespace) return false;
+  beforeSignal?.();
+  if (processIdentityStatus(target) !== "alive" || namespaceOf(target.pid, "pid") !== domain.pidNamespace) return false;
   try { process.kill(target.pid, signal); return true; }
   catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; }
 }

@@ -1,3 +1,4 @@
+import { readHostExit, recordHostExit, recordHostStop, withHostStopOrigin } from "@/lib/runtime/hostExit";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import fs from "node:fs";
@@ -2385,4 +2386,21 @@ test("strict transcript evidence keeps I/O errors visible while verifying the na
   expect(await readLivenessTranscriptEvidence("claude", transcript)).toBeNull();
   await expect(readLivenessTranscriptEvidence("claude", transcript, { strict: true })).rejects.toMatchObject({ code: "ELOOP" });
   expect(await readLivenessTranscriptEvidence("claude", path.join(dir, "missing.jsonl"), { strict: true })).toBeNull();
+});
+
+test("full activity evidence retains the exit and stop source of a gone structured host", async () => {
+  const transcript = path.join(sandbox(), "exit-evidence.jsonl");
+  const entry = structuredEntry(transcript, 2147482998);
+  entry.structuredHost!.process!.startIdentity = "fixture-activity-host-exit";
+  entry.hostExitProcess = entry.structuredHost!.process!;
+  withHostStopOrigin({ path: "idle-retirement-sweep", operationId: "sweep-fixture-operation" }, () => recordHostStop(entry.hostExitProcess, "SIGTERM", "fallback"));
+  recordHostExit(entry.hostExitProcess, null, "SIGTERM");
+  const snapshot = await agentLivenessSnapshot({}, sources({
+    listFiles: async () => [fileEntry({ path: transcript })],
+    registrySnapshot: () => ({ entries: { host: entry }, conversations: {} }),
+    pipelines: () => [],
+    transcriptEvidence: async () => ({ lastRecordTs: FROZEN_AT, turn: "busy" }),
+  }));
+  expect(snapshot.conversations[0]!.hostExit).toEqual(readHostExit(entry.hostExitProcess));
+  expect(snapshot.conversations[0]!.hostExit).toMatchObject({ stop: { path: "idle-retirement-sweep", operationId: "sweep-fixture-operation" }, exit: { code: null, signal: "SIGTERM" } });
 });

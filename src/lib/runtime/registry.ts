@@ -1,3 +1,4 @@
+import { recordHostStop, withHostStopOrigin } from "./hostExit";
 import { CODEX_MISSING_ROLLOUT_REASON, isMissingCodexRolloutError } from "./hostEndCause";
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
 import type {
@@ -64,6 +65,7 @@ function registryProcess(state: HostState): ProcessIdentity | null {
 
 export function codexHostColumns(state: HostState, writerClaimEpoch: number): StructuredHostColumns {
   return {
+    ...(state.exitProcess ? { exitProcess: state.exitProcess } : {}),
     kind: "codex-app-server",
     endpoint: state.endpoint,
     process: registryProcess(state),
@@ -81,6 +83,7 @@ export function codexHostColumns(state: HostState, writerClaimEpoch: number): St
 
 export function claudeHostColumns(state: HostState, writerClaimEpoch: number): StructuredHostColumns {
   return {
+    ...(state.exitProcess ? { exitProcess: state.exitProcess } : {}),
     kind: "claude-broker",
     endpoint: state.endpoint,
     process: registryProcess(state),
@@ -102,6 +105,7 @@ export function claudeHostColumns(state: HostState, writerClaimEpoch: number): S
 
 export function copilotHostColumns(state: HostState, writerClaimEpoch: number): StructuredHostColumns {
   return {
+    ...(state.exitProcess ? { exitProcess: state.exitProcess } : {}),
     kind: "copilot-acp",
     endpoint: state.endpoint,
     process: registryProcess(state),
@@ -233,7 +237,7 @@ async function bindStructuredHostPersistence(
   try {
     await persist(await host.health());
   } catch (error) {
-    await host.release();
+    await withHostStopOrigin({ path: "host-checkpoint-failure", operationId: sessionKeyId(key) }, () => host.release());
     throw error;
   }
 
@@ -309,7 +313,7 @@ async function bindStructuredHostPersistence(
     try { await releaseClaim(); } finally {
       /* A release that could not record its child's tree sends nothing and
          says so; the child keeps its own fence, so nothing here awaits it. */
-      void host.release().catch(() => undefined);
+      void withHostStopOrigin({ path: "host-checkpoint-failure", operationId: sessionKeyId(key) }, () => host.release()).catch(() => undefined);
     }
   };
   const persistPending = async () => {
@@ -627,6 +631,8 @@ async function terminateVerifiedProcess(processIdentity: ProcessIdentity): Promi
   const status = processIdentityStatus(processIdentity);
   if (status === "dead") return true;
   if (processIdentity.pid === process.pid || status !== "alive") return false;
+  recordHostStop(processIdentity, "SIGTERM", "registry-recovery");
+  if (processIdentityStatus(processIdentity) !== "alive") return processIdentityProvenDead(processIdentity);
   try { process.kill(processIdentity.pid, "SIGTERM"); } catch { /* process exited */ }
   if (await waitForVerifiedProcessExit(processIdentity, ORPHAN_TERM_GRACE_MS)) return true;
   try { process.kill(processIdentity.pid, "SIGKILL"); } catch { /* process exited */ }
@@ -692,6 +698,7 @@ async function endRecordedStructuredTree(
     kind: "structured", pid: root.pid, startIdentity, bootEpoch, engine, sessionId: key.sessionId, conversationId: null,
     seat: null, turnBusy: null, owned: false, lastActiveAt: null,
   }, {
+    stopOrigin: { path: source, operationId: sessionKeyId(key) },
     retainedSurvivors: [...registry.readOnlySnapshot().entries[sessionKeyId(key)]?.structuredTerminationSurvivors ?? [], ...domainProcesses],
     authorize,
     /* No runtime holds this tree: an orphan's claim owner is gone, and a
@@ -977,7 +984,7 @@ export async function adoptCodexRegistryHosts(
                 claimed.claimEpoch,
                 "dead",
               );
-              await error.host.release();
+              await withHostStopOrigin({ path: "startup-adoption-cleanup", operationId: sessionKeyId(entry.key) }, () => error.host.release());
             } catch { /* retain the live process and claim until its late reap is observed */ }
             return;
           }
@@ -1121,7 +1128,7 @@ export async function adoptClaudeRegistryHosts(
                 claimed.claimEpoch,
                 "dead",
               );
-              await error.host.release();
+              await withHostStopOrigin({ path: "startup-adoption-cleanup", operationId: sessionKeyId(entry.key) }, () => error.host.release());
             } catch { /* retain the live process and claim until its late reap is observed */ }
             return;
           }

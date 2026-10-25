@@ -1,3 +1,4 @@
+import { hostExitProcess, observeHostExit, recordHostStop, withHostStopOrigin } from "./hostExit";
 import { nativeProcessId, signalDomain, signalAgentDomain, signalBoundaryOff, spawnManagedEngine } from "./agentSignalSandbox";
 import { engineMemoryOff } from "@/lib/memory/source";
 import { CodexSocketTransport, type CodexTransport, type CodexSocketOwner } from "./codexSocketTransport";
@@ -1289,6 +1290,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   private readonly processIdentity: (pid: number) => string | null;
   private readonly pidAlive: (pid: number) => boolean;
   private readonly childStartIdentity: string | null;
+  private readonly exitProcess: import("@/lib/processIdentity").ProcessIdentity | null;
   private readonly onEventCursorRecovery: RuntimeEventCursorRecoveryReporter | undefined;
   private readonly resolveImagePath: (ref: StructuredImageRef) => string;
   private readonly pending = new Map<number, PendingRpc>();
@@ -1444,6 +1446,9 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     this.pidAlive = options.pidAlive ?? ((pid) => procBackend.pidAlive(pid));
     this.releaseCleanup = options.releaseCleanup ?? null;
     this.childStartIdentity = nativeProcessId(child) ? this.processIdentity(nativeProcessId(child)!) : null;
+    this.exitProcess = signalDomain(child)?.native ?? hostExitProcess(nativeProcessId(child), this.childStartIdentity);
+    this.memoryCell?.setExitProcess(this.exitProcess);
+    observeHostExit(child, this.exitProcess);
     this.onEventCursorRecovery = options.onEventCursorRecovery;
     this.resolveImagePath = options.resolveImagePath ?? ((ref) => {
       const store = runtimeImageStore();
@@ -1720,7 +1725,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       return provisional;
     } catch (error) {
       try {
-        await provisional.release();
+        await withHostStopOrigin({ path: "codex-startup-cleanup", operationId: provisional.identity.threadId }, () => provisional.release());
       } catch (cleanupError) {
         throw new StructuredHostAdoptionCleanupError(safeError(error), provisional, { cause: cleanupError });
       }
@@ -3303,6 +3308,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       endpoint: pid ? this.child instanceof CodexSocketTransport ? this.child.endpoint : `stdio:${pid}` : "stdio:released",
       pid,
       processStartIdentity,
+      ...(this.exitProcess ? { exitProcess: this.exitProcess } : {}),
       ...(signalDomain(this.child) ? { signalDomain: signalDomain(this.child) } : {}),
       ...(signalBoundaryOff(this.child) ? { signalBoundary: signalBoundaryOff(this.child) } : {}),
       eventCursor: this.cursor,
@@ -3564,7 +3570,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   private signalTermination(signal: NodeJS.Signals): TerminationSignalResult {
     // Fatal OOM cleanup is owned by the cell, without legacy group signals.
     if (this.memoryCell?.fatalMemoryExit) return "attempted";
-    const protectedSignal = signalAgentDomain(this.child, signal);
+    const protectedSignal = signalAgentDomain(this.child, signal, () => recordHostStop(this.exitProcess, signal, this.dead ? "codex-host-fault" : "codex-host-release"));
     if (protectedSignal !== undefined) return protectedSignal ? "attempted" : "unsafe";
     const ownership = this.childProcessOwnership();
     if (ownership === "gone") {
@@ -3572,6 +3578,8 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       return "attempted";
     }
     if (this.reaped || ownership !== "owned") return "unsafe";
+    recordHostStop(this.exitProcess, signal, this.dead ? "codex-host-fault" : "codex-host-release");
+    if (this.childProcessOwnership() !== "owned") return "unsafe";
     signalDetachedProcessGroup(this.child, signal, this.signalProcess);
     return "attempted";
   }

@@ -1,3 +1,4 @@
+import { hostExitText, readHostExit, withHostStopOrigin } from "./hostExit";
 import { SOURCE_STATES, chooseSource, sourceTurnsEnginesOff } from "@/lib/memory/fixtures/source";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { fakeAgentMemory, fakeHostMemory } from "./fixtures/agentMemory";
@@ -6830,3 +6831,26 @@ for (const { midAnswer = false, graceful = false, reconnectFailure, crashBeforeW
     fs.rmSync(socketRoot, { recursive: true, force: true });
   }
 }, 30_000);
+
+for (const ending of ["release", "external", "code"] as const) test(`Codex host exit observer retains ${ending} status and source after release`, async () => {
+  const server = new FakeAppServer("host-exit-thread");
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server),
+    processIdentity: () => "fixture-codex-host-exit", pidAlive: () => true, shutdownGraceMs: 10,
+    signalProcess: (_pid, signal) => {
+      queueMicrotask(() => server.emit("close", null, signal));
+    } });
+  const process = (await host.health()).exitProcess!;
+  try {
+    expect(process.startIdentity).toBe("fixture-codex-host-exit");
+    if (ending === "release") await withHostStopOrigin({ path: "deploy-cut", operationId: "deploy-fixture-operation" }, () => host.release());
+    else {
+      server.emit("exit", ending === "code" ? 23 : null, ending === "external" ? "SIGKILL" : null);
+      server.emit("close", ending === "code" ? 23 : null, ending === "external" ? "SIGKILL" : null);
+    }
+    const evidence = readHostExit(process)!;
+    expect(evidence.exit).toMatchObject({ code: ending === "code" ? 23 : null, signal: ending === "external" ? "SIGKILL" : ending === "release" ? "SIGTERM" : null });
+    expect(evidence.stop).toEqual(ending === "release" ? expect.objectContaining({ path: "deploy-cut", operationId: "deploy-fixture-operation" }) : null);
+    expect(hostExitText(evidence)).toContain(ending === "release" ? "stopped by deploy-cut" : "no Delegatus stop recorded");
+    expect((await host.health()).exitProcess).toEqual(process);
+  } finally { await host.release(); }
+});

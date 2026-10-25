@@ -1,3 +1,4 @@
+import { readHostExit, recordHostExit, recordHostStop } from "./hostExit";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -106,6 +107,7 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
   private socket: WebSocket | null = null;
   private poll: ReturnType<typeof setInterval> | null = null;
   private closed = false;
+  private launchChild: ChildProcessWithoutNullStreams | null = null;
   private readonly directoryIdentity: { ino: number; dev: number };
 
   private constructor(owner: CodexSocketOwner) {
@@ -247,7 +249,9 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
       }
       const transport = await this.reconnect(owner);
       if (drain) transport.stderrDrained = drain.finished;
-      child.on("close", () => transport.processEnded());
+      transport.launchChild = child;
+      child.on("exit", (code, signal) => transport.processEnded(code, signal));
+      child.on("close", (code, signal) => transport.processEnded(code, signal));
       child.unref();
       return transport;
     } catch (error) {
@@ -259,6 +263,7 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
       }
       if (child.pid && child.exitCode === null && child.signalCode === null && (!monitorIdentity || procBackend.processIdentity(child.pid) === monitorIdentity)) {
         const stopped = new Promise<void>(resolve => { if (child.exitCode !== null || child.signalCode !== null) resolve(); else child.once("close", () => resolve()); });
+        if (pid && identity) recordHostStop(captureProcessIdentity(pid, undefined, identity), "SIGKILL", "codex-socket-startup-cleanup");
         const signalled = signalAgentDomain(child, "SIGKILL");
         if (signalled === undefined) signalProcessGroup(child.pid, "SIGKILL", process.kill);
         else if (!signalled) throw new Error(`Codex callback setup cleanup identity could not be verified; ${message}`, { cause: error });
@@ -277,6 +282,8 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
   }
 
   kill(signal: NodeJS.Signals | number = "SIGTERM"): boolean {
+    if (procBackend.processIdentity(this.pid) !== this.startIdentity) return false;
+    recordHostStop({ pid: this.pid, startIdentity: this.startIdentity, bootEpoch: this.bootEpoch }, String(signal), "codex-socket-kill");
     if (procBackend.processIdentity(this.pid) !== this.startIdentity) return false;
     try { process.kill(this.pid, signal); return true; } catch { return false; }
   }
@@ -308,7 +315,17 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
     this.socket?.terminate();
   }
 
-  private processEnded(): void {
+  private processEnded(code?: number | null, signal?: NodeJS.Signals | null): void {
+    const process = { pid: this.pid, startIdentity: this.startIdentity, bootEpoch: this.bootEpoch };
+    if (code === undefined && signal === undefined) {
+      // The original parent can still supply wait status. A poll must not
+      // publish an empty exit just before that parent's exit callback.
+      if (this.launchChild?.pid === this.pid && this.launchChild.exitCode === null && this.launchChild.signalCode === null) return;
+      const retained = readHostExit(process)?.exit;
+      code = this.launchChild?.exitCode ?? retained?.code;
+      signal = this.launchChild?.signalCode ?? retained?.signal as NodeJS.Signals | null | undefined;
+    }
+    recordHostExit(process, code, signal);
     // Remove only the private directory this connection originally verified.
     const file = codexSocketPath(this.endpoint)!;
     if (procBackend.processIdentity(this.pid) !== this.startIdentity) {
@@ -323,7 +340,7 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
     }
     if (this.closed) return;
     this.disconnect();
-    this.emit("exit");
-    this.emit("close");
+    this.emit("exit", code, signal);
+    this.emit("close", code, signal);
   }
 }

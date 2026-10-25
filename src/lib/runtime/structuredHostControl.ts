@@ -1,3 +1,4 @@
+import { recordHostStop, withHostStopOrigin, type HostStopOrigin } from "./hostExit";
 import fs from "node:fs";
 
 import { agentRegistry, type ProcessIdentity, type RegistryFile, type StructuredHostCustody } from "@/lib/agent/registry";
@@ -351,6 +352,7 @@ export type StructuredHostTerminationOutcome =
     };
 
 export interface StructuredHostTerminationDependencies {
+  stopOrigin?: HostStopOrigin;
   processIdentity?(pid: number): string | null;
   bootEpoch?(): string | null;
   pidAlive?(pid: number): boolean;
@@ -636,7 +638,7 @@ export async function terminateStructuredHostTree(
     let runtimeFailure = false;
     if (key && rootAlive && (dependencies.retainedSurvivors?.length ?? 0) === 0) {
       try {
-        if (await terminateOwned(key, expected)) {
+        if (await withHostStopOrigin(dependencies.stopOrigin ?? { path: "structured-host-kill", operationId: key.sessionId }, () => terminateOwned(key, expected))) {
           via = "runtime";
           markStarted();
         }
@@ -662,6 +664,10 @@ export async function terminateStructuredHostTree(
     const signalOnce = (target: number, value: NodeJS.Signals) => {
       markStarted();
       try {
+        withHostStopOrigin(dependencies.stopOrigin ?? { path: "structured-host-kill", operationId: ref.sessionId ?? String(pid) },
+          () => { if (processIdentityStatus(expected, identityProbe) === "alive") recordHostStop(expected, value, "structured-host-kill"); });
+        const changed = identityRefusal() ?? authorityRefusal();
+        if (changed) throw new Error(changed.error);
         signal(target, value);
       } catch (error) {
         const code = signalErrorCode(error);

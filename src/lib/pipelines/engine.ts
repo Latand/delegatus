@@ -1,3 +1,4 @@
+import { hostExitText, readHostExit } from "@/lib/runtime/hostExit";
 import { settledPublicationForHead } from "./publicationEvidence";
 import { codexCloudEnvironmentId } from "@/lib/projects/settings";
 import { CLOUD_STAGE_TIMEOUT_MS, cloudPollDelay, cloudStageConfigurationError, cloudServiceTierError, cloudTransportError, validCloudTaskReference, validCloudThreadReference, type CloudStageClient, type CloudStageAttempt } from "./cloudStage";
@@ -1505,6 +1506,7 @@ async function stopStageHostByRecordedIdentity(
     ?? registry.readOnlySnapshot().entries[sessionKeyId(probe.key)]?.structuredTerminationSurvivors ?? [];
   const outcome = await terminateStructuredHostTree(ref, {
     ...termination,
+    stopOrigin: { path: "pipeline-stage-stop", operationId: `${target.launchId}:${target.stageId}:${target.attempt}` },
     retainedSurvivors,
     authorize,
     onFirstEffect: () => {
@@ -2238,9 +2240,11 @@ export function defaultPipelinePorts(
       const current = snapshot();
       const conversation = current.conversations[conversationId as ViewerConversationId];
       const generation = conversation?.generations.at(-1);
-      if (conversation?.engine !== "claude" || !generation) return null;
-      const ended = current.entries[sessionKeyId({ engine: "claude", sessionId: generation.id })]?.structuredHost?.ended;
-      return ended ? claudeHostEndText(ended) : null;
+      if (!conversation || !generation) return null;
+      const entry = current.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })];
+      const ended = entry?.structuredHost?.ended;
+      const evidence = readHostExit(entry?.hostExitProcess ?? entry?.structuredHost?.exitProcess ?? entry?.structuredHost?.process);
+      return [ended ? claudeHostEndText(ended) : null, hostExitText(evidence)].filter(Boolean).join("; ");
     },
     conversationInterruption: (conversationId) => {
       const cut = newestCut(conversationId);
@@ -5902,15 +5906,16 @@ function rerunHostLostReadOnlyStage(
   const attempts = pipeline.runs.find((run) => run.stageId === stage.id)?.attempts ?? [];
   let lost = 0;
   for (const earlier of attempts.slice(0, attempts.indexOf(attempt)).reverse()) {
-    if (earlier.error !== HOST_LOST_READ_ONLY_RERUN) break;
+    if (!earlier.error?.startsWith(HOST_LOST_READ_ONLY_RERUN)) break;
     lost += 1;
   }
   if (lost >= HOST_LOST_READ_ONLY_RERUNS) return false;
   attempt.state = "failed";
   attempt.completedAt = ports.now();
-  attempt.error = HOST_LOST_READ_ONLY_RERUN;
+  const exit = attempt.conversationId ? ports.conversationHostEnded?.(attempt.conversationId) ?? hostExitText(null) : hostExitText(null);
+  attempt.error = `${HOST_LOST_READ_ONLY_RERUN}; ${exit}`;
   pipeline.state = "running";
-  pipeline.stateDetail = HOST_LOST_READ_ONLY_RERUN;
+  pipeline.stateDetail = attempt.error;
   setCursorState(pipeline, stage.id, "pending");
   return true;
 }
@@ -6127,7 +6132,9 @@ async function replaceInterruptedStageAttempt(
      Each new service boot or recorded deploy cut owes its own replacement. */
   if (previous?.bootId === bootId) {
     if (previous.replacedAttempt !== undefined && !interruption.cut) {
-      await park(pipeline, secondInterruptionParkDetail(attempt.restartContext?.cause, interruption), attempt);
+      const exit = interruption.kind === "dead" && !interruption.restarted
+        ? `; ${attempt.conversationId ? ports.conversationHostEnded?.(attempt.conversationId) ?? hostExitText(null) : hostExitText(null)}` : "";
+      await park(pipeline, `${secondInterruptionParkDetail(attempt.restartContext?.cause, interruption)}${exit}`, attempt);
       await persist();
       return true;
     }
@@ -6265,7 +6272,7 @@ async function startReplacementAttempt(
 ): Promise<void> {
   attempt.state = "failed";
   attempt.completedAt = ports.now();
-  const why = cause === "host-lost" && lost.hostEnded ? ` (${lost.hostEnded})` : "";
+  const why = cause === "host-lost" ? ` (${lost.hostEnded ?? hostExitText(null)})` : "";
   const orphan = lost.orphanStopped ? "; its agent process was still running and Delegatus stopped it by its recorded identity" : "";
   attempt.error = `${INTERRUPTION_WORDS[cause].error}${why}${orphan}; replaced by a fresh stage attempt`;
   attempt.restartRecovery ??= { ...recovery };
