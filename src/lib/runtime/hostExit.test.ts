@@ -56,19 +56,22 @@ for (const mode of ["delegatus", "external"] as const) test(`real host exit pers
   }
 });
 
-test("exit receipts keep the first numeric exit and first operation in fixed slots", () => {
+test("exit receipts retain the latest stop operation and first numeric exit in fixed slots", () => {
   const process = { pid: 2147483000, startIdentity: "fixture-host-exit-bounded", bootEpoch: "fixture-boot" };
   const directory = statePath("host-exits");
   const beforeFiles = new Set(fs.existsSync(directory) ? fs.readdirSync(directory) : []);
   withHostStopOrigin({ path: "recovery", operationId: "recovery-fixture-operation" }, () => recordHostStop(process, "SIGTERM", "fallback"));
+  withHostStopOrigin({ path: "kill-action", operationId: "kill-fixture-operation" }, () => recordHostStop(process, "SIGKILL", "fallback"));
   const before = readHostExit(process)!;
+  expect(before.stop).toMatchObject({ path: "kill-action", operationId: "kill-fixture-operation", signal: "SIGKILL" });
+  recordHostExit(process, 23, null);
   for (let i = 0; i < 20; i++) {
     recordHostStop(process, "SIGKILL", "escalation");
     recordHostExit(process, 23, null);
     recordHostExit(process, null, "SIGKILL");
   }
   expect(readHostExit(process)).toMatchObject({ stop: before.stop, exit: { code: 23, signal: null } });
-  expect(hostExitText(readHostExit(process))).toBe("exit: code 23; stopped by recovery (recovery-fixture-operation)");
+  expect(hostExitText(readHostExit(process))).toBe("exit: code 23; stopped by kill-action (kill-fixture-operation)");
   expect(fs.readdirSync(directory).filter(file => !beforeFiles.has(file))).toHaveLength(2);
 });
 

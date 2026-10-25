@@ -421,7 +421,7 @@ export interface PipelinePorts {
   conversationHostProcess?(conversationId: string): Promise<{ state: "alive" | "gone" | "unknown"; pid: number | null }>;
   /** How the conversation's recorded host ended, in one clause, when the host
       recorded it (#2790). Null for a running host and for one that recorded none. */
-  conversationHostEnded?(conversationId: string): string | null;
+  conversationHostEnded?(conversationId: string, launchId?: string | null): string | null;
   /** The newest turn a Viewer release or restart cut for this conversation, as
       its interruption obligation records it (#1835). Null when none was
       recorded, which is the answer for every conversation no deploy cut. */
@@ -2235,13 +2235,17 @@ export function defaultPipelinePorts(
       if (host.observedIdentity === null || host.expected.startIdentity === null) return { state: "unknown", pid };
       return { state: host.observedIdentity === host.expected.startIdentity ? "alive" : "gone", pid };
     },
-    conversationHostEnded: (conversationId) => {
+    conversationHostEnded: (conversationId, launchId) => {
       if (!conversationId.startsWith("conversation_")) return null;
       const current = snapshot();
       const conversation = current.conversations[conversationId as ViewerConversationId];
       const generation = conversation?.generations.at(-1);
-      if (!conversation || !generation) return null;
-      const entry = current.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })];
+      const receipt = launchId ? current.receipts[launchId] : null;
+      if (launchId && (!receipt?.key || !receipt.conversationId
+        || registry.canonicalConversationId(receipt.conversationId) !== registry.canonicalConversationId(conversationId as ViewerConversationId))) return null;
+      const key = receipt?.key ?? (conversation && generation ? { engine: conversation.engine, sessionId: generation.id } : null);
+      if (!key) return null;
+      const entry = current.entries[sessionKeyId(key)];
       const ended = entry?.structuredHost?.ended;
       const evidence = readHostExit(entry?.hostExitProcess ?? entry?.structuredHost?.exitProcess ?? entry?.structuredHost?.process);
       return [ended ? claudeHostEndText(ended) : null, hostExitText(evidence)].filter(Boolean).join("; ");
@@ -5912,7 +5916,7 @@ function rerunHostLostReadOnlyStage(
   if (lost >= HOST_LOST_READ_ONLY_RERUNS) return false;
   attempt.state = "failed";
   attempt.completedAt = ports.now();
-  const exit = attempt.conversationId ? ports.conversationHostEnded?.(attempt.conversationId) ?? hostExitText(null) : hostExitText(null);
+  const exit = attempt.conversationId ? ports.conversationHostEnded?.(attempt.conversationId, attempt.launchId) ?? hostExitText(null) : hostExitText(null);
   attempt.error = `${HOST_LOST_READ_ONLY_RERUN}; ${exit}`;
   pipeline.state = "running";
   pipeline.stateDetail = attempt.error;
@@ -6133,7 +6137,7 @@ async function replaceInterruptedStageAttempt(
   if (previous?.bootId === bootId) {
     if (previous.replacedAttempt !== undefined && !interruption.cut) {
       const exit = interruption.kind === "dead" && !interruption.restarted
-        ? `; ${attempt.conversationId ? ports.conversationHostEnded?.(attempt.conversationId) ?? hostExitText(null) : hostExitText(null)}` : "";
+        ? `; ${attempt.conversationId ? ports.conversationHostEnded?.(attempt.conversationId, attempt.launchId) ?? hostExitText(null) : hostExitText(null)}` : "";
       await park(pipeline, `${secondInterruptionParkDetail(attempt.restartContext?.cause, interruption)}${exit}`, attempt);
       await persist();
       return true;
@@ -6155,8 +6159,9 @@ async function replaceInterruptedStageAttempt(
     ...(promptBoundary === undefined ? {} : { promptBoundary }), ...(endedEarlier ? { stopped: endedEarlier } : {}) };
   await persist();
   if (restartCutHoldsStageRecovery(attempt, ports)) return true;
-  /* Read before the stop: ending the host retires the row that recorded it. */
-  const hostEnded = attempt.conversationId ? ports.conversationHostEnded?.(attempt.conversationId) ?? null : null;
+  /* Capture the existing cause, then refresh the retained exit receipt once
+     teardown has settled and supplied its final status and stop sender. */
+  const hostEnded = attempt.conversationId ? ports.conversationHostEnded?.(attempt.conversationId, attempt.launchId) ?? null : null;
   const stopped = await stopAutomaticInterruptedStageAttempt(stage, attempt, ports, true);
   /* A withdrawn stop did nothing, so it leaves no reservation behind either;
      whatever the transcript holds by now is read by the ordinary paths. */
@@ -6239,7 +6244,7 @@ async function replaceInterruptedStageAttempt(
      stream was gone while its process kept running (#2790). */
   const orphanStopped = cause === "host-lost" && ended?.kind === "dead";
   await startReplacementAttempt(pipeline, stage, attempt, cause, { bootId, requestedAt, lastRecordAt }, latest, ports,
-    { hostEnded, orphanStopped });
+    { hostEnded: attempt.conversationId ? ports.conversationHostEnded?.(attempt.conversationId, attempt.launchId) ?? hostEnded : hostEnded, orphanStopped });
   await persist();
   return true;
 }

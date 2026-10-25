@@ -20,7 +20,7 @@ export function withHostStopOrigin<T>(source: HostStopOrigin, run: () => T): T {
   return origin.run(origin.getStore() ?? source, run);
 }
 
-/** A host owns two immutable, bounded receipts. Separate slots keep an exit
+/** A host owns two bounded receipts. Separate slots keep an exit
  * observer and a signal sender from overwriting each other's evidence. They
  * require no registry lock, including at the synchronous signal boundary. */
 function slot(process: ProcessIdentity, kind: "stop" | "exit"): string {
@@ -39,8 +39,8 @@ function read<T>(file: string): T | null {
     throw error;
   }
 }
-function record(file: string, value: unknown): void {
-  if (fs.existsSync(file)) return;
+function record(file: string, value: unknown, replace = false): void {
+  if (!replace && fs.existsSync(file)) return;
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const temporary = `${file}.${randomUUID()}`;
   const fd = fs.openSync(temporary, "wx", 0o600);
@@ -50,13 +50,14 @@ function record(file: string, value: unknown): void {
       fs.fsyncSync(fd);
     } finally { fs.closeSync(fd); }
     try {
-      fs.linkSync(temporary, file);
+      if (replace) fs.renameSync(temporary, file);
+      else fs.linkSync(temporary, file);
       if (process.platform !== "win32") {
         const directory = fs.openSync(path.dirname(file), "r");
         try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
       }
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
-  } finally { fs.unlinkSync(temporary); }
+  } finally { fs.rmSync(temporary, { force: true }); }
 }
 
 export function recordHostStop(process: ProcessIdentity | null | undefined, signal: string, fallback: string): void {
@@ -65,8 +66,11 @@ export function recordHostStop(process: ProcessIdentity | null | undefined, sign
     // Cleanup after exit cannot retroactively claim to have caused that exit.
     if (read(slot(process, "exit"))) return;
     const source = origin.getStore() ?? { path: fallback, operationId: randomUUID() };
-    record(slot(process, "stop"), { path: source.path.slice(0, 160), operationId: source.operationId.slice(0, 200),
-      signal, at: new Date().toISOString() });
+    const file = slot(process, "stop");
+    const prior = read<HostExitRecord["stop"]>(file);
+    const next = { path: source.path.slice(0, 160), operationId: source.operationId.slice(0, 200), signal };
+    if (prior?.path === next.path && prior.operationId === next.operationId && prior.signal === signal) return;
+    record(file, { ...next, at: new Date().toISOString() }, true);
   } catch (error) { console.error("[host exit] could not persist stop intent", error); }
 }
 export function recordHostExit(process: ProcessIdentity | null | undefined, code: number | null | undefined, signal: string | null | undefined): void {

@@ -1,3 +1,5 @@
+import { agentRegistry } from "@/lib/agent/registry";
+import { recordHostExit } from "@/lib/runtime/hostExit";
 import { expect, test, spawn, makeStructuredAttempt, pinStageHead, AccountAuthenticationRequiredError, ProjectAccountRefusedError, selectProjectAccount, IDLE_TURN_QUIET_MS, tickPipelines, createPipelineFromRequest, loadPipelines, savePipelines, patchPipeline, entry, harness, create, structuredLatest, runningStructuredStage, LIMITED_ACCOUNT, SPARE_ACCOUNT, stageTranscript, readFixtures, providerQuotaRecord, SILENT_RUN, stageWhoseStopMovesTheTranscript, recoveryReport, providerRecoveryHarness, parkedAccountCases, parkedAccountHarness } from "./engine.fixture";
 import type { DurableQuotaObservation, PipelinePorts, StageTurnEvidence } from "./engine.fixture";
 import { AgentRegistry, defaultPipelinePorts, path, spyOn } from "./engine.fixture";
@@ -646,12 +648,40 @@ test("a lost stage names its exit and sender in the attempt error and lane detai
   await runningStructuredStage(h);
   const attempt = loadPipelines()[0]!.runs[0]!.attempts[0]!;
   h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(attempt.startedAt!) + 1 });
+  let hostExit = "exit: status unavailable; no Delegatus stop recorded";
   await tickPipelines([entry(attempt.agentPath!)], { ...h.ports,
+    stopInterruptedStageAgent: async () => { hostExit = "exit: signal SIGKILL; no Delegatus stop recorded"; return { outcome: "not-running" }; },
     restartRecoveryBootId: () => "exit-evidence-boot",
     restartRecoveryBootStartedAt: () => Date.parse(attempt.startedAt!) - 60_000,
     conversationTurnInterrupted: async () => "dead",
-    conversationHostEnded: () => "exit: signal SIGKILL; no Delegatus stop recorded" });
+    conversationHostEnded: (_conversationId, launchId) => { expect(launchId).toBe(attempt.launchId); return hostExit; } });
   const lane = loadPipelines()[0]!;
   expect(lane.runs[0]!.attempts[0]!.error).toContain("exit: signal SIGKILL; no Delegatus stop recorded");
   expect(lane.stateDetail).toContain("exit: signal SIGKILL; no Delegatus stop recorded");
+});
+
+test("exit lookup stays bound to the attempt launch when a successor is current", () => {
+  const registry = agentRegistry();
+  const current = registry.readOnlySnapshot();
+  const conversationId = "conversation_exit_scope";
+  const oldKey = { engine: "codex" as const, sessionId: "exit-old-session" };
+  const newKey = { engine: "codex" as const, sessionId: "exit-new-session" };
+  const oldProcess = { pid: 2147482901, startIdentity: "exit-old-start", bootEpoch: "fixture-boot" };
+  const newProcess = { pid: 2147482902, startIdentity: "exit-new-start", bootEpoch: "fixture-boot" };
+  recordHostExit(oldProcess, 23, null);
+  recordHostExit(newProcess, 99, null);
+  const view = { ...current,
+    entries: { ...current.entries,
+      [`codex:${oldKey.sessionId}`]: { hostExitProcess: oldProcess },
+      [`codex:${newKey.sessionId}`]: { hostExitProcess: newProcess } },
+    conversations: { ...current.conversations, [conversationId]: { id: conversationId, engine: "codex", generations: [oldKey, newKey].map(key => ({ id: key.sessionId })) } },
+    receipts: { ...current.receipts, "exit-old-launch": { key: oldKey, conversationId }, "exit-unrelated-launch": { key: newKey, conversationId: "conversation_unrelated_exit" } },
+  } as unknown as ReturnType<AgentRegistry["readOnlySnapshot"]>;
+  const read = spyOn(registry, "readOnlySnapshot").mockReturnValue(view);
+  try {
+    const ports = defaultPipelinePorts();
+    expect(ports.conversationHostEnded!(conversationId, "exit-old-launch")).toContain("exit: code 23;");
+    expect(ports.conversationHostEnded!(conversationId, "exit-old-launch")).not.toContain("code 99");
+    expect(ports.conversationHostEnded!(conversationId, "exit-unrelated-launch")).toBeNull();
+  } finally { read.mockRestore(); }
 });
