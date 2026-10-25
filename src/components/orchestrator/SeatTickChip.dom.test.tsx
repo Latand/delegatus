@@ -115,7 +115,7 @@ const LAUNCH_CHOICES = [
     { id: "gpt-6-luna", label: "GPT-6-Luna", shortLabel: "6-Luna", use: "general", efforts: effortsOf("low", "medium", "high", "xhigh", "max") },
   ] },
 ];
-let maintainerConfig: { engine: string; model: string; effort: string };
+let maintainerConfig: { engine: string; model: string; effort: string; agentMemoryMaxBytes?: number | null };
 let rolesRevision: number;
 /** How `/api/roles` PUT answers; the default applies the config. */
 let rolesPut: null | { status: number; body: unknown };
@@ -951,6 +951,24 @@ test("an effort the new model lacks lands on the nearest tier it has, and an eng
   const sent = (rolePuts()[0]!.body.overrides as { maintainer: { config: { engine: string; model: string; effort: string } } }).maintainer.config;
   expect(sent.engine).toBe("claude");
   expect(LAUNCH_CHOICES.find((choice) => choice.engine === "claude")!.models.map((model) => model.id)).toContain(sent.model);
+});
+
+test("#3054: the maintainer's saved memory cap survives a model change and an engine change", async () => {
+  const cap = 6 * 2 ** 30;
+  maintainerConfig = { engine: "codex", model: "gpt-6.1-sol", effort: "medium", agentMemoryMaxBytes: cap };
+  const { root } = await mount();
+  await open(root);
+  choose(modelSelect(), "gpt-6-luna");
+  press(save());
+  await settle(root);
+  expect((rolePuts()[0]!.body.overrides as { maintainer: { config: unknown } }).maintainer.config)
+    .toEqual({ engine: "codex", model: "gpt-6-luna", effort: "medium", agentMemoryMaxBytes: cap });
+  choose(engineSelect(), "claude");
+  press(save());
+  await settle(root);
+  expect(rolePuts()).toHaveLength(2);
+  expect((rolePuts()[1]!.body.overrides as { maintainer: { config: unknown } }).maintainer.config)
+    .toMatchObject({ engine: "claude", agentMemoryMaxBytes: cap });
 });
 
 test("a refused agent write keeps the choice, names the refusal beside the picker and leaves the tick's save alone", async () => {

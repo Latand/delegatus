@@ -234,7 +234,7 @@ scopeTest("gate-slot runs a gate in the work slice with the same quotas", () => 
   expect(result.status).toBe(0);
   const seen = report(result.stdout);
   expect(seen.group).toMatch(new RegExp(`/${slices.top}/${slices.agents}/${slices.work}/delegatus-gate-[0-9a-f-]{36}\\.service$`));
-  expect([seen.weight, seen.max, seen.memory, seen.parentMax]).toEqual(["100", "60000 20000", String(8 * GIB), "360000 20000"]);
+  expect([seen.weight, seen.max, seen.memory, seen.parentMax]).toEqual(["10", "60000 20000", String(8 * GIB), "360000 20000"]);
 });
 
 scopeTest("a workflow setup and its orphaned child run in a work scope without memory properties", async () => {
@@ -275,12 +275,12 @@ scopeTest("a merger gate runs in the work slice, on a shared slot, and waits out
   fs.writeFileSync(pressure, "some avg10=1.00 avg60=0.00 avg300=0.00 total=1\n");
   const result = await gated;
   expect(result.code).toBe(0);
-  expect(result.output).toContain("gate-slot: Waiting for the CPU queue · 1st · up to 10 min");
+  expect(result.output).toContain("gate-slot: Waiting for measured CPU pressure");
   expect(result.output).toContain("taken"); // the gate holds the shared slot while its command runs
   expect(fs.readFileSync(marker, "utf8")).toBe("run\n");
   const seen = report(result.output);
   expect(seen.group).toMatch(new RegExp(`/${slices.top}/${slices.agents}/${slices.work}/delegatus-gate-[0-9a-f-]{36}\\.service$`));
-  expect([seen.weight, seen.max, seen.memory, seen.parentMax]).toEqual(["100", "60000 20000", String(8 * GIB), "360000 20000"]);
+  expect([seen.weight, seen.max, seen.memory, seen.parentMax]).toEqual(["10", "60000 20000", String(8 * GIB), "360000 20000"]);
 }, 30_000);
 
 scopeTest("boot adoption relaunches Codex and Claude hosts in the CPU scope of their class, with memory off and on", async () => {

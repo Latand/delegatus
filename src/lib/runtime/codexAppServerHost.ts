@@ -212,6 +212,8 @@ export interface CodexAppServerHostOptions {
   cwd: string;
   codexHome?: string;
   binary?: string;
+  /** Executable used for switch admission; fixture launchers pin a private CLI path here. */
+  launchBinary?: string;
   /** Dependency injection for protocol compatibility rehearsals. Production
       identifies the selected executable with --version before spawning. */
   readProtocolVersion?: typeof installedCodexVersion;
@@ -1386,6 +1388,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   private modelCatalog: unknown = null;
   private authRecovery: "unknown" | "started" | "completed-unverified" = "unknown";
   private account: HostState["account"] = null;
+  private readonly tierAccountHome?: string;
   private engineStatus: "active" | "idle" | "unhosted" | "dead" = "idle";
   private activeFlags: string[] = [];
   /** Image capability learned from `model/list`. An RPC fault leaves the
@@ -1419,6 +1422,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   private resolveReaped!: () => void;
 
   private constructor(child: CodexTransport, identity: CodexThreadIdentity, options: CodexAppServerHostOptions) {
+    this.tierAccountHome = options.codexHome;
     this.child = child;
     this.reconnecting = !!options.socketOwner;
     this.callbackGeneration = child instanceof CodexSocketTransport
@@ -1488,6 +1492,22 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   }
 
   private static async open(options: CodexAppServerHostOptions, threadId: string | null): Promise<CodexAppServerHost> {
+    const { withCodexCliLaunch } = await import("@/lib/codexUpdate/installation");
+    const launchBinary = options.launchBinary
+      ?? (options.spawnProcess && process.env.NODE_ENV === "test" ? "/fixture/codex" : options.binary ?? process.env.LLV_CODEX_BINARY ?? "codex");
+    let entered = false;
+    try {
+      return await withCodexCliLaunch(launchBinary, () => {
+        entered = true;
+        return this.openWithCliGuard(options, threadId);
+      });
+    } catch (error) {
+      if (!entered) options.releaseCleanup?.();
+      throw error;
+    }
+  }
+
+  private static async openWithCliGuard(options: CodexAppServerHostOptions, threadId: string | null): Promise<CodexAppServerHost> {
     let memoryHook: ReturnType<typeof installCodexMemoryHook> = null;
     try { if (!options.socketOwner && options.codexHome && !options.cleanMemory) memoryHook = installCodexMemoryHook(options.codexHome, options.env ?? process.env); }
     catch { /* optional memory must never stop a launch */ }
@@ -1599,7 +1619,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
           }
         } catch { /* A missing receipt remains unknown, never a capability grant. */ }
       }
-      if (options.serviceTier) assertCatalogOffersTier(provisional.modelCatalog, options.model, options.serviceTier);
+      if (options.serviceTier) assertCatalogOffersTier(provisional.modelCatalog, options.model, options.serviceTier, provisional.tierAccountHome);
       const configRead = await provisional.rpc("config/read", { cwd: options.cwd, includeLayers: false }) as { config?: { shell_environment_policy?: unknown; developer_instructions?: unknown } };
       const config = headlessCodexThreadConfig(
         configRead,
@@ -1890,7 +1910,6 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       },
       evidence: (entry) => this.nativeQueueEvidence(entry),
       evidenceBatch: async (entries) => {
-        if (!this.identity.path) return entries.map(() => null);
         const history = await this.readDeliveryHistory(entries.map(entry => entry.clientUserMessageId), this.requestTimeoutMs,
           candidate => entries.some(entry => this.nativeQueueProof(entry, candidate) !== null));
         return Promise.all(entries.map(entry => this.nativeQueueEvidence(entry, history)));
@@ -1937,6 +1956,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
 
   private async readDeliveryHistory(clientIds: string[], timeoutMs = this.requestTimeoutMs,
     accept?: (history: Extract<CodexDeliveryHistoryResult, {state: "observed"}>) => boolean): Promise<CodexDeliveryHistoryResult> {
+    if (!this.identity.path) await this.recoverIdentityPath();
     if (!this.identity.path) return {state: "unknown", reason: "identity"};
     return readCodexDeliveryHistory((method, params, timeout) => this.rpc(method, params, timeout, true),
       {threadId: this.identity.threadId, path: this.identity.path},
@@ -1944,8 +1964,21 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         maxPages: DELIVERY_HISTORY_PAGES, maxBytes: DELIVERY_HISTORY_BYTES}, clientIds, accept);
   }
 
+  /** thread/start and thread/resume may answer without a transcript path (it is
+      nullable). The thread's own read names it; without one every canonical
+      history read is blocked, so a consumed native-queue entry never gets its
+      proof. A failed read leaves the identity as it was and is retried. */
+  private async recoverIdentityPath(): Promise<void> {
+    try {
+      const path = stringField(record(record(await this.rpc("thread/read", { threadId: this.identity.threadId }, this.requestTimeoutMs, true))?.thread), "path");
+      if (path && !this.identity.path) this.identity.path = path;
+    } catch (error) {
+      console.warn("[codex host] the thread's transcript path is unavailable", { threadId: this.identity.threadId, error: safeError(error) });
+    }
+  }
+
   private async nativeQueueEvidence(entry: NativeQueueRecord, snapshot?: CodexDeliveryHistoryResult) {
-    if (entry.binding.threadId !== this.identity.threadId || !this.identity.path) return null;
+    if (entry.binding.threadId !== this.identity.threadId) return null;
     const history = snapshot ?? await this.readDeliveryHistory([entry.clientUserMessageId]);
     return this.nativeQueueProof(entry, history);
   }
@@ -2508,7 +2541,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
       throw new Error("Codex app-server host is unavailable");
     }
-    if (request.serviceTier !== null) assertCatalogOffersTier(this.modelCatalog, this.currentImageModel(), request.serviceTier);
+    if (request.serviceTier !== null) assertCatalogOffersTier(this.modelCatalog, this.currentImageModel(), request.serviceTier, this.tierAccountHome);
     /* A boundary interrupt already sent owns its terminal evidence and its
        continuation. Let the old operation settle before another tier can
        replace the armed record. */

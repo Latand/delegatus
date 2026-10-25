@@ -44,7 +44,7 @@ if (!process.env.LLV_STATE_OWNER) process.env.LLV_STATE_OWNER = "launcher";
 
 const DEFAULT_PORT = 8898;
 const DEFAULT_HOSTNAME = "127.0.0.1";
-const READINESS_TIMEOUT_MS = 15_000;
+const READINESS_TIMEOUT_MS = 90_000;
 const READINESS_INTERVAL_MS = 200;
 // Socket timeout for a single readiness probe. The probe hits /api/files,
 // which scans every log under ~/.claude and ~/.codex; with a few hundred
@@ -57,8 +57,7 @@ const RUNTIME_HOST_READINESS_INTERVAL_MS = 100;
 const RUNTIME_HOST_RESTART_BASE_MS = 500;
 const RUNTIME_HOST_RESTART_MAX_MS = 10_000;
 const RUNTIME_HOST_STABLE_UPTIME_MS = 30_000;
-/* A restart onto a freshly built release starts `next start` cold, which
-   takes 10–30 s on a full checkout (#2007); the first start keeps its budget. */
+/* A freshly built release and a reboot both start `next start` cold. */
 const RESTART_READINESS_TIMEOUT_MS = 90_000;
 
 const cliPath = fileURLToPath(import.meta.url);
@@ -82,6 +81,8 @@ const LANG = detectLang();
 const MESSAGES = {
   en: {
     usage: () => `Usage: delegatus [options]
+
+  delegatus doctor [--json] [--port <n>]  Read-only onboarding diagnostics
 
 Options:
   -p, --port <n>       Port for the local server (default ${DEFAULT_PORT})
@@ -108,9 +109,7 @@ Options:
     bannerOpened: (url) => `  Opened:    ${url}`,
     bannerOpening: (url) => `  Opening:   ${url}`,
     bannerOpenUrl: (url) => `  Open ${url} in your browser.`,
-    bannerSetup: () => "  Sign in through the setup guide to run agents.",
     bannerReads: () => "  Reads logs from ~/.claude/projects, ~/.codex/sessions, ~/.copilot/session-state.",
-    bannerDebug: () => "  DELEGATUS_DEBUG=1 — show startup diagnostics.",
     bannerStop: () => "  Ctrl+C — stop.  --tailscale — access from your phone.",
     tsLinkWarn: () => "  The link contains an access key — don't forward it to others.",
     tsCookie: () => "  After the first open the key is stored in a cookie for 30 days.",
@@ -134,6 +133,8 @@ Options:
   },
   uk: {
     usage: () => `Використання: delegatus [опції]
+
+  delegatus doctor [--json] [--port <n>]  Діагностика онбордингу лише для читання
 
 Опції:
   -p, --port <n>       Порт для локального сервера (типово ${DEFAULT_PORT})
@@ -160,9 +161,7 @@ Options:
     bannerOpened: (url) => `  Відкрито:  ${url}`,
     bannerOpening: (url) => `  Відкриваю: ${url}`,
     bannerOpenUrl: (url) => `  Відкрийте ${url} у браузері.`,
-    bannerSetup: () => "  Увійдіть в обліковий запис у майстрі налаштування, щоб запускати агентів.",
     bannerReads: () => "  Читає логи з ~/.claude/projects, ~/.codex/sessions, ~/.copilot/session-state.",
-    bannerDebug: () => "  DELEGATUS_DEBUG=1 — показати діагностику запуску.",
     bannerStop: () => "  Ctrl+C — зупинити.  --tailscale — доступ з телефона.",
     tsLinkWarn: () => "  Посилання містить ключ доступу — не пересилайте його стороннім.",
     tsCookie: () => "  Після першого відкриття ключ зберігається у cookie на 30 днів.",
@@ -200,16 +199,21 @@ const HELD_OUTPUT_LIMIT_BYTES = 1024 * 1024;
 /* The name `src/lib/startupDiagnostics.ts` reads. */
 const QUIET_DIAGNOSTICS_ENV = "LLV_QUIET_DIAGNOSTICS";
 
-function withoutNextStartupLines(text) {
+function withoutTerminalDiagnostics(text) {
   return text
     .split("\n")
-    .filter((line) => !NEXT_STARTUP_LINE.test(line.replace(/\x1b\[[0-9;]*m/g, "")))
+    .filter((line) => {
+      const plain = line.replace(/\x1b\[[0-9;]*m/g, "");
+      return !NEXT_STARTUP_LINE.test(plain) && (process.env.JOURNAL_STREAM !== undefined
+        || !/^\[(?:viewer loop-gap|performance summary)\] /.test(plain));
+    })
     .join("\n");
 }
 
 function createStartupOutput() {
   const held = [];
   const tails = { stdout: "", stderr: "" };
+  const pending = { stdout: "", stderr: "" };
   let failureFile = null;
   let failureRevision = null;
   let heldBytes = 0;
@@ -221,6 +225,14 @@ function createStartupOutput() {
     for (const [stream, text] of held.splice(0)) stream.write(text);
   };
   return {
+    finish() {
+      release();
+      for (const channel of ["stdout", "stderr"]) {
+        const text = debug ? pending[channel] : withoutTerminalDiagnostics(pending[channel]);
+        pending[channel] = "";
+        if (text) process[channel].write(text);
+      }
+    },
     setFailureFile(file, revision) { failureFile = file; failureRevision = revision; },
     persistFailure() {
       if (!failureFile) return;
@@ -235,7 +247,11 @@ function createStartupOutput() {
     write(stream, chunk) {
       const channel = stream === process.stderr ? "stderr" : "stdout";
       tails[channel] = (tails[channel] + String(chunk)).slice(-32 * 1024);
-      const text = debug ? String(chunk) : withoutNextStartupLines(String(chunk));
+      pending[channel] += String(chunk);
+      const end = pending[channel].lastIndexOf("\n") + 1;
+      const complete = pending[channel].slice(0, end);
+      pending[channel] = pending[channel].slice(end);
+      const text = debug ? complete : withoutTerminalDiagnostics(complete);
       if (!text) return;
       if (released) {
         stream.write(text);
@@ -250,7 +266,7 @@ function createStartupOutput() {
 }
 
 const startupOutput = createStartupOutput();
-process.once("exit", () => startupOutput.release());
+process.once("exit", () => startupOutput.finish());
 
 function usage() {
   return m.usage();
@@ -851,18 +867,13 @@ function localUrl(options, runtime) {
 
 /* `browser` is what `openBrowser` found out: the banner says "Opened" only
    when an opener reported success. */
-function printBanner(version, options, runtime, browser, debug, minimal) {
+function printBanner(version, options, runtime, browser, debug) {
   const url = localUrl(options, runtime);
-  if (!minimal) console.log(`  ✳ Delegatus v${version}`);
+  if (debug) console.log(`  ✳ Delegatus v${version}`);
   console.log(browser === "opened" ? m.bannerOpened(url) : browser === "opening" ? m.bannerOpening(url) : m.bannerOpenUrl(url));
-  if (minimal) {
-    console.log(m.bannerSetup());
-    return;
-  }
   if (debug) console.log(m.bannerReads());
   console.log(agentStartupMessage(LANG));
-  console.log(m.bannerStop());
-  if (!debug) console.log(m.bannerDebug());
+  if (debug) console.log(m.bannerStop());
 }
 
 async function printTailscaleBanner(runtime) {
@@ -1050,6 +1061,16 @@ async function main() {
     });
     return;
   }
+  /* `delegatus export` / `delegatus import` (install-memory-transfer §4.2): a
+     loopback client of the running Viewer. It starts nothing. */
+  if (process.argv[2] === "export" || process.argv[2] === "import") {
+    const packageRoot = launcherCheckout || findPackageRoot(cliDir);
+    const { runTransferCommand } = await import("./transfer.mjs");
+    process.exitCode = await runTransferCommand(process.argv[2], process.argv.slice(3), {
+      stateDirectory: cliRuntimeHostConfig(packageRoot).stateDirectory,
+    });
+    return;
+  }
   const options = parseArgs(process.argv.slice(2));
   /* Phone access turned on from the setup guide is remembered as a file; its
      presence stands for --tailscale. */
@@ -1129,10 +1150,9 @@ async function main() {
   /* Everything started below inherits the choice (#2168). */
   const debug = process.env.LLV_DEBUG === "1";
   startupOutput.setDebug(debug);
-  // Package launches stay quiet through pipes too. Journal metadata takes
-  // precedence even when a service gives the launcher a terminal. Clear an
-  // inherited quiet choice so a previous launcher cannot silence the service.
-  const quiet = !debug && (!checkout || process.stdout.isTTY === true) && process.env.JOURNAL_STREAM === undefined;
+  // A captured first run is still a newcomer launch. Journal metadata and an
+  // explicit debug request retain service diagnostics, regardless of the TTY.
+  const quiet = !debug && process.env.JOURNAL_STREAM === undefined;
   if (quiet) process.env[QUIET_DIAGNOSTICS_ENV] = "1";
   else delete process.env[QUIET_DIAGNOSTICS_ENV];
 
@@ -1484,7 +1504,7 @@ async function main() {
   const browser = !options.noOpen && process.stdout.isTTY
     ? await openBrowser(localUrl(options, runtime))
     : "not-opened";
-  printBanner(version, options, runtime, browser, debug, !checkout && quiet);
+  printBanner(version, options, runtime, browser, debug);
   if (options.tailscale) {
     await printTailscaleBanner(runtime);
   }
@@ -1573,7 +1593,7 @@ function handOffLauncher({ checkout, entry, record }) {
       if (child.pid) {
         try { recorded = JSON.parse(readFileSync(record, "utf8"))?.launcher?.pid === child.pid; } catch { /* no record */ }
       }
-      const oneShot = process.argv[2] === "team" || process.argv.slice(2).some((arg) => ["-v", "--version", "-h", "--help"].includes(arg));
+      const oneShot = ["team", "export", "import"].includes(process.argv[2]) || process.argv.slice(2).some((arg) => ["-v", "--version", "-h", "--help"].includes(arg));
       if (!recorded && !forwarded && !oneShot) {
         console.error(`[self-update] installed launcher could not start (${spawnError?.message || `exit ${status}`}); using the checkout launcher.`);
         done(false);
@@ -1631,11 +1651,20 @@ async function checkoutLauncher() {
   await main();
 }
 
-try {
+if (process.argv[2] === "doctor") {
+  // Stay outside launcher custody, release selection and startup side effects.
+  try {
+    const { runDoctorCommand } = await import("./doctor-command.mjs");
+    process.exitCode = await runDoctorCommand(process.argv.slice(3), { lang: LANG });
+  } catch {
+    console.error(LANG === "uk" ? "Не вдалося завершити діагностику." : "Diagnostics could not complete.");
+    process.exitCode = 2;
+  }
+} else try {
   const custodyModule = join(cliDir, "launcher-credentials.mjs");
   if (existsSync(custodyModule)) {
     const { restoreLauncherCredentials } = await import("./launcher-credentials.mjs");
-    const oneShot = process.argv[2] === "team" || process.argv.slice(2).some((arg) => ["-v", "--version", "-h", "--help"].includes(arg));
+    const oneShot = ["team", "export", "import"].includes(process.argv[2]) || process.argv.slice(2).some((arg) => ["-v", "--version", "-h", "--help"].includes(arg));
     restoreLauncherCredentials(launcherCheckout || findPackageRoot(cliDir), process.env, { launch: !oneShot });
   } else if (process.env.LLV_LAUNCHER_CREDENTIAL_HANDOFF === "1") throw new Error("This launcher cannot read protected handoff credentials; keep the current launcher running.");
   const selectedLauncher = releaseLauncher();

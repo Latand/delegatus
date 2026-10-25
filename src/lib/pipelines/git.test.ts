@@ -51,7 +51,9 @@ test("an unpinned base without origin resolves local main without fetching", asy
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "local-base-"));
   try {
     await git(root, "init", "-q", "-b", "main");
-    await git(root, "commit", "-q", "--allow-empty", "-m", "base");
+    await git(root, "config", "user.name", "Fixture");
+    await git(root, "config", "user.email", "noreply@example.invalid");
+    await git(root, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-q", "--allow-empty", "-m", "base");
     const head = await git(root, "rev-parse", "HEAD");
     const calls: string[] = [];
     const result = await resolvePipelineBaseAsync(root, {}, (command, args, cwd, signal) => {
@@ -187,6 +189,66 @@ async function isolatedIdentityRepo() {
   (await run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "initial"));
   return { root, repo, env, exec, run };
 }
+
+test.each(["deletion", "modification", "normal"] as const)("passed stage settlement handles %s while leaving ignored files alone", async (change) => {
+  const box = await isolatedIdentityRepo();
+  try {
+    fs.mkdirSync(path.join(box.repo, ".artifacts"));
+    const tracked = ".artifacts/brief.md";
+    fs.writeFileSync(path.join(box.repo, tracked), "tracked brief\n");
+    await box.run("add", tracked);
+    await box.run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "tracked brief");
+    fs.writeFileSync(path.join(box.repo, ".gitignore"), ".artifacts/\n");
+    await box.run("add", ".gitignore");
+    await box.run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "ignore artifacts");
+    const subject = pipeline();
+    subject.repoDir = subject.worktreeDir = box.repo;
+    subject.baseRef = subject.lastPassedCommit = await box.run("rev-parse", "HEAD");
+    const ignored = path.join(box.repo, ".artifacts/untracked.md");
+    fs.writeFileSync(ignored, "ignored draft\n");
+    if (change === "deletion") fs.unlinkSync(path.join(box.repo, tracked));
+    else if (change === "modification") fs.writeFileSync(path.join(box.repo, tracked), "updated brief\n");
+    else fs.writeFileSync(path.join(box.repo, "source.ts"), "export const value = 2;\n");
+    // New eligible files still join the settlement commit, with literal names.
+    fs.writeFileSync(path.join(box.repo, "new[1].md"), "new output\n");
+    const result = await commitPipelineStage(subject, "build", true, box.exec);
+    expect(result).toMatchObject({ ok: true });
+    const expected = change === "normal" ? "A\tnew[1].md\nM\tsource.ts"
+      : `${change === "deletion" ? "D" : "M"}\t${tracked}\nA\tnew[1].md`;
+    expect(await box.run("diff", "--name-status", subject.baseRef, "HEAD")).toBe(expected);
+    expect(await box.run("ls-files", ".artifacts/untracked.md")).toBe("");
+    expect(fs.readFileSync(ignored, "utf8")).toBe("ignored draft\n");
+    expect(await box.run("status", "--porcelain")).toBe("");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test.each(["listing", "newly ignored"] as const)("passed stage settlement preserves work on a %s untracked path refusal", async (refusal) => {
+  const box = await isolatedIdentityRepo();
+  try {
+    const subject = pipeline();
+    subject.repoDir = subject.worktreeDir = box.repo;
+    subject.baseRef = subject.lastPassedCommit = await box.run("rev-parse", "HEAD");
+    fs.writeFileSync(path.join(box.repo, "new.md"), "stage output\n");
+    const exec: ExecPort = async (command, args, cwd, env, options) => {
+      const result = await box.exec(command, args, cwd, env, options);
+      if (args[0] === "ls-files" && args.includes("--others")) {
+        if (refusal === "listing") return { code: 1, stdout: "", stderr: "index read refused" };
+        // The ignore policy changes after discovery; Git must still refuse it.
+        fs.writeFileSync(path.join(box.repo, ".git/info/exclude"), "new.md\n");
+      }
+      return result;
+    };
+    const result = await commitPipelineStage(subject, "build", true, exec);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("settlement unexpectedly committed");
+    expect(result.error).toStartWith("staging the passed stage:");
+    expect(result.error).toContain("new.md");
+    expect(result.commitRefusal).toBeUndefined();
+    expect(await box.run("rev-parse", "HEAD")).toBe(subject.baseRef);
+    expect(await box.run("ls-files", "new.md")).toBe("");
+    expect(fs.readFileSync(path.join(box.repo, "new.md"), "utf8")).toBe("stage output\n");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
 
 test("a real stale dirty checkout provisions from the freshly fetched origin/main tip", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-base-"));
@@ -1064,7 +1126,7 @@ test("pass commits a dirty stage and retry resets plus cleans", async () => {
     expect(await resetPipelineStage(subject, exec)).toEqual({ ok: true, sha: subject.lastPassedCommit });
     expect(await box.run("show", "HEAD:source.ts")).toBe("export const value = 1;");
     expect(calls).toContain(`git reset --quiet HEAD -- ${CONTROLLER_ARTIFACT_GIT_PATHS.join(" ")}`);
-    expect(calls).toContain(`git add -A -- . ${CONTROLLER_ARTIFACT_PATHSPECS.join(" ")}`);
+    expect(calls).toContain(`git add -u -- . ${CONTROLLER_ARTIFACT_PATHSPECS.join(" ")}`);
     expect(calls).toContain(`git reset --hard ${subject.lastPassedCommit}`);
     expect(calls).toContain("git clean -fd");
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
@@ -1714,7 +1776,10 @@ test("read-only stage records a declared report without granting source commits"
   }
 });
 
-test("read-only stage records an ignored declared report", async () => {
+test.each([
+  { label: "read-write", allowCommit: true },
+  { label: "read-only", allowCommit: false },
+])("$label settlement leaves an ignored declared report untracked", async ({ allowCommit }) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-ignored-output-"));
   try {
     (await git(root, "init", "--initial-branch=main"));
@@ -1729,17 +1794,50 @@ test("read-only stage records an ignored declared report", async () => {
     const subject = pipeline();
     subject.worktreeDir = root;
     subject.lastPassedCommit = (await git(root, "rev-parse", "HEAD"));
+    const head = subject.lastPassedCommit;
     fs.mkdirSync(path.join(root, "reports"));
     fs.writeFileSync(path.join(root, "reports", "audit.md"), "audited\n");
 
     expect((await git(root, "status", "--porcelain"))).toBe("");
-    const result = (await commitPipelineStage(subject, "audit", false, realExec, ["reports/audit.md"]));
-    expect(result.ok).toBeTrue();
-    expect(result.ok && result.sha).not.toBe(subject.lastPassedCommit);
-    expect((await git(root, "show", "HEAD:reports/audit.md"))).toBe("audited");
+    const result = (await commitPipelineStage(subject, "audit", allowCommit, realExec, ["reports/audit.md"]));
+    expect(result).toEqual({ ok: true, sha: head });
+    expect((await git(root, "ls-files", "--", "reports/audit.md"))).toBe("");
+    expect((await git(root, "rev-parse", "HEAD"))).toBe(head);
+    expect(fs.readFileSync(path.join(root, "reports", "audit.md"), "utf8")).toBe("audited\n");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test.each([
+  { label: "read-write", allowCommit: true, mutateAfterListing: 1 },
+  { label: "read-only", allowCommit: false, mutateAfterListing: 2 },
+])("$label settlement refuses an output that becomes ignored after discovery", async ({ allowCommit, mutateAfterListing }) => {
+  const box = await isolatedIdentityRepo();
+  try {
+    const subject = pipeline();
+    subject.worktreeDir = box.repo;
+    subject.lastPassedCommit = await box.run("rev-parse", "HEAD");
+    const output = path.join(box.repo, "new.md");
+    fs.writeFileSync(output, "stage output\n");
+    let listings = 0;
+    const exec: ExecPort = async (command, args, cwd, env, options) => {
+      const result = await box.exec(command, args, cwd, env, options);
+      if (command === "git" && args[0] === "ls-files" && args.includes("--others")) {
+        listings += 1;
+        if (listings === mutateAfterListing) fs.appendFileSync(path.join(box.repo, ".git", "info", "exclude"), "\n/new.md\n");
+      }
+      return result;
+    };
+
+    const result = await commitPipelineStage(subject, "audit", allowCommit, exec, ["new.md"]);
+
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining("new.md") });
+    expect(await box.run("rev-parse", "HEAD")).toBe(subject.lastPassedCommit);
+    expect(await box.run("ls-files", "--", "new.md")).toBe("");
+    expect(await box.run("ls-files", "--others", "--exclude-standard", "--", "new.md")).toBe("");
+    expect(fs.readFileSync(output, "utf8")).toBe("stage output\n");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
 test("a declared output directory leaves ignored descendants alone", async () => {
@@ -2020,10 +2118,10 @@ for (const scenario of [
     fs.mkdirSync(path.dirname(path.join(box.subject.worktreeDir, scenario.file)), { recursive: true });
     const head = await box.commit(scenario.file, "accepted work\n");
     const hooks = path.join(box.root, "hooks"); fs.mkdirSync(hooks);
-    fs.writeFileSync(path.join(hooks, "pre-push"), '#!/bin/sh\nprintf "# hook deadline %s\\n" "$LLV_GATE_PUSH_DEADLINE"\n'
+    fs.writeFileSync(path.join(hooks, "pre-push"), '#!/bin/sh\nprintf "# hook deadline %s\\n" "$LLV_GATE_PUSH_DEADLINE"\nprintf "# check context %s %s %s\\n" "$LLV_GATE_LANE_ID" "$LLV_GATE_STAGE_ID" "$LLV_GATE_PUSH_HEAD"\n'
       + (scenario.refused ? 'echo "fixture gate refusal" >&2\nexit 1\n' : 'exit 0\n'), { mode: 0o700 });
     await git(box.subject.worktreeDir, "config", "core.hooksPath", hooks);
-    let observed: { ms?: number; deadline?: string; output: string } | undefined;
+    let observed: { ms?: number; deadline?: string; state?: string; output: string } | undefined;
     const exec: ExecPort = async (command, args, cwd, env, options) => {
       if (scenario.unreadable && command === "git" && args[0] === "diff" && args.includes("--no-renames")) {
         return scenario.unreadable === "truncated"
@@ -2033,14 +2131,16 @@ for (const scenario of [
       const inner = command === "systemd-run" ? args.slice(args.indexOf("--") + 1) : [command, ...args];
       const result = await realExec(command, args, cwd, env, options);
       if (inner[0] === "git" && inner[1] === "push") observed = {
-        ms: options?.timeoutMs, deadline: env?.LLV_GATE_PUSH_DEADLINE, output: result.stdout + result.stderr,
+        ms: options?.timeoutMs, deadline: env?.LLV_GATE_PUSH_DEADLINE, state: env?.LLV_GATE_STATE_DIR, output: result.stdout + result.stderr,
       };
       return result;
     };
     const result = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
     expect(observed?.ms).toBe(scenario.ms);
     expect(observed?.deadline).toMatch(/^\d+$/);
+    expect(observed?.state).toBe(process.env.LLV_STATE_DIR!);
     expect(observed?.output).toContain("# hook deadline " + observed?.deadline);
+    expect(observed?.output).toContain(`# check context ${box.subject.id} ${box.subject.cursor?.stageId ?? ""} ${head}`);
     expect(result.ok).toBe(!scenario.refused);
     expect(await box.originHead()).toBe(scenario.refused ? "" : head);
     if (scenario.refused) expect(JSON.stringify(result)).toContain("fixture gate refusal");
@@ -3089,6 +3189,100 @@ test("publication releases the SQLite lease during Git and refuses an in-flight 
     expect((await takeover)?.error).toContain("in flight");
     expect((await box.originHead())).toBe(head);
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test.each(["before-push", "after-confirm"] as const)("operator rejection fences publication and retains its real receipt: %s", async phase => {
+  const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
+  const { candidate, context, authority, NOW } = await import("@/lib/tasks/proactive.fixture");
+  const box = await publishSandbox();
+  try {
+    const { task } = await admitProactiveTask(candidate(`publication-${phase}`), context(), undefined, authority());
+    box.subject.taskIds = [task.id];
+    savePipelines([box.subject]);
+    const head = await box.commit("accepted.txt", "accepted outcome\n");
+    let effects = 0;
+    const untouched: ExecPort = async () => { effects++; throw new Error("fenced effect ran"); };
+    expect(await publishPipelineBranch(box.subject, untouched, { acceptedSha: head })).toMatchObject({ ok: false, error: expect.stringContaining("disabled") });
+    expect(effects).toBe(0);
+    await decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task), undefined, () => new Date(NOW).toISOString());
+    let rejected = false;
+    const racing: ExecPort = async (command, args, cwd, env, options) => {
+      const result = await realExec(command, args, cwd, env, options);
+      if (!rejected && (phase === "before-push" || args.includes("ls-remote") && result.stdout.startsWith(head))) {
+        await decideProactiveTask(task.id, "reject", "operator", proactiveDecisionToken(task));
+        rejected = true;
+      }
+      return result;
+    };
+    const result = await publishPipelineBranch(box.subject, racing, { acceptedSha: head });
+    expect(rejected).toBe(true);
+    if (phase === "before-push") {
+      expect(result).toMatchObject({ ok: false });
+      expect(await box.originHead()).toBe("");
+    } else {
+      expect(result).toMatchObject({ ok: true, remote: "published", sha: head });
+      expect(findPipelineRecord(box.subject.id)?.delivery?.operation).toMatchObject({ state: "settled", result: { ok: true, remote: "published" } });
+      expect(await box.originHead()).toBe(head);
+    }
+    expect(fs.readFileSync(path.join(box.subject.worktreeDir, "accepted.txt"), "utf8")).toBe("accepted outcome\n");
+    expect(await publishPipelineBranch(box.subject, untouched, { acceptedSha: head })).toMatchObject({ ok: false, error: expect.stringContaining("rejected") });
+    expect(effects).toBe(0);
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test.each(["success", "refused"] as const)("rejection during an active push preserves its child and settles the actual %s receipt", async outcome => {
+  const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
+  const { candidate, context, authority, NOW } = await import("@/lib/tasks/proactive.fixture");
+  const box = await publishSandbox();
+  if (outcome === "refused") {
+    fs.mkdirSync(path.join(box.origin, "hooks"), { recursive: true });
+    await git(box.origin, "config", "core.hooksPath", path.join(box.origin, "hooks"));
+    fs.writeFileSync(path.join(box.origin, "hooks", "pre-receive"), "#!/bin/sh\nexit 1\n", { mode: 0o700 });
+  }
+  const interval = globalThis.setInterval;
+  let watch: (() => void) | undefined;
+  globalThis.setInterval = ((callback: () => void, ms: number) => {
+    if (ms === 50) watch = callback;
+    return interval(callback, ms);
+  }) as typeof setInterval;
+  try {
+    const project = `active-push-${outcome}`;
+    const { task } = await admitProactiveTask({ ...candidate(project), project }, { ...context(), project }, undefined, authority());
+    await decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task), undefined, () => new Date(NOW).toISOString());
+    box.subject.taskIds = [task.id];
+    savePipelines([box.subject]);
+    const head = await box.commit("accepted.txt", "retained outcome\n");
+    let pushes = 0;
+    let confirmations = 0;
+    let abortedAtRejection: boolean | undefined;
+    const racing: ExecPort = async (command, args, cwd, env, options) => {
+      if (args.includes("push")) {
+        pushes++;
+        await decideProactiveTask(task.id, "reject", "operator", proactiveDecisionToken(task));
+        expect(watch).toBeDefined();
+        watch!();
+        abortedAtRejection = options?.signal?.aborted;
+      }
+      if (pushes && args.includes("ls-remote")) confirmations++;
+      return realExec(command, args, cwd, env, options);
+    };
+    const result = await publishPipelineBranch(box.subject, racing, { acceptedSha: head });
+    expect(pushes).toBe(1);
+    expect(abortedAtRejection).toBe(false);
+    expect(result).toMatchObject(outcome === "success" ? { ok: true, remote: "published", sha: head } : { ok: false });
+    expect(confirmations).toBe(outcome === "success" ? 1 : 0);
+    expect(findPipelineRecord(box.subject.id)?.delivery?.operation).toMatchObject({ state: "settled", result });
+    expect(await box.originHead()).toBe(outcome === "success" ? head : "");
+    expect(fs.readFileSync(path.join(box.subject.worktreeDir, "accepted.txt"), "utf8")).toBe("retained outcome\n");
+    let nextEffects = 0;
+    expect(await publishPipelineBranch(findPipelineRecord(box.subject.id)!, async () => {
+      nextEffects++; throw new Error("new publication must remain fenced");
+    }, { acceptedSha: head })).toMatchObject({ ok: false, error: expect.stringContaining("rejected") });
+    expect(nextEffects).toBe(0);
+  } finally {
+    globalThis.setInterval = interval;
+    fs.rmSync(box.root, { recursive: true, force: true });
+  }
 });
 
 test("a same-owner adapter retry waits on its running reservation without executing Git (#1939)", async () => {

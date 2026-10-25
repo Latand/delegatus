@@ -4,7 +4,6 @@ import { Activity, Component, memo, useMemo, useEffect, useRef, useState, type C
 import { createPortal } from 'react-dom';
 import { ArrowLeft, ArrowUpRight, Check, CircleHelp, Focus, Grip, Info, Minus, Moon, MoreHorizontal, Pin, Plus, Sun, X } from 'lucide-react';
 import { BranchPane } from '@/components/BranchPane';
-import { SchemeBoard as NativeBoard } from '@native-board';
 import { appendMessage, files, fixtureScene, latestSummary, selectFixtureScene, type Point, type WorkEdge, type WorkNode } from './fixtures';
 import { layoutScene, intersects, ports, visibleEdges, type Box } from './layout';
 import { nodeFrame, essentialRole, essentialState, W, H, type Camera } from './semantic';
@@ -17,7 +16,6 @@ const clamp = (v: number, low: number, high: number) => Math.max(low, Math.min(h
 const stateText = { running: 'Working', waiting: '1 finding', done: 'Complete', queued: 'Waiting for review' };
 
 export function SchemeBoard(props: any) {
-  if (new URLSearchParams(location.search).has('baseline')) return <NativeBoard {...props} />;
   return <FreshBoard {...props} />;
 }
 

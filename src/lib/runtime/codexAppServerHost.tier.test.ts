@@ -235,7 +235,7 @@ test("a tier missing from the live catalog is refused before any call", async ()
   const server = new TierAppServer("tier-thread", ["priority"]);
   const host = await startHost(server);
   try {
-    await expect(host.setTier({ operationId: "turbo-1", serviceTier: "ultrafast", cut: "boundary" })).rejects.toThrow("not offered");
+    await expect(host.setTier({ operationId: "turbo-1", serviceTier: "ultrafast", cut: "boundary" })).rejects.toThrow('serviceTier ultrafast for model gpt-6.1-sol; evaluated selected account "default"');
     expect(tierUpdates(server)).toHaveLength(0);
   } finally { await host.release(); }
 });

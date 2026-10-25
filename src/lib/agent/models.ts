@@ -6,6 +6,9 @@ export type AgentModelOption = {
       full `label` stays in menu rows and accessible names. */
   shortLabel: string;
   use: "implement" | "review" | "general";
+  /** This row is a launch alias of the row with this id: it stays a valid
+      model id but is not offered beside it (see listedModels). */
+  duplicateOf?: string;
 };
 
 export const CODEX_ASTRA_MODEL = "gpt-6-astra";
@@ -54,7 +57,7 @@ export const ENGINE_MODELS: Record<"claude" | "codex" | "copilot", readonly Agen
     { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", shortLabel: "Sonnet 5.5", use: "implement" },
     // Claude Code 2.1.296 resolves `haiku` to claude-haiku-5-5 on
     // first-party auth. Pinned rows keep both generations selectable.
-    { id: "haiku", label: "Haiku 5.5", shortLabel: "Haiku 5.5", use: "general" },
+    { id: "haiku", label: "Haiku 5.5", shortLabel: "Haiku 5.5", use: "general", duplicateOf: "claude-haiku-5-5" },
     { id: "claude-haiku-5-5", label: "Haiku 5.5", shortLabel: "Haiku 5.5", use: "general" },
     { id: "claude-haiku-4-5", label: "Haiku 4.5", shortLabel: "Haiku 4.5", use: "general" },
   ],
@@ -81,6 +84,15 @@ export const ENGINE_MODELS: Record<"claude" | "codex" | "copilot", readonly Agen
     { id: "gpt-5-mini", label: "GPT-5 mini", shortLabel: "5 mini", use: "general" },
   ],
 };
+
+/** The rows a picker offers for `engine`. A launch alias that names the same
+    release as a pinned row stays valid but is not listed beside it, unless it
+    is the current choice, which then stands in for the pinned row. */
+export function listedModels(engine: "claude" | "codex" | "copilot", current?: string | null): readonly AgentModelOption[] {
+  const rows = ENGINE_MODELS[engine];
+  const alias = rows.find((option) => option.duplicateOf && option.id === current);
+  return rows.filter((option) => option.duplicateOf ? option === alias : option.id !== alias?.duplicateOf);
+}
 
 export type LaunchModelValidation = { model: string } | { error: string };
 

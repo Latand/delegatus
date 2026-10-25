@@ -1,4 +1,6 @@
-import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
+import { performanceSpans } from "@/lib/performanceSpans";
+import { startupHostSnapshot } from "./startupSnapshot";
+import { registryKeysMatching, registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { seatRecipientVerdict, seatRecipientVerdictAsync, setSeatChannelNativeWithdrawal } from "@/lib/orchestrator/seatChannel";
 import { conversationIdsResolvingTo, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
 import { detachCodexHostForViewerRestart, flushStructuredHostPersistence } from "./registry";
@@ -17,7 +19,7 @@ import { handoffQueue } from "./handoffQueueStore";
 import { blockingHostActivityFlags } from "./hostActivityFlags";
 import { runtimeIdleKillMatches } from "./contracts";
 import { settleNativeQueueEntry } from "./nativeQueueSettlement";
-import { conversationActorRunning, recordObservedWait, recordWait, restoreMissingRecords } from "./recordWait";
+import { conversationActorRunning, recordObservedWait, recordWait, restoreMissingRecordsAsync } from "./recordWait";
 
 /** How many times a failed switch's hold is asked for before it is given up
     and logged; each attempt waits up to the registry's lock deadline. */
@@ -70,7 +72,7 @@ import {
 import { structuredHostKillRefFromRegistry, terminateStructuredHostTree } from "./structuredHostControl";
 import { publishFilesRevision } from "./filesRevision";
 import { setStructuredDeliveryKick } from "./structuredDeliverySignal";
-import { confirmJournalDelivery, deliveryRouteOf, journalVerdict, mirrorSettledReceipts, SEND_DISCARDED_REASON, sendIsSettled, settleDueSends } from "./sendSettlement";
+import { confirmJournalDelivery, deliveryRouteOf, journalVerdict, mirrorSettledReceiptsAsync, SEND_DISCARDED_REASON, sendIsSettled, settleDueSends } from "./sendSettlement";
 import { runtimeImageCapability } from "./runtimeImageStore";
 import { noteVoiceWorkBoundary } from "./voiceViewBinding";
 import { STRUCTURED_IMAGE_CAPABILITY } from "./structuredContent";
@@ -150,6 +152,7 @@ interface ControllerState {
      shares this object and has no such hook. */
   settleHostlessSessions?: (() => Promise<number>) | null;
   updateStartupDeferral?: ((conversationId: string, deferred: boolean) => void) | null;
+  allowStartupRecovery?: (() => void) | null;
   completeActive: ((adopted: readonly StructuredDeliveryHost[], progress?: (phase: StructuredHostStartupPhase) => void, assertActive?: () => void, deferredConversationIds?: ReadonlySet<string>) => Promise<void>) | null;
   stopActive: () => void;
   lastDrainError?: string | null;
@@ -229,6 +232,7 @@ function retireStructuredDeliveryPublication(): void {
   state.settleHostlessSessions = null;
   state.completeActive = null;
   state.updateStartupDeferral = null;
+  state.allowStartupRecovery = null;
   setStructuredDeliveryKick(null);
   markStructuredDeliveryControllerUnavailable();
 }
@@ -468,8 +472,12 @@ async function reconcileTerminalDeliveries(
   registry: AgentRegistry,
   client: RuntimeHostClient,
   isCurrent: () => boolean,
+  assertActive: () => void,
 ): Promise<void> {
-  const snapshot = registry.readOnlySnapshot();
+  assertActive();
+  const snapshot = await registry.prepareReadOnlySnapshot(AbortSignal.timeout(30_000));
+  assertActive();
+  if (!isCurrent()) return;
   const unsettledDeliveries = Object.values(snapshot.heldDeliveries)
     .filter((delivery) => delivery.state === "delivery-uncertain" || delivery.state === "failed");
   const pendingOutcomes: Parameters<AgentRegistry["recordDeliveryOutcomesForOperations"]>[0][number][] = [];
@@ -564,7 +572,7 @@ function registrySessionProjection(
   const generation = conversation?.generations.at(-1);
   if (!conversation || !generation) return null;
   const sessionKey = { engine: conversation.engine, sessionId: generation.id } as const;
-  const entry = registry.readOnlySnapshot().entries[sessionKeyId(sessionKey)] ?? null;
+  const entry = startupHostSnapshot(registry, sessionKey).entries[sessionKeyId(sessionKey)] ?? null;
   const legacy = entry?.host?.kind === "tmux";
   const host = entry?.status === "dead"
     ? "dead"
@@ -761,6 +769,11 @@ export async function bindStructuredDeliveryQueue(
     /** Watchdog and background settlement cadences; 0 leaves each to a direct call. */
     watchdogIntervalMs?: number;
     settlementSweepMs?: number;
+    /** How long a native queue canonical read may stay unanswered before a
+        pass logs it and starts its replacement; tests shorten it. */
+    nativeReconcileDeadlineMs?: number;
+    /** The clock behind that deadline; tests pass their own. */
+    now?: () => number;
   } = {},
 ): Promise<void> {
   const client = dependencies.client === undefined ? runtimeHostClient() : dependencies.client;
@@ -780,10 +793,23 @@ export async function bindStructuredDeliveryQueue(
   // the remaining hosts. Their original queued operations must wait for those
   // seats instead of attempting competing recovery and terminalizing them.
   let startupPending = dependencies.deferStartupWork === true;
+  let startupRecoveryReady = !startupPending;
   let deferredStartupConversations = new Set<string>();
   let scheduleAutomaticRetry = () => {};
   let requestDrain = () => {};
-  const nativeReconciliations = new Map<string, Promise<void>>();
+  /* A canonical read that never answers must not hold the conversation's proof
+     forever: past this bound the pass logs it, settles it as a failure and
+     starts one replacement. The abandoned read cannot be cancelled, so it is
+     counted until it answers: a conversation has at most two reads outstanding
+     (the abandoned one and its replacement), never one per pass. */
+  const nativeReconcileDeadlineMs = dependencies.nativeReconcileDeadlineMs ?? 60_000;
+  const nativeNow = dependencies.now ?? Date.now;
+  const nativeReconciliations = new Map<string, { startedAt: number; token: number; read: Promise<void> }>();
+  const nativeReadsOutstanding = new Map<string, number>();
+  let nativeReadToken = 0;
+  const unresolvedNativeHosts = new Set<string>();
+  const coolingNativeHosts = new Set<string>();
+  const queuelessNativeHosts = new Set<string>();
   const nativeRetries = new Map<string, RetryBackoff>();
   const seatRecipient = (conversationId: string) => {
     const snapshot = registry.conversationDeliverySnapshot({ conversationId });
@@ -939,6 +965,9 @@ export async function bindStructuredDeliveryQueue(
         || (deferredStartupConversations.size > 0
           && deferredStartupConversations.has(resolveConversationAlias(registry.readOnlySnapshot(), conversationId as ViewerConversationId))))
         && hostResolver(registry, hosts)(conversationId) === null,
+      canRecoverDeferredTarget: (conversationId) => startupRecoveryReady
+        && (deferredStartupConversations.size === 0
+          || !deferredStartupConversations.has(resolveConversationAlias(registry.readOnlySnapshot(), conversationId as ViewerConversationId))),
       reconfigureCancelled: (effect) => registry.reconfigureCancelled(effect.conversationId as ViewerConversationId, effect.operationId),
       switchHold: (conversationId) => registry.switchHold(conversationId as ViewerConversationId),
       /* Off the loop (rule c). The hold is written before the switch is
@@ -976,9 +1005,23 @@ export async function bindStructuredDeliveryQueue(
       nativeQueueReconcile: async () => {
         if (!client.nativeQueueRead) return;
         const readyHosts = [...hosts].filter(([key, host]) => {
-          if (!host.nativeQueue) return false;
+          if (!host.nativeQueue) {
+            if (!queuelessNativeHosts.has(key)) {
+              queuelessNativeHosts.add(key);
+              console.warn("[structured delivery] native queue reconcile skipped: the host has no native queue", { host: key });
+            }
+            return false;
+          }
+          queuelessNativeHosts.delete(key);
           const retry = nativeRetries.get(key);
-          if (retry && !retry.ready()) { scheduleAutomaticRetry(); return false; }
+          if (retry && !retry.ready(nativeNow())) {
+            if (!coolingNativeHosts.has(key)) {
+              coolingNativeHosts.add(key);
+              console.warn("[structured delivery] native queue reconcile waits for its retry backoff", { host: key });
+            }
+            scheduleAutomaticRetry(); return false;
+          }
+          coolingNativeHosts.delete(key);
           return true;
         });
         // A cooldown wake must not rebuild the registry snapshot either.
@@ -987,15 +1030,43 @@ export async function bindStructuredDeliveryQueue(
         for (const [key] of readyHosts) {
           const entry = entries[key];
           const conversationId = entry ? conversationIdForEntry(registry, entry) : null;
-          if (!conversationId || nativeReconciliations.has(conversationId)) continue;
+          if (!conversationId) {
+            if (!unresolvedNativeHosts.has(key)) {
+              unresolvedNativeHosts.add(key);
+              console.warn("[structured delivery] native queue reconcile skipped: the host has no conversation", { host: key });
+            }
+            continue;
+          }
+          unresolvedNativeHosts.delete(key);
+          const running = nativeReconciliations.get(conversationId);
+          if (running) {
+            if ((nativeReadsOutstanding.get(conversationId) ?? 0) >= 2) continue;
+            // A later pass has to come back to find the read past its deadline.
+            if (nativeNow() - running.startedAt < nativeReconcileDeadlineMs) { scheduleAutomaticRetry(); continue; }
+          }
           const retry = nativeRetries.get(key) ?? new RetryBackoff();
           nativeRetries.set(key, retry);
+          if (running) {
+            console.warn("[structured delivery] native queue reconcile exceeded its deadline; starting its replacement", { conversationId });
+            retry.fail(nativeNow());
+          }
+          const token = ++nativeReadToken;
+          const owns = () => nativeReconciliations.get(conversationId)?.token === token;
+          nativeReadsOutstanding.set(conversationId, (nativeReadsOutstanding.get(conversationId) ?? 0) + 1);
           // Canonical reads cannot hold up interrupt/answer or other sends.
-          const read = nativeQueueExecutor.reconcile(conversationId)
-            .then(pending => { retry.reset(); if (pending) scheduleAutomaticRetry(); })
-            .catch(() => { retry.fail(); scheduleAutomaticRetry(); })
-            .finally(() => { nativeReconciliations.delete(conversationId); });
-          nativeReconciliations.set(conversationId, read);
+          const read: Promise<void> = nativeQueueExecutor.reconcile(conversationId)
+            .then(pending => { if (owns()) { retry.reset(); if (pending) scheduleAutomaticRetry(); } })
+            .catch(error => {
+              if (!owns()) return;
+              console.warn("[structured delivery] native queue reconcile failed", { conversationId, error: error instanceof Error ? error.message : String(error) });
+              retry.fail(nativeNow()); scheduleAutomaticRetry();
+            })
+            .finally(() => {
+              const left = (nativeReadsOutstanding.get(conversationId) ?? 1) - 1;
+              if (left > 0) nativeReadsOutstanding.set(conversationId, left); else nativeReadsOutstanding.delete(conversationId);
+              if (owns()) nativeReconciliations.delete(conversationId);
+            });
+          nativeReconciliations.set(conversationId, { startedAt: nativeNow(), token, read });
         }
       },
       ...(typeof client.events === "function" ? { events: (afterEventSeq: number) => client.events(afterEventSeq) } : {}),
@@ -1351,13 +1422,14 @@ export async function bindStructuredDeliveryQueue(
       const recovered = await recover({
         path: generation.path,
         conversationId: conversation.id,
+        ...(startupPending ? { reconnectLiveHost: true } : {}),
         ...admission,
       }, {
         registry,
         client,
         requestDeliveryDrain: requestDrain,
       });
-      return recovered?.spawned === true;
+      return recovered?.spawned === true || recovered?.reconnected === true;
     },
     (effect, ownership) => applyStructuredReconfigure(effect, {
       ...dependencies.reconfigure,
@@ -1607,7 +1679,10 @@ export async function bindStructuredDeliveryQueue(
   let settleSweep = 0;
   const settleHostlessSessions = async (): Promise<number> => {
     if (superseded() || !client.appendSessionFenced) return 0;
-    const registrySnapshot = registry.readOnlySnapshot();
+    /* Selection only: every row is read again by key below. A whole snapshot
+       here was one 0.3 s slice per sweep on retained history. */
+    const registrySnapshot = await registry.prepareReadOnlySnapshot(AbortSignal.timeout(30_000), { recoveryIndexes: false });
+    if (superseded()) return 0;
     const hostless = hostlessConversations(registrySnapshot);
     for (const id of settledRows.keys()) if (!hostless.has(id)) settledRows.delete(id);
     const candidates = [...hostless].filter(([, row]) => !registrations.has(row.key));
@@ -1640,7 +1715,7 @@ export async function bindStructuredDeliveryQueue(
          next sweep, and the rest of this one is left for then too. */
       try { session = listed ? listed.get(conversationId) ?? null : await client.readSession!({ conversationId }); }
       catch { break; }
-      const current = hostlessConversationEvidence(registry.readOnlySnapshot(), conversationId);
+      const current = hostlessConversationEvidence(registry.conversationRetentionSnapshot(conversationId), conversationId);
       if (!current || current.key !== row.key || current.endedAt !== row.endedAt || registrations.has(row.key)) continue;
       if (session && sessionClaimsOpenTurn(session)) {
         /* A write the journal refused or never received settles nothing, as
@@ -2044,6 +2119,7 @@ export async function bindStructuredDeliveryQueue(
       state.settleHostlessSessions = null;
       state.completeActive = null;
       state.updateStartupDeferral = null;
+      state.allowStartupRecovery = null;
       setStructuredDeliveryKick(null);
     }
   };
@@ -2075,7 +2151,19 @@ export async function bindStructuredDeliveryQueue(
          registering hosts so even a registration-triggered drain sees the
          repaired durable state. */
       deferredStartupConversations = new Set(deferredConversationIds);
-      (await registry.deliveryWriteOrBusy({ label: "registry.repairCompletedStructuredSpawnMarkers" }, registry.repairCompletedStructuredSpawnMarkers.bind(registry)));
+      const markerSnapshot = await registry.prepareReadOnlySnapshot();
+      assertActive();
+      const markerKeys = registryKeysMatching(markerSnapshot, "entries", "structuredHost.kind",
+        ["codex-app-server", "claude-broker", "copilot-acp"]);
+      await forEachStartupBatch(markerKeys, async key => {
+        const entry = performanceSpans.sync("runtime.startup.select", () => markerSnapshot.entries[key]);
+        if (entry?.pendingAction !== "spawn") return;
+        await registry.deliveryWriteOrBusy({ label: "registry.repairCompletedStructuredSpawnMarkers" }, () => {
+          assertActive();
+          if (superseded()) throw new StructuredDeliveryControllerUnavailableError();
+          return registry.repairCompletedStructuredSpawnMarkers(entry.key);
+        });
+      }, assertActive);
       await phase("registering structured delivery hosts");
       for (const item of items) await register(item);
       assertActive();
@@ -2085,7 +2173,9 @@ export async function bindStructuredDeliveryQueue(
         await successor(items, progress, assertActive, deferredConversationIds);
         return;
       }
-      const startupSnapshot = registry.readOnlySnapshot();
+      // Marker repair changes no membership or generation. This selection is
+      // reused only to enumerate candidates; publication rechecks each host.
+      const startupSnapshot = markerSnapshot;
       /* Read only to skip republishing a projection that already says what
          this pass would say. It decides nothing else: the state published
          below is read off the registry, never off this snapshot, so a read
@@ -2099,7 +2189,12 @@ export async function bindStructuredDeliveryQueue(
         (runtimeSnapshot?.sessions ?? []).map((session) => [session.conversationId, session]),
       );
       await phase("publishing historical host fallbacks");
-      await forEachStartupBatch(Object.values(startupSnapshot.conversations), async (conversation) => {
+      const conversations = (function* () {
+        for (const id in startupSnapshot.conversations) {
+          yield performanceSpans.sync("runtime.startup.conversations", () => startupSnapshot.conversations[id]!);
+        }
+      })();
+      await forEachStartupBatch(conversations, async (conversation) => {
         assertActive();
         if (superseded()) return;
         const generation = conversation.generations.at(-1);
@@ -2123,7 +2218,7 @@ export async function bindStructuredDeliveryQueue(
         return;
       }
       await phase("reconciling terminal delivery receipts");
-      await reconcileTerminalDeliveries(registry, client, () => !stopped && state.activeQueue === queue);
+      await reconcileTerminalDeliveries(registry, client, () => !stopped && state.activeQueue === queue, assertActive);
       await phase("draining startup delivery queue");
       assertActive();
       startupPending = false;
@@ -2136,6 +2231,11 @@ export async function bindStructuredDeliveryQueue(
     if (stopped || state.activeQueue !== queue) throw new StructuredDeliveryControllerUnavailableError();
     if (deferred) deferredStartupConversations.add(conversationId);
     else deferredStartupConversations.delete(conversationId);
+  };
+  state.allowStartupRecovery = () => {
+    if (stopped || state.activeQueue !== queue) throw new StructuredDeliveryControllerUnavailableError();
+    startupRecoveryReady = true;
+    requestDrain();
   };
   state.settleHostlessSessions = settleHostlessSessions;
   const settleIntervalMs = dependencies.hostlessSettleIntervalMs ?? HOSTLESS_SETTLE_INTERVAL_MS;
@@ -2174,6 +2274,7 @@ export async function bindStructuredDeliveryQueue(
        own, so a sweep starts whether or not the last one has ended, and a
        conversation whose evidence does not answer holds only itself. */
     const settling = new Set<string>();
+    let restoration: Promise<void> | null = null;
     settlementSweepTimer = setInterval(() => {
       if (stopped || state.activeQueue !== queue) return;
       /* A3: an open record or an ending a crash or the inventory sidecar left
@@ -2182,24 +2283,37 @@ export async function bindStructuredDeliveryQueue(
          Its margin covers a row stamped just before the snapshot. A sweep
          that could not read the store, or failed a backfill, takes none. */
       const sweptAt = Date.now();
-      try {
-        const complete = restoreMissingRecords(registry, progressStore, sweptAt);
-        mirrorSettledReceipts(registry, progressStore);
-        if (complete) progressStore.checkpoint(sweptAt - sweepMs);
-      } catch (error) {
-        controllerDiagnosticError("[structured delivery] progress restoration failed", { error: error instanceof Error ? error.message : String(error) });
-      }
+      if (!restoration) restoration = (async () => {
+        const active = () => {
+          if (stopped || state.activeQueue !== queue) throw new Error("delivery restoration owner retired");
+        };
+        try {
+          const deadline = performance.now() + 30_000;
+          const complete = await restoreMissingRecordsAsync(registry, progressStore, sweptAt, active, deadline);
+          active();
+          await mirrorSettledReceiptsAsync(registry, progressStore, sweptAt, active, deadline);
+          active();
+          if (complete) progressStore.checkpoint(sweptAt - sweepMs);
+        } catch (error) {
+          if (!stopped && state.activeQueue === queue) controllerDiagnosticError("[structured delivery] progress restoration failed", { error: error instanceof Error ? error.message : String(error) });
+        }
+      })().finally(() => { restoration = null; });
       void settleDueSends({
         registry,
         client,
-        progress: progressStore,
+        assertActive: () => {
+          if (stopped || state.activeQueue !== queue) throw new Error("delivery settlement owner retired");
+        },
+        progress: { settle: (...args) => {
+          if (!stopped && state.activeQueue === queue) progressStore.settle(...args);
+        } },
         running: settling,
         onDeadline: (operationId, _conversationId, deadline) => {
           progressStore.deadline(operationId, deadline?.deadlineAt ?? null, deadline?.policy ?? null);
         },
         onSettled: () => requestDrain(),
       }).catch((error) => {
-        controllerDiagnosticError("[structured delivery] background settlement failed", { error: error instanceof Error ? error.message : String(error) });
+        if (!stopped && state.activeQueue === queue) controllerDiagnosticError("[structured delivery] background settlement failed", { error: error instanceof Error ? error.message : String(error) });
       });
     }, sweepMs);
     settlementSweepTimer.unref?.();
@@ -2289,6 +2403,14 @@ export async function publishStructuredDeliveryHost(
 export function updateStructuredStartupDeferral(registry: AgentRegistry, conversationId: string, deferred: boolean): void {
   if (state.activeRegistry !== registry || !state.updateStartupDeferral) throw new StructuredDeliveryControllerUnavailableError();
   state.updateStartupDeferral(conversationId, deferred);
+}
+
+/** Restart-cut recognition has fenced undecided rows. Explicit messages may
+ * now use ordinary per-conversation recovery while the historical sweep runs.
+ * Recovery still checks each row's cut, custody and pipeline authority. */
+export function allowStructuredStartupRecovery(registry: AgentRegistry): void {
+  if (state.activeRegistry !== registry || !state.allowStartupRecovery) return;
+  state.allowStartupRecovery();
 }
 
 export async function completeStructuredDeliveryQueueStartup(

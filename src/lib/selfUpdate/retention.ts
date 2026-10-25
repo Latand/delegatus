@@ -1,3 +1,4 @@
+import { startupDiagnosticsQuiet } from "@/lib/startupDiagnostics";
 import { withSelfObservation, type RetentionScan } from "./retentionInspection";
 import { RetentionWorker, RetentionInspectionError, type RetentionInspection } from "./retentionWorker";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -12,7 +13,6 @@ import { runGit } from "./git";
 import { builtRevision } from "./steps";
 import { adoptLegacyTrash, isGatedTrashRow, quarantineTree, reopenGate, settleGatedTrash } from "./gatedTrash";
 import type { LauncherRecord } from "./launcher";
-import { startupDiagnosticsQuiet } from "@/lib/startupDiagnostics";
 
 const DAY = 86_400_000;
 const TRASH_JOURNAL = /^(cache|package|release-output|release)-trash-.*\.json$/;
@@ -206,17 +206,17 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
     const processes = await scan();
     const initial = await read();
     const root = path.resolve(record.releasesDir);
-    // The updater creates this cache on its first downloaded release. A fresh
-    // install has nothing to retain. A dangling alias still fails realpath.
-    const exists = fs.lstatSync(root, { throwIfNoEntry: false }) !== undefined;
-    if (exists && fs.realpathSync(root) !== root) throw new Error("release root is an alias; skipped");
+    // The cache is created by the first update, not by the initial install.
+    // Only absence is empty; aliases and unreadable/invalid roots still fail.
+    const rootExists = fs.lstatSync(root, { throwIfNoEntry: false }) !== undefined;
+    if (rootExists && fs.realpathSync(root) !== root) throw new Error("release root is an alias; skipped");
     let listed: ReturnType<typeof parseWorktreeList> = [];
-    if (record.checkout) {
+    if (rootExists && record.checkout) {
       const result = await run(["worktree", "list", "--porcelain", "-z"], record.checkout);
       if (result.code !== 0) throw new Error(`cannot list release worktrees: ${result.stderr}`);
       listed = parseWorktreeList(result.stdout);
     }
-    for (const name of exists ? fs.readdirSync(root).sort() : []) {
+    for (const name of rootExists ? fs.readdirSync(root).sort() : []) {
       const dir = path.join(root, name);
       const stat = fs.lstatSync(dir);
       if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
@@ -517,8 +517,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
     console.error("[self-update] cannot write retention report", String(error));
   }
   const summary = `[self-update] retention removed ${report.removed.length}; reclaimed ${report.reclaimedCacheBytes} cache bytes; ${report.errors.length} error(s)`;
-  if (report.errors.length) console.error(summary, ...report.errors);
-  else if (!startupDiagnosticsQuiet()) console.log(summary);
+  if (report.errors.length || !startupDiagnosticsQuiet()) console.log(summary);
   return report;
   } finally { await inspection.close(); }
   });

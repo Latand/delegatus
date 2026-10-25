@@ -39,6 +39,8 @@ export interface CopilotLoginPorts {
   sleep(ms: number): Promise<void>;
   setTimeout(callback: () => void, ms: number): NodeJS.Timeout;
   clearTimeout(timer: NodeJS.Timeout): void;
+  /** After a confirmed sign-in: an account an install transfer brought settles its checklist row. */
+  observeSignedIn?(accountId: string): void;
 }
 
 export type CopilotLoginOperation = LoginOperationSummary & {
@@ -64,6 +66,9 @@ export const realCopilotLoginPorts: CopilotLoginPorts = {
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   setTimeout,
   clearTimeout,
+  observeSignedIn: (accountId) => {
+    void import("@/lib/transfer/accounts").then(({ settleImportedAccountSignIn }) => settleImportedAccountSignIn("copilot", accountId)).catch(() => {});
+  },
 };
 
 /** Owns one device-code login at a time and exposes only the browser URL/code
@@ -158,6 +163,7 @@ export class CopilotLoginSupervisor {
     while (this.ports.now() <= until) {
       if (copilotSignedInUser(home)) {
         this.finish(operationId, "authenticated", successResult());
+        this.ports.observeSignedIn?.(operation.accountId);
         return;
       }
       await this.ports.sleep(100);

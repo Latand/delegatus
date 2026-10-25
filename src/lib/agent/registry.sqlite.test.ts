@@ -1931,8 +1931,20 @@ test("production-sized SQLite registry admits every ten-lane write beside a conc
     fs.writeFileSync(start, "start");
     expect(await Promise.all(children.map(({ child }) => child.exited))).toEqual(Array(10).fill(0));
     expect(await reader.exited).toBe(0);
-    expect(await Promise.all(children.map(({ child }) => new Response(child.stderr).text()))).toEqual(Array(10).fill(""));
-    expect(await new Response(reader.stderr).text()).toBe("");
+    const stderr = await Promise.all([...children.map(({ child }) => child), reader]
+      .map(child => new Response(child.stderr).text()));
+    let diagnosticCount = 0;
+    for (const output of stderr) for (const line of output.split("\n").filter(Boolean)) {
+      // Timing is observed below. Its structured diagnostic is allowed;
+      // an exception, an invalid diagnostic or any other stderr still fails.
+      expect(line.startsWith("[blocking-wait] ")).toBe(true);
+      const diagnostic = JSON.parse(line.slice("[blocking-wait] ".length));
+      expect(typeof diagnostic.site).toBe("string");
+      expect(typeof diagnostic.synchronous).toBe("boolean");
+      expect(Number.isFinite(diagnostic.durationMs) && diagnostic.durationMs >= 0).toBe(true);
+      diagnosticCount++;
+    }
+    console.info(`[agent registry benchmark] timed wait diagnostics: ${diagnosticCount}`);
     const measurements = children.map(({ result }) => JSON.parse(fs.readFileSync(result, "utf8")) as {
       durations: number[];
       writerWaits: number[];

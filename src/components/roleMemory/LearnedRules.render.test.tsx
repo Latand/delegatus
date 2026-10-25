@@ -5,7 +5,7 @@ import { act } from "react";
 import { Window } from "happy-dom";
 import { installActEnv } from "@/test-helpers/actEnv";
 
-import { setLocale } from "@/lib/i18n";
+import { setLocale, translate } from "@/lib/i18n";
 import type { RuleView, ScopeView } from "@/lib/memory/roleTypes";
 
 import { RuleSection, RulesWindow } from "./LearnedRules";
@@ -116,6 +116,9 @@ test("orchestrator and maintainer rules have named tabs and rows in both languag
     for (const locale of ["en", "uk"] as const) {
       await act(() => setLocale(locale));
       await act(async () => { root.render(<RulesWindow project="seat-window" onClose={() => {}} />); await new Promise(resolve => setTimeout(resolve, 0)); });
+      // The window opens on Profile; exercise its real navigation to the rules.
+      const allRules = [...dom.document.querySelectorAll("button")].find(button => button.textContent === translate(locale, "memoryProfile.allRules"))!;
+      await act(() => allRules.click());
       const names = locale === "en" ? ["Orchestrator", "Maintainer"] : ["Оркестратор", "Доглядач дошки"];
       for (const [index, role] of roles.entries()) {
         const tab = dom.document.querySelector(`[data-rules-role="${role}"]`)!;
@@ -130,6 +133,19 @@ test("orchestrator and maintainer rules have named tabs and rows in both languag
     for (const [key, value] of prior) if (value) Object.defineProperty(globalThis, key, value); else Reflect.deleteProperty(globalThis, key);
     await dom.happyDOM.close();
   }
+});
+
+test("the swarm scope follows role-wide guidance and offers no local mutation controls", () => {
+  const rule: RuleView = { id: "r_public", rule: "Read the project instruction files before changing code.", why: "", state: "active", hints: [], roleId: "builder", fixRound: false, stageId: "", fresh: false, createdAt: "2026-10-23", changedAt: "2026-10-23" };
+  const swarm: ScopeView = { ...scope(80), scope: "swarm:builder", kind: "swarm", roleId: "builder", bound: 4000, active: [rule] };
+  setLocale("en");
+  const markup = renderToStaticMarkup(<RuleSection kind="role" title="Role" scope={null} additionalScope={{ ...scope(0), scope: "role:*:builder", kind: "role", roleId: "builder" }} swarm={swarm} focusRule={rule.id} onDelete={() => { throw Error("public rule mutation"); }} onRestore={() => {}} />);
+  expect(markup.indexOf("data-rules-every-project")).toBeLessThan(markup.indexOf("data-rules-swarm"));
+  expect(markup).toContain("Swarm rules · Builder on every install");
+  expect(markup).toContain("Read only");
+  expect(markup).toContain(rule.rule);
+  expect(markup).not.toContain("data-learned-rule-delete");
+  expect(markup).not.toContain("data-rule-revert");
 });
 
 /* Audit B26: delete leaves at once, a refusal puts the rule back with the
@@ -233,3 +249,39 @@ for (const order of ["refusal first", "acceptance first"] as const) {
     }
   });
 }
+
+for (const cause of ["memorySource", "override"] as const) test(`rules stopped by ${cause === "memorySource" ? "the Settings row's engines position" : "the kill switch"} say which, in both languages`, async () => {
+  const dom = new Window();
+  dom.HTMLElement.prototype.scrollIntoView = () => {};
+  const globals = { window: dom, document: dom.document, navigator: dom.navigator, HTMLElement: dom.HTMLElement };
+  const prior = new Map(Object.keys(globals).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  Object.assign(globalThis, globals);
+  installActEnv();
+  const oldFetch = globalThis.fetch;
+  const view = { project: "paused-window", enabled: false, ...(cause === "memorySource" ? { pausedBy: "memorySource" } : {}), scopes: [{ ...scope(100), scope: "project:paused-window" }],
+    curation: { lastAt: null, nextAt: null, newLessons: 0, passes: [] } };
+  globalThis.fetch = (async () => Response.json(view)) as unknown as typeof fetch;
+  const host = dom.document.createElement("div"); dom.document.body.append(host);
+  const root = createRoot(host as unknown as HTMLElement);
+  try {
+    for (const lang of ["en", "uk"] as const) {
+      setLocale(lang);
+      await act(async () => { root.render(<RulesWindow key={lang} project="paused-window" onClose={() => {}} />); await new Promise(resolve => setTimeout(resolve, 0)); });
+      const banner = dom.document.querySelector("[data-rules-window-off]")!;
+      expect(banner.getAttribute("data-rules-window-off")).toBe(cause);
+      expect(banner.textContent).toBe(translate(lang, cause === "memorySource" ? "roleMemory.pausedBySource" : "roleMemory.off"));
+      if (cause === "memorySource") {
+        /* It names the Settings row by its own title and leaves the override unnamed. */
+        expect(banner.textContent).toContain(translate(lang, "memorySource.title"));
+        expect(banner.textContent).not.toContain("LLV_ROLE_MEMORY");
+      }
+      expect(dom.document.querySelector("summary")!.textContent).toContain(translate(lang, cause === "memorySource" ? "roleMemory.paused" : "roleMemory.off"));
+    }
+  } finally {
+    setLocale("en");
+    await act(() => root.unmount());
+    globalThis.fetch = oldFetch;
+    for (const [key, value] of prior) if (value) Object.defineProperty(globalThis, key, value); else Reflect.deleteProperty(globalThis, key);
+    await dom.happyDOM.close();
+  }
+});

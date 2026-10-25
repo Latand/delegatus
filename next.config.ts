@@ -1,5 +1,5 @@
 import type { NextConfig } from "next";
-import { PHASE_PRODUCTION_BUILD } from "next/constants";
+import { PHASE_DEVELOPMENT_SERVER, PHASE_PRODUCTION_BUILD } from "next/constants";
 
 /* DELEGATUS_STANDALONE and DELEGATUS_DEV_ORIGINS fold into the LLV_ names
    read below (docs/design/rename-delegatus.md §5). */
@@ -40,6 +40,7 @@ const nextConfig: NextConfig = {
       ".next/server/mcp-task-worker.js",
       ".next/server/memory-import-worker.js",
       ".next/server/voice-tools-probe-worker.js",
+      ".next/server/transfer-worker.js",
       ".next/server/chunks/**",
     ],
   },
@@ -67,6 +68,7 @@ const nextConfig: NextConfig = {
         "retention-worker": "./src/lib/retention.worker.ts",
         "memory-import-worker": "./src/lib/memoryImport.worker.ts",
         "voice-tools-probe-worker": "./src/lib/voiceTools/probe.worker.ts",
+        "transfer-worker": "./src/lib/transfer/transfer.worker.ts",
         "self-update-work-worker": "./src/lib/selfUpdateWork.worker.ts",
         "transcript-search-index-worker": "./src/lib/transcriptSearchIndex.worker.ts",
         "transcript-search-query-worker": "./src/lib/transcriptSearchQuery.worker.ts",
@@ -82,6 +84,11 @@ const nextConfig: NextConfig = {
 };
 
 export default function configureNext(phase: string): NextConfig {
+  if (phase === PHASE_DEVELOPMENT_SERVER) {
+    // Bun can exit tsc before its large --showConfig stdout pipe is flushed.
+    // Read the same project through the installed TypeScript API at startup.
+    return { ...nextConfig, experimental: { ...nextConfig.experimental, useTypeScriptCli: false } };
+  }
   if (phase === PHASE_PRODUCTION_BUILD) {
     // Every build entry point loads this config before Next launches TypeScript.
     // Preserve unrelated Node options and any larger caller-supplied heap.

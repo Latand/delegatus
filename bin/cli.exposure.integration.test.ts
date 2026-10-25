@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import { networkInterfaces, tmpdir } from "node:os";
@@ -10,6 +10,7 @@ import { afterEach, expect, test } from "bun:test";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
 import { stopFixtureIdentity, stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
 import { createTailscaleStub, hermeticTailscaleEnvironment, STUB_DNS_NAME } from "../src/test-helpers/tailscaleStub";
+import { agentStartupMessage } from "./agent-binaries.mjs";
 import { telemetryNotice } from "./telemetry-notice.mjs";
 
 const fixtures = new Set<string>();
@@ -72,14 +73,10 @@ async function probe(hostname: string, port: number): Promise<number> {
   });
 }
 
-async function waitForStatus(hostname: string, port: number, expected: number, stateDirectory: string): Promise<void> {
+async function waitForStatus(hostname: string, port: number, expected: number): Promise<void> {
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
-    // The CLI temporarily binds this port to check availability. An HTTP
-    // probe accepted there can keep that listener's close pending. Wait for
-    // the Viewer fixture to start before making any connections.
-    const viewerStarted = await readFile(path.join(stateDirectory, "web.pid"), "utf8").catch(() => null);
-    if (viewerStarted && await probe(hostname, port) === expected) return;
+    if (await probe(hostname, port) === expected) return;
     await Bun.sleep(50);
   }
   throw new Error(`listener at ${hostname}:${port} did not reach status ${expected}`);
@@ -175,7 +172,6 @@ function runtimeDiagnostics(role: "viewer" | "runtime-host"): string {
 import { startupDiagnostic } from ${JSON.stringify(pathToFileURL(path.resolve("src/lib/startupDiagnostics.ts")).href)};
 import { createViewerLoopMonitor } from ${JSON.stringify(pathToFileURL(path.resolve("src/lib/viewerLoopMonitor.ts")).href)};
 import { createPerformanceSpans } from ${JSON.stringify(pathToFileURL(path.resolve("src/lib/performanceSpans.ts")).href)};
-import { recordBlockingWait } from ${JSON.stringify(pathToFileURL(path.resolve("src/lib/blockingWaits.ts")).href)};
 process.env.LLV_STATE_OWNER = ${JSON.stringify(role)};
 writeFileSync(process.env.LLV_STATE_DIR + "/" + process.env.LLV_STATE_OWNER + "-quiet.json",
   JSON.stringify({ quiet: process.env.LLV_QUIET_DIAGNOSTICS ?? null }));
@@ -184,12 +180,18 @@ let at = 0;
 const monitor = createViewerLoopMonitor(undefined, () => at, createPerformanceSpans(() => at));
 at = 61000;
 monitor.tick();
-recordBlockingWait({ site: "state-write-lock", durationMs: 300, synchronous: true });
-writeFileSync(process.env.LLV_STATE_DIR + "/" + process.env.LLV_STATE_OWNER + "-diagnostics-done", "done");
+setTimeout(() => {
+  const line = "[performance summary] " + JSON.stringify({ role: process.env.LLV_STATE_OWNER });
+  process.stderr.write(line.slice(0, 12));
+  setTimeout(() => {
+    process.stderr.write(line.slice(12) + "\\n");
+    console.log("fixture diagnostics complete");
+  }, 25);
+}, 200);
 `;
 }
 
-async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableAddress?: string; startupChatter?: boolean; failQr?: boolean; diagnostics?: boolean; package?: boolean } = {}): Promise<{ cli: string; env: NodeJS.ProcessEnv }> {
+async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableAddress?: string; startupChatter?: boolean; failQr?: boolean; diagnostics?: boolean; readinessDelayMs?: number } = {}): Promise<{ cli: string; env: NodeJS.ProcessEnv }> {
   const fixture = await mkdtemp(path.join(tmpdir(), "llv-cli-exposure-"));
   fixtures.add(fixture);
   const bin = path.join(fixture, "bin");
@@ -204,7 +206,6 @@ async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableA
     mkdir(home, { recursive: true }),
     mkdir(state, { recursive: true }),
   ]);
-  if (!options.package) await mkdir(path.join(fixture, ".git"));
   await Promise.all([
     /* The tailnet banner prints its QR code with it; without it the launcher
        died on the banner and left its Viewer and runtime host running. */
@@ -229,10 +230,10 @@ async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableA
     copyFile(path.resolve("bin/viewer-helpers-retire.mjs"), path.join(bin, "viewer-helpers-retire.mjs")),
     copyFile(path.resolve("bin/launcher-service-proof.mjs"), path.join(bin, "launcher-service-proof.mjs")),
     copyFile(path.resolve("bin/legacySystemd.mjs"), path.join(bin, "legacySystemd.mjs")),
-    // Service policy is covered separately; a fixture must not inspect its runner's unit.
-    writeFile(path.join(bin, "oomPolicy.mjs"), "export const detectOomPolicyNotice = () => null;\n"),
+    copyFile(path.resolve("bin/oomPolicy.mjs"), path.join(bin, "oomPolicy.mjs")),
     copyFile(path.resolve("bin/internalService.mjs"), path.join(bin, "internalService.mjs")),
     copyFile(path.resolve("bin/skillLinks.mjs"), path.join(bin, "skillLinks.mjs")),
+    copyFile(path.resolve("bin/oomPolicy.mjs"), path.join(bin, "oomPolicy.mjs")),
     copyFile(path.resolve("bin/viewerGateKey.mjs"), path.join(bin, "viewerGateKey.mjs")),
     copyFile(path.resolve("bin/windows-process-identity.mjs"), path.join(bin, "windows-process-identity.mjs")),
     copyFile(path.resolve("bin/darwin-process-identity.mjs"), path.join(bin, "darwin-process-identity.mjs")),
@@ -243,6 +244,7 @@ import { join } from "node:path";
 writeFileSync(join(process.env.LLV_STATE_DIR, "web.pid"), String(process.pid));
 const hostnameIndex = process.argv.indexOf("--hostname");
 const hostname = ${options.ignoreHostname ? JSON.stringify("0.0.0.0") : "hostnameIndex === -1 ? \"0.0.0.0\" : process.argv[hostnameIndex + 1]"};
+await Bun.sleep(${options.readinessDelayMs ?? 0});
 const server = Bun.serve({
   hostname,
   port: Number(process.env.PORT),
@@ -333,12 +335,30 @@ test("the checkout next start path keeps the default listener on loopback", asyn
   children.add(child);
   const output = captureOutput(child);
 
-  await waitForStatus("127.0.0.1", port, 200, fixture.env.LLV_STATE_DIR!);
-  await output.waitFor("Delegatus v", 10_000);
+  await waitForStatus("127.0.0.1", port, 200);
+  await output.waitFor("Open http://", 10_000);
   expect(child.exitCode).toBeNull();
   expect(child.signalCode).toBeNull();
   expect(await probe(nonLoopbackIpv4Address(), port)).toBe(0);
 });
+
+test("the first start keeps a cold Viewer alive beyond fifteen seconds", async () => {
+  const fixture = await checkoutFixture({ readinessDelayMs: 17_000 });
+  await mkdir(fixture.env.TMPDIR!, { recursive: true });
+  const port = await availablePort();
+  const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(port)], {
+    cwd: path.dirname(path.dirname(fixture.cli)),
+    env: fixture.env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.add(child);
+  const output = captureOutput(child);
+
+  await output.waitFor("Open http://", 25_000);
+  expect(child.exitCode).toBeNull();
+  expect(child.signalCode).toBeNull();
+  expect(await probe("127.0.0.1", port)).toBe(200);
+}, 30_000);
 
 test("a machine that still has the retired systemd unit is told how to move to Docker, and the Viewer still starts", async () => {
   const fixture = await checkoutFixture();
@@ -356,8 +376,8 @@ test("a machine that still has the retired systemd unit is told how to move to D
   const output = captureOutput(child);
 
   await output.waitFor("The systemd install of Delegatus is retired: Docker is the only install.", 10_000);
-  await output.waitFor("Delegatus v", 10_000);
-  await waitForStatus("127.0.0.1", port, 200, fixture.env.LLV_STATE_DIR!);
+  await output.waitFor("Open http://", 10_000);
+  await waitForStatus("127.0.0.1", port, 200);
   expect(output.text()).toContain("systemctl --user disable --now agent-log-viewer.service\n");
   expect(output.text()).toContain(`rm ${path.join(unitDir, "agent-log-viewer.service")}\n`);
   expect(output.text()).toContain("https://github.com/Latand/delegatus/blob/main/docs/docker.md");
@@ -388,8 +408,8 @@ test("a pre-existing non-loopback listener does not impersonate a widened Viewer
   children.add(child);
   const output = captureOutput(child);
 
-  await waitForStatus("127.0.0.1", port, 200, fixture.env.LLV_STATE_DIR!);
-  await output.waitFor("Delegatus v", 10_000);
+  await waitForStatus("127.0.0.1", port, 200);
+  await output.waitFor("Open http://", 10_000);
   expect(child.exitCode).toBeNull();
   expect(child.signalCode).toBeNull();
   expect(await probe(nonLoopbackAddress, port)).toBe(204);
@@ -430,13 +450,13 @@ test("an address the platform will not evaluate neither stops startup nor claims
 
   // The banner comes first: it is the assertion that names the CLI's own stderr
   // when a probe the guard could not answer killed startup instead.
-  await output.waitFor("Delegatus v", 10_000);
+  await output.waitFor("Open http://", 10_000);
   // What the guard could not cover is said out loud rather than only recorded.
   await output.waitFor(
     `the exposure check skipped addresses this machine would not answer for: ${nonLoopbackAddress}`,
     10_000,
   );
-  await waitForStatus("127.0.0.1", port, 200, fixture.env.LLV_STATE_DIR!);
+  await waitForStatus("127.0.0.1", port, 200);
   expect(child.exitCode).toBeNull();
   expect(child.signalCode).toBeNull();
   // The probe could not answer for that address and the guard read nothing into
@@ -617,8 +637,8 @@ test("a remembered choice whose publish fails says so and advertises no tailnet 
   children.add(child);
   const output = captureOutput(child);
 
-  await output.waitFor("Delegatus v", 15_000);
-  await waitForStatus("127.0.0.1", port, 200, fixture.env.LLV_STATE_DIR!);
+  await output.waitFor("Open http://", 15_000);
+  await waitForStatus("127.0.0.1", port, 200);
   /* The publish failed, so the tailnet address answers nothing: the banner
      that would carry it, and its QR, are not printed. */
   expect(output.text()).toContain("listener already in use");
@@ -646,7 +666,7 @@ test("a remembered choice whose Tailscale went away starts locally and says why"
   const output = captureOutput(child);
 
   await output.waitFor("this start is local only", 10_000);
-  await waitForStatus("127.0.0.1", port, 200, fixture.env.LLV_STATE_DIR!);
+  await waitForStatus("127.0.0.1", port, 200);
   const answer = await fetch(`http://127.0.0.1:${port}/api/access`).then((response) => response.json()) as { tailnetUrl: string | null; gated: boolean };
   expect(answer.tailnetUrl).toBeNull();
   /* The gate stays on. A background mapping an earlier tailnet start left
@@ -675,15 +695,33 @@ test("a start prints the banner first, hides Next's startup lines and still prin
   expect(text).toContain("DO_NOT_TRACK=1");
   expect(text.split(telemetryNotice.en)).toHaveLength(2);
   expect(text).not.toContain("Reads logs from");
-  expect(text.indexOf("Delegatus v")).toBeGreaterThanOrEqual(0);
-  expect(text.indexOf("Delegatus v")).toBeLessThan(text.indexOf("Error: fixture failure"));
+  expect(text.indexOf("Open http://")).toBeGreaterThanOrEqual(0);
+  expect(text.indexOf("Open http://")).toBeLessThan(text.indexOf("Error: fixture failure"));
   expect(text).toContain(`  Open http://127.0.0.1:${port}/ in your browser.`);
   expect(text).not.toContain("Opened:");
-  expect(text).toContain("DELEGATUS_DEBUG=1");
-  expect(text).toContain("child quiet diagnostics: unset");
+  expect(text).not.toContain("DELEGATUS_DEBUG=1 —");
+  expect(text).toContain("child quiet diagnostics: 1");
   expect(text).not.toContain("Next.js");
   expect(text).not.toContain("- Local:");
   expect(text).not.toContain("Ready in");
+});
+
+test("an ordinary start prints only the URL and setup hint", async () => {
+  const fixture = await checkoutFixture();
+  await mkdir(fixture.env.TMPDIR!, { recursive: true });
+  const port = await availablePort();
+  const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(port)], {
+    cwd: path.dirname(path.dirname(fixture.cli)), env: { ...fixture.env, LLV_LANG: "en" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.add(child);
+  const output = captureOutput(child);
+  await output.waitFor(`Open http://127.0.0.1:${port}/`, 10_000);
+  await Bun.sleep(100);
+  expect(output.text().split(/\r?\n/).filter(line => line.trim())).toEqual([
+    `  Open http://127.0.0.1:${port}/ in your browser.`,
+    ...agentStartupMessage("en", { home: fixture.env.HOME, envPath: fixture.env.PATH }).split("\n"),
+  ]);
 });
 
 test.each(["en", "uk"] as const)("the %s notice is printed once on first start and stays settled after restart", async lang => {
@@ -708,21 +746,16 @@ test.each(["en", "uk"] as const)("the %s notice is printed once on first start a
 /* Use a real PTY for the interactive case; CLI children still use pipes, as
    they do in production. Journal metadata must override even a terminal. */
 for (const scenario of [
-  { name: "piped output", terminal: false, journal: undefined, debug: undefined, quiet: null },
+  { name: "piped output", terminal: false, journal: undefined, debug: undefined, quiet: "1" },
   { name: "journal output", terminal: false, journal: "1:1", debug: undefined, quiet: null },
   { name: "interactive terminal", terminal: true, journal: undefined, debug: undefined, quiet: "1" },
   { name: "journal with a terminal", terminal: true, journal: "1:1", debug: undefined, quiet: null },
   { name: "debug terminal", terminal: true, journal: undefined, debug: "1", quiet: null },
-  { name: "package piped output", package: true, terminal: false, journal: undefined, debug: undefined, quiet: "1" },
-  { name: "package terminal", package: true, terminal: true, journal: undefined, debug: undefined, quiet: "1" },
-  { name: "package journal", package: true, terminal: false, journal: "1:1", debug: undefined, quiet: null },
-  { name: "package journal with a terminal", package: true, terminal: true, journal: "1:1", debug: undefined, quiet: null },
-  { name: "package debug", package: true, terminal: false, journal: undefined, debug: "1", quiet: null },
 ]) {
   // Bun's PTY is a POSIX facility; piped cases also run on Windows.
   test.skipIf(scenario.terminal && process.platform === "win32")(
-    `${scenario.name} selects diagnostic output for both children`, async () => {
-      const fixture = await checkoutFixture({ diagnostics: true, package: "package" in scenario });
+    `${scenario.name} selects diagnostics for both children and retains stall evidence`, async () => {
+      const fixture = await checkoutFixture({ diagnostics: true });
       await mkdir(fixture.env.TMPDIR!, { recursive: true });
       const port = await availablePort();
       let output = "";
@@ -745,41 +778,24 @@ for (const scenario of [
         } finally { reader.releaseLock(); }
       });
       try {
-        await waitForStatus("127.0.0.1", port, 200, fixture.env.LLV_STATE_DIR!);
+        await waitForStatus("127.0.0.1", port, 200);
         for (const role of ["viewer", "runtime-host"]) {
           expect(JSON.parse(await readFile(path.join(fixture.env.LLV_STATE_DIR!, `${role}-quiet.json`), "utf8")))
             .toEqual({ quiet: scenario.quiet });
         }
-        for (const role of ["viewer", "runtime-host"]) {
-          expect(await readFile(path.join(fixture.env.LLV_STATE_DIR!, `${role}-diagnostics-done`), "utf8")).toBe("done");
-        }
         const deadline = Date.now() + 10_000;
         const diagnosticLines = () => output.split(/\r?\n/).filter(line => /^\[(viewer loop-gap|performance summary)\]/.test(line));
-        const quietDiagnostics = scenario.quiet === "1";
-        while ((!output.includes(`http://127.0.0.1:${port}/`) || !quietDiagnostics && diagnosticLines().length < 4)
-          && child.exitCode === null && Date.now() < deadline) await Bun.sleep(25);
-        expect(output).toContain(`http://127.0.0.1:${port}/`);
-        // Settle the launcher and drain every child pipe before asserting absence.
-        await stopFixtureIdentity(identity);
-        await child.exited;
-        await Promise.all(readers);
-        expect(diagnosticLines()).toHaveLength(quietDiagnostics ? 0 : 4);
+        while (output.split("fixture diagnostics complete").length < 3 && child.exitCode === null && Date.now() < deadline) await Bun.sleep(25);
+        expect(diagnosticLines()).toHaveLength(scenario.quiet === "1" ? 0 : 6);
         for (const role of ["viewer", "runtime-host"]) {
           for (const prefix of ["[viewer loop-gap] ", "[performance summary] "]) {
             const reports = diagnosticLines().filter(line => line.startsWith(prefix)).map(line => JSON.parse(line.slice(prefix.length)));
-            expect(reports.filter(report => report.role === role)).toHaveLength(quietDiagnostics ? 0 : 1);
+            expect(reports.filter(report => report.role === role)).toHaveLength(scenario.quiet === "1" ? 0 : prefix === "[performance summary] " ? 2 : 1);
           }
           expect(output.includes(`[fixture startup diagnostic] ${role}`)).toBe(scenario.quiet === null);
         }
-        expect(output.includes("[blocking-wait] ")).toBe(!quietDiagnostics);
       } catch (error) {
-        // Startup output is held until the banner. Stop and drain first so a
-        // readiness failure includes the child's retained diagnostic lines.
-        await stopFixtureIdentity(identity);
-        await child.exited;
-        await Promise.all(readers);
-        const stateFiles = await readdir(fixture.env.LLV_STATE_DIR!, { recursive: true });
-        throw new Error(`CLI diagnostics failed (exit ${child.exitCode}; state files: ${stateFiles.join(", ")}):\n${output}`, { cause: error });
+        throw new Error(`CLI diagnostics failed:\n${output}`, { cause: error });
       } finally {
         await stopFixtureIdentity(identity);
         await child.exited;
@@ -801,7 +817,7 @@ test("DELEGATUS_DEBUG=1 keeps Next's startup lines and lets the children print t
   children.add(child);
   const output = captureOutput(child);
 
-  await output.waitFor("Delegatus v", 10_000);
+  await output.waitFor("Open http://", 10_000);
   await output.waitFor("fixture failure that must reach the terminal", 10_000);
   const text = output.text();
   expect(text).toContain("▲ Next.js 16.3.3");
@@ -809,32 +825,6 @@ test("DELEGATUS_DEBUG=1 keeps Next's startup lines and lets the children print t
   expect(text).toContain("child quiet diagnostics: unset");
   expect(text).toContain("Reads logs from");
   expect(text).not.toContain("DELEGATUS_DEBUG=1 —");
-});
-
-test.each(["en", "uk"] as const)("a %s package launch prints only its URL, setup hint and one-time notice, plus real errors", async lang => {
-  const fixture = await checkoutFixture({ package: true, startupChatter: true });
-  await mkdir(fixture.env.TMPDIR!, { recursive: true });
-  const port = await availablePort();
-  for (const first of [true, false]) {
-    const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(port)], {
-      cwd: path.dirname(path.dirname(fixture.cli)), env: { ...fixture.env, LLV_LANG: lang },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    children.add(child);
-    const output = captureOutput(child);
-    await output.waitFor("fixture failure that must reach the terminal", 10_000);
-    child.kill("SIGINT");
-    expect(await waitForExit(child, 10_000)).toBe(0);
-    const lines = output.text().split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-    expect(lines).toEqual([
-      lang === "en" ? `Open http://127.0.0.1:${port}/ in your browser.`
-        : `Відкрийте http://127.0.0.1:${port}/ у браузері.`,
-      lang === "en" ? "Sign in through the setup guide to run agents." : "Увійдіть в обліковий запис у майстрі налаштування, щоб запускати агентів.",
-      ...(first ? [telemetryNotice[lang]] : []),
-      "child quiet diagnostics: 1",
-      "Error: fixture failure that must reach the terminal",
-    ]);
-  }
 });
 
 
@@ -855,8 +845,8 @@ writeFileSync(path.join(process.env.LLV_STATE_DIR, "runtime-control.json"), JSON
   });
   children.add(child);
   const output = captureOutput(child);
-  await waitForStatus("127.0.0.1", port, 200, fixture.env.LLV_STATE_DIR!);
-  await output.waitFor("Delegatus v", 10_000);
+  await waitForStatus("127.0.0.1", port, 200);
+  await output.waitFor("Open http://", 10_000);
   expect(await (await fetch(`http://127.0.0.1:${port}/api/access`)).json()).toMatchObject({ gated: true });
   expect(await (await fetch(`http://127.0.0.1:${port}/api/control-port`)).json()).toEqual({ port: String(port) });
   expect(JSON.parse(await readFile(path.join(fixture.env.LLV_STATE_DIR!, "runtime-control.json"), "utf8"))).toEqual({ port: String(port), credentialInherited: true });

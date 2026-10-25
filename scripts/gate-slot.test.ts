@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { admitPortableTestRunner } from "../src/lib/testing/portableTestAdmission";
 import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
 
-for (const platform of ["darwin", "win32"] as const) test(`portable ${platform} admission warns once and permits best-effort execution`, () => {
+for (const platform of ["darwin", "win32", "linux"] as const) test(`portable ${platform} admission warns once and permits best-effort execution`, () => {
   const env: NodeJS.ProcessEnv = { NODE_ENV: "test" };
   const warnings: string[] = [];
   admitPortableTestRunner(platform, env, warning => warnings.push(warning));
@@ -17,38 +17,32 @@ for (const platform of ["darwin", "win32"] as const) test(`portable ${platform} 
   expect(env.LLV_PORTABLE_TEST_WARNING_SHOWN).toBe("1");
 });
 
-test("Linux portable admission refuses even an inherited warning marker", () => {
-  const warnings: string[] = [];
-  expect(() => admitPortableTestRunner("linux", { NODE_ENV: "test", LLV_PORTABLE_TEST_WARNING_SHOWN: "1" }, warning => warnings.push(warning)))
-    .toThrow("require a reachable user systemd manager");
-  expect(warnings).toEqual([]);
-});
-
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 function fixture(systemd: boolean) {
   const root = mkdtempSync(join(tmpdir(), "slot-test-")); roots.push(root);
-  for (const name of ["mkdir", "flock", "sleep", "dirname", "mktemp", "touch", "rm"]) symlinkSync(`/usr/bin/${name}`, join(root, name));
+  for (const name of ["date", "mkdir", "flock", "sleep", "dirname", "mktemp", "touch", "rm"]) symlinkSync(`/usr/bin/${name}`, join(root, name));
   if (systemd) {
     writeFileSync(join(root, "systemctl"), "#!/bin/bash\nexit 0\n"); chmodSync(join(root, "systemctl"), 0o755);
     writeFileSync(join(root, "systemd-run"), '#!/bin/bash\nprintf "%s\\n" "$@" > "$SLOT_LOG"\nwhile [[ "$1" != -- ]]; do shift; done\nshift\nexec "$SLOT_BUN" "$SLOT_SERVICE_STUB" "$4"\n'); chmodSync(join(root, "systemd-run"), 0o755);
     writeFileSync(join(root, "service-stub.ts"), 'import fs from "node:fs"; const cfg = JSON.parse(fs.readFileSync(process.argv[2]!, "utf8")); const result = Bun.spawnSync(cfg.command, { cwd: cfg.cwd, env: cfg.env, stdio: ["inherit", "inherit", "inherit"] }); process.exit(result.exitCode);');
   }
-  const env = { ...process.env, PATH: root, LLV_GATE_BUN: process.execPath, SLOT_BUN: process.execPath, SLOT_SERVICE_STUB: join(root, "service-stub.ts"), LLV_GATE_LOCK_DIR: root, LLV_GATE_SLOTS: "1", SLOT_LOG: join(root, "log") };
+  const env: NodeJS.ProcessEnv = { ...process.env, PATH: root, LLV_GATE_BUN: process.execPath, SLOT_BUN: process.execPath, SLOT_SERVICE_STUB: join(root, "service-stub.ts"), LLV_GATE_LOCK_DIR: root, LLV_GATE_SLOTS: "1", SLOT_LOG: join(root, "log"), DELEGATUS_CPU_PRESSURE: "off" };
   // The stubbed systemd runs no real service or namespace: start outside a
   // run's gate and outside a signal-sandboxed stage's domain.
   withoutInheritedGate(env);
   const run = (script: string) => spawnSync("/bin/bash", [join(import.meta.dir, "gate-slot.sh"), "/bin/bash", "-c", script], { env, encoding: "utf8", timeout: 10_000 });
   return { root, run, env };
 }
-test.skipIf(process.platform !== "linux")("a Linux gate without systemd refuses to launch an uncontained command", () => {
+test.skipIf(process.platform !== "linux")("a Linux gate without systemd uses the explicit portable fallback", () => {
   const f = fixture(false); const run = f.run('echo "$NODE_OPTIONS"; exit 37');
-  expect(run.status).not.toBe(0); expect(run.stderr).toContain("require a reachable user systemd manager");
+  expect(run.status).toBe(37); expect(run.stderr).toContain("portable cleanup on linux is best effort");
 });
 test("memory service forwards args, status and bounded tree termination", () => {
   const f = fixture(true); expect(f.run("exit 23").status).toBe(23);
   const args = readFileSync(join(f.root, "log"), "utf8");
   expect(args).toContain("MemoryMax=8G"); expect(args).toContain("KillMode=control-group"); expect(args).toContain("TimeoutStopSec=2s");
+  expect(args).toContain("CPUWeight=10"); expect(args).toContain("IOWeight=10");
   expect(f.run('echo "$NODE_OPTIONS"').stdout).toContain("--max-old-space-size=6144");
 });
 test("another command waits for the same legacy-compatible slot", async () => {
@@ -74,7 +68,7 @@ function fakeCgroup(root: string, group: string, controls: { scope?: string; sli
 /** A Linux fixture whose systemd records what the gate asked for. */
 function cpuFixture(options: { manager: boolean; refuseQuota?: boolean; kernel?: { scope?: string; slice?: string } }) {
   const root = mkdtempSync(join(tmpdir(), "slot-cpu-test-")); roots.push(root);
-  for (const name of ["mkdir", "flock", "sleep", "awk", "uname", "cat", "dirname", "mktemp", "touch", "rm"]) symlinkSync(`/usr/bin/${name}`, join(root, name));
+  for (const name of ["date", "mkdir", "flock", "sleep", "awk", "uname", "cat", "dirname", "mktemp", "touch", "rm"]) symlinkSync(`/usr/bin/${name}`, join(root, name));
   writeFileSync(join(root, "getconf"), "#!/bin/bash\necho 24\n"); chmodSync(join(root, "getconf"), 0o755);
   if (options.manager) {
     writeFileSync(join(root, "systemctl"), `#!/bin/bash\nprintf "%s\\n" "$*" >> "$SYSTEMCTL_LOG"\n${options.refuseQuota ? '[[ "$2" == set-property ]] && exit 1\n' : ""}exit 0\n`);
@@ -103,7 +97,7 @@ test.skipIf(process.platform !== "linux")("a gate runs in the work slice with th
   expect(f.run().status).toBe(0);
   const args = readFileSync(join(f.root, "log"), "utf8").trim().split("\n");
   expect(args).toContain("--slice=delegatus-agents-work.slice");
-  for (const property of ["MemoryMax=8G", "CPUWeight=100", "CPUQuota=300%", "CPUQuotaPeriodSec=20ms"]) expect(args[args.indexOf(property) - 1]).toBe("-p");
+  for (const property of ["MemoryMax=8G", "CPUWeight=10", "IOWeight=10", "CPUQuota=300%", "CPUQuotaPeriodSec=20ms"]) expect(args[args.indexOf(property) - 1]).toBe("-p");
   expect(readFileSync(join(f.root, "systemctl.log"), "utf8")).toContain("--user set-property --runtime delegatus-agents-work.slice CPUWeight=100 CPUQuota=1800% CPUQuotaPeriodSec=20ms");
   expect(readFileSync(f.marker, "utf8")).toBe("run\n");
 });
@@ -117,9 +111,9 @@ test.skipIf(process.platform !== "linux")("a missing CPU mechanism is an explici
   expect(quota.run().stderr).toContain("the user manager refused the quota for delegatus-agents-work.slice");
   expect(Bun.file(quota.marker).size).toBe(0);
   const optedOut = missing.run({ DELEGATUS_AGENT_CPU: "off" });
-  expect(optedOut.status).not.toBe(0);
-  expect(optedOut.stderr).toContain("require a reachable user systemd manager");
-  expect(Bun.file(missing.marker).size).toBe(0);
+  expect(optedOut.status).toBe(0);
+  expect(optedOut.stderr).toContain("portable cleanup on linux is best effort");
+  expect(Bun.file(missing.marker).size).toBeGreaterThan(0);
 });
 test.skipIf(process.platform !== "linux")("CPU pressure holds a gate visibly, then starts it once after the release window", async () => {
   const f = cpuFixture({ manager: true });
@@ -134,11 +128,13 @@ test.skipIf(process.platform !== "linux")("CPU pressure holds a gate visibly, th
   writeFileSync(join(f.root, "pressure"), "some avg10=2.00 avg60=30.00 avg300=20.00 total=1\n");
   expect(await child.exited).toBe(0);
   const stderr = await new Response(child.stderr).text();
-  expect(stderr).toContain("gate-slot: Waiting for the CPU queue · 1st · up to 10 min");
+  expect(stderr).toContain("gate-slot: Waiting for measured CPU pressure");
+  expect(stderr.match(/Waiting for measured CPU pressure/g)).toHaveLength(1);
   expect(readFileSync(f.marker, "utf8")).toBe("run\n");
 }, 20_000);
-test.skipIf(process.platform !== "linux")("a failed pressure sample admits; the quotas still bound the gate", () => {
+test.skipIf(process.platform !== "linux")("a low pressure sample admits; the quotas still bound the gate", () => {
   const f = cpuFixture({ manager: true });
+  writeFileSync(join(f.root, "pressure"), "some avg10=0.00 total=1\n");
   const result = f.run({ DELEGATUS_CPU_PRESSURE: "on" });
   expect(result.status).toBe(0);
   expect(result.stderr).not.toContain("held");
@@ -168,8 +164,8 @@ test.skipIf(process.platform !== "linux")("the gate reads the folded LLV_ spelli
   const env: NodeJS.ProcessEnv = { ...f.env };
   delete env.DELEGATUS_AGENT_CPU;
   const result = spawnSync("/bin/bash", [join(import.meta.dir, "gate-slot.sh"), "/bin/bash", "-c", f.script], { env: { ...env, LLV_AGENT_CPU: "off" }, encoding: "utf8" });
-  expect(result.status).not.toBe(0);
-  expect(result.stderr).toContain("require a reachable user systemd manager");
+  expect(result.status).toBe(0);
+  expect(result.stderr).toContain("portable cleanup on linux is best effort");
   expect(spawnSync("/bin/bash", [join(import.meta.dir, "gate-slot.sh"), "/bin/true"], { env: { ...env, LLV_AGENT_CPU: "auto" }, encoding: "utf8" }).status).toBe(69);
 });
 test.skipIf(process.platform !== "linux")("pressure that rises while a gate waits for a slot holds it; it starts once after the release window", async () => {
@@ -192,7 +188,7 @@ test.skipIf(process.platform !== "linux")("pressure that rises while a gate wait
   writeFileSync(pressure, "some avg10=2.00 avg60=30.00 avg300=20.00 total=1\n");
   expect(await child.exited).toBe(0);
   const stderr = await new Response(child.stderr).text();
-  expect(stderr).toContain("gate-slot: Waiting for the CPU queue · 1st · up to 10 min");
+  expect(stderr).toContain("gate-slot: Waiting for measured CPU pressure");
   expect(readFileSync(f.marker, "utf8")).toBe("run\n");
 }, 20_000);
 // The work slice's ceiling is one machine-wide value: a caller pinned to fewer

@@ -48,10 +48,40 @@ otherwise under `$HOME/.cache/delegatus/signal-runs`. A host without
 `/usr/bin/python3` launches the engine unprotected. Container services retain
 their `bun-container` interpreter.
 
+### Tests and gates without host systemd
+
+A development container does not need a reachable user systemd manager to run
+`bun test`, `scripts/gate-slot.sh`, or `scripts/verify-viewer-runtime.ts`.
+Those entry points automatically select the portable owned runner and print a
+best-effort warning. Test state remains private and recorded child identities
+are stopped and checked by the independent guardian. Unlike a transient
+service cgroup, this fallback cannot see a descendant that detaches between
+guardian polls; use the host-systemd shape above when that stronger kernel
+lifetime guarantee is required. CPU placement remains a separate policy: set
+`DELEGATUS_AGENT_CPU=off` where the container cannot create a quota scope.
+
 The shims use `nsenter --no-fork` with Compose's shared host PID namespace.
 The managed child handle therefore remains the launcher through the host
 transition and UID drop. Entering the host cgroup namespace also keeps
 membership paths aligned with the host cgroup mount.
+
+## Claude launches under root
+
+Run the container as a non-root user, or explicitly set `IS_SANDBOX=1` in
+the Delegatus environment when running Claude as root in a container you
+trust. Claude refuses `bypassPermissions` under root without that setting.
+Delegatus forwards the supplied value to structured Claude launches and
+resumes; it never enables the setting automatically.
+
+For Compose root installs, put `IS_SANDBOX=1` in the configured `service.env`
+(selected by `DELEGATUS_ENV_FILE`), then recreate the affected services. For
+`docker run`, pass `--env IS_SANDBOX=1`. Compose defaults to a non-root UID;
+the image and Compose keep this opt-in unset because their privileged host
+access does not establish a sandbox for Claude.
+
+A refused root launch reports a canonical reason in the launch receipt and
+host state. Unknown stderr remains private; provider diagnostics can contain
+credentials.
 
 ## Production instance
 

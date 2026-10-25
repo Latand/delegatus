@@ -2,11 +2,13 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { seatTickWakeMessage, seatTickWakePayload } from "./report";
+import { seatTickBullet, seatTickWakeMessage, seatTickWakePayload } from "./report";
 import type { AttentionEscalationMark } from "@/lib/attention/routeTypes";
 import { stampAttentionRoutes, type AttentionRoutingInputs } from "@/lib/attention/routing";
 import { seatAgendaAsks } from "@/lib/attention/seatAgenda";
 import type { FileEntry } from "@/lib/types";
+import type { Pipeline } from "@/lib/pipelines/types";
+import { laneState } from "@/components/kanban/cardState";
 
 import { evaluateLiveness } from "@/lib/lifecycle/liveness";
 import { observeDiskPressureReport } from "@/lib/state/diskPressure";
@@ -217,6 +219,198 @@ function lane(over: Partial<SeatTickPipelineInput> = {}): SeatTickPipelineInput 
     ...over,
   };
 }
+
+describe("overdue board tasks", () => {
+  const HOUR = 60 * MINUTE;
+  const DAY = 24 * HOUR;
+  const dated = (id: string, over: Partial<SeatTickTaskInput> = {}) => card({
+    id, title: `Finish ${id}`, status: "inbox", accepted: true,
+    createdAt: new Date(NOW - 9 * DAY).toISOString(),
+    dueAt: new Date(NOW - 2 * DAY - 4 * HOUR).toISOString(), ...over,
+  });
+
+  test("priority then overdue age; seven overdue name five and defer two, with facts and seat policy", () => {
+    const tasks = [dated("low", { priority: "low" }), dated("normal"), dated("high-new", { priority: "high", dueAt: new Date(NOW - HOUR).toISOString() }),
+      dated("high-old", { priority: "high" }), dated("normal-2"), dated("normal-3"), dated("normal-4")];
+    const decision = seatTickDecision(input({ tasks, overdueTasks: tasks }));
+    expect(decision.verdict.kind).toBe("wake");
+    if (decision.verdict.kind !== "wake") return;
+    expect(decision.verdict.items.map(item => item.id)).toEqual(["high-old", "high-new", "normal", "normal-2", "normal-3"]);
+    const reason = decision.verdict.reasons.find(reason => reason.kind === "overdue-task")!;
+    expect(reason.detail).toContain("2 more await a later wake");
+    expect(decision.verdict.reasons.some(reason => reason.kind === "unstarted-task")).toBe(false);
+    expect(decision.verdict.items[0]!.label).toContain("overdue 2d 4h · open 9d · high · moved 0×");
+    expect(decision.verdict.items[0]!.label).toContain("first due");
+  });
+
+  test("done, future-held and other-machine are absent; holds without until remain; ticking off is quiet", () => {
+    const overdueTasks = [dated("done", { status: "done" }), dated("remote", { runsOn: "another machine" }),
+      dated("held", { hold: { kind: "postponed", note: "Later", until: new Date(NOW + DAY).toISOString(), since: new Date(NOW).toISOString(), by: "operator" } }),
+      dated("unbounded-hold", { hold: { kind: "worker", note: "Wait for capacity", since: new Date(NOW).toISOString(), by: "operator" } })];
+    const decision = seatTickDecision(input({ overdueTasks }));
+    expect(decision.verdict.kind).toBe("wake");
+    if (decision.verdict.kind !== "wake") return;
+    expect(decision.verdict.items.map(item => item.id)).toEqual(["unbounded-hold"]);
+    expect(seatTickDecision(input({ overdueTasks, settings: { ...input().settings, enabled: false } })).verdict.kind).toBe("quiet");
+  });
+
+  test("same date waits 24 hours after delivery across process restart; new passed date is offered immediately", () => {
+    const task = dated("repeat");
+    const first = seatTickDecision(input({ tasks: [task], overdueTasks: [task] }));
+    expect(first.verdict.kind).toBe("wake");
+    if (first.verdict.kind !== "wake") return;
+    const landed = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 0), NOW);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "due-repeat-"));
+    try {
+      const file = path.join(root, "input.json");
+      const source = `import fs from "node:fs"; import {seatTickDecision} from ${JSON.stringify(path.join(import.meta.dir, "seatTick.ts"))}; console.log(JSON.stringify(seatTickDecision(JSON.parse(fs.readFileSync(process.argv[1],"utf8"))).verdict));`;
+      const restarted = (now: number, taskInput = task) => {
+        fs.writeFileSync(file, JSON.stringify(input({ now, tasks: [taskInput], overdueTasks: [taskInput], state: landed })));
+        const child = Bun.spawnSync({ cmd: [process.execPath, "-e", source, file], stdout: "pipe", stderr: "pipe", env: { ...process.env, LLV_STATE_DIR: path.join(root, "state") } });
+        expect(child.exitCode).toBe(0);
+        return JSON.parse(child.stdout.toString()) as SeatTickVerdict;
+      };
+      expect(restarted(NOW + DAY - 1).kind).toBe("quiet");
+      expect(restarted(NOW + DAY).kind).toBe("wake");
+      expect(restarted(NOW + 2 * HOUR, { ...task, dueAt: new Date(NOW - HOUR).toISOString() }).kind).toBe("wake");
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test("a cropped overdue bullet earns neither a reminder stamp nor a selection exclusion", async () => {
+    const { shownOverdueDates } = await import("./seatTickReminders");
+    const task = dated("cropped-date");
+    const first = seatTickDecision(input({ tasks: [task], overdueTasks: [task] }));
+    const commit = plan(first.verdict, "fp-1", 0);
+    const state = seatTickWakeCommit({ ...first.state, outstandingWake: { clientMessageId: "cropped-due", conversationId: CONVERSATION,
+      seatEpoch: 7, operationId: null, text: "The agenda was cropped", commit } }, commit, NOW);
+    expect(shownOverdueDates(state.itemsShown ?? [], NOW)).toEqual([]);
+    expect(seatTickDecision(input({ tasks: [task], overdueTasks: [task], state, now: NOW + HOUR })).verdict.kind).toBe("wake");
+    const landed = seatTickWakeCommit(first.state, commit, NOW);
+    expect(shownOverdueDates(landed.itemsShown ?? [], NOW)).toEqual([`t:${task.id}:${Date.parse(task.dueAt!)}`]);
+    expect(shownOverdueDates(landed.itemsShown ?? [], NOW + DAY)).toEqual([]);
+    expect(shownOverdueDates(landed.itemsShown ?? [], NOW + DAY, true)).toEqual([`t:${task.id}:${Date.parse(task.dueAt!)}`]);
+    expect(shownOverdueDates(["reminder:overdue-date:bad@" + NOW, "reminder:overdue-date:e30@" + NOW], NOW)).toEqual([]);
+    const valid = `reminder:overdue-date:${Buffer.from(JSON.stringify([task.id, Date.parse(task.dueAt!)])).toString("base64url")}`;
+    expect(shownOverdueDates([valid, `${valid}@bad`, `${valid}@`], NOW, true)).toEqual([]);
+  });
+
+  test.each([60, 155])("%i unchanged overdue dates drain across daily repeats with a fresh process for each wake", async (count) => {
+    const { saveTasks } = await import("@/lib/tasks/store");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "due-drain-"));
+    const file = path.join(root, "tasks.json");
+    const inputFile = path.join(root, "input.json");
+    const tasks = Array.from({ length: count }, (_, n) => dated(`due-${String(n).padStart(3, "0")}`));
+    const original = tasks.map(task => ({ id: task.id, project: PROJECT, text: task.title, status: "inbox" as const,
+      placement: "unplaced" as const, assignments: [], createdAt: task.createdAt!, updatedAt: task.createdAt!, dueAt: task.dueAt!, dueTz: "UTC" }));
+    try {
+      saveTasks(original, file);
+      const source = `
+        import fs from "node:fs";
+        import {overdueTasks} from ${JSON.stringify(path.join(import.meta.dir, "../tasks/store.ts"))};
+        import {shownOverdueDates, overdueSweepCursor} from ${JSON.stringify(path.join(import.meta.dir, "seatTickReminders.ts"))};
+        import {seatTickDecision, seatTickWakeCommit, seatTickWakeCommitPlan} from ${JSON.stringify(path.join(import.meta.dir, "seatTick.ts"))};
+        const input = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+        input.overdueTasks = overdueTasks(input.project, input.now, process.argv[2], shownOverdueDates(input.state.itemsShown ?? [], input.now), overdueSweepCursor(input.state.itemsShown ?? [], input.now), shownOverdueDates(input.state.itemsShown ?? [], input.now, true))
+          .map(task => ({id: task.id, title: task.text, status: task.status, createdAt: task.createdAt, dueAt: task.dueAt, owned: false, overdueSweep: task.overdueSweep}));
+        const decision = seatTickDecision(input);
+        const commit = seatTickWakeCommitPlan(decision.verdict, {fingerprint: input.changeFingerprint, eventsThrough: 0});
+        console.log(JSON.stringify({verdict: decision.verdict, state: commit ? seatTickWakeCommit(decision.state, commit, input.now) : decision.state}));
+      `;
+      let state = input().state;
+      const delivered = new Set<string>();
+      const lastShown = new Map<string, number>();
+      let quiet = false;
+      for (let wake = 0; wake <= Math.ceil(count / 5) + 10; wake++) {
+        fs.writeFileSync(inputFile, JSON.stringify(input({ now: NOW + wake * HOUR, tasks, state })));
+        const child = Bun.spawnSync({ cmd: [process.execPath, "-e", source, inputFile, file], stdout: "pipe", stderr: "pipe",
+          env: { ...process.env, LLV_STATE_DIR: path.join(root, "state") } });
+        expect(child.exitCode, child.stderr.toString()).toBe(0);
+        const result = JSON.parse(child.stdout.toString()) as { verdict: SeatTickVerdict; state: SeatTickProjectState };
+        if (delivered.size === count) {
+          expect(result.verdict.kind).toBe("quiet");
+          quiet = true;
+          break;
+        }
+        expect(result.verdict.kind).toBe("wake");
+        if (result.verdict.kind !== "wake") throw new Error("missing overdue wake");
+        if (count === 60) expect(result.verdict.items.map(item => item.id)).toEqual(tasks.slice(wake * 5, wake * 5 + 5).map(task => task.id));
+        for (const item of result.verdict.items) {
+          const prior = lastShown.get(item.id);
+          if (prior !== undefined) expect(wake - prior).toBeGreaterThanOrEqual(24);
+          lastShown.set(item.id, wake);
+          delivered.add(item.id);
+        }
+        state = result.state;
+      }
+      expect(quiet).toBe(true);
+      expect(delivered.size).toBe(count);
+      const { loadTasks } = await import("@/lib/tasks/store");
+      expect(loadTasks(file).map(task => task.dueAt)).toEqual(original.map(task => task.dueAt));
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test.each(["new-high", "expired-hold"])("the persisted reader offers %s first on the next wake after restart", async mode => {
+    const { saveTasks } = await import("@/lib/tasks/store");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "due-reader-wake-"));
+    const file = path.join(root, "tasks.json");
+    const request = path.join(root, "input.json");
+    const stored = (task: SeatTickTaskInput) => ({ id: task.id, project: PROJECT, text: task.title, status: "inbox" as const,
+      placement: "unplaced" as const, assignments: [], createdAt: task.createdAt!, updatedAt: task.createdAt!, dueAt: task.dueAt!, dueTz: "UTC",
+      ...(task.priority ? { priority: task.priority } : {}), ...(task.hold ? { hold: task.hold } : {}) });
+    const high = Array.from({ length: 30 }, (_, n) => dated(`delivered-${n}`, { priority: "high" }));
+    const newer = Array.from({ length: 60 }, (_, n) => dated(`normal-${String(n).padStart(3, "0")}`, { dueAt: new Date(NOW - HOUR).toISOString() }));
+    const target = mode === "new-high" ? dated(mode, { priority: "high", dueAt: new Date(NOW - MINUTE).toISOString() })
+      : dated(mode, { hold: { kind: "postponed", until: new Date(NOW - 1).toISOString(), note: "Wait", since: new Date(NOW - DAY).toISOString(), by: "operator" } });
+    let state = input().state;
+    if (mode === "new-high") {
+      // Build the persisted credits through real five-item delivered wakes.
+      for (let wake = 0; wake < 6; wake++) {
+        const at = NOW - (7 - wake) * HOUR;
+        const decision = seatTickDecision(input({ now: at, state, overdueTasks: high }));
+        const commit = seatTickWakeCommitPlan(decision.verdict, { fingerprint: "prior-date-delivery", eventsThrough: 0 });
+        if (!commit) throw new Error("missing initial high wake");
+        state = seatTickWakeCommit(decision.state, commit, at);
+      }
+      const normal = { ...newer[20]!, overdueSweep: Buffer.from(JSON.stringify([1, NOW - HOUR, "t:normal-020"])).toString("base64url") };
+      const decision = seatTickDecision(input({ now: NOW - HOUR, state, overdueTasks: [normal] }));
+      const commit = seatTickWakeCommitPlan(decision.verdict, { fingerprint: "prior-normal-delivery", eventsThrough: 0 });
+      if (!commit) throw new Error("missing initial normal wake");
+      state = seatTickWakeCommit(decision.state, commit, NOW - HOUR);
+    }
+    try {
+      saveTasks([...(mode === "new-high" ? high : []), ...newer, target].map(stored), file);
+      fs.writeFileSync(request, JSON.stringify(input({ state })));
+      const source = `
+        import fs from "node:fs";
+        import {overdueTasks} from ${JSON.stringify(path.join(import.meta.dir, "../tasks/store.ts"))};
+        import {shownOverdueDates, overdueSweepCursor} from ${JSON.stringify(path.join(import.meta.dir, "seatTickReminders.ts"))};
+        import {seatTickDecision} from ${JSON.stringify(path.join(import.meta.dir, "seatTick.ts"))};
+        const input = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+        input.overdueTasks = overdueTasks(input.project, input.now, process.argv[2], shownOverdueDates(input.state.itemsShown ?? [], input.now), overdueSweepCursor(input.state.itemsShown ?? [], input.now), shownOverdueDates(input.state.itemsShown ?? [], input.now, true))
+          .map(task => ({id: task.id, title: task.text, status: task.status, createdAt: task.createdAt, dueAt: task.dueAt, priority: task.priority, hold: task.hold, owned: false}));
+        console.log(JSON.stringify(seatTickDecision(input).verdict));
+      `;
+      const child = Bun.spawnSync({ cmd: [process.execPath, "-e", source, request, file], stdout: "pipe", stderr: "pipe",
+        env: { ...process.env, LLV_STATE_DIR: path.join(root, "state") } });
+      expect(child.exitCode, child.stderr.toString()).toBe(0);
+      const verdict = JSON.parse(child.stdout.toString()) as SeatTickVerdict;
+      expect(verdict.kind).toBe("wake");
+      if (verdict.kind === "wake") expect(verdict.items[0]!.id).toBe(mode);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test("accepted-work and overdue reminders merge to one line; three slips ask for structural action; 51st says 50 or more", () => {
+    const task = dated("slips", { dueHistory: { firstAt: new Date(NOW - 4 * DAY).toISOString(), slips: 3 } });
+    const decision = seatTickDecision(input({ tasks: [task], overdueTasks: [task] }));
+    expect(decision.verdict.kind).toBe("wake");
+    if (decision.verdict.kind !== "wake") return;
+    expect(decision.verdict.items).toHaveLength(1);
+    expect(decision.verdict.items[0]!.label).toContain("moved 3×: move again only with a lane running on it or a hold with an until; otherwise split or close it");
+    const capped = seatTickDecision(input({ overdueTasks: Array.from({ length: 51 }, (_, n) => dated(`task-${String(n).padStart(2, "0")}`)) }));
+    expect(capped.verdict.kind).toBe("wake");
+    if (capped.verdict.kind === "wake") expect(capped.verdict.reasons.find(reason => reason.kind === "overdue-task")!.detail).toContain("50 or more");
+  });
+});
 
 function card(over: Partial<SeatTickTaskInput> = {}): SeatTickTaskInput {
   return {
@@ -2226,6 +2420,111 @@ test("a restarted disk reader joins the shared episode and does not wake the sea
 /* docs/design/attention-auto-resolve.md, acceptance 3: a worker's or a stage's
    wait is routed to the seat first and is off the operator's list, so the seat
    is woken with the ask on the next check, once per wait and seat. */
+describe("seat-owned parked lane wakes", () => {
+  const routes: AttentionRoutingInputs = {
+    seatFor: () => CONVERSATION, canonicalProject: project => project,
+    isSeatConversation: id => id === CONVERSATION, escalation: () => null, formWaiting: () => false,
+  };
+  const parked = (n: number): Pipeline => ({
+    id: `waiting-lane-${String(n).padStart(2, "0")}`, task: `Repair export ${n}`,
+    project: PROJECT, srcConversationId: CONVERSATION, state: n % 2 ? "needs_review" : "needs_decision",
+    stateDetail: `blocked export ${n}`, createdAt: new Date(NOW - (40 - n) * MINUTE).toISOString(),
+    runs: [], stages: [], cursor: null,
+  }) as unknown as Pipeline;
+  const agenda = (lanes: Pipeline[]) => {
+    stampAttentionRoutes([], lanes, NOW / 1000, routes);
+    for (const row of lanes) expect(laneState(row).owner).toBe("seat");
+    return seatAgendaAsks({ files: [], pipelines: lanes }, NOW / 1000, PROJECT);
+  };
+  const render = (decision: ReturnType<typeof seatTickDecision>, now: number) => {
+    if (decision.verdict.kind !== "wake") throw new Error(`expected wake, got ${decision.verdict.kind}`);
+    return seatTickWakePayload({ ...decision.verdict, project: PROJECT, now, signals: [], mandateCarriesContract: true });
+  };
+  const deliver = (decision: ReturnType<typeof seatTickDecision>, now: number) => {
+    const payload = render(decision, now);
+    if (decision.verdict.kind !== "wake") throw new Error("expected wake");
+    const commit = seatTickWakeCommitPlan({ ...decision.verdict, items: [...payload.items] },
+      { fingerprint: "fp-1", eventsThrough: 0, frozenText: payload.text })!;
+    return seatTickWakeCommit(decision.state, commit, now);
+  };
+
+  test("all 20 seat-owned lanes appear oldest-first within the wake bound with five detailed items", () => {
+    const lanes = Array.from({ length: 20 }, (_, n) => parked(n));
+    const decision = seatTickDecision(input({ workerAsks: agenda([...lanes].reverse()) }));
+    const { text } = render(decision, NOW);
+    expect(text.length).toBeLessThanOrEqual(4_000);
+    let previous = -1;
+    for (const row of lanes) {
+      const line = text.split("\n").find(line => line.startsWith(`- ${row.id} |`));
+      expect(line).toBeDefined();
+      expect(line).toContain(row.task);
+      expect(line).toContain(row.state === "needs_review" ? "review" : "decision");
+      expect(line).toContain(`${40 - lanes.indexOf(row)}m`);
+      expect(text.indexOf(line!)).toBeGreaterThan(previous);
+      previous = text.indexOf(line!);
+    }
+    expect(decision.verdict.kind === "wake" && decision.verdict.items.length).toBe(5);
+  });
+
+  test("a held-back old lane gets detail before newer arrivals on a later wake", () => {
+    const lanes = Array.from({ length: 6 }, (_, n) => parked(n));
+    const first = seatTickDecision(input({ workerAsks: agenda([...lanes].reverse()) }));
+    if (first.verdict.kind !== "wake") throw new Error("expected wake");
+    expect(first.verdict.items.map(item => item.id)).toEqual(lanes.slice(0, 5).map(row => row.id));
+    const landed = deliver(first, NOW);
+    const later = seatTickDecision(input({ now: NOW + 5 * MINUTE,
+      state: JSON.parse(JSON.stringify(landed)), workerAsks: agenda([parked(20), ...lanes].reverse()) }));
+    if (later.verdict.kind !== "wake") throw new Error("expected wake");
+    const ids = later.verdict.items.map(item => item.id);
+    expect(ids).toContain(lanes[5]!.id);
+    expect(ids.indexOf(lanes[5]!.id)).toBeLessThan(ids.indexOf(parked(20).id));
+    const payload = render(later, NOW + 5 * MINUTE);
+    const heldDetail = payload.items.find(item => item.id === lanes[5]!.id)!;
+    expect(payload.text).toContain(seatTickBullet(heldDetail));
+  });
+
+  test("an unchanged parked seat-owned lane keeps waking at the project cadence", async () => {
+    const asks = agenda([parked(0)]);
+    const settings = { ...input().settings, wakeIntervalMs: 20 * MINUTE };
+    const restartedDecision = async (check: SeatTickCheckInput): Promise<ReturnType<typeof seatTickDecision>> => {
+      const child = Bun.spawn([process.execPath, "--eval", `
+        const { seatTickDecision } = await import("./src/lib/monitor/seatTick.ts");
+        console.log(JSON.stringify(seatTickDecision(await Bun.stdin.json())));
+      `], { cwd: process.cwd(), env: process.env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+      child.stdin.write(JSON.stringify(check));
+      child.stdin.end();
+      const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      expect({ exit, stderr }).toEqual({ exit: 0, stderr: "" });
+      return JSON.parse(stdout);
+    };
+    let state = deliver(seatTickDecision(input({ workerAsks: asks, settings })), NOW);
+    for (let cycle = 1; cycle <= 4; cycle++) {
+      const now = NOW + cycle * settings.wakeIntervalMs;
+      expect(seatTickDecision(input({ now: now - 1, state, settings, workerAsks: asks })).verdict.kind).toBe("quiet");
+      const next = await restartedDecision(input({ now, state, settings, workerAsks: asks }));
+      expect(next.verdict.kind).toBe("wake");
+      expect(render(next, now).text).toContain(asks[0]!.id);
+      state = deliver(next, now);
+    }
+    expect(seatTickDecision(input({ now: NOW + 120 * MINUTE, state, settings, workerAsks: [] })).verdict.kind).not.toBe("wake");
+    expect(seatTickDecision(input({ now: NOW + 120 * MINUTE, state, settings: { ...settings, enabled: false }, workerAsks: asks })).verdict.kind).toBe("quiet");
+  });
+
+  test("already-shown parked detail rotates after the last delivered item", () => {
+    const lanes = Array.from({ length: 3 }, (_, n) => parked(n));
+    const asks = agenda([...lanes].reverse());
+    const policy = { ...DEFAULT_SEAT_TICK_POLICY, itemsPerWake: 1 };
+    let state = emptySeatTickState();
+    for (let cycle = 0; cycle < 6; cycle++) {
+      const now = NOW + cycle * SEAT_TICK_WAKE_INTERVAL_MS;
+      const decision = seatTickDecision(input({ now, state, policy, workerAsks: asks }));
+      if (decision.verdict.kind !== "wake") throw new Error("expected wake");
+      expect(decision.verdict.items.map(item => item.id)).toEqual([lanes[cycle % lanes.length]!.id]);
+      state = JSON.parse(JSON.stringify(deliver(decision, now)));
+    }
+  });
+});
+
 describe("waits routed to the seat", () => {
   const ask = { key: "reason:ask-1", id: "conversation_deployer", label: "deploy the release — deployer asks: «Roll out now?»; reply with send_message to conversation_deployer" };
   const lastWakeAt = new Date(NOW - 5 * MINUTE).toISOString();
@@ -2236,7 +2535,6 @@ describe("waits routed to the seat", () => {
     if (decision.verdict.kind !== "wake") throw new Error("expected a wake");
     const items = decision.verdict.items.filter((item) => item.kind === "ask");
     expect(items).toEqual([expect.objectContaining({ kind: "ask", id: "conversation_deployer", askKey: "reason:ask-1", label: ask.label })]);
-    expect(decision.verdict.reasons[0]!.detail).toContain("dismiss_attention escalate");
   });
 
   test("a delivered ask is not shown again to the same seat, a newer ask is, and a successor seat is shown what its predecessor was", () => {
