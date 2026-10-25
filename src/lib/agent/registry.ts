@@ -11813,11 +11813,11 @@ export function agentRegistry(): AgentRegistry {
   return registryProcessState.__llvAgentRegistry;
 }
 
-/** Startup opens the entire constructor under one asynchronous lock deadline.
+/** Open the entire constructor under one asynchronous lock deadline.
     A failed constructor closes its connection and leaves the singleton unset. */
-export async function prepareAgentRegistry(signal?: AbortSignal): Promise<AgentRegistry> {
+export async function prepareAgentRegistry(signal?: AbortSignal, open: () => AgentRegistry = agentRegistry): Promise<AgentRegistry> {
   return waitForStateLock("registry.prepare.open", () =>
-    stateLockAttempt("registry.prepare.open", () => agentRegistry()), { signal });
+    stateLockAttempt("registry.prepare.open", open), { signal });
 }
 
 /** Open the cold session facade and answer from keyed rows. The one admitted
