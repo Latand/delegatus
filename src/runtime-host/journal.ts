@@ -1265,6 +1265,18 @@ export class RuntimeJournal {
         producer: { kind: "runtime-effect", eventKey: `operation:${operationId}:receipt:${previous.revision + 1}:${status}`, hostEpoch: Number(this.meta("host_epoch")) },
         payload: next as unknown as Record<string, unknown>,
       }));
+      /* The panel refetches its queue only on a session-scoped event, and the
+         operation-scoped receipt above never reaches it. A proof that settles
+         an entry through its operation tells the session once, keyed by the
+         entry and its revision, so a replayed proof appends nothing. */
+      if (nativeEntry && nativeTransition?.phase === "proven") {
+        this.appendInTransaction(normalizeRuntimeEventInput({
+          scope: { type: "session", id: nativeEntry.conversationId },
+          kind: "native-queue-changed",
+          producer: { kind: "runtime-effect", eventKey: `native-queue:${nativeEntry.entryId}:proven:${nativeEntry.revision}`, hostEpoch: Number(this.meta("host_epoch")) },
+          payload: { conversationId: nativeEntry.conversationId, threadId: nativeEntry.binding.threadId, entryId: nativeEntry.entryId, settledBy: "canonical-proof" },
+        }));
+      }
       const committed = { ...next, revision: event.revision };
       this.upsertEntity("operation", operationId, event.revision, committed, event.seq);
       if (completing) this.appendCompletionConsequences(command, committed, operationId);

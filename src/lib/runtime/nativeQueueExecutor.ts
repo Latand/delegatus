@@ -243,22 +243,28 @@ export class NativeQueueExecutor {
         }
       }
     }
+    let pending = false;
     for (const entry of records) {
       if (entry.state === "removed") {
-        const operation = await client.operationStatus(entry.entryId);
-        /* A compacted add has no receipt left to fail. The removed entry is the
-           discard record, and asking for the transition anyway threw on every
-           pass, so no later entry of this conversation could ever converge. */
-        if (operation && operation.receipt.status !== "failed") await client.nativeQueueTransition(entry.entryId, { phase: "removed" });
-        await this.port.settled?.(entry);
+        /* One removed entry the journal refuses cannot hold up the proofs of the
+           entries behind it; it stays for the next pass. */
+        try {
+          const operation = await client.operationStatus(entry.entryId);
+          /* A compacted add has no receipt left to fail. The removed entry is the
+             discard record, and asking for the transition anyway threw on every
+             pass, so no later entry of this conversation could ever converge. */
+          if (operation && operation.receipt.status !== "failed") await client.nativeQueueTransition(entry.entryId, { phase: "removed" });
+          await this.port.settled?.(entry);
+        } catch {
+          pending = true;
+        }
       }
     }
     const entries = records.filter(entry =>
       !entry.proof && entry.state !== "refused" && entry.state !== "removed" && sameNativeQueueBinding(entry.binding, binding));
-    if (!entries.length) return false;
+    if (!entries.length) return pending;
     const proofs = host.nativeQueue.evidenceBatch ? await host.nativeQueue.evidenceBatch(entries)
       : await Promise.all(entries.map(entry => host.nativeQueue!.evidence(entry)));
-    let pending = false;
     for (let index = 0; index < entries.length; index++) {
       const entry = entries[index]!;
       const proof = proofs[index];

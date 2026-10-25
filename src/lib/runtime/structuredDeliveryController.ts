@@ -792,7 +792,10 @@ export async function bindStructuredDeliveryQueue(
   let deferredStartupConversations = new Set<string>();
   let scheduleAutomaticRetry = () => {};
   let requestDrain = () => {};
-  const nativeReconciliations = new Map<string, Promise<void>>();
+  /* A canonical read that never answers must not hold the conversation's proof
+     forever: past this bound a later pass starts its own read. */
+  const NATIVE_RECONCILE_DEADLINE_MS = 60_000;
+  const nativeReconciliations = new Map<string, { startedAt: number; read: Promise<void> }>();
   const nativeRetries = new Map<string, RetryBackoff>();
   const seatRecipient = (conversationId: string) => {
     const snapshot = registry.conversationDeliverySnapshot({ conversationId });
@@ -999,15 +1002,23 @@ export async function bindStructuredDeliveryQueue(
         for (const [key] of readyHosts) {
           const entry = entries[key];
           const conversationId = entry ? conversationIdForEntry(registry, entry) : null;
-          if (!conversationId || nativeReconciliations.has(conversationId)) continue;
+          if (!conversationId) continue;
+          const running = nativeReconciliations.get(conversationId);
+          if (running) {
+            if (Date.now() - running.startedAt < NATIVE_RECONCILE_DEADLINE_MS) continue;
+            console.warn("[structured delivery] native queue reconcile exceeded its deadline; starting another", { conversationId });
+          }
           const retry = nativeRetries.get(key) ?? new RetryBackoff();
           nativeRetries.set(key, retry);
           // Canonical reads cannot hold up interrupt/answer or other sends.
-          const read = nativeQueueExecutor.reconcile(conversationId)
+          const read: Promise<void> = nativeQueueExecutor.reconcile(conversationId)
             .then(pending => { retry.reset(); if (pending) scheduleAutomaticRetry(); })
-            .catch(() => { retry.fail(); scheduleAutomaticRetry(); })
-            .finally(() => { nativeReconciliations.delete(conversationId); });
-          nativeReconciliations.set(conversationId, read);
+            .catch(error => {
+              console.warn("[structured delivery] native queue reconcile failed", { conversationId, error: error instanceof Error ? error.message : String(error) });
+              retry.fail(); scheduleAutomaticRetry();
+            })
+            .finally(() => { if (nativeReconciliations.get(conversationId)?.read === read) nativeReconciliations.delete(conversationId); });
+          nativeReconciliations.set(conversationId, { startedAt: Date.now(), read });
         }
       },
       ...(typeof client.events === "function" ? { events: (afterEventSeq: number) => client.events(afterEventSeq) } : {}),

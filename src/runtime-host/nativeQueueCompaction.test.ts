@@ -617,3 +617,56 @@ test("the compacted-proof settlement crosses the production socket with its own 
     journal.close();
   }
 });
+
+test("a canonical proof through the operation tells the session once, only for the entry it proves", async () => {
+  const filename = journalFile();
+  const journal = open(filename);
+  nativeSession(journal);
+  const h = harness(journal);
+  // Two entries with the same words and different ids; only the first is consumed.
+  for (const id of ["op-consumed", "op-still-queued"]) {
+    const add = nativeCommand(id, { text: "same words" });
+    journal.executeOperation(add);
+    await h.executor.execute(add);
+  }
+  const seqBefore = tailSeq(filename);
+  h.canonical(entry => entry.entryId === "op-consumed" ? h.proofFor(entry.entryId) : null);
+  expect(await h.executor.reconcile(conversationId)).toBeTrue();
+
+  const states = Object.fromEntries(journal.nativeQueueRead(conversationId).map(row => [row.entryId, row.state]));
+  expect(states).toEqual({ "op-consumed": "delivered", "op-still-queued": "queued" });
+  const changed = eventsAfter(filename, seqBefore).filter(event => event.kind === "native-queue-changed");
+  expect(changed.map(event => [event.scope, (event.payload as { entryId: string }).entryId])).toEqual([[`session:${conversationId}`, "op-consumed"]]);
+
+  // Proof seen again by a later pass appends nothing more.
+  const seqAfter = tailSeq(filename);
+  await h.executor.reconcile(conversationId);
+  expect(eventsAfter(filename, seqAfter).filter(event => event.kind === "native-queue-changed")).toEqual([]);
+  journal.close();
+});
+
+test("a removed entry whose receipt cannot be read does not hold back the proof of a consumed entry behind it", async () => {
+  const journal = open(journalFile());
+  nativeSession(journal);
+  const h = harness(journal);
+  for (const id of ["op-removed", "op-consumed"]) {
+    const add = nativeCommand(id);
+    journal.executeOperation(add);
+    await h.executor.execute(add);
+  }
+  const del = nativeCommand("op-delete", { action: "delete", entryId: "op-removed", expectedRevision: 1 });
+  journal.executeOperation(del);
+  await h.executor.execute(del);
+  expect(journal.nativeQueueRead(conversationId).find(row => row.entryId === "op-removed")?.state).toBe("removed");
+
+  h.canonical(entry => h.proofFor(entry.entryId));
+  const real = h.client.operationStatus;
+  h.client.operationStatus = async id => {
+    if (id === "op-removed") throw new Error("receipt read failed");
+    return real(id);
+  };
+  // The failed read leaves the pass pending, and the consumed entry still settles.
+  expect(await h.executor.reconcile(conversationId)).toBeTrue();
+  expect(journal.nativeQueueRead(conversationId).find(row => row.entryId === "op-consumed")?.state).toBe("delivered");
+  journal.close();
+});
