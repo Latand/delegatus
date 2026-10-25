@@ -1,7 +1,4 @@
 import { createHash } from "node:crypto";
-import { listCodexAccounts } from "@/lib/accounts/codex";
-import { allowedAccountIdsForProject } from "@/lib/accounts/projectBindings";
-import { tierOffers } from "@/lib/accounts/codexServiceTiers";
 import type { CreatePipelineRequest, Pipeline, PipelineRefresh } from "@/lib/pipelines/types";
 import type { MergeOnReviewSetting } from "@/lib/projects/settings";
 import { mergeEligible } from "./autoMerge";
@@ -53,24 +50,14 @@ export function refreshWasRequested(lane: Pipeline, pipelines: readonly Pipeline
     && merge.prNumber === lane.merge!.prNumber && merge.refresh?.base === base && merge.refresh.head === head);
 }
 
-/** Replay keeps the durable reservation facts and rechecks current tier availability. */
-export function refreshRequest(lane: Pipeline, legacyBase = "main", catalog = {
-  accounts: listCodexAccounts() as readonly { id: string; home: string }[],
-  allowed: allowedAccountIdsForProject(lane.project, "codex"),
-}): CreatePipelineRequest {
+/** Account and tier are selected against live capacity at each stage launch. */
+export function refreshRequest(lane: Pipeline, legacyBase = "main"): CreatePipelineRequest {
   const merge = lane.merge!;
   const refresh = merge.refresh!;
   const target = lane.delivery!.target;
   const base = refresh.baseBranch ?? legacyBase;
   const facts = `PR #${merge.prNumber}; finished lane ${lane.id}; base ${base} at ${refresh.base}; reviewed head ${refresh.head}; delivery ${target.branch}.`;
-  const model = "gpt-6.1-sol";
-  const accounts = catalog.accounts.filter(account => catalog.allowed === null || catalog.allowed.includes(account.id));
-  // Prefer ultrafast anywhere in the allowed pool, then priority. A missing
-  // tier catalogue must not prevent the merge resolution from being refreshed.
-  const tier = ["ultrafast", "priority"].map(serviceTier => ({
-    serviceTier, account: tierOffers(accounts, model, serviceTier).offering[0],
-  })).find(choice => choice.account);
-  const runtime = { engine: "codex" as const, model, effort: "high", ...(tier ?? {}) };
+  const runtime = { engine: "codex" as const, model: "gpt-6.1-sol", effort: "high", preferredServiceTier: "ultrafast" };
   const merger = { roleId: "merger" as const, params: { prs: `${merge.prNumber}@${refresh.head}` } };
   return {
     task: `#${merge.prNumber} ${lane.task.split("\n")[0]!.slice(0, 60)}: merge current ${base}, review the merge resolution only`,

@@ -1338,24 +1338,15 @@ test("persisted refresh reservations replay only within the head limit", async (
   expect(h.merge("queued-1")!.refresh!.pipelineId).toBeNull();
 });
 
-test.each([true, false])("refresh stages select an allowed fast account (ultrafast=%s)", async ultrafast => {
+test("refresh stages defer tier and account selection to live launch capacity", async () => {
   const { refreshRequest } = await import("./autoRefresh");
   const value = finished();
   value.merge = { prNumber: 11, refresh: { base: MAIN_1, head: HEAD_A } } as PipelineMerge;
-  const accounts = ["account-a", "account-b", "account-c"].map((id, index) => {
-    const home = path.join(sandbox, `${id}-${ultrafast}`);
-    fs.mkdirSync(home, { recursive: true });
-    fs.writeFileSync(path.join(home, "models_cache.json"), JSON.stringify({ models: [{
-      slug: "gpt-6.1-sol", additional_speed_tiers: index === 2 ? ["ultrafast"] : index === 1 ? [ultrafast ? "ultrafast" : "fast"] : [],
-    }] }));
-    return { id, home };
-  });
-  const request = refreshRequest(value, "main", { accounts, allowed: ["account-a", "account-b"] });
+  const request = refreshRequest(value);
   for (const stage of request.stages) {
-    expect(stage).toMatchObject({ account: "account-b", serviceTier: ultrafast ? "ultrafast" : "priority",
-      engine: "codex", model: "gpt-6.1-sol", effort: "high" });
+    expect(stage).toMatchObject({ preferredServiceTier: "ultrafast", engine: "codex", model: "gpt-6.1-sol", effort: "high" });
+    expect(stage.account).toBeUndefined();
+    expect(stage.serviceTier).toBeUndefined();
   }
   expect(request.stages.map(stage => stage.role?.roleId)).toEqual(["merger", "reviewer", "merger"]);
-  const restricted = refreshRequest(value, "main", { accounts, allowed: ["account-a"] });
-  expect(restricted.stages.every(stage => !stage.serviceTier && !stage.account)).toBe(true);
 });

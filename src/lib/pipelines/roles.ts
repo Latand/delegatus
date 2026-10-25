@@ -111,11 +111,11 @@ export function validatePipelineRoleParams(roleId: string, params: Record<string
 }
 
 export function resolvePipelineRole(
-  stage: Pick<PipelineStage, "role" | "engine" | "model" | "effort" | "serviceTier" | "access">,
+  stage: Pick<PipelineStage, "role" | "engine" | "model" | "effort" | "serviceTier" | "preferredServiceTier" | "access">,
   kind: PipelineStageKind,
   lookup?: PipelineRoleLookup | null,
   project = "",
-): { role?: EffectivePipelineRole; error?: string; field?: "model" | "serviceTier" } {
+): { role?: EffectivePipelineRole; error?: string; field?: "model" | "serviceTier" | "preferredServiceTier" } {
   const ref = stage.role;
   if (ref !== undefined && (!ref || typeof ref !== "object" || Array.isArray(ref))) {
     return { error: "stage role must be an object" };
@@ -157,11 +157,15 @@ export function resolvePipelineRole(
   const engine = stage.engine ?? registered?.engine ?? builder.engine;
   const engineRefusal = roleEngineRefusal(roleId, engine);
   if (engineRefusal) return { error: engineRefusal };
+  if (stage.preferredServiceTier !== undefined && engine !== "codex") {
+    return { error: "preferredServiceTier is Codex only", field: "preferredServiceTier" };
+  }
   const model = value(stage.model, registered?.model ?? builder.model);
   const effort = value(stage.effort, registered?.effort ?? builder.effort);
   const row = registered ?? builder;
   const tier = codexLaunchTier({ engine, model, fast: undefined, serviceTier: stage.serviceTier,
-    roleDefault: row.serviceTier, roleDefaultApplies: engine === row.engine && model === row.model });
+    roleDefault: stage.preferredServiceTier ?? row.serviceTier,
+    roleDefaultApplies: stage.preferredServiceTier !== undefined || (engine === row.engine && model === row.model) });
   if ("error" in tier) return { error: tier.error, field: "serviceTier" };
   if (model) {
     const validation = validateLaunchModel(engine, model);
@@ -187,6 +191,7 @@ export function resolvePipelineRole(
       model,
       effort,
       ...(tier.tier ? { serviceTier: tier.tier, serviceTierSource: tier.required ? "explicit" as const : "role-default" as const } : {}),
+      ...(stage.preferredServiceTier ? { preferredServiceTier: stage.preferredServiceTier } : {}),
       access: kind === "review-loop" || isReadOnlyLockedRole(roleId) ? "read-only" : stage.access ?? registered?.access ?? builder.access ?? "read-write",
       promptScaffold,
     },

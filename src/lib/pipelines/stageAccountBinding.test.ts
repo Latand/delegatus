@@ -17,7 +17,7 @@ fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
 fs.mkdirSync(process.env.HOME, { recursive: true });
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
-const { accountManager } = await import("@/lib/accounts/manager");
+const { accountManager, ProjectAccountRefusedError } = await import("@/lib/accounts/manager");
 const { createPipelineFromRequest, defaultPipelinePorts, patchPipeline } = await import("./engine");
 const { loadPipelines, savePipelines } = await import("./store");
 const { stageDigest } = await import("./stageDigest");
@@ -622,4 +622,76 @@ test("create_pipeline accepts ultrafast from an allowed legacy model catalogue",
   expect(result.error).toBeUndefined();
   expect(result.pipeline?.stages[0]?.effectiveRole.serviceTier).toBe("ultrafast");
   expect(result.pipeline?.stages[0]?.account).not.toBe(accountA.id);
+});
+
+test("automatic ultrafast launch falls back to available priority inside the allowed pool", async () => {
+  const { createManagedCodexAccount, listCodexAccounts } = await import("@/lib/accounts/codex");
+  const { agentRegistry } = await import("@/lib/agent/registry");
+  const { selectProjectAccount } = await import("@/lib/accounts/projectSelection");
+  const accountA = createManagedCodexAccount("priority account");
+  const accountB = createManagedCodexAccount("exhausted ultrafast account");
+  const excluded = createManagedCodexAccount("excluded ultrafast account");
+  for (const [account, tiers] of [[accountA, ["priority"]], [accountB, ["ultrafast"]], [excluded, ["ultrafast"]]] as const) {
+    fs.writeFileSync(path.join(account.home, "auth.json"), "{}");
+    fs.writeFileSync(path.join(account.home, "models_cache.json"), JSON.stringify({ models: [{
+      slug: "gpt-6.1-sol", service_tiers: tiers.map(id => ({ id })),
+    }] }));
+  }
+  const ports = portsAllowing([accountA.id, accountB.id]);
+  const now = Date.now();
+  seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [accountA, accountB].map(account => ({
+    engine: "codex", accountId: account.id, project: ATLAS, createdAt: new Date(now).toISOString(),
+  })) });
+  const accounts = listCodexAccounts().map(account => ({ id: account.id, authPresent: true }));
+  const observations = [accountA, accountB, excluded].map(account => ({ engine: "codex" as const, accountId: account.id,
+    authenticated: true, authCheckedAt: new Date(now).toISOString(), observedAt: new Date(now).toISOString(), bootId: "tier-fallback",
+    provenance: { source: "live" as const, reason: null, staleSince: null },
+    limits: { session: null, weekly: { usedPercent: account.id === accountB.id ? 100 : 25, resetsAt: now / 1000 + 86400 },
+      plan: "pro", capturedAt: now / 1000, credits: { hasCredits: true, balance: "10", unlimited: false } },
+  }));
+  const resolve = spyOn(accountManager, "resolveProjectSpawn").mockImplementation((engine, request) => {
+    const selected = selectProjectAccount({ ...request, engine, accounts, observations, now,
+      bindings: [accountA, accountB].map(account => ({ engine: "codex" as const, accountId: account.id, project: ATLAS, createdAt: new Date(now).toISOString() })) });
+    return selected.kind === "available"
+      ? { kind: "available", account: accountManager.resolveSpawn("codex", selected.accountId) }
+      : selected;
+  });
+  const reserved: string[] = [];
+  const input = { ...spawnInput(null), role: { ...spawnInput(null).role, engine: "codex" as const, model: "gpt-6.1-sol",
+    effort: "high", serviceTier: "ultrafast", serviceTierSource: "role-default" as const,
+    preferredServiceTier: "ultrafast" }, requireAccountCapacity: true };
+  try {
+    await expect(defaultPipelinePorts().spawnAgent(input, reservation => { reserved.push(reservation.launchId); })).rejects.toThrow("runtime host");
+    expect(resolve.mock.calls).toHaveLength(2);
+    expect(resolve.mock.calls[0]?.[1]?.unavailableIds).toContain(accountA.id);
+    expect(resolve.mock.calls[0]?.[1]?.unavailableIds).not.toContain(excluded.id);
+    expect(resolve.mock.calls[1]?.[1]?.unavailableIds).toContain(accountB.id);
+    expect(resolve.mock.calls[1]?.[1]?.unavailableIds).not.toContain(excluded.id);
+    const receipt = agentRegistry().readOnlySnapshot().receipts[reserved[0]!]!;
+    expect(receipt.accountId).toBe(accountA.id);
+    expect(receipt.launchProfile).toMatchObject({ serviceTier: "priority", fast: true });
+    expect(receipt.launchProfile).not.toMatchObject({ serviceTier: "ultrafast" });
+
+    resolve.mockClear();
+    observations.find(item => item.accountId === accountA.id)!.limits!.weekly!.usedPercent = 100;
+    const reservedCount = reserved.length;
+    await expect(defaultPipelinePorts().spawnAgent({ ...input, clientAttemptId: "priority-exhausted" }, () => {}))
+      .rejects.toThrow(ProjectAccountRefusedError);
+    expect(resolve.mock.calls).toHaveLength(2);
+    expect(resolve.mock.calls[1]?.[1]?.model).toBe("gpt-6.1-sol");
+    expect(reserved).toHaveLength(reservedCount);
+
+    resolve.mockClear();
+    observations.find(item => item.accountId === accountA.id)!.limits!.weekly!.usedPercent = 25;
+    fs.writeFileSync(path.join(accountA.home, "models_cache.json"), JSON.stringify({ models: [{
+      slug: "gpt-6.1-sol", service_tiers: [],
+    }] }));
+    await expect(defaultPipelinePorts().spawnAgent({ ...input, clientAttemptId: "standard-fallback" }, reservation => { reserved.push(reservation.launchId); }))
+      .rejects.toThrow("runtime host");
+    expect(resolve.mock.calls).toHaveLength(2);
+    expect(resolve.mock.calls[1]?.[1]?.unavailableIds).toEqual([]);
+    const standardReceipt = agentRegistry().readOnlySnapshot().receipts[reserved.at(-1)!]!;
+    expect(standardReceipt.accountId).toBe(accountA.id);
+    expect(standardReceipt.launchProfile.serviceTier).toBe("standard");
+  } finally { resolve.mockRestore(); clearAccountFixture(BINDINGS_SOURCE); }
 });
