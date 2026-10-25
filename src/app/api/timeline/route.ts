@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
 import { completedFileScan } from "@/lib/scanner/scanCache";
@@ -16,7 +17,7 @@ export const dynamic = "force-dynamic";
  * timeline only needs path/mtime/size/fmt/title for one project's fresh files,
  * which the cached snapshot already carries. Background revalidation keeps the
  * generation current. */
-export async function GET(
+async function workspaceGET(
   req: NextRequest,
 ): Promise<NextResponse<{ events: ActionEvent[] } | ApiError>> {
   const project = req.nextUrl.searchParams.get("project") ?? "";
@@ -30,3 +31,5 @@ export async function GET(
   overlaySessionTitles(files);
   return NextResponse.json({ events: projectTimeline(files, project, Math.min(limit, 600)) });
 }
+
+export const GET = workspaceRoute("/api/timeline", workspaceGET);

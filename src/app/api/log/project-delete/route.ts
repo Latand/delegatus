@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import fs from "node:fs/promises";
 
 import { NextRequest, NextResponse } from "next/server";
@@ -21,7 +22,7 @@ export const dynamic = "force-dynamic";
 
 const MAX_PROJECT_PATHS = 10_000;
 
-export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; deleted: number } | ApiError>> {
+async function workspacePOST(req: NextRequest): Promise<NextResponse<{ ok: true; deleted: number } | ApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
   let body: unknown;
@@ -100,3 +101,5 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; d
   }
   return NextResponse.json({ ok: true, deleted: targets.length });
 }
+
+export const POST = workspaceRoute("/api/log/project-delete", workspacePOST);

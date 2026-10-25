@@ -1,22 +1,22 @@
 "use client";
 
 import { ArrowLeft, Folder, Plus } from "lucide-react";
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useLocale } from "@/lib/i18n";
 import type { Workspace } from "@/lib/team/contract";
 
-import { BUTTON, INPUT } from "./ui";
+import { BUTTON, Field, INPUT, teamRequest } from "./ui";
 import { ProjectChecklist, projectRows, smtAge } from "./WorkspacesTab";
 import { WORKSPACE_MENU_LABEL, WORKSPACE_PATHS, WorkspaceDot, workspaceErrorText, WorkspacePopover } from "./WorkspaceSwitch";
 import type { TeamWorkspaces } from "./workspaceFilter";
-import { deleteWorkspace, placeProject, updateWorkspace, useWorkspaces, workspaceNameProblem } from "./workspacesClient";
+import { deleteWorkspace, placeProject, refreshWorkspaces, updateWorkspace, useWorkspaces, workspaceNameProblem } from "./workspacesClient";
 
 /*
  * `/team/workspaces/<id>` (docs/design/workspaces.md §13.5 D6, D7, P6): one
  * workspace, its name and its projects. The owner renames it, adds and
  * removes projects, and deletes it once it is empty; anyone else reads it.
- * The members, accounts, chat, worker share, usage and fence sections of the
+ * Membership and workspace roles are managed beside projects. The accounts, chat, worker share, usage and fence sections of the
  * prototype come with the later slices.
  */
 
@@ -171,6 +171,7 @@ function WorkspaceBody({ view, workspace }: { view: TeamWorkspaces; workspace: W
         ) : null}
       </header>
       {alert("delete")}
+      <WorkspaceMembers key={workspace.id} id={workspace.id} />
 
       <section aria-labelledby="workspace-projects-title" className="flex flex-col gap-1.5">
         <div className="flex min-h-8 items-center gap-2 px-1">
@@ -231,5 +232,68 @@ function WorkspaceBody({ view, workspace }: { view: TeamWorkspaces; workspace: W
         </WorkspacePopover>
       ) : null}
     </>
+  );
+}
+
+type WorkspacePerson = { id: string; name: string; owner: boolean; role: "member" | "manager" | null };
+type MembershipView = { canManage: boolean; members: WorkspacePerson[]; candidates: WorkspacePerson[] };
+
+function WorkspaceMembers({ id }: { id: string }) {
+  const { t } = useLocale();
+  const [view, setView] = useState<MembershipView | null>(null);
+  const [selected, setSelected] = useState("");
+  const [role, setRole] = useState<"member" | "manager">("member");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(false);
+  const load = useCallback(async () => {
+    const answer = await teamRequest<MembershipView>(`/api/team/workspaces/${id}/members`);
+    if (answer.ok) { setView(answer.body); return true; }
+    setView(null);
+    setError(true);
+    return false;
+  }, [id]);
+  useEffect(() => {
+    let mounted = true;
+    void Promise.resolve().then(() => { if (mounted) void load(); });
+    return () => { mounted = false; };
+  }, [load]);
+  const write = async (memberId: string, nextRole: "member" | "manager" | null) => {
+    setBusy(true);
+    setError(false);
+    const answer = await teamRequest(`/api/team/workspaces/${id}/members`, { method: nextRole ? "PUT" : "DELETE", body: { memberId, ...(nextRole ? { role: nextRole } : {}) } });
+    if (answer.ok) { await refreshWorkspaces(); if (await load()) setSelected(""); }
+    else setError(true);
+    setBusy(false);
+  };
+  return (
+    <section aria-labelledby="workspace-members-title" className="flex flex-col gap-2" data-workspace-members="">
+      <h2 id="workspace-members-title" className="px-1 text-label font-semibold text-secondary">{t("team.tabs.members")}</h2>
+      {!view ? <button type="button" className={BUTTON.small} disabled={!error} onClick={() => { setError(false); void load(); }}>{t(error ? "workspaces.members.retry" : "common.loadingCap")}</button> : <>
+        <ul className="overflow-hidden rounded-surface border border-border bg-card">
+          {view.members.map(person => <li key={person.id} className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2 last:border-b-0" data-workspace-member={person.id}>
+            <span className="min-w-0 flex-1 basis-32 break-words text-ui font-semibold text-primary">{person.name}</span>
+            {view.canManage && !person.owner ? <>
+              <select className={`${INPUT.replace("w-full", "w-auto")} max-w-full`} aria-label={t("workspaces.members.roleFor", { name: person.name })} value={person.role ?? "member"} disabled={busy} onChange={event => void write(person.id, event.target.value as "member" | "manager")} data-workspace-member-role="">
+                <option value="member">{t("team.role.member")}</option><option value="manager">{t("workspaces.members.manager")}</option>
+              </select>
+              <button type="button" className={BUTTON.small} disabled={busy} onClick={() => void write(person.id, null)} data-workspace-member-remove="">{t("workspaces.members.remove")}</button>
+            </> : <span className="text-label text-secondary">{t(person.owner ? "team.role.owner" : person.role === "manager" ? "workspaces.members.manager" : "team.role.member")}</span>}
+          </li>)}
+        </ul>
+        {view.canManage && view.candidates.length > 0 ? <form className="flex flex-wrap items-end gap-2 rounded-surface border border-border bg-card p-3" onSubmit={event => { event.preventDefault(); if (selected) void write(selected, role); }} data-workspace-member-add="">
+          <div className="min-w-0 flex-1 basis-48"><Field label={t("workspaces.members.person")}>
+            <select className={`${INPUT} w-full min-w-0`} title={view.candidates.find(person => person.id === selected)?.name ?? t("workspaces.members.choose")} value={selected} disabled={busy} onChange={event => setSelected(event.target.value)} data-workspace-member-choice="">
+              <option value="">{t("workspaces.members.choose")}</option>
+              {view.candidates.map(person => <option key={person.id} value={person.id}>{person.name}</option>)}
+            </select>
+          </Field></div>
+          <Field label={t("workspaces.members.role")}><select className={INPUT} value={role} disabled={busy} onChange={event => setRole(event.target.value as "member" | "manager")} data-workspace-member-add-role="">
+            <option value="member">{t("team.role.member")}</option><option value="manager">{t("workspaces.members.manager")}</option>
+          </select></Field>
+          <button type="submit" className={BUTTON.smallPrimary} disabled={busy || !selected} data-workspace-member-submit="">{t("workspaces.members.add")}</button>
+        </form> : null}
+      </>}
+      {error ? <p role="alert" className="text-ui text-danger">{t("workspaces.error.failed")}</p> : null}
+    </section>
   );
 }

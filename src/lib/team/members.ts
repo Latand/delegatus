@@ -1,3 +1,4 @@
+import { inviteWorkspace } from "./workspaceAccess";
 import crypto from "node:crypto";
 
 import {
@@ -284,10 +285,11 @@ export function claimInstall(store: TeamStore, nameInput: unknown, device: Devic
 
 /* ---- invites -------------------------------------------------------------- */
 
-export function createInvite(store: TeamStore, owner: Member, nameInput: unknown, nowMs = Date.now()): { challenge: Challenge; code: string } {
+export function createInvite(store: TeamStore, owner: Member, nameInput: unknown, nowMs = Date.now(), workspaceInput?: unknown): { challenge: Challenge; code: string } {
   const invitedName = cleanMemberName(nameInput);
   return store.transaction(() => {
-    const issued = issueChallenge(store, { kind: "invite", ttlMs: INVITE_TTL_MS, createdBy: owner.id, invitedName }, nowMs);
+    const workspaceId = inviteWorkspace(store, owner, workspaceInput);
+    const issued = issueChallenge(store, { kind: "invite", ttlMs: INVITE_TTL_MS, createdBy: owner.id, invitedName, payload: workspaceId ? { workspaceId } : null }, nowMs);
     appendTeamEvent(store, {
       actor: { kind: "member", memberId: owner.id },
       action: "member.invited",
@@ -303,6 +305,7 @@ export interface OpenInvite {
   createdAt: string;
   expiresAt: string;
   createdBy: string | null;
+  workspaceId: string | null;
 }
 
 export function openInvites(store: TeamStore, nowMs = Date.now()): OpenInvite[] {
@@ -312,6 +315,7 @@ export function openInvites(store: TeamStore, nowMs = Date.now()): OpenInvite[] 
     createdAt: challenge.createdAt,
     expiresAt: challenge.expiresAt,
     createdBy: challenge.createdBy,
+    workspaceId: challenge.payload?.workspaceId ?? null,
   }));
 }
 
@@ -361,6 +365,9 @@ export function redeemJoin(store: TeamStore, code: unknown, nameInput: unknown, 
     if (challenge.kind === "invite") {
       const name = requireName(nameInput ?? challenge.invitedName);
       if (!store.hasActiveOwner()) throw new TeamError("link_invalid", "this install has no team", 410);
+      const inviter = challenge.createdBy ? store.member(challenge.createdBy) : null;
+      if (!inviter || inviter.status !== "active") throw new TeamError("link_invalid", "this invite is no longer available", 410);
+      const workspaceId = inviteWorkspace(store, inviter, challenge.payload?.workspaceId);
       requireFreeName(store, name);
       if (!store.consumeChallenge(challenge.id, iso(nowMs))) throw new TeamError("link_invalid", "this link was already used", 410);
       const member: Member = {
@@ -375,6 +382,7 @@ export function redeemJoin(store: TeamStore, code: unknown, nameInput: unknown, 
         revokedAt: null,
       };
       store.insertMember(member);
+      if (workspaceId) store.putWorkspaceMember(workspaceId, member.id, "member", inviter.id, iso(nowMs));
       appendTeamEvent(store, {
         actor: { kind: "member", memberId: member.id },
         action: "member.joined",
