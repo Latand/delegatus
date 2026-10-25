@@ -1221,3 +1221,51 @@ for (const interruption of [null, "before-ref", "after-ref"] as const) {
     }
   });
 }
+
+
+test.each(["preparation", "transport"] as const)("spawn admission rechecks its lane cutoff after %s yields", async boundary => {
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `deadline-registry-${boundary}.json`));
+  setAgentRegistryForTests(registry);
+  let clock = 1_000;
+  const monotonic = spyOn(performance, "now").mockImplementation(() => clock);
+  const resolve = spyOn(accountManager, "resolveProjectSpawn").mockReturnValue({ kind: "available", account: {
+    engine: "claude", accountId: "fixture-account", kind: "managed", home: process.env.LLV_STATE_DIR!,
+    transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" },
+  }});
+  const clientModule = await import("@/lib/runtime/client");
+  const spawnModule = await import("@/lib/runtime/structuredSpawn");
+  const guardModule = await import("@/lib/git/stageAttemptGuard");
+  const client = spyOn(clientModule, "runtimeHostClient").mockReturnValue({} as never);
+  const guard = spyOn(guardModule, "prepareStageGitGuard").mockResolvedValue({});
+  let dispatched = false;
+  const spawn = spyOn(spawnModule, "spawnStructuredConversation").mockImplementation(async input => {
+    await Promise.resolve();
+    clock += 3_000;
+    await input.authorize?.();
+    dispatched = true;
+    return { path: null } as never;
+  });
+  let reservations = 0;
+  try {
+    await expect(defaultPipelinePorts().spawnAgent({
+      role: { roleId: "builder", engine: "claude", model: "fable", effort: "high", access: "read-write", promptScaffold: "" },
+      runtimeProfile: { access: "read-write", sandbox: "full" }, cwd: process.env.LLV_STATE_DIR!,
+      project: "repo-00000000000000000000000000000001", requestedAccountId: null,
+      title: "Build", prompt: "Build", parentPath: null, clientAttemptId: `lane_deadline_${boundary}`,
+      spawnAdmissionDeadline: clock + 3_000,
+      membership: { kind: "pipeline", containerId: "deadline-lane", role: "builder", slot: "build:1",
+        stageId: "build", stageOrder: 0, round: 1, parentConversationId: null }, creatorConversationId: null,
+    }, async () => {
+      if (++reservations === 2 && boundary === "preparation") {
+        await Promise.resolve(); clock += 3_000;
+      }
+    })).rejects.toThrow("lane deadline exhausted");
+    expect(dispatched).toBe(false);
+    expect(spawn.mock.calls.length).toBe(boundary === "preparation" ? 0 : 1);
+    const receipt = registry.spawnReceiptForClientAttempt(`lane_deadline_${boundary}`);
+    if (boundary === "preparation") expect(receipt?.state).toBe("failed");
+  } finally {
+    monotonic.mockRestore(); resolve.mockRestore(); client.mockRestore(); guard.mockRestore(); spawn.mockRestore();
+    setAgentRegistryForTests(null); registry.close();
+  }
+});
