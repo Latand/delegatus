@@ -2252,7 +2252,7 @@ export function defaultPipelinePorts(
       const current = snapshot();
       const conversation = current.conversations[conversationId as ViewerConversationId];
       const generation = conversation?.generations.at(-1);
-      const receipt = launchId ? current.receipts[launchId] : null;
+      const receipt = launchId ? registry.spawnReceipt(launchId) : null;
       if (launchId && (!receipt?.key || !receipt.conversationId
         || registry.canonicalConversationId(receipt.conversationId) !== registry.canonicalConversationId(conversationId as ViewerConversationId))) return null;
       const key = receipt?.key ?? (conversation && generation ? { engine: conversation.engine, sessionId: generation.id } : null);
@@ -2260,7 +2260,7 @@ export function defaultPipelinePorts(
       const entry = current.entries[sessionKeyId(key)];
       const ended = entry?.structuredHost?.ended;
       const evidence = receipt?.hostExit ?? readHostExit(entry?.hostExitProcess ?? entry?.structuredHost?.exitProcess ?? entry?.structuredHost?.process);
-      return [ended ? claudeHostEndText(ended) : null, hostExitText(evidence)].filter(Boolean).join("; ");
+      return [hostExitText(evidence), ended ? claudeHostEndText(ended) : null].filter(Boolean).join("; ");
     },
     conversationInterruption: (conversationId) => {
       const cut = newestCut(conversationId);

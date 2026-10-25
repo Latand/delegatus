@@ -8,6 +8,7 @@ import { redactBounded } from "@/lib/monitor/redact";
 import type { AgentMemoryCell } from "./agentMemory";
 import { STDERR_READ_BYTES, startupStderrText, withoutUnterminatedSecret } from "./startupStderr";
 import { bindHostExitWriter } from "./hostExit";
+import { spawnNativeWaitOwner } from "./nativeWaitOwner";
 
 export interface AgentSignalDomain {
   policyVersion: 1;
@@ -54,10 +55,27 @@ export async function spawnManagedEngine(command: string, args: string[], option
   transportSpawn?: EngineSpawn): Promise<ChildProcessWithoutNullStreams> {
   if (injected) return (memory?.wrapSpawn(injected) ?? injected)(command, args, options);
   options = { ...options, env: { ...(options.env ?? process.env), LLV_HOST_EXIT_RECEIPTS: "1" } };
-  const base = memory?.wrapSpawn(transportSpawn) ?? transportSpawn ?? ((cmd, argv, opts) => spawn(cmd, argv, { ...opts, stdio: ["pipe", "pipe", "pipe"] }));
+  const waiters: Array<ReturnType<typeof spawnNativeWaitOwner>> = [];
+  const transport: EngineSpawn = transportSpawn ?? ((cmd, argv, opts) => {
+    const child = spawnNativeWaitOwner(cmd, argv, opts);
+    waiters.push(child);
+    return child;
+  });
+  const base = memory?.wrapSpawn(transport) ?? transport;
   const scope = memory && (memory.plan.mechanism === "scope" || memory.plan.cpu) ? memory.plan.unit : null;
   const capabilityEnv = sourceEnv.LLV_GATE_SLOT_LEASE ? { ...(options.env ?? process.env), LLV_GATE_SLOT_LEASE: sourceEnv.LLV_GATE_SLOT_LEASE } : undefined;
-  return await spawnSignalSandbox(command, args, { ...options, stdio: ["pipe", "pipe", "pipe"] }, base as typeof spawn, scope, capabilityEnv) as ChildProcessWithoutNullStreams;
+  try {
+    const child = await spawnSignalSandbox(command, args, { ...options, stdio: ["pipe", "pipe", "pipe"] }, base as typeof spawn, scope, capabilityEnv) as ChildProcessWithoutNullStreams;
+    for (const waiter of waiters) waiter.retainExit(!signalDomain(child));
+    return child;
+  } catch (error) {
+    // Setup owns cleanup and its refusal. No host row will retain these slots.
+    for (const waiter of waiters) {
+      try { await waiter.abortLaunch(); }
+      catch (cleanupError) { throw new AggregateError([error, cleanupError], "managed engine startup cleanup failed"); }
+    }
+    throw error;
+  }
 }
 
 /** Why this handle's engine runs without the boundary, if it does. */
@@ -239,17 +257,20 @@ export function nativeProcessId(child: SignalDomainHandle): number | undefined {
 
 /** TERM reaches the verified native process. Escalation ends the owned PID
  * namespace, including descendants that changed session or were reparented. */
-export function signalAgentDomain(child: SignalDomainHandle, signal: NodeJS.Signals, beforeSignal?: () => void): boolean | undefined {
+export function signalAgentDomain(child: SignalDomainHandle, signal: NodeJS.Signals, beforeSignal?: () => void | (() => void)): boolean | undefined {
   const domain = signalDomain(child);
   if (!domain) return undefined;
   const target = signal === "SIGKILL" ? domain.init : domain.native;
   const status = processIdentityStatus(target);
   if (status === "dead") return true;
   if (status !== "alive" || namespaceOf(target.pid, "pid") !== domain.pidNamespace) return false;
-  beforeSignal?.();
-  if (processIdentityStatus(target) !== "alive" || namespaceOf(target.pid, "pid") !== domain.pidNamespace) return false;
+  const withdraw = beforeSignal?.();
+  if (processIdentityStatus(target) !== "alive" || namespaceOf(target.pid, "pid") !== domain.pidNamespace) {
+    withdraw?.();
+    return false;
+  }
   try { process.kill(target.pid, signal); return true; }
-  catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; }
+  catch (error) { withdraw?.(); return (error as NodeJS.ErrnoException).code === "ESRCH"; }
 }
 
 /** File-backed headless callers retain their synchronous handle API. The
@@ -386,6 +407,7 @@ export async function spawnSignalSandbox(command: string, args: string[], option
   if ("off" in prepared) {
     // Main's launch path: the engine under its memory and CPU wrapper only.
     const child = start(command, args, options);
+    await (child as ChildProcess & { spawnReady?: Promise<void> }).spawnReady;
     recordSignalBoundaryOff(child, prepared.off, "managed");
     return child;
   }
@@ -396,6 +418,7 @@ export async function spawnSignalSandbox(command: string, args: string[], option
     ...(diagnosticFile ? { LLV_SIGNAL_DIAGNOSTIC: diagnosticFile } : {}) };
   const child = bridged ? start(command, args, { ...options, env })
     : start("python3", [launcher, "--receipt", receipt, ...(scope ? ["--scope", scope] : []), "--", command, ...args], { ...options, env });
+  await (child as ChildProcess & { spawnReady?: Promise<void> }).spawnReady;
   let stderr = "", failure: Error | undefined, closed = false;
   // The head of the output keeps a secret's opening marker with its payload;
   // a clipped tail could start inside one and defeat redaction.

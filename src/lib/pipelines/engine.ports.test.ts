@@ -1,7 +1,7 @@
 import { assertCpuReadGuardSurvivesSpyRestoration } from "./engineEnvironment.fixture";
 import { expect, spyOn, test, crypto, fs, path, accountManager, engineModule, defaultPipelinePorts, pipelineClaudePermissionMode, tickPipelines, AgentRegistry, setAgentRegistryForTests, loadPipelines, savePipelines, pipelineIdentity, patchPipeline, entry, finishReported, realWorktreeLane, successorOnPullRequestBranch } from "./engine.fixture";
 import type { PipelinePorts } from "./engine.fixture";
-import { bindHostExitWriter, recordHostExit } from "@/lib/runtime/hostExit";
+import { bindHostExitWriter, recordHostExit, recordHostStop, withHostStopOrigin } from "@/lib/runtime/hostExit";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 
 test("pipeline death evidence waits for the independent native waiter's receipt", async () => {
@@ -25,6 +25,30 @@ test("pipeline death evidence waits for the independent native waiter's receipt"
     expect(await ports.conversationHostProcess!(launch.conversationId)).toMatchObject({ state: "gone" });
     expect(ports.conversationHostEnded!(launch.conversationId, launch.launchId)).toBe("exit: signal SIGKILL; no Delegatus stop recorded");
   } finally { setAgentRegistryForTests(null); registry.close(); fs.rmSync(binding, { recursive: true, force: true }); }
+});
+
+for (const sqliteMode of ["off", "sqlite"] as const) test(`a warmed pipeline projection retains reclaimed launch evidence (${sqliteMode})`, () => {
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `reclaimed-exit-${sqliteMode}.json`), undefined, undefined, { sqliteMode });
+  setAgentRegistryForTests(registry);
+  const native = { pid: 2147482598, startIdentity: `reclaimed-exit-${sqliteMode}`, bootEpoch: "fixture-boot" };
+  const next = { ...native, startIdentity: `successor-${sqliteMode}` };
+  const key = { engine: "codex" as const, sessionId: `reclaimed-exit-${sqliteMode}` };
+  const host = { kind: "codex-app-server" as const, process: native, exitProcess: native, endpoint: "stdio:fixture",
+    eventCursor: 0, protocolVersion: null, writerClaimEpoch: 1, activeTurnRef: "open-turn", pendingAttention: [], activeFlags: [] };
+  try {
+    const launch = registry.beginSpawn("codex", "fixtures", { title: "Reclaimed native exit fixture" });
+    registry.stageStructuredSpawn(launch.launchId, { key, artifactPath: "fixtures/reclaimed.jsonl", cwd: "fixtures", accountId: null,
+      status: "dead", host: null, claimEpoch: 1, claimOwner: null, pendingAction: null, structuredHost: host });
+    const ports = defaultPipelinePorts();
+    expect(ports.conversationHostEnded!(launch.conversationId, launch.launchId)).toContain("status unavailable");
+    withHostStopOrigin({ path: "pipeline-stage-stop", operationId: "reclaimed-exit-operation" }, () => recordHostStop(native, "SIGTERM", "fallback"));
+    recordHostExit(native, 23, null);
+    registry.setStructuredHost(key, { ...host, process: next, exitProcess: next });
+    expect(registry.spawnReceipt(launch.launchId)?.hostExit?.exit?.code).toBe(23);
+    const expected = "exit: code 23; stopped by pipeline-stage-stop (reclaimed-exit-operation)";
+    expect(ports.conversationHostEnded!(launch.conversationId, launch.launchId)).toBe(expected);
+    expect(defaultPipelinePorts().conversationHostEnded!(launch.conversationId, launch.launchId)).toBe(expected);
+  } finally { setAgentRegistryForTests(null); registry.close(); }
 });
 
 test("default pane liveness keeps failed or unreadable tmux observations alive", async () => {

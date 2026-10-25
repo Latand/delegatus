@@ -469,14 +469,15 @@ export class AgentMemoryCell {
           || !this.canSignal(sample)) continue;
         if (identity(sample.pid) !== sample.identity) continue;
         this.killedThisTick.add(sample.pid);
+        let withdraw: (() => void) | undefined;
         if (sample.pid === this.exitProcess?.pid) {
-          recordHostStop(this.exitProcess, "SIGKILL", "agent-memory-enforcement");
-          if (!this.canSignal(target) || !this.canSignal(sample)) continue;
+          withdraw = recordHostStop(this.exitProcess, "SIGKILL", "agent-memory-enforcement");
+          if (!this.canSignal(target) || !this.canSignal(sample)) { withdraw?.(); continue; }
         }
         try {
           (this.ports.kill ?? ((pid) => process.kill(pid, "SIGKILL")))(sample.pid);
           signalledDescendant = true;
-        } catch { /* Already gone. */ }
+        } catch { withdraw?.(); }
       }
       // A descendant signal may race with a root exit or PID reuse.
       if (!this.canSignal(target)) {
@@ -492,9 +493,10 @@ export class AgentMemoryCell {
     // Do not run listeners between the final ownership check and the signal.
     this.recordKill(limit, target.pid === this.pid, victim.name, 1, false);
     this.killedThisTick.add(target.pid);
-    if (target.pid === this.pid || target.pid === this.exitProcess?.pid) recordHostStop(this.exitProcess ?? hostExitProcess(this.pid ?? undefined, target.identity), "SIGKILL", "agent-memory-enforcement");
-    if (!this.canSignal(target)) return;
-    try { (this.ports.kill ?? ((pid) => process.kill(pid, "SIGKILL")))(target.pid); } catch { /* The sampled process may have already exited. */ }
+    const withdraw = target.pid === this.pid || target.pid === this.exitProcess?.pid
+      ? recordHostStop(this.exitProcess ?? hostExitProcess(this.pid ?? undefined, target.identity), "SIGKILL", "agent-memory-enforcement") : undefined;
+    if (!this.canSignal(target)) { withdraw?.(); return; }
+    try { (this.ports.kill ?? ((pid) => process.kill(pid, "SIGKILL")))(target.pid); } catch { withdraw?.(); }
     this.notify();
   }
   settleExit({ expected }: { expected: boolean }): AgentMemoryKill | null {
@@ -519,11 +521,12 @@ export class AgentMemoryCell {
       try { (this.ports.runner ?? run)("systemctl", ["--user", "kill", "--signal=SIGKILL", this.plan.unit]); } catch { /* An empty scope has already been collected. */ }
     } else {
       for (const sample of this.lastSample) if (this.canSignal(sample)) {
+        let withdraw: (() => void) | undefined;
         if (sample.pid === this.exitProcess?.pid) {
-          recordHostStop(this.exitProcess, "SIGKILL", "agent-memory-enforcement");
-          if (!this.canSignal(sample)) continue;
+          withdraw = recordHostStop(this.exitProcess, "SIGKILL", "agent-memory-enforcement");
+          if (!this.canSignal(sample)) { withdraw?.(); continue; }
         }
-        try { (this.ports.kill ?? ((pid) => process.kill(pid, "SIGKILL")))(sample.pid); } catch { /* Already gone. */ }
+        try { (this.ports.kill ?? ((pid) => process.kill(pid, "SIGKILL")))(sample.pid); } catch { withdraw?.(); }
       }
     }
   }

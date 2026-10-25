@@ -77,7 +77,7 @@ function record(file: string, value: unknown, replace = false): void {
   } finally { fs.rmSync(temporary, { force: true }); }
 }
 
-export function recordHostStop(process: ProcessIdentity | null | undefined, signal: string, fallback: string): void {
+export function recordHostStop(process: ProcessIdentity | null | undefined, signal: string, fallback: string): (() => void) | undefined {
   if (!process?.startIdentity) return;
   try {
     // Cleanup after exit cannot retroactively claim to have caused that exit.
@@ -87,7 +87,17 @@ export function recordHostStop(process: ProcessIdentity | null | undefined, sign
     const prior = read<HostExitRecord["stop"]>(file);
     const next = { path: source.path.slice(0, 160), operationId: source.operationId.slice(0, 200), signal };
     if (prior?.path === next.path && prior.operationId === next.operationId && prior.signal === signal) return;
-    record(file, { ...next, at: new Date().toISOString() }, true);
+    const intent = { ...next, at: new Date().toISOString() };
+    record(file, intent, true);
+    return () => {
+      // A refused sender may withdraw only its own intent, preserving an
+      // earlier signal and any newer sender that took over in the meantime.
+      try {
+        if (JSON.stringify(read(file)) !== JSON.stringify(intent)) return;
+        if (prior) record(file, prior, true);
+        else fs.rmSync(file, { force: true });
+      } catch (error) { console.error("[host exit] could not withdraw refused stop intent", error); }
+    };
   } catch (error) { console.error("[host exit] could not persist stop intent", error); }
 }
 export function recordHostExit(process: ProcessIdentity | null | undefined, code: number | null | undefined, signal: string | null | undefined): boolean {
@@ -99,6 +109,7 @@ export function recordHostExit(process: ProcessIdentity | null | undefined, code
   } catch (error) { console.error("[host exit] could not persist exit status", error); return false; }
 }
 export function observeHostExit(child: EventEmitter, process: ProcessIdentity | null): void {
+  if (process?.startIdentity && (hostExitWriterRegistered(process) || readHostExit(process)?.exit)) return;
   if (process?.startIdentity && !readHostExit(process)?.exit) {
     try { record(slot(process, "writer"), captureProcessIdentity(globalThis.process.pid)); }
     catch (error) { console.error("[host exit] could not retain wait owner", error); }

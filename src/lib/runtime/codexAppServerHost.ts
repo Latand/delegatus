@@ -3528,10 +3528,11 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       return true;
     }
     if (this.terminationStarted) return true;
+    let withdrawEof: (() => void) | undefined;
     if (!this.reaped && this.childProcessOwnership() === "owned" && !procBackend.processExited(nativeProcessId(this.child)!)) {
-      recordHostStop(this.exitProcess, "EOF", this.dead ? "codex-host-fault" : "codex-host-release");
+      withdrawEof = recordHostStop(this.exitProcess, "EOF", this.dead ? "codex-host-fault" : "codex-host-release");
     }
-    try { this.child.stdin.end(); } catch { /* already closed */ }
+    try { this.child.stdin.end(); } catch { withdrawEof?.(); }
     const ownership = this.childProcessOwnership();
     if (signalDomain(this.child) && ownership === "gone") {
       signalAgentDomain(this.child, "SIGKILL");
@@ -3581,9 +3582,9 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       return "attempted";
     }
     if (this.reaped || ownership !== "owned") return "unsafe";
-    recordHostStop(this.exitProcess, signal, this.dead ? "codex-host-fault" : "codex-host-release");
-    if (this.childProcessOwnership() !== "owned") return "unsafe";
-    signalDetachedProcessGroup(this.child, signal, this.signalProcess);
+    const withdraw = recordHostStop(this.exitProcess, signal, this.dead ? "codex-host-fault" : "codex-host-release");
+    if (this.childProcessOwnership() !== "owned") { withdraw?.(); return "unsafe"; }
+    if (!signalDetachedProcessGroup(this.child, signal, this.signalProcess)) withdraw?.();
     return "attempted";
   }
 

@@ -6,7 +6,7 @@ import { EventEmitter, once } from "node:events";
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
 import { statePath } from "@/lib/configDir";
 import { bindHostExitWriter, hostExitText, observeHostExit, readHostExit, readHostExitSpool, recordHostExit, recordHostStop, withHostStopOrigin } from "./hostExit";
-import { launcherFile } from "./agentSignalSandbox";
+import { launcherFile, spawnManagedEngine } from "./agentSignalSandbox";
 import { socketWaitOwnerSource } from "./codexSocketTransport";
 import path from "node:path";
 import { terminateStructuredHostTree } from "./structuredHostControl";
@@ -289,5 +289,138 @@ test("a waiter whose readiness write fails records its cleanup and reaps its nat
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     await closed;
     fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+for (const engine of ["claude", "copilot"] as const) for (const boundary of ["direct", "launcher"] as const) for (const ending of ["signal", "code"] as const) {
+  test.skipIf(process.platform !== "linux")(`${engine} ${boundary} fallback retains native ${ending} after its observer dies`, async () => {
+    const directory = fs.mkdtempSync(path.join(process.env.TMPDIR!, "unprotected-host-exit-"));
+    const ready = path.join(directory, "host.json"), finish = path.join(directory, "finish");
+    const nativeReady = path.join(directory, "native.pid");
+    const fixture = path.join(directory, "engine.cjs"), binary = path.join(directory, "engine");
+    fs.writeFileSync(fixture, `const fs=require("node:fs");
+fs.writeFileSync(${JSON.stringify(nativeReady)},String(process.pid));
+process.stdout.on("error",()=>{}); process.stderr.on("error",()=>{});
+require("node:readline").createInterface({input:process.stdin}).on("line",line=>{
+  const q=JSON.parse(line); if(q.id===undefined) return;
+  const result=q.method==="initialize"?{protocolVersion:1,agentInfo:{name:"fixture",version:"1"}}:q.method==="session/new"?{sessionId:"exit-fixture-session"}:{};
+  process.stdout.write(JSON.stringify({jsonrpc:"2.0",id:q.id,result})+"\\n");
+});
+setInterval(()=>{if(fs.existsSync(${JSON.stringify(finish)})) process.exit(23)},10);`);
+    fs.writeFileSync(binary, `#!/bin/sh\nexec '${process.execPath}' '${fixture}' "$@"\n`, { mode: 0o700 });
+    const bin = path.join(directory, "bin"); fs.mkdirSync(bin);
+    fs.symlinkSync(Bun.which("python3")!, path.join(bin, "python3"));
+    const hostModule = path.join(import.meta.dir, engine === "claude" ? "claudeStreamBrokerHost.ts" : "copilotAcpHost.ts");
+    const source = `import fs from "node:fs";
+import { ${engine === "claude" ? "ClaudeStreamBrokerHost" : "CopilotAcpHost"} as Host } from ${JSON.stringify(hostModule)};
+import { captureProcessIdentity } from ${JSON.stringify(path.join(import.meta.dir, "../processIdentity.ts"))};
+const env={...process.env,PATH:${JSON.stringify(boundary === "launcher" ? bin : process.env.PATH)},LLV_GATE_SLOT_LEASE:${boundary === "direct" ? '"fixture-lease"' : 'undefined'}};
+delete env.LLV_SIGNAL_SANDBOX; delete env.LLV_DOCKER_NSENTER_SHIMS;
+const host=await Host.start({cwd:${JSON.stringify(directory)},binary:${JSON.stringify(binary)},env,
+  copilotHome:${JSON.stringify(path.join(directory, "copilot"))},viewerMcpServer:null,mcpServers:[],
+  readAuthStatus:()=>({loggedIn:true,authMethod:"claude.ai",subscriptionType:"max"}),readTranscript:()=>[]});
+fs.writeFileSync(${JSON.stringify(ready)},JSON.stringify(captureProcessIdentity((await host.health()).pid)));
+setInterval(()=>{},1000);`;
+    const observer = spawn(process.execPath, ["-e", source], { env: process.env, stdio: ["ignore", "ignore", "pipe"] });
+    const closed = once(observer, "close");
+    let errors = ""; observer.stderr!.on("data", chunk => { errors += String(chunk); });
+    let native: ReturnType<typeof captureProcessIdentity> | undefined;
+    let waiter: ReturnType<typeof captureProcessIdentity> | undefined;
+    try {
+      const deadline = Date.now() + 10_000;
+      while (!fs.existsSync(ready) && observer.exitCode === null && observer.signalCode === null && Date.now() < deadline) await Bun.sleep(10);
+      expect({ ready: fs.existsSync(ready), errors }).toMatchObject({ ready: true });
+      native = JSON.parse(fs.readFileSync(ready, "utf8"));
+      waiter = captureProcessIdentity(Number(fs.readFileSync(`/proc/${native!.pid}/stat`, "utf8").split(")").at(-1)!.trim().split(/\s+/)[1]));
+      observer.kill("SIGKILL"); await closed;
+      expect(processIdentityStatus(native!)).toBe("alive");
+      if (ending === "signal") process.kill(native!.pid, "SIGKILL");
+      else fs.writeFileSync(finish, "finish");
+      const exitDeadline = Date.now() + 5_000;
+      while (!readHostExit(native)?.exit && Date.now() < exitDeadline) await Bun.sleep(10);
+      const evidence = readHostExit(native)!;
+      expect(evidence.exit).toMatchObject(ending === "signal" ? { code: null, signal: "SIGKILL" } : { code: 23, signal: null });
+      expect(Number.isFinite(Date.parse(evidence.exit!.at))).toBeTrue();
+      expect(evidence.stop).toBeNull();
+      const reader = Bun.spawn([process.execPath, "-e", `import {readHostExit,hostExitText} from ${JSON.stringify(path.join(import.meta.dir, "hostExit.ts"))}; const evidence=readHostExit(${JSON.stringify(native)});console.log(JSON.stringify({evidence,text:hostExitText(evidence)}));`], { env: process.env, stdout: "pipe", stderr: "pipe" });
+      const answer = JSON.parse(await new Response(reader.stdout).text());
+      expect(await reader.exited).toBe(0);
+      expect(answer.evidence).toEqual(evidence);
+      expect(answer.text).toBe(`exit: ${ending === "signal" ? "signal SIGKILL" : "code 23"}; no Delegatus stop recorded`);
+    } finally {
+      if (!native && fs.existsSync(nativeReady)) native = captureProcessIdentity(Number(fs.readFileSync(nativeReady, "utf8")));
+      if (native && !waiter && processIdentityStatus(native) === "alive") waiter = captureProcessIdentity(Number(fs.readFileSync(`/proc/${native.pid}/stat`, "utf8").split(")").at(-1)!.trim().split(/\s+/)[1]));
+      if (native && processIdentityStatus(native) === "alive") process.kill(native.pid, "SIGKILL");
+      if (observer.exitCode === null && observer.signalCode === null) observer.kill("SIGKILL");
+      await closed;
+      const deadline = Date.now() + 5_000;
+      while (waiter && processIdentityStatus(waiter) === "alive" && Date.now() < deadline) await Bun.sleep(10);
+      expect(waiter ? processIdentityStatus(waiter) : "dead").toBe("dead");
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  }, 20_000);
+}
+
+for (const newer of [false, true]) test(`withdrawing a refused stop preserves existing sender evidence (newer=${newer})`, () => {
+  const process = { pid: 2147482596, startIdentity: `withdraw-fixture-${newer}`, bootEpoch: "fixture-boot" };
+  withHostStopOrigin({ path: "earlier-stop", operationId: "earlier-operation" }, () => recordHostStop(process, "SIGTERM", "fallback"));
+  const earlier = readHostExit(process)?.stop;
+  const withdraw = withHostStopOrigin({ path: "refused-stop", operationId: "refused-operation" }, () => recordHostStop(process, "SIGKILL", "fallback"));
+  if (newer) withHostStopOrigin({ path: "later-stop", operationId: "later-operation" }, () => recordHostStop(process, "SIGTERM", "fallback"));
+  const expected = newer ? readHostExit(process)?.stop : earlier;
+  withdraw?.();
+  expect(readHostExit(process)?.stop).toEqual(expected);
+});
+
+test("the managed waiter forwards native stdio and exit status without changing the signal target", async () => {
+  const child = await spawnManagedEngine(process.execPath, ["-e", `process.stdout.write(JSON.stringify({pid:process.pid})+"\\n");process.stdin.once("data",data=>{process.stdout.write(data);process.exit(23)});`],
+    { detached: true, env: { ...process.env, LLV_GATE_SLOT_LEASE: "fixture-lease" } }, null);
+  const closed = once(child, "close");
+  const identity = captureProcessIdentity(child.pid!);
+  let output = ""; child.stdout.on("data", chunk => { output += String(chunk); });
+  try {
+    const deadline = Date.now() + 5_000;
+    while (!output.includes("\n") && Date.now() < deadline) await Bun.sleep(10);
+    expect(JSON.parse(output.trim()).pid).toBe(child.pid);
+    child.stdin.write("native-stdio-fixture");
+    expect(await closed).toEqual([23, null]);
+    expect(output).toContain("native-stdio-fixture");
+    expect(readHostExit(identity)?.exit).toMatchObject({ code: 23, signal: null });
+  } finally {
+    if (processIdentityStatus(identity) === "alive") child.kill("SIGKILL");
+    await closed;
+  }
+});
+
+test("a managed waiter whose engine cannot spawn releases its private binding", async () => {
+  const directory = statePath("host-exit-waits");
+  const before = fs.existsSync(directory) ? fs.readdirSync(directory) : [];
+  await expect(spawnManagedEngine("/nonexistent-host-exit-fixture", [],
+    { detached: true, env: { ...process.env, LLV_GATE_SLOT_LEASE: "fixture-lease" } }, null)).rejects.toThrow("invalid PID");
+  const deadline = Date.now() + 5_000;
+  while (fs.readdirSync(directory).length !== before.length && Date.now() < deadline) await Bun.sleep(10);
+  expect(fs.readdirSync(directory)).toEqual(before);
+});
+
+test("a refused managed exit binding reaps the native engine before rejecting startup", async () => {
+  const write = fs.writeFileSync;
+  let native: ReturnType<typeof captureProcessIdentity> | null = null;
+  const refusal = spyOn(fs, "writeFileSync").mockImplementation((file, ...args) => {
+    if (path.basename(String(file)) === "host-exit.json") {
+      const pid = JSON.parse(fs.readFileSync(path.join(path.dirname(String(file)), "native.json"), "utf8")).pid;
+      native = captureProcessIdentity(pid);
+      throw new Error("fixture exit binding refused");
+    }
+    return write(file, ...args);
+  });
+  try {
+    await expect(spawnManagedEngine(process.execPath, ["-e", "setInterval(()=>{},1000)"],
+      { detached: true, env: { ...process.env, LLV_GATE_SLOT_LEASE: "fixture-lease" } }, null)).rejects.toThrow("fixture exit binding refused");
+    expect(native).not.toBeNull();
+    expect(processIdentityStatus(native!)).toBe("dead");
+    expect(readHostExit(native)?.stop).toBeNull();
+  } finally {
+    refusal.mockRestore();
+    if (native && processIdentityStatus(native) === "alive") process.kill((native as { pid: number }).pid, "SIGKILL");
   }
 });

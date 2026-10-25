@@ -19,52 +19,8 @@ export interface CodexSocketOwner { endpoint: string; process: ProcessIdentity; 
 export type CodexTransport = Pick<ChildProcessWithoutNullStreams, "pid" | "stdin" | "stdout" | "stderr" | "kill"> & EventEmitter;
 const prefix = "codex-unix:";
 
-/** Uses the serving interpreter and builtins only, including on installations
- * where the optional namespace launcher/Python is unavailable. */
-export const socketWaitOwnerSource = String.raw`
-const fs = require("node:fs"), path = require("node:path"), crypto = require("node:crypto");
-const [directory, binary, ...argv] = JSON.parse(process.argv.at(-1));
-const atomic = (file, value, first = false) => {
-  fs.mkdirSync(path.dirname(file), {recursive:true, mode:0o700});
-  const temporary = file + "." + crypto.randomUUID();
-  try {
-    const fd = fs.openSync(temporary, "wx", 0o600);
-    try { fs.writeFileSync(fd, JSON.stringify(value)); fs.fsyncSync(fd); }
-    finally { fs.closeSync(fd); }
-    if (first) { try { fs.linkSync(temporary, file); } catch(e) { if(e.code!=="EEXIST") throw e; } }
-    else fs.renameSync(temporary, file);
-    const parent = fs.openSync(path.dirname(file), "r");
-    try { fs.fsyncSync(parent); } finally { fs.closeSync(parent); }
-  } finally { fs.rmSync(temporary, {force:true}); }
-};
-const child = require("node:child_process").spawn(binary, argv, {stdio:"inherit", detached:true});
-let settled = false;
-const finish = (code, signal, error) => {
-  if(settled) return; settled = true;
-  const value = {code, signal, at:new Date().toISOString()};
-  if(error) { fs.writeSync(2, "agent engine could not start: " + error.message + "\n"); value.error=error.code; }
-  atomic(path.join(directory,"native-exit.json"), value);
-  const binding = path.join(directory,"host-exit.json");
-  if(fs.existsSync(binding)) {
-    const bound = JSON.parse(fs.readFileSync(binding,"utf8"));
-    if(!bound.discard) {
-      atomic(bound.file, value, true);
-      fs.rmSync(bound.file.replace(/\.exit\.json$/, ".writer.json"), {force:true});
-    }
-  }
-  if(fs.existsSync(path.join(directory,"attached"))) fs.rmSync(directory,{recursive:true,force:true});
-  process.exitCode = code ?? (signal ? 128 + require("node:os").constants.signals[signal] : 127);
-};
-child.once("error", error=>finish(null,null,error));
-child.once("exit", (code,signal)=>finish(code,signal));
-try { atomic(path.join(directory,"native.json"), {pid:child.pid ?? null}); }
-catch(error) {
-  fs.writeSync(2,"native wait owner readiness failed: " + (error.code ?? error.name) + "\n");
-  try { atomic(path.join(directory,"native-stop.json"), {path:"codex-socket-startup-cleanup",operationId:crypto.randomUUID(),signal:"SIGKILL",at:new Date().toISOString()}); }
-  catch { fs.writeSync(2,"native startup stop intent could not be persisted\n"); }
-  try { process.kill(-child.pid,"SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch {} }
-}
-`;
+import { nativeWaitOwnerSource as socketWaitOwnerSource } from "./nativeWaitOwner";
+export { nativeWaitOwnerSource as socketWaitOwnerSource } from "./nativeWaitOwner";
 
 export function codexSocketPath(endpoint: string): string | null {
   if (!endpoint.startsWith(prefix)) return null;
@@ -383,10 +339,12 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
       }
       if (child.pid && child.exitCode === null && child.signalCode === null && (!monitorIdentity || procBackend.processIdentity(child.pid) === null || procBackend.processIdentity(child.pid) === monitorIdentity)) {
         const stopped = new Promise<void>(resolve => { if (child.exitCode !== null || child.signalCode !== null) resolve(); else child.once("close", () => resolve()); });
-        if (pid && identity) recordHostStop(captureProcessIdentity(pid, undefined, identity), "SIGKILL", "codex-socket-startup-cleanup");
-        const signalled = signalAgentDomain(child, "SIGKILL");
-        if (signalled === undefined) signalProcessGroup(child.pid, "SIGKILL", process.kill);
-        else if (!signalled) throw new Error(`Codex callback setup cleanup identity could not be verified; ${message}`, { cause: error });
+        const record = () => pid && identity ? recordHostStop(captureProcessIdentity(pid, undefined, identity), "SIGKILL", "codex-socket-startup-cleanup") : undefined;
+        const signalled = signalAgentDomain(child, "SIGKILL", record);
+        if (signalled === undefined) {
+          const withdraw = record();
+          if (!signalProcessGroup(child.pid, "SIGKILL", process.kill)) withdraw?.();
+        } else if (!signalled) throw new Error(`Codex callback setup cleanup identity could not be verified; ${message}`, { cause: error });
         let timer: ReturnType<typeof setTimeout> | undefined;
         try {
           await Promise.race([stopped, new Promise<never>((_resolve, reject) => {
@@ -404,9 +362,9 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
 
   kill(signal: NodeJS.Signals | number = "SIGTERM"): boolean {
     if (procBackend.processIdentity(this.pid) !== this.startIdentity || procBackend.processExited(this.pid)) return false;
-    recordHostStop({ pid: this.pid, startIdentity: this.startIdentity, bootEpoch: this.bootEpoch }, String(signal), "codex-socket-kill");
-    if (procBackend.processIdentity(this.pid) !== this.startIdentity) return false;
-    try { process.kill(this.pid, signal); return true; } catch { return false; }
+    const withdraw = recordHostStop({ pid: this.pid, startIdentity: this.startIdentity, bootEpoch: this.bootEpoch }, String(signal), "codex-socket-kill");
+    if (procBackend.processIdentity(this.pid) !== this.startIdentity) { withdraw?.(); return false; }
+    try { process.kill(this.pid, signal); return true; } catch { withdraw?.(); return false; }
   }
 
   private async connect(): Promise<void> {

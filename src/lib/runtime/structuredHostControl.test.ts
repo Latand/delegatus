@@ -1,3 +1,4 @@
+import { readHostExit } from "./hostExit";
 import { ownFixtureTree, stopFixtureTree } from "@/lib/testing/fixtureProcess";
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
@@ -328,6 +329,9 @@ for (const refused of [false, true]) test(`a detached host completing setsid dur
     expect(result.ok).toBe(!refused);
     expect(signals).toEqual(refused ? [] : [-root]);
     expect(captures).toEqual([[root], [root, root + 1]]);
+    const stop = readHostExit({ pid: root, startIdentity: `${root}:setsid-boundary`, bootEpoch: BOOT_EPOCH })?.stop;
+    if (refused) expect(stop).toBeNull();
+    else expect(stop).toMatchObject({ path: "structured-host-kill", signal: "SIGTERM" });
   } finally { sync.mockRestore(); }
 });
 

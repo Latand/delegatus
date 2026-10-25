@@ -402,11 +402,11 @@ async function terminateVerifiedStructuredSpawnProcess(expected: ProcessIdentity
   const matches = () => procBackend.processIdentity(expected.pid) === expected.startIdentity;
   if (!matches()) return true;
   for (const signal of ["SIGTERM", "SIGKILL"] as const) {
-    recordHostStop(expected, signal, "stale-structured-spawn-reap");
-    if (!matches()) return true;
+    const withdraw = recordHostStop(expected, signal, "stale-structured-spawn-reap");
+    if (!matches()) { withdraw?.(); return true; }
     if (!signalProcessGroup(expected.pid, signal)) {
       try { process.kill(expected.pid, signal); }
-      catch { return !matches(); }
+      catch { withdraw?.(); return !matches(); }
     }
     for (let attempt = 0; attempt < STALE_SPAWN_PROCESS_REAP_ATTEMPTS; attempt += 1) {
       if (!matches()) return true;

@@ -631,9 +631,9 @@ async function terminateVerifiedProcess(processIdentity: ProcessIdentity): Promi
   const status = processIdentityStatus(processIdentity);
   if (status === "dead") return true;
   if (processIdentity.pid === process.pid || status !== "alive") return false;
-  recordHostStop(processIdentity, "SIGTERM", "registry-recovery");
-  if (processIdentityStatus(processIdentity) !== "alive") return processIdentityProvenDead(processIdentity);
-  try { process.kill(processIdentity.pid, "SIGTERM"); } catch { /* process exited */ }
+  const withdraw = recordHostStop(processIdentity, "SIGTERM", "registry-recovery");
+  if (processIdentityStatus(processIdentity) !== "alive") { withdraw?.(); return processIdentityProvenDead(processIdentity); }
+  try { process.kill(processIdentity.pid, "SIGTERM"); } catch { withdraw?.(); }
   if (await waitForVerifiedProcessExit(processIdentity, ORPHAN_TERM_GRACE_MS)) return true;
   try { process.kill(processIdentity.pid, "SIGKILL"); } catch { /* process exited */ }
   return waitForVerifiedProcessExit(processIdentity, ORPHAN_KILL_GRACE_MS);

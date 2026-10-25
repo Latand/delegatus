@@ -1032,9 +1032,11 @@ export class CopilotAcpHost implements EngineHost {
     const record = () => recordHostStop(this.exitProcess, signal, this.dead ? "copilot-host-fault" : "copilot-host-release");
     const protectedSignal = signalAgentDomain(this.child, signal, record);
     if (protectedSignal !== undefined) return protectedSignal;
-    record();
-    if (expected && this.processIdentity(expected.pid) !== expected.startIdentity) return false;
-    return signalDetachedProcessGroup(this.child, signal, this.signalProcess);
+    const withdraw = record();
+    if (expected && this.processIdentity(expected.pid) !== expected.startIdentity) { withdraw?.(); return false; }
+    const signalled = signalDetachedProcessGroup(this.child, signal, this.signalProcess);
+    if (!signalled) withdraw?.();
+    return signalled;
   }
 
   private startTermination(): boolean {
@@ -1048,9 +1050,10 @@ export class CopilotAcpHost implements EngineHost {
       return true;
     }
     if (this.terminationStarted || this.reaped) return true;
+    let withdrawEof: (() => void) | undefined;
     if (!this.reaped && this.childStartIdentity !== null && this.processIdentity(nativeProcessId(this.child)!) === this.childStartIdentity
-      && !procBackend.processExited(nativeProcessId(this.child)!)) recordHostStop(this.exitProcess, "EOF", "copilot-host-release");
-    try { this.child.stdin.end(); } catch { /* already closed */ }
+      && !procBackend.processExited(nativeProcessId(this.child)!)) withdrawEof = recordHostStop(this.exitProcess, "EOF", "copilot-host-release");
+    try { this.child.stdin.end(); } catch { withdrawEof?.(); }
     if (!this.signalReleaseGroup("SIGTERM")) return false;
     this.terminationStarted = true;
     this.terminationTimer = setTimeout(() => {

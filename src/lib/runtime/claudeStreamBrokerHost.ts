@@ -1871,9 +1871,11 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     const record = () => recordHostStop(this.exitProcess, signal, this.dead ? "claude-host-fault" : "claude-host-release");
     const protectedSignal = signalAgentDomain(this.child, signal, record);
     if (protectedSignal !== undefined) return protectedSignal;
-    record();
-    if (!this.releaseFenceHolds()) return false;
-    return signalDetachedProcessGroup(this.child, signal, this.signalProcess);
+    const withdraw = record();
+    if (!this.releaseFenceHolds()) { withdraw?.(); return false; }
+    const signalled = signalDetachedProcessGroup(this.child, signal, this.signalProcess);
+    if (!signalled) withdraw?.();
+    return signalled;
   }
 
   /** Hands the child's process tree to the termination listener before the
@@ -1954,9 +1956,10 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     if (this.terminationStarted || this.reaped) return true;
     if (!this.releaseFenceHolds()) return false;
     this.clearCaptureRetry();
+    let withdrawEof: (() => void) | undefined;
     if (!this.reaped && this.childStartIdentity !== null && this.processIdentity(nativeProcessId(this.child)!) === this.childStartIdentity
-      && !procBackend.processExited(nativeProcessId(this.child)!)) recordHostStop(this.exitProcess, "EOF", "claude-host-release");
-    try { this.child.stdin.end(); } catch { /* already closed */ }
+      && !procBackend.processExited(nativeProcessId(this.child)!)) withdrawEof = recordHostStop(this.exitProcess, "EOF", "claude-host-release");
+    try { this.child.stdin.end(); } catch { withdrawEof?.(); }
     if (!this.signalReleaseGroup("SIGTERM")) return false;
     this.terminationStarted = true;
     this.terminationTimer = setTimeout(() => {
