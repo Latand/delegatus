@@ -230,14 +230,16 @@ test("the bar carries the title on one line and a meta line under it, with `stag
   expect(state.className).toContain("shrink-0");
   expect(state.className).toContain("whitespace-nowrap");
   expect(state.className).toContain("text-success");
-  /* The model and its reasoning tier are ONE reading and are not cut (#1795).
+  /* The model and its reasoning tier are ONE reading (#1795); on a line too narrow they end in an
+     ellipsis, so the line's edge never slices a word.
      The account is not on this line at all: at 390 px the state phrase and the
      model leave it nothing, so it rides the title line above. */
   const model = state.parentElement!.querySelector("[data-mobile2-chat-model]") as unknown as HTMLElement;
   expect(model.textContent).toContain("Opus");
   expect(model.textContent).toContain("high");
-  expect(model.className).toContain("shrink-0");
-  expect(model.className).toContain("whitespace-nowrap");
+  expect(model.className).toContain("min-w-0");
+  expect(model.className).toContain("truncate");
+  expect(model.className).not.toContain("shrink-0");
   expect(state.parentElement!.querySelector("[data-mobile2-chat-account]")).toBeNull();
   const accountCell = dom.document.querySelector("[data-mobile2-chat-account]") as unknown as HTMLElement;
   /* Beside the title, which is the elastic cell there. */

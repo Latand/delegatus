@@ -860,8 +860,10 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
  * review round's — because a round opened from the board said only
  * «working 6:44» while the sheet it opens changes exactly these things (#1795).
  *
- * The model and its tier are ONE reading and do not yield; the state phrase
- * before them still outranks everything.
+ * The model and its tier are ONE reading and are the first cell to give way:
+ * on a line too narrow for them they end in an ellipsis rather than being
+ * sliced by the line's edge mid-word. The state phrase before them still
+ * outranks everything and never shrinks.
  */
 function ChatIdentity({ file }: { file: FileEntry }) {
   const { t } = useLocale();
@@ -874,7 +876,7 @@ function ChatIdentity({ file }: { file: FileEntry }) {
     <>
       <span aria-hidden className="shrink-0 text-muted">·</span>
       <ChatEngineMark file={file} />
-      <span data-mobile2-chat-model className="shrink-0 whitespace-nowrap" title={effortTitle(file)}>{model}</span>
+      <span data-mobile2-chat-model className="min-w-0 truncate" title={effortTitle(file)}>{model}</span>
     </>
   );
 }

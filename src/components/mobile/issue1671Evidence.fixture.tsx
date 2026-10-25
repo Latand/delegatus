@@ -255,7 +255,7 @@ const files: FileEntry[] = [
     activity: "live", proc: "running", pid: 4_401, mtime: now - 20,
     /* A real launch model, not a one-word one: the bar line has to hold
        `fable-5-1 · high` beside the state phrase and the account (#1795). */
-    model: "fable-5-1", effort: "high",
+    model: new URLSearchParams(location.search).get("model") || "fable-5-1", effort: "high",
     ...reviewerLineage,
     lastTurn: { startedAt: (now - 400) * 1_000, endedAt: null },
     ...(MENU_STATE === "limit" ? { rateLimit: { source: "account", accountId: "reserve-account-7", window: "session", resetAt: now + 40 * 60 } } : {}),

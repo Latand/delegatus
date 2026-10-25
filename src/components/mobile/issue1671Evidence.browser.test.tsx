@@ -1947,6 +1947,7 @@ const headerReading = (page: Page) => page.evaluate(() => {
       width: Math.round(box.width * 10) / 10,
       /* Chromium rounds a truncating box down by up to a pixel. */
       cut: element.scrollWidth > element.clientWidth + 1,
+      ellipsis: getComputedStyle(element).textOverflow === "ellipsis" && getComputedStyle(element).overflow === "hidden",
     };
   };
   const line = document.querySelector("[data-mobile2-chat-state]")?.parentElement ?? null;
@@ -2016,7 +2017,7 @@ async function sheetSurface(
   await shot("header");
   check("the header names the state, the model with its tier, and the account", Boolean(header.state && header.model && header.account));
   check("the state phrase is whole", header.state?.cut === false);
-  check("the model and its tier are whole", header.model?.cut === false);
+  check("the model and its tier are whole or end in an ellipsis", header.model?.cut === false || header.model?.ellipsis === true);
   check("the account the conversation runs on is the one it names", (header.account?.text ?? "").includes(account));
   /* An ordinary account id has to be READABLE, not merely present in the DOM:
      `@ spare` rendered as `@ s…` and the first evidence pass called that a pass
@@ -2316,7 +2317,8 @@ browserTest("#1846: a pick on the phone names the next account whole on the titl
           /* The running account is either whole beside it or not drawn at all — never a sliver. */
           if (parts.runs?.shown && parts.runs.cut) fail(`the running account shows cut: ${JSON.stringify(parts.runs)}`);
           if (account.length <= 8 && !parts.runs?.shown) fail(`short ids both fit: ${JSON.stringify(parts.runs)}`);
-          if (after.model?.cut !== false) fail(`the model and its tier are whole: ${JSON.stringify(after.model)}`);
+          /* The model gives way before anything else on the line and ends in an ellipsis; the line's edge never slices it. */
+          if (after.model?.cut && after.model.ellipsis !== true) fail(`the model and its tier are whole or end in an ellipsis: ${JSON.stringify(after.model)}`);
           if (JSON.stringify(sent.reconfigures) !== JSON.stringify([next]) || sent.selects !== 0) fail(`requests ${JSON.stringify(sent)}`);
           if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
           await page.close();
@@ -12874,3 +12876,71 @@ describe("phone composer tools row", () => {
     } finally { await browser.close(); served.stop(); }
   }, 300_000);
 });
+
+/*
+ * The phone bar's meta line never cuts a word without an ellipsis (seat finding from the 1.16.0 critique:
+ * «● done · 30m ago · ✳ Opus 5.5 · h»). At 360, 390 and 416 px, with the launch model and with a long one,
+ * every cell of the line is either whole inside the line or, for the model cell, ends in an ellipsis:
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 LLV_META_LINE_SHOTS=<dir outside the repo> bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "meta line"
+ */
+browserTest("the phone bar's meta line never cuts a word without an ellipsis", async () => {
+  const shots = process.env.LLV_META_LINE_SHOTS ? path.resolve(process.env.LLV_META_LINE_SHOTS) : null;
+  const label = process.env.LLV_META_LINE_LABEL ?? "after";
+  if (shots) fs.mkdirSync(shots, { recursive: true });
+  const { base, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const failures: string[] = [];
+  const results: unknown[] = [];
+  try {
+    for (const width of [360, 390, 416]) {
+      for (const model of ["opus-5-5", "claude-opus-5-5-preview-extended-context-2026"]) {
+        const context = await browser.newContext({ viewport: { width, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: "dark" });
+        try {
+          const page = await context.newPage();
+          await page.goto(`${base}/?account=spare&model=${model}#c=conversation_running`);
+          await page.waitForSelector("[data-mobile2-chat-model]", { timeout: 20_000 });
+          await pause(page, 600);
+          const reading = await page.evaluate(() => {
+            const modelCell = document.querySelector("[data-mobile2-chat-model]") as HTMLElement;
+            const line = modelCell.parentElement!;
+            const lineBox = line.getBoundingClientRect();
+            const cells = [...line.children].map((child) => {
+              const box = child.getBoundingClientRect();
+              return { text: child.textContent ?? "", left: box.left, right: box.right, width: box.width };
+            }).filter((cell) => cell.width > 0);
+            const modelBox = modelCell.getBoundingClientRect();
+            const range = document.createRange();
+            range.selectNodeContents(modelCell);
+            const style = getComputedStyle(modelCell);
+            const stateCell = document.querySelector("[data-mobile2-chat-state]") as HTMLElement;
+            return {
+              line: { left: lineBox.left, right: lineBox.right },
+              cells,
+              model: { text: modelCell.textContent ?? "", width: modelBox.width, need: range.getBoundingClientRect().width, textOverflow: style.textOverflow, overflow: style.overflow },
+              state: { cut: stateCell.scrollWidth > stateCell.clientWidth + 1 },
+            };
+          });
+          const key = `${width}-${model.length > 12 ? "long" : "short"}`;
+          results.push({ key, reading });
+          const fail = (what: string) => failures.push(`${key}: ${what}`);
+          for (const cell of reading.cells) {
+            if (cell.right > reading.line.right + 0.5 || cell.left < reading.line.left - 0.5) fail(`a cell sticks out of the line and is sliced by it: ${JSON.stringify(cell)}`);
+          }
+          const cutModel = reading.model.need > reading.model.width + 0.5;
+          if (cutModel && !(reading.model.textOverflow === "ellipsis" && reading.model.overflow === "hidden")) fail(`the model is cut without an ellipsis: ${JSON.stringify(reading.model)}`);
+          if (reading.state.cut) fail("the state phrase is cut");
+          if (shots) await page.locator("[data-mobile2-chat-title]").first().screenshot({ path: path.join(shots, `${label}-${key}.png`) });
+          await page.close();
+        } finally {
+          await context.close();
+        }
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  if (shots) fs.writeFileSync(path.join(shots, `${label}-readings.json`), `${JSON.stringify({ results, failures }, null, 2)}\n`);
+  expect(failures).toEqual([]);
+}, 300_000);
