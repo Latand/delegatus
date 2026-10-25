@@ -2,7 +2,9 @@
 
 Status: proposed. First written 2026-10-24; revised 2026-10-25 with the
 operator's answers and their 06:22 UTC correction, then again the same day for
-run recovery, follow-up receipts and the launch contract when L1 is unusable.
+run recovery, follow-up receipts and the launch contract when L1 is unusable,
+and once more for binding the result to the last part, the first readiness
+check and candidates whose prompt event is not visible yet.
 Design only; no product code changes here.
 
 Made from `main` at `e28d793c` (2026-10-25). That `main` contains PR #3302
@@ -109,10 +111,13 @@ as the Codex desktop protocol the operator already accepted for Codex Cloud.
 Neither call has an idempotency key, so each effect is bound to its attempt by
 evidence read back from the session itself. A run counts as the attempt's own
 only when its answer names it, or when its own events carry the attempt's
-nonce. Each follow-up part counts as delivered only when the CLI reported it
-queued, or when the events show it. An outcome that no evidence settles stays
-unknown: Delegatus never adopts another session for it and never sends the
-same run call or part a second time. If S0 shows that a run cannot be bound
+nonce. Each follow-up part counts as queued only when the CLI reported it
+queued, or when the events show it. A result counts only when the events show
+the last part's own user event, then a message carrying that part's random
+receipt token, then the end of that turn; an idle session showing an older
+verdict settles nothing. An outcome that no evidence settles stays unknown:
+Delegatus never adopts another session for it and never sends the same run call
+or part a second time. If S0 shows that a run or its result cannot be bound
 this way, the Claude provider stays not ready and stages run on this machine.
 
 The session clones the published lane branch through a GitHub connection that
@@ -374,7 +379,7 @@ S0 answers each row. The budget is about six short sessions on one account
 | U0 | Is model training off on both accounts, and which field shows it? | The operator turns off data use for model improvement on both accounts at the D11 settings page. S0 reads `GET /api/oauth/account/settings` (the read the CLI makes) for both accounts before and after; the field that flips is the training choice | No session |
 | U1 | Does a run check out an exact published head? | The assignment names a published lane branch and SHA; read `git rev-parse HEAD` from the tool result in events | A |
 | U2 | Do `/model <id>`, `/effort <level>` and `/fast` sent with `claude -p --cloud` run as commands (D1 documents them typed in a session), and where does the run report its model? | Send each; read events for the command result and a model field | A |
-| U3 | Shapes of `GET /v1/code/sessions/{id}` and `…/events`: status values (running, idle, waiting on permission, archived), paging, and whether the final assistant message and Bash results come back whole with exit codes recorded by the harness | The session prints outputs of 1 KB, 30 KB and 100 KB with SHA-256; compare byte counts and digests with the events; run one failing command | A |
+| U3 | Shapes of `GET /v1/code/sessions/{id}` and `…/events`: status values (running, idle, waiting on permission, archived), paging, event ordering, and whether the final assistant message and Bash results come back whole with exit codes recorded by the harness. Which event ends a turn, and whether a queued follow-up's user event is recorded when it is queued or when its turn starts | The session prints outputs of 1 KB, 30 KB and 100 KB with SHA-256; compare byte counts and digests with the events; run one failing command. Queue two parts while the first turn is still running, each asking for a `Receipt <token>` first line; read the events after each send and after the session goes idle, and note where each user event, assistant message and turn end sits | A |
 | U4 | The largest follow-up `claude -p --cloud` accepts | Send 32 KB, 64 KB and 128 KB messages on stdin; read `ok` and the events | A |
 | U5 | Does the read-only connection refuse a push and a comment? | First, from this machine with its normal write-capable `gh` login, calibrate both requests once: `POST repos/{repo}/git/refs` for a fresh `refs/heads/delegatus-probe-<nonce>` with an all-zero SHA, and `POST repos/{repo}/issues/{closed issue}/comments` with an empty body. Each must answer 422 and create nothing. Then in session A the same two requests through the proxy must answer 401, 403 or 404. Only when both are refused: `git push origin HEAD:refs/heads/delegatus-probe-<nonce>` of the already published head. A push that succeeds stops the spike; Delegatus deletes the probe ref with its own credentials and reports it | A |
 | U6 | Can a setup script install Bun 1.4.0 and run `bun install --frozen-lockfile` through the security proxy inside the five-minute cache budget? How long do `bun x tsc --noEmit` and one touched test take on 4 vCPU? Can Chrome for Testing be fetched, and do one kanban driver block and one phone driver block render? | A setup script mirroring the `Dockerfile` deps stage, timed; then the drivers with `CHROME_BIN` set; look at one frame from each | B |
@@ -382,7 +387,7 @@ S0 answers each row. The budget is about six short sessions on one account
 | U8 | Which CLI call refreshes an expired access token without side effects, and how two concurrent refreshes behave | Compare `expiresAt` in the credential file before and after `claude auth status --json` and after a `claude -p --cloud` send | No session |
 | U9 | Can a session start from a tree that is not on GitHub, for the decisive pre-push checks? | `CCR_FORCE_BUNDLE=1 claude --cloud "<task>"` from a throwaway repository with no remote, under a pseudo-terminal with `--debug api`; record the creation call and whether events carry exit codes | E |
 | U10 | How a run waiting on an auto-mode permission prompt shows in status | Ask the session for an action that matches an ask rule | A |
-| U11 | What the run call answers (session id or not); whether body text reaches the session verbatim, in which event and field; how long until `list_runs` lists the run. The delay is recorded only: no design step concludes from an empty list that no session exists | Run once with a nonce in the body; read the answer, then `get_run_log` and the first events page for the nonce; list immediately, after 30 seconds and after five minutes. The record states whether L1 can bind a run to its attempt (4.4 step 4). If the call is unusable, start session A with `claude --cloud` from the logged-in CLI under a pseudo-terminal and record the creation call (L3) | A |
+| U11 | What the run call answers (session id or not); whether body text reaches the session verbatim, in which event and field; how long until `list_runs` lists the run, and how long after that its prompt event appears in the events. Both delays are recorded only: no design step concludes from an empty list, or from a listed run with no prompt event yet, that no session or no nonce exists | Run once with a nonce in the body; read the answer, then `get_run_log` and the first events page for the nonce; list immediately, after 30 seconds and after five minutes, and read the first events page of the listed run at each of those times. The record states whether L1 can bind a run to its attempt (4.4 step 4). If the call is unusable, start session A with `claude --cloud` from the logged-in CLI under a pseudo-terminal and record the creation call (L3) | A |
 | U15 | Receipts for follow-ups: does a message queued with `claude -p --cloud` appear in the events as a user event with its text whole, how soon after `{ok: true}`, and which `{ok: false}` errors and stderr failures leave nothing queued? What does a send killed by its deadline leave? | Send three short parts with distinct headers and read the events after each; send one with an invalid session id and one with the login file unreadable; kill one send one second after start, then read the events for five minutes | A |
 | U12 | Does a diff exported as numbered base64 blocks come back whole, and does it survive the VM pausing between export and read? | Session C makes a small change, exports it, idles past the pause, then gets one follow-up; compare digests | C |
 | U13 | How many sessions run at once on one Max account | Start session D while C is running | D |
@@ -505,10 +510,14 @@ Recommended: L1 to launch, documented `claude -p --cloud` follow-ups for the
 probe, the input and the export request, R1 to read and D1 to return the diff.
 S0 gates all of it.
 
-- **L1 usable** (U11): the run call answers with the session id, or its body
-  text reaches the session's events verbatim, so 4.4 step 4 can bind a run to
-  its attempt. S3 builds the provider on L1.
-- **L1 unusable** (refused, or a run that can be bound neither way): the
+- **L1 usable** (U11, U3, U15): the run call answers with the session id, or
+  its body text reaches the session's events verbatim, so 4.4 step 4 can bind
+  a run to its attempt; and a result can be bound to the turn that ran the last
+  part (4.4, Poll and read): queued parts appear as user events, a turn-end
+  event exists, and session A's final message carried the last part's receipt
+  line. S3 builds the provider on L1.
+- **L1 unusable** (refused, a run that can be bound neither way, or a result
+  that cannot be bound to its last part): the
   Claude provider is not built for stages. S3 is not started, Claude's
   capabilities stay false, the runtime control shows Claude cloud disabled with
   the reason "Claude cloud launch not available", and every Claude stage runs on
@@ -569,17 +578,18 @@ export type CloudCapabilities = { readOnlyStages: boolean; writeStages: boolean;
 export type CloudReference =
   | { provider: "codex"; threadId: string; turnId: string; hosted?: { environmentId: string; cwd: string; model: string } }
   | { provider: "claude"; sessionId: string; taskId: string; nonce: string; probe: "pending" | "refused";
-      parts: number; delivered: number; sending: { part: number; since: string; outcome: "pending" | "unknown" } | null;
-      eventsCursor: string | null };
+      parts: number; tokens: string[]; queued: number; sending: { part: number; since: string; outcome: "pending" | "unknown" } | null;
+      lastPartEvent: string | null; eventsCursor: string | null };
 
 export interface CloudStageClient {
   readonly provider: CloudProviderId;
   capabilities(input: { project: string; account: AccountContext }): CloudCapabilities;
   supportsModel(model: string, reasoningEffort: string | null, account: AccountContext): boolean;
   /** Creates the remote task. Codex sends its whole input here; Claude sends nothing yet. */
-  submit(input: { target: string; branch: string; headSha: string; parts: string[]; model: string; reasoningEffort: string | null;
+  submit(input: { purpose: "stage" | "readiness-check"; target: string; branch: string; headSha: string; parts: string[]; model: string; reasoningEffort: string | null;
     allowProviderModelFallback: false; account: AccountContext; signal: AbortSignal; assertCurrent: () => void }): Promise<{ taskId: string; taskUrl: string; reference: CloudReference }>;
-  /** One bounded step of what follows creation. Claude: the GitHub write probe, then the next part. Codex: done at once. */
+  /** One bounded step of what follows creation. Claude: the GitHub write probe, then the next part. Codex: done at once.
+   * Empty `parts` is the readiness check (4.4): the probe and nothing after it. */
   deliver(input: CloudTaskAccess & { parts: string[] }): Promise<{ reference: CloudReference; done: boolean }>;
   poll(input: CloudTaskAccess): Promise<CloudTaskObservation>;
   readFinalMessage(input: CloudTaskAccess): Promise<{ message: string; model: string | null }>;
@@ -591,7 +601,14 @@ export interface CloudStageClient {
 
 - `submit` takes the parts from the shared composer (4.5). Codex sends them as
   turns. Every transport error is a `CloudFailure` or `CloudNotReady`, so the
-  engine and the check runner classify one way.
+  engine and the check runner classify one way. `purpose: "readiness-check"`
+  is Claude's probe-only run (4.4, Readiness record); Codex refuses it as
+  `invalid`.
+- `poll` reports `completed` only when the provider has bound a finished turn
+  to the last input it sent, and `readFinalMessage` reads only that turn. Codex
+  already does this: it finds the turn by the accepted `turnId` and reads only
+  that turn's items (`cloudHostedClient.ts:363` and `:429`–`:432` at
+  `e28d793c`). Claude binds by the receipt of 4.4 (Poll and read).
 - `PipelinePorts.cloudClients: Partial<Record<CloudProviderId,
   CloudStageClient>>` replaces `cloudClient` (engine.ts:279).
   `defaultPipelinePorts` registers `hostedCloudStageClient`, and
@@ -619,6 +636,9 @@ export interface CloudStageClient {
   write probe and multi-part input (`reference.probe` tells them apart);
   `collecting` covers the diff export.
 - `nonce: string`, generated and persisted at `reserved`, before any call.
+- `candidates: Array<{ sessionId: string; createdAt: string; state: "new" |
+  "pending" | "read"; carriesNonce: boolean | null; lastReadAt: string | null
+  }>`, for reconciling an unknown run outcome (4.4 step 4).
 - `submittingAt: string`, `submitOutcome?: "unknown"` with `unknownSince:
   string`, `retries: number`, `failureClass?: CloudFailureClass`, and
   `fallback?: { cause: "unavailable" | "cloud-limit" | "not-ready"; detail:
@@ -674,10 +694,37 @@ checkedAt, trainingOff, taskEnabled, connectors, repository, lastProbe:
 `repository` come from two read-only calls on the login, `GET
 /api/oauth/account/settings` and `GET /v1/code/triggers/{taskId}` (U0, U14).
 They are refreshed at most once an hour per account, by the controller job
-that is about to submit. A Settings «Check» button runs one short session
-through the same path as a stage, probe only. The provider is off for the
-project until a probe has been refused and the record shows training off, the
-task enabled, zero connectors and this repository.
+that is about to submit. The provider is off for the project until a probe has
+been refused and the record shows training off, the task enabled, zero
+connectors and this repository. Stage submission (Submit, step 1) requires that
+ready record.
+
+A new install or a newly added account has no probe yet, so stage submission
+can never pick it. The readiness check is its own admission, through the same
+client and controller jobs:
+
+- A Settings «Check» button, per account and task, starts one controller job
+  `cloud.claude.check` (one per account and task at a time; a second press while
+  one runs joins it). It first refreshes the two read-only calls. Training not
+  off, the task paused or off, any connector, or another repository: the record
+  stores the reason, no run call is made, and the provider stays off.
+- With those static conditions met, it is admitted whatever `lastProbe` holds:
+  `null` on a fresh record, `"write-access"` after the operator fixed the
+  GitHub connection, or `"refused"` for a recheck. It calls `submit` with
+  `purpose: "readiness-check"` and `deliver` with no parts, so the run gets the
+  probe part (Submit, step 5) and nothing after it. The check is persisted
+  under the account's readiness entry with the same `phase`, `nonce`,
+  `submittingAt`, candidate and `sending` fields as a stage attempt, so the
+  run-call-once rule, reconciliation (step 4) and receipts (step 8) hold for it
+  across a restart.
+- Both refusals write `lastProbe: "refused"` and the capabilities; the
+  provider becomes ready for the project. Either 422 writes `"write-access"`
+  and raises the attention item. No probe result within ten minutes writes no
+  `lastProbe` and records `cloud-limit`. In every case the session is then
+  cancelled where U7 proved `cancel`, and otherwise left to end on the saved
+  prompt; no assignment part is ever sent.
+- Stage attempts run the same probe per session (step 5). A stage attempt's
+  probe that answers 422 also writes `"write-access"`.
 
 **Submit**
 
@@ -692,7 +739,8 @@ task enabled, zero connectors and this repository.
    Step 4 binds by nonce, so nothing depends on Delegatus being the only
    starter.
 3. `POST /v1/code/triggers/{taskId}/run` on the login, with the body `Delegatus
-   stage <pipeline>/<stage> attempt <n>, nonce <nonce>`. Answers:
+   stage <pipeline>/<stage> attempt <n>, nonce <nonce>` (a readiness check
+   sends `Delegatus readiness check <check id>, nonce <nonce>`). Answers:
    - A session id stores it and moves to `delivering`.
    - A refusal answer means no session exists. The CLI's tool contract states
      that "a fire that was skipped or refused before a session existed
@@ -712,34 +760,49 @@ task enabled, zero connectors and this repository.
 4. Reconciling an unknown outcome binds only by the nonce, and only when U11
    showed that body text reaches the session's events. Each due tick lists
    `GET /v1/code/sessions?trigger_id=<taskId>` and keeps the runs created at
-   or after `submittingAt` minus a 60-second clock allowance. For each
-   candidate it has not checked yet, at most five per tick, it reads the
-   prompt event that U11 names. Candidate ids already checked are kept on the
-   attempt, so a tick reads only new candidates.
-   - Exactly one candidate carries the attempt's nonce: adopt it and move to
-     `delivering`.
-   - A run without the nonce is someone else's (Run now, a schedule, another
-     attempt). It is never adopted and never receives a part.
+   or after `submittingAt` minus a 60-second clock allowance. Each candidate
+   has a state on the attempt: `new`, `pending` (its events were read and hold
+   no prompt event yet, for example only provisioning) or `read` (the prompt
+   event that U11 names was read). A run appearing in the list does not mean
+   its prompt event is visible yet; nothing documented makes the two appear
+   together, and U11 records the gap without bounding it. Each tick reads the
+   first events page of at most five candidates that are `new` or `pending`:
+   never-read first, then the least recently read, then oldest `created_at`,
+   then id, so a run that stays `pending` cannot starve a newer one. Each read
+   time is stored on the candidate. A `pending` candidate is read again
+   on every due tick while the window below lasts; only a `read` candidate is
+   final.
+   - Exactly one `read` candidate carries the attempt's nonce: adopt it and
+     move to `delivering`.
+   - A `read` candidate whose prompt lacks the nonce is someone else's (Run
+     now, a schedule, another attempt). It is never adopted, never read again
+     and never receives a part.
    - Two or more carry the nonce: adopt none; the outcome stays unknown.
-   - No match: the outcome stays unknown. An empty or nonce-free list proves
-     nothing, because no source bounds how soon a created run becomes visible
-     (U11 records the delay only).
+   - No match, `pending` candidates included: the outcome stays unknown. An
+     empty or nonce-free list proves nothing, because no source bounds how soon
+     a created run becomes visible (U11 records the delay only).
    - The attempt keeps reconciling for ten minutes from `unknownSince`. After
      that it falls back to this machine as confirmed `unavailable` (4.8),
      without a retry: a second run call could start a second session. When U11
      showed that body text does not reach the events, the window is skipped and
      the fallback is immediate.
-   - A run carrying the nonce that appears after the fallback is recorded in
-     `fallback.lateSession`, cancelled where U7 proved `cancel`, and sent
-     nothing. The saved prompt makes a run that receives no assignment end its
-     first turn at once. Later attempts have other nonces, so none of them
-     adopts it.
-   - The unknown state, the checked candidates and the late session are
-     persisted on the attempt, so all of this holds across a restart.
+   - After the fallback, the controller keeps listing and reading `new` and
+     `pending` candidates at the `cloudPollDelay` backoff until the attempt's
+     deadline, still at most five reads per tick. A candidate whose prompt then
+     shows the nonce is recorded in `fallback.lateSession`, cancelled where U7
+     proved `cancel`, and sent nothing. The saved prompt makes a run that
+     receives no assignment end its first turn at once. Later attempts have
+     other nonces, so none of them adopts it.
+   - The unknown state, every candidate with its state and read time, and the
+     late session are persisted on the attempt, so all of this holds across a
+     restart: a `pending` candidate is read again after it, and the run call
+     is never repeated.
 5. `delivering`, probe first. Part 0 asks for exactly two commands: the U5
    refs request and the U5 comment request, through `gh api` and the proxy.
    `deliver` reads their harness-recorded results from events and matches the
-   command text exactly, as `isExactCommand` does for checks. Both refused (401,
+   command text exactly, as `isExactCommand` does for checks. The refs request
+   names `delegatus-probe-<nonce>`, so only this attempt's probe can match, and
+   only results after the probe part's own user event count. Both refused (401,
    403 or 404): `probe = "refused"`, continue. Either 422: `CloudNotReady("GitHub
    write access in the cloud session")`; no assignment part is sent, the
    readiness record turns the provider off and an attention item names the fix.
@@ -760,11 +823,18 @@ task enabled, zero connectors and this repository.
    most once unless its refusal is proven. Delivery does not rely on the model
    ignoring repeats:
    - Each part, the probe included, starts with the header `Input part i/N,
-     nonce <nonce>, sha256 <digest of the part>`. A slash command cannot
-     carry a header; its receipt is a user event with exactly that text after
-     the previous follow-up's receipt (U2, U15). Before the CLI is spawned,
-     `reference.sending = { part: i, since, outcome: "pending" }` is persisted.
-   - `{ok: true}` persists `delivered = i + 1` and clears `sending`.
+     nonce <nonce>, token <token>, sha256 <digest of the part>`. `token` is
+     random per part, generated and persisted in `reference.tokens` when the
+     parts are fixed, before the first send; no earlier output in the session
+     can contain it. A slash command cannot carry a header; its receipt is a
+     user event with exactly that text after the previous follow-up's receipt
+     (U2, U15). Before the CLI is spawned, `reference.sending = { part: i,
+     since, outcome: "pending" }` is persisted.
+   - `{ok: true}` means the CLI queued the part (D1: it "queues the message
+     into the session and exits without waiting for a reply"). It persists
+     `queued = i + 1` and clears `sending`, so the next part may be queued
+     behind it. It is no proof that the session has read or run the part; only
+     the binding under Poll and read settles the stage.
    - A refusal that S0 recorded as leaving nothing queued (U15: an `{ok:
      false}` error or a stderr configuration failure of that kind) clears
      `sending`. The next tick sends that part once more; a second refusal is
@@ -774,15 +844,16 @@ task enabled, zero connectors and this repository.
      `sending` set. The engine sets `outcome: "unknown"` and spawns no CLI.
      Each poll then reads the events after `eventsCursor` for a user event
      whose text starts with that part's header and whose digest matches. This
-     is the receipt. A matching event persists `delivered = i + 1`, clears
+     is the receipt. A matching event persists `queued = i + 1`, clears
      `sending` and continues with the next part.
    - No receipt within ten minutes of `since`: the part is not sent again. The
      attempt falls back as confirmed `unavailable` (4.8), and the
      session is abandoned with `cancel` where U7 proved it. A missing receipt
      never counts as proof that the part was not queued.
    - When U15 shows that queued follow-ups do not appear whole in the events,
-     an unknown send has no receipt to wait for and falls back at once.
-9. The phase moves to `polling`.
+     no part has a receipt and no result can be bound to its last part (Poll
+     and read), so S0 records "L1 unusable" (§3) and this path is not built.
+9. The phase moves to `polling` once the last part is queued.
 
 **Poll and read**
 
@@ -790,10 +861,29 @@ task enabled, zero connectors and this repository.
   events page after `eventsCursor`. Backoff runs from 2 to 30 seconds through
   `cloudPollDelay`. Waiting on a permission prompt (U10) for more than ten
   minutes is `cloud-limit`.
-- When the session goes idle after the last part, `readFinalMessage` takes the
-  last assistant message from the events. The model is confirmed where the
-  events report it (U2, U3). The verdict goes through
-  `parsePipelineStageVerdict` (engine.ts:2658), as for Codex.
+- **Binding the result to the last part.** An idle session and a last
+  assistant message prove nothing on their own: the probe turn or an earlier
+  part may have ended with a valid-looking verdict, and the last part may still
+  be queued with its turn not started. `poll` reports `completed` only when the
+  events read so far show, in event order:
+  1. the user event of the last part, with its header and digest (its receipt,
+     as in step 8), stored as `reference.lastPartEvent`;
+  2. after it, an assistant message whose first line is `Receipt <token of
+     the last part>`; the runtime lines (4.5) ask for that line, and no turn
+     before the last part was read can know the token;
+  3. after that message, the turn-end event U3 names, with no assistant event
+     after it.
+
+  `readFinalMessage` returns that message without its receipt line. The
+  verdict goes through `parsePipelineStageVerdict` (engine.ts:2658), as for
+  Codex. The model is confirmed where the events report it (U2, U3). Anything
+  short of all three leaves the result unknown and the attempt keeps polling;
+  a message with the wrong token or none is never parsed as the verdict. No
+  bound result by the deadline is the deadline's `cloud-limit` (4.8), never a
+  verdict. `tokens`, `queued` and `lastPartEvent` are persisted, so a restart
+  between the last send and the end of its turn binds the same way. A
+  follow-up for missing diff blocks (4.6) is bound the same way by its own
+  token.
 - **Auth.** The account's OAuth access token and organization id are read from
   its own files into memory for each operation, which is what the CLI's
   `teleport-org` mode sends. Delegatus never writes those files. When the token
@@ -817,7 +907,9 @@ and S3 timings.
   the handoff digest. Then the cloud runtime lines replace the local host, MCP
   and scratch mechanics (`engine.ts:8096`) and add: check out exactly
   `<headSha>` from `origin/<branch>`; do not push; leave changes in the working
-  tree.
+  tree; work only after part N/N has arrived, and begin the final message with
+  the line `Receipt <token>`, copying the token from part N/N's header (4.4,
+  Poll and read).
 - Learned rules arrive as the first assignment part after the probe. Local
   Claude gets them in the system prompt and Codex in developer instructions; a
   cloud session has neither channel. Delivery is recorded in the memory
@@ -833,14 +925,16 @@ and S3 timings.
 ### 4.6 How the result returns
 
 - **Verdict:** the final message ends with the fenced JSON verdict, the same
-  contract as PR #3302's cloud stages. It settles through `tickCloudStage` and
+  contract as PR #3302's cloud stages. For Claude it starts with the receipt
+  line and counts only when bound to the last part (4.4, Poll and read). It settles through `tickCloudStage` and
   the existing fail edges.
 - **Diff (S4):** for build and fix stages, the runtime lines tell the session
   to run, as its last step: `git add -A`, `git diff --cached --binary <headSha>`
   to a file, then print its byte count and SHA-256, then print it in numbered
   base64 blocks. The block size is the largest output U3 shows returned whole.
   It all happens in the same turn, before the VM can pause and be reclaimed.
-  `readDiff` reassembles the blocks from events, checks count and checksum, and
+  `readDiff` reassembles the blocks from the events of the bound turn only,
+  checks count and checksum, and
   returns the patch. When blocks are missing, one follow-up asks for them again.
   A reclaimed VM means `cloud-limit`.
 - **Decision 4:** when S0 shows that U3, U4 or U12 does not return output whole,
@@ -969,8 +1063,10 @@ attempt someone else's.
   per-attempt scan.
 - A poll reads one session record and one events page after the stored cursor;
   the work scales with new events. `list_runs` runs only for an unknown
-  submit and reads the prompt event of at most five unchecked candidates per
-  tick. The readiness reads run at most once an hour per account.
+  submit and reads the first events page of at most five `new` or `pending`
+  candidates per tick, least recently read first. The readiness reads run at
+  most once an hour per account, and a readiness check only on a «Check»
+  press.
 - CLI sends are child processes with a deadline and process-group cleanup,
   spawned from the main thread, at most one per attempt at a time.
 - Every new controller job carries a monitor operation label, for example
@@ -1007,12 +1103,12 @@ attempt someone else's.
 
 | Slice | Depends on | Work | Acceptance |
 | --- | --- | --- | --- |
-| **S0. Observation spike** | Decisions 1 to 3 (answered 2026-10-25); the operator's setup steps 1 to 4 of 4.4 on one account, and step 1 on the other | No-session steps first: U0, U8, U14, and the local U5 calibration. Then sessions A to E on the one account, F only as a repeat (1.12). Scratch tooling lives in a durable folder outside the repository, named in the task details. Commit `evidence/claude-code-cloud.json` (request and response shapes with ids and tokens removed, timings, sizes, model and status values) and update §1.12 and §3 of this document | Every U row has an observed answer or "not available" with its evidence. At most six sessions, counted from `list_runs` and the send log. Every call used the account's subscription login, read from its own login files. Nothing written to GitHub; if a probe push wrongly succeeds, the ref is deleted, reported, and the spike stops. The record states whether results come back whole, which decides decision 4. It states one launch verdict, "L1 usable" or "L1 unusable" with its evidence (§3): usable needs the session id in the run answer or the body nonce found verbatim in the run's events (U11). It states which follow-up outcomes carry a receipt: whether queued text appears whole in the events and which `{ok: false}` and stderr failures leave nothing queued (U15) |
+| **S0. Observation spike** | Decisions 1 to 3 (answered 2026-10-25); the operator's setup steps 1 to 4 of 4.4 on one account, and step 1 on the other | No-session steps first: U0, U8, U14, and the local U5 calibration. Then sessions A to E on the one account, F only as a repeat (1.12). Scratch tooling lives in a durable folder outside the repository, named in the task details. Commit `evidence/claude-code-cloud.json` (request and response shapes with ids and tokens removed, timings, sizes, model and status values) and update §1.12 and §3 of this document | Every U row has an observed answer or "not available" with its evidence. At most six sessions, counted from `list_runs` and the send log. Every call used the account's subscription login, read from its own login files. Nothing written to GitHub; if a probe push wrongly succeeds, the ref is deleted, reported, and the spike stops. The record states whether results come back whole, which decides decision 4. It states one launch verdict, "L1 usable" or "L1 unusable" with its evidence (§3): usable needs the session id in the run answer or the body nonce found verbatim in the run's events (U11), and a result bound to its last part: queued parts appear as user events (U15), a turn-end event exists (U3), and the final message of session A carried the last part's `Receipt <token>` line. It states which follow-up outcomes carry a receipt: whether queued text appears whole in the events and which `{ok: false}` and stderr failures leave nothing queued (U15) |
 | **S1. One cloud-stage seam** | None open (PR #3302 is on `main`) | 4.1 to 4.3 plus 4.5: runtime union, provider registry, the moved failure vocabulary and `CloudNotReady`, provider-neutral messages, the extended attempt record with old-record reads, `deliver`; apply result 73's composer without its transport and use it for Codex cloud stages | Existing `cloudStage`, `cloudHostedClient`, `engine.cloud` and `scripts/cloud-checks` tests pass. A fake `claude` client proves engine-based dispatch and account resolution. For the same stage, the cloud parts joined equal the local composed input apart from the runtime lines. Codex cloud stages carry learned rules. One stage-side `thread/start` sender exists under `src/` |
 | **S2. Fallback to this machine** | S1 | 4.8 for stage attempts of both providers | Fake providers raise each class and `CloudNotReady` before and after a receipt. Tests assert the attempt transitions, exactly one local start on the same head, none for `account-limit`, `invalid` failing the attempt, a late cloud result ignored after fallback, and resumption across a real-process restart (`fixtures/cloudStageRestart.ts`) |
-| **S3. Claude provider, review and verify** | S0 with the verdict "L1 usable" (U1, U3, U5, U11, U15 answered), S1, S2. With "L1 unusable" this slice is not started (§3) | 4.4: settings, readiness record, run call, nonce reconciliation, probe, parts with receipts, polling | Fake HTTP and CLI tests: the run call carries the login and no other credential; 429 is `cloud-limit` with `Retry-After`; 401 is `account-limit`; 404 is `CloudNotReady`. Lost run answers, each against a fake that counts run calls and sent parts: a lost answer whose own run appears in the list is adopted by its nonce; a foreign Run now run created after `submittingAt`, alone or listed before the own run, is never adopted and receives no part; two candidates carrying the nonce adopt none; the own run appearing only after the ten-minute window is recorded as `lateSession` and receives nothing, and the next attempt does not adopt it; a 5xx answer is unknown; in every case the run call count is one. Lost sends: the CLI queues part i and then hangs to its deadline, or answers with its JSON lost, or the process restarts before `delivered` is persisted. The receipt in the events advances `delivered` with no second send. With no receipt, the part is never sent again, and the attempt falls back after its window. A refusal recorded as leaving nothing queued is sent once more. The fake session counts how often it received each part and the assignment: every count is one. The unknown run, the checked candidates and `sending` survive a real-process restart (`fixtures/cloudStageRestart.ts`). A fake probe answering 422 sends no part and turns the provider off; no probe result in ten minutes is `cloud-limit`; parts go on stdin, in order; a task listing a connector is refused. A scan of records, logs and spawned argument lists shows no token. One live review stage on a published lane head, with operator approval, settles with its verdict |
+| **S3. Claude provider, review and verify** | S0 with the verdict "L1 usable" (U1, U3, U5, U11, U15 answered), S1, S2. With "L1 unusable" this slice is not started (§3) | 4.4: settings, readiness record, run call, nonce reconciliation, probe, parts with receipts, polling | Fake HTTP and CLI tests: the run call carries the login and no other credential; 429 is `cloud-limit` with `Retry-After`; 401 is `account-limit`; 404 is `CloudNotReady`. Lost run answers, each against a fake that counts run calls and sent parts: a lost answer whose own run appears in the list is adopted by its nonce; a foreign Run now run created after `submittingAt`, alone or listed before the own run, is never adopted and receives no part; two candidates carrying the nonce adopt none; the own run appearing only after the ten-minute window is recorded as `lateSession` and receives nothing, and the next attempt does not adopt it; the own run listed while its events hold only provisioning, with its prompt and nonce appearing on the next tick, is adopted on that tick, and the same holds when a real-process restart falls between the two ticks; a foreign run read the same way gets no part; a candidate that stays `pending` does not stop a newer candidate from being read within the five-per-tick bound; a 5xx answer is unknown; in every case the run call count is one and the own run is adopted at most once. Lost sends: the CLI queues part i and then hangs to its deadline, or answers with its JSON lost, or the process restarts before `queued` is persisted. The receipt in the events advances `queued` with no second send. With no receipt, the part is never sent again, and the attempt falls back after its window. A refusal recorded as leaving nothing queued is sent once more. The fake session counts how often it received each part and the assignment: every count is one. The unknown run, the candidates with their states and `sending` survive a real-process restart (`fixtures/cloudStageRestart.ts`). Result binding: the fake session already holds a valid fenced pass from the probe turn or an earlier part, the last part is queued with `{ok: true}`, its turn has not started and the session reads idle: the stage does not complete. A message with no receipt line, or the token of another part, is never parsed as the verdict. Only the message after the last part's user event, carrying its token and followed by the turn end, completes the stage, also when a real-process restart falls between the last send and the turn end. With no bound result by the deadline the attempt fails as `cloud-limit` and falls back. Readiness check, from an empty readiness store: one «Check» makes exactly one run call and sends exactly the probe part and no assignment; both refusals make the provider ready; a 422 in either request keeps it off with `write-access`; training not off, a connector, the task paused or another repository makes no run call and keeps it off with its reason; a second press while one runs makes no second run call; a lost run answer during a check reconciles by nonce like a stage. A fake probe answering 422 sends no part and turns the provider off; no probe result in ten minutes is `cloud-limit`; parts go on stdin, in order; a task listing a connector is refused. A scan of records, logs and spawned argument lists shows no token. One live review stage on a published lane head, with operator approval, settles with its verdict |
 | **S4. Diff return and apply** | S1 for Codex; S3 and S0's whole-output answer for Claude | 4.6 for both providers, or for Codex alone under decision 4; lift `cloudStageConfigurationError` to builder and fix where `writeStages` holds | Checksum mismatch, path escape, outside symlink and submodule change are refused; a privacy-violating line in a cloud diff fails the settlement commit like a local stage; a reclaimed VM before export falls back; one live build stage per built provider settles through publication |
-| **S5. Pipelines, board and guide** | S1; Claude states after S3 | 4.9, the Settings rows for both providers (task id, readiness, «Check»), and the user guide in `docs/guide/pipelines.md` and `docs/guide/configuration.md` | Rendered evidence through `kanbanBoard.browser.test.tsx` (one describe block over the existing fixture) and the phone driver: every phase, "not ready" and the default-not-ready line, en and uk, light and dark, at the board's named widths, every frame inspected. The choice reaches the stage over the UI and over MCP, and a refused write rolls back in place |
+| **S5. Pipelines, board and guide** | S1; Claude states after S3 | 4.9, the Settings rows for both providers (task id, readiness, «Check»), and the user guide in `docs/guide/pipelines.md` and `docs/guide/configuration.md` | On a fresh install with a task id entered and no readiness record, «Check» is enabled and its press starts the check job of 4.4 (one run call, the probe only); the row shows the result, ready or the reason, and the stage runtime control turns Claude cloud on only after a refused probe. Rendered evidence through `kanbanBoard.browser.test.tsx` (one describe block over the existing fixture) and the phone driver: every phase, "not ready" and the default-not-ready line, en and uk, light and dark, at the board's named widths, every frame inspected. The choice reaches the stage over the UI and over MCP, and a refused write rolls back in place |
 | **S6. Checks on the shared seam** | S1 | Move `AppServerCloudTransport`'s thread and turn sequence onto `cloudHostedClient.ts`; settle the setting vocabulary, `claude-cloud` included as a refused value (4.10) | One Codex Cloud thread and turn sequence in the repository. PR #3330's tests pass. A stored `cloud` value keeps working. `claude-cloud` is refused for checks with the reason "Claude cloud checks not available" over the UI, MCP and git config, and the hook then runs the checks as the stored fallback says |
 | **S7. Default runtime (decision 5)** | S3 for the visual critic with U6's driver answer; S4's Claude half for frontend builders; S5 | 4.12 | Tests: a new visual-critic stage gets `claude-cloud` when ready and no runtime with the reason when not; `runtime: "local"` is respected; stored stages keep their runtime when readiness flips; a frontend builder gets it only with `writeStages`; a Codex-bound frontend builder and a prototype-mode builder are unchanged; the checks default stays Codex Cloud |
 
