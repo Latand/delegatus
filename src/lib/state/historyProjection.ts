@@ -7,7 +7,7 @@ import { mayRunStateStartupMutation } from "@/lib/stateOwnership";
 import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { statePath } from "@/lib/configDir";
 import { observeSqlite } from "@/lib/sqliteReadAttribution";
-import { databaseFileIdentity, openCurrentDatabase } from "./currentDatabase";
+import { DatabaseReplacedError, databaseFileIdentity, openCurrentDatabase } from "./currentDatabase";
 import { stateLockAttempt, stateLockDeferral, waitForStateLock } from "./lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import type { AgentLivenessPipelineRef, LivenessFlow } from "@/lib/lifecycle/liveness";
@@ -325,18 +325,38 @@ export async function readHistoryProjection<T>(read: (db: Database) => T, option
   const deadline = options.deadlineMs ?? performance.now() + 30_000;
   // Retain the finite batch and its progress across asynchronous lock retries.
   let pendingRows: Array<{ collection: string; row_key: string }> | undefined;
+  let pendingIdentity: string | null | undefined;
   let next = 0;
   return withViewerOperation("history.prepare", () => waitForStateLock("history.projection", async () => {
     let slice = performance.now();
     for (;;) {
       options.signal?.throwIfAborted();
       const db = connection(filename);
+      if (pendingRows && databaseFileIdentity(filename) !== pendingIdentity) {
+        throw new DatabaseReplacedError(`${filename} was replaced while history projection was draining`);
+      }
+      const batchIdentity = pendingRows ? pendingIdentity : databaseFileIdentity(filename);
       const answer = projectionStep(deadline, () => {
         db.exec("BEGIN");
         try {
-          pendingRows ??= db.query<{ collection: string; row_key: string }, SQLQueryBindings[]>(pendingSql).all(...collections);
+          if (!pendingRows) {
+            const rows = db.query<{ collection: string; row_key: string }, SQLQueryBindings[]>(pendingSql).all(...collections);
+            if (databaseFileIdentity(filename) !== batchIdentity) {
+              throw new DatabaseReplacedError(`${filename} was replaced while history projection captured its pending rows`);
+            }
+            pendingIdentity = batchIdentity;
+            pendingRows = rows;
+          }
           const pending = pendingRows[next];
-          if (!pending) { assertWriter(); const value = withViewerOperation("history.read", () => read(db)); db.exec("COMMIT"); return { value }; }
+          if (!pending) {
+            assertWriter();
+            const value = withViewerOperation("history.read", () => read(db));
+            db.exec("COMMIT");
+            if (databaseFileIdentity(filename) !== pendingIdentity) {
+              throw new DatabaseReplacedError(`${filename} was replaced while history projection read its answer`);
+            }
+            return { value };
+          }
           db.exec("ROLLBACK");
         } catch (error) { try { db.exec("ROLLBACK"); } catch { /* transaction already closed */ } throw error; }
         if (performance.now() > deadline) throw new FileTransactionBusyError("history projection preparation exceeded its deadline");
@@ -344,6 +364,9 @@ export async function readHistoryProjection<T>(read: (db: Database) => T, option
         db.exec("BEGIN IMMEDIATE");
         try {
           const pending = pendingRows![next];
+          if (databaseFileIdentity(filename) !== pendingIdentity) {
+            throw new DatabaseReplacedError(`${filename} was replaced while history projection was projecting a row`);
+          }
           assertWriter();
           if (pending) {
             const allowedStamps=new Map<string,{before:string;after:string}>();
@@ -363,6 +386,9 @@ export async function readHistoryProjection<T>(read: (db: Database) => T, option
             db.query("DELETE FROM history_pending WHERE collection=? AND row_key=?").run(pending.collection,pending.row_key);
             assertWriter();
             db.exec("COMMIT");
+            if (databaseFileIdentity(filename) !== pendingIdentity) {
+              throw new DatabaseReplacedError(`${filename} was replaced while history projection committed a row`);
+            }
             if(countUpdate)updateWarmCountCaches(filename,countUpdate,allowedStamps);
             next++;
             return null;
