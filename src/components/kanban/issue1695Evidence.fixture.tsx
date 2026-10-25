@@ -4030,7 +4030,7 @@ const workerAnswer = (project: string | null) => ({
   project: project ? { key: project, value: workerProject, effective: workerProject ?? workerMachine, source: workerSource() } : null,
   running: { here: project ? workerRunning : null, machine: WORKER_SCENE ? 19 : 0 },
 });
-const HEADER_ROUTES = ["/api/telemetry", "/api/subscription-api-consent", "/api/memory/settings", "/api/asks-you/key", "/api/team"];
+const HEADER_ROUTES = ["/api/telemetry", "/api/subscription-api-consent", "/api/memory/settings", "/api/memory/source", "/api/asks-you/key", "/api/team"];
 /* Team workspaces (docs/design/workspaces.md §13.9): `?scenario=workspaces` is the Viewer over the rail's
    projects (`&rail=1`) on a team install; `workspaces-team` and `workspaces-page` mount the Team page's
    Workspaces tab and one workspace's page. `&member=1` signs the member in, `&ws=client|research|long|all`
@@ -4112,6 +4112,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (SCENARIO === "service-tier" && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => ({ ...role, promptPreview: role.promptScaffold, config: { ...role.config, ...(role.id === "reviewer" ? { serviceTier: "ultrafast" } : {}) }, shipped: { config: role.config } })) });
   if (SCENARIO === "memory-settings" && ["/api/telemetry", "/api/memory/settings", "/api/asks-you/key", "/api/asks-you"].includes(url.pathname)) return serverFetch(url.pathname + url.search, init);
   if (HEADER_MENU && HEADER_ROUTES.includes(url.pathname)) return serverFetch(url.pathname + url.search, init);
+  /* The installation's memory source (memory-source-switch.md §3.4): not chosen, unless the driver answers it under `&header=1`. */
+  if (url.pathname === "/api/memory/source") return json({ choice: null, phase: null });
   /* «Keys» (docs/design/keys-settings.md): the driver answers the section's routes, or hands them to the real ones. */
   if ((HEADER_MENU || SCENARIO === "memory-settings" || SCENARIO === "keys") && url.pathname.startsWith("/api/keys")) return serverFetch(url.pathname + url.search, init);
   if (SCENARIO === "keys" && url.pathname === "/api/transcribe/backend") return serverFetch(url.pathname + url.search, init);

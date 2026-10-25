@@ -54,6 +54,8 @@ export interface RewriteInput {
 }
 
 export interface StageRuleSource {
+  /** Task provenance for a correction written before a closing request exists. */
+  taskId?: string;
   origin?: "stage";
   project: string;
   pipelineId: string;
@@ -85,6 +87,14 @@ export interface ImportRuleSource {
   sha256: string;
   importId: string;
 }
+/** Server-attributed role conversation outside a pipeline, including scheduled roles. */
+export interface ConversationRuleSource {
+  origin: "conversation";
+  project: string;
+  roleId: string;
+  fixRound: false;
+  conversationId: string;
+}
 /** The operator's own root conversation, in Delegatus mode: project and machine only. */
 export interface OperatorRuleSource {
   origin: "operator";
@@ -93,7 +103,7 @@ export interface OperatorRuleSource {
   fixRound: false;
   conversationId: string;
 }
-export type RuleSource = StageRuleSource | SeatRuleSource | ImportRuleSource | OperatorRuleSource;
+export type RuleSource = StageRuleSource | SeatRuleSource | ImportRuleSource | OperatorRuleSource | ConversationRuleSource;
 
 /** One time a rule left the injected text, as it was then. Appended, never
     rewritten or removed, so a later restore, curation or re-archive leaves
@@ -106,6 +116,8 @@ export interface RuleDeparture {
 }
 
 export interface RoleMemoryRule {
+  /** This rule includes a lesson prompted by an operator correction. */
+  operatorCorrection?: true;
   kind: "rule";
   id: string;
   scope: string;
@@ -225,6 +237,7 @@ export interface LessonInput {
 
 /** What the window and the card read: no conversation ids leave the server. */
 export interface RuleView {
+  operatorCorrection?: true;
   id: string;
   rule: string;
   why: string;
@@ -271,8 +284,11 @@ export interface ScopeView {
 
 export interface RoleMemoryProjectView {
   project: string;
-  /** False only while the installation's kill switch (`LLV_ROLE_MEMORY=off`) is set. */
+  /** False while the installation's kill switch (`LLV_ROLE_MEMORY=off`) is set, or while the
+      installation chose the engines' own memory (memory-source-switch.md §3.1). */
   enabled: boolean;
+  /** Present when the Settings row's engines position stops the rules while the kill switch is unset. */
+  pausedBy?: "memorySource";
   scopes: ScopeView[];
   curation?: { lastAt: string | null; nextAt: string | null; newLessons: number; passes: CuratorPassView[] };
 }

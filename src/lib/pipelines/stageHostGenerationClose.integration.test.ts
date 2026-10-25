@@ -1364,10 +1364,12 @@ test.each(["{broken", JSON.stringify({ runs: [] })])("malformed archive %s defer
   pipeline.cursor = null;
   pipeline.closedAt = new Date(Date.now() - 5 * 86400000).toISOString();
   pipeline.hiddenAt = pipeline.closedAt;
+  await loseIncumbent(current);
+  const settledAt = NOW();
+  pipeline.terminalReap = { rounds: 1, stopped: 0, lastAt: settledAt, settledAt, settledAttempts: ["build:1"] };
   savePipelines(loadPipelines().map((record) => record.id === pipeline.id ? pipeline : record));
   const { archiveSettledPipelines } = await import("./store");
   await archiveSettledPipelines();
-  await loseIncumbent(current);
   const before = current.entry()!;
   const db = new Database(path.join(isolatedEnvironment.LLV_STATE_DIR, "state.sqlite"));
   const row = db.query("SELECT value_json FROM state_rows WHERE collection='pipelines_archive' AND row_key=?").get(pipeline.id) as { value_json: string };
