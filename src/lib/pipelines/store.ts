@@ -1,3 +1,4 @@
+import { cloudStageConfigurationError, isCloudStageAttempt } from "./cloudStage";
 import { projectStoreSignature } from "@/lib/projects/persistence";
 import { isPublicationRecovery, mergePublicationRecovery, publicationInterrupted, PUBLICATION_RETRY_DELAYS_MS, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
 import { deepFreeze } from "@/lib/deepFreeze";
@@ -20,6 +21,7 @@ import { statePath } from "@/lib/configDir";
 import { canonicalProject, projectAliasSnapshot, projectAliasResolver } from "@/lib/projects/aliases";
 import { canonicalProjectKeys, replaceProjectKeySource } from "@/lib/projects/projectKeyIndex";
 import { effortScale } from "@/lib/agent/efforts";
+import { validAgentMemoryMax, normalizeAgentMemoryCap } from "@/lib/runtime/agentMemoryConfig";
 import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/store";
 import { FileTransactionBusyError, refuseBusyBeforeAdmission } from "@/lib/state/fileTransaction";
@@ -302,6 +304,7 @@ function isAttempt(value: unknown, index: number): boolean {
   const attempt = value as Record<string, unknown>;
   return (
     attempt.n === index + 1 &&
+    (attempt.cloud === undefined || isCloudStageAttempt(attempt.cloud)) &&
     (attempt.decisionAnswerId === undefined || (typeof attempt.decisionAnswerId === "string" && attempt.decisionAnswerId.length > 0 && attempt.decisionAnswerId.length <= 200)) &&
     (attempt.historical === undefined || typeof attempt.historical === "boolean") &&
     (attempt.legacyReview === undefined || (attempt.legacyReview === true && attempt.historical === true)) &&
@@ -381,6 +384,7 @@ function isAttempt(value: unknown, index: number): boolean {
     (attempt.accountHolds === undefined || Array.isArray(attempt.accountHolds) && attempt.accountHolds.every(isSuspensionHold)) &&
     (attempt.runtimeEvidenceSince === undefined || typeof attempt.runtimeEvidenceSince === "string" && Number.isFinite(Date.parse(attempt.runtimeEvidenceSince))) &&
     (attempt.runtimeAccountPin === undefined || isNullableString(attempt.runtimeAccountPin)) &&
+    (attempt.memoryCap === undefined || normalizeAgentMemoryCap(attempt.memoryCap) !== null) &&
     isAttemptDefinition(attempt.definition) &&
     isSpawnActivation(attempt.activation) &&
     isStageReport(attempt.report) &&
@@ -444,7 +448,9 @@ function isAttemptDefinition(value: unknown): boolean {
   if (typeof value !== "object" || Array.isArray(value)) return false;
   const definition = value as Record<string, unknown>;
   const role = definition.role;
-  return typeof definition.boundAt === "string"
+  return (definition.runtime === undefined || definition.runtime === "codex-cloud")
+    && validAgentMemoryMax(definition.agentMemoryMaxBytes)
+    && typeof definition.boundAt === "string"
     && typeof definition.stageDigest === "string"
     && typeof definition.prompt === "string"
     && isNullableString(definition.account)
@@ -660,6 +666,7 @@ function isStage(value: unknown): value is PipelineStage {
     (stage.model === undefined || stage.model === null || typeof stage.model === "string") &&
     (stage.effort === undefined || stage.effort === null || typeof stage.effort === "string") &&
     (stage.serviceTier == null || typeof stage.serviceTier === "string") &&
+    validAgentMemoryMax(stage.agentMemoryMaxBytes) &&
     (stage.access === undefined || stage.access === "read-only" || stage.access === "read-write") &&
     (stage.sandbox === undefined || stage.sandbox === "full" || stage.sandbox === "restricted") &&
     (stage.outputs === undefined || (
@@ -670,6 +677,7 @@ function isStage(value: unknown): value is PipelineStage {
     )) &&
     isEffectiveRole(stage.effectiveRole)
   )) return false;
+  if (cloudStageConfigurationError(stage as PipelineStage)) return false;
   const effective = stage.effectiveRole;
   const referencedRoleId = role === undefined ? null : (role as { roleId: EffectivePipelineRole["roleId"] }).roleId;
   if (stage.outputs !== undefined && effective.access !== "read-only") return false;
@@ -1337,9 +1345,10 @@ async function preparePipelineEvidence(mode: "startup" | "health" | "ownership" 
   finally { if (!budget && pendingEvidence.get(pendingKey) === pending) pendingEvidence.delete(pendingKey); }
 }
 
-export async function loadPipelineOwnershipForStartupAsync(): Promise<PipelineStartupOwnership[]> {
+export async function loadPipelineOwnershipForStartupAsync(ids?: readonly string[], conversationIds?: ReadonlySet<string>): Promise<PipelineStartupOwnership[]> {
   const evidence = admittedEvidence.getStore()?.current ?? await preparePipelineEvidence("ownership");
-  return (evidence.ownership ?? evidence.pipelines.map(startupOwnership)).map(row => ({ ...row,
+  const selected = ids && new Set(ids);
+  return (evidence.ownership ?? evidence.pipelines.map(startupOwnership)).filter(row => !selected || selected.has(row.id) || row.attempts.some(attempt => attempt.conversationId !== null && conversationIds?.has(attempt.conversationId))).map(row => ({ ...row,
     attempts: row.attempts.map(attempt => ({ ...attempt })), survivors: row.survivors.map(identity => ({ ...identity })) }));
 }
 
@@ -2143,6 +2152,13 @@ export function archivedPipelinesRevision(): number {
 
 function pipelineSettledForArchive(pipeline: Pipeline, nowMs: number): boolean {
   if (!pipelineActivitySettled(pipeline)) return false;
+  /* The task-finish sweep reads the hot collection and records its durable
+     outcome on the marked lane. Keep that lane visible to the sweep while any
+     linked mark is unresolved, including while another lane on the task is
+     still open. Once every mark has a finish receipt, ordinary archival is
+     safe (and a task reopened afterwards intentionally stays open). */
+  const finishedTasks = new Set((pipeline.taskFinishes ?? []).map((finish) => finish.taskId));
+  if (pipeline.state === "completed" && (pipeline.finishesTaskIds ?? []).some((taskId) => pipeline.taskIds.includes(taskId) && !finishedTasks.has(taskId))) return false;
   /* Closed records archive on closedAt. A discarded draft now closes like
      anything else (#1274), but records discarded before that fix are hidden
      with no closedAt at all, so their hiddenAt still stands in. Anything still

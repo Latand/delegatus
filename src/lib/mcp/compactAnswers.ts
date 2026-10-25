@@ -11,6 +11,8 @@
  * without `compact` for a liveness row.
  */
 import { liveFreshObservation } from "@/lib/accounts/accountProjection";
+import { selectProjectAccount } from "@/lib/accounts/projectSelection";
+import type { AccountProjectBinding } from "@/lib/accounts/projectBindings";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 import type { AgentLivenessRecord, AgentLivenessSnapshot } from "@/lib/lifecycle/liveness";
 import { latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
@@ -298,9 +300,14 @@ export type AccountLimitEngine = "claude" | "codex" | "copilot";
 export type AccountLimitsInput = {
   engine?: AccountLimitEngine;
   accountId?: string;
-  accounts: Record<AccountLimitEngine, ReadonlyArray<{ accountId: string }>>;
+  accounts: Record<AccountLimitEngine, ReadonlyArray<{ accountId: string; authPresent?: boolean }>>;
   active: Record<AccountLimitEngine, string | null>;
   observations: Record<AccountLimitEngine, Readonly<Record<string, DurableQuotaObservation>>>;
+  /** Server-resolved project and bindings used by the actual automatic selector. */
+  project?: string | null;
+  bindings?: readonly AccountProjectBinding[];
+  /** Model explicitly named by the current surface; absent uses launch defaults. */
+  model?: string | null;
   now: number;
 };
 
@@ -320,25 +327,41 @@ function windowRow(window: LimitWindow | null | undefined) {
  */
 export function accountLimitRows(input: AccountLimitsInput) {
   const engines: AccountLimitEngine[] = input.engine ? [input.engine] : ["claude", "codex", "copilot"];
-  return engines.flatMap((engine) => input.accounts[engine]
-    .filter((account) => !input.accountId || account.accountId === input.accountId)
-    .map((account) => {
-      const observation = input.observations[engine][account.accountId];
-      const limits = observation?.limits ?? null;
-      return {
-        engine,
-        /* No label: it is free text the operator typed and may name a person;
-           the account id is the one identity this answer carries. */
-        accountId: account.accountId,
-        active: input.active[engine] === account.accountId,
-        /* Whether the observation is recent enough for the automatic switch to
-           act on — the same test the accounts panel draws "stale" from. */
-        fresh: liveFreshObservation(observation, input.now),
-        plan: limits?.plan ?? null,
-        session: windowRow(limits?.session),
-        weekly: windowRow(limits?.weekly),
-        tiers: modelTierWindows(limits).map((tier) => ({ tier: tier.tier, ...windowRow(tier)! })),
-        observedAt: observation?.observedAt ?? null,
-      };
-    }));
+  return engines.flatMap((engine) => {
+    const engineAccounts = input.accounts[engine];
+    const observationMap = input.observations[engine];
+    const nextChosen = engine === "copilot" ? null : selectProjectAccount({
+      project: input.project ?? null,
+      engine,
+      accounts: engineAccounts.map((account) => ({ id: account.accountId, authPresent: account.authPresent ?? true })),
+      observations: Object.values(observationMap),
+      bindings: [...(input.bindings ?? [])],
+      preferredId: input.active[engine],
+      model: input.model,
+      now: input.now,
+    });
+    const nextChosenId = nextChosen?.kind === "available" ? nextChosen.accountId : null;
+    return engineAccounts
+      .filter((account) => !input.accountId || account.accountId === input.accountId)
+      .map((account) => {
+        const observation = observationMap[account.accountId];
+        const limits = observation?.limits ?? null;
+        return {
+          engine,
+          /* No label: it is free text the operator typed and may name a person;
+             the account id is the one identity this answer carries. */
+          accountId: account.accountId,
+          active: input.active[engine] === account.accountId,
+          ...(nextChosenId ? { nextChosen: nextChosenId === account.accountId } : {}),
+          /* Whether the observation is recent enough for the automatic switch to
+             act on — the same test the accounts panel draws "stale" from. */
+          fresh: liveFreshObservation(observation, input.now),
+          plan: limits?.plan ?? null,
+          session: windowRow(limits?.session),
+          weekly: windowRow(limits?.weekly),
+          tiers: modelTierWindows(limits).map((tier) => ({ tier: tier.tier, ...windowRow(tier)! })),
+          observedAt: observation?.observedAt ?? null,
+        };
+      });
+  });
 }

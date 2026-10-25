@@ -1,3 +1,4 @@
+import { normalizeAgentMemoryCap, type AgentMemoryCap } from "@/lib/runtime/agentMemoryConfig";
 import type { AccountOverrideNotice } from "@/lib/accounts/accountOverrides";
 import { identityMaterializationFence, type SpawnReceipt } from "@/lib/agent/registry";
 import type { SpawnAdmissionError, SpawnRejection, SpawnRejectionCode } from "@/lib/agent/spawnAdmission";
@@ -23,6 +24,7 @@ export function spawnRejectionResponse(error: SpawnAdmissionError): SpawnRejecti
 }
 
 export interface SpawnResponse {
+  memoryCap?: AgentMemoryCap;
   ok: true;
   target: string | null;
   /** Published transcript path. Structured sessions stay null until finalization. */
@@ -87,8 +89,10 @@ export function spawnResponseForReceipt(
     && receipt.state !== "failed"
     && receipt.state !== "conflicted";
   const publishedPath = identityMaterializationFence().allowsReceipt(receipt, { structured }) ? path : null;
+  const memoryCap = normalizeAgentMemoryCap(receipt.memoryCap);
   return {
     ok: true,
+    ...(memoryCap ? { memoryCap } : {}),
     target: receipt.pane?.paneId ?? receipt.target ?? null,
     path: publishedPath,
     ...(structured && receipt.engine === "claude"

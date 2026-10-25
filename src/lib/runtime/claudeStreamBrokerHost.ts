@@ -304,6 +304,8 @@ const CHILD_ENV_ALLOWLIST = [
   "LC_ALL", "LC_CTYPE", "TERM", "COLORTERM", "NO_COLOR", "XDG_CONFIG_HOME",
   "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR",
   "DBUS_SESSION_BUS_ADDRESS", "SSL_CERT_FILE", "SSL_CERT_DIR",
+  /* Explicit opt-in for Claude's bypass-permissions mode under container root. */
+  "IS_SANDBOX",
   "LLV_SPAWN_CAPABILITY",
   "LLV_GATE_CPU_PRIORITY_SOURCE",
   /* Where Claude Code writes background-task output. A pipeline stage runs
@@ -379,6 +381,10 @@ const TERMINAL_CLI_EXIT_SIGNATURES: readonly { pattern: RegExp; reason: string }
   {
     pattern: /no conversation found with session id/i,
     reason: "the Claude CLI found no conversation with this session id",
+  },
+  {
+    pattern: /--dangerously-skip-permissions cannot be used with root\/sudo privileges/i,
+    reason: "the Claude CLI refused bypass permissions under root; set IS_SANDBOX=1 in the container environment or run as a non-root user",
   },
 ];
 
@@ -801,7 +807,8 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       if (this.releasing) this.finishRelease();
       else if (this.dead) this.notifyStateListeners();
       else if (!this.releasing && !this.released) {
-        const launchFailure = this.memoryCell?.launchFailure() ?? null;
+        // Pipes may deliver the diagnostic after exit, before close.
+        const launchFailure = this.terminalExit ?? this.memoryCell?.launchFailure() ?? null;
         if (launchFailure && this.endCause?.kind === "child-exit" && this.endCause.reason === CLAUDE_CHILD_EXITED) {
           this.endCause = { ...this.endCause, reason: boundedEndReason(launchFailure) };
         }
@@ -1385,7 +1392,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     if (this.exitNoted) return;
     this.exitNoted = true;
     if (!this.endCause) {
-      if (!this.releasing && !this.released) this.recordEnd("child-exit", CLAUDE_CHILD_EXITED, code, signal);
+      if (!this.releasing && !this.released) this.recordEnd("child-exit", this.terminalExit ?? CLAUDE_CHILD_EXITED, code, signal);
       return;
     }
     if (this.endCause.code === null && this.endCause.signal === null) {

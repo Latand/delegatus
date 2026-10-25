@@ -47,7 +47,7 @@ export function hostlessConversations(snapshot: RegistryFile): Map<string, Hostl
 }
 
 /** Revalidate one owner after I/O without discovering every historical owner again. */
-export function hostlessConversationEvidence(snapshot: RegistryFile, conversationId: string): HostlessConversationEvidence | null {
+export function hostlessConversationEvidence(snapshot: Pick<RegistryFile, "conversations" | "entries" | "receipts" | "conversationAliases">, conversationId: string): HostlessConversationEvidence | null {
   const canonical = resolveConversationAlias(snapshot, conversationId as ViewerConversationId);
   const conversation = snapshot.conversations[canonical];
   const generation = conversation?.generations.at(-1);

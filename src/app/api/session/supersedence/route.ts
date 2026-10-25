@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
 import { agentRegistry } from "@/lib/agent/registry";
@@ -19,7 +20,7 @@ type SupersedenceResponse = { ok: true; conversationId: string } | ApiError;
     superseded surface and the ordinary dead/resume recovery takes over. The
     edge is the ONLY thing removed — transcripts, receipts, memberships, and
     the successor conversation all stay untouched. */
-export async function POST(req: NextRequest): Promise<NextResponse<SupersedenceResponse>> {
+async function workspacePOST(req: NextRequest): Promise<NextResponse<SupersedenceResponse>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
 
@@ -43,3 +44,5 @@ export async function POST(req: NextRequest): Promise<NextResponse<SupersedenceR
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }
 }
+
+export const POST = workspaceRoute("/api/session/supersedence", workspacePOST);

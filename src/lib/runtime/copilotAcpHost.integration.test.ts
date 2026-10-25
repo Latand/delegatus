@@ -42,18 +42,16 @@ import { spawnStructuredConversation, startCopilotStructuredHost, type Structure
 const BIN = process.env.LLV_COPILOT_BIN?.trim() ?? "";
 const MODEL = "gpt-5.4";
 const EFFORT = "xhigh";
-const SLOW_MS = 15_000;
-
 type ProviderRequest = { model: unknown; effort: unknown; tools: string[]; text: string; at: number };
 
 /** Loopback chat-completions stub. The last user message chooses the
     behaviour: SLOW holds the answer, TOOL calls `bash`, anything else answers. */
 function startProvider() {
   const requests: ProviderRequest[] = [];
-  const timers = new Set<ReturnType<typeof setTimeout>>();
+  let heldSlowResponses = 0;
+  const chunk = (payload: Record<string, unknown>) => `data: ${JSON.stringify({ id: "stub", object: "chat.completion.chunk", created: 1, model: MODEL, ...payload })}\n\n`;
   const sse = (res: http.ServerResponse, delta: Record<string, unknown>, finish: string) => {
     if (res.writableEnded || res.destroyed) return;
-    const chunk = (payload: Record<string, unknown>) => `data: ${JSON.stringify({ id: "stub", object: "chat.completion.chunk", created: 1, model: MODEL, ...payload })}\n\n`;
     res.writeHead(200, { "content-type": "text/event-stream" });
     res.write(chunk({ choices: [{ index: 0, delta, finish_reason: null }] }));
     res.write(chunk({ choices: [{ index: 0, delta: {}, finish_reason: finish }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } }));
@@ -89,8 +87,12 @@ function startProvider() {
       });
       const afterTool = last?.role === "tool";
       if (text.includes("SLOW") && !afterTool) {
-        const timer = setTimeout(() => { timers.delete(timer); sse(res, { role: "assistant", content: "late answer" }, "stop"); }, SLOW_MS);
-        timers.add(timer);
+        // Open the stream, then deliberately never finish it. Cancellation must close this response;
+        // the resend cannot complete by waiting out a test timer.
+        heldSlowResponses += 1;
+        res.once("close", () => { heldSlowResponses -= 1; });
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write(chunk({ choices: [{ index: 0, delta: { role: "assistant", content: "held" }, finish_reason: null }] }));
         return;
       }
       if (text.includes("TOOL") && !afterTool) {
@@ -102,9 +104,9 @@ function startProvider() {
   });
   return {
     requests,
+    heldSlowResponses: () => heldSlowResponses,
     listen: () => new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as { port: number }).port))),
     close: () => {
-      for (const timer of timers) clearTimeout(timer);
       server.closeAllConnections?.();
       server.close();
     },
@@ -280,59 +282,63 @@ describe.skipIf(!BIN)("Copilot CLI over ACP through the structured spawn path (B
       await until(() => host.health(), (state) => state.status === "idle", "the tool turn");
       expect(transcriptRecords(artifactPath).some((line) => line.type === "tool.execution_complete")).toBe(true);
 
-      /* 4: interrupt-and-resend, 2.5 s into a 15 s turn, through every delivery
+      /* 4: interrupt-and-resend while the provider holds the answer, through every delivery
          mode the send path distinguishes: a steer, a steer-if-active send and
          the composer's default interrupt-active send. */
-      const timings: Array<{ policy: string; cancelToReturnMs: number; cancelToResendDoneMs: number }> = [];
       const original = host.interrupt.bind(host);
-      let interruptStartedAt = 0;
-      let interruptReturnedAt = 0;
+      let interruptReturned = false;
       host.interrupt = async (turnRef: string) => {
-        interruptStartedAt = performance.now();
+        interruptReturned = false;
         await original(turnRef);
-        interruptReturnedAt = performance.now();
+        interruptReturned = true;
       };
       for (const policy of ["steer", "steer-if-active", "interrupt-active"] as const) {
+        interruptReturned = false;
         const slowOp = await send(conversationId, artifactPath, `SLOW task for ${policy}`, "queue");
         expect(await settled(slowOp)).toMatchObject({ status: "delivered" });
         const slowTurn = receipt(slowOp)!.turnId!;
         await until(() => provider.requests.some((request) => request.text.includes(`SLOW task for ${policy}`)), Boolean, "the slow request");
-        await Bun.sleep(2_500);
+        expect(provider.heldSlowResponses()).toBeGreaterThan(0);
         expect((await host.health()).activeTurnRef).toBe(slowTurn);
-        const events: Array<{ event: RuntimeEvent; at: number }> = [];
-        const cursor = (await host.health()).eventCursor;
-        const stream = host.attach(cursor)[Symbol.asyncIterator]();
+        const events: RuntimeEvent[] = [];
+        const stream = host.attach(0)[Symbol.asyncIterator]();
         void (async () => {
           for (;;) {
             const next = await stream.next();
             if (next.done) return;
-            events.push({ event: next.value, at: performance.now() });
+            events.push(next.value);
           }
         })();
+        await until(() => events.flatMap((event) => event.kind === "delta" && event.turnId === slowTurn ? [event.text] : []).join("").includes("held"), Boolean, "the slow provider stream to reach the CLI");
         const text = `new direction via ${policy}`;
         const resendOp = await send(conversationId, artifactPath, text, policy);
         const resent = await settled(resendOp);
         expect(resent).toMatchObject({ status: "delivered", delivery: "interrupt-then-turn-started", interruptedTurnId: slowTurn });
         expect(resent!.status).not.toBe("steered");
-        const done = (await until(() => events.find(({ event }) => event.kind === "turn-ended" && event.turnId === resent!.turnId), Boolean, "the resent turn"))!;
-        expect(events.find(({ event }) => event.kind === "turn-ended" && event.turnId === slowTurn)?.event).toMatchObject({ status: "interrupted" });
-        expect(done.event).toMatchObject({ status: "completed" });
+        const done = (await until(() => events.find((event) => event.kind === "turn-ended" && event.turnId === resent!.turnId), Boolean, "the resent turn"))!;
+        expect(events.find((event) => event.kind === "turn-ended" && event.turnId === slowTurn)).toMatchObject({ status: "interrupted" });
+        expect(done).toMatchObject({ status: "completed" });
+        expect(interruptReturned).toBe(true);
+        expect(await until(provider.heldSlowResponses, (count) => count === 0, "the cancelled provider response to close")).toBe(0);
         void stream.return?.();
-        timings.push({ policy, cancelToReturnMs: interruptReturnedAt - interruptStartedAt, cancelToResendDoneMs: done.at - interruptStartedAt });
+        // Native transcript writes may settle after the ACP turn event.
+        const types = await until(
+          () => transcriptRecords(artifactPath).map((line) => `${line.type}:${String(line.data.reason ?? line.data.content ?? "")}`),
+          (rows) => {
+            const slowAt = rows.lastIndexOf(`user.message:SLOW task for ${policy}`);
+            const abortAt = rows.lastIndexOf("abort:user_initiated");
+            return slowAt >= 0 && abortAt > slowAt && rows.lastIndexOf(`user.message:${text}`) > abortAt;
+          },
+          "the durable interrupt and resend records",
+        );
         /* Nothing lost, nothing duplicated: each message reached the engine once. */
         const users = transcriptRecords(artifactPath).filter((line) => line.type === "user.message").map((line) => String(line.data.content));
         expect(users.filter((content) => content === text)).toHaveLength(1);
         expect(users.filter((content) => content === `SLOW task for ${policy}`)).toHaveLength(1);
         expect(provider.requests.filter((request) => request.text.includes(text))).toHaveLength(1);
-        const types = transcriptRecords(artifactPath).map((line) => `${line.type}:${String(line.data.reason ?? line.data.content ?? "")}`);
         const abortAt = types.lastIndexOf("abort:user_initiated");
         expect(abortAt).toBeGreaterThan(types.indexOf(`user.message:SLOW task for ${policy}`));
         expect(types.indexOf(`user.message:${text}`)).toBeGreaterThan(abortAt);
-      }
-      console.info("[copilot e2e] interrupt-and-resend timings (ms)", JSON.stringify(timings));
-      for (const timing of timings) {
-        expect(timing.cancelToReturnMs).toBeLessThan(2_000);
-        expect(timing.cancelToResendDoneMs).toBeLessThan(2_000);
       }
       host.interrupt = original;
 

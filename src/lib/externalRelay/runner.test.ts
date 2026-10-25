@@ -21,7 +21,7 @@ import type { AccountContext } from "@/lib/accounts/contracts";
 import { createManagedClaudeAccount } from "@/lib/accounts/claude";
 import { advertisedSlots, completeRelayRequest, HANDOFF_DETAIL, memberLimitDetail, runClaimedRequest as runClaimedRequestWithLeaseWorker, runningCount } from "./runner";
 import { relayActivity } from "./activity";
-import { dropRun, externalRelayFile, readRunLedger, reserveRun, updateRelayStore, type PairedRelay } from "./store";
+import { changeRun, dropRun, externalRelayFile, readRunLedger, reserveRun, updateRelayStore, type PairedRelay } from "./store";
 import { confirmRelayPairing } from "./pairing";
 import { contextRequest, sampleRequest, serviceClaims } from "./request.fixture";
 import { countMemberAnswers, listAnswerRecords, readAnswerRecord, settleInterruptedAnswer } from "./answers";
@@ -32,6 +32,7 @@ import { prototypeCopyLine, prototypeReference } from "@/lib/prototypeReview/tel
 import { prototypeDecisionText } from "@/lib/prototypeReview/decision";
 import { RelayLeaseTransport } from "./relayLeaseTransport";
 import { answerCapabilities, checkedAnswerV2 } from "./answerV2";
+import { cloneReceipt } from "./clone.fixture";
 import { richRequest } from "./rich.fixture";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-runner-test-"));
 process.env.LLV_STATE_DIR = path.join(root, "state");
@@ -1105,18 +1106,18 @@ test("an immediately admitted owner can answer in the final ten seconds", async 
   } finally { await server.close(); }
 }, 10000);
 
-test("a confirmed owner run completes a readable timeout at the service deadline", async () => {
+test("a confirmed owner run outlives the service deadline and delivers its answer late", async () => {
   const completions: unknown[] = [];
   const stops: string[] = [];
   const server = await startTestRelay((req, body) => {
-    if (req.url?.endsWith("/complete")) completions.push(body);
-    return { body: { status: "accepted", duplicate: false } };
+    if (req.url?.endsWith("/send")) completions.push(body);
+    return { body: req.url?.endsWith("/send") ? cloneReceipt() : { status: "accepted", duplicate: false } };
   });
   const paired = relay(`${server.origin}/v1`);
   paired.targets[0]!.ownerTier = true;
   updateRelayStore(s => ({ ...s, relays: [paired] }));
   try {
-    const result = await runClaimedRequest(paired, { ...contextRequest, request_id: "rq_confirmed_past_deadline",
+    const result = await runClaimedRequest(paired, { ...contextRequest, owner_delivery: { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: 12 }, request_id: "rq_confirmed_past_deadline",
       deadline_at: new Date(Date.now() + 700).toISOString(),
       input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
       ownerPorts: {
@@ -1125,8 +1126,8 @@ test("a confirmed owner run completes a readable timeout at the service deadline
         stop: async (_id, action) => { stops.push(action); }, pollMs: 5,
       },
     });
-    expect(result).toMatchObject({ outcome: "answered", answer: { action: "reply", text: expect.stringMatching(/ran out of time/i) } });
-    expect(stops).toEqual(["interrupt"]);
+    expect(result).toMatchObject({ outcome: "answered", answer: { action: "reply", text: "Done" } });
+    expect(stops).toEqual([]);
     expect(completions).toHaveLength(1);
   } finally { await server.close(); }
 }, 10000);
@@ -3090,7 +3091,7 @@ for (const scenario of ["answer", "owner_tools", "lease_lost", "hard_cap", "inva
         expect(record).toMatchObject({ profile: { webSearch: true, owner: true }, conversationId: "conversation_owner_runner" });
         if (scenario === "answer" || scenario === "owner_tools") { expect(completion).toMatchObject({ outcome: "answered", answer: { text: "Owner reply", reply_to: "m1" } }); expect(stops).toEqual([]); }
         if (scenario === "lease_lost") { expect(completion).toBeNull(); expect(stops).toEqual(["interrupt"]); }
-        if (scenario === "hard_cap") { expect(completion).toMatchObject({ outcome: "failed", reason: "hard_cap" }); expect(stops).toEqual(["interrupt"]); }
+        if (scenario === "hard_cap") { expect(completion).toMatchObject({ outcome: "answered", answer: { text: expect.stringContaining("Failed:") } }); expect(stops).toEqual(["interrupt"]); }
       }
     } finally { fs.rmSync(switchFile, { force: true }); await server.close(); }
   });
@@ -3162,21 +3163,25 @@ test("owner admission rechecks current store even when the claimed target object
   } finally { await service.close(); }
 });
 
-for (const trigger of ["hard_cap", "lease_lost"] as const) test(`owner ${trigger} retains failed-stop custody and recovers through sweep`, async () => {
-  const { sweepExternalRelayOrphans } = await import("./poller");
+for (const trigger of ["hard_cap", "lease_lost"] as const) test(`owner ${trigger} retains pending execution and retries failed-stop custody`, async () => {
   const service = await startTestRelay((req, body) => req.url?.endsWith("/heartbeat") && trigger === "lease_lost" && (body as { seq: number }).seq > 1
     ? { status: 409, body: { error: { code: "lease_lost", message: "gone" } } } : { body: { status: "ok" } });
   const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
   updateRelayStore(s => ({ ...s, relays: [paired] }));
-  let stops = 0, working = true, recover = false;
+  let stops = 0, working = true, recover = false, finished = false;
+  let reached!: () => void;
+  const refused = new Promise<void>(r => { reached = r; });
   const ports = { launch: async () => ({ status: 202, body: { conversationId: `conversation_stop_${trigger}` } }),
     observe: async () => ({ state: "running" as const }), stopRetryMs: 1, pollMs: 1,
-    stop: async () => { stops++; if (!recover) throw Error("control unavailable"); working = false; } };
+    stop: async () => { if (++stops === 3) reached(); if (!recover) throw Error("control unavailable"); working = false; } };
+  let done: ReturnType<typeof runClaimedRequest> | undefined;
   try {
-    const done = await runClaimedRequest(paired, { ...contextRequest, request_id: `stop_${trigger}`, liveness: { ...contextRequest.liveness, heartbeat_interval_s: 2 },
+    done = runClaimedRequest(paired, { ...contextRequest, request_id: `stop_${trigger}`, liveness: { ...contextRequest.liveness, heartbeat_interval_s: 2 },
       input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, { timeoutMs: trigger === "lease_lost" ? 4000 : 20, ownerPorts: ports });
-    if (trigger === "lease_lost") expect(done).toBeNull(); else expect(done).toMatchObject({ reason: "hard_cap" });
-    expect(stops).toBe(3); expect(working).toBe(true);
+    void done.then(() => { finished = true; });
+    await refused;
+    await new Promise<void>(r => setImmediate(r));
+    expect(finished).toBe(false); expect(working).toBe(true);
     expect(readRunLedger().runs[0]).toMatchObject({ conversationId: `conversation_stop_${trigger}`, ownerTurn: { cancel: "interrupt" } });
     expect(advertisedSlots(paired)[0]!.free).toBe(0);
     expect(relayActivity(paired.id).lastOutcome).toBe("owner_stop_pending");
@@ -3184,43 +3189,791 @@ for (const trigger of ["hard_cap", "lease_lost"] as const) test(`owner ${trigger
     const { noteRelayOutcome } = await import("./activity");
     noteRelayOutcome(paired.id, "failed:hard_cap");
     expect(relayPollerStatus(paired.id).lastOutcome).toBe("owner_stop_pending");
-    // A restarted Viewer still has the receipt-bound conversation to stop.
-    const { changeRun } = await import("./store");
-    changeRun(`stop_${trigger}`, r => ({ ...r, ownerPid: 999999999, ownerIdentity: "gone" }));
     recover = true;
-    await sweepExternalRelayOrphans(ports);
-    expect(stops).toBe(4); expect(working).toBe(false); expect(readRunLedger().runs).toEqual([]);
-  } finally { await service.close(); }
+    const completion = await done;
+    if (trigger === "lease_lost") expect(completion).toBeNull(); else expect(completion).toMatchObject({ outcome: "answered" });
+    expect(stops).toBeGreaterThan(3); expect(working).toBe(false); expect(readRunLedger().runs).toEqual([]);
+  } finally { recover = true; await done; await service.close(); }
 });
 
-for (const admission of ["failed_receipt", "lost_response"] as const) test(`owner ${admission} keeps custody until host control confirms`, async () => {
-  const { sweepExternalRelayOrphans } = await import("./poller");
+for (const failure of ["observation", "turn-error", "observe-exception", "launch-exception", "launch-refusal", "invalid-launch"] as const)
+for (const worker of [false, true]) test(`owner ${failure} keeps its reason in the record, journal and requester reply (worker=${worker})`, async () => {
+  const completions: unknown[] = [], journal: unknown[][] = [];
+  const service = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  paired.targets[0]!.fallback = "none";
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const reason = "fixture transport refused";
+  const unsafe = `${reason} ${paired.credential} /srv/fixture/private.txt`;
+  const source = failure === "observation" || failure === "turn-error" ? "observation" : failure.endsWith("exception") ? "exception" : "launch";
+  const logging = spyOn(console, "error").mockImplementation((...args) => { journal.push(args); });
+  try {
+    const completion = await runClaimedRequestWithLeaseWorker(paired, { ...contextRequest, request_id: "owner_reason",
+      answer: { ...contextRequest.answer, max_chars: 4000 },
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
+      leaseWorker: worker,
+      ownerPorts: { launch: async () => {
+        if (failure === "launch-exception") throw new Error(unsafe);
+        if (failure === "launch-refusal") return { status: 503, body: { conversationId: "conversation_reason", code: "launch_refused", error: unsafe } };
+        if (failure === "invalid-launch") return { status: 202, body: { error: unsafe } };
+        return { status: 202, body: { conversationId: "conversation_reason" } };
+      },
+        observe: async () => {
+          if (failure === "observe-exception") throw new Error(unsafe);
+          if (failure === "turn-error") return { state: "ended", turnError: unsafe };
+          return { state: "failed", conversationId: "conversation_reason", failure: { kind: "launch-failed", detail: unsafe } };
+        },
+        stop: async () => {} },
+    });
+    const record = readAnswerRecord(paired.id, "target_1", "owner_reason");
+    expect(record).toMatchObject({ diagnostic: { source, message: expect.stringContaining(reason), ...(failure === "launch-refusal" ? { status: 503 } : {}) } });
+    expect(completion).toMatchObject({ outcome: "answered", answer: { action: "reply", text: expect.stringContaining(reason) } });
+    expect(JSON.stringify(journal)).toContain("owner_reason");
+    expect(JSON.stringify(journal)).toContain("fixture transport refused");
+    expect(completions).toHaveLength(1);
+    for (const surface of [completion, record, journal]) {
+      expect(JSON.stringify(surface)).not.toContain(paired.credential);
+      expect(JSON.stringify(surface)).not.toContain("/srv/fixture/private.txt");
+    }
+  } finally { logging.mockRestore(); await service.close(); }
+});
+
+for (const worker of [false, true]) test(`owner runner exception is recorded before the stop wait and answered after confirmed stop (worker=${worker})`, async () => {
+  const relayStore = await import("./store");
+  const completions: unknown[] = [], journal: unknown[][] = [];
+  const service = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  paired.targets[0]!.fallback = "none";
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const requestId = `owner_runner_exception_${worker}`;
+  const unsafe = `fixture ledger write refused ${paired.credential} /srv/fixture/private.txt`;
+  const conversationId = `conversation_runner_exception_${worker}`;
+  const write = relayStore.changeRunAsync;
+  let armed = false, writes = 0, stops = 0;
+  let stopReached!: () => void, confirm!: () => void;
+  const stopping = new Promise<void>(r => { stopReached = r; });
+  const confirmed = new Promise<void>(r => { confirm = r; });
+  const writer = spyOn(relayStore, "changeRunAsync").mockImplementation(async (...args) => {
+    if (armed && ++writes === 1) throw Error(unsafe);
+    return write(...args);
+  });
+  const logging = spyOn(console, "error").mockImplementation((...args) => { journal.push(args); });
+  let done: ReturnType<typeof runClaimedRequestWithLeaseWorker> | undefined, finished = false;
+  try {
+    done = runClaimedRequestWithLeaseWorker(paired, { ...contextRequest, request_id: requestId,
+      answer: { ...contextRequest.answer, max_chars: 4000 },
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
+      leaseWorker: worker,
+      ownerPorts: { launch: async () => { armed = true; return { status: 202, body: { conversationId } }; },
+        observe: async () => ({ state: "running", conversationId }),
+        stop: async () => { stops++; stopReached(); await confirmed; }, stopRetryMs: 1, pollMs: 1 },
+    });
+    void done.then(() => { finished = true; });
+    await stopping;
+    await new Promise<void>(r => setImmediate(r));
+    // While host control is still unconfirmed the first failure is already
+    // readable in the answer record, the journal and durable owner custody.
+    expect(writes).toBeGreaterThan(1); expect(finished).toBe(false); expect(completions).toEqual([]);
+    expect(readAnswerRecord(paired.id, "target_1", requestId)).toMatchObject({ diagnostic: { source: "exception", message: expect.stringContaining("fixture ledger write refused") } });
+    expect(JSON.stringify(journal)).toContain(requestId);
+    expect(JSON.stringify(journal)).toContain("fixture ledger write refused");
+    expect(readRunLedger().runs.find(r => r.requestId === requestId)).toMatchObject({ ownerTurn: { cancel: expect.any(String),
+      diagnostic: { source: "exception", message: expect.stringContaining("fixture ledger write refused") } } });
+    expect(readRunLedger().runs.find(r => r.requestId === requestId)!.ownerTurn!.confirmed).not.toBe(true);
+    confirm();
+    const completion = await done;
+    expect(stops).toBeGreaterThan(0);
+    expect(completion).toMatchObject({ outcome: "answered", answer: { action: "reply", text: expect.stringContaining("fixture ledger write refused") } });
+    expect(completions).toHaveLength(1);
+    expect(completions[0]).toMatchObject({ outcome: "answered", answer: { text: expect.stringContaining("fixture ledger write refused") } });
+    const record = readAnswerRecord(paired.id, "target_1", requestId);
+    expect(record).toMatchObject({ diagnostic: { source: "exception" }, answer: { text: expect.stringContaining("fixture ledger write refused") } });
+    for (const surface of [completion, record, journal, completions]) {
+      expect(JSON.stringify(surface)).not.toContain(paired.credential);
+      expect(JSON.stringify(surface)).not.toContain("/srv/fixture/private.txt");
+    }
+  } finally {
+    confirm(); await done; writer.mockRestore(); logging.mockRestore();
+    dropRun(requestId); await service.close();
+  }
+});
+
+for (const worker of [false, true]) test(`owner runner exception with a refused stop answers at the request bound and keeps execution custody (worker=${worker})`, async () => {
+  const relayStore = await import("./store");
+  const completions: { body: unknown; at: number }[] = [];
+  const service = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete") || req.url?.endsWith("/send")) completions.push({
+      body: req.url.endsWith("/send") ? { outcome: "answered", answer: { action: "reply", text: (body as { text: string }).text, reply_to: "m1" } } : body,
+      at: Date.now(),
+    });
+    return { body: req.url?.endsWith("/send") ? cloneReceipt() : { status: "ok" } };
+  });
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  paired.targets[0]!.fallback = "none";
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  paired.targets[0]!.hardCapMinutes = 1500 / 60_000;
+  const requestId = `owner_exception_bound_${worker}`;
+  const conversationId = `conversation_exception_bound_${worker}`;
+  const write = relayStore.changeRunAsync;
+  let armed = false, writes = 0, stops = 0, recover = false;
+  const writer = spyOn(relayStore, "changeRunAsync").mockImplementation(async (...args) => {
+    if (armed && ++writes === 1) throw Error("fixture ledger write refused");
+    return write(...args);
+  });
+  const logging = spyOn(console, "error").mockImplementation(() => {});
+  const ports: import("./ownerRun").OwnerRunPorts = {
+    launch: async () => { armed = true; return { status: 202, body: { conversationId } }; },
+    observe: async () => ({ state: "running", conversationId }),
+    stop: async () => { stops++; if (!recover) throw Error("owner relay conversation control refused"); }, stopRetryMs: 5, pollMs: 1,
+  };
+  const deadlineAt = Date.now() + 1500;
+  let done: ReturnType<typeof runClaimedRequestWithLeaseWorker> | undefined;
+  try {
+    done = runClaimedRequestWithLeaseWorker(paired, { ...contextRequest, owner_delivery: { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: 12 }, request_id: requestId, deadline_at: new Date(deadlineAt).toISOString(),
+      answer: { ...contextRequest.answer, max_chars: 4000 },
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, { leaseWorker: worker, ownerPorts: ports });
+    const completion = await done;
+    // One readable completion at the request bound while the stop is refused.
+    expect(completion).toMatchObject({ outcome: "answered", answer: { action: "reply", text: expect.stringMatching(/ran out of time/i) } });
+    expect(completions).toHaveLength(1);
+    expect(completions[0]!.at).toBeGreaterThanOrEqual(deadlineAt - 50);
+    expect(stops).toBeGreaterThan(0);
+    const held = readRunLedger().runs.find(r => r.requestId === requestId)!;
+    expect(held).toMatchObject({ completionAccepted: true, ownerTurn: { cancel: expect.any(String),
+      diagnostic: { source: "exception", message: expect.stringContaining("fixture ledger write refused") } } });
+    expect(held.ownerTurn!.confirmed).toBeUndefined();
+    expect(readAnswerRecord(paired.id, "target_1", requestId)).toMatchObject({ diagnostic: { source: "exception" } });
+    // Later recovery confirms the stop and sends nothing more.
+    recover = true;
+    while (!readRunLedger().runs.find(r => r.requestId === requestId)?.ownerTurn?.confirmed) await Bun.sleep(5);
+    await sweepExternalRelayOrphans(ports);
+    expect(readRunLedger().runs.find(r => r.requestId === requestId)).toBeUndefined();
+    expect(completions).toHaveLength(1);
+  } finally {
+    recover = true; await done; writer.mockRestore(); logging.mockRestore();
+    dropRun(requestId); await service.close();
+  }
+}, 15000);
+
+for (const recovery of ["answered", "revoked", "completed", "expired"] as const)
+test(`a fresh process recovers an abandoned diagnosed owner failure: ${recovery}`, async () => {
+  const completions: unknown[] = [];
+  const service = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete") || req.url?.endsWith("/send")) completions.push(
+      req.url.endsWith("/send") ? { outcome: "answered", answer: { action: "reply", text: (body as { text: string }).text, reply_to: "m1" } } : body,
+    );
+    return { body: req.url?.endsWith("/send") ? cloneReceipt() : { status: "ok" } };
+  });
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  paired.targets[0]!.fallback = "none";
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const requestId = `owner_restart_${recovery}`;
+  const conversationId = `conversation_restart_${recovery}`;
+  const reason = "fixture launch refused";
+  const request = { ...contextRequest, owner_delivery: { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: 12 }, request_id: requestId, claimed_at: new Date().toISOString(), deadline_at: new Date(Date.now() + 60_000).toISOString(),
+    answer: { ...contextRequest.answer, max_chars: 4000 },
+    input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } };
+  // The real runner produces the custody; its process then exits while the
+  // stop is still refused, as a Viewer restart would leave it.
+  const child = Bun.spawn([process.execPath, "-e", `
+    import { accountManager } from './src/lib/accounts/manager.ts';
+    import { runClaimedRequest } from './src/lib/externalRelay/runner.ts';
+    import { readRelayStore, readRunLedger } from './src/lib/externalRelay/store.ts';
+    const home = process.env.FIXTURE_HOME;
+    accountManager.resolveHeadlessSpawn = () => ({ kind: 'available', account: { engine: 'codex', accountId: 'answer', kind: 'managed', home, transcriptRoot: home, env: { ...process.env } } });
+    const request = JSON.parse(process.env.FIXTURE_REQUEST);
+    void runClaimedRequest(readRelayStore().relays[0], request, undefined, { leaseWorker: false, ownerPorts: {
+      launch: async () => ({ status: 503, body: { conversationId: process.env.FIXTURE_CONVERSATION, code: 'launch_refused', error: process.env.FIXTURE_REASON } }),
+      observe: async () => ({ state: 'running', conversationId: process.env.FIXTURE_CONVERSATION }),
+      stop: async () => { throw new Error('control unavailable'); }, stopRetryMs: 5, pollMs: 5 } });
+    for (;;) {
+      const row = readRunLedger().runs.find(r => r.requestId === request.request_id);
+      if (row?.ownerTurn?.cancel && row.ownerTurn.failureReply) process.exit(0);
+      await Bun.sleep(5);
+    }`], { cwd: process.cwd(), env: { ...process.env, FIXTURE_HOME: home, FIXTURE_REQUEST: JSON.stringify(request),
+    FIXTURE_CONVERSATION: conversationId, FIXTURE_REASON: `${reason} ${paired.credential}` }, stdout: "pipe", stderr: "pipe" });
+  const logging = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    expect(await child.exited).toBe(0);
+    const held = readRunLedger().runs.find(r => r.requestId === requestId)!;
+    expect(held).toMatchObject({ ownerPid: child.pid, conversationId, ownerTurn: { cancel: expect.any(String),
+      diagnostic: { source: "launch", message: expect.stringContaining(reason) },
+      failureReply: { until: new Date(Date.parse(request.deadline_at)).toISOString(), answer: { action: "reply", text: expect.stringContaining(reason) } } } });
+    expect(held.ownerTurn!.confirmed).toBeUndefined();
+    expect(JSON.stringify(held)).not.toContain(paired.credential);
+    expect(readAnswerRecord(paired.id, "target_1", requestId)).toMatchObject({ state: "running", diagnostic: { source: "launch" } });
+    expect(completions).toEqual([]);
+    if (recovery === "revoked") updateRelayStore(s => ({ ...s, relays: s.relays.map(r => ({ ...r, targets: r.targets.map(t => ({ ...t, enabled: false })) })) }));
+    if (recovery === "completed") changeRun(requestId, r => ({ ...r, completionAccepted: true }));
+    if (recovery === "expired") changeRun(requestId, r => ({ ...r, ownerTurn: { ...r.ownerTurn!, failureReply: { ...r.ownerTurn!.failureReply!, until: new Date(Date.now() - 1).toISOString() } } }));
+    const ports: import("./ownerRun").OwnerRunPorts = {
+      launch: async () => { throw Error("must not launch"); },
+      observe: async () => ({ state: "running", conversationId }),
+      stop: async () => {}, stopRetryMs: 1,
+    };
+    await sweepExternalRelayOrphans(ports);
+    if (recovery === "answered" || recovery === "expired") {
+      expect(completions).toEqual([expect.objectContaining({ outcome: "answered",
+        answer: expect.objectContaining({ action: "reply", text: expect.stringContaining(reason) }) })]);
+      expect(readAnswerRecord(paired.id, "target_1", requestId)).toMatchObject({ state: "finished", outcome: "answered", delivery: "accepted",
+        diagnostic: { source: "launch" }, answer: { text: expect.stringContaining(reason) } });
+    } else if (recovery === "completed") {
+      expect(completions).toEqual([]);
+    } else {
+      expect(completions).toEqual([{ lease_id: request.lease_id, outcome: "failed", reason: "install_restarted", detail: null }]);
+      expect(readAnswerRecord(paired.id, "target_1", requestId)).toMatchObject({ outcome: "failed:install_restarted", answer: null });
+    }
+    expect(readRunLedger().runs.find(r => r.requestId === requestId)).toBeUndefined();
+    await sweepExternalRelayOrphans(ports);
+    expect(completions.length).toBe(recovery === "completed" ? 0 : 1);
+    expect(JSON.stringify(completions)).not.toContain(paired.credential);
+  } finally {
+    child.kill(); await child.exited; logging.mockRestore(); dropRun(requestId); await service.close();
+  }
+}, 30000);
+
+for (const seam of ["continuation-receipt", "fresh-receipt"] as const)
+for (const worker of [false, true]) test(`owner ${seam} failure keeps its runtime reason through the production observation (worker=${worker})`, async () => {
+  const registryModule = await import("@/lib/agent/registry");
+  const { AgentRegistry } = registryModule;
+  const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+  const { observeOwnerContinuation, observeOwnerTurn } = await import("./ownerRun");
+  const completions: unknown[] = [], journal: unknown[][] = [];
+  const service = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete") || req.url?.endsWith("/send")) completions.push(
+      req.url.endsWith("/send") ? { outcome: "answered", answer: { action: "reply", text: (body as { text: string }).text, reply_to: "m1" } } : body,
+    );
+    return { body: req.url?.endsWith("/send") ? cloneReceipt() : { status: "ok" } };
+  });
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  paired.targets[0]!.fallback = "none";
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  if (seam === "continuation-receipt") setRelaySwitch("chain_conversations", true);
+  const reason = `fixture runtime rejected the ${seam}`;
+  const unsafe = `${reason} ${paired.credential} /srv/fixture/private.txt`;
+  const cwd = fs.mkdtempSync(path.join(root, "owner-observation-"));
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const sources = { registry: () => registry, now: () => Date.now(),
+    liveness: async () => [{ reason: "host_gone_turn_open" }] } as unknown as Parameters<typeof observeOwnerTurn>[1];
+  const prefix = `${seam}-${worker}`;
+  const first = { ...contextRequest, request_id: `${prefix}-first`, chat: { key: `fixture-${prefix}` },
+    input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } };
+  const requestId = seam === "continuation-receipt" ? `${prefix}-next` : `${prefix}-fresh`;
+  let launched: string | null = null;
+  const ports: import("./ownerRun").OwnerRunPorts = {
+    launch: async () => {
+      if (seam === "continuation-receipt") {
+        const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd, transport: "structured", clientAttemptId: `relay-owner-${prefix}-first`,
+          conversationId: `conversation_${prefix}` });
+        if (begun.kind !== "created") throw Error("owner conversation fixture unavailable");
+        return { status: 202, body: { conversationId: begun.receipt.conversationId } };
+      }
+      const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd, transport: "structured", clientAttemptId: `relay-owner-${requestId}` });
+      if (begun.kind !== "created") throw Error("owner receipt fixture unavailable");
+      registry.failSpawn(begun.receipt.launchId, unsafe);
+      launched = begun.receipt.conversationId;
+      return { status: 202, body: { conversationId: launched } };
+    },
+    // The runtime refuses the held continuation; its receipt is read through
+    // the production send settlement, as observeOwnerContinuation does by default.
+    continue: async turn => {
+      const held = registry.holdDelivery(turn.conversationId! as `conversation_${string}`, "Fixture continuation", turn.clientAttemptId, "text", [], null,
+        { operationId: turn.continuation!.operationId });
+      registry.terminalizeHeldDelivery(held.id, unsafe);
+      return { ok: true, structured: true, target: turn.conversationId!, outcome: "held", operationId: turn.continuation!.operationId };
+    },
+    observe: async turn => !turn.continuation
+      ? seam === "fresh-receipt" ? observeOwnerTurn(turn, sources) : { state: "ended", finalText: "Done" }
+      : observeOwnerContinuation(turn, sources),
+    stop: async () => {}, stopRetryMs: 1, pollMs: 1,
+  };
+  const lookup = spyOn(registryModule, "agentRegistry").mockReturnValue(registry);
+  const logging = spyOn(console, "error").mockImplementation((...args) => { journal.push(args); });
+  try {
+    if (seam === "continuation-receipt") {
+      expect((await runClaimedRequestWithLeaseWorker(paired, first, undefined, { leaseWorker: worker, ownerPorts: ports }))?.outcome).toBe("answered");
+      completions.length = 0;
+    }
+    const answer = { ...contextRequest.answer, max_chars: 4000 };
+    const request = seam === "continuation-receipt"
+      ? { ...first, answer, request_id: requestId, claimed_at: new Date().toISOString(), deadline_at: new Date(Date.now() + 20_000).toISOString(),
+        input: { ...first.input, respond_to: "next", conversation: [{ ...first.input.conversation[0]!, id: "next", reply_to: first.input.respond_to }] } }
+      : { ...contextRequest, answer, request_id: requestId, input: first.input };
+    const completion = await runClaimedRequestWithLeaseWorker(paired, request, undefined, { leaseWorker: worker, ownerPorts: ports });
+    if (seam === "fresh-receipt") {
+      expect(launched).not.toBeNull();
+      // Host-died evidence is kept beside the original receipt error.
+      expect(await observeOwnerTurn({ clientAttemptId: `relay-owner-${requestId}`, conversationId: launched, claimedAt: new Date().toISOString() }, sources))
+        .toMatchObject({ state: "failed", failure: { kind: "host-died", detail: expect.stringContaining(reason) } });
+    }
+    const record = readAnswerRecord(paired.id, "target_1", requestId);
+    expect(record).toMatchObject({ diagnostic: { source: "observation", message: expect.stringContaining(reason) } });
+    expect(completion).toMatchObject({ outcome: "answered", answer: { action: "reply", text: expect.stringContaining(reason) } });
+    expect(completions).toHaveLength(1);
+    expect(JSON.stringify(journal)).toContain(requestId);
+    expect(JSON.stringify(journal)).toContain(reason);
+    for (const surface of [completion, record, journal, completions]) {
+      expect(JSON.stringify(surface)).not.toContain(paired.credential);
+      expect(JSON.stringify(surface)).not.toContain("/srv/fixture/private.txt");
+    }
+  } finally {
+    logging.mockRestore(); lookup.mockRestore(); registry.close(); setRelaySwitch("chain_conversations", false);
+    fs.rmSync(cwd, { recursive: true, force: true }); await service.close();
+  }
+});
+
+for (const failure of ["exception", "refusal"] as const)
+for (const worker of [false, true]) test(`owner admission registry ${failure} releases capacity before the next claim (worker=${worker})`, async () => {
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+  const { ownerAttemptHasNoExecution } = await import("./ownerRun");
+  const { relayClaimBody } = await import("./poller");
+  const { relayCall } = await import("./client");
+  const reason = "transcript registry changed during admission";
+  const next = { ...contextRequest, answer: { ...contextRequest.answer, max_chars: 4000 }, request_id: `registry-${failure}-next-${worker}`,
+    input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } };
+  const claims: unknown[] = [], completions: unknown[] = [], journal: unknown[][] = [];
+  const service = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/claim")) {
+      claims.push(body);
+      return { body: { request: next } };
+    }
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  paired.targets[0]!.fallback = "none";
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const cwd = fs.mkdtempSync(path.join(root, "owner-registry-refusal-"));
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const requestId = `registry-${failure}-${worker}`;
+  let launches = 0, stops = 0;
+  const ports: import("./ownerRun").OwnerRunPorts = {
+    launch: async () => {
+      expect(advertisedSlots(paired)[0]!.free).toBe(0);
+      if (++launches > 1) return { status: 202, body: { conversationId: "conversation_next_request" } };
+      const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd, transport: "structured", clientAttemptId: `relay-owner-${requestId}` });
+      if (begun.kind !== "created") throw Error("owner receipt fixture unavailable");
+      registry.failSpawn(begun.receipt.launchId, reason);
+      expect(registry.releaseStructuredSpawnAdmissionOwner(begun.receipt.launchId, begun.receipt.admissionOwner!).released).toBe(true);
+      expect(registry.conversation(begun.receipt.conversationId)).toBeNull();
+      if (failure === "exception") throw Error(reason);
+      return { status: 409, body: { conversationId: begun.receipt.conversationId, error: reason } };
+    },
+    observe: async () => ({ state: "ended", finalText: "Next request completed" }),
+    noExecution: async run => ownerAttemptHasNoExecution(run, registry),
+    stop: async () => { stops++; throw Error("unregistered conversation cannot be stopped"); },
+  };
+  const logging = spyOn(console, "error").mockImplementation((...args) => { journal.push(args); });
+  try {
+    const failed = await runClaimedRequestWithLeaseWorker(paired, { ...next, request_id: requestId }, undefined, { leaseWorker: worker, ownerPorts: ports });
+    expect(failed).toMatchObject({ outcome: "answered", answer: { action: "reply", text: expect.stringContaining(reason) } });
+    expect(readAnswerRecord(paired.id, "target_1", requestId)).toMatchObject({ diagnostic: { source: failure === "exception" ? "exception" : "launch", message: expect.stringContaining(reason) } });
+    expect(stops).toBe(0);
+    // No sweep or elapsed stop bound: the very next wire claim has capacity.
+    expect(advertisedSlots(paired)[0]!.free).toBe(1);
+    const claimed = await relayCall<{ request: unknown }>(paired.api_base, "/requests/claim", "POST", relayClaimBody(paired), paired.credential);
+    expect(claims).toEqual([expect.objectContaining({ slots: [{ target_id: "target_1", free: 1 }] })]);
+    expect(claimed.body?.request).toEqual(next);
+    expect(await runClaimedRequestWithLeaseWorker(paired, claimed.body?.request, undefined, { leaseWorker: worker, ownerPorts: ports }))
+      .toMatchObject({ outcome: "answered", answer: { text: "Next request completed" } });
+    expect(launches).toBe(2); expect(completions).toHaveLength(2);
+    expect(JSON.stringify(journal)).toContain(reason);
+    expect(JSON.stringify(journal)).not.toContain("stop remains pending");
+  } finally {
+    logging.mockRestore(); dropRun(requestId); dropRun(next.request_id); registry.close();
+    fs.rmSync(cwd, { recursive: true, force: true }); await service.close();
+  }
+}, 15_000);
+
+test("owner stop custody with no registered execution releases the target on the next sweep and keeps its record", async () => {
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+  const { ownerAttemptHasNoExecution } = await import("./ownerRun");
+  const { relayPollerStatus } = await import("./poller");
+  const relayStore = await import("./store");
+  const service = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  paired.targets[0]!.engine = "claude"; paired.targets[0]!.model = "opus";
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const cwd = fs.mkdtempSync(path.join(root, "owner-no-execution-"));
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal: unknown[][] = [];
+  const logging = spyOn(console, "error").mockImplementation((...args) => { journal.push(args); });
+  // The two failed runs exactly as the run ledger kept them: admission
+  // complete, kill cutoff, no capacity release, no confirmation, a
+  // conversation the Viewer never registered, and an owner process that is gone.
+  const rows = ["incident-row-a", "incident-row-b"].map((requestId, index) => {
+    const clientAttemptId = `relay-owner-${requestId}`;
+    const begun = beginLegacySpawnFixture(registry, { engine: "claude", cwd, transport: "structured", clientAttemptId });
+    if (begun.kind !== "created") throw Error("owner receipt fixture unavailable");
+    registry.failSpawn(begun.receipt.launchId, "structured spawn runtime snapshot has no session after 300000ms");
+    // The launch owner conclusively handed admission back after the failure.
+    expect(registry.releaseStructuredSpawnAdmissionOwner(begun.receipt.launchId, begun.receipt.admissionOwner!).released).toBe(true);
+    const row: import("./store").RunRecord = { requestId, leaseId: `lease-${index}`, relayId: paired.id, targetId: "target_1",
+      childPid: null, childIdentity: null, ownerPid: 999999999, ownerIdentity: "gone", runDir: "",
+      startedAt: new Date(Date.now() - (index + 1) * 60_000).toISOString(), conversationId: begun.receipt.conversationId,
+      ownerTurn: { clientAttemptId, admissionComplete: true, cancel: "kill" } };
+    return row;
+  });
+  relayStore.updateRunLedger(ledger => ({ ...ledger, runs: rows }));
+  let stops = 0;
+  const ports: import("./ownerRun").OwnerRunPorts = {
+    launch: async () => { throw Error("must not launch"); },
+    observe: async () => ({ state: "running", firstMessagePending: true }),
+    stop: async () => { stops++; throw Error("owner relay conversation control refused"); },
+    noExecution: async run => ownerAttemptHasNoExecution(run, registry), stopRetryMs: 1,
+  };
+  try {
+    for (const row of rows) expect(registry.conversation(row.conversationId as `conversation_${string}`)).toBeNull();
+    expect(advertisedSlots(paired)[0]!.free).toBe(0);
+    await sweepExternalRelayOrphans(ports);
+    expect(stops).toBe(0);
+    // The next claim tick advertises the slot and a new request reserves it.
+    expect(advertisedSlots(paired)[0]!.free).toBe(1);
+    expect(reserveRun({ ...rows[0]!, requestId: "next-claim", ownerTurn: undefined, conversationId: undefined, ownerPid: process.pid, ownerIdentity: null }, 1)).toBe("added");
+    dropRun("next-claim");
+    // Each custody record stays with its cutoff, and the journal says why its
+    // slot was released; the settled completion marks it as cleanup only.
+    for (const row of rows) {
+      expect(readRunLedger().runs.find(r => r.requestId === row.requestId)).toMatchObject({ capacityReleased: true, conversationId: row.conversationId,
+        ownerTurn: { cancel: "kill", admissionComplete: true, confirmed: true, released: { reason: "no_execution" } } });
+      expect(JSON.stringify(journal)).toContain(row.requestId);
+    }
+    expect(JSON.stringify(journal)).toContain("no_execution");
+    expect(JSON.stringify(journal)).not.toContain("stop remains pending");
+    expect(relayPollerStatus(paired.id).lastOutcome).not.toBe("owner_stop_pending");
+    // A later sweep neither retries control nor drops the retained record.
+    await sweepExternalRelayOrphans(ports);
+    expect(stops).toBe(0); expect(readRunLedger().runs).toHaveLength(2);
+    // Retention is bounded.
+    relayStore.updateRunLedger(ledger => ({ ...ledger, runs: ledger.runs.map(r => ({ ...r, ownerTurn: { ...r.ownerTurn!,
+      released: { ...r.ownerTurn!.released!, at: new Date(Date.now() - relayStore.OWNER_RELEASED_CUSTODY_RETENTION_MS - 1).toISOString() } } })) }));
+    await sweepExternalRelayOrphans(ports);
+    expect(readRunLedger().runs).toEqual([]);
+  } finally {
+    logging.mockRestore(); registry.close();
+    relayStore.updateRunLedger(ledger => ({ ...ledger, runs: ledger.runs.filter(r => !rows.some(row => row.requestId === r.requestId)) }));
+    fs.rmSync(cwd, { recursive: true, force: true }); await service.close();
+  }
+});
+
+test("owner launch custody retained by a live admission owner is no proof of no execution", async () => {
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+  const { ownerAttemptHasNoExecution } = await import("./ownerRun");
+  const relayStore = await import("./store");
   const service = await startTestRelay(() => ({ body: { status: "ok" } }));
   const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
   updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const cwd = fs.mkdtempSync(path.join(root, "owner-live-admission-"));
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const logging = spyOn(console, "error").mockImplementation(() => {});
+  const requestId = "live-admission-row";
+  const clientAttemptId = `relay-owner-${requestId}`;
+  const begun = beginLegacySpawnFixture(registry, { engine: "claude", cwd, transport: "structured", clientAttemptId });
+  if (begun.kind !== "created") throw Error("owner receipt fixture unavailable");
+  registry.failSpawn(begun.receipt.launchId, "fixture structured launch failed");
+  const row: import("./store").RunRecord = { requestId, leaseId: "lease", relayId: paired.id, targetId: "target_1",
+    childPid: null, childIdentity: null, ownerPid: 999999999, ownerIdentity: "gone", runDir: "", startedAt: new Date().toISOString(),
+    conversationId: begun.receipt.conversationId, ownerTurn: { clientAttemptId, admissionComplete: true, cancel: "kill" } };
+  relayStore.updateRunLedger(ledger => ({ ...ledger, runs: [row] }));
+  let stops = 0;
+  const ports: import("./ownerRun").OwnerRunPorts = {
+    launch: async () => { throw Error("must not launch"); },
+    observe: async () => ({ state: "running", firstMessagePending: true }),
+    stop: async () => { stops++; throw Error("owner relay conversation control refused"); },
+    noExecution: async run => ownerAttemptHasNoExecution(run, registry), stopRetryMs: 1,
+  };
+  try {
+    // The failed receipt still names this live process as its launch owner.
+    const receipt = registry.spawnReceiptForClientAttempt(clientAttemptId)!;
+    expect(receipt).toMatchObject({ state: "failed", key: null });
+    expect(receipt.admissionOwner?.pid).toBe(process.pid);
+    expect(registry.conversation(row.conversationId as `conversation_${string}`)).toBeNull();
+    expect(ownerAttemptHasNoExecution(row, registry)).toBe(false);
+    await sweepExternalRelayOrphans(ports);
+    expect(stops).toBe(3);
+    const held = readRunLedger().runs.find(r => r.requestId === requestId)!;
+    expect(held.ownerTurn?.confirmed).toBeUndefined(); expect(held.ownerTurn?.released).toBeUndefined();
+    expect(held.capacityReleased).toBeUndefined();
+    // Once the launch owner hands admission back, the same row is proven idle.
+    expect(registry.releaseStructuredSpawnAdmissionOwner(receipt.launchId, receipt.admissionOwner!).released).toBe(true);
+    expect(ownerAttemptHasNoExecution(row, registry)).toBe(true);
+    await sweepExternalRelayOrphans(ports);
+    expect(stops).toBe(3);
+    expect(readRunLedger().runs.find(r => r.requestId === requestId)).toMatchObject({ capacityReleased: true,
+      ownerTurn: { confirmed: true, released: { reason: "no_execution" } } });
+  } finally {
+    logging.mockRestore(); registry.close(); dropRun(requestId);
+    fs.rmSync(cwd, { recursive: true, force: true }); await service.close();
+  }
+});
+
+for (const worker of [false, true]) test(`a live owner run whose stop never confirms stays pending past its bound and answers at the request bound (worker=${worker})`, async () => {
+  const { OWNER_STOP_PENDING_LIMIT_MS } = await import("./ownerRun");
+  const completions: unknown[] = [];
+  const service = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete") || req.url?.endsWith("/send")) completions.push(
+      req.url.endsWith("/send") ? { outcome: "answered", answer: { action: "reply", text: (body as { text: string }).text, reply_to: "m1" } } : body,
+    );
+    return { body: req.url?.endsWith("/send") ? cloneReceipt() : { status: "ok" } };
+  });
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  paired.targets[0]!.fallback = "none";
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  paired.targets[0]!.hardCapMinutes = 1500 / 60_000;
+  const requestId = `live_stop_bound_${worker}`;
+  let stops = 0, skew = 0, finished = false, recover = false;
+  let reached!: () => void, pastBound!: () => void;
+  const refused = new Promise<void>(r => { reached = r; });
+  const retried = new Promise<void>(r => { pastBound = r; });
+  let stopsAtRelease = Infinity;
+  const logging = spyOn(console, "error").mockImplementation(() => {});
+  const ports: import("./ownerRun").OwnerRunPorts = {
+    launch: async () => ({ status: 202, body: { conversationId: `conversation_live_stop_bound_${worker}` } }),
+    observe: async () => ({ state: "running" }), stopRetryMs: 1, pollMs: 1, now: () => Date.now() + skew,
+    stop: async () => {
+      if (++stops === 3) reached();
+      if (stops > stopsAtRelease + 3) pastBound();
+      if (!recover) throw Error("owner relay conversation control refused");
+    },
+  };
+  let done: ReturnType<typeof runClaimedRequestWithLeaseWorker> | undefined;
+  try {
+    done = runClaimedRequestWithLeaseWorker(paired, { ...contextRequest, owner_delivery: { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: 12 }, request_id: requestId, deadline_at: new Date(Date.now() + 1500).toISOString(),
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, { leaseWorker: worker, timeoutMs: 20, ownerPorts: ports });
+    void done.then(() => { finished = true; });
+    await refused;
+    await new Promise<void>(r => setImmediate(r));
+    expect(finished).toBe(false); expect(advertisedSlots(paired)[0]!.free).toBe(0);
+    skew = OWNER_STOP_PENDING_LIMIT_MS + 1;
+    while (!readRunLedger().runs.find(r => r.requestId === requestId)?.ownerTurn?.released) await Bun.sleep(1);
+    stopsAtRelease = stops;
+    // Elapsed time releases the slot only: control keeps retrying and the
+    // execution promise stays pending.
+    await retried;
+    expect(readRunLedger().runs.find(r => r.requestId === requestId)).toMatchObject({
+      ownerTurn: { cancel: "interrupt", released: { reason: "stop_unconfirmed" }, diagnostic: { source: "hard-cap" } } });
+    expect(readRunLedger().runs.find(r => r.requestId === requestId)!.ownerTurn!.confirmed).toBeUndefined();
+    expect(completions).toEqual([]);
+    // The requester still hears back at the request bound.
+    expect(await done).toMatchObject({ outcome: "answered", answer: { action: "reply", text: expect.stringMatching(/ran out of time/i) } });
+    expect(completions).toHaveLength(1);
+    expect(advertisedSlots(paired)[0]!.free).toBe(1);
+    const held = readRunLedger().runs.find(r => r.requestId === requestId)!;
+    expect(held).toMatchObject({ completionAccepted: true, ownerTurn: { released: { reason: "stop_unconfirmed" } } });
+    expect(held.ownerTurn!.confirmed).toBeUndefined();
+    // The sweep keeps controlling the unconfirmed stop without a second completion.
+    const before = stops;
+    await sweepExternalRelayOrphans(ports);
+    expect(stops).toBeGreaterThan(before);
+    recover = true;
+    while (!readRunLedger().runs.find(r => r.requestId === requestId)?.ownerTurn?.confirmed) await Bun.sleep(1);
+    await sweepExternalRelayOrphans(ports);
+    // The confirmed record is retained as cleanup only; no sweep completes it again.
+    expect(readRunLedger().runs.find(r => r.requestId === requestId)).toMatchObject({ capacityReleased: true, ownerTurn: { confirmed: true } });
+    await sweepExternalRelayOrphans(ports);
+    expect(completions).toHaveLength(1);
+  } finally {
+    recover = true; await done; logging.mockRestore(); dropRun(requestId); await service.close();
+  }
+}, 15000);
+
+for (const age of ["within", "past"] as const) test(`owner stop that stays unconfirmed ${age} its bound ${age === "past" ? "releases" : "keeps"} the target slot`, async () => {
+  const relayStore = await import("./store");
+  const { OWNER_STOP_PENDING_LIMIT_MS } = await import("./ownerRun");
+  const { relayPollerStatus } = await import("./poller");
+  const completions: unknown[] = [];
+  const service = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete") || req.url?.endsWith("/send")) completions.push(
+      req.url.endsWith("/send") ? { outcome: "answered", answer: { action: "reply", text: (body as { text: string }).text, reply_to: "m1" } } : body,
+    );
+    return { body: req.url?.endsWith("/send") ? cloneReceipt() : { status: "ok" } };
+  });
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const now = Date.parse("2026-10-22T16:00:00Z");
+  const cancelledAt = new Date(now - OWNER_STOP_PENDING_LIMIT_MS + (age === "past" ? -1 : 60_000)).toISOString();
+  const requestId = `unconfirmed-${age}`;
+  const journal: unknown[][] = [];
+  const logging = spyOn(console, "error").mockImplementation((...args) => { journal.push(args); });
+  relayStore.updateRunLedger(ledger => ({ ...ledger, runs: [{ requestId, leaseId: "lease", relayId: paired.id, targetId: "target_1",
+    childPid: null, childIdentity: null, ownerPid: 999999999, ownerIdentity: "gone", runDir: "", startedAt: "2026-10-22T15:00:00Z",
+    conversationId: "conversation_unconfirmed", ownerTurn: { clientAttemptId: `relay-owner-${requestId}`, admissionComplete: true, cancel: "kill", cancelledAt,
+      diagnostic: { source: "launch", message: "fixture launch failed" } } }] }));
   let stops = 0, recover = false;
+  const ports: import("./ownerRun").OwnerRunPorts = {
+    launch: async () => { throw Error("must not launch"); },
+    observe: async () => ({ state: "running", firstMessagePending: true }),
+    stop: async () => { stops++; if (!recover) throw Error("owner relay conversation control refused"); },
+    noExecution: async () => false, stopRetryMs: 1, now: () => now,
+  };
+  try {
+    await sweepExternalRelayOrphans(ports);
+    expect(stops).toBe(3);
+    const row = readRunLedger().runs.find(r => r.requestId === requestId);
+    if (age === "within") {
+      expect(advertisedSlots(paired)[0]!.free).toBe(0);
+      expect(row?.capacityReleased).toBeUndefined(); expect(row?.ownerTurn?.released).toBeUndefined();
+      expect(JSON.stringify(journal)).toContain("stop remains pending");
+    } else {
+      expect(advertisedSlots(paired)[0]!.free).toBe(1);
+      expect(row).toMatchObject({ ownerTurn: { cancel: "kill", diagnostic: { message: "fixture launch failed" },
+        released: { reason: "stop_unconfirmed", at: new Date(now).toISOString() } } });
+      // An unconfirmed release keeps agent tools revoked and is no confirmed
+      // stop: execution stays pending and every sweep retries control.
+      expect(row?.capacityReleased).toBeUndefined(); expect(row?.ownerTurn?.confirmed).toBeUndefined();
+      expect(JSON.stringify(journal)).toContain("stop_unconfirmed");
+      expect(relayPollerStatus(paired.id).lastOutcome).toBe("owner_stop_pending");
+      await sweepExternalRelayOrphans(ports);
+      expect(stops).toBe(6); expect(completions).toEqual([]);
+      expect(readRunLedger().runs.find(r => r.requestId === requestId)?.ownerTurn?.released?.at).toBe(new Date(now).toISOString());
+      recover = true;
+      await sweepExternalRelayOrphans(ports);
+      expect(stops).toBe(7);
+      expect(completions).toEqual([expect.objectContaining({ outcome: "failed", reason: "install_restarted" })]);
+      expect(readRunLedger().runs.find(r => r.requestId === requestId)).toMatchObject({ capacityReleased: true, ownerTurn: { confirmed: true } });
+      await sweepExternalRelayOrphans(ports);
+      expect(stops).toBe(7); expect(completions).toHaveLength(1);
+    }
+  } finally {
+    logging.mockRestore(); dropRun(requestId); await service.close();
+  }
+});
+
+for (const worker of [false, true])
+for (const state of ["confirmed", "unconfirmed", "undiagnosed", "paused", "disabled", "removed", "unbound"] as const)
+test(`owner failure delivery checks durable authority (${state}, worker=${worker})`, async () => {
+  const { InlineRelayLeaseTransport } = await import("./relayLeaseTransport");
+  const { ownerRelayAuthorized } = await import("./ownerAuthority");
+  const completions: unknown[] = [];
+  const service = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  if (state === "paused") paired.paused = true;
+  if (state === "disabled") paired.targets[0]!.enabled = false;
+  if (state === "removed") paired.targets = [];
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const requestId = "failure-authority";
+  reserveRun({ requestId, relayId: paired.id, targetId: "target_1", leaseId: "fixture", childPid: null, childIdentity: null,
+    ownerPid: process.pid, ownerIdentity: null, runDir: "", startedAt: "2026-01-01T00:00:00Z",
+    ownerTurn: { clientAttemptId: "fixture", cancel: "interrupt", ...(state !== "unconfirmed" ? { confirmed: true } : {}),
+      ...(state !== "undiagnosed" ? { diagnostic: { source: "exception", message: "fixture launch failure" } } : {}) } });
+  const Transport = worker ? RelayLeaseTransport : InlineRelayLeaseTransport;
+  const transport = new Transport(paired, state === "unbound" ? "another-request" : requestId, "target_1", "fixture", 10000, () => {}, null);
+  try {
+    await transport.ready;
+    expect(ownerRelayAuthorized(paired.id, "target_1", requestId)).toBe(false);
+    const result = await transport.complete({ lease_id: "fixture", outcome: "answered", duration_ms: 0,
+      answer: { action: "reply", text: "The agent failed. Retry.", reply_to: "m1" } }, Date.now() + 5000, 4000, "failure");
+    expect(result.body).toMatchObject(state === "confirmed" ? { outcome: "answered" } : { outcome: "failed", reason: "cancelled" });
+    expect(completions).toHaveLength(1);
+    if (state !== "confirmed") expect(completions[0]).not.toHaveProperty("answer");
+  } finally { await transport.close(); dropRun(requestId); await service.close(); }
+});
+
+for (const language of ["en", "uk"] as const) test(`owner ${language} failure reply excludes interrupted answer parts`, async () => {
+  const { relayAnswerOp } = await import("./ownerAnswer");
+  let uploads = 0;
+  const service = await startTestRelay(req => { if (req.method === "PUT") uploads++; return { body: { status: "ok" } }; });
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const request = richRequest(true); request.request_id = `owner-failure-parts-${language}`;
+  request.input.requester = { key: "u1", is_owner: true, is_admin: true, is_anonymous_admin: false, can_delete_messages: true, can_restrict_members: true };
+  request.input.conversation[0]!.text = language === "uk" ? "Виконай запит" : "Complete the request";
+  const file = path.join(process.env.HOME!, "handoff", "interrupted-report.md");
+  fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, "# Interrupted report");
+  const conversationId = `conversation_failure_parts_${language}`;
+  const { Database } = await import("bun:sqlite");
+  const settingsFile = path.join(process.env.LLV_STATE_DIR!, "telegram", "bot.sqlite");
+  const hadDatabase = fs.existsSync(settingsFile);
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  const settings = new Database(settingsFile);
+  const hadSettings = !!settings.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'settings'").get();
+  const priorRoots = hadSettings ? settings.query<{ value: string }, []>("SELECT value FROM settings WHERE key = 'document_roots'").get() : null;
+  let stagingError: unknown;
+  try {
+    // Earlier cases can leave an intentionally partial bot database. Own the
+    // setting this attachment fixture needs, then restore exactly that state.
+    settings.exec("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)");
+    settings.query("INSERT OR REPLACE INTO settings (key, value) VALUES ('document_roots', ?)").run(JSON.stringify([path.dirname(file)]));
+    const result = await runClaimedRequest(paired, request, undefined, { ownerPorts: {
+      launch: async () => ({ status: 202, body: { conversationId } }),
+      observe: async () => {
+        try { expect(await relayAnswerOp(conversationId, { format: "rich_markdown", buttons: [[{ text: "Staged", url: "https://example.test/report" }]],
+          attachments: [{ path: file, kind: "document", caption: "Interrupted report" }] })).toMatchObject({ attachments: [expect.anything()] }); }
+        catch (error) { stagingError = error; }
+        return { state: "failed", failure: { kind: "host-died", detail: "fixture turn ended unexpectedly" } };
+      }, stop: async () => {},
+    } });
+    if (stagingError) throw stagingError;
+    expect(result).toMatchObject({ outcome: "answered", answer: { format: "plain", buttons: [], text: expect.stringContaining(language === "uk" ? "Причина:" : "Reason:") } });
+    if (result?.outcome === "answered") {
+      expect(result.answer.attachments ?? []).toEqual([]);
+      expect(result.answer.mentions ?? []).toEqual([]);
+    }
+    expect(uploads).toBe(0);
+  } finally {
+    try {
+      if (!hadSettings) settings.exec("DROP TABLE settings");
+      else if (priorRoots) settings.query("INSERT OR REPLACE INTO settings (key, value) VALUES ('document_roots', ?)").run(priorRoots.value);
+      else settings.query("DELETE FROM settings WHERE key = 'document_roots'").run();
+    } finally {
+      settings.close();
+      if (!hadDatabase) fs.rmSync(settingsFile, { force: true });
+      fs.rmSync(file, { force: true }); await service.close();
+    }
+  }
+});
+
+for (const admission of ["failed_receipt", "lost_response"] as const) test(`owner ${admission} keeps custody until host control confirms`, async () => {
+  const completions: unknown[] = [];
+  const service = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  let stops = 0, recover = false, finished = false;
+  let reached!: () => void;
+  const refused = new Promise<void>(r => { reached = r; });
   const conversationId = `conversation_${admission}`;
   const ports = {
     launch: async () => admission === "lost_response" ? { status: 202, body: {} }
       : { status: 503, body: { conversationId } },
     observe: async () => ({ state: "failed" as const, conversationId,
       failure: { kind: "launch-failed" as const, detail: "receipt failed before cleanup was confirmed" } }),
-    stop: async () => { stops++; if (!recover) throw Error("control receipt pending"); }, stopRetryMs: 1,
+    stop: async () => { if (++stops === 3) reached(); if (!recover) throw Error("control receipt pending"); }, stopRetryMs: 1,
   };
+  let done: ReturnType<typeof runClaimedRequest> | undefined;
   try {
-    const completion = await runClaimedRequest(paired, { ...contextRequest, request_id: admission,
+    done = runClaimedRequest(paired, { ...contextRequest, request_id: admission,
       input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, { ownerPorts: ports });
-    expect(completion).toMatchObject({ outcome: "failed" });
-    expect(stops).toBe(3);
+    void done.then(() => { finished = true; });
+    await refused;
+    await new Promise<void>(r => setImmediate(r));
+    expect(finished).toBe(false);
     expect(readRunLedger().runs[0]).toMatchObject({ conversationId, ownerTurn: { cancel: "kill", admissionComplete: true } });
     expect(readAnswerRecord(paired.id, "target_1", admission)?.conversationId).toBe(conversationId);
     expect(readRunLedger().runs[0]!.ownerTurn!.confirmed).not.toBe(true);
     expect(advertisedSlots(paired)[0]!.free).toBe(0);
-    // Retry while the same Viewer is alive, without relying on a restart.
-    recover = true;
+    expect(readAnswerRecord(paired.id, "target_1", admission)).toMatchObject({ state: "running", diagnostic: { source: "launch" } });
     await sweepExternalRelayOrphans(ports);
-    expect(stops).toBe(4); expect(readRunLedger().runs).toEqual([]);
-  } finally { await service.close(); }
+    expect(completions).toEqual([]);
+    expect(finished).toBe(false);
+    recover = true;
+    expect(await done).toMatchObject({ outcome: "answered" });
+    expect(stops).toBeGreaterThan(3); expect(readRunLedger().runs).toEqual([]);
+  } finally { recover = true; await done; await service.close(); }
 });
 
 test("owner credentials, host paths and key material never reach completion, answer records or diagnostics", async () => {
@@ -3290,10 +4043,11 @@ test("owner credentials, host paths and key material never reach completion, ans
       expect(opaqueRecord?.answer?.text).toContain("[redacted]");
       expect(JSON.stringify([opaqueOutcome, opaqueRecord, completions])).not.toContain(opaque.slice(0, 27));
     }
+    let diagnosticStops = 0;
     await runClaimedRequest(paired, { ...contextRequest, request_id: "owner_safe_diagnostic",
       input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
       timeoutMs: 10, ownerPorts: { launch: async () => ({ status: 202, body: { conversationId: "conversation_diag" } }),
-        observe: async () => ({ state: "running" }), stop: async () => { throw Error(finalText); }, stopRetryMs: 1, pollMs: 1 },
+        observe: async () => ({ state: "running" }), stop: async () => { if (++diagnosticStops <= 3) throw Error(finalText); }, stopRetryMs: 1, pollMs: 1 },
     });
     for (const secret of [value, paired.credential, control, spawn, ...paths, material, pgpMaterial]) expect(JSON.stringify(diagnostics)).not.toContain(JSON.stringify(secret).slice(1, -1));
     const { dropRun } = await import("./store"); dropRun("owner_safe_diagnostic");
@@ -3676,8 +4430,11 @@ for (const refusal of ["busy", "unavailable", "accepted-failure"] as const) test
     const next = { ...first, request_id: `chain-${refusal}-next`, claimed_at: new Date().toISOString(), deadline_at: new Date(Date.now() + 10200).toISOString(),
       input: { ...first.input, respond_to: "next", conversation: [{ ...first.input.conversation[0]!, id: "next", reply_to: first.input.respond_to }] } };
     const result = await runClaimedRequest(paired, next, undefined, { ownerPorts: ports });
-    expect(result?.outcome).toBe(refusal === "busy" ? "declined" : refusal === "unavailable" ? "answered" : "failed");
+    expect(result?.outcome).toBe(refusal === "busy" ? "declined" : "answered");
     if (refusal === "busy") expect(result).toMatchObject({ reason: "busy", detail: "chat busy" });
+    if (refusal === "accepted-failure") expect(readAnswerRecord(paired.id, "target_1", next.request_id)).toMatchObject({
+      diagnostic: { source: "observation", message: "Owner turn observation failed without further details" },
+    });
     expect(launches).toBe(refusal === "unavailable" ? 2 : 1); expect(sends).toBe(1);
   } finally { await server.close(); }
 });

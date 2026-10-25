@@ -1,4 +1,5 @@
 import { attentionReason } from "@/components/attention";
+import { laneState } from "@/components/kanban/cardState";
 import { withoutArchivedPredecessors } from "@/lib/accounts/identity";
 import type { SeatTickWorkerAskInput } from "@/lib/monitor/types";
 import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
@@ -8,7 +9,7 @@ import { laneStopKind } from "@/lib/pipelines/laneStop";
 import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
 
-import { laneNeedKind, laneRouteNow } from "./routeTypes";
+import { laneNeedKind } from "./routeTypes";
 
 /*
  * The seat's half of routing (docs/design/attention-auto-resolve.md,
@@ -113,8 +114,7 @@ function returnedNote(route: { returnedFrom?: string }): string {
     : "";
 }
 
-/** Every wait the projection routed to this canonical project's seat, oldest
-    conversation first, then the lanes. */
+/** Every wait the board routes to this project's seat, oldest first. */
 export function seatAgendaAsks(body: { files: readonly FileEntry[]; pipelines: readonly Pipeline[] }, now: number, project: string): SeatTickWorkerAskInput[] {
   const canonical = canonicalOrchestratorProject(project);
   const asks: (SeatTickWorkerAskInput & { since: number })[] = [];
@@ -124,12 +124,24 @@ export function seatAgendaAsks(body: { files: readonly FileEntry[]; pipelines: r
     if (!reason || reason.dismissal || reason.route?.owner !== "seat") continue;
     asks.push({ key: agendaKey(reason.route), id: file.conversationId ?? file.path, label: clip(returnedNote(reason.route) + conversationLine(file, reason), LABEL_MAX), since: reason.since });
   }
-  asks.sort((a, b) => a.since - b.since);
   const lanes = body.pipelines
     .filter((pipeline) => canonicalOrchestratorProject(pipeline.project) === canonical)
     .flatMap((pipeline) => {
-      const route = laneRouteNow(pipeline);
-      return route?.owner === "seat" ? [{ key: agendaKey(route), id: pipeline.id, label: clip(returnedNote(route) + laneLine(pipeline), LABEL_MAX) }] : [];
+      const state = laneState(pipeline);
+      const route = state.route;
+      if (state.owner !== "seat" || !route) return [];
+      const kind = laneNeedKind(pipeline)?.replace("lane-", "") ?? pipeline.state;
+      return [{ key: agendaKey(route), id: pipeline.id, label: clip(returnedNote(route) + laneLine(pipeline), LABEL_MAX),
+        sinceMs: state.sinceMs,
+        seatOwnedLane: { id: pipeline.id, title: pipeline.task || pipeline.id, sinceMs: state.sinceMs,
+          reason: `${kind}: ${pipeline.merge?.state === "blocked" ? pipeline.merge.reason ?? "merge stopped" : pipeline.stateDetail ?? state.stop?.kind ?? pipeline.state}` } }];
     });
-  return [...asks.map((ask) => ({ key: ask.key, id: ask.id, label: ask.label })), ...lanes];
+  const ordered: SeatTickWorkerAskInput[] = [...asks.map((ask) => ({ key: ask.key, id: ask.id, label: ask.label, sinceMs: ask.since * 1000 })), ...lanes];
+  return ordered.sort((a, b) => {
+    const age = (a.sinceMs ?? Number.POSITIVE_INFINITY) - (b.sinceMs ?? Number.POSITIVE_INFINITY);
+    if (age) return age;
+    if (a.seatOwnedLane && b.seatOwnedLane) return a.id.localeCompare(b.id);
+    // Preserve the board's conversation order when their timestamps tie.
+    return Number(!!a.seatOwnedLane) - Number(!!b.seatOwnedLane);
+  });
 }
