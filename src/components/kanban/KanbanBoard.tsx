@@ -36,6 +36,8 @@ import { cleanTitle } from "@/components/utils";
 import { canHandoff } from "@/components/HandoffHandle";
 
 import { AccountChoiceContext, ConversationAccountPopover, StageAccountPopover, useAccountChoices, type AccountTarget } from "./AccountPicker";
+import { PipelineChecksPopover } from "./PipelineChecksPopover";
+import { publishingStage } from "@/components/pipelines/PipelineCheckSettings";
 import { BAR_MENU_ROW, BarCreateGroup, BarFilterMenu, BarIslandSlot, BarRecentAgents, useBarFit, useBoardPaneRef } from "@/components/ProjectBar";
 import { HiddenTray } from "./HiddenTray";
 import { KanbanDraftContext, KanbanTaskComposer, type KanbanDraftActions } from "./KanbanDrafts";
@@ -415,6 +417,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     | { kind: "pipeline"; cardId: string; pipelineId: string } | { kind: "stage"; cardId: string; pipelineId: string; stageId: string; from: "sheet" | "panel" }
     | { kind: "account"; target: AccountTarget }
     | { kind: "links"; target: WorkLinkTarget }
+    | { kind: "checks"; pipelineId: string }
   >();
   const { receipts, show, dismiss } = useReceipts();
 
@@ -1474,7 +1477,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       });
       return { label: t("kanban.columnActions", { column: statusLabel(t, status) }), items };
     }
-    if (open.value.kind === "tray" || open.value.kind === "link" || open.value.kind === "stop" || open.value.kind === "account" || open.value.kind === "links" || open.value.kind === "icon") return null;
+    if (open.value.kind === "tray" || open.value.kind === "link" || open.value.kind === "stop" || open.value.kind === "account" || open.value.kind === "links" || open.value.kind === "icon" || open.value.kind === "checks") return null;
     if (open.value.kind === "reader") return readerMenu(open.value.key, open.anchor, open.value.stop);
     if (open.value.kind === "pipeline" || open.value.kind === "stage") return pipelineMenu(open.value);
     const value = open.value;
@@ -1577,6 +1580,19 @@ export function KanbanBoard(props: KanbanBoardProps) {
       keepFocus: true,
       disabled: !anchor,
       onSelect: () => { if (anchor) queueMicrotask(() => menu.setOpen({ anchor, value: { kind: "links", target } })); },
+    };
+  };
+  /* Where the lane's heavy checks run (docs/design/cloud-checks.md): its
+     choices open over the same anchor, the way a stage's account picker does. */
+  const checksItem = (pipelineId: string): KanbanMenuItem => {
+    const anchor = menu.open?.anchor;
+    return {
+      type: "item",
+      id: "checks",
+      label: t("pipelineStrip.checks"),
+      keepFocus: true,
+      disabled: !anchor,
+      onSelect: () => { if (anchor) queueMicrotask(() => menu.setOpen({ anchor, value: { kind: "checks", pipelineId } })); },
     };
   };
   /* ── A pipeline's actions, and a stage's (prototype `openPipelineMenu`, pane ⋯) ─ */
@@ -1687,6 +1703,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         { type: "item", label: t("kanban.stages.expandTitle"), keepFocus: true, onSelect: () => openSheet(card.id, pipeline) },
         /* In the card's ⋯ the task's own Attach sits a few rows up, so the lane's names what it attaches to. */
         linksItem({ kind: "pipeline", id: pipeline.id }, inCardMenu ? t("workLinks.attachPipeline") : undefined),
+        checksItem(pipeline.id),
         item(pauseOrResume, t(`kanban.pipelineAct.label.${pauseOrResume.action}`, { title, stage: "" }), pauseOrResume.action === "pause" ? t("kanban.pipelineAct.pauseWhy") : null),
         ...answerItems,
         ...finishItems,
@@ -2585,6 +2602,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const stopOpen = menu.open?.value.kind === "stop" ? menu.open : null;
   const accountOpen = menu.open?.value.kind === "account" ? menu.open : null;
   const linksOpen = menu.open?.value.kind === "links" ? menu.open.value.target : null;
+  const checksOpen = menu.open?.value.kind === "checks" ? menu.open.value.pipelineId : null;
+  const checksPipeline = checksOpen ? cards.flatMap((card) => card.pipelines).find((entry) => entry.pipeline.id === checksOpen)?.pipeline ?? null : null;
+  const checksStage = checksPipeline ? publishingStage(checksPipeline) : null;
   const iconOpen = menu.open?.value.kind === "icon" ? menu.open : null;
   const iconCard = iconOpen && iconOpen.value.kind === "icon" ? cardsById.get(iconOpen.value.cardId) ?? null : null;
   /* The picker reads the pipeline and the conversation as the board holds them now. */
@@ -2685,6 +2705,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const spawnRetryRef = useRef(props.onSpawnRetry);
   spawnRetryRef.current = props.onSpawnRetry;
   const spawnRetry = useCallback((file: FileEntry) => spawnRetryRef.current?.(file), []);
+  const closeConversation = useStableCallback((file: FileEntry) => props.onCloseConversation?.(file));
   const draftCloseRef = useRef(props.onDraftClose);
   draftCloseRef.current = props.onDraftClose;
   const draftSpawnedRef = useRef(props.onDraftSpawned);
@@ -3088,7 +3109,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         onLeave={leaveWindow}
         onMenu={openReaderMenu}
         onSpawnRetry={props.onSpawnRetry ? spawnRetry : undefined}
-        onCloseConversation={props.onCloseConversation}
+        onCloseConversation={props.onCloseConversation ? closeConversation : undefined}
       />
 
       {openMenu && menu.open ? (
@@ -3177,6 +3198,15 @@ export function KanbanBoard(props: KanbanBoardProps) {
         </KanbanPopover>
       ) : null}
       {accountOpen && accountOpen.value.kind === "account" ? accountOverlay(accountOpen.value.target, accountOpen.anchor) : null}
+      {checksPipeline && menu.open ? (
+        <PipelineChecksPopover
+          key={checksPipeline.id}
+          anchor={menu.open.anchor}
+          onClose={menu.close}
+          pipeline={checksPipeline}
+          stageName={checksStage ? stageNames(t, checksPipeline).get(checksStage) ?? checksStage : null}
+        />
+      ) : null}
     </div>
     </KanbanDraftContext.Provider>
     </AccountChoiceContext.Provider>

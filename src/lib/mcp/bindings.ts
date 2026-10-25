@@ -2194,6 +2194,18 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
   return { ...view(readIssueReportPreview(digest, directory) ?? stored), issueUrl, published: true };
 }
 
+/** Date validation runs before receipts while preserving project admission. */
+function requireTaskCreateDue(binding: McpToolBinding): McpToolBinding {
+  const prepare = binding.prepareAdmission;
+  binding.prepareAdmission = async (args: McpToolArgs) => {
+    if (args.dueAt === undefined || args.dueAt === null || args.dueAt === "") {
+      throw new McpToolRefusal("A dueAt date is required for a new task", { code: "TASK_DUE_REQUIRED", field: "dueAt", status: 400 });
+    }
+    await prepare?.(args);
+  };
+  return binding;
+}
+
 async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   /* A new task runs on the machine that creates it (M.4); "here" is the only
      machine a create names. */
@@ -2213,7 +2225,7 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
   let prior: BoardTask | undefined;
   let matchedFields: string[] | undefined;
   const result = await waitForStateLock("mcp.tasks.create", () => mutateTasksFile((state) => {
-    let outcome = createTask(state.tasks, input, state.recentCreates, { explicit: true, actor: "agent", noteAuthor: caller?.kind === "manager" ? { kind: "orchestrator", conversationId: caller.conversationId } : { kind: "agent", conversationId: caller?.conversationId ?? null }, conversationId: caller?.conversationId ?? undefined, seatHolding: taskSeatHoldingSnapshot(), ...(dependencies ? { statusActor: pauseResumeActorOf(dependencies) } : {}) });
+    let outcome = createTask(state.tasks, input, state.recentCreates, { requireDue: true, dueTimeZone: operatorTimeZone() ?? undefined, explicit: true, actor: "agent", noteAuthor: caller?.kind === "manager" ? { kind: "orchestrator", conversationId: caller.conversationId } : { kind: "agent", conversationId: caller?.conversationId ?? null }, conversationId: caller?.conversationId ?? undefined, seatHolding: taskSeatHoldingSnapshot(), ...(dependencies ? { statusActor: pauseResumeActorOf(dependencies) } : {}) });
     // Publish the new owner task and its seat-tick eligibility atomically.
     // Replays and matched findings retain the task's existing status.
     if (outcome.ok && !outcome.replay && !outcome.matched && ownerRelay && !outcome.task.hold) {
@@ -5999,9 +6011,23 @@ async function listPipelines(
   const scope = { project: boardReadProject(args, dependencies), states, includeClosed: args.includeClosed === true,
     ids: stringSet(args.ids), query: normalizedBoardQuery(text(args.query)), updatedSince: sinceTime(args.updatedSince),
     queryIds: undefined as string[] | undefined };
+  // Resolve explicit ids once so PR matching and paging share the same
+  // hot-or-archive records without traversing either collection.
+  const requested = scope.ids.length && dependencies.readPipelineRecord
+    ? new Map(scope.ids.flatMap(id => {
+      const row = dependencies.readPipelineRecord!(id);
+      return row ? [[id, row] as const] : [];
+    }))
+    : undefined;
   const number = pullRequestQuery(scope.query);
-  if (number !== null) scope.queryIds = pipelineReferenceRows(dependencies, scope.project).filter(row => pipelineMatchesPr(row, number)).map(row => row.id).sort();
-  const source = dependencies.pipelineSelectionSource?.();
+  if (number !== null) scope.queryIds = (requested ? [...requested.values()] : pipelineReferenceRows(dependencies, scope.project))
+    .filter(row => (!scope.project || canonicalProject(row.project) === scope.project) && pipelineMatchesPr(row, number)).map(row => row.id).sort();
+  const hotSource = dependencies.pipelineSelectionSource?.();
+  // Explicit ids share get_pipeline's hot-or-archive lookup. Keep ordinary
+  // lists on their scalar selection index and materialize only requested rows.
+  const source = hotSource && requested
+    ? { ...hotSource, read: (id: string) => requested.get(id) ?? null }
+    : hotSource;
   /* #2059: the compact row names its PR in one string, the full forms carry
      every resolved link. */
   const project = (source: Pipeline) => {
@@ -6013,7 +6039,9 @@ async function listPipelines(
   };
   const page = source ? boardSelection(source.filename, "pipelines").page(source, scope, args.cursor,
     Math.max(1, Math.min(200, integer(args.limit, PIPELINE_LIST_DEFAULT_LIMIT))), project)
-    : await listPageAsync(dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines, {
+    : await listPageAsync(requested
+      ? [...requested.values()]
+      : dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines, {
     scope, cursor: args.cursor, limit: Math.max(1, Math.min(200, integer(args.limit, PIPELINE_LIST_DEFAULT_LIMIT))),
     identity: pipeline => ({ id: pipeline.id, time: pipeline.createdAt ?? "" }),
     matches: pipeline => (!scope.project || canonicalProject(pipeline.project) === scope.project)
@@ -8171,7 +8199,7 @@ export function viewerMcpBindings(
     spawn_agent: (args, context) => spawnAgent(args, viewerControlForCall(controlDependencies, context), context, domainDependencies),
     send_message: (args, context) => sendMessage(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
     message_receipt: (args) => messageReceipt(args),
-    create_task: orchestratorProjectBinding(domainDependencies, (args) => createBoardTask(args, domainDependencies), true, true, true),
+    create_task: requireTaskCreateDue(orchestratorProjectBinding(domainDependencies, (args) => createBoardTask(args, domainDependencies), true, true, true)),
     update_task: Object.assign((args: McpToolArgs) => updateBoardTask(args, domainDependencies), { prepareAdmission: admitTaskDuePatch }),
     create_pipeline: (args, context) => unadmittedBeforeMutation(async () => (await createPipeline(args, context, domainDependencies))),
     pipeline_action: Object.assign(
@@ -8256,6 +8284,12 @@ export function viewerMcpBindings(
       (args: McpToolArgs, context?: McpToolCallContext) => deployExactSha(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
       { authorizeReceipt: () => { deploySeatAuthority(domainDependencies); } },
     ),
+    pipeline_checks: (args, context) => {
+      assertPipelineSeatAuthority(domainDependencies);
+      return viewerControlForCall(controlDependencies, context).post(`/api/pipelines/${encodeURIComponent(required(args, "pipelineId"))}/checks`, {
+        scope: args.scope, execution: args.execution, stageId: args.stageId,
+      }, {}, context);
+    },
     get_pipeline: reads.get_pipeline,
     board_snapshot: (args) => boardSnapshot(args, domainDependencies),
     list_flows: (args) => Promise.resolve(listFlows(args, domainDependencies)),

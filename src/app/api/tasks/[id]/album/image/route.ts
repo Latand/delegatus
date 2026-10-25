@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
@@ -18,7 +19,7 @@ type TaskRouteContext = {
  * Only a picture that album indexed can be named, so this route reads no
  * transcript line the album did not already point at.
  */
-export async function GET(req: NextRequest, context: TaskRouteContext): Promise<NextResponse<ApiError> | NextResponse> {
+async function workspaceGET(req: NextRequest, context: TaskRouteContext): Promise<NextResponse<ApiError> | NextResponse> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
   const { id } = await context.params;
@@ -38,3 +39,5 @@ export async function GET(req: NextRequest, context: TaskRouteContext): Promise<
     },
   });
 }
+
+export const GET = workspaceRoute("/api/tasks/[id]/album/image", workspaceGET);

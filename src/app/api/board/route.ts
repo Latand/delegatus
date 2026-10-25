@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
 import { applyBoardCommandAsync as applyBoardCommand } from "@/lib/board/command";
@@ -10,7 +11,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 const headers = { "Cache-Control": "no-store" };
 
-export function GET(request: NextRequest): NextResponse {
+function workspaceGET(request: NextRequest): NextResponse {
   const rejection = rejectCrossOrigin(request);
   if (rejection) { rejection.headers.set("Cache-Control", "no-store"); return rejection; }
   const project = request.nextUrl.searchParams.get("project");
@@ -23,7 +24,7 @@ export function GET(request: NextRequest): NextResponse {
   }
 }
 
-export async function PATCH(request: NextRequest): Promise<NextResponse> {
+async function workspacePATCH(request: NextRequest): Promise<NextResponse> {
   const rejection = rejectCrossOrigin(request);
   if (rejection) { rejection.headers.set("Cache-Control", "no-store"); return rejection; }
   try {
@@ -38,3 +39,7 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "INTERNAL_ERROR", message: "internal error" }, { status: 500, headers });
   }
 }
+
+export const GET = workspaceRoute("/api/board", workspaceGET);
+
+export const PATCH = workspaceRoute("/api/board", workspacePATCH);

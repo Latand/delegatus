@@ -104,6 +104,34 @@ corresponding original hashes below:
 | `src/lib/boardMaintenance/answer.test.ts` | `ec897e07f7e7900d2e1f28e44796993ded6190bfe125a704457e30b7ed8ee648` |
 | `src/lib/boardMaintenance/run.test.ts` | `0aa931966b556a1485fa8722ede27e58294d295e782610a9adf5c666fa97f48f` |
 
+## Publication repair (2026-10-25)
+
+Publication of the IANA correction was refused by the three high dependency
+advisories recorded above. The branch now merges main at
+`6aedba12d94013369b3f15b37bee44a39aea0959`, including main's reviewed dependency
+repair and its compatibility fixes. The resolved graph uses `body-parser`
+2.4.0, `happy-dom` 21.0.4 and `zod` 4.6.6, while retaining the pinned
+`moment-timezone` 0.6.5 and all accepted maintenance-window changes.
+
+The only merge conflict was in `src/lib/mcp/schemaParity.test.ts`: both branches
+added a test at the end of the file. The resolution keeps the maintenance-window
+forwarding test and main's Cloud-execution-choice test as separate complete
+tests. Workflow files match the merged main revision.
+
+The merged implementation was checked in a fresh detached export with isolated
+HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR, through the supplied gate-slot
+wrapper. `bash .githooks/pre-push` returned 0: privacy, frozen install, audit
+tests, **supply chain**, types, ESLint, touched tests, Linux backend and all 17
+scoped Linux test files passed. This supersedes the earlier red audit result.
+
+The explicit nine-file maintenance/MCP comparator shown above was also rerun
+with `--base 6aedba12d94013369b3f15b37bee44a39aea0959` and returned 0. All nine
+files completed: 0 new failures and 1 pre-existing oversized-send refusal in
+`src/lib/mcp/originalKeySendRecovery.test.ts`, freshly reproduced on main.
+`src/lib/mcp/schemaParity.test.ts`, including both retained tests, is green.
+The implementation files match the checked export byte for byte; the accepted
+`src/lib/boardMaintenance/window.ts` implementation remains byte-identical.
+
 ## Input and fixes
 
 The supplied `03.diff` is 29,703 bytes. Its SHA-256 matches `03.meta.json`:

@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, setSystemTime, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -175,4 +175,28 @@ test("REST replaces and clears the status note, deriving the operator author", a
   expect((await patch({ note: "x".repeat(281) })).status).toBe(400);
   expect((await patch({ note: null })).status).toBe(200);
   expect(loadTasks()[0]!.note).toBeUndefined();
+});
+
+
+test("operator creates without a picked date receive a fresh 72-hour default", async () => {
+  const { updateOperatorSettings } = await import("@/lib/operator/settings");
+  const { defaultTaskDue } = await import("@/lib/tasks/helpers");
+  const now = new Date("2026-10-23T10:12:34.567Z");
+  setSystemTime(now);
+  try {
+    expect(updateOperatorSettings({ timeZone: "Asia/Tokyo" })).not.toBeNull();
+    const request = (body: object) => new NextRequest("http://localhost/api/tasks", { method: "POST", headers: { "content-type": "application/json", host: "localhost" }, body: JSON.stringify(body) });
+    const body = { project: "operator-default", text: "New dated work", placement: "unplaced", clientRequestId: "operator-default-date", defaultDue: false };
+    const response = await route.POST(request(body));
+    expect(response.status).toBe(200);
+    const first = (await response.json()).task;
+    expect(first).toMatchObject(defaultTaskDue(now.getTime(), "Asia/Tokyo"));
+    setSystemTime(new Date("2026-10-30T10:12:34.567Z"));
+    const replay = await route.POST(request(body));
+    expect((await replay.json()).task).toMatchObject({ id: first.id, dueAt: first.dueAt });
+    const fresh = await route.POST(request({ ...body, clientRequestId: "operator-default-fresh" }));
+    expect((await fresh.json()).task.dueAt).toBe("2026-11-02T11:00:00.000Z");
+    const picked = await route.POST(request({ ...body, clientRequestId: "operator-picked", dueAt: "2026-11-04T10:00:00Z", dueTz: "Europe/Kyiv" }));
+    expect((await picked.json()).task).toMatchObject({ dueAt: "2026-11-04T10:00:00.000Z", dueTz: "Europe/Kyiv" });
+  } finally { setSystemTime(); }
 });
