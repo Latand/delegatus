@@ -150,7 +150,7 @@ test("a dead aged owner is removed once without disturbing another live ticket",
   expect(f.rows().map((row) => row.key)).toEqual(["next"]);
 });
 
-test.each(["v2", "pre-poll"])("cold %s rows age on the first current check without rewriting their identities", version => {
+test.each(["v2", "pre-poll"])("cold %s rows keep legacy order until their owner upgrades without rewriting their identities", version => {
   const f = fixture();
   const old = version === "v2" ? new V2CpuAdmissionQueue(f.file, () => 0, GAP, T, Infinity) : new PrePollCpuAdmissionQueue(f.file, () => 0);
   cleanup.push(() => old.close());
@@ -159,26 +159,32 @@ test.each(["v2", "pre-poll"])("cold %s rows age on the first current check witho
   const restarted = f.open();
   const before = f.rows();
   f.priority("young-high", "high"); f.check("young-high");
-  expect(restarted.check("young-high", true, f.owner, false, f.source("young-high"), true)?.position).toBe(2);
+  expect(restarted.check("young-high", true, f.owner, false, f.source("young-high"), true)).toBeNull();
   expect(f.rows()[0]).toEqual(before[0]);
+  expect(f.db.query("SELECT aging FROM tickets WHERE key = 'old-normal'").get()).toEqual({ aging: 0 });
   expect(restarted.check("old-normal", true, f.owner, true, undefined, true)).toBeNull();
 });
 
-test("V2 and current connections keep schema, row meaning, legacy ordering and global spacing", () => {
+test("V2 and current connections preserve legacy rows and spacing while each claims only its own ticket", () => {
   const f = fixture();
   let clock = 0;
   const old = new V2CpuAdmissionQueue(f.file, () => clock, GAP, T, Infinity);
   cleanup.push(() => old.close());
-  const schema = () => f.db.query("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all();
+  const schema = () => f.db.query("SELECT type, name, tbl_name, sql FROM sqlite_master WHERE type != 'table' ORDER BY type, name").all();
   const original = schema();
-  f.open(); expect(schema()).toEqual(original);
+  const columns = f.db.query("PRAGMA table_info(tickets)").all();
+  f.open(); expect(schema()).toEqual(original); // additive column leaves legacy triggers/indexes unchanged
+  const upgraded = f.db.query("PRAGMA table_info(tickets)").all();
+  expect(upgraded.slice(0, -1)).toEqual(columns);
+  expect(upgraded.at(-1)).toMatchObject({ name: "aging", type: "INTEGER", notnull: 1, dflt_value: "0" });
+  const reopened = new V2CpuAdmissionQueue(f.file, () => clock, GAP, T, Infinity);
+  cleanup.push(() => reopened.close());
   f.priority("normal", "normal"); old.check("normal", true, f.owner, false, f.source("normal"), true);
   f.at(T); clock = T;
   f.priority("urgent", "high"); f.check("urgent");
   const rows = f.rows();
-  expect(f.check("normal", true)).toBeNull(); // aged normal is ready
-  expect(old.check("normal", true, f.owner, false, undefined, true)?.position).toBe(2); // old policy still sees urgent first
-  expect(old.check("urgent", true, f.owner, true)).toBeNull();
+  expect(old.check("normal", true, f.owner, true, undefined, true)?.position).toBe(2);
+  expect(f.check("urgent", true, true)).toBeNull();
   expect(f.rows()).toEqual(rows.filter((row) => row.key !== "urgent"));
   expect(f.q.check("stage:current", true)).toMatchObject({ position: 1, heldBy: "queue" });
   f.at(T + GAP); clock = T + GAP;
@@ -187,6 +193,64 @@ test("V2 and current connections keep schema, row meaning, legacy ordering and g
   f.at(T + 2 * GAP); clock = T + 2 * GAP;
   expect(old.check("normal", true, f.owner, true)).toBeNull();
   expect(schema()).toEqual(original);
+});
+
+test.each([
+  ["normal", "high"], ["low", "normal"],
+  ["high", "normal"], ["normal", "low"],
+])("legacy %s and current %s owners make progress across aging in either poll order", (oldRank, newRank) => {
+  for (const currentFirst of [false, true]) {
+    const f = fixture();
+    let now = 0;
+    const old = new V2CpuAdmissionQueue(f.file, () => now, GAP, T, Infinity);
+    cleanup.push(() => old.close());
+    f.priority("legacy", oldRank!); f.priority("current", newRank!);
+    old.check("legacy", true, f.owner, false, f.source("legacy"), true);
+    f.at(now = 5 * 60_000); f.check("current"); // readiness only: slots stay occupied
+    const legacyRow = f.rows().find(row => row.key === "legacy");
+    expect(f.db.query("SELECT key, aging FROM tickets ORDER BY fifo_seq").all()).toEqual([
+      { key: "legacy", aging: 0 }, { key: "current", aging: 1 },
+    ]);
+    const pending = currentFirst ? ["current", "legacy"] : ["legacy", "current"];
+    const admissions: number[] = [];
+    for (now = T - 1; now <= 2 * T + GAP; now += now === T - 1 ? 1 : GAP) {
+      f.at(now);
+      for (const key of [...pending]) {
+        const claim = now >= 2 * T; // slots become available only after both age steps
+        const wait = key === "legacy"
+          ? old.check(key, true, f.owner, claim, f.source(key), true)
+          : f.check(key, true, claim);
+        if (claim && wait === null) {
+          admissions.push(now); pending.splice(pending.indexOf(key), 1);
+          if (key === "current" && pending.includes("legacy")) expect(f.rows().find(row => row.key === "legacy")).toEqual(legacyRow);
+        }
+      }
+    }
+    expect(pending).toEqual([]);
+    expect(admissions).toEqual([2 * T, 2 * T + GAP]);
+  }
+});
+
+test.each([false, true])("legacy and aged current heads serialize their own claims (current first: %s)", currentFirst => {
+  const f = fixture();
+  let now = 0;
+  const old = new V2CpuAdmissionQueue(f.file, () => now, GAP, T, Infinity);
+  cleanup.push(() => old.close());
+  f.priority("current", "normal"); f.check("current");
+  f.at(now = T / 2); f.priority("legacy", "high");
+  old.check("legacy", true, f.owner, false, f.source("legacy"), true);
+  f.at(now = T);
+  // Each version sees its own head: aging and legacy rank disagree safely.
+  expect(f.check("current", true)).toBeNull();
+  expect(old.check("legacy", true, f.owner, false, f.source("legacy"), true)).toBeNull();
+  const claim = (key: string) => key === "current" ? f.check(key, true, true)
+    : old.check(key, true, f.owner, true, f.source(key), true);
+  const [first, second] = currentFirst ? ["current", "legacy"] : ["legacy", "current"];
+  expect(claim(first!)).toBeNull();
+  expect(claim(second!)).toMatchObject({ position: 1 });
+  f.at(now = T + GAP);
+  expect(claim(second!)).toBeNull();
+  expect(f.rows()).toEqual([]);
 });
 
 test("fresh checker processes recover aging from durable wait timestamps and keep pressure mandatory", () => {

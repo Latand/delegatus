@@ -341,18 +341,19 @@ pressure policies stay exactly as they are.
 ```text
 T = CPU_QUEUE_MAX_WAIT_MS            (10 minutes, the queue's existing fairness bound)
 rank(t)  = 0 high, 1 normal, 2 low   (refreshed from the board on every check, as today)
-class(t) = max(0, rank(t) − ⌊max(0, now − since(t)) / T⌋)
+aging(t) = 1 after this ticket's owner checks with V3; 0 for legacy owners
+class(t) = max(0, rank(t) − aging(t) · ⌊max(0, now − since(t)) / T⌋)
 order within a lane = (class, fifo_seq)
 ```
 
-A ticket's effective class rises by one level for every full `T` it has
-waited. Normal reaches high after 10 minutes. Low reaches normal after 10 and
+An aging-aware ticket's effective class rises by one level for every full `T`
+it has waited. Normal reaches high after 10 minutes. Low reaches normal after 10 and
 high after 20. Inside a class the order stays the durable insertion sequence
 (`fifo_seq`), so an aged ticket lines up behind every ticket that was queued
 before it and ahead of every ticket queued after it.
 
-**Guarantee.** Let X be a ticket with rank `r` that entered lane L at `t0`,
-with its rank staying at `r` or a smaller number during the interval.
+**Guarantee.** Among aging-aware callers, let X be a ticket with rank `r` that
+entered lane L at `t0`, with its rank staying at `r` or a smaller number during the interval.
 From `t0 + r·T` on, every ticket counted ahead of X in L was queued before X.
 New arrivals of any priority land behind X, and so do priority raises of
 younger tickets. X's position therefore never grows from arrivals after
@@ -512,14 +513,23 @@ Three code versions write the machine queue today:
 V1 and V2 keep running until the normal deploy, and until every lane
 worktree's hooks come from a base containing V3.
 
-**V3 makes no schema change.** It adds no table, column, trigger or index, and
-it writes no column V2 does not already write. `priority` keeps holding the
-task rank; V3 never writes an aged class into it. That matters because V1 and
-V2 refresh `priority` from the board on every check: an aged class written
-there would be overwritten at once. V3 keeps maintaining the legacy `seq` view
-(`tickets_fifo`, `orderLegacyTicketsByPriority`) unchanged. It computes `class`
-and `lane` inside its own queries from `priority`, `since`, `owner` and
-`fifo_seq`, so every old row is read as written.
+**V3 adds one capability column.** `tickets.aging INTEGER NOT NULL DEFAULT 0`
+is added under the constructor's existing writer transaction. Old rows and
+inserts from old helpers leave it 0. Only the ticket's own V3 check stamps it 1,
+inside the same transaction that computes and claims its turn. Opening a file,
+refreshing another ticket's priority and the shared poll triggers never opt
+another owner into aging. A cold row retains its age and FIFO; its first check
+from an upgraded owner enables aging immediately. Cancellation deletes the
+marker with the ticket, so a reused key starts with the inserting client's
+capability.
+
+`priority` keeps holding the task rank. V3 never writes an aged class into it:
+V1 and V2 refresh that rank from the board on every check. V3 keeps maintaining
+the legacy `seq` view (`tickets_fifo`, `orderLegacyTicketsByPriority`) unchanged.
+It computes `class` and `lane` inside its own queries. Unmarked rows use their
+stored task rank, so a V3 caller never waits behind a legacy row solely because
+of age the legacy checker cannot act on. Without this capability, an old normal
+and a new high can each put the other first after ten minutes and deadlock.
 
 What holds with all three versions at once:
 
@@ -542,11 +552,11 @@ spacing then separates the two claims.
 deadline. It is based before #3338 and already conflicts with main on its own.
 It restructures the `CpuAdmissionQueue` constructor and adds a seventh
 parameter, `busyTimeoutMs`. It wraps the helper's checks in `admissionLockWait`
-and adds `claim()` to `gate-slot.sh`. This design changes only the body of
-`check()` and `cpuQueueText.ts`; in the helper it changes the text expression
-and the argv read; in the shell it changes the `--wait` line. It does not
-touch the constructor and adds no constructor parameter: the age step is the
-existing `maxWaitMs`. Whichever lands second merges main append-only, keeps the
+and adds `claim()` to `gate-slot.sh`. This design adds the capability column
+in the constructor's existing schema transaction and changes `check()` and
+`cpuQueueText.ts`; in the helper it changes the text expression and the argv
+read; in the shell it changes the `--wait` line. It adds no constructor
+parameter: the age step is the existing `maxWaitMs`. Whichever lands second merges main append-only, keeps the
 other's wrapper and claim function, and reruns `scripts/gate-slot.queue.test.ts`.
 Draft #2926 is stale (last updated 2026-10-15), and its queue edits are already
 on main.
@@ -565,7 +575,8 @@ on main.
    applies only within the lane.
 5. Only a ticket's first insert sets `since`. Nothing makes a ticket older than
    its own wait.
-6. The schema and the legacy `seq` view are byte-for-byte what V2 produces.
+6. The additive capability column defaults to legacy ordering. Existing
+   columns, triggers, indexes and the legacy `seq` view retain V2 semantics.
 7. Cancellation, dead-owner removal, the unverified and unpolled pass-overs,
    suspension, reconcile and the 24-hour removal are unchanged.
 8. Waiting text never shows a remaining-time estimate. It shows the cause and
@@ -573,15 +584,15 @@ on main.
 
 ### 6. Code areas and tests
 
-Code: `src/lib/runtime/cpuAdmission.ts` (`check()`, the `CpuQueueWait` type),
+Code: `src/lib/runtime/cpuAdmission.ts` (schema capability, `check()`,
+the `CpuQueueWait` type),
 `src/lib/runtime/cpuQueueText.ts`, `src/lib/runtime/cpuPressure.ts`
 (`cpuPressureHoldDetail`), `scripts/cpu-admission.ts`, `scripts/gate-slot.sh`
 (the `--wait` line), `src/components/kanban/PipelineSection.tsx`,
 `src/lib/i18n/en.ts` and `uk.ts`, `src/lib/runtime/cpuAdmission.prePoll.fixture.ts`
 (its return type). The engines need no change: they pass the hold through
 `cpuPressureHoldDetail`. The per-check cost stays a scan of the waiting tickets
-(33 in the audit) inside the transaction that already scans them for owners and
-priorities. No speed claim is made.
+inside the transaction that already scans them for owners and priorities. No speed claim is made.
 
 Every case below uses a fake clock and a private queue file. All of them are
 behavioural. Existing cases whose expectations encode the old order or text
@@ -621,16 +632,19 @@ and `heldBy`.
 - **Mixed versions.** A frozen copy of the V2 class, `cpuAdmission.v2.fixture.ts`
   (the class at `dcf07a26`, only its name changed, like the existing pre-poll
   fixture), and V3 share one file:
-  - the schema dump (`sqlite_master`) after V3 opens a V2-created file equals
-    V2's own;
+  - V3 adds only the capability column, leaving legacy triggers and indexes
+    unchanged; V2 can reopen the upgraded file;
   - after V3 checks, every row's `priority` still equals its task rank;
   - V2's positions for its own command tickets match strict
     `(priority, fifo_seq)`;
   - spacing holds across a V2 claim and a V3 stage admission;
+  - each version checks and claims only its own tickets across both aging
+    steps, in either poll order; old normal/new high and old low/new normal
+    both drain immediately when slots free, with shared spacing;
   - neither version removes or rewrites the other's live ticket.
 - **Cold start.** V3 opens a file that the pre-poll fixture or V2 created, with
-  rows whose `since` is 25 minutes old. Their classes apply at the first check,
-  with no migration step.
+  rows whose `since` is 25 minutes old. Legacy rows keep task rank until their
+  own upgraded checker polls, then their full durable age applies.
 - **Fencing.**
   - Cancelling an aged ticket and checking the same key again gives a fresh
     `since`.

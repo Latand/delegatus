@@ -173,6 +173,9 @@ export class CpuAdmissionQueue {
       // Set by a ticket's own check: it starts only while measured pressure is
       // low. Helpers that predate the column leave it 0, the old behaviour.
       if (!columns.some(column => column.name === "low_pressure")) this.db.exec("ALTER TABLE tickets ADD COLUMN low_pressure INTEGER NOT NULL DEFAULT 0");
+      // Only a ticket checked by an aging-aware owner may gain effective rank.
+      // Legacy owners keep comparing task rank/seq and cannot act on its age.
+      if (!columns.some(column => column.name === "aging")) this.db.exec("ALTER TABLE tickets ADD COLUMN aging INTEGER NOT NULL DEFAULT 0");
       if (!columns.some(column => column.name === "fifo_seq")) {
         this.db.exec("ALTER TABLE tickets ADD COLUMN fifo_seq INTEGER");
         this.db.exec("UPDATE tickets SET fifo_seq = seq");
@@ -295,6 +298,7 @@ export class CpuAdmissionQueue {
       this.db.query("DELETE FROM suspended WHERE key = ?").run(key);
       this.db.query("DELETE FROM stage_admissions WHERE key = ?").run(key);
       this.touch(key);
+      this.db.query("UPDATE tickets SET aging = 1 WHERE key = ? AND aging = 0").run(key);
       this.db.query("UPDATE tickets SET low_pressure = ? WHERE key = ? AND low_pressure IS NOT ?").run(requireLowPressure ? 1 : 0, key, requireLowPressure ? 1 : 0);
       if (source) {
         const binding = JSON.stringify(source);
@@ -327,10 +331,12 @@ export class CpuAdmissionQueue {
       // their own lane. No slot-waiting command can hold a stage start.
       const lane = ticket.owner === null ? "owner IS NULL" : "owner IS NOT NULL";
       // Keep task ranks and the legacy seq view unchanged for old checkers.
-      // Each full wait bound raises one class; fifo_seq breaks every tie.
+      // Each full wait bound raises one class for aging-aware owners only.
+      // Aging a legacy row could make both owners count the other ahead,
+      // leaving no client able to claim. fifo_seq breaks every class tie.
       const age = Math.floor(waitedMs / this.maxWaitMs);
       const effectiveClass = Math.max(0, ticket.priority - age);
-      const agedClass = "MAX(0, priority - CAST(MAX(0, ? - since) / ? AS INTEGER))";
+      const agedClass = "MAX(0, priority - aging * CAST(MAX(0, ? - since) / ? AS INTEGER))";
       // A bounded caller still passes low-pressure-only tickets at its bound.
       const passesLowPressure = !requireLowPressure && budget === 0 ? 1 : 0;
       const counted = `${lane} AND (${agedClass} < ? OR (${agedClass} = ? AND fifo_seq <= ?)) AND (? = 0 OR low_pressure = 0 OR key = ?) AND key NOT IN (SELECT key FROM suspended) AND key NOT IN (SELECT key FROM stage_admissions)`;
