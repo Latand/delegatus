@@ -74,7 +74,7 @@ interface FilesRouteDependencies {
 
 function projectedProjectCatalog(
   fallback: ProjectCatalogEntry[],
-  snapshot: ReturnType<ReturnType<typeof agentRegistry>["snapshot"]>,
+  snapshot: RegistryFile,
 ): ProjectCatalogEntry[] {
   const source = conversationCatalogSnapshot();
   if (!source.length) return fallback;
