@@ -77,15 +77,16 @@ export async function runSetupRecipe(root: string, recipe: ReviewedSetupRecipe, 
     const plan = ports.planMemory({ engine: "setup", sessionKey: root, liveAgents, cpu: ports.planCpu("work"),
       memoryScopes: memoryInput ? agentMemoryScopes(memoryInput) : undefined });
     memory = plan ? new AgentMemoryCell(plan) : null;
-    let supervisorPython: string, supervisorSandbox: string;
+    let supervisorPython = "", supervisorSandbox = "", unavailable = "";
     try {
       supervisorPython = await setupInterpreter("python3");
       supervisorSandbox = await setupInterpreter("bwrap");
-    } catch (error) {
-      return { code: null, stdout: "", stderr: `setup isolation could not start; no command was run: ${error instanceof Error ? error.message : String(error)}` };
-    }
+    } catch (error) { unavailable = error instanceof Error ? error.message : String(error); }
+    // Approval and activation are rechecked after the last await, also on
+    // hosts without isolation, so a revocation reports as a revocation.
     authorize?.();
     if (signal?.aborted) return { code: null, stdout: "", stderr: "setup cancelled" };
+    if (unavailable) return { code: null, stdout: "", stderr: `setup isolation could not start; no command was run: ${unavailable}` };
     return await new Promise<ExecResult>((resolve) => {
       let stdout = "", stderr = "", bytes = 0, stopped = "";
       const base = (command: string, argv: string[], options: SpawnOptionsWithoutStdio) =>

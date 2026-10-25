@@ -10,8 +10,11 @@ import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } f
 import { procBackend } from "@/lib/proc";
 import { descendantPids } from "@/lib/proc/memory";
 import { ownFixtureTree, stopFixtureIdentity, stopFixtureTree } from "@/lib/testing/fixtureProcess";
-import { reviewSetupRecipe, setupInterpreter } from "@/lib/projects/setupRecipe";
+import { reviewSetupRecipe, setProjectSetupRecipe, setupInterpreter } from "@/lib/projects/setupRecipe";
+import { statePath } from "@/lib/configDir";
 import { executeSetupRecipe, runSetupRecipe, type SetupExecution } from "./setupExecution";
+import { preparePipelineSetup } from "./setupRecipe";
+import type { Pipeline, PipelineStage, PipelineStageAttempt } from "./types";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "setup-execution-"));
 const checkout = path.join(root, "checkout"); fs.mkdirSync(checkout);
@@ -338,4 +341,44 @@ test.skipIf(process.platform !== "linux")("memory admission refusal prevents set
     planMemory: () => { throw new Error("fixture memory admission refused"); },
   })).rejects.toThrow("fixture memory admission refused");
   expect(fs.existsSync(path.join(directory, "unexpected-effect"))).toBe(false);
+});
+
+test.skipIf(process.platform !== "linux")("the real executor rechecks approval after its preparation, before any process starts", async () => {
+  const directory = fs.mkdtempSync(path.join(root, "final-seam-"));
+  fs.writeFileSync(path.join(directory, "setup.sh"), "printf wrong > unexpected-effect");
+  const input = { command: ["sh", "setup.sh"], cwd: "." };
+  const project = "setup-final-seam-project";
+  await setProjectSetupRecipe(project, { ...input, hash: (await reviewSetupRecipe(directory, input)).hash, approvedAt: "2026-10-23T10:00:00.000Z" });
+  const settings = statePath("project-setup.json");
+  const approvals = fs.readFileSync(settings, "utf8");
+  const scratch = () => new Set(fs.readdirSync(os.tmpdir()).filter(name => name.startsWith("delegatus-setup-")));
+  const before = scratch();
+  const original = AgentMemoryCell.prototype.wrapSpawn;
+  let planned = 0, launched = 0;
+  AgentMemoryCell.prototype.wrapSpawn = function(base) {
+    return (command, args, options) => { launched++; return base!(command, args, options); };
+  };
+  const current = { n: 1, effectiveRole: { roleId: "builder" } } as PipelineStageAttempt;
+  const lane = { project, worktreeDir: directory, runs: [{ stageId: "build", attempts: [current] }] } as unknown as Pipeline;
+  try {
+    await expect(preparePipelineSetup(lane, { sandbox: "restricted" } as PipelineStage, current, () => "2026-10-23T10:00:00.000Z", () => {},
+      (cwd, reviewed, sandbox, signal, authorize) => runSetupRecipe(cwd, reviewed, sandbox, signal, authorize, {
+        planCpu: () => null,
+        // Scratch, interpreter and registry work has finished; another writer revokes approval now.
+        planMemory: plan => {
+          planned++;
+          fs.writeFileSync(settings, JSON.stringify(Object.fromEntries(Object.keys(JSON.parse(approvals)).map(key => [key, null]))));
+          return { mechanism: "scope", mode: "scope", platform: "linux", limitBytes: 512 * 1024 * 1024, budgetBytes: 1024 ** 3,
+            reserveBytes: 0, totalBytes: 2 * 1024 ** 3, score: 500, unit: "setup-fixture.scope", slice: "delegatus-agents.slice",
+            viewerUnit: null, systemdVersion: 255, cpu: plan.cpu };
+        },
+      }))).rejects.toThrow("approval changed");
+    expect(planned).toBe(1); expect(launched).toBe(0);
+    expect(current.setup?.state).toBe("failed");
+    expect(fs.existsSync(path.join(directory, "unexpected-effect"))).toBe(false);
+    expect([...scratch()].filter(name => !before.has(name))).toEqual([]);
+  } finally {
+    AgentMemoryCell.prototype.wrapSpawn = original;
+    await setProjectSetupRecipe(project, null);
+  }
 });

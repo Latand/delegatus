@@ -171,6 +171,27 @@ test("cwd traversal, linked scripts and shell expressions are refused", async ()
   await expect(reviewSetupRecipe(root, { command: ["sh", "link.sh"], cwd: "." })).rejects.toThrow("symbolic links");
 });
 
+test("a linked directory inside a script path or cwd is refused before any outside byte is captured", async () => {
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "setup-recipe-outside-"));
+  const checkout = fs.mkdtempSync(path.join(root, "linked-components-"));
+  try {
+    fs.writeFileSync(path.join(outside, "setup.sh"), "echo outside\n");
+    fs.mkdirSync(path.join(checkout, "inside"));
+    fs.writeFileSync(path.join(checkout, "inside/setup.sh"), "echo inside\n");
+    fs.symlinkSync(outside, path.join(checkout, "scripts"), "dir");
+    fs.symlinkSync("inside", path.join(checkout, "alias"), "dir");
+    for (const input of [
+      { command: ["sh", "scripts/setup.sh"], cwd: "." },
+      { command: ["sh", "setup.sh"], cwd: "scripts" },
+      { command: ["sh", "setup.sh"], cwd: "alias" },
+      { command: ["sh", "inside/setup.sh", "--file=scripts/setup.sh"], cwd: "." },
+    ]) {
+      await expect(reviewSetupRecipe(checkout, input)).rejects.toThrow("setup paths may not contain symbolic links");
+    }
+    expect(Object.keys((await reviewSetupRecipe(checkout, { command: ["sh", "setup.sh"], cwd: "inside" })).files)).toEqual(["inside/setup.sh"]);
+  } finally { fs.rmSync(outside, { recursive: true, force: true }); }
+});
+
 test("every named script is pinned, and cwd is part of the approval", async () => {
   fs.writeFileSync(path.join(root, "additional.sh"), "echo first\n");
   const command = { command: ["sh", "setup.sh", "additional.sh"], cwd: "." };
