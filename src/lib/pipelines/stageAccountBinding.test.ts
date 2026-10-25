@@ -275,6 +275,66 @@ test("clearing a live pin selects an account offering the requested tier through
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.to).toEqual(result.runtimeSwitch!.to);
 });
 
+test.each([
+  ["role default", "one account"], ["role default", "both accounts"],
+  ["retained explicit", "one account"], ["retained explicit", "both accounts"],
+] as const)("apply now names the allowed tier scope after an unavailable real selection (%s, %s)", async (source, scope) => {
+  const { id, ports, accountA, accountB } = await tierOverrideFixture();
+  const catalogs = [accountA, accountB].map(account => ({ file: path.join(account.home, "models_cache.json"), content: fs.readFileSync(path.join(account.home, "models_cache.json")) }));
+  try {
+    ports.roleLookup = () => ({ engine: "codex", model: "gpt-6.1-sol", effort: "high", serviceTier: "ultrafast", promptScaffold: "Builder guidance" });
+    const configured = await patchPipeline(id, {
+      action: "override-stage", stageId: "build", account: null,
+      ...(source === "role default" ? { role: { roleId: "builder", params: { mode: "apply-fixes" } } } : { serviceTier: "ultrafast" }),
+    }, ports);
+    expect(configured.error).toBeUndefined();
+    expect(configured.pipeline!.stages[0]!.effectiveRole.serviceTierSource).toBe(source === "role default" ? "role-default" : "explicit");
+
+    const accounts = scope === "one account" ? [accountA] : [accountA, accountB];
+    ports.allowedAccountIds = () => accounts.map(account => account.id);
+    seedAccountSource(BINDINGS_SOURCE, {
+      schemaVersion: 1,
+      bindings: accounts.map(account => ({ engine: "codex", accountId: account.id, project: ATLAS, createdAt: ports.now() })),
+    });
+    const catalog = (tiers: string[]) => JSON.stringify({ models: [
+      { slug: "gpt-6.1-sol", service_tiers: tiers.map(tier => ({ id: tier })) },
+      { slug: "gpt-6-astra", service_tiers: [{ id: "ultrafast" }] },
+    ] });
+    fs.writeFileSync(path.join(accountA.home, "models_cache.json"), catalog(["priority"]));
+    if (scope === "both accounts") fs.writeFileSync(path.join(accountB.home, "models_cache.json"), catalog(["standard", "priority"]));
+    const before = structuredClone(loadPipelines()[0]);
+    const request = { action: "override-stage" as const, stageId: "build", ...(source === "role default" ? { effort: "xhigh" } : {}), applyNow: true };
+    const refused = await patchPipeline(id, request, ports);
+    expect(refused.status).toBe(409);
+    expect(refused.error).toContain("serviceTier ultrafast for model gpt-6.1-sol; evaluated allowed accounts:");
+    expect(refused.error).toContain(`account "account A" (${accountA.id}): gpt-6.1-sol offered: priority; ultrafast offered for other models on this account: gpt-6-astra`);
+    if (scope === "both accounts") expect(refused.error).toContain(`account "account B" (${accountB.id}): gpt-6.1-sol offered: priority, standard; ultrafast offered for other models on this account: gpt-6-astra`);
+    else expect(refused.error).not.toContain(accountB.id);
+    expect(refused.runtimeSwitch).toBeUndefined();
+    expect(loadPipelines()[0]).toEqual(before);
+
+    fs.writeFileSync(path.join(accountA.home, "models_cache.json"), catalog(["priority", "ultrafast"]));
+    const accepted = await patchPipeline(id, request, ports);
+    expect(accepted.error).toBeUndefined();
+    expect(accepted.runtimeSwitch?.to).toMatchObject({ accountId: accountA.id, accountPinned: false, model: "gpt-6.1-sol", effort: source === "role default" ? "xhigh" : "high", serviceTier: "ultrafast" });
+  } finally {
+    for (const { file, content } of catalogs) fs.writeFileSync(file, content);
+  }
+});
+
+test.each(["unavailable", "exhausted"] as const)("apply now keeps the capacity refusal when an allowed account offers the tier (%s)", async kind => {
+  const { id, ports, accountA, accountB } = await tierOverrideFixture();
+  const configured = await patchPipeline(id, { action: "override-stage", stageId: "build", account: null, serviceTier: "ultrafast" }, ports);
+  expect(configured.error).toBeUndefined();
+  const before = structuredClone(loadPipelines()[0]);
+  ports.resolveProjectSpawn = () => ({ kind, allowedAccountIds: [accountA.id, accountB.id], resetsAt: null });
+  const result = await patchPipeline(id, { action: "override-stage", stageId: "build", effort: "xhigh", applyNow: true }, ports);
+  expect(result.status).toBe(409);
+  expect(result.error).toBe("no allowed target account is available");
+  expect(result.runtimeSwitch).toBeUndefined();
+  expect(loadPipelines()[0]).toEqual(before);
+});
+
 test.each(["unsupported", "unknown", "absent"] as const)("live tier validation refuses an unsafe selector result (%s)", async selection => {
   const { id, ports, accountA } = await tierOverrideFixture();
   const before = structuredClone(loadPipelines()[0]);
