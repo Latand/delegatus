@@ -583,3 +583,28 @@ test("the page lifecycle suspends the streams on pagehide and freeze, and resume
   doc.dispatchEvent(new Event("visibilitychange"));
   expect(calls).toEqual(["suspend", "resume", "suspend", "resume"]);
 });
+
+test("reconnect delays retain their exact progression, cap, and success reset", async () => {
+  const h = harness();
+  h.mux.open("/api/runtime/stream");
+  h.physical()[0]!.say("ready", "{}");
+  await h.settle();
+  for (const delay of [500, 1_000, 2_000, 4_000, 8_000, 8_000]) {
+    const count = h.physical().length;
+    h.physical().at(-1)!.fail();
+    await h.settle();
+    await h.advance(delay - 1);
+    expect(h.physical()).toHaveLength(count);
+    await h.advance(1);
+    expect(h.physical()).toHaveLength(count + 1);
+  }
+  h.physical().at(-1)!.say("ready", "{}");
+  await h.settle();
+  const count = h.physical().length;
+  h.physical().at(-1)!.fail();
+  await h.advance(499);
+  expect(h.physical()).toHaveLength(count);
+  await h.advance(1);
+  expect(h.physical()).toHaveLength(count + 1);
+  h.mux.suspend();
+});

@@ -8,6 +8,7 @@ import { startLeaderExitedChild, startUnreapedChild } from "@/lib/testing/unreap
 
 import {
   captureProcessIdentity,
+  sameRecordedProcessIdentity,
   processIdentityMayRun,
   processIdentityProvenDead,
   processIdentityStatus,
@@ -147,5 +148,19 @@ test.skipIf(process.platform !== "linux" || !python)("a live process whose main 
   } finally {
     await fixture.stop();
     fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test("recorded equality distinguishes boot-aware and legacy expectations", () => {
+  for (const startIdentity of [null, "start"]) {
+    for (const bootEpoch of [undefined, null, "boot-current", "boot-earlier"]) {
+      const current = { pid: 42, startIdentity, bootEpoch };
+      expect(sameRecordedProcessIdentity(current, { pid: 42, startIdentity })).toBe(true);
+      expect(sameRecordedProcessIdentity(current, { pid: 43, startIdentity })).toBe(false);
+      expect(sameRecordedProcessIdentity(current, { pid: 42, startIdentity: "other" })).toBe(false);
+      expect(sameRecordedProcessIdentity(current, { pid: 42, startIdentity, bootEpoch: "boot-current" })).toBe(bootEpoch === "boot-current");
+      expect(sameRecordedProcessIdentity(current, { pid: 42, startIdentity, bootEpoch: null })).toBe(bootEpoch === null);
+    }
   }
 });
