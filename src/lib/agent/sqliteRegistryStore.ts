@@ -396,6 +396,12 @@ export function registryConversationsForEntryKey(file: RegistryFile, entryKey: s
     row.generations.some(generation => `${row.engine}:${generation.id}` === entryKey));
 }
 
+/** Physical row keys from the same generation index and transaction overlay.
+    Plain files keep the existing conversation-reader fallback. */
+export function registryConversationKeysForEntryKey(file: RegistryFile, entryKey: string): string[] | undefined {
+  return entryKeyReaders.get(file)?.(entryKey);
+}
+
 /**
  * The rows of one collection that are not archived, in collection order. An
  * archive version is terminal by the archive's own rules (a dead entry with no

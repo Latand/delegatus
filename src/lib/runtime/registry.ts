@@ -942,11 +942,13 @@ export async function adoptCodexRegistryHosts(
     /** Termination ladder seams for an orphan stopped before adoption (#2790). */
     orphanStop?: StructuredOrphanStopDependencies;
     assertActive?: () => void;
+    /** Selection only; ownership and grants are rechecked by key. */
+    preparedSnapshot?: RegistryFile;
   } = {},
 ): Promise<AdoptedCodexHost[]> {
   if (!structuredHostsEnabled(env)) return [];
   const candidate: StructuredHostAdoptionFilter = entry => !codexBootAdoptionRetired(entry) && shouldAdopt(entry);
-  const prepared = typeof registry.prepareReadOnlySnapshot === "function" ? await registry.prepareReadOnlySnapshot() : undefined;
+  const prepared = dependencies.preparedSnapshot ?? (typeof registry.prepareReadOnlySnapshot === "function" ? await registry.prepareReadOnlySnapshot() : undefined);
   const rows = (prepared ? await startupStructuredHostEntries(prepared, dependencies.assertActive) : registry.structuredHostEntries()).filter((entry) =>
     entry.key.engine === "codex"
     && entry.structuredHost?.kind === "codex-app-server"
@@ -1099,10 +1101,12 @@ export async function adoptClaudeRegistryHosts(
     /** Termination ladder seams for an orphan stopped before adoption (#2790). */
     orphanStop?: StructuredOrphanStopDependencies;
     assertActive?: () => void;
+    /** Selection only; ownership and grants are rechecked by key. */
+    preparedSnapshot?: RegistryFile;
   } = {},
 ): Promise<AdoptedClaudeHost[]> {
   if (!structuredHostsEnabled(env)) return [];
-  const prepared = typeof registry.prepareReadOnlySnapshot === "function" ? await registry.prepareReadOnlySnapshot() : undefined;
+  const prepared = dependencies.preparedSnapshot ?? (typeof registry.prepareReadOnlySnapshot === "function" ? await registry.prepareReadOnlySnapshot() : undefined);
   const rows = (prepared ? await startupStructuredHostEntries(prepared, dependencies.assertActive) : registry.structuredHostEntries()).filter((entry) =>
     entry.key.engine === "claude"
     && entry.structuredHost?.kind === "claude-broker"

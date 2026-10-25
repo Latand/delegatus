@@ -229,6 +229,35 @@ test("repeated host progress keeps the startup selection valid while a later mem
   } finally { peer.close(); store.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test("a prepared membership selection is reused only while its native revision proof stands", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-prepared-memberships-"));
+  const filename = path.join(root, "registry.sqlite");
+  const initial = seeded(root, 8);
+  const seed = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry }); seed.close();
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const peer = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry });
+  const snapshot = await registry.prepareReadOnlySnapshot();
+  const prepare = registry.prepareReadOnlySnapshot.bind(registry);
+  let preparations = 0;
+  const observed = spyOn(registry, "prepareReadOnlySnapshot").mockImplementation((...args) => { preparations++; return prepare(...args); });
+  try {
+    const selected = await pipelineStartupMembershipsAsync(registry, {}, snapshot);
+    expect(selected.byPipeline.has("lane-0")).toBe(true);
+    expect(preparations).toBe(0);
+    setImmediate(() => peer.mutate(file => { file.memberships.conversation_reader_0![0]!.containerId = "replacement-owner"; }, false));
+    await expect(pipelineStartupMembershipsAsync(registry, {}, snapshot)).rejects.toThrow("changed");
+    const current = await pipelineStartupMembershipsAsync(registry, {}, snapshot);
+    expect(current.byPipeline.has("replacement-owner")).toBe(true);
+    expect(current.byPipeline.get("lane-0")).toEqual(["conversation_reader_alias"]);
+    expect(preparations).toBe(1);
+    // A copied or submitted object has no native proof and cannot choose its
+    // own memberships for admission.
+    const copied = { ...current.snapshot, memberships: {} };
+    expect((await pipelineStartupMembershipsAsync(registry, {}, copied)).byPipeline.has("replacement-owner")).toBe(true);
+    expect(preparations).toBe(2);
+  } finally { observed.mockRestore(); peer.close(); registry.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test("startup does not prepare an unused snapshot before asking for pipeline evidence", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-evidence-preparation-"));
   const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
@@ -247,7 +276,7 @@ test("startup does not prepare an unused snapshot before asking for pipeline evi
       pipelineEvidence: () => { throw boundary; },
     })).rejects.toBe(boundary);
     expect(refreshed).toBe(true);
-    expect(initialPreparations).toBe(2);
+    expect(initialPreparations).toBe(1);
     expect(unrelatedPreparations).toBe(0);
   } finally { observed.mockRestore(); registry.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
@@ -593,32 +622,37 @@ test("spawn recovery selection services timers between keyed batches without los
 });
 
 
-for (const engine of ["codex", "claude"] as const) test(`${engine} adoption prepares selection once and checks each admission with keyed evidence`, async () => {
+for (const engine of ["codex", "claude"] as const) for (const prepared of [false, true]) for (const revoked of [false, true]) test(`${engine} adoption prepares selection once and checks each admission with keyed evidence (prepared=${prepared}, revoked=${revoked})`, async () => {
   const { adoptCodexRegistryHosts, adoptClaudeRegistryHosts } = await import("./registry");
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-admission-selection-"));
   try {
     const file = seeded(root, 1);
     const rows = Object.values(file.entries).map(entry => ({ ...entry, key: { ...entry.key, engine },
-      status: "idle" as const, claimOwner: { pid: 990001, startIdentity: "fixture", bootEpoch: "fixture" }, claimEpoch: 1,
+      status: "idle" as const, claimOwner: JSON.stringify({ pid: 990001, startIdentity: "fixture", bootEpoch: "fixture" }), claimEpoch: 1,
       structuredHost: { ...file.entries["codex:reader-0"]!.structuredHost!, kind: engine === "codex" ? "codex-app-server" as const : "claude-broker" as const,
         process: null, endpoint: "stdio:released" } }));
-    const view = { ...file, entries: Object.fromEntries(rows.map(entry => [`${engine}:${entry.key.sessionId}`, entry])) };
+    const view: RegistryFile = { ...file, entries: Object.fromEntries(rows.map(entry => [`${engine}:${entry.key.sessionId}`, entry])) };
     let preparations = 0, admissions = 0;
     const registry = {
       prepareReadOnlySnapshot: async () => { if (++preparations > 1) throw new Error("admission repeated the registry preparation"); return view; },
       structuredHostEntries: () => rows,
       startupHostSnapshot: () => view,
-      withOperationLock: async (_key: unknown, _owner: unknown, work: () => Promise<void>) => work(),
+      withOperationLock: async (key: { sessionId: string }, _owner: unknown, work: () => Promise<void>) => {
+        await Promise.resolve();
+        if (revoked) view.entries[`${engine}:${key.sessionId}`]!.structuredHost = null;
+        return work();
+      },
       deliveryWriteOrBusy: async (_options: unknown, work: () => unknown) => work(),
       setStructuredHostClaimed: () => null,
     } as unknown as AgentRegistry;
     const adopt = engine === "codex" ? adoptCodexRegistryHosts : adoptClaudeRegistryHosts;
     await adopt(registry, async () => { throw new Error("refused admission reached options"); }, { NODE_ENV: "test" }, () => true, undefined, {
+      ...(prepared ? { preparedSnapshot: view } : {}),
       claimHost: async entry => entry,
       admit: () => { admissions++; return { error: "fixture admission refused" }; },
     });
-    expect(preparations).toBe(1);
-    expect(admissions).toBe(rows.length);
+    expect(preparations).toBe(prepared ? 0 : 1);
+    expect(admissions).toBe(revoked ? 0 : rows.length);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

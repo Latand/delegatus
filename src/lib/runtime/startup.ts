@@ -185,9 +185,9 @@ async function revalidateRetainedStartupHosts(
   prepared: RegistryFile | undefined = undefined,
   retainedTerminalHostKeys: ReadonlySet<string> = new Set(),
 ): Promise<AdoptedStructuredHost[]> {
-  const snapshot = prepared ?? await preparedStartupSnapshot(registry);
   const current: AdoptedStructuredHost[] = [];
   await forEachStartupBatch(retained, async (item) => {
+    const snapshot = prepared ?? startupHostSnapshot(registry, item.key);
     if (!startupHostInScope(registry, sessionKeyId(item.key))
       || retainedStartupHostIsCurrent(snapshot, item, retainedTerminalHostKeys)) current.push(item);
     else {
@@ -1915,10 +1915,11 @@ export function pipelineStartupMemberships(registry: AgentRegistry, host?: Agent
   return next.value;
 }
 
-export async function pipelineStartupMembershipsAsync(registry: AgentRegistry, budget: { signal?: AbortSignal; deadline?: number } = {}) {
+export async function pipelineStartupMembershipsAsync(registry: AgentRegistry, budget: { signal?: AbortSignal; deadline?: number } = {}, prepared?: RegistryFile) {
   return withViewerOperation("runtime.startup", async () => {
-    const snapshot = typeof registry.prepareReadOnlySnapshot === "function"
-      ? await registry.prepareReadOnlySnapshot(budget.signal) : registry.readOnlySnapshot();
+    const snapshot = prepared && registryStartupSelectionUnchanged(prepared) === true ? prepared
+      : typeof registry.prepareReadOnlySnapshot === "function"
+        ? await registry.prepareReadOnlySnapshot(budget.signal) : registry.readOnlySnapshot();
     const steps = pipelineStartupMembershipSteps(registry, undefined, snapshot);
     const check = () => {
       budget.signal?.throwIfAborted();
@@ -2271,6 +2272,7 @@ async function adoptStructuredHostsPass(
     interruptions.list(),
     resumeDeferred,
     dependencies.readHostTurnRecord ?? readHostTurnRecord,
+    recoveryBoundarySnapshot,
   );
   const passState = startupPasses.get(registry);
   const cutHostKeys = passState ? passState.cutHostKeys ??= new Set<string>() : new Set<string>();
@@ -2350,7 +2352,7 @@ async function adoptStructuredHostsPass(
         // revision proof and current pipeline ownership belong to that lease.
         if (!dependencies.pipelineEvidence && !selectionCurrent()) {
           assertActive();
-          const value = await pipelineStartupMembershipsAsync(registry, { signal: dependencies.signal, deadline: membershipDeadline });
+          const value = await pipelineStartupMembershipsAsync(registry, { signal: dependencies.signal, deadline: membershipDeadline }, recoveryBoundarySnapshot);
           assertActive();
           membershipSelection = { snapshot: value.snapshot, value };
         }
@@ -2420,7 +2422,7 @@ async function adoptStructuredHostsPass(
     const retainedRecoveryHostKeys = () => new Set([...orchestratorHostKeys, ...interruptedHostKeys]);
     const retained = retainAdoptedHosts(startupPasses.get(registry)?.ready ?? [], startupPasses.get(registry)?.retained ?? []);
     let nextAdoptedHosts = retained.length ? await revalidateRetainedStartupHosts(
-      registry, retained, await preparedStartupSnapshot(registry), retainedRecoveryHostKeys(),
+      registry, retained, undefined, retainedRecoveryHostKeys(),
     ) : [];
     rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
     /* Off the loop (rule c); refused, it is skipped this pass and the next
@@ -2680,7 +2682,7 @@ async function adoptStructuredHostsPass(
         totalHosts = Math.max(totalHosts, completedHosts);
         if (!resumeDeferred) markStructuredHostStartupProgress({ phase: "adopting Codex hosts", completedHosts, totalHosts });
       },
-      { onAdopted, onFailure, claimHost, assertActive, ...(dependencies.adoptCodexHost ? { adoptHost: dependencies.adoptCodexHost } : {}) },
+      { onAdopted, onFailure, claimHost, assertActive, preparedSnapshot: adoptionSnapshot, ...(dependencies.adoptCodexHost ? { adoptHost: dependencies.adoptCodexHost } : {}) },
     );
     completedHosts = Math.max(completedHosts, codexCandidateCount);
     nextAdoptedHosts = retainAdoptedHosts(nextAdoptedHosts, codex);
@@ -2741,7 +2743,7 @@ async function adoptStructuredHostsPass(
         totalHosts = Math.max(totalHosts, completedHosts);
         if (!resumeDeferred) markStructuredHostStartupProgress({ phase: "adopting Claude hosts", completedHosts, totalHosts });
       },
-      { onAdopted, onFailure, claimHost, assertActive },
+      { onAdopted, onFailure, claimHost, assertActive, preparedSnapshot: adoptionSnapshot },
     );
     completedHosts = Math.max(completedHosts, codexCandidateCount + claudeCandidateCount);
     nextAdoptedHosts = retainAdoptedHosts(nextAdoptedHosts, claude);
@@ -2767,7 +2769,7 @@ async function adoptStructuredHostsPass(
     nextAdoptedHosts = await revalidateRetainedStartupHosts(
       registry,
       nextAdoptedHosts,
-      await preparedStartupSnapshot(registry),
+      undefined,
       retainedRecoveryHostKeys(),
     );
     rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
@@ -3004,7 +3006,7 @@ async function adoptStructuredHostsPass(
     }
     assertActive();
     adoptedHosts = nextAdoptedHosts;
-    const heldEntries = (await preparedStartupSnapshot(registry)).entries;
+    const heldEntries = heldHostKeys.size ? (await preparedStartupSnapshot(registry)).entries : {};
     const held = new Map([...heldHostKeys].flatMap((key) => {
       const stamp = stamps.get(key);
       const entry = heldEntries[key];

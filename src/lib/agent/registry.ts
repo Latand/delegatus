@@ -103,7 +103,7 @@ import {
 import {
   SqliteAgentRegistryStore,
   registryRowsMatching, registryKeysMatching, registryKeysMatchingBounded, registryHasLookupIndex, registryConversationsForPath, registryHasPathIndex,
-  registryConversationsForEntryKey, registryHasEntryKeyIndex,
+  registryConversationsForEntryKey, registryConversationKeysForEntryKey, registryHasEntryKeyIndex,
   sqliteRegistryStoreImported,
   type RegistryDeliveryCompactionChanges,
   type SqliteRegistryReplacement,
@@ -6211,10 +6211,13 @@ export class AgentRegistry {
       // Linked-task admission also recognizes a generation by its artifact.
       // Keep that existing path fallback without enumerating other hosts.
       const selectedKeys = includeArtifactPath && entry && this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
-        ? this.sqliteStore.conversationKeysForHost(entryKey, entry.artifactPath) : undefined;
-      const conversations = includeArtifactPath && entry
-        ? selectedKeys ? selectedKeys.flatMap(id => file.conversations[id] ? [file.conversations[id]!] : [])
-          : Object.values(file.conversations).filter(conversation => conversation.generations.some(generation =>
+        ? this.sqliteStore.conversationKeysForHost(entryKey, entry.artifactPath) : registryConversationKeysForEntryKey(file, entryKey);
+      const selectedRows = selectedKeys ? new Map(selectedKeys.flatMap(id => {
+        const conversation = file.conversations[id];
+        return conversation ? [[id, conversation] as const] : [];
+      })) : undefined;
+      const conversations = selectedRows ? [...selectedRows.values()] : includeArtifactPath && entry
+        ? Object.values(file.conversations).filter(conversation => conversation.generations.some(generation =>
             (conversation.engine === key.engine && generation.id === key.sessionId) || generation.path === entry.artifactPath))
         : registryConversationsForEntryKey(file, entryKey);
       // Admission's path fallback chooses in collection order. Insert those
@@ -6225,10 +6228,11 @@ export class AgentRegistry {
         for (const id of conversationIdsResolvingTo(file, canonical)) {
           if (file.conversationAliases[id]) result.conversationAliases[id] = file.conversationAliases[id]!;
           if (!result.conversations[id]) {
-            const current = file.conversations[id];
+            const current = selectedRows?.get(id) ?? file.conversations[id];
             if (current) result.conversations[id] = clone(current);
           }
-          if (file.memberships[id]) result.memberships[id] = clone(file.memberships[id]!);
+          const memberships = file.memberships[id];
+          if (memberships) result.memberships[id] = clone(memberships);
         }
       }
       return result;
