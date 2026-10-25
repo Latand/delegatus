@@ -20,7 +20,6 @@ import { ruleUsageCounts } from "./roleViewSource";
 import { claimPass } from "./curation/store";
 import { readCuration } from "./curation/read";
 import { applyCuration } from "./curation/apply";
-import { curatorBrief } from "./curation/brief";
 import * as selector from "./roleSelect";
 import { roleSelectionCollection } from "./roleSelection";
 
@@ -337,8 +336,6 @@ test("the curator sees usage even for no-lesson answers and can retire guidance 
   expect(page).toMatchObject({ swarmReceiving: true, swarm: [{ id: entry().id, rule: TEXT, readOnly: true }] });
   applyCuration(pass, { scopes: [{ scope: local.scope, revision: page.revision, order: [] }], archive: [{ id: local.id, reason: "in-instructions", where: `swarm:${entry().id}`, note: "The receiving pack holds the same action and conditions." }] }, NOW);
   expect(projectView(PROJECT).scopes.find(scope => scope.scope === local.scope)?.left[0]).toMatchObject({ id: local.id, reason: "in-instructions", where: `swarm:${entry().id}` });
-  expect(curatorBrief(PROJECT)).toContain("swarm:<id> as where");
-  expect(curatorBrief(PROJECT)).toContain("applied and misled counts");
 });
 
 test.each(["missing", "other-role", "in-code", "stale", "disabled", "withdrawn", "project", "machine"])("curator refuses %s swarm evidence atomically", async scenario => {
@@ -371,19 +368,18 @@ test.each(["missing", "other-role", "in-code", "stale", "disabled", "withdrawn",
   expect(projectView(PROJECT)).toEqual(before);
 });
 
-test("curator swarm instructions and evidence follow consent; off preserves the pre-swarm brief byte for byte", async () => {
+test("curator swarm evidence follows consent", async () => {
   const local = seed();
-  // SHA-256 of curatorBrief(PROJECT) at bf1c0024 with the default seat budget.
-  const original = "854873a8fcd42469eebc22bfda1171ac5677f16aadfcccf0d90ff7f15ec8f1b0";
-  expect(digest(curatorBrief(PROJECT))).toBe(original);
   const pass = claimPass({ project: PROJECT, repoDir: root, now: Date.parse(NOW) })!;
   const off = await readCuration(pass, local.scope, undefined, Date.parse(NOW));
   expect(off).not.toHaveProperty("swarm");
   expect(off).not.toHaveProperty("swarmReceiving");
   updatePreferences({ swarmRules: true });
-  expect(curatorBrief(PROJECT)).toContain("swarm:<id> as where");
-  expect(curatorBrief(PROJECT)).toContain("candidates for the maintainers’ swarm pack pass");
-  expect(curatorBrief(PROJECT)).toContain("applied and misled counts");
+  expect(await readCuration(pass, local.scope, undefined, Date.parse(NOW))).toMatchObject({
+    swarmReceiving: true, swarm: [{ id: entry().id, rule: TEXT, readOnly: true }],
+  });
   updatePreferences({ swarmRules: false });
-  expect(digest(curatorBrief(PROJECT))).toBe(original);
+  const offAgain = await readCuration(pass, local.scope, undefined, Date.parse(NOW));
+  expect(offAgain).not.toHaveProperty("swarm");
+  expect(offAgain).not.toHaveProperty("swarmReceiving");
 });

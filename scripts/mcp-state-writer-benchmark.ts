@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 /* The state-writer mode of mcp-call-cost-benchmark.ts. Every process uses a
  * generated fixture, and the outer caller supplies the owned CPU runner. */
 import fs from "node:fs";
@@ -244,7 +245,7 @@ export async function runStateWriterSample(): Promise<void> {
         const args = kind < 6 ? { project: "fixture", limit: 50 } : kind < 9
           ? { taskId: taskId(shared ? 0 : n), text: `Updated ${shared ? "shared" : n} ${index}`, clientRequestId: key,
             ...(shared ? { expectedProject: "fixture", expectedRevision } : {}) }
-          : { project: "fixture", text: `Created ${n} ${index}`, placement: "unplaced", board: "hidden", clientRequestId: key };
+          : withTaskDue({ project: "fixture", text: `Created ${n} ${index}`, placement: "unplaced", board: "hidden", clientRequestId: key });
         const row: typeof calls[number] = { client: n, index, phase, name, args, offered: Date.now() }; calls.push(row);
         const started = performance.now();
         const operation = (async () => {

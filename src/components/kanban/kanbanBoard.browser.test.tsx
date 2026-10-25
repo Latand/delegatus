@@ -1,3 +1,4 @@
+import { captureTaskDueFrames } from "@/components/kanban/issue1695BrowserHarness";
 import type { FileEntry } from "@/lib/types";
 import { staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
 import { BoardEncoder } from "@/lib/boardEncoding";
@@ -66,6 +67,231 @@ import { prepareProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profile
    machine. Launch through `chromium` from the harness so the case owns them. */
 const browserTest = browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1");
 const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) };
+
+describe("retained worktree drilldown", () => {
+  browserTest("resource entry, paging, variants and read failures fit desktop, 1000 px and 390 px in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/worktree-drilldown");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const [width, height] of [[1440, 900], [1000, 700], [390, 844]] as const) {
+        const { context, page, pageErrors } = await openFixture(browser,
+          `${server.base}?disk-density=${width === 390 ? "full" : "detail"}&disk-role=all&worktree-state=ready`,
+          { width, height }, theme, lang, "reduce", width === 390);
+        const text = (key: Parameters<typeof translate>[1], values?: Record<string, string | number>) => translate(lang, key, values);
+        const dialog = page.locator("[data-worktree-drilldown]");
+        const footerButton = page.getByRole("button", { name: text("resources.openAria"), exact: true });
+        const state = async (value: string) => page.evaluate(value => {
+          const url = new URL(location.href); url.searchParams.set("worktree-state", value); history.replaceState(null, "", url);
+        }, value);
+        const open = async (value: string, captureEntry = false) => {
+          await state(value);
+          await footerButton.click();
+          const entry = page.locator("[data-open-worktrees]");
+          if (captureEntry) {
+            await entry.focus();
+            expect(await entry.innerText()).toContain(text("worktrees.title"));
+            expect(await entry.locator("span").last().innerText()).toBe(text("worktrees.aggregate", { n: 10, size: "78 MiB" }));
+            await frame("entry", entry);
+          }
+          await entry.click();
+          await dialog.waitFor();
+        };
+        const boxes = async () => dialog.evaluate(element => {
+          const box = (target: Element | null) => { const r = target?.getBoundingClientRect(); return r ? { x: r.x, y: r.y, width: r.width, height: r.height } : null; };
+          const buttons = [...element.querySelectorAll("footer button")];
+          return { dialog: box(element), previous: box(buttons[0] ?? null), next: box(buttons[1] ?? null) };
+        });
+        const frame = async (name: string, target = dialog) => {
+          // Text ranges test the actual wrapped lines, including native dialog
+          // and scroll clipping; hit tests ensure the top layer owns controls.
+          // A range wholly outside a scroller is scrolled away, not cut; the
+          // stepping pass below proves every row is whole at some scroll offset.
+          const reading = (element: Element) => {
+            const measure = (element: Element) => {
+              const failures: string[] = [];
+              const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                const node = walker.currentNode;
+                if (!node.textContent?.trim()) continue;
+                const range = document.createRange(); range.selectNodeContents(node);
+                for (const rect of range.getClientRects()) {
+                  if (rect.width === 0 || rect.height === 0) continue;
+                  for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+                    const style = getComputedStyle(parent);
+                    if (!/(auto|scroll|hidden|clip)/.test(style.overflow + style.overflowX + style.overflowY)) continue;
+                    const box = parent.getBoundingClientRect();
+                    const outside = rect.bottom <= box.top + 1 || rect.top >= box.bottom - 1;
+                    if (outside && parent.matches("[data-worktree-body]")) break;
+                    if (rect.top < box.top - 1 || rect.bottom > box.bottom + 1 || rect.left < box.left - 1 || rect.right > box.right + 1) failures.push(node.textContent);
+                  }
+                  if (rect.left < 0 || rect.right > innerWidth || rect.top < 0 || rect.bottom > innerHeight) failures.push(node.textContent);
+                }
+              }
+              for (const button of [...(element.matches("button") ? [element] : []), ...element.querySelectorAll("button")]) {
+                const box = button.getBoundingClientRect();
+                if (!button.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2))) failures.push("covered control");
+              }
+              return failures;
+            };
+            const bounds = element.getBoundingClientRect();
+            const scroller = (element.querySelector("[data-worktree-body]") ?? element.parentElement)!;
+            const failures = measure(element);
+            const rows = [...element.querySelectorAll("[data-retained-worktree]")];
+            const channels = (color: string) => color.match(/[\d.]+/g)!.slice(0, 3).map(Number);
+            const background = channels(getComputedStyle(element).backgroundColor);
+            const luminance = (rgb: number[]) => rgb.map(value => value / 255).map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4)
+              .reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index]!, 0);
+            const rowText = rows.flatMap(row => [...row.querySelectorAll("p, span")].map(text => {
+              const style = getComputedStyle(text);
+              let opacity = 1;
+              for (let parent: Element | null = text; parent; parent = parent.parentElement) opacity *= Number(getComputedStyle(parent).opacity);
+              const alpha = (Number(style.color.match(/[\d.]+/g)?.[3] ?? 1)) * opacity;
+              const foreground = channels(style.color).map((channel, index) => channel * alpha + background[index]! * (1 - alpha));
+              const [high, low] = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
+              return { text: text.textContent, opacity, contrast: (high! + 0.05) / (low! + 0.05) };
+            }));
+            const sizes = rows.map(row => {
+              const size = row.querySelector("[data-worktree-size]")?.getBoundingClientRect(); const box = row.getBoundingClientRect();
+              return size ? box.right - size.right : null;
+            });
+            return { failures, left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom, text: element.textContent,
+              scrollTop: scroller.scrollTop, scrollable: scroller.scrollHeight > scroller.clientHeight + 1,
+              focused: element.contains(document.activeElement), background: getComputedStyle(element).backgroundColor, sizeInset: sizes, rowText };
+          };
+          const geometry = await target.evaluate(reading);
+          expect(geometry.failures).toEqual([]);
+          expect(geometry.focused).toBe(true);
+          expect(geometry.scrollTop).toBe(0);
+          if (name !== "entry") expect(geometry.background).not.toBe("rgba(0, 0, 0, 0)");
+          // A size sits against the row's right padding whether or not it wrapped.
+          for (const inset of geometry.sizeInset) if (inset !== null) expect(inset).toBeLessThan(14);
+          // Include every ancestor's applied opacity: readable color tokens alone
+          // do not protect the retained content while the next request is held.
+          for (const row of geometry.rowText) {
+            expect(row.opacity, `${name}: ${row.text}`).toBe(1);
+            expect(row.contrast, `${name}: ${row.text}`).toBeGreaterThanOrEqual(4.5);
+          }
+          await page.screenshot({ path: path.join(out, `${width}-${lang}-${theme}-${name}.png`) });
+          if (geometry.scrollable) {
+            const covered = await target.evaluate(async element => {
+              const scroller = element.querySelector<HTMLElement>("[data-worktree-body]")!;
+              const rows = [...element.querySelectorAll<HTMLElement>("[data-retained-worktree]")];
+              const whole = new Set<number>();
+              const cuts: string[] = [];
+              for (let top = 0; ; top += Math.max(1, scroller.clientHeight - 24)) {
+                scroller.scrollTop = Math.min(top, scroller.scrollHeight - scroller.clientHeight);
+                await new Promise(resolve => requestAnimationFrame(resolve));
+                const box = scroller.getBoundingClientRect();
+                rows.forEach((row, index) => { const r = row.getBoundingClientRect(); if (r.top >= box.top - 1 && r.bottom <= box.bottom + 1) whole.add(index); });
+                for (const row of rows) {
+                  const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+                  while (walker.nextNode()) {
+                    const range = document.createRange(); range.selectNodeContents(walker.currentNode);
+                    for (const r of range.getClientRects()) {
+                      if (r.height === 0) continue;
+                      if (r.top < box.top - 1 && r.bottom > box.top + 1 || r.top < box.bottom - 1 && r.bottom > box.bottom + 1) cuts.push(walker.currentNode.textContent ?? "");
+                    }
+                  }
+                }
+                if (scroller.scrollTop >= scroller.scrollHeight - scroller.clientHeight - 1) break;
+              }
+              return { rows: rows.length, whole: whole.size, bottom: scroller.scrollTop, cuts: cuts.length };
+            });
+            expect(covered.whole).toBe(covered.rows);
+            await page.screenshot({ path: path.join(out, `${width}-${lang}-${theme}-${name}-end.png`) });
+            await target.evaluate(element => { element.querySelector("[data-worktree-body]")!.scrollTop = 0; });
+            readings.push({ width, lang, theme, name: `${name}-scrolled`, ...covered });
+          }
+          readings.push({ width, lang, theme, name, ...geometry });
+        };
+        try {
+          await open("ready", true);
+          await page.waitForFunction(() => document.querySelectorAll("[data-retained-worktree]").length === 4);
+          const firstText = await dialog.innerText();
+          expect(firstText).toContain(text("worktrees.reason.not-created-by-delegatus"));
+          expect(firstText).not.toContain("local-only-commits");
+          expect(firstText).toContain("../checkouts/retain-the-unpublished-export-and-its-source-evidence");
+          // Sizes read in the entry's units; no raw byte counts anywhere.
+          expect(firstText).toContain("1 MiB");
+          expect(firstText).not.toMatch(/\d[ ,  ]\d{3}\s?(B|Б)\b/);
+          // Fresh decisions have differing raw timestamps within the report's
+          // displayed minute; only the row observed earlier carries its own.
+          expect(await dialog.locator("[data-retained-worktree] p.text-muted").filter({ hasText: text("worktrees.observed", { at: "" }).trim() }).count()).toBe(1);
+          expect(await dialog.locator("header p").first().innerText()).toBe(text("worktrees.hint"));
+          expect(await dialog.locator("header p").first().evaluate(element => { const r = document.createRange(); r.selectNodeContents(element); return r.getClientRects().length; })).toBe(1);
+          await frame("first");
+          const next = dialog.getByRole("button", { name: text("worktrees.next"), exact: true });
+          const previous = dialog.getByRole("button", { name: text("worktrees.previous"), exact: true });
+          const stable = await boxes();
+          // Paging keeps the dialog and both pager buttons where they were: loading, middle and last pages.
+          await state("hold");
+          await next.click();
+          await page.waitForFunction(() => document.querySelector("[data-worktree-body]")?.getAttribute("aria-busy") === "true");
+          expect(await boxes()).toEqual(stable);
+          expect(await dialog.locator("[data-retained-worktree]").count()).toBe(4);
+          expect(await dialog.getByRole("status", { name: text("worktrees.loading") }).isVisible()).toBe(true);
+          expect(await next.isEnabled()).toBe(false);
+          expect(await previous.isEnabled()).toBe(false);
+          await frame("paging");
+          await page.evaluate(() => (window as unknown as { __releaseWorktreePage: () => void }).__releaseWorktreePage());
+          await state("ready");
+          await page.waitForFunction(() => document.querySelector("[data-worktree-range]")?.textContent?.startsWith("5–8"));
+          expect(await boxes()).toEqual(stable);
+          expect(await dialog.getByRole("status", { name: text("worktrees.loading") }).count()).toBe(0);
+          // Row five has no recorded time or size.
+          expect(await dialog.innerText()).toContain(text("worktrees.unknownSize"));
+          expect(await dialog.innerText()).toContain(text("worktrees.observed", { at: text("worktrees.unknownTime") }));
+          await frame("middle");
+          await next.click(); await page.waitForFunction(() => document.querySelector("[data-worktree-range]")?.textContent?.startsWith("9–10"));
+          expect(await next.isEnabled()).toBe(false);
+          expect(await boxes()).toEqual(stable);
+          await frame("last");
+          await previous.click(); await page.waitForFunction(() => document.querySelector("[data-worktree-range]")?.textContent?.startsWith("5–8"));
+          await state("changed"); await previous.click();
+          await dialog.getByRole("alert").waitFor(); await frame("changed");
+          await state("ready"); await dialog.getByRole("button", { name: text("worktrees.reload") }).click();
+          await page.waitForFunction(() => document.querySelectorAll("[data-retained-worktree]").length === 4);
+          await page.keyboard.press("Escape"); await dialog.waitFor({ state: "detached" });
+          await footerButton.waitFor();
+          const messages = new Set<string>();
+          for (const value of ["loading", "unavailable", "empty", "denied", "offline"]) {
+            await open(value);
+            const message = text(`worktrees.${value}` as Parameters<typeof translate>[1]);
+            messages.add(message);
+            await dialog.getByText(message, { exact: true }).waitFor();
+            // No pages, no pager: neither buttons nor a range in a state without rows.
+            expect(await dialog.locator("footer").count()).toBe(0);
+            expect(await dialog.locator("[data-worktree-range]").count()).toBe(0);
+            expect(await dialog.locator("header p").first().evaluate(element => { const r = document.createRange(); r.selectNodeContents(element); return r.getClientRects().length; })).toBe(1);
+            await frame(value);
+            if (value === "unavailable" || value === "offline") {
+              await state("ready"); await dialog.getByRole("button", { name: text("worktrees.reload") }).click();
+              await page.waitForFunction(() => document.querySelectorAll("[data-retained-worktree]").length === 4);
+            }
+            await dialog.getByRole("button", { name: text("resources.close"), exact: true }).click();
+            await dialog.waitFor({ state: "detached" });
+          }
+          expect(messages.size).toBe(5);
+          // Dry-run report: pipeline id instead of a task, no repository, an unrecorded size and time, 12-digit and GiB sizes, the longest reasons.
+          await open("variant");
+          await page.waitForFunction(() => document.querySelectorAll("[data-retained-worktree]").length === 4);
+          const variantText = await dialog.innerText();
+          for (const expected of [text("worktrees.pipeline", { id: "lane-7f3a2c91" }), text("worktrees.dryRun"), text("worktrees.noTask"), text("worktrees.unknownSize"),
+            text("worktrees.observed", { at: text("worktrees.unknownTime") }), text("worktrees.reason.holds-worktree"), text("worktrees.reason.changed-during-inspection"),
+            "~/.agents/tools/atlas-feature-with-a-very-long-sibling-checkout-name", "920 GiB", "12 GiB"]) expect(variantText).toContain(expected);
+          expect(variantText).not.toContain("atlas · ~/");
+          expect(await dialog.locator("footer").count()).toBe(0);
+          await frame("variant");
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 300_000);
+});
 
 describe("Cloud check execution choices", () => {
   /* The lane's checks choices, opened from its card's ⋯ by the «Checks» row
@@ -216,6 +442,7 @@ describe("Cloud check execution choices", () => {
       expect(failures).toEqual([]);
     } finally { await browser.close(); server.stop(); }
   });
+
 });
 
 describe("legacy review follow-up navigation", () => {
@@ -14297,6 +14524,79 @@ describe("#2146 the orchestrator's report log beside its chat, and the Bridge re
     fs.writeFileSync(path.join(EVIDENCE, "desktop.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
   }, 900_000);
+});
+
+describe("group chat adapted to report authors", () => {
+  browserTest("recorded authors link to their conversation on desktop and phone", async () => {
+    const out = path.resolve(".artifacts/report-authors");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(out, "fixture"));
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 915, 390]) for (const kind of ["manager", "long-role"] as const) {
+        const phone = width === 390;
+        const conversation = kind === "manager" ? "conversation_orchestrator" : "conversation_search-impl-1";
+        const label = kind === "manager" ? translate(lang, "render.senderRoleOrchestrator") : "LongCustomRole".repeat(12);
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?report-author=${kind}`, { width, height: 900 }, theme, lang, "reduce", phone);
+        try {
+          if (phone) {
+            await page.locator("[data-mobile2-seat-open]").click();
+            await page.locator('[data-mobile2-open="reports"]').click();
+          } else {
+            const toggle = page.locator("[data-kanban-seat] [data-report-log-toggle]");
+            await toggle.waitFor();
+            if (await toggle.getAttribute("data-report-log-toggle") === "closed") {
+              const notificationDismiss = page.locator("[data-attention-toast-dismiss]");
+              await notificationDismiss.waitFor();
+              await notificationDismiss.click();
+              await toggle.click();
+            }
+          }
+          const row = page.locator("[data-report-entry]").first();
+          await row.waitFor();
+          await row.scrollIntoViewIfNeeded();
+          const author = row.locator('[data-report-link="author"]');
+          await author.waitFor();
+          expect(await row.locator("[data-report-author]").innerText()).toBe(label);
+          expect(await author.getAttribute("href")).toBe(`#c=${conversation}`);
+          const geometry = await row.evaluate(element => {
+            const problems: string[] = [];
+            const rowBox = element.getBoundingClientRect();
+            if (element.scrollWidth > element.clientWidth + 1) problems.push("row horizontal overflow");
+            const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+            for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+              if (!node.textContent?.trim()) continue;
+              const parent = node.parentElement!;
+              const range = document.createRange(); range.selectNodeContents(node);
+              for (const rect of range.getClientRects()) {
+                if (!rect.width || !rect.height) continue;
+                if (rect.left < rowBox.left - 1 || rect.right > rowBox.right + 1) problems.push("text outside row");
+                if (rect.left < 0 || rect.right > innerWidth || rect.top < 0 || rect.bottom > innerHeight) problems.push("viewport");
+                for (let ancestor: HTMLElement | null = parent; ancestor; ancestor = ancestor.parentElement) {
+                  const style = getComputedStyle(ancestor), box = ancestor.getBoundingClientRect();
+                  if (style.overflowX !== "visible" && (rect.left < box.left - 1 || rect.right > box.right + 1)) problems.push("horizontal clip");
+                  if (style.overflowY !== "visible" && (rect.top < box.top - 1 || rect.bottom > box.bottom + 1)) problems.push("vertical clip");
+                }
+                const hit = document.elementFromPoint((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2);
+                if (!hit || !parent.contains(hit)) problems.push("covered text");
+              }
+            }
+            return { problems, scroll: element.parentElement!.parentElement!.scrollTop, focus: document.activeElement?.tagName };
+          });
+          expect(geometry.problems).toEqual([]);
+          if (phone) expect((await author.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+          const frame = `${lang}-${theme}-${width}-${kind}.png`;
+          await row.screenshot({ path: path.join(out, frame) });
+          await author.click();
+          await page.waitForFunction(id => location.hash === `#c=${id}`, conversation);
+          expect(pageErrors).toEqual([]);
+          readings.push({ lang, theme, width, kind, frame, ...geometry });
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "rendered.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2));
+    } finally { await browser.close(); server.stop(); }
+  }, 300_000);
 });
 
 describe("the report log opens beside the seat's chat only where the chat keeps its width", () => {
@@ -38281,4 +38581,15 @@ describe("conversation open motion", () => {
     if (failures.length) throw new Error(failures.join("\n"));
     expect(failures).toEqual([]);
   }, 600_000);
+});
+
+describe("new task default deadline", () => {
+  browserTest("default, picked and reset deadlines render in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/task-due-composer/desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"], ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try { await captureTaskDueFrames(browser, server.base, out, false); }
+    finally { await browser.close(); server.stop(); }
+  }, 900_000);
 });
