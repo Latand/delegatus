@@ -6,7 +6,7 @@ import { canonicalProject } from "@/lib/projects/aliases";
 import { readTaskHold, storedTaskHold } from "./hold";
 import { isTaskAttachment } from "./attachments";
 import { taskRevision } from "./revision";
-import { isoNow, storedDueHistory } from "./helpers";
+import { defaultTaskDue, isoNow, storedDueHistory } from "./helpers";
 import { hasUndeliveredDecision, TaskDecisionUndeliveredError } from "./decisionCompletion";
 import { withTaskCompletion } from "./completion";
 import { countBoardTasks, taskShowsOnBoard } from "./boardVisibility";
@@ -193,6 +193,12 @@ export interface TaskCommandDeps {
   actor?: "operator" | "agent";
   conversationId?: string;
   now?: () => string;
+  /** Agent tool creates require an explicit future date; system callers omit this. */
+  requireDue?: boolean;
+  /** Operator creates receive a fresh default when the date was omitted. */
+  defaultDue?: boolean;
+  /** The transport supplies the operator zone, with the server zone as fallback. */
+  dueTimeZone?: string;
   id?: () => string;
   attachmentExists?: (att: TaskAttachment) => boolean;
   /** Whether a hidden task still holds something the board draws — the answer
@@ -403,6 +409,10 @@ export function createTask(
   const details = normalizeDetails(input.details);
   if (!details.ok) return details;
 
+  if (deps.requireDue && (input.dueAt === undefined || input.dueAt === null || input.dueAt === "")) {
+    return { ok: false, error: "A dueAt date is required for a new task", status: 400, code: "TASK_DUE_REQUIRED", field: "dueAt" };
+  }
+
   /* Idempotency: a replayed create (double-tap, retry after a lost response)
      returns the task the first attempt made instead of minting a twin. */
   const clientRequestId = typeof input.clientRequestId === "string" && input.clientRequestId.trim() ? input.clientRequestId.trim() : null;
@@ -448,8 +458,14 @@ export function createTask(
   if (placement === "unplaced" && pos) return { ok: false, error: "unplaced task must not carry a position", status: 400, code: "TASK_INVALID_FIELD", field: "pos" };
   if (placement === null) return { ok: false, error: "task position is required", status: 400, code: "TASK_INVALID_FIELD", field: "pos" };
 
-  const due = normalizeDue(input.dueAt, input.dueTz);
+  const zone = deps.dueTimeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const due = deps.defaultDue && (input.dueAt === undefined || input.dueAt === null)
+    ? { ok: true as const, ...defaultTaskDue(Date.parse(now), zone) }
+    : normalizeDue(input.dueAt, (deps.requireDue || deps.defaultDue) && input.dueAt != null ? input.dueTz ?? zone : input.dueTz);
   if (!due.ok) return { ok: false, error: due.error, status: 400 };
+  if (deps.requireDue && due.dueAt && Date.parse(due.dueAt) <= Date.parse(now)) {
+    return { ok: false, error: "dueAt must be in the future", status: 400, code: "TASK_DUE_PAST", field: "dueAt" };
+  }
   const attachments = normalizeAttachments(input.attachments, deps.attachmentExists ?? (() => true));
   if (!attachments.ok) return attachments;
 
@@ -830,6 +846,7 @@ function replaceLostMemberships(
 export function deleteTask(existing: BoardTask[], id: string, deps: MembershipDeps = {}): { ok: true; tasks: BoardTask[]; replacements: string[] } | TaskRefusal {
   const task = existing.find((candidate) => candidate.id === id);
   if (!task) return { ok: false, error: "task not found", status: 404 };
+  if (task.proactive) return { ok: false, error: "invented work retains its provenance; hide or reject it instead", status: 403 };
   const tasks = existing.filter((candidate) => candidate.id !== id);
   return replaceLostMemberships(tasks, task.project, task.assignments, null, deps);
 }

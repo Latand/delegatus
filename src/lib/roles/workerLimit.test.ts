@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { ROLE_DEFAULTS } from "./defaults";
-import { resolveRole, roleSpawnPrompt } from "./registry";
-import { ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateForDelivery } from "@/lib/orchestrator/prompt";
+import { resolveRole } from "./registry";
+import { orchestratorMandateForDelivery } from "@/lib/orchestrator/prompt";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,11 +13,8 @@ test("retired maxWorkers is ignored and no shipped scaffold names a worker numbe
   expect(role.ok).toBe(true);
   if (!role.ok) throw new Error(role.error);
   expect(role.value.params).not.toHaveProperty("maxWorkers");
-  expect(ROLE_DEFAULTS.find(row => row.id === "orchestrator")!.promptScaffold).not.toContain("maxWorkers");
-  expect(roleSpawnPrompt({ role: "orchestrator", scaffold: role.value.prompt }, "Run the project")).toContain("worker limit each wake and get_orchestrator state");
 });
 test("the mandate names the live limit and delivery repairs an older mandate", () => {
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("worker limit each wake and get_orchestrator state");
   expect(orchestratorMandateForDelivery(old)).not.toContain("3 when they name none");
 });
 

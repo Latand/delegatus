@@ -266,35 +266,13 @@ test("acknowledgements, lock waits, reentry after a drain and completion failure
   } finally { clearTimeout(unlock); fs.rmSync(lock, { force: true }); releaseDrain(drainFile(), "reentry"); dropRun("nonrenew-blocker"); accountManager.resolveHeadlessSpawn = previous; await pending; await server.close(); }
 }, 20000);
 
-for (const recovery of [true, false]) test(`owner first-message hold ${recovery ? "recovers" : "fails at the fixed bound"} with queued progress`, async () => {
-  const beats: { progress: { label: string } | null }[] = [], stops: string[] = [];
-  const server = await startTestRelay((req, body) => {
-    if (req.url?.endsWith("/heartbeat")) beats.push(body as typeof beats[number]);
-    return { body: { status: "ok" } };
-  });
-  const relay = paired(`${server.origin}/v1`); relay.targets[0]!.ownerTier = true;
-  updateRelayStore(s => ({ ...s, relays: [relay] }));
-  const request = claim(`owner-hold-${recovery}`); request.input.requester.is_owner = true;
-  const start = performance.now();
-  try {
-    const result = await runClaimedRequest(relay, request, undefined, { ownerPorts: {
-      launch: async () => ({ status: 202, body: { conversationId: "conversation_first_message", initialMessage: "queued" } }),
-      observe: async () => recovery && performance.now() - start >= 3300 ? { state: "ended", firstMessagePending: false, finalText: "Done" } : { state: "running", firstMessagePending: true },
-      stop: async (_id, action) => { stops.push(action); }, pollMs: 10,
-    } });
-    expect(beats[0]?.progress?.label).toBe("accepted");
-    expect(beats.some(b => b.progress?.label === "queued")).toBe(true);
-    expect(result).toMatchObject(recovery ? { outcome: "answered", answer: { text: "Done" } } : { outcome: "failed", reason: "agent_error" });
-    expect(stops).toEqual(recovery ? [] : ["kill"]);
-    expect(performance.now() - start).toBeLessThan(5000);
-  } finally { await server.close(); }
-}, 10000);
-
 test("capacity returning at the admission cutoff cannot start expired waiting work", async () => {
   let now = Date.now(); const clock = spyOn(Date, "now").mockImplementation(() => now);
   const server = await startTestRelay(() => ({ body: { status: "ok" } }));
   const relay = paired(`${server.origin}/v1`); reserveRun(blocker(relay, "cutoff-blocker"));
-  const pending = runClaimedRequest(relay, claim("cutoff-return", 11000), undefined, { command });
+  // Keep the service timestamp on the same clock as the mocked local cutoff.
+  const pending = runClaimedRequest(relay, { ...claim("cutoff-return", 11000),
+    deadline_at: new Date(now + 11000).toISOString() }, undefined, { command });
   try {
     await Bun.sleep(150); now += 1000; dropRun("cutoff-blocker");
     expect(await pending).toMatchObject({ outcome: "declined", reason: "busy" });

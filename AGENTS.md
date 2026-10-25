@@ -325,6 +325,8 @@ A restart submission error or an exited old PID is an observation to reconcile;
 the final serving identities and protected work are judged from the
 procedure's verdict.
 
+Tests must check behaviour; never check prompts, instructions, mandates, role scaffolds or tool descriptions for the presence or absence of phrases.
+
 # Rendered evidence: call the driver that exists, do not write a new one
 
 A rendered surface is part of correctness, so new UI work still owes rendered
