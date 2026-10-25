@@ -156,13 +156,14 @@ or read, the id is unknown, so the read fails toward `requester` tier. On an
 install with no team store (every solo install), or whose owner member has no
 Telegram link, it is the relay owner's id when every paired relay names the
 same Telegram owner, which is the single-pairing case today's switch serves;
-when pairings name different owners it is unknown. An `owner`-tier entry gives the owner's wording, the owner's
-conversation authority and, in phase 2, the owner's unbounded reach. A
-`requester`-tier `paired-owner` entry is a grant to that pairing's owner as a
-trusted requester: the board labels it "Owner of pairing <relay name>", and
-everything §4.3, §4.7, §5.3 and §5.7 say about requester entries applies to it.
-In phase 1 both tiers reach the whole machine; the tier decides what the run
-says about itself, where its seat handoffs may go, and what phase 2 narrows.
+when pairings name different owners it is unknown. An `owner`-tier entry gives
+the owner's wording, the owner's conversation authority and, in phase 2, the
+owner's unbounded reach. A `requester`-tier `paired-owner` entry is a grant to
+that pairing's owner as a trusted requester: the board labels it "Owner of
+pairing <relay name>", and everything §4.3, §4.7, §5.3 and §5.7 say about
+requester entries applies to it. In phase 1 both tiers reach the whole
+machine; the tier decides what the run says about itself, where its seat
+handoffs may go, and what phase 2 narrows.
 
 ### 4.2 The decision
 
@@ -334,10 +335,11 @@ One server module writes entries; two surfaces call it.
   0600, append-only. One row per add, remove, earlier-switch materialisation,
   declined confirmation and expired code: time, action, relay, target, project,
   entry id, label, surface, proposing conversation (MCP), approving owner
-  member id (`operator` on a solo install), and revision before and after. The row is appended and synced
-  under the `relays.json` lock before the store is replaced; if the append
-  fails, the entry is not written. The board shows the target's history from
-  this file. It holds no requester key, platform id or chat text.
+  member id (`operator` on a solo install), and revision before and after.
+  The row is appended and synced under the `relays.json` lock before the store
+  is replaced; if the append fails, the entry is not written. The board shows
+  the target's history from this file. It holds no requester key, platform id
+  or chat text.
 
 Phase 1 trust is machine-wide, and the confirmation and audit should be read
 with that in mind. They stop a mistaken click and an agent that tries to act for
@@ -631,10 +633,10 @@ and write `relays.json` (an entry or an `owner`-tier claim), the run ledger,
 the team store (W's membership) and the audit file; each fails without side
 effects, and the same Unassigned entry gives the restricted answer while no
 outside boundary exists. A membership removed by the Viewer stops the member's
-run when the MCP task executor rechecks it. With two pairings of different owners, the
-second pairing's owner, holding an entry carried from the earlier switch and
-membership of the isolated workspace W, runs inside W's boundary, while the
-machine owner, also a member of W, keeps the owner's reach.
+run when the MCP task executor rechecks it. With two pairings of different
+owners, the second pairing's owner, holding an entry carried from the earlier
+switch and membership of the isolated workspace W, runs inside W's boundary,
+while the machine owner, also a member of W, keeps the owner's reach.
 
 ## 7. Validation against the requirement
 
