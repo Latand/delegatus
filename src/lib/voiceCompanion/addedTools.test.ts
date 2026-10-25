@@ -65,9 +65,10 @@ async function hub(servers: Array<{ url: string } & ServerOptions>) {
     const name = server.chat ? "chat" : server.name ?? "music";
     await store.propose({ name, title: server.chat ? "Chat" : name === "music" ? "Music" : "Diary",
       capability: server.chat ? "Chat: read and send chat messages." : name === "music" ? "Music: what plays now, and play a song." : "Diary: private notes.",
-      transport: { type: "http", url: server.url, ...(server.boundValue ? { headers: { Authorization: { secretRef: "server-credential" } } } : {}) },
+      transport: { type: "http", url: server.url, ...(server.boundValue ? { headers: { Authorization: { secretRef: `credential-${new URL(server.url).port}` } } } : {}) },
       private: server.private ?? false, askBeforeActing: server.askBeforeActing ?? false }, { kind: "operator", conversationId: null, at });
-    if (server.boundValue) await store.saveSecrets({ "server-credential": { value: server.boundValue, destinations: [new URL(server.url).origin] } });
+    // Each server binds its own: a secret is pinned to the one origin it was saved for.
+    if (server.boundValue) await store.saveSecrets({ [`credential-${new URL(server.url).port}`]: { value: server.boundValue, destinations: [new URL(server.url).origin] } });
     await dryRuns.dryRun(name, (await store.view()).servers[name].digest);
     await store.operatorChange(name, (await store.view()).servers[name].digest, "configure", { tools: server.chat
       ? { read_inbox: { enabled: true, acts: false }, send_message: { enabled: true, acts: true } } : { now_playing: { enabled: true, acts: false }, play: { enabled: true, acts: true } } });
