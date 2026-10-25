@@ -101,6 +101,7 @@ test("finding identity and occurrence history stay local across linked task exch
   const arriving = peerRow({ ...fields, id: remoteId, machine: PEER }, Date.now() + 1000);
   applyTaskRows([arriving], peerLink, { filePath: file });
   expect(find(file, remoteId)).toMatchObject({ text: published.text });
+  expect(find(file, remoteId)?.dueAt).toBeUndefined(); expect(find(file, remoteId)?.dueTz).toBeUndefined();
   expect(find(file, remoteId)?.findingKey).toBeUndefined();
   expect(find(file, remoteId)?.finding).toBeUndefined();
   // A linked edit to the original task retains this install's reporter state.

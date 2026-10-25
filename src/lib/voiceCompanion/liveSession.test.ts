@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { fixtureBoardReads } from "./boardReads.fixture";
 import { afterAll, afterEach, beforeEach, expect, jest, test, spyOn } from "bun:test";
 import fs from "node:fs";
@@ -74,7 +75,7 @@ const said = (delta: string, at: number, speaker: "input" | "output" = "input") 
 const spoken = (f: ReturnType<typeof fixture>) => f.provider.commands.filter(row => row.type === "session.commentary.append");
 const large = { input_tokens: 1_050_000, input_tokens_details: { cached_tokens: 0 }, output_tokens: 512 };
 
-async function seatVoiceFixture(lines: unknown[], engine: "claude" | "codex" = "claude", credential = "synthetic-credential") {
+async function seatVoiceFixture(lines: unknown[], engine: "claude" | "codex" = "claude", credential = "synthetic-credential", now = Date.now) {
   const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
   const { productionDomainDependencies } = await import("@/lib/mcp/bindings");
   const { createCompanionBoardReadPaths } = await import("./readPaths");
@@ -92,9 +93,9 @@ async function seatVoiceFixture(lines: unknown[], engine: "claude" | "codex" = "
     pinnedTranscript: candidate => { expect(candidate).toBe(filename); const descriptor = fs.openSync(candidate, "r");
       return { descriptor, stat: fs.fstatSync(descriptor), rootName: "claude-projects", root, sameIdentity: () => true }; },
   } });
-  const f = fixture(credential);
+  const f = fixture(credential, undefined, now);
   const reads = new CompanionBoardReads(paths);
-  const service = new CompanionLiveSessions(f.storage, f.admission, reads, f.provider, { key: () => credential, timers: false });
+  const service = new CompanionLiveSessions(f.storage, f.admission, reads, f.provider, { key: () => credential, timers: false, now });
   const s = await service.start({ project, locale: "en", sdp: "v=0" });
   let turn = 0;
   return { ...f, reads, service, s, filename, async tool(name: string, args: Record<string, unknown> = {}) {
@@ -107,6 +108,18 @@ async function seatVoiceFixture(lines: unknown[], engine: "claude" | "codex" = "
 }
 const seatLine = (role: "user" | "assistant", text: string, second: number) => ({ type: role,
   timestamp: `2026-10-12T06:37:${String(second).padStart(2, "0")}.000Z`, message: { role, content: [{ type: "text", text }] } });
+
+test("an unlisted null since recovers an orchestrator message read through the live read ledger", async () => {
+  const f = await seatVoiceFixture([seatLine("user", "Read the latest reply", 0), seatLine("assistant", "The review passed.", 1)], "claude", "synthetic-credential", () => 1792713600000);
+  try {
+    const result = await f.tool("orchestrator_messages", { project: null, before: null, limit: 12, refresh: null, since: null });
+    expect(result.rows).toMatchObject([{ text: "The review passed." }]);
+    const repeated = await f.tool("orchestrator_messages", { limit: 12 });
+    expect(repeated).toMatchObject({ rows: result.rows, repeated: true });
+    const refused = await f.tool("orchestrator_messages", { since: "2026-10-23T00:00:00Z" });
+    expect(refused).toMatchObject({ status: "refused", code: "INVALID_TOOL_ARGUMENTS" });
+  } finally { await f.service.close(f.s.sessionId); }
+});
 
 test("October 12: the second latest orchestrator message is whole in one voice tool round and older handles survive appends", async () => {
   const reply = "Перевірка повідомлення.\n".repeat(80);
@@ -290,7 +303,7 @@ test.each([true, false])("Claude actions keep their completed outcome across sca
     { type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content: JSON.stringify(value) }] } },
   ];
   const f = await seatVoiceFixture([
-    ...pair("older", "create_task", { text: "Earlier task" }, { ok: true }),
+    ...pair("older", "create_task", withTaskDue({ text: "Earlier task" }), { ok: true }),
     ...pair("boundary", "create_pipeline", { task: "Boundary lane" }, { ok }),
     ...Array.from({ length: 59 }, (_, index) => pair(`read-${index}`, "list_tasks", {}, { ok: true })).flat(),
     { type: "assistant", message: { content: [{ type: "tool_use", id: "pending-read", name: "mcp__viewer__list_tasks", input: {} }] } },
