@@ -4,6 +4,7 @@ import { expect, test, AgentRegistry, fs, path, setAgentRegistryForTests, loadPi
 
 async function unreservedPark(replacement = true) {
   const h = await reserveActivationOnly();
+  h.ports.now = () => "2026-10-25T07:00:00Z";
   const lane = loadPipelines()[0]!;
   const first = lane.runs[0]!.attempts[0]!;
   delete first.activation;
