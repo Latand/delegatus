@@ -15417,6 +15417,9 @@ export async function patchPipeline(
       if (unreservedSpawnRetry) {
         const refusal = unreservedStageRetryRefusal(pipeline, stage, attempt);
         if (refusal) return { error: refusal, status: 409 };
+        // Later account recovery must not reopen this attempt if its error changes.
+        attempt.state = "failed";
+        attempt.completedAt ??= ports.now();
       }
       resetStageForRetry(pipeline, stage);
       recordHandLaunch(pipeline, actor, ports.now());

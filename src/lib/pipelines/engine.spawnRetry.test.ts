@@ -101,6 +101,11 @@ test.each([false, true].flatMap(suspended => [false, true].map(receipt => ({ sus
     }
     else {
       expect(result.error).toBeUndefined();
+      // Cancellation or a later controller may replace the original spawn
+      // error. Durable settlement must still prevent account recovery on it.
+      const rows = loadPipelines();
+      rows[0]!.runs[0]!.attempts[1]!.error = "account recovery retry pending";
+      savePipelines(rows);
       await tickPipelines([], f.h.ports);
       await tickPipelines([], f.h.ports);
       expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)).toMatchObject({ n: 3, state: "running" });
