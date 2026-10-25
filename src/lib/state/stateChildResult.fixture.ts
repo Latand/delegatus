@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { z } from "zod";
+import { BLOCKING_WAIT_LOG_MS } from "@/lib/blockingWaits";
 
 // Match the complete successful state-lock record emitted by blockingWaits.ts.
 // Unknown fields (including an attached error) must remain visible.
@@ -29,6 +30,20 @@ const successfulWait = z.strictObject({
   stateWait,
 });
 
+// Registry contention is also timing evidence when the child completes its
+// writes. Refusal/error fields and unknown shapes remain failures.
+const registryWait = z.strictObject({
+  site: z.enum(["registry-lock", "registry-revision-retry", "registry-lock-async"]),
+  callSite: z.string().min(1).max(1_024),
+  role: z.string().min(1).max(32),
+  durationMs: milliseconds.min(BLOCKING_WAIT_LOG_MS),
+  synchronous: z.boolean(),
+  subject: z.string().max(80).nullable(),
+  label: z.string().max(80).nullable(),
+  operationId: z.string().max(120).nullable(),
+  at: z.iso.datetime({ precision: 3 }),
+});
+
 // server.ts emits this sibling timing diagnostic after a two-second call.
 // Every phase is required, in emitter order; trailing text is an error.
 const mcpSlow = /^\[mcp slow\] pid=([1-9]\d*) role=(\S{1,32}) tool=([a-z][a-z0-9_]*) callerMs=(\d+) httpMs=(\d+) claimMs=(\d+) bindingMs=(\d+) completionMs=(\d+) serializationMs=(\d+) serviceTotalMs=(\d+) replayMs=(\d+)$/;
@@ -40,8 +55,8 @@ function isMcpTiming(line: string): boolean {
 }
 
 /** Successful state admission may log after 50 ms, even without contention.
- * Allow only successful [blocking-wait] records and complete [mcp slow] timing
- * lines. Keep every other diagnostic and unsuccessful exit visible to callers. */
+ * Allow successful state/registry [blocking-wait] records and complete [mcp slow]
+ * timing lines. Keep every other diagnostic and unsuccessful exit visible to callers. */
 export function assertStateChildSuccess(code: number | null, stderr: string): void {
   const completed = new Set<string>();
   // Walk backwards so an in-flight record needs a later successful completion.
@@ -51,7 +66,9 @@ export function assertStateChildSuccess(code: number | null, stderr: string): vo
     const prefix = "[blocking-wait] ";
     if (!line.startsWith(prefix)) return true;
     try {
-      const parsed = successfulWait.safeParse(JSON.parse(line.slice(prefix.length)));
+      const value: unknown = JSON.parse(line.slice(prefix.length));
+      if (registryWait.safeParse(value).success) return false;
+      const parsed = successfulWait.safeParse(value);
       if (!parsed.success) return true;
       const sample = parsed.data;
       const key = JSON.stringify([sample.stateWait.pid, sample.stateWait.callSite, sample.subject, sample.operationId]);

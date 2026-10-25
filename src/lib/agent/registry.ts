@@ -1,3 +1,4 @@
+import { registryWriterDetail } from "./registryWriter";
 import { agentSignalDomainAlive, normalizeAgentSignalDomain, normalizeSignalBoundaryOff, type AgentSignalDomain, type SignalBoundaryOff } from "@/lib/runtime/agentSignalSandbox";
 import { liveRootSession } from "@/lib/root/adopt";
 import { StateLockDeferredError, stateLockAttempt, stateLockDeferral, waitForStateLock } from "@/lib/state/lockWait";
@@ -5,7 +6,7 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { normalizeHostMemory, type HostMemoryState } from "@/lib/runtime/agentMemoryState";
 import { normalizeHostEndCause, type HostEndCause } from "@/lib/runtime/hostEndCause";
-import { recordBlockingWait, withWaitCorrelation, type BlockingWaitCorrelation } from "@/lib/blockingWaits";
+import { recordBlockingWait, withWaitCorrelation, currentWaitCorrelation, type BlockingWaitCorrelation } from "@/lib/blockingWaits";
 import crypto from "node:crypto";
 import { parseRuntimeIdleKillFence } from "@/lib/runtime/commands";
 import fs from "node:fs";
@@ -4707,8 +4708,8 @@ export const REGISTRY_WRITER_BUSY = "the delivery record's write lock is held by
     nothing was written, so the durable state is what it was before the step,
     and the next pass resumes from it. */
 export class RegistryWriterBusyError extends Error {
-  constructor(readonly label: string) {
-    super(`${REGISTRY_WRITER_BUSY} (${label})`);
+  constructor(readonly label: string, readonly holder?: string) {
+    super(`${REGISTRY_WRITER_BUSY} (${label})${holder ? `; ${holder}` : ""}`);
     this.name = "RegistryWriterBusyError";
   }
 }
@@ -5396,7 +5397,7 @@ export class AgentRegistry {
     try {
       fs.mkdirSync(staging, 0o700);
       fd = fs.openSync(path.join(staging, "owner.json"), "wx", 0o600);
-      fs.writeFileSync(fd, JSON.stringify({ ...owner, token }), "utf8");
+      fs.writeFileSync(fd, JSON.stringify({ ...owner, token, callSite: currentWaitCorrelation()?.label ?? "registry synchronous write", acquiredAt: Date.now() }), "utf8");
       fs.fsyncSync(fd);
       fs.closeSync(fd);
       fd = null;
@@ -5731,7 +5732,7 @@ export class AgentRegistry {
       {@link RegistryWriterBusyError} when the lock stayed held. */
   async deliveryWriteOrBusy<T>(correlation: { label: string; operationId?: string | null }, write: () => T): Promise<T> {
     const written = await this.whenWriterHeld(correlation, write);
-    if (!written.acquired) throw new RegistryWriterBusyError(correlation.label);
+    if (!written.acquired) throw new RegistryWriterBusyError(correlation.label, this.writerHolderDetail());
     return written.value;
   }
 
@@ -5762,7 +5763,7 @@ export class AgentRegistry {
       if (this.admittedJsonWriter) return { acquired: true, value: withWaitCorrelation(correlation, write) };
       const lock = `${this.filename}.write-lock`;
       fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
-      const claim = this.tryAcquireLock(lock, captureProcessIdentity(process.pid));
+      const claim = withWaitCorrelation(correlation, () => this.tryAcquireLock(lock, captureProcessIdentity(process.pid)));
       if (!claim) {
         if (options.recordRefusal !== false) recordBlockingWait({ site: "registry-lock-async", synchronous: false,
           durationMs: 0, correlation, subject: "agent-registry", refused: true });
@@ -6404,10 +6405,14 @@ export class AgentRegistry {
   /** Bounded, non-blocking admission for request and controller paths. */
   async beginSpawnRequestAsync(input: SpawnRequest, guard?: () => void): Promise<SpawnBeginResult> {
     const caller = input.purpose === "resume-successor" ? "resume" : "spawn";
-    const deadline = performance.now() + (this.writerDeadlineMs ?? 2_000);
+    // One bounded admission slice; the pipeline persists its longer lane deadline.
+    // Membership can need a separate state writer, so two seconds is not enough
+    // to admit and then record it under load.
+    const deadline = performance.now() + (this.writerDeadlineMs ?? 30_000);
+    const busy = (label: string) => new RegistryWriterBusyError(label, this.writerHolderDetail());
     const remaining = () => Math.max(0, deadline - performance.now());
     const written = await this.accountMutationWrite(`${caller} admission`, () => this.reserveSpawnRequest(input), guard, { waitMs: remaining() });
-    if (!written.acquired) throw new RegistryWriterBusyError(`${caller} admission`);
+    if (!written.acquired) throw busy(`${caller} admission`);
     const result = written.value;
     if (result.kind === "created" || result.kind === "replay") {
       await new Promise<void>(resolve => setImmediate(resolve));
@@ -6429,10 +6434,19 @@ export class AgentRegistry {
         const recorded = await this.accountMutationWrite(`${caller} membership record`, () => {
           this.recordSpawnMembership(result.receipt, admission.taskIds);
         }, guard, { waitMs: remaining() });
-        if (!recorded.acquired) throw new RegistryWriterBusyError(`${caller} membership record`);
+        if (!recorded.acquired) throw busy(`${caller} membership record`);
       }
     }
     return result;
+  }
+
+  private writerHolderDetail(): string {
+    if (this.sqliteStore) return registryWriterDetail(this.sqliteStore.filename);
+    try {
+      const lock = `${this.filename}.write-lock`;
+      const writer = JSON.parse(fs.readFileSync(this.lockOwnerFile(lock), "utf8")) as ProcessIdentity & { callSite?: string; acquiredAt?: number };
+      return `holder=${writer.callSite ?? "legacy registry writer"} pid=${writer.pid} age=${Math.max(0, Date.now() - (writer.acquiredAt ?? fs.statSync(lock).mtimeMs))}ms`;
+    } catch { return "holder=writer changed before inspection; retry admission"; }
   }
 
   /** Acquire each writer without waiting while the other is held. A failed
@@ -6453,6 +6467,7 @@ export class AgentRegistry {
     let waited = false;
     let refused = false;
     let acquiredAt: number | undefined;
+    let backoffMs = 5;
     let correlation: BlockingWaitCorrelation = { label, operationId: options.operationId };
     const run = async (remainingMs: number): Promise<{ acquired: true; value: T } | { acquired: false }> => {
       const deadline = performance.now() + remainingMs;
@@ -6488,7 +6503,9 @@ export class AgentRegistry {
           acquiredAt = undefined;
           if (inherited || performance.now() >= deadline) return result;
           waited = true;
-          await new Promise<void>(resolve => setTimeout(resolve, 5));
+          const delayMs = Math.min(Math.max(0, deadline - performance.now()), backoffMs * (0.5 + Math.random() * 0.5));
+          await new Promise<void>(resolve => setTimeout(resolve, delayMs));
+          backoffMs = Math.min(250, backoffMs * 2);
         }
       } finally {
         if (waited || refused) recordBlockingWait({ site: "registry-lock-async", synchronous: false,

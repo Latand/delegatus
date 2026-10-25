@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { assertStateChildSuccess } from "@/lib/state/stateChildResult.fixture";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry, normalizeRegistry, RegistryParityError, type SeatChildrenAnchor } from "./registry";
@@ -1929,10 +1930,10 @@ test("production-sized SQLite registry admits every ten-lane write beside a conc
     /* The first open imported the 14 MB JSON and kept it renamed (#1870). */
     expect(fs.existsSync(filename)).toBeFalse();
     fs.writeFileSync(start, "start");
-    expect(await Promise.all(children.map(({ child }) => child.exited))).toEqual(Array(10).fill(0));
-    expect(await reader.exited).toBe(0);
-    expect(await Promise.all(children.map(({ child }) => new Response(child.stderr).text()))).toEqual(Array(10).fill(""));
-    expect(await new Response(reader.stderr).text()).toBe("");
+    for (const { child } of children) {
+      assertStateChildSuccess(await child.exited, await new Response(child.stderr).text());
+    }
+    assertStateChildSuccess(await reader.exited, await new Response(reader.stderr).text());
     const measurements = children.map(({ result }) => JSON.parse(fs.readFileSync(result, "utf8")) as {
       durations: number[];
       writerWaits: number[];

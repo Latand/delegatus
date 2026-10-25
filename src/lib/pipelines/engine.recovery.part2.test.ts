@@ -1,7 +1,8 @@
 import { expect, spyOn, test, spawn, fs, path, accountManager, engineModule, defaultPipelinePorts, tickPipelines, AgentRegistry, setAgentRegistryForTests, createPipelineFromRequest, loadPipelines, savePipelines, patchPipeline, RUN_STAGES, ORIGIN_MAIN_SHA, harness, durableStageTurnEvidence, create, forbiddenSleep, frozenWallClock, HOST_UNAVAILABLE, failedReceipt, stagedRecoveryHarness, aliveStagedLaunch, stageHostChild, productionHostSeams, activationDrainFixture, expectPipelineLeaseFree, reserveActivationOnly } from "./engine.fixture";
 import type { Snapshot, PipelinePorts } from "./engine.fixture";
 
-const RAW_ADMISSION_BUSY = ["database is locked", "database is busy", "SQLITE_BUSY", "SQLITE_LOCKED"] as const;
+const RAW_ADMISSION_BUSY = ["database is locked", "database is busy", "SQLITE_BUSY", "SQLITE_LOCKED",
+  "the delivery record's write lock is held by another writer (spawn membership record); holder=registry.staged-recovery pid=321 age=2500ms"] as const;
 
 
 
