@@ -329,6 +329,14 @@ class OwnerPromptCleanupPending extends Error {}
 export const OWNER_STOP_RECOVERY_GRACE_MS = 60_000;
 /** Past this time after its cutoff, an unconfirmed stop stops holding the target. */
 export const OWNER_STOP_PENDING_LIMIT_MS = 10 * 60_000;
+/** A live stop that stays unconfirmed retries after its base delay, doubling
+ * up to this many times the base: one minute in production, the sweep's
+ * cadence. A fixed one-second retry wrote 16 207 pending warnings from one
+ * Viewer in twelve hours (2026-10-24). */
+export const OWNER_STOP_RETRY_BACKOFF_CAP = 60;
+export function ownerStopRetryDelayMs(baseMs: number, failures: number): number {
+  return Math.min(baseMs * 2 ** Math.min(failures, 6), baseMs * OWNER_STOP_RETRY_BACKOFF_CAP);
+}
 const OWNER_STOP_LEDGER_WAIT_MS = 50;
 export async function observeOwnerTurn(run: SpawnedTurn, sources: Pick<SeatTickSources, "registry" | "liveness" | "now">, progressSteps = false): Promise<OwnerTurnObservation> {
   let finalTextChanged = false;
@@ -678,6 +686,10 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
   let cancelStatus: "timeout" | "cancelled" | "failed" = "cancelled";
   let stopWork: Promise<void> | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  let stopFailures = 0;
+  const retryStop = () => {
+    retryTimer = setTimeout(() => { void applyStop(); }, ownerStopRetryDelayMs(ports.stopRetryMs ?? 1000, stopFailures++));
+  };
   let reject!: (error: Error) => void;
   let resolve!: (result: EphemeralAgentResult) => void;
   const done = new Promise<EphemeralAgentResult>((r, fail) => { resolve = r; reject = fail; });
@@ -749,10 +761,10 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
       }
       if (confirmed && (durable || persistStop())) finish(cancelStatus);
       // Retain execution and retry until both cutoff and termination are proven.
-      else retryTimer = setTimeout(() => { void applyStop(); }, ports.stopRetryMs ?? 1000);
+      else retryStop();
     })().catch(() => {
       console.error("Owner relay stop remains pending; custody retained");
-      retryTimer = setTimeout(() => { void applyStop(); }, ports.stopRetryMs ?? 1000);
+      retryStop();
     }).finally(() => { stopWork = null; });
     return stopWork;
   };

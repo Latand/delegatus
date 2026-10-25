@@ -42,6 +42,52 @@ test("heavy gate readiness and claims keep the pressure fence across process res
   expect(check(CPU_QUEUE_MAX_WAIT_MS + 1, true, true)).toBeNull();
 });
 
+test.each(["stage", "workflow"])("a gate held for pressure at the head lets a %s start at its own bound; gates keep FIFO", prefix => {
+  const f = fixture(), owner = captureProcessIdentity(process.pid), gates = f.open(), key = `${prefix}:s`;
+  const gate = (name: string, low = false) => gates.check(name, low, owner, true, undefined, true);
+  expect(gate("command:gate")).toMatchObject({ since: 0, position: 1 });
+  f.at(1_000);
+  // The stage's checker is another connection, as the Viewer is.
+  const stages = f.open();
+  expect(stages.check(key, false)).toMatchObject({ since: 1_000, position: 2 });
+  f.at(2_000);
+  expect(gate("command:later")).toMatchObject({ position: 3 });
+  // Before its own bound the stage still waits behind the gate.
+  f.at(1_000 + CPU_QUEUE_MAX_WAIT_MS - 1);
+  expect(gate("command:gate")).toMatchObject({ position: 1 });
+  expect(stages.check(key, false)).toMatchObject({ position: 2 });
+  f.at(1_000 + CPU_QUEUE_MAX_WAIT_MS);
+  expect(stages.check(key, false)).toBeNull();
+  // The gate still waits under pressure, and the later gate stays behind it.
+  for (const minute of [30, 60]) {
+    f.at(minute * 60_000);
+    expect(gate("command:gate")).toMatchObject({ since: 0, position: 1 });
+    expect(gate("command:later")).toMatchObject({ position: 2 });
+  }
+  // Low pressure admits the gates in order, spaced.
+  f.at(60 * 60_000 + 1);
+  expect(gate("command:later", true)).toMatchObject({ position: 2 });
+  expect(gate("command:gate", true)).toBeNull();
+  expect(gate("command:later", true)).toMatchObject({ position: 1, remainingMs: CPU_QUEUE_SPACING_MS });
+  f.at(60 * 60_000 + 1 + CPU_QUEUE_SPACING_MS);
+  expect(gate("command:later", true)).toBeNull();
+});
+
+test("a stage past its bound under pressure still waits for spacing and for an older stage ahead of a held gate", () => {
+  const f = fixture(), owner = captureProcessIdentity(process.pid), q = f.open();
+  q.check("stage:older", false);
+  f.at(1_000); q.check("command:gate", false, owner, true, undefined, true);
+  f.at(2_000); q.check("stage:newer", false);
+  f.at(2_000 + CPU_QUEUE_MAX_WAIT_MS);
+  // Only the held gate is passed; the older stage keeps its place.
+  expect(q.check("stage:newer", false)).toMatchObject({ position: 2 });
+  expect(q.check("stage:older", false)).toBeNull();
+  expect(q.check("stage:newer", false)).toMatchObject({ position: 1, remainingMs: CPU_QUEUE_SPACING_MS });
+  f.at(2_000 + CPU_QUEUE_MAX_WAIT_MS + CPU_QUEUE_SPACING_MS);
+  expect(q.check("stage:newer", false)).toBeNull();
+  expect(q.check("command:gate", false, owner, true, undefined, true)).toMatchObject({ position: 1 });
+});
+
 test("priority orders levels strictly and preserves FIFO within each level despite reverse polling", () => {
   const f = fixture(), q = f.open(), tasks = priorityTasks(f.file);
   const entries = [["low-first", "low"], ["normal-first", "normal"], ["high-first", "high"], ["low-second", "low"], ["normal-second", "normal"], ["high-second", "high"]] as const;

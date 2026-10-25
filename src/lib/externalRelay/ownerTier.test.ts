@@ -10,7 +10,7 @@ import type { SeatTickSources } from "@/lib/monitor/seatTickSources";
 import { requestSchema, type ExternalRelayRequest } from "./protocol";
 import { contextRequest } from "./request.fixture";
 import { ownerTierFor } from "./profile";
-import { observeOwnerTurn, ownerAnswer, ownerRunPrompt, runOwnerAgent, revokeOwnerRuns, settleOwnerFirstPrompt, confirmOwnerStop, type OwnerRunPorts } from "./ownerRun";
+import { observeOwnerTurn, ownerAnswer, ownerRunPrompt, ownerStopRetryDelayMs, runOwnerAgent, revokeOwnerRuns, settleOwnerFirstPrompt, confirmOwnerStop, type OwnerRunPorts } from "./ownerRun";
 import { reserveRun, readRunLedger, externalRelayFile, dropRun } from "./store";
 import { sweepExternalRelayOrphans } from "./poller";
 import { appDirIn } from "../../../bin/appDir.mjs";
@@ -272,6 +272,39 @@ test("owner failure stays pending through refused stop receipts and retries unti
     expect(stops).toBeGreaterThan(3);
     expect(readRunLedger().runs.find(r => r.requestId === requestId)?.ownerTurn?.confirmed).toBe(true);
   } finally { recovered = true; await run.done; dropRun(requestId); }
+});
+
+test("an unconfirmed live stop backs off to its cap, so the pending warning slows to the sweep's cadence", async () => {
+  expect(Array.from({ length: 9 }, (_, failures) => ownerStopRetryDelayMs(1000, failures)))
+    .toEqual([1000, 2000, 4000, 8000, 16_000, 32_000, 60_000, 60_000, 60_000]);
+  const requestId = request().request_id, base = 2;
+  reserveRun({ requestId, relayId: "relay_fixture", targetId: target.id, leaseId: "lease_fixture",
+    ownerTurn: { clientAttemptId: `relay-owner-${requestId}` }, ownerPid: process.pid, ownerIdentity: "fixture",
+    childPid: null, childIdentity: null, runDir: "", startedAt: new Date().toISOString() }, 1);
+  const warnings: number[] = [];
+  const error = console.error.bind(console);
+  const spy = spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+    if (args[0] === "Owner relay stop remains pending; durable custody retained") warnings.push(performance.now());
+    else error(...args);
+  });
+  let recovered = false, bound!: () => void;
+  const conversation = new Promise<void>(r => { bound = r; });
+  const run = start({ launch, observe: async () => ({ state: "running" }),
+    stop: async () => { if (!recovered) throw Error("control unavailable"); }, stopRetryMs: base, pollMs: 1 }, 60_000, () => bound());
+  try {
+    await conversation;
+    run.cancel();
+    await Bun.sleep(600);
+    const count = warnings.length;
+    // A fixed retry of `base` wrote one warning per round of about 3 × base:
+    // about a hundred here. The backoff allows at most 7 + 600 / 120.
+    expect(count).toBeGreaterThanOrEqual(3);
+    expect(count).toBeLessThanOrEqual(13);
+    // A timer never fires early, so each gap covers at least its delay.
+    for (let index = 1; index < count; index++) expect(warnings[index]! - warnings[index - 1]!).toBeGreaterThanOrEqual(ownerStopRetryDelayMs(base, index - 1) - 1);
+    recovered = true;
+    expect(await run.done).toMatchObject({ status: "cancelled" });
+  } finally { recovered = true; spy.mockRestore(); await run.done; dropRun(requestId); }
 });
 
 test("normal spawn fields and final turn are used without a child or progress stream", async () => {

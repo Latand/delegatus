@@ -151,6 +151,9 @@ Starvation handling and per-stage urgency remain follow-ups.
 Stage and workflow admission retains its ten-minute fairness bound. A local
 heavy check requires a permissive measured sample at readiness and again when
 it claims a free slot, even after ten minutes and after its helper restarts.
+Its ticket records that rule (`low_pressure`). A ticket past its own bound that
+does not need low pressure passes such tickets, so a check held by pressure
+never holds a stage beyond the stage's bound. Checks keep FIFO among themselves.
 The gate samples PSI asynchronously; if PSI is unreadable or malformed, it
 requires the one-minute load divided by online CPUs to be below 0.75. If both
 metrics are unavailable, it waits. `DELEGATUS_CPU_PRESSURE=off` explicitly
