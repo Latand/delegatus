@@ -1545,6 +1545,51 @@ describe("memory profile window: one top, whole rows, level order, named topic",
   });
 });
 
+describe("memory profile window: opening under slow data", () => {
+  browserTest("opened from the menu row with the rules already read, the body draws at once, one profile request goes out and Summarize waits for its answer, with each role's costume beside its name", async () => {
+    const out = path.resolve(".artifacts/memory-profile-opening"); fs.mkdirSync(out, { recursive: true });
+    const rules = sampleMemory();
+    const delay = 1500;
+    let rulesReads = 0; const profileReads: string[] = [];
+    const service = createProfileService({ rules: () => structuredClone(rules), read: () => null, write: () => {}, model: "haiku", prepare: async () => async () => ({ answer: sampleAnswer(false), model: "haiku" }) });
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/role-memory": async () => { if (++rulesReads > 1) await new Promise(resolve => setTimeout(resolve, delay)); return Response.json(rules); },
+      "/api/role-memory/profile": async (request: Request) => {
+        profileReads.push(request.method);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        const view: MemoryProfileView = service.read("garden", new URL(request.url).searchParams.get("locale") === "uk" ? "uk" : "en");
+        view.overall = null; view.slices.forEach(slice => { slice.summary = null; }); view.run = null;
+        return Response.json(view);
+      },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      for (const lang of ["uk", "en"] as const) for (const scheme of ["light", "dark"] as const) for (const [width, height] of [[1440, 900], [1000, 700], [390, 844]] as const) {
+        rulesReads = 0; profileReads.length = 0;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-profile&rolememory=1&via=row`, { width, height }, scheme, lang, "reduce", width === 390);
+        try {
+          await page.locator("[data-learned-rules-open]").waitFor();
+          await page.waitForFunction(() => /\d/.test(document.querySelector("[data-learned-rules-count]")?.textContent ?? ""));
+          const started = Date.now();
+          await page.locator("[data-learned-rules-open]").click();
+          await page.locator("[data-memory-profile]").waitFor();
+          expect(Date.now() - started).toBeLessThan(delay / 2);
+          expect(await page.locator("[data-profile-summarize]").count()).toBe(0);
+          expect(await page.locator("[data-memory-profile] h3").first().innerText()).toBe(translate(lang, "memoryProfile.reading"));
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-reading.png`) });
+          await page.locator("[data-profile-summarize]").waitFor({ timeout: delay * 3 });
+          expect(profileReads).toEqual(["GET"]);
+          const marks = await page.locator("[data-profile-slice]").evaluateAll(nodes => nodes.map(node => ({ kind: node.getAttribute("data-profile-slice"), costume: node.querySelector("img[data-role-avatar]")?.getAttribute("data-role-avatar") ?? null })));
+          for (const mark of marks) expect(mark.costume !== null).toBe(mark.kind === "role" || mark.kind === "swarm");
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-loaded.png`) });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+  });
+});
+
 describe("finding recurrence (#2648)", () => {
   browserTest("quiet and held state lines keep the full recurrence visible at 1440, 1000 and 390 in en and uk", async () => {
     const out = path.resolve(".artifacts/finding-recurrence");
