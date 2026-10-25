@@ -90,3 +90,18 @@ test("a parked lane's line names its stop class before the stage's words", () =>
   const [line] = seatAgendaAsks({ files: [], pipelines: [lane] }, now, "project-a");
   expect(line!.label).toStartWith("[commit] Ship the panel — stage build asks stopped: stage failed");
 });
+
+test("only the successor delivery owner asks for a shared PR merge", () => {
+  const old = mergeLane("old", "conflict with the base branch");
+  const owner = mergeLane("owner", "conflict with the base branch");
+  const target = { repository: "repo-fixture", remote: "", branch: "review", pr: 7 };
+  old.delivery = { target, disposition: "owner", active: false, publish: "disabled", ownerId: old.id, epoch: 1, journal: [] };
+  owner.delivery = { target, disposition: "owner", active: true, publish: "enabled", ownerId: owner.id, epoch: 2, journal: [] };
+  expect(seatAgendaAsks({ files: [], pipelines: [old, owner] }, now, "project-a").map(ask => ask.id)).toEqual([owner.id]);
+  owner.dismissedAt = new Date(now * 1000).toISOString();
+  expect(seatAgendaAsks({ files: [], pipelines: [old, owner] }, now + 60, "project-a")).toEqual([]);
+  const later = new Date((now + 120) * 1000).toISOString();
+  owner.merge!.blockedAt = later;
+  owner.attentionRoute!.key = `lane:owner:merge:${later}`;
+  expect(seatAgendaAsks({ files: [], pipelines: [old, owner] }, now + 180, "project-a").map(ask => ask.id)).toEqual([owner.id]);
+});

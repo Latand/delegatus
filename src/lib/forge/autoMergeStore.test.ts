@@ -1093,3 +1093,25 @@ test("a timed-out lane retries old duplicate green checks and merges after a rea
     expect(observations[1]!.logs.some(line => line.includes("waiting-checks"))).toBe(false);
   } finally { for (let i = 0; i < 20; i++) await Promise.resolve(); unregister(); }
 });
+
+test("a newer delivery owner retires the completed predecessor merge with its successor named", async () => {
+  const old = completedLane("predecessor");
+  const owner = completedLane("successor");
+  const target = { repository: PROJECT, remote: "", branch: "refs/heads/review", pr: 7 };
+  old.delivery = { target, disposition: "owner", publish: "disabled", active: false, ownerId: old.id, epoch: 1, journal: [] };
+  owner.delivery = { target, disposition: "owner", publish: "enabled", active: true, ownerId: owner.id, epoch: 2, journal: [] };
+  owner.state = "running";
+  old.merge = {
+    state: "blocked", by: null, repository: REPO, prNumber: 7, policyChangedAt: iso(T0), reviewedHead: HEAD, chain: [HEAD], updates: [],
+    seenChecks: [], head: HEAD, headSeenAt: iso(T0), lastChecks: [], readAt: iso(T0), nextReadAt: null, requestedAt: iso(T0),
+    mergedHead: null, mergeCommit: null, method: null, mergedAt: null, attempts: 0, reason: MERGE_REASONS.conflict, blockedAt: iso(T0), updatedAt: iso(T0),
+  };
+  savePipelines([old, owner]);
+  const ports = productionAutoMergePorts({ loadPipelines, now: () => T0, log: () => undefined });
+  await sweepAutoMerge(ports);
+  const retired = loadPipelines().find(lane => lane.id === old.id)!;
+  expect(retired.merge).toMatchObject({ state: "cancelled", reason: "Merge superseded by delivery owner successor" });
+  const stamp = retired.merge!.updatedAt;
+  await sweepAutoMerge(ports);
+  expect(loadPipelines().find(lane => lane.id === old.id)!.merge!.updatedAt).toBe(stamp);
+});

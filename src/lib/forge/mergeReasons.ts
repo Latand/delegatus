@@ -4,7 +4,7 @@
  * them back to say each one in the operator's language.
  */
 export const MERGE_REASONS = {
-  refreshClosed: "the refresh was closed before the PR merged",
+  refreshClosed: "the refresh was closed; finish the resolution review before retrying the merge",
   refreshSameBase: "the refresh did not clear the conflict, and main has not moved since",
   conflict: "conflict with the base branch",
   noChecks: "no checks reported on this head",

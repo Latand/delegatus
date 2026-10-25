@@ -6,10 +6,11 @@ import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { MERGE_REASON_PATTERNS, MERGE_REASONS } from "@/lib/forge/mergeReasons";
 import { laneStopKind } from "@/lib/pipelines/laneStop";
+import { mergeSuccessor } from "@/lib/pipelines/mergeSuccessor";
 import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
 
-import { laneNeedKind } from "./routeTypes";
+import { laneNeedKind, laneWaitCleared } from "./routeTypes";
 
 /*
  * The seat's half of routing (docs/design/attention-auto-resolve.md,
@@ -127,6 +128,7 @@ export function seatAgendaAsks(body: { files: readonly FileEntry[]; pipelines: r
   const lanes = body.pipelines
     .filter((pipeline) => canonicalOrchestratorProject(pipeline.project) === canonical)
     .flatMap((pipeline) => {
+      if (laneWaitCleared(pipeline) || mergeSuccessor(pipeline, body.pipelines)) return [];
       const state = laneState(pipeline);
       const route = state.route;
       if (state.owner !== "seat" || !route) return [];

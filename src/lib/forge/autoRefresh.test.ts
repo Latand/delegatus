@@ -86,7 +86,7 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
   const pipelines = new Map(options.lanes.map((pipeline) => [pipeline.id, structuredClone(pipeline)]));
   const prs = new Map(options.prs.map((pr) => [pr.number, pr]));
   const prOf = new Map(options.lanes.map((pipeline, index) => [pipeline.id, options.prs[index]!.number]));
-  const commits = new Map<string, { parents: string[]; committer: string }>();
+  const commits = new Map<string, { parents: string[]; committer: string; identity?: { name: string; email: string } }>();
   const tasks = new Map((options.tasks ?? []).map((id) => [id, "assigned"]));
   let setting: MergeOnReviewSetting = { enabled: true, changedAt: iso(T0 - 3_600_000), changedBy: "operator", ...options.setting };
   let mergeRefusal: string | null = null;
@@ -1336,4 +1336,117 @@ test("persisted refresh reservations replay only within the head limit", async (
   expect(h.creates).toHaveLength(2); // First failed call, then the head replay.
   expect(h.merge("queued-0")!.refresh!.pipelineId).toBe("refresh-1");
   expect(h.merge("queued-1")!.refresh!.pipelineId).toBeNull();
+});
+
+test("a published refresh owns the extended head only after its resolution review", async () => {
+  const h = harness({ lanes: [finished()], prs: [conflicting()] });
+  await h.sweep();
+  const head = "b".repeat(40);
+  Object.assign(h.prs.get(11)!, { head, mergeStateStatus: "CLEAN", mergeable: "MERGEABLE" });
+  h.pipeline("refresh-1").lastPassedCommit = head;
+  const reviewAttempt = { ...h.pipeline("refresh-1").runs[1]!.attempts[0]!, reviewHeadSha: head };
+  h.pipeline("refresh-1").runs[1]!.attempts = [];
+  await h.run(5 * MERGE_POLL_MS);
+  expect(h.merge("finished")!.chain).toEqual([HEAD_A]);
+  expect(h.merges()).toHaveLength(0);
+  h.pipeline("refresh-1").runs[1]!.attempts = [reviewAttempt];
+  h.pipeline("refresh-1").state = "completed";
+  h.pipeline("refresh-1").delivery!.active = false;
+  await h.run(10 * MERGE_POLL_MS);
+  expect(h.merge("refresh-1")).toMatchObject({ state: "merged", chain: [head], reviewedHead: head, mergedHead: head });
+  expect(h.merge("finished")).toMatchObject({ state: "merged", chain: [HEAD_A], mergedHead: head });
+  expect(h.merges()).toHaveLength(1);
+});
+
+test("a refresh closed after publication blocks before resolution review", async () => {
+  const h = harness({ lanes: [finished()], prs: [conflicting()] });
+  await h.sweep();
+  Object.assign(h.prs.get(11)!, { head: "b".repeat(40), mergeStateStatus: "CLEAN", mergeable: "MERGEABLE" });
+  h.pipeline("refresh-1").runs[1]!.attempts = [];
+  h.pipeline("refresh-1").state = "closed";
+  await h.run(10 * MERGE_POLL_MS);
+  expect(h.merge("finished")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.refreshClosed });
+  expect(h.merge("refresh-1")).toBeUndefined();
+  expect(h.merge("finished")!.chain).toEqual([HEAD_A]);
+  expect(h.merges()).toHaveLength(0);
+});
+
+test("a foreign push after refresh review still blocks with headChanged", async () => {
+  const h = harness({ lanes: [finished()], prs: [conflicting()] });
+  await h.sweep();
+  h.pipeline("refresh-1").state = "completed";
+  h.pipeline("refresh-1").lastPassedCommit = "b".repeat(40);
+  h.pipeline("refresh-1").delivery!.active = false;
+  Object.assign(h.prs.get(11)!, { head: "c".repeat(40), mergeStateStatus: "CLEAN", mergeable: "MERGEABLE" });
+  await h.run(10 * MERGE_POLL_MS);
+  expect(h.merge("refresh-1")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.headChanged });
+  expect(h.merges()).toHaveLength(0);
+});
+
+
+test("a machine main merge outside refresh lineage automatically gets resolution review", async () => {
+  const h = harness({ lanes: [finished()], prs: [openPr(11)] });
+  await h.sweep();
+  const head = "b".repeat(40);
+  h.commits.set(head, { parents: [HEAD_A, MAIN_1], committer: "", identity: { name: "Delegatus", email: ["noreply", "delegatus.invalid"].join("@") } });
+  h.prs.get(11)!.head = head;
+  await h.run(2 * MERGE_POLL_MS);
+  expect(h.creates).toHaveLength(1);
+  expect(h.merge("finished")).toMatchObject({ state: "refreshing", chain: [HEAD_A], refresh: { head: HEAD_A, base: MAIN_1 } });
+  expect(h.merges()).toHaveLength(0);
+  h.pipeline("refresh-1").lastPassedCommit = head;
+  h.pipeline("refresh-1").runs[1]!.attempts[0]!.reviewHeadSha = head;
+  h.pipeline("refresh-1").state = "completed";
+  h.pipeline("refresh-1").delivery!.active = false;
+  await h.run(10 * MERGE_POLL_MS);
+  expect(h.merge("refresh-1")).toMatchObject({ state: "merged", chain: [head] });
+  expect(h.merge("finished")!.state).toBe("merged");
+});
+
+
+test.each(["foreign identity", "wrong first parent", "wrong base", "one parent"])("an unrelated head keeps headChanged: %s", async change => {
+  const h = harness({ lanes: [finished()], prs: [openPr(11)] });
+  await h.sweep();
+  const head = "b".repeat(40);
+  const parents = change === "one parent" ? [HEAD_A] : [change === "wrong first parent" ? "c".repeat(40) : HEAD_A, change === "wrong base" ? MAIN_2 : MAIN_1];
+  h.commits.set(head, { parents, committer: "", identity: { name: change === "foreign identity" ? "Other tool" : "Delegatus", email: ["noreply", "delegatus.invalid"].join("@") } });
+  h.prs.get(11)!.head = head;
+  await h.run(5 * MERGE_POLL_MS);
+  expect(h.merge("finished")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.headChanged, chain: [HEAD_A] });
+  expect(h.creates).toHaveLength(0);
+  expect(h.merges()).toHaveLength(0);
+});
+
+test("closing the automatic resolution review of a published machine merge never merges it", async () => {
+  const h = harness({ lanes: [finished()], prs: [openPr(11)] });
+  await h.sweep();
+  const head = "b".repeat(40);
+  h.commits.set(head, { parents: [HEAD_A, MAIN_1], committer: "", identity: { name: "Delegatus", email: ["noreply", "delegatus.invalid"].join("@") } });
+  h.prs.get(11)!.head = head;
+  await h.run(2 * MERGE_POLL_MS);
+  h.pipeline("refresh-1").runs[1]!.attempts = [];
+  h.pipeline("refresh-1").state = "closed";
+  await h.run(10 * MERGE_POLL_MS);
+  expect(h.merge("finished")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.refreshClosed, chain: [HEAD_A] });
+  expect(h.merge("finished")!.reason).toContain("resolution review");
+  expect(h.merges()).toHaveLength(0);
+});
+
+
+test("an exhausted resolution review cannot merge its unreviewed final fix", async () => {
+  const h = harness({ lanes: [finished()], prs: [conflicting()] });
+  await h.sweep();
+  const child = h.pipeline("refresh-1");
+  child.state = "completed";
+  child.delivery!.active = false;
+  child.lastPassedCommit = "b".repeat(40);
+  const review = child.runs[1]!.attempts[0]!;
+  review.state = "failed";
+  review.budgetSpent = true;
+  child.runs[0]!.attempts[0]!.activatedBy = { edge: "fail", budgetSpent: true, stageId: "review", attempt: review.n };
+  Object.assign(h.prs.get(11)!, { head: child.lastPassedCommit, mergeStateStatus: "CLEAN", mergeable: "MERGEABLE" });
+  await h.run(10 * MERGE_POLL_MS);
+  expect(h.merge("refresh-1")).toBeUndefined();
+  expect(h.merge("finished")!.state).toBe("blocked");
+  expect(h.merges()).toHaveLength(0);
 });

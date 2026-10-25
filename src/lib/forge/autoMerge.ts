@@ -1,4 +1,6 @@
 import { assertProactiveTaskExecution, proactiveTaskExecutionError } from "@/lib/tasks/proactiveExecution";
+import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
+import { mergeSuccessor } from "@/lib/pipelines/mergeSuccessor";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { yieldToRuntime } from "@/lib/cooperative";
@@ -110,7 +112,8 @@ export function isReviewStage(pipeline: Pipeline, stage: PipelineStage): boolean
  * Whether a completed lane's reviews passed: at least one review stage ran,
  * and every one that ran ended passed, was accepted by the operator (skipped,
  * or its unreviewed head accepted with `accept-head`), or spent its budget
- * with the fix of its last findings passed.
+ * with the fix of its last findings passed. Refresh lanes require passed
+ * reviews because their resolution has not been reviewed by the original lane.
  */
 export function mergeEligible(pipeline: Pipeline): boolean {
   if (pipeline.state !== "completed") return false;
@@ -120,7 +123,11 @@ export function mergeEligible(pipeline: Pipeline): boolean {
     const latest = pipeline.runs.find((run) => run.stageId === stage.id)?.attempts.filter((attempt) => !attempt.historical).at(-1);
     if (!latest) continue;
     reviewed += 1;
-    if (latest.state === "passed" || latest.state === "skipped") continue;
+    if (latest.state === "passed") continue;
+    // A refresh changes the integration resolution: a skipped review or a
+    // final fix after an exhausted review budget cannot certify that merge.
+    if (pipeline.refreshOf) return false;
+    if (latest.state === "skipped") continue;
     if ((pipeline.reviewAcceptances ?? []).some((acceptance) => acceptance.stageId === stage.id && acceptance.attempt === latest.n)) continue;
     if (latest.budgetSpent && stage.onFail && failEdgeExhaustion(stage.onFail) !== "park") {
       const fix = pipeline.runs.find((run) => run.stageId === stage.onFail!.to)?.attempts.find((attempt) => !attempt.historical
@@ -424,9 +431,9 @@ export function decideMerge(merge: PipelineMerge, view: PullRequestView, require
 }
 
 function block(merge: PipelineMerge, reason: string, now: number): void {
+  if (merge.state !== "blocked" || merge.reason !== reason || !merge.blockedAt) merge.blockedAt = iso(now);
   merge.state = "blocked";
   merge.reason = reason;
-  merge.blockedAt = iso(now);
   merge.nextReadAt = null;
 }
 
@@ -460,6 +467,20 @@ async function admitUpdateHead(merge: PipelineMerge, head: string, ports: AutoMe
   merge.chain = [...merge.chain, head];
   outstanding.head = head;
   return true;
+}
+
+/** A machine identity is authority to request a review, never to merge.
+ * Only a two-parent refresh directly on the reviewed tip is a candidate. */
+async function machineRefreshParent(merge: PipelineMerge, head: string, ports: AutoMergePorts): Promise<string | null> {
+  const raw = await ports.run(["api", `repos/${merge.repository}/commits/${head}`, "--jq",
+    "{parents: [.parents[].sha], identity: .commit.committer}"]);
+  const commit = JSON.parse(raw) as { parents?: unknown; identity?: { name?: unknown; email?: unknown } };
+  const identity = controllerCommitIdentityEnv();
+  const parents = Array.isArray(commit.parents) ? commit.parents : [];
+  return parents.length === 2 && parents[0] === merge.chain.at(-1)
+    && typeof parents[1] === "string" && /^[0-9a-f]{40}$/i.test(parents[1])
+    && commit.identity?.name === identity.GIT_COMMITTER_NAME && commit.identity?.email === identity.GIT_COMMITTER_EMAIL
+    ? parents[1] : null;
 }
 
 /** A checkout base may be the PR branch itself on a successor lane. Only
@@ -514,7 +535,10 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true):
     decision = decideMerge(merge, view, required, now);
     const red = view.checks.find(check => check.verdict === "red");
     const failedCheck = decision.kind === "block" && red && decision.reason === checkFailedReason(red.name);
-    const needsRefresh = failedCheck || decision.kind === "refresh" || (decision.kind === "block" && decision.reason === MERGE_REASONS.conflict);
+    const machineParent = decision.kind === "block" && decision.reason === MERGE_REASONS.headChanged
+      && ports.startRefresh && refreshAdmission(read, ports.loadPipelines(), ports.setting(read.project))
+      ? await machineRefreshParent(merge, view.headRefOid, ports) : null;
+    const needsRefresh = machineParent !== null || failedCheck || decision.kind === "refresh" || (decision.kind === "block" && decision.reason === MERGE_REASONS.conflict);
     const refreshRefusal = decision.kind === "refresh"
       ? "Delegatus could not start the refresh: the PR is behind its base and has no eligible delivery refresh"
       : decision.kind === "block" ? decision.reason : MERGE_REASONS.conflict;
@@ -523,6 +547,13 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true):
       const baseBranch = await refreshBaseBranch(read, view.baseRefName, ports);
       const base = (await ports.run(["api", `repos/${merge.repository}/branches/${encodeURIComponent(baseBranch)}`, "--jq", ".commit.sha"])).trim();
       if (!/^[0-9a-f]{40}$/i.test(base)) throw new Error("gh returned no base tip");
+      if (machineParent !== null && machineParent !== base) {
+        await commit(ports, read, (live) => block(live, MERGE_REASONS.headChanged, now));
+        return;
+      }
+      // An already published merge must be reviewed against its first parent.
+      // Keeping that boundary also makes a replay review the same resolution.
+      const refreshHead = machineParent !== null ? merge.chain.at(-1)! : view.headRefOid;
       // Compare immutable SHAs: soft protection need not report BEHIND.
       const mergeBase = failedCheck
         ? (await ports.run(["api", `repos/${merge.repository}/compare/${base}...${view.headRefOid}`, "--jq", ".merge_base_commit.sha"])).trim()
@@ -542,15 +573,15 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true):
         const reserved = await commit(ports, read, (live, current) => {
           const pipelines = ports.loadPipelines();
           if (!refreshAdmission(current, pipelines, ports.setting(current.project))) { block(live, refreshRefusal, now); return; }
-          if (refreshWasRequested(current, pipelines, base, view!.headRefOid)
-            || ports.loadRefreshByKey?.(refreshTupleKey(current, base, view!.headRefOid))) {
+          if (refreshWasRequested(current, pipelines, base, refreshHead)
+            || ports.loadRefreshByKey?.(refreshTupleKey(current, base, refreshHead))) {
             block(live, failedCheck ? refreshRefusal : MERGE_REASONS.refreshSameBase, now);
             return;
           }
           live.state = "refreshing";
           live.reason = null;
           live.nextReadAt = null;
-          live.refresh = refreshReservation(read, base, view!.headRefOid, now, baseBranch);
+          live.refresh = refreshReservation(read, base, refreshHead, now, baseBranch);
           live.readFailures = 0;
         });
         if (reserved) {
@@ -809,6 +840,18 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
       completed: pipeline.state === "completed", hidden: Boolean(pipeline.hiddenAt),
     }), 1);
     if (!completed) continue;
+    const successor = mergeSuccessor(pipeline, pipelines);
+    if (successor) {
+      if (pipeline.merge && pipeline.merge.state !== "merged"
+        && pipeline.merge.reason !== `Merge superseded by delivery owner ${successor.id}`) {
+        await commit(ports, pipeline, live => {
+          live.state = "cancelled";
+          live.reason = `Merge superseded by delivery owner ${successor.id}`;
+          live.nextReadAt = null;
+        });
+      }
+      continue;
+    }
     if (hidden) {
       if (!pipeline.merge) notAdmitted(ports, pipeline.id, "lane is hidden");
       else laneStatus(ports, pipeline.id, mergeStatus(pipeline.merge, true));
