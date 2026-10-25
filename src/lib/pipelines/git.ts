@@ -209,14 +209,8 @@ export async function provisionPipelineWorktree(pipeline: Pipeline, exec: ExecPo
   if (base.code !== 0 || !base.stdout.trim()) return failure("resolving the pipeline base ref", base);
   if (base.stdout.trim() !== pipeline.baseRef) return { ok: false, error: "the pipeline worktree does not match its persisted base" };
   recordWorktreeProvenance(pipeline.worktreeDir, { creator: "pipeline", id: pipeline.id });
-  if (fs.existsSync(path.join(pipeline.repoDir, "package.json"))) {
-    const ignored = await exec("git", ["check-ignore", "--quiet", "node_modules/"], pipeline.worktreeDir);
-    if (ignored.code !== 0 && ignored.code !== 1) return failure("checking ignored worktree dependencies", ignored);
-    if (ignored.code === 0) {
-      try { await prepareWorktreeDependencies(pipeline); }
-      catch { return { ok: false, error: "preparing isolated worktree dependencies failed; source dependencies preserved" }; }
-    }
-  }
+  try { await prepareStageToolchain(pipeline, exec); }
+  catch { return { ok: false, error: "preparing isolated worktree dependencies failed; source dependencies preserved" }; }
   return { ok: true, sha: pipeline.baseRef, baseBranch: pipeline.baseBranch };
 }
 
@@ -229,9 +223,9 @@ function worktreePathMatches(registeredPath: string | undefined, lanePath: strin
 }
 
 /** Provisioning uses the same bounded executor with a cancellation signal. */
-export type ProvisionExecPort = (command: string, args: string[], cwd: string, signal?: AbortSignal) => Promise<ExecResult>;
-export const realProvisionExec: ProvisionExecPort = async (command, args, cwd, signal) =>
-  await realExec(command, args, cwd, undefined, { signal });
+export type ProvisionExecPort = (command: string, args: string[], cwd: string, signal?: AbortSignal, options?: { env?: Partial<NodeJS.ProcessEnv>; timeoutMs?: number }) => Promise<ExecResult>;
+export const realProvisionExec: ProvisionExecPort = async (command, args, cwd, signal, options) =>
+  await realExec(command, args, cwd, options?.env, { signal, timeoutMs: options?.timeoutMs });
 
 export async function resolvePipelineBaseAsync(
   repoDir: string,
@@ -446,13 +440,14 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
   // The pipeline's own record names this path too, so a failed write keeps it sweepable.
   recordWorktreeProvenance(pipeline.worktreeDir, { creator: "pipeline", id: pipeline.id });
   try {
-    if (fs.existsSync(path.join(pipeline.repoDir, "package.json"))) {
-      const ignored = await exec("git", ["check-ignore", "--quiet", "node_modules/"], pipeline.worktreeDir, signal);
-      if (ignored.code !== 0 && ignored.code !== 1) return failure("checking ignored worktree dependencies", ignored);
-      if (ignored.code === 0) await prepareWorktreeDependencies(pipeline, { signal });
-    }
+    await prepareStageToolchain(pipeline,
+      (command, args, cwd, env, options) => exec(command, args, cwd, signal, { env, timeoutMs: options?.timeoutMs }), signal);
   }
-  catch { return { ok: false, error: "preparing isolated worktree dependencies failed; source dependencies preserved" }; }
+  catch {
+    if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
+    return { ok: false, error: "preparing isolated worktree dependencies failed; source dependencies preserved" };
+  }
+  if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
   return { ok: true, sha: base.stdout.trim(), baseBranch: pipeline.baseBranch };
 }
 
@@ -760,23 +755,31 @@ async function recoverStageCommit(
   return { ok: true, sha: head };
 }
 
-/** Settlement runs repository hooks against an isolated snapshot of the source
-    toolchain. Inputs may differ because the source changed after provisioning;
-    clone or copy the source installation in that case, and preserve any local
-    install or unrelated link, including dangling links. */
-async function prepareStageToolchain(pipeline: Pipeline, exec: ExecPort): Promise<(() => void) | undefined> {
+/** Provisioning and settlement prepare hooks from matching dependency inputs.
+    Incompatible or unavailable installations require a private frozen install.
+    Existing local installations and unrelated links remain their owner's. */
+async function prepareStageToolchain(pipeline: Pipeline, exec: ExecPort, signal?: AbortSignal): Promise<void> {
   if (path.resolve(pipeline.repoDir) === path.resolve(pipeline.worktreeDir)) return;
+  isolateWorktreeDependencies(pipeline);
   const local = path.join(pipeline.worktreeDir, "node_modules");
   try { fs.lstatSync(local); return; }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-  const parent = path.join(pipeline.repoDir, "node_modules");
-  if (!fs.existsSync(parent) || !fs.statSync(parent).isDirectory()) return;
-  // A repository that tracks dependencies must never gain a staged symlink.
+  // A non-package repository needs no preparation. If the source has tools,
+  // an absent lane manifest must still refuse sharing and try a private install.
+  if (!fs.existsSync(path.join(pipeline.worktreeDir, "package.json"))
+    && !fs.existsSync(path.join(pipeline.repoDir, "node_modules"))) return;
+  // Repositories tracking dependencies must not acquire an ignored install.
   const ignored = await exec("git", ["check-ignore", "--quiet", "node_modules/"], pipeline.worktreeDir);
   if (ignored.code === 1) return;
-  if (ignored.code !== 0) throw new Error(`checking ignored settlement dependencies: ${(ignored.stderr || ignored.stdout).trim()}`);
-  const prepared = await prepareWorktreeDependencies(pipeline, { allowMismatchedInputs: true });
-  if (prepared === "private-install") throw new Error("could not prepare an isolated repository hook toolchain");
+  if (ignored.code !== 0) throw new Error("checking ignored repository hook dependencies failed");
+  signal?.throwIfAborted();
+  const prepared = await prepareWorktreeDependencies(pipeline, { signal });
+  if (prepared !== "private-install") return;
+  signal?.throwIfAborted();
+  const installed = await exec("bun", ["install", "--frozen-lockfile", "--ignore-scripts"], pipeline.worktreeDir,
+    pipelinePublicationHookEnv(), { signal, timeoutMs: 180_000 });
+  signal?.throwIfAborted();
+  if (installed.code !== 0) throw new Error("private repository hook dependency installation failed");
 }
 
 /** Git owns its short-lived index lock and hook protocol. Verify the actual
@@ -922,17 +925,13 @@ export async function commitPipelineStage(
   if (head.stdout.trim() !== sha || recheckedTree.stdout.trim() !== custodyTree) {
     return { ok: false, deferred: true, error: "stage index custody changed during validation; retrying with fresh evidence" };
   }
-  let releaseTools: (() => void) | undefined;
-  try { releaseTools = await prepareStageToolchain(pipeline, exec); }
+  try { await prepareStageToolchain(pipeline, exec); }
   catch (error) {
     return { ok: false, error: `committing the passed stage: preparing repository hook toolchain: ${error instanceof Error ? error.message : "unknown failure"}` };
   }
-  let commit: PipelineGitResult;
-  try {
-    commit = await commitStageTree(pipeline, sha, custodyTree, [`pipeline(${pipeline.id}): complete ${stageId}`,
+  const commit = await commitStageTree(pipeline, sha, custodyTree, [`pipeline(${pipeline.id}): complete ${stageId}`,
       ...(receipt ? [`Delegatus-Stage-Commit: ${receipt.id}`] : [])], exec, allowCommit ? undefined : changedOutputPaths,
       () => control?.beforeCommit(sha));
-  } finally { releaseTools?.(); }
   if (!commit.ok) {
     if (commit.deferred) return commit;
     return { ...commit,

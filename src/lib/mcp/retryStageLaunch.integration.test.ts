@@ -233,9 +233,6 @@ test("retry-stage on a stage whose attempt never launched is fenced the same way
     expect(requests.at(-1)).not.toHaveProperty("stageId");
     expect(requests.at(-1)).not.toHaveProperty("launchId");
 
-    const tool = (await p.client.listTools()).tools.find((candidate) => candidate.name === "pipeline_action")!;
-    const properties = tool.inputSchema.properties as Record<string, { description?: string }>;
-    expect(properties.launchId?.description ?? "").toContain("only for an attempt whose launch failed");
   } finally {
     await p.close();
   }

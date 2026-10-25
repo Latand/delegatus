@@ -1389,6 +1389,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   private modelCatalog: unknown = null;
   private authRecovery: "unknown" | "started" | "completed-unverified" = "unknown";
   private account: HostState["account"] = null;
+  private readonly tierAccountHome?: string;
   private engineStatus: "active" | "idle" | "unhosted" | "dead" = "idle";
   private activeFlags: string[] = [];
   /** Image capability learned from `model/list`. An RPC fault leaves the
@@ -1422,6 +1423,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   private resolveReaped!: () => void;
 
   private constructor(child: CodexTransport, identity: CodexThreadIdentity, options: CodexAppServerHostOptions) {
+    this.tierAccountHome = options.codexHome;
     this.child = child;
     this.reconnecting = !!options.socketOwner;
     this.callbackGeneration = child instanceof CodexSocketTransport
@@ -1619,7 +1621,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
           }
         } catch { /* A missing receipt remains unknown, never a capability grant. */ }
       }
-      if (options.serviceTier) assertCatalogOffersTier(provisional.modelCatalog, options.model, options.serviceTier);
+      if (options.serviceTier) assertCatalogOffersTier(provisional.modelCatalog, options.model, options.serviceTier, provisional.tierAccountHome);
       const configRead = await provisional.rpc("config/read", { cwd: options.cwd, includeLayers: false }) as { config?: { shell_environment_policy?: unknown; developer_instructions?: unknown } };
       const config = headlessCodexThreadConfig(
         configRead,
@@ -2528,7 +2530,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
       throw new Error("Codex app-server host is unavailable");
     }
-    if (request.serviceTier !== null) assertCatalogOffersTier(this.modelCatalog, this.currentImageModel(), request.serviceTier);
+    if (request.serviceTier !== null) assertCatalogOffersTier(this.modelCatalog, this.currentImageModel(), request.serviceTier, this.tierAccountHome);
     /* A boundary interrupt already sent owns its terminal evidence and its
        continuation. Let the old operation settle before another tier can
        replace the armed record. */

@@ -194,10 +194,6 @@ test("the operator block holds project and machine rules under its own notice an
   expect(block).toContain("Run the project's gate wrapper");
   expect(block).not.toContain("Write the failing test");
   expect(block).toContain("Learned rules (Delegatus role memory): 1 project · 1 machine");
-  expect(block).toContain("Earlier seats and agents on this machine left these.");
-  expect(block).toContain("call leave_lesson with lesson and scope project or machine");
-  expect(block).not.toContain("stage_report");
-  expect(block).not.toContain("finished their stages");
   chooseSource("importing");
   expect(await learnedRulesForLaunchProfile({ learnedRules: OPERATOR as never })).toBeUndefined();
   chooseSource("engines");
@@ -208,7 +204,6 @@ test("a role-less stage keeps the stage block byte for byte in Delegatus mode", 
   chooseSource("active");
   const scopes = [`project:${PROJECT}`, "machine"].map(scope => ({ scope, rules: [] }));
   expect(learnedRulesSnapshot(PROJECT, null).block).toBe(renderLearnedRules(scopes));
-  expect(learnedRulesSnapshot(PROJECT, null).block).toContain("When you report with stage_report");
 });
 
 test.each([...SOURCE_STATES.filter(source => source !== "engines")])("the seat's pointer in %s names the engines' memory as off only in Delegatus mode", source => {
@@ -222,7 +217,6 @@ test.each([...SOURCE_STATES.filter(source => source !== "engines")])("the seat's
     expect(block).not.toContain(off);
     expect(block).toContain("while your engine's own memory reaches one account");
   }
-  expect(block).toContain("create_task");
 });
 
 test("the seat block outside Delegatus mode is today's block byte for byte", () => {

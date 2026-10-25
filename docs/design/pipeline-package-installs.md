@@ -26,10 +26,14 @@ made. The package manager uses its usual shared download cache. This avoids
 letting an installer follow a link into the source repository. Every stage
 launch releases a source-owned dependency link, including resumed read-only
 stages, while preserving private installations and unrelated links. Publication
-releases a source-owned link before its frozen Bun install. Settlement prepares an isolated clone or copy
-for repository hooks even when the source and lane inputs differ, then leaves
-that private tree in the lane; hooks therefore keep running without writing to
-the source installation.
+releases a source-owned link before its frozen Bun install. Provisioning and
+settlement prepare an isolated clone or copy only for matching inputs. Otherwise
+they run `bun install --frozen-lockfile --ignore-scripts` in the worktree before
+hooks can run. The install has a three-minute execution limit; cancellation or
+failure refuses provisioning or settlement. When the source has installed tools
+but the lane lacks a manifest, its private install must succeed before provisioning
+can succeed. A repository with neither a manifest nor source tools needs no
+dependency preparation. Private tools remain in the lane.
 
 `worktreeDependencies.test.ts` exercises the platform choices, clone flags,
 private writes, internal links, failure cleanup and access transitions. The

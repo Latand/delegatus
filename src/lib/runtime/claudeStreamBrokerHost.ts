@@ -52,7 +52,7 @@ import {
 } from "./eventStore";
 import { withAgentConfigSandbox } from "./agentConfigSandbox";
 import { assertViewerMcpTools } from "./viewerMcpLaunch";
-import { pendingPermissionFrom, pendingToolUseFrom, type PendingPermissionRequest } from "./permissionRequests";
+import { pendingPermissionFrom, pendingQuestionFrom, pendingToolUseFrom, type PendingPermissionRequest, type PendingQuestionRequest } from "./permissionRequests";
 import { NATIVE_MULTI_AGENT_DENY_FLAG } from "./hostActivityFlags";
 import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, runtimeImageStore } from "./runtimeImageStore";
 import { resolveTelegramLaunchGrant, TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE, type TelegramLaunchGrant } from "./telegramConnectorEnv";
@@ -1364,6 +1364,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       activeTurnRef: this.activeTurnId,
       pendingAttention: [...this.attentions.keys()],
       pendingPermissions: this.pendingPermissions(),
+      pendingQuestions: this.pendingQuestions(),
       ...this.pendingToolUses(),
       providerRetry: this.activeTurnId ? this.providerRetry : null,
       ...memoryField(this.memoryCell),
@@ -1411,6 +1412,15 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     const requests: PendingPermissionRequest[] = [];
     for (const [id, attention] of this.attentions) {
       const request = pendingPermissionFrom(id, attention, this.attentionSince.get(id) ?? new Date().toISOString());
+      if (request) requests.push(request);
+    }
+    return requests;
+  }
+
+  private pendingQuestions(): PendingQuestionRequest[] {
+    const requests: PendingQuestionRequest[] = [];
+    for (const [id, attention] of this.attentions) {
+      const request = pendingQuestionFrom(id, attention, this.attentionSince.get(id) ?? new Date().toISOString());
       if (request) requests.push(request);
     }
     return requests;
