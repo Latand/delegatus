@@ -51,7 +51,10 @@ scope and the agent memory policy, including project, role and bound stage
 memory caps. It runs in the new pipeline checkout, with
 private HOME, configuration, state and temporary directories. It receives no
 account credentials. System tools are read-only; only the checkout and private
-scratch are writable. Restricted stages also have isolated networking. This
+scratch are writable. A new checkout borrows the parent checkout's installed
+`node_modules` through a link; setup runs without that link, and the link
+returns only when setup installed no `node_modules` of its own. Restricted
+stages also have isolated networking. This
 initial runner requires Linux, Bubblewrap namespaces and Python 3; missing
 isolation refuses execution and parks the stage. There is no host fallback.
 

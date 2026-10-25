@@ -2,6 +2,7 @@ import { projectSetupRecipe, reviewSetupRecipe } from "@/lib/projects/setupRecip
 import path from "node:path";
 import { redactBounded } from "@/lib/monitor/redact";
 import { executeSetupRecipe, type SetupExecution } from "./setupExecution";
+import { withdrawStageToolchainForSetup } from "./git";
 import { PIPELINE_MEMORY_DEFAULT_ROLE } from "@/lib/runtime/agentMemorySettings";
 import type { Pipeline, PipelineStage, PipelineStageAttempt } from "./types";
 
@@ -30,7 +31,9 @@ export async function preparePipelineSetup(pipeline: Pipeline, stage: PipelineSt
   attempt.setup = { command: approved.command, cwd: path.resolve(pipeline.worktreeDir, approved.cwd), hash: approved.hash,
     state: "running", startedAt: now(), completedAt: null, code: null, stdout: "", stderr: "" };
   await persist();
+  let restoreToolchain = () => {};
   try {
+    restoreToolchain = withdrawStageToolchainForSetup(pipeline);
     const reviewed = await reviewSetupRecipe(pipeline.worktreeDir, approved);
     if (reviewed.hash !== approved.hash) throw new Error("project setup content changed; the operator must review and approve it again");
     const authorize = () => {
@@ -57,10 +60,12 @@ export async function preparePipelineSetup(pipeline: Pipeline, stage: PipelineSt
     attempt.setup.stderr = redactBounded(result.stderr, 16_000);
     if (result.code !== 0) throw new Error(`project setup failed (exit ${result.code ?? "unavailable"}); inspect setup output and retry the stage`);
     if (signal?.aborted) throw new Error("project setup cancelled; inspect output before retrying");
+    restoreToolchain();
     attempt.setup.state = "passed";
     attempt.setup.completedAt = now();
     await persist();
   } catch (error) {
+    try { restoreToolchain(); } catch { /* The failure below is the cause the stage reports. */ }
     attempt.setup.state = "failed";
     attempt.setup.completedAt = now();
     attempt.setup.stderr ||= redactBounded(error instanceof Error ? error.message : String(error), 2000);

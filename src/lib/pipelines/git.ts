@@ -770,6 +770,26 @@ function stageToolchainRelease(pipeline: Pipeline): (() => void) | undefined {
     and read-only turns, then removes the borrowed link after its commit so a
     later install cannot write into the parent checkout.
     Preserve any local install or unrelated link, including dangling links. */
+/** Project setup runs without the borrowed parent tools. Its sandbox mounts
+    only the checkout, so the link would dangle there and an install would fail
+    on it. The returned restore puts the same link back only when setup left no
+    node_modules of its own. */
+export function withdrawStageToolchainForSetup(pipeline: Pipeline): () => void {
+  if (typeof pipeline.repoDir !== "string") return () => {};
+  const release = stageToolchainRelease(pipeline);
+  if (!release) return () => {};
+  release();
+  const local = path.join(pipeline.worktreeDir, "node_modules");
+  const target = path.resolve(pipeline.repoDir, "node_modules");
+  return () => {
+    try { fs.lstatSync(local); return; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    if (!fs.existsSync(target)) return;
+    try { fs.symlinkSync(target, local, "dir"); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+  };
+}
+
 async function prepareStageToolchain(pipeline: Pipeline, exec: ExecPort): Promise<(() => void) | undefined> {
   if (path.resolve(pipeline.repoDir) === path.resolve(pipeline.worktreeDir)) return;
   const local = path.join(pipeline.worktreeDir, "node_modules");

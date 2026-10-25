@@ -58,6 +58,49 @@ test("a durable start precedes execution; success runs once and retains cwd, out
   expect(calls).toBe(1);
 });
 
+test("setup runs without the borrowed parent tools, and the link returns only when setup installed none", async () => {
+  const parent = path.join(root, "parent"); const tools = path.join(parent, "node_modules");
+  const local = path.join(root, "node_modules");
+  fs.mkdirSync(tools, { recursive: true });
+  // `git check-ignore` passed when provisioning made this exact link.
+  const borrow = () => fs.symlinkSync(tools, local, "dir");
+  try {
+    await approve();
+    for (const installs of [false, true]) {
+      borrow();
+      const current = attempt();
+      const borrowed = { ...lane, repoDir: parent, runs: [{ stageId: "build", attempts: [current] }] } as unknown as Pipeline;
+      await preparePipelineSetup(borrowed, stage, current, now, () => {}, async () => {
+        // Inside the sandbox the parent is unmounted: a link would dangle and fail an install.
+        expect(fs.lstatSync(local, { throwIfNoEntry: false })).toBeUndefined();
+        if (installs) fs.mkdirSync(local);
+        return { code: 0, stdout: "ready", stderr: "" };
+      });
+      expect(current.setup?.state).toBe("passed");
+      expect(fs.lstatSync(local).isSymbolicLink()).toBe(!installs);
+      expect(fs.existsSync(tools)).toBe(true);
+      fs.rmSync(local, { recursive: true, force: true });
+    }
+    // A failed setup restores the link too, and an unrelated link is never touched.
+    borrow();
+    const failed = attempt();
+    await expect(preparePipelineSetup({ ...lane, repoDir: parent, runs: [{ stageId: "build", attempts: [failed] }] } as unknown as Pipeline,
+      stage, failed, now, () => {}, async () => ({ code: 3, stdout: "", stderr: "broken" }))).rejects.toThrow("exit 3");
+    expect(fs.readlinkSync(local)).toBe(tools);
+    fs.rmSync(local);
+    fs.symlinkSync(path.join(root, "elsewhere"), local);
+    const foreign = attempt();
+    await preparePipelineSetup({ ...lane, repoDir: parent, runs: [{ stageId: "build", attempts: [foreign] }] } as unknown as Pipeline,
+      stage, foreign, now, () => {}, async () => {
+        expect(fs.readlinkSync(local)).toBe(path.join(root, "elsewhere"));
+        return { code: 0, stdout: "", stderr: "" };
+      });
+  } finally {
+    fs.rmSync(local, { recursive: true, force: true });
+    fs.rmSync(parent, { recursive: true, force: true });
+  }
+});
+
 test("changed script, command, missing script and unusable settings refuse before execution", async () => {
   await approve();
   const approved = (await projectSetupRecipe(lane.project))!;
