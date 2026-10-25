@@ -92,8 +92,9 @@ test("state.sqlite installs, maintains its pipeline references and projects hist
     { row_key: "pipeline_a", stageId: "build", n: 1 }, { row_key: "pipeline_a", stageId: "build", n: 2 },
     { row_key: "pipeline_b", stageId: "build", n: 1 },
   ]);
+  // Attempt 2 supersedes attempt 1, which is released (-1) and retains no custody.
   expect(owners()).toEqual([
-    { row_key: "pipeline_a", identity: "conversation_pipeline_a_1", live: 0 }, { row_key: "pipeline_a", identity: "conversation_pipeline_a_2", live: 1 },
+    { row_key: "pipeline_a", identity: "conversation_pipeline_a_1", live: -1 }, { row_key: "pipeline_a", identity: "conversation_pipeline_a_2", live: 1 },
     { row_key: "pipeline_b", identity: "conversation_pipeline_b_1", live: 1 },
   ]);
   store.boundedPatch(1, tx => tx.delete("pipeline_b"));
