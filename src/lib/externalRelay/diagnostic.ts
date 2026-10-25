@@ -5,6 +5,8 @@ export type OwnerTurnDiagnostic = {
   source: "exception" | "launch" | "observation" | "admission-deadline" | "hard-cap";
   message: string;
   status?: number;
+  exitCode?: number | null;
+  signal?: string | null;
   deadlineAt?: string;
   cutoffAt?: string;
   deadlineSource?: "deadline_at" | "receipt";

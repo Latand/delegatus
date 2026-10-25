@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { requestSession, teamMode } from "@/lib/team/sessions";
@@ -7,7 +8,7 @@ import { taskSpendResponse } from "@/lib/activity/taskLimitSpend";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(req: NextRequest): Promise<NextResponse> {
+async function workspaceGET(req: NextRequest): Promise<NextResponse> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
   return activityOperation("activity.task-spend.read", () => {
@@ -22,3 +23,5 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     }
   });
 }
+
+export const GET = workspaceRoute("/api/task-spend", workspaceGET);

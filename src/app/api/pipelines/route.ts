@@ -1,3 +1,4 @@
+import { requestWorkspaceScope, filterWorkspaceRows, workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 
@@ -49,7 +50,7 @@ const LIST_PARAMETERS = new Set(["project", "state", "includeClosed", "limit"]);
  * than nothing. A parameter this route does not read is refused, never
  * silently dropped again.
  */
-export async function GET(req: NextRequest): Promise<NextResponse<PipelinesResponse | ApiError>> {
+async function workspaceGET(req: NextRequest): Promise<NextResponse<PipelinesResponse | ApiError>> {
   return withViewerOperation("pipelines.get", () => getPipelineList(req));
 }
 
@@ -92,7 +93,7 @@ async function getPipelineList(req: NextRequest): Promise<NextResponse<Pipelines
     }, { status: 400 });
   }
   try {
-    if (params.size === 0) return pipelineListResponse(loadPipelinesForList());
+    if (params.size === 0) return pipelineListResponse(filterWorkspaceRows(requestWorkspaceScope(req), loadPipelinesForList()));
     const includeClosed = params.get("includeClosed") === "true" || params.get("includeClosed") === "1";
     const limit = params.has("limit") ? Number(params.get("limit")) : null;
     const pipelines = await loadPipelineListRecords({
@@ -101,7 +102,7 @@ async function getPipelineList(req: NextRequest): Promise<NextResponse<Pipelines
       includeClosed,
       limit: Number.isFinite(limit) ? limit : null,
     });
-    return await pipelineListResponse(pipelines);
+    return await pipelineListResponse(filterWorkspaceRows(requestWorkspaceScope(req), pipelines));
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "pipeline registry unreadable" }, { status: 500 });
   }
@@ -156,7 +157,7 @@ function pipelineOrigin(req: NextRequest, body: CreatePipelineRequest): NextResp
   return { kind: "agent", conversationId: null };
 }
 
-export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; pipeline: Pipeline } | PipelineApiError>> {
+async function workspacePOST(req: NextRequest): Promise<NextResponse<{ ok: true; pipeline: Pipeline } | PipelineApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
   let body: CreatePipelineRequest;
@@ -212,3 +213,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; p
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }
 }
+
+export const GET = workspaceRoute("/api/pipelines", workspaceGET, true);
+
+export const POST = workspaceRoute("/api/pipelines", workspacePOST);

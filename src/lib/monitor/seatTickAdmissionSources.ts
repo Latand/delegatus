@@ -1,3 +1,4 @@
+import { seatTickWorkSignal, seatTickWorkRemainingMs } from "./seatTickWork";
 import type { SeatTickSources } from "./seatTickSources";
 import { agentRegistry } from "@/lib/agent/registry";
 import { agentLivenessSnapshot, productionLivenessSources } from "@/lib/lifecycle/liveness";
@@ -16,6 +17,7 @@ export function defaultSeatTickAdmissionSources(): SeatTickAdmissionSources {
     registry: () => agentRegistry(),
     liveness: async request => {
       const snapshot = await agentLivenessSnapshot({
+        signal: seatTickWorkSignal(), answerBudgetMs: seatTickWorkRemainingMs(),
         ...(request.reconcileStructuredIdle ? { reconcileStructuredIdle: true } : {}),
         ...(request.conversationId ? { conversationId: request.conversationId } : {}),
         ...(request.project ? { project: request.project, liveOnly: true } : {}),
