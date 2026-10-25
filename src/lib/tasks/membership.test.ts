@@ -63,6 +63,7 @@ test("a global launch mints one placeholder keyed by its attempt; the replay con
   expect(first.created.length).toBe(1);
   const created = first.tasks.find((candidate) => candidate.id === first.taskIds[0])!;
   expect(created.text).toBe("Restore search results");
+  expect(created.dueAt).toBeUndefined(); expect(created.dueTz).toBeUndefined();
   expect(created.origin).toEqual({ kind: "launch", key: "attempt-1", refinement: "pending" });
   expect(created.assignments).toEqual([{ clientAttemptId: "attempt-1", path: null, panePid: null, state: "linked", error: null, at: now, engine: "claude" }]);
   expect(created.status).toBe("assigned");

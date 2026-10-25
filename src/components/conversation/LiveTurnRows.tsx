@@ -289,8 +289,8 @@ function LiveMcpRow({
   const { t } = useLocale();
   const availability = useConversationAvailability();
   const description = useMemo(
-    () => describeMcpCall(identity.toolName, tool.args),
-    [identity.toolName, tool.args],
+    () => describeMcpCall(identity.toolName, tool.args, undefined, t),
+    [identity.toolName, tool.args, t],
   );
   const state = liveCallState(tool.status);
   const tone = liveStateTone(state);
@@ -316,7 +316,7 @@ function LiveMcpRow({
         <span
           data-live-mcp-title
           className="min-w-[6rem] flex-1 basis-0 truncate font-semibold text-secondary"
-          title={description.title}
+          title={description.tooltip ?? description.title}
         >
           {description.title}
         </span>

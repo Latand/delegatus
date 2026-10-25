@@ -1131,7 +1131,7 @@ describe("agent registry", () => {
       deliverable: false,
     });
 
-    expect(store.repairCompletedStructuredSpawnMarkers()).toBe(1);
+    expect(store.repairCompletedStructuredSpawnMarkers(fixture.entry.key)).toBe(1);
     expect(store.readOnlySnapshot().entries[`codex:${fixture.entry.key.sessionId}`]?.pendingAction).toBeNull();
     expect(await conversationDeliverabilityFromRecord(store.snapshot(), { conversationId: fixture.conversationId })).toMatchObject({
       condition: "deliverable",

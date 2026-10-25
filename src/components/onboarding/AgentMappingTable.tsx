@@ -7,7 +7,7 @@ import { replaceRoleCatalog, type RoleCatalogItem } from "@/components/DraftAgen
 import { EngineMark } from "@/components/EngineMark";
 import type { AccountOption } from "@/hooks/useEngineAccounts";
 import { clampEffortToScale, effortScale } from "@/lib/agent/efforts";
-import { ENGINE_MODELS } from "@/lib/agent/models";
+import { ENGINE_MODELS, listedModels } from "@/lib/agent/models";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import { costClass, effortRank, tightestHeadroom, type CostClass } from "@/lib/roles/costHints";
 import { equivalentConfig } from "@/lib/roles/equivalents";
@@ -240,8 +240,8 @@ function runtimeName(config: RoleConfig): string {
 
 /* The server refuses the light models a row may not run (docs/design/model-sizing-tiers.md
    §2, R1), so the select does not offer them. */
-function modelOptions(row: RowKey, engine: RoleEngine) {
-  const models = ENGINE_MODELS[engine];
+function modelOptions(row: RowKey, engine: RoleEngine, current: string) {
+  const models = listedModels(engine, current);
   if (engine !== "claude") return models;
   return models.filter((option) => !mappingRowRefusal(row.roleId, { engine, model: option.id }, row.variant));
 }
@@ -265,7 +265,7 @@ function RowControls({ row, config, shipped, reset, promptCustom, statuses, layo
   const status = statuses[config.engine];
   const scale = effortScale(config.engine, config.model) ?? [];
   const nudge = !same(config, shipped) && costClass(config) === "very-heavy" && effortRank(config.effort) > effortRank("high") && scale.includes("high");
-  const models = modelOptions(row, config.engine);
+  const models = modelOptions(row, config.engine, config.model);
   const modelSelect = (
     <select
       aria-label={t("onboarding.agents.modelAria", { role: label })}

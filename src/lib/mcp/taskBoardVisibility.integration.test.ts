@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 /**
  * Board membership is a published, honoured field of the task surface (#1614).
  *
@@ -74,7 +75,7 @@ test("update_task publishes board membership, and every published value lands in
     expect(board.enum?.slice().sort()).toEqual(["hidden", "shown"]);
     expect(board.description ?? "").toContain("board");
 
-    const created = await call("create_task", { project: "fixture-project", text: "band membership" });
+    const created = await call("create_task", withTaskDue({ project: "fixture-project", text: "band membership" }));
     expect(created.ok).toBe(true);
     /* A task is on the board until something says otherwise. */
     expect(loadTasks().find(task => task.id === created.task.id)!.board).toBeUndefined();
@@ -100,9 +101,9 @@ test("update_task publishes board membership, and every published value lands in
 test("an unsupported board value is refused, never accepted and dropped", async () => {
   const p = await protocol();
   try {
-    const created = (await p.client.callTool({ name: "create_task", arguments: {
+    const created = (await p.client.callTool({ name: "create_task", arguments: withTaskDue({
       clientRequestId: "board-refusal-create", project: "fixture-project", text: "refusal",
-    } })).structuredContent as { task: { id: string } };
+    }) })).structuredContent as { task: { id: string } };
     const before = persistedTaskState(TASKS_FILE);
     for (const value of ["archived", "", null, 1]) {
       const refused = (await p.client.callTool({ name: "update_task", arguments: {
@@ -121,9 +122,9 @@ test("the HTTP task PATCH and update_task write the same board flag", async () =
   const { PATCH } = await import("@/app/api/tasks/[id]/route");
   const p = await protocol();
   try {
-    const created = (await p.client.callTool({ name: "create_task", arguments: {
+    const created = (await p.client.callTool({ name: "create_task", arguments: withTaskDue({
       clientRequestId: "board-parity-create", project: "fixture-project", text: "parity",
-    } })).structuredContent as { task: { id: string } };
+    }) })).structuredContent as { task: { id: string } };
 
     /* «Remove from board» as the dashboard sends it. */
     const response = await PATCH(
@@ -172,18 +173,18 @@ test("create_task publishes board membership, and a full board still takes a hid
     const board = (tools.find(tool => tool.name === "create_task")!.inputSchema.properties as Record<string, { enum?: string[]; description?: string }>).board;
     expect(board?.enum?.slice().sort()).toEqual(["hidden", "shown"]);
 
-    const refused = (await p.client.callTool({ name: "create_task", arguments: {
+    const refused = (await p.client.callTool({ name: "create_task", arguments: withTaskDue({
       clientRequestId: "band-cap-refused", project, text: "one band too many",
-    } })).structuredContent as { ok: boolean; error?: string; details?: { code?: string } };
+    }) })).structuredContent as { ok: boolean; error?: string; details?: { code?: string } };
     expect(refused.ok).toBe(false);
     expect(refused.details?.code).toBe("TASK_BOARD_FULL");
     /* The refusal tells the agent the way through, and it is not deletion. */
     expect(refused.error ?? "").toContain('board: "hidden"');
     expect(loadTasks()).toHaveLength(before);
 
-    const accepted = (await p.client.callTool({ name: "create_task", arguments: {
+    const accepted = (await p.client.callTool({ name: "create_task", arguments: withTaskDue({
       clientRequestId: "band-cap-hidden", project, text: "recorded off the board", board: "hidden",
-    } })).structuredContent as { ok: boolean; task: TaskWithRevision };
+    }) })).structuredContent as { ok: boolean; task: TaskWithRevision };
     expect(accepted.ok).toBe(true);
     expect(accepted.task.board).toBe("hidden");
     const stored = loadTasks().find(task => task.id === accepted.task.id)!;

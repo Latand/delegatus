@@ -104,6 +104,8 @@ export type PipelineFailEdge = { to: string; maxRounds: number; onExhausted?: Pi
 export type PipelineStageInput = {
   id: string;
   kind: PipelineStageKind;
+  /** Omitted stages keep their local runtime. Slice 1 supports read-only Codex reviews. */
+  runtime?: "codex-cloud";
   role?: PipelineRoleRef;
   engine?: FlowEngine;
   model?: string | null;
@@ -253,6 +255,7 @@ export type PipelineBoundedWait = {
 export type PipelineAttemptDefinition = {
   agentMemoryMaxBytes?: number | null;
   boundAt: string;
+  runtime?: "codex-cloud";
   /** `stageDigest` of the stage as it was bound. */
   stageDigest: string;
   "prompt": string;
@@ -403,6 +406,7 @@ export type PipelineAccountHold = { accountId: string; resetsAt: number | null; 
 export type PipelineStageAttempt = {
   memoryCap?: import("@/lib/runtime/agentMemoryConfig").AgentMemoryCap;
   n: number;
+  cloud?: import("./cloudStage").CloudStageAttempt;
   /** Stop custody for pause or account evacuation. A replacement keeps this checkout. */
   suspension?: { reason: "pause" | "account"; detail: string; requestedAt: string; stoppedAt?: string; stopRevision?: number; operatorStoppedAt?: string;
     hold?: PipelineAccountHold };

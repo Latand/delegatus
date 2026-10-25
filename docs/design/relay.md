@@ -3348,3 +3348,61 @@ stop custody remains in the ledger for recovery. Busy holds retain ten seconds
 for explicit completion; per-call, upload and history limits stay unchanged.
 See [relay-request-window.md](relay-request-window.md) for the timer audit,
 journal observations and validation.
+
+### 2026-10-24 owner execution and late delivery
+
+This amendment supersedes the owner execution cutoff in the 2026-10-22
+request-window amendment above. A verified owner-tier turn uses the target's
+`hardCapMinutes`, independently of `request.deadline_at`. Before that service
+deadline it uses normal completion. Afterwards it posts a new text message
+through `src/lib/externalRelay/cloneSend.ts`. Members retain their existing lease
+and deadline behavior. Request-bound service tools can become unavailable when
+the service window closes.
+
+The claim response may carry `owner_delivery: { chat_id, reply_to_message_id,
+message_thread_id }`. Celestia supplies this only for the server-verified owner
+of the pairing. `chat_id` is a nonzero numeric chat id, `reply_to_message_id` is
+the numeric trigger message id, and `message_thread_id` is a topic id or null.
+The install validates and persists this context with the durable owner turn.
+It maps those fields directly to `POST /api/relay/v1/targets/{target_id}/send`,
+using the pairing credential in `Authorization: Bearer …`,
+`Delegatus-Relay-Version: 1` and JSON content type. It never discovers or guesses
+the trigger id from an opaque message reference or the destination from an
+owner identity. Absent or malformed context keeps the late answer durable with
+status `pending-delivery-context`, logs that status and sends nothing. A member
+claim carrying these fields still has no owner execution or delivery authority.
+
+The exact `SendMessage` payload and a valid 8–64-character `client_key` are
+persisted before dispatch and reused on every retry, including after restart.
+Text uses `parse_mode: null` and is split at Unicode code point boundaries
+into at most 4,096 UTF-16 units per message. Each part has its own persisted key
+and receipt; recovery skips acknowledged parts and retries an unresolved part
+with its original payload and key. Literal markup is preserved. `silent` is false. This v1
+route carries text only: when files existed the text includes a note that files
+were omitted. The original answer and staged files remain in durable custody
+while delivery is pending. A validated `SentMessage` receipt acknowledges the
+send; a 404 during rollout or an unavailable service keeps it queued with a
+30-second retry interval. The client never switches to another transport.
+An unresolved send is retried only within Celestia's 24-hour key retention
+window; expiry leaves `retry-expired` for reconciliation. A service
+`send_uncertain` or `idempotency_conflict` leaves `uncertain` for operator
+reconciliation and stops automatic dispatch. Definite unused-key refusals can
+be retried with the same payload; permanent text or format refusals retain
+`refused` custody and stop automatic dispatch. Normal completions persist
+`ownerTurn.completionAttempt` before dispatch. A lost response keeps that
+custody across restart and orphan sweeps, without execution retry or `/send`.
+Only confirmed non-delivery permits switching to the late-send route.
+
+Owner runs durably retain their request and owner context. Startup first stops
+and confirms the interrupted execution, then retries it once with a distinct
+launch attempt id and persisted retry count. The retry delivers through `/send`.
+Older custody rows may reconstruct the request from their retained answer
+record only when its owner text matches the verified request. Without delivery
+context their late answer remains pending; reconstruction supplies no numeric
+chat or message ids. Rows without request evidence retain the previous recovery
+behavior.
+
+Agent failures retain a scrubbed diagnostic in the local answer record and
+journal, including the launch or observation step and exit code/signal when
+available. No specific cause for a short pre-transcript launch failure is
+assumed without a receipt or host error identifying it.

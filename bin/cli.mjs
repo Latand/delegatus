@@ -44,7 +44,7 @@ if (!process.env.LLV_STATE_OWNER) process.env.LLV_STATE_OWNER = "launcher";
 
 const DEFAULT_PORT = 8898;
 const DEFAULT_HOSTNAME = "127.0.0.1";
-const READINESS_TIMEOUT_MS = 15_000;
+const READINESS_TIMEOUT_MS = 90_000;
 const READINESS_INTERVAL_MS = 200;
 // Socket timeout for a single readiness probe. The probe hits /api/files,
 // which scans every log under ~/.claude and ~/.codex; with a few hundred
@@ -57,8 +57,7 @@ const RUNTIME_HOST_READINESS_INTERVAL_MS = 100;
 const RUNTIME_HOST_RESTART_BASE_MS = 500;
 const RUNTIME_HOST_RESTART_MAX_MS = 10_000;
 const RUNTIME_HOST_STABLE_UPTIME_MS = 30_000;
-/* A restart onto a freshly built release starts `next start` cold, which
-   takes 10–30 s on a full checkout (#2007); the first start keeps its budget. */
+/* A freshly built release and a reboot both start `next start` cold. */
 const RESTART_READINESS_TIMEOUT_MS = 90_000;
 
 const cliPath = fileURLToPath(import.meta.url);
@@ -82,6 +81,8 @@ const LANG = detectLang();
 const MESSAGES = {
   en: {
     usage: () => `Usage: delegatus [options]
+
+  delegatus doctor [--json] [--port <n>]  Read-only onboarding diagnostics
 
 Options:
   -p, --port <n>       Port for the local server (default ${DEFAULT_PORT})
@@ -133,6 +134,8 @@ Options:
   },
   uk: {
     usage: () => `Використання: delegatus [опції]
+
+  delegatus doctor [--json] [--port <n>]  Діагностика онбордингу лише для читання
 
 Опції:
   -p, --port <n>       Порт для локального сервера (типово ${DEFAULT_PORT})
@@ -1635,7 +1638,16 @@ async function checkoutLauncher() {
   await main();
 }
 
-try {
+if (process.argv[2] === "doctor") {
+  // Stay outside launcher custody, release selection and startup side effects.
+  try {
+    const { runDoctorCommand } = await import("./doctor-command.mjs");
+    process.exitCode = await runDoctorCommand(process.argv.slice(3), { lang: LANG });
+  } catch {
+    console.error(LANG === "uk" ? "Не вдалося завершити діагностику." : "Diagnostics could not complete.");
+    process.exitCode = 2;
+  }
+} else try {
   const custodyModule = join(cliDir, "launcher-credentials.mjs");
   if (existsSync(custodyModule)) {
     const { restoreLauncherCredentials } = await import("./launcher-credentials.mjs");
