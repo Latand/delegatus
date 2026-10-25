@@ -140,15 +140,17 @@ describe("Cloud check execution choices", () => {
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=cloud-checks`, viewport, theme, lang, "reduce", false);
         const t = (k: Parameters<typeof translate>[1], params?: Record<string, string>) => translate(lang, k, params);
         try {
-          const row = page.locator("[data-pipeline-checks-row]");
           await openChecks(page);
-          await page.waitForSelector('[data-pipeline-checks-row="ready"]');
+          await page.waitForSelector('[data-pipeline-checks-row="ready"]', { state: "attached" });
           await page.waitForSelector('[data-pipeline-checks-choice="stage:cloud"]:focus');
           const face = (await readChecks(page))!;
           for (const problem of outside(face, viewport)) failures.push(`${key} checks: ${problem}`);
           /* The answer moves focus to the stage's checked choice. */
           if (face.focused !== "stage:cloud") failures.push(`${key}: opening focuses «${face.focused}»`);
-          expect(await row.getAttribute("aria-label")).toBe(t("pipelineStrip.checksAria", { value: t("pipelineStrip.checksCloud") }));
+          /* The title stands once; the value shows only as a checked choice, never as a «Checks | Cloud» block. */
+          expect(await page.locator(".popover.acct-pop .acct-now").count()).toBe(0);
+          expect(await page.locator(".popover.acct-pop").innerText()).toMatch(new RegExp(`^${t("pipelineStrip.checks")}\\n`));
+          expect((await page.locator(".popover.acct-pop").innerText()).split(t("pipelineStrip.checks")).length - 1).toBe(1);
           /* The stage's own Cloud wins over the lane's Local, and each inherited choice names its value. */
           expect(face.rows.map((entry) => [entry.role, entry.choice, entry.text, entry.checked])).toEqual([
             ["radio", "stage:inherit", t("pipelineStrip.checksStageInherit", { value: t("pipelineStrip.checksLocal") }), "false"],
@@ -166,8 +168,7 @@ describe("Cloud check execution choices", () => {
           await page.keyboard.press("Escape");
           await page.waitForSelector("[data-pipeline-checks]", { state: "detached" });
           await openChecks(page);
-          await page.waitForSelector('[data-pipeline-checks-row="ready"]');
-          expect(await row.getAttribute("aria-label")).toBe(t("pipelineStrip.checksAria", { value: t("pipelineStrip.checksLocal") }));
+          await page.waitForSelector('[data-pipeline-checks-row="ready"]', { state: "attached" });
           const after = (await readChecks(page))!;
           expect(after.rows.filter((entry) => entry.checked === "true").map((entry) => entry.choice)).toEqual(["stage:inherit", "lane:local", "project:local"]);
           expect(after.rows.find((entry) => entry.choice === "lane:inherit")?.text).toBe(t("pipelineStrip.checksLaneInherit", { value: t("pipelineStrip.checksLocal") }));
@@ -184,20 +185,21 @@ describe("Cloud check execution choices", () => {
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=cloud-checks&checks=${mode}`, viewport, theme, lang, "reduce", false);
         try {
           await openChecks(page);
-          const row = page.locator("[data-pipeline-checks-row]");
           if (mode === "pending") {
-            await page.waitForSelector('[data-pipeline-checks-row="loading"]');
+            await page.waitForSelector('[data-pipeline-checks-row="loading"]', { state: "attached" });
             await page.waitForTimeout(400);
-            expect(await row.innerText()).toBe(translate(lang, "pipelineStrip.checksLoading"));
+            expect(await page.locator('[data-pipeline-checks-state="loading"]').innerText()).toBe(translate(lang, "pipelineStrip.checksLoading"));
             expect(await page.locator("[data-pipeline-checks-choice]").count()).toBe(0);
           } else if (mode === "refused") {
-            await page.waitForSelector('[data-pipeline-checks-row="failed"]');
+            await page.waitForSelector('[data-pipeline-checks-row="failed"]', { state: "attached" });
             expect(await page.locator('[data-pipeline-checks-error="load"]').innerText()).toBe(translate(lang, "pipelineStrip.checksLoadFailed"));
             expect(await inDanger(page, '[data-pipeline-checks-error="load"]')).toBe(true);
             expect(await page.locator("[data-pipeline-checks-retry]").innerText()).toBe(translate(lang, "pipelineStrip.checksRetry"));
+            /* Retry reads as a button: a visible border and fill, not bare text. */
+            expect(await page.locator("[data-pipeline-checks-retry]").evaluate((el) => { const c = getComputedStyle(el); return c.borderTopWidth !== "0px" && c.borderTopColor !== "rgba(0, 0, 0, 0)" && c.backgroundColor !== "rgba(0, 0, 0, 0)"; })).toBe(true);
             expect(await page.locator("[data-pipeline-checks-choice]").count()).toBe(0);
           } else {
-            await page.waitForSelector('[data-pipeline-checks-row="ready"]');
+            await page.waitForSelector('[data-pipeline-checks-row="ready"]', { state: "attached" });
             await page.locator('[data-pipeline-checks-choice="lane:cloud"]').click();
             await page.waitForSelector('[data-pipeline-checks-error="save"]');
             expect(await page.locator('[data-pipeline-checks-error="save"]').innerText()).toBe(translate(lang, "pipelineStrip.checksSaveFailed"));

@@ -35,12 +35,12 @@ export function PipelineChecksPopover({ anchor, onClose, pipeline, stageName }: 
     box.querySelector<HTMLElement>('[data-pipeline-checks-choice][aria-checked="true"], [data-pipeline-checks-retry]')?.focus();
   }, [read.kind]);
   const label = t("pipelineStrip.checks");
-  const value = read.kind === "ready" ? checkValueLabel(t, read.settings.effective) : read.kind === "loading" ? t("pipelineStrip.checksLoading") : null;
   return (
     <KanbanPopover anchor={anchor} label={label} onClose={onClose} className="acct-pop" reflow={`${read.kind} ${checks.saveFailed}`}>
       <div
         ref={body}
         data-pipeline-checks={pipeline.id}
+        data-pipeline-checks-row={read.kind}
         style={{ display: "contents" }}
         onKeyDown={(event) => {
           if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
@@ -52,17 +52,13 @@ export function PipelineChecksPopover({ anchor, onClose, pipeline, stageName }: 
         }}
       >
         <div className="head"><span>{label}</span></div>
-        <div className="acct-now">
-          <div className="kv">
-            <span className="k">{label}</span>
-            {value !== null
-              ? <span className="v" data-pipeline-checks-row={read.kind} aria-label={t("pipelineStrip.checksAria", { value })} aria-busy={read.kind === "loading" || undefined}>{value}</span>
-              : <span className="v error" role="alert" data-pipeline-checks-row="failed" data-pipeline-checks-error="load">{t("pipelineStrip.checksLoadFailed")}</span>}
-            {read.kind === "failed" ? (
-              <button type="button" className="btn quiet" data-pipeline-checks-retry="" onClick={checks.reload}>{t("pipelineStrip.checksRetry")}</button>
-            ) : null}
+        {read.kind === "loading" ? <p className="note" data-pipeline-checks-state="loading" aria-busy="true">{t("pipelineStrip.checksLoading")}</p> : null}
+        {read.kind === "failed" ? (
+          <div className="acct-fail" data-pipeline-checks-state="failed">
+            <p role="alert" className="note error" data-pipeline-checks-error="load">{t("pipelineStrip.checksLoadFailed")}</p>
+            <button type="button" className="btn" data-pipeline-checks-retry="" onClick={checks.reload}>{t("pipelineStrip.checksRetry")}</button>
           </div>
-        </div>
+        ) : null}
         {read.kind === "ready" ? checkChoiceGroups(t, BOARD_CHECK_TERMS, read.settings, stageName).map((group) => (
           <div key={group.scope} data-pipeline-checks-group={group.scope} style={{ display: "contents" }}>
             <div id={`checks-${pipeline.id}-${group.scope}`} className="acct-lbl" title={group.heading}>{group.heading}</div>

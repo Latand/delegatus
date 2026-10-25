@@ -1237,8 +1237,10 @@ test("the lane's Checks row opens the publishing stage's override and the value 
   /* The menu gave way to the choices, read for the stage the lane stands on. */
   expect(host.querySelector(".menu")).toBeNull();
   expect(checksCalls[0]).toEqual({ url: "/api/pipelines/p-search/checks?stageId=verify", method: "GET", body: null });
-  const row = checksPopover()!.querySelector("[data-pipeline-checks-row]")!;
-  expect([row.getAttribute("data-pipeline-checks-row"), row.getAttribute("aria-label")]).toEqual(["ready", "Checks: Cloud"]);
+  expect(checksPopover()!.getAttribute("data-pipeline-checks-row")).toBe("ready");
+  /* The title stands once and the answer only as the checked choice: no «Checks | Cloud» block under it. */
+  expect(checksPopover()!.querySelector(".acct-now")).toBeNull();
+  expect(checksPopover()!.textContent!.match(/Checks/g)).toHaveLength(1);
   expect([...checksPopover()!.querySelectorAll("[data-pipeline-checks-group] > .acct-lbl")].map((heading) => heading.textContent)).toEqual([expect.stringMatching(/^Stage .+/), "This pipeline", "Project default"]);
   expect(choices()).toEqual([
     ["stage:inherit", "Use pipeline choice (Local)", "false"], ["stage:cloud", "Cloud", "true"], ["stage:local", "Local", "false"],
@@ -1252,7 +1254,6 @@ test("the lane's Checks row opens the publishing stage's override and the value 
   await tick();
   expect(checksCalls[1]).toEqual({ url: "/api/pipelines/p-search/checks", method: "POST", body: { scope: "stage", execution: null, stageId: "verify" } });
   expect(checksPopover()!.querySelector('[data-pipeline-checks-choice="stage:inherit"]')?.getAttribute("aria-checked")).toBe("true");
-  expect(checksPopover()!.querySelector("[data-pipeline-checks-row]")?.getAttribute("aria-label")).toBe("Checks: Local");
   /* A checked choice sends nothing. */
   click(checksPopover()!.querySelector('[data-pipeline-checks-choice="stage:inherit"]'));
   await tick();
@@ -1279,14 +1280,14 @@ test("a pending, refused or malformed read shows no choice, Retry reads again, a
   const { host } = mount(searchPipeline());
   await tick();
   await openChecks(host);
-  let row = checksPopover()!.querySelector("[data-pipeline-checks-row]")!;
-  expect([row.getAttribute("data-pipeline-checks-row"), row.textContent, row.getAttribute("aria-busy")]).toEqual(["loading", "Loading…", "true"]);
+  const line = checksPopover()!.querySelector("[data-pipeline-checks-state]")!;
+  expect([checksPopover()!.getAttribute("data-pipeline-checks-row"), line.textContent, line.getAttribute("aria-busy")]).toEqual(["loading", "Loading…", "true"]);
+  expect(checksPopover()!.textContent!.match(/Checks/g)).toHaveLength(1);
   expect(choices()).toEqual([]);
   release(new Response("{}", { status: 500 }));
   await tick();
   await tick();
-  row = checksPopover()!.querySelector("[data-pipeline-checks-row]")!;
-  expect(row.getAttribute("data-pipeline-checks-row")).toBe("failed");
+  expect(checksPopover()!.getAttribute("data-pipeline-checks-row")).toBe("failed");
   expect(checksPopover()!.querySelector('[data-pipeline-checks-error="load"]')?.textContent).toBe("Could not load the check settings");
   expect(choices()).toEqual([]);
   /* Retry is the one control, so it takes focus, and reads again. */
@@ -1297,14 +1298,14 @@ test("a pending, refused or malformed read shows no choice, Retry reads again, a
   await tick();
   await tick();
   expect(checksCalls).toHaveLength(2);
-  expect(checksPopover()!.querySelector("[data-pipeline-checks-row]")?.getAttribute("data-pipeline-checks-row")).toBe("ready");
+  expect(checksPopover()!.getAttribute("data-pipeline-checks-row")).toBe("ready");
   key(document.activeElement, "Escape");
   await tick();
 
   for (const body of [{ project: "cloud", effective: "cloud" }, { project: "toString", override: null, effective: "cloud" }]) {
     checksRoute = () => settings(body);
     await openChecks(host);
-    expect(checksPopover()!.querySelector("[data-pipeline-checks-row]")?.getAttribute("data-pipeline-checks-row")).toBe("failed");
+    expect(checksPopover()!.getAttribute("data-pipeline-checks-row")).toBe("failed");
     expect(choices()).toEqual([]);
     key(document.activeElement, "Escape");
     await tick();
