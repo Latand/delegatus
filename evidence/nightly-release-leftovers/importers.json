@@ -1,0 +1,1713 @@
+{
+  "command": [
+    "bun",
+    "run",
+    "test",
+    "<file>"
+  ],
+  "isolation": "One fresh isolatedEnvironment/checkEnvironment root per file and revision; detached setsid child with closed stdin. Main is a detached Git clone with the same origin.",
+  "comparison": {
+    "base": "62235181a310ad5783cb0fc0342721772efa7b54",
+    "head": "e336511c72efad99ac43e2adc9c8023dddcb0c18",
+    "tree": "517e6d0cdfc7cae11ef1a9093ba2b0d5861c4e5d",
+    "startedAt": "2026-10-23T21:31:12.401Z",
+    "completedAt": "2026-10-23T23:23:34.325Z"
+  },
+  "expectedObservations": 204,
+  "actualObservations": 204,
+  "files": [
+    {
+      "file": "src/lib/pipelines/engine.recovery.part2.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 81,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 81,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/stageAttemptPush.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 168,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 153,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/git/agentPublicationIdentity.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 7,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 7,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/publicationRecovery.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 113,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 113,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/app/api/pipelines/[id]/route.lifecycle.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 3,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 3,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/app/api/pipelines/route.admission.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 6,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 6,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/app/api/pipelines/route.busy.test.ts",
+      "head": {
+        "exit": 1,
+        "pass": 1,
+        "fail": 1,
+        "skip": 0
+      },
+      "main": {
+        "exit": 1,
+        "pass": 1,
+        "fail": 1,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/components/BranchPane.spawn.dom.test.tsx",
+      "head": {
+        "exit": 1,
+        "pass": 0,
+        "fail": 1,
+        "skip": 0
+      },
+      "main": {
+        "exit": 1,
+        "pass": 0,
+        "fail": 1,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/attention/landing.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 8,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 8,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/delivery.test.ts",
+      "head": {
+        "exit": 1,
+        "pass": 55,
+        "fail": 12,
+        "skip": 0
+      },
+      "main": {
+        "exit": 1,
+        "pass": 55,
+        "fail": 12,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/flows/retirement.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 16,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 16,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/forge/autoMergeStore.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 99,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 99,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/lifecycle/projector.test.ts",
+      "head": {
+        "exit": 1,
+        "pass": 7,
+        "fail": 1,
+        "skip": 0
+      },
+      "main": {
+        "exit": 1,
+        "pass": 7,
+        "fail": 1,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/mcp/inputLimits.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 16,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 16,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/mcp/pipelineBusyAdmission.test.ts",
+      "head": {
+        "exit": 1,
+        "pass": 9,
+        "fail": 1,
+        "skip": 0
+      },
+      "main": {
+        "exit": 1,
+        "pass": 9,
+        "fail": 1,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/mcp/pipelineRoleFence.test.ts",
+      "head": {
+        "exit": 1,
+        "pass": 5,
+        "fail": 1,
+        "skip": 0
+      },
+      "main": {
+        "exit": 1,
+        "pass": 5,
+        "fail": 1,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/mcp/retryStageLaunch.integration.test.ts",
+      "head": {
+        "exit": 1,
+        "pass": 2,
+        "fail": 4,
+        "skip": 0
+      },
+      "main": {
+        "exit": 1,
+        "pass": 2,
+        "fail": 4,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/memory/roleLane.test.ts",
+      "head": {
+        "exit": 1,
+        "pass": 2,
+        "fail": 1,
+        "skip": 0
+      },
+      "main": {
+        "exit": 1,
+        "pass": 2,
+        "fail": 1,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/orchestrator/seatProjectIdentity.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 13,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 13,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/adoptionHistory.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 1,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 1,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/autoRefreshStore.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 9,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 9,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/backgroundTaskSettlement.test.ts",
+      "head": {
+        "exit": 1,
+        "pass": 9,
+        "fail": 6,
+        "skip": 0
+      },
+      "main": {
+        "exit": 1,
+        "pass": 9,
+        "fail": 6,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/controllerLease.reproduction.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 0,
+        "fail": 0,
+        "skip": 1
+      },
+      "main": {
+        "exit": 0,
+        "pass": 0,
+        "fail": 0,
+        "skip": 1
+      }
+    },
+    {
+      "file": "src/lib/pipelines/decisionAuthority.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 45,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 45,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/deputyLineage.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 3,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 3,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.accountGuard.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 30,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 30,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.activation.test.ts",
+      "head": {
+        "exit": 1,
+        "pass": 47,
+        "fail": 6,
+        "skip": 23
+      },
+      "main": {
+        "exit": 1,
+        "pass": 47,
+        "fail": 6,
+        "skip": 23
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.containment.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 49,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 49,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.controllerPass.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 46,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 46,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.controllerSnapshot.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 2,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 2,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+      "head": {
+        "exit": 1,
+        "pass": 14,
+        "fail": 1,
+        "skip": 5
+      },
+      "main": {
+        "exit": 0,
+        "pass": 15,
+        "fail": 0,
+        "skip": 5
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.cpuQueue.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 2,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 2,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.creation.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 95,
+        "fail": 0,
+        "skip": 3
+      },
+      "main": {
+        "exit": 0,
+        "pass": 95,
+        "fail": 0,
+        "skip": 3
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.fencedMessage.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 13,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 13,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.pauseMetadata.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 6,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 6,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.ports.part2.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 51,
+        "fail": 0,
+        "skip": 4
+      },
+      "main": {
+        "exit": 0,
+        "pass": 51,
+        "fail": 0,
+        "skip": 4
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.ports.part3.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 18,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 18,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.ports.test.ts",
+      "head": {
+        "exit": 1,
+        "pass": 70,
+        "fail": 1,
+        "skip": 0
+      },
+      "main": {
+        "exit": 1,
+        "pass": 70,
+        "fail": 1,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.providerBudget.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 42,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 42,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.providerBudgetChains.part3.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 26,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 26,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.providerBudgetKinds.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 28,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 28,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.providerChains.part2.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 32,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 32,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.providerChains.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 16,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 16,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.providerReset.part2.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 5,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 5,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.providerReset.part3.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 27,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 27,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.providerReset.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 18,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 18,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.providerSignals.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 28,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 28,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.provisioning.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 69,
+        "fail": 0,
+        "skip": 17
+      },
+      "main": {
+        "exit": 0,
+        "pass": 69,
+        "fail": 0,
+        "skip": 17
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.publication.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 24,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 24,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.recoveredPending.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 20,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 20,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.recovery.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 67,
+        "fail": 0,
+        "skip": 17
+      },
+      "main": {
+        "exit": 0,
+        "pass": 67,
+        "fail": 0,
+        "skip": 17
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.recoveryAdmission.part2.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 116,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 116,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.recoveryAdmission.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 61,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 61,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.recoveryAuthority.part2.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 86,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 86,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.recoveryAuthority.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 98,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 98,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.rolePrivacy.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 13,
+        "fail": 0,
+        "skip": 1
+      },
+      "main": {
+        "exit": 0,
+        "pass": 13,
+        "fail": 0,
+        "skip": 1
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.routing.test.ts",
+      "head": {
+        "exit": 1,
+        "pass": 103,
+        "fail": 2,
+        "skip": 24
+      },
+      "main": {
+        "exit": 1,
+        "pass": 103,
+        "fail": 2,
+        "skip": 24
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.settlement.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 91,
+        "fail": 0,
+        "skip": 10
+      },
+      "main": {
+        "exit": 0,
+        "pass": 91,
+        "fail": 0,
+        "skip": 10
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.spawnSilence.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 25,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 25,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.succession.part2.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 99,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 99,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.succession.part3.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 105,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 105,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.succession.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 30,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 30,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engine.watchdogRegression.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 5,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 5,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/engineConnectionRefusal.test.ts",
+      "head": {
+        "exit": 1,
+        "pass": 0,
+        "fail": 4,
+        "skip": 0
+      },
+      "main": {
+        "exit": 1,
+        "pass": 0,
+        "fail": 4,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/git.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 180,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 180,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/graphEdits.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 13,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 13,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/handLaunch.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 4,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 4,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/legacyReviewConversion.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 16,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 16,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/materializationHistory.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 1,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 1,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/parkedPublication.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 1,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 1,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/remoteActions.test.ts",
+      "head": {
+        "exit": 1,
+        "pass": 1,
+        "fail": 42,
+        "skip": 0
+      },
+      "main": {
+        "exit": 1,
+        "pass": 1,
+        "fail": 42,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/repositoryInitialization.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 40,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 40,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/resolveDecision.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 17,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 17,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/runtimeReads.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 3,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 3,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/runtimeSwitch.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 167,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 167,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/severedStageRetry.test.ts",
+      "head": {
+        "exit": 1,
+        "pass": 21,
+        "fail": 2,
+        "skip": 0
+      },
+      "main": {
+        "exit": 1,
+        "pass": 21,
+        "fail": 2,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/severedTurnResume.test.ts",
+      "head": {
+        "exit": 1,
+        "pass": 0,
+        "fail": 10,
+        "skip": 0
+      },
+      "main": {
+        "exit": 1,
+        "pass": 0,
+        "fail": 10,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/spawnRestartRecovery.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 35,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 35,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/stageAccountBinding.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 25,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 25,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/stageCommitRepair.test.ts",
+      "head": {
+        "exit": 1,
+        "pass": 56,
+        "fail": 18,
+        "skip": 0
+      },
+      "main": {
+        "exit": 1,
+        "pass": 56,
+        "fail": 18,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/stageCompletion.test.ts",
+      "head": {
+        "exit": 1,
+        "pass": 33,
+        "fail": 25,
+        "skip": 0
+      },
+      "main": {
+        "exit": 1,
+        "pass": 33,
+        "fail": 25,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/stageHostGenerationClose.integration.test.ts",
+      "head": {
+        "exit": 1,
+        "pass": 31,
+        "fail": 13,
+        "skip": 0
+      },
+      "main": {
+        "exit": 1,
+        "pass": 31,
+        "fail": 13,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/stageHostLiveness.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 7,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 7,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/stageHostTeardown.test.ts",
+      "head": {
+        "exit": 1,
+        "pass": 12,
+        "fail": 6,
+        "skip": 0
+      },
+      "main": {
+        "exit": 1,
+        "pass": 12,
+        "fail": 6,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/stagePublicationRepair.test.ts",
+      "head": {
+        "exit": 1,
+        "pass": 8,
+        "fail": 3,
+        "skip": 0
+      },
+      "main": {
+        "exit": 1,
+        "pass": 8,
+        "fail": 3,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/stagePullRequest.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 98,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 98,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/stageSizing.test.ts",
+      "head": {
+        "exit": 1,
+        "pass": 0,
+        "fail": 9,
+        "skip": 0
+      },
+      "main": {
+        "exit": 1,
+        "pass": 0,
+        "fail": 9,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/stageVerdictRequest.test.ts",
+      "head": {
+        "exit": 1,
+        "pass": 8,
+        "fail": 1,
+        "skip": 0
+      },
+      "main": {
+        "exit": 1,
+        "pass": 8,
+        "fail": 1,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/taskBinding.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 8,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 8,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/pipelines/terminalReap.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 58,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 58,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/projects/succession.test.ts",
+      "head": {
+        "exit": 1,
+        "pass": 5,
+        "fail": 2,
+        "skip": 0
+      },
+      "main": {
+        "exit": 1,
+        "pass": 5,
+        "fail": 2,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/release/stages.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 2,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 2,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/runtime/agentMemorySettings.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 5,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 5,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/runtime/codexSubagentDetection.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 34,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 34,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/runtime/nativeQueueHost.integration.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 0,
+        "fail": 0,
+        "skip": 5
+      },
+      "main": {
+        "exit": 0,
+        "pass": 0,
+        "fail": 0,
+        "skip": 5
+      }
+    },
+    {
+      "file": "src/lib/runtime/pipelineStageHostAccess.integration.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 0,
+        "fail": 0,
+        "skip": 1
+      },
+      "main": {
+        "exit": 0,
+        "pass": 0,
+        "fail": 0,
+        "skip": 1
+      }
+    },
+    {
+      "file": "src/lib/runtime/releaseInterruption.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 134,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 134,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/runtime/structuredDeliveryQueue.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 156,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 156,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/scanner/taskExtractionRetirement.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 2,
+        "fail": 0,
+        "skip": 0
+      },
+      "main": {
+        "exit": 0,
+        "pass": 2,
+        "fail": 0,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/lib/workflows/engine.cpuAdmission.test.ts",
+      "head": {
+        "exit": 0,
+        "pass": 0,
+        "fail": 0,
+        "skip": 32
+      },
+      "main": {
+        "exit": 0,
+        "pass": 0,
+        "fail": 0,
+        "skip": 32
+      }
+    },
+    {
+      "file": "src/lib/mainThreadInstrumentation.test.ts",
+      "head": {
+        "exit": 1,
+        "pass": 19,
+        "fail": 6,
+        "skip": 0
+      },
+      "main": {
+        "exit": 1,
+        "pass": 19,
+        "fail": 6,
+        "skip": 0
+      }
+    },
+    {
+      "file": "src/app/api/pipelines/[id]/route.test.ts",
+      "head": {
+        "exit": 1,
+        "pass": 15,
+        "fail": 1,
+        "skip": 0
+      },
+      "main": {
+        "exit": 1,
+        "pass": 15,
+        "fail": 1,
+        "skip": 0
+      }
+    }
+  ],
+  "followup": {
+    "comparison": {
+      "base": "62235181a310ad5783cb0fc0342721772efa7b54",
+      "head": "e336511c72efad99ac43e2adc9c8023dddcb0c18",
+      "tree": "517e6d0cdfc7cae11ef1a9093ba2b0d5861c4e5d",
+      "startedAt": "2026-10-23T23:41:51.457Z"
+    },
+    "expectedObservations": 16,
+    "actualObservations": 16,
+    "observations": [
+      {
+        "file": "src/lib/git/agentHistoryGuard.test.ts",
+        "side": "head",
+        "exit": 0,
+        "pass": 148,
+        "fail": 0,
+        "skip": 0
+      },
+      {
+        "file": "src/lib/git/agentHistoryGuard.test.ts",
+        "side": "main",
+        "exit": 0,
+        "pass": 148,
+        "fail": 0,
+        "skip": 0
+      },
+      {
+        "file": "src/lib/git/agentForgeCredentials.test.ts",
+        "side": "head",
+        "exit": 0,
+        "pass": 73,
+        "fail": 0,
+        "skip": 1
+      },
+      {
+        "file": "src/lib/git/agentForgeCredentials.test.ts",
+        "side": "main",
+        "exit": 0,
+        "pass": 73,
+        "fail": 0,
+        "skip": 1
+      },
+      {
+        "file": "src/lib/git/codexShellPolicy.test.ts",
+        "side": "head",
+        "exit": 0,
+        "pass": 2,
+        "fail": 0,
+        "skip": 2
+      },
+      {
+        "file": "src/lib/git/codexShellPolicy.test.ts",
+        "side": "main",
+        "exit": 0,
+        "pass": 2,
+        "fail": 0,
+        "skip": 2
+      },
+      {
+        "file": "src/lib/runtime/agentPublicationIdentity.test.ts",
+        "side": "head",
+        "exit": 0,
+        "pass": 13,
+        "fail": 0,
+        "skip": 0
+      },
+      {
+        "file": "src/lib/runtime/agentPublicationIdentity.test.ts",
+        "side": "main",
+        "exit": 0,
+        "pass": 13,
+        "fail": 0,
+        "skip": 0
+      },
+      {
+        "file": "src/lib/environmentIsolation.test.ts",
+        "side": "head",
+        "exit": 0,
+        "pass": 3,
+        "fail": 0,
+        "skip": 0
+      },
+      {
+        "file": "src/lib/environmentIsolation.test.ts",
+        "side": "main",
+        "exit": 0,
+        "pass": 3,
+        "fail": 0,
+        "skip": 0
+      },
+      {
+        "file": "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+        "side": "head",
+        "exit": 0,
+        "pass": 15,
+        "fail": 0,
+        "skip": 5
+      },
+      {
+        "file": "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+        "side": "main",
+        "exit": 1,
+        "pass": 14,
+        "fail": 1,
+        "skip": 5
+      },
+      {
+        "file": "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+        "side": "head",
+        "exit": 1,
+        "pass": 14,
+        "fail": 1,
+        "skip": 5
+      },
+      {
+        "file": "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+        "side": "main",
+        "exit": 0,
+        "pass": 15,
+        "fail": 0,
+        "skip": 5
+      },
+      {
+        "file": "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+        "side": "head",
+        "exit": 0,
+        "pass": 15,
+        "fail": 0,
+        "skip": 5
+      },
+      {
+        "file": "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+        "side": "main",
+        "exit": 0,
+        "pass": 15,
+        "fail": 0,
+        "skip": 5
+      }
+    ]
+  },
+  "finalSourceDigests": {
+    "src/lib/git/agentHistoryGuard.ts": "28b8a7b8599bbe754a48b4ada4b617662b915cb2cb569da98d9a1497c479efc6",
+    "src/lib/git/stageAttemptGuard.ts": "0a0f7f65a250df9c0d996f54e65eefab4da3e3a7d3e25abf9e5360b936c5c404",
+    "src/lib/pipelines/engine.ts": "a71b1dd146069fb16f7d4ae0e8ad42b3501ccb495b079d925f00adab2ba7c271",
+    "src/lib/pipelines/engine.fixture.ts": "7afd0bddc45c387814b1e60708d48c57ff3b3f1870923652580253abef08e452"
+  },
+  "finalChecks": [
+    {
+      "name": "typecheck",
+      "code": 0,
+      "elapsedMs": 160852
+    },
+    {
+      "name": "eslint",
+      "code": 0,
+      "elapsedMs": 8149
+    },
+    {
+      "name": "phone",
+      "code": 0,
+      "elapsedMs": 14615
+    }
+  ]
+}
