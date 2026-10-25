@@ -797,10 +797,7 @@ test("the seat's mandate carries all sixteen working rules in their short form",
   expect(numbers(WORKING_RULES_SHORT)).toHaveLength(16);
 });
 
-/* The short form first shipped without what the memory delta added to rules 6
-   and 12 (role-memory-to-prompts.md §4.1), so no seat read those duties. Each
-   pair is one duty: its words in the full rule and in the short one, checked
-   on the first message a seat spawn actually sends. */
+/* A seat's launch prompt composes the short rules once. */
 test("a seat's launch prompt carries the evidence and publication duties of rules 6 and 12", () => {
   const resolved = resolveSpawnRole({ role: "orchestrator" });
   if (!resolved.ok || !resolved.value) throw new Error("orchestrator role did not resolve");

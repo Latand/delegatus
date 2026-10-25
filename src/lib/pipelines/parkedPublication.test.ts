@@ -133,7 +133,7 @@ for (const recovery of ["automatic", "retry-stage", "publish"] as const) for (co
     attempt.startedAt = now; attempt.completedAt = null;
     attempt.launchId = `unsettled-${shape}-${recovery}`;
     attempt.state = "committing";
-    const guard = await prepareStageGitGuard(attempt.launchId, h.repo, realExec, now);
+    const guard = await prepareStageGitGuard(attempt.launchId, h.repo, realExec, now, async () => {});
     const identity = agentPublicationIdentityEnv({ ...process.env, ...guard });
     const made = await realExec("git", ["commit", "--allow-empty", "-m", "accepted stage output"], h.repo,
       { ...identity, ...guard, GIT_AUTHOR_DATE: now, GIT_COMMITTER_DATE: now });
