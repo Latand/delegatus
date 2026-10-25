@@ -2259,7 +2259,8 @@ export function defaultPipelinePorts(
       if (!key) return null;
       const entry = current.entries[sessionKeyId(key)];
       const ended = entry?.structuredHost?.ended;
-      const evidence = receipt?.hostExit ?? readHostExit(entry?.hostExitProcess ?? entry?.structuredHost?.exitProcess ?? entry?.structuredHost?.process);
+      const pending = launchId ? entry?.pendingHostExits?.find(item => item.launchId === launchId) : null;
+      const evidence = receipt?.hostExit ?? readHostExit(pending?.process ?? entry?.hostExitProcess ?? entry?.structuredHost?.exitProcess ?? entry?.structuredHost?.process);
       return [hostExitText(evidence), ended ? claudeHostEndText(ended) : null].filter(Boolean).join("; ");
     },
     conversationInterruption: (conversationId) => {

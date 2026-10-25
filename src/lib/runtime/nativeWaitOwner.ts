@@ -4,6 +4,7 @@ import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStd
 import { EventEmitter } from "node:events";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 import { statePath } from "@/lib/configDir";
+import { captureProcessTree, signalProcessGroup } from "@/lib/processGroup";
 import { bindHostExitWriter, readHostExit, readHostExitSpool, reclaimHostExit, recordHostExit, recordHostStop } from "./hostExit";
 
 /** Uses the serving interpreter and builtins only, including on installations
@@ -110,18 +111,33 @@ export function spawnNativeWaitOwner(command: string, args: string[], options: S
     cleanup();
   };
   const abortLaunch = async () => {
-    // A refused binding never admits a host. Reap only this launch's native
-    // identity and retain no evidence files without an owning registry row.
-    if (native && processIdentityStatus(native) === "alive") {
-      const withdraw = recordHostStop(native, "SIGKILL", "managed-engine-startup-cleanup");
+    // Capture descendants before the native parent exits and loses them.
+    // The independent waiter is outside this tree and must finish its write.
+    const tree = native && processIdentityStatus(native) === "alive" ? captureProcessTree(native.pid) : { identities: [], unresolved: [] };
+    const withdraw = native && processIdentityStatus(native) === "alive"
+      ? recordHostStop(native, "SIGKILL", "managed-engine-startup-cleanup") : undefined;
+    for (const descendant of tree.identities.reverse()) {
+      if (processIdentityStatus(descendant) === "alive") {
+        try { process.kill(descendant.pid, "SIGKILL"); } catch { /* confirmed below */ }
+      }
+    }
+    if (native) {
       if (processIdentityStatus(native) !== "alive") withdraw?.();
-      else { try { process.kill(native.pid, "SIGKILL"); } catch { withdraw?.(); } }
+      else if (!signalProcessGroup(native.pid, "SIGKILL")) {
+        try { process.kill(native.pid, "SIGKILL"); } catch { withdraw?.(); }
+      }
     }
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = performance.now() + 3_000;
     try {
       await Promise.race([reaped, new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => reject(new Error("native wait owner startup cleanup did not settle")), 3_000);
       })]);
+      while ([...(native ? [native] : []), ...tree.identities].some(identity => processIdentityStatus(identity) !== "dead")) {
+        if (performance.now() >= deadline) throw new Error("native startup cleanup left a surviving process");
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      if (tree.unresolved.length) throw new Error("native startup cleanup could not verify every descendant");
     } finally { if (timer) clearTimeout(timer); }
     if (native) reclaimHostExit(native);
     fs.rmSync(directory, { recursive: true, force: true });

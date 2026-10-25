@@ -44,17 +44,35 @@ export function hostExitWriterPending(process: ProcessIdentity): boolean {
 export function hostExitWriterRegistered(process: ProcessIdentity): boolean {
   return fs.existsSync(slot(process, "writer"));
 }
+function readDescriptor<T>(fd: number): T {
+  if (fs.fstatSync(fd).size > 4096) throw new Error("host exit receipt exceeds its bound");
+  return JSON.parse(fs.readFileSync(fd, "utf8")) as T;
+}
 function read<T>(file: string): T | null {
   try {
     const fd = fs.openSync(file, "r");
     try {
-      if (fs.fstatSync(fd).size > 4096) throw new Error("host exit receipt exceeds its bound");
-      return JSON.parse(fs.readFileSync(fd, "utf8")) as T;
+      return readDescriptor<T>(fd);
     } finally { fs.closeSync(fd); }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
   }
+}
+
+type StopReceipt = NonNullable<HostExitRecord["stop"]> & {
+  active?: 0 | 1; prior?: HostExitRecord["stop"]; requestId?: string;
+};
+// This first JSON property has a single-byte value, changed only through an
+// open descriptor. A replacement sender owns another inode, so withdrawal
+// cannot erase it between a comparison and a pathname mutation.
+const STOP_ACTIVE_PREFIX = '{"active":';
+function readStop(file: string): HostExitRecord["stop"] {
+  const receipt = read<StopReceipt>(file);
+  if (!receipt) return null;
+  if (receipt.active === 0) return receipt.prior ?? null;
+  const { path, operationId, signal, at } = receipt;
+  return { path, operationId, signal, at };
 }
 function record(file: string, value: unknown, replace = false): void {
   if (!replace && fs.existsSync(file)) return;
@@ -84,18 +102,22 @@ export function recordHostStop(process: ProcessIdentity | null | undefined, sign
     if (read(slot(process, "exit"))) return;
     const source = origin.getStore() ?? { path: fallback, operationId: randomUUID() };
     const file = slot(process, "stop");
-    const prior = read<HostExitRecord["stop"]>(file);
+    const prior = readStop(file);
     const next = { path: source.path.slice(0, 160), operationId: source.operationId.slice(0, 200), signal };
     if (prior?.path === next.path && prior.operationId === next.operationId && prior.signal === signal) return;
     const intent = { ...next, at: new Date().toISOString() };
-    record(file, intent, true);
+    const requestId = randomUUID();
+    record(file, { active: 1, prior, requestId, ...intent }, true);
     return () => {
       // A refused sender may withdraw only its own intent, preserving an
       // earlier signal and any newer sender that took over in the meantime.
       try {
-        if (JSON.stringify(read(file)) !== JSON.stringify(intent)) return;
-        if (prior) record(file, prior, true);
-        else fs.rmSync(file, { force: true });
+        const fd = fs.openSync(file, "r+");
+        try {
+          if (readDescriptor<StopReceipt>(fd).requestId !== requestId) return;
+          fs.writeSync(fd, Buffer.from("0"), 0, 1, STOP_ACTIVE_PREFIX.length);
+          fs.fsyncSync(fd);
+        } finally { fs.closeSync(fd); }
       } catch (error) { console.error("[host exit] could not withdraw refused stop intent", error); }
     };
   } catch (error) { console.error("[host exit] could not persist stop intent", error); }
@@ -129,7 +151,7 @@ export function reclaimHostExit(process: ProcessIdentity): void {
 }
 export function readHostExit(process: ProcessIdentity | null | undefined): HostExitRecord | null {
   if (!process?.startIdentity) return null;
-  try { return { process, stop: read(slot(process, "stop")), exit: read(slot(process, "exit")) }; }
+  try { return { process, stop: readStop(slot(process, "stop")), exit: read(slot(process, "exit")) }; }
   catch { return { process, stop: null, exit: null, unavailable: "host exit receipts could not be read" }; }
 }
 /** Startup can fail before the native identity is admitted to a host row. */

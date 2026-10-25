@@ -1,7 +1,7 @@
 import { AgentRegistry } from "@/lib/agent/registry";
 import { expect, test, spyOn } from "bun:test";
 import fs from "node:fs";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
 import { statePath } from "@/lib/configDir";
@@ -372,6 +372,54 @@ for (const newer of [false, true]) test(`withdrawing a refused stop preserves ex
   expect(readHostExit(process)?.stop).toEqual(expected);
 });
 
+test("repeated refused first stops stay empty and use one bounded receipt", () => {
+  const identity = { pid: 2147482594, startIdentity: "withdraw-empty-fixture", bootEpoch: "fixture-boot" };
+  const directory = statePath("host-exits");
+  const before = new Set(fs.existsSync(directory) ? fs.readdirSync(directory) : []);
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const withdraw = recordHostStop(identity, "SIGTERM", "refused-first-stop");
+    expect(readHostExit(identity)?.stop?.signal).toBe("SIGTERM");
+    withdraw?.();
+    withdraw?.();
+    expect(readHostExit(identity)?.stop).toBeNull();
+  }
+  expect(fs.readdirSync(directory).filter(file => !before.has(file))).toHaveLength(1);
+});
+
+test("a successful sender in another process survives withdrawal after the receipt read", async () => {
+  const child = spawn(process.execPath, ["-e", 'setInterval(()=>{},1000);process.stdout.write("ready")'], { stdio: ["ignore", "pipe", "pipe"] });
+  const closed = once(child, "close");
+  let receiptRead: ReturnType<typeof spyOn> | undefined;
+  try {
+    await once(child.stdout!, "data");
+    const identity = captureProcessIdentity(child.pid!);
+    observeHostExit(child, identity);
+    const withdraw = withHostStopOrigin({ path: "refused-stop", operationId: "refused-race-operation" }, () => recordHostStop(identity, "SIGTERM", "fallback"));
+    const readFile = fs.readFileSync;
+    let interleaved = false;
+    receiptRead = spyOn(fs, "readFileSync").mockImplementation(((...args: Parameters<typeof fs.readFileSync>) => {
+      const value = readFile(...args);
+      if (!interleaved && String(value).includes("refused-race-operation")) {
+        interleaved = true;
+        const sender = spawnSync(process.execPath, ["-e", `import { recordHostStop, withHostStopOrigin } from ${JSON.stringify(import.meta.path.replace(/\.test\.ts$/, ".ts"))};
+          withHostStopOrigin({path:"successful-stop",operationId:"successful-race-operation"},()=>recordHostStop(${JSON.stringify(identity)},"SIGKILL","fallback"));
+          process.kill(${child.pid},"SIGKILL");`], { env: process.env, encoding: "utf8", timeout: 5_000 });
+        expect(sender.status).toBe(0);
+      }
+      return value;
+    }) as typeof fs.readFileSync);
+    withdraw?.();
+    receiptRead.mockRestore();
+    expect(interleaved).toBe(true);
+    await closed;
+    expect(readHostExit(identity)).toMatchObject({ stop: { path: "successful-stop", operationId: "successful-race-operation", signal: "SIGKILL" }, exit: { signal: "SIGKILL" } });
+  } finally {
+    receiptRead?.mockRestore();
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await closed;
+  }
+});
+
 test("the managed waiter forwards native stdio and exit status without changing the signal target", async () => {
   const child = await spawnManagedEngine(process.execPath, ["-e", `process.stdout.write(JSON.stringify({pid:process.pid})+"\\n");process.stdin.once("data",data=>{process.stdout.write(data);process.exit(23)});`],
     { detached: true, env: { ...process.env, LLV_GATE_SLOT_LEASE: "fixture-lease" } }, null);
@@ -422,5 +470,43 @@ test("a refused managed exit binding reaps the native engine before rejecting st
   } finally {
     refusal.mockRestore();
     if (native && processIdentityStatus(native) === "alive") process.kill((native as { pid: number }).pid, "SIGKILL");
+  }
+});
+
+for (const detached of [false, true]) test(`refused managed exit binding reaps inherited pipes and descendants (detached=${detached})`, async () => {
+  const fixture = fs.mkdtempSync(path.join(process.env.TMPDIR!, "refused-binding-tree-"));
+  const ready = path.join(fixture, "descendant.json");
+  const waits = statePath("host-exit-waits");
+  const receipts = statePath("host-exits");
+  const beforeWaits = fs.existsSync(waits) ? fs.readdirSync(waits).sort() : [];
+  const beforeReceipts = fs.existsSync(receipts) ? fs.readdirSync(receipts).sort() : [];
+  const write = fs.writeFileSync;
+  let native: ReturnType<typeof captureProcessIdentity> | null = null;
+  let descendant: ReturnType<typeof captureProcessIdentity> | null = null;
+  const refusal = spyOn(fs, "writeFileSync").mockImplementation((file, ...args) => {
+    if (path.basename(String(file)) === "host-exit.json") {
+      const pid = JSON.parse(fs.readFileSync(path.join(path.dirname(String(file)), "native.json"), "utf8")).pid;
+      native = captureProcessIdentity(pid);
+      const probe = spawnSync(process.execPath, ["-e", `const fs=require("node:fs");const until=Date.now()+5000;while(!fs.existsSync(${JSON.stringify(ready)})){if(Date.now()>until)process.exit(1);await Bun.sleep(10)}`], { timeout: 6_000, env: process.env });
+      if (probe.status !== 0) throw new Error("fixture descendant did not become ready");
+      descendant = captureProcessIdentity(JSON.parse(fs.readFileSync(ready, "utf8")).pid);
+      throw new Error("fixture tree exit binding refused");
+    }
+    return write(file, ...args);
+  });
+  try {
+    await expect(spawnManagedEngine(process.execPath, ["-e", `const child=require("node:child_process").spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"inherit",detached:${detached}});child.once("spawn",()=>require("node:fs").writeFileSync(${JSON.stringify(ready)},JSON.stringify({pid:child.pid})));setInterval(()=>{},1000);`],
+      { detached: true, env: { ...process.env, LLV_GATE_SLOT_LEASE: "fixture-lease" } }, null)).rejects.toThrow("fixture tree exit binding refused");
+    expect(native).not.toBeNull();
+    expect(descendant).not.toBeNull();
+    expect(processIdentityStatus(native!)).toBe("dead");
+    expect(processIdentityStatus(descendant!)).toBe("dead");
+    expect(fs.readdirSync(waits).sort()).toEqual(beforeWaits);
+    expect(fs.readdirSync(receipts).sort()).toEqual(beforeReceipts);
+  } finally {
+    refusal.mockRestore();
+    const identities: Array<ReturnType<typeof captureProcessIdentity> | null> = [descendant, native];
+    for (const identity of identities) if (identity && processIdentityStatus(identity) === "alive") process.kill(identity.pid, "SIGKILL");
+    fs.rmSync(fixture, { recursive: true, force: true });
   }
 });

@@ -1,5 +1,7 @@
 import { agentRegistry, type RegistryFile } from "@/lib/agent/registry";
-import { recordHostExit, recordHostStop, withHostStopOrigin } from "@/lib/runtime/hostExit";
+import { bindHostExitWriter, recordHostExit, recordHostStop, withHostStopOrigin } from "@/lib/runtime/hostExit";
+import { captureProcessIdentity } from "@/lib/processIdentity";
+import fs from "node:fs";
 import { HOST_END_REASON_MAX_CHARS } from "@/lib/runtime/hostEndCause";
 import { expect, test, spawn, makeStructuredAttempt, pinStageHead, AccountAuthenticationRequiredError, ProjectAccountRefusedError, selectProjectAccount, IDLE_TURN_QUIET_MS, tickPipelines, createPipelineFromRequest, loadPipelines, savePipelines, patchPipeline, entry, harness, create, structuredLatest, runningStructuredStage, LIMITED_ACCOUNT, SPARE_ACCOUNT, stageTranscript, readFixtures, providerQuotaRecord, SILENT_RUN, stageWhoseStopMovesTheTranscript, recoveryReport, providerRecoveryHarness, parkedAccountCases, parkedAccountHarness } from "./engine.fixture";
 import type { DurableQuotaObservation, PipelinePorts, StageTurnEvidence } from "./engine.fixture";
@@ -696,38 +698,41 @@ for (const sender of ["pipeline-stage-stop", null]) test(`lost-host stage projec
   const registry = agentRegistry();
   const identity = { pid: 2147482597, startIdentity: `projection-error-${sender}`, bootEpoch: "fixture-boot" };
   const key = { engine: "claude" as const, sessionId: `projection-error-${sender}` };
+  const diagnostic = { kind: "host-fault" as const, reason: "r".repeat(HOST_END_REASON_MAX_CHARS), code: null, signal: null, signalledByHost: true, at: h.ports.now() };
   const launch = registry.beginSpawn("claude", "fixtures", { title: "Maximum host end diagnostic" });
   registry.stageStructuredSpawn(launch.launchId, { key, artifactPath: "fixtures/claude-exit.jsonl", cwd: "fixtures", accountId: null,
     status: "dead", host: null, claimEpoch: 1, claimOwner: null, pendingAction: null,
     structuredHost: { kind: "claude-broker", process: identity, exitProcess: identity, endpoint: "stdio:fixture",
       eventCursor: 0, protocolVersion: null, writerClaimEpoch: 1, activeTurnRef: "open-turn", pendingAttention: [], activeFlags: [],
-      ended: { kind: "host-fault", reason: "r".repeat(HOST_END_REASON_MAX_CHARS), code: null, signal: null, signalledByHost: true, at: h.ports.now() } } });
+      ended: diagnostic } });
   const saved = loadPipelines()[0]!;
   saved.runs[0]!.attempts[0]!.launchId = launch.launchId;
   saved.runs[0]!.attempts[0]!.conversationId = launch.conversationId;
   savePipelines([saved]);
-  const ports = defaultPipelinePorts();
-  // The controller already cached this projection before its awaited teardown.
-  ports.conversationHostEnded!(launch.conversationId, launch.launchId);
-  await tickPipelines([entry(attempt.agentPath!)], { ...h.ports,
-    restartRecoveryBootId: () => "projection-error-boot",
-    restartRecoveryBootStartedAt: () => Date.parse(attempt.startedAt!) - 60_000,
-    conversationTurnInterrupted: async () => "dead",
-    stopInterruptedStageAgent: async () => {
-      if (sender) withHostStopOrigin({ path: sender, operationId: "projection-error-operation" }, () => recordHostStop(identity, "SIGKILL", "fallback"));
-      recordHostExit(identity, null, "SIGKILL");
-      registry.setStructuredHost(key, null);
-      registry.setStructuredHost(key, { kind: "claude-broker", process: { ...identity, startIdentity: "projection-successor" }, endpoint: "stdio:successor",
-        eventCursor: 0, protocolVersion: null, writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] });
-      return { outcome: "not-running" };
-    },
-    conversationHostEnded: () => ports.conversationHostEnded!(launch.conversationId, launch.launchId),
-  });
-  const lane = loadPipelines()[0]!;
-  const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
-  const projected = await viewerMcpBindings().get_pipeline({ pipelineId: lane.id, stageId: "plan", attempt: 1 });
-  const source = sender ? "stopped by pipeline-stage-stop (projection-error-operation)" : "no Delegatus stop recorded";
-  expect(lane.runs[0]!.attempts[0]!.error).toContain(`exit: signal SIGKILL; ${source}`);
-  expect(lane.stateDetail).toContain(`exit: signal SIGKILL; ${source}`);
-  expect(projected).toMatchObject({ attempt: { error: expect.stringContaining(`exit: signal SIGKILL; ${source}`) } });
+  const binding = fs.mkdtempSync(path.join(process.env.TMPDIR!, "projection-late-exit-"));
+  try {
+    bindHostExitWriter(binding, identity, captureProcessIdentity(process.pid));
+    await tickPipelines([entry(attempt.agentPath!)], { ...h.ports,
+      restartRecoveryBootId: () => "projection-error-boot",
+      restartRecoveryBootStartedAt: () => Date.parse(attempt.startedAt!) - 60_000,
+      conversationTurnInterrupted: async () => "dead",
+      stopInterruptedStageAgent: async () => {
+        const successor = { ...identity, startIdentity: "projection-successor" };
+        registry.setStructuredHost(key, { kind: "claude-broker", process: successor, endpoint: "stdio:successor",
+          eventCursor: 0, protocolVersion: null, writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [], ended: diagnostic });
+        if (sender) withHostStopOrigin({ path: sender, operationId: "projection-error-operation" }, () => recordHostStop(identity, "SIGKILL", "fallback"));
+        recordHostExit(identity, null, "SIGKILL");
+        recordHostExit(successor, 99, null);
+        return { outcome: "not-running" };
+      },
+      conversationHostEnded: () => defaultPipelinePorts().conversationHostEnded!(launch.conversationId, launch.launchId),
+    });
+    const lane = loadPipelines()[0]!;
+    const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
+    const projected = await viewerMcpBindings().get_pipeline({ pipelineId: lane.id, stageId: "plan", attempt: 1 });
+    const source = sender ? "stopped by pipeline-stage-stop (projection-error-operation)" : "no Delegatus stop recorded";
+    expect(lane.runs[0]!.attempts[0]!.error).toContain(`exit: signal SIGKILL; ${source}`);
+    expect(lane.stateDetail).toContain(`exit: signal SIGKILL; ${source}`);
+    expect(projected).toMatchObject({ attempt: { error: expect.stringContaining(`exit: signal SIGKILL; ${source}`) } });
+  } finally { fs.rmSync(binding, { recursive: true, force: true }); }
 });

@@ -30,6 +30,7 @@ import { conversationTurnLiveness, type TurnLivenessDependencies } from "./liven
 import { restartCutEvidenceHolds } from "./restartCutHold";
 import { verifiedSignalDomainProcesses } from "./agentSignalSandbox";
 import { isDeepStrictEqual } from "node:util";
+import { randomUUID } from "node:crypto";
 import { registryConversationsForEntryKey } from "@/lib/agent/sqliteRegistryStore";
 import type { StructuredHostTerminationDependencies } from "./structuredHostControl";
 
@@ -635,7 +636,9 @@ async function terminateVerifiedProcess(processIdentity: ProcessIdentity): Promi
   if (processIdentityStatus(processIdentity) !== "alive") { withdraw?.(); return processIdentityProvenDead(processIdentity); }
   try { process.kill(processIdentity.pid, "SIGTERM"); } catch { withdraw?.(); }
   if (await waitForVerifiedProcessExit(processIdentity, ORPHAN_TERM_GRACE_MS)) return true;
-  try { process.kill(processIdentity.pid, "SIGKILL"); } catch { /* process exited */ }
+  const withdrawKill = recordHostStop(processIdentity, "SIGKILL", "registry-recovery");
+  if (processIdentityStatus(processIdentity) !== "alive") { withdrawKill?.(); return processIdentityProvenDead(processIdentity); }
+  try { process.kill(processIdentity.pid, "SIGKILL"); } catch { withdrawKill?.(); }
   return waitForVerifiedProcessExit(processIdentity, ORPHAN_KILL_GRACE_MS);
 }
 
@@ -777,7 +780,8 @@ export async function reapSeveredStructuredHost(
   const liveness = await conversationTurnLiveness(registry, conversationId, dependencies);
   if (liveness?.state !== "severed") return null;
   if (sessionKeyId(liveness.key) !== sessionKeyId(key)) return null;
-  return { reaped: await terminateVerifiedProcess(structuredProcess), reason: liveness.reason };
+  return withHostStopOrigin({ path: "registry-recovery", operationId: randomUUID() }, async () =>
+    ({ reaped: await terminateVerifiedProcess(structuredProcess), reason: liveness.reason }));
 }
 
 /** Reconciles claimable structured ownership for rows excluded by startup adoption. */

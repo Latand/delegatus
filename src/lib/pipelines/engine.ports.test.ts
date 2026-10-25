@@ -51,6 +51,34 @@ for (const sqliteMode of ["off", "sqlite"] as const) test(`a warmed pipeline pro
   } finally { setAgentRegistryForTests(null); registry.close(); }
 });
 
+for (const sqliteMode of ["off", "sqlite"] as const) test(`late predecessor exit stays bound to its pending launch before another mutation (${sqliteMode})`, () => {
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `late-predecessor-${sqliteMode}.json`), undefined, undefined, { sqliteMode });
+  const binding = fs.mkdtempSync(path.join(process.env.TMPDIR!, "late-predecessor-"));
+  setAgentRegistryForTests(registry);
+  const predecessor = { pid: 2147482595, startIdentity: `late-predecessor-${sqliteMode}`, bootEpoch: "fixture-boot" };
+  const successor = { ...predecessor, startIdentity: `late-successor-${sqliteMode}` };
+  const key = { engine: "codex" as const, sessionId: `late-predecessor-${sqliteMode}` };
+  const host = { kind: "codex-app-server" as const, process: predecessor, exitProcess: predecessor, endpoint: "stdio:fixture",
+    eventCursor: 0, protocolVersion: null, writerClaimEpoch: 1, activeTurnRef: "open-turn", pendingAttention: [], activeFlags: [] };
+  try {
+    const launch = registry.beginSpawn("codex", "fixtures", { title: "Late predecessor exit fixture" });
+    registry.stageStructuredSpawn(launch.launchId, { key, artifactPath: "fixtures/late-predecessor.jsonl", cwd: "fixtures", accountId: null,
+      status: "dead", host: null, claimEpoch: 1, claimOwner: null, pendingAction: null, structuredHost: host });
+    bindHostExitWriter(binding, predecessor, captureProcessIdentity(process.pid));
+    const warmed = defaultPipelinePorts();
+    expect(warmed.conversationHostEnded!(launch.conversationId, launch.launchId)).toContain("status unavailable");
+    registry.setStructuredHost(key, { ...host, process: successor, exitProcess: successor });
+    expect(registry.readOnlySnapshot().entries[`codex:${key.sessionId}`]?.pendingHostExits).toEqual([{ process: predecessor, launchId: launch.launchId }]);
+    withHostStopOrigin({ path: "pipeline-stage-stop", operationId: "late-predecessor-operation" }, () => recordHostStop(predecessor, "SIGKILL", "fallback"));
+    recordHostExit(predecessor, null, "SIGKILL");
+    recordHostExit(successor, 99, null);
+    expect(registry.spawnReceipt(launch.launchId)?.hostExit).toBeUndefined();
+    const expected = "exit: signal SIGKILL; stopped by pipeline-stage-stop (late-predecessor-operation)";
+    expect(warmed.conversationHostEnded!(launch.conversationId, launch.launchId)).toBe(expected);
+    expect(defaultPipelinePorts().conversationHostEnded!(launch.conversationId, launch.launchId)).toBe(expected);
+  } finally { setAgentRegistryForTests(null); registry.close(); fs.rmSync(binding, { recursive: true, force: true }); }
+});
+
 test("default pane liveness keeps failed or unreadable tmux observations alive", async () => {
   const observations: Awaited<ReturnType<typeof import("@/lib/tmux").panePidMap>>[] = [
     { kind: "failure", error: "tmux snapshot unavailable" },
