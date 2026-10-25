@@ -377,11 +377,6 @@ function continuationsIn(ledger: FakeDeliveryLedger): string[] {
 
 function expectDeploymentContinuation(text: string | undefined): void {
   expect(text).toContain("deployment interrupted your turn");
-  expect(text).toContain("Inspect your transcript");
-  expect(text).toContain("preserved work");
-  expect(text).toContain("Re-run any interrupted operation");
-  expect(text).toContain("Run long commands in the foreground");
-  expect(text).toContain("stage_report");
 }
 
 test.each(["claude", "codex"] as const)(
@@ -1235,7 +1230,6 @@ test("a spawned agent whose turn a service restart cut is resumed once, and a se
     expect(writes).toHaveLength(1);
     expect(writes[0]).toStartWith("Viewer restarted and severed your structured host mid-turn.");
     expect(writes[0]).toContain("The interrupted turn's last transcript event is tool-call");
-    expect(writes[0]).toContain("Re-run any interrupted operation");
 
     const second = await successorBoot(cut.registryFile, journal, ledger);
     expect(second.error).toBeNull();

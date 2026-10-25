@@ -12657,6 +12657,154 @@ describe("keys settings", () => {
   }, 3_600_000);
 });
 
+/*
+ * «Delegatus memory» (docs/design/memory-source-switch.md §3.4): the Settings
+ * row of the memory source switch in every state on the phone's menu sheet,
+ * at 360, 375 and 390 px, light and dark, en and uk. Each state is real state
+ * in a throw-away state directory (src/lib/memory/fixtures/sourceStates.ts),
+ * read through the real `GET /api/memory/source`, with the import counts at
+ * the design's real sizes; the press is held to frame the optimistic switch
+ * and refused to frame its rollback. The state line is measured from its text
+ * ranges: no line under the sheet's or the window's edge, none cut sideways,
+ * none under the switch, and its words are the row's own for that state.
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 LLV_MEMORY_SOURCE_FRAMES=<dir> CHROME_BIN=… bun test \
+ *     src/components/mobile/issue1671Evidence.browser.test.tsx -t "memory source settings"
+ */
+describe("memory source settings", () => {
+  browserTest("«Delegatus memory»: every state at 360, 375 and 390, light and dark, en and uk", async () => {
+    const FRAMES = path.resolve(process.env.LLV_MEMORY_SOURCE_FRAMES ?? ".artifacts/memory-source");
+    fs.mkdirSync(FRAMES, { recursive: true });
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-memory-source-browser-"));
+    const previous = process.env.LLV_STATE_DIR;
+    process.env.LLV_STATE_DIR = path.join(root, "state");
+    fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true, mode: 0o700 });
+    const { GET } = await import("@/app/api/memory/source/route");
+    const { MEMORY_SOURCE_FRAME_STATES, MEMORY_SOURCE_FRAME_ROW, MEMORY_SOURCE_FRAME_ON, seedMemorySourceState } = await import("@/lib/memory/fixtures/sourceStates");
+    const { memorySourceLine } = await import("@/components/memory/MemorySourceRow");
+    /* The press: held open for `pressed`, refused for `refused`; nothing else writes. */
+    let releaseWrite: (() => void) | null = null;
+    const writes: unknown[] = [];
+    let failReads = false;
+    const server = await serveEvidenceFixture(path.join(FRAMES, "bundle-root"), undefined, {
+      "/api/memory/source": async (request: Request) => {
+        if (request.method !== "PUT") return failReads ? Response.json({ error: "read_failed" }, { status: 500 }) : GET();
+        writes.push(await request.json());
+        await new Promise<void>((resolve) => { releaseWrite = resolve; });
+        return Response.json({ error: "write_failed" }, { status: 500 });
+      },
+      "/api/memory/settings": { enabled: true, reasons: [], keySource: "file", capUsd: 5, spentUsd: 1.214, month: "2026-10",
+        counts: { decisions: 214, delivered: 61, prepared: 69, noCandidates: 48, noMatches: 97, skipped: 12, failed: 5 } },
+      "/api/keys": { staging: false, owner: true, keys: [] },
+      "/api/telemetry": { enabled: false, locked: false, noticeDismissed: true },
+      "/api/asks-you/key": { present: true, source: "file" },
+      "/api/team": { mode: "solo" },
+    });
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const readings: Record<string, unknown>[] = [];
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [360, 375, 390] as const) {
+        const viewport = { width, height: width === 360 ? 740 : width === 375 ? 812 : 844 };
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=keys&header=1`, viewport, theme, lang, "reduce", true, 2);
+        try {
+          for (const state of MEMORY_SOURCE_FRAME_STATES) {
+            const key = `memory-source-${state}-${lang}-${theme}-${width}`;
+            try {
+              await seedMemorySourceState(state);
+              failReads = state === "read-failed";
+              await page.goto(`${server.base}?scenario=keys&header=1`);
+              await page.locator('[data-mobile2-open="menu"]').first().click();
+              await page.locator('[data-mobile2-menu-row="settings"]').first().click();
+              const row = page.locator("[data-mobile2-sheet='menu'] [data-header-menu-memory-source]");
+              await row.waitFor();
+              const first = state === "pressed" ? "unchosen" : state === "refused" ? "active" : MEMORY_SOURCE_FRAME_ROW[state];
+              await page.waitForFunction((want) => document.querySelector("[data-header-menu-memory-source]")?.getAttribute("data-memory-source-state") === want, first);
+              if (state === "pressed" || state === "refused") {
+                await row.locator("[data-memory-source-switch]").click();
+                await page.waitForFunction((want) => document.querySelector("[data-header-menu-memory-source]")?.getAttribute("data-memory-source-state") === want, state === "pressed" ? "preparing" : "engines");
+                if (state === "refused") {
+                  for (let wait = 0; wait < 100 && !releaseWrite; wait++) await page.waitForTimeout(20);
+                  (releaseWrite as (() => void) | null)?.(); releaseWrite = null;
+                  await row.locator("[data-memory-source-failed]").waitFor();
+                }
+              }
+              await row.scrollIntoViewIfNeeded();
+              await page.waitForTimeout(120);
+              const geometry = await page.evaluate(() => {
+                const sheet = document.querySelector<HTMLElement>("[data-mobile2-sheet='menu']")!;
+                const host = document.querySelector<HTMLElement>("[data-header-menu-memory-source]")!;
+                const line = host.querySelector<HTMLElement>("[data-memory-source-line]")!;
+                const title = host.querySelector<HTMLElement>("[data-memory-source-title]")!;
+                const control = host.querySelector<HTMLElement>("[data-memory-source-switch]")!;
+                /* The sheet's own scroller bounds what shows; the window bounds everything. */
+                let clip = sheet.getBoundingClientRect();
+                for (let node: HTMLElement | null = host.parentElement; node && node !== sheet.parentElement; node = node.parentElement) {
+                  const style = getComputedStyle(node);
+                  if (/(auto|scroll|hidden)/.test(style.overflowY)) { clip = node.getBoundingClientRect(); break; }
+                }
+                const bounds = { top: Math.max(clip.top, 0), bottom: Math.min(clip.bottom, innerHeight), left: Math.max(clip.left, 0), right: Math.min(clip.right, innerWidth) };
+                const rects = (element: HTMLElement) => {
+                  const out: DOMRect[] = [];
+                  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+                  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                    if (!node.textContent?.trim()) continue;
+                    const range = document.createRange(); range.selectNodeContents(node);
+                    out.push(...[...range.getClientRects()].filter((rect) => rect.width && rect.height));
+                  }
+                  return out;
+                };
+                const lineRects = rects(line), titleRects = rects(title);
+                const cut = [...lineRects, ...titleRects].filter((rect) => rect.top < bounds.top - 0.5 || rect.bottom > bounds.bottom + 0.5 || rect.left < bounds.left - 0.5 || rect.right > bounds.right + 0.5).length;
+                const s = control.getBoundingClientRect();
+                const overlaps = [...lineRects, ...titleRects].filter((rect) => rect.left < s.right && rect.right > s.left && rect.top < s.bottom && rect.bottom > s.top).length;
+                const lineTops = [...new Set(lineRects.map((rect) => Math.round(rect.top)))];
+                const colour = getComputedStyle(line.querySelector("span:last-child") ?? line).color;
+                return {
+                  rowState: host.getAttribute("data-memory-source-state"), checked: control.getAttribute("aria-checked"),
+                  line: line.textContent ?? "", title: title.textContent ?? "", lines: lineTops.length, cut, overlaps,
+                  lineClipped: line.scrollWidth > line.clientWidth + 1 || line.scrollHeight > line.clientHeight + 1,
+                  switchBox: { width: Math.round(s.width), height: Math.round(s.height) }, switchInside: s.left >= bounds.left - 0.5 && s.right <= bounds.right + 0.5 && s.top >= bounds.top - 0.5 && s.bottom <= bounds.bottom + 0.5,
+                  rowHeight: Math.round(host.getBoundingClientRect().height), sheetOverflowX: sheet.scrollWidth - sheet.clientWidth, colour,
+                };
+              });
+              await page.screenshot({ path: path.join(FRAMES, `${key}.png`) });
+              const t = (name: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate(lang, name, params);
+              const view = state === "read-failed" ? null : await (await GET()).json();
+              const words = state === "read-failed" ? memorySourceLine(null, true, t, lang)
+                : memorySourceLine(state === "pressed" ? { choice: "delegatus", phase: "importing", import: { counts: null, remainingGenerations: 0, hold: null } } : view, false, t, lang);
+              const expected = state === "refused" ? `${t("memorySource.saveFailed")} ${words}` : words;
+              readings.push({ key, state, lang, theme, width, file: `${key}.png`, expected, pageErrors: [...pageErrors], ...geometry });
+              if (geometry.rowState !== MEMORY_SOURCE_FRAME_ROW[state]) failures.push(`${key}: row reads ${geometry.rowState}`);
+              if (geometry.line !== expected) failures.push(`${key}: line «${geometry.line}» is not «${expected}»`);
+              if (geometry.title !== t("memorySource.title")) failures.push(`${key}: title «${geometry.title}»`);
+              if (geometry.checked !== String(MEMORY_SOURCE_FRAME_ON[state])) failures.push(`${key}: switch reads ${geometry.checked}`);
+              if (geometry.cut) failures.push(`${key}: ${geometry.cut} text lines cut by an edge`);
+              if (geometry.lineClipped) failures.push(`${key}: the state line is clipped inside its box`);
+              if (geometry.overlaps) failures.push(`${key}: the switch covers ${geometry.overlaps} text lines`);
+              if (!geometry.switchInside) failures.push(`${key}: the switch leaves the sheet`);
+              if (geometry.switchBox.width < 44 || geometry.switchBox.height < 44) failures.push(`${key}: switch target ${geometry.switchBox.width}×${geometry.switchBox.height}`);
+              if (geometry.sheetOverflowX > 1) failures.push(`${key}: sheet overflows sideways by ${geometry.sheetOverflowX}`);
+              if (pageErrors.length) failures.push(`${key}: ${pageErrors.join("; ")}`);
+            } catch (error) {
+              failures.push(`${key}: ${String(error).split("\n")[0]}`);
+              await page.screenshot({ path: path.join(FRAMES, `failed-${key}.png`) }).catch(() => {});
+            } finally { (releaseWrite as (() => void) | null)?.(); releaseWrite = null; }
+          }
+        } finally { await context.close(); }
+      }
+      /* Each frame pressed once: the held press and the refused one. */
+      if (writes.length !== 2 * 2 * 3 * 2 || writes.some((body) => JSON.stringify(body) !== JSON.stringify({ source: "delegatus" }) && JSON.stringify(body) !== JSON.stringify({ source: "engines" }))) failures.push(`writes ${JSON.stringify(writes.slice(0, 4))} (${writes.length})`);
+    } finally {
+      await browser.close(); server.stop();
+      if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.writeFileSync(path.join(FRAMES, "readings.json"), JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", block: "memory source settings", failures, frames: readings }, null, 2) + "\n");
+    }
+    expect(failures).toEqual([]);
+  }, 3_600_000);
+});
+
 browserTest("what a full-screen conversation opens draws above it on the phone: the runtime sheet picks a model and a document preview opens and closes", async () => {
   /* The phone's reader hosts sit on the `reader` layer; the runtime sheet is a popover and the preview is one step
      above `reader` (`src/components/layers.ts`). The conversation is deep-linked, so no board is under it. */

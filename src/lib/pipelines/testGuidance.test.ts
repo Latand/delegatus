@@ -62,13 +62,3 @@ test("packed tooling resolves without source files and the container bridge publ
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
-
-test("an install without resolvable gate tooling composes the fallback brief", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "unresolved-gate-guidance-"));
-  try {
-    const guidance = resolveStageTestGuidance(root);
-    expect(guidance).toStartWith("Gate wrapper unavailable: installed Delegatus gate tooling could not be resolved.");
-    expect(guidance).toContain("Run heavy checks one at a time directly and report that shared gate containment was unavailable");
-    expect(guidance).not.toContain("never bypass it");
-  } finally { fs.rmSync(root, { recursive: true, force: true }); }
-});

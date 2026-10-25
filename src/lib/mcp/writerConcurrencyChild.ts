@@ -249,9 +249,10 @@ if (kind === "task" && operation === "create" && writer === "http") {
 } else if (kind === "pipeline" && operation === "create" && writer === "http") {
   const input = { task: `${writer} pipeline`, src: creatorPath, repoDir: process.cwd(), autoStart: false, stages: [] };
   const { POST } = await import("@/app/api/pipelines/route");
+  const { soloBrowserSession } = await import("@/lib/agent/operatorSession");
   const response = await POST(new NextRequest("http://127.0.0.1/api/pipelines", {
     method: "POST",
-    headers: { host: "127.0.0.1", "content-type": "application/json" },
+    headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "content-type": "application/json" },
     body: JSON.stringify(input),
   }));
   if (!response.ok) throw new Error(`HTTP pipeline create failed: ${response.status} ${await response.text()}`);

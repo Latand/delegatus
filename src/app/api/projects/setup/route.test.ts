@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
 import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { projectIdentityFromRepositoryRoot } from "@/lib/projects/identity";
 import { GET, POST, PUT } from "./route";
@@ -19,7 +20,7 @@ const project = projectIdentityFromRepositoryRoot(root)!.project;
 const origin = "http://localhost";
 const recipe = { command: ["sh", "setup.sh"], cwd: "." };
 const request = (body: unknown, extras: Record<string, string> = {}) => new NextRequest(`${origin}/api/projects/setup`, {
-  method: "PUT", headers: { "content-type": "application/json", host: "localhost", origin, ...extras }, body: JSON.stringify(body),
+  method: "PUT", headers: { cookie: `llv_operator=${soloBrowserSession()}`, "content-type": "application/json", host: "localhost", origin, ...extras }, body: JSON.stringify(body),
 });
 afterAll(() => {
   setCallerConversationResolverForTests(null);
@@ -46,11 +47,12 @@ test("preview shows reviewed content, approval requires that exact digest, and n
   expect(await (await PUT(request({ project, recipe: null }))).json()).toEqual({ ok: true, setup: null });
 });
 
-test("each mutation denies a named agent exactly; a valid-Host operator control reaches validation", async () => {
+test("each mutation denies a named agent exactly; an authenticated operator control reaches validation", async () => {
   setCallerConversationResolverForTests(() => "conversation_fixture");
   const capability = Buffer.alloc(32, 7).toString("base64url");
   try {
     for (const action of [POST, PUT]) {
+      expect((await action(request({ project, repoDir: root, recipe }, { cookie: "" }))).status).toBe(403);
       for (const body of [{ project, repoDir: root, recipe }, { project, recipe: null }, { project, repoDir: root, recipe, reviewedHash: "0".repeat(64) }]) {
         const denied = await action(request(body, { [VIEWER_SPAWN_CAPABILITY_HEADER]: capability }));
         expect(denied.status).toBe(403);

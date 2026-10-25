@@ -1688,12 +1688,18 @@ export function pipelineRegistryHealth(): RegistryRecordIssue[] {
   });
 }
 
+function pipelineHasRecordedHost(pipeline: Pipeline): boolean {
+  return pipeline.runs.some(run => run.attempts.some(attempt => attempt.conversationId || attempt.agentPath || attempt.paneId));
+}
+
 function pipelineControllerActive(pipeline: Pipeline): boolean {
   if (pipeline.closeTeardown) return pipeline.closeTeardown.phase !== "settled";
   if (pipeline.activationCloseRequested) return true;
-  if (pipeline.state === "closed") return Boolean(pipeline.unconfirmedHosts?.length);
-  if (pipeline.state === "completed") {
-    return Boolean(pipeline.unconfirmedHosts?.length) || !pipeline.terminalReap?.settledAt;
+  if (pipeline.state === "completed" || pipeline.state === "closed") {
+    // A scoped controller holds an attempt window. Keep its eligibility
+    // conservative; the scheduler checks host identity in the stored row.
+    return Boolean(pipeline.unconfirmedHosts?.length) || (!pipeline.terminalReap?.settledAt
+      && (pipeline.state === "completed" || controllerPipelineKeys()?.includes(pipeline.id) || pipelineHasRecordedHost(pipeline)));
   }
   return true;
 }
@@ -2168,6 +2174,9 @@ export function archivedPipelinesRevision(): number {
 
 function pipelineSettledForArchive(pipeline: Pipeline, nowMs: number): boolean {
   if (!pipelineActivitySettled(pipeline)) return false;
+  if (pipeline.unconfirmedHosts?.length) return false;
+  if (["completed", "closed"].includes(pipeline.state) && !pipeline.closeTeardown && !pipeline.terminalReap?.settledAt
+    && pipelineHasRecordedHost(pipeline)) return false;
   /* The task-finish sweep reads the hot collection and records its durable
      outcome on the marked lane. Keep that lane visible to the sweep while any
      linked mark is unresolved, including while another lane on the task is

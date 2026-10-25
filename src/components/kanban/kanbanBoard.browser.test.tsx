@@ -1438,6 +1438,56 @@ describe("subscription API consent", () => {
   }, 120_000);
 });
 
+describe("telemetry opt-outs", () => {
+  browserTest("locked telemetry hides notices in both languages, themes and product widths", async () => {
+    const out = path.resolve(".artifacts/telemetry-opt-outs"); fs.mkdirSync(out, { recursive: true });
+    let locked = false;
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/telemetry": () => Response.json({ enabled: !locked, locked, noticeDismissed: false }),
+      "/api/subscription-api-consent": { version: 1, enabled: false, source: "default" },
+    });
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const phone of [false, true]) for (const off of [false, true]) {
+        locked = off;
+        const viewport = phone ? { width: 390, height: 844 } : { width: 1000, height: 700 };
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-settings&header=1&lang=${lang}`, viewport, theme, lang, "reduce", phone);
+        try {
+          if (off) {
+            await page.locator(phone ? '[data-mobile2-open="menu"]' : "[data-rail-menu]").first().click();
+            await page.locator(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").click();
+            await page.locator(phone ? '[data-mobile2-menu-row="ping"]' : "[data-rail-menu-ping]").click();
+          } else {
+            await page.locator("[data-telemetry-notice]").getByRole("button", { name: translate(lang, "headerMenu.ping"), exact: true }).click();
+          }
+          const dialog = page.locator("[data-telemetry-settings]"); await dialog.waitFor();
+          const toggle = dialog.getByRole("switch", { name: translate(lang, "telemetry.label"), exact: true });
+          await toggle.waitFor();
+          expect(await toggle.isDisabled()).toBe(off);
+          expect(await toggle.isChecked()).toBe(!off);
+          const { telemetryNotice } = await import("../../../bin/telemetry-notice.mjs");
+          expect((await dialog.innerText()).includes(telemetryNotice[lang])).toBe(!off);
+          const name = `${phone ? "phone" : "desktop"}-${lang}-${theme}-${off ? "off" : "on"}`;
+          await dialog.screenshot({ path: path.join(out, `${name}-settings.png`) });
+          await dialog.getByRole("button", { name: translate(lang, "telemetry.close"), exact: true }).click();
+          if (!off) await page.locator("[data-telemetry-notice]").waitFor();
+          const noticeCount = await page.locator("[data-telemetry-notice]").count();
+          expect(noticeCount).toBe(off ? 0 : 1);
+          await page.screenshot({ path: path.join(out, `${name}-page.png`) });
+          expect(pageErrors).toEqual([]);
+          readings.push({ lang, theme, viewport, locked: off, noticeCount, switchDisabled: off, settingsNotice: !off });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/telemetry", { recursive: true });
+      const sources = ["src/components/telemetry/TelemetrySettings.tsx", "src/components/kanban/kanbanBoard.browser.test.tsx"];
+      fs.writeFileSync("evidence/telemetry/opt-outs.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx",
+        command: "LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<browser> bun test src/components/kanban/kanbanBoard.browser.test.tsx -t 'telemetry opt-outs'",
+        sources: Object.fromEntries(sources.map(source => [source, createHash("sha256").update(fs.readFileSync(source)).digest("hex")])), readings }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
+
 describe("swarm release rules", () => {
   browserTest("consent, refused save and read-only scope fit both languages, themes and viewports", async () => {
     const out = path.resolve(".artifacts/swarm-rules"); fs.mkdirSync(out, { recursive: true });
@@ -7617,9 +7667,9 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
   const PANEL = "[data-rail-menu-panel]";
   const SHEET = "[data-mobile2-sheet='menu']";
   const TODAY_SHEET_PX = 743;
-  /* docs/design/header-menu.md: 360 px for every desktop state, 380 px for the Settings page and its voice row. */
+  /* docs/design/header-menu.md: 360 px for every desktop state, 560 px for the Settings page with its voice and memory source rows. */
   const DESKTOP_PX = 360;
-  const SETTINGS_PX = 420;
+  const SETTINGS_PX = 560;
   /* «Keys» is 370 px as approved (six rows, the back row and two transfer rows); an open field passes it and only the window bounds it (docs/design/keys-settings.md §15). */
   const KEYS_PX = 380;
   const desktopBound = (state: string) => (/^settings(-|$)/.test(state) ? SETTINGS_PX
@@ -7710,6 +7760,8 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
       },
       "/api/team": { mode: "team", me: { id: "member-1", name: "Fixture member", role: "owner", telegram: null }, members: [], methods: {} },
       "/api/telemetry": { enabled: true, locked: false, noticeDismissed: true },
+      /* The installation's memory source row (memory-source-switch.md §3.4), before any choice: its longest resting line. */
+      "/api/memory/source": { choice: null, phase: null },
     });
     /* The browser runs as a server of its own so its process id is on record and closed by it. */
     const browserServer = await chromium.launchServer(LAUNCH);
@@ -23432,6 +23484,48 @@ describe("task chip native queue presentation", () => {
     fs.mkdirSync("evidence/task-chip-to-orchestrator", { recursive: true });
     fs.writeFileSync("evidence/task-chip-to-orchestrator/native-queue.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
   }, 120_000);
+});
+
+describe("native queue after a matching proof", () => {
+  browserTest("the proven row and its acknowledgement hint leave and a same-text pending row stays, desktop and phone, en and uk, light and dark", async () => {
+    const out = path.resolve(".artifacts/native-queue-proof");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, args: [...(LAUNCH.args ?? []), "--disable-gpu"] });
+    const cases: Record<string, unknown>[] = [];
+    const hint = { en: "1 message is waiting for Codex to acknowledge it", uk: "1 повідомлення чекає на підтвердження від Codex." };
+    try {
+      for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 390]) {
+        const seen: Record<string, { rows: (string | null)[]; notice: string | null; count: string | null }> = {};
+        for (const proof of ["before", "after"] as const) {
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=native-queue-proof&proof=${proof}`, { width, height: 700 }, theme, locale, "reduce", width === 390);
+          try {
+            await page.reload();
+            const panel = page.locator('[data-testid="native-queue-panel"]');
+            await panel.waitFor();
+            await page.evaluate(() => document.fonts.ready);
+            const notice = panel.locator('[data-testid="native-queue-notice"]');
+            seen[proof] = {
+              rows: await panel.locator('[data-testid="native-queue-row"]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-entry"))),
+              notice: (await notice.count()) ? ((await notice.first().textContent()) ?? "").trim() : null,
+              count: ((await panel.locator('[data-testid="native-queue-count"]').first().textContent()) ?? "").trim(),
+            };
+            expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBeFalse();
+            expect(pageErrors).toEqual([]);
+            await page.screenshot({ path: path.join(out, `${locale}-${theme}-${width}-${proof}.png`) });
+          } finally { await context.close(); }
+        }
+        expect(seen.before!.rows).toEqual(["entry-b", "entry-a"]);
+        expect(seen.before!.notice).toContain(hint[locale]);
+        expect(seen.after!.rows).toEqual(["entry-b"]);
+        expect(seen.after!.notice).toBeNull();
+        cases.push({ locale, theme, width, rowsBefore: seen.before!.rows, noticeBefore: seen.before!.notice, countBefore: seen.before!.count,
+          rowsAfter: seen.after!.rows, noticeAfter: seen.after!.notice, countAfter: seen.after!.count });
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.mkdirSync("evidence/native-queue-proof", { recursive: true });
+    fs.writeFileSync("evidence/native-queue-proof/frames.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
+  }, 180_000);
 });
 
 describe("passive task status note", () => {

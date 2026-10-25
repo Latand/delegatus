@@ -1,3 +1,4 @@
+import { withoutOperatorCredentials } from "./operatorCredentials";
 import { engineMemoryOff } from "@/lib/memory/source";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -73,7 +74,8 @@ export function setCodexFeatureReaderForTest(reader: FeatureReader | undefined):
 /** Read the exact launch binary, without account configuration, auth or a turn.
  * No cache: replacing the interpreter must also replace its feature inventory. */
 export function readCodexFeatures(binary: string, source: NodeJS.ProcessEnv = process.env): CodexFeature[] {
-  if (testReader) return testReader(binary, source);
+  const probeSource = withoutOperatorCredentials(source);
+  if (testReader) return testReader(binary, probeSource);
   // The Docker shim resolves the interpreter under HOME in the host mount
   // namespace. Its probe files must live on that shared mount as well.
   const hostShim = source.LLV_DOCKER_NSENTER_SHIMS === "1";
@@ -90,7 +92,7 @@ export function readCodexFeatures(binary: string, source: NodeJS.ProcessEnv = pr
     // eslint-disable-next-line no-restricted-syntax -- Legacy isolated feature probe during serving Codex launch policy checks.
     const result = spawnSync(binary, ["features", "list"], {
       cwd: hostShim ? sharedHome : root,
-      env: { ...source, HOME: hostShim ? sharedHome : home, USERPROFILE: home, CODEX_HOME: codexHome,
+      env: { ...probeSource, HOME: hostShim ? sharedHome : home, USERPROFILE: home, CODEX_HOME: codexHome,
         XDG_CONFIG_HOME: path.join(root, "config"), XDG_CACHE_HOME: path.join(root, "cache"),
         TMPDIR: temporary, TMP: temporary, TEMP: temporary,
         LLV_STATE_DIR: path.join(root, "state"), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" },

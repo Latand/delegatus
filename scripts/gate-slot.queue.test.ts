@@ -33,6 +33,32 @@ function fixture() {
     close: () => { db.close(); fs.rmSync(dir, { recursive: true, force: true }); } };
 }
 
+for (const hasFlock of [false, true]) test.skipIf(process.platform === "win32")(`a claim failure stops the gate before checks start (flock: ${hasFlock})`, async () => {
+  const f = fixture(), bin = path.join(f.dir, "bin"), helper = path.join(f.dir, "helper");
+  fs.mkdirSync(bin);
+  for (const command of ["date", "mkdir", "dirname", "mktemp", "touch", "rm", "sleep"]) {
+    fs.symlinkSync(execFileSync("which", [command], { encoding: "utf8" }).trim(), path.join(bin, command));
+  }
+  fs.writeFileSync(helper, `#!/bin/bash
+case "$2" in
+  --reuse-slot) exit 75 ;;
+  --watch-wait) echo ready > "$3/ready"; while [[ ! -f "$3/done" ]]; do /bin/sleep 0.01; done; exit 0 ;;
+  --wait) exit 0 ;;
+  --claim) echo 'gate-slot: CPU admission queue lock deadline exceeded; checks did not start' >&2; exit 1 ;;
+  *) exit 99 ;;
+esac
+`, { mode: 0o755 });
+  try {
+    const result = await realExec("/bin/bash", ["scripts/gate-slot.sh", "/bin/bash", "-c", 'echo started > "$CPU_QUEUE_OUTPUT"'], process.cwd(), {
+      ...f.env, LLV_GATE_BUN: helper, LLV_GATE_RUNNER: "off", LLV_CPU_WAIT_ROOTS: "[]", LLV_GATE_SLOTS: "1",
+      PATH: hasFlock ? process.env.PATH : bin,
+    }, { timeoutMs: 5000 });
+    expect(result.code, result.stderr).toBe(1);
+    expect(result.stderr).toContain("lock deadline exceeded");
+    expect(fs.existsSync(f.env.CPU_QUEUE_OUTPUT)).toBe(false);
+  } finally { f.close(); }
+});
+
 test.each([1, 6])("%i real slot locks stay exclusive while an independent stage starts", async slots => {
   const f = fixture(), controls: AbortController[] = [], pending: Promise<Awaited<ReturnType<typeof realExec>>>[] = [];
   const release = path.join(f.dir, "release");

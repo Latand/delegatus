@@ -53,12 +53,19 @@ export function leavingOrder(rules: readonly RoleMemoryRule[]): RoleMemoryRule[]
   ];
 }
 
+/** A correction changed after its last curation still waits for the curator,
+    so the budget cannot archive it before that review. */
+export function pendingCorrection(rule: RoleMemoryRule): boolean {
+  return !!rule.operatorCorrection && (!rule.curatedAt || rule.changedAt > rule.curatedAt);
+}
+
 export interface RetentionPolicy {
   canCurate: boolean;
   evidence: (rules: readonly RoleMemoryRule[]) => ReadonlyMap<string, { tasks: number; applied: number; lastAppliedAt?: string }>;
 }
 
-/** Only unavailable curation permits emergency eviction beyond 125% of target. */
+/** Only unavailable curation permits emergency eviction beyond 125% of target.
+    Pending operator corrections stay active until the curator reviews them. */
 export function retainRules(rules: readonly RoleMemoryRule[], at: string, protectedIds: ReadonlySet<string> = new Set(), bound = ROLE_MEMORY_BOUND, policy?: RetentionPolicy): Pick<AppendOutcome, "active" | "changed" | "archived"> {
   const active = leavingOrder(rules);
   const changed: RoleMemoryRule[] = [];
@@ -68,7 +75,7 @@ export function retainRules(rules: readonly RoleMemoryRule[], at: string, protec
   const evidence = policy?.evidence(active);
   const newest = active.reduce((latest, rule) => rule.createdAt > latest.createdAt
     || rule.createdAt === latest.createdAt && rule.id > latest.id ? rule : latest, active[0]);
-  const candidates = active.filter(rule => rule.id !== newest?.id && !protectedIds.has(rule.id) && !rule.keptByOperatorAt).sort((a, b) => {
+  const candidates = active.filter(rule => rule.id !== newest?.id && !protectedIds.has(rule.id) && !rule.keptByOperatorAt && !pendingCorrection(rule)).sort((a, b) => {
     const left = evidence?.get(a.id), right = evidence?.get(b.id);
     return (left?.tasks ?? 0) - (right?.tasks ?? 0)
       || (left?.applied ?? 0) - (right?.applied ?? 0)
@@ -93,9 +100,9 @@ export function appendRule(active: readonly RoleMemoryRule[], incoming: RoleMemo
   if (duplicate) {
     changed.push({ ...incoming, state: "merged", reason: "duplicate", mergedInto: duplicate.id, mergedAt: at, changedAt: at });
     merged.push({ from: incoming.id, into: duplicate.id });
-    if (!duplicate.curatedAt && !duplicate.keptByOperatorAt) {
+    if (incoming.operatorCorrection || (!duplicate.curatedAt && !duplicate.keptByOperatorAt)) {
       next.splice(next.indexOf(duplicate), 1);
-      const refreshed = { ...duplicate, changedAt: at };
+      const refreshed = { ...duplicate, changedAt: at, ...(incoming.operatorCorrection ? { operatorCorrection: true as const } : {}) };
       next.push(refreshed);
       changed.push(refreshed);
     }

@@ -30,13 +30,15 @@ async function readRuleCuration(pass: CuratorPass, scope?: string, cursor?: stri
   const attempts = scope ? await readHistoryProjection(db => historyAttemptCounts(db, project, now), { collections: ["pipelines","pipelines_archive"] }) : {};
   const scopes = [...new Set(pass.scopes.map(canonicalScope))];
   const view = await projectViewAsync(project, now);
+  const correctionCounts = new Map(view.scopes.map(s => [s.scope, [...s.active, ...s.left.filter(rule => rule.reason === "budget")].filter(rule => rule.operatorCorrection && rule.awaitingCuration).length]));
+  const corrections = (key: string) => correctionCounts.get(key) ?? 0;
   if (!scope) return { pass: pass.id,
     ...(pass.budgetSweepCandidates ? { budgetSweep: Object.entries(pass.budgetSweepCandidates).map(([scope, ids]) => ({ scope, candidates: ids.length })) } : {}),
-    ...(pass.importBatch ? { import: { candidates: pass.importBatch.candidates.length, scope: "imports" } } : {}), scopes: scopes.map(key => {
+    ...(pass.importBatch ? { import: { candidates: pass.importBatch.candidates.length, scope: "imports" } } : {}), scopes: scopes.slice().sort((a, b) => Number(corrections(b) > 0) - Number(corrections(a) > 0)).map(key => {
     const held = view.scopes.find(s => s.scope === key);
     const row = !held ? roleMemoryCollection()?.get(`s:${key}`) : null;
     const active = row?.kind === "scope" ? row.active.flatMap(id => { const rule = roleMemoryCollection()?.get(`r:${id}`); return rule?.kind === "rule" ? [rule] : []; }) : [];
-    return { scope: key, revision: held?.revision ?? (row?.kind === "scope" ? row.revision : 0), chars: held?.chars ?? scopeChars(active), bound: ROLE_MEMORY_BOUND, active: held?.active.length ?? active.length,
+    return { scope: key, corrections: corrections(key), revision: held?.revision ?? (row?.kind === "scope" ? row.revision : 0), chars: held?.chars ?? scopeChars(active), bound: ROLE_MEMORY_BOUND, active: held?.active.length ?? active.length,
       left: held?.left.length ?? (row?.kind === "scope" || pass.budgetSweepCandidates?.[key]?.length ? leftRuleCount(key) : 0) };
   }) };
   const resolvedScope = canonicalScope(scope);
@@ -59,8 +61,9 @@ async function readRuleCuration(pass: CuratorPass, scope?: string, cursor?: stri
   const departuresSince = held.hasPass ? held.departuresSince : since;
   const entries: Record<string, unknown>[] = [
     ...(rules?.active.slice().reverse().map(({ versions, ...rule }) => ({ kind: "active", ...rule, newSincePass: !!rule.awaitingCuration || rule.changedAt > since, versionCount: versions?.length ?? 0, earlierText: versions?.at(-1) })) ?? []),
-    ...(rules?.left.filter(rule => rule.reason === "budget" || pass.budgetSweepCandidates?.[resolvedScope]?.includes(rule.id) || rule.changedAt > departuresSince).map(({ versions, ...rule }) => ({ kind: "left", ...rule, versionCount: versions?.length ?? 0 })) ?? []),
+    ...(rules?.left.filter(rule => rule.reason === "budget" || pass.budgetSweepCandidates?.[resolvedScope]?.includes(rule.id) || rule.changedAt > departuresSince).map(({ versions, ...rule }) => ({ kind: "left", ...rule, newSincePass: rule.changedAt > departuresSince, versionCount: versions?.length ?? 0 })) ?? []),
   ];
+  entries.sort((a, b) => Number(!!b.operatorCorrection && b.newSincePass === true) - Number(!!a.operatorCorrection && a.newSincePass === true));
   if (role && !isCrossProjectRoleScope(resolvedScope)) entries.push(...otherProjectRoleRules(resolvedScope).map(row => ({ kind: "other-project", id: row.id, scope: canonicalScope(row.scope), rule: row.rule, why: row.why, readOnly: true })));
   const usage = ruleUsageCounts(entries.map(entry => String(entry.id)));
   for (const entry of entries) Object.assign(entry, usage[String(entry.id)] ?? { applied: 0, misled: 0 });
