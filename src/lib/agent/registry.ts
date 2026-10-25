@@ -113,7 +113,7 @@ import { identityMaterializationFence } from "./identityMaterialization";
 import type { ResumePaneRecord } from "@/lib/resumePanesFile";
 import type { RuntimeDeliveryMode } from "@/lib/runtime/contracts";
 import { parseMessageOrigin, sameMessageOrigin } from "@/lib/runtime/messageOrigin";
-import { normalizePendingPermissions, normalizePendingToolUses, type PendingPermissionRequest, type PendingToolUse } from "@/lib/runtime/permissionRequests";
+import { normalizePendingPermissions, normalizePendingQuestions, normalizePendingToolUses, type PendingPermissionRequest, type PendingQuestionRequest, type PendingToolUse } from "@/lib/runtime/permissionRequests";
 import type { ProviderRetryEvidence } from "@/lib/runtime/engineHost";
 import { assertStructuredTextEnvelope, parseStructuredImageRefs, structuredContent, type StructuredImageRef } from "@/lib/runtime/structuredContent";
 import { admitRecoveredLaunch, admitReservedLaunch, settleFailedLaunch } from "@/lib/tasks/launchMembership";
@@ -164,6 +164,7 @@ export interface StructuredHostColumns {
   pendingAttention: string[];
   /** The pending attentions that are tool permission requests (#2215). */
   pendingPermissions?: PendingPermissionRequest[];
+  pendingQuestions?: PendingQuestionRequest[];
   /** The pending attentions that are native questions or plans, with the
       transcript tool use each answers. */
   pendingToolUses?: PendingToolUse[];
@@ -2236,6 +2237,9 @@ function normalizeStructuredHost(value: unknown): StructuredHostColumns | null {
       : [],
     ...(Array.isArray(host.pendingPermissions) && host.pendingPermissions.length > 0
       ? { pendingPermissions: normalizePendingPermissions(host.pendingPermissions) }
+      : {}),
+    ...(normalizePendingQuestions(host.pendingQuestions).length > 0
+      ? { pendingQuestions: normalizePendingQuestions(host.pendingQuestions) }
       : {}),
     ...(normalizePendingToolUses(host.pendingToolUses).length > 0
       ? { pendingToolUses: normalizePendingToolUses(host.pendingToolUses) }
