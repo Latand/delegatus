@@ -201,7 +201,7 @@ test("selection validation covers every membership input and refuses a lost or c
       db.run("DELETE FROM registry_changes");
       expect(registryStartupSelectionUnchanged(view)).toBe(false);
       view=(await store.prepareReadOnlySnapshot()).file;
-      db.transaction(()=>{ for(let i=0;i<129;i++) db.run("INSERT INTO registry_changes(collection,row_key) VALUES ('meta',?)", `selection-fixture-${i}`); })();
+      db.transaction(()=>{ for(let i=0;i<129;i++) db.run("INSERT INTO registry_changes(collection,row_key) VALUES ('meta',?)", [`selection-fixture-${i}`]); })();
       expect(registryStartupSelectionUnchanged(view)).toBe(false);
     } finally {db.close();store.close();}
   } finally {fs.rmSync(root,{recursive:true,force:true});}

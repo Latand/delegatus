@@ -61,7 +61,9 @@ prototype[site!] = function (...args: unknown[]) {
 
 // Keep the legacy singleton as the baseline entry, so a base run reaches the
 // actual locked constructor instead of failing on a missing export.
-const prepare = (registryModule as Partial<typeof registryModule>).prepareAgentRegistry
+const prepare = (registryModule as unknown as {
+  prepareAgentRegistry?: (signal?: AbortSignal) => Promise<registryModule.AgentRegistry>;
+}).prepareAgentRegistry
   ?? (() => registryModule.agentRegistry());
 let error: string | null = null;
 let sameSingleton = false;
