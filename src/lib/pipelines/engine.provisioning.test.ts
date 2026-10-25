@@ -2,6 +2,7 @@
 // Supported run-reviewer cases and flows/retirement.test.ts remain active.
 import { expect, test, spawn, spawnSync, fs, path, ACCOUNT_STORE_BUSY_MESSAGE, AccountMutationBusyError, defaultPipelinePorts, reconcileEmbeddedReviewFlows, tickPipelines, newRound, setRelayDeliveryForTest, tickFlow, registerPipelineTick, loadPipelines, savePipelines, interruptionObligationDirectory, patchPipeline, closeAndDrain, ORIGIN_MAIN_SHA, entry, harness, REMOTE_BRANCH, create, exhaustVerdictRecovery, withRuntimeSnapshot, DEPLOY_WINDOW_MS, forbiddenSleep, frozenWallClock, HISTORICAL_VERDICT_MISS, DEPLOY_CUT_HOLD, READ_ONLY_RERUN, deployCutObligations, structuredLatest, reviewParkedAfterRestart, STAGE_HEAD, PASS_TEXT, makeStructuredAttempt, stalledEntry, countDurableReads, pinStageHead, runningStructuredStage } from "./engine.fixture";
 import type { Flow, FileEntry } from "./engine.fixture";
+import { assertStateChildSuccess } from "@/lib/state/stateChildResult.fixture";
 
 
 test("a busy account mutation waits between ticks and claims one host on the same attempt (#1433)", async () => {
@@ -203,6 +204,7 @@ test("a due busy wait survives a restarted controller race with one fresh host c
     const { registerPipelineTick } = await import(${JSON.stringify(path.join(import.meta.dir, "controllerSignal.ts"))});
     registerPipelineTick(async () => {});
     const ports = defaultPipelinePorts();
+    ports.now = () => ${JSON.stringify(h.ports.now())};
     // This child models admission and a fake spawn, just like the parent harness.
     ports.engineReadiness = () => "connected";
     ports.structuredDeliveryPublication = () => "ready";
@@ -225,10 +227,13 @@ test("a due busy wait survives a restarted controller race with one fresh host c
   let first: ReturnType<typeof Bun.spawn> | null = null;
   let second: ReturnType<typeof Bun.spawn> | null = null;
   const waitFor = async (filename: string): Promise<void> => {
-    for (let attempt = 0; attempt < 400 && !fs.existsSync(filename); attempt += 1) await Bun.sleep(5);
-    if (!fs.existsSync(filename)) {
-      const childError = first?.exitCode !== null && first?.stderr ? await new Response(first.stderr as ReadableStream<Uint8Array>).text() : "";
-      throw new Error(`timed out waiting for ${path.basename(filename)}: ${childError || JSON.stringify(loadPipelines().map((pipeline) => ({ state: pipeline.state, detail: pipeline.stateDetail })))}`);
+    const deadline = performance.now() + 10_000;
+    while (!fs.existsSync(filename)) {
+      if (performance.now() >= deadline) {
+        const childError = first?.exitCode !== null && first?.stderr ? await new Response(first.stderr as ReadableStream<Uint8Array>).text() : "";
+        throw new Error(`timed out waiting for ${path.basename(filename)}: ${childError || JSON.stringify(loadPipelines().map((pipeline) => ({ state: pipeline.state, detail: pipeline.stateDetail })))}`);
+      }
+      await Bun.sleep(5);
     }
   };
   try {
@@ -243,13 +248,14 @@ test("a due busy wait survives a restarted controller race with one fresh host c
       new Response(first.stderr as ReadableStream<Uint8Array>).text(),
       new Response(second.stderr as ReadableStream<Uint8Array>).text(),
     ]);
-    expect({ firstExit, secondExit, firstError, secondError }).toEqual({ firstExit: 0, secondExit: 0, firstError: "", secondError: "" });
+    assertStateChildSuccess(firstExit, firstError);
+    assertStateChildSuccess(secondExit, secondError);
   } finally {
     fs.writeFileSync(releasePath, "release");
     for (const child of [first, second]) {
       if (!child) continue;
       const finished = await Promise.race([child.exited.then(() => true), Bun.sleep(100).then(() => false)]);
-      if (!finished) child.kill();
+      if (!finished) { child.kill(); await child.exited; }
     }
   }
 
