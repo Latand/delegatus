@@ -221,7 +221,20 @@ boundary had already closed to every send.
 The cut is found from the journal alone (the first `tool` entry named
 `relay_owner_history` with status `done`, then back to the `delegation` entry
 with its `delegationId`, then to the last operator utterance before it), so
-recovery after a restart applies the same cut.
+recovery after a restart applies the same cut. A private added server's call
+(`docs/design/voice-extensible-tools.md` §3.6) is recorded under its own name,
+so its entry carries `privateTool` while it runs and `privateResult` once it
+answers `done`, and the cut keys on those exactly as on `relay_owner_history`;
+on Codex, whose tool entries carry the turn's id, the delegation is matched by
+its operator turn. A resumed part's opening stops at the same cut.
+
+**Text an added tool shaped.** From the delegation that led to the first
+answer of an added tool (the tool entry's `addedResult`), the voice's `reply`
+entries are left out of the summariser's input: they can retell that answer,
+which is untrusted. The operator's words, requests and reports stay. A request
+or report can still carry such text when the operator asked to send it, so a
+call whose earlier-call notes include a call with an added answer starts with
+the added-result gates held, as a resumed part of such a call does.
 
 ### Which model, engine and account
 
