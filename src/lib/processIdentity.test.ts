@@ -111,6 +111,23 @@ test.skipIf(process.platform !== "linux")("a real unreaped child reads exited an
 
 const python = Bun.which("python3");
 
+test.skipIf(process.platform !== "linux")("a captured zombie with legacy or missing identity evidence cannot hold a worktree (#2967)", async () => {
+  const fixture = await startUnreapedChild();
+  try {
+    for (const identity of [
+      { pid: fixture.zombie.pid, startIdentity: fixture.zombie.startIdentity },
+      { pid: fixture.zombie.pid, startIdentity: null, bootEpoch: null },
+    ]) {
+      expect(processIdentityStatus(identity)).toBe("unverified");
+      expect(processIdentityMayRun(identity)).toBeFalse();
+    }
+    expect(processIdentityMayRun({ pid: fixture.parentIdentity.pid, startIdentity: null })).toBeTrue();
+    expect(procBackend.pidAlive(fixture.zombie.pid)).toBeTrue();
+  } finally {
+    await fixture.stop();
+  }
+});
+
 test.skipIf(process.platform !== "linux" || !python)("a live process whose main thread exited still may run while its other thread writes (#2967)", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "leader-exited-"));
   const output = path.join(directory, "writes.txt");

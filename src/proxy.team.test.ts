@@ -21,6 +21,7 @@ import { POST as handoffRoute } from "@/app/api/team/session/handoff/route";
 import { probeHeadersFrom } from "../bin/internalService.mjs";
 
 import { proxy } from "./proxy";
+import { mcpHttpAccessToken, MCP_HTTP_ACCESS_HEADER } from "@/lib/mcp/httpAccess";
 
 /* The two layers of sign-in-and-team D1 through the real proxy: the access
    key decides who reaches the Viewer at all, and only then, on a team
@@ -28,18 +29,21 @@ import { proxy } from "./proxy";
 
 const TOKEN = "t".repeat(43);
 const DESKTOP = { surface: "desktop" as const, browser: "chrome" as const };
-const previous = { token: process.env.LLV_TOKEN, state: process.env.LLV_STATE_DIR, host: process.env.LLV_TS_HOST };
+const previous = { token: process.env.LLV_TOKEN, state: process.env.LLV_STATE_DIR, host: process.env.LLV_TS_HOST, bind: process.env.HOSTNAME };
 let stateDir = "";
 
 beforeEach(() => {
   stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-proxy-team-"));
   process.env.LLV_STATE_DIR = stateDir;
   process.env.LLV_TOKEN = TOKEN;
+  process.env.HOSTNAME = "127.0.0.1";
   process.env.LLV_TS_HOST = "dev.example.net";
   resetTeamStoreForTests();
 });
 
 afterEach(() => {
+  if (previous.bind === undefined) delete process.env.HOSTNAME;
+  else process.env.HOSTNAME = previous.bind;
   if (previous.host === undefined) delete process.env.LLV_TS_HOST;
   else process.env.LLV_TS_HOST = previous.host;
   resetTeamStoreForTests();
@@ -214,6 +218,21 @@ describe("team install: first-party callers name themselves and are checked", ()
   test("a capability the registry issued still passes, for writes too", () => {
     const response = proxy(get("/api/pipelines", { ...KEY, "x-llv-spawn-capability": REAL_CAPABILITY }, "POST"));
     expect(response.headers.get("x-middleware-next")).toBe("1");
+  });
+
+  test("local MCP access still requires verified agent identity on a team install", async () => {
+    const access = mcpHttpAccessToken()!;
+    const local = (headers: Record<string, string>) => new NextRequest("http://127.0.0.1:8898/api/mcp", {
+      method: "POST", headers: { host: "127.0.0.1:8898", [MCP_HTTP_ACCESS_HEADER]: access, ...headers },
+    });
+    for (const headers of [{}, FORGED_CAPABILITY, FORGED_SERVICE]) {
+      const denied = proxy(local(headers));
+      expect(denied.status).toBe(401);
+      expect(await denied.json()).toMatchObject({ code: "member_required" });
+    }
+    expect(proxy(local({ "x-llv-spawn-capability": REAL_CAPABILITY })).headers.get("x-middleware-next")).toBe("1");
+    installSpawnCapabilityResolver(null);
+    expect(proxy(local({ "x-llv-spawn-capability": REAL_CAPABILITY })).status).toBe(401);
   });
 
   test("the runtime host's pipeline tick passes, with the key and without one", async () => {
@@ -424,7 +443,10 @@ describe("team install: no credential a teammate holds outlives the membership",
 
   test("a revoked member holding everything the product gave them is refused every read", async () => {
     const jar = new Jar();
-    const invite = await (await inviteRoute(route("/api/team/invites", { body: { name: "Ivan" }, cookie: ownerCookie }))).json() as { url: string };
+    const { createWorkspace } = await import("@/lib/team/workspaces");
+    const workspaceId = `w_${"f".repeat(32)}`;
+    createWorkspace(teamStore(), teamStore().owner()!, { id: workspaceId, name: "Revocation fixture", projects: ["repo-fixture"] });
+    const invite = await (await inviteRoute(route("/api/team/invites", { body: { name: "Ivan", workspaceId }, cookie: ownerCookie }))).json() as { url: string };
     open(invite.url, jar);
     const code = new URL(invite.url).pathname.split("/").at(-1)!;
     const joined = await joinRoute(route(`/api/team/join/${code}`, { body: { name: "Ivan" } }), { params: Promise.resolve({ code }) });

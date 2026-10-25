@@ -41,7 +41,7 @@ import { compactPipelineArtifactPaths, compactPipelineLayoutFlows, createDraftPi
 import { PipelineTemplatePicker } from "./pipelines/PipelineTemplatePicker";
 import { createProjectDashboardDerivation } from "./projectDashboardDerivation";
 import { buildSubagentTrays, subagentTraySignature } from "./scheme/subagentTray";
-import type { SubagentTrayApi } from "./scheme/SubagentTrayView";
+import type { SubagentTrayApi } from "./scheme/subagentTray";
 import { conversationIdentity, currentConversationFile, formatConversationHash, isLaunchPlaceholder } from "@/lib/accounts/identity";
 import { recordFocusNavigation } from "@/lib/navigation/focusHistory";
 import { collapsibleWorkerFiles, conversationSeenKey, finishedLaneOutcomePaths, pipelineCursorStagePaths, protectedReviewerNodes } from "./scheme/workerCollapse";
@@ -2252,7 +2252,7 @@ function ProjectDashboardView({
            conversation is on top of the navigation stack. The strip inside the
            focus view stays until lane 3 folds it into the bar's title cell. */
         mobileTop.kind === "accounts" ? (
-          <MobileAccountsScreen host={mobileShell} renderSheet={renderMobileSheet} />
+          <MobileAccountsScreen project={project} host={mobileShell} renderSheet={renderMobileSheet} />
         ) : mobileTop.kind === "reports" ? (
           /* The orchestrator's report log (#2146), over its conversation. */
           <MobileReportsScreen project={project} host={mobileShell} renderSheet={renderMobileSheet} />

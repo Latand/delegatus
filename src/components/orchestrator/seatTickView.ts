@@ -61,6 +61,7 @@ const REASONS: Record<SeatTickWakeReasonKind, MessageKey> = {
   "autonomy-idle": "seatTick.reason.autonomyIdle",
   "autonomy-ended": "seatTick.reason.autonomyEnded",
   "unstarted-task": "seatTick.reason.unstartedTask",
+  "overdue-task": "seatTick.reason.overdueTask",
   interval: "seatTick.reason.interval",
   "child-terminal": "seatTick.reason.childTerminal",
   "own-lane-settled": "seatTick.reason.ownLaneSettled",

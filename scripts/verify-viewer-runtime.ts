@@ -403,10 +403,11 @@ export async function verifyBuiltCodexSocket(root: string): Promise<{ ok: boolea
 async function serveOnce(root: string, sandbox: string): Promise<{ status: number; bytes: number; readyMs: number; log: string[]; detail?: string }> {
   const port = await freePort();
   const origin = `http://127.0.0.1:${port}`;
-  const contained = process.platform === "linux" && Boolean(process.env.LLV_OWNED_TEST_RUN_CGROUP);
+  const contained = process.platform === "linux" && (Boolean(process.env.LLV_OWNED_TEST_RUN_CGROUP)
+    || Number(process.env.LLV_PORTABLE_TEST_RUNNER_PID) === process.pid);
   const command = [process.execPath, "--bun", "node_modules/.bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)];
   // A serving Viewer starts background workers. Within a gate, give this
-  // deliberate probe lifetime its own service so stopping it ends those forks
+  // deliberate probe lifetime its own runner so stopping it ends those forks
   // too, without concealing leftovers from the enclosing run's standing guard.
   const child = spawn(process.execPath, contained ? [path.join(import.meta.dir, "owned-runner.ts"), ...command] : command.slice(1), {
     cwd: root,
@@ -457,8 +458,8 @@ async function serveOnce(root: string, sandbox: string): Promise<{ status: numbe
       return { status: 0, bytes: 0, readyMs, log: log(), detail: `the served application dropped GET /: ${firstLine(error)}` };
     }
   } finally {
-    // The service's TERM/KILL budget is two seconds. Its original outer handle
-    // waits for systemd-run and the exact-unit stop before it exits.
+    // The owned runner has bounded TERM/KILL cleanup. Its original handle
+    // waits for the service stop or portable guardian before it exits.
     await stopFixtureProcess(child, contained ? 7_000 : 500, contained ? 10_000 : 2_000);
     if (contained && (child.signalCode !== null || ![0, 143].includes(child.exitCode ?? -1))) {
       throw new Error("served probe service shutdown was not confirmed");
@@ -552,13 +553,14 @@ if (import.meta.main) {
   // The direct command prescribed by CI needs the same containment as a hook.
   // Redirect before probing, and bind the service to this original caller so
   // its hard death cannot leave the redirected verifier behind.
-  if (process.platform === "linux" && !(Number(process.env.LLV_OWNED_TEST_RUNNER_PID) === process.pid
+  if (process.platform === "linux" && Number(process.env.LLV_PORTABLE_TEST_RUNNER_PID) !== process.pid
+    && !(Number(process.env.LLV_OWNED_TEST_RUNNER_PID) === process.pid
     && fs.readFileSync("/proc/self/cgroup", "utf8").split("\n").some(line => line === `0::${process.env.LLV_OWNED_TEST_RUN_CGROUP}`))) {
     const runner = spawn(process.execPath, [path.join(import.meta.dir, "owned-runner.ts"), process.execPath, import.meta.path, ...argv], {
       env: { ...process.env, LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)) }, stdio: "inherit",
     });
     process.on("SIGTERM", () => runner.kill("SIGTERM"));
-    process.on("SIGINT", () => runner.kill("SIGTERM"));
+    process.on("SIGINT", () => runner.kill("SIGINT"));
     const code = await new Promise<number>(resolve => {
       runner.once("exit", (exitCode, signal) => resolve(exitCode ?? (signal === "SIGTERM" ? 143 : 137)));
       runner.once("error", () => resolve(1));

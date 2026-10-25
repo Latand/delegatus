@@ -297,6 +297,34 @@ for (const [healthyKind, kind] of [["legacy", "managed"], ["managed", "legacy"],
   }
 }
 
+for (const state of ["unknown", "unsafe", "absent"] as const) {
+  for (const scope of ["unbound", "allowed", "excluded"] as const) {
+    test(`automatic Claude credential ${state} diagnosis respects the ${scope} pool`, async () => {
+      const { clearAccountTestState } = await import("./accountsStoreFixture");
+      const { bindAccountToProject } = await import("./projectBindings");
+      const { resolveHealthySpawnAccount } = await import("./manager");
+      clearAccountTestState(process.env.LLV_STATE_DIR!);
+      setSubscriptionApiConsent(true);
+      seedAccountRegistry("claude", { version: 1, active: "default", accounts: [], retired: [] });
+      const project = "repo-credential-diagnosis";
+      if (scope !== "unbound") expect(bindAccountToProject("claude", scope === "allowed" ? "default" : "not-listed", project,
+        () => new Date(NOW).toISOString()).ok).toBe(true);
+      const read = spyOn(credentials, "readClaudeCredentials").mockReturnValue({ state });
+      const readsBefore = providerReads;
+      try {
+        await expect(resolveHealthySpawnAccount("claude", undefined, project)).rejects.toMatchObject({
+          name: state === "unknown" && scope !== "excluded" ? "ClaudeCredentialUnavailableError" : "ProjectAccountRefusedError",
+        });
+        expect(providerReads).toBe(readsBefore);
+      } finally {
+        read.mockRestore();
+        clearAccountTestState(process.env.LLV_STATE_DIR!);
+        setSubscriptionApiConsent(true);
+      }
+    });
+  }
+}
+
 for (const phase of ["probe", "refresh"] as const) {
   for (const policy of ["healthy alternative", "no healthy alternative", "explicit pin"] as const) test(`a changed ${phase} candidate preserves ${policy}`, async () => {
     const { AccountAdmissionChangedError } = await import("./accountMutation");

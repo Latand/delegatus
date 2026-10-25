@@ -297,6 +297,9 @@ test.each([false, true])("restart after receipt completion clears only the recov
     f.advance(61_000);
     await f.recover(f.launchId(), () => true);
   }
+  const cap = { limitBytes: 8 * 2 ** 30, requestedBytes: 12 * 2 ** 30, source: "stage" as const, clamped: true, enforced: true };
+  await f.registry.recordSpawnMemoryCapOffLoop(f.launchId(), cap);
+  productionHostSeams(f);
   expect(f.registry.readOnlySnapshot().receipts[f.launchId()]?.state).toBe("completed");
   expect(f.attempt().state).toBe("spawning");
   expect(loadPipelines()[0]!.stateDetail).toContain("waiting for the runtime host");
@@ -315,6 +318,7 @@ test.each([false, true])("restart after receipt completion clears only the recov
     expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: "manual review required for changed requirements" });
     expect(f.attempt().controllerWait).toBeDefined();
   } else {
+    expect(f.attempt().memoryCap).toMatchObject(cap);
     expect(f.attempt().controllerWait).toBeUndefined();
     expect(loadPipelines()[0]!.stateDetail).toBeNull();
   }
@@ -586,13 +590,20 @@ test.each(["before-recovery", "account-lock"] as const)("recovering an unsubmitt
     dispatches.push(input.receipt.launchId);
     return { path: null } as never;
   });
-  // The activation harness provisions a synthetic worktree. Supply its HEAD
-  // only at the native Git boundary; keep admission and recovery real.
+  // The activation harness provisions a synthetic worktree. Supply its Git
+  // directory and HEAD at the native boundary; keep guard writes, admission
+  // and recovery real and confined to this test's state directory.
+  const gitDirectory = path.join(process.env.LLV_STATE_DIR!, `unsubmitted-${seam}.git`);
+  fs.mkdirSync(gitDirectory);
   const provision = await import("@/lib/workflows/provision");
   const execute = provision.realExec;
-  const gitHead = spyOn(provision, "realExec").mockImplementation((command, args, cwd, ...rest) =>
-    command === "git" && args.join(" ") === "rev-parse HEAD" && cwd === before.activation!.input.cwd
-      ? { code: 0, stdout: ORIGIN_MAIN_SHA, stderr: "" } : execute(command, args, cwd, ...rest));
+  const gitPreparation = spyOn(provision, "realExec").mockImplementation((command, args, cwd, ...rest) => {
+    if (command === "git" && cwd === before.activation!.input.cwd) {
+      if (args.join(" ") === "rev-parse --absolute-git-dir") return { code: 0, stdout: gitDirectory, stderr: "" };
+      if (args.join(" ") === "rev-parse HEAD") return { code: 0, stdout: ORIGIN_MAIN_SHA, stderr: "" };
+    }
+    return execute(command, args, cwd, ...rest);
+  });
   const hold = () => drain.writeDrain(drain.drainFile(), { id: "unsubmitted-recovery", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
   let resume!: () => void;
   let locking: Promise<void> | undefined;
@@ -618,7 +629,8 @@ test.each(["before-recovery", "account-lock"] as const)("recovering an unsubmitt
     await (recovering ?? engineModule.drainStageActivations(recoveryPorts));
     await engineModule.drainStageActivations(recoveryPorts);
     expect(dispatches).toHaveLength(0);
-    expect(gitHead).not.toHaveBeenCalled();
+    expect(gitPreparation).not.toHaveBeenCalled();
+    expect(fs.readdirSync(gitDirectory)).toEqual([]);
     expect(Object.values(registry.readOnlySnapshot().receipts)).toHaveLength(0);
     const held = loadPipelines()[0]!.runs[0]!.attempts[0]!;
     expect(held).toMatchObject({ n: before.n, launchId: null, spawnCalls: 1, activation: {
@@ -637,13 +649,16 @@ test.each(["before-recovery", "account-lock"] as const)("recovering an unsubmitt
     expect(JSON.parse(fs.readFileSync(path.join(launched.account.env.LLV_STAGE_GIT_RECEIPT!, "start.json"), "utf8"))).toMatchObject({
       launchId: launched.receipt.launchId, head: ORIGIN_MAIN_SHA, worktree: before.activation!.input.cwd,
     });
+    const ownerFile = path.join(gitDirectory, "delegatus-stage-owner");
+    expect(fs.readFileSync(ownerFile, "utf8")).toBe(launched.account.env.LLV_STAGE_GIT_RECEIPT!);
+    expect(fs.readFileSync(path.join(launched.account.env.LLV_STAGE_GIT_RECEIPT!, "owner"), "utf8")).toBe(ownerFile);
     const receipts = Object.values(registry.readOnlySnapshot().receipts);
     expect(receipts).toHaveLength(1);
     expect(receipts[0]!.clientAttemptId).toBe(before.activation!.clientAttemptId);
     expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.spawnCalls).toBe(1);
   } finally {
     resume?.(); await locking; await recovering;
-    lock?.mockRestore(); resolve.mockRestore(); client.mockRestore(); spawn.mockRestore(); gitHead.mockRestore();
+    lock?.mockRestore(); resolve.mockRestore(); client.mockRestore(); spawn.mockRestore(); gitPreparation.mockRestore();
     drain.releaseDrain(drain.drainFile(), "unsubmitted-recovery"); setAgentRegistryForTests(null);
   }
 });

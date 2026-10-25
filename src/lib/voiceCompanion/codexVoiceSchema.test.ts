@@ -5,6 +5,7 @@ import path from "node:path";
 import { codexAccountBinary } from "@/lib/accounts/codexAppServer";
 import { CODEX_V3_VOICES, CODEX_VOICE, codexVoiceContext, codexVoiceStart, codexVoiceText, codexVoiceThread, codexVoiceToolResult } from "./codexProvider";
 import { VOICE_IMAGES } from "./boardReads";
+import type { VoiceToolSnapshot } from "@/lib/voiceTools/snapshot";
 
 type Schema = boolean | { $ref?: string; oneOf?: Schema[]; anyOf?: Schema[]; allOf?: Schema[]; properties?: Record<string, Schema>; required?: string[]; items?: Schema; enum?: unknown[]; type?: string | string[]; definitions?: Record<string, Schema> };
 /** Unknown properties are rejected even where serde's schema allows them:
@@ -32,6 +33,11 @@ function check(value: unknown, schema: Schema, root: Schema, at = "params"): voi
     }
   }
 }
+/** One added server with two functions, as a call's snapshot hands them to the thread (one namespace per server). */
+const ADDED: VoiceToolSnapshot = { revision: 3, servers: [{ name: "music", title: "Music", capability: "Plays music.", transport: "http", private: false, askBeforeActing: false,
+  callTimeoutMs: 15_000, approvalDigest: "sha256:fixture", catalogDigest: "sha256:fixture", tools: [
+    { wire: "music__play", tool: "play", description: "Play a song", inputSchema: { type: "object", properties: { song: { type: "string" } }, required: ["song"] }, acts: true },
+    { wire: "music__now_playing", tool: "now-playing", description: "What plays", inputSchema: { type: "object" }, acts: false }] }] };
 const codexBinary = codexAccountBinary();
 test.if(Bun.which(codexBinary) !== null)("the installed Codex experimental schema contains every field the voice sends", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "voice-schema-"));
@@ -45,6 +51,8 @@ test.if(Bun.which(codexBinary) !== null)("the installed Codex experimental schem
       ["v2/ThreadStartParams", codexVoiceThread(directory, true)],
       ["v2/ThreadRealtimeStartParams", codexVoiceStart("fixture", "en", "v=0\n", "Fixture")],
       ["v2/ThreadStartParams", codexVoiceThread(directory,true,"M".repeat(2400))],
+      ["v2/ThreadStartParams", codexVoiceThread(directory, true, "", "en", ADDED)],
+      ["v2/ThreadRealtimeStartParams", codexVoiceStart("fixture", "en", "v=0\n", "Fixture", undefined, "", ADDED)],
       ["v2/ThreadRealtimeStartParams", codexVoiceStart("fixture", "en", "v=0\n", "Fixture", undefined,"M".repeat(2400))],
       ["v2/ThreadRealtimeStopParams", { threadId: "fixture" }],
       ["v2/ThreadRealtimeAppendSpeechParams", { threadId: "fixture", text: "The board could not be read just now." }],
@@ -108,7 +116,7 @@ test("orchestrator message, action and show schemas are identical on API and Cod
   const thread = codexVoiceThread("/fixture", false);
   for (const name of ["orchestrator_messages", "orchestrator_actions", "show_orchestrator_message", "list_projects"]) {
     const api = COMPANION_TOOLS.find(tool => tool.name === name)!;
-    const dynamic = thread.dynamicTools.find(tool => tool.name === name)!;
+    const dynamic = thread.dynamicTools.find(tool => tool.name === name) as { inputSchema: unknown; description: string };
     expect(dynamic.inputSchema).toEqual(api.parameters);
     expect(dynamic.description).toBe(api.description);
     expect(api.parameters.required).toEqual(Object.keys(api.parameters.properties));

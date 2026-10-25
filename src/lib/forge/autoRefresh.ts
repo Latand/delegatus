@@ -10,10 +10,15 @@ export type RefreshOptions = {
   refreshOf: { pipelineId: string; base: string; lineage: RefreshLineage };
 };
 
-/** Admission at a fresh conflict read; an old blocked record starts no work. */
+/** Admission at a fresh conflict or BEHIND read; an old block starts no work. */
 export function refreshAdmission(lane: Pipeline, pipelines: readonly Pipeline[], setting: MergeOnReviewSetting): boolean {
   const delivery = lane.delivery;
   const merge = lane.merge;
+  const current = pipelines.find(candidate => candidate.id === lane.id);
+  if (!current || current.lastPassedCommit !== lane.lastPassedCommit || current.merge?.updatedAt !== merge?.updatedAt
+    || current.delivery?.target.branch !== delivery?.target.branch || current.delivery?.target.remote !== delivery?.target.remote
+    || current.delivery?.target.repository !== delivery?.target.repository || current.delivery?.target.pr !== delivery?.target.pr
+    || current.delivery?.active || current.delivery?.disposition !== "owner" || !mergeEligible(current)) return false;
   if (!setting.enabled || !mergeEligible(lane) || !delivery || delivery.disposition !== "owner" || delivery.active
     || !merge?.prNumber || merge.refresh?.attempt === merge.attempts) return false;
   return !pipelines.some((other) => {
@@ -24,12 +29,25 @@ export function refreshAdmission(lane: Pipeline, pipelines: readonly Pipeline[],
   });
 }
 
+/** The child retains this immutable key in both the hot and archived stores. */
+export function refreshTupleKey(lane: Pipeline, base: string, head: string): string {
+  const tuple = [lane.merge!.repository, lane.merge!.prNumber, head, base];
+  return `auto-refresh:${createHash("sha256").update(JSON.stringify(tuple)).digest("hex")}`;
+}
+
 export function refreshReservation(lane: Pipeline, base: string, head: string, now: number, baseBranch?: string): PipelineRefresh {
   const attempt = lane.merge!.attempts;
-  const key = `auto-refresh:${lane.id}:${attempt}`;
+  const key = refreshTupleKey(lane, base, head);
   return { attempt, base, head, key, ...(baseBranch ? { baseBranch } : {}),
     digest: createHash("sha256").update(JSON.stringify([key, base, head, lane.merge!.prNumber, ...(baseBranch ? [baseBranch] : [])])).digest("hex"),
     requestedAt: new Date(now).toISOString(), pipelineId: null };
+}
+
+/** Hot reservations cover pending creation and older children with lane-based
+ * keys. Created tuple-keyed children are also looked up in the durable index. */
+export function refreshWasRequested(lane: Pipeline, pipelines: readonly Pipeline[], base: string, head: string): boolean {
+  return pipelines.some(({ merge }) => merge?.repository === lane.merge!.repository
+    && merge.prNumber === lane.merge!.prNumber && merge.refresh?.base === base && merge.refresh.head === head);
 }
 
 /** Rebuilt solely from the durable reservation so a replay keeps its facts. */
@@ -40,7 +58,7 @@ export function refreshRequest(lane: Pipeline, legacyBase = "main"): CreatePipel
   const base = refresh.baseBranch ?? legacyBase;
   const facts = `PR #${merge.prNumber}; finished lane ${lane.id}; base ${base} at ${refresh.base}; reviewed head ${refresh.head}; delivery ${target.branch}.`;
   return {
-    task: `#${merge.prNumber} ${lane.task.split("\n")[0]!.slice(0, 60)}: merge current ${base}, resolve the conflict, review the resolution only`,
+    task: `#${merge.prNumber} ${lane.task.split("\n")[0]!.slice(0, 60)}: merge current ${base}, review the merge resolution only`,
     taskIds: lane.taskIds,
     finishesTask: lane.finishesTaskIds ?? false,
     repoDir: lane.repoDir,
@@ -48,7 +66,7 @@ export function refreshRequest(lane: Pipeline, legacyBase = "main"): CreatePipel
     delivery: { branch: target.branch, remote: target.remote, pr: merge.prNumber!, ...(target.prRepository ? { prRepository: target.prRepository } : {}) },
     publication: "remote-branch",
     autoStart: true,
-    spec: `Automatic refresh is authorized for conflicts with the PR base branch.
+    spec: `Automatic refresh is authorized for a PR behind or in conflict with its base branch.
 A content-preserving refresh from ${base} gets one review of the resolution only.
 ${facts}
 Both sides keep their behaviour. Commits use the enforced Delegatus machine identity plus the engine's noreply Co-Authored-By trailer. Never rebase, force-push or call GitHub update-branch. A semantic conflict parks needs_decision with its file:line and @@ hunk. Review only the resolution. The project's checks must pass.`,

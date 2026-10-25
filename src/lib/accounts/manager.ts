@@ -1,4 +1,4 @@
-import { codexModelServiceTiers, tierOffers, CodexServiceTierUnavailableError } from "./codexServiceTiers";
+import { codexServiceTierRefusal, tierOffers, CodexServiceTierUnavailableError } from "./codexServiceTiers";
 import { accountsCollectionRevision } from "./accountsStore";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { accountForSpawn, activeCodexAccountId, codexAccountListed, codexAccountsMutationLocked, codexHomeOwningSessionPath, CorruptCodexAccountsError, createManagedCodexAccount, listCodexAccounts, setActiveCodexAccount, UnknownAccountError, type CodexAccount } from "./codex";
@@ -16,7 +16,7 @@ import { selectProjectAccount } from "./projectSelection";
 import { creditGuardBlock } from "./creditGuard";
 import { turboCreditExemptFor } from "./turboCreditExemption";
 import { refreshStaleExhaustion, type LiveLimitsDeps } from "./liveLimits";
-import { selectHealthyClaudeAccount } from "./spawnHealth";
+import { ClaudeCredentialUnavailableError, selectHealthyClaudeAccount } from "./spawnHealth";
 import { classifySpawnAccountAdmission, type SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
 import { readProviderMessageHealth } from "./claudeProviderHealth";
 
@@ -144,8 +144,7 @@ export async function resolveHealthySpawnAccount(
     bindings,
     preferredId: routing ?? null,
     model,
-    /* An unbound project keeps the engine's active account with no capacity
-       arithmetic in front of it, which is what this seam has always done. */
+    /* Both historical launch hints now share reset-aware capacity ranking. */
     unbound: "engine-default" as const,
   };
   /* The pick nobody named: the pool, then capacity, in that order. Computed
@@ -160,9 +159,7 @@ export async function resolveHealthySpawnAccount(
   const labels = offers?.offering.map(id => tierAccounts.find(account => account.id === id)?.label ?? "account").join(", ") || "none";
   if (offers && !offers.offering.length) {
     if (serviceTier!.required) {
-      const allOffers = tierOffers(tierAccounts, serviceTier!.model, serviceTier!.id);
-      const availableLabels = allOffers.offering.map(id => tierAccounts.find(account => account.id === id)?.label ?? "account").join(", ") || "none";
-      throw new CodexServiceTierUnavailableError(`${named ? "named account does not offer" : allowed ? "no account in this project's pool offers" : "no Codex account offers"} serviceTier ${serviceTier!.id} for ${serviceTier!.model}; offered: ${offers.offered.join(", ") || "none"}; accounts that offer it: ${availableLabels}`);
+      throw new CodexServiceTierUnavailableError(codexServiceTierRefusal(candidates, serviceTier!.model, serviceTier!.id, named));
     }
     appliedTier = null;
   }
@@ -179,6 +176,13 @@ export async function resolveHealthySpawnAccount(
     automatic = selectProjectAccount({ ...selectionInput, observations: registry.quotaObservations(engine) });
   }
   if (named === null && automatic.kind !== "available") {
+    // Discovery cannot prove authentication when Keychain is unreadable.
+    // Preserve that diagnosis when capacity selection has no candidate, before
+    // its authPresent filter can hide the health pass's uncertainty refusal.
+    if (engine === "claude" && automatic.kind === "unavailable" && selectionInput.accounts.some(account =>
+      (allowed === null || allowed.has(account.id)) && "credentialState" in account && account.credentialState === "unknown")) {
+      throw new ClaudeCredentialUnavailableError();
+    }
     throw new ProjectAccountRefusedError(automatic, engine, project, appliedTier ? `serviceTier ${appliedTier} is offered by: ${labels}` : undefined);
   }
   if (named !== null) {
@@ -211,7 +215,7 @@ export async function resolveHealthySpawnAccount(
     try {
       const context = contextForSpawn(engine, routed, project);
       if (appliedTier && serviceTier && !tierOffers([{ id: context.accountId, home: context.home }], serviceTier.model, appliedTier).offering.length) {
-        if (serviceTier.required) throw new CodexServiceTierUnavailableError(`selected account does not offer serviceTier ${appliedTier}; offered: ${(codexModelServiceTiers(context.home, serviceTier.model) ?? []).map(tier => tier.id).join(", ") || "none"}`);
+        if (serviceTier.required) throw new CodexServiceTierUnavailableError(codexServiceTierRefusal([{ id: context.accountId, home: context.home }], serviceTier.model, appliedTier, context.accountId, "selected"));
         appliedTier = null;
       }
       return { ...context, ...(serviceTier ? { serviceTier: appliedTier } : {}) };
@@ -318,10 +322,8 @@ export class ProjectAccountRefusedError extends Error {
  * the same work already ran on.
  *
  * `resolveSpawn` answers with the engine's active account when nothing is
- * named, which is a choice made without consulting anything; this is the same
- * call with the project's pool in front of it. An unbound project keeps that
- * exact behaviour — `selectProjectAccount` answers with the preferred account
- * and `contextForSpawn` resolves it, byte for byte what the caller did before.
+ * named; this call ranks the project's permitted accounts by fresh capacity
+ * and binding reset, including every account when the project is unbound.
  * A bound project draws from its allowed set only, reports when every allowed
  * account is out of capacity, and refuses when the binding record cannot be
  * read (that read throws from here, and a caller that cannot see the boundary
@@ -428,8 +430,8 @@ export function resolveContinuityAccount(
  *   project's pool first, capacity second, an exhausted pool reported and an
  *   unreadable record refused before any spec is built.
  *
- * An UNBOUND project answers `null` — no preference is offered and the spec
- * builder's own fallback stands, byte for byte what it always did.
+ * A project with no binding uses the same capacity ranking across all listed
+ * accounts. A recorded account above keeps continuity without reranking.
  */
 export function resolveResumeAccountId(
   engine: "claude" | "codex",
@@ -451,10 +453,7 @@ export function resolveResumeAccountId(
     accounts,
     observations: registry.quotaObservations(engine),
     bindings,
-    /* Offered only where it can order a candidate set. An unbound project has
-       none, and handing its routing account back here would replace the spec
-       builder's fallback with a different one on projects that opted into
-       nothing. */
+    /* Keep the historical routing tie-break only for a bound resume. */
     preferredId: allowed === null ? null : routedAccountId(engine),
     unbound: "engine-default",
   });

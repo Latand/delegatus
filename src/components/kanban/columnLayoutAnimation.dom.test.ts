@@ -6,6 +6,11 @@ import { COLUMN_LAYOUT_MS, installColumnLayoutAnimation } from "./columnLayoutAn
 let dom: Window;
 beforeEach(() => {
   dom = new Window({ url: "http://localhost/" });
+  // Record effects through the animate stub; native constructors bypass it.
+  Object.defineProperties(dom, {
+    KeyframeEffect: { configurable: true, value: undefined },
+    CSSAnimation: { configurable: true, value: undefined },
+  });
   Object.assign(globalThis, { window: dom, document: dom.document });
 });
 const disposers: (() => void)[] = [];

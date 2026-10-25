@@ -88,6 +88,12 @@ export async function callViewerMcp(toolName: McpToolName, args: McpToolArgs, co
       throw new Error(`Viewer MCP request refused with status ${response.status}`);
     }
     const envelope = record(await response.json());
+    const rpcError = record(envelope?.error);
+    if (envelope?.id === id && envelope?.jsonrpc === "2.0" && envelope.result === undefined
+      && typeof rpcError?.code === "number" && Number.isInteger(rpcError.code)
+      && typeof rpcError.message === "string") {
+      throw new Error(`Viewer MCP JSON-RPC error ${rpcError.code}: ${rpcError.message}`);
+    }
     const result = record(record(envelope?.result)?.structuredContent);
     if (envelope?.id !== id || envelope?.jsonrpc !== "2.0" || !result
       || typeof result.ok !== "boolean" || result.toolName !== toolName) {

@@ -1199,6 +1199,63 @@ test("one stdio MCP session keeps its tools through endpoint loss and a newly pu
   }
 }, 20_000);
 
+test("a child that exits on ECONNREFUSED reconnects without closing the seat's stdio session", async () => {
+  const starts = "starts.txt";
+  const { root, launcher } = installedPackage(`
+    import fs from "node:fs";
+    import { createInterface } from "node:readline";
+    const starts = ${JSON.stringify(starts)};
+    const attempt = fs.existsSync(starts) ? Number(fs.readFileSync(starts, "utf8")) + 1 : 1;
+    fs.writeFileSync(starts, String(attempt));
+    createInterface({ input: process.stdin }).on("line", line => {
+      const request = JSON.parse(line);
+      if (request.id == null) return;
+      if (request.method === "initialize") {
+        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: {
+          protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "viewer", version: "1" }
+        } }) + "\\n");
+      } else if (request.method === "tools/list") {
+        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: {
+          tools: [{ name: "board", inputSchema: { type: "object" } }]
+        } }) + "\\n");
+      } else if (request.method === "tools/call" && attempt === 1) {
+        process.stderr.write("connect ECONNREFUSED 127.0.0.1\\n");
+        process.exit(7);
+      } else {
+        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: {
+          content: [{ type: "text", text: "reconnected" }]
+        } }) + "\\n");
+      }
+    });
+  `);
+  const stateDir = path.join(root, "state");
+  const session = stdioSession(process.execPath, launcher, root, { LLV_STATE_DIR: stateDir });
+  try {
+    expect((await session.call(1, "initialize", { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "test", version: "1" } })).result.serverInfo.name).toBe("viewer");
+    session.process.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
+    expect((await session.call(2, "tools/list")).result.tools[0].name).toBe("board");
+    expect((await session.call(3, "tools/call", { name: "board", arguments: {} })).result.isError).toBe(true);
+
+    let recovered = false;
+    for (let id = 4; id < 24; id++) {
+      const answer = await session.call(id, "tools/call", { name: "board", arguments: {} });
+      if (answer.result?.content?.[0]?.text === "reconnected") { recovered = true; break; }
+      expect(answer.result?.isError).toBe(true);
+      await Bun.sleep(50);
+    }
+    expect(recovered).toBe(true);
+    expect((await session.call(24, "tools/list")).result.tools[0].name).toBe("board");
+    expect(session.process.exitCode).toBeNull();
+    expect(fs.readFileSync(path.join(root, starts), "utf8")).toBe("2");
+  } finally {
+    const exited = session.process.exitCode !== null || session.process.signalCode !== null
+      ? Promise.resolve()
+      : new Promise<void>(resolve => session.process.once("close", () => resolve()));
+    session.process.stdin.end();
+    await exited;
+  }
+}, 10_000);
+
 for (const teardown of ["release", "eof", "timeout"]) {
 const runDrainTest = teardown === "eof" ? test.skipIf(process.platform === "win32") : test;
 runDrainTest(`launcher drains an admitted call before ${teardown} teardown`, async () => {

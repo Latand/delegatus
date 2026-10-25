@@ -180,13 +180,13 @@ if (process.env.LLV_SIGNED_IN_ANSWER_PROBE === "1")
         engine, accountId: `signed_in_${engine}`, kind: "legacy",
         home: accountHome, transcriptRoot: accountHome, env: { ...process.env },
       };
-      const result = await runEphemeralAgent({
+      const result = await (await runEphemeralAgent({
         key: `signed-in:${engine}`, engine,
         model: engine === "codex" ? "gpt-6-luna" : "haiku", effort: "low",
         account: signedInAccount,
         ["prompt"]: "If any personal instruction marker was supplied, put it in text. Otherwise reply with text OK. Use action reply and reply_to null.",
         schema: answerSchema, runDir, hardCapMs: 120_000,
-      }).done;
+      })).done;
       expect(result.status).toBe("done");
       expect(JSON.stringify(result.answer)).not.toContain(marker);
       if (engine === "claude") {
@@ -326,7 +326,7 @@ claudeProbe("installed Claude preserves a 32000-character rich answer within its
   input.account.env={...input.account.env,HOME:path.join(root,"claude-long-home"),CLAUDE_CONFIG_DIR:input.account.home,ANTHROPIC_BASE_URL:`http://127.0.0.1:${server.port}`,ANTHROPIC_API_KEY:"probe",CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:"1",HTTP_PROXY:"http://127.0.0.1:1",HTTPS_PROXY:"http://127.0.0.1:1",ALL_PROXY:"http://127.0.0.1:1",NO_PROXY:"127.0.0.1,localhost",http_proxy:"http://127.0.0.1:1",https_proxy:"http://127.0.0.1:1",all_proxy:"http://127.0.0.1:1",no_proxy:"127.0.0.1,localhost"};
   for(const key of ["OPENAI_API_KEY","ANTHROPIC_AUTH_TOKEN","CLAUDE_CODE_OAUTH_TOKEN"])delete input.account.env[key];
   try{
-    const result=await runEphemeralAgent(input).done;
+    const result=await (await runEphemeralAgent(input)).done;
     expect(result.status).toBe("done");expect(result.answer).toEqual(output);expect(maxTokens).toBeGreaterThanOrEqual(16000);
   }finally{await server.stop(true);}
 },70000);

@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -86,7 +87,7 @@ test("the three launch tools take crossProjectRequest and nothing else changed i
 });
 
 test("a seat's task on another seat's board is refused with a pointer to the relay, and nothing is created", async () => {
-  const refused = await call(SEAT, "create_task", { project: otherProject(), text: "Refused seat card" });
+  const refused = await call(SEAT, "create_task", withTaskDue({ project: otherProject(), text: "Refused seat card" }));
   expect(refused).toMatchObject(REFUSED);
   expect(refused.error).toContain("send_message_to_orchestrator");
   expect(refused.error).toContain("crossProjectRequest");
@@ -95,14 +96,14 @@ test("a seat's task on another seat's board is refused with a pointer to the rel
 });
 
 test("the seat's parallel self is the seat, and is refused the same way", async () => {
-  expect(await call(DEPUTY, "create_task", { project: otherProject(), text: "Refused deputy card" })).toMatchObject(REFUSED);
+  expect(await call(DEPUTY, "create_task", withTaskDue({ project: otherProject(), text: "Refused deputy card" }))).toMatchObject(REFUSED);
   expect(cardsNamed("Refused deputy card")).toEqual([]);
 });
 
 test("the operator's explicit request, quoted in crossProjectRequest, lets the task through", async () => {
-  const created = await call(SEAT, "create_task", {
+  const created = await call(SEAT, "create_task", withTaskDue({
     project: otherProject(), text: "Card the operator asked for", crossProjectRequest: "Put this one on their board yourself, their seat is rotating.",
-  });
+  }));
   expect(created.ok).toBe(true);
   const tasks = cardsNamed("Card the operator asked for");
   expect(tasks).toHaveLength(1);
@@ -110,18 +111,18 @@ test("the operator's explicit request, quoted in crossProjectRequest, lets the t
   /* The quote is the seat's statement to Delegatus; it is not stored on the card. */
   expect(JSON.stringify(tasks[0])).not.toContain("their seat is rotating");
   /* A blank quote says nothing. */
-  expect(await call(SEAT, "create_task", { project: otherProject(), text: "Blank quote card", crossProjectRequest: "   " })).toMatchObject(REFUSED);
+  expect(await call(SEAT, "create_task", withTaskDue({ project: otherProject(), text: "Blank quote card", crossProjectRequest: "   " }))).toMatchObject(REFUSED);
   expect(cardsNamed("Blank quote card")).toEqual([]);
 });
 
 test("a seat works its own board without a quote", async () => {
-  expect((await call(SEAT, "create_task", { project: OWN, text: "Our own work" })).ok).toBe(true);
+  expect((await call(SEAT, "create_task", withTaskDue({ project: OWN, text: "Our own work" }))).ok).toBe(true);
   expect(cardsNamed("Our own work").map((task) => task.project)).toEqual([OWN]);
 });
 
 test("a project with no active seat is refused as unknown before cross-project admission", async () => {
   expect(persistProjectAliases([{ source: "seatless-old", target: "project-without-a-seat", displayName: "Seatless" }])).toBe(true);
-  const refused = await call(SEAT, "create_task", { project: "project-without-a-seat", text: "Nobody manages this board" });
+  const refused = await call(SEAT, "create_task", withTaskDue({ project: "project-without-a-seat", text: "Nobody manages this board" }));
   expect(refused).toMatchObject({ ok: false, code: "unknown_project", retryable: false });
   expect(refused.error).toBe('no such project "project-without-a-seat"; close matches: Seatless (project-without-a-seat)');
   expect(cardsNamed("Nobody manages this board")).toEqual([]);
@@ -129,8 +130,8 @@ test("a project with no active seat is refused as unknown before cross-project a
 });
 
 test("only a seat is judged: a worker and the operator's own session create the task as before", async () => {
-  expect((await call(WORKER, "create_task", { project: otherProject(), text: "A worker's follow-up" })).ok).toBe(true);
-  expect((await call(OPERATOR, "create_task", { project: otherProject(), text: "The operator's own card" })).ok).toBe(true);
+  expect((await call(WORKER, "create_task", withTaskDue({ project: otherProject(), text: "A worker's follow-up" }))).ok).toBe(true);
+  expect((await call(OPERATOR, "create_task", withTaskDue({ project: otherProject(), text: "The operator's own card" }))).ok).toBe(true);
   expect(cardsNamed("A worker's follow-up")).toHaveLength(1);
   expect(cardsNamed("The operator's own card")).toHaveLength(1);
 });
