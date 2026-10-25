@@ -268,3 +268,26 @@ All PSI override callers in the gate tests were checked; the other callers
 already use explicit measurements or intentionally test missing metrics.
 No production threshold or admission guard changed. Diagnostic logging was
 confined to scratch and removed before final verification.
+
+## Fix round: queue order and relay stop retry
+
+Checks ran one at a time through the prescribed gate wrapper on 2026-10-25, in
+a scratch export of commit `750ff3fb2`. Each run had a private HOME, XDG
+directories, TMPDIR and state directory, and a closed control URL. "Unfixed"
+means the file from `c341f4553` was put back in the export for that run.
+
+| Command | Exit | Result |
+| --- | --- | --- |
+| `bun test src/lib/runtime/cpuAdmission.test.ts` | 0 | 50 pass, including the three new queue-order cases |
+| Same, filtered to the three new cases, unfixed `cpuAdmission.ts` | 1 | 3 fail: the stage stays second behind the held check |
+| `bun test src/lib/externalRelay/ownerTier.test.ts -t 'backs off to its cap'` | 0 | Passed on two runs |
+| Same, with a fixed retry delay | 1 | 64 warnings in 600 ms, limit 13 |
+| `bun test src/lib/externalRelay/ownerTier.test.ts` | 1 | 54 pass; `refuse truncated JSON credentials` fails the same way on unfixed files |
+| `bun test src/lib/externalRelay/ownerStop.test.ts` | 1 | 23 pass; `completed cleanup stays with a live foreign owner` fails the same way unfixed |
+| `bun test src/lib/externalRelay/runner.test.ts` | 1 | 318 pass, 4 skip; both `failure reply excludes interrupted answer parts` cases fail the same way unfixed |
+| `bun test scripts/gate-slot.queue.test.ts` | 0 | 12 pass |
+| `bun test scripts/gate-slot.test.ts` | 0 | 15 pass |
+| `bun test src/lib/runtime/gateCpuPressure.test.ts` | 0 | 4 pass |
+| `bun test scripts/gate-properties.test.ts` | 0 | 2 pass against the real user manager |
+| `node node_modules/typescript/bin/tsc --noEmit` | 0 | Full typecheck |
+| `node node_modules/eslint/bin/eslint.js` on the four changed source and test files | 0 | One existing warning at `ownerTier.test.ts:244` |
