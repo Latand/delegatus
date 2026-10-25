@@ -1,3 +1,4 @@
+import { captureTaskDueFrames } from "@/components/kanban/issue1695BrowserHarness";
 import { staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
@@ -13239,3 +13240,15 @@ browserTest("the phone bar's meta line never cuts a word without an ellipsis", a
   if (shots) fs.writeFileSync(path.join(shots, `${label}-readings.json`), `${JSON.stringify({ results, failures }, null, 2)}\n`);
   expect(failures).toEqual([]);
 }, 1_200_000);
+
+
+describe("new task default deadline", () => {
+  browserTest("default, picked and reset deadlines render in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/task-due-composer/phone");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"], ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try { await captureTaskDueFrames(browser, server.base, out, true); }
+    finally { await browser.close(); server.stop(); }
+  }, 300_000);
+});

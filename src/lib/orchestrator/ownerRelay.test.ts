@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -333,7 +334,7 @@ test("a run without an owner turn cannot gain authority from an enabled target a
 
 test("owner board fallback creates an assigned task that the seat tick owes as unstarted-task", async () => {
   const sender = actor(); const seat = actor("project-b"); ownerRun(sender);
-  expect(await toolsFor(sender).service.callTool("create_task", { clientRequestId: "owner-board", project: "project-b", text: "Виконати зміну обережно" })).toMatchObject({ ok: true });
+  expect(await toolsFor(sender).service.callTool("create_task", withTaskDue({ clientRequestId: "owner-board", project: "project-b", text: "Виконати зміну обережно" }))).toMatchObject({ ok: true });
   const task = loadTasks().find(task => task.text === "Виконати зміну обережно")!;
   expect(task.status).toBe("assigned");
   const evidence = evidenceFromTasks([task])[0]!;
@@ -350,7 +351,7 @@ test("owner board fallback creates an assigned task that the seat tick owes as u
 
 test("ordinary worker board creation keeps its inbox default", async () => {
   const sender = actor();
-  expect(await toolsFor(sender).service.callTool("create_task", { clientRequestId: "worker-board", project: "project-b", text: "Виконати зміну" })).toMatchObject({ ok: true });
+  expect(await toolsFor(sender).service.callTool("create_task", withTaskDue({ clientRequestId: "worker-board", project: "project-b", text: "Виконати зміну" }))).toMatchObject({ ok: true });
   expect(loadTasks().find(task => task.text === "Виконати зміну")!.status).toBe("inbox");
 });
 
