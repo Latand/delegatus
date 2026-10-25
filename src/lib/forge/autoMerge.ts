@@ -847,6 +847,20 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
       } else if (cached === "closed") {
         const due = Date.parse(merge.nextReadAt ?? "");
         if (!Number.isFinite(due) || due <= now) await reconcileBatchLanding(pipeline, { repository: merge.repository, number: merge.prNumber! }, ports, true);
+      } else if (refreshed?.state === "completed" && !refreshed.merge
+        && refreshed.refreshOf?.pipelineId === pipeline.id && refreshed.refreshOf.base === merge.refresh?.base) {
+        // A refused successor cannot carry the queue slot. An eligible lane
+        // still awaiting admission keeps it; a failed admission write retries.
+        const admission = mergeAdmission(refreshed, now, ports);
+        if ("reason" in admission && (merge.state !== "blocked" || merge.reason !== `Refresh was not admitted: ${admission.reason}`)) {
+          await commit(ports, pipeline, (live) => {
+            const current = ports.loadPipelines().find(lane => lane.id === refreshed.id);
+            if (current?.state !== "completed" || current.merge
+              || current.refreshOf?.pipelineId !== pipeline.id || current.refreshOf.base !== live.refresh?.base) return;
+            const latest = mergeAdmission(current, ports.now(), ports);
+            if ("reason" in latest) block(live, `Refresh was not admitted: ${latest.reason}`, ports.now());
+          });
+        }
       } else if (refreshed?.state === "completed" && mergeEligible(refreshed) && refreshed.merge
         && refreshed.refreshOf?.pipelineId === pipeline.id && refreshed.refreshOf.base === merge.refresh?.base
         && refreshed.merge.repository === merge.repository && refreshed.merge.prNumber === merge.prNumber) {

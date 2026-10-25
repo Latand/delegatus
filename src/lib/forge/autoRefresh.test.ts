@@ -779,6 +779,82 @@ test.each(["closed", "needs_decision"] as const)("a %s head refresh retains its 
   expect(h.creates).toHaveLength(2);
 });
 
+for (const refusal of ["hidden", "setting moved"] as const) for (const refreshConcurrency of [1, 2]) {
+  test(`a completed refresh refused admission by ${refusal} releases the next PR at concurrency ${refreshConcurrency}`, async () => {
+    const h = queuedRefreshes();
+    Object.assign(h.ports, { refreshConcurrency });
+    await h.sweep();
+    const child = h.pipeline("refresh-1");
+    child.state = "completed";
+    child.closedAt = iso(T0);
+    child.delivery!.active = false;
+    if (refusal === "hidden") child.hiddenAt = iso(T0);
+    else h.setSetting({ changedAt: iso(T0 + 1) });
+
+    await h.sweep();
+    const stoppedAt = h.merge("queued-0")!.updatedAt;
+    await h.run(5 * MERGE_POLL_MS);
+    expect(h.merge("refresh-1")).toBeUndefined();
+    expect(h.merge("queued-0")).toMatchObject({ state: "blocked", reviewedHead: HEAD_A,
+      reason: `Refresh was not admitted: ${refusal === "hidden" ? "lane is hidden" : "lane did not complete after the merge setting was enabled"}` });
+    expect(h.creates).toHaveLength(refreshConcurrency + 1);
+    expect((h.creates[refreshConcurrency]!.request as CreatePipelineRequest).delivery?.pr).toBe(11 + refreshConcurrency);
+    expect(h.merge(`queued-${refreshConcurrency}`)?.state).toBe("refreshing");
+    expect(h.merge(`queued-${refreshConcurrency + 1}`)).toMatchObject({ state: "queued", reviewedHead: HEAD_A, head: null });
+    expect(h.merge("queued-0")!.updatedAt).toBe(stoppedAt);
+    expect(h.writes).toHaveLength(0);
+  });
+}
+
+for (const change of ["visible", "running", "different base"] as const) test(`a completed refresh admission refusal is rechecked under the original's lock: ${change}`, async () => {
+  const h = queuedRefreshes();
+  await h.sweep();
+  const child = h.pipeline("refresh-1");
+  child.state = "completed";
+  child.delivery!.active = false;
+  child.hiddenAt = iso(T0);
+  const mutate = h.ports.mutate;
+  let raced = false;
+  h.ports.mutate = async (id, apply) => {
+    if (id === "queued-0" && !raced) {
+      raced = true;
+      if (change === "visible") h.pipeline(child.id).hiddenAt = null;
+      else if (change === "running") h.pipeline(child.id).state = "running";
+      else h.pipeline(child.id).refreshOf!.base = MAIN_2;
+    }
+    return mutate(id, apply);
+  };
+  await h.sweep();
+  expect(raced).toBe(true);
+  expect(h.merge("queued-0")).toMatchObject({ state: "refreshing", reason: null });
+  expect(h.creates).toHaveLength(1);
+  expect(h.writes).toHaveLength(0);
+});
+
+test("a completed refresh awaiting admission keeps its slot and acquires its own check clock", async () => {
+  const h = queuedRefreshes();
+  await h.sweep();
+  const child = h.pipeline("refresh-1");
+  child.state = "completed";
+  child.delivery!.active = false;
+  child.lastPassedCommit = "b".repeat(40);
+  Object.assign(h.prs.get(11)!, { head: child.lastPassedCommit, mergeStateStatus: "CLEAN", checks: [] });
+  const mutate = h.ports.mutate;
+  let holdAdmission = true;
+  h.ports.mutate = async (id, apply) => id === child.id && holdAdmission ? false : mutate(id, apply);
+  await h.sweep();
+  expect(h.merge(child.id)).toBeUndefined();
+  expect(h.merge("queued-0")?.state).toBe("refreshing");
+  expect(h.creates).toHaveLength(1);
+  holdAdmission = false;
+  await h.run(2 * MERGE_POLL_MS);
+  expect(h.merge(child.id)).toMatchObject({ state: "waiting-checks", reviewedHead: child.lastPassedCommit });
+  expect(h.merge("queued-0")?.state).toBe("waiting-checks");
+  expect(h.merge("queued-1")).toMatchObject({ state: "queued", reviewedHead: HEAD_A, head: null });
+  expect(h.creates).toHaveLength(1);
+  expect(h.writes).toHaveLength(0);
+});
+
 test.each(["closed", "needs_decision"] as const)("a hidden original releases its %s refresh with the failure reason", async state => {
   const h = queuedRefreshes();
   await h.sweep();
