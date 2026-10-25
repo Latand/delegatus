@@ -87,15 +87,15 @@ test("a start reads exactly its four scopes across projects and never another ro
   expect(store.learnedRulesBlock("boundary-p", "visual-critic")).not.toContain(fixtures[1]![1]!);
 });
 
-test("curation order evicts the lowest curated rule while uncurated rules wait for review", () => {
+test("curated and uncurated rules share headroom while duplicates retain their order", () => {
   const make = (id: string, extra: Partial<Rule> = {}): Rule => ({ kind: "rule", id, scope: "role:retention:builder", rule: `${id} ${"word ".repeat(10)}`, why, hints: [], state: "active", source: request().source, createdAt: "2026-10-11T00:00:00.000Z", changedAt: "2026-10-11T00:00:00.000Z", ...extra });
   const best = make("best", { curatedAt: "now" });
   const low = make("low", { curatedAt: "now" });
   const old = make("old");
   const incoming = make("incoming");
-  const result = appendRule([low, best, old], incoming, "now", scopeChars([best, low, incoming]));
-  expect(result.archived).toEqual([low.id]);
-  expect(result.active.map(r => r.id)).toEqual([old.id, incoming.id, best.id]);
+  const result = appendRule([low, best, old], incoming, "now", scopeChars([best, low, old, incoming]) - 1);
+  expect(result.archived).toEqual([]);
+  expect(result.active.map(r => r.id)).toEqual([old.id, incoming.id, low.id, best.id]);
   const repeat = appendRule([old, incoming, low, best], { ...make("repeat"), rule: old.rule }, "now");
   expect(repeat.active.map(r => r.id)).toEqual([incoming.id, old.id, low.id, best.id]);
 });
@@ -157,7 +157,7 @@ test("a project succession preserves the curation and operator priority of a dup
   expect(kept.curatedAt).toBeTruthy();
 });
 
-test("an engine start bounds aliased scopes by curation order without changing the store", async () => {
+test("an engine start preserves aliased scopes for available curation without changing the store", async () => {
   const template = fixtureRows().snapshot().find((row): row is Rule => row.kind === "rule" && row.state === "active" && !row.versionOf)!;
   const currentScope = "role:alias-budget-current:builder";
   const oldScope = "role:alias-budget-old:builder";
@@ -176,7 +176,8 @@ test("an engine start bounds aliased scopes by curation order without changing t
   const before = fixtureRows().snapshot();
   const block = store.learnedRulesBlock("alias-budget-current", "builder");
   const selected = rules.filter(row => block.includes(`[${row.id}]`));
-  expect(scopeChars(selected)).toBeLessThanOrEqual(10_000);
+  expect(scopeChars(selected)).toBeGreaterThan(10_000);
+  expect(selected).toHaveLength(rules.length);
   for (const row of rules.filter(row => !row.curatedAt)) expect(block).toContain(row.rule);
   expect(fixtureRows().snapshot()).toEqual(before);
 });

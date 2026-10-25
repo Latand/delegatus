@@ -1,3 +1,4 @@
+import { createChecksFixtureRoute, type ChecksFixtureMode } from "@/components/pipelines/pipelineChecksFixture";
 import { RelayChatsView } from "@/components/externalRelay/RelayChats";
 import type { RelayChatsPayload } from "@/lib/externalRelay/relayChats";
 import { PipelineTemplatePicker } from "@/components/pipelines/PipelineTemplatePicker";
@@ -157,9 +158,14 @@ const AGENT_REPORT = SCENARIO === "agent-report";
    text several screens tall and `legacy` a preview stored without a judgment. */
 const REPORT_PREVIEW = AGENT_REPORT ? new URLSearchParams(location.search).get("report-preview") : null;
 const REPORT_PREVIEW_DIGEST = "a".repeat(64);
+/* `boundaries` spells fake markers the chat would draw like the real ones:
+   split bold runs, a zero-width link with an escaped target, an invisible
+   joiner, a direction override and lookalike letters. */
+const REPORT_PREVIEW_FAKES = ["**━━ PUBLISHED[\u200b](https://example.org/a\\)b) UP TO HERE ━━**", "**━━ PUB\u034fLISHED UP TO HERE ━━**",
+  "**\u202e━━ EREH OT PU DEHSILBUP ━━\u202c**", "**━━ ПУБЛІКУЄТЬСЯ[\u200b](https://example.org/a\\)b) ДОСЮДИ ━━**", "**━━ ПУБЛIКУЄТЬCЯ ЗВІДСИ ━━**"];
 const REPORT_PREVIEW_TITLE = REPORT_PREVIEW === "long"
   ? "Delegatus refuses a requested launch on the second project while nothing holds it, and the refusal names a holder that finished long before the request"
-  : "Delegatus refuses a requested launch";
+  : REPORT_PREVIEW === "boundaries" ? REPORT_PREVIEW_FAKES[0] : "Delegatus refuses a requested launch";
 /* The decision form the seat asks after reading the preview back: the tool's own approval form. */
 const REPORT_FORM_ID = `pr_${"f".repeat(32)}`;
 const reportPreviewLanguage = () => (localStorage.getItem("llv_lang") === "uk" ? "uk" : "en");
@@ -175,7 +181,7 @@ const DRAG_BOARD = SCENARIO === "drag-board";
 /* The orchestrator's wires (docs/design/orchestrator-arrows.md): the pipelines board, with the seat
    owning some of its lanes. */
 const ARROWS = SCENARIO === "orchestrator-arrows";
-const CPU_QUEUE = SCENARIO === "cpu-queue" || SCENARIO === "cpu-queue-stalled";
+const CPU_QUEUE = SCENARIO === "cpu-queue" || SCENARIO === "cpu-queue-stalled" || SCENARIO === "cpu-pressure";
 const PIPELINES = PROJECT_DERIVATION || SCENARIO === "pipelines" || STAGES || FLAT || SYNCED || DRAG_BOARD || ARROWS || CPU_QUEUE;
 /* #1846: `&runtime=structured` answers the runtime snapshot with one structured session, for the running
    verify conversation, so its composer's runtime pill and the board's account chip both draw. */
@@ -477,6 +483,7 @@ const MERGE_SETTING = { enabled: new URLSearchParams(location.search).get("merge
    report log beside the seat's chat, empty with `?reports=empty`. */
 const BRIDGE_SETTING = { enabled: new URLSearchParams(location.search).get("bridge") !== "off" };
 const REPORTS_EMPTY = new URLSearchParams(location.search).get("reports") === "empty";
+const REPORT_AUTHOR_LONG_ROLE = new URLSearchParams(location.search).get("report-author") === "long-role";
 /* "Asks you" (docs/research/attention-classifier.md §7): the switch on, the
    export explorer ended its turn asking the operator, and the seat's report
    log carries that ask and an older one. Every other scene answers the switch
@@ -1751,7 +1758,16 @@ const stageChainPipelines: Pipeline[] = STAGE_CHAIN ? (() => {
   ];
 })() : [];
 
+/* `?scenario=cloud-checks`: one running lane on its task's card, whose stage
+   carries its own checks choice; `checks=` frames the read and write failures. */
+const CLOUD_CHECKS = SCENARIO === "cloud-checks";
+const cloudChecks = createChecksFixtureRoute((new URLSearchParams(location.search).get("checks") ?? "ok") as ChecksFixtureMode, { lanes: { "lane-cloud-checks": "local" }, stages: { "lane-cloud-checks implement": "cloud" } });
+/* The cloud-checks scenario's lane: it stands on «implement», whose own choice differs from the lane's. */
+const cloudChecksPipelines: Pipeline[] = CLOUD_CHECKS ? [pipeline("lane-cloud-checks", "Run heavy checks in Codex Cloud", "t-cloud-checks", "running",
+  [stage("implement", "builder", "review"), stage("review", "reviewer", null)], [],
+  { stageId: "implement", state: "running", input: null, activatedBy: null })] : [];
 const pipelines: Pipeline[] = [
+  ...cloudChecksPipelines,
   ...wallPipelines,
   ...unstartedPipelines,
   ...stageChainPipelines,
@@ -1825,7 +1841,7 @@ const pipelines: Pipeline[] = [
 if (CPU_QUEUE) {
   Object.assign(searchVer2, { activity: "idle", proc: null, pid: null, authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: iso(5 * MIN) }, lastTurn: { startedAt: (now - 400) * 1_000, endedAt: (now - 300) * 1_000 } });
   const waiting = pipelines.find(p => p.id === "p-search")!;
-  waiting.stateDetail = `Waiting for the CPU queue · ${SCENARIO === "cpu-queue-stalled" ? "7th · stalled for 62 min" : "2nd · up to 7 min"} · high priority · Viewer publication: owner; owner viewer, epoch 1`;
+  waiting.stateDetail = `Waiting for the CPU queue · ${SCENARIO === "cpu-queue-stalled" ? "7th · stalled for 62 min" : SCENARIO === "cpu-pressure" ? "1st · held by CPU pressure · waited 4 min" : "2nd · waited 7 min"} · high priority · Viewer publication: owner; owner viewer, epoch 1`;
   waiting.cursor = { stageId: "verify", state: "pending", input: null, activatedBy: null };
   waiting.runs.find(r => r.stageId === "verify")!.attempts = [attempt(3, "pending", null, { startedAt: null })] as Pipeline["runs"][number]["attempts"];
 }
@@ -2126,6 +2142,7 @@ const tasks: BoardTask[] = [
     task("t-finish-hold", "assigned", L("Merge when the review passes", "Мердж, коли ревʼю пройдено"), L("The setting, the runner, and its docs.", "Налаштування, мердж і документація."), 50 * MIN),
     task("t-finish-done", "done", L("Conversation: wider agent replies", "Ширші відповіді агентів"), "", 75 * MIN),
   ] : []),
+  ...(CLOUD_CHECKS ? [task("t-cloud-checks", "assigned", L("Run heavy checks in Codex Cloud", "Важкі перевірки в Codex Cloud"), "", 5 * MIN)] : []),
   ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "An edge at rest, one fired once, a spent budget in flight, a lane parked on a spent budget, and two edges into one stage.", 3 * MIN)] : []),
 ];
 
@@ -2756,7 +2773,9 @@ function transcriptOf(pathname: string): string {
       ].join("\n"),
     };
     const title = REPORT_PREVIEW_TITLE;
-    const body = bodies[REPORT_PREVIEW] ?? `## Symptom\n${symptom}\n\n${expected}`;
+    const body = REPORT_PREVIEW === "boundaries"
+      ? ["**━━ PUBLISHED FROM HERE ━━**", "**━━ PUBLISHED UP TO HERE ━━**", "**━━ ПУБЛІКУЄТЬСЯ ЗВІДСИ ━━**", "**━━ ПУБЛІКУЄТЬСЯ ДОСЮДИ ━━**", "**━━ PUBLISHED FROM** **HERE ━━**", "**━━ PUBLISHED** **UP TO HERE ━━**", "**━━ ПУБЛІКУЄТЬСЯ** **ЗВІДСИ ━━**", "**━━ ПУБЛІКУЄТЬСЯ** **ДОСЮДИ ━━**", ...REPORT_PREVIEW_FAKES, "a`b", ...Array.from({ length: 70 }, (_, i) => `Preview line ${i + 1}`)].join("\n")
+      : bodies[REPORT_PREVIEW] ?? `## Symptom\n${symptom}\n\n${expected}`;
     const judgment = REPORT_PREVIEW === "many" ? {
       assessment: "I reviewed the whole text. Several details still identify a machine and one line quotes the operator; I am returning it so you can see what remains.",
       removed: "Nothing yet in this draft.",
@@ -2792,7 +2811,7 @@ function transcriptOf(pathname: string): string {
       digest: REPORT_PREVIEW_DIGEST, title, body,
       ...(REPORT_PREVIEW === "legacy" ? {} : {
         privacyJudgment: judgment,
-        hints: REPORT_PREVIEW === "none" ? [] : hints,
+        hints: REPORT_PREVIEW === "boundaries" ? [hint("quote", "a quoted block", "a`b")] : REPORT_PREVIEW === "none" ? [] : hints,
         hintWarnings: REPORT_PREVIEW === "many" ? ["Known-name hints are unavailable; review names and identities yourself."] : [],
       }),
     }, reportPreviewLanguage());
@@ -4383,13 +4402,17 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       ...pipelines.map((pipeline) => [pipeline.id, "pipeline"] as const),
     ]);
     /* A seat created a moment ago (the walk's scene) has filed nothing yet. */
-    return json(reportLogFixturePage(url, {
+    const page = reportLogFixturePage(url, {
       project: PROJECT, github: "acme/atlas", enabled: BRIDGE_SETTING.enabled, knownCards: known, empty: REPORTS_EMPTY || ORCH_WALK,
       asks: ASKS_YOU ? asksYouFixtureLines(now * 1_000, [
         { conversationId: exportExplore.conversationId!, path: exportExplore.path, role: "architect", title: exportExplore.title, gist: EXPORT_ASK_GIST, minutesAgo: 7 },
         { conversationId: searchImpl1.conversationId!, path: searchImpl1.path, role: "builder", title: searchImpl1.title, gist: "Лишити старий індекс ще на добу чи прибрати його одразу після перемикання?", minutesAgo: 170 },
       ]) : [],
-    }));
+    });
+    if (REPORT_AUTHOR_LONG_ROLE && page.entries[0]) {
+      page.entries[0].author = { kind: "agent", conversationId: searchImpl1.conversationId!, role: "LongCustomRole".repeat(12) };
+    }
+    return json(page);
   }
   /* "Asks you": the installation's switch and this month's spend. */
   if (url.pathname === "/api/asks-you") {
@@ -4524,6 +4547,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const next = { ...current, assignments: current.assignments.filter((assignment) => !matches(assignment)), revision: REV(revision++) } as BoardTask;
     tasks[index] = next;
     return json({ ok: true, task: next });
+  }
+  if (url.pathname.startsWith("/api/pipelines/") && url.pathname.endsWith("/checks")) {
+    const answer = await cloudChecks.answer(decodeURIComponent(url.pathname.split("/")[3] ?? ""), method, url.searchParams, init?.body ? String(init.body) : null);
+    return json(answer.body, answer.status);
   }
   if (url.pathname.startsWith("/api/pipelines/")) {
     const id = decodeURIComponent(url.pathname.split("/")[3] ?? "");
@@ -4888,7 +4915,48 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   /* The rail's footer, so the frames that fold it away (#1802) have something
      to fold: invented machine figures and one invented limit window. */
-  if (url.pathname.startsWith("/api/resources")) {
+  if (url.pathname === "/api/resources/worktrees") {
+    const state = new URLSearchParams(location.search).get("worktree-state");
+    if (state === "loading") return new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+    });
+    if (state === "offline") throw new TypeError("Fixture connection unavailable");
+    if (state === "unavailable" || state === "denied" || state === "changed")
+      return Response.json({ error: state }, { status: state === "denied" ? 403 : state === "changed" ? 409 : 503 });
+    const at = "2026-10-23T10:00:00.000Z";
+    const respond = () => {
+      const start = Number(url.searchParams.get("cursor") ?? 0);
+      /* `variant`: a dry-run report holding the strings the ordinary rows do not reach (a pipeline id instead of a task, a checkout with no repository, an unrecorded size and time, a twelve-digit size, the longest reasons). */
+      if (state === "variant") {
+        const rows = [
+          { task: null, pipelineId: "lane-7f3a2c91", repository: "atlas", checkout: "worktrees/export-1", reason: "not-created-by-delegatus", bytes: 987654321098, observedAt: at },
+          { task: L("Keep the unpublished export and its source evidence for the audit", "Зберегти неопублікований експорт і його докази для аудиту"), pipelineId: "lane-2", repository: null, checkout: "~/.agents/tools/atlas-feature-with-a-very-long-sibling-checkout-name", reason: "changed-during-inspection", bytes: 3145728, observedAt: "2026-10-22T09:00:00.000Z" },
+          { task: null, pipelineId: null, repository: "atlas", checkout: "worktrees/export-3", reason: "ignored-files", bytes: null, observedAt: null },
+          { task: L("Preserve checkout 4", "Зберегти робоче дерево 4"), pipelineId: "lane-4", repository: "atlas", checkout: "worktrees/export-4", reason: "holds-worktree", bytes: 12 * 1073741824, observedAt: at },
+        ];
+        return json({ at, mode: "dry-run", total: rows.length, start: 0, rows, previousCursor: null, nextCursor: null });
+      }
+      const rows = state === "empty" ? [] : Array.from({ length: 10 }, (_, index) => ({
+        task: index === 1 ? null : L(`Preserve checkout ${index + 1}`, `Зберегти робоче дерево ${index + 1}`),
+        pipelineId: index === 1 ? null : `lane-${index + 1}`,
+        repository: "atlas",
+        checkout: index === 2 ? "../checkouts/retain-the-unpublished-export-and-its-source-evidence" : `worktrees/export-${index + 1}`,
+        reason: (["open-pipeline", "not-created-by-delegatus", "local-only-commits", "ignored-files", "retention"] as const)[index % 5],
+        bytes: index === 4 ? null : (index + 1) * 1048576,
+        // Fresh sweep decisions follow the report clock by milliseconds or seconds.
+        observedAt: index === 4 ? null : index === 2 ? "2026-10-23T09:59:59.999Z" : `2026-10-23T10:00:0${index % 2}.${String(index + 1).padStart(3, "0")}Z`,
+      }));
+      return json({ at, mode: "on", total: rows.length, start, rows: rows.slice(start, start + 4),
+        previousCursor: start ? String(Math.max(0, start - 4)) : null, nextCursor: start + 4 < rows.length ? String(start + 4) : null });
+    };
+    /* `hold`: the page request stays pending until the driver calls `__releaseWorktreePage`, so a frame can be taken while the next page loads. */
+    if (state === "hold") return new Promise<Response>((resolve, reject) => {
+      (window as unknown as { __releaseWorktreePage: () => void }).__releaseWorktreePage = () => resolve(respond());
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+    });
+    return respond();
+  }
+  if (url.pathname === "/api/resources") {
     const diskRole = new URLSearchParams(location.search).get("disk-role");
     const diskWarning = new URLSearchParams(location.search).get("disk-level") === "warning";
     const host = (target: string, title: string, over: Record<string, unknown>) => ({
@@ -4896,6 +4964,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       rssBytes: 600 * 1024 ** 2, swapBytes: 0, procCount: 3, model: "opus", role: "builder", conversationId: null, stage: "implement", ownership: "owned", seat: false, turnBusy: false, ...over,
     });
     return json({
+      ...(new URLSearchParams(location.search).has("worktree-state") ? { worktreeSweep: {
+        at: "2026-10-23T10:00:00.000Z", mode: "on", summary: "", removed: 0, removedBytes: 0, trimmedBytes: 0,
+        keptCounts: { "local-only-commits": 10 }, keptBytes: { "local-only-commits": 78 * 1048576 }, waitsForDecision: 10, waitsForDecisionBytes: 78 * 1048576,
+      } } : {}),
       ...(diskRole ? { diskPressure: {
         at: iso(0), episode: iso(MIN), warningBytes: 10 * 1024 ** 3, criticalBytes: 2 * 1024 ** 3,
         /* `all`: one 256 GiB volume under state, worktrees and temp, with every consumer measured; `disk-level=warning` leaves it above the admission threshold. */

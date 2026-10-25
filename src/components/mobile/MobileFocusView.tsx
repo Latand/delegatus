@@ -855,13 +855,33 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
 }
 
 /**
- * The identity half of a bar meta line: the engine mark and the model with its
- * reasoning tier. One cell for both title cells — a conversation's own and a
- * review round's — because a round opened from the board said only
- * «working 6:44» while the sheet it opens changes exactly these things (#1795).
+ * The meta line under a bar title: the dot, the state phrase, the identity and
+ * the stage. The row around it also holds the pending self-wake chip, which is
+ * taller than a text line and keeps its place after the line.
  *
- * The model and its tier are ONE reading and do not yield; the state phrase
- * before them still outranks everything.
+ * The line wraps, and its height is one text line, so a cell that has no room
+ * left drops onto a second line that the line clips WHOLE; its edge never
+ * slices a word (the 1.16.0 critique: «Opus 5.5 · h»). What gives way goes in
+ * this order: the identity shrinks to its floor, then leaves with its
+ * separator and mark, and only the state phrase is left, ending in an ellipsis
+ * when it alone is wider than the line.
+ */
+const BAR_META_ROW = "flex min-w-0 items-center gap-1 overflow-hidden text-label font-medium leading-tight text-secondary";
+const BAR_META_LINE = "flex h-[1lh] min-w-0 flex-wrap items-center gap-x-1 overflow-hidden";
+/** The state phrase is the first cell to stay: it ends in an ellipsis, leading word first, rather than leave the line (the dot and gap are 0.625rem). */
+const BAR_META_STATE = "min-w-0 max-w-[calc(100%-0.625rem)] truncate";
+
+/**
+ * The identity half of a bar meta line: the separator, the engine mark and the
+ * model with its reasoning tier. One cell for both title cells — a
+ * conversation's own and a review round's — because a round opened from the
+ * board said only «working 6:44» while the sheet it opens changes exactly
+ * these things (#1795).
+ *
+ * The group asks the line for its floor (separator, mark and six characters
+ * of the model) and takes what is left up to its own width. The model ends in
+ * an ellipsis inside that; a line without the floor wraps the whole group out of
+ * sight, so a model is never a single letter or a sliver.
  */
 function ChatIdentity({ file }: { file: FileEntry }) {
   const { t } = useLocale();
@@ -871,11 +891,11 @@ function ChatIdentity({ file }: { file: FileEntry }) {
     ? file.effort ? t("mobile2.chat.identity", { model: modelName, effort: file.effort }) : modelName
     : badge.label;
   return (
-    <>
+    <span data-mobile2-chat-identity className="flex min-w-[calc(14px_+_0.5rem_+_6.5ch)] max-w-max grow basis-0 items-center gap-1">
       <span aria-hidden className="shrink-0 text-muted">·</span>
       <ChatEngineMark file={file} />
-      <span data-mobile2-chat-model className="shrink-0 whitespace-nowrap" title={effortTitle(file)}>{model}</span>
-    </>
+      <span data-mobile2-chat-model className="min-w-0 truncate" title={effortTitle(file)}>{model}</span>
+    </span>
   );
 }
 
@@ -938,8 +958,9 @@ function ChatAccountTag({ file }: { file: FileEntry }) {
  * model and its reasoning tier, and `stage k/n` when this conversation is its
  * pipeline's current stage.
  *
- * The state phrase NEVER truncates; the model and the reasoning give way
- * first. That is the whole point of the line: a conversation blocked on the
+ * The model and the reasoning give way first; the state phrase is the last
+ * cell to yield, and when it must, its leading state word stays and an ellipsis
+ * ends it. That is the whole point of the line: a conversation blocked on the
  * operator must not read as a running one because its own word ran out of room
  * (2026-08 audit findings 3 and 4).
  */
@@ -968,20 +989,22 @@ export function ChatBarTitle({ file, offline, stage, bump, renamed = null, taskC
           {t("mobile2.chat.otherTask", { title: taskChange })}
         </span>
       ) : (
-      <span className="flex min-w-0 items-center gap-1 overflow-hidden text-label font-medium leading-tight text-secondary">
-        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${CHAT_TONE_DOT[bits.tone]} ${bits.key === "working" ? "animate-pulse motion-reduce:animate-none" : ""}`} aria-hidden />
-        <span data-mobile2-chat-state className={`shrink-0 whitespace-nowrap ${CHAT_TONE_TEXT[bits.tone]}`}>{bits.phrase}</span>
-        {offline ? null : (
-          <>
-            <ChatIdentity file={file} />
-            {stage?.current ? (
-              <>
-                <span aria-hidden className="shrink-0 text-muted">·</span>
-                <span data-mobile2-chat-stage className="shrink-0 whitespace-nowrap tabular-nums">{t("mobile2.chat.stage", { k: stage.k, n: stage.n })}</span>
-              </>
-            ) : null}
-          </>
-        )}
+      <span className={BAR_META_ROW}>
+        <span className={BAR_META_LINE}>
+          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${CHAT_TONE_DOT[bits.tone]} ${bits.key === "working" ? "animate-pulse motion-reduce:animate-none" : ""}`} aria-hidden />
+          <span data-mobile2-chat-state className={`${BAR_META_STATE} ${CHAT_TONE_TEXT[bits.tone]}`}>{bits.phrase}</span>
+          {offline ? null : (
+            <>
+              <ChatIdentity file={file} />
+              {stage?.current ? (
+                <span className="flex shrink-0 items-center gap-1">
+                  <span aria-hidden className="text-muted">·</span>
+                  <span data-mobile2-chat-stage className="whitespace-nowrap tabular-nums">{t("mobile2.chat.stage", { k: stage.k, n: stage.n })}</span>
+                </span>
+              ) : null}
+            </>
+          )}
+        </span>
         {/* The pending self-wake (#165). Its standing contract is that it shows
             on EVERY surface, the phone included, because a conversation that
             reads as idle is actually sleeping until a known time — and the
@@ -1027,16 +1050,18 @@ export function EntryBarTitle({ entry, offline, bump }: { entry: SwitchEntry; of
         </span>
         {entry.file ? <ChatAccountTag file={entry.file} /> : null}
       </span>
-      <span className="flex min-w-0 items-center gap-1 overflow-hidden text-label font-medium leading-tight text-secondary">
-        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${bits ? CHAT_TONE_DOT[bits.tone] : "bg-strong"}`} aria-hidden />
-        {bits ? (
-          <span data-mobile2-chat-state className={`shrink-0 whitespace-nowrap ${CHAT_TONE_TEXT[bits.tone]}`}>{bits.phrase}</span>
-        ) : (
-          <span data-mobile2-chat-state className="min-w-0 truncate">{entry.meta}</span>
-        )}
-        {/* The round on screen is a conversation like any other: it says which
-            model, tier and account the sheet on this surface would change. */}
-        {!offline && entry.file ? <ChatIdentity file={entry.file} /> : null}
+      <span className={BAR_META_ROW}>
+        <span className={BAR_META_LINE}>
+          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${bits ? CHAT_TONE_DOT[bits.tone] : "bg-strong"}`} aria-hidden />
+          {bits ? (
+            <span data-mobile2-chat-state className={`${BAR_META_STATE} ${CHAT_TONE_TEXT[bits.tone]}`}>{bits.phrase}</span>
+          ) : (
+            <span data-mobile2-chat-state className={BAR_META_STATE}>{entry.meta}</span>
+          )}
+          {/* The round on screen is a conversation like any other: it says which
+              model, tier and account the sheet on this surface would change. */}
+          {!offline && entry.file ? <ChatIdentity file={entry.file} /> : null}
+        </span>
         {/* The same standing contract as the conversation's own cell (#165). */}
         {entry.file?.pendingWakeup ? (
           <WakeupChip key={wakeupChipKey(entry.file.pendingWakeup)} wakeup={entry.file.pendingWakeup} interactive={false} className="ml-0.5" />
