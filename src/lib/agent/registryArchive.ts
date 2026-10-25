@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { installRegistryEndings } from "./registryEndings";
 
 /* Identity comes from the indexed cold mapping, and the archive version must
    carry the same identity. The equalities let a field lookup start from the
@@ -99,6 +100,7 @@ export function installRegistryArchive(db: Database): void {
     db.run("DROP VIEW IF EXISTS registry_records");
     db.run(wanted);
   }).immediate();
+  installRegistryEndings(db);
 }
 
 /* Each archivable collection's own test, in the order the pass reads them. */

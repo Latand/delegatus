@@ -1,3 +1,5 @@
+import { workspaceRuntime } from "@/lib/team/workspaceProjection";
+import { workspaceRoute, requestWorkspaceScope } from "@/lib/team/workspaceRoute";
 import { NextResponse } from "next/server";
 
 import { acceptsGzip, gzipBody } from "@/lib/http/gzipBody";
@@ -11,7 +13,7 @@ import { structuredStartupAxis } from "@/lib/runtime/startupStatus";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(request: Request): Promise<NextResponse> {
+async function workspaceGET(request: Request): Promise<NextResponse> {
   /* `runtime-plane-absent` distinguishes "this deployment has no runtime plane
      at all" from "the host is momentarily unreachable": the client bus stops
      claiming host authority on the former (so conversations resolve through the
@@ -31,6 +33,13 @@ export async function GET(request: Request): Promise<NextResponse> {
     const scope = summary || voiceFor ? { voiceBodiesFor: voiceFor ? [voiceFor] : [] } : undefined;
     // The request signal reaches the runtime host, so a disconnected caller
     // cancels its socket wait instead of leaving late host work behind.
+    const memberScope = requestWorkspaceScope(request);
+    if (memberScope && !memberScope.owner) {
+      const snapshot = await client.snapshot(request.signal, scope);
+      const latest = requestWorkspaceScope(request);
+      if (!latest) return NextResponse.json({ error: "workspace access denied", code: "workspace_forbidden" }, { status: 403 });
+      return NextResponse.json({ ...await workspaceRuntime(latest, snapshot, () => requestWorkspaceScope(request)), structuredHostsEnabled: structuredHostsEnabled(), structuredStartup: structuredStartupAxis() }, { headers: { "cache-control": "private, no-store" } });
+    }
     const encoded = client.snapshotBytes ? await client.snapshotBytes(request.signal, scope) : null;
     const snapshot = encoded === null ? await client.snapshot(request.signal, scope) : null;
     const viewer = { structuredHostsEnabled: structuredHostsEnabled(), structuredStartup: structuredStartupAxis() };
@@ -57,3 +66,5 @@ export async function GET(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: error instanceof Error ? error.message : "runtime host is unavailable" }, { status: 503 });
   }
 }
+
+export const GET = workspaceRoute("/api/runtime/snapshot", workspaceGET, true);

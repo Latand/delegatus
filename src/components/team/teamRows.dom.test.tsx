@@ -18,6 +18,7 @@ const { createRoot } = await import("react-dom/client");
 const { MembersTab } = await import("./MembersTab");
 const { SessionsTab } = await import("./SessionsTab");
 const { translate } = await import("@/lib/i18n");
+const { setWorkspacesForTests } = await import("./workspacesClient");
 
 const member = (id: string, name: string, role: "owner" | "member") => ({
   id, name, initials: name.slice(0, 2).toUpperCase(), color: "teal" as const, role, status: "active" as const,
@@ -30,6 +31,7 @@ let mounted: { root: Root; host: HTMLDivElement } | null = null;
 afterEach(async () => {
   if (mounted) { await act(async () => mounted!.root.unmount()); mounted.host.remove(); mounted = null; }
   document.body.replaceChildren();
+  setWorkspacesForTests(null);
 });
 async function render(element: React.ReactElement): Promise<HTMLDivElement> {
   const host = document.createElement("div");
@@ -50,6 +52,46 @@ function hold(method: string, other: (url: string) => Response | undefined = () 
 }
 const sent = (method: string) => harness.calls.filter((call) => call.method === method);
 const dialog = () => document.querySelector("[data-team-dialog='member']") as HTMLElement;
+
+const WORKSPACE = `w_${"a".repeat(32)}`;
+function inviteWorkspaces(manager: boolean) {
+  setWorkspacesForTests({ mode: "team", canManage: !manager, managedWorkspaceIds: [WORKSPACE], workspaces: [{ id: WORKSPACE, name: "Client work", color: "teal", projects: [], createdAt: "2026-10-20T09:00:00.000Z" }] });
+}
+
+for (const target of ["team-only", "owner-workspace", "manager-workspace"] as const) {
+  test(`the ${target} invite submits its selected workspace and retains its fields after refusal`, async () => {
+    const answer = hold("POST");
+    const manager = target === "manager-workspace";
+    inviteWorkspaces(manager);
+    const view = manager ? { ...VIEW, me: { ...VIEW.members[1]!, telegram: null } } : VIEW;
+    const host = await render(<MembersTab view={view} />);
+    await click(host.querySelector("[data-team-invite-open]"));
+    const invite = document.querySelector("[data-team-dialog='invite']")!;
+    const select = invite.querySelector("select") as HTMLSelectElement;
+    expect([...select.options].map(option => option.value)).toEqual(manager ? [WORKSPACE] : ["", WORKSPACE]);
+    if (target === "owner-workspace") await act(async () => { select.value = WORKSPACE; select.dispatchEvent(new Event("change", { bubbles: true })); });
+    const submit = async () => act(async () => { (invite.querySelector("form") as HTMLFormElement).requestSubmit(); await settle(2); });
+    await submit();
+    const body = { name: "", workspaceId: target === "team-only" ? null : WORKSPACE };
+    expect(sent("POST").map(call => call.body)).toEqual([body]);
+    expect((invite.querySelector("button[type='submit']") as HTMLButtonElement).disabled).toBe(true);
+    await answer(jsonResponse({ error: "forbidden", code: "workspace_forbidden" }, 403));
+    expect(select.value).toBe(body.workspaceId ?? "");
+    expect(invite.querySelector("[role='alert']")).not.toBeNull();
+    await submit();
+    expect(sent("POST").map(call => call.body)).toEqual([body, body]);
+    await answer(jsonResponse({ url: "https://delegatus.example/team/join/fixture", expiresAt: new Date(Date.now() + 60_000).toISOString() }));
+    expect(invite.querySelector("[data-team-invite-link]")).not.toBeNull();
+  });
+}
+
+test("an ordinary member has no invite button", async () => {
+  hold("POST");
+  setWorkspacesForTests({ mode: "team", canManage: false, managedWorkspaceIds: [], workspaces: [] });
+  const host = await render(<MembersTab view={{ ...VIEW, me: { ...VIEW.members[1]!, telegram: null } }} />);
+  expect(host.querySelector("[data-team-invite-open]")).toBeNull();
+  expect(harness.calls.some(call => call.url === "/api/team/invites")).toBe(false);
+});
 
 test("a held rename shows the new name on the row and the dialog at once, cannot be saved twice, and a refusal puts the stored name back with the reason", async () => {
   const answer = hold("PATCH", (url) => (url === "/api/team/passkeys" ? jsonResponse({ available: true, passkeys: [] }) : undefined));

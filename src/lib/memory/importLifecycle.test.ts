@@ -13,12 +13,11 @@ import { readMemorySourceFile, setMemorySource } from "./source";
 import { claimPass, patchPass } from "./curation/store";
 import { readCuration } from "./curation/read";
 import { applyCuration, revertCuratorPass } from "./curation/apply";
-import { curatorBrief } from "./curation/brief";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import type { RegistryFile } from "@/lib/agent/registry";
 import { persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projects/aliases";
-import { joinMovedScopes, roleScope } from "./roleStore";
+import { joinMovedScopes, roleMemoryCollection, roleScope } from "./roleStore";
 import type { ImportManifest, ImportRoots } from "./importTypes";
 
 const AT = "2026-10-19T00:00:00.000Z", NOW = Date.parse(AT), PROJECT = "import-fixture", ID = "fixture-import";
@@ -40,6 +39,14 @@ beforeEach(async () => {
 afterEach(async () => { if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous; await fs.rm(root, { recursive: true, force: true }); resetProjectAliasesForTests(); });
 const ports = () => ({ hostProject: PROJECT, projectForSlug: () => PROJECT, writer: async () => ({ kind: "unknown" as const, roleId: null }) });
 const request = (delta = 0) => ({ importId: ID, previous: null, roots, at: at(delta) });
+function expectHelperDiagnostics(stderr: string) {
+  for (const line of stderr.trim().split("\n").filter(Boolean)) {
+    expect(line.startsWith("[blocking-wait] "), stderr).toBe(true);
+    expect(JSON.parse(line.slice("[blocking-wait] ".length))).toMatchObject({
+      site: "state-write-lock", stateWait: { reason: "sqlite", outcome: "success" },
+    });
+  }
+}
 async function backup(body = "Inspect current ownership before changing a running worker.\n") {
   await fs.writeFile(path.join(memory, "topic.md"), body);
   await fs.writeFile(path.join(memory, "MEMORY.md"), "- [Topic](topic.md)\n");
@@ -231,7 +238,8 @@ test("the fallback scan is durable across a fresh helper process and reversal le
   const code = `import {advanceMemoryImportWork} from ${JSON.stringify(path.join(import.meta.dir, "importLifecycle.ts"))}; await advanceMemoryImportWork(${JSON.stringify(request(30 * 60_000 + 11))},{hostProject:${JSON.stringify(PROJECT)},projectForSlug:()=>${JSON.stringify(PROJECT)},legacy:async()=>["legacy-claude"]});`;
   const child = Bun.spawn([process.execPath, "--eval", code], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-  expect({ stdout, stderr, exit }).toEqual({ stdout: "", stderr: "", exit: 0 });
+  expect({ stdout, exit }).toEqual({ stdout: "", exit: 0 });
+  expectHelperDiagnostics(stderr);
   expect(readImportCandidates(ID).candidates.some(c => c.body === late)).toBe(true);
   expect(readMemorySourceFile()?.phase).toBe("draining");
   expect(setMemorySource("engines", at(40 * 60_000))).toBeNull();
@@ -274,20 +282,27 @@ test("the orchestrator target rises only after its project's completed import re
   const { importCollection } = await import("./importStore");
   const candidate = readImportCandidates(ID).candidates[0];
   importCollection()!.boundedPatch(2, tx => tx.put({ ...candidate, suggestedScope: roleScope(PROJECT, "orchestrator"), occurrences: candidate.occurrences.map(o => ({ ...o, writer: { kind: "seat", roleId: "orchestrator" } })) }));
-  expect(curatorBrief(PROJECT)).not.toContain("raised only this project's");
+  const originalScope = roleScope(PROJECT, "orchestrator");
+  const target = (scope: string) => {
+    const row = roleMemoryCollection()?.get(`s:${scope}`);
+    return row?.kind === "scope" ? row.fourScopeTarget : undefined;
+  };
+  expect(target(originalScope)).toBeUndefined();
   await dispose({ room: true });
-  expect(curatorBrief(PROJECT)).not.toContain("raised only this project's");
+  expect(target(originalScope)).toBeUndefined();
   await advanceMemoryImportWork(request(10), { ...ports(), legacy: async () => [] });
-  expect(curatorBrief(PROJECT)).toContain("raised only this project's orchestrator four-scope target to 24 000 bytes");
-  expect(curatorBrief("another-project")).not.toContain("raised only this project's");
-  const code = `import {curatorBrief} from ${JSON.stringify(path.join(import.meta.dir, "curation/brief.ts"))}; console.log(curatorBrief(${JSON.stringify(PROJECT)}).includes("raised only this project's orchestrator"));`;
+  expect(target(originalScope)).toBe(24_000);
+  expect(target(roleScope("another-project", "orchestrator"))).toBeUndefined();
+  const code = `import {roleMemoryCollection} from ${JSON.stringify(path.join(import.meta.dir, "roleStore.ts"))}; const row = roleMemoryCollection()?.get(${JSON.stringify(`s:${originalScope}`)}); console.log(row?.kind === "scope" ? row.fourScopeTarget : null);`;
   const child = Bun.spawn([process.execPath, "--eval", code], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
   const [output, errors, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-  expect({ output: output.trim(), errors, exit }).toEqual({ output: "true", errors: "", exit: 0 });
+  expect({ output: output.trim(), exit }).toEqual({ output: "24000", exit: 0 });
+  expectHelperDiagnostics(errors);
   expect(persistProjectAliases([{ source: PROJECT, target: "renamed-import-fixture", displayName: "Renamed fixture" }])).toBe(true);
-  expect(curatorBrief("renamed-import-fixture")).toContain("raised only this project's orchestrator");
+  expect(target(originalScope)).toBe(24_000);
   joinMovedScopes(at(20));
-  expect(curatorBrief("renamed-import-fixture")).toContain("raised only this project's orchestrator");
+  expect(target(roleScope("renamed-import-fixture", "orchestrator"))).toBe(24_000);
+  expect(target(originalScope)).toBeUndefined();
 });
 
 test("an operator reversal or undo after the legacy await prevents a stale flip", async () => {
@@ -350,5 +365,6 @@ test("a room drop after the trial opened keeps the pre-trial budget", async () =
   await fs.writeFile(path.join(process.env.LLV_STATE_DIR!, "memory-source.json"), JSON.stringify({ schemaVersion: 1, source: "delegatus", phase: "active", importId: ID, changedAt: AT, flippedAt: AT, drainedAt: AT }));
   await dispose({ room: true });
   await advanceMemoryImportWork(request(10), ports());
-  expect(curatorBrief(PROJECT)).not.toContain("raised only this project's");
+  const scope = roleMemoryCollection()?.get(`s:${roleScope(PROJECT, "orchestrator")}`);
+  expect(scope?.kind === "scope" ? scope.fourScopeTarget : undefined).toBeUndefined();
 });

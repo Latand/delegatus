@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
 import { handleRuntimeCommand } from "@/lib/runtime/http";
@@ -15,6 +16,8 @@ export const dynamic = "force-dynamic";
  * kind it admits, which is what decides that the engine is asked to append
  * input to the thread instead of to answer it.
  */
-export function POST(request: NextRequest): Promise<NextResponse> {
+function workspacePOST(request: NextRequest): Promise<NextResponse> {
   return handleRuntimeCommand(request, "inject");
 }
+
+export const POST = workspaceRoute("/api/runtime/inject", workspacePOST);

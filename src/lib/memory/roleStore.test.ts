@@ -88,27 +88,22 @@ test("only a repeat of the same rule deduplicates: two obligations and a contrad
   expect(deduped.changed).toContainEqual(expect.objectContaining({ id: "r_repeat", state: "merged", reason: "duplicate", mergedInto: "r_atomic" }));
 });
 
-test("a scope over 10 000 characters is consolidated under the bound, and the dropped rule stays visible in history", () => {
+test("an append over the target keeps curated rules for integration", () => {
   const project = PROJECT();
-  const distinct = (i: number) => `Rule ${i}: ${["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india", "juliet", "kilo", "lima", "mike", "november", "oscar", "papa", "quebec", "romeo", "sierra", "tango", "uniform", "victor", "whiskey", "xray", "yankee", "zulu"].map((word, w) => `${word}${(i * 31 + w * 7) % 997}`).join(" ")}`.slice(0, 300);
-  let attempt = 0;
-  let firstId = "";
-  let firstArchived = false;
-  while (!firstArchived && attempt < 100) {
-    attempt += 1;
-    const left = leaveLessons({ request: request(attempt), source: source(attempt), lessons: [{ scope: "role", rule: distinct(attempt), why: `Round ${attempt} taught it.` }], none: null, now: new Date(Date.UTC(2026, 9, 7, 0, attempt)).toISOString() }).left[0]!;
-    if (attempt === 1) firstId = left.id;
+  const ids: string[] = [];
+  let chars = 0;
+  for (let attempt = 1; chars <= ROLE_MEMORY_BOUND; attempt++) {
+    const left = leaveLessons({ request: request(attempt), source: source(attempt), lessons: [{ scope: "role", rule: `Check category ${attempt}: ${"preserve the complete condition ".repeat(12)}`.slice(0, 300), why: "Distinct conditions need integration." }], none: null, now: new Date(Date.UTC(2026, 9, 24, 0, attempt)).toISOString() }).left[0]!;
+    ids.push(left.id);
     const row = roleMemoryCollection()!.get(`r:${left.id}`);
-    if (attempt === 1 && row?.kind === "rule") roleMemoryCollection()!.boundedPatch(1, tx => tx.put({ ...row, curatedAt: row.createdAt }));
-    expect(left.scopeChars).toBeLessThanOrEqual(ROLE_MEMORY_BOUND);
-    firstArchived = left.archived.includes(firstId);
+    if (row?.kind === "rule") roleMemoryCollection()!.boundedPatch(1, tx => tx.put({ ...row, curatedAt: row.createdAt }));
+    expect(left.archived).toEqual([]);
+    chars = left.scopeChars;
   }
-  expect(firstArchived).toBe(true);
-  const builder = projectView(project).scopes.find((scope) => scope.roleId === "builder")!;
-  expect(builder.chars).toBeLessThanOrEqual(ROLE_MEMORY_BOUND);
-  expect(builder.active.some((entry) => entry.id === firstId)).toBe(false);
-  expect(builder.left).toContainEqual(expect.objectContaining({ id: firstId, state: "archived", reason: "budget" }));
-  expect(learnedRulesBlock(project, "builder")).not.toContain(firstId);
+  const builder = projectView(project).scopes.find(scope => scope.roleId === "builder")!;
+  expect(builder.chars).toBeLessThanOrEqual(ROLE_MEMORY_BOUND * 1.25);
+  expect(builder.active.map(rule => rule.id).sort()).toEqual(ids.sort());
+  expect(builder.left).toEqual([]);
 });
 
 test("lessons join their scopes at once, with the source the server resolved, and the card reads them per attempt", () => {

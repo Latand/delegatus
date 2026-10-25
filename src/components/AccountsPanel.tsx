@@ -1,7 +1,7 @@
 "use client";
 
 import { Plus } from "lucide-react";
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import {
   accountNoticeText,
@@ -33,6 +33,7 @@ import { Badge } from "./ui/Badge";
 import { formatCheckedClock, formatQuotaAsOf, formatResetClock, formatResetEta, windowLabel } from "./rateLimit";
 import { engineTintOf } from "./utils";
 import { Z } from "@/components/layers";
+import { TransferAccountsChecklist, useImportedAccounts } from "./TransferAccountsChecklist";
 
 /** Amber that clears contrast on the panel background — state legibility never
     leans on color alone, so this pairs with the "needs sign-in" text chip. */
@@ -321,7 +322,7 @@ function AuthIdentity({ account }: { account: AccountOption }) {
 /** How long an armed removal waits for its confirm before it disarms. */
 const REMOVE_ARM_MS = 10_000;
 
-function AccountRow({ account, engine, quota, activeId, onSelect, onRemove, onCopyCommand, disabled, removing = false, refusal = null, focused = false, children }: { account: AccountOption; engine: "claude" | "codex"; quota: ReconciledQuota; activeId: string; onSelect: () => void; onRemove: () => void; onCopyCommand: () => void; disabled: boolean; removing?: boolean; refusal?: React.ReactNode; focused?: boolean; children?: React.ReactNode }) {
+function AccountRow({ account, engine, quota, activeId, nextChosen = false, onSelect, onRemove, onCopyCommand, disabled, removing = false, refusal = null, focused = false, children }: { account: AccountOption; engine: "claude" | "codex"; quota: ReconciledQuota; activeId: string; nextChosen?: boolean; onSelect: () => void; onRemove: () => void; onCopyCommand: () => void; disabled: boolean; removing?: boolean; refusal?: React.ReactNode; focused?: boolean; children?: React.ReactNode }) {
   const { t } = useLocale();
   const state = rowState(account, activeId);
   const isActive = account.id === activeId;
@@ -348,6 +349,7 @@ function AccountRow({ account, engine, quota, activeId, onSelect, onRemove, onCo
   return (
     <div
       data-account-row={account.id}
+      data-account-next-chosen={nextChosen ? "true" : undefined}
       aria-busy={removing || undefined}
       className={`relative ${focused ? "ring-2 ring-inset ring-accent/50" : ""} ${removing ? "opacity-60" : ""}`}
       // The active account reads as a tinted wash + hairline identity bar —
@@ -369,6 +371,7 @@ function AccountRow({ account, engine, quota, activeId, onSelect, onRemove, onCo
         />
         <span className="min-w-0 flex-1">
           <span className={`block break-words text-[13px] leading-tight ${isActive ? "font-bold text-primary" : "font-semibold"}`}>{account.label}</span>
+          {nextChosen ? <span className="block pt-0.5 text-[10px] font-semibold text-accent">{t("accounts.nextForUnpinned")}</span> : null}
           <AuthIdentity account={account} />
         </span>
         <CapacityChip quota={quota} engine={engine} />
@@ -457,6 +460,7 @@ function AccountRow({ account, engine, quota, activeId, onSelect, onRemove, onCo
 
 export type ProjectAccountContext = {
   project: string;
+  nextChosenAccountId?: string | null;
   restricted: boolean;
   allowed: { accountId: string; label: string }[];
   carrying: { accountId: string; label: string }[];
@@ -922,7 +926,28 @@ export function AccountsPanel({
   // aria-live text changes exactly on the code-ready and signed-in transitions —
   // no effect/setState needed, and mount content is never announced.
   const announcement = claudeAnnouncement(engine, accounts, t);
+  /* Accounts an install transfer brought: re-read whenever an account's
+     sign-in state here changes, since a sign-in settles its row. */
+  const imported = useImportedAccounts(engine, accounts.map((account) => `${account.id}:${account.authPresent ? 1 : 0}`).join(","));
   const closeRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  /* The whole dialog stays inside the viewport: it is anchored by one edge
+     (its bottom for the footer flyout and the phone sheet, its top under the
+     header), so its height is bounded by the room on that side, and anything
+     past it scrolls inside the dialog under its own header. */
+  const [maxHeight, setMaxHeight] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const fit = () => {
+      const node = dialogRef.current;
+      if (!node) return;
+      const rect = node.getBoundingClientRect();
+      const growsDown = placement === "header" && window.matchMedia("(min-width: 640px)").matches;
+      setMaxHeight(Math.max(160, Math.floor(growsDown ? window.innerHeight - rect.top - 8 : rect.bottom - 8)));
+    };
+    fit();
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  }, [placement]);
   const engineName = engineDisplay(engine);
   // Desktop anchor per caller; both share the mobile bottom sheet. The header
   // placement drops downward (`sm:top-full`) so an overflow-hidden ancestor
@@ -953,9 +978,12 @@ export function AccountsPanel({
   };
 
   const rows = accounts.map((account) => ({
-    account,
+    account: projectContext
+      ? { ...account, nextChosen: projectContext.nextChosenAccountId != null && account.id === projectContext.nextChosenAccountId }
+      : account,
     quota: quotaOverride?.accountId === active && account.id === active ? quotaOverride.quota : accountQuota(account, quotaNow),
-  }));
+  })).sort((a, b) => Number(b.account.nextChosen === true) - Number(a.account.nextChosen === true)
+    || Number(b.account.id === active) - Number(a.account.id === active));
   // One label column for the whole list (#1358): a tier row's longer label
   // widens every card's column, so the meters stay aligned from card to card.
   const wideLabels = rows.some(({ quota }) => quota.tiers.length > 0);
@@ -980,9 +1008,11 @@ export function AccountsPanel({
         aria-label={t("accounts.titleFor", { engine: engineName })}
         aria-busy={mutation !== null}
         onKeyDown={(event) => handleOverlayEscape(event, onClose)}
-        className={`fixed bottom-3 left-1/2 ${Z.modal} flex w-[min(400px,calc(100vw-16px))] -translate-x-1/2 flex-col rounded-[14px] border border-border bg-card shadow-2 ${placementClass}`}
+        ref={dialogRef}
+        style={maxHeight === null ? undefined : { maxHeight }}
+        className={`fixed bottom-3 left-1/2 ${Z.modal} flex w-[min(400px,calc(100vw-16px))] -translate-x-1/2 flex-col overflow-y-auto rounded-[14px] border border-border bg-card shadow-2 ${placementClass}`}
       >
-        <header className="flex items-center gap-2 border-b border-border px-3 py-2">
+        <header className="sticky top-0 z-[1] flex shrink-0 items-center gap-2 rounded-t-[14px] border-b border-border bg-card px-3 py-2">
           <span aria-hidden className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: engineTintOf(engine).color }} />
           <span className="text-[12.5px] font-bold">{t("accounts.titleFor", { engine: engineName })}</span>
           <button
@@ -1007,7 +1037,23 @@ export function AccountsPanel({
           </div>
         ) : null}
           <>
-            <div className="max-h-[min(420px,60vh)] divide-y divide-border/40 overflow-y-auto">
+            <div data-accounts-scroller className="max-h-[min(420px,60vh)] min-h-0 shrink divide-y divide-border/40 overflow-y-auto">
+              {/* Inside the bounded list, so a long import scrolls with the
+                  accounts it brought instead of pushing the dialog off screen. */}
+              <TransferAccountsChecklist
+                engine={engine}
+                rows={imported.rows}
+                onSignIn={async (accountId) => {
+                  if (engine === "claude") await state.retryLogin(accountId);
+                  else await startCodexDeviceSignIn(state, accountId);
+                  await imported.reload();
+                }}
+                onAction={async (body) => {
+                  await imported.post(body);
+                  if (body.action === "verify" || body.action === "retry") await state.refresh();
+                  await imported.reload();
+                }}
+              />
               {status === "loading" ? <AccountRowsSkeleton className="px-1.5 py-1" /> : null}
               {status === "error" && accounts.length === 0 ? <div className="px-3.5 py-2 text-[11px] text-muted">{t("accounts.noAccounts")}</div> : null}
               {rows.map(({ account, quota }) => {
@@ -1017,7 +1063,7 @@ export function AccountsPanel({
                 // shows neither numbers nor actions.
                 const showLimits = account.authPresent || Boolean(quota.session || quota.weekly || quota.tiers.length);
                 return (
-                  <AccountRow key={account.id} account={account} engine={engine} quota={quota} activeId={active} disabled={mutation !== null} removing={state.removing === account.id} refusal={rowRefusal(state, account.id)} focused={account.id === focusAccountId} onSelect={() => void onSelect(account.id)} onRemove={() => void state.remove(account.id)} onCopyCommand={() => void state.copyTerminalCommand(account.id)}>
+                  <AccountRow key={account.id} account={account} engine={engine} quota={quota} activeId={active} nextChosen={account.nextChosen} disabled={mutation !== null} removing={state.removing === account.id} refusal={rowRefusal(state, account.id)} focused={account.id === focusAccountId} onSelect={() => void onSelect(account.id)} onRemove={() => void state.remove(account.id)} onCopyCommand={() => void state.copyTerminalCommand(account.id)}>
                     {showLimits ? account.provider ? <div className="px-3 pb-2 pl-[30px] text-[10px] text-muted">{t("accounts.provider.limitsUnknown")}</div> : <AccountLimitsBlock
                         account={account}
                         engine={engine}
@@ -1264,9 +1310,10 @@ function MobileAccountHead({ account, engine, state, quota, t }: { account: Acco
     <>
       <MobileEngineFill engine={engine} />
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className={`flex items-center gap-1.5 text-body font-semibold leading-[1.25] ${state === "active" ? "text-primary" : "text-secondary"}`}>
-          <span className="min-w-0 truncate">{account.label}</span>
+        <span className={`flex flex-wrap items-center gap-x-1.5 gap-y-1 text-body font-semibold leading-[1.25] ${state === "active" ? "text-primary" : "text-secondary"}`}>
+          <span data-mobile2-account-name className="basis-full min-w-0 truncate">{account.label}</span>
           {state === "active" ? <MobileBadge tone="success">{t("accounts.active")}</MobileBadge> : null}
+          {account.nextChosen ? <MobileBadge tone="warning">{t("accounts.nextForUnpinnedShort")}</MobileBadge> : null}
           {state === "ready" ? <MobileBadge tone="neutral">{t("mobile2.accounts.ready")}</MobileBadge> : null}
           {state === "needsSignIn" ? <MobileBadge tone="warning">{t("accounts.needsLogin")}</MobileBadge> : null}
           {state === "error" ? <MobileBadge tone="danger">{t("accounts.provider.credentialError")}</MobileBadge> : null}
@@ -1514,7 +1561,8 @@ function MobileEngineSection({ state, now, focusAccountId, receipts }: { state: 
   const dismissRemoval = state.dismissRemoval;
   useEffect(() => dismissRemoval, [dismissRemoval]);
   /* The active card leads; the rest keep the registry's order. */
-  const ordered = [...accounts].sort((a, b) => Number(mobileAccountState(b, active) === "active") - Number(mobileAccountState(a, active) === "active"));
+  const ordered = [...accounts].sort((a, b) => Number(b.nextChosen === true) - Number(a.nextChosen === true)
+    || Number(mobileAccountState(b, active) === "active") - Number(mobileAccountState(a, active) === "active"));
 
   const switchTo = (account: AccountOption) => {
     const before = active;
@@ -1539,6 +1587,9 @@ function MobileEngineSection({ state, now, focusAccountId, receipts }: { state: 
     setChallenge((current) => (current?.accountId === account.id ? null : current));
     void cancelCodexDeviceSignIn(state, account.id);
   };
+  /* Accounts an install transfer brought, as on the desktop dialog: re-read
+     whenever a sign-in here changes, since a sign-in settles its row. */
+  const imported = useImportedAccounts(engine, accounts.map((account) => `${account.id}:${account.authPresent ? 1 : 0}`).join(","));
 
   return (
     <section data-mobile2-accounts-engine={engine} aria-label={t("accounts.titleFor", { engine: engineName })}>
@@ -1548,6 +1599,21 @@ function MobileEngineSection({ state, now, focusAccountId, receipts }: { state: 
       </div>
       {/* The phone has no footer slot: the removal answer leads the section. */}
       <RemovalOutcome state={state} phone />
+      <TransferAccountsChecklist
+        variant="phone"
+        engine={engine}
+        rows={imported.rows}
+        onSignIn={async (accountId) => {
+          const account = accounts.find((candidate) => candidate.id === accountId);
+          if (account) signIn(account);
+          await imported.reload();
+        }}
+        onAction={async (body) => {
+          await imported.post(body);
+          if (body.action === "verify" || body.action === "retry") await state.refresh();
+          await imported.reload();
+        }}
+      />
       {status === "loading" && accounts.length === 0 ? <AccountRowsSkeleton className="px-1 pb-2" /> : null}
       {status !== "loading" && accounts.length === 0 ? <div className="px-3 pb-2 text-label text-muted">{t("mobile2.accounts.noAccounts", { engine: engineName })}</div> : null}
       {ordered.map((account) => (
@@ -1586,24 +1652,78 @@ function MobileEngineSection({ state, now, focusAccountId, receipts }: { state: 
 }
 
 /** The screen's body over given engine states — the shape the tests drive. */
-export function MobileAccountsBody({ engines, now, focusAccountId = null, receipts = tabReceipts }: {
+export function MobileAccountsBody({ engines, now, focusAccountId = null, receipts = tabReceipts, nextChosenAccountIds }: {
   engines: EngineAccountsState[];
   /** Unix seconds the reset ETAs and staleness are read against. */
   now: number;
   /** The account a badge tap steered here (issue #229): scrolled to and ringed. */
   focusAccountId?: string | null;
   receipts?: ReceiptStore;
+  /** The project route's shared selector result, keyed by engine. */
+  nextChosenAccountIds?: Partial<Record<"claude" | "codex", string | null>>;
 }) {
+  const projected = nextChosenAccountIds
+    ? engines.map((state) => ({
+        ...state,
+        accounts: state.accounts.map((account) => ({
+          ...account,
+          nextChosen: nextChosenAccountIds[state.engine] === account.id,
+        })),
+      }))
+    : engines;
   return (
     <div data-mobile2-accounts-body className="flex flex-col pb-5 pt-1">
-      {engines.map((state) => <MobileEngineSection key={state.engine} state={state} now={now} focusAccountId={focusAccountId} receipts={receipts} />)}
+      {projected.map((state) => <MobileEngineSection key={state.engine} state={state} now={now} focusAccountId={focusAccountId} receipts={receipts} />)}
     </div>
   );
 }
 
+/** Keeps the project's read-only router choice aligned with the account rows
+    shown on the phone. A new reading, account set, or presentation minute
+    invalidates the prior response while the route is re-read. */
+export function ProjectAwareMobileAccountsBody({ engines, now, project, focusAccountId = null, receipts = tabReceipts }: {
+  engines: EngineAccountsState[];
+  now: number;
+  project?: string | null;
+  focusAccountId?: string | null;
+  receipts?: ReceiptStore;
+}) {
+  const [nextChoice, setNextChoice] = useState<{ key: string; ids: Partial<Record<"claude" | "codex", string | null>> } | null>(null);
+  const key = project ? JSON.stringify([project, now, ...engines.map((state) => [state.engine, state.identityVersion, state.limitsVersion,
+    state.accounts.map((account) => [account.id, account.authPresent, account.authHealth, account.loginState])])]) : "";
+  useEffect(() => {
+    if (!project) return;
+    let live = true;
+    void (async () => {
+      try {
+        const response = await fetch(`/api/account-project-bindings?project=${encodeURIComponent(project)}`, { cache: "no-store" });
+        if (!response.ok) return;
+        const payload: unknown = await response.json();
+        if (!payload || typeof payload !== "object") return;
+        const blocks = (payload as { engines?: unknown }).engines;
+        if (!blocks || typeof blocks !== "object") return;
+        const ids: Partial<Record<"claude" | "codex", string | null>> = {};
+        for (const engine of ["claude", "codex"] as const) {
+          const block = (blocks as Record<string, unknown>)[engine];
+          if (block && typeof block === "object") {
+            const id = (block as { nextChosenAccountId?: unknown }).nextChosenAccountId;
+            if (typeof id === "string" || id === null) ids[engine] = id;
+          }
+        }
+        if (live) setNextChoice({ key, ids });
+      } catch {
+        // Keep account rows usable when the project view is unavailable.
+      }
+    })();
+    return () => { live = false; };
+  }, [key, project]);
+  const ids = nextChoice?.key === key && project ? nextChoice.ids : undefined;
+  return <MobileAccountsBody engines={engines} now={now} focusAccountId={focusAccountId} receipts={receipts} nextChosenAccountIds={ids} />;
+}
+
 /** The screen the shell mounts under its bar: both engines' stores, the
     presentation clock, and the focus a badge asked for. */
-export function MobileAccountsPanel({ receipts }: { receipts?: ReceiptStore }) {
+export function MobileAccountsPanel({ receipts, project }: { receipts?: ReceiptStore; project?: string | null }) {
   const claude = useEngineAccounts("claude");
   const codex = useEngineAccounts("codex");
   const [focus, setFocus] = useState<string | null>(null);
@@ -1614,8 +1734,10 @@ export function MobileAccountsPanel({ receipts }: { receipts?: ReceiptStore }) {
   }, []);
   useEffect(() => {
     const pending = consumePendingAccountPanel("claude") ?? consumePendingAccountPanel("codex");
+    // This mount-only value comes from the external account-navigation queue.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- restore focus from the surface that opened this screen.
     if (pending) setFocus(pending.accountId);
     return onAccountPanelRequest((request) => setFocus(request.accountId));
   }, []);
-  return <MobileAccountsBody engines={[claude, codex]} now={now} focusAccountId={focus} receipts={receipts} />;
+  return <ProjectAwareMobileAccountsBody engines={[claude, codex]} now={now} project={project} focusAccountId={focus} receipts={receipts} />;
 }

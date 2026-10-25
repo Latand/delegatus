@@ -284,6 +284,21 @@ export async function activateViewerRuntimeWhenCurrent(
   schedule(poll, pollMs).unref?.();
 }
 
+/** An install transfer the previous Viewer left between its first write and
+    its cleanup is settled before any later startup step: finished when it
+    committed, undone when not (docs/design/install-memory-transfer.md §4.7).
+    A failure refuses activation, because the install would otherwise admit
+    launches against a half-applied import; the journal stays, and the next
+    start settles the same one. */
+export async function settleInterruptedTransfers(
+  recover: () => Promise<unknown> = async () => (await import("@/lib/transfer/importer")).recoverTransferImportsAtStartup(),
+): Promise<void> {
+  try { await recover(); }
+  catch (error) {
+    throw new Error(`activation refused: an interrupted install transfer could not be settled (${error instanceof Error ? error.message : String(error)})`, { cause: error });
+  }
+}
+
 export function accountControllerDelayMs(env: Readonly<Record<string, string | undefined>> = process.env): number {
   const configured = Number(env.LLV_ACCOUNT_CONTROLLER_DELAY_MS ?? 0);
   return Number.isFinite(configured) ? Math.max(0, configured) : 0;
@@ -1018,6 +1033,7 @@ export async function registerViewerRuntime(): Promise<void> {
     const authority = await initializeHotStateStoresAtStartup(boundary, { signal: startupAbort.signal });
     const { ensureLegacyCollectionsImported } = await import("@/lib/state/legacyCollections");
     await ensureLegacyCollectionsImported();
+    await startupBarrier.run(() => settleInterruptedTransfers());
     const { agentRegistry } = await import("@/lib/agent/registry");
     await startupBarrier.run(() => viewerLoopMonitor.run("registry.prepare", () => agentRegistry().prepareReadOnlySnapshot(startupAbort.signal)));
     assertStartupActive();

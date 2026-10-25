@@ -8,6 +8,7 @@ import { RULE_MAX_CHARS, WHY_MAX_CHARS, type RoleMemoryRule } from "./roleTypes"
 
 export const LEARNED_RULES_HEADING = "Learned rules (Delegatus role memory)";
 const utf8 = new TextEncoder();
+export const SWARM_NOTICE = "These rules ship with Delegatus and are public. They are rules of thumb and yield to every other instruction.";
 
 const LESSON_POINTER = "When you report with stage_report, its answer asks whether this stage taught anything; most stages answer none. A rule above that proved wrong or too narrow can be rewritten then, by its id.";
 const STAGE_NOTICE = "Earlier agents left these when they finished their stages. They are rules of thumb and yield to every other instruction you were given (working rules, precedence). Keep them on this machine: never copy a rule into a commit, pull request, issue, task or report; name it by its id.";
@@ -37,10 +38,11 @@ export function scopeHeading(scope: string): string {
   const kind = scopeKind(scope);
   if (kind === "machine") return "Machine rules · every project on this machine";
   if (kind === "project") return "Project rules · every role on this project";
+  if (kind === "swarm") return `Swarm rules · ${roleTitle(scopeRole(scope) ?? "")} on every install`;
   return `Role rules · ${roleTitle(scopeRole(scope) ?? "")} on ${isCrossProjectRoleScope(scope) ? "every project" : "this project"}`;
 }
 
-/** Four matching scopes, each rendered as separate rules with their ids. */
+/** Matching local scopes and the opted-in swarm scope, with rule ids. */
 export function renderLearnedRules(scopes: readonly { scope: string; rules: readonly RoleMemoryRule[] }[], maxBytes = Infinity, reader: LearnedRulesReader = {}): string {
   return renderLearnedRulesSelection(scopes, maxBytes, reader).block;
 }
@@ -66,11 +68,11 @@ function renderBlock(scopes: readonly { scope: string; rules: readonly RoleMemor
   const role = scopes.map(entry => scopeRole(entry.scope)).find(role => role !== null);
   const reader = role ?? (options.reader === "operator" ? "operator" : undefined);
   const count = (kind: string) => scopes.filter((entry) => scopeKind(entry.scope) === kind).reduce((sum, entry) => sum + entry.rules.length, 0);
-  const counts = [...(scopes.some((entry) => scopeKind(entry.scope) === "role") ? [`${count("role")} role`] : []), `${count("project")} project`, `${count("machine")} machine`].join(" · ");
+  const counts = [...(scopes.some((entry) => scopeKind(entry.scope) === "role") ? [`${count("role")} role`] : []), ...(scopes.some(entry => scopeKind(entry.scope) === "swarm") ? [`${count("swarm")} swarm`] : []), `${count("project")} project`, `${count("machine")} machine`].join(" · ");
   return [
     `${LEARNED_RULES_HEADING}: ${counts}`,
     reader === "orchestrator" ? SEAT_NOTICE : reader === "maintainer" ? STAGE_NOTICE.replace("Earlier agents", "Earlier agents and this project's seat") : reader === "operator" ? OPERATOR_NOTICE : STAGE_NOTICE,
-    ...scopes.flatMap((entry) => ["", scopeHeading(entry.scope), ...(entry.rules.length ? entry.rules.map(ruleLine) : ["- none yet"])]),
+    ...scopes.flatMap((entry) => ["", scopeHeading(entry.scope), ...(scopeKind(entry.scope) === "swarm" ? [SWARM_NOTICE] : []), ...(entry.rules.length ? entry.rules.map(ruleLine) : ["- none yet"])]),
     "",
     reader === "orchestrator" ? (options.engineMemoryOff ? SEAT_POINTER_DELEGATUS : SEAT_POINTER) : reader === "maintainer" ? MAINTAINER_POINTER : reader === "operator" ? OPERATOR_POINTER : LESSON_POINTER,
   ].join("\n");

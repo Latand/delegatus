@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 /**
  * A busy refusal before admission never consumes the request id (#1766).
  *
@@ -324,11 +325,11 @@ test("a link-task refused on the task lock keeps its id too", async () => {
     },
   };
   const linkService = createMcpToolService(viewerMcpBindings(linkDependencies), receipts);
-  const board = await linkService.callTool("create_task", {
+  const board = await linkService.callTool("create_task", withTaskDue({
     clientRequestId: `link-task-${crypto.randomUUID()}`,
     text: task,
     project: projectForCwd(process.cwd())!,
-  });
+  }));
   expect(board.ok).toBe(true);
   const taskId = board.ok ? board.taskId : null;
   const clientRequestId = `link-${crypto.randomUUID()}`;

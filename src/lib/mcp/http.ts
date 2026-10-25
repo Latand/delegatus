@@ -48,9 +48,9 @@ import {
  * retain unidentified authority. The tool policy still resolves native proof
  * and operator approval before permitting an operation.
  *
- * The capability identifies; it does not admit. Reaching the route at all
- * takes whatever every other Viewer route takes — LLV_TOKEN when one is
- * configured — so exposure is exactly the Viewer's own.
+ * The capability identifies. A keyed installation additionally requires the
+ * access key or the purpose-separated local MCP credential at the perimeter.
+ * The latter admits only loopback MCP, with the same per-call identity rules.
  */
 
 const CAPABILITY_PATTERN = /^[A-Za-z0-9_-]{43}$/;
@@ -140,10 +140,9 @@ export function mcpHttpMethodNotAllowed(): Response {
 }
 
 export async function handleMcpHttpRequest(request: NextRequest): Promise<Response> {
-  /* Access is the Viewer's, unchanged: the proxy applies LLV_TOKEN here as on
-     every other path (the stable local entry supplies it for loopback callers
-     when trusted), and this gate refuses a browser's cross-site request. The
-     capability below is identity on top of that, never a way past it. */
+  /* The proxy authenticates access with the Viewer key or its local MCP
+     credential; this gate also refuses a browser's cross-site request.
+     Neither access credential replaces the launch identity checked below. */
   const crossOrigin = rejectCrossOrigin(request);
   if (crossOrigin) return crossOrigin;
 

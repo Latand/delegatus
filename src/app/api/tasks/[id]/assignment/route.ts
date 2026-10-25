@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import fs from "node:fs";
 
 import { NextRequest, NextResponse } from "next/server";
@@ -103,13 +104,13 @@ async function postAssignment(
   return NextResponse.json({ ok: true, task: taskForResponse(req, result.task) });
 }
 
-export const POST = Object.assign(
+const workspacePOST = Object.assign(
   async (req: NextRequest, ctx: TaskRouteContext): Promise<NextResponse<{ ok: true; task: BoardTask } | ApiError>> => await postAssignment(req, ctx),
   { withDependencies: postAssignment },
 );
 
 /** Detaches one assignment from the task — the undo for a wrong handoff. */
-export async function DELETE(req: NextRequest, ctx: TaskRouteContext): Promise<NextResponse<{ ok: true; task: BoardTask } | ApiError>> {
+async function workspaceDELETE(req: NextRequest, ctx: TaskRouteContext): Promise<NextResponse<{ ok: true; task: BoardTask } | ApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
 
@@ -220,7 +221,13 @@ async function patchAssignment(
   return NextResponse.json({ ok: true, task: taskForResponse(req, result.task) });
 }
 
-export const PATCH = Object.assign(
+const workspacePATCH = Object.assign(
   async (req: NextRequest, ctx: TaskRouteContext): Promise<NextResponse<{ ok: true; task: BoardTask } | ApiError>> => await patchAssignment(req, ctx),
   { withDependencies: patchAssignment },
 );
+
+export const DELETE = workspaceRoute("/api/tasks/[id]/assignment", workspaceDELETE);
+
+export const POST = workspaceRoute("/api/tasks/[id]/assignment", workspacePOST);
+
+export const PATCH = workspaceRoute("/api/tasks/[id]/assignment", workspacePATCH);
