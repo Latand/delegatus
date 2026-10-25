@@ -75,7 +75,7 @@ test("the runtime image's copied gate helper loads and refuses an absent slot le
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }, 15_000);
 
-test("the helper retains its opening deadline through a second real writer contention", async () => {
+for (const recovers of [true, false]) test(`the helper shares its lock budget across a long CPU wait (second writer recovers: ${recovers})`, async () => {
   const f = fixture();
   // Keep the helper queued after opening, including on systems without flock.
   const ahead = f.open();
@@ -105,11 +105,17 @@ test("the helper retains its opening deadline through a second real writer conte
         subprocess.send(80); // Opening recovers after consuming 80 of 120 ms.
       } else if (episodes.length === 2) {
         f.writer.exec("BEGIN IMMEDIATE"); held = true;
-        subprocess.send(100); // The first check completed; block the next one.
+        subprocess.send(60_000); // Healthy CPU waiting must not consume the SQLite budget.
       } else if (episodes.length === 3) {
-        subprocess.send(120); // Original deadline, before any fresh budget.
+        if (recovers) {
+          f.writer.query("DELETE FROM tickets WHERE key = ?").run("stage:ahead");
+          f.writer.exec("COMMIT"); held = false;
+        }
+        subprocess.send(60_020);
+      } else if (episodes.length === 4 && !recovers) {
+        subprocess.send(60_040); // Opening used 80 ms; this writer gets the remaining 40.
       } else {
-        // A reset deadline would retry the still-held writer again.
+        // Resetting the budget would retry the still-held writer again.
         subprocess.kill("SIGKILL");
       }
     },
@@ -119,13 +125,18 @@ test("the helper retains its opening deadline through a second real writer conte
   try {
     const code = await child.exited, stderr = await output;
     expect(expired, stderr).toBe(false);
-    expect(episodes).toEqual([{ sleep: 20, now: 0 }, { sleep: 123, now: 80 }, { sleep: 20, now: 100 }]);
-    expect(code, stderr).toBe(1);
+    expect(episodes).toEqual([
+      { sleep: 20, now: 0 }, { sleep: 123, now: 80 }, { sleep: 20, now: 60_000 },
+      ...(recovers ? [] : [{ sleep: 20, now: 60_020 }]),
+    ]);
+    expect(code, stderr).toBe(recovers ? 0 : 1);
     expect(stderr.match(/waiting for CPU admission queue SQLite lock/g)).toHaveLength(2);
-    expect(stderr.match(/lock acquired after/g)).toHaveLength(1);
+    expect(stderr.match(/lock acquired after/g)).toHaveLength(recovers ? 2 : 1);
     expect(stderr).toContain("lock acquired after 80 ms");
-    expect(stderr).toContain("lock deadline exceeded after 120 ms");
-    expect(f.writer.query("SELECT key FROM tickets ORDER BY seq").all()).toEqual([{ key: "stage:ahead" }, { key: "command:two-locks" }]);
+    if (recovers) expect(stderr).toContain("lock acquired after 20 ms");
+    else expect(stderr).toContain("lock deadline exceeded after 120 ms");
+    expect(f.writer.query("SELECT key FROM tickets ORDER BY seq").all())
+      .toEqual([...(recovers ? [] : [{ key: "stage:ahead" }]), { key: "command:two-locks" }]);
   } finally {
     clearTimeout(watchdog);
     if (child.exitCode === null) child.kill("SIGKILL");
@@ -141,6 +152,25 @@ test("an uncontended operation returns without waiting or logging", async () => 
   expect(await admissionLockWait(120, line => lines.push(line), time)(() => "ready")).toBe("ready");
   expect(time.sleeps).toEqual([]);
   expect(lines).toEqual([]);
+});
+
+test("brief writer contention after a long CPU queue wait retains its unused lock budget", async () => {
+  const time = clock(), lines: string[] = [];
+  const retry = admissionLockWait(120, line => lines.push(line), time);
+  let attempts = 0;
+  expect(await retry(() => { if (attempts++ === 0) throw locked(); return "opened"; })).toBe("opened");
+  time.advance(60_000); // Healthy CPU-queue waiting, with no SQLite lock held.
+  attempts = 0;
+  expect(await retry(async () => {
+    await Promise.resolve();
+    if (attempts++ === 0) throw locked();
+    return "checked";
+  })).toBe("checked");
+  expect(time.sleeps).toEqual([20, 20]);
+  expect(lines.filter(line => line.includes("lock acquired"))).toEqual([
+    "gate-slot: CPU admission queue lock acquired after 20 ms",
+    "gate-slot: CPU admission queue lock acquired after 20 ms",
+  ]);
 });
 
 for (const code of ["SQLITE_BUSY", "SQLITE_LOCKED"]) {
@@ -263,16 +293,16 @@ test("the default lock budget is 30 seconds and backoff caps at 250 ms", async (
   expect(time.sleeps.every(ms => ms > 0)).toBe(true);
 });
 
-test("opening and later checks retain the first contention deadline", async () => {
+test("opening and later checks share one contention budget, excluding healthy CPU queue waits", async () => {
   const time = clock(), lines: string[] = [];
   const retry = admissionLockWait(120, line => lines.push(line), time);
   let attempts = 0;
   expect(await retry(() => { if (attempts++ === 0) throw locked(); return "opened"; })).toBe("opened");
   expect(lines[1]).toBe("gate-slot: CPU admission queue lock acquired after 20 ms");
-  time.advance(80);
+  time.advance(60_000);
   await expect(retry(() => { throw locked(); })).rejects.toThrow("deadline exceeded after 120 ms");
-  expect(time.sleeps).toEqual([20, 20]);
-  expect(time.now()).toBe(120);
+  expect(time.sleeps).toEqual([20, 20, 40, 40]);
+  expect(time.now()).toBe(60_120);
   expect(lines.filter(line => line.includes("lock acquired"))).toHaveLength(1);
 });
 

@@ -17,8 +17,11 @@ Verification ran on 2026-10-23.
 ## Scope and overlap
 
 `scripts/cpu-admission-lock.ts` retries `SQLITE_BUSY` and `SQLITE_LOCKED`
-through asynchronous backoff. The first contention starts one 30-second
-monotonic deadline, retained across queue opening and subsequent checks.
+through asynchronous backoff. One cumulative 30-second contention budget covers
+queue opening and subsequent checks. Each contention episode has a monotonic
+deadline bounded by the remaining budget; healthy CPU queue waits between
+completed checks are excluded. The publication repair below records this change
+from the original deadline that aged throughout the helper invocation.
 A waiting episode prints its start and, after success, its acquisition;
 exhaustion refuses the helper with a clear message. The helper opens SQLite with zero
 busy timeout, captures its owner before opening can yield, and retains owner
@@ -366,3 +369,60 @@ while sampling is awaited. Removing the await from retry, caching the first
 pressure sample, and removing the post-sample owner check each caused its two
 targeted regression cases to fail. All mutations were restored before the
 complete suites and typecheck ran.
+
+## Publication repair: exclude healthy CPU queue waits (2026-10-25)
+
+The refused publication reported a 66 ms successful lock recovery followed by
+44,894 ms of CPU admission waiting. The helper's original absolute deadline
+kept aging during healthy queue polls. Once another poll encountered SQLite
+contention after that deadline, it immediately refused its next attempt.
+
+A deterministic regression reproduced that failure on accepted head
+`335a33d11ebbf3e89ecc18f055f0d1a9a1ab086d` before changing the helper. The four
+updated targeted cases also failed against that head's original implementation.
+They exercise the same first-contention, healthy-wait, later-contention pattern
+with a controlled monotonic clock and independent real SQLite writer.
+
+`scripts/cpu-admission-lock.ts:7` now carries one remaining contention budget
+across queue opening and all later checks. A call's first SQLite lock failure
+starts a monotonic deadline using that remainder. Completion or refusal charges
+the episode's elapsed time to the shared budget. Healthy time between completed
+calls is excluded. The default remains 30 seconds, with the existing bounded
+backoff and SQLite error filter. The earlier dated observations in this record
+used the invocation-wide absolute deadline.
+
+The process regressions in `scripts/cpu-admission-lock.test.ts:78` consume
+80 ms of a 120 ms budget while opening, then advance through a long CPU wait.
+A second writer that releases after 20 ms recovers successfully. A writer that
+stays held receives only the remaining 40 ms and is refused. Resetting the
+budget for each call causes an extra retry and fails the exhaustion case.
+The pressure and ownership guards in `scripts/cpu-admission.ts` are unchanged.
+The pre-push admission path still resolves that checkout's helper through
+`scripts/gate-slot.sh:116`. No hook or check was disabled.
+
+Verification used detached scratch exports based on the accepted head, with
+pinned remote references and matching dependency manifests and lockfiles.
+Each explicit file ran sequentially through the supplied gate-slot wrapper,
+`setsid --wait`, and `bun run test <file>`, with stdin closed.
+`checkEnvironment` and `isolatedEnvironment` supplied private HOME,
+XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR plus a closed Viewer control URL.
+Logs remained outside the exports.
+
+| Explicit repaired-tree test path | Passed |
+| --- | --- |
+| `scripts/cpu-admission-lock.test.ts` | 34 |
+| `scripts/gate-slot.queue.test.ts` | 14 |
+| `scripts/gate-slot.test.ts` | 15 |
+| `scripts/local-gate.cpuQueue.test.ts` | 2 |
+| `scripts/local-gate-tests.cpuQueue.test.ts` | 4 |
+| `scripts/local-gate.noproc.test.ts` | 3 |
+| `src/lib/runtime/cpuAdmission.test.ts` | 50 |
+| `src/lib/runtime/gateCpuPressure.test.ts` | 4 |
+| `scripts/local-gate.test.ts` | 69 |
+| `scripts/local-gate.receipts.test.ts` | 8 |
+
+All ten complete test files exited 0: 203 tests passed.
+`bunx tsc --noEmit` exited 0. The campaign ended with
+`FINAL ran-count 13; failures 0`, including the expected failing accepted-head
+regressions and the expected budget-reset negative control. Both repaired
+source files were byte-compared with the restored verification export.
