@@ -34,7 +34,7 @@ async function unreservedPark(replacement = true) {
   const reserve = (call: number) => beginLegacySpawnFixture(registry, {
     engine: attempt.effectiveRole.engine, cwd: lane.worktreeDir!, transport: "structured", clientAttemptId: key(call),
     memberships: [{ kind: "pipeline", containerId: lane.id, stageId: "plan", slot: `plan:${attempt.n}`,
-      round: attempt.n, role: "architect", stageOrder: 0 }],
+      round: attempt.n, role: "architect", stageOrder: 0, parentConversationId: null }],
   });
   return { h, lane, attempt, registry, registryPath, key, reserve,
     close: () => { registry.close(); setAgentRegistryForTests(null); } };
