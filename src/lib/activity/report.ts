@@ -1,3 +1,4 @@
+import { projectInWorkspaceFilter, type WorkspaceProjectFilter } from "@/lib/team/workspaceAccess";
 import { statePath } from "@/lib/configDir";
 import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { UNRESOLVED_PROJECT } from "@/lib/projects/identity";
@@ -130,6 +131,7 @@ export interface ActivityMemberView {
 export interface ActivityRequestViewer extends Omit<ActivityViewer, "everyone"> {
   /** The owner, or the operator of a solo host. */
   canChoose?: boolean;
+  workspaceProjects?: WorkspaceProjectFilter;
 }
 
 export const ACTIVITY_MEMBER_FORBIDDEN = "activity_member_forbidden";
@@ -270,13 +272,15 @@ export async function activityResponse(
      that cannot be read covers nothing, which leaves its host unknown. The
      owner's read holds every member's input, each tagged with its author. */
   const readViewer = viewer ? { mode: viewer.mode, memberId: viewer.memberId, ...(canChoose ? { everyone: true } : {}) } : undefined;
-  const human = dependencies.humanInputs({ start: window.start - params.breakMs, end: Math.min(window.end, nowMs) }, nowMs, readViewer);
+  const human = { ...dependencies.humanInputs({ start: window.start - params.breakMs, end: Math.min(window.end, nowMs) }, nowMs, readViewer) };
   if (canChoose && human.operator === undefined) throw new Error("the owner's read of every member did not happen");
   const canonical = (project: string | null): string | null => {
     if (project === null) return null;
     const resolved = dependencies.canonicalProject(project);
     return resolved && resolved !== UNRESOLVED_PROJECT ? resolved : null;
   };
+  const allowedProject = (project: string | null) => !viewer?.workspaceProjects || projectInWorkspaceFilter(viewer.workspaceProjects, canonical(project));
+  human.inputs = human.inputs.filter(input => allowedProject(input.project));
   const anchorsOf = (inputs: HumanInputRead["inputs"]): Anchor[] => inputs.map((input) => ({
     at: input.at,
     project: canonical(input.project),
@@ -294,10 +298,11 @@ export async function activityResponse(
     agentIndex = "unreadable";
   }
 
+  agentRead = { ...agentRead, agents: agentRead.agents.filter(agent => allowedProject(agent.project)) };
   const reports = new Map(human.hosts.map((host) => [host.host, host]));
   const hostCoverage: HostCoverage[] = human.coverage.map((host) => ({
     ...host,
-    projects: host.projects === "all" ? "all" as const : host.projects.map((project) => canonical(project) ?? project),
+    projects: host.projects === "all" ? "all" as const : host.projects.filter(allowedProject).map((project) => canonical(project) ?? project),
     agents: agentSpans(reports.get(host.host), agentRead.local),
   }));
   /* A project is asked for by its key as the page knows it; an older key of

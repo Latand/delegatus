@@ -37182,6 +37182,155 @@ describe("team workspaces slice (a)", () => {
   }, 900_000);
 });
 
+
+// Slice (b): reach placement, role changes and scoped invitations through Team's controls.
+describe("team workspaces slice (b)", () => {
+  browserTest("membership and invitations in both languages, themes and widths", async () => {
+    const out = path.resolve(process.env.LLV_WORKSPACES_OUT ?? ".artifacts/team-workspaces-members");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(out, "bundle-root"));
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const client = `w_${"c1".repeat(16)}`;
+    const readings: unknown[] = [];
+    async function frame(page: Page, tag: string, state: string, selector: string) {
+      await page.locator(selector).scrollIntoViewIfNeeded();
+      if (state.endsWith("link")) {
+        const qr = page.locator("[data-team-invite-link] img");
+        await qr.waitFor();
+        await qr.evaluate((image: HTMLImageElement) => image.decode());
+      }
+      const problems = await page.locator(selector).evaluate(root => {
+        const problems: string[] = [];
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const parent = node.parentElement!;
+          if (!(node.textContent ?? "").trim() || parent.closest("option") || !parent.getClientRects().length) continue;
+          const range = document.createRange(); range.selectNodeContents(node);
+          for (const rect of range.getClientRects()) {
+            if (!rect.width) continue;
+            const text = node.textContent!.trim();
+            if (rect.left < 0 || rect.right > innerWidth + 0.5 || rect.top < 0 || rect.bottom > innerHeight + 0.5) problems.push(`viewport: ${text}`);
+            for (let ancestor: HTMLElement | null = parent; ancestor; ancestor = ancestor.parentElement) {
+              const style = getComputedStyle(ancestor), clip = ancestor.getBoundingClientRect();
+              if (style.overflowY !== "visible" && (rect.top < clip.top - 0.5 || rect.bottom > clip.bottom + 0.5)) problems.push(`clip: ${text}`);
+              if (style.overflowX !== "visible" && (rect.left < clip.left - 0.5 || rect.right > clip.right + 0.5)) problems.push(`horizontal clip: ${text}`);
+            }
+            const hit = document.elementFromPoint((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2);
+            if (!hit || !parent.contains(hit)) problems.push(`covered: ${text}`);
+          }
+        }
+        for (const select of root.querySelectorAll("select")) {
+          const context = document.createElement("canvas").getContext("2d")!;
+          context.font = getComputedStyle(select).font;
+          if (context.measureText(select.selectedOptions[0]?.text ?? "").width + 36 > select.clientWidth && !select.title) problems.push("cut select without title");
+        }
+        return problems;
+      });
+      expect(problems, `${tag} ${state}`).toEqual([]);
+      const file = `${tag}-${state}.png`;
+      await page.screenshot({ path: path.join(out, file) });
+      readings.push({ tag, state, file, scroll: await page.locator("[data-workspace-page]").evaluateAll(items => items.map(item => item.scrollTop)), focus: await page.evaluate(() => document.activeElement?.getAttribute("data-team-invite-name")) });
+    }
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 390]) {
+        const tag = `${lang}-${theme}-${width}`;
+        const open = (query: string) => openFixture(browser, `${server.base}?scenario=${query}&rail=1`, { width, height: width === 390 ? 844 : 900 }, theme, lang, "reduce", width === 390);
+        {
+          const { context, page, pageErrors } = await open("workspaces-page&page=client");
+          try {
+            await page.locator("[data-workspace-member-choice]").selectOption("m_member");
+            await frame(page, tag, "choose-existing", "[data-workspace-members]");
+            await page.locator("[data-workspace-member-submit]").click();
+            await page.locator("[data-workspace-member='m_member']").waitFor();
+            await frame(page, tag, "placed", "[data-workspace-members]");
+            await page.locator("[data-workspace-member='m_member'] select").selectOption("manager");
+            await page.waitForFunction(() => !(document.querySelector("[data-workspace-member-role]") as HTMLSelectElement)?.disabled);
+            expect(await page.locator("[data-workspace-member-role]").inputValue()).toBe("manager");
+            await frame(page, tag, "manager-role", "[data-workspace-members]");
+            await page.locator("[data-workspace-member='m_member'] [data-workspace-member-remove]").click();
+            await page.waitForFunction(() => !document.querySelector("[data-workspace-member='m_member']"));
+            await frame(page, tag, "removed", "[data-workspace-members]");
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+        for (const manager of [false, true]) {
+          const { context, page, pageErrors } = await open(`workspaces-team&members=1${manager ? "&manager=1" : ""}`);
+          try {
+            await page.locator("[data-team-invite-open]").click();
+            await page.locator("[data-team-invite-workspace]").waitFor();
+            const values = await page.locator("[data-team-invite-workspace] option").evaluateAll(items => items.map(item => (item as HTMLOptionElement).value));
+            expect(values.includes("")).toBe(!manager);
+            if (manager) expect(values).toEqual([client]);
+            if (!manager) await frame(page, tag, "invite-team-only", "[data-team-dialog='invite']");
+            await page.locator("[data-team-invite-name]").fill(lang === "uk" ? "Новий учасник" : "New member");
+            // Use the longest real workspace name at the narrow width as well.
+            await page.locator("[data-team-invite-workspace]").selectOption(manager ? client : `w_${"e3".repeat(16)}`);
+            await frame(page, tag, manager ? "manager-invite" : "owner-invite", "[data-team-dialog='invite']");
+            await page.locator("[data-team-invite-create]").click();
+            await page.locator("[data-team-invite-link]").waitFor();
+            await frame(page, tag, manager ? "manager-link" : "owner-link", "[data-team-dialog='invite']");
+            expect(await page.locator("[data-team-invite-link] input").inputValue()).toContain(manager ? client : `w_${"e3".repeat(16)}`);
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+        for (const surface of ["membership", "invite"] as const) {
+          const { context, page, pageErrors } = await open(surface === "membership" ? "workspaces-page&page=client&membership-refused=1" : "workspaces-team&members=1&manager=1&invite-refused=1");
+          try {
+            if (surface === "membership") {
+              await page.locator("[data-workspace-member-choice]").selectOption("m_member");
+              await page.locator("[data-workspace-member-submit]").click();
+              await page.locator("[data-workspace-members] [role='alert']").waitFor();
+              expect(await page.locator("[data-workspace-member-choice]").inputValue()).toBe("m_member");
+              expect(await page.locator("[data-workspace-member='m_member']").count()).toBe(0);
+            } else {
+              await page.locator("[data-team-invite-open]").click();
+              await page.locator("[data-team-invite-create]").click();
+              await page.locator("[data-team-dialog='invite'] [role='alert']").waitFor();
+              expect(await page.locator("[data-team-invite-link]").count()).toBe(0);
+            }
+            await frame(page, tag, `${surface}-refused`, surface === "membership" ? "[data-workspace-members]" : "[data-team-dialog='invite']");
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+        {
+          const { context, page } = await open("workspaces-page&page=client&manager=1&membership-refused=1");
+          try {
+            await page.locator("[data-workspace-member-role]").selectOption("member");
+            await page.locator("[data-workspace-members] [role='alert']").waitFor();
+            expect(await page.locator("[data-workspace-member-role]").inputValue()).toBe("manager");
+            await frame(page, tag, "role-refused", "[data-workspace-members]");
+            await page.locator("[data-workspace-member-remove]").click();
+            await page.locator("[data-workspace-members] [role='alert']").waitFor();
+            expect(await page.locator("[data-workspace-member='m_member']").count()).toBe(1);
+            await frame(page, tag, "remove-refused", "[data-workspace-members]");
+          } finally { await context.close(); }
+        }
+        {
+          const { context, page } = await open("workspaces-page&page=client&membership-unavailable=1");
+          try {
+            await page.locator("[data-workspace-members] [role='alert']").waitFor();
+            expect(await page.locator("[data-workspace-member-choice]").count()).toBe(0);
+            await frame(page, tag, "read-failed", "[data-workspace-members]");
+            await page.locator("[data-workspace-members] button").click();
+            await page.locator("[data-workspace-member-choice]").waitFor();
+            expect(await page.locator("[data-workspace-members] [role='alert']").count()).toBe(0);
+            await frame(page, tag, "read-retried", "[data-workspace-members]");
+          } finally { await context.close(); }
+        }
+        {
+          const { context, page } = await open("workspaces-page&page=client&member=1");
+          try {
+            await page.locator("[data-workspace-member='m_member']").waitFor();
+            expect(await page.locator("[data-workspace-member-add], [data-workspace-member-role], [data-workspace-member-remove]").count()).toBe(0);
+            await frame(page, tag, "member-read", "[data-workspace-members]");
+          } finally { await context.close(); }
+        }
+      }
+      fs.writeFileSync(path.join(out, "rendered.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2));
+    } finally { await browser.close(); server.stop(); }
+  }, 600_000);
+});
+
 // docs/design/telegram-multi-bot.md: keep multiple bots inside the Telegram panel.
 describe("Telegram multiple bots", () => {
   browserTest("Telegram multiple bots settings and refused chats", async () => {
