@@ -22,15 +22,15 @@ function fixture() {
 test("nested queue waits exceed the old per-file wall cap and leave the next file its execution budget", async () => {
   const f = fixture(), repo = path.resolve(import.meta.dir, "..");
   const source = `import { expect, test } from "bun:test";
-import { CpuAdmissionQueue, cpuAdmissionFile } from ${JSON.stringify(path.join(repo, "src/lib/runtime/cpuAdmission.ts"))};
+import { CpuAdmissionQueue, cpuAdmissionFile, cpuCommandOwner } from ${JSON.stringify(path.join(repo, "src/lib/runtime/cpuAdmission.ts"))};
 test("queued heavy command", async () => {
   const queue = new CpuAdmissionQueue(cpuAdmissionFile());
-  queue.check("stage:predecessor", false);
-  const release = setTimeout(() => queue.cancel("stage:predecessor"), 8000);
+  queue.check("command:predecessor", false, cpuCommandOwner());
+  const release = setTimeout(() => queue.cancel("command:predecessor"), 8000);
   try {
     const child = Bun.spawn(["bash", ${JSON.stringify(path.join(repo, "scripts/gate-slot.sh"))}, process.execPath, "-e", ""], { stdout: "ignore", stderr: "inherit" });
     expect(await child.exited).toBe(0);
-  } finally { clearTimeout(release); queue.cancel("stage:predecessor"); queue.close(); }
+  } finally { clearTimeout(release); queue.cancel("command:predecessor"); queue.close(); }
 }, 20000);`;
   writeFileSync(path.join(f.dir, "a.test.ts"), source);
   writeFileSync(path.join(f.dir, "b.test.ts"), 'import { test } from "bun:test"; test("next file", () => {});');

@@ -351,13 +351,17 @@ high after 20. Inside a class the order stays the durable insertion sequence
 (`fifo_seq`), so an aged ticket lines up behind every ticket that was queued
 before it and ahead of every ticket queued after it.
 
-**Guarantee.** Let X be a ticket with rank `r` that entered lane L at `t0`.
+**Guarantee.** Let X be a ticket with rank `r` that entered lane L at `t0`,
+with its rank staying at `r` or a smaller number during the interval.
 From `t0 + r·T` on, every ticket counted ahead of X in L was queued before X.
 New arrivals of any priority land behind X, and so do priority raises of
 younger tickets. X's position therefore never grows from arrivals after
 `t0 + r·T`. X is admitted no later than the (k+1)-th admission in L after that
-instant, where k is the number of earlier tickets of L still waiting then. This
-holds as long as X keeps checking (stages every 5 s, gate helpers every 2 s)
+instant among callers using the same pressure policy, where k is the number
+of earlier tickets of L still waiting then. The existing escape for a bounded
+publication command can pass low-pressure-only checks; those bypass admissions
+do not count toward a heavy check's admission bound. This holds as long as X
+keeps checking (stages every 5 s, gate helpers every 2 s)
 and L's own admission conditions hold that many times:
 
 - Start lane: the CPU-pressure gate allows a start, or the head is past its own
@@ -365,16 +369,18 @@ and L's own admission conditions hold that many times:
 - Command lane: a slot is free, and measured pressure is low at readiness and
   at claim, plus spacing.
 
-There is no wall-clock promise. While all six slots stay busy, or pressure
-stays high, nothing in that lane is admitted, and the waiting text names that
-cause (§3).
+There is no wall-clock promise for heavy checks. Occupied slots or a
+nonpermissive measured pressure sample can hold them indefinitely, and the
+waiting text names that cause (§3). The start lane retains its existing escape
+at the head's ten-minute bound, with spacing and worker limits still applying.
 
 **Before aging, urgent work keeps its preference.** A high ticket that arrives
 while X is still younger than `r·T` is ordered ahead of X. So for one full
 `T` per level, a new urgent ticket keeps exactly the preference #3129 gave it.
 Board priority changes still take effect at the next check: raising X to high
 makes its class 0 at once, and lowering an aged ticket recomputes its class
-from the new rank and the same age.
+from the new rank and the same age. A priority decrease can postpone reaching
+class 0, but every ticket reaches it by `2T` whatever its task rank becomes.
 
 **Why 10 minutes.** It is the bound the queue already promises stages
 (`CPU_QUEUE_MAX_WAIT_MS`, also the stall reference), so one number keeps one
@@ -583,6 +589,7 @@ are rewritten in place. "A stage and a heavy check share FIFO" becomes the
 lane-independence case below. The `remainingMs` expectations become `waitedMs`
 and `heldBy`.
 
+`src/lib/runtime/cpuAdmission.fairness.test.ts` and
 `src/lib/runtime/cpuAdmission.test.ts`:
 
 - **Sustained high arrivals.** A normal and a low ticket are queued first. One

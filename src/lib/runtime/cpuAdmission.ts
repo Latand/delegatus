@@ -22,7 +22,7 @@ export const CPU_QUEUE_ABANDONED_MS = 24 * 60 * 60_000;
 /** How long a head may stay past its bound, with nothing admitted, before the wait reads as stalled. */
 export const CPU_QUEUE_STALE_GRACE_MS = 60_000;
 /** `stalledMs` is set only while the head is past its bound and nothing is admitted. */
-export type CpuQueueWait = { since: number; position: number; remainingMs: number; priority?: TaskPriority; stalledMs?: number };
+export type CpuQueueWait = { since: number; position: number; waitedMs: number; heldBy: "queue" | "pressure"; priority?: TaskPriority; stalledMs?: number };
 type Ticket = { seq: number; fifo_seq: number; key: string; since: number; owner: string | null; priority: number; source: string | null; polled: number | null; low_pressure: number };
 /** The queue judges owners with these; `log` receives one line for each ticket
  * it removes or passes over because of its owner. */
@@ -321,22 +321,25 @@ export class CpuAdmissionQueue {
       }
       if (priorityChanged) this.orderLegacyTicketsByPriority();
       const ticket = this.db.query<Ticket, [string]>("SELECT * FROM tickets WHERE key = ?").get(key)!;
-      // Pressure may rise again before this queued ticket reaches the head.
-      // Display the durable worst-case bound even on a permissive sample.
-      const budget = Math.max(0, this.maxWaitMs - (now - ticket.since));
-      // A ticket whose own bound has run out passes tickets that wait for low
-      // pressure: their stricter rule can hold them indefinitely, and the
-      // bound promises this one a start. They keep FIFO among themselves.
+      const waitedMs = Math.max(0, now - ticket.since);
+      const budget = Math.max(0, this.maxWaitMs - waitedMs);
+      // Owned commands and ownerless starts share spacing, but only count
+      // their own lane. No slot-waiting command can hold a stage start.
+      const lane = ticket.owner === null ? "owner IS NULL" : "owner IS NOT NULL";
+      // Keep task ranks and the legacy seq view unchanged for old checkers.
+      // Each full wait bound raises one class; fifo_seq breaks every tie.
+      const age = Math.floor(waitedMs / this.maxWaitMs);
+      const effectiveClass = Math.max(0, ticket.priority - age);
+      const agedClass = "MAX(0, priority - CAST(MAX(0, ? - since) / ? AS INTEGER))";
+      // A bounded caller still passes low-pressure-only tickets at its bound.
       const passesLowPressure = !requireLowPressure && budget === 0 ? 1 : 0;
-      // Strict high → normal → low; the durable sequence is FIFO within a
-      // level, including after reprioritization, restart and recovery.
-      const counted = "(priority < ? OR (priority = ? AND seq <= ?)) AND (? = 0 OR low_pressure = 0 OR key = ?) AND key NOT IN (SELECT key FROM suspended) AND key NOT IN (SELECT key FROM stage_admissions)";
-      const ahead = this.db.query<{ n: number; since: number | null }, [string, number, number, number, number, string]>(`SELECT COUNT(*) AS n, MAX(CASE WHEN key <> ? THEN since END) AS since FROM tickets WHERE ${counted}`).get(key, ticket.priority, ticket.priority, ticket.seq, passesLowPressure, key)!;
-      const head = this.db.query<{ since: number }, [number, number, number, number, string]>(`SELECT since FROM tickets WHERE ${counted} ORDER BY priority, seq LIMIT 1`).get(ticket.priority, ticket.priority, ticket.seq, passesLowPressure, key)!;
+      const counted = `${lane} AND (${agedClass} < ? OR (${agedClass} = ? AND fifo_seq <= ?)) AND (? = 0 OR low_pressure = 0 OR key = ?) AND key NOT IN (SELECT key FROM suspended) AND key NOT IN (SELECT key FROM stage_admissions)`;
+      const args: [number, number, number, number, number, number, number, number, string] = [now, this.maxWaitMs, effectiveClass, now, this.maxWaitMs, effectiveClass, ticket.fifo_seq, passesLowPressure, key];
+      const ahead = this.db.query<{ n: number }, typeof args>(`SELECT COUNT(*) AS n FROM tickets WHERE ${counted}`).get(...args)!;
+      const head = this.db.query<{ since: number }, [...typeof args, number, number]>(`SELECT since FROM tickets WHERE ${counted} ORDER BY ${agedClass}, fifo_seq LIMIT 1`).get(...args, now, this.maxWaitMs)!;
       const position = ahead.n;
       const last = this.db.query<{ last: number | null }, []>("SELECT last FROM admission WHERE id = 1").get()!.last;
       const spacing = last === null ? 0 : Math.max(0, last + this.spacingMs - now);
-      const priorBudget = ahead.since === null ? 0 : Math.max(0, this.maxWaitMs - (now - ahead.since));
       // Heavy gates must keep waiting under load even after the queue's stage
       // fairness bound. Readiness and the final slot claim use the same guard.
       if (position === 1 && spacing === 0 && (pressureAllows || !requireLowPressure && budget === 0)) {
@@ -350,11 +353,12 @@ export class CpuAdmissionQueue {
         }
         return null;
       }
-      // The bounds above assume the head is admitted at its own. Once it is
-      // past that and nothing has been admitted since, they promise nothing.
+      // A lane head past its pressure bound, with no recent machine
+      // admission, is stalled. This reading never estimates a remaining wait.
       const stalledMs = now - Math.max(head.since + this.maxWaitMs, last ?? 0);
       return {
-        since: ticket.since, position, ...(ticket.priority === 1 ? {} : { priority: ticket.priority === 0 ? "high" as const : "low" as const }), remainingMs: Math.max(budget, priorBudget, spacing) + (position - 1) * this.spacingMs,
+        since: ticket.since, position, waitedMs, heldBy: position > 1 || spacing > 0 ? "queue" as const : "pressure" as const,
+        ...(ticket.priority === 1 ? {} : { priority: ticket.priority === 0 ? "high" as const : "low" as const }),
         ...(stalledMs > CPU_QUEUE_STALE_GRACE_MS ? { stalledMs } : {}),
       };
     }).immediate();
