@@ -53,7 +53,7 @@ test("an unpinned base without origin resolves local main without fetching", asy
     await git(root, "init", "-q", "-b", "main");
     await git(root, "config", "user.name", "Fixture");
     await git(root, "config", "user.email", "noreply@example.invalid");
-    await git(root, "commit", "-q", "--allow-empty", "-m", "base");
+    await git(root, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-q", "--allow-empty", "-m", "base");
     const head = await git(root, "rev-parse", "HEAD");
     const calls: string[] = [];
     const result = await resolvePipelineBaseAsync(root, {}, (command, args, cwd, signal) => {
@@ -189,6 +189,66 @@ async function isolatedIdentityRepo() {
   (await run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "initial"));
   return { root, repo, env, exec, run };
 }
+
+test.each(["deletion", "modification", "normal"] as const)("passed stage settlement handles %s while leaving ignored files alone", async (change) => {
+  const box = await isolatedIdentityRepo();
+  try {
+    fs.mkdirSync(path.join(box.repo, ".artifacts"));
+    const tracked = ".artifacts/brief.md";
+    fs.writeFileSync(path.join(box.repo, tracked), "tracked brief\n");
+    await box.run("add", tracked);
+    await box.run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "tracked brief");
+    fs.writeFileSync(path.join(box.repo, ".gitignore"), ".artifacts/\n");
+    await box.run("add", ".gitignore");
+    await box.run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "ignore artifacts");
+    const subject = pipeline();
+    subject.repoDir = subject.worktreeDir = box.repo;
+    subject.baseRef = subject.lastPassedCommit = await box.run("rev-parse", "HEAD");
+    const ignored = path.join(box.repo, ".artifacts/untracked.md");
+    fs.writeFileSync(ignored, "ignored draft\n");
+    if (change === "deletion") fs.unlinkSync(path.join(box.repo, tracked));
+    else if (change === "modification") fs.writeFileSync(path.join(box.repo, tracked), "updated brief\n");
+    else fs.writeFileSync(path.join(box.repo, "source.ts"), "export const value = 2;\n");
+    // New eligible files still join the settlement commit, with literal names.
+    fs.writeFileSync(path.join(box.repo, "new[1].md"), "new output\n");
+    const result = await commitPipelineStage(subject, "build", true, box.exec);
+    expect(result).toMatchObject({ ok: true });
+    const expected = change === "normal" ? "A\tnew[1].md\nM\tsource.ts"
+      : `${change === "deletion" ? "D" : "M"}\t${tracked}\nA\tnew[1].md`;
+    expect(await box.run("diff", "--name-status", subject.baseRef, "HEAD")).toBe(expected);
+    expect(await box.run("ls-files", ".artifacts/untracked.md")).toBe("");
+    expect(fs.readFileSync(ignored, "utf8")).toBe("ignored draft\n");
+    expect(await box.run("status", "--porcelain")).toBe("");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test.each(["listing", "newly ignored"] as const)("passed stage settlement preserves work on a %s untracked path refusal", async (refusal) => {
+  const box = await isolatedIdentityRepo();
+  try {
+    const subject = pipeline();
+    subject.repoDir = subject.worktreeDir = box.repo;
+    subject.baseRef = subject.lastPassedCommit = await box.run("rev-parse", "HEAD");
+    fs.writeFileSync(path.join(box.repo, "new.md"), "stage output\n");
+    const exec: ExecPort = async (command, args, cwd, env, options) => {
+      const result = await box.exec(command, args, cwd, env, options);
+      if (args[0] === "ls-files" && args.includes("--others")) {
+        if (refusal === "listing") return { code: 1, stdout: "", stderr: "index read refused" };
+        // The ignore policy changes after discovery; Git must still refuse it.
+        fs.writeFileSync(path.join(box.repo, ".git/info/exclude"), "new.md\n");
+      }
+      return result;
+    };
+    const result = await commitPipelineStage(subject, "build", true, exec);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("settlement unexpectedly committed");
+    expect(result.error).toStartWith("staging the passed stage:");
+    expect(result.error).toContain("new.md");
+    expect(result.commitRefusal).toBeUndefined();
+    expect(await box.run("rev-parse", "HEAD")).toBe(subject.baseRef);
+    expect(await box.run("ls-files", "new.md")).toBe("");
+    expect(fs.readFileSync(path.join(box.repo, "new.md"), "utf8")).toBe("stage output\n");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
 
 test("a real stale dirty checkout provisions from the freshly fetched origin/main tip", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-base-"));
@@ -1066,7 +1126,7 @@ test("pass commits a dirty stage and retry resets plus cleans", async () => {
     expect(await resetPipelineStage(subject, exec)).toEqual({ ok: true, sha: subject.lastPassedCommit });
     expect(await box.run("show", "HEAD:source.ts")).toBe("export const value = 1;");
     expect(calls).toContain(`git reset --quiet HEAD -- ${CONTROLLER_ARTIFACT_GIT_PATHS.join(" ")}`);
-    expect(calls).toContain(`git add -A -- . ${CONTROLLER_ARTIFACT_PATHSPECS.join(" ")}`);
+    expect(calls).toContain(`git add -u -- . ${CONTROLLER_ARTIFACT_PATHSPECS.join(" ")}`);
     expect(calls).toContain(`git reset --hard ${subject.lastPassedCommit}`);
     expect(calls).toContain("git clean -fd");
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
@@ -1716,7 +1776,10 @@ test("read-only stage records a declared report without granting source commits"
   }
 });
 
-test("read-only stage records an ignored declared report", async () => {
+test.each([
+  { label: "read-write", allowCommit: true },
+  { label: "read-only", allowCommit: false },
+])("$label settlement leaves an ignored declared report untracked", async ({ allowCommit }) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-ignored-output-"));
   try {
     (await git(root, "init", "--initial-branch=main"));
@@ -1731,17 +1794,50 @@ test("read-only stage records an ignored declared report", async () => {
     const subject = pipeline();
     subject.worktreeDir = root;
     subject.lastPassedCommit = (await git(root, "rev-parse", "HEAD"));
+    const head = subject.lastPassedCommit;
     fs.mkdirSync(path.join(root, "reports"));
     fs.writeFileSync(path.join(root, "reports", "audit.md"), "audited\n");
 
     expect((await git(root, "status", "--porcelain"))).toBe("");
-    const result = (await commitPipelineStage(subject, "audit", false, realExec, ["reports/audit.md"]));
-    expect(result.ok).toBeTrue();
-    expect(result.ok && result.sha).not.toBe(subject.lastPassedCommit);
-    expect((await git(root, "show", "HEAD:reports/audit.md"))).toBe("audited");
+    const result = (await commitPipelineStage(subject, "audit", allowCommit, realExec, ["reports/audit.md"]));
+    expect(result).toEqual({ ok: true, sha: head });
+    expect((await git(root, "ls-files", "--", "reports/audit.md"))).toBe("");
+    expect((await git(root, "rev-parse", "HEAD"))).toBe(head);
+    expect(fs.readFileSync(path.join(root, "reports", "audit.md"), "utf8")).toBe("audited\n");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test.each([
+  { label: "read-write", allowCommit: true, mutateAfterListing: 1 },
+  { label: "read-only", allowCommit: false, mutateAfterListing: 2 },
+])("$label settlement refuses an output that becomes ignored after discovery", async ({ allowCommit, mutateAfterListing }) => {
+  const box = await isolatedIdentityRepo();
+  try {
+    const subject = pipeline();
+    subject.worktreeDir = box.repo;
+    subject.lastPassedCommit = await box.run("rev-parse", "HEAD");
+    const output = path.join(box.repo, "new.md");
+    fs.writeFileSync(output, "stage output\n");
+    let listings = 0;
+    const exec: ExecPort = async (command, args, cwd, env, options) => {
+      const result = await box.exec(command, args, cwd, env, options);
+      if (command === "git" && args[0] === "ls-files" && args.includes("--others")) {
+        listings += 1;
+        if (listings === mutateAfterListing) fs.appendFileSync(path.join(box.repo, ".git", "info", "exclude"), "\n/new.md\n");
+      }
+      return result;
+    };
+
+    const result = await commitPipelineStage(subject, "audit", allowCommit, exec, ["new.md"]);
+
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining("new.md") });
+    expect(await box.run("rev-parse", "HEAD")).toBe(subject.lastPassedCommit);
+    expect(await box.run("ls-files", "--", "new.md")).toBe("");
+    expect(await box.run("ls-files", "--others", "--exclude-standard", "--", "new.md")).toBe("");
+    expect(fs.readFileSync(output, "utf8")).toBe("stage output\n");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
 test("a declared output directory leaves ignored descendants alone", async () => {
