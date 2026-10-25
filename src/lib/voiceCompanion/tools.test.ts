@@ -49,6 +49,10 @@ test("all declarations execute through one allowlist, parameter schema and proje
   for (const tool of COMPANION_TOOL_REGISTRY) {
     expect(await runCompanionTool(context, tool.name, args[tool.name])).toBeDefined();
     await expect(runCompanionTool(context, tool.name, { ...args[tool.name], arbitrary: "foreign" })).rejects.toThrow("INVALID_TOOL_ARGUMENTS");
+    if (tool.class === "board-read")
+      expect(await runCompanionTool(context, tool.name, { ...args[tool.name], arbitrary: null })).toBeDefined();
+    else
+      await expect(runCompanionTool(context, tool.name, { ...args[tool.name], arbitrary: null })).rejects.toThrow("INVALID_TOOL_ARGUMENTS");
   }
   expect(ended).toBe(true);
   await expect(runCompanionTool(context, "send_message", {})).rejects.toThrow("TOOL_NOT_ALLOWED");
@@ -56,6 +60,39 @@ test("all declarations execute through one allowlist, parameter schema and proje
   await expect(runCompanionTool(context, "get_task", {})).rejects.toThrow("INVALID_TOOL_ARGUMENTS");
   admission.retire(session.id);
   await expect(runCompanionTool(context, "end_conversation", {})).rejects.toThrow("SESSION_CLOSED");
+});
+
+test("orchestrator reads discard only unlisted nulls before dispatch and normalization", async () => {
+  const now = () => 1792713600000;
+  const admission = new CompanionAdmission(new CompanionStorage(now), { recipient: () => null, reports: () => [], send: async () => { throw new Error("unexpected delivery"); } }, now);
+  const session = admission.create({ project: "fixture", locale: "en", authority: "live-model" });
+  const reads = fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [],
+    messages: async () => [{ role: "assistant", text: "The review passed." }] });
+  const context = { project: "fixture", sessionId: session.id, callId: "read-arguments", delegationId: "read-arguments", admission, reads, endConversation: () => undefined };
+  const args = { project: null, before: null, limit: 12, refresh: null, since: null };
+  const normalized = { project: "fixture", limit: 12 };
+  expect(reads.normalize("fixture", "orchestrator_messages", args)).toEqual(normalized);
+  expect(reads.normalize("fixture", "orchestrator_messages", { ...args, message: null, offset: null, at: null, limit: null })).toEqual({ project: "fixture", limit: 6 });
+  const result = await runCompanionTool(context, "orchestrator_messages", args);
+  expect(result).toMatchObject({ rows: [{ text: "The review passed." }] });
+  const calls: unknown[] = [];
+  expect(await runCompanionTool({ ...context, read: async (name, values) => {
+    calls.push({ name, values });
+    return reads.call("fixture", name, values);
+  } }, "orchestrator_messages", args)).toEqual(result);
+  expect(calls).toEqual([{ name: "orchestrator_messages", values: { project: null, before: null, limit: 12, refresh: null } }]);
+  expect(args).toEqual({ project: null, before: null, limit: 12, refresh: null, since: null });
+  const since = "2026-10-23T00:00:00Z";
+  expect(reads.normalize("fixture", "orchestrator_actions", { since, extra: null })).toEqual({ project: "fixture", since, limit: 15 });
+  for (const invalid of [{ since }, { since: false }, { since: 0 }, { since: "" }, { since: {} }, { since: [] }, { since: undefined },
+    { since: null, limit: 13 }, { since: null, message: 42 }, { since: null, arbitrary: "foreign" }, { since: null, toString: "foreign" }]) {
+    expect(() => reads.normalize("fixture", "orchestrator_messages", invalid)).toThrow("INVALID_TOOL_ARGUMENTS");
+    await expect(runCompanionTool(context, "orchestrator_messages", invalid)).rejects.toThrow("INVALID_TOOL_ARGUMENTS");
+  }
+  await expect(runCompanionTool(context, "get_task", { since: null })).rejects.toThrow("INVALID_TOOL_ARGUMENTS");
+  expect(() => reads.normalize("fixture", "get_task", { taskId: null, since: null })).toThrow("INVALID_TOOL_ARGUMENTS");
+  await expect(runCompanionTool(context, "view_prototype_frame", { variants: null, since: null })).rejects.toThrow("INVALID_TOOL_ARGUMENTS");
+  await expect(runCompanionTool(context, "orchestrator_messages", { ...args, project: "foreign" })).rejects.toThrow("PROJECT_REFUSED");
 });
 
 test("the delegation tool sends at once; the model's own flag asks first, and the spoken answer resolves it through the second tool", async () => {
