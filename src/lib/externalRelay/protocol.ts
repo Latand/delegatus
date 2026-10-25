@@ -187,7 +187,16 @@ export const inputSchema = z.object({
   }
 });
 const chatKey = z.string().regex(/^[A-Za-z0-9_-]{16,64}$/);
+/** Supplied only by the service for its verified pairing owner. Opaque message
+ * references elsewhere in a claim cannot be converted into this destination. */
+export const ownerDeliverySchema = z.object({
+  chat_id: z.number().int().safe().refine(value => value !== 0),
+  reply_to_message_id: z.number().int().min(1).max(2147483647),
+  message_thread_id: z.number().int().positive().nullable(),
+});
+export type OwnerDelivery = z.infer<typeof ownerDeliverySchema>;
 const answerRequestSchema = z.object({
+  owner_delivery: ownerDeliverySchema.optional().catch(undefined),
   features: z.array(boundedString(64)).max(32).refine(v => new Set(v).size === v.length).optional().catch(undefined),
   request_id: id,
   lease_id: leaseId,

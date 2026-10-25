@@ -704,7 +704,9 @@ export function createFilesClientCache(
     if (completionRetry && !ownsCompletionRetry(url, completionRetry)) return snapshot;
     const servedGeneration = responseGeneration(response, "x-llv-files-generation");
     const targetGeneration = responseGeneration(response, "x-llv-files-target-generation");
-    const projectionIncomplete = response.headers.get("x-llv-files-projection-cache") === "stale";
+    const projectionState = response.headers.get("x-llv-files-projection-cache");
+    const serverBootstrap = projectionState === "bootstrap";
+    const projectionIncomplete = serverBootstrap || projectionState === "stale";
     const completionTargetGeneration = targetGeneration ?? servedGeneration ?? requiredGeneration;
     const generationIncomplete = completionTargetGeneration !== undefined && (
       projectionIncomplete || (servedGeneration !== undefined
@@ -731,7 +733,7 @@ export function createFilesClientCache(
       }
       /* The answer a restored snapshot carried is still the server's: the
          same rows, now certified, identities kept (#2071). */
-      if (!snapshot.loaded || snapshot.cached) {
+      if ((!snapshot.loaded || snapshot.cached) && !(snapshot.cached && generationIncomplete)) {
         snapshot = { ...snapshot, loaded: true, cached: false, scopeCertified: true };
       }
       /* A dated 304 confirms these rows as of a later scan: the generation the
@@ -778,7 +780,14 @@ export function createFilesClientCache(
     if (generation < appliedGeneration) return snapshot;
     const built = parseFilesBuilt(response.headers.get(FILES_BUILT_HEADER));
     const parsedData = parsedFilesData(parsed, url);
-    const incoming = built ? { ...parsedData, builtGeneration: built.generation } : parsedData;
+    // Saved server bytes have the same provisional status as a browser restore.
+    // Incomplete follow-ups keep that status until this scope is certified.
+    const provisional = serverBootstrap || (snapshot.cached && generationIncomplete);
+    const incoming = {
+      ...parsedData,
+      ...(built ? { builtGeneration: built.generation } : {}),
+      ...(provisional ? { loaded: false, cached: true, scopeCertified: false } : {}),
+    };
     if (filesBuiltBefore(built, shownBuilt)) {
       const raw = Array.isArray(parsed) ? undefined : rawSharingRows(parsed as unknown as RawFilesResponse, incoming);
       const refused = refuseOlder(url, incoming, etag ?? undefined, etag ? raw : undefined, built, healthRequest);

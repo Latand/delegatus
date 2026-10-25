@@ -133,3 +133,46 @@ test("SSE forwards every session's tool items, a session this tab never opened i
   expect(asked).toEqual([[0, expect.any(Number)]]);
   expect(forwarded.map((e) => [e.kind, e.scope.id])).toEqual([["item", "conv-on-screen"], ["item", "conv-never-opened"]]);
 });
+
+test("SSE omits refused events while advancing the replay cursor past them", async () => {
+  const afters: number[] = [];
+  const client = {
+    waitEvents: async (after: number) => {
+      afters.push(after);
+      return { reset: false, floorSeq: 0, events: after === 0 ? [event(1), event(2), event(3)] : [event(4)] };
+    },
+  } as unknown as RuntimeHostClient;
+  const abort = new AbortController();
+  const reader = runtimeEventStream(client, 0, abort.signal, () => row => row.seq !== 2).getReader();
+  try {
+    const first = new TextDecoder().decode((await reader.read()).value);
+    expect(first).toContain("id: 1\n");
+    expect(first).not.toContain("id: 2\n");
+    expect(first).toContain("id: 3\n");
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain("id: 4\n");
+    expect(afters).toEqual([0, 3]);
+  } finally { abort.abort(); await reader.cancel(); }
+});
+
+
+test("SSE verifies authority once per replay batch after the host wait", async () => {
+  let scopes = 0;
+  let live = true;
+  let waits = 0;
+  const abort = new AbortController();
+  const client = { waitEvents: async () => {
+    waits++;
+    await Promise.resolve();
+    if (waits === 2) live = false;
+    return { reset: false, floorSeq: 0, events: [event(waits * 2 - 1), event(waits * 2)] };
+  } } as unknown as RuntimeHostClient;
+  const reader = runtimeEventStream(client, 0, abort.signal, () => { scopes++; const admitted = live; return () => admitted; }).getReader();
+  try {
+    const first = new TextDecoder().decode((await reader.read()).value);
+    const second = new TextDecoder().decode((await reader.read()).value);
+    expect(first).toContain("id: 1");
+    expect(first).toContain("id: 2");
+    expect(second).not.toContain("data:");
+    expect(scopes).toBe(2);
+  } finally { abort.abort(); await reader.cancel(); }
+});

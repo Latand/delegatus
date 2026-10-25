@@ -2,7 +2,18 @@
 
 import { TelegramFileConfirmation } from "@/components/telegram/TelegramFileConfirmation";
 import type { FileConfirmationView } from "@/lib/telegram/bot/fileConfirmationContract";
+
+
 import { DeputyBlock } from "./DeputyBlock";
+import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
+import { StagesSheet } from "@/components/kanban/StagesSheet";
+import { summarizePipeline } from "@/components/kanban/pipelineSummary";
+import { ReaderPlacement } from "@/components/kanban/KanbanReaders";
+import { StageDrafts } from "@/components/kanban/stageDrafts";
+import type { PipelinePorts } from "@/components/kanban/pipelinePorts";
+import type { Pipeline } from "@/lib/pipelines/types";
+import { StagePlaceholderPane } from "@/components/pipelines/StagePlaceholderPane";
+import type { StageSlot } from "@/components/scheme/layout";
 import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
 
 /**
@@ -126,7 +137,8 @@ export type ConversationWindowCase =
   | "agent-images"
   | "image-viewers"
   | "own-message-steps"
-  | "payload-notice";
+  | "payload-notice"
+  | "memory-cap";
 
 /* #1846 recurrence: a first turn that died unauthorized produced no assistant
    message at all, so the row the parser makes out of the turn-end record is
@@ -1855,7 +1867,37 @@ const requested = (params.get("case") as ConversationWindowCase | null) ?? "rece
 /* The lifecycle case mounts the production window itself — the feed, the
    composer and a fake host behind them — so it takes over the root rather than
    rendering one arranged frame. */
-if (root && requested === "file-confirmation") mountFileConfirmation(root);
+if (root && requested === "memory-cap") {
+  const role = { roleId: "builder", engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null };
+  const stage = { id: "build", kind: "run", next: null, prompt: "Implement the scoped memory cap.", effectiveRole: role };
+  const unenforced = params.get("mode") === "unenforced";
+  const attempt = { n: 1, state: "passed", verdict: null, effectiveRole: role, memoryCap: {
+    limitBytes: unenforced ? null : 8 * 2 ** 30, requestedBytes: unenforced ? null : 12 * 2 ** 30,
+    source: "stage", clamped: !unenforced, enforced: !unenforced,
+  } };
+  const pipeline = { id: "memory-demo", task: "Scoped agent memory", project: "demo", state: "completed", stages: [stage],
+    runs: [{ stageId: "build", attempts: [attempt] }], cursor: null } as unknown as Pipeline;
+  const slot = { key: "memory-demo", pipeline, stage, attempt, index: 0, total: 1, presentation: "completed" } as unknown as StageSlot;
+  const summary = summarizePipeline(pipeline);
+  const ports: PipelinePorts = {
+    read: async () => ({ pipeline, stageDigests: {}, revision: "fixture" }),
+    patch: async () => ({ ok: true, pipeline }), refresh: () => {},
+  };
+  const noop = () => {};
+  const surface = params.get("surface") ?? "stages";
+  createRoot(root).render(<main className="kb min-h-dvh w-full overflow-y-auto bg-canvas p-3 text-primary">
+    {surface === "stages" ? <div data-memory-surface="stages" className="fixed inset-0"><StagesSheet
+      title={pipeline.task} summary={summary}
+      panes={[{ stage: pipeline.stages[0]!, folded: false, attempts: pipeline.runs[0]!.attempts, shown: pipeline.runs[0]!.attempts[0]!, file: null, readerKey: null }]}
+      flowsById={new Map()} initialFocus="build" windowReader={null} placement={new ReaderPlacement()}
+      drafts={new StageDrafts(() => ADMITTED_AT)} ports={ports} onFold={noop} onFoldMany={noop} onChooseAttempt={noop}
+      onStageMenu={noop} onOpenRecorded={noop} onLeaveWindow={noop} onClose={noop}
+    /></div> : surface === "placeholder"
+      ? <div data-memory-surface="placeholder" className="mx-auto h-[350px] max-w-2xl"><StagePlaceholderPane slot={slot} interactive={false} /></div>
+      : <div data-memory-surface="screen" className="mx-auto max-w-2xl"><PipelineBlock summary={summary} density="screen" nowMs={ADMITTED_AT} /></div>}
+  </main>);
+}
+else if (root && requested === "file-confirmation") mountFileConfirmation(root);
 else if (root && requested === "seat-inbox") createRoot(root).render(<InboxFixture />);
 else if (root && requested === "attention-answer") mountAttentionAnswer(root);
 else if (root && requested === "parallel-failure") createRoot(root).render(<ParallelFailureFixture />);

@@ -1,3 +1,4 @@
+import { workspaceRoute, requestWorkspaceScope } from "@/lib/team/workspaceRoute";
 import { resolveSeatProject } from "@/lib/orchestrator/seatProjectIdentity";
 import { ProjectNameRefusal } from "@/lib/projects/nameResolution";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -85,13 +86,13 @@ interface SeatFailure {
   automaticReplacement?: { conversationId: string; seatEpoch: number };
 }
 
-export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | SeatConversationsAnswer | ApiError>> {
+async function workspaceGET(req: NextRequest): Promise<NextResponse<SeatStatus | SeatConversationsAnswer | ApiError>> {
   return withViewerOperation("seat.panel", async () => {
   let project = req.nextUrl.searchParams.get("project")?.trim() ?? "";
   let displayName = project;
   const cwd = req.nextUrl.searchParams.get("cwd")?.trim() || undefined;
   if (req.nextUrl.searchParams.get("scope")?.trim() === "all") {
-    return NextResponse.json({ all: withDeputyRefs(allSeatConversationsIn(readOrchestratorSeatFileOrNull()), readDeputyFileOrNull()) });
+    return NextResponse.json({ all: requestWorkspaceScope(req)?.owner === false ? null : withDeputyRefs(allSeatConversationsIn(readOrchestratorSeatFileOrNull()), readDeputyFileOrNull()) });
   }
   if (!project) return NextResponse.json({ error: "project is required" }, { status: 400 });
   try {
@@ -161,7 +162,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | S
     viewerMcpRegistered: viewerMcpRegistered(home, cwd),
     previous,
     currentTask: active ? taskForSeat(active) : null,
-    all: withDeputyRefs(allSeatConversationsIn(record), deputyFile),
+    all: requestWorkspaceScope(req)?.owner === false ? null : withDeputyRefs(allSeatConversationsIn(record), deputyFile),
     /* docs/design/ghost-seat.md §5: the seat's feed draws each deputy's block
        from these, and the seat head and card point at the live one. */
     ...(seatDeputies.length ? { deputies: seatDeputies } : {}),
@@ -207,7 +208,7 @@ function withDeputyRefs(all: SeatConversations | null, file: { deputies: readonl
   return refs && (refs.conversationIds.length || refs.paths.length) ? { ...all, deputies: refs } : all;
 }
 
-export async function POST(req: NextRequest): Promise<NextResponse<Record<string, unknown> | ApiError>> {
+async function workspacePOST(req: NextRequest): Promise<NextResponse<Record<string, unknown> | ApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return NextResponse.json({ ...await rejection.json(), admission: "refused" }, { status: rejection.status });
   /* Designation is operator-only for the same reason the legacy record's is:
@@ -227,3 +228,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<Record<string
   const result = await executeOrchestratorSeatRequest(body);
   return NextResponse.json(result.body, { status: result.status });
 }
+
+export const GET = workspaceRoute("/api/orchestrator/seat", workspaceGET);
+
+export const POST = workspaceRoute("/api/orchestrator/seat", workspacePOST);

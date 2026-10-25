@@ -18,9 +18,24 @@ login.
 - **Remove and Show Main again.** **Remove** takes any account out of
   Delegatus. For the engine's own default account it only forgets it, and
   **Show Main again** brings it back.
-- **Switching.** Switch to another account before one runs out, or move a
-  single agent to a different account. Agents you start after a switch use
-  the new active account.
+- **Automatic selection.** Unpinned work ranks the project's allowed accounts;
+  an unbound project allows all listed accounts. Among fresh balances above
+  25% remaining in every governing window, the account whose binding window
+  resets soonest goes first. The binding window has the least headroom across
+  session, week and the requested Claude model's tier; tied binding windows
+  use the latest reset. If any adequately provisioned candidate's binding reset
+  is missing or has passed, that group uses most headroom instead. Equal resets
+  use most headroom, then the supplied account preference, then account ID.
+  Smaller balances remain fallbacks in headroom order. On retries, untried
+  accounts retain priority. A named account keeps its identity.
+- **Switching.** Switch the active account to change the routing preference,
+  or move a single agent to another account. Choose an account explicitly when
+  you want a launch to use it.
+- **Claude readings.** The existing Claude Code `/usage` command supplies fresh
+  session, weekly and per-model reset windows, shared by the accounts panel,
+  footer and `account_limits`. It runs no model turn. Direct subscription API
+  fallback still requires the installation's existing consent. A failed refresh
+  keeps the last reading and its original time, marked stale.
 - **At a limit.** When a pipeline stage hits a usage limit, Delegatus moves it
   to another allowed account of the same engine. When none has room, the
   stage waits and carries on once an allowed account has room or is signed in

@@ -100,7 +100,8 @@ export function CodeBlock({ code, lang, copyLabel }: { code: string; lang?: stri
   );
 }
 
-const ANCHOR_CLASS = "break-all text-accent underline decoration-accent/40 underline-offset-2 hover:decoration-accent";
+// Prefer word boundaries in labels; an unbroken URL or path can still fit the feed.
+const ANCHOR_CLASS = "[word-break:normal] [overflow-wrap:anywhere] text-accent underline decoration-accent/40 underline-offset-2 hover:decoration-accent";
 
 /**
  * Set by a surface that renders a whole document (the file preview): links

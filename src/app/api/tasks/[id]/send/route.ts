@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
@@ -167,7 +168,9 @@ async function postTaskSend(
   });
 }
 
-export const POST = Object.assign(
+const workspacePOST = Object.assign(
   async (req: NextRequest, ctx: TaskRouteContext): Promise<NextResponse<SendResponse | ApiError>> => postTaskSend(req, ctx),
   { withDependencies: postTaskSend },
 );
+
+export const POST = workspaceRoute("/api/tasks/[id]/send", workspacePOST);
