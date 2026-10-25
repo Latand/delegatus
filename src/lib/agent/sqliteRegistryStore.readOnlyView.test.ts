@@ -169,16 +169,23 @@ test("a retained archived collection keeps its retired reader alive after its ro
   writer.mutate(file => { file.receipts[kept]!.error = "new generation"; }, false);
   await reader.prepareReadOnlySnapshot();
   const nextTask = () => new Promise<void>(resolve => setImmediate(resolve));
-  for (let attempt = 0; attempt < 50 && !rootCollected; attempt++) {
+  // An unreferenced root can stay marked across any number of immediate turns
+  // and is released by the collection after a timer turn, so each round takes
+  // both, under a deadline that names the rounds it reached.
+  const deadline = performance.now() + 10_000;
+  let rounds = 0;
+  while (!rootCollected && performance.now() < deadline) {
+    rounds++;
     await nextTask();
+    await new Promise<void>(resolve => setTimeout(resolve, 1));
     Bun.gc(true);
     await nextTask();
   }
-  expect(rootCollected).toBe(true);
+  expect({ rootCollected, rounds }).toEqual({ rootCollected: true, rounds: expect.any(Number) });
   // The store's finalizer for the same root is queued by the same collection.
   for (let turn = 0; turn < 3; turn++) await nextTask();
   expect(retained.collection["retained-collection-0"]?.error).toBe("receipt-0");
-});
+}, 30_000);
 
 test("the first keyed archived read visits only its requested payload", async () => {
   const { open, kept, filename } = fixture();
