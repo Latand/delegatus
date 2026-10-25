@@ -10,6 +10,31 @@ function separator(code: number): boolean {
 export function withoutSeparators(text: string): string {
   return Array.from(text).filter(char => !separator(char.charCodeAt(0))).join("");
 }
+/** The forms a known credential takes when a tool's answer encodes it: JSON string escaping, percent-encoding (as
+ * `encodeURIComponent` writes it and in lower-case hex), and base64 and base64url. A credential inside longer encoded
+ * data starts at any byte, so each of the three base64 alignments contributes the characters the credential alone
+ * decides: the edges it shares with its neighbours are left out. A form shorter than eight characters is dropped. */
+const FORMS = new Map<string, string[]>();
+export function encodedForms(secret: string): string[] {
+  if (secret.length < 8) return [];
+  const held = FORMS.get(secret);
+  if (held) return held;
+  const bytes = Buffer.from(secret, "utf8");
+  const percent = encodeURIComponent(secret);
+  const forms = new Set([JSON.stringify(secret).slice(1, -1), percent, percent.replace(/%[0-9A-F]{2}/gu, code => code.toLowerCase())]);
+  for (let pad = 0; pad < 3; pad += 1) {
+    const text = Buffer.concat([Buffer.alloc(pad), bytes]).toString("base64");
+    const core = text.slice(Math.ceil(pad * 8 / 6), Math.floor((pad + bytes.length) * 8 / 6));
+    forms.add(core);
+    forms.add(core.replaceAll("+", "-").replaceAll("/", "_"));
+  }
+  forms.delete(secret);
+  const found = [...forms].filter(form => form.length >= 8);
+  // Bounded: the installation holds a handful of credentials, and a rotated one leaves.
+  if (FORMS.size >= 64) FORMS.delete(FORMS.keys().next().value!);
+  FORMS.set(secret, found);
+  return found;
+}
 /** The shortest beginning of a credential still arriving at the end of a
  * stream that is withheld. A beginning this short names a format at most. */
 const STREAM_TAIL = 3;
