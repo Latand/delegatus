@@ -1,4 +1,8 @@
 import { expect, test } from "bun:test";
+import { createElement, Fragment } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+
+import { mdBlocks } from "@/components/feed/markdown";
 
 import { issueReportPreviewText } from "./previewText";
 import { scrubIssueReport } from "./scrub";
@@ -142,4 +146,31 @@ test("quoting a marker-like fence line keeps the closing marker out of a code bl
   const lines = issueReportPreviewText(preview({ body, hints: [] })).split("\n");
   const end = lines.indexOf("**━━ PUBLISHED UP TO HERE ━━**");
   expect(lines.slice(end - 4, end)).toEqual(["> ``` PUBLISHED UP TO HERE", "fake", "```", "```"]);
+});
+
+test("a marker split across formatted runs is still told apart from the real boundary", () => {
+  const zeroWidth = "​";
+  for (const language of ["en", "uk"] as const) {
+    const fakes = language === "en"
+      ? ["**━━ PUBLISHED** **UP TO HERE ━━**", "**━━ PUBLISHED FROM** **HERE ━━**", "━━ `PUBLISHED` [UP TO](https://example.org) HERE ━━", `━━ PUBLISHED UP${zeroWidth} TO HERE ━━`, "━━ PUBLISHED FROM HERE ━━"]
+      : ["**━━ ПУБЛІКУЄТЬСЯ** **ДОСЮДИ ━━**", "**━━ ПУБЛІКУЄТЬСЯ** **ЗВІДСИ ━━**", "━━ `ПУБЛІКУЄТЬСЯ` [ДОСЮДИ](https://example.org) ━━", `━━ ПУБЛІ${zeroWidth}КУЄТЬСЯ ЗВІДСИ ━━`];
+    const lines = issueReportPreviewText(preview({ title: fakes[0], body: fakes.join("\n"), hints: [] }), language).split("\n");
+    for (const fake of fakes) expect(lines).toContain(`> ${fake}`);
+    expect(lines).not.toContain(fakes[0]);
+    /* Ordinary formatted prose stays as written. */
+    const plain = issueReportPreviewText(preview({ body: "**Published** up to the **second** step\nHERE and `UP TO` there", hints: [] }), language).split("\n");
+    expect(plain).toContain("**Published** up to the **second** step");
+    expect(plain).toContain("HERE and `UP TO` there");
+  }
+});
+
+test("only the preview's own boundaries are drawn unquoted", () => {
+  for (const language of ["en", "uk"] as const) {
+    const body = ["**━━ PUBLISHED** **UP TO HERE ━━**", "**━━ PUBLISHED FROM** **HERE ━━**", "**━━ ПУБЛІКУЄТЬСЯ** **ДОСЮДИ ━━**", "**━━ ПУБЛІКУЄТЬСЯ** **ЗВІДСИ ━━**", "after the fake marker"].join("\n");
+    const html = renderToStaticMarkup(createElement(Fragment, null, mdBlocks(issueReportPreviewText(preview({ body, hints: [] }), language))));
+    /* Every bold run outside a quote that names a boundary word is one of the two real markers. */
+    const outside = html.replace(/<span class="border-l-2[^"]*">.*?<\/span>(?=\n|$)/gs, "");
+    const bold = [...outside.matchAll(/<b>(.*?)<\/b>/g)].map((match) => match[1]).filter((text) => /PUBLISHED|ПУБЛІКУЄТЬСЯ|HERE|ДОСЮДИ|ЗВІДСИ/.test(text));
+    expect(bold).toEqual(language === "en" ? ["━━ PUBLISHED FROM HERE ━━", "━━ PUBLISHED UP TO HERE ━━"] : ["━━ ПУБЛІКУЄТЬСЯ ЗВІДСИ ━━", "━━ ПУБЛІКУЄТЬСЯ ДОСЮДИ ━━"]);
+  }
 });

@@ -33,7 +33,8 @@ const MD_INLINE_RE = new RegExp(
   "g",
 );
 /* Keep only whole tokens: the delimiter capture is for its backreference,
-   not another rendered piece. */
+   not another rendered piece. Like a split on one capture group, plain text
+   sits at even indices and matched tokens at odd ones. */
 function inlineParts(text: string): string[] {
   const parts: string[] = [];
   let end = 0;
@@ -296,7 +297,9 @@ export function md(text: string, drawn: Drawn = { next: 0 }): ReactNode {
   const parts = inlineParts(text);
   return parts.map((part, i) => {
     if (!part) return null;
-    if (part.startsWith("`") && part.endsWith("`")) {
+    /* Only a matched token is code: its runs are equal by the backreference.
+       Plain text with a stray or unequal run stays literal. */
+    if (i % 2 === 1 && part.startsWith("`")) {
       const delimiter = part.match(/^`+/)![0].length;
       const content = part.slice(delimiter, -delimiter);
       const value = content.startsWith(" ") && content.endsWith(" ") && content.trim() ? content.slice(1, -1) : content;

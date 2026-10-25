@@ -157,3 +157,13 @@ test("inline code preserves embedded backticks with a longer delimiter", () => {
     expect(html).toContain(`>${expected}</span>`);
   }
 });
+
+test("an unequal or unclosed backtick run stays literal text", () => {
+  for (const source of ["``abc`", "`abc``", "```abc``", "`abc", "abc`", "`a``", "x `` y"]) {
+    const html = renderToStaticMarkup(<>{md(source)}</>);
+    expect(html).toBe(source);
+    expect(html).not.toContain("cursor-copy");
+  }
+  /* A matched pair beside a stray run is still code, and the stray run stays literal. */
+  expect(renderToStaticMarkup(<>{md("`` `a` ")}</>)).toMatch(/^`` <span[^>]*>a<\/span> $/);
+});

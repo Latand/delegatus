@@ -12740,6 +12740,17 @@ browserTest("digest preview boundaries and literal hints stay distinct without a
         const boundaries = preview.locator("b").filter({ hasText: marker });
         expect(await boundaries.count()).toBe(2);
         expect(await boundaries.evaluateAll(nodes => nodes.filter(node => node.parentElement?.className.includes("border-l-2")).length)).toBe(1);
+        /* Markers split across bold runs are quoted too: only the preview's own two keep the unquoted style. */
+        const drawn = await preview.locator("b").evaluateAll(nodes => nodes
+          .filter(node => /PUBLISHED|ПУБЛІКУЄТЬСЯ|HERE|ЗВІДСИ|ДОСЮДИ/.test(node.textContent ?? ""))
+          .map(node => ({ text: node.textContent, quoted: Boolean(node.closest(".border-l-2")), color: getComputedStyle(node).color })));
+        const own = lang === "en" ? ["━━ PUBLISHED FROM HERE ━━", "━━ PUBLISHED UP TO HERE ━━"] : ["━━ ПУБЛІКУЄТЬСЯ ЗВІДСИ ━━", "━━ ПУБЛІКУЄТЬСЯ ДОСЮДИ ━━"];
+        expect(drawn.filter(run => !run.quoted).map(run => run.text)).toEqual(own);
+        for (const split of ["━━ PUBLISHED", "UP TO HERE ━━", "━━ PUBLISHED FROM", "HERE ━━", "━━ ПУБЛІКУЄТЬСЯ", "ЗВІДСИ ━━", "ДОСЮДИ ━━"]) {
+          expect(drawn.some(run => run.quoted && run.text === split)).toBe(true);
+        }
+        const ownColor = drawn.find(run => !run.quoted)!.color;
+        expect(drawn.filter(run => run.quoted && run.color === ownColor)).toEqual([]);
         expect(await preview.locator("span.cursor-copy").filter({ hasText: "a`b" }).innerText()).toBe("a`b");
         const move = await boundaries.first().evaluate(node => {
           let feed = node.parentElement;

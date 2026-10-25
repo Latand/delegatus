@@ -64,9 +64,14 @@ const verbatim = (text: string) => text.trim().split("\n").filter((line) => line
   }).join(" ↵ ");
 
 /* Boundary-like report lines are quoted, so only the preview's own markers
-   have the unquoted boundary style. The publication bytes stay untouched. */
+   have the unquoted boundary style. A line is read as the chat draws it:
+   link and image targets, emphasis and code delimiters and invisible format
+   characters are dropped, so a marker split across formatted runs is still
+   caught. The publication bytes stay untouched. */
+const MARKER_RE = /PUBLISHED\s*(?:FROM\s*HERE|UP\s*TO\s*HERE)|ПУБЛІКУЄТЬСЯ\s*(?:ЗВІДСИ|ДОСЮДИ)/iu;
+const drawnText = (line: string) => line.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/[*_`~|\\]|\p{Cf}/gu, "");
 const distinguishBoundaries = (text: string) => text.split("\n").map((line) =>
-  /PUBLISHED (?:FROM HERE|UP TO HERE)|ПУБЛІКУЄТЬСЯ (?:ЗВІДСИ|ДОСЮДИ)/i.test(line) ? `> ${line}` : line).join("\n");
+  MARKER_RE.test(drawnText(line)) ? `> ${line}` : line).join("\n");
 
 /* The chat draws an unclosed code fence to the end of the message, which
    would swallow the closing marker and everything after it. */
