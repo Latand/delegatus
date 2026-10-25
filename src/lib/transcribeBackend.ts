@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { readCodexAuth } from "@/lib/codexAuth";
 import { configFilePath } from "@/lib/configDir";
+import { withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { localWhisperReady, whisperPythonPath } from "@/lib/transcribe/local";
 
 export type TranscribeBackend = "local" | "chatgpt" | "elevenlabs" | "soniox";
@@ -49,7 +50,10 @@ function writePrivateConfigFile(file: string, content: string): void {
 
 /** Persists the mic-menu choice; the env override, when set, still wins. */
 export function writeTranscribeBackend(backend: TranscribeBackend): void {
-  writePrivateConfigFile(configFilePath("transcribe-backend"), backend + "\n");
+  const file = configFilePath("transcribe-backend");
+  /* Under the file's lock, which an install transfer holds while it writes the same file. */
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  withFileTransactionSync(file, "the voice settings are busy", () => writePrivateConfigFile(file, backend + "\n"));
 }
 
 export type LiveTranscribeProvider = "elevenlabs" | "soniox";

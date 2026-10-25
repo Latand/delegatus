@@ -17,6 +17,7 @@ import type {
   RequestState,
   SeatTickEvidenceGap,
   SeatTickItem,
+  SeatTickSeatOwnedLane,
   SeatTickSignalInput,
   SeatTickSkippedChildren,
   SeatTickUnreadableChild,
@@ -161,7 +162,9 @@ export const SEAT_TICK_CONTRACT_POINTER = `Contract: the "${ORCHESTRATOR_VIEWER_
     that paragraph surviving a seat's edit, so it states the ban too. */
 export const SEAT_TICK_NO_SELF_SCHEDULE = "Do not schedule yourself. Delegatus ticks this seat; a self-scheduled monitor is refused practice.";
 
-function seatTickContractLines(mandateCarriesContract: boolean): string[] {
+function seatTickContractLines(mandateCarriesContract: boolean, compact = false): string[] {
+  if (compact && !mandateCarriesContract) return ["", "Contract:",
+    "Delegatus ticks this seat; do not self-schedule. Handle listed items first, then ONE bounded project-board pass: list_pipelines (completed/parked/spawn failures and their open PRs), agent_activity liveOnly (live/stalled), open tasks without running work. Act on stalled work. Record every outcome on card/pipeline. If unable, set task hold with reason; that is the only stop. Never wait on operator. seat_tick_settings controls tick on/off/cadence per project with a board reason. File owed/due bridge reports under listed keys before turn ends."];
   return mandateCarriesContract
     ? ["", SEAT_TICK_CONTRACT_POINTER]
     : ["", "Contract:", `- ${SEAT_TICK_NO_SELF_SCHEDULE}`, ...ORCHESTRATOR_SEAT_TICK_CONTRACT.map((clause) => `- ${clause}`)];
@@ -171,6 +174,14 @@ export function seatTickBullet(item: SeatTickItem): string {
   const bullet = `- [${item.kind}] ${item.id} — ${item.label}`;
   /* A settled child's own last words (#1881), attached by the controller. */
   return item.finalMessage ? `${bullet}\n  final message: ${item.finalMessage}` : bullet;
+}
+
+function seatTickItemSummary(item: SeatTickItem, limit: number): SeatTickItem {
+  const source = item.kind === "signal" && item.id.startsWith("memory-problem:") ? `seat_tick_settings verbose:true problemId=${item.id}`
+    : item.kind === "maintenance" ? "seat_tick_settings verbose:true" : item.kind === "child"
+    ? `get_conversation ${item.id}` : item.kind === "pipeline" || item.kind === "provisioning"
+      ? `get_pipeline ${item.id}` : item.kind === "pull-request" ? `pull request ${item.id}` : "the board and current source";
+  return { ...item, label: `${item.label.slice(0, limit).trimEnd()}… [summary; ${source} holds the full item]`, finalMessage: undefined };
 }
 
 /**
@@ -234,6 +245,29 @@ function snapshotSection(snapshotAt: string | undefined, compact: boolean): stri
   return snapshotAt ? ["", `Snapshot at ${snapshotAt}${compact ? ". Re-read delayed work." : "; age = time since then. Re-read delayed agendas and notes."}`] : [];
 }
 
+/** The roster never spends detailed-item credit. Reserve every identity before
+ * bounding the detail, shortening descriptive fields across all rows together. */
+function seatOwnedLaneSection(lanes: readonly SeatTickSeatOwnedLane[], now: number, budget: number, compact = false): string[] | null {
+  const flat = (value: string) => redactMonitorText(value).replace(/\s+/g, " ").trim();
+  const clip = (value: string, limit: number) => value.length <= limit ? value : `${value.slice(0, limit - 1).trimEnd()}…`;
+  const rows = [...lanes].sort((a, b) => (a.sinceMs ?? Infinity) - (b.sinceMs ?? Infinity) || a.id.localeCompare(b.id));
+  for (const limit of compact ? [90, 60, 40, 24, 16, 12, 11, 10, 8, 4] : [90, 60, 40, 24]) {
+    const lines = ["", `Waiting on seat (${rows.length}${compact ? "" : "; oldest first"}):`, ...rows.map(lane => {
+      const minutes = lane.sinceMs === null ? null : Math.max(0, Math.floor((now - lane.sinceMs) / 60_000));
+      const age = minutes === null ? "age unknown" : minutes < 60 ? `${minutes}m`
+        : `${Math.floor(minutes / 60)}h${minutes % 60 ? ` ${minutes % 60}m` : ""}`;
+      const reason = flat(lane.reason);
+      // Keep the stop class and a preview of its cause at every width.
+      const colon = reason.indexOf(":");
+      const why = colon < 0 ? clip(reason, Math.max(limit, 12))
+        : `${reason.slice(0, colon)}: ${clip(reason.slice(colon + 1).trim(), Math.max(limit, 13))}`;
+      return [`- ${flat(lane.id)}`, clip(flat(lane.title), limit), why, age].join(compact ? "|" : " | ");
+    })];
+    if (lines.join("\n").length <= budget) return lines;
+  }
+  return null;
+}
+
 export function seatTickWakeMessage(input: {
   catchUp?: { key: string; from: string; through: string };
   compactCatchUpManifest?: boolean;
@@ -251,6 +285,7 @@ export function seatTickWakeMessage(input: {
   snapshotAt?: string;
   reasons: readonly SeatTickWakeReason[];
   items: readonly SeatTickItem[];
+  seatOwnedLanes?: readonly SeatTickSeatOwnedLane[];
   deferred: number;
   /** Terminal children the check declined to list (#1749, #1783). Said as one
       line per reason and no more: naming them is what filled six consecutive
@@ -279,7 +314,9 @@ export function seatTickWakeMessage(input: {
       so the length bound never cuts them. */
   reportLines?: readonly string[];
 }): string {
-  const lines = [
+  const lines = input.seatOwnedLanes?.length ? [
+    `Seat tick — ${input.project}; ${input.reasons.map(reason => reason.kind).join(", ")}.`,
+  ] : [
     `Seat tick — ${input.project}.`,
     "",
     `Wake reasons: ${input.reasons.map(reason => reason.kind).join(", ")}.`,
@@ -293,13 +330,16 @@ export function seatTickWakeMessage(input: {
   if (input.gaps && input.gaps.length > 0) {
     lines.push("", "Evidence unavailable:", ...input.gaps.map((gap) => `- ${gap.source}: ${gap.detail}.`));
   }
-  if (input.issues?.length) lines.push("", "Open issues:", ...input.issues.map(issue => `- #${issue.number} ${issue.title} [${issue.labels.join(", ")}]`));
+  const issues = input.issues?.length ? ["", "Open issues:", ...input.issues.map(issue => `- #${issue.number} ${issue.title} [${issue.labels.join(", ")}]`)] : [];
+  if (!input.seatOwnedLanes?.length) lines.push(...issues);
   lines.push("", "Items:", ...input.items.map(item => input.compactCatchUpManifest
     ? item.manifestLine ?? `- ${item.kind[0]} ${item.id} ${item.occurredAt ?? "time-unavailable"}`
     : seatTickBullet(item)));
+  if (input.seatOwnedLanes?.length) lines.push(...issues);
   lines.push("", "Why you were woken:", ...input.reasons.map(reason => `- ${reason.kind}: ${reason.detail}`));
   if (input.deferred > 0) {
-    lines.push(`(${input.deferred} more item(s) held back for the next wake.)`);
+    lines.push(input.seatOwnedLanes?.length ? `(${input.deferred} more item(s) awaiting detail.)`
+      : `(${input.deferred} more item(s) held back for the next wake.)`);
   }
   /* One line per reason, counting CHILDREN. Both of these lines used to speak
      of the children's outcomes, which was true while only the harvest applied
@@ -329,21 +369,31 @@ export function seatTickWakeMessage(input: {
   // Compact only large ledgers, keeping ordinary wakes' established framing.
   const compactLedger = !!input.workers && (input.reportLines?.join("\n").length ?? 0) > 800;
   const autonomy = autonomyMandate(input.autonomy, input.now ?? Date.now(), input.autonomyUnchanged);
-  const noteLimit = autonomy.length ? 100 : SEAT_TICK_PROMPT_PREVIEW_LIMIT;
+  const noteLimit = autonomy.length || input.seatOwnedLanes?.length ? 100 : SEAT_TICK_PROMPT_PREVIEW_LIMIT;
   const autonomyNote = autonomy.length && input.monitorPrompt
     ? ["", `Standing monitor note (${input.monitorPrompt.length} chars): seat_tick_settings verbose:true reads it.`]
     : null;
   const turbo = turboMandate(input.turbo, input.now ?? Date.now(), input.turboUnchanged);
-  const reserved = [
-    ...autonomy,
-    ...turbo,
-    ...snapshotSection(input.snapshotAt, !!input.workers),
-    ...(input.reportLines && input.reportLines.length > 0 ? ["", compactLedger ? "Reports:" : "Bridge reports:", ...input.reportLines.map((line) => `- ${line}`)] : []),
-    ...seatTickInstructionSections({ reason: input.operatorInstructions ?? null, instructionLines: input.instructionLines }),
-    ...(autonomyNote ?? seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true, noteLimit, !!input.workers)),
-    ...(autonomy.length && input.workers ? ["", `Worker limit ${input.workers.limit} (${input.workers.source}; machine ${input.workers.machine}); running ${input.workers.running}. Overrides mandate/launch limits.`] : workerSection(input.workers)),
-    ...seatTickContractLines(input.mandateCarriesContract === true),
-  ];
+  const reservation = (compactRoster = false, compactRules = false) => {
+    const sections = [
+      compactRules ? autonomyMandate(input.autonomy, input.now ?? Date.now(), input.autonomyUnchanged, true) : autonomy,
+      compactRules ? turboMandate(input.turbo, input.now ?? Date.now(), input.turboUnchanged, undefined, true) : turbo,
+      (compactRoster && input.snapshotAt ? ["", `Snapshot at ${input.snapshotAt}. Re-read if delayed.`] : snapshotSection(input.snapshotAt, !!input.workers)),
+      (input.reportLines && input.reportLines.length > 0 ? ["", compactLedger ? "Reports:" : "Bridge reports:", ...input.reportLines.map((line) => `- ${line}`)] : []),
+      seatTickInstructionSections({ reason: input.operatorInstructions ?? null, instructionLines: input.instructionLines }),
+      (compactRoster && input.monitorPrompt
+      ? ["", autonomyNote || input.monitorPromptUnchanged
+        ? "Standing monitor note: seat_tick_settings verbose:true."
+        : `Standing monitor note: ${seatTickPromptPreview(input.monitorPrompt, 100)}`]
+      : autonomyNote ?? seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true, noteLimit, !!input.workers)),
+      (compactRoster && input.workers
+      ? ["", `Worker limit ${input.workers.limit} (${input.workers.source}; machine ${input.workers.machine}), running ${input.workers.running}; overrides mandate/launch.`]
+      : autonomy.length && input.workers ? ["", `Worker limit ${input.workers.limit} (${input.workers.source}; machine ${input.workers.machine}); running ${input.workers.running}. Overrides mandate/launch limits.`] : workerSection(input.workers)),
+      seatTickContractLines(input.mandateCarriesContract === true, compactRules),
+    ];
+    return sections.flatMap(section => compactRoster && section[0] === "" ? section.slice(1) : section);
+  };
+  const reserved = reservation();
   // Large report ledgers keep all their keys. Shorten the note's explicitly
   // marked preview when that tail would exceed the payload bound.
   if (!autonomyNote && input.reportLines?.length && redactMonitorText(reserved.join("\n")).length > SEAT_TICK_MESSAGE_LIMIT - 700) {
@@ -354,7 +404,31 @@ export function seatTickWakeMessage(input: {
   // A recovery snapshot carries every compact outcome once. Cutting this
   // agenda would recreate a series of wakes and fresh report debts. Its size
   // scales with changed work; child transcript bodies are omitted by the caller.
-  if (input.catchUp) return redactMonitorText([...lines, ...reserved].join("\n")).trim();
+  if (input.catchUp) {
+    const roster = input.seatOwnedLanes?.length
+      ? seatOwnedLaneSection(input.seatOwnedLanes, input.now ?? Date.now(), MAX_STRUCTURED_TEXT_BYTES) : [];
+    if (!roster) throw new Error("seat-owned lane roster exceeds catch-up transport budget");
+    return redactMonitorText([...lines, ...roster, ...reserved].join("\n")).trim();
+  }
+  if (input.seatOwnedLanes?.length) {
+    // Reserve the actual prefix (including evidence gaps) and enough room for
+    // a complete first item or the payload's explicit summary. The roster is
+    // never proof that an agenda item was delivered.
+    const prefix = redactMonitorText(lines.slice(0, lines.indexOf("Items:") + 1).join("\n")).trimStart();
+    const first = input.items[0];
+    const detailBudget = first ? Math.min(redactMonitorText(seatTickBullet(first)).length,
+      redactMonitorText(seatTickBullet(seatTickItemSummary(first, 0))).length) + 1 : 0;
+    const headBudget = prefix.length + detailBudget + 2; // newline and truncation marker
+    // The last form also compacts rules: combined autonomy, Turbo and a
+    // legacy contract can otherwise consume the roster's entire budget.
+    for (const [compact, compactRules] of [[false, false], [true, false], [true, true]]) {
+      const tail = compact ? reservation(true, compactRules) : reserved;
+      const roster = seatOwnedLaneSection(input.seatOwnedLanes, input.now ?? Date.now(),
+        SEAT_TICK_MESSAGE_LIMIT - redactMonitorText(tail.join("\n")).trimEnd().length - headBudget - 2, compact);
+      if (roster) return boundedSeatTickMessage(lines, [...roster, ...tail]);
+    }
+    throw new Error("seat-owned lane roster and first detail exceed wake budget after compaction");
+  }
   return boundedSeatTickMessage(lines, reserved);
 }
 
@@ -399,20 +473,16 @@ export function seatTickWakePayload(input: Parameters<typeof seatTickWakeMessage
   }
   const text = seatTickWakeMessage(input);
   const first = input.items[0];
-  if (!first || (input.monitorPrompt && !input.monitorPromptUnchanged)
+  if (!first || (input.monitorPrompt && !input.monitorPromptUnchanged && !input.seatOwnedLanes?.length)
     || `\n${text}\n`.includes(`\n${redactMonitorText(seatTickBullet(first))}\n`)) return { text, items: input.items };
-  const source = first.kind === "signal" && first.id.startsWith("memory-problem:") ? `seat_tick_settings verbose:true problemId=${first.id}`
-    : first.kind === "maintenance" ? "seat_tick_settings verbose:true" : first.kind === "child"
-    ? `get_conversation ${first.id}` : first.kind === "pipeline" || first.kind === "provisioning"
-      ? `get_pipeline ${first.id}` : first.kind === "pull-request" ? `pull request ${first.id}` : "the board and current source";
-  const suffix = `… [summary; ${source} holds the full item]`;
   // Fit against the real redacted renderer, including headings, all owed
   // keys, instructions and the mandate's contract. Later items remain owed.
-  for (let limit = Math.min(first.label.length, 600); limit >= 0; limit -= 50) {
-    const summary = { ...first, label: first.label.slice(0, limit).trimEnd() + suffix, finalMessage: undefined };
+  for (let limit = Math.min(first.label.length, 600); ; limit = Math.max(0, limit - 50)) {
+    const summary = seatTickItemSummary(first, limit);
     const items = [summary, ...input.items.slice(1)];
     const candidate = seatTickWakeMessage({ ...input, items });
     if (`\n${candidate}\n`.includes(`\n${redactMonitorText(seatTickBullet(summary))}\n`)) return { text: candidate, items };
+    if (limit === 0) break;
   }
   return { text, items: input.items };
 }

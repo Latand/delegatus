@@ -9,6 +9,7 @@ import { CpuAdmissionQueue, cpuAdmissionFile, CPU_QUEUE_ABANDONED_MS, CPU_QUEUE_
 import { cpuQueueDetail, ordinal, parseCpuQueueDetail } from "./cpuQueueText";
 import { captureProcessIdentity } from "../processIdentity";
 import { CPU_TASK_PRIORITY_SQL, cpuPriorityEnv, cpuPriorityFromEnv, readCpuPriority } from "./cpuPriority";
+import { cpuOwnerExited, cpuOwnerIdentity, cpuOwnerStatus } from "./signalSandboxContext";
 
 const directories: string[] = [];
 const queues: { close(): void }[] = [];
@@ -21,9 +22,71 @@ function fixture(unpolledMs = Number.POSITIVE_INFINITY) {
   const file = path.join(dir, "queue.sqlite");
   let now = 0;
   const open = () => { const q = new CpuAdmissionQueue(file, () => now, CPU_QUEUE_SPACING_MS, CPU_QUEUE_MAX_WAIT_MS, unpolledMs); queues.push(q); return q; };
-  return { open, file, at: (value: number) => { now = value; } };
+  return { open, file, now: () => now, at: (value: number) => { now = value; } };
 }
 const FOREIGN = `stage:${"b".repeat(64)}:895e3de4:plan:1`, LIVE = `stage:${"0".repeat(64)}:762633d8:build:1`;
+
+test("heavy gate readiness and claims keep the pressure fence across process restart and the fairness bound", () => {
+  const f = fixture(), owner = captureProcessIdentity(process.pid);
+  const script = `const { CpuAdmissionQueue } = await import(process.argv[1]); const q = new CpuAdmissionQueue(process.argv[2], () => Number(process.argv[3])); try { process.stdout.write(JSON.stringify(q.check("command:heavy", process.argv[4] === "low", JSON.parse(process.argv[5]), process.argv[6] === "claim", undefined, true))); } finally { q.close(); }`;
+  const check = (at: number, low: boolean, claim: boolean) => {
+    const result = spawnSync(process.execPath, ["-e", script, path.join(import.meta.dir, "cpuAdmission.ts"), f.file, String(at), low ? "low" : "high", JSON.stringify(owner), claim ? "claim" : "peek"], { encoding: "utf8", env: process.env });
+    expect(result.status, result.stderr).toBe(0);
+    return JSON.parse(result.stdout);
+  };
+  expect(check(0, false, false)).toMatchObject({ position: 1, since: 0 });
+  expect(check(CPU_QUEUE_MAX_WAIT_MS + 1, false, false)).toMatchObject({ position: 1, since: 0 });
+  expect(check(CPU_QUEUE_MAX_WAIT_MS + 1, true, false)).toBeNull();
+  // Pressure can rise between readiness and the shell acquiring its slot.
+  expect(check(CPU_QUEUE_MAX_WAIT_MS + 1, false, true)).toMatchObject({ position: 1, since: 0 });
+  expect(check(CPU_QUEUE_MAX_WAIT_MS + 1, true, true)).toBeNull();
+});
+
+test.each(["stage", "workflow"])("a gate held for pressure at the head lets a %s start at its own bound; gates keep FIFO", prefix => {
+  const f = fixture(), owner = captureProcessIdentity(process.pid), gates = f.open(), key = `${prefix}:s`;
+  const gate = (name: string, low = false) => gates.check(name, low, owner, true, undefined, true);
+  expect(gate("command:gate")).toMatchObject({ since: 0, position: 1 });
+  f.at(1_000);
+  // The stage's checker is another connection, as the Viewer is.
+  const stages = f.open();
+  expect(stages.check(key, false)).toMatchObject({ since: 1_000, position: 2 });
+  f.at(2_000);
+  expect(gate("command:later")).toMatchObject({ position: 3 });
+  // Before its own bound the stage still waits behind the gate.
+  f.at(1_000 + CPU_QUEUE_MAX_WAIT_MS - 1);
+  expect(gate("command:gate")).toMatchObject({ position: 1 });
+  expect(stages.check(key, false)).toMatchObject({ position: 2 });
+  f.at(1_000 + CPU_QUEUE_MAX_WAIT_MS);
+  expect(stages.check(key, false)).toBeNull();
+  // The gate still waits under pressure, and the later gate stays behind it.
+  for (const minute of [30, 60]) {
+    f.at(minute * 60_000);
+    expect(gate("command:gate")).toMatchObject({ since: 0, position: 1 });
+    expect(gate("command:later")).toMatchObject({ position: 2 });
+  }
+  // Low pressure admits the gates in order, spaced.
+  f.at(60 * 60_000 + 1);
+  expect(gate("command:later", true)).toMatchObject({ position: 2 });
+  expect(gate("command:gate", true)).toBeNull();
+  expect(gate("command:later", true)).toMatchObject({ position: 1, remainingMs: CPU_QUEUE_SPACING_MS });
+  f.at(60 * 60_000 + 1 + CPU_QUEUE_SPACING_MS);
+  expect(gate("command:later", true)).toBeNull();
+});
+
+test("a stage past its bound under pressure still waits for spacing and for an older stage ahead of a held gate", () => {
+  const f = fixture(), owner = captureProcessIdentity(process.pid), q = f.open();
+  q.check("stage:older", false);
+  f.at(1_000); q.check("command:gate", false, owner, true, undefined, true);
+  f.at(2_000); q.check("stage:newer", false);
+  f.at(2_000 + CPU_QUEUE_MAX_WAIT_MS);
+  // Only the held gate is passed; the older stage keeps its place.
+  expect(q.check("stage:newer", false)).toMatchObject({ position: 2 });
+  expect(q.check("stage:older", false)).toBeNull();
+  expect(q.check("stage:newer", false)).toMatchObject({ position: 1, remainingMs: CPU_QUEUE_SPACING_MS });
+  f.at(2_000 + CPU_QUEUE_MAX_WAIT_MS + CPU_QUEUE_SPACING_MS);
+  expect(q.check("stage:newer", false)).toBeNull();
+  expect(q.check("command:gate", false, owner, true, undefined, true)).toMatchObject({ position: 1 });
+});
 
 test("priority orders levels strictly and preserves FIFO within each level despite reverse polling", () => {
   const f = fixture(), q = f.open(), tasks = priorityTasks(f.file);
@@ -183,7 +246,10 @@ test("the gate helper inherits a publication's task binding through wait and fre
   const q = new CpuAdmissionQueue(path.join(directory, "admission.sqlite"), () => observerTime); queues.push(q);
   const owner = captureProcessIdentity(process.pid);
   const env = { ...process.env, ...cpuPriorityEnv(tasks.source(["first"])), LLV_GATE_LOCK_DIR: directory,
-    LLV_GATE_SLOTS: "1", LLV_GATE_SLOT_LEASE: "", DELEGATUS_CPU_PRESSURE: "off" };
+    LLV_GATE_SLOTS: "1", LLV_GATE_SLOT_LEASE: "", DELEGATUS_CPU_PRESSURE: "off",
+    // Both checkers stay in this PID namespace; the queue's default observer
+    // and its recorded owner use local identities, with no service handoff.
+    LLV_SIGNAL_SANDBOX: undefined };
   const run = async (mode: string) => {
     const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "../../../scripts/cpu-admission.ts"), mode, "command:publication-gate", String(process.pid)], { env, stdout: "pipe", stderr: "pipe" });
     const [out, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
@@ -398,6 +464,121 @@ test("a stage released from a long hold is ahead of later work before its own ne
   expect(q.check("stage:two", false)).toMatchObject({ since: 0, position: 2 });
   f.at(CPU_QUEUE_MAX_WAIT_MS);
   expect(q.check("stage:one", false)).toBeNull();
+});
+
+/* Command owners as the machine queue judges them (cpuOwnerStatus), here or
+   in a signal sandbox: this process, a recorded start this process does not
+   have, and a process recorded in a PID namespace nothing here can read. */
+function owners() {
+  const live = cpuOwnerIdentity(process.pid);
+  const foreignEpoch = live.bootEpoch!.replace(/pid:\[\d+\]$/, "pid:[1]");
+  expect(foreignEpoch).not.toBe(live.bootEpoch);
+  return { live, dead: { ...live, startIdentity: `${live.pid}:1` }, foreign: { pid: 4242, startIdentity: "4242:1", bootEpoch: foreignEpoch } };
+}
+function ownerFixture(status = cpuOwnerStatus) {
+  const f = fixture(CPU_QUEUE_UNPOLLED_MS), lines: string[] = [];
+  const open = () => { const q = new CpuAdmissionQueue(f.file, f.now, CPU_QUEUE_SPACING_MS, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_UNPOLLED_MS, { status: identity => status(identity), exited: cpuOwnerExited, log: line => lines.push(line) }); queues.push(q); return q; };
+  const read = <T>(sql: string) => { const db = new Database(f.file, { readonly: true }); try { return db.query<T, []>(sql).all(); } finally { db.close(); } };
+  return { ...f, open, lines, read };
+}
+
+test("the machine queue reads each fake owner as the incident's observer does", () => {
+  const { live, dead, foreign } = owners();
+  expect([cpuOwnerStatus(live), cpuOwnerStatus(dead), cpuOwnerStatus(foreign)]).toEqual(["alive", "dead", "unverified"]);
+  expect(cpuOwnerExited(foreign)).toBe(false);
+});
+
+test("a dead owner at the head is removed at the next check with one reason line", () => {
+  const f = ownerFixture(), q = f.open(), { live, dead } = owners();
+  expect(q.check("command:gone", false, dead)).toMatchObject({ position: 1 });
+  expect(f.lines).toEqual([]);
+  expect(q.check("command:next", true, live)).toBeNull();
+  expect(f.lines).toEqual([`removed command:gone: its owner process ${live.pid} has exited`]);
+  expect(q.check("command:third", false, live)).toMatchObject({ position: 1 });
+  expect(f.lines).toHaveLength(1);
+  expect(f.read("SELECT key FROM tickets")).toEqual([{ key: "command:third" }]);
+});
+
+test("an owner from another PID namespace that stops checking in stops holding the head, once, and keeps its row", () => {
+  const f = ownerFixture(), q = f.open(), { live, foreign } = owners();
+  // The incident: a sandboxed gate queued under its own namespace's PID and went away.
+  expect(q.check("command:foreign", false, foreign)).toMatchObject({ since: 0, position: 1 });
+  f.at(CPU_QUEUE_UNPOLLED_MS);
+  expect(q.check("command:here", false, live)).toMatchObject({ position: 2 }); // within the bound it still counts
+  expect(f.lines).toEqual([]);
+  // Hours later the stalled reading is what the lanes showed; one check ends it.
+  const late = CPU_QUEUE_MAX_WAIT_MS + 12 * 60_000;
+  f.at(late);
+  expect(q.check("command:here", false, live, false)).toBeNull();
+  expect(f.lines).toEqual([`passed over command:foreign: its owner process 4242 cannot be verified from here and has not checked in for ${(CPU_QUEUE_MAX_WAIT_MS + 12 * 60_000) / 1_000} s; its next check returns it to its place`]);
+  expect(q.check("command:here", true, live)).toBeNull();
+  for (let at = 5_000; at <= 20_000; at += 5_000) {
+    f.at(late + at);
+    expect(q.check("command:later", false, live)).toMatchObject({ since: late + 5_000, position: 1 });
+  }
+  expect(f.lines).toHaveLength(1);
+  expect(f.read("SELECT key FROM tickets ORDER BY seq")).toEqual([{ key: "command:foreign" }, { key: "command:later" }]);
+  // Its gate was only stopped: its own check returns it to its place and age.
+  expect(q.check("command:foreign", false, foreign, false)).toBeNull();
+  expect(q.check("command:later", false, live)).toMatchObject({ position: 2 });
+  expect(f.read("SELECT key FROM suspended UNION ALL SELECT key FROM unpolled")).toEqual([]);
+});
+
+test("an owner from another PID namespace that keeps checking in holds the head past the bound", () => {
+  const f = ownerFixture(), q = f.open(), { live, foreign } = owners();
+  expect(q.check("command:foreign", true, foreign, false)).toBeNull();
+  for (let at = 5_000; at <= CPU_QUEUE_UNPOLLED_MS * 3; at += 5_000) {
+    f.at(at);
+    expect(q.check("command:foreign", true, foreign, false)).toBeNull();
+    expect(q.check("command:here", true, live)).toMatchObject({ position: 2 });
+  }
+  expect(f.lines).toEqual([]);
+});
+
+test("a live owner the kernel verifies keeps the head however long it stays silent", () => {
+  const f = ownerFixture(), q = f.open(), { live } = owners();
+  // A command waiting for a slot it cannot get stops checking only if it hangs.
+  expect(q.check("command:holder", true, live, false)).toBeNull();
+  for (const at of [CPU_QUEUE_UNPOLLED_MS + 1, CPU_QUEUE_MAX_WAIT_MS * 3, CPU_QUEUE_ABANDONED_MS + 1]) {
+    f.at(at);
+    expect(q.check("stage:later", true)).toMatchObject({ position: 2 });
+  }
+  expect(f.lines).toEqual([]);
+  expect(f.read("SELECT key FROM suspended")).toEqual([]);
+});
+
+test("an unverifiable owner silent for a day is removed with one reason line", () => {
+  const f = ownerFixture(), q = f.open(), { foreign } = owners();
+  q.check("command:foreign", false, foreign);
+  f.at(CPU_QUEUE_UNPOLLED_MS + 1);
+  expect(q.check("stage:probe", false)).toMatchObject({ position: 1 });
+  f.at(CPU_QUEUE_ABANDONED_MS + 1);
+  expect(q.check("stage:probe", false, undefined, false)).toBeNull();
+  expect(f.lines).toHaveLength(2);
+  expect(f.lines[1]).toBe("removed command:foreign: its owner process 4242 cannot be verified from here and has not checked in for 24 h");
+  expect(f.read("SELECT key FROM tickets UNION ALL SELECT key FROM suspended UNION ALL SELECT key FROM unpolled")).toEqual([{ key: "stage:probe" }]);
+});
+
+test("an owned ticket an older release keeps polling stays at the head for a checker that cannot verify its owner", async () => {
+  // The older release runs where its owner is visible; the current checker
+  // cannot see that process. The shared trigger records the older release's polls.
+  const child = Bun.spawn(["sleep", "60"], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+  try {
+    const owner = captureProcessIdentity(child.pid);
+    const f = ownerFixture(identity => identity.pid === child.pid ? "unverified" : cpuOwnerStatus(identity));
+    const q = f.open(), older = new PrePollCpuAdmissionQueue(f.file, f.now); queues.push(older);
+    expect(older.check("command:older", true, owner, false)).toBeNull();
+    for (let at = 5_000; at <= CPU_QUEUE_UNPOLLED_MS * 3; at += 5_000) {
+      f.at(at);
+      expect(older.check("command:older", true, owner, false)).toBeNull();
+      expect(q.check("stage:later", true)).toMatchObject({ position: 2 });
+    }
+    expect(f.lines).toEqual([]);
+    // Its release stops checking: past the bound the current checker passes it over.
+    f.at(CPU_QUEUE_UNPOLLED_MS * 4 + 1);
+    expect(q.check("stage:later", true)).toBeNull();
+    expect(f.lines).toEqual([`passed over command:older: its owner process ${child.pid} cannot be verified from here and has not checked in for 60 s; its next check returns it to its place`]);
+  } finally { child.kill(); await child.exited; }
 });
 
 /* A release that predates polls shares the file with the current one for as

@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -546,10 +547,12 @@ async function postTaskSpawn(
   }
 }
 
-export const POST = Object.assign(
+const workspacePOST = Object.assign(
   async (req: NextRequest, ctx: TaskRouteContext): Promise<NextResponse<TaskSpawnResponse | ApiError>> => await postTaskSpawn(req, ctx),
   /* `productionDependencies` rides along so a test can keep the real account
      resolution — the one #1279's rule lives in — while substituting the task
      store and the pane it must never reach. */
   { withDependencies: postTaskSpawn, productionDependencies },
 );
+
+export const POST = workspaceRoute("/api/tasks/[id]/spawn", workspacePOST);

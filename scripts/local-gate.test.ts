@@ -317,7 +317,7 @@ test.skipIf(process.platform !== "linux")("a cold fixture install excludes CPU q
   const bin = path.join(dir, "bin"); mkdirSync(bin);
   const relative = `node_modules/@openai/codex-linux-${process.arch}/vendor/${process.arch === "x64" ? "x86_64" : "aarch64"}-unknown-linux-musl/bin`;
   writeFileSync(path.join(bin, "npm"), `#!/bin/bash\nwhile [[ "$1" != --prefix ]]; do shift; done\nshift\nmkdir -p "$1/${relative}"\nprintf fixture > "$1/${relative}/codex"\n`, { mode: 0o700 });
-  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, DELEGATUS_CPU_PRESSURE: "on", DELEGATUS_AGENT_CPU: "off", LLV_GATE_PSI_FILE: path.join(dir, "pressure"), LLV_GATE_LOCK_DIR: dir, LLV_GATE_POLL_SECONDS: "0.02" };
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, DELEGATUS_CPU_PRESSURE: "on", DELEGATUS_AGENT_CPU: "off", LLV_GATE_PSI_FILE: path.join(dir, "pressure"), LLV_GATE_PSI_RELEASE_SECONDS: "0", LLV_GATE_LOCK_DIR: dir, LLV_GATE_POLL_SECONDS: "0.02" };
   const cache = path.join(dir, "cold-cache");
   const pending = runSteps("pre-push", [grouped("native Codex 0.154.0"), grouped("native Codex shared contracts", true)], {
     root, deadline: soon(1_500), logDir: dir, say: () => {},
@@ -338,10 +338,10 @@ test.skipIf(process.platform !== "linux")("a cold fixture install excludes CPU q
     expect(queued).toBe(true);
     await Bun.sleep(1_600);
     expect(existsSync(cache)).toBe(false);
-    writeFileSync(path.join(dir, "pressure"), "");
+    writeFileSync(path.join(dir, "pressure"), "some avg10=0.00 total=1\n");
     expect(await pending).toEqual([]);
     expect(processesNaming(cache)).toEqual([]);
-  } finally { writeFileSync(path.join(dir, "pressure"), ""); await pending.catch(() => {}); }
+  } finally { writeFileSync(path.join(dir, "pressure"), "some avg10=0.00 total=1\n"); await pending.catch(() => {}); }
 }, 30_000);
 test("the fetch before planning ends at the deadline", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "gate-fetch-")); roots.push(dir);

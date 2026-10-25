@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { fixtureBoardReads } from "./boardReads.fixture";
 import { expect, test } from "bun:test";
 import { CompanionBoardReads, READ_TOOL_NAMES } from "./boardReads";
@@ -50,7 +51,7 @@ test("every speech read tool stays on its board, bounds output, and refuses the 
     expect(JSON.stringify(result).length).toBeLessThanOrEqual(8_000);
     expect(JSON.stringify(result)).not.toContain("Foreign");
   }
-  await expect(reads.call("project-a", "create_task", {})).rejects.toThrow("TOOL_NOT_ALLOWED");
+  await expect(reads.call("project-a", "create_task", withTaskDue({}))).rejects.toThrow("TOOL_NOT_ALLOWED");
   await expect(reads.call("project-a", "list_tasks", { project: "project-b" })).rejects.toThrow("PROJECT_REFUSED");
   await expect(reads.call("project-a", "get_task", { taskId: "task-b" })).rejects.toThrow("PROJECT_REFUSED");
   await expect(reads.call("project-a", "conversation_messages", { conversationId: "conversation_b" })).rejects.toThrow("PROJECT_REFUSED");

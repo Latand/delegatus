@@ -886,6 +886,10 @@ export function appendBridgeReports(
   if (inputs.length === 0) return { appended: [], skipped: 0 };
   /* Refused before the transaction: a complete copy past its bound is never cut. */
   for (const input of inputs) bridgeReportComplete(input.complete, true);
+  // A first channel read may import its collection into the same database.
+  // Prepare it before the report writer takes SQLite's transaction; the
+  // cursor itself is still read inside the transaction below.
+  channelsCollection("read");
   return mutateLog((file) => {
     const known = new Set<string>([...file.reports.map((report) => report.id), ...file.retired]);
     const appended: BridgeReportV1[] = [];
@@ -1230,6 +1234,7 @@ export function acknowledgeBridgeReports(
  */
 function mergeLegacyLog(legacyPath: string, body: BridgeReportLogV1, options: { fenceOwner: boolean; consumedSha256?: string }): LegacyReconcileSummary {
   const collection = openCollection(legacyDatabasePath(legacyPath), REPORTS_COLLECTION);
+  channelsCollection("read");
   const consumedSha256 = options.consumedSha256;
   const summary: LegacyReconcileSummary = { added: 0, replaced: 0, removed: 0, kept: 0, keys: [], conflicts: [], spared: [] };
   collection.patchSync(() => {

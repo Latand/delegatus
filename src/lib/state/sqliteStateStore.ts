@@ -18,7 +18,7 @@ import { rememberRecordBytes } from "./registryRecords";
 import { installPipelineControllerSchedule, pipelineControllerScheduleIndexes, selectPipelineTickWork, type PipelineTickWork } from "./pipelineControllerSchedule";
 import { installPipelineControllerIndex, type PipelineControllerSelection } from "./pipelineControllerIndex";
 import { installPipelineControllerReferences, pipelineControllerReferencesCurrent, pipelineControllerReferencesReady, type PipelineAttemptReference } from "./pipelineControllerReferences";
-import { installPipelineEvidenceIndex, pipelineEvidenceIndexReady } from "./pipelineEvidenceIndex";
+import { installPipelineEvidenceIndex, pipelineEvidenceIndexReady, pipelineEvidenceSchemaReady } from "./pipelineEvidenceIndex";
 import { databaseFileIdentity, databaseSwapMarker, databaseSwapInProgress, DatabaseReplacedError, openCurrentDatabase } from "./currentDatabase";
 import { collectionReadCache, rememberCollectionReadCache, type ReadCacheSlot } from "./collectionReadCache";
 import { FileTransactionBusyError } from "./fileTransaction";
@@ -997,17 +997,31 @@ export function stateEvidenceVersion(filename: string): string {
   return `${reader.generation}:${version}:${schema}`;
 }
 
+/* Schema readiness per file and schema_version. Every schema edit moves
+   schema_version, and a replaced file has another identity. */
+const evidenceSchemaMemo = evidenceOwner as typeof evidenceOwner & { __llvPipelineEvidenceSchema?: { key: string; ready: boolean } };
+function evidenceIndexReadyAt(db: Database, key: string): boolean {
+  if (evidenceSchemaMemo.__llvPipelineEvidenceSchema?.key !== key) {
+    evidenceSchemaMemo.__llvPipelineEvidenceSchema = { key, ready: pipelineEvidenceSchemaReady(db) };
+  }
+  return evidenceSchemaMemo.__llvPipelineEvidenceSchema.ready
+    && Boolean(db.query("SELECT 1 FROM pipeline_evidence_clock WHERE id=1").get());
+}
+
 /** The index's validity is checked against the actual trigger definitions.
- * Schema loss or an older store takes the complete reader path. */
+ * Schema loss or an older store takes the complete reader path. Opening the
+ * state database and checking its schema cost about 16 ms on a production
+ * copy, and one startup admission asks two or three times; the persistent
+ * version connection answers it, and the schema check runs once per
+ * schema_version. */
 export function pipelineEvidenceRevision(filename: string): string | null {
   if (!fs.existsSync(filename)) return null;
-  const db = connectReadonlyDatabase(filename);
-  try {
-    if (!pipelineEvidenceIndexReady(db)) return null;
-    const revision = db.query<{ revision: number }, []>("SELECT revision FROM pipeline_evidence_clock WHERE id=1").get();
-    const schema = db.query<{ schema_version: number }, []>("PRAGMA schema_version").get()!.schema_version;
-    return revision ? `${databaseFileIdentity(filename)}:${schema}:${revision.revision}` : null;
-  } finally { db.close(); }
+  if (stateEvidenceVersion(filename) === "missing" || !evidenceVersions.reader) return null;
+  const { db, identity } = evidenceVersions.reader;
+  const schema = db.query<{ schema_version: number }, []>("PRAGMA schema_version").get()!.schema_version;
+  if (!evidenceIndexReadyAt(db, `${identity}:${schema}`)) return null;
+  const clock = db.query<{ revision: number }, []>("SELECT revision FROM pipeline_evidence_clock WHERE id=1").get();
+  return clock ? `${identity.slice(filename.length + 1)}:${schema}:${clock.revision}` : null;
 }
 
 export type CompactEvidenceCache<T> = { identity: string; sourceRevision?: number; rows: Map<string, { revision: number; value: T }> };
@@ -1032,8 +1046,8 @@ export async function readCompactPipelineEvidence<T>(filename: string, prior: Co
   const db = connectReadonlyDatabase(filename);
   try {
     db.exec("BEGIN");
-    if (!pipelineEvidenceIndexReady(db)) return null;
     const schema = db.query<{ schema_version: number }, []>("PRAGMA schema_version").get()!.schema_version;
+    if (!evidenceIndexReadyAt(db, `${filename}:${openedIdentity}:${schema}`)) return null;
     if (databaseFileIdentity(filename) !== openedIdentity) throw new StateSnapshotChangedError();
     const identity = `${openedIdentity}:${schema}`;
     const collections = db.query<{ collection: string }, []>("SELECT collection FROM state_collections WHERE collection IN ('pipelines','pipelines_archive')").all();
@@ -2286,6 +2300,58 @@ export class SqliteStateCollection<T> {
 
   async patch<C = never>(prepare: () => { records: readonly T[]; deleteKeys?: readonly string[]; appendKeys?: readonly string[]; companion?: CompanionPatch<C> }, options: { fenceOwner?: boolean; companion?: SqliteStateCollection<C> } = {}): Promise<void> {
     await waitForStateLock("state.patch", () => this.patchSync(prepare, options), { subject: this.options.collection });
+  }
+
+  /** Upserts across any number of collections of one database in a single
+      SQLite transaction: the companion write generalised. Leases are taken in
+      collection-name order, like `patchSync`, so two such writers cannot
+      deadlock. `beforeCommit` runs inside the transaction after every merge;
+      a throw there rolls every collection back. */
+  static commitPatchesSync(
+    patches: readonly { collection: SqliteStateCollection<unknown>; records: readonly unknown[]; deleteKeys?: readonly string[] }[],
+    options: {
+      /** Runs first inside the transaction, with the committed revision and row
+          count of any collection; a throw rolls back before anything is written. */
+      beforeMerge?: (read: { revision(collection: string): number | null; rows(collection: string): number }) => void;
+      beforeCommit?: () => void;
+      busyMessage?: string;
+    } = {},
+  ): void {
+    if (!patches.length) return;
+    const filename = patches[0]!.collection.filename;
+    const names = new Set<string>();
+    for (const patch of patches) {
+      if (patch.collection.filename !== filename) throw new Error("a combined state write needs collections of one database");
+      if (names.has(patch.collection.options.collection)) throw new Error(`duplicate collection in a combined state write: ${patch.collection.options.collection}`);
+      names.add(patch.collection.options.collection);
+    }
+    assertSqliteWriteAuthority(filename);
+    const ordered = [...patches].sort((a, b) => a.collection.options.collection.localeCompare(b.collection.options.collection));
+    const leases: { collection: SqliteStateCollection<unknown>; token: string }[] = [];
+    try {
+      for (const patch of ordered) leases.push({ collection: patch.collection, token: patch.collection.acquireLeaseSync() });
+      const db = connectDatabase(filename);
+      let changed = false;
+      try {
+        withImmediateTransaction(db, options.busyMessage ?? "state is busy", () => {
+          assertSqliteWriteAuthority(filename);
+          options.beforeMerge?.({
+            revision: collection => db.query<{ revision: number }, [string]>("SELECT revision FROM state_collections WHERE collection = ?").get(collection)?.revision ?? null,
+            rows: collection => db.query<{ count: number }, [string]>("SELECT COUNT(*) AS count FROM state_rows WHERE collection = ?").get(collection)?.count ?? 0,
+          });
+          for (const [index, patch] of ordered.entries()) {
+            if (patch.collection.mergeRows(db, leases[index]!.token, patch.records, patch.deleteKeys ?? [])) changed = true;
+          }
+          options.beforeCommit?.();
+        });
+      } finally { db.close(); }
+      if (changed) {
+        secureDatabaseFiles(filename);
+        for (const patch of ordered) patch.collection.invalidateAfterCommit();
+      }
+    } finally {
+      for (const lease of leases.reverse()) lease.collection.releaseLeaseSync(lease.token);
+    }
   }
 
   /** One prepared, indexed revision reader per in-flight pipeline operation.

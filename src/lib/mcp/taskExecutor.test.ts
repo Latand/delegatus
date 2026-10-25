@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -156,11 +157,11 @@ test.skipIf(process.platform !== "linux")("the real task channel preserves comma
   const executor = create({ LLV_TOKEN: "fixture-perimeter-key", PORT: "" });
   const channel = await privateChannel(executor);
   const args = { project: "fixture", text: "Private task", details: "Exact\n\t🙂", board: "hidden", clientRequestId: "private-task-create" };
-  const answer = await (await privateCall(channel, "create_task", args)).json() as { result: { structuredContent: McpToolResult } };
+  const answer = await (await privateCall(channel, "create_task", withTaskDue(args))).json() as { result: { structuredContent: McpToolResult } };
   const result = answer.result.structuredContent;
   expect(result.ok).toBe(true);
   if (!result.ok) throw new Error("private creation refused");
-  expect(await call(executor, "create_task", args)).toMatchObject({ ok: true, replayed: true, taskId: result.taskId, revision: result.revision });
+  expect(await call(executor, "create_task", withTaskDue(args))).toMatchObject({ ok: true, replayed: true, taskId: result.taskId, revision: result.revision });
   const edit = await (await privateCall(channel, "update_task", { taskId: result.taskId, note: "private caller", clientRequestId: "private-task-note", full: true })).json() as { result: { structuredContent: McpToolResult } };
   const { agentRegistry } = await import("@/lib/agent/registry");
   const conversationId = agentRegistry().conversationIdForSpawnCapabilityDigest(createHash("sha256").update(capability).digest("hex"));
@@ -175,7 +176,7 @@ for (const engine of ["codex-mcp-client", "claude-code"]) test.skipIf(process.pl
       const channel = await privateChannel(executor);
       for (const invalid of [false, true]) {
         const name = invalid ? "create_task" : "get_task";
-        const args = invalid ? { clientRequestId: `format-invalid-${engine}`, project: "fixture", text: "Inspect the transport", details: 42 } : { taskId: seedTaskId };
+        const args = invalid ? { ...withTaskDue({}), clientRequestId: `format-invalid-${engine}`, project: "fixture", text: "Inspect the transport", details: 42 } : { taskId: seedTaskId };
         const response = await callTaskChannel(channel, JSON.stringify({ jsonrpc: "2.0", id: "format-fixture", method: "tools/call", params: { name, arguments: args } }), capability,
           new Headers({ accept: "application/json, text/event-stream", "content-type": "application/json", "user-agent": `${engine}/fixture` }), Date.now() + 30_000, new AbortController().signal);
         expect(response.status).toBe(200);
@@ -194,7 +195,7 @@ test.skipIf(process.platform !== "linux")("private receipt replay observes exter
   const token = capabilities[5]!;
   const channel = await privateChannel(executor, token);
   const args = { project: "fixture", text: "Private rotation", board: "hidden", clientRequestId: "private-task-rotation" };
-  const accepted = await (await privateCall(channel, "create_task", args, token)).json() as { result: { structuredContent: McpToolResult } };
+  const accepted = await (await privateCall(channel, "create_task", withTaskDue(args), token)).json() as { result: { structuredContent: McpToolResult } };
   const result = accepted.result.structuredContent;
   if (!result.ok) throw new Error("private creation refused");
   const { agentRegistry } = await import("@/lib/agent/registry");
@@ -202,15 +203,15 @@ test.skipIf(process.platform !== "linux")("private receipt replay observes exter
   const conversationId = registry.conversationIdForSpawnCapabilityDigest(createHash("sha256").update(token).digest("hex"));
   const receipt = Object.values(registry.readOnlySnapshot().receipts).find(row => row.conversationId === conversationId)!;
   const successor = registry.rotateSpawnCapabilityForReceipt(receipt.launchId);
-  const refused = await privateCall(channel, "create_task", args, token);
+  const refused = await privateCall(channel, "create_task", withTaskDue(args), token);
   expect(refused.status).toBe(403); expect((await refused.text()).includes(String(result.taskId))).toBe(false);
-  const replayed = await (await privateCall(channel, "create_task", args, successor)).json() as { result: { structuredContent: McpToolResult } };
+  const replayed = await (await privateCall(channel, "create_task", withTaskDue(args), successor)).json() as { result: { structuredContent: McpToolResult } };
   expect(replayed.result.structuredContent).toMatchObject({ ok: true, replayed: true, taskId: result.taskId, revision: result.revision });
   await executor.close();
   await expect(privateCall(channel, "get_task", { taskId: result.taskId }, successor)).rejects.toBeInstanceOf(Error);
   const replacement = create({ LLV_TOKEN: "fixture-perimeter-key", PORT: "" });
   const next = await privateChannel(replacement, successor);
-  const afterRestart = await (await privateCall(next, "create_task", args, successor)).json() as { result: { structuredContent: McpToolResult } };
+  const afterRestart = await (await privateCall(next, "create_task", withTaskDue(args), successor)).json() as { result: { structuredContent: McpToolResult } };
   expect(afterRestart.result.structuredContent).toMatchObject({ ok: true, replayed: true, taskId: result.taskId, revision: result.revision });
 });
 
@@ -248,7 +249,7 @@ test.skipIf(process.platform !== "linux")("stdio task calls use the delegated wo
   try {
     const adapter = await createProductionViewerMcpService(false, true);
     const args = { project: "fixture", text: "Delegated adapter", board: "hidden", clientRequestId: "private-adapter-create" };
-    const created = await adapter.callTool("create_task", args);
+    const created = await adapter.callTool("create_task", withTaskDue(args));
     if (!created.ok) throw new Error("adapter creation refused");
     expect(requests).toBe(1);
     const edit = { taskId: created.taskId, appendLine: "one private line", clientRequestId: "private-adapter-edit" };
@@ -511,14 +512,14 @@ test("isolated HTTP dispatch preserves the SDK envelope and direct-service recei
     "content-type": "application/json", accept: "application/json, text/event-stream",
   } });
   const response = await executor.callHttpTool("create_task", {
-    jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "create_task", arguments: args },
+    jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "create_task", arguments: withTaskDue(args) },
   }, request, { capability }, {});
   expect(response.status).toBe(200);
   const wire = await response.json() as { id: number; result: { content: Array<{ text: string }>; structuredContent: Record<string, unknown> } };
   expect(wire.id).toBe(7);
   expect(JSON.parse(wire.result.content[0]!.text)).toEqual(wire.result.structuredContent);
   expect(wire.result.structuredContent).toMatchObject({ ok: true, task: { text: args.text, details: args.details } });
-  expect(await call(executor, "create_task", args)).toMatchObject({
+  expect(await call(executor, "create_task", withTaskDue(args))).toMatchObject({
     ok: true, replayed: true, taskId: wire.result.structuredContent.taskId, revision: wire.result.structuredContent.revision,
   });
 });
@@ -535,7 +536,7 @@ test("task HTTP calls authenticate unknown and rotated capabilities before recei
   const args = { project: "fixture", text: "HTTP caller authentication", board: "hidden", clientRequestId: "executor-http-auth" };
   const post = (capability: string, framed = true, large = false, malformed = false) => {
     const body = malformed ? "{" : JSON.stringify({ jsonrpc: "2.0", id: 19, method: "tools/call", params: {
-      name: "create_task", arguments: { ...args, ...(large ? { details: "x".repeat(16_384) } : {}) },
+      name: "create_task", arguments: withTaskDue({ ...args, ...(large ? { details: "x".repeat(16_384) } : {}) }),
     } });
     return handleMcpHttpRequest(new NextRequest("http://127.0.0.1/api/mcp", { method: "POST", body, headers: {
       host: "127.0.0.1", "content-type": "application/json", accept: "application/json, text/event-stream", "x-llv-spawn-capability": capability,
@@ -610,7 +611,7 @@ test("production task HTTP pagination binds unidentified compatibility connectio
 
 test("isolated task service preserves receipts, identity, revisions and same-key replay across executors", async () => {
   const first = create();
-  const created = await call(first, "create_task", { project: "fixture", text: "Executor task", board: "hidden", clientRequestId: "executor-create" });
+  const created = await call(first, "create_task", withTaskDue({ project: "fixture", text: "Executor task", board: "hidden", clientRequestId: "executor-create" }));
   expect(created.ok).toBe(true);
   if (!created.ok) throw new Error(JSON.stringify(created));
   const taskId = created.taskId;
@@ -642,8 +643,8 @@ test("isolated task service preserves receipts, identity, revisions and same-key
 test("caller cancellation does not claim that the original mutation never ran", async () => {
   const executor = create();
   const caller = new AbortController(); caller.abort();
-  await expect(call(executor, "create_task", { project: "fixture", text: "Cancelled", clientRequestId: "executor-cancel" }, { signal: caller.signal })).rejects.toThrow("before dispatch");
-  const result = await call(executor, "create_task", { project: "fixture", text: "Cancelled", clientRequestId: "executor-cancel" });
+  await expect(call(executor, "create_task", withTaskDue({ project: "fixture", text: "Cancelled", clientRequestId: "executor-cancel" }), { signal: caller.signal })).rejects.toThrow("before dispatch");
+  const result = await call(executor, "create_task", withTaskDue({ project: "fixture", text: "Cancelled", clientRequestId: "executor-cancel" }));
   if (!result.ok) throw new Error(JSON.stringify(result));
   expect(result.ok).toBe(true);
 });
@@ -659,9 +660,9 @@ test("concurrent callers keep their own server-derived note attribution across t
   expect(expected[0]).not.toBe(expected[1]);
   const results = await Promise.all(capabilities.slice(0, 2).map((token, n) =>
     runAsMcpHttpCaller({ capability: token }, async () => {
-      const created = await executor.callTool("create_task", {
+      const created = await executor.callTool("create_task", withTaskDue({
         project: "fixture", text: `Attributed task ${n}`, board: "hidden", clientRequestId: `attributed-${n}`,
-      });
+      }));
       if (!created.ok) throw new Error(JSON.stringify(created));
       return executor.callTool("update_task", { taskId: created.taskId, note: `Caller ${n}`, clientRequestId: `attributed-note-${n}`, full: true });
     })));

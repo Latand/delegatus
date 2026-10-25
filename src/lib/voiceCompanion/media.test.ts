@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { activeVoiceInput, configureVoiceDeviceStorage, setVoiceDeviceChoice } from "@/lib/audio/voiceDevices";
 import { BrowserCompanionMedia } from "./media";
 
 const originals = new Map<string, PropertyDescriptor | undefined>();
@@ -138,4 +139,43 @@ test("played RMS drives the mouth; microphone mute preserves output and interrup
   expect(samples.at(-1)!.speaking).toBe(true);
   await media.close();
   expect(frame).toBeNull();
+});
+
+test("open() uses the stored microphone and names it for the status line, and close() clears it", async () => {
+  const asked: unknown[] = [];
+  const store = new Map<string, string>();
+  configureVoiceDeviceStorage({ getItem: key => store.get(key) ?? null, setItem: (key, value) => { store.set(key, value); }, removeItem: key => { store.delete(key); } });
+  try {
+    setVoiceDeviceChoice("input", { id: "usb-mic", label: "USB Microphone" });
+    const track = { enabled: true, stop() {}, label: "USB Microphone", getSettings: () => ({ deviceId: "usb-mic" }) };
+    const stream = { getTracks: () => [track], getAudioTracks: () => [track] };
+    install("navigator", { mediaDevices: { getUserMedia: async (constraints: unknown) => { asked.push(constraints); return stream; } } });
+    install("RTCPeerConnection", class extends EventTarget {
+      iceGatheringState = "complete"; localDescription = { sdp: "synthetic-offer" };
+      addTrack() {} createDataChannel() { return Object.assign(new EventTarget(), { close() {} }); }
+      async createOffer() { return {}; } async setLocalDescription() {} close() {}
+    });
+    install("AudioContext", class { state = "running"; async resume() {} async close() {} });
+    install("Audio", class { pause() {} });
+    const media = new BrowserCompanionMedia(callbacks());
+    await media.open();
+    expect(asked).toEqual([{ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, deviceId: { exact: "usb-mic" } } }]);
+    expect(activeVoiceInput()).toEqual({ label: "USB Microphone", fellBack: false });
+    await media.close();
+    expect(activeVoiceInput()).toBeNull();
+  } finally {
+    configureVoiceDeviceStorage(undefined);
+  }
+});
+
+test("a hangup while the microphone is pending leaves no active input behind", async () => {
+  let grant!: (value: MediaStream) => void;
+  const track = { stop() {}, label: "Headset", getSettings: () => ({}) };
+  install("navigator", { mediaDevices: { getUserMedia: () => new Promise<MediaStream>(resolve => { grant = resolve; }) } });
+  const media = new BrowserCompanionMedia(callbacks());
+  const opening = media.open();
+  await media.close();
+  grant({ getTracks: () => [track], getAudioTracks: () => [track] } as unknown as MediaStream);
+  await expect(opening).rejects.toThrow("SESSION_CLOSED");
+  expect(activeVoiceInput()).toBeNull();
 });
