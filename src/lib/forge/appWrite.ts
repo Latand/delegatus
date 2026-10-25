@@ -19,9 +19,10 @@ export interface ForgeAppToken {
 }
 
 /** A forge write as the Delegatus GitHub App: `gh` arguments and the one
-    repository the token is minted for. */
+    repository the token is minted for. A synchronous authority check runs
+    after credential waits, immediately before dispatch. */
 export interface ForgeAppWriter {
-  (args: string[], repository: string): Promise<string>;
+  (args: string[], repository: string, beforeDispatch?: () => void): Promise<string>;
 }
 
 /** The write did not happen and no other credential was tried. */
@@ -114,11 +115,12 @@ export function forgeAppWriter(cwd: string, timeoutMs: number, options: ForgeApp
     const { stdout } = await execFileAsync("gh", args, { cwd, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, env });
     return stdout;
   });
-  return async (args, repository) => {
+  return async (args, repository, beforeDispatch) => {
     const token = await tokens.token(repository);
     const env: NodeJS.ProcessEnv = { ...source, GH_TOKEN: token, GH_PROMPT_DISABLED: "1", GH_CONFIG_DIR: path.join(agentForgeDir(source), "gh-config") };
     for (const name of ["GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"]) delete env[name];
     try {
+      beforeDispatch?.();
       return await exec(args, env);
     } catch (error) {
       if (/HTTP 401|Bad credentials/i.test(`${(error as { stderr?: unknown })?.stderr ?? ""}`)) tokens.forget(repository);
@@ -137,5 +139,9 @@ export function forgeWriter(
   asApp: ForgeAppWriter,
   declared: (repository: string) => boolean = isForgeAppRepository,
 ): ForgeAppWriter {
-  return (args, repository) => (declared(repository) ? asApp(args, repository) : run(args));
+  return (args, repository, beforeDispatch) => {
+    if (declared(repository)) return asApp(args, repository, beforeDispatch);
+    beforeDispatch?.();
+    return run(args);
+  };
 }

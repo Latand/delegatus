@@ -16,6 +16,8 @@ import { DeputyBlock } from "@/components/conversation/DeputyBlock";
 import { SeatDeputyChip } from "@/components/orchestrator/SeatDeputyChip";
 import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
 import { NativeQueuePanel } from "@/components/NativeQueuePanel";
+import { projectNativeQueue } from "@/components/nativeQueueView";
+import type { NativeQueueRecord } from "@/lib/runtime/nativeQueueContracts";
 import { translate, useLocale } from "@/lib/i18n";
 import { lessonRequestLines, renderLearnedRules } from "@/lib/memory/roleRender";
 import { taskReferencePrelude } from "@/lib/selection/selectedContext";
@@ -5072,6 +5074,30 @@ const queueTaskPreview = <div className="p-3"><NativeQueuePanel
   error={null} thread={{ model: null, effort: null }} cardId="conversation_task_queue" mintKey={() => "task-queue-edit"}
   submit={async () => ({ ok: true })} onRefresh={() => {}} t={(key, params) => translate(UK ? "uk" : "en", key, params)}
 /><div className="mt-3"><SeatDeputyChip deputy={taskDeputy} /><DeputyBlock deputy={taskDeputy} /></div></div>;
+/* The consumed entry is gone from Codex's queue and has no proof yet; a second entry with the same words is still held there.
+   The panel's view is the production projection of journal-shaped records, so the acknowledgement hint is the real one. */
+const proofAfter = new URLSearchParams(location.search).get("proof") === "after";
+const proofRecord = (id: string, overrides: Partial<NativeQueueRecord> = {}): NativeQueueRecord => ({
+  entryId: `entry-${id}`, conversationId: "conversation_proof_queue", binding: { threadId: "thread-proof", accountId: "account-a" },
+  clientUserMessageId: `client-${id}`, nativeSubmissionId: `native-${id}`, revision: 1,
+  versions: [{ revision: 1, operationId: `entry-${id}`, text: "Check the memory profile", images: [], contentDigest: `digest-${id}` }],
+  profilePolicy: "thread-at-dispatch", state: "queued", mutationOperationId: null, dispatchedRevision: null, dispatchedTurnId: null,
+  proof: null, reason: null, ...overrides });
+const proofView = projectNativeQueue({
+  turn: "running", activeTurnId: "turn-proof",
+  entries: [
+    proofAfter ? proofRecord("a", { state: "delivered", dispatchedRevision: 1, dispatchedTurnId: "turn-proof",
+      proof: { threadId: "thread-proof", clientUserMessageId: "client-a", revision: 1, turnId: "turn-proof", itemId: "item-a", input: [{ type: "text", text: "Check the memory profile" }] } })
+      : proofRecord("a"),
+    proofRecord("b"),
+  ],
+  native: { threadId: "thread-proof", stale: false, items: [{ id: "native-b", clientUserMessageId: "client-b", input: [{ type: "text", text: "Check the memory profile" }] }] },
+});
+const queueProofPreview = <div className="p-3"><NativeQueuePanel
+  view={proofView}
+  unresolved={[]} error={null} thread={{ model: null, effort: null }} cardId="conversation_proof_queue" mintKey={() => "proof-queue-edit"}
+  submit={async () => ({ ok: true })} onRefresh={() => {}} t={(key, params) => translate(UK ? "uk" : "en", key, params)}
+/></div>;
 /* The companion over the real Viewer. The simulator's one effect is `dispatch`, which here makes the delegated
    message appear in the seat's transcript; the orchestrator's answer joins it when the simulator reports one.
    The page gives up the strip the companion docks into, as a host surface is asked to. */
@@ -5255,7 +5281,7 @@ createRoot(document.getElementById("root")!).render(SCENARIO === "workspaces-tea
   <div className="bg-panel" style={{ width: diskDensity === "full" ? "100%" : 248, marginTop: "auto" }}>
     <ResourcesFooter density={diskDensity === "full" ? "full" : diskDensity === "detail" ? "detail" : "line"} />
   </div>
-) : SCENARIO === "task-queue-preview" ? queueTaskPreview : SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
+) : SCENARIO === "task-queue-preview" ? queueTaskPreview : SCENARIO === "native-queue-proof" ? queueProofPreview : SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
   new URLSearchParams(location.search).has("mapping") ? <div className="p-6"><AgentMappingTable statuses={{ claude: { connected: true, account: null }, codex: { connected: true, account: null } }} layout={innerWidth < 640 ? "card" : "table"} onConnect={() => {}} /></div> : <div className="p-6" style={{ paddingTop: 400 }}>
     <RuntimePill file={{ ...searchVer2, engine: "codex", root: "codex-sessions", model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" }} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />
   </div>

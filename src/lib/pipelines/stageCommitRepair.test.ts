@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { shortId } from "@/lib/shortIds";
 
 import type { CreateFlowRequest, Flow } from "@/lib/flows/types";
 import type { ExecPort, ExecResult } from "@/lib/workflows/provision";
@@ -170,7 +171,7 @@ test.each([["sync", "changed"], ["async", "changed"], ["sync", "absent"], ["asyn
     expect(fs.lstatSync(path.join(subject.worktreeDir, "node_modules")).isDirectory()).toBe(true);
     expect(fs.existsSync(path.join(subject.worktreeDir, "node_modules/source-only"))).toBe(false);
     expect(fs.readFileSync(path.join(box.repo, "node_modules/source-only"), "utf8")).toBe("preserved\n");
-    expect(box.calls).toContain("bun install --frozen-lockfile --ignore-scripts");
+    expect(box.calls).toContain("bun install --frozen-lockfile --ignore-scripts --backend=copyfile");
     fs.writeFileSync(path.join(box.repo, ".git/hooks/pre-commit"), "#!/bin/sh\nnode_modules/.bin/fixture-lint\n", { mode: 0o755 });
     for (const [content, allowed] of [["export const value = 2;\n", true], ["export const value: any = 2;\n", false]] as const) {
       fs.writeFileSync(path.join(subject.worktreeDir, "source.ts"), content);
@@ -178,6 +179,37 @@ test.each([["sync", "changed"], ["async", "changed"], ["sync", "absent"], ["asyn
       const committed = await box.exec("git", ["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "hooked change"], subject.worktreeDir);
       expect(committed.code === 0, committed.stderr).toBe(allowed);
     }
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test("private installation copies cached package files before writable use", async () => {
+  const box = hookedRepo();
+  try {
+    const original = "module.exports = 'original';\n";
+    const archive = path.join(box.root, "dependency.tgz");
+    await Bun.write(archive, new Bun.Archive({
+      "package/package.json": JSON.stringify({ name: "fixture-cache", version: "1.0.0", main: "index.js" }),
+      "package/index.js": original,
+    }, { compress: "gzip" }));
+    fs.writeFileSync(path.join(box.repo, ".gitignore"), "node_modules/\n");
+    fs.writeFileSync(path.join(box.repo, "package.json"), JSON.stringify({ dependencies: { "fixture-cache": `file:${archive}` } }));
+    const exec: ExecPort = (command, args, cwd, env, options) => box.exec(command, args, cwd,
+      { ...env, BUN_INSTALL_CACHE_DIR: path.join(box.root, "cache") }, options);
+    const installed = await exec("bun", ["install", "--ignore-scripts", "--backend=hardlink"], box.repo);
+    expect(installed, installed.stderr).toMatchObject({ code: 0 });
+    const sourceFile = path.join(box.repo, "node_modules/fixture-cache/index.js");
+    const sourceStat = fs.statSync(sourceFile, { bigint: true });
+    expect(sourceStat.nlink > BigInt(1)).toBe(true);
+    box.run("add", ".");
+    box.run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "cached dependency");
+    const subject = { ...box.subject, branch: "lane", baseBranch: "main", baseRef: box.run("rev-parse", "HEAD"), worktreeDir: path.join(box.root, "lane") };
+    fs.writeFileSync(path.join(box.repo, "package.json"), "{}\n");
+    expect(await provisionPipelineWorktree(subject, exec)).toMatchObject({ ok: true });
+    const localFile = path.join(subject.worktreeDir, "node_modules/fixture-cache/index.js");
+    fs.writeFileSync(localFile, "module.exports = 'lane';\n");
+    expect(fs.readFileSync(sourceFile, "utf8")).toBe(original);
+    const localStat = fs.statSync(localFile, { bigint: true });
+    expect(localStat.dev === sourceStat.dev && localStat.ino === sourceStat.ino).toBe(false);
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
@@ -195,7 +227,7 @@ test.each(["sync", "async"] as const)("%s provisioning refuses a failed private 
     fs.writeFileSync(path.join(box.repo, "node_modules/source-only"), "preserved\n");
     const exec: ExecPort = (command, args, cwd, env, options) => {
       if (command !== "bun") return box.exec(command, args, cwd, env, options);
-      expect(args).toEqual(["install", "--frozen-lockfile", "--ignore-scripts"]);
+      expect(args).toEqual(["install", "--frozen-lockfile", "--ignore-scripts", "--backend=copyfile"]);
       expect(cwd).toBe(subject.worktreeDir);
       expect(options?.timeoutMs).toBe(180_000);
       return { code: 1, stdout: "", stderr: "install refused" };
@@ -223,7 +255,7 @@ test.each(["sync", "async"] as const)("%s provisioning refuses private hook tool
       ? await provisionPipelineWorktree(subject, box.exec)
       : await provisionPipelineWorktreeAsync(subject, async (command, args, cwd) => await box.exec(command, args, cwd));
     expect(result).toMatchObject({ ok: false, error: expect.stringContaining("source dependencies preserved") });
-    expect(box.calls).toContain("bun install --frozen-lockfile --ignore-scripts");
+    expect(box.calls).toContain("bun install --frozen-lockfile --ignore-scripts --backend=copyfile");
     expect(fs.existsSync(path.join(subject.worktreeDir, "node_modules/source-only"))).toBe(false);
     expect(fs.readFileSync(path.join(box.repo, "node_modules/source-only"), "utf8")).toBe("preserved\n");
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
@@ -625,6 +657,8 @@ async function runningStage(h: ReturnType<typeof harness>, access: "read-only" |
     spec: "AC1",
     repoDir: "/repo",
     src: "/claude/creator.jsonl",
+    // These cases exercise settlement; remote publication has its own fixture.
+    publication: "internal",
     stages: [
       access === "read-only"
         ? { id: "study", kind: "run", role: { roleId: "architect" }, access, outputs: ["evidence/draft"], prompt: "Study", next: "verify" }
@@ -667,6 +701,38 @@ test.each(["read-only", "read-write"] as const)("retry-stage retries a refused %
   expect(h.spawnCount()).toBe(launches);
   expect(h.requests).toHaveLength(1);
   expect(h.calls.filter(call => call.startsWith("git commit"))).toHaveLength(2);
+});
+
+test.each(["read-only", "read-write"] as const)("a %s staging refusal parks and retries settlement without relaunching the passed stage", async (access) => {
+  const h = harness({ access });
+  await runningStage(h, access);
+  const execute = h.ports.exec;
+  let refuseStaging = true;
+  h.ports.exec = (command, args, ...rest) => args[0] === "add" && refuseStaging
+    ? refusal(`cannot stage ${OUTPUT}: permission denied`)
+    : execute(command, args, ...rest);
+  h.advance(1_000); h.endTurn(PASS);
+  await tickPipelines([], h.ports);
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.cursor?.state).toBe("committing");
+  expect(parked.stateDetail).toContain(`cannot stage ${OUTPUT}`);
+  expect(parked.stateDetail).toContain("retry-stage");
+  expect(study().verdict?.status).toBe("pass");
+  expect(study().commitRepair).toBeUndefined();
+  await tickPipelines([], h.ports);
+  expect(h.spawnCount()).toBe(1);
+  expect(h.requests).toHaveLength(0);
+  h.ports.conversationAgentActive = async () => false;
+  refuseStaging = false;
+  expect((await patchPipeline(parked.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.stateDetail).toBeNull();
+  expect(study().state).toBe("passed");
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  expect(h.spawnCount()).toBe(1);
+  expect(h.requests).toHaveLength(0);
+  expect(h.calls.some(call => call.startsWith("git reset --hard") || call.startsWith("git clean"))).toBe(false);
 });
 
 test("retry-stage refuses a settlement retry while the repair turn is still busy or queued", async () => {
@@ -1351,7 +1417,7 @@ test("a request a crash interrupted after the stage accepted it is replayed unde
 
 test.each([
   ["the ancestry check fails", (h: ReturnType<typeof harness>) => h.ancestryAnswers({ code: 128, stdout: "", stderr: "fatal: object store unavailable" }),
-    `stage head ${STAGE_HEAD} does not descend from accepted head ${BASE_SHA}; fatal: object store unavailable`],
+    `stage head ${shortId(STAGE_HEAD)} does not descend from accepted head ${shortId(BASE_SHA)}; fatal: object store unavailable`],
   ["history reconciliation fails", (h: ReturnType<typeof harness>) => {
     h.ancestryAnswers({ code: 1, stdout: "", stderr: "" });
     h.branchRefAnswers({ code: 128, stdout: "", stderr: "fatal: ref HEAD is not a symbolic ref" });
@@ -1515,6 +1581,7 @@ function repairedPublication() {
 
 test.each([
   ["the pre-push hook refuses the repaired head", "publishing the passed stage: ", (h: ReturnType<typeof repairedPublication>) => {
+    fs.mkdirSync(path.dirname(h.hook), { recursive: true });
     fs.writeFileSync(h.hook, "#!/bin/sh\necho 'pre-push: touched tests' >&2\necho '(fail) the stage broke this [2.00ms]' >&2\nexit 1\n", { mode: 0o700 });
   }],
   ["the worktree moved past the repaired head", "the worktree moved to ", (h: ReturnType<typeof repairedPublication>) => {
