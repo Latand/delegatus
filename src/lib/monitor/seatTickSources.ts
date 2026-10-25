@@ -2708,11 +2708,12 @@ async function refreshSeatTickInputCooperatively(
       pipelines = sources.pipelines();
       tasks = sources.tasks();
       await performanceSpans.wait("seat-tick.project", () => prepareSeatTickProjection(sources, input.project, pipelines, tasks));
-      // Never use metadata prepared for a prior publication. Re-capture and
-      // warm the replacement after the await; sustained churn defers this tick.
+      // Prefer the replacement, but bound preparation under continuous churn.
+      // The captured rows already have their metadata prepared; projecting
+      // that snapshot keeps the alarm progressing without claiming later rows.
       if ((sources.pipelines() === pipelines || samePipelineSource(projectRows(sources.pipelines(), input.project), projectRows(pipelines, input.project)))
         && (sources.tasks() === tasks || sameTaskSource(projectRows(sources.tasks(), input.project), projectRows(tasks, input.project)))) break;
-      if (attempt >= 2) throw new SeatTickEvidenceRefreshCanceledError(input.state.pullRequestGap);
+      if (attempt >= 2) break;
     }
     const preparedSources = Object.create(sources) as SeatTickSources;
     preparedSources.pipelines = () => pipelines;
@@ -2899,9 +2900,6 @@ export class SeatTickEvidenceRefreshCanceledError extends Error {
   }
 }
 
-/** The local gates and lane associations under which PR evidence was read.
- * A note edit needs no subprocess; eligibility or lane changes do.
- */
 // Weak keys retain only source versions while the shared frozen row is alive.
 // Mutable test/adaptor rows are still hashed from their current contents.
 const evidenceHashHost = globalThis as typeof globalThis & {
@@ -2937,27 +2935,13 @@ function laneEvidenceHash(lane: Pipeline): string {
 
 async function pullRequestEvidenceKey(input: Pick<SeatTickCheckInput, "project" | "now" | "settings" | "seat" | "state">, sources: SeatTickSources): Promise<string> {
   return withViewerOperation("seat-tick.check", async () => {
-    const aliasesSnapshot = projectAliasSnapshot();
-    const canonicalProject = projectAliasResolver(aliasesSnapshot);
-    const aliases = JSON.stringify(aliasesSnapshot.aliases);
     const seatIdentity = () => {
       const seat = sources.seatFor(input.project).active;
       return JSON.stringify([seat?.conversationId, seat?.seatEpoch]);
     };
     const seat = seatIdentity();
-    const allLanes = sources.pipelines();
-    await prepareProjectRows(allLanes, aliasesSnapshot);
-    const lanes = projectRows(allLanes, input.project);
-    const hashes: string[] = [];
-    await forEachCooperatively(lanes, lane => {
-      if (canonicalProject(lane.project) === input.project) {
-        hashes.push(performanceSpans.sync("seat-tick.hash", () => laneEvidenceHash(lane)));
-      }
-    }, { batchSize: 4, timeBudgetMs: 8 });
     const now = sources.now(), settings = effectiveSeatTickSettings(sources.settings(input.project), now, SEAT_TICK_WAKE_INTERVAL_MS);
-    if (Object.isFrozen(allLanes) && sources.pipelines() !== allLanes
-      && !samePipelineSource(projectRows(sources.pipelines(), input.project), lanes) || JSON.stringify(projectAliasSnapshot().aliases) !== aliases
-      || seatIdentity() !== seat || settings.enabled !== input.settings.enabled || settings.wakeIntervalMs !== input.settings.wakeIntervalMs
+    if (seatIdentity() !== seat || settings.enabled !== input.settings.enabled || settings.wakeIntervalMs !== input.settings.wakeIntervalMs
       || seatTickWakeDue(input.state.lastWakeAt, now, settings.wakeIntervalMs) !== seatTickWakeDue(input.state.lastWakeAt, input.now, input.settings.wakeIntervalMs)) {
       throw new SeatTickEvidenceRefreshCanceledError(input.state.pullRequestGap);
     }
@@ -2966,13 +2950,16 @@ async function pullRequestEvidenceKey(input: Pick<SeatTickCheckInput, "project" 
       seatTickWakeDue(input.state.lastWakeAt, input.now, input.settings.wakeIntervalMs),
       input.settings.wakeIntervalMs,
       input.seat ? seatTurnProgressing(input.seat) : null,
-      hashes,
+      seat,
     ])).digest("hex");
   });
 }
 
-/** Revalidate gated evidence too when fresh state changes its question. A
- * second concurrent change leaves this check unsent for the next tick.
+/** PR evidence is one observation per eligible check, with lane associations
+ * captured by that read. Local agenda refreshes must not invalidate it as lanes
+ * advance. Changed eligibility still asks the newly enabled question, and a
+ * second eligibility change keeps the alarm unsent. The next check reads PRs
+ * again; delivery credits only the outcomes its frozen payload actually names.
  */
 export async function refreshSeatTickEvidence(input: SeatTickCheckInput, sources: SeatTickSources): Promise<SeatTickCheckInput> {
   let fresh = await refreshSeatTickInputCooperatively(input, sources);

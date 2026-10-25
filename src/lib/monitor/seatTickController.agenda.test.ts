@@ -483,7 +483,93 @@ test("a second state change during PR refresh leaves the alarm unsent", async ()
   expect(rig.written.every(state => state.lastWakeAt === OVERDUE.lastWakeAt)).toBe(true);
 });
 
-test("a canceled PR refresh keeps its outage run in durable state", async () => {
+test("lane churn during every PR refresh still wakes the seat in one check", async () => {
+  const rig = harness({ pipelines: [...FINISHED_LANE, ...OPEN_LANE], state: OVERDUE });
+  let reads = 0;
+  rig.deps.sources!.openPullRequests = async () => {
+    const current = rig.deps.sources!.pipelines();
+    const at = new Date(NOW + ++reads * MINUTE).toISOString();
+    rig.deps.sources!.pipelines = () => current.map(lane => lane.id === OPEN_LANE[0]!.id
+      ? { ...lane, updatedAt: at } : lane);
+    return { ok: true, pullRequests: [] };
+  };
+  expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "wake" });
+  expect(reads).toBe(1);
+  expect(rig.sent).toHaveLength(1);
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent).toHaveLength(1);
+});
+
+test("a churn wake delivered before process exit is settled once after restart and credits only named lanes", async () => {
+  const directory = fs.mkdtempSync(path.join(SANDBOX, "churn-restart-"));
+  const stateFile = path.join(directory, "tick.json");
+  const receiptFile = path.join(directory, "receipt.json");
+  writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, stateFile);
+  for (const phase of ["deliver", "recover", "again"] as const) {
+    const script = path.join(directory, `${phase}.test.ts`);
+    fs.writeFileSync(script, `import { test, expect } from "bun:test";
+      const { fs, harness, runSeatTickCheck, PROJECT, NOW, MINUTE, FINISHED_LANE, OPEN_LANE, CONVERSATION,
+        defaultSeatTickSettings } = await import(${JSON.stringify(path.join(import.meta.dir, "seatTickController.fixture.ts"))});
+      test("churn restart ${phase}", async () => {
+        const phase = ${JSON.stringify(phase)};
+        const receiptFile = ${JSON.stringify(receiptFile)};
+        const own = { ...FINISHED_LANE[0], src: CONVERSATION };
+        const lanes = [own, ...OPEN_LANE];
+        if (phase === "recover") lanes.push({ ...own, id: "late-unseen-lane" });
+        const rig = harness({ stateFile: ${JSON.stringify(stateFile)}, pipelines: lanes, now: NOW,
+          settings: { ...defaultSeatTickSettings(PROJECT), enabled: phase !== "recover" } });
+        let reads = 0;
+        rig.deps.sources.openPullRequests = async () => {
+          const current = rig.deps.sources.pipelines();
+          const at = new Date(NOW + ++reads * MINUTE).toISOString();
+          rig.deps.sources.pipelines = () => current.map(lane => lane.id === OPEN_LANE[0].id
+            ? { ...lane, updatedAt: at } : lane);
+          return { ok: true, pullRequests: [] };
+        };
+        rig.deps.deliver = async message => {
+          expect(phase).toBe("deliver");
+          expect(fs.existsSync(receiptFile)).toBe(false);
+          fs.writeFileSync(receiptFile, JSON.stringify(message));
+          process.exit(23); // destination accepted; controller has not received its acknowledgement
+        };
+        rig.deps.sources.wakeState = async wake => {
+          const receipt = JSON.parse(fs.readFileSync(receiptFile, "utf8"));
+          expect(wake.clientMessageId).toBe(receipt.clientMessageId);
+          return "landed";
+        };
+        const before = rig.deps.readState(PROJECT);
+        const record = await runSeatTickCheck(PROJECT, rig.deps);
+        expect(record.verdict).toBe("quiet");
+        const after = rig.deps.readState(PROJECT);
+        expect(after.outstandingWake).toBeNull();
+        expect(after.lastWakeAt).toBe(new Date(NOW).toISOString());
+        if (phase === "recover") {
+          expect(before.outstandingWake).toBeTruthy();
+          expect(before.outstandingWake.commit.announcedLanes.length).toBeGreaterThan(0);
+          expect(after.announcedLanes).toEqual(before.outstandingWake.commit.announcedLanes);
+          expect(after.announcedLanes.some(key => key.includes("late-unseen-lane"))).toBe(false);
+        }
+      });`);
+    const child = spawn(process.execPath, ["test", script], { env: { ...process.env }, stdio: ["ignore", "pipe", "pipe"] });
+    let output = "";
+    child.stdout.on("data", chunk => { output += chunk; });
+    child.stderr.on("data", chunk => { output += chunk; });
+    const code = await new Promise<number | null>((resolve, reject) => {
+      child.once("error", reject); child.once("close", resolve);
+    });
+    expect(code, output).toBe(phase === "deliver" ? 23 : 0);
+    if (phase === "deliver") {
+      const wake = readSeatTickState(PROJECT, stateFile).outstandingWake!;
+      const receipt = JSON.parse(fs.readFileSync(receiptFile, "utf8"));
+      expect(receipt.clientMessageId).toBe(wake.clientMessageId);
+      expect(receipt.text).toContain(FINISHED_LANE[0]!.id);
+      expect(receipt.text).not.toContain("late-unseen-lane");
+      expect(readSeatTickState(PROJECT, stateFile).lastWakeAt).toBe(OVERDUE.lastWakeAt);
+    }
+  }
+});
+
+test("lane churn keeps a real PR source failure visible in durable state", async () => {
   const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "canceled-pr-gap-")), "state.json");
   const running = { ...OPEN_LANE[0]!, id: "running-lane" };
   const rig = harness({ stateFile, pipelines: [...FINISHED_LANE, running], state: OVERDUE });
@@ -492,8 +578,7 @@ test("a canceled PR refresh keeps its outage run in durable state", async () => 
   let attempt = 1;
   const pipelines = rig.deps.sources!.pipelines;
   rig.deps.sources!.pipelines = () => {
-    /* Keep the running lane's attempt identity moving across every freshness
-       read, so each completed failure is canceled before it can be dispatched. */
+    // Every freshness read sees a different attempt, including preparation.
     attempt += 1;
     return pipelines().map(lane => lane.id === running.id
       ? { ...lane, runs: [{ stageId: "build", attempts: [{ n: attempt, state: "running", startedAt: new Date(NOW + attempt * MINUTE).toISOString() }] }] as never }
@@ -503,20 +588,23 @@ test("a canceled PR refresh keeps its outage run in durable state", async () => 
 
   const first = await runSeatTickCheck(PROJECT, rig.deps);
   const firstGap = readSeatTickState(PROJECT, stateFile).pullRequestGap;
-  expect(first).toMatchObject({ verdict: "error", delivery: null });
-  expect(rig.sent).toEqual([]);
+  expect(first).toMatchObject({ verdict: "wake" });
+  expect(first!.detail).toContain("command-failed");
+  expect(rig.sent).toHaveLength(1);
   expect(firstGap).toMatchObject({ gap: "command-failed", reported: false });
   const since = firstGap!.since;
 
   rig.deps.sources!.now = () => NOW + 65 * MINUTE;
   const second = await runSeatTickCheck(PROJECT, rig.deps);
   const secondGap = readSeatTickState(PROJECT, stateFile).pullRequestGap;
-  expect(second).toMatchObject({ verdict: "error", delivery: null });
-  expect(rig.sent).toEqual([]);
-  expect(secondGap).toMatchObject({ gap: "command-failed", reported: false, since });
+  expect(second).toMatchObject({ verdict: "wake" });
+  expect(second!.detail).toContain("command-failed");
+  expect(rig.sent).toHaveLength(2);
+  expect(rig.cards.filter(entry => entry.card.kind === "source-unreadable")).toHaveLength(1);
+  expect(secondGap).toMatchObject({ gap: "command-failed", reported: true, since });
 });
 
-test("a canceled successful PR refresh clears recovered outage accounting and starts the next run fresh", async () => {
+test("a successful PR read under lane churn clears outage accounting and starts the next run fresh", async () => {
   const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "canceled-pr-recovery-")), "state.json");
   const running = { ...OPEN_LANE[0]!, id: "running-lane" };
   const previousSince = new Date(NOW - 3 * 60 * MINUTE).toISOString();
@@ -529,8 +617,7 @@ test("a canceled successful PR refresh clears recovered outage accounting and st
   const pipelines = rig.deps.sources!.pipelines;
   rig.deps.sources!.openPullRequests = async () => {
     reads++;
-    /* Both reads succeed, but the running lane advances during each one. The
-       second freshness fence cancels this wake after recovery was observed. */
+    // The lane advances during every PR read while the source recovers.
     const nextAttempt = ++attempt;
     const current = pipelines();
     rig.deps.sources!.pipelines = () => current.map(lane => lane.id === running.id
@@ -539,10 +626,9 @@ test("a canceled successful PR refresh clears recovered outage accounting and st
     return { ok: true, pullRequests: [] };
   };
 
-  const canceled = await runSeatTickCheck(PROJECT, rig.deps);
-  expect(canceled).toMatchObject({ verdict: "error", delivery: null });
-  expect(reads).toBe(4);
-  expect(rig.sent).toEqual([]);
+  expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "wake" });
+  expect(reads).toBe(1);
+  expect(rig.sent).toHaveLength(1);
   expect(readSeatTickState(PROJECT, stateFile).pullRequestGap).toBeNull();
 
   const firstFailure = harness({ stateFile, pipelines: [...FINISHED_LANE, running], now: NOW + 65 * MINUTE,

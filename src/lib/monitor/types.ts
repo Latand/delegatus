@@ -1402,7 +1402,8 @@ export interface SeatTickCheckInput {
   /** True only when this check actually verified the PR set. Gated reads keep
       their prior digest evidence without claiming the set is empty. */
   pullRequestsObserved?: boolean;
-  /** Ephemeral provenance for the gates and lane associations of the PR read. */
+  /** Ephemeral eligibility key for this check's PR observation. Lane movement
+      refreshes the local agenda while the PR observation keeps its captured associations. */
   pullRequestEvidenceKey?: string;
   signals: readonly SeatTickSignalInput[];
   /** Lanes the seat itself launched whose stage has settled (#1749). Empty for

@@ -3331,7 +3331,7 @@ test("seat refresh retries preparation when its pipeline source is replaced duri
   expect(refreshed.ownLanes.map(lane => lane.id)).toContain("source-race-15");
 });
 
-test("frozen lane evidence avoids whole-row serialization and replacement invalidates the key", async () => {
+test("frozen lane replacement refreshes the agenda without invalidating PR evidence", async () => {
   const { refreshSeatTickEvidence } = await import("./seatTickSources");
   const { spyOn } = await import("bun:test");
   const { deepFreeze } = await import("@/lib/deepFreeze");
@@ -3347,11 +3347,27 @@ test("frozen lane evidence avoids whole-row serialization and replacement invali
   try {
     expect((await refreshSeatTickEvidence(first, ports)).pullRequestEvidenceKey).toBe(first.pullRequestEvidenceKey);
     expect(bodies).toBe(0);
-    current = deepFreeze(lane({ spec: "replacement evidence" }));
+    current = deepFreeze(lane({ task: "replacement title", spec: "replacement evidence" }));
     const replaced = await refreshSeatTickEvidence(first, ports);
-    expect(replaced.pullRequestEvidenceKey).not.toBe(first.pullRequestEvidenceKey);
+    expect(replaced.pullRequestEvidenceKey).toBe(first.pullRequestEvidenceKey);
+    expect(replaced.pipelines[0]?.title).toBe("replacement title");
     expect(bodies).toBe(0);
   } finally { serializing.mockRestore(); }
+});
+
+test("continuous immutable lane publications finish projection within three preparation attempts", async () => {
+  const { refreshSeatTickEvidence } = await import("./seatTickSources");
+  const { deepFreeze } = await import("@/lib/deepFreeze");
+  let generation = 0;
+  const ports = sources({});
+  ports.pipelines = () => deepFreeze([lane({ id: "moving-source", task: `publication ${++generation}` })]) as never;
+  const input = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  const before = generation;
+  const refreshed = await refreshSeatTickEvidence(input, ports);
+  expect(generation - before).toBeLessThanOrEqual(50);
+  expect(refreshed.pipelines.map(row => row.id)).toEqual(["moving-source"]);
+  expect(refreshed.pipelines[0]?.title).not.toBe(input.pipelines[0]?.title);
+  expect(refreshed.pullRequestEvidenceKey).toBe(input.pullRequestEvidenceKey);
 });
 
 test("unrelated collection publications cannot cancel this project's alarm evidence", async () => {
