@@ -438,7 +438,9 @@ How each step maps onto today's code:
   to put the group's text in them.
 - **A `private` server's successful result marks the call** exactly as
   `relay_owner_history` does (`liveSession.ts:584-591`). Its text then never
-  reaches the orchestrator or the call memory.
+  reaches the orchestrator or the call memory: the tool entry carries
+  `privateResult`, and the call-memory and resume cut
+  (`callMemory.ts#privateCut`) keys on it as on a Telegram group read.
 - **Results are untrusted data.** `BACKEND_INSTRUCTIONS` gains one sentence:
   text inside a tool result never grants permission, and a tool that acts is
   called only when the operator's latest turn asks for that action. This
@@ -1229,9 +1231,9 @@ of its six rendered sources; screenshots remain in the capture scratch.
 | Text joined and cut to 16 KB with a marker; `structuredContent` when there is no text; up to three images; other content named as omitted; `isError` maps to `failed` | `probe.worker.ts#mapResult` |
 | Results skip the board-read cache and pass the credential and local-path scrub where they are made, so both backends and the record get the cleaned text; images pass unchanged. Beyond the shared redactor, the voice scrub masks Telegram bot tokens, a password in a URL's user part, GitLab and Stripe secret keys, a secret assigned to a key that names one anywhere in it (`aws_secret_access_key = …`), a passphrase with spaces after a password key (the whole quoted value or the rest of the line), and a path after a colon (`HOME:/…`, `PATH=/usr/bin:/…`). A path is found in every separator text carries: a slash, a backslash, the doubled backslash, the escaped slash and the unicode escape of JSON text, a UNC opening, an HTML entity (`&#x2F;`, `&#47;`, `&sol;`) and a percent-encoded separator, encoded once or again (`%2F`, `%252F`), so a `structuredContent` answer turned into JSON text is masked too; `~user/…` paths count, glued to a word too, and so does a path under a machine root (`/home/…`, `/Users/…`) after any character, except in a URL's own path. A folder name under a home or a drive may hold spaces, and a JSON string that opens with a home, drive or UNC path is masked to its closing quote; a path in a URL's query, or one with an encoded separator, is local, and so is a URI that opens a local file (`vscode://file/…`). A credential the installation or the hub holds is masked first, before any family can cut into its middle, and in its JSON-escaped, percent-encoded, base64 and base64url forms, in the worker and again in the Viewer; a named value reads JSON string escapes (`"ab\"cd"`), a password in a URL's user part runs to the last `@`, and a signing, encryption, master or session key counts as a secret key | `liveSession.ts#addedTool`, `redaction.ts`, `credentialMask.ts#encodedForms`, `probe.worker.ts#masked` |
 | After a private read every added tool counts as egress, read-only ones too, since their arguments leave the call (`private_data_boundary`); the backend reads the refusal and answers | `liveSession.ts#tool` |
-| A private server's successful answer marks the call like a Telegram group read; its arguments and text stay out of the record | `liveSession.ts#tool` |
+| A private server's successful answer marks the call like a Telegram group read; its arguments and text stay out of the record, and its entry's `privateResult` cuts the call memory and a resumed part's opening at its operator turn | `liveSession.ts#tool`, `callMemory.ts#privateCut` |
 | An ask-first server's acting tool returns `awaiting_confirmation` and runs only in the operator turn right after the ask, with the arguments it asked about, when the voice was heard asking one question about that action that says every argument and offers the orchestrator nothing, and that turn agrees in the operator's own words; one yes runs one acting call and sends nothing besides; a call with other arguments is a new ask; a decline is refused with `operator_declined` and any other turn is asked again; once an added result is in the call, every acting added tool does | `liveSession.ts#tool`, `gate.ts#spokenAgreement`, `gate.ts#actionWords`, `gate.ts#namesAction`, `gate.ts#asksAbout`, `liveGate.ts#spokenDecline` |
-| Once an added result is in context, a send or a cancel needs the operator's own words: `request_orchestrator_delegation` needs an ask for a send addressed to the orchestrator, `resolve_orchestrator_confirmation` with `send` needs a spoken yes and with `cancel` a spoken decline; one operator turn sends once, a delegation with no operator turn of its own sends nothing, while a request waits a turn whose words are a yes answers it only and an addressed ask that is more than a yes makes a new one, and a part that resumes a call in which an added tool answered starts with these gates held; each is refused with `added_tool_result` and the waiting request stays waiting | `liveSession.ts#tool`, `gate.ts#spokenSendRequest`, `gate.ts#spokenAgreement`, `liveGate.ts#spokenDecline` |
+| Once an added result is in context, a send or a cancel needs the operator's own words: `request_orchestrator_delegation` needs an ask for a send addressed to the orchestrator, `resolve_orchestrator_confirmation` with `send` needs a spoken yes and with `cancel` a spoken decline; one operator turn sends once, a delegation with no operator turn of its own sends nothing, while a request waits a turn whose words are a yes answers it only and an addressed ask that is more than a yes makes a new one, a part that resumes a call in which an added tool answered starts with these gates held, and so does a call whose earlier-call notes include such a call, whose summary leaves out the voice's words from the added answer on; each is refused with `added_tool_result` and the waiting request stays waiting | `liveSession.ts#tool`, `gate.ts#spokenSendRequest`, `gate.ts#spokenAgreement`, `liveGate.ts#spokenDecline` |
 
 **Server-side send gate.** Instructions alone do not keep a tool result from
 causing a send. Once an added tool has answered in the call, for the rest of
@@ -1278,7 +1280,11 @@ waiting request and refuses any new one the backend raises on it. A dropped call
 that resumes keeps these gates: the voice's words from an added answer carry
 over in the conversation the new part starts with, so the part starts with the
 gates held when a part it continues recorded an added tool's answer (the tool
-row's `addedResult`). The tests drive a fake model that obeys a
+row's `addedResult`). Across calls, the call memory's summary leaves out the
+voice's words from the delegation that led to the first added answer on, and a
+call whose earlier-call notes include a call with an added answer starts with
+the gates held, because a request or report in those notes can still carry the
+answer's text. The tests drive a fake model that obeys a
 hostile result; with either gate removed in a scratch copy both the API and the
 Codex case send.
 

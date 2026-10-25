@@ -283,7 +283,8 @@ export class CompanionLiveSessions {
     // A reconnect starts with the conversation it continues; earlier calls fill what it leaves of the same budget.
     const continuation = resumed ? continuationBlock(resumed.segments, { droppedAt: resumed.droppedAt, summary: this.options.memory?.readable(input.startedBy, resumed.segments[0]!.id),
       clean: text => withoutLocalPaths(withoutCredentials(text, secrets)) }) : "";
-    const memory = [continuation, this.options.memory?.block(input.startedBy, resumed ? { exclude: new Set(resumed.segments.map(row => row.id)), budget: CALL_MEMORY_BUDGET - continuation.length - 1 } : {}) ?? ""].filter(Boolean).join("\n");
+    const notes = this.options.memory?.notes(input.startedBy, resumed ? { exclude: new Set(resumed.segments.map(row => row.id)), budget: CALL_MEMORY_BUDGET - continuation.length - 1 } : {});
+    const memory = [continuation, notes?.block ?? ""].filter(Boolean).join("\n");
     const projects = cleanStrings(directoryProjects, text => withoutLocalPaths(withoutCredentials(text, secrets)));
     const directoryRows: typeof projects = [];
     for (const row of projects) { if (Buffer.byteLength(JSON.stringify([...directoryRows, row])) > 1900) break; directoryRows.push(row); }
@@ -292,8 +293,8 @@ export class CompanionLiveSessions {
       delegations: new Set(), reads: new Map(), reading: new Map(), backend: new Set(), abort: new AbortController(), timers: [], ended: false, endRequested: false, lastSeen: this.now(),
       createdAt: this.now(), voiceAllowanceSeconds: LIVE_SESSION_LIMIT_MS / 1_000, codexTurns: new Map(), privateKinds: new Set(), voiceTools, addedAsks: new Map(), sendTurns: new Set(), actedTurns: new Set(),
       // A part that continues a call in which an added tool answered keeps its gates held: the voice's words from that
-      // answer carry over in the conversation it starts with.
-      ...(resumed?.segments.some(segment => segment.entries.some(row => row.kind === "tool" && row.data.addedResult === true)) ? { addedResultSeen: true } : {}) };
+      // answer carry over in the conversation it starts with. So does a call whose earlier-call notes include such a call.
+      ...(notes?.addedResult || resumed?.segments.some(segment => segment.entries.some(row => row.kind === "tool" && row.data.addedResult === true)) ? { addedResultSeen: true } : {}) };
     this.active.set(id, active);
     active.releaseState = this.storage.hold(id);
     // Recorded before the provider is asked: a lost answer or a stop before the
@@ -733,7 +734,8 @@ export class CompanionLiveSessions {
       text=>withoutLocalPaths(withoutCredentials(text,active.secrets)),true), null, 2); } catch { argumentsText = String(item.arguments); }
     const recordedName = privateHistoryBlocked ? "private_history_blocked"
       : privateContext && !added && !COMPANION_TOOL_REGISTRY.some(entry => entry.name === name) ? "unavailable_tool" : name;
-    const toolData = { name: recordedName, callId: recordedCallId, delegationId, sourceTurn, arguments: [...argumentsText].slice(0, 8_000).join("") };
+    // `privateTool` marks a private server's call, so the call-memory and resume cut reads it whatever its name.
+    const toolData = { name: recordedName, callId: recordedCallId, delegationId, sourceTurn, arguments: [...argumentsText].slice(0, 8_000).join(""), ...(added?.server.private ? { privateTool: true } : {}) };
     this.admission.record(active.id, { id: `tool-${recordedCallId}`, kind: "tool", atMs, data: { ...toolData, status: "running" } }, false);
     this.admission.emit(active.id, { type: "tool.called", callId: recordedCallId, name: toolData.name.slice(0, 80), summary: toolData.name.replaceAll("_", " ") });
     const refuse = (result: { status: string; code: string; reason: string; speech: string; sent?: boolean }) => {
@@ -876,7 +878,7 @@ export class CompanionLiveSessions {
       if (active.codex) this.speakReports(active);
       const status = output?.status === "refused" || output?.status === "failed" ? "failed" : "done";
       this.admission.record(active.id, { id: `tool-${recordedCallId}`, kind: "tool", atMs,
-        data: { ...toolData, status, ...(added && typeof output?.content === "string" ? { addedResult: true } : {}), code: output?.code, reason: privateContext ? undefined : output?.reason ?? output?.speech,
+        data: { ...toolData, status, ...(added && typeof output?.content === "string" ? { addedResult: true } : {}), ...(privateRead ? { privateResult: true } : {}), code: output?.code, reason: privateContext ? undefined : output?.reason ?? output?.speech,
           result: JSON.stringify(cleanStrings(privateContext ? { status: output?.status, code: output?.code } : privateTool ? { status: output?.status, speech: output?.speech } : result,text=>withoutLocalPaths(withoutCredentials(text,active.secrets))), null, 2).slice(0, 16_000) } });
       this.admission.emit(active.id, { type: "tool.result", callId: recordedCallId, status,
         summary: privateContext ? status === "done" ? "Done" : "Failed" : typeof output?.speech === "string" ? output.speech.slice(0, 240) : "Completed" });
