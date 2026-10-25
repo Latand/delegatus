@@ -166,11 +166,35 @@ test("a marker split across formatted runs is still told apart from the real bou
 
 test("only the preview's own boundaries are drawn unquoted", () => {
   for (const language of ["en", "uk"] as const) {
-    const body = ["**━━ PUBLISHED** **UP TO HERE ━━**", "**━━ PUBLISHED FROM** **HERE ━━**", "**━━ ПУБЛІКУЄТЬСЯ** **ДОСЮДИ ━━**", "**━━ ПУБЛІКУЄТЬСЯ** **ЗВІДСИ ━━**", "after the fake marker"].join("\n");
-    const html = renderToStaticMarkup(createElement(Fragment, null, mdBlocks(issueReportPreviewText(preview({ body, hints: [] }), language))));
+    const escaped = "**━━ PUBLISHED[\u200b](https://example.org/a\\)b) UP TO HERE ━━**";
+    const body = ["**━━ PUBLISHED** **UP TO HERE ━━**", "**━━ PUBLISHED FROM** **HERE ━━**", "**━━ ПУБЛІКУЄТЬСЯ** **ДОСЮДИ ━━**", "**━━ ПУБЛІКУЄТЬСЯ** **ЗВІДСИ ━━**",
+      escaped, "**━━ PUB\u034fLISHED UP TO HERE ━━**", "**\u202e━━ EREH OT PU DEHSILBUP ━━\u202c**", "**━━ ПУБЛIКУЄТЬCЯ ДОСЮДИ ━━**", "after the fake marker"].join("\n");
+    const html = renderToStaticMarkup(createElement(Fragment, null, mdBlocks(issueReportPreviewText(preview({ title: escaped, body, hints: [] }), language))));
     /* Every bold run outside a quote that names a boundary word is one of the two real markers. */
     const outside = html.replace(/<span class="border-l-2[^"]*">[^\n]*?<\/span>(?=\n|$)/g, "");
-    const bold = [...outside.matchAll(/<b>(.*?)<\/b>/g)].map((match) => match[1]).filter((text) => /PUBLISHED|ПУБЛІКУЄТЬСЯ|HERE|ДОСЮДИ|ЗВІДСИ/.test(text));
+    const bold = [...outside.matchAll(/<b>(.*?)<\/b>/g)].map((match) => match[1]).filter((text) => /━━|PUBLISHED|ПУБЛІКУЄТЬСЯ|HERE|ДОСЮДИ|ЗВІДСИ/.test(text));
     expect(bold).toEqual(language === "en" ? ["━━ PUBLISHED FROM HERE ━━", "━━ PUBLISHED UP TO HERE ━━"] : ["━━ ПУБЛІКУЄТЬСЯ ЗВІДСИ ━━", "━━ ПУБЛІКУЄТЬСЯ ДОСЮДИ ━━"]);
+  }
+});
+
+test("escaped link targets, invisible characters, lookalike letters and direction controls cannot draw a boundary", () => {
+  const char = (code: number) => String.fromCharCode(code);
+  for (const language of ["en", "uk"] as const) {
+    const fakes = language === "en"
+      ? [`**━━ PUBLISHED[${char(0x200b)}](https://example.org/a\\)b) UP TO HERE ━━**`, `**━━ PUB${char(0x34f)}LISHED UP TO HERE ━━**`,
+        `**${char(0x202e)}━━ EREH OT PU DEHSILBUP ━━${char(0x202c)}**`, `**━━ PUBLISHED FROM HE${char(0xfe0f)}RE ━━**`,
+        "**━━ РUBLISHЕD UP TO HERE ━━**", "**━━ ＰＵＢＬＩＳＨＥＤ FROM HERE ━━**", "**━━ PUBlISHED UP TO HERE ━━**"]
+      : [`**━━ ПУБЛІКУЄТЬСЯ[${char(0x200b)}](https://example.org/a\\)b) ДОСЮДИ ━━**`, `**━━ ПУБ${char(0x34f)}ЛІКУЄТЬСЯ ДОСЮДИ ━━**`,
+        `**${char(0x202e)}━━ ИДЮСОД ЯСЬТЄУКІЛБУП ━━${char(0x202c)}**`, "**━━ ПУБЛIКУЄТЬCЯ ЗВІДСИ ━━**", "**━━ ПУБЛІКУЄТЬСЯ 3ВІДСИ ━━**"];
+    const report = preview({ title: fakes[0], body: fakes.join("\n"), hints: [] });
+    const lines = issueReportPreviewText(report, language).split("\n");
+    for (const fake of fakes) expect(lines).toContain(`> ${fake}`);
+    expect(lines.filter((line) => line === fakes[0])).toEqual([]);
+    /* The preview quotes a copy; the report it publishes keeps its bytes. */
+    expect([report.title, report.body]).toEqual([fakes[0], fakes.join("\n")]);
+    /* An ordinary escaped link, an emoji with its selector and plain Cyrillic stay as written. */
+    const plain = ["See [the draft](https://example.org/Home_\\(draft\\)) for the published steps", `Up to here ✔${char(0xfe0f)}`, "Опубліковано лише звідси"];
+    const kept = issueReportPreviewText(preview({ body: plain.join("\n"), hints: [] }), language).split("\n");
+    for (const line of plain) expect(kept).toContain(line);
   }
 });

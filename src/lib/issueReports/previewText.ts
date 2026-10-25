@@ -65,13 +65,25 @@ const verbatim = (text: string) => text.trim().split("\n").filter((line) => line
 
 /* Boundary-like report lines are quoted, so only the preview's own markers
    have the unquoted boundary style. A line is read as the chat draws it:
-   link and image targets, emphasis and code delimiters and invisible format
-   characters are dropped, so a marker split across formatted runs is still
-   caught. The publication bytes stay untouched. */
-const MARKER_RE = /PUBLISHED\s*(?:FROM\s*HERE|UP\s*TO\s*HERE)|ПУБЛІКУЄТЬСЯ\s*(?:ЗВІДСИ|ДОСЮДИ)/iu;
-const drawnText = (line: string) => line.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/[*_`~|\\]|\p{Cf}/gu, "");
+   link and image targets (with the chat's own escapes), emphasis and code
+   delimiters, invisible characters and combining marks are dropped,
+   compatibility forms are folded and a letter matches its lookalikes in the
+   other scripts, so a marker split across runs or spelled with other
+   characters is still caught. A direction control can redraw any text as a
+   marker, so a line holding one is always quoted. The publication bytes stay
+   untouched. */
+const LOOKALIKES = ["AАΑ", "BВΒ", "CСϹ", "DԁԀ", "EЕΕ", "HНΗ", "IІΙӀl1", "KКΚ", "MМΜ", "NΝ", "OОΟ0", "PРΡ", "SЅ", "TТΤ", "XХΧ", "YУΥ", "ЗZ3"];
+const letter = (char: string) => {
+  const group = LOOKALIKES.find((members) => members.includes(char.toUpperCase()));
+  return char === " " ? "\\s*" : `[${group ?? char}]`;
+};
+const MARKER_RE = new RegExp([COPY.en.from, COPY.en.to, COPY.uk.from, COPY.uk.to]
+  .map((marker) => [...marker].map(letter).join("")).join("|"), "iu");
+const MD_TARGET = String.raw`\((?:\\.|[^)\s\\])+\)`;
+const drawnText = (line: string) => line.replace(new RegExp(String.raw`!?\[([^\]]*)\]${MD_TARGET}`, "g"), "$1")
+  .normalize("NFKC").replace(/[*_`~|\\]|[\p{Cf}\p{DI}\p{M}]/gu, "");
 const distinguishBoundaries = (text: string) => text.split("\n").map((line) =>
-  MARKER_RE.test(drawnText(line)) ? `> ${line}` : line).join("\n");
+  /\p{Bidi_C}/u.test(line) || MARKER_RE.test(drawnText(line)) ? `> ${line}` : line).join("\n");
 
 /* The chat draws an unclosed code fence to the end of the message, which
    would swallow the closing marker and everything after it. */

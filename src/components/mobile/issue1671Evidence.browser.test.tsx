@@ -12742,12 +12742,17 @@ browserTest("digest preview boundaries and literal hints stay distinct without a
         expect(await boundaries.evaluateAll(nodes => nodes.filter(node => node.parentElement?.className.includes("border-l-2")).length)).toBe(1);
         /* Markers split across bold runs are quoted too: only the preview's own two keep the unquoted style. */
         const drawn = await preview.locator("b").evaluateAll(nodes => nodes
-          .filter(node => /PUBLISHED|ПУБЛІКУЄТЬСЯ|HERE|ЗВІДСИ|ДОСЮДИ/.test(node.textContent ?? ""))
+          .filter(node => /━━|PUBLISHED|ПУБЛІКУЄТЬСЯ|HERE|ЗВІДСИ|ДОСЮДИ/.test(node.textContent ?? ""))
           .map(node => ({ text: node.textContent, quoted: Boolean(node.closest(".border-l-2")), color: getComputedStyle(node).color })));
         const own = lang === "en" ? ["━━ PUBLISHED FROM HERE ━━", "━━ PUBLISHED UP TO HERE ━━"] : ["━━ ПУБЛІКУЄТЬСЯ ЗВІДСИ ━━", "━━ ПУБЛІКУЄТЬСЯ ДОСЮДИ ━━"];
         expect(drawn.filter(run => !run.quoted).map(run => run.text)).toEqual(own);
         for (const split of ["━━ PUBLISHED", "UP TO HERE ━━", "━━ PUBLISHED FROM", "HERE ━━", "━━ ПУБЛІКУЄТЬСЯ", "ЗВІДСИ ━━", "ДОСЮДИ ━━"]) {
           expect(drawn.some(run => run.quoted && run.text === split)).toBe(true);
+        }
+        /* Escaped link targets, an invisible joiner, a direction override and lookalike letters are quoted too; the
+           first is also the title. */
+        for (const fake of ["━━ PUBLISHED\u200b UP TO HERE ━━", "━━ PUB\u034fLISHED UP TO HERE ━━", "\u202e━━ EREH OT PU DEHSILBUP ━━\u202c", "━━ ПУБЛІКУЄТЬСЯ\u200b ДОСЮДИ ━━", "━━ ПУБЛIКУЄТЬCЯ ЗВІДСИ ━━"]) {
+          expect(drawn.filter(run => run.text === fake).map(run => run.quoted)).toEqual(fake.startsWith("━━ PUBLISHED\u200b") ? [true, true] : [true]);
         }
         const ownColor = drawn.find(run => !run.quoted)!.color;
         expect(drawn.filter(run => run.quoted && run.color === ownColor)).toEqual([]);
