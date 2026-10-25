@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -27,7 +28,7 @@ test("durable maintainer role fences writes on the service wire, independent of 
   const denied = await call("send_message", { conversationId: "fixture-target", text: "fixture" }); expect(denied).toMatchObject({ ok: false, code: "maintainer_tool_refused" });
   const result = claimMaintenanceRun({ project, now: Date.now(), intervalHours: 3, seat: { conversationId: "fixture-seat", seatEpoch: 1 }, repoDir: "/fixtures/repository" }); if (!result.claimed) throw new Error("claim expected");
   patchMaintenanceRun(result.run.runId, { conversationId: worker, state: "running" });
-  const created = await call("create_task", { project, text: "Перевірка дошки", details: "fixture new task", icon: "brush-cleaning", color: "slate" }); expect(created.ok).toBe(true);
+  const created = await call("create_task", withTaskDue({ project, text: "Перевірка дошки", details: "fixture new task", icon: "brush-cleaning", color: "slate" })); expect(created.ok).toBe(true);
   const task = loadTasks()[0];
   expect(await call("update_task", { taskId: task.id, board: "hidden" })).toMatchObject({ ok: false, code: "maintainer_delete_refused" });
   expect(await call("update_task", { taskId: task.id, removeLine: { index: 0 } })).toMatchObject({ ok: false, code: "maintainer_delete_refused" });
@@ -48,7 +49,7 @@ test("durable maintainer role fences writes on the service wire, independent of 
   }
   expect(readMaintenanceRun(result.run.runId)).toBeNull();
   expect(await call("update_task", { taskId: task.id, text: "Після retention" })).toMatchObject({ ok: false, code: "maintainer_run_ended" });
-  expect(await call("create_task", { project, text: "Після retention" })).toMatchObject({ ok: false, code: "maintainer_run_ended" });
+  expect(await call("create_task", withTaskDue({ project, text: "Після retention" }))).toMatchObject({ ok: false, code: "maintainer_run_ended" });
 });
 test("builder retains normal task writes", async () => {
   const id = ["conversation", "fixture-builder"].join("_");

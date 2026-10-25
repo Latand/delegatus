@@ -22,10 +22,16 @@ const read = () => {
     }
   }
 };
+// An enclosing portable guardian may stop this guardian after the test dies.
+// Finish its recorded ledger before exiting; a default TERM would strand the
+// children whose short-lived parent the enclosing poll never observed.
+let interrupted = false;
+process.on("SIGTERM", () => { interrupted = true; });
+process.on("SIGINT", () => { interrupted = true; });
 let expired = false;
 const bound = setTimeout(() => { expired = true; }, 15 * 60 * 1000);
 try {
-  while (!expired && processIdentityStatus(owner) === "alive" && !procBackend.processExited(owner.pid) && !fs.existsSync(`${ledger}.done`)) {
+  while (!interrupted && !expired && processIdentityStatus(owner) === "alive" && !procBackend.processExited(owner.pid) && !fs.existsSync(`${ledger}.done`)) {
     read(); await Bun.sleep(100);
   }
   read();
@@ -36,7 +42,7 @@ try {
       try { process.kill(identity.pid, signal); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
     }
     const deadline = Date.now() + 1_000;
-    while (Date.now() < deadline && [...owned.values()].some(identity => processIdentityStatus(identity) === "alive")) await Bun.sleep(20);
+    while (!(interrupted && signal === "SIGTERM") && Date.now() < deadline && [...owned.values()].some(identity => processIdentityStatus(identity) === "alive")) await Bun.sleep(20);
     read();
   }
   if ([...owned.values()].some(identity => processIdentityStatus(identity) === "alive")) throw new Error("owned test child guardian could not end an owned process");

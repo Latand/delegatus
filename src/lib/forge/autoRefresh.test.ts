@@ -78,8 +78,8 @@ const green = (name: string): Check => ({ name, status: "COMPLETED", conclusion:
 const red = (name: string): Check => ({ name, status: "COMPLETED", conclusion: "FAILURE" });
 
 /** A fake GitHub: pull requests, commits, the base's required contexts, and
-    what each `update-branch` does to its pull request. */
-function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: string[]; lanes: Pipeline[]; prs: PullRequest[]; tasks?: string[] }) {
+    strict-base changes and owned refresh delivery; GitHub updates are refused. */
+function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: string[]; lanes: Pipeline[]; prs: PullRequest[]; tasks?: string[]; strict?: boolean }) {
   let clock = T0;
   const calls: string[][] = [];
   const pipelines = new Map(options.lanes.map((pipeline) => [pipeline.id, structuredClone(pipeline)]));
@@ -88,7 +88,6 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
   const commits = new Map<string, { parents: string[]; committer: string }>();
   const tasks = new Map((options.tasks ?? []).map((id) => [id, "assigned"]));
   let setting: MergeOnReviewSetting = { enabled: true, changedAt: iso(T0 - 3_600_000), changedBy: "operator", ...options.setting };
-  let onUpdate: ((pr: PullRequest) => void) | null = null;
   let mergeRefusal: string | null = null;
   let baseTip = MAIN_1;
   let cached: PullRequestState | null = null;
@@ -126,14 +125,7 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
     if (args[0] === "api" && /\/pulls\/\d+\/reviews/.test(args[1] ?? "")) return "";
     if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/branches/`)) return args.at(-1) === ".commit.sha" ? baseTip : JSON.stringify(options.required ?? []);
     if (args[0] === "repo" && args[1] === "view") return JSON.stringify({ squashMergeAllowed: true, mergeCommitAllowed: true, rebaseMergeAllowed: true });
-    if (args[0] === "api" && args[1] === "-X" && args[2] === "PUT") {
-      const number = Number(/pulls\/(\d+)\/update-branch/.exec(args[3]!)![1]);
-      const pr = prs.get(number)!;
-      const expected = args[5]!.replace("expected_head_sha=", "");
-      if (expected !== pr.head) throw fail("gh: expected head sha didn’t match current head ref. (HTTP 422)");
-      onUpdate?.(pr);
-      return JSON.stringify({ message: "Updating pull request branch." });
-    }
+    if (args[0] === "api" && args[1] === "-X" && args[2] === "PUT") throw new Error("GitHub update-branch is forbidden");
     if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/commits/`)) {
       const sha = args[1].split("/").at(-1)!;
       return JSON.stringify(commits.get(sha) ?? { parents: [], committer: "someone" });
@@ -144,6 +136,10 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
       const match = args[args.indexOf("--match-head-commit") + 1];
       if (match !== pr.head) throw fail("GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)");
       pr.state = "MERGED";
+      if (options.strict) {
+        baseTip = MAIN_2;
+        for (const peer of prs.values()) if (peer.state === "OPEN") peer.mergeStateStatus = "BEHIND";
+      }
       return "";
     }
     throw new Error(`unexpected gh ${args.join(" ")}`);
@@ -163,8 +159,10 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
         refreshed = lane(`refresh-${byKey.size + 1}`);
         refreshed.state = "running";
         refreshed.taskIds = request.taskIds ?? [];
-        refreshed.delivery = { ...structuredClone(optionsLaneDelivery), active: true, ownerId: refreshed.id };
+        refreshed.delivery = { ...structuredClone(optionsLaneDelivery), active: true, ownerId: refreshed.id,
+          target: { ...optionsLaneDelivery.target, ...request.delivery, branch: request.delivery!.branch } };
         refreshed.refreshOf = { pipelineId: options.refreshOf.pipelineId, base: options.refreshOf.base };
+        refreshed.creationRequest = structuredClone(options.creationRequest);
         refreshed.srcConversationId = options.refreshOf.lineage.srcConversationId;
         byKey.set(options.creationRequest.key, refreshed);
         pipelines.set(refreshed.id, refreshed);
@@ -206,6 +204,7 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
     setBase: (value: string) => { baseTip = value; },
     setCreateMode: (value: typeof createMode) => { createMode = value; },
     add: (value: Pipeline) => { pipelines.set(value.id, value); },
+    remove: (id: string) => { pipelines.delete(id); },
     calls,
     prs,
     commits,
@@ -213,7 +212,6 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
     pipeline: (id: string) => pipelines.get(id)!,
     taskStatus: (id: string) => tasks.get(id),
     setSetting: (next: Partial<MergeOnReviewSetting>) => { setting = { ...setting, ...next }; },
-    onUpdate: (handler: (pr: PullRequest) => void) => { onUpdate = handler; },
     refuseMerges: (message: string) => { mergeRefusal = message; },
     /** Every call that went through the App write seam, and how to refuse them. */
     writes,
@@ -322,7 +320,7 @@ test("a semantic conflict names its hunk on the successor and keeps the PR open"
   h.pipeline("refresh-1").state = "needs_decision";
   h.pipeline("refresh-1").stateDetail = "src/example.ts:12 @@ -9,6 +9,7 @@ changes either side's behaviour";
   await h.run(30 * 60_000);
-  expect(h.merge("finished")?.state).toBe("refreshing");
+  expect(h.merge("finished")).toMatchObject({ state: "blocked", reason: h.pipeline("refresh-1").stateDetail });
   expect(h.pipeline("refresh-1").srcConversationId).toBe("seat-one");
   expect(h.creates).toHaveLength(1);
   expect(h.writes).toHaveLength(0);
@@ -598,6 +596,28 @@ test.each(["main", "release/stable"])("a PR successor names the forge base and i
 });
 
 
+test("a reserved refresh replays the same source and target after branch metadata changes", async () => {
+  const value = finished();
+  value.baseBranch = "topic";
+  const h = harness({ lanes: [value], prs: [{ ...conflicting(), base: "release/stable" }] });
+  h.setCreateMode("throw");
+  await h.sweep();
+  const reservation = structuredClone(h.merge("finished")!.refresh!);
+  const request = structuredClone(h.creates[0]!.request as CreatePipelineRequest);
+  h.pipeline("finished").baseBranch = "another-checkout-base";
+  h.prs.get(11)!.base = "another-integration-base";
+  h.setBase(MAIN_2);
+  h.setCreateMode("ok");
+  await h.sweep();
+  expect(h.creates).toHaveLength(2);
+  expect(h.creates[1]!.request).toEqual(request);
+  expect(h.creates[1]!.options).toEqual(h.creates[0]!.options);
+  expect(h.merge("finished")!.refresh).toEqual({ ...reservation, pipelineId: "refresh-1" });
+  expect(request.baseBranch).toBe("release/stable");
+  expect(request.stages[0]!.prompt).toContain("Merge current origin/release/stable into this PR's delivery branch refs/heads/topic");
+  expect(request.spec).toContain(`base release/stable at ${MAIN_1}; reviewed head ${HEAD_A}; delivery refs/heads/topic`);
+});
+
 test("a legacy reservation replays with the forge base after a failed creation", async () => {
   const value = finished();
   value.baseBranch = "topic";
@@ -644,4 +664,317 @@ test("progress observed before write admission cannot advance a reopened success
   await h.sweep();
   expect(h.merge("finished")?.state).toBe("refreshing");
   expect(h.writes).toHaveLength(0);
+});
+
+
+test("strict protection refreshes the next PR locally and waits for checks on its new head", async () => {
+  const first = finished(), second = finished();
+  second.id = "second";
+  second.closedAt = iso(T0);
+  second.delivery!.ownerId = second.id;
+  second.delivery!.target = { ...second.delivery!.target, branch: "refs/heads/second", pr: 22 };
+  const oldChecks = [green("privacy-tracker-audit"), green("privacy-tracker-audit"), green("typecheck")]
+    .map(check => ({ ...check, startedAt: iso(T0 - 7_200_000) }));
+  const h = harness({ strict: true, required: ["privacy-tracker-audit", "typecheck"], lanes: [first, second],
+    prs: [openPr(11, { checks: structuredClone(oldChecks) }), openPr(22, { checks: structuredClone(oldChecks) })] });
+  await h.run(5 * 60_000, () => h.merges().length === 1);
+  expect(h.merges().map(args => args[2])).toEqual(["11"]);
+  expect(h.prs.get(22)!.mergeStateStatus).toBe("BEHIND");
+  await h.sweep();
+  expect(h.creates).toHaveLength(1);
+  expect(h.merge("second")).toMatchObject({ state: "refreshing", refresh: { base: MAIN_2, head: HEAD_A, pipelineId: "refresh-1" } });
+  const request = h.creates[0]!.request as CreatePipelineRequest;
+  expect(request.delivery).toMatchObject({ branch: "refs/heads/second", pr: 22 });
+  expect(request.stages[0]!.prompt).toContain("machine identity");
+  expect(request.stages[0]!.prompt).toContain("Never rebase, force-push or call GitHub update-branch");
+  expect(h.updates()).toHaveLength(0);
+  const refreshedHead = "b".repeat(40);
+  Object.assign(h.pipeline("refresh-1"), { state: "completed", lastPassedCommit: refreshedHead });
+  h.pipeline("refresh-1").delivery!.active = false;
+  Object.assign(h.prs.get(22)!, { head: refreshedHead, mergeStateStatus: "CLEAN", checks: [] });
+  await h.sweep();
+  expect(h.merge("refresh-1")).toMatchObject({ state: "waiting-checks", head: refreshedHead, headSeenAt: iso(h.now()) });
+  h.advance(3 * 60_000);
+  await h.sweep();
+  expect(h.merges()).toHaveLength(1);
+  h.prs.get(22)!.checks = [green("privacy-tracker-audit"), { name: "privacy-tracker-audit", status: "IN_PROGRESS", conclusion: "" }, green("typecheck")];
+  await h.run(2 * MERGE_POLL_MS);
+  expect(h.merges()).toHaveLength(1);
+  h.prs.get(22)!.checks = structuredClone(oldChecks);
+  await h.run(3 * MERGE_POLL_MS, () => h.merges().length === 2);
+  expect(h.merges().map(args => [args[2], args.at(-1)])).toEqual([["11", HEAD_A], ["22", refreshedHead]]);
+  expect(h.updates()).toHaveLength(0);
+  expect(h.writes.every(write => write.args[0] === "pr" && write.args[1] === "merge")).toBe(true);
+});
+
+test.each(["missing delivery", "active owner", "disabled", "changed during base read", "retargeted delivery", "review changed", "changed during reservation"])("BEHIND never falls back to update-branch when refresh is %s", async mode => {
+  const value = finished();
+  if (mode === "missing delivery") delete value.delivery;
+  const h = harness({ lanes: [value], prs: [openPr(11, { mergeStateStatus: "BEHIND" })] });
+  if (mode === "active owner") {
+    const owner = finished(); owner.id = "active"; owner.state = "running"; h.add(owner);
+  }
+  if (mode === "disabled") delete (h.ports as Partial<typeof h.ports>).startRefresh;
+  if (mode === "changed during reservation") {
+    const mutate = h.ports.mutate;
+    h.ports.mutate = async (id, change) => {
+      if (h.merge(id)) h.pipeline(id).delivery!.active = true;
+      return mutate(id, change);
+    };
+  }
+  if (["changed during base read", "retargeted delivery", "review changed"].includes(mode)) {
+    const run = h.ports.run;
+    h.ports.run = async args => {
+      const result = await run(args);
+      if (args.at(-1) === ".commit.sha") {
+        if (mode === "retargeted delivery") h.pipeline("finished").delivery!.target.branch = "refs/heads/changed";
+        else if (mode === "review changed") h.pipeline("finished").runs[1]!.attempts[0]!.state = "failed";
+        else h.pipeline("finished").delivery!.active = true;
+      }
+      return result;
+    };
+  }
+  await h.sweep();
+  expect(h.creates).toHaveLength(0);
+  expect(h.writes).toHaveLength(0);
+  expect(h.merge("finished")?.state).toBe("blocked");
+  expect(h.merge("finished")?.reason).toContain("Delegatus could not start the refresh");
+});
+
+function queuedRefreshes() {
+  const lanes = Array.from({ length: 12 }, (_, index) => {
+    const value = finished();
+    value.id = `queued-${index}`;
+    value.closedAt = iso(T0 + index);
+    value.delivery!.ownerId = value.id;
+    value.delivery!.target = { ...value.delivery!.target, branch: `refs/heads/topic-${index}`, pr: index + 11 };
+    return value;
+  });
+  return harness({ lanes, prs: lanes.map((_, index) => openPr(index + 11, { mergeStateStatus: "BEHIND" })) });
+}
+
+test("a main move refreshes only the queue head across repeated sweeps", async () => {
+  const h = queuedRefreshes();
+  await h.run(5 * MERGE_POLL_MS);
+  h.setBase(MAIN_2);
+  await h.run(5 * MERGE_POLL_MS);
+  expect(h.creates).toHaveLength(1);
+  expect(h.merge("queued-1")).toMatchObject({ state: "queued", reviewedHead: HEAD_A, head: null });
+  expect(h.calls.filter(args => args[0] === "pr" && args[1] === "view").every(args => args[2] === "11")).toBe(true);
+});
+
+test("a merged head releases the next refresh", async () => {
+  const h = queuedRefreshes();
+  await h.sweep();
+  h.pipeline("refresh-1").state = "completed";
+  h.pipeline("refresh-1").merge = { ...h.merge("queued-0")!, state: "merged" };
+  await h.sweep();
+  expect(h.creates).toHaveLength(2);
+  expect(h.merge("queued-1")?.state).toBe("refreshing");
+});
+
+test("two refresh slots are honoured and larger limits are capped", async () => {
+  for (const concurrency of [2, 20]) {
+    resetAutoMergeForTests();
+    const h = queuedRefreshes();
+    Object.assign(h.ports, { refreshConcurrency: concurrency });
+    await h.run(5 * MERGE_POLL_MS);
+    expect(h.creates).toHaveLength(2);
+  }
+});
+
+test.each([0, -1, Number.NaN, 1.9])("refresh concurrency %s retains one head slot", async refreshConcurrency => {
+  const h = queuedRefreshes();
+  Object.assign(h.ports, { refreshConcurrency });
+  await h.run(5 * MERGE_POLL_MS);
+  expect(h.creates).toHaveLength(1);
+  expect(h.merge("queued-1")).toMatchObject({ state: "queued", reviewedHead: HEAD_A, head: null });
+});
+
+test.each(["closed", "needs_decision"] as const)("a %s head refresh retains its reason and releases the next PR", async state => {
+  const h = queuedRefreshes();
+  await h.sweep();
+  h.pipeline("refresh-1").state = state;
+  h.pipeline("refresh-1").stateDetail = "Resolution needs a decision";
+  await h.sweep();
+  expect(h.merge("queued-0")).toMatchObject({ state: "blocked", reason: state === "closed" ? MERGE_REASONS.refreshClosed : "Resolution needs a decision" });
+  expect(h.creates).toHaveLength(2);
+});
+
+for (const refusal of ["hidden", "setting moved"] as const) for (const refreshConcurrency of [1, 2]) {
+  test(`a completed refresh refused admission by ${refusal} releases the next PR at concurrency ${refreshConcurrency}`, async () => {
+    const h = queuedRefreshes();
+    Object.assign(h.ports, { refreshConcurrency });
+    await h.sweep();
+    const child = h.pipeline("refresh-1");
+    child.state = "completed";
+    child.closedAt = iso(T0);
+    child.delivery!.active = false;
+    if (refusal === "hidden") child.hiddenAt = iso(T0);
+    else h.setSetting({ changedAt: iso(T0 + 1) });
+
+    await h.sweep();
+    const stoppedAt = h.merge("queued-0")!.updatedAt;
+    await h.run(5 * MERGE_POLL_MS);
+    expect(h.merge("refresh-1")).toBeUndefined();
+    expect(h.merge("queued-0")).toMatchObject({ state: "blocked", reviewedHead: HEAD_A,
+      reason: `Refresh was not admitted: ${refusal === "hidden" ? "lane is hidden" : "lane did not complete after the merge setting was enabled"}` });
+    expect(h.creates).toHaveLength(refreshConcurrency + 1);
+    expect((h.creates[refreshConcurrency]!.request as CreatePipelineRequest).delivery?.pr).toBe(11 + refreshConcurrency);
+    expect(h.merge(`queued-${refreshConcurrency}`)?.state).toBe("refreshing");
+    expect(h.merge(`queued-${refreshConcurrency + 1}`)).toMatchObject({ state: "queued", reviewedHead: HEAD_A, head: null });
+    expect(h.merge("queued-0")!.updatedAt).toBe(stoppedAt);
+    expect(h.writes).toHaveLength(0);
+  });
+}
+
+for (const change of ["visible", "running", "different base"] as const) test(`a completed refresh admission refusal is rechecked under the original's lock: ${change}`, async () => {
+  const h = queuedRefreshes();
+  await h.sweep();
+  const child = h.pipeline("refresh-1");
+  child.state = "completed";
+  child.delivery!.active = false;
+  child.hiddenAt = iso(T0);
+  const mutate = h.ports.mutate;
+  let raced = false;
+  h.ports.mutate = async (id, apply) => {
+    if (id === "queued-0" && !raced) {
+      raced = true;
+      if (change === "visible") h.pipeline(child.id).hiddenAt = null;
+      else if (change === "running") h.pipeline(child.id).state = "running";
+      else h.pipeline(child.id).refreshOf!.base = MAIN_2;
+    }
+    return mutate(id, apply);
+  };
+  await h.sweep();
+  expect(raced).toBe(true);
+  expect(h.merge("queued-0")).toMatchObject({ state: "refreshing", reason: null });
+  expect(h.creates).toHaveLength(1);
+  expect(h.writes).toHaveLength(0);
+});
+
+test("a completed refresh awaiting admission keeps its slot and acquires its own check clock", async () => {
+  const h = queuedRefreshes();
+  await h.sweep();
+  const child = h.pipeline("refresh-1");
+  child.state = "completed";
+  child.delivery!.active = false;
+  child.lastPassedCommit = "b".repeat(40);
+  Object.assign(h.prs.get(11)!, { head: child.lastPassedCommit, mergeStateStatus: "CLEAN", checks: [] });
+  const mutate = h.ports.mutate;
+  let holdAdmission = true;
+  h.ports.mutate = async (id, apply) => id === child.id && holdAdmission ? false : mutate(id, apply);
+  await h.sweep();
+  expect(h.merge(child.id)).toBeUndefined();
+  expect(h.merge("queued-0")?.state).toBe("refreshing");
+  expect(h.creates).toHaveLength(1);
+  holdAdmission = false;
+  await h.run(2 * MERGE_POLL_MS);
+  expect(h.merge(child.id)).toMatchObject({ state: "waiting-checks", reviewedHead: child.lastPassedCommit });
+  expect(h.merge("queued-0")?.state).toBe("waiting-checks");
+  expect(h.merge("queued-1")).toMatchObject({ state: "queued", reviewedHead: HEAD_A, head: null });
+  expect(h.creates).toHaveLength(1);
+  expect(h.writes).toHaveLength(0);
+});
+
+test.each(["closed", "needs_decision"] as const)("a hidden original releases its %s refresh with the failure reason", async state => {
+  const h = queuedRefreshes();
+  await h.sweep();
+  h.pipeline("queued-0").hiddenAt = iso(T0);
+  h.pipeline("refresh-1").state = state;
+  h.pipeline("refresh-1").stateDetail = "Resolution needs a decision";
+  await h.run(5 * MERGE_POLL_MS);
+  expect(h.merge("queued-0")).toMatchObject({ state: "blocked",
+    reason: state === "closed" ? MERGE_REASONS.refreshClosed : "Resolution needs a decision" });
+  expect(h.creates).toHaveLength(2);
+  expect((h.creates[1]!.request as CreatePipelineRequest).delivery?.pr).toBe(12);
+  expect(h.merge("queued-2")?.head).toBeNull();
+});
+
+test.each([1, 2])("closed originals retain their active refresh slots at concurrency %s", async refreshConcurrency => {
+  const h = queuedRefreshes();
+  Object.assign(h.ports, { refreshConcurrency });
+  await h.sweep();
+  for (let i = 0; i < refreshConcurrency; i++) h.pipeline(`queued-${i}`).state = "closed";
+  await h.run(5 * MERGE_POLL_MS);
+  expect(h.creates).toHaveLength(refreshConcurrency);
+  expect(h.merge(`queued-${refreshConcurrency}`)?.head).toBeNull();
+});
+
+test("an active refresh outside the head window still consumes capacity", async () => {
+  const h = queuedRefreshes();
+  await h.sweep();
+  h.pipeline("queued-0").merge!.requestedAt = iso(T0 + 100);
+  await h.run(5 * MERGE_POLL_MS);
+  expect(h.creates).toHaveLength(1);
+  expect(h.merge("queued-1")?.head).toBeNull();
+});
+
+test("an archived original preserves its completed refresh's queue position", async () => {
+  const h = queuedRefreshes();
+  await h.sweep();
+  const archived = structuredClone(h.pipeline("queued-0"));
+  h.remove(archived.id);
+  const ancestryReads: string[][] = [];
+  Object.assign(h.ports, { loadRefreshAncestors: (ids: readonly string[]) => {
+    ancestryReads.push([...ids]);
+    return ids.includes(archived.id) ? [archived] : [];
+  } });
+  const child = h.pipeline("refresh-1");
+  child.state = "completed";
+  child.closedAt = iso(T0 + 10 * MERGE_POLL_MS);
+  child.delivery!.active = false;
+  child.lastPassedCommit = "b".repeat(40);
+  Object.assign(h.prs.get(11)!, { head: child.lastPassedCommit, mergeStateStatus: "CLEAN", checks: [] });
+  h.advance(MERGE_POLL_MS);
+  await h.sweep();
+  expect(ancestryReads).toEqual([[archived.id]]);
+  expect(h.merge("refresh-1")?.state).toBe("waiting-checks");
+  expect(h.creates).toHaveLength(1);
+  expect(h.merge("queued-1")?.head).toBeNull();
+});
+
+test("a refreshed carrier keeps the head slot when main moves again", async () => {
+  const h = queuedRefreshes();
+  await h.sweep();
+  const head = "b".repeat(40);
+  Object.assign(h.pipeline("refresh-1"), { state: "completed", lastPassedCommit: head });
+  h.pipeline("refresh-1").delivery!.active = false;
+  Object.assign(h.prs.get(11)!, { head, mergeStateStatus: "CLEAN", checks: [] });
+  await h.sweep();
+  h.setBase(MAIN_2);
+  h.prs.get(11)!.mergeStateStatus = "BEHIND";
+  h.advance(MERGE_POLL_MS);
+  await h.sweep();
+  expect(h.creates).toHaveLength(2);
+  expect((h.creates[1]!.request as CreatePipelineRequest).delivery?.pr).toBe(11);
+  expect(h.merge("queued-1")?.state).toBe("queued");
+});
+
+test("a second ready slot cannot merge ahead of the refreshing head", async () => {
+  const h = queuedRefreshes();
+  Object.assign(h.ports, { refreshConcurrency: 2 });
+  h.prs.get(12)!.mergeStateStatus = "CLEAN";
+  await h.run(5 * MERGE_POLL_MS);
+  expect(h.creates).toHaveLength(1);
+  expect(h.merges()).toHaveLength(0);
+  expect(h.merge("queued-1")).toMatchObject({ state: "queued", reason: null });
+  expect(h.merge("queued-2")?.head).toBeNull();
+});
+
+test("persisted refresh reservations replay only within the head limit", async () => {
+  const h = queuedRefreshes();
+  h.setCreateMode("throw");
+  await h.sweep();
+  const reservation = structuredClone(h.merge("queued-0")!.refresh!);
+  for (let index = 1; index < 12; index++) {
+    const merge = h.pipeline(`queued-${index}`).merge!;
+    merge.state = "refreshing";
+    merge.refresh = { ...reservation, key: `refresh-reservation-${index}` };
+  }
+  h.setCreateMode("ok");
+  await h.run(5 * MERGE_POLL_MS);
+  expect(h.creates).toHaveLength(2); // First failed call, then the head replay.
+  expect(h.merge("queued-0")!.refresh!.pipelineId).toBe("refresh-1");
+  expect(h.merge("queued-1")!.refresh!.pipelineId).toBeNull();
 });

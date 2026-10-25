@@ -38,10 +38,10 @@ for (const [status, code, mapped, fallback] of [
   expect(await sendAsClone(relay, "fixture-clone", input())).toMatchObject({ kind: "refused", code: mapped, fallback,
     ...(status === 429 ? { retryAfterSeconds: 7 } : {}) });
 });
-for (const code of ["send_uncertain", "idempotency_conflict", "unrecognised"])
+for (const code of ["send_uncertain", "idempotency_conflict", "unrecognised"] as const)
   test(`409/${code} stops without fallback`, async () => {
     const relay = await server(() => ({ status: 409, body: { error: { code } } }));
-    expect(await sendAsClone(relay, "fixture-clone", input())).toEqual({ kind: "uncertain" });
+    expect(await sendAsClone(relay, "fixture-clone", input())).toEqual({ kind: "uncertain", ...(code === "unrecognised" ? {} : { cause: code }) });
   });
 
 for (const first of ["drop", "500", "in-progress"] as const) test(`${first} retries with the original key and accepts replay`, async () => {

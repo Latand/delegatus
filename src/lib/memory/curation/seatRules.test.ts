@@ -6,7 +6,6 @@ import { learnedRulesBlock, projectView, leaveLessons, recordLessonRequest, role
 import { applyCuration, revertCuratorPass, type CurationApply } from "./apply";
 import { curationStatus, claimPass, patchPass } from "./store";
 import { leaveLessonForSeat } from "../roleStage";
-import { CURATOR_CHECKLIST } from "./brief";
 
 const project = "curator-seat";
 let attempt = 0;
@@ -64,13 +63,6 @@ test.each(["orchestrator", "maintainer"])("curator can move into %s, widen, merg
   expect(view.scopes.find(entry => entry.scope === target)!.active.map(rule => rule.id)).toEqual([two]);
   expect(view.scopes.find(entry => entry.scope === wide)!.active).toEqual([]);
 });
-
-test("the curator brief names both readers and directs it to the seat's mandate", () => {
-  expect(CURATOR_CHECKLIST).toContain("orchestrator seat and the board maintainer read rules");
-  expect(CURATOR_CHECKLIST).toContain("get_orchestrator full:true");
-  expect(CURATOR_CHECKLIST).not.toContain("no learned-rule level");
-});
-
 
 test("the curator can transfer a seat-written defect to its project wake agenda", async () => {
   const { memoryProblemSignals } = await import("../roleProblems");

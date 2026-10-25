@@ -214,7 +214,7 @@ const segments = (scope: ParentNode) => [...scope.querySelectorAll<HTMLElement>(
 const segmentKeys = (scope: ParentNode) => segments(scope).map((segment) => segment.dataset.openAgent);
 const readerOf = (host: HTMLElement, key: string) => [...host.querySelectorAll<HTMLElement>("[data-kanban-reader]")].find((reader) => reader.dataset.kanbanReader === key) ?? null;
 const jump = (scope: ParentNode, key: string) => segments(scope).find((segment) => segment.dataset.openAgent === key)?.querySelector<HTMLElement>("[data-open-agent-jump]");
-/* By identity: Bun's toBe passes two distinct happy-dom elements. */
+/* Focus on this very element, never two nulls. */
 const isFocused = (element: Element | null) => element !== null && document.activeElement === element;
 const remembered = () => (JSON.parse(localStorage.getItem(`${READER_STORAGE_PREFIX}fixture`) ?? "[]") as Array<{ key: string; folded: boolean }>).map((reader) => reader.key);
 const altKey = (code: "KeyJ" | "KeyK", target: EventTarget = document) => flushSync(() => {
@@ -317,6 +317,9 @@ test("a row brings its agent into the same reader and focuses it; the board unde
   scrolledTo.length = 0;
   click(jump(host, "conversation_plain-1"));
   const reader = await showing(host, "conversation_plain-1");
+  /* Over the mounted board an element comparison used to pass with the wrong
+     element (#2182); test-helpers/domInspect.ts keeps the failure. */
+  expect(() => expect(document.body).toBe(reader as never)).toThrow("Received: <body>");
   expect(host.querySelector("[data-agent-window-frame]")).toBe(frame);
   expect(isFocused(reader)).toBe(true);
   expect(jump(host, "conversation_plain-1")?.getAttribute("aria-current")).toBe("true");

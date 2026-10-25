@@ -117,7 +117,8 @@ function customPrompt(roles: readonly MappingCatalogItem[], row: RowKey): boolea
 }
 
 function same(left: RoleConfig | null, right: RoleConfig | null): boolean {
-  return !!left && !!right && left.engine === right.engine && left.model === right.model && left.effort === right.effort && left.serviceTier === right.serviceTier;
+  return !!left && !!right && left.engine === right.engine && left.model === right.model && left.effort === right.effort && left.serviceTier === right.serviceTier
+    && (left.agentMemoryMaxBytes ?? null) === (right.agentMemoryMaxBytes ?? null);
 }
 
 /** The request body for a set of row changes; `null` resets a row. */
@@ -271,7 +272,8 @@ function RowControls({ row, config, shipped, reset, promptCustom, statuses, layo
       value={config.model}
       onChange={(event) => {
         const model = event.target.value;
-        onChange({ engine: config.engine, model, effort: clampEffortToScale(config.engine, model, config.effort) ?? config.effort });
+        onChange({ engine: config.engine, model, effort: clampEffortToScale(config.engine, model, config.effort) ?? config.effort,
+          ...(config.agentMemoryMaxBytes != null ? { agentMemoryMaxBytes: config.agentMemoryMaxBytes } : {}) });
       }}
       className={SELECT}
     >

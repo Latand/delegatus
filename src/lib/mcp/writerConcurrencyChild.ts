@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import fs from "node:fs";
 import path from "node:path";
 import { NextRequest } from "next/server";
@@ -229,7 +230,7 @@ if (kind === "task" && operation === "create" && writer === "http") {
 } else if (kind === "task" && operation === "create" && writer === "mcp") {
   const input = { project: "viewer", text: `${writer} task`, placement: "unplaced" as const, clientRequestId: `${writer}-task-request` };
   const { viewerMcpBindings } = await import("./bindings");
-  await viewerMcpBindings().create_task(input);
+  await viewerMcpBindings().create_task(withTaskDue(input));
 } else if (kind === "task" && operation === "update" && writer === "http") {
   const { PATCH } = await import("@/app/api/tasks/[id]/route");
   const response = await PATCH(new NextRequest("http://127.0.0.1/api/tasks/task-http", {

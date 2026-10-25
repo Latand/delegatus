@@ -9,6 +9,22 @@ test("reserves the core budget and bounds each agent at launch", () => {
   expect(agentMemoryCeiling(16 * GIB, 6).limitBytes).toBe(4 * GIB);
 });
 
+test("scoped caps resolve installation then project then role then stage and clamp to the shared budget", () => {
+  const env = { LLV_AGENT_MEMORY_MAX: "3G", LLV_AGENT_MEMORY_RESERVE: "8G" };
+  for (const [scopes, requestedBytes, source] of [
+    [{}, 3 * GIB, "installation"],
+    [{ project: 5 * GIB }, 5 * GIB, "project"],
+    [{ project: 5 * GIB, role: 6 * GIB }, 6 * GIB, "role"],
+    [{ project: 5 * GIB, role: 6 * GIB, stage: 12 * GIB }, 12 * GIB, "stage"],
+    [{ project: 5 * GIB, role: null, stage: null }, 5 * GIB, "project"],
+  ] as const) {
+    const result = agentMemoryCeiling(16 * GIB, 2, env, scopes);
+    expect(result.limitBytes).toBe(Math.min(requestedBytes, 8 * GIB));
+    expect(result).toMatchObject({ reserveBytes: 8 * GIB, budgetBytes: 8 * GIB,
+      requestedBytes, source, clamped: requestedBytes > 8 * GIB });
+  }
+});
+
 import fs from "node:fs";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
@@ -77,6 +93,27 @@ function fakeCell() {
   cell.attach(123);
   return { cell, file, slice, calls, notify: () => notify(), dispose: () => { cell.close(); fs.rmSync(root, { recursive: true, force: true }); } };
 }
+test("launch population varies automatic caps while repeated descendant OOMs leave the session running", () => {
+  // The launch population, rather than the engine or role, explains these caps.
+  expect([1, 5, 7, 10, 12].map((liveAgents) => agentMemoryCeiling(30 * GIB, liveAgents).limitBytes / GIB))
+    .toEqual([12.5, 10, 7, 5, 4]);
+  expect(agentMemoryCeiling(30 * GIB, 12, {}, { project: 6 * GIB, role: 8 * GIB, stage: 12 * GIB }))
+    .toMatchObject({ limitBytes: 12 * GIB, requestedBytes: 12 * GIB, source: "stage", clamped: false });
+
+  const fixture = fakeCell();
+  try {
+    for (let kills = 1; kills <= 3; kills++) {
+      fs.writeFileSync(fixture.file, `oom ${kills}\noom_kill ${kills}\n`);
+      fixture.notify();
+      expect(fixture.cell.snapshot()).toMatchObject({ kills, lastKill: { limit: "agent", fatal: false } });
+      expect(fixture.cell.fatalMemoryExit).toBe(false);
+      expect(fixture.calls).toEqual([]);
+    }
+    // An orderly session exit after recovering from child failures is not fatal.
+    expect(fixture.cell.settleExit({ expected: true })?.fatal).toBe(false);
+    expect(fixture.calls).toEqual([]);
+  } finally { fixture.dispose(); }
+});
 for (const kind of ["agent", "shared", "system"] as const) test(`fake cgroup attributes ${kind} kills and retains fatal evidence after collection`, () => {
   const fixture = fakeCell();
   try {

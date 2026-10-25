@@ -67,7 +67,9 @@ export function shippedVariantConfig(roleId: RoleId | string, variant: RoleVaria
 export function configForVariant(definition: { id: RoleId; config: RoleConfig; variants?: Partial<Record<RoleVariantId, RoleConfig>> }, params: RoleParamValues | undefined): RoleConfig {
   const variant = variantForParams(definition.id, params);
   if (!variant) return definition.config;
-  return definition.variants?.[variant] ?? shippedVariantConfig(definition.id, variant) ?? definition.config;
+  const config = definition.variants?.[variant] ?? shippedVariantConfig(definition.id, variant) ?? definition.config;
+  return { ...config, ...(config.agentMemoryMaxBytes == null && definition.config.agentMemoryMaxBytes != null
+    ? { agentMemoryMaxBytes: definition.config.agentMemoryMaxBytes } : {}) };
 }
 
 /**

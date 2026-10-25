@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { expect, test } from "bun:test";
 import { registerPipelineTick } from "@/lib/pipelines/controllerSignal";
 registerPipelineTick(async () => {});
@@ -734,7 +735,7 @@ test("create_pipeline publishes the stage contract in its tool definition", asyn
     const stage = stages?.items?.properties;
 
     expect(Object.keys(stage ?? {}).sort()).toEqual([
-      "access", "account", "effort", "engine", "id", "kind", "model", "next", "onFail", "outputs", "prompt", "role", "sandbox", "serviceTier",
+      "access", "account", "agentMemoryMaxBytes", "effort", "engine", "id", "kind", "model", "next", "onFail", "outputs", "prompt", "role", "runtime", "sandbox", "serviceTier",
     ]);
     expect(stage?.kind?.enum).toEqual(["run", "review-loop"]);
     expect(stage?.engine?.enum).toEqual(["claude", "codex"]);
@@ -979,13 +980,13 @@ test("task coordinates publish finite axes and retain pinned-update position sem
       /* update_task's taskId became optional with the first-action refinement
          (#1586): `refine` defaults to the calling conversation's own pending
          task; every other update still needs the id (enforced in the binding). */
-      expect(tool.inputSchema.required?.slice().sort()).toEqual(name === "create_task" ? ["clientRequestId", "project", "text"] : ["clientRequestId"]);
+      expect(tool.inputSchema.required?.slice().sort()).toEqual(name === "create_task" ? ["clientRequestId", "dueAt", "project", "text"] : ["clientRequestId"]);
       if (name === "update_task") {
         const refine = (tool.inputSchema.properties as Record<string, { properties?: Record<string, { type?: string }> }> | undefined)?.refine;
         expect(refine?.properties?.text?.type).toBe("string");
       }
       for (const invalid of [null, {}, { x: 1 }, { y: 2 }, { x: "1", y: 2 }, { x: Infinity, y: 0 }, { x: NaN, y: 0 }]) {
-        const args = { clientRequestId: "invalid-coordinate", project: "fixture-project", text: "task", taskId: "task-fixture", pos: invalid };
+        const args = { ...(name === "create_task" ? withTaskDue({}) : {}), clientRequestId: "invalid-coordinate", project: "fixture-project", text: "task", taskId: "task-fixture", pos: invalid };
         const parsed = TOOL_INPUT_SCHEMAS[name].safeParse(args);
         expect(parsed.success).toBe(false);
         expect(parsed.error?.issues.some(issue => issue.path[0] === "pos")).toBe(true);
@@ -1240,5 +1241,18 @@ test("seat_tick_settings advertises and forwards the independent curation timer"
     expect(result.isError).not.toBe(true);
     expect(received).toMatchObject({ curation: { enabled: false, intervalHours: 12 } });
     expect((await client.callTool({ name: "seat_tick_settings", arguments: { clientRequestId: "curation-invalid", curation: { enabled: "yes" } } })).isError).toBe(true);
+  });
+});
+
+test("Cloud execution choices are available through MCP with strict values", async () => {
+  let received: unknown;
+  await withProtocolClient(inertBindings({ pipeline_checks: async args => { received = args; return { effective: args.execution }; } }), async client => {
+    const tool = (await client.listTools()).tools.find(tool => tool.name === "pipeline_checks");
+    expect(tool).toBeDefined();
+    expect((await client.callTool({ name: "pipeline_checks", arguments: { clientRequestId: "cloud-choice", pipelineId: "lane-fixture", scope: "lane", execution: "local" } })).isError).not.toBe(true);
+    expect(received).toMatchObject({ scope: "lane", execution: "local" });
+    expect((await client.callTool({ name: "pipeline_checks", arguments: { clientRequestId: "cloud-stage-choice", pipelineId: "lane-fixture", scope: "stage", stageId: "verify", execution: "cloud" } })).isError).not.toBe(true);
+    expect(received).toMatchObject({ scope: "stage", stageId: "verify", execution: "cloud" });
+    expect((await client.callTool({ name: "pipeline_checks", arguments: { clientRequestId: "cloud-invalid", pipelineId: "lane-fixture", scope: "lane", execution: "invalid" } })).isError).toBe(true);
   });
 });

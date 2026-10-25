@@ -61,7 +61,7 @@ test("maintainer picker catalogue choices write the shared row and resolve for l
 
 test("roles route returns all merged role definitions with scaffold previews and shipped runtimes", async () => {
   const body = await (await GET()).json() as Catalog;
-  expect(body.schemaVersion).toBe(5);
+  expect(body.schemaVersion).toBe(6);
   expect(body.roles.map((role) => role.id)).toEqual([
     "orchestrator", "reviewer", "verifier", "builder", "architect",
     "cleaner", "prod-auditor", "deployer", "merger", "maintainer", "curator", "issue-reporter", "visual-critic",
@@ -226,4 +226,18 @@ test("a stored fix row writes the file at schema 4", async () => {
   const row = { engine: "claude" as const, model: "opus", effort: "medium" };
   expect((await put({ overrides: { builder: { variants: { "frontend-fixes": row } } } })).status).toBe(200);
   expect(loadRoleOverrides()).toEqual({ schemaVersion: 4, overrides: { builder: { variants: { "frontend-fixes": row } } } });
+});
+
+
+test("role memory caps round trip through the mapping route and invalid writes preserve the row", async () => {
+  const base = { engine: "codex", model: "gpt-6.1-sol", effort: "high" };
+  const update = (cap: unknown) => put({ overrides: { builder: { config: { ...base, agentMemoryMaxBytes: cap } } } });
+  expect((await update(6 * 2 ** 30)).status).toBe(200);
+  const before = JSON.stringify(loadRoleOverrides());
+  for (const invalid of [0, "8G", 2 ** 40 + 1, false, {}]) {
+    expect((await update(invalid)).status).toBe(400);
+    expect(JSON.stringify(loadRoleOverrides())).toBe(before);
+  }
+  expect((await update(null)).status).toBe(200);
+  expect(loadRoleOverrides().overrides.builder?.config?.agentMemoryMaxBytes).toBeNull();
 });
