@@ -10,6 +10,7 @@ import path from "node:path";
 import * as fs from "node:fs/promises";
 import { assertSecretDestinations, type SecretPolicies, digest, launchShapingEnv, packageLaunch, validateCatalog, voiceToolBounds, type VoiceToolServer } from "./contracts";
 import { verifyEntry } from "./entry";
+import { encodedForms } from "../voiceCompanion/credentialMask";
 
 /** Lines of the owned input pipe. A dry run sends one request and closes it; a session keeps it open for calls. */
 async function* inputLines(): AsyncGenerator<string> {
@@ -240,8 +241,9 @@ const boundedFetch = async (input: string | URL | Request, init?: RequestInit): 
 };
 
 const write = (value: unknown) => new Promise<void>(resolve => process.stdout.write(JSON.stringify(value) + "\n", () => resolve()));
-// A secret is masked as written and as JSON writes it inside structuredContent (a quote or backslash escaped).
-const masked = (text: string) => Object.values(request.secrets).filter(secret => secret.length >= 8).flatMap(secret => [secret, JSON.stringify(secret).slice(1, -1)])
+// A secret is masked as written and in every form an answer can encode it: JSON escaping inside structuredContent, a
+// percent-encoded URL, base64 and base64url.
+const masked = (text: string) => Object.values(request.secrets).filter(secret => secret.length >= 8).flatMap(secret => [secret, ...encodedForms(secret)])
   .reduce((value, form) => value.replaceAll(form, "[masked]"), text);
 function cutText(text: string, limit: number): string {
   if (Buffer.byteLength(text) <= limit) return text;

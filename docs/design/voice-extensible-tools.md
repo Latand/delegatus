@@ -1210,11 +1210,11 @@ of its six rendered sources; screenshots remain in the capture scratch.
 | Arguments are validated against the approved input schema with Ajv, inside the worker | `probe.worker.ts#serve` |
 | One deadline per call (`callTimeoutMs`), plus up to 20 s for a cold start; it starts when the call is asked, so a wait behind an earlier call to the same server counts, and a call given up while queued is never sent; expiry sends MCP `notifications/cancelled` | `sessions.ts#dispatch`, `#deadline` |
 | Text joined and cut to 16 KB with a marker; `structuredContent` when there is no text; up to three images; other content named as omitted; `isError` maps to `failed` | `probe.worker.ts#mapResult` |
-| Results skip the board-read cache and pass the credential and local-path scrub where they are made, so both backends and the record get the cleaned text; images pass unchanged. Beyond the shared redactor, the voice scrub masks Telegram bot tokens, a password in a URL's user part, GitLab and Stripe secret keys, a secret assigned to a key that names one anywhere in it (`aws_secret_access_key = …`), a passphrase with spaces after a password key (the whole quoted value or the rest of the line), and a path after a colon (`HOME:/…`, `PATH=/usr/bin:/…`). A path is found in every separator text carries: a slash, a backslash, the doubled backslash and the escaped slash of JSON text, a UNC opening and a percent-encoded separator, so a `structuredContent` answer turned into JSON text is masked too; `~user/…` paths count, and so does a path under a machine root (`/home/…`, `/Users/…`) after any character, except inside a URL | `liveSession.ts#addedTool`, `redaction.ts` |
+| Results skip the board-read cache and pass the credential and local-path scrub where they are made, so both backends and the record get the cleaned text; images pass unchanged. Beyond the shared redactor, the voice scrub masks Telegram bot tokens, a password in a URL's user part, GitLab and Stripe secret keys, a secret assigned to a key that names one anywhere in it (`aws_secret_access_key = …`), a passphrase with spaces after a password key (the whole quoted value or the rest of the line), and a path after a colon (`HOME:/…`, `PATH=/usr/bin:/…`). A path is found in every separator text carries: a slash, a backslash, the doubled backslash, the escaped slash and the unicode escape of JSON text, a UNC opening, an HTML entity (`&#x2F;`, `&#47;`, `&sol;`) and a percent-encoded separator, encoded once or again (`%2F`, `%252F`), so a `structuredContent` answer turned into JSON text is masked too; `~user/…` paths count, glued to a word too, and so does a path under a machine root (`/home/…`, `/Users/…`) after any character, except in a URL's own path. A folder name under a home or a drive may hold spaces, and a JSON string that opens with a home, drive or UNC path is masked to its closing quote; a path in a URL's query, or one with an encoded separator, is local, and so is a URI that opens a local file (`vscode://file/…`). A credential the installation or the hub holds is masked first, before any family can cut into its middle, and in its JSON-escaped, percent-encoded, base64 and base64url forms, in the worker and again in the Viewer; a named value reads JSON string escapes (`"ab\"cd"`), a password in a URL's user part runs to the last `@`, and a signing, encryption, master or session key counts as a secret key | `liveSession.ts#addedTool`, `redaction.ts`, `credentialMask.ts#encodedForms`, `probe.worker.ts#masked` |
 | After a private read every added tool counts as egress, read-only ones too, since their arguments leave the call (`private_data_boundary`); the backend reads the refusal and answers | `liveSession.ts#tool` |
 | A private server's successful answer marks the call like a Telegram group read; its arguments and text stay out of the record | `liveSession.ts#tool` |
-| An ask-first server's acting tool returns `awaiting_confirmation` and runs only in the operator turn right after the ask, with the arguments it asked about, when that turn agrees in the operator's own words and either names the action or answers the voice's own question about the tool; a call with other arguments is a new ask; a decline is refused with `operator_declined` and any other turn is asked again; once an added result is in the call, every acting added tool does | `liveSession.ts#tool`, `gate.ts#spokenAgreement`, `gate.ts#namesAction`, `gate.ts#asksAbout`, `liveGate.ts#spokenDecline` |
-| Once an added result is in context, a send or a cancel needs the operator's own words: `request_orchestrator_delegation` needs an ask for a send addressed to the orchestrator, `resolve_orchestrator_confirmation` with `send` needs a spoken yes and with `cancel` a spoken decline; one operator turn sends once, a delegation with no operator turn of its own sends nothing, and while a request waits only an addressed ask makes a new one; each is refused with `added_tool_result` and the waiting request stays waiting | `liveSession.ts#tool`, `gate.ts#spokenSendRequest`, `gate.ts#spokenAgreement`, `liveGate.ts#spokenDecline` |
+| An ask-first server's acting tool returns `awaiting_confirmation` and runs only in the operator turn right after the ask, with the arguments it asked about, when the voice was heard asking one question about that action that says every argument and offers the orchestrator nothing, and that turn agrees in the operator's own words; one yes runs one acting call and sends nothing besides; a call with other arguments is a new ask; a decline is refused with `operator_declined` and any other turn is asked again; once an added result is in the call, every acting added tool does | `liveSession.ts#tool`, `gate.ts#spokenAgreement`, `gate.ts#actionWords`, `gate.ts#namesAction`, `gate.ts#asksAbout`, `liveGate.ts#spokenDecline` |
+| Once an added result is in context, a send or a cancel needs the operator's own words: `request_orchestrator_delegation` needs an ask for a send addressed to the orchestrator, `resolve_orchestrator_confirmation` with `send` needs a spoken yes and with `cancel` a spoken decline; one operator turn sends once, a delegation with no operator turn of its own sends nothing, while a request waits a turn whose words are a yes answers it only and an addressed ask that is more than a yes makes a new one, and a part that resumes a call in which an added tool answered starts with these gates held; each is refused with `added_tool_result` and the waiting request stays waiting | `liveSession.ts#tool`, `gate.ts#spokenSendRequest`, `gate.ts#spokenAgreement`, `liveGate.ts#spokenDecline` |
 
 **Server-side send gate.** Instructions alone do not keep a tool result from
 causing a send. Once an added tool has answered in the call, for the rest of
@@ -1255,8 +1255,13 @@ back only when nothing was asked of the orchestrator, so a second send in the
 same turn is refused, and a delegation with no operator turn of its own (a
 handoff after the voice answered, with no new words) has no words to read and
 sends nothing. While a request waits for its answer, a yes or a bare "Send it."
-answers that request, and only a send addressed to the orchestrator makes a new
-one. The tests drive a fake model that obeys a
+answers that request, and only a send addressed to the orchestrator that says
+more than a yes makes a new one: "Yes, send it to the orchestrator." answers the
+waiting request and refuses any new one the backend raises on it. A dropped call
+that resumes keeps these gates: the voice's words from an added answer carry
+over in the conversation the new part starts with, so the part starts with the
+gates held when a part it continues recorded an added tool's answer (the tool
+row's `addedResult`). The tests drive a fake model that obeys a
 hostile result; with either gate removed in a scratch copy both the API and the
 Codex case send.
 
@@ -1265,12 +1270,19 @@ through the ask-first path whatever the server's switch: it returns
 `awaiting_confirmation` and runs only in the operator turn right after the
 ask, with the same arguments (a call with other ones is a new ask, so a result
 read under the yes cannot swap what runs), and only when that turn's words
-agree: every sentence a yes built from agreement words and the action's own
-words. The yes names the action by a word of the tool's own name that is no
-plain yes ("Yes, play it."), or it is a plain yes ("Yes.", «Так») to a question
-the voice was heard asking about the tool after the ask, one that names the
-tool's action or its server's title, with no orchestrator request waiting then
-or now, nothing sent in the turn and no other ask open. A yes that answers
+agree: every sentence a yes built from agreement words, the action's own words
+and its arguments. The voice must have been heard, after the ask, asking one
+question about doing that action with those arguments: the question names one
+of the action's words (the tool's own words that are no yes and no bare send,
+or its server's title when the tool has no other, so `send_message` is named
+by "Chat"), says every string and number of the arguments, and offers the
+orchestrator nothing. "Do you like this music?", "Want me to send this to the
+orchestrator?" and "Should Music play Fixture again?" for a call that plays
+another song ask about nothing the call does. The yes then names the action
+("Yes, play it."), or it is a plain yes ("Yes.", «Так») with no orchestrator
+request waiting then or now. One yes runs one acting call: a second acting
+call on it, a call in a turn that sent or answered a request, and a request in
+a turn whose yes ran a call are asked again or refused. A yes that answers
 another question ("Yes, send it." to a waiting deploy) runs nothing. A turn that declines ("No, don't play
 anything.") is refused with `operator_declined` and runs nothing; any other
 turn, a question or a yes with another request beside it, is asked again. A

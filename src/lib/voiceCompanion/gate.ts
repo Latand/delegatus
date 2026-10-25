@@ -207,16 +207,30 @@ export function spokenSendRequest(utterance: string, options: { addressedOnly?: 
   return bare || all.some((sentence) => ADDRESSED_SEND.test(sentence));
 }
 
-/** Whether words name an action by one of its own words that is no plain yes: "Yes, play it." names play, while
- * "Yes, send it." names no added tool's action, whatever the tool is called. */
-export function namesAction(utterance: string, action: readonly string[]): boolean {
-  const own = action.filter((word) => !AGREEMENT_WORDS.has(word));
-  return gateSentences(utterance).some((sentence) => (sentence.match(WORD) ?? []).some((word) => own.includes(word)));
+/** The words that name an action: a tool's own words that are neither a yes nor a bare send ("play" in music__play).
+ * A tool whose own words are all such ("send_message") is named by its server's title instead. */
+export function actionWords(tool: readonly string[], title: readonly string[]): string[] {
+  const own = (words: readonly string[]) => words.filter(word => !BARE_SEND_WORDS.has(word));
+  const named = own(tool);
+  return named.length ? named : own(title);
 }
 
-/** Whether speech holds a question that names an action ("Should Music play it?"). */
-export function asksAbout(speech: string, action: readonly string[]): boolean {
-  return gateSentences(speech).some((sentence) => sentence.includes("?") && (sentence.match(WORD) ?? []).some((word) => action.includes(word)));
+/** Whether words name an action by one of its action words: "Yes, play it." names play, while "Yes, send it." names
+ * no added tool's action, whatever the tool is called. */
+export function namesAction(utterance: string, action: readonly string[]): boolean {
+  return gateSentences(utterance).some((sentence) => (sentence.match(WORD) ?? []).some((word) => action.includes(word)));
+}
+
+const loose = (text: string) => text.normalize("NFC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+/** Whether speech holds a question about doing one action with these arguments: one question names an action word and
+ * carries every argument ("Should Music play Fixture two?"). A question that offers the orchestrator a request is
+ * about that request, and one that names no action word ("Do you like this music?") or other arguments asks about
+ * something else. */
+export function asksAbout(speech: string, action: readonly string[], args: readonly string[] = []): boolean {
+  const spoken = args.map(loose).filter(Boolean);
+  return gateSentences(speech).some((sentence) => sentence.includes("?") && !ORCHESTRATOR.test(sentence)
+    && (sentence.match(WORD) ?? []).some((word) => action.includes(word))
+    && spoken.every((arg) => ` ${loose(sentence)} `.includes(` ${arg} `)));
 }
 
 /**
