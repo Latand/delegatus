@@ -286,25 +286,26 @@ function gather(over: Parameters<typeof sources>[0], state: SeatTickProjectState
   return gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, sources(over));
 }
 
-test("lane hashing yields and refuses a frozen source replaced while hashing", async () => {
-  let rows = Object.freeze(Array.from({ length: 24 }, (_, index) => Object.freeze(lane({ id: `hash-${index}`, state: "closed", cursor: null }))));
+test("gather yields while frozen lanes move and refresh carries the replacement agenda", async () => {
+  const { deepFreeze } = await import("@/lib/deepFreeze");
+  const { refreshSeatTickEvidence } = await import("./seatTickSources");
+  let rows = deepFreeze(Array.from({ length: 24 }, (_, index) => lane({ id: `moving-${index}` })));
   const ports = sources({ pipelines: rows as never, noSeat: true });
   ports.pipelines = () => rows as never;
-  const { performanceSpans, performanceSites } = await import("@/lib/performanceSpans");
-  let scheduled = false;
-  performanceSpans.observeSite(site => {
-    if (performanceSites[site] !== "seat-tick.hash" || scheduled) return;
-    scheduled = true;
-    // A publication with unchanged rows keeps its evidence. Change an owned
-    // row during hashing to prove the provenance fence still refuses it.
-    setImmediate(() => { rows = Object.freeze(rows.map((row, index) => index === 0
-      ? Object.freeze({ ...row, task: "replacement source evidence" }) : row)); });
+  const publication = new Promise<void>(resolve => {
+    setImmediate(() => {
+      rows = deepFreeze(rows.map((row, index) => index === 0
+        ? { ...row, task: "replacement source evidence" } : row));
+      resolve();
+    });
   });
-  try {
-    await expect(gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports)).rejects.toThrow("sources changed");
-  } finally { performanceSpans.observeSite(); }
-  expect(scheduled).toBe(true);
-  expect((await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports)).project).toBe(PROJECT);
+  const gathering = gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  expect(await Promise.race([gathering.then(() => false), publication.then(() => true)])).toBe(true);
+  const input = await gathering;
+  const refreshed = await refreshSeatTickEvidence(input, ports);
+  expect(refreshed.project).toBe(PROJECT);
+  expect(refreshed.pipelines).toHaveLength(24);
+  expect(refreshed.pipelines[0]?.title).toBe("replacement source evidence");
 }, 30_000);
 
 test("gather and refresh retain explicit work and its blocker for the reminder composer", async () => {
