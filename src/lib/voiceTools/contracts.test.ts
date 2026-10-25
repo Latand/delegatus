@@ -7,6 +7,19 @@ const base = (): VoiceToolServer => ({ ...proposalSchema.parse({ name: "music", 
   generation: 1, owner: "installation", audience: ["voice"], state: "pending", proposedBy: { kind: "conversation", conversationId: null, at: "2026-01-01T00:00:00Z" }, approval: null,
   tools: { search: { enabled: true, acts: false } }, catalog: { digest: digest([tool()]), fetchedAt: "2026-01-01T00:00:00Z", tools: [tool()] }, lastDryRun: null });
 
+test.each([
+  ["🎵".repeat(4), true],
+  ["🎵".repeat(3) + "a", false],
+  ["🎵".repeat(4096), true],
+  ["🎵".repeat(4096) + "a", false],
+  ["a".repeat(8), true],
+  ["a".repeat(7), false],
+  ["a".repeat(8192), true],
+  ["a".repeat(8193), false],
+])("secret boundary case %# preserves its UTF-16 length bound", (value, valid) => {
+  expect(secretsSchema.safeParse({ music: { value, destinations: ["https://example.invalid"] } }).success).toBe(valid);
+});
+
 test("every pinned approval field changes the digest, with stable key ordering", () => {
   const source = base();
   const changes: ((server: VoiceToolServer) => void)[] = [

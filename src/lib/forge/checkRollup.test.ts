@@ -55,3 +55,27 @@ test("conflicting same-time results with identical provenance stay pending", () 
   expect(rollupChecks([run("SUCCESS"), run("FAILURE")]))
     .toEqual([{ name: "ci", verdict: "pending" }]);
 });
+
+
+test.each(["forward", "reverse"])("green duplicate runs without source identity remain green (%s)", order => {
+  const entries = [
+    { __typename: "CheckRun", name: "privacy-tracker-audit", workflowName: "Privacy tracker audit",
+      status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-10-23T01:20:50Z", completedAt: "2026-10-23T01:21:34Z" },
+    { __typename: "CheckRun", name: "privacy-tracker-audit", workflowName: "Privacy tracker audit",
+      status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-10-23T01:20:56Z", completedAt: "2026-10-23T01:21:38Z" },
+  ];
+  expect(rollupChecks(order === "reverse" ? entries.reverse() : entries)).toEqual([
+    { name: "privacy-tracker-audit", verdict: "green" }, { name: "privacy-tracker-audit", verdict: "green" },
+  ]);
+});
+
+test.each(["FAILURE", "IN_PROGRESS"])("unproven duplicate runs preserve an independent %s verdict", state => {
+  const entries = [
+    { name: "ci", status: state === "FAILURE" ? "COMPLETED" : state, conclusion: state, startedAt: "2026-10-23T01:20:50Z" },
+    { name: "ci", status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-10-23T01:20:56Z" },
+  ];
+  for (const rows of [entries, [...entries].reverse()]) {
+    expect(rollupChecks(rows).map(check => check.verdict).sort())
+      .toEqual(["green", state === "FAILURE" ? "red" : "pending"]);
+  }
+});

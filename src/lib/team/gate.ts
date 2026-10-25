@@ -5,6 +5,8 @@ import { agentCapabilityClaim, internalServiceClaim } from "@/lib/agent/callerCl
 import { MEMBER_REQUIRED_CODE } from "./contract";
 import { MEMBER_COOKIE, verifySessionValue } from "./sessions";
 import { existingTeamStore } from "./store";
+import { workspaceScope } from "./workspaceAccess";
+import { workspaceRouteDecision } from "./workspaceRoutes";
 
 /*
  * The identity gate (§4.2): called by `src/proxy.ts` after the perimeter has
@@ -168,13 +170,33 @@ export function teamGate(request: NextRequest, context: TeamGateContext, nowMs =
      as a person, so reads pass and the first write asks. On a team install
      the key is the operator's alone: no link a teammate receives carries it
      (`teamPerimeter`), so this is never a teammate's way in (§9). */
-  if (context.bearerAuthenticated && reads) return null;
+  if (context.bearerAuthenticated && reads && !request.cookies.get(MEMBER_COOKIE)?.value) return null;
 
   try {
-    if (verifySessionValue(store, request.cookies.get(MEMBER_COOKIE)?.value, nowMs)) return null;
+    const live = verifySessionValue(store, request.cookies.get(MEMBER_COOKIE)?.value, nowMs);
+    if (live) {
+      if (live.member.role === "owner") return null;
+      const scope = workspaceScope(store, live.member.id);
+      if (!pathname.startsWith("/api/")) {
+        if (!reads) return workspaceRefusal();
+        if (pathname === "/team") return null;
+        const workspaceId = /^\/team\/workspaces\/([^/]+)$/.exec(pathname)?.[1];
+        if (workspaceId) return scope.role(workspaceId) !== "none" ? null : workspaceRefusal();
+        if (!scope.workspaces.length) return NextResponse.redirect(new URL("/team", request.url), 307);
+        return null;
+      }
+      const decision = workspaceRouteDecision(pathname);
+      if (decision === "team") return null; // Each team handler checks its own member/owner/manager role.
+      if ((decision === "project" || decision === "collection") && scope.workspaces.length) return null;
+      return workspaceRefusal();
+    }
   } catch {
     return NextResponse.json({ error: "team sign-in is unavailable", code: "team_store_unavailable" }, { status: 503 });
   }
 
   return signedOut(request);
+}
+
+function workspaceRefusal(): NextResponse {
+  return NextResponse.json({ error: "workspace access denied", code: "workspace_forbidden" }, { status: 403 });
 }

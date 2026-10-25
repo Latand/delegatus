@@ -23,7 +23,7 @@ fs.mkdirSync(SESSIONS, { recursive: true });
 
 const { gatherSeatTickInput: gatherProduction, refreshSeatTickInput, readRetirementJournalWindow, repoDirForProject, RETIREMENT_STALL_WINDOW_MS, runtimeWakeState, seatTickProjects, selfUpdateSignals, stalledRetirementClause, wakeStateFromRecord, withdrawRuntimeWake } = await import("./seatTickSources");
 const { SeatTickAccounting } = await import("./seatTickAccounting");
-const { SEND_UNVERIFIED_REASON } = await import("@/lib/runtime/sendSettlement");
+const { SEND_UNVERIFIED_REASON, resolveOriginalSend } = await import("@/lib/runtime/sendSettlement");
 const { FileRuntimeEventStore } = await import("@/lib/runtime/eventStore");
 const { statePath } = await import("@/lib/configDir");
 const gatherSeatTickInput: typeof gatherProduction = (project, state, policy, ports) => {
@@ -295,7 +295,10 @@ test("lane hashing yields and refuses a frozen source replaced while hashing", a
   performanceSpans.observeSite(site => {
     if (performanceSites[site] !== "seat-tick.hash" || scheduled) return;
     scheduled = true;
-    setImmediate(() => { rows = Object.freeze([...rows]); });
+    // A publication with unchanged rows keeps its evidence. Change an owned
+    // row during hashing to prove the provenance fence still refuses it.
+    setImmediate(() => { rows = Object.freeze(rows.map((row, index) => index === 0
+      ? Object.freeze({ ...row, task: "replacement source evidence" }) : row)); });
   });
   try {
     await expect(gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports)).rejects.toThrow("sources changed");
@@ -316,6 +319,50 @@ test("gather and refresh retain explicit work and its blocker for the reminder c
   delete task.hold;
   const refreshed = refreshSeatTickInput(gathered, ports);
   expect(seatTickDecision(refreshed).verdict.kind).toBe("wake");
+});
+
+test("overdue selection runs once on gather and every refresh, including cached snapshots as time passes", async () => {
+  const task = boardCard({ status: "inbox", chosen: false, dueAt: new Date(NOW + 60_000).toISOString(), dueTz: "UTC" }) as unknown as import("@/lib/tasks/types").BoardTask;
+  const tasks = Object.freeze([Object.freeze(task)]);
+  const calls: number[] = [];
+  let now = NOW;
+  const ports = sources({ tasks: [], pipelines: [] });
+  ports.tasks = () => tasks;
+  const pipelines = Object.freeze([]);
+  ports.pipelines = () => pipelines;
+  ports.now = () => now;
+  const forwarded: string[][] = [];
+  const knownDates: string[][] = [];
+  ports.overdueTasks = (project, at, shown, _cursor, known) => {
+    knownDates.push([...known]);
+    expect(project).toBe(PROJECT);
+    forwarded.push([...shown]);
+    calls.push(at);
+    return at >= Date.parse(task.dueAt!) ? [task] : [];
+  };
+  const gathered = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  expect(calls).toEqual([NOW]);
+  expect(gathered.overdueTasks).toEqual([]);
+  now += 60_000;
+  const refreshed = refreshSeatTickInput(gathered, ports);
+  expect(calls).toEqual([NOW, now]);
+  expect(refreshed.overdueTasks?.[0]?.id).toBe(task.id);
+  const again = refreshSeatTickInput(refreshed, ports);
+  expect(calls).toEqual([NOW, now, now]);
+  const decision = seatTickDecision(again);
+  expect(decision.verdict.kind).toBe("wake");
+  if (decision.verdict.kind !== "wake") throw new Error("missing overdue wake");
+  const { seatTickWakeCommit, seatTickWakeCommitPlan } = await import("./seatTick");
+  const commit = seatTickWakeCommitPlan(decision.verdict, { fingerprint: again.changeFingerprint, eventsThrough: 0 })!;
+  const landed = seatTickWakeCommit(decision.state, commit, now);
+  refreshSeatTickInput({ ...again, state: landed }, ports);
+  expect(forwarded).toEqual([[], [], [], [`t:${task.id}:${Date.parse(task.dueAt!)}`]]);
+  now += DAY_MS;
+  refreshSeatTickInput({ ...again, state: landed }, ports);
+  expect(forwarded.at(-1)).toEqual([]);
+  expect(knownDates).toEqual([[], [], [], [`t:${task.id}:${Date.parse(task.dueAt!)}`], [`t:${task.id}:${Date.parse(task.dueAt!)}`]]);
+  ports.overdueTasks = () => { throw new Error("overdue source unavailable"); };
+  expect(() => refreshSeatTickInput(again, ports)).toThrow("overdue source unavailable");
 });
 
 test("accepted work is owned only by an open lane, including a hidden open lane", async () => {
@@ -1891,9 +1938,20 @@ test("a delivered record lands, a fenced loss drops, and an unverified failure i
   expect((await classify(found(receipt({ state: "failed", resend: null })))).state).toBe("uncertain");
 });
 
+// The wake lookup models a journal-history miss. The real send resolver
+// still needs a local journal client to arbitrate canonical confirmation.
+function lateWakePorts(registry: InstanceType<typeof AgentRegistry>, end: boolean) {
+  return {
+    ...wakeRecordPorts({ end }),
+    lookup: (binding: Parameters<typeof resolveOriginalSend>[0]) => resolveOriginalSend(binding, { registry, client: runtimeClient({}) }),
+    journal: async () => null,
+  };
+}
+
 test("a timed-out Claude wake resolves under its original key when its ledger confirms delivery late", async () => {
   const dir = fs.mkdtempSync(path.join(SANDBOX, "late-wake-"));
   const registry = new AgentRegistry(path.join(dir, "agent-registry.json"), () => false, undefined, { sqliteMode: "sqlite" });
+  await registry.prepareRecoveryIndexes();
   const conversation = registry.ensureConversation("claude", path.join(dir, `${crypto.randomUUID()}.jsonl`), null);
   const text = "Check the owed lane outcomes.";
   const key = "seat-tick:fixture:3:first:lane-event:prompt-fixture";
@@ -1910,7 +1968,7 @@ test("a timed-out Claude wake resolves under its original key when its ledger co
   setAgentRegistryForTests(registry);
   try {
     // The journal has no record of the operation, as after its retention window.
-    const ports = { ...wakeRecordPorts({ end: true }), journal: async () => null };
+    const ports = lateWakePorts(registry, true);
     expect((await wakeStateFromRecord(wake, ports)).state).toBe("uncertain");
     ledger.recordQueued(session, { id: "different-operation", text }, "turn-started");
     ledger.confirmDelivered(session, "different-operation", "other-message");
@@ -1918,9 +1976,11 @@ test("a timed-out Claude wake resolves under its original key when its ledger co
     ledger.confirmDelivered("unrelated-session", held.command.operationId, "other-session-message");
     expect((await wakeStateFromRecord(wake, ports)).state).toBe("uncertain");
     ledger.confirmDelivered(session, held.command.operationId, "engine-message-fixture");
+    const unavailable = { ...ports, lookup: (binding: Parameters<typeof resolveOriginalSend>[0]) => resolveOriginalSend(binding, { registry, client: null }) };
+    expect((await wakeStateFromRecord(wake, unavailable)).state).toBe("unknown");
     // A diagnostic can observe the proof while leaving both stores untouched.
     const before = JSON.stringify(registry.readOnlySnapshot());
-    const readonly = { ...wakeRecordPorts({ end: false }), journal: async () => null };
+    const readonly = lateWakePorts(registry, false);
     expect(await wakeStateFromRecord(wake, readonly)).toMatchObject({ state: "landed", evidence: { confirmation: "claude-ledger", record: { state: "failed" } } });
     expect(JSON.stringify(registry.readOnlySnapshot())).toBe(before);
     expect((await wakeStateFromRecord({ ...wake, text: "A changed instruction." }, ports)).state).toBe("unknown");
@@ -1943,6 +2003,7 @@ test("a timed-out Codex wake retains canonical transcript confirmation", async (
   const { deliveryDedupToken } = await import("@/lib/runtime/deliveryDedup");
   const dir = fs.mkdtempSync(path.join(SANDBOX, "codex-wake-"));
   const registry = new AgentRegistry(path.join(dir, "fixture-registry.json"), () => false, undefined, { sqliteMode: "sqlite" });
+  await registry.prepareRecoveryIndexes();
   const transcript = path.join(dir, "fixture.jsonl");
   const conversation = registry.ensureConversation("codex", transcript, null);
   const text = "Check the owed lane outcomes.";
@@ -1957,7 +2018,9 @@ test("a timed-out Codex wake retains canonical transcript confirmation", async (
   setAgentRegistryForTests(registry);
   try {
     const wake = { ...WAKE, conversationId: conversation.id, clientMessageId: key, operationId: null, text };
-    const ports = { ...wakeRecordPorts({ end: true }), journal: async () => null };
+    const ports = lateWakePorts(registry, true);
+    const unavailable = { ...ports, lookup: (binding: Parameters<typeof resolveOriginalSend>[0]) => resolveOriginalSend(binding, { registry, client: null }) };
+    expect((await wakeStateFromRecord(wake, unavailable)).state).toBe("unknown");
     expect((await wakeStateFromRecord(wake, ports)).state).toBe("landed");
     expect((await wakeStateFromRecord({ ...wake, text: "A different request." }, ports)).state).toBe("unknown");
   } finally {
@@ -3289,6 +3352,24 @@ test("frozen lane evidence avoids whole-row serialization and replacement invali
     expect(replaced.pullRequestEvidenceKey).not.toBe(first.pullRequestEvidenceKey);
     expect(bodies).toBe(0);
   } finally { serializing.mockRestore(); }
+});
+
+test("unrelated collection publications cannot cancel this project's alarm evidence", async () => {
+  const { refreshSeatTickEvidence } = await import("./seatTickSources");
+  const { deepFreeze } = await import("@/lib/deepFreeze");
+  const own = deepFreeze(lane({ id: "own-evidence", spec: "project evidence" }));
+  let generation = 0;
+  const ports = sources({});
+  // A different project publishes between every read and every yield. This
+  // project's immutable row remains exactly the one which was prepared.
+  ports.pipelines = () => Object.freeze([own, deepFreeze(lane({ id: "foreign-evidence",
+    project: "unrelated", spec: `foreign publication ${++generation}` }))]) as never;
+  const input = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  for (let pass = 0; pass < 3; pass++) {
+    const fresh = await refreshSeatTickEvidence(input, ports);
+    expect(fresh.pullRequestEvidenceKey).toBe(input.pullRequestEvidenceKey);
+    expect(fresh.pipelines.map(row => row.id)).toEqual(["own-evidence"]);
+  }
 });
 
 

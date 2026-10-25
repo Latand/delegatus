@@ -52,6 +52,10 @@ test("owners see account details and members see provider headlines only",async(
     team.insertMember({id,role,name:role,status:"active",color:"teal",telegram:null,createdAt:new Date(now).toISOString(),createdBy:"claim",revokedAt:null});
     cookies.push(mintSession(team,id,"claim",{surface:"desktop",browser:"chrome"},now).value);
   }
+  const { createWorkspace } = await import("@/lib/team/workspaces");
+  const workspaceId = `w_${"c".repeat(32)}`;
+  createWorkspace(team, team.owner()!, { id: workspaceId, name: "Spend fixture", projects: ["fixture"] });
+  team.putWorkspaceMember(workspaceId, "m_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "member", team.owner()!.id, new Date(now).toISOString());
   saveTasks([task("a")]); const store=ActivityStore.open();
   store.db.query("INSERT INTO task_limit_spend VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run("a","codex:a","codex",1000,0,10,10,4,null,null,null,null,1,2,null,now);
   store.db.query("INSERT INTO task_limit_spend VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run("a","claude:a","claude",2000,0,10,10,6,null,null,null,null,1,2,null,now); store.close();

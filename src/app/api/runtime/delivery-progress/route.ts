@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextResponse } from "next/server";
 
 import { deliveryProgressView } from "@/lib/runtime/deliveryProgressView";
@@ -7,7 +8,7 @@ export const dynamic = "force-dynamic";
 
 /** What each held message in these conversations is waiting on (incident
     2026-10-06). Ids, codes and times only; message text never leaves here. */
-export async function GET(request: Request): Promise<NextResponse> {
+async function workspaceGET(request: Request): Promise<NextResponse> {
   const url = new URL(request.url);
   const conversationIds = url.searchParams.getAll("conversationId").filter((id) => id && id.length <= 256).slice(0, 16);
   const operationIds = url.searchParams.getAll("operationId").filter((id) => id && id.length <= 256).slice(0, 64);
@@ -18,3 +19,5 @@ export async function GET(request: Request): Promise<NextResponse> {
     headers: { "cache-control": "no-store" },
   });
 }
+
+export const GET = workspaceRoute("/api/runtime/delivery-progress", workspaceGET);

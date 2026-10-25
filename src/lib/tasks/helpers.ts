@@ -1,3 +1,5 @@
+import type { BoardTask } from "./types";
+
 export function isoNow(): string {
   return new Date().toISOString();
 }
@@ -51,4 +53,25 @@ export function fromDueInput(value: string): { dueAt: string; dueTz: string } | 
   const ms = Date.parse(value);
   if (!Number.isFinite(ms)) return null;
   return { dueAt: new Date(ms).toISOString(), dueTz: Intl.DateTimeFormat().resolvedOptions().timeZone };
+}
+
+/** A default advances by elapsed hours, including across daylight-saving changes. */
+export function defaultTaskDue(nowMs = Date.now(), dueTz = Intl.DateTimeFormat().resolvedOptions().timeZone): { dueAt: string; dueTz: string } {
+  const hour = 60 * 60 * 1000;
+  return { dueAt: new Date(Math.ceil((nowMs + 72 * hour) / hour) * hour).toISOString(), dueTz };
+}
+
+/** Unknown history from an older release must never make its task unreadable. */
+export function storedDueHistory(value: unknown): BoardTask["dueHistory"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const history = value as NonNullable<BoardTask["dueHistory"]>;
+  const instant = (at: unknown): at is string => typeof at === "string" && Number.isFinite(Date.parse(at));
+  if (!instant(history.firstAt) || !Number.isSafeInteger(history.slips) || history.slips < 0) return undefined;
+  const last = history.last;
+  if (last !== undefined && (!last || typeof last !== "object" || Array.isArray(last)
+    || !instant(last.at) || !instant(last.from) || !instant(last.to)
+    || (last.by !== "operator" && last.by !== "agent")
+    || (last.reason !== undefined && (typeof last.reason !== "string" || !last.reason.trim() || last.reason.length > 200))
+    || (last.conversationId !== undefined && typeof last.conversationId !== "string"))) return undefined;
+  return { firstAt: history.firstAt, slips: history.slips, ...(last ? { last: { ...last } } : {}) };
 }

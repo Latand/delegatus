@@ -196,6 +196,7 @@ export type SeatTickWakeReasonKind =
   | "autonomy-ended"
   /** A board task eligible to start. */
   | "unstarted-task"
+  | "overdue-task"
   /** The wake interval elapsed while work is open — "roughly hourly". */
   | "interval"
   /** A standalone child the seat spawned reached a terminal outcome nobody has
@@ -232,6 +233,7 @@ export const SEAT_TICK_WAKE_REASON_KINDS: readonly SeatTickWakeReasonKind[] = [
   "autonomy-idle",
   "autonomy-ended",
   "unstarted-task",
+  "overdue-task",
   "interval",
   "child-terminal",
   "own-lane-settled",
@@ -252,7 +254,7 @@ export interface SeatTickWakeReason {
 
 /** One line of the wake's body. Bounded and structural — never transcript text. */
 export interface SeatTickItem {
-  reminderKind?: "task" | "pause";
+  reminderKind?: "task" | "pause" | "overdue";
   occurredAt?: string | null;
   /** Journal identity of a merge this visible line announces on delivery. */
   mergeEventSeq?: number;
@@ -611,6 +613,12 @@ export interface SeatTickOwnLaneInput {
 }
 
 export interface SeatTickTaskInput {
+  /** Read-only selection credit; a landing alone advances the overdue sweep. */
+  overdueSweep?: string;
+  dueAt?: string;
+  dueHistory?: import("@/lib/tasks/types").BoardTask["dueHistory"];
+  priority?: import("@/lib/tasks/types").BoardTask["priority"];
+  createdAt?: string;
   /** Explicitly chosen work, including a submitted continuation. */
   accepted?: boolean;
   waitingSince?: string;
@@ -1141,6 +1149,8 @@ export interface SeatTickProjectState {
   diskPressureShown?: string;
   /** Latest delivered versions, bounded to 2000 recent agenda items. */
   itemsShown?: string[];
+  /** Problem versions whose delivered credit awaits the asynchronous memory read. */
+  memoryProblemCreditOwed?: { shown: string[]; recipient: { conversationId: string; seatEpoch: number } | null };
   accounting?: { filename: string; revision: number; gap: string | null };
   seatEpoch: number | null;
   lastCheckAt: string | null;
@@ -1346,6 +1356,7 @@ export interface SeatTickCheckInput {
   seatEverHeld?: boolean;
   pipelines: readonly SeatTickPipelineInput[];
   tasks: readonly SeatTickTaskInput[];
+  overdueTasks?: readonly SeatTickTaskInput[];
   /** The waits «Waiting for you» routes to this project's seat first
       (docs/design/attention-auto-resolve.md), each with the line that says
       what was asked and how to answer it. Absent reads as none. */
@@ -1388,6 +1399,9 @@ export interface SeatTickCheckInput {
       (#2063). Absent reads as none. */
   settledMaintenance?: readonly MaintenanceRun[];
   settledDeploys?: readonly SeatTickDeployInput[];
+  /** A deploy-only check carries an unannounced settlement deadline, so its
+      delivery must not inherit an unrelated recent wake's quiet period. */
+  deploySettlementWakeDue?: boolean;
   /** The seat's own standalone children (#1465), bounded and project-scoped,
       with already-harvested terminal ones removed. Empty when the seat spawned
       nothing, and empty when the registry could not be read — the field below
