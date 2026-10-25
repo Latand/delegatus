@@ -212,6 +212,8 @@ export interface CodexAppServerHostOptions {
   cwd: string;
   codexHome?: string;
   binary?: string;
+  /** Executable used for switch admission; fixture launchers pin a private CLI path here. */
+  launchBinary?: string;
   /** Dependency injection for protocol compatibility rehearsals. Production
       identifies the selected executable with --version before spawning. */
   readProtocolVersion?: typeof installedCodexVersion;
@@ -1488,6 +1490,22 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   }
 
   private static async open(options: CodexAppServerHostOptions, threadId: string | null): Promise<CodexAppServerHost> {
+    const { withCodexCliLaunch } = await import("@/lib/codexUpdate/installation");
+    const launchBinary = options.launchBinary
+      ?? (options.spawnProcess && process.env.NODE_ENV === "test" ? "/fixture/codex" : options.binary ?? process.env.LLV_CODEX_BINARY ?? "codex");
+    let entered = false;
+    try {
+      return await withCodexCliLaunch(launchBinary, () => {
+        entered = true;
+        return this.openWithCliGuard(options, threadId);
+      });
+    } catch (error) {
+      if (!entered) options.releaseCleanup?.();
+      throw error;
+    }
+  }
+
+  private static async openWithCliGuard(options: CodexAppServerHostOptions, threadId: string | null): Promise<CodexAppServerHost> {
     let memoryHook: ReturnType<typeof installCodexMemoryHook> = null;
     try { if (!options.socketOwner && options.codexHome && !options.cleanMemory) memoryHook = installCodexMemoryHook(options.codexHome, options.env ?? process.env); }
     catch { /* optional memory must never stop a launch */ }

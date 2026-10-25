@@ -221,7 +221,7 @@ test("stub CLI emits progress before a structured answer for each engine", async
   for (const engine of ["codex", "claude"] as const) {
     const request = fixture(engine);
     const events: string[] = [];
-    const run = runEphemeralAgent({
+    const run = await runEphemeralAgent({
       ...request,
       runtime: { command: script },
       onEvent: (event) => events.push(event.type),
@@ -254,7 +254,7 @@ process.stdout.write(result.subarray(cut));
 `);
   fs.chmodSync(script, 0o700);
   const notes: string[] = [];
-  const run = runEphemeralAgent({
+  const run = await runEphemeralAgent({
     ...fixture("claude"), runtime: { command: script },
     onEvent: (event) => { if (event.type === "note") notes.push(event.text); },
   });
@@ -336,9 +336,9 @@ if (args.includes('--output-last-message')) {
 `); fs.chmodSync(script, 0o700);
   for (const engine of ["codex", "claude"] as const) {
     const request = fixture(engine);
-    const run = runEphemeralAgent({ ...request, inputImages: [image], ...(engine === "claude" ? { inputFile: file } : {}), runtime: { command: script } });
+    const run = await runEphemeralAgent({ ...request, inputImages: [image], ...(engine === "claude" ? { inputFile: file } : {}), runtime: { command: script } });
     expect(await run.done).toMatchObject({ status: "done", answer: { text: "Photo received" } });
   }
-  const failed = runEphemeralAgent({ ...fixture("claude"), inputFile: path.join(root, "missing-input"), runtime: { command: script } });
+  const failed = await runEphemeralAgent({ ...fixture("claude"), inputFile: path.join(root, "missing-input"), runtime: { command: script } });
   expect((await failed.done).status).not.toBe("done");
 });

@@ -4,12 +4,9 @@ The reviewed blockers are frontend interaction/geometry changes. The pipeline
 sandbox has no browser or Docker, so this evidence set is split into two
 deterministic, fully synthetic halves:
 
-- **Auditable geometry stills (`*.svg`)** — regenerated with
-  `bun docs/acceptance/pr-441/capture.ts`. They are rendered from the **same
-  pure geometry the product ships** — `subagentsOf` (current-generation
-  selection and bottom-up order) and `layoutBadges` (30×30 placement, right-edge
-  anchoring, hard-cap overflow) — over hand-authored fictional data. Being SVG
-  text they are fully readable in review.
+- **Auditable geometry stills (`*.svg`)** — retained as historical evidence for
+  the retired scheme-board surface. Being SVG text they remain fully readable
+  in review; their one-off capture driver was removed with that surface.
 - **Published raster stills (`*.png`)** — deterministic **redacted
   placeholders** emitted by the approved trusted generator
   `scripts/generate-privacy-placeholders.ts`, with schema-v2 provenance recorded
@@ -20,7 +17,7 @@ deterministic, fully synthetic halves:
 
 ## Privacy
 
-Every id, title, path, project (`atlas-demo`) and model in the capture script is
+Every id, title, path, project (`atlas-demo`) and model in the archived stills is
 invented for these stills. No real project name, account, filesystem path,
 transcript text, or user data is read or embedded. The SVGs are text-auditable;
 the PNGs are reproducible redacted placeholders whose provenance

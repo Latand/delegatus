@@ -1,0 +1,3896 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-23T19:23:31.132980+00:00",
+  "base": "95d52f4db9803e9a06d835fb5dbe37bbbd4d2b79",
+  "design": "docs/design/cloud-stage-runtime.md",
+  "isolation": {
+    "transport": "gate-remote -- bash -c <check procedure>",
+    "perFileRoots": [
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "TMPDIR",
+      "LLV_STATE_DIR"
+    ],
+    "testOwner": "scripts/owned-runner.ts",
+    "network": "Cloud client and socket are fake; no live cloud task is launched."
+  },
+  "focused": {
+    "sourceRevision": "Content-addressed follow-up to the core commit; fingerprints identify the final checked inputs.",
+    "sourcesSha256": {
+      "docs/design/cloud-stage-runtime.md": "4194677c2d71461b0588dd9b42f72cc27553a04f2e96b0189ade69c11c44b5b6",
+      "src/app/api/projects/settings/route.test.ts": "19dec3ae2b1328ca205cc274f38c9742f27044056a7eaa547e1ace925b724c6a",
+      "src/app/api/projects/settings/route.ts": "eb3eeb1ba0f5c74184273077b6ddfccbc35edad48ba7ffdd5fa99cd11cbc5498",
+      "src/lib/mcp/server.ts": "56ef463e58dfa0c0cd23b1ae55d21fe95b860b2cca544a56392107af0120b92c",
+      "src/lib/pipelines/cloudHostedClient.test.ts": "0e54236c8deea9e66a1028a4dec3c9f39b845b0e6a51c32b4658850c1ab378f6",
+      "src/lib/pipelines/cloudHostedClient.ts": "c5f29768e0d04be9f68ac4afd18244cb56a1dd7aca782bd4bfe56160af69abd8",
+      "src/lib/pipelines/cloudStage.test.ts": "3eb075eecc4ae7a89ac6b774289e6f9b74717f3cd9601d55c961337e94e120d8",
+      "src/lib/pipelines/cloudStage.ts": "27fc1ec0402b7af674fe121e9dc91b5e3cc6255757d6088d70af6590c7f94d10",
+      "src/lib/pipelines/controllerPass.ts": "243142d75f1dc2cffff2893512d2db20fa15ab9ad5113adfe7b786443a870ef1",
+      "src/lib/pipelines/engine.cloud.test.ts": "ca4db0d60767de2232f1491f26dd68265b56665a4cd2bc1e5b53d933834b2cd9",
+      "src/lib/pipelines/engine.ts": "6efd7e61f5139a3b861b5bef1a047c3150d0d9474777eb5a96f19fcbff177fd8",
+      "src/lib/pipelines/fixtures/cloudStageRestart.ts": "5e1e7028e472e307090c0c5f894b47aeec3ee0d63fbdcb5d63862800fcf39121",
+      "src/lib/pipelines/stageDigest.ts": "f88172aa04cc7c07f3f5dbcd01e12261c5b395c0bff5d3e96fa8c3c977d98e02",
+      "src/lib/pipelines/store.ts": "1314f5d337939668a789005a8b5635bc151a93e7ac45d317b7c0f2fb49339f18",
+      "src/lib/pipelines/types.ts": "e48346d3e89554a2e2553cd2edad42abda8dbe6311320f85863201d9db2c5fcc",
+      "src/lib/projects/settings.ts": "ccb75211d5fdfad2e624e3d9955845d2151714a992662f94af465afd81acea0d"
+    },
+    "commands": {
+      "typecheck": "bunx tsc --noEmit --incremental false",
+      "eslint": "bun node_modules/eslint/bin/eslint.js --max-warnings=0 <all touched TypeScript files>",
+      "test": "setsid bun scripts/owned-runner.ts bun test --timeout=60000 <explicit test path>, stdin closed",
+      "privacy": "bun scripts/privacy-publication-gate.ts --require-known-values --base 95d52f4d --paths <all sixteen implementation and design files>"
+    },
+    "checks": [
+      {
+        "check": "typecheck",
+        "exitCode": 0
+      },
+      {
+        "check": "eslint",
+        "exitCode": 0
+      },
+      {
+        "check": "src/lib/pipelines/cloudHostedClient.test.ts",
+        "exitCode": 0,
+        "counts": {
+          "pass": 48,
+          "fail": 0,
+          "skip": 0,
+          "error": 0
+        }
+      },
+      {
+        "check": "src/lib/pipelines/cloudStage.test.ts",
+        "exitCode": 0,
+        "counts": {
+          "pass": 8,
+          "fail": 0,
+          "skip": 0,
+          "error": 0
+        }
+      },
+      {
+        "check": "src/lib/pipelines/engine.cloud.test.ts",
+        "exitCode": 0,
+        "counts": {
+          "pass": 40,
+          "fail": 0,
+          "skip": 0,
+          "error": 0
+        }
+      },
+      {
+        "check": "privacy",
+        "exitCode": 0
+      }
+    ]
+  },
+  "importers": {
+    "sourceRevision": "ee981a03135812258a20a7851ba65afd132bc911",
+    "sourcesSha256": {
+      "docs/design/cloud-stage-runtime.md": "c48da92d85e48b2be6abc399cd918adfdaa74b27d28eb7ed2386c6d49b9a349c",
+      "src/app/api/projects/settings/route.test.ts": "19dec3ae2b1328ca205cc274f38c9742f27044056a7eaa547e1ace925b724c6a",
+      "src/app/api/projects/settings/route.ts": "eb3eeb1ba0f5c74184273077b6ddfccbc35edad48ba7ffdd5fa99cd11cbc5498",
+      "src/lib/mcp/server.ts": "56ef463e58dfa0c0cd23b1ae55d21fe95b860b2cca544a56392107af0120b92c",
+      "src/lib/pipelines/cloudHostedClient.test.ts": "5c4f3793708772fc536b1f72beb2be7aa03fc534224526d84144a82c2a485f0e",
+      "src/lib/pipelines/cloudHostedClient.ts": "614355103a88c75aac63f5d681700cf8fd6aded68df2bca1ff8da480c1f99601",
+      "src/lib/pipelines/cloudStage.test.ts": "a90fd5874624751afde38575c64c1a3e5e9002fa098ce4f9b94c561f6fedeaf7",
+      "src/lib/pipelines/cloudStage.ts": "72cdfec3ff814c35ce8ea81482184f79fd879371d4922edfb7b0127ef74c2f27",
+      "src/lib/pipelines/controllerPass.ts": "243142d75f1dc2cffff2893512d2db20fa15ab9ad5113adfe7b786443a870ef1",
+      "src/lib/pipelines/engine.cloud.test.ts": "8a7ad20aab4b53cffc2836cce8d4c458c4e4dcaff47e5d5e05ddb88d2dbfb6a2",
+      "src/lib/pipelines/engine.ts": "6904acd2da8719ab8aebff8ec28af4669de28156470cfb46aee4fd5ff4257ff3",
+      "src/lib/pipelines/fixtures/cloudStageRestart.ts": "5e1e7028e472e307090c0c5f894b47aeec3ee0d63fbdcb5d63862800fcf39121",
+      "src/lib/pipelines/stageDigest.ts": "f88172aa04cc7c07f3f5dbcd01e12261c5b395c0bff5d3e96fa8c3c977d98e02",
+      "src/lib/pipelines/store.ts": "1314f5d337939668a789005a8b5635bc151a93e7ac45d317b7c0f2fb49339f18",
+      "src/lib/pipelines/types.ts": "e48346d3e89554a2e2553cd2edad42abda8dbe6311320f85863201d9db2c5fcc",
+      "src/lib/projects/settings.ts": "ccb75211d5fdfad2e624e3d9955845d2151714a992662f94af465afd81acea0d"
+    },
+    "command": "setsid bun -e 'import { touchedTests } from \"./scripts/local-gate-tests\"; const r = await touchedTests(process.cwd(), \"95d52f4d\", process.argv.slice(1), { budgets: { fileMs: 600000, runMs: 3600000 } }); if (r.introduced.length) process.exitCode = 1;' <twenty explicit paths per group>, stdin closed",
+    "exitCode": 1,
+    "fileCount": 414,
+    "groups": [
+      {
+        "group": 1,
+        "exitCode": 0,
+        "summary": {
+          "new": 0,
+          "preExisting": 17,
+          "fixed": 0,
+          "removedOrSkipped": 0,
+          "flaky": 0
+        }
+      },
+      {
+        "group": 2,
+        "exitCode": 0,
+        "summary": {
+          "new": 0,
+          "preExisting": 10,
+          "fixed": 0,
+          "removedOrSkipped": 0,
+          "flaky": 0
+        }
+      },
+      {
+        "group": 3,
+        "exitCode": 0,
+        "summary": {
+          "new": 0,
+          "preExisting": 4,
+          "fixed": 0,
+          "removedOrSkipped": 0,
+          "flaky": 0
+        }
+      },
+      {
+        "group": 4,
+        "exitCode": 0,
+        "summary": {
+          "new": 0,
+          "preExisting": 6,
+          "fixed": 0,
+          "removedOrSkipped": 0,
+          "flaky": 0
+        }
+      },
+      {
+        "group": 5,
+        "exitCode": 0,
+        "summary": {
+          "greenHead": true
+        }
+      },
+      {
+        "group": 6,
+        "exitCode": 0,
+        "summary": {
+          "new": 0,
+          "preExisting": 1,
+          "fixed": 0,
+          "removedOrSkipped": 0,
+          "flaky": 0
+        }
+      },
+      {
+        "group": 7,
+        "exitCode": 0,
+        "summary": {
+          "new": 0,
+          "preExisting": 30,
+          "fixed": 0,
+          "removedOrSkipped": 0,
+          "flaky": 0
+        }
+      },
+      {
+        "group": 8,
+        "exitCode": 0,
+        "summary": {
+          "new": 0,
+          "preExisting": 21,
+          "fixed": 0,
+          "removedOrSkipped": 0,
+          "flaky": 0
+        }
+      },
+      {
+        "group": 9,
+        "exitCode": 0,
+        "summary": {
+          "new": 0,
+          "preExisting": 11,
+          "fixed": 0,
+          "removedOrSkipped": 0,
+          "flaky": 0
+        }
+      },
+      {
+        "group": 10,
+        "exitCode": 0,
+        "summary": {
+          "new": 0,
+          "preExisting": 21,
+          "fixed": 0,
+          "removedOrSkipped": 0,
+          "flaky": 1
+        }
+      },
+      {
+        "group": 11,
+        "exitCode": 1,
+        "summary": {
+          "new": 1,
+          "preExisting": 46,
+          "fixed": 1,
+          "removedOrSkipped": 30,
+          "flaky": 1
+        }
+      },
+      {
+        "group": 12,
+        "exitCode": 0,
+        "summary": {
+          "new": 0,
+          "preExisting": 7,
+          "fixed": 0,
+          "removedOrSkipped": 0,
+          "flaky": 0
+        }
+      },
+      {
+        "group": 13,
+        "exitCode": 0,
+        "summary": {
+          "new": 0,
+          "preExisting": 81,
+          "fixed": 0,
+          "removedOrSkipped": 0,
+          "flaky": 0
+        }
+      },
+      {
+        "group": 14,
+        "exitCode": 0,
+        "summary": {
+          "new": 0,
+          "preExisting": 3,
+          "fixed": 0,
+          "removedOrSkipped": 0,
+          "flaky": 6
+        }
+      },
+      {
+        "group": 15,
+        "exitCode": 0,
+        "summary": {
+          "new": 0,
+          "preExisting": 2,
+          "fixed": 0,
+          "removedOrSkipped": 0,
+          "flaky": 4
+        }
+      },
+      {
+        "group": 16,
+        "exitCode": 0,
+        "summary": {
+          "new": 0,
+          "preExisting": 16,
+          "fixed": 0,
+          "removedOrSkipped": 0,
+          "flaky": 0
+        }
+      },
+      {
+        "group": 17,
+        "exitCode": 0,
+        "summary": {
+          "new": 0,
+          "preExisting": 116,
+          "fixed": 0,
+          "removedOrSkipped": 0,
+          "flaky": 0
+        }
+      },
+      {
+        "group": 18,
+        "exitCode": 0,
+        "summary": {
+          "new": 0,
+          "preExisting": 22,
+          "fixed": 0,
+          "removedOrSkipped": 0,
+          "flaky": 3
+        }
+      },
+      {
+        "group": 19,
+        "exitCode": 0,
+        "summary": {
+          "new": 0,
+          "preExisting": 15,
+          "fixed": 0,
+          "removedOrSkipped": 0,
+          "flaky": 0
+        }
+      },
+      {
+        "group": 20,
+        "exitCode": 0,
+        "summary": {
+          "new": 0,
+          "preExisting": 24,
+          "fixed": 0,
+          "removedOrSkipped": 0,
+          "flaky": 0
+        }
+      },
+      {
+        "group": 21,
+        "exitCode": 0,
+        "summary": {
+          "new": 0,
+          "preExisting": 5,
+          "fixed": 0,
+          "removedOrSkipped": 0,
+          "flaky": 0
+        }
+      }
+    ],
+    "headFiles": [
+      {
+        "path": "scripts/harness-ledger.test.ts",
+        "group": 1,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "scripts/runtime-host-viewer-adapter.test.ts",
+        "group": 1,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/app/api/files/route.test.ts",
+        "group": 1,
+        "reportedFailures": 10,
+        "complete": true
+      },
+      {
+        "path": "src/app/api/orchestrator/reports/route.test.ts",
+        "group": 1,
+        "reportedFailures": 1,
+        "complete": false
+      },
+      {
+        "path": "src/app/api/pipelines/[id]/route.lifecycle.test.ts",
+        "group": 1,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/app/api/pipelines/[id]/route.test.ts",
+        "group": 1,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/app/api/pipelines/preflight/route.test.ts",
+        "group": 1,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/app/api/pipelines/route.admission.test.ts",
+        "group": 1,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/app/api/pipelines/route.busy.test.ts",
+        "group": 1,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/app/api/pipelines/route.test.ts",
+        "group": 1,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/app/api/projects/settings/route.test.ts",
+        "group": 1,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/app/api/search/memory/route.test.ts",
+        "group": 1,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/app/api/search/transcripts/route.test.ts",
+        "group": 1,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/app/api/spawn/route.stageTasks.test.ts",
+        "group": 1,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/app/api/tasks/[id]/assignment/route.test.ts",
+        "group": 1,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/app/api/tasks/[id]/spawn/route.test.ts",
+        "group": 1,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/app/api/tasks/route.test.ts",
+        "group": 1,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/app/api/voice-companion/calls/route.test.ts",
+        "group": 1,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/app/api/voice-companion/session/route.test.ts",
+        "group": 1,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/BranchPane.spawn.dom.test.tsx",
+        "group": 1,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/components/ProjectDashboard.looseReader.dom.test.tsx",
+        "group": 2,
+        "reportedFailures": 8,
+        "complete": true
+      },
+      {
+        "path": "src/components/ProjectDashboard.pipelineNavigation.dom.test.tsx",
+        "group": 2,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/ProjectDashboard.test.ts",
+        "group": 2,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/RuntimePill.stageSwitch.dom.test.tsx",
+        "group": 2,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/Viewer.mobileSwipe.dom.test.tsx",
+        "group": 2,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/Viewer.needsYou.dom.test.tsx",
+        "group": 2,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/Viewer.overviewPhone.dom.test.tsx",
+        "group": 2,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/attention/AttentionHost.dom.test.tsx",
+        "group": 2,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/components/attention/AttentionPanel.dom.test.tsx",
+        "group": 2,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/attention/MobileAttentionSheet.dom.test.tsx",
+        "group": 2,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/attention/attentionQueue.test.ts",
+        "group": 2,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/attention/decision.test.ts",
+        "group": 2,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/attention/dismissalOverlay.test.ts",
+        "group": 2,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/attention/needsYouPanel.test.ts",
+        "group": 2,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/attention/operatorAsk.test.ts",
+        "group": 2,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/kanban/KanbanAccounts.dom.test.tsx",
+        "group": 2,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/kanban/KanbanAccountsRuntime.dom.test.tsx",
+        "group": 2,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/kanban/KanbanDismiss.dom.test.tsx",
+        "group": 2,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/kanban/KanbanOpenAgents.dom.test.tsx",
+        "group": 2,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/kanban/KanbanPipelines.dom.test.tsx",
+        "group": 2,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/components/kanban/KanbanReaders.dom.test.tsx",
+        "group": 3,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/kanban/KanbanStages.dom.test.tsx",
+        "group": 3,
+        "reportedFailures": 2,
+        "complete": true
+      },
+      {
+        "path": "src/components/kanban/accountChoice.test.ts",
+        "group": 3,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/kanban/cardState.test.ts",
+        "group": 3,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/kanban/kanbanModel.test.ts",
+        "group": 3,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/kanban/laneAnswerMenu.test.ts",
+        "group": 3,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/kanban/orchestratorArrows.test.ts",
+        "group": 3,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/kanban/overviewBands.test.ts",
+        "group": 3,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/kanban/pipelineGraph.test.ts",
+        "group": 3,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/kanban/pipelinePorts.test.ts",
+        "group": 3,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/kanban/stageDisplayName.test.ts",
+        "group": 3,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/kanban/stageIdentity.test.ts",
+        "group": 3,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/kanban/stagesModel.test.ts",
+        "group": 3,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/kanban/taskChronologyModel.test.ts",
+        "group": 3,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/mobile/MobileBoard.dom.test.tsx",
+        "group": 3,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/mobile/MobileFocusView.conversation.dom.test.tsx",
+        "group": 3,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/mobile/MobileFocusView.reviewDeckRole.dom.test.tsx",
+        "group": 3,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/mobile/MobileFocusView.viewport.dom.test.tsx",
+        "group": 3,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/mobile/MobileKanban.dom.test.tsx",
+        "group": 3,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/components/mobile/MobilePipelineScreen.actions.dom.test.tsx",
+        "group": 3,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/components/mobile/MobilePipelineScreen.dom.test.tsx",
+        "group": 4,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/components/mobile/MobilePipelinesScreen.dom.test.tsx",
+        "group": 4,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/mobile/MobileTaskScreen.dom.test.tsx",
+        "group": 4,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/mobile/MobileTaskScreen.entry.dom.test.tsx",
+        "group": 4,
+        "reportedFailures": 3,
+        "complete": true
+      },
+      {
+        "path": "src/components/mobile/directReviewDeck.dom.test.tsx",
+        "group": 4,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/mobile/mobileBoardModel.test.ts",
+        "group": 4,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/mobile/mobileChatState.test.ts",
+        "group": 4,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/mobile/overviewPhone.test.ts",
+        "group": 4,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/mobile/phoneKanbanModel.test.ts",
+        "group": 4,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/orchestrator/reportLog/ReportLog.dom.test.tsx",
+        "group": 4,
+        "reportedFailures": 2,
+        "complete": true
+      },
+      {
+        "path": "src/components/overlay/useAttentionOffers.dom.test.tsx",
+        "group": 4,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/pipelines/PipelineBlock.dom.test.tsx",
+        "group": 4,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/pipelines/PipelineEditor.legacyReview.dom.test.tsx",
+        "group": 4,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/pipelines/PipelineHub.dom.test.tsx",
+        "group": 4,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/pipelines/PipelineStrip.dom.test.tsx",
+        "group": 4,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/pipelines/PipelineStrip.render.test.tsx",
+        "group": 4,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/pipelines/PipelineTemplatePicker.dom.test.tsx",
+        "group": 4,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/pipelines/StageEdgeControls.dom.test.tsx",
+        "group": 4,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/pipelines/StagePlaceholderPane.dom.test.tsx",
+        "group": 4,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/pipelines/VerdictPopover.render.test.tsx",
+        "group": 4,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/pipelines/pipelineBlockModel.test.ts",
+        "group": 5,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/pipelines/pipelineModel.test.ts",
+        "group": 5,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/pipelines/pipelinePlaceholderStages.test.ts",
+        "group": 5,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/pipelines/remoteLaneSummary.dom.test.tsx",
+        "group": 5,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/pipelines/stageCardAria.render.test.tsx",
+        "group": 5,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/projectDashboardDerivation.test.ts",
+        "group": 5,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/scheme/AgentLinksLayer.render.test.tsx",
+        "group": 5,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/scheme/GroupOverridePanel.dom.test.tsx",
+        "group": 5,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/scheme/GroupOverridePanel.render.test.tsx",
+        "group": 5,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/scheme/GroupsLayer.render.test.tsx",
+        "group": 5,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/scheme/SchemeBoard.bands.dom.test.tsx",
+        "group": 5,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/scheme/SchemeBoard.builderReveal.dom.test.tsx",
+        "group": 5,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/scheme/SchemeBoard.camera.dom.test.tsx",
+        "group": 5,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/scheme/SchemeBoard.catalogFocus.dom.test.tsx",
+        "group": 5,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/scheme/SchemeBoard.pipelineComposition.dom.test.tsx",
+        "group": 5,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/scheme/SchemeBoard.pipelineRegions.dom.test.tsx",
+        "group": 5,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/scheme/SchemeBoard.stageOverlay.dom.test.tsx",
+        "group": 5,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/scheme/TaskCard.dom.test.tsx",
+        "group": 5,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/scheme/agentLinks.test.ts",
+        "group": 5,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/scheme/focusFrames.test.ts",
+        "group": 5,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/scheme/layout.lineage.test.ts",
+        "group": 6,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/scheme/layout.test.ts",
+        "group": 6,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/scheme/nodes.stageRow.dom.test.tsx",
+        "group": 6,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/components/scheme/pipelineAnchor.test.ts",
+        "group": 6,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/scheme/pipelineRegionGeometry.test.ts",
+        "group": 6,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/scheme/pipelineStageSurfaces.test.ts",
+        "group": 6,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/scheme/placementHorizon.test.ts",
+        "group": 6,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/scheme/taskBands.test.ts",
+        "group": 6,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/scheme/workerCollapse.test.ts",
+        "group": 6,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/taskAlbum/TaskAlbum.dom.test.tsx",
+        "group": 6,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/tasks/taskWorkflowModel.test.ts",
+        "group": 6,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/workLinks/workLinks.dom.test.tsx",
+        "group": 6,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/components/workingAgents.test.ts",
+        "group": 6,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/hooks/useFiles.forwardOnly.test.ts",
+        "group": 6,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/agent/cli.integration.test.ts",
+        "group": 6,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/attention/dismissals.test.ts",
+        "group": 6,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/attention/finishedWork.test.ts",
+        "group": 6,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/attention/finishedWorkCleanup.test.ts",
+        "group": 6,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/attention/landing.test.ts",
+        "group": 6,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/attention/needsYouRead.test.ts",
+        "group": 6,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/attention/reconcile.test.ts",
+        "group": 7,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/attention/routing.test.ts",
+        "group": 7,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/attention/seatAgenda.test.ts",
+        "group": 7,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/attention/service.test.ts",
+        "group": 7,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/audio/workCues.test.ts",
+        "group": 7,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/boardMaintenance/guard.test.ts",
+        "group": 7,
+        "reportedFailures": 2,
+        "complete": true
+      },
+      {
+        "path": "src/lib/boardMaintenance/run.test.ts",
+        "group": 7,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/bridge/reportLog.test.ts",
+        "group": 7,
+        "reportedFailures": 6,
+        "complete": true
+      },
+      {
+        "path": "src/lib/bridge/service.test.ts",
+        "group": 7,
+        "reportedFailures": 22,
+        "complete": true
+      },
+      {
+        "path": "src/lib/delivery.test.ts",
+        "group": 7,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/done/project.test.ts",
+        "group": 7,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/filesReadSummary.test.ts",
+        "group": 7,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/flows/decisions.test.ts",
+        "group": 7,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/flows/retirement.test.ts",
+        "group": 7,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/forge/autoMerge.test.ts",
+        "group": 7,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/forge/autoMergeStore.test.ts",
+        "group": 7,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/forge/autoRefresh.test.ts",
+        "group": 7,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/forge/sweep.test.ts",
+        "group": 7,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/forge/taskFinish.test.ts",
+        "group": 7,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/forge/workLinks.test.ts",
+        "group": 7,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/i18n/serverBoundary.test.ts",
+        "group": 8,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/lib/lifecycle/liveness.test.ts",
+        "group": 8,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/lifecycle/projector.test.ts",
+        "group": 8,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/lib/links/laneFeed.test.ts",
+        "group": 8,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/accountProjectBinding.test.ts",
+        "group": 8,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/agentFleet.binding.test.ts",
+        "group": 8,
+        "reportedFailures": 2,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/agentFleet.test.ts",
+        "group": 8,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/answerSizes.test.ts",
+        "group": 8,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/autoUpdates.test.ts",
+        "group": 8,
+        "reportedFailures": 4,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/autonomy.test.ts",
+        "group": 8,
+        "reportedFailures": 2,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/bindings.deploy.replay.test.ts",
+        "group": 8,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/bindings.deploy.test.ts",
+        "group": 8,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/bindings.test.ts",
+        "group": 8,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/bridgeReportOrigin.test.ts",
+        "group": 8,
+        "reportedFailures": 10,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/bridgeReportShape.test.ts",
+        "group": 8,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/callCost.test.ts",
+        "group": 8,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/callerIdentification.test.ts",
+        "group": 8,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/callerResolution.test.ts",
+        "group": 8,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/coldScan.test.ts",
+        "group": 8,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/compactAnswers.test.ts",
+        "group": 8,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/controlPlaneReads.test.ts",
+        "group": 9,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/conversationAction.integration.test.ts",
+        "group": 9,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/conversationMigration.integration.test.ts",
+        "group": 9,
+        "reportedFailures": 2,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/crossProject.test.ts",
+        "group": 9,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/curateRules.test.ts",
+        "group": 9,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/deployAuthority.test.ts",
+        "group": 9,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/deploymentListPages.test.ts",
+        "group": 9,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/deploymentReads.test.ts",
+        "group": 9,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/deputyAttribution.test.ts",
+        "group": 9,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/dismissAttention.test.ts",
+        "group": 9,
+        "reportedFailures": 2,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/http.cancellation.test.ts",
+        "group": 9,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/http.test.ts",
+        "group": 9,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/inputLimits.test.ts",
+        "group": 9,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/interruptedCall.test.ts",
+        "group": 9,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/issueReport.test.ts",
+        "group": 9,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/largeReads.test.ts",
+        "group": 9,
+        "reportedFailures": 2,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/leaveLesson.test.ts",
+        "group": 9,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/leaveLessonOperator.test.ts",
+        "group": 9,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/leaveLessonSeat.test.ts",
+        "group": 9,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/linkedSeatTools.test.ts",
+        "group": 9,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/maintainerGuard.integration.test.ts",
+        "group": 10,
+        "reportedFailures": 1,
+        "complete": false
+      },
+      {
+        "path": "src/lib/mcp/modelInput.native.test.ts",
+        "group": 10,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/modelInput.test.ts",
+        "group": 10,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/nativeWorkMetadata.test.ts",
+        "group": 10,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/orchestratorSendRecovery.test.ts",
+        "group": 10,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/orchestratorTools.test.ts",
+        "group": 10,
+        "reportedFailures": 2,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/originalKeySendRecovery.test.ts",
+        "group": 10,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/pageCursors.integration.test.ts",
+        "group": 10,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/pageCursors.test.ts",
+        "group": 10,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/pipelineBusyAdmission.test.ts",
+        "group": 10,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/pipelineRoleFence.test.ts",
+        "group": 10,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/projectResolution.test.ts",
+        "group": 10,
+        "reportedFailures": 12,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/pullRequestReads.test.ts",
+        "group": 10,
+        "reportedFailures": 3,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/readLatency.test.ts",
+        "group": 10,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/relayOwnerHistory.test.ts",
+        "group": 10,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/relayServiceTools.test.ts",
+        "group": 10,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/releaseSettings.test.ts",
+        "group": 10,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/reportTools.test.ts",
+        "group": 10,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/requestAttention.immediate.test.ts",
+        "group": 10,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/requestAttention.targets.test.ts",
+        "group": 10,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/requestAttention.test.ts",
+        "group": 11,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/retirementStatus.integration.test.ts",
+        "group": 11,
+        "reportedFailures": 17,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/retirementStatus.test.ts",
+        "group": 11,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/retryStageLaunch.integration.test.ts",
+        "group": 11,
+        "reportedFailures": 4,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/reviewDispatchFailure.test.ts",
+        "group": 11,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/rolePresets.test.ts",
+        "group": 11,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/schemaParity.test.ts",
+        "group": 11,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/searchMemory.budget.test.ts",
+        "group": 11,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/searchMemory.test.ts",
+        "group": 11,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/seatAnswerBudgets.test.ts",
+        "group": 11,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/selectedContextActions.test.ts",
+        "group": 11,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/server.test.ts",
+        "group": 11,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/shortIds.answers.test.ts",
+        "group": 11,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/spawnAccount.test.ts",
+        "group": 11,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/spawnDeployer.test.ts",
+        "group": 11,
+        "reportedFailures": 2,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/spawnRecovery.integration.test.ts",
+        "group": 11,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/stdio.integration.test.ts",
+        "group": 11,
+        "reportedFailures": 17,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/taskBoardVisibility.integration.test.ts",
+        "group": 11,
+        "reportedFailures": 1,
+        "complete": false
+      },
+      {
+        "path": "src/lib/mcp/taskColor.integration.test.ts",
+        "group": 11,
+        "reportedFailures": 1,
+        "complete": false
+      },
+      {
+        "path": "src/lib/mcp/taskColorGroupHide.integration.test.ts",
+        "group": 11,
+        "reportedFailures": 1,
+        "complete": false
+      },
+      {
+        "path": "src/lib/mcp/taskDetails.integration.test.ts",
+        "group": 12,
+        "reportedFailures": 1,
+        "complete": false
+      },
+      {
+        "path": "src/lib/mcp/taskExecutor.test.ts",
+        "group": 12,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/taskFinding.integration.test.ts",
+        "group": 12,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/taskIcon.integration.test.ts",
+        "group": 12,
+        "reportedFailures": 1,
+        "complete": false
+      },
+      {
+        "path": "src/lib/mcp/taskLineEdits.integration.test.ts",
+        "group": 12,
+        "reportedFailures": 1,
+        "complete": false
+      },
+      {
+        "path": "src/lib/mcp/taskOwnership.integration.test.ts",
+        "group": 12,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/taskPosition.integration.test.ts",
+        "group": 12,
+        "reportedFailures": 1,
+        "complete": false
+      },
+      {
+        "path": "src/lib/mcp/taskPriority.integration.test.ts",
+        "group": 12,
+        "reportedFailures": 1,
+        "complete": false
+      },
+      {
+        "path": "src/lib/mcp/telegramBot.test.ts",
+        "group": 12,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/toolAllowlist.service.test.ts",
+        "group": 12,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/toolAllowlist.test.ts",
+        "group": 12,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/voiceTools.test.ts",
+        "group": 12,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/voiceUtteranceContext.test.ts",
+        "group": 12,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/workerLimit.test.ts",
+        "group": 12,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/mcp/worktreeBackfill.integration.test.ts",
+        "group": 12,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/memory/curation/curation.test.ts",
+        "group": 12,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/memory/curation/curator.eval.test.ts",
+        "group": 12,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/memory/roleLane.test.ts",
+        "group": 12,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/lib/memory/roleLaunch.test.ts",
+        "group": 12,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/lib/memory/roleSelection.test.ts",
+        "group": 12,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/memory/roleSelectionRetention.test.ts",
+        "group": 13,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/monitor/ruleReports.test.ts",
+        "group": 13,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/monitor/seatAutoRotation.spawn.test.ts",
+        "group": 13,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/monitor/seatHostRecovery.test.ts",
+        "group": 13,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/monitor/seatTickController.test.ts",
+        "group": 13,
+        "reportedFailures": 63,
+        "complete": true
+      },
+      {
+        "path": "src/lib/monitor/seatTickSources.test.ts",
+        "group": 13,
+        "reportedFailures": 2,
+        "complete": true
+      },
+      {
+        "path": "src/lib/onboarding/healthCheck.test.ts",
+        "group": 13,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/onboarding/healthRoute.test.ts",
+        "group": 13,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/lib/orchestrator/boardReportRun.test.ts",
+        "group": 13,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/orchestrator/ownerRelay.test.ts",
+        "group": 13,
+        "reportedFailures": 3,
+        "complete": true
+      },
+      {
+        "path": "src/lib/orchestrator/relay.test.ts",
+        "group": 13,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/lib/orchestrator/rotationAuthority.test.ts",
+        "group": 13,
+        "reportedFailures": 2,
+        "complete": true
+      },
+      {
+        "path": "src/lib/orchestrator/seatProjectIdentity.test.ts",
+        "group": 13,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/adoptionHistory.test.ts",
+        "group": 13,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/autoRefreshStore.test.ts",
+        "group": 13,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/backgroundTaskSettlement.test.ts",
+        "group": 13,
+        "reportedFailures": 6,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/cloudHostedClient.test.ts",
+        "group": 13,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/cloudStage.test.ts",
+        "group": 13,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/coldScan.test.ts",
+        "group": 13,
+        "reportedFailures": 3,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/controllerArtifacts.test.ts",
+        "group": 13,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/controllerLease.reproduction.test.ts",
+        "group": 14,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/controllerLease.test.ts",
+        "group": 14,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/decisionAuthority.test.ts",
+        "group": 14,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/deputyLineage.test.ts",
+        "group": 14,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.accountGuard.test.ts",
+        "group": 14,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.activation.test.ts",
+        "group": 14,
+        "reportedFailures": 6,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.cloud.test.ts",
+        "group": 14,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.containment.test.ts",
+        "group": 14,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.controllerPass.test.ts",
+        "group": 14,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.controllerSnapshot.test.ts",
+        "group": 14,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+        "group": 14,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.cpuQueue.test.ts",
+        "group": 14,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.creation.test.ts",
+        "group": 14,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.fencedMessage.test.ts",
+        "group": 14,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.pauseMetadata.test.ts",
+        "group": 14,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.ports.part2.test.ts",
+        "group": 14,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.ports.part3.test.ts",
+        "group": 14,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.ports.test.ts",
+        "group": 14,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.providerBudget.test.ts",
+        "group": 14,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.providerBudgetChains.part3.test.ts",
+        "group": 14,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.providerBudgetKinds.test.ts",
+        "group": 15,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.providerChains.part2.test.ts",
+        "group": 15,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.providerChains.test.ts",
+        "group": 15,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.providerReset.part2.test.ts",
+        "group": 15,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.providerReset.part3.test.ts",
+        "group": 15,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.providerReset.test.ts",
+        "group": 15,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.providerSignals.test.ts",
+        "group": 15,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.provisioning.test.ts",
+        "group": 15,
+        "reportedFailures": 4,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.publication.test.ts",
+        "group": 15,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.recoveredPending.test.ts",
+        "group": 15,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.recovery.part2.test.ts",
+        "group": 15,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.recovery.test.ts",
+        "group": 15,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.recoveryAdmission.part2.test.ts",
+        "group": 15,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.recoveryAdmission.test.ts",
+        "group": 15,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.recoveryAuthority.part2.test.ts",
+        "group": 15,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.recoveryAuthority.test.ts",
+        "group": 15,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.rolePrivacy.test.ts",
+        "group": 15,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.routing.test.ts",
+        "group": 15,
+        "reportedFailures": 2,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.settlement.test.ts",
+        "group": 15,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.spawnSilence.test.ts",
+        "group": 15,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.succession.part2.test.ts",
+        "group": 16,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.succession.part3.test.ts",
+        "group": 16,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.succession.test.ts",
+        "group": 16,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engine.watchdogRegression.test.ts",
+        "group": 16,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/engineConnectionRefusal.test.ts",
+        "group": 16,
+        "reportedFailures": 4,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/failEdgeBudget.test.ts",
+        "group": 16,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/git.test.ts",
+        "group": 16,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/graphEdits.test.ts",
+        "group": 16,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/handLaunch.test.ts",
+        "group": 16,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/hostRetirement.test.ts",
+        "group": 16,
+        "reportedFailures": 11,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/laneStop.test.ts",
+        "group": 16,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/legacyReviewConversion.test.ts",
+        "group": 16,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/legacyReviewDefinition.test.ts",
+        "group": 16,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/legacyReviewStore.test.ts",
+        "group": 16,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/listProjection.test.ts",
+        "group": 16,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/materializationHistory.test.ts",
+        "group": 16,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/parkedPublication.test.ts",
+        "group": 16,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/preflight.test.ts",
+        "group": 16,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/prompts.test.ts",
+        "group": 16,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/publication.test.ts",
+        "group": 16,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/publicationRecovery.test.ts",
+        "group": 17,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/registryCompatibility.test.ts",
+        "group": 17,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/remoteActions.test.ts",
+        "group": 17,
+        "reportedFailures": 42,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/repositoryInitialization.test.ts",
+        "group": 17,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/resolveDecision.test.ts",
+        "group": 17,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/retirementEvidence.test.ts",
+        "group": 17,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/revalidation.test.ts",
+        "group": 17,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/runtimeReads.test.ts",
+        "group": 17,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/runtimeSwitch.test.ts",
+        "group": 17,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/severedStageRetry.test.ts",
+        "group": 17,
+        "reportedFailures": 2,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/severedTurnResume.test.ts",
+        "group": 17,
+        "reportedFailures": 10,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/spawnRestartRecovery.test.ts",
+        "group": 17,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/stageAccountBinding.test.ts",
+        "group": 17,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/stageAttemptPush.test.ts",
+        "group": 17,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/stageCommitRepair.test.ts",
+        "group": 17,
+        "reportedFailures": 18,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/stageCompletion.test.ts",
+        "group": 17,
+        "reportedFailures": 25,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/stageDigest.test.ts",
+        "group": 17,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/stageHostGenerationClose.integration.test.ts",
+        "group": 17,
+        "reportedFailures": 13,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/stageHostLiveness.test.ts",
+        "group": 17,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/stageHostTeardown.test.ts",
+        "group": 17,
+        "reportedFailures": 6,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/stageInput.test.ts",
+        "group": 18,
+        "reportedFailures": 5,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/stagePublicationRepair.test.ts",
+        "group": 18,
+        "reportedFailures": 3,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/stagePullRequest.test.ts",
+        "group": 18,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/stageSizing.test.ts",
+        "group": 18,
+        "reportedFailures": 9,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/stageVerdictRequest.test.ts",
+        "group": 18,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/startupResponsiveness.test.ts",
+        "group": 18,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/store.reads.test.ts",
+        "group": 18,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/store.test.ts",
+        "group": 18,
+        "reportedFailures": 2,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/taskBinding.test.ts",
+        "group": 18,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/taskFinish.test.ts",
+        "group": 18,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/taskStatusNote.test.ts",
+        "group": 18,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/terminalReap.test.ts",
+        "group": 18,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/verdict.test.ts",
+        "group": 18,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/visibility.test.ts",
+        "group": 18,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/pipelines/worktreeSweep.test.ts",
+        "group": 18,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/projects/durableMigration.test.ts",
+        "group": 18,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/projects/reportDestination.test.ts",
+        "group": 18,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/projects/shortIds.test.ts",
+        "group": 18,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/lib/projects/succession.test.ts",
+        "group": 18,
+        "reportedFailures": 2,
+        "complete": true
+      },
+      {
+        "path": "src/lib/prototypeReview/criticGate.test.ts",
+        "group": 18,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/prototypeReview/decision.integration.test.ts",
+        "group": 19,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/prototypeReview/deliveryWorker.test.ts",
+        "group": 19,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/prototypeReview/fences.test.ts",
+        "group": 19,
+        "reportedFailures": 3,
+        "complete": true
+      },
+      {
+        "path": "src/lib/prototypeReview/http.test.ts",
+        "group": 19,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/prototypeReview/mcpReceipts.test.ts",
+        "group": 19,
+        "reportedFailures": 8,
+        "complete": true
+      },
+      {
+        "path": "src/lib/prototypeReview/seatDecisions.test.ts",
+        "group": 19,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/prototypeReview/telegramPost.test.ts",
+        "group": 19,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/realtime/voiceCardChain.dom.test.ts",
+        "group": 19,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/release/stages.test.ts",
+        "group": 19,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/runtime/agentSignalSandbox.mcp.integration.test.ts",
+        "group": 19,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/runtime/attemptTempProduction.test.ts",
+        "group": 19,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/runtime/claudeStreamBrokerHost.integration.test.ts",
+        "group": 19,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/runtime/codexAppServerHost.integration.test.ts",
+        "group": 19,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/runtime/codexSubagentDetection.test.ts",
+        "group": 19,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/runtime/nativeQueueHost.integration.test.ts",
+        "group": 19,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/runtime/permissionGuard.test.ts",
+        "group": 19,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/runtime/pipelineStageHostAccess.integration.test.ts",
+        "group": 19,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/runtime/releaseInterruption.test.ts",
+        "group": 19,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/runtime/startup.test.ts",
+        "group": 19,
+        "reportedFailures": 4,
+        "complete": true
+      },
+      {
+        "path": "src/lib/runtime/startupFinalization.integration.test.ts",
+        "group": 19,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/runtime/structuredDeliveryQueue.test.ts",
+        "group": 20,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/runtime/structuredRecovery.test.ts",
+        "group": 20,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/runtime/structuredSpawn.terminalize.test.ts",
+        "group": 20,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/scanner/filesResponseWorker.test.ts",
+        "group": 20,
+        "reportedFailures": 2,
+        "complete": true
+      },
+      {
+        "path": "src/lib/scanner/taskExtractionRetirement.test.ts",
+        "group": 20,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/selfUpdate/quietFallback.test.ts",
+        "group": 20,
+        "reportedFailures": 2,
+        "complete": true
+      },
+      {
+        "path": "src/lib/selfUpdate/workEvidence.test.ts",
+        "group": 20,
+        "reportedFailures": 11,
+        "complete": true
+      },
+      {
+        "path": "src/lib/state/declaredIndexes.test.ts",
+        "group": 20,
+        "reportedFailures": 2,
+        "complete": true
+      },
+      {
+        "path": "src/lib/state/historyProjection.test.ts",
+        "group": 20,
+        "reportedFailures": 3,
+        "complete": true
+      },
+      {
+        "path": "src/lib/state/hotStateStores.benchmark.test.ts",
+        "group": 20,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/state/hotStateStores.sqlite.test.ts",
+        "group": 20,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/state/registryRecords.test.ts",
+        "group": 20,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/state/sqliteStateStore.bounded.test.ts",
+        "group": 20,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/taskAlbum/album.test.ts",
+        "group": 20,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/tasks/launchMembership.registry.test.ts",
+        "group": 20,
+        "reportedFailures": 4,
+        "complete": true
+      },
+      {
+        "path": "src/lib/tasks/membership.test.ts",
+        "group": 20,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/tasks/seatRecoveryCleanup.test.ts",
+        "group": 20,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/tasks/taskColorGroupHide.test.ts",
+        "group": 20,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/voiceCompanion/boardReads.test.ts",
+        "group": 20,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/voiceCompanion/callHistory.test.ts",
+        "group": 20,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/voiceCompanion/callMemory.test.ts",
+        "group": 21,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/voiceCompanion/callResume.test.ts",
+        "group": 21,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/voiceCompanion/codexConversation.test.ts",
+        "group": 21,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/voiceCompanion/codexProvider.test.ts",
+        "group": 21,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/voiceCompanion/delivery.team.test.ts",
+        "group": 21,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/voiceCompanion/liveSession.test.ts",
+        "group": 21,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/voiceCompanion/ownerHistoryRecording.test.ts",
+        "group": 21,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/lib/voiceCompanion/readPaths.test.ts",
+        "group": 21,
+        "reportedFailures": 2,
+        "complete": true
+      },
+      {
+        "path": "src/lib/voiceCompanion/tools.test.ts",
+        "group": 21,
+        "reportedFailures": 1,
+        "complete": true
+      },
+      {
+        "path": "src/lib/workflows/engine.cpuAdmission.test.ts",
+        "group": 21,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/runtime-host/candidateStateDataset.test.ts",
+        "group": 21,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/runtime-host/mcpRuntimeCompatibility.test.ts",
+        "group": 21,
+        "reportedFailures": 0,
+        "complete": true
+      },
+      {
+        "path": "src/runtime-host/mcpRuntimeProbe.test.ts",
+        "group": 21,
+        "reportedFailures": 2,
+        "complete": true
+      }
+    ],
+    "browser": {
+      "path": "src/components/kanban/kanbanBoard.browser.test.tsx",
+      "command": "setsid bun scripts/owned-runner.ts bun test --timeout=60000 src/components/kanban/kanbanBoard.browser.test.tsx, stdin closed",
+      "exitCode": 0,
+      "counts": {
+        "pass": 1,
+        "fail": 0,
+        "skip": 247,
+        "error": 0
+      }
+    },
+    "interpretation": "Group 11's unmatched between-tests MCP lifecycle diagnostic embeds process identities. Whole-file repetitions reproduce the diagnostic and the same assertion failures on the starting revision. Raw gate exit 1 is retained. Other failure classifications are pre-existing. The audit checked the core commit; focused checks cover subsequent cloud-only changes."
+  },
+  "wholeFileComparisons": {
+    "sourceRevision": "Follow-up snapshot before the final mount lookup and late-receipt fixes; the final focused source fingerprints are separate.",
+    "sourcesSha256": {
+      "docs/design/cloud-stage-runtime.md": "d9a39d91b59a8d2b54d0d6c99c39cc8f256e333f7186294d1e9e4f5d3553128e",
+      "src/app/api/projects/settings/route.test.ts": "19dec3ae2b1328ca205cc274f38c9742f27044056a7eaa547e1ace925b724c6a",
+      "src/app/api/projects/settings/route.ts": "eb3eeb1ba0f5c74184273077b6ddfccbc35edad48ba7ffdd5fa99cd11cbc5498",
+      "src/lib/mcp/server.ts": "56ef463e58dfa0c0cd23b1ae55d21fe95b860b2cca544a56392107af0120b92c",
+      "src/lib/pipelines/cloudHostedClient.test.ts": "e6112c91edaec4d47f0362e74e0ae39a829bbdc2aa5bc9ebf26fb77712b288f8",
+      "src/lib/pipelines/cloudHostedClient.ts": "03b390c7304fa60e26af836dfc35dc09e086245b32cd8a9e1c78bfcbaaa65b76",
+      "src/lib/pipelines/cloudStage.test.ts": "9a4a17e037d66eb88b21085e6b52280f7f5ced7ee2a7e080219fd4212d090ecc",
+      "src/lib/pipelines/cloudStage.ts": "27fc1ec0402b7af674fe121e9dc91b5e3cc6255757d6088d70af6590c7f94d10",
+      "src/lib/pipelines/controllerPass.ts": "243142d75f1dc2cffff2893512d2db20fa15ab9ad5113adfe7b786443a870ef1",
+      "src/lib/pipelines/engine.cloud.test.ts": "7db643a5dbe82044412089222eee5d1f5f74f16d2d26b120223bc3308da1a04d",
+      "src/lib/pipelines/engine.ts": "fd11f0cd6a3e37ebe507de817c26e8b3dfce789cf3ffd88ea9cf239bd8b927de",
+      "src/lib/pipelines/fixtures/cloudStageRestart.ts": "5e1e7028e472e307090c0c5f894b47aeec3ee0d63fbdcb5d63862800fcf39121",
+      "src/lib/pipelines/stageDigest.ts": "f88172aa04cc7c07f3f5dbcd01e12261c5b395c0bff5d3e96fa8c3c977d98e02",
+      "src/lib/pipelines/store.ts": "1314f5d337939668a789005a8b5635bc151a93e7ac45d317b7c0f2fb49339f18",
+      "src/lib/pipelines/types.ts": "e48346d3e89554a2e2553cd2edad42abda8dbe6311320f85863201d9db2c5fcc",
+      "src/lib/projects/settings.ts": "ccb75211d5fdfad2e624e3d9955845d2151714a992662f94af465afd81acea0d"
+    },
+    "command": "For three rounds, head then base: setsid bun scripts/owned-runner.ts bun test --timeout=60000 --reporter=junit --reporter-outfile=<isolated report> <explicit path>, stdin closed; fresh isolated roots for each file; base checkout at the pinned starting revision.",
+    "combinedDriverExitCode": 1,
+    "combinedDriverNote": "The combined preliminary focused/paired command retained lint and fixture-privacy refusals. Both were corrected before the separately recorded final focused checks.",
+    "preliminaryFocusedChecks": [
+      {
+        "check": "typecheck",
+        "exitCode": 0
+      },
+      {
+        "check": "eslint",
+        "exitCode": 1
+      },
+      {
+        "check": "src/lib/pipelines/cloudHostedClient.test.ts",
+        "exitCode": 0
+      },
+      {
+        "check": "src/lib/pipelines/cloudStage.test.ts",
+        "exitCode": 0
+      },
+      {
+        "check": "src/lib/pipelines/engine.cloud.test.ts",
+        "exitCode": 0
+      },
+      {
+        "check": "privacy",
+        "exitCode": 1
+      }
+    ],
+    "observationCount": 42,
+    "observations": [
+      {
+        "side": "head",
+        "round": 1,
+        "path": "src/lib/mcp/reportTools.test.ts",
+        "exitCode": 1,
+        "counts": {
+          "pass": 5,
+          "fail": 1,
+          "skip": 0,
+          "error": 0
+        },
+        "failureNamesSha256": "a25cd9d3bc6b6c18d73ee8584ae06e9a9acab4b9761f953413778218ed5355f6"
+      },
+      {
+        "side": "head",
+        "round": 1,
+        "path": "src/lib/mcp/retirementStatus.integration.test.ts",
+        "exitCode": 1,
+        "counts": {
+          "pass": 3,
+          "fail": 16,
+          "skip": 0,
+          "error": 1
+        },
+        "failureNamesSha256": "fa31b514d543d08c37f351e1690e93f2fc85a59450fe815e6d17a6d87ea41f1e"
+      },
+      {
+        "side": "head",
+        "round": 1,
+        "path": "src/lib/pipelines/engine.activation.test.ts",
+        "exitCode": 1,
+        "counts": {
+          "pass": 47,
+          "fail": 6,
+          "skip": 23,
+          "error": 0
+        },
+        "failureNamesSha256": "eda6f2799792e148517fb04ff395baf2fd8a2fa9f6589380fac6825503f40ede"
+      },
+      {
+        "side": "head",
+        "round": 1,
+        "path": "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+        "exitCode": 0,
+        "counts": {
+          "pass": 15,
+          "fail": 0,
+          "skip": 5,
+          "error": 0
+        },
+        "failureNamesSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "side": "head",
+        "round": 1,
+        "path": "src/lib/pipelines/engine.provisioning.test.ts",
+        "exitCode": 0,
+        "counts": {
+          "pass": 69,
+          "fail": 0,
+          "skip": 17,
+          "error": 0
+        },
+        "failureNamesSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "side": "head",
+        "round": 1,
+        "path": "src/lib/pipelines/store.test.ts",
+        "exitCode": 0,
+        "counts": {
+          "pass": 56,
+          "fail": 0,
+          "skip": 0,
+          "error": 0
+        },
+        "failureNamesSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "side": "head",
+        "round": 1,
+        "path": "src/lib/pipelines/terminalReap.test.ts",
+        "exitCode": 0,
+        "counts": {
+          "pass": 58,
+          "fail": 0,
+          "skip": 0,
+          "error": 0
+        },
+        "failureNamesSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "side": "base",
+        "round": 1,
+        "path": "src/lib/mcp/reportTools.test.ts",
+        "exitCode": 1,
+        "counts": {
+          "pass": 5,
+          "fail": 1,
+          "skip": 0,
+          "error": 0
+        },
+        "failureNamesSha256": "a25cd9d3bc6b6c18d73ee8584ae06e9a9acab4b9761f953413778218ed5355f6"
+      },
+      {
+        "side": "base",
+        "round": 1,
+        "path": "src/lib/mcp/retirementStatus.integration.test.ts",
+        "exitCode": 1,
+        "counts": {
+          "pass": 3,
+          "fail": 16,
+          "skip": 0,
+          "error": 1
+        },
+        "failureNamesSha256": "fa31b514d543d08c37f351e1690e93f2fc85a59450fe815e6d17a6d87ea41f1e"
+      },
+      {
+        "side": "base",
+        "round": 1,
+        "path": "src/lib/pipelines/engine.activation.test.ts",
+        "exitCode": 1,
+        "counts": {
+          "pass": 47,
+          "fail": 6,
+          "skip": 23,
+          "error": 0
+        },
+        "failureNamesSha256": "eda6f2799792e148517fb04ff395baf2fd8a2fa9f6589380fac6825503f40ede"
+      },
+      {
+        "side": "base",
+        "round": 1,
+        "path": "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+        "exitCode": 1,
+        "counts": {
+          "pass": 14,
+          "fail": 1,
+          "skip": 5,
+          "error": 0
+        },
+        "failureNamesSha256": "93910cf0f895073f621a58fe24e1b01b0b98b84e3deca946065623f9ad9ef83e"
+      },
+      {
+        "side": "base",
+        "round": 1,
+        "path": "src/lib/pipelines/engine.provisioning.test.ts",
+        "exitCode": 0,
+        "counts": {
+          "pass": 69,
+          "fail": 0,
+          "skip": 17,
+          "error": 0
+        },
+        "failureNamesSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "side": "base",
+        "round": 1,
+        "path": "src/lib/pipelines/store.test.ts",
+        "exitCode": 1,
+        "counts": {
+          "pass": 54,
+          "fail": 2,
+          "skip": 0,
+          "error": 0
+        },
+        "failureNamesSha256": "562a175b8707c1b8eccf45a7406c6902c8421cbe5ef1876714666a9c30f93f2a"
+      },
+      {
+        "side": "base",
+        "round": 1,
+        "path": "src/lib/pipelines/terminalReap.test.ts",
+        "exitCode": 1,
+        "counts": {
+          "pass": 0,
+          "fail": 1,
+          "skip": 0,
+          "error": 0
+        },
+        "failureNamesSha256": "85d77e2f319f872b7ea3cc959f1e1c17200e869de8210647798b3e4552ee703f"
+      },
+      {
+        "side": "head",
+        "round": 2,
+        "path": "src/lib/mcp/reportTools.test.ts",
+        "exitCode": 1,
+        "counts": {
+          "pass": 5,
+          "fail": 1,
+          "skip": 0,
+          "error": 0
+        },
+        "failureNamesSha256": "a25cd9d3bc6b6c18d73ee8584ae06e9a9acab4b9761f953413778218ed5355f6"
+      },
+      {
+        "side": "head",
+        "round": 2,
+        "path": "src/lib/mcp/retirementStatus.integration.test.ts",
+        "exitCode": 1,
+        "counts": {
+          "pass": 3,
+          "fail": 16,
+          "skip": 0,
+          "error": 1
+        },
+        "failureNamesSha256": "fa31b514d543d08c37f351e1690e93f2fc85a59450fe815e6d17a6d87ea41f1e"
+      },
+      {
+        "side": "head",
+        "round": 2,
+        "path": "src/lib/pipelines/engine.activation.test.ts",
+        "exitCode": 1,
+        "counts": {
+          "pass": 47,
+          "fail": 6,
+          "skip": 23,
+          "error": 0
+        },
+        "failureNamesSha256": "eda6f2799792e148517fb04ff395baf2fd8a2fa9f6589380fac6825503f40ede"
+      },
+      {
+        "side": "head",
+        "round": 2,
+        "path": "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+        "exitCode": 0,
+        "counts": {
+          "pass": 15,
+          "fail": 0,
+          "skip": 5,
+          "error": 0
+        },
+        "failureNamesSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "side": "head",
+        "round": 2,
+        "path": "src/lib/pipelines/engine.provisioning.test.ts",
+        "exitCode": 0,
+        "counts": {
+          "pass": 69,
+          "fail": 0,
+          "skip": 17,
+          "error": 0
+        },
+        "failureNamesSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "side": "head",
+        "round": 2,
+        "path": "src/lib/pipelines/store.test.ts",
+        "exitCode": 0,
+        "counts": {
+          "pass": 56,
+          "fail": 0,
+          "skip": 0,
+          "error": 0
+        },
+        "failureNamesSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "side": "head",
+        "round": 2,
+        "path": "src/lib/pipelines/terminalReap.test.ts",
+        "exitCode": 0,
+        "counts": {
+          "pass": 58,
+          "fail": 0,
+          "skip": 0,
+          "error": 0
+        },
+        "failureNamesSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "side": "base",
+        "round": 2,
+        "path": "src/lib/mcp/reportTools.test.ts",
+        "exitCode": 1,
+        "counts": {
+          "pass": 5,
+          "fail": 1,
+          "skip": 0,
+          "error": 0
+        },
+        "failureNamesSha256": "a25cd9d3bc6b6c18d73ee8584ae06e9a9acab4b9761f953413778218ed5355f6"
+      },
+      {
+        "side": "base",
+        "round": 2,
+        "path": "src/lib/mcp/retirementStatus.integration.test.ts",
+        "exitCode": 1,
+        "counts": {
+          "pass": 3,
+          "fail": 16,
+          "skip": 0,
+          "error": 1
+        },
+        "failureNamesSha256": "fa31b514d543d08c37f351e1690e93f2fc85a59450fe815e6d17a6d87ea41f1e"
+      },
+      {
+        "side": "base",
+        "round": 2,
+        "path": "src/lib/pipelines/engine.activation.test.ts",
+        "exitCode": 1,
+        "counts": {
+          "pass": 47,
+          "fail": 6,
+          "skip": 23,
+          "error": 0
+        },
+        "failureNamesSha256": "eda6f2799792e148517fb04ff395baf2fd8a2fa9f6589380fac6825503f40ede"
+      },
+      {
+        "side": "base",
+        "round": 2,
+        "path": "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+        "exitCode": 1,
+        "counts": {
+          "pass": 14,
+          "fail": 1,
+          "skip": 5,
+          "error": 0
+        },
+        "failureNamesSha256": "93910cf0f895073f621a58fe24e1b01b0b98b84e3deca946065623f9ad9ef83e"
+      },
+      {
+        "side": "base",
+        "round": 2,
+        "path": "src/lib/pipelines/engine.provisioning.test.ts",
+        "exitCode": 0,
+        "counts": {
+          "pass": 69,
+          "fail": 0,
+          "skip": 17,
+          "error": 0
+        },
+        "failureNamesSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "side": "base",
+        "round": 2,
+        "path": "src/lib/pipelines/store.test.ts",
+        "exitCode": 0,
+        "counts": {
+          "pass": 56,
+          "fail": 0,
+          "skip": 0,
+          "error": 0
+        },
+        "failureNamesSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "side": "base",
+        "round": 2,
+        "path": "src/lib/pipelines/terminalReap.test.ts",
+        "exitCode": 1,
+        "counts": {
+          "pass": 0,
+          "fail": 1,
+          "skip": 0,
+          "error": 0
+        },
+        "failureNamesSha256": "fe7acc662d267a9afbd6e6ae305efc82f9138fb5a82051dd01118b3d8a36255b"
+      },
+      {
+        "side": "head",
+        "round": 3,
+        "path": "src/lib/mcp/reportTools.test.ts",
+        "exitCode": 1,
+        "counts": {
+          "pass": 5,
+          "fail": 1,
+          "skip": 0,
+          "error": 0
+        },
+        "failureNamesSha256": "a25cd9d3bc6b6c18d73ee8584ae06e9a9acab4b9761f953413778218ed5355f6"
+      },
+      {
+        "side": "head",
+        "round": 3,
+        "path": "src/lib/mcp/retirementStatus.integration.test.ts",
+        "exitCode": 1,
+        "counts": {
+          "pass": 3,
+          "fail": 16,
+          "skip": 0,
+          "error": 1
+        },
+        "failureNamesSha256": "fa31b514d543d08c37f351e1690e93f2fc85a59450fe815e6d17a6d87ea41f1e"
+      },
+      {
+        "side": "head",
+        "round": 3,
+        "path": "src/lib/pipelines/engine.activation.test.ts",
+        "exitCode": 1,
+        "counts": {
+          "pass": 47,
+          "fail": 6,
+          "skip": 23,
+          "error": 0
+        },
+        "failureNamesSha256": "eda6f2799792e148517fb04ff395baf2fd8a2fa9f6589380fac6825503f40ede"
+      },
+      {
+        "side": "head",
+        "round": 3,
+        "path": "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+        "exitCode": 0,
+        "counts": {
+          "pass": 15,
+          "fail": 0,
+          "skip": 5,
+          "error": 0
+        },
+        "failureNamesSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "side": "head",
+        "round": 3,
+        "path": "src/lib/pipelines/engine.provisioning.test.ts",
+        "exitCode": 0,
+        "counts": {
+          "pass": 69,
+          "fail": 0,
+          "skip": 17,
+          "error": 0
+        },
+        "failureNamesSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "side": "head",
+        "round": 3,
+        "path": "src/lib/pipelines/store.test.ts",
+        "exitCode": 0,
+        "counts": {
+          "pass": 56,
+          "fail": 0,
+          "skip": 0,
+          "error": 0
+        },
+        "failureNamesSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "side": "head",
+        "round": 3,
+        "path": "src/lib/pipelines/terminalReap.test.ts",
+        "exitCode": 0,
+        "counts": {
+          "pass": 58,
+          "fail": 0,
+          "skip": 0,
+          "error": 0
+        },
+        "failureNamesSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "side": "base",
+        "round": 3,
+        "path": "src/lib/mcp/reportTools.test.ts",
+        "exitCode": 1,
+        "counts": {
+          "pass": 5,
+          "fail": 1,
+          "skip": 0,
+          "error": 0
+        },
+        "failureNamesSha256": "a25cd9d3bc6b6c18d73ee8584ae06e9a9acab4b9761f953413778218ed5355f6"
+      },
+      {
+        "side": "base",
+        "round": 3,
+        "path": "src/lib/mcp/retirementStatus.integration.test.ts",
+        "exitCode": 1,
+        "counts": {
+          "pass": 3,
+          "fail": 16,
+          "skip": 0,
+          "error": 1
+        },
+        "failureNamesSha256": "fa31b514d543d08c37f351e1690e93f2fc85a59450fe815e6d17a6d87ea41f1e"
+      },
+      {
+        "side": "base",
+        "round": 3,
+        "path": "src/lib/pipelines/engine.activation.test.ts",
+        "exitCode": 1,
+        "counts": {
+          "pass": 47,
+          "fail": 6,
+          "skip": 23,
+          "error": 0
+        },
+        "failureNamesSha256": "eda6f2799792e148517fb04ff395baf2fd8a2fa9f6589380fac6825503f40ede"
+      },
+      {
+        "side": "base",
+        "round": 3,
+        "path": "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+        "exitCode": 0,
+        "counts": {
+          "pass": 15,
+          "fail": 0,
+          "skip": 5,
+          "error": 0
+        },
+        "failureNamesSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "side": "base",
+        "round": 3,
+        "path": "src/lib/pipelines/engine.provisioning.test.ts",
+        "exitCode": 0,
+        "counts": {
+          "pass": 69,
+          "fail": 0,
+          "skip": 17,
+          "error": 0
+        },
+        "failureNamesSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "side": "base",
+        "round": 3,
+        "path": "src/lib/pipelines/store.test.ts",
+        "exitCode": 0,
+        "counts": {
+          "pass": 56,
+          "fail": 0,
+          "skip": 0,
+          "error": 0
+        },
+        "failureNamesSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "side": "base",
+        "round": 3,
+        "path": "src/lib/pipelines/terminalReap.test.ts",
+        "exitCode": 0,
+        "counts": {
+          "pass": 58,
+          "fail": 0,
+          "skip": 0,
+          "error": 0
+        },
+        "failureNamesSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ]
+  },
+  "limits": [
+    "No live paid cloud launch was run.",
+    "Hosted app-server protocol is the current desktop protocol and has no verified public stability guarantee.",
+    "Build/fix, untracked diff application and cloud checks remain slice 2.",
+    "The branch remains based on the pinned starting revision; concurrent main changes were inspected separately."
+  ],
+  "fixVerification": {
+    "recordedAt": "2026-10-23T22:11:10.478988+00:00",
+    "base": "8008507865d9b4826f07a84e567c59bc68307f14",
+    "sourceRevision": "Uncommitted fix snapshot; final checked inputs are identified by the source fingerprints.",
+    "sourcesSha256": {
+      "docs/design/cloud-stage-runtime.md": "5e2fbdfd158c992912243540238b72d3ef9e3aa8e331c813543e39f65365ed01",
+      "src/lib/pipelines/cloudHostedClient.test.ts": "85fbfd77d99fd904cb5bfe2181139bbb000a549b283ccaf9f993a7094aef8f20",
+      "src/lib/pipelines/cloudHostedClient.ts": "abd8854a708276f901731059146fb18e14440c3314b0107e982e12275b978f25",
+      "src/lib/pipelines/cloudStage.test.ts": "56853f00296f001d0fa5e7da3fa608401a16fff342c973431037aca491a136f3",
+      "src/lib/pipelines/cloudStage.ts": "189aef1134b9a9ab8d3ddbbc282955d73af13d6ca034864c5621f83e5b139f9c",
+      "src/lib/pipelines/engine.cloud.test.ts": "0082ca74e046f73167df0068b12c27c5e3898b5d1dc8480d5f56e482f59016da",
+      "src/lib/pipelines/engine.ts": "9dfcfdf9d63f29575a537c9864d75f9db5d13e3dc980b0bfad7e20c7fed691aa"
+    },
+    "fixes": {
+      "serviceTier": "Cloud execution refuses every explicit tier before submission. Role defaults retain the preference as preferredServiceTier with no claim of an applied tier. Durable shape validation is unchanged. The hosted adapter refuses direct tier requests before authentication.",
+      "failureCause": "Failed turns retain bounded credential-redacted messages and recognized cause names. Additional payload fields are discarded. Malformed non-null errors fail on poll, final-message and diff reads."
+    },
+    "isolation": {
+      "transport": "Controller-provided gate-slot.sh with gate-remote; one remote command at a time.",
+      "roots": [
+        "HOME",
+        "XDG_CONFIG_HOME",
+        "TMPDIR",
+        "LLV_STATE_DIR"
+      ],
+      "controlUrl": "Closed loopback port",
+      "testRuntime": "Bun 1.4.0",
+      "network": "Cloud clients and sockets are fake; no live cloud task."
+    },
+    "commands": {
+      "focused": "setsid bun scripts/owned-runner.ts bun run test <explicit path>, stdin closed",
+      "typecheck": "bunx tsc --noEmit --incremental false",
+      "eslint": "bun node_modules/eslint/bin/eslint.js --max-warnings=0 <the six touched TypeScript files>",
+      "importers": "setsid bun -e 'import { touchedTests } from \"./scripts/local-gate-tests\"; const r = await touchedTests(process.cwd(), \"8008507865d9b4826f07a84e567c59bc68307f14\", process.argv.slice(1), { budgets: { fileMs: 600000, runMs: 3600000 } }); if (r.introduced.length) process.exitCode = 1;' <files below>, stdin closed",
+      "sourcePrivacy": "bun scripts/privacy-publication-gate.ts --require-known-values --base 800850786 --paths <the seven source, test and design files>"
+    },
+    "focused": [
+      {
+        "path": "src/lib/pipelines/cloudStage.test.ts",
+        "exitCode": 0,
+        "pass": 11,
+        "fail": 0
+      },
+      {
+        "path": "src/lib/pipelines/cloudHostedClient.test.ts",
+        "exitCode": 0,
+        "pass": 65,
+        "fail": 0
+      },
+      {
+        "path": "src/lib/pipelines/engine.cloud.test.ts",
+        "exitCode": 0,
+        "pass": 47,
+        "fail": 0
+      }
+    ],
+    "staticChecks": [
+      {
+        "check": "typecheck",
+        "exitCode": 0
+      },
+      {
+        "check": "touched-file ESLint",
+        "exitCode": 0
+      },
+      {
+        "check": "source publication privacy",
+        "exitCode": 0
+      }
+    ],
+    "baselineRegression": {
+      "method": "Run the new fake-socket and engine probes with production modules restored to the pre-fix revision in the isolated remote checkout, then restore the final modules and run all three focused files.",
+      "observations": [
+        {
+          "probe": "hosted",
+          "exitCode": 1,
+          "expectedExitCode": 1,
+          "failedAssertions": [
+            "hosted submission refuses explicit default tiers before authentication or remote I/O",
+            "failed turns retain only sanitized messages and recognized cause codes: Codex Cloud turn failed (environment_setup_failed): Environment setup failed: missing dependency"
+          ]
+        },
+        {
+          "probe": "engine",
+          "exitCode": 1,
+          "expectedExitCode": 1,
+          "failedAssertions": [
+            "a newly created cloud stage with an explicit default tier fails before submission",
+            "cloud role tier preferences visibly fall back to the provider default"
+          ]
+        }
+      ]
+    },
+    "importers": {
+      "selection": "Resolved direct imports of the three changed modules and engine.fixture consumers, plus seven conservative candidates.",
+      "selectedCount": 107,
+      "completedCount": 107,
+      "exitCode": 0,
+      "files": [
+        "src/app/api/pipelines/[id]/route.lifecycle.test.ts",
+        "src/app/api/pipelines/route.admission.test.ts",
+        "src/app/api/pipelines/route.busy.test.ts",
+        "src/components/BranchPane.spawn.dom.test.tsx",
+        "src/lib/attention/landing.test.ts",
+        "src/lib/delivery.test.ts",
+        "src/lib/flows/commands.durable.test.ts",
+        "src/lib/flows/commands.set-roles.test.ts",
+        "src/lib/flows/decisions.test.ts",
+        "src/lib/flows/engine.test.ts",
+        "src/lib/flows/relayResumeAccount.test.ts",
+        "src/lib/flows/retirement.test.ts",
+        "src/lib/forge/autoMergeStore.test.ts",
+        "src/lib/lifecycle/projector.test.ts",
+        "src/lib/mcp/inputLimits.test.ts",
+        "src/lib/mcp/pipelineBusyAdmission.test.ts",
+        "src/lib/mcp/pipelineRoleFence.test.ts",
+        "src/lib/mcp/retryStageLaunch.integration.test.ts",
+        "src/lib/memory/roleLane.test.ts",
+        "src/lib/orchestrator/seatProjectIdentity.test.ts",
+        "src/lib/pipelines/adoptionHistory.test.ts",
+        "src/lib/pipelines/autoRefreshStore.test.ts",
+        "src/lib/pipelines/backgroundTaskSettlement.test.ts",
+        "src/lib/pipelines/cloudHostedClient.test.ts",
+        "src/lib/pipelines/cloudStage.test.ts",
+        "src/lib/pipelines/controllerLease.reproduction.test.ts",
+        "src/lib/pipelines/decisionAuthority.test.ts",
+        "src/lib/pipelines/deputyLineage.test.ts",
+        "src/lib/pipelines/engine.accountGuard.test.ts",
+        "src/lib/pipelines/engine.activation.test.ts",
+        "src/lib/pipelines/engine.cloud.test.ts",
+        "src/lib/pipelines/engine.containment.test.ts",
+        "src/lib/pipelines/engine.controllerPass.test.ts",
+        "src/lib/pipelines/engine.controllerSnapshot.test.ts",
+        "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+        "src/lib/pipelines/engine.cpuQueue.test.ts",
+        "src/lib/pipelines/engine.creation.test.ts",
+        "src/lib/pipelines/engine.fencedMessage.test.ts",
+        "src/lib/pipelines/engine.pauseMetadata.test.ts",
+        "src/lib/pipelines/engine.ports.part2.test.ts",
+        "src/lib/pipelines/engine.ports.part3.test.ts",
+        "src/lib/pipelines/engine.ports.test.ts",
+        "src/lib/pipelines/engine.providerBudget.test.ts",
+        "src/lib/pipelines/engine.providerBudgetChains.part3.test.ts",
+        "src/lib/pipelines/engine.providerBudgetKinds.test.ts",
+        "src/lib/pipelines/engine.providerChains.part2.test.ts",
+        "src/lib/pipelines/engine.providerChains.test.ts",
+        "src/lib/pipelines/engine.providerReset.part2.test.ts",
+        "src/lib/pipelines/engine.providerReset.part3.test.ts",
+        "src/lib/pipelines/engine.providerReset.test.ts",
+        "src/lib/pipelines/engine.providerSignals.test.ts",
+        "src/lib/pipelines/engine.provisioning.test.ts",
+        "src/lib/pipelines/engine.publication.test.ts",
+        "src/lib/pipelines/engine.recoveredPending.test.ts",
+        "src/lib/pipelines/engine.recovery.part2.test.ts",
+        "src/lib/pipelines/engine.recovery.test.ts",
+        "src/lib/pipelines/engine.recoveryAdmission.part2.test.ts",
+        "src/lib/pipelines/engine.recoveryAdmission.test.ts",
+        "src/lib/pipelines/engine.recoveryAuthority.part2.test.ts",
+        "src/lib/pipelines/engine.recoveryAuthority.test.ts",
+        "src/lib/pipelines/engine.rolePrivacy.test.ts",
+        "src/lib/pipelines/engine.routing.test.ts",
+        "src/lib/pipelines/engine.settlement.test.ts",
+        "src/lib/pipelines/engine.spawnSilence.test.ts",
+        "src/lib/pipelines/engine.succession.part2.test.ts",
+        "src/lib/pipelines/engine.succession.part3.test.ts",
+        "src/lib/pipelines/engine.succession.test.ts",
+        "src/lib/pipelines/engine.watchdogRegression.test.ts",
+        "src/lib/pipelines/engineConnectionRefusal.test.ts",
+        "src/lib/pipelines/git.test.ts",
+        "src/lib/pipelines/graphEdits.test.ts",
+        "src/lib/pipelines/handLaunch.test.ts",
+        "src/lib/pipelines/legacyReviewConversion.test.ts",
+        "src/lib/pipelines/materializationHistory.test.ts",
+        "src/lib/pipelines/parkedPublication.test.ts",
+        "src/lib/pipelines/publicationRecovery.test.ts",
+        "src/lib/pipelines/remoteActions.test.ts",
+        "src/lib/pipelines/repositoryInitialization.test.ts",
+        "src/lib/pipelines/resolveDecision.test.ts",
+        "src/lib/pipelines/runtimeReads.test.ts",
+        "src/lib/pipelines/runtimeSwitch.test.ts",
+        "src/lib/pipelines/severedStageRetry.test.ts",
+        "src/lib/pipelines/severedTurnResume.test.ts",
+        "src/lib/pipelines/spawnRestartRecovery.test.ts",
+        "src/lib/pipelines/stageAccountBinding.test.ts",
+        "src/lib/pipelines/stageCommitRepair.test.ts",
+        "src/lib/pipelines/stageCompletion.test.ts",
+        "src/lib/pipelines/stageHostGenerationClose.integration.test.ts",
+        "src/lib/pipelines/stageHostLiveness.test.ts",
+        "src/lib/pipelines/stageHostTeardown.test.ts",
+        "src/lib/pipelines/stagePublicationRepair.test.ts",
+        "src/lib/pipelines/stagePullRequest.test.ts",
+        "src/lib/pipelines/stageSizing.test.ts",
+        "src/lib/pipelines/stageVerdictRequest.test.ts",
+        "src/lib/pipelines/taskBinding.test.ts",
+        "src/lib/pipelines/terminalReap.test.ts",
+        "src/lib/projects/succession.test.ts",
+        "src/lib/release/stages.test.ts",
+        "src/lib/runtime/codexSubagentDetection.test.ts",
+        "src/lib/runtime/nativeQueueHost.integration.test.ts",
+        "src/lib/runtime/pipelineStageHostAccess.integration.test.ts",
+        "src/lib/runtime/releaseInterruption.test.ts",
+        "src/lib/runtime/structuredDeliveryQueue.test.ts",
+        "src/lib/scanner/taskExtractionRetirement.test.ts",
+        "src/lib/workflows/engine.contention.test.ts",
+        "src/lib/workflows/engine.cpuAdmission.test.ts",
+        "src/lib/workflows/engine.test.ts"
+      ],
+      "comparisonCounts": {
+        "introduced": 0,
+        "preexisting": 164,
+        "fixed": 0,
+        "absent": 0,
+        "flaky": 6
+      },
+      "baselineFailuresByFile": {
+        "src/app/api/pipelines/route.busy.test.ts": 1,
+        "src/components/BranchPane.spawn.dom.test.tsx": 1,
+        "src/lib/flows/relayResumeAccount.test.ts": 8,
+        "src/lib/lifecycle/projector.test.ts": 1,
+        "src/lib/mcp/pipelineBusyAdmission.test.ts": 1,
+        "src/lib/mcp/pipelineRoleFence.test.ts": 1,
+        "src/lib/mcp/retryStageLaunch.integration.test.ts": 4,
+        "src/lib/memory/roleLane.test.ts": 1,
+        "src/lib/pipelines/backgroundTaskSettlement.test.ts": 6,
+        "src/lib/pipelines/engine.activation.test.ts": 1,
+        "src/lib/pipelines/engine.controllerPass.test.ts": 1,
+        "src/lib/pipelines/engine.routing.test.ts": 2,
+        "src/lib/pipelines/engineConnectionRefusal.test.ts": 4,
+        "src/lib/pipelines/git.test.ts": 1,
+        "src/lib/pipelines/remoteActions.test.ts": 42,
+        "src/lib/pipelines/severedStageRetry.test.ts": 2,
+        "src/lib/pipelines/severedTurnResume.test.ts": 10,
+        "src/lib/pipelines/stageCommitRepair.test.ts": 18,
+        "src/lib/pipelines/stageCompletion.test.ts": 25,
+        "src/lib/pipelines/stageHostGenerationClose.integration.test.ts": 13,
+        "src/lib/pipelines/stageHostTeardown.test.ts": 6,
+        "src/lib/pipelines/stagePublicationRepair.test.ts": 3,
+        "src/lib/pipelines/stageSizing.test.ts": 9,
+        "src/lib/pipelines/stageVerdictRequest.test.ts": 1,
+        "src/lib/projects/succession.test.ts": 2
+      },
+      "filteredRerunCandidates": [
+        {
+          "path": "src/lib/pipelines/engine.activation.test.ts",
+          "test": "a completed two-stage pipeline reaps its final stage host too (#1728)",
+          "base": {
+            "pass": 2,
+            "fail": 0
+          },
+          "head": {
+            "pass": 1,
+            "fail": 1
+          }
+        },
+        {
+          "path": "src/lib/pipelines/engine.activation.test.ts",
+          "test": "a settled attempt with an idle CLI in its pane does not block the close (#670)",
+          "base": {
+            "pass": 2,
+            "fail": 0
+          },
+          "head": {
+            "pass": 1,
+            "fail": 1
+          }
+        },
+        {
+          "path": "src/lib/pipelines/engine.activation.test.ts",
+          "test": "a re-hosted Codex continuation settles once and activates the next stage exactly once (#1589)",
+          "base": {
+            "pass": 2,
+            "fail": 0
+          },
+          "head": {
+            "pass": 1,
+            "fail": 1
+          }
+        },
+        {
+          "path": "src/lib/pipelines/engine.activation.test.ts",
+          "test": "a Claude session limit preserves dirty work, stage identity and review rounds through controller recovery",
+          "base": {
+            "pass": 2,
+            "fail": 0
+          },
+          "head": {
+            "pass": 1,
+            "fail": 1
+          }
+        },
+        {
+          "path": "src/lib/pipelines/engine.activation.test.ts",
+          "test": "a recorded Claude limit launches a fresh target registry conversation and settles there",
+          "base": {
+            "pass": 2,
+            "fail": 0
+          },
+          "head": {
+            "pass": 1,
+            "fail": 1
+          }
+        },
+        {
+          "path": "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+          "test": "expired pipeline heads start in FIFO with real spacing while their predecessor's commit hook waits",
+          "base": {
+            "pass": 2,
+            "fail": 0
+          },
+          "head": {
+            "pass": 1,
+            "fail": 1
+          }
+        }
+      ]
+    },
+    "wholeFileActivation": {
+      "path": "src/lib/pipelines/engine.activation.test.ts",
+      "method": "Three whole-file runs on each side, fresh isolated roots and JUnit reports.",
+      "sameOutcomes": true,
+      "observations": [
+        {
+          "side": "base",
+          "round": 1,
+          "pass": 47,
+          "failures": [
+            "an internal terminal pass an older build left waiting on publication closes without the network (#1692)",
+            "a completed two-stage pipeline reaps its final stage host too (#1728)",
+            "a settled attempt with an idle CLI in its pane does not block the close (#670)",
+            "a re-hosted Codex continuation settles once and activates the next stage exactly once (#1589)",
+            "a Claude session limit preserves dirty work, stage identity and review rounds through controller recovery",
+            "a recorded Claude limit launches a fresh target registry conversation and settles there"
+          ]
+        },
+        {
+          "side": "base",
+          "round": 2,
+          "pass": 47,
+          "failures": [
+            "an internal terminal pass an older build left waiting on publication closes without the network (#1692)",
+            "a completed two-stage pipeline reaps its final stage host too (#1728)",
+            "a settled attempt with an idle CLI in its pane does not block the close (#670)",
+            "a re-hosted Codex continuation settles once and activates the next stage exactly once (#1589)",
+            "a Claude session limit preserves dirty work, stage identity and review rounds through controller recovery",
+            "a recorded Claude limit launches a fresh target registry conversation and settles there"
+          ]
+        },
+        {
+          "side": "base",
+          "round": 3,
+          "pass": 47,
+          "failures": [
+            "an internal terminal pass an older build left waiting on publication closes without the network (#1692)",
+            "a completed two-stage pipeline reaps its final stage host too (#1728)",
+            "a settled attempt with an idle CLI in its pane does not block the close (#670)",
+            "a re-hosted Codex continuation settles once and activates the next stage exactly once (#1589)",
+            "a Claude session limit preserves dirty work, stage identity and review rounds through controller recovery",
+            "a recorded Claude limit launches a fresh target registry conversation and settles there"
+          ]
+        },
+        {
+          "side": "head",
+          "round": 1,
+          "pass": 47,
+          "failures": [
+            "an internal terminal pass an older build left waiting on publication closes without the network (#1692)",
+            "a completed two-stage pipeline reaps its final stage host too (#1728)",
+            "a settled attempt with an idle CLI in its pane does not block the close (#670)",
+            "a re-hosted Codex continuation settles once and activates the next stage exactly once (#1589)",
+            "a Claude session limit preserves dirty work, stage identity and review rounds through controller recovery",
+            "a recorded Claude limit launches a fresh target registry conversation and settles there"
+          ]
+        },
+        {
+          "side": "head",
+          "round": 2,
+          "pass": 47,
+          "failures": [
+            "an internal terminal pass an older build left waiting on publication closes without the network (#1692)",
+            "a completed two-stage pipeline reaps its final stage host too (#1728)",
+            "a settled attempt with an idle CLI in its pane does not block the close (#670)",
+            "a re-hosted Codex continuation settles once and activates the next stage exactly once (#1589)",
+            "a Claude session limit preserves dirty work, stage identity and review rounds through controller recovery",
+            "a recorded Claude limit launches a fresh target registry conversation and settles there"
+          ]
+        },
+        {
+          "side": "head",
+          "round": 3,
+          "pass": 47,
+          "failures": [
+            "an internal terminal pass an older build left waiting on publication closes without the network (#1692)",
+            "a completed two-stage pipeline reaps its final stage host too (#1728)",
+            "a settled attempt with an idle CLI in its pane does not block the close (#670)",
+            "a re-hosted Codex continuation settles once and activates the next stage exactly once (#1589)",
+            "a Claude session limit preserves dirty work, stage identity and review rounds through controller recovery",
+            "a recorded Claude limit launches a fresh target registry conversation and settles there"
+          ]
+        }
+      ],
+      "conclusion": "All six runs have the same six failed assertions. Five filtered-rerun candidates are pre-existing whole-file ordering leakage."
+    },
+    "wholeFileCpu": {
+      "path": "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+      "method": "Three alternating full-file head/base repetitions with fresh isolated roots and JUnit reports. The base is a disposable detached Git clone at the captured revision with matching origin, test file and dependency inputs.",
+      "observations": [
+        {
+          "side": "head",
+          "round": 1,
+          "exitCode": 0,
+          "pass": 15,
+          "failures": []
+        },
+        {
+          "side": "base",
+          "round": 1,
+          "exitCode": 0,
+          "pass": 15,
+          "failures": []
+        },
+        {
+          "side": "head",
+          "round": 2,
+          "exitCode": 0,
+          "pass": 15,
+          "failures": []
+        },
+        {
+          "side": "base",
+          "round": 2,
+          "exitCode": 1,
+          "pass": 14,
+          "failures": [
+            "expired pipeline heads start in FIFO with real spacing while their predecessor's commit hook waits"
+          ]
+        },
+        {
+          "side": "head",
+          "round": 3,
+          "exitCode": 0,
+          "pass": 15,
+          "failures": []
+        },
+        {
+          "side": "base",
+          "round": 3,
+          "exitCode": 0,
+          "pass": 15,
+          "failures": []
+        }
+      ],
+      "conclusion": "All three head repetitions pass 15 tests. The same candidate assertion fails in one of the three base repetitions, confirming pre-existing intermittency."
+    },
+    "notes": [
+      "The comparator reports 164 pre-existing failures and six filtered-rerun candidates. Five candidates reproduce as identical whole-file ordering failures on both sides; the remaining CPU assertion also fails on the base in a whole-file repetition. No new failure remains.",
+      "No live cloud task was launched. Local runtime branches, workflows and dependencies are unchanged."
+    ]
+  }
+}

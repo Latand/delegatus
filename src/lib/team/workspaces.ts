@@ -2,7 +2,7 @@ import { projectDisplayName } from "@/lib/displayNames";
 import { operatorLocale } from "@/lib/operator/settings";
 import { projectAliasResolver } from "@/lib/projects/aliases";
 import { projectCurationSnapshot } from "@/lib/projects/curation";
-import { conversationCatalogReady, conversationCatalogSnapshot } from "@/lib/scanner/conversationCatalog";
+import { conversationCatalogProjectsSnapshot, conversationCatalogReady, conversationCatalogSnapshot } from "@/lib/scanner/conversationCatalog";
 
 import {
   cleanWorkspaceName,
@@ -23,9 +23,8 @@ import { TeamError } from "./members";
 import type { StoredWorkspace, StoredWorkspaceProject, TeamStore } from "./store";
 
 /*
- * Workspaces, slice (a) (docs/design/workspaces.md §13.2): a named set of
- * projects that anyone signed in can use as a filter, and that only the owner
- * changes. Nothing here restricts what anyone sees.
+ * The workspace directory and its project placement. Reads are scoped by
+ * workspaceAccess; placement checks its writer inside the store transaction.
  *
  * A project is placed under the key `canonicalProject` answers when it is
  * written. The alias map is a separate store that can later join two keys, so
@@ -251,6 +250,17 @@ export function placeProject(store: TeamStore, actor: Member, project: unknown, 
   const canonical = resolve(key);
   const at = nowIso(options);
   store.transaction(() => {
+    const live = store.member(actor.id);
+    if (!live || live.status !== "active") throw new TeamError("workspace_forbidden", "workspace access denied", 403);
+    if (live.role !== "owner") {
+      const roles = store.workspaceMemberships(live.id);
+      const manages = (id: string) => roles.some(row => row.workspaceId === id && row.role === "manager");
+      const directory = workspaceDirectory(store, { ...options, resolve });
+      const source = directory.workspaceOf(canonical);
+      if (!knownWorkspaceProjects({ resolve }).has(canonical) || !directory.workspaces.some(workspace => manages(workspace.id)) || (target && !manages(target)) || (source && !manages(source))) {
+        throw new TeamError("workspace_forbidden", "workspace access denied", 403);
+      }
+    }
     if (target && !store.workspaceRows().some((row) => row.id === target)) throw new TeamError("workspace_gone", "this workspace was deleted", 404);
     writePlacement(store, resolve, canonical, target, actor, at);
   });
@@ -295,4 +305,13 @@ export function workspaceCatalog(options: { resolve?: ProjectResolver } = {}): {
   }));
   projects.sort((a, b) => b.smt - a.smt || compareCodeUnits(a.project, b.project));
   return { ready: conversationCatalogReady(), projects };
+}
+
+/** Catalog membership is affirmative authority; deriving a key from a path is not. */
+export function knownWorkspaceProjects(options: { resolve?: ProjectResolver } = {}): ReadonlySet<string> {
+  const resolve = options.resolve ?? projectAliasResolver();
+  return new Set([
+    ...conversationCatalogProjectsSnapshot(),
+    ...projectCurationSnapshot().manualProjects.map(row => row.project),
+  ].map(resolve));
 }
