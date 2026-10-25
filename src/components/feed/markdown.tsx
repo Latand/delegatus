@@ -29,9 +29,22 @@ const MD_LINK = String.raw`\[[^\]]+\]\(${MD_URL}\)`;
    `**…**` run keeps its emphasis: its body goes back through this same pass
    (see `md`), so a link inside bold is still a link. */
 const MD_INLINE_RE = new RegExp(
-  `(${MD_IMAGE}|\`[^\`]+\`|\\*\\*[^*]+\\*\\*|${MD_LINK}|https?://[^\\s<>"')\\]]+)`,
+  `(${MD_IMAGE}|(?<!\`)(\`+)(?!\`)[^\n]*?(?<!\`)\\2(?!\`)|\\*\\*[^*]+\\*\\*|${MD_LINK}|https?://[^\\s<>"')\\]]+)`,
   "g",
 );
+/* Keep only whole tokens: the delimiter capture is for its backreference,
+   not another rendered piece. */
+function inlineParts(text: string): string[] {
+  const parts: string[] = [];
+  let end = 0;
+  for (const match of text.matchAll(MD_INLINE_RE)) {
+    parts.push(text.slice(end, match.index), match[0]);
+    end = match.index! + match[0].length;
+  }
+  parts.push(text.slice(end));
+  return parts;
+}
+
 const IMAGE_LINE_RE = new RegExp(String.raw`^\s*!\[([^\]]*)\]\((${MD_URL})\)\s*$`);
 const IMAGE_PART_RE = new RegExp(String.raw`^!\[([^\]]*)\]\((${MD_URL})\)$`);
 const LINK_PART_RE = new RegExp(String.raw`^\[([^\]]+)\]\((${MD_URL})\)$`);
@@ -241,7 +254,7 @@ export function mdImages(text: string): { alt: string; src: string }[] {
   const found: { alt: string; src: string }[] = [];
   if (!text.includes("![")) return found;
   const inline = (part: string) => {
-    for (const piece of part.split(MD_INLINE_RE)) {
+    for (const piece of inlineParts(part)) {
       if (piece.startsWith("**") && piece.endsWith("**")) inline(piece.slice(2, -2));
       const image = piece.match(IMAGE_PART_RE);
       if (image) found.push({ alt: image[1], src: imageSrc(image[2], null) });
@@ -280,11 +293,14 @@ export function MdImageRow({ images }: { images: { alt: string; src: string; at?
 }
 
 export function md(text: string, drawn: Drawn = { next: 0 }): ReactNode {
-  const parts = text.split(MD_INLINE_RE);
+  const parts = inlineParts(text);
   return parts.map((part, i) => {
     if (!part) return null;
     if (part.startsWith("`") && part.endsWith("`")) {
-      return <InlineCode key={i} text={part.slice(1, -1)} />;
+      const delimiter = part.match(/^`+/)![0].length;
+      const content = part.slice(delimiter, -delimiter);
+      const value = content.startsWith(" ") && content.endsWith(" ") && content.trim() ? content.slice(1, -1) : content;
+      return <InlineCode key={i} text={value} />;
     }
     /* A bold run is emphasis around markdown, not a leaf: its body goes back
        through the pass, so `**[#12](https://…)**` — how an agent writes a

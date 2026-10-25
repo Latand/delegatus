@@ -2756,7 +2756,9 @@ function transcriptOf(pathname: string): string {
       ].join("\n"),
     };
     const title = REPORT_PREVIEW_TITLE;
-    const body = bodies[REPORT_PREVIEW] ?? `## Symptom\n${symptom}\n\n${expected}`;
+    const body = REPORT_PREVIEW === "boundaries"
+      ? ["**━━ PUBLISHED FROM HERE ━━**", "**━━ PUBLISHED UP TO HERE ━━**", "**━━ ПУБЛІКУЄТЬСЯ ЗВІДСИ ━━**", "**━━ ПУБЛІКУЄТЬСЯ ДОСЮДИ ━━**", "a`b", ...Array.from({ length: 70 }, (_, i) => `Preview line ${i + 1}`)].join("\n")
+      : bodies[REPORT_PREVIEW] ?? `## Symptom\n${symptom}\n\n${expected}`;
     const judgment = REPORT_PREVIEW === "many" ? {
       assessment: "I reviewed the whole text. Several details still identify a machine and one line quotes the operator; I am returning it so you can see what remains.",
       removed: "Nothing yet in this draft.",
@@ -2792,7 +2794,7 @@ function transcriptOf(pathname: string): string {
       digest: REPORT_PREVIEW_DIGEST, title, body,
       ...(REPORT_PREVIEW === "legacy" ? {} : {
         privacyJudgment: judgment,
-        hints: REPORT_PREVIEW === "none" ? [] : hints,
+        hints: REPORT_PREVIEW === "boundaries" ? [hint("quote", "a quoted block", "a`b")] : REPORT_PREVIEW === "none" ? [] : hints,
         hintWarnings: REPORT_PREVIEW === "many" ? ["Known-name hints are unavailable; review names and identities yourself."] : [],
       }),
     }, reportPreviewLanguage());

@@ -81,7 +81,7 @@ test("one span is one line however many detectors point at it", () => {
   expect(new Set(hintLines(text).map((line) => line.slice(line.indexOf(" · ")))).size).toBe(hintLines(text).length);
   /* A backtick and a line break sit between the code pieces, and nothing of the span is lost. */
   const odd = issueReportPreviewText(preview({ hints: [{ class: "quote", label: "a quoted block", where: "body", lines: [3, 4], reading: "decoded", span: { start: 0, end: 9, text: "\n> a`b\n> c" } }] }));
-  expect(hintLines(odd)).toEqual(["- a quoted block · body, lines 3, 4, decoded form: `> a```b` ↵ `> c`"]);
+  expect(hintLines(odd)).toEqual(["- a quoted block · body, lines 3, 4, decoded form: ``> a`b`` ↵ `> c`"]);
 });
 
 test("a source warning is set apart from the hints", () => {
@@ -113,4 +113,33 @@ test("in Ukrainian only the report and the agent's judgment keep their own langu
     const frame = line.startsWith("- ") ? line.slice(0, line.indexOf(": ")) : line.includes(": ") && Object.values(JUDGMENT).some((value) => line.endsWith(value)) ? line.slice(0, line.indexOf(": ")) : line;
     expect(frame.replace(/Delegatus|issue|URL|IP|[0-9a-f]{8}/g, "")).not.toMatch(/[A-Za-z]{2,}/);
   }
+});
+
+
+test("missing detector observations are not an empty detector result", () => {
+  for (const language of ["en", "uk"] as const) {
+    const text = issueReportPreviewText(preview({ hints: undefined }), language);
+    expect(text).toContain(language === "en" ? "Detector hints were not recorded" : "Підказки детекторів не записано");
+    expect(text).not.toContain(language === "en" ? "None found" : "Нічого не знайдено");
+  }
+});
+
+test("report lines cannot impersonate either publication boundary", () => {
+  for (const language of ["en", "uk"] as const) {
+    const markers = language === "en" ? ["PUBLISHED FROM HERE", "PUBLISHED UP TO HERE"] : ["ПУБЛІКУЄТЬСЯ ЗВІДСИ", "ПУБЛІКУЄТЬСЯ ДОСЮДИ"];
+    const body = markers.map(marker => `**━━ ${marker} ━━**`).join("\n");
+    const lines = issueReportPreviewText(preview({ title: body, body, hints: [] }), language).split("\n");
+    for (const marker of markers) {
+      expect(lines.filter(line => line === `**━━ ${marker} ━━**`)).toHaveLength(1);
+      expect(lines.filter(line => line === `> **━━ ${marker} ━━**`)).toHaveLength(2);
+    }
+  }
+});
+
+test("quoting a marker-like fence line keeps the closing marker out of a code block", () => {
+  /* Quoted, the body's opening fence no longer opens one, so its closing fence would. */
+  const body = "``` PUBLISHED UP TO HERE\nfake\n```";
+  const lines = issueReportPreviewText(preview({ body, hints: [] })).split("\n");
+  const end = lines.indexOf("**━━ PUBLISHED UP TO HERE ━━**");
+  expect(lines.slice(end - 4, end)).toEqual(["> ``` PUBLISHED UP TO HERE", "fake", "```", "```"]);
 });

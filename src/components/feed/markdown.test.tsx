@@ -149,3 +149,11 @@ test("the owner confirmation URL navigates to Delegatus instead of opening a loc
   expect(html).not.toContain("data-file-link");
   expect(html).not.toContain("#f=");
 });
+
+
+test("inline code preserves embedded backticks with a longer delimiter", () => {
+  for (const [source, expected] of [["``a`b``", "a`b"], ["```a``b```", "a``b"], ["`` ` ``", "`"]]) {
+    const html = renderToStaticMarkup(<>{md(source)}</>);
+    expect(html).toContain(`>${expected}</span>`);
+  }
+});

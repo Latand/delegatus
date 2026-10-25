@@ -12874,3 +12874,70 @@ describe("phone composer tools row", () => {
     } finally { await browser.close(); served.stop(); }
   }, 300_000);
 });
+
+
+browserTest("digest preview boundaries and literal hints stay distinct without a floating reply row", async () => {
+  const out = path.resolve(".artifacts/digest-preview");
+  fs.mkdirSync(out, { recursive: true });
+  const server = await serveEvidenceFixture(out);
+  const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, headless: true, args: ["--no-sandbox"] });
+  try {
+    for (const width of [390, 1440]) for (const lang of ["en", "uk"] as const) for (const scheme of SCHEMES) {
+      const phone = width === 390;
+      const { page, context } = await openFixture(browser, `${server.base}?scenario=agent-report&report-preview=boundaries`, { width, height: 900 }, scheme, lang, "reduce", phone);
+      try {
+        if (phone) await page.locator("[data-mobile2-seat-open]").click();
+        const preview = page.locator("[data-tts-message]").filter({ hasText: lang === "en" ? "PREVIEW" : "ПОПЕРЕДНІЙ ПЕРЕГЛЯД" }).first();
+        await preview.waitFor();
+        const marker = lang === "en" ? "PUBLISHED UP TO HERE" : "ПУБЛІКУЄТЬСЯ ДОСЮДИ";
+        const boundaries = preview.locator("b").filter({ hasText: marker });
+        expect(await boundaries.count()).toBe(2);
+        expect(await boundaries.evaluateAll(nodes => nodes.filter(node => node.parentElement?.className.includes("border-l-2")).length)).toBe(1);
+        expect(await preview.locator("span.cursor-copy").filter({ hasText: "a`b" }).innerText()).toBe("a`b");
+        const move = await boundaries.first().evaluate(node => {
+          let feed = node.parentElement;
+          while (feed && !(/auto|scroll/.test(getComputedStyle(feed).overflowY) && feed.scrollHeight > feed.clientHeight + 1)) feed = feed.parentElement;
+          if (!feed) throw new Error("missing preview scroller");
+          const frame = feed.getBoundingClientRect();
+          return { x: frame.left + frame.width / 2, y: frame.top + frame.height / 2,
+            by: node.getBoundingClientRect().top - frame.top - frame.height / 2 };
+        });
+        await page.mouse.move(move.x, move.y);
+        await page.mouse.wheel(0, move.by);
+        await page.waitForTimeout(250);
+        expect(await boundaries.first().evaluate(node => {
+          const rect = node.getBoundingClientRect();
+          const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+          return hit === node || node.contains(hit);
+        })).toBe(true);
+        await page.screenshot({ path: path.join(out, `${width}-${lang}-${scheme}-boundaries.png`) });
+        await page.waitForTimeout(250);
+        const fromEnd = await preview.evaluate(node => {
+          let feed = node.parentElement;
+          while (feed && !(/auto|scroll/.test(getComputedStyle(feed).overflowY) && feed.scrollHeight > feed.clientHeight + 1)) feed = feed.parentElement;
+          if (!feed) throw new Error("missing preview scroller");
+          feed.scrollTop = (feed.scrollHeight - feed.clientHeight) / 2;
+          return feed.scrollHeight - feed.clientHeight - feed.scrollTop;
+        });
+        expect(fromEnd).toBeGreaterThan(200);
+        expect(await page.locator("[data-reply-suggestions], [data-reply-suggestion]").count()).toBe(0);
+        await page.screenshot({ path: path.join(out, `${width}-${lang}-${scheme}.png`) });
+        /* The hint's inline code keeps its one backtick; no doubled run is drawn. */
+        const hintCode = preview.locator("span.cursor-copy").filter({ hasText: "a`b" });
+        await hintCode.scrollIntoViewIfNeeded();
+        await page.waitForTimeout(250);
+        expect(await preview.innerText()).not.toContain("``");
+        await page.screenshot({ path: path.join(out, `${width}-${lang}-${scheme}-hint.png`) });
+      } finally { await context.close(); }
+    }
+    for (const lang of ["en", "uk"] as const) {
+      const { page, context } = await openFixture(browser, `${server.base}?scenario=agent-report&report-preview=legacy`, { width: 390, height: 900 }, "light", lang, "reduce", true);
+      try {
+        await page.locator("[data-mobile2-seat-open]").click();
+        const preview = page.locator("[data-tts-message]").filter({ hasText: lang === "en" ? "PREVIEW" : "ПОПЕРЕДНІЙ ПЕРЕГЛЯД" }).first();
+        await preview.waitFor();
+        expect(await preview.innerText()).toContain(lang === "en" ? "Detector hints were not recorded" : "Підказки детекторів не записано");
+      } finally { await context.close(); }
+    }
+  } finally { await browser.close(); server.stop(); }
+}, 180_000);
