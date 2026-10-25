@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -52,9 +53,9 @@ test("published positioning contract carries coordinates and current-row guards"
 test.each([["foreign", "other-project"], ["stale", "fixture-project"]])("%s placement refuses atomically through real protocol and persistence", async (key, expectedProject) => {
   const p = await protocol();
   try {
-    const created = (await p.client.callTool({ name: "create_task", arguments: {
+    const created = (await p.client.callTool({ name: "create_task", arguments: withTaskDue({
       clientRequestId: `create-fence-${key}`, project: "fixture-project", text: "original", placement: "pinned", pos: { x: -0.5, y: 0 },
-    } })).structuredContent as { ok: boolean; task: { id: string; revision?: string } };
+    }) })).structuredContent as { ok: boolean; task: { id: string; revision?: string } };
     expect(created.ok).toBe(true);
     expect(loadTasks().find(task => task.id === created.task.id)!.pos).toEqual({ x: -0.5, y: 0 });
     const expectedRevision = key === "foreign" ? created.task.revision ?? "missing-baseline-token" : "task-v1:stale";
@@ -72,7 +73,7 @@ test.each([["foreign", "other-project"], ["stale", "fixture-project"]])("%s plac
 test("completed SQLite receipts replay original coordinates and revisions after restart and deletion", async () => {
   let p = await protocol();
   const createArgs = { clientRequestId: "replay-create", project: "fixture-project", text: "receipt", placement: "pinned", pos: { x: -2.25, y: 0 } };
-  const created = (await p.client.callTool({ name: "create_task", arguments: createArgs })).structuredContent as { task: { id: string; revision: string; project: string } };
+  const created = (await p.client.callTool({ name: "create_task", arguments: withTaskDue(createArgs) })).structuredContent as { task: { id: string; revision: string; project: string } };
   const updateArgs = { clientRequestId: "replay-update", taskId: created.task.id, expectedProject: created.task.project, expectedRevision: created.task.revision, pos: { x: 3.5, y: -4 } };
   const updated = (await p.client.callTool({ name: "update_task", arguments: updateArgs })).structuredContent as { task: unknown };
   expect(updated).toMatchObject({ ok: true });
@@ -81,11 +82,11 @@ test("completed SQLite receipts replay original coordinates and revisions after 
   const before = persistedTaskState(TASKS_FILE);
   await p.close(); p = await protocol();
   try {
-    const replayCreate = (await p.client.callTool({ name: "create_task", arguments: createArgs })).structuredContent;
+    const replayCreate = (await p.client.callTool({ name: "create_task", arguments: withTaskDue(createArgs) })).structuredContent;
     const replayUpdate = (await p.client.callTool({ name: "update_task", arguments: updateArgs })).structuredContent;
     expect(replayCreate).toMatchObject({ ok: true, replayed: true, task: created.task });
     expect(replayUpdate).toMatchObject({ ok: true, replayed: true, task: updated.task });
-    for (const [name, args] of [["create_task", { ...createArgs, text: "changed" }], ["update_task", { ...updateArgs, pos: { x: 9, y: 9 } }]] as const) {
+    for (const [name, args] of [["create_task", withTaskDue({ ...createArgs, text: "changed" })], ["update_task", { ...updateArgs, pos: { x: 9, y: 9 } }]] as const) {
       expect((await p.client.callTool({ name, arguments: args })).structuredContent).toMatchObject({ ok: false, code: "idempotency_conflict", retryable: false });
     }
     expect(persistedTaskState(TASKS_FILE)).toBe(before);
@@ -101,10 +102,10 @@ test("MCP placement semantics and independent HTTP handlers share durable coordi
   const call = async (name: string, args: Record<string, unknown>) => (await p.client.callTool({ name, arguments: { clientRequestId: `semantics-${++sequence}`, ...args } })).structuredContent as { task: TaskWithRevision; tasks: TaskWithRevision[] };
   const request = (body: unknown) => new NextRequest("http://localhost/api/tasks", { method: "POST", headers: { "content-type": "application/json", host: "localhost" }, body: JSON.stringify(body) });
   try {
-    const unplaced = await call("create_task", { project: "fixture-project", text: "unplaced" });
+    const unplaced = await call("create_task", withTaskDue({ project: "fixture-project", text: "unplaced" }));
     expect(unplaced.task.placement).toBe("unplaced");
     for (const args of [{ placement: "pinned" }, { placement: "unplaced", pos: { x: 0, y: 0 } }, { pos: { x: 0, y: 0 } }]) {
-      const refused = await call("create_task", { project: "fixture-project", text: "invalid", ...args });
+      const refused = await call("create_task", withTaskDue({ project: "fixture-project", text: "invalid", ...args }));
       expect(refused).toMatchObject({ ok: false, retryable: false, details: { field: "pos" } });
     }
     let task = unplaced.task;
@@ -144,7 +145,7 @@ test("MCP placement semantics and independent HTTP handlers share durable coordi
 
 test("two independent processes racing identical coordinates under one revision have exactly one winner", async () => {
   const p = await protocol();
-  const created = (await p.client.callTool({ name: "create_task", arguments: { clientRequestId: "race-create", project: "fixture-project", text: "race", placement: "pinned", pos: { x: 1, y: 1 } } })).structuredContent as { task: { id: string; revision: string } };
+  const created = (await p.client.callTool({ name: "create_task", arguments: withTaskDue({ clientRequestId: "race-create", project: "fixture-project", text: "race", placement: "pinned", pos: { x: 1, y: 1 } }) })).structuredContent as { task: { id: string; revision: string } };
   await p.close();
   const gate = path.join(sandbox, "race-go");
   const script = `
@@ -196,7 +197,7 @@ test("canonical readback includes the persisted generation and placement preserv
   const { saveTasks } = await import("@/lib/tasks/store");
   const p = await protocol();
   try {
-    const create = (await p.client.callTool({ name: "create_task", arguments: { clientRequestId: "preserve-create", project: "fixture-project", text: "preserve", placement: "pinned", pos: { x: 0, y: 0 } } })).structuredContent as { task: { id: string; revision: string } };
+    const create = (await p.client.callTool({ name: "create_task", arguments: withTaskDue({ clientRequestId: "preserve-create", project: "fixture-project", text: "preserve", placement: "pinned", pos: { x: 0, y: 0 } }) })).structuredContent as { task: { id: string; revision: string } };
     expect(typeof create.task.revision).toBe("string");
     const tasks = loadTasks();
     const task = tasks.find(t => t.id === create.task.id)!;

@@ -33,6 +33,7 @@ import {
 import { HOT_STATE_BACKEND } from "./hotStateAuthority";
 import { ensureLegacyCollectionsImported } from "./legacyCollections";
 import { readStateImport } from "./sqliteStateStore";
+import { digestScopeKey, readDigestSubscriber } from "@/lib/lifecycle/digest";
 
 /* The release path of #1870 slice 1 in a sandboxed state directory: a release
    that is not yet promoted reads the legacy file and refuses writes, the
@@ -76,6 +77,9 @@ test("an unpromoted release reads tasks.json, activation imports it, and demotio
     hotStateBackend: HOT_STATE_BACKEND,
   }));
   fs.writeFileSync(tasksFile, JSON.stringify({ tasks: [task("legacy")] }));
+  const digestFile = path.join(sandbox, "lifecycle-digests.json");
+  const subscriber = { cursorSeq: 7, lastRelayAt: "2026-09-19T00:00:00.000Z", updatedAt: "2026-09-19T00:00:00.000Z" };
+  fs.writeFileSync(digestFile, JSON.stringify({ version: 1, subscribers: { [digestScopeKey({ subscriberId: "subscriber-a" })]: subscriber } }));
 
   // Before activation the release may not import: reads fall back to the file, writes are busy.
   expect(loadTasks(tasksFile).map((row) => row.id)).toEqual(["legacy"]);
@@ -92,6 +96,8 @@ test("an unpromoted release reads tasks.json, activation imports it, and demotio
   const outcomes = await ensureLegacyCollectionsImported();
 
   expect(outcomes.get("tasks")).toMatchObject({ state: "imported" });
+  expect(outcomes.get("lifecycle_digests")).toMatchObject({ state: "imported" });
+  expect(readDigestSubscriber("subscriber-a")).toEqual(subscriber);
   expect(readStateImport(path.join(sandbox, "state.sqlite"), "tasks")?.release).toBe(revision.slice(0, 12));
   expect(fs.statSync(tasksFile).isDirectory()).toBe(true);
   expect(fs.readdirSync(sandbox).filter((name) => name.startsWith("tasks.json.imported-"))).toEqual([`tasks.json.imported-${revision.slice(0, 12)}`]);
@@ -101,10 +107,13 @@ test("an unpromoted release reads tasks.json, activation imports it, and demotio
 
   const mirror = JSON.parse(fs.readFileSync(tasksFile, "utf8")) as { tasks: BoardTask[] };
   expect(mirror.tasks.map((row) => row.id)).toEqual(["legacy", "after-import"]);
+  expect(JSON.parse(fs.readFileSync(digestFile, "utf8")).subscribers[digestScopeKey({ subscriberId: "subscriber-a" })]).toEqual(subscriber);
 
   // Roll-forward: the untouched mirror is recognized and retired, not imported twice.
   const rolledForward = await ensureLegacyCollectionsImported();
   expect(rolledForward.get("tasks")).toMatchObject({ state: "already-imported", incident: null });
+  expect(rolledForward.get("lifecycle_digests")).toMatchObject({ state: "already-imported", incident: null });
+  expect(fs.statSync(digestFile).isDirectory()).toBe(true);
   expect(fs.statSync(tasksFile).isDirectory()).toBe(true);
   expect(loadTasks(tasksFile).map((row) => row.id)).toEqual(["legacy", "after-import"]);
 });

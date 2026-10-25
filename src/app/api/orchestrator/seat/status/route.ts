@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
 import type { ApiError } from "@/lib/types";
@@ -18,8 +19,10 @@ import { readOrchestratorIncumbent, type OrchestratorIncumbentBody } from "./inc
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(req: NextRequest): Promise<NextResponse<OrchestratorIncumbentBody | ApiError>> {
+async function workspaceGET(req: NextRequest): Promise<NextResponse<OrchestratorIncumbentBody | ApiError>> {
   const project = req.nextUrl.searchParams.get("project")?.trim() ?? "";
   if (!project) return NextResponse.json({ error: "project is required" }, { status: 400 });
   return NextResponse.json({ ...await readOrchestratorIncumbent(project), workers: workerReading(project) });
 }
+
+export const GET = workspaceRoute("/api/orchestrator/seat/status", workspaceGET);

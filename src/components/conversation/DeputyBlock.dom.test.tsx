@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { Window as HappyWindow } from "happy-dom";
 import { flushSync } from "react-dom";
@@ -76,7 +77,7 @@ const seatLines = [
 /* The deputy's own records, as the route serves them past the fork prefix. */
 const deputyLines = [
   user("g0", 39, "Add a task: reviewer for #2244\n\n---\n[Delegatus: you are the orchestrator's parallel self] …"),
-  assistant("g1", 39, [{ type: "tool_use", id: "call_1", name: "mcp__viewer__create_task", input: { text: "Reviewer for #2244", project: "proj" } }], 20),
+  assistant("g1", 39, [{ type: "tool_use", id: "call_1", name: "mcp__viewer__create_task", input: withTaskDue({ text: "Reviewer for #2244", project: "proj" }) }], 20),
   JSON.stringify({ type: "user", uuid: "g2", timestamp: at(39, 22), sessionId: SESSION, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "call_1", content: [{ type: "text", text: JSON.stringify({ taskId: "task_318" }) }] }] } }),
   assistant("g3", 39, [{ type: "text", text: "Created the task and linked it to lane #2244." }], 40),
 ];

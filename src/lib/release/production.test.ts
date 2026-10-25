@@ -1,10 +1,10 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { changesSinceRelease, latestReleaseTag, supersedingReleaseTag } from "./production";
+import { changesSinceRelease, latestReleaseTag, releaseControllerForSources, supersedingReleaseTag } from "./production";
 import { releaseState } from "./policy";
 import { ready } from "./policy.fixture";
 
@@ -128,4 +128,25 @@ test("the production adapter settles the actual stored done task without reposit
     env: { ...process.env, HOME: path.join(root, "home"), XDG_CONFIG_HOME: path.join(root, "config"),
       TMPDIR: path.join(root, "tmp"), LLV_STATE_DIR: path.join(root, "state") } });
   expect(JSON.parse(stdout)).toMatchObject({ live: null, lastRun: { outcome: "completed", reason: "task-done" } });
+});
+
+
+test("the production release task producer remains undated", async () => {
+  const runModule = await import("./run");
+  const { loadTasks } = await import("@/lib/tasks/store");
+  const original = runModule.productionReleaseController;
+  let taskId: string | undefined;
+  const intercepted = spyOn(runModule, "productionReleaseController").mockImplementation(ports => {
+    taskId = ports.task("release-due-policy", {
+      key: "release-due-policy", request: { task: "Release fixture", spec: "A system-owned release" },
+    } as Parameters<typeof ports.task>[1]);
+    return original(ports);
+  });
+  try {
+    releaseControllerForSources({ now: () => Date.parse("2026-10-23T10:00:00Z") } as Parameters<typeof releaseControllerForSources>[0]);
+    expect(taskId).toBeDefined();
+    const task = loadTasks().find(task => task.id === taskId);
+    expect(task?.text).toBe("Release fixture");
+    expect(task?.dueAt).toBeUndefined(); expect(task?.dueTz).toBeUndefined();
+  } finally { intercepted.mockRestore(); }
 });

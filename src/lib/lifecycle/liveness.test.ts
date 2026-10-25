@@ -907,6 +907,34 @@ test("a pending permission request reads as waiting on permission_request, never
   expect(answered.conversations[0]!.permission).toBeUndefined();
 });
 
+test("a structured AskUserQuestion reads as waiting on question with its choices and age (#2357)", async () => {
+  const agentPath = path.join(sandbox(), "question-wedge.jsonl");
+  fs.writeFileSync(agentPath, "{}\n", "utf8");
+  const base = structuredEntry(agentPath, 4242);
+  const question = {
+    id: "question-one", tool: "AskUserQuestion",
+    questions: [{ prompt: "Which scope?", options: ["Small", "All"], multiSelect: false }],
+    since: new Date(NOW - 13 * 60_000).toISOString(),
+  };
+  const entry = { ...base, structuredHost: { ...base.structuredHost!, kind: "claude-broker" as const,
+    activeTurnRef: "turn-one", pendingAttention: [question.id], pendingQuestions: [question] } };
+  const snapshot = await agentLivenessSnapshot({}, sources({
+    probe: { now: () => NOW, pidAlive: () => true, processIdentity: () => "start-token-of-a-dead-host" },
+    listFiles: async () => [fileEntry({ path: agentPath })],
+    registrySnapshot: () => ({ entries: { "claude:question-wedge": entry }, conversations: {} }) as unknown as RegistryFile,
+    pipelines: () => [],
+    transcriptEvidence: async () => ({ turn: "busy" as const, lastRecordTs: NOW - 13 * 60_000 }),
+  }));
+  expect(snapshot.stalledCount).toBe(0);
+  expect(snapshot.conversations[0]).toMatchObject({ lifecycle: "waiting", reason: "question", question });
+  expect(evaluateLiveness({ host: { state: "gone" }, turnState: "busy", silentForMs: 13 * 60_000,
+    stallAfterMs: 10 * 60_000, providerRetryAt: null, pendingQuestion: question }))
+    .toEqual({ lifecycle: "stalled", reason: "host_gone_turn_open" });
+  expect(evaluateLiveness({ host: { state: "alive" }, turnState: "busy", silentForMs: 1_000,
+    stallAfterMs: 10 * 60_000, providerRetryAt: null, pendingQuestion: null }))
+    .toEqual({ lifecycle: "running", reason: "host_alive_turn_active" });
+});
+
 test("the decision table puts a pending permission ahead of silence and the provider", () => {
   const permission = { id: "r", tool: "Bash", command: "rm -rf $X", reason: "flagged", reasonType: "safetyCheck", since: new Date(NOW).toISOString() };
   expect(evaluateLiveness({

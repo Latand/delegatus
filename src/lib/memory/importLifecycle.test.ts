@@ -13,12 +13,11 @@ import { readMemorySourceFile, setMemorySource } from "./source";
 import { claimPass, patchPass } from "./curation/store";
 import { readCuration } from "./curation/read";
 import { applyCuration, revertCuratorPass } from "./curation/apply";
-import { curatorBrief } from "./curation/brief";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import type { RegistryFile } from "@/lib/agent/registry";
 import { persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projects/aliases";
-import { joinMovedScopes, roleScope } from "./roleStore";
+import { joinMovedScopes, roleMemoryCollection, roleScope } from "./roleStore";
 import type { ImportManifest, ImportRoots } from "./importTypes";
 
 const AT = "2026-10-19T00:00:00.000Z", NOW = Date.parse(AT), PROJECT = "import-fixture", ID = "fixture-import";
@@ -283,21 +282,27 @@ test("the orchestrator target rises only after its project's completed import re
   const { importCollection } = await import("./importStore");
   const candidate = readImportCandidates(ID).candidates[0];
   importCollection()!.boundedPatch(2, tx => tx.put({ ...candidate, suggestedScope: roleScope(PROJECT, "orchestrator"), occurrences: candidate.occurrences.map(o => ({ ...o, writer: { kind: "seat", roleId: "orchestrator" } })) }));
-  expect(curatorBrief(PROJECT)).not.toContain("raised only this project's");
+  const originalScope = roleScope(PROJECT, "orchestrator");
+  const target = (scope: string) => {
+    const row = roleMemoryCollection()?.get(`s:${scope}`);
+    return row?.kind === "scope" ? row.fourScopeTarget : undefined;
+  };
+  expect(target(originalScope)).toBeUndefined();
   await dispose({ room: true });
-  expect(curatorBrief(PROJECT)).not.toContain("raised only this project's");
+  expect(target(originalScope)).toBeUndefined();
   await advanceMemoryImportWork(request(10), { ...ports(), legacy: async () => [] });
-  expect(curatorBrief(PROJECT)).toContain("raised only this project's orchestrator four-scope target to 24 000 bytes");
-  expect(curatorBrief("another-project")).not.toContain("raised only this project's");
-  const code = `import {curatorBrief} from ${JSON.stringify(path.join(import.meta.dir, "curation/brief.ts"))}; console.log(curatorBrief(${JSON.stringify(PROJECT)}).includes("raised only this project's orchestrator"));`;
+  expect(target(originalScope)).toBe(24_000);
+  expect(target(roleScope("another-project", "orchestrator"))).toBeUndefined();
+  const code = `import {roleMemoryCollection} from ${JSON.stringify(path.join(import.meta.dir, "roleStore.ts"))}; const row = roleMemoryCollection()?.get(${JSON.stringify(`s:${originalScope}`)}); console.log(row?.kind === "scope" ? row.fourScopeTarget : null);`;
   const child = Bun.spawn([process.execPath, "--eval", code], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
   const [output, errors, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-  expect({ output: output.trim(), exit }).toEqual({ output: "true", exit: 0 });
+  expect({ output: output.trim(), exit }).toEqual({ output: "24000", exit: 0 });
   expectHelperDiagnostics(errors);
   expect(persistProjectAliases([{ source: PROJECT, target: "renamed-import-fixture", displayName: "Renamed fixture" }])).toBe(true);
-  expect(curatorBrief("renamed-import-fixture")).toContain("raised only this project's orchestrator");
+  expect(target(originalScope)).toBe(24_000);
   joinMovedScopes(at(20));
-  expect(curatorBrief("renamed-import-fixture")).toContain("raised only this project's orchestrator");
+  expect(target(roleScope("renamed-import-fixture", "orchestrator"))).toBe(24_000);
+  expect(target(originalScope)).toBeUndefined();
 });
 
 test("an operator reversal or undo after the legacy await prevents a stale flip", async () => {
@@ -360,5 +365,6 @@ test("a room drop after the trial opened keeps the pre-trial budget", async () =
   await fs.writeFile(path.join(process.env.LLV_STATE_DIR!, "memory-source.json"), JSON.stringify({ schemaVersion: 1, source: "delegatus", phase: "active", importId: ID, changedAt: AT, flippedAt: AT, drainedAt: AT }));
   await dispose({ room: true });
   await advanceMemoryImportWork(request(10), ports());
-  expect(curatorBrief(PROJECT)).not.toContain("raised only this project's");
+  const scope = roleMemoryCollection()?.get(`s:${roleScope(PROJECT, "orchestrator")}`);
+  expect(scope?.kind === "scope" ? scope.fourScopeTarget : undefined).toBeUndefined();
 });
