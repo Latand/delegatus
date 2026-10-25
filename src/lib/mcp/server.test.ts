@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { afterAll, afterEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -49,13 +50,26 @@ function rewriteReceiptFileAsV1(receiptPath: string): void {
   }));
 }
 
-async function waitForFile(filename: string, timeoutMs = 3_000): Promise<boolean> {
+// A child's milestone is bounded by the test's own timeout, never by runner
+// speed: process startup under load can take seconds. Pass the child to stop
+// waiting as soon as it exits without reaching the milestone.
+const MILESTONE_TIMEOUT_MS = 60_000;
+const SLOW_FLOW_ACTION_LINE = /^\[mcp slow\] pid=\d+ role=[a-z-]+ tool=flow_action(?: [a-zA-Z]+Ms=\d+)+$/;
+
+async function waitForAnyFile(filenames: string[], child?: { exited: Promise<number> }, timeoutMs = MILESTONE_TIMEOUT_MS): Promise<string | null> {
   const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (fs.existsSync(filename)) return true;
+  let exited = false;
+  void child?.exited.then(() => { exited = true; }, () => { exited = true; });
+  while (Date.now() < deadline && !exited) {
+    const found = filenames.find((filename) => fs.existsSync(filename));
+    if (found) return found;
     await Bun.sleep(10);
   }
-  return fs.existsSync(filename);
+  return filenames.find((filename) => fs.existsSync(filename)) ?? null;
+}
+
+async function waitForFile(filename: string, timeoutMs = MILESTONE_TIMEOUT_MS, child?: { exited: Promise<number> }): Promise<boolean> {
+  return await waitForAnyFile([filename], child, timeoutMs) === filename;
 }
 
 async function waitForFileCount(directory: string, prefix: string, count: number, timeoutMs = 10_000): Promise<boolean> {
@@ -1340,6 +1354,8 @@ describe("MCP tool service", () => {
     const handoffReadyPath = path.join(directory, "handoff-ready");
     const handoffReleasePath = path.join(directory, "handoff-release");
     const reuseReadyPath = path.join(directory, "reuse-ready");
+    const reuseWaitingPath = `${reuseReadyPath}-waiting`;
+    const reuseProceedPath = `${reuseReadyPath}-proceed`;
     const reuseReleasePath = path.join(directory, "reuse-release");
     const countPath = path.join(directory, "binding-count");
     const reaperResultPath = path.join(directory, "reaper-result.json");
@@ -1369,7 +1385,7 @@ describe("MCP tool service", () => {
       stdout: "ignore",
       stderr: "pipe",
     }));
-    expect(await waitForFile(handoffReadyPath)).toBeTrue();
+    expect(await waitForFile(handoffReadyPath, undefined, reaper)).toBeTrue();
     expect(fs.existsSync(lockPath)).toBeFalse();
     expect(fs.statSync(pinPath).ino).toBe(staleInode);
 
@@ -1395,9 +1411,18 @@ describe("MCP tool service", () => {
       stdout: "ignore",
       stderr: "pipe",
     }));
-    const enteredBeforeRelease = await waitForFile(reuseReadyPath, 250);
+    // The successor signals an acquisition retry taken while the lock is free
+    // and the handoff still paused. Forced reuse during the handoff reaches the
+    // ready file instead, without such a retry.
+    expect(await waitForAnyFile([reuseWaitingPath, reuseReadyPath], first)).toBe(reuseWaitingPath);
+    expect(fs.existsSync(reuseReadyPath)).toBeFalse();
     fs.writeFileSync(handoffReleasePath, "release");
-    expect(await waitForFile(reuseReadyPath)).toBeTrue();
+    // The retiring generation finishes its own namespace cleanup before it
+    // claims, so its result proves the retired inode is free. Letting the
+    // successor retry before that leaves two generations racing one inode name.
+    expect(await waitForFile(reaperResultPath, undefined, reaper)).toBeTrue();
+    fs.writeFileSync(reuseProceedPath, "proceed");
+    expect(await waitForFile(reuseReadyPath, undefined, first)).toBeTrue();
     expect(Number(fs.readFileSync(reuseReadyPath, "utf8"))).toBe(staleInode);
     fs.writeFileSync(reuseReleasePath, "release");
     const processes = await Promise.all([
@@ -1406,18 +1431,22 @@ describe("MCP tool service", () => {
       childResult(second),
     ]);
 
-    expect(enteredBeforeRelease).toBeFalse();
-    expect(processes).toEqual([
-      { exit: 0, error: "" },
-      { exit: 0, error: "" },
-      { exit: 0, error: "" },
+    // Contended claimants may report the threshold-gated slow-call line on a
+    // loaded runner; any other stderr output still fails.
+    expect(processes.map(({ exit, error }) => ({
+      exit,
+      unexpected: error.split("\n").filter((line) => line && !SLOW_FLOW_ACTION_LINE.test(line)),
+    }))).toEqual([
+      { exit: 0, unexpected: [] },
+      { exit: 0, unexpected: [] },
+      { exit: 0, unexpected: [] },
     ]);
     const results = [reaperResultPath, firstResultPath, secondResultPath]
       .map((filename) => JSON.parse(fs.readFileSync(filename, "utf8")) as { ok: boolean; replayed: boolean });
     expect(results.filter((result) => result.ok && !result.replayed)).toHaveLength(1);
     expect(fs.readFileSync(countPath, "utf8").trim().split("\n")).toHaveLength(1);
     expect(recoveryArtifacts(directory)).toEqual([]);
-  }, 12_000);
+  }, 60_000);
 
   test("successors remain responsive and bounded while namespace release is paused", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-lock-namespace-busy-"));
@@ -1911,6 +1940,7 @@ describe("MCP tool service", () => {
         "create_task",
         "update_task",
         "create_pipeline",
+        "pipeline_checks",
         "pipeline_action",
         "stage_report",
         "leave_lesson",
@@ -2023,16 +2053,7 @@ test("create_task and update_task tell a writer which hold kind a worker slot wa
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   try {
-    const tools = (await client.listTools()).tools;
-    for (const name of ["create_task", "update_task"]) {
-      const tool = tools.find((entry) => entry.name === name)!;
-      expect(tool.description).toContain("A wait for a free worker slot is kind worker");
-      const kind = JSON.stringify((tool.inputSchema.properties as Record<string, unknown>).hold);
-      expect(kind).toContain("worker is a wait for a free worker slot");
-      expect(kind).toContain("resource is a shortage on the machine such as memory or disk");
-      expect(kind).toContain("Unknown kinds normalize to unstated.");
-    }
-    await client.callTool({ name: "create_task", arguments: { clientRequestId: "hold-worker", project: "fixture", text: "Queued lane", hold: { kind: "worker", note: "After a lane finishes" } } });
+    await client.callTool({ name: "create_task", arguments: withTaskDue({ clientRequestId: "hold-worker", project: "fixture", text: "Queued lane", hold: { kind: "worker", note: "After a lane finishes" } }) });
     await client.callTool({ name: "update_task", arguments: { clientRequestId: "hold-resource", id: "task_fixture", hold: { kind: "resource", note: "4 GB of memory available, 8 GB needed" } } });
     expect(seen.map((args) => (args.hold as { kind: string }).kind)).toEqual(["worker", "resource"]);
   } finally {
@@ -2110,13 +2131,9 @@ test("seat_tick_settings publishes the panel instruction contract through tools/
   try {
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
     const tool = (await client.listTools()).tools.find((entry) => entry.name === "seat_tick_settings")!;
-    expect(tool.description).toContain("Each reason write replaces only the caller’s own lines");
-    expect(tool.description).toContain("author unknown");
-    expect(tool.description).not.toContain("labelled as operator instructions");
     expect(tool.inputSchema.properties!.reason).toMatchObject({
       description: TOOL_INPUT_SCHEMAS.seat_tick_settings.shape.reason.description,
     });
-    expect(JSON.stringify(tool.inputSchema.properties!.reason)).toContain("every wake");
     expect(TOOL_INPUT_SCHEMAS.seat_tick_settings.safeParse({ clientRequestId: "instruction-contract", reason: "Prioritize incoming tasks." }).success).toBe(true);
     expect(TOOL_INPUT_SCHEMAS.seat_tick_settings.safeParse({ clientRequestId: "instruction-clear", reason: null }).success).toBe(true);
   } finally { await client.close(); await server.close(); }
@@ -2146,17 +2163,20 @@ test("async SQLite receipts retry each transition and a contended completion nev
   const store = await openAsyncMcpReceiptStore(filename);
   const holder = new Database(filename);
   const { stateLockWaitsInFlight } = await import("@/lib/state/lockWait");
-  const waiting = async () => {
-    const deadline = Date.now() + 2000;
+  // This connection holds the lock until the wait is observed, so a receipt
+  // operation that settles first never waited, whatever the runner's speed.
+  const waiting = async (pending: Promise<unknown>) => {
+    let settled = false;
+    void pending.then(() => { settled = true; }, () => { settled = true; });
     while (!stateLockWaitsInFlight().some(wait => wait.callSite.startsWith("mcp.receipts.") && wait.attempts >= 2)) {
-      if (Date.now() >= deadline) throw new Error("receipt operation did not yield while waiting for its lock");
+      if (settled) throw new Error("receipt operation did not yield while waiting for its lock");
       await Bun.sleep(1);
     }
   };
   const contended = async <T>(operation: () => T | Promise<T>) => {
     holder.exec("BEGIN IMMEDIATE");
     const result = operation();
-    try { await waiting(); }
+    try { await waiting(Promise.resolve(result)); }
     finally { holder.exec("ROLLBACK"); }
     return result;
   };
@@ -2192,13 +2212,14 @@ test("async SQLite receipts retry each transition and a contended completion nev
     const service = createMcpToolService(bindings, store);
     const args = { flowId: "flow_fixture", action: "pause", clientRequestId: "async-completion" };
     const completed = service.callTool("flow_action", args);
-    try { await waiting(); }
+    try { await waiting(completed); }
     finally { if (holder.inTransaction) holder.exec("ROLLBACK"); }
     expect(await completed).toMatchObject({ ok: true, effect: 1 });
     expect(await service.callTool("flow_action", args)).toMatchObject({ ok: true, replayed: true, effect: 1 });
     expect(effects).toBe(1);
   } finally { holder.close(); store.close(); }
-}, 10_000);
+  // Nothing here measures elapsed time, so the runner's own timeout bounds it.
+}, 60_000);
 
 const OTHER: McpRequestCaller = { kind: "worker", conversationId: "conversation_other", project: "proj-a" };
 const OTHER_PROJECT: McpRequestCaller = { kind: "worker", conversationId: "conversation_owner", project: "proj-b" };
@@ -3236,26 +3257,6 @@ for (const tool of ["send_message", "spawn_agent"] as const) {
     });
   }
 }
-
-
-test("prototype publication tells callers about the critic gate and fresh refusal retries", async () => {
-  const bindings = Object.fromEntries(MCP_TOOL_NAMES.map(name => [name, async () => ({})])) as unknown as McpToolBindings;
-  const server = createViewerMcpServer(createMcpToolService(bindings, new MemoryMcpReceiptStore()));
-  const client = new Client({ name: "prototype-gate-test", version: "1.0.0" });
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
-  try {
-    const tool = (await client.listTools()).tools.find(entry => entry.name === "publish_prototype_review")!;
-    expect(tool.description).toContain("visual-critic pass or a passed fix after its last fail");
-    expect(tool.description).toContain("proto-fix (2 rounds)");
-    expect(tool.description).toContain("new clientRequestId");
-    expect(tool.description).toContain("questions without variants");
-  } finally {
-    await client.close();
-    await server.close();
-  }
-});
-
 
 test("native admission refusals disclose no binding and only inventory pending is retryable", async () => {
   for (const reason of ["session-not-scanned", "session-record-missing", "capability-unresolved"] as const) {

@@ -37,7 +37,13 @@ test("an exact-head review export borrows matching dependencies without another 
   expect(fs.readFileSync(path.join(exported.directory, "source.txt"), "utf8")).toBe("committed source");
   expect(exported.dependencies).toBe("shared");
   expect(fs.realpathSync(path.join(exported.directory, "node_modules"))).toBe(path.join(f.repository, "node_modules"));
-  expect(fs.readdirSync(path.dirname(exported.directory))).toEqual(["checkout"]);
+  expect(fs.readdirSync(path.dirname(exported.directory)).sort()).toEqual(["checkout", "export.json"]);
+  // The gate runner ships an export through this record; it names the
+  // checkout, the exported commit and the repository that holds it.
+  expect(JSON.parse(fs.readFileSync(path.join(path.dirname(exported.directory), "export.json"), "utf8"))).toEqual({
+    version: 1, checkout: fs.realpathSync(exported.directory), head, repository: fs.realpathSync(path.join(f.repository, ".git")),
+  });
+  expect(f.git("--git-dir", fs.realpathSync(path.join(f.repository, ".git")), "cat-file", "-t", head)).toBe("commit");
   fs.rmSync(path.dirname(exported.directory), { recursive: true });
   expect(fs.readFileSync(path.join(f.repository, "node_modules/fixture/index.js"), "utf8")).toBe("export default 42");
 });

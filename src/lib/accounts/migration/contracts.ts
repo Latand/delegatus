@@ -1,3 +1,4 @@
+import { assertAgentMemoryMax } from "@/lib/runtime/agentMemoryConfig";
 import type { AgentEngine } from "@/lib/agent/cli";
 import type { QuotaEngine } from "./quotaPolicy";
 import { grantedMcpServers, type McpGrantPolicy } from "@/lib/agent/mcpAllowlist";
@@ -54,6 +55,10 @@ export function normalizeProjectOwnership(value: unknown): ConversationProjectOw
 }
 
 export interface LaunchProfile {
+  /** Stage request; null/absent inherits project and role settings at launch. */
+  agentMemoryMaxBytes?: number | null;
+  /** Text-free role variant selector for resource planning after restart. */
+  agentMemoryRoleParams?: Record<string, string | number>;
   cwd: string;
   model: string | null;
   effort: string | null;
@@ -72,8 +77,10 @@ export interface LaunchProfile {
       clean role or review gate (src/lib/memory/eligibility.ts) and kept on
       every resume. Absent means memory is allowed. */
   cleanMemory?: boolean;
-  /** Text-free selector, replayed from SQLite at every engine process start. */
-  learnedRules?: { project: string; roleId: string | null };
+  /** Text-free selector, replayed from SQLite at every engine process start.
+      reader "operator" marks the operator's own root conversation in Delegatus
+      mode: it reads the project and machine rules under its own notice. */
+  learnedRules?: { project: string; roleId: string | null; reader?: "operator" };
   mcpServers: string[];
   /** Codex plugins granted to this session (issue #687). Decided once, at
       spawn, from the session's origin; a resume replays it and can never
@@ -113,6 +120,7 @@ export function emptyLaunchProfile(
      that HAS a grantable connector (issue #739). */
   policy?: McpGrantPolicy,
 ): LaunchProfile {
+  assertAgentMemoryMax(overrides.agentMemoryMaxBytes);
   return {
     cwd: "",
     model: null,

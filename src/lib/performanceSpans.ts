@@ -27,6 +27,8 @@ export const performanceSites = [
   "memory.project-view",
   "memory.import",
   "seat-tick.check", "seat-tick.hash", "seat-tick.project", "forge.auto-merge.read", "forge.auto-merge.prune", "forge.auto-merge.admit", "forge.auto-merge.queue", "forge.auto-merge.step",
+  "registry.prepare.endings", "runtime.startup.memberships", "runtime.startup.conversations", "runtime.startup.select", "delivery-progress.restore.slice",
+  "pipeline.prior-writer-stop",
 ] as const;
 export type PerformanceSite = typeof performanceSites[number];
 type Slice = { sequence: number; span: number; parent: number; site: number; kind: "sync" | "await" | "event";

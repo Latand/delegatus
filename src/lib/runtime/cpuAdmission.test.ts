@@ -9,6 +9,7 @@ import { CpuAdmissionQueue, cpuAdmissionFile, CPU_QUEUE_ABANDONED_MS, CPU_QUEUE_
 import { cpuQueueDetail, ordinal, parseCpuQueueDetail } from "./cpuQueueText";
 import { captureProcessIdentity } from "../processIdentity";
 import { CPU_TASK_PRIORITY_SQL, cpuPriorityEnv, cpuPriorityFromEnv, readCpuPriority } from "./cpuPriority";
+import { cpuOwnerExited, cpuOwnerIdentity, cpuOwnerStatus } from "./signalSandboxContext";
 
 const directories: string[] = [];
 const queues: { close(): void }[] = [];
@@ -21,9 +22,71 @@ function fixture(unpolledMs = Number.POSITIVE_INFINITY) {
   const file = path.join(dir, "queue.sqlite");
   let now = 0;
   const open = () => { const q = new CpuAdmissionQueue(file, () => now, CPU_QUEUE_SPACING_MS, CPU_QUEUE_MAX_WAIT_MS, unpolledMs); queues.push(q); return q; };
-  return { open, file, at: (value: number) => { now = value; } };
+  return { open, file, now: () => now, at: (value: number) => { now = value; } };
 }
 const FOREIGN = `stage:${"b".repeat(64)}:895e3de4:plan:1`, LIVE = `stage:${"0".repeat(64)}:762633d8:build:1`;
+
+test("heavy gate readiness and claims keep the pressure fence across process restart and the fairness bound", () => {
+  const f = fixture(), owner = captureProcessIdentity(process.pid);
+  const script = `const { CpuAdmissionQueue } = await import(process.argv[1]); const q = new CpuAdmissionQueue(process.argv[2], () => Number(process.argv[3])); try { process.stdout.write(JSON.stringify(q.check("command:heavy", process.argv[4] === "low", JSON.parse(process.argv[5]), process.argv[6] === "claim", undefined, true))); } finally { q.close(); }`;
+  const check = (at: number, low: boolean, claim: boolean) => {
+    const result = spawnSync(process.execPath, ["-e", script, path.join(import.meta.dir, "cpuAdmission.ts"), f.file, String(at), low ? "low" : "high", JSON.stringify(owner), claim ? "claim" : "peek"], { encoding: "utf8", env: process.env });
+    expect(result.status, result.stderr).toBe(0);
+    return JSON.parse(result.stdout);
+  };
+  expect(check(0, false, false)).toMatchObject({ position: 1, since: 0 });
+  expect(check(CPU_QUEUE_MAX_WAIT_MS + 1, false, false)).toMatchObject({ position: 1, since: 0 });
+  expect(check(CPU_QUEUE_MAX_WAIT_MS + 1, true, false)).toBeNull();
+  // Pressure can rise between readiness and the shell acquiring its slot.
+  expect(check(CPU_QUEUE_MAX_WAIT_MS + 1, false, true)).toMatchObject({ position: 1, since: 0 });
+  expect(check(CPU_QUEUE_MAX_WAIT_MS + 1, true, true)).toBeNull();
+});
+
+test.each(["stage", "workflow"])("a gate held for pressure at the head lets a %s start at its own bound; gates keep FIFO", prefix => {
+  const f = fixture(), owner = captureProcessIdentity(process.pid), gates = f.open(), key = `${prefix}:s`;
+  const gate = (name: string, low = false) => gates.check(name, low, owner, true, undefined, true);
+  expect(gate("command:gate")).toMatchObject({ since: 0, position: 1 });
+  f.at(1_000);
+  // The stage's checker is another connection, as the Viewer is.
+  const stages = f.open();
+  expect(stages.check(key, false)).toMatchObject({ since: 1_000, position: 1 });
+  f.at(2_000);
+  expect(gate("command:later")).toMatchObject({ position: 2 });
+  // Before its own bound the start lane is held by its pressure check.
+  f.at(1_000 + CPU_QUEUE_MAX_WAIT_MS - 1);
+  expect(gate("command:gate")).toMatchObject({ position: 1 });
+  expect(stages.check(key, false)).toMatchObject({ position: 1 });
+  f.at(1_000 + CPU_QUEUE_MAX_WAIT_MS);
+  expect(stages.check(key, false)).toBeNull();
+  // The gate still waits under pressure, and the later gate stays behind it.
+  for (const minute of [30, 60]) {
+    f.at(minute * 60_000);
+    expect(gate("command:gate")).toMatchObject({ since: 0, position: 1 });
+    expect(gate("command:later")).toMatchObject({ position: 2 });
+  }
+  // Low pressure admits the gates in order, spaced.
+  f.at(60 * 60_000 + 1);
+  expect(gate("command:later", true)).toMatchObject({ position: 2 });
+  expect(gate("command:gate", true)).toBeNull();
+  expect(gate("command:later", true)).toMatchObject({ position: 1, heldBy: "queue" });
+  f.at(60 * 60_000 + 1 + CPU_QUEUE_SPACING_MS);
+  expect(gate("command:later", true)).toBeNull();
+});
+
+test("a stage past its bound under pressure still waits for spacing and for an older stage ahead of a held gate", () => {
+  const f = fixture(), owner = captureProcessIdentity(process.pid), q = f.open();
+  q.check("stage:older", false);
+  f.at(1_000); q.check("command:gate", false, owner, true, undefined, true);
+  f.at(2_000); q.check("stage:newer", false);
+  f.at(2_000 + CPU_QUEUE_MAX_WAIT_MS);
+  // The older stage keeps its place in the independent start lane.
+  expect(q.check("stage:newer", false)).toMatchObject({ position: 2 });
+  expect(q.check("stage:older", false)).toBeNull();
+  expect(q.check("stage:newer", false)).toMatchObject({ position: 1, heldBy: "queue" });
+  f.at(2_000 + CPU_QUEUE_MAX_WAIT_MS + CPU_QUEUE_SPACING_MS);
+  expect(q.check("stage:newer", false)).toBeNull();
+  expect(q.check("command:gate", false, owner, true, undefined, true)).toMatchObject({ position: 1 });
+});
 
 test("priority orders levels strictly and preserves FIFO within each level despite reverse polling", () => {
   const f = fixture(), q = f.open(), tasks = priorityTasks(f.file);
@@ -64,7 +127,7 @@ test("a waiting task raised by another writer moves ahead before its own next po
   } finally { tasks.close(); }
 });
 
-test("a pre-upgrade gate cannot admit normal work ahead of an observed high-priority stage", () => {
+test("legacy gates retain global priority order while current commands count their own lane", () => {
   const m = mixed(), older = m.older(), q = m.open(), tasks = priorityTasks(m.file);
   tasks.set("first", "high");
   q.check("stage:high", false, undefined, true, tasks.source(["first"]));
@@ -74,8 +137,8 @@ test("a pre-upgrade gate cannot admit normal work ahead of an observed high-prio
   expect(older.check("command:normal", true, captureProcessIdentity(process.pid))).toMatchObject({ position: 2 });
   expect(older.check("command:normal-second", true, captureProcessIdentity(process.pid))).toMatchObject({ position: 3 });
   expect(q.check("stage:high", false)?.position).toBe(1);
-  expect(q.check("command:normal", false, captureProcessIdentity(process.pid))?.position).toBe(2);
-  expect(q.check("command:normal-second", false, captureProcessIdentity(process.pid))?.position).toBe(3);
+  expect(q.check("command:normal", false, captureProcessIdentity(process.pid))?.position).toBe(1);
+  expect(q.check("command:normal-second", false, captureProcessIdentity(process.pid))?.position).toBe(2);
   tasks.close();
 });
 
@@ -97,7 +160,7 @@ test("legacy inserts restore priority and FIFO seq order even when the new norma
 
     m.at(CPU_QUEUE_SPACING_MS);
     tasks.set("raised", "normal");
-    expect(q.check("stage:normal-first", false, undefined, true, tasks.source(["raised"]))).toMatchObject({ position: 2 });
+    expect(q.check("stage:normal-first", false, undefined, true, tasks.source(["raised"]))).toMatchObject({ position: 1 });
     m.at(CPU_QUEUE_SPACING_MS + 1);
     expect(older.check("command:normal-second", false, captureProcessIdentity(process.pid))).toMatchObject({ position: 1 });
 
@@ -106,8 +169,8 @@ test("legacy inserts restore priority and FIFO seq order even when the new norma
     expect(reopened.check("command:normal-second", false, captureProcessIdentity(process.pid))).toMatchObject({ position: 1 });
     tasks.set("first", "high");
     expect(reopened.check("stage:low-first", false, undefined, false, tasks.source(["first"]))).toMatchObject({ position: 1, priority: "high" });
-    expect(reopened.check("command:normal-second", false, captureProcessIdentity(process.pid))).toMatchObject({ position: 2 });
-    expect(reopened.check("stage:normal-first", false, undefined, false, tasks.source(["raised"]))).toMatchObject({ position: 3 });
+    expect(reopened.check("command:normal-second", false, captureProcessIdentity(process.pid))).toMatchObject({ position: 1 });
+    expect(reopened.check("stage:normal-first", false, undefined, false, tasks.source(["raised"]))).toMatchObject({ position: 2 });
     expect(older.check("command:normal-second", false, captureProcessIdentity(process.pid))).toMatchObject({ position: 2 });
   } finally { tasks.close(); }
 });
@@ -183,9 +246,13 @@ test("the gate helper inherits a publication's task binding through wait and fre
   const q = new CpuAdmissionQueue(path.join(directory, "admission.sqlite"), () => observerTime); queues.push(q);
   const owner = captureProcessIdentity(process.pid);
   const env = { ...process.env, ...cpuPriorityEnv(tasks.source(["first"])), LLV_GATE_LOCK_DIR: directory,
-    LLV_GATE_SLOTS: "1", LLV_GATE_SLOT_LEASE: "", DELEGATUS_CPU_PRESSURE: "off" };
+    LLV_GATE_SLOTS: "1", LLV_GATE_SLOT_LEASE: "", DELEGATUS_CPU_PRESSURE: "off",
+    // Both checkers stay in this PID namespace; the queue's default observer
+    // and its recorded owner use local identities, with no service handoff.
+    LLV_SIGNAL_SANDBOX: undefined };
   const run = async (mode: string) => {
-    const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "../../../scripts/cpu-admission.ts"), mode, "command:publication-gate", String(process.pid)], { env, stdout: "pipe", stderr: "pipe" });
+    const script = 'const now = Number(process.argv.pop()); Date.now = () => now; await import(process.argv[1]!);';
+    const child = Bun.spawn([process.execPath, "-e", script, path.join(import.meta.dir, "../../../scripts/cpu-admission.ts"), mode, "command:publication-gate", String(process.pid), String(observerTime)], { env, stdout: "pipe", stderr: "pipe" });
     const [out, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     expect(out).toBe(""); expect(error).toBe(""); return code;
   };
@@ -219,7 +286,7 @@ test("a direct test invocation resolves its default queue inside its chosen stat
 
 test("persistent high pressure admits the ten-minute head, then one at a time in FIFO order", () => {
   const f = fixture(), q = f.open();
-  expect(q.check("stage:one", false)).toEqual({ since: 0, position: 1, remainingMs: CPU_QUEUE_MAX_WAIT_MS });
+  expect(q.check("stage:one", false)).toEqual({ since: 0, position: 1, waitedMs: 0, heldBy: "pressure" });
   expect(q.check("stage:two", false)?.position).toBe(2);
   expect(q.check("stage:three", false)?.position).toBe(3);
   f.at(CPU_QUEUE_MAX_WAIT_MS - 1);
@@ -227,7 +294,7 @@ test("persistent high pressure admits the ten-minute head, then one at a time in
   f.at(CPU_QUEUE_MAX_WAIT_MS);
   expect(q.check("stage:three", false)?.position).toBe(3); // reverse tick order cannot overtake
   expect(q.check("stage:one", false)).toBeNull();
-  expect(q.check("stage:two", false)?.remainingMs).toBe(CPU_QUEUE_SPACING_MS);
+  expect(q.check("stage:two", false)?.heldBy).toBe("queue");
   f.at(CPU_QUEUE_MAX_WAIT_MS + CPU_QUEUE_SPACING_MS);
   expect(q.check("stage:three", false)?.position).toBe(2);
   expect(q.check("stage:two", false)).toBeNull();
@@ -243,7 +310,7 @@ test("a restarted Viewer preserves timestamps and order alongside command ticket
   q.close(); queues.splice(queues.indexOf(q), 1);
   const restarted = f.open();
   f.at(CPU_QUEUE_MAX_WAIT_MS);
-  expect(restarted.check("command:two", false)).toMatchObject({ since: 10_000, position: 2 });
+  expect(restarted.check("command:two", false)).toMatchObject({ since: 10_000, position: 1 });
   expect(restarted.check("stage:one", false)).toBeNull();
   f.at(CPU_QUEUE_MAX_WAIT_MS + CPU_QUEUE_SPACING_MS);
   expect(restarted.check("command:two", true)).toBeNull();
@@ -259,7 +326,7 @@ test.each(["stage", "workflow"])("a %s admission survives a restart before the s
   q.close(); queues.splice(queues.indexOf(q), 1);
   const restarted = f.open();
   restarted.reconcile(`${prefix}:`, new Set([one, two]));
-  expect(restarted.check(one, false)).toMatchObject({ since: 0, position: 1, remainingMs: CPU_QUEUE_SPACING_MS });
+  expect(restarted.check(one, false)).toMatchObject({ since: 0, position: 1, heldBy: "queue" });
   expect(restarted.check(two, false)?.position).toBe(2);
   f.at(CPU_QUEUE_MAX_WAIT_MS + CPU_QUEUE_SPACING_MS);
   expect(restarted.check(one, false)).toBeNull();
@@ -269,30 +336,30 @@ test.each(["stage", "workflow"])("a %s admission survives a restart before the s
   expect(restarted.check(two, false)).toBeNull();
 });
 
-test("a stage and a heavy check share FIFO, even when pressure is low or sampling failed", () => {
+test("ownerless callers share FIFO, even when pressure is low or sampling failed", () => {
   const f = fixture(), q = f.open();
-  q.check("stage:one", false); q.check("command:two", false);
-  expect(q.check("command:two", true)?.position).toBe(2);
+  q.check("stage:one", false); q.check("workflow:two", false);
+  expect(q.check("workflow:two", true)?.position).toBe(2);
   expect(q.check("stage:one", true)).toBeNull();
   f.at(CPU_QUEUE_SPACING_MS);
-  expect(q.check("command:two", true)).toBeNull();
+  expect(q.check("workflow:two", true)).toBeNull();
 });
 
-test("a permissive sample cannot understate the bound if pressure rises again before admission", () => {
+test("waited time progresses independently of a permissive or held pressure sample", () => {
   const f = fixture(), q = f.open();
   q.check("stage:one", false);
   f.at(300_000);
-  expect(q.check("command:two", true)).toEqual({
-    since: 300_000, position: 2, remainingMs: CPU_QUEUE_MAX_WAIT_MS + CPU_QUEUE_SPACING_MS,
+  expect(q.check("workflow:two", true)).toEqual({
+    since: 300_000, position: 2, waitedMs: 0, heldBy: "queue",
   });
   f.at(301_000);
-  expect(q.check("command:two", false)?.remainingMs).toBe(CPU_QUEUE_MAX_WAIT_MS - 1_000 + CPU_QUEUE_SPACING_MS);
+  expect(q.check("workflow:two", false)?.waitedMs).toBe(1_000);
   f.at(302_000);
-  expect(q.check("command:two", true)?.remainingMs).toBe(CPU_QUEUE_MAX_WAIT_MS - 2_000 + CPU_QUEUE_SPACING_MS);
+  expect(q.check("workflow:two", true)?.waitedMs).toBe(2_000);
   f.at(CPU_QUEUE_MAX_WAIT_MS);
   expect(q.check("stage:one", false)).toBeNull();
   f.at(CPU_QUEUE_MAX_WAIT_MS + CPU_QUEUE_SPACING_MS);
-  expect(q.check("command:two", true)).toBeNull();
+  expect(q.check("workflow:two", true)).toBeNull();
 });
 
 test("slot readiness leaves the head durable until claim; cancellation frees only its namespace", () => {
@@ -303,10 +370,10 @@ test("slot readiness leaves the head durable until claim; cancellation frees onl
   expect(q.check("other:one", true)).toBeNull();
 });
 
-test("queue details carry remaining whole minutes and English ordinals", () => {
-  expect(cpuQueueDetail(2, 61_000)).toBe("Waiting for the CPU queue · 2nd · up to 2 min · normal priority");
-  expect(parseCpuQueueDetail(cpuQueueDetail(12, 0))).toEqual({ position: 12, minutes: 0, priority: "normal" });
-  expect(parseCpuQueueDetail(`${cpuQueueDetail(2, 61_000)} · Viewer publication: owner; owner viewer, epoch 1`)).toEqual({ position: 2, minutes: 2, priority: "normal" });
+test("queue details carry elapsed whole minutes and English ordinals", () => {
+  expect(cpuQueueDetail(2, 61_000)).toBe("Waiting for the CPU queue · 2nd · waited 1 min · normal priority");
+  expect(parseCpuQueueDetail(cpuQueueDetail(12, 0))).toEqual({ position: 12, minutes: 0, heldBy: "queue", priority: "normal" });
+  expect(parseCpuQueueDetail(`${cpuQueueDetail(2, 61_000)} · Viewer publication: owner; owner viewer, epoch 1`)).toEqual({ position: 2, minutes: 1, heldBy: "queue", priority: "normal" });
   expect(parseCpuQueueDetail(`${cpuQueueDetail(2, 61_000)} · unknown detail`)).toBeNull();
   expect([1, 2, 3, 4, 11, 12, 13, 21].map(ordinal)).toEqual(["1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st"]);
 });
@@ -322,19 +389,19 @@ test("a proven stale command owner loses its ticket without discarding active st
   expect(q.check("stage:two", false)).toBeNull();
 });
 
-test("an update-held stage keeps its order and age across restart without starving heavy checks", () => {
+test("an update-held stage keeps its order and age across restart while eligible starts proceed", () => {
   const f = fixture(), q = f.open();
   q.check("stage:one", false); q.check("stage:two", false);
   q.reconcile("stage:", new Set(["stage:one", "stage:two"]), new Set());
   q.close(); queues.splice(queues.indexOf(q), 1);
   const restarted = f.open();
-  expect(restarted.check("command:check", true)).toBeNull();
+  expect(restarted.check("workflow:check", true)).toBeNull();
   f.at(CPU_QUEUE_MAX_WAIT_MS);
   restarted.reconcile("stage:", new Set(["stage:one", "stage:two"]));
-  expect(restarted.check("command:later", true)?.position).toBe(3);
+  expect(restarted.check("workflow:later", true)?.position).toBe(3);
   expect(restarted.check("stage:two", false)).toMatchObject({ since: 0, position: 2 });
   expect(restarted.check("stage:one", false)).toBeNull();
-  expect(restarted.check("stage:two", false)?.remainingMs).toBe(CPU_QUEUE_SPACING_MS);
+  expect(restarted.check("stage:two", false)?.heldBy).toBe("queue");
   f.at(CPU_QUEUE_MAX_WAIT_MS + CPU_QUEUE_SPACING_MS);
   expect(restarted.check("stage:two", false)).toBeNull();
 });
@@ -346,11 +413,11 @@ test("a foreign ownerless stage ticket nobody polls stops holding the head withi
   f.at(1_000);
   const command = captureProcessIdentity(process.pid);
   expect(q.check(LIVE, true)).toMatchObject({ position: 2 });
-  expect(q.check("command:push", true, command)).toMatchObject({ position: 3 });
+  expect(q.check("command:push", true, command, false)).toBeNull();
   f.at(CPU_QUEUE_UNPOLLED_MS);
   expect(q.check(LIVE, true)).toMatchObject({ position: 2 }); // within the bound the orphan still counts
   f.at(CPU_QUEUE_UNPOLLED_MS + 1);
-  expect(q.check("command:push", true, command)).toMatchObject({ position: 2 }); // FIFO behind the live stage holds
+  expect(q.check("command:push", true, command, false)).toBeNull(); // only the start lane waits on the orphan
   expect(q.check(LIVE, true)).toBeNull();
   // Skipping the orphan admits one start at a time: the spacing still applies.
   expect(q.check("command:push", true, command)).toMatchObject({ since: 1_000, position: 1 });
@@ -385,7 +452,7 @@ test("a polled live stage keeps its sequence and age across the bound, and a ski
   expect(q.check("stage:later", false)).toMatchObject({ position: 2 });
   f.at(CPU_QUEUE_MAX_WAIT_MS);
   expect(q.check(LIVE, false)).toBeNull();
-  expect(q.check("stage:later", false)).toMatchObject({ position: 1, remainingMs: CPU_QUEUE_SPACING_MS });
+  expect(q.check("stage:later", false)).toMatchObject({ position: 1, heldBy: "queue" });
 });
 
 test("a stage released from a long hold is ahead of later work before its own next check", () => {
@@ -394,10 +461,126 @@ test("a stage released from a long hold is ahead of later work before its own ne
   q.reconcile("stage:", held, new Set());
   f.at(CPU_QUEUE_MAX_WAIT_MS - 1);
   q.reconcile("stage:", held); // the hold ends; neither stage has ticked yet
-  expect(q.check("command:later", true, captureProcessIdentity(process.pid))).toMatchObject({ position: 3 });
+  expect(q.check("workflow:later", true)).toMatchObject({ position: 3 });
+  expect(q.check("command:later", true, captureProcessIdentity(process.pid), false)).toBeNull();
   expect(q.check("stage:two", false)).toMatchObject({ since: 0, position: 2 });
   f.at(CPU_QUEUE_MAX_WAIT_MS);
   expect(q.check("stage:one", false)).toBeNull();
+});
+
+/* Command owners as the machine queue judges them (cpuOwnerStatus), here or
+   in a signal sandbox: this process, a recorded start this process does not
+   have, and a process recorded in a PID namespace nothing here can read. */
+function owners() {
+  const live = cpuOwnerIdentity(process.pid);
+  const foreignEpoch = live.bootEpoch!.replace(/pid:\[\d+\]$/, "pid:[1]");
+  expect(foreignEpoch).not.toBe(live.bootEpoch);
+  return { live, dead: { ...live, startIdentity: `${live.pid}:1` }, foreign: { pid: 4242, startIdentity: "4242:1", bootEpoch: foreignEpoch } };
+}
+function ownerFixture(status = cpuOwnerStatus) {
+  const f = fixture(CPU_QUEUE_UNPOLLED_MS), lines: string[] = [];
+  const open = () => { const q = new CpuAdmissionQueue(f.file, f.now, CPU_QUEUE_SPACING_MS, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_UNPOLLED_MS, { status: identity => status(identity), exited: cpuOwnerExited, log: line => lines.push(line) }); queues.push(q); return q; };
+  const read = <T>(sql: string) => { const db = new Database(f.file, { readonly: true }); try { return db.query<T, []>(sql).all(); } finally { db.close(); } };
+  return { ...f, open, lines, read };
+}
+
+test("the machine queue reads each fake owner as the incident's observer does", () => {
+  const { live, dead, foreign } = owners();
+  expect([cpuOwnerStatus(live), cpuOwnerStatus(dead), cpuOwnerStatus(foreign)]).toEqual(["alive", "dead", "unverified"]);
+  expect(cpuOwnerExited(foreign)).toBe(false);
+});
+
+test("a dead owner at the head is removed at the next check with one reason line", () => {
+  const f = ownerFixture(), q = f.open(), { live, dead } = owners();
+  expect(q.check("command:gone", false, dead)).toMatchObject({ position: 1 });
+  expect(f.lines).toEqual([]);
+  expect(q.check("command:next", true, live)).toBeNull();
+  expect(f.lines).toEqual([`removed command:gone: its owner process ${live.pid} has exited`]);
+  expect(q.check("command:third", false, live)).toMatchObject({ position: 1 });
+  expect(f.lines).toHaveLength(1);
+  expect(f.read("SELECT key FROM tickets")).toEqual([{ key: "command:third" }]);
+});
+
+test("an owner from another PID namespace that stops checking in stops holding the head, once, and keeps its row", () => {
+  const f = ownerFixture(), q = f.open(), { live, foreign } = owners();
+  // The incident: a sandboxed gate queued under its own namespace's PID and went away.
+  expect(q.check("command:foreign", false, foreign)).toMatchObject({ since: 0, position: 1 });
+  f.at(CPU_QUEUE_UNPOLLED_MS);
+  expect(q.check("command:here", false, live)).toMatchObject({ position: 2 }); // within the bound it still counts
+  expect(f.lines).toEqual([]);
+  // Hours later the stalled reading is what the lanes showed; one check ends it.
+  const late = CPU_QUEUE_MAX_WAIT_MS + 12 * 60_000;
+  f.at(late);
+  expect(q.check("command:here", false, live, false)).toBeNull();
+  expect(f.lines).toEqual([`passed over command:foreign: its owner process 4242 cannot be verified from here and has not checked in for ${(CPU_QUEUE_MAX_WAIT_MS + 12 * 60_000) / 1_000} s; its next check returns it to its place`]);
+  expect(q.check("command:here", true, live)).toBeNull();
+  for (let at = 5_000; at <= 20_000; at += 5_000) {
+    f.at(late + at);
+    expect(q.check("command:later", false, live)).toMatchObject({ since: late + 5_000, position: 1 });
+  }
+  expect(f.lines).toHaveLength(1);
+  expect(f.read("SELECT key FROM tickets ORDER BY seq")).toEqual([{ key: "command:foreign" }, { key: "command:later" }]);
+  // Its gate was only stopped: its own check returns it to its place and age.
+  expect(q.check("command:foreign", false, foreign, false)).toBeNull();
+  expect(q.check("command:later", false, live)).toMatchObject({ position: 2 });
+  expect(f.read("SELECT key FROM suspended UNION ALL SELECT key FROM unpolled")).toEqual([]);
+});
+
+test("an owner from another PID namespace that keeps checking in holds the head past the bound", () => {
+  const f = ownerFixture(), q = f.open(), { live, foreign } = owners();
+  expect(q.check("command:foreign", true, foreign, false)).toBeNull();
+  for (let at = 5_000; at <= CPU_QUEUE_UNPOLLED_MS * 3; at += 5_000) {
+    f.at(at);
+    expect(q.check("command:foreign", true, foreign, false)).toBeNull();
+    expect(q.check("command:here", true, live)).toMatchObject({ position: 2 });
+  }
+  expect(f.lines).toEqual([]);
+});
+
+test("a live owner the kernel verifies keeps the head however long it stays silent", () => {
+  const f = ownerFixture(), q = f.open(), { live } = owners();
+  // A command waiting for a slot it cannot get stops checking only if it hangs.
+  expect(q.check("command:holder", true, live, false)).toBeNull();
+  for (const at of [CPU_QUEUE_UNPOLLED_MS + 1, CPU_QUEUE_MAX_WAIT_MS * 3, CPU_QUEUE_ABANDONED_MS + 1]) {
+    f.at(at);
+    expect(q.check("command:later", true, live)).toMatchObject({ position: 2 });
+  }
+  expect(f.lines).toEqual([]);
+  expect(f.read("SELECT key FROM suspended")).toEqual([]);
+});
+
+test("an unverifiable owner silent for a day is removed with one reason line", () => {
+  const f = ownerFixture(), q = f.open(), { foreign } = owners();
+  q.check("command:foreign", false, foreign);
+  f.at(CPU_QUEUE_UNPOLLED_MS + 1);
+  expect(q.check("stage:probe", false)).toMatchObject({ position: 1 });
+  f.at(CPU_QUEUE_ABANDONED_MS + 1);
+  expect(q.check("stage:probe", false, undefined, false)).toBeNull();
+  expect(f.lines).toHaveLength(2);
+  expect(f.lines[1]).toBe("removed command:foreign: its owner process 4242 cannot be verified from here and has not checked in for 24 h");
+  expect(f.read("SELECT key FROM tickets UNION ALL SELECT key FROM suspended UNION ALL SELECT key FROM unpolled")).toEqual([{ key: "stage:probe" }]);
+});
+
+test("an owned ticket an older release keeps polling stays at the head for a checker that cannot verify its owner", async () => {
+  // The older release runs where its owner is visible; the current checker
+  // cannot see that process. The shared trigger records the older release's polls.
+  const child = Bun.spawn(["sleep", "60"], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+  try {
+    const owner = captureProcessIdentity(child.pid);
+    const f = ownerFixture(identity => identity.pid === child.pid ? "unverified" : cpuOwnerStatus(identity));
+    const q = f.open(), older = new PrePollCpuAdmissionQueue(f.file, f.now); queues.push(older);
+    expect(older.check("command:older", true, owner, false)).toBeNull();
+    for (let at = 5_000; at <= CPU_QUEUE_UNPOLLED_MS * 3; at += 5_000) {
+      f.at(at);
+      expect(older.check("command:older", true, owner, false)).toBeNull();
+      expect(q.check("command:later", true, captureProcessIdentity(process.pid))).toMatchObject({ position: 2 });
+    }
+    expect(f.lines).toEqual([]);
+    // Its release stops checking: past the bound the current checker passes it over.
+    f.at(CPU_QUEUE_UNPOLLED_MS * 4 + 1);
+    expect(q.check("command:later", true, captureProcessIdentity(process.pid))).toBeNull();
+    expect(f.lines).toEqual([`passed over command:older: its owner process ${child.pid} cannot be verified from here and has not checked in for 60 s; its next check returns it to its place`]);
+  } finally { child.kill(); await child.exited; }
 });
 
 /* A release that predates polls shares the file with the current one for as
@@ -421,16 +604,16 @@ test("a stage an older release keeps polling holds its place against a current c
   for (let tick = 5_000; tick <= CPU_QUEUE_UNPOLLED_MS + 5_000; tick += 5_000) { m.at(tick); older.check(LIVE, false); }
   // The orphan is passed over; the polled stage is not, so later work waits behind it.
   expect(q.check("stage:later", true)).toMatchObject({ since: CPU_QUEUE_UNPOLLED_MS + 5_000, position: 2 });
-  expect(q.check("command:push", true, captureProcessIdentity(process.pid))).toMatchObject({ position: 3 });
+  expect(q.check("stage:push", true)).toMatchObject({ position: 3 });
   expect(m.row(LIVE)).toEqual(first);
   // Its release stops: within the bound of its last poll it is passed over too.
   m.at(m.clock() + CPU_QUEUE_UNPOLLED_MS + 1);
   expect(q.check("stage:later", true)).toBeNull();
-  expect(q.check("command:push", true, captureProcessIdentity(process.pid))).toMatchObject({ position: 1 }); // spacing still separates the two starts
+  expect(q.check("stage:push", true)).toMatchObject({ position: 1 }); // spacing still separates the two starts
   expect(m.row(LIVE)).toEqual(first);
   // Back again, the older release finds its stage where it left it, ahead of the command.
   expect(older.check(LIVE, false)).toMatchObject({ since: 0, position: 1 });
-  expect(q.check("command:push", true, captureProcessIdentity(process.pid))).toMatchObject({ position: 2 });
+  expect(q.check("stage:push", true)).toMatchObject({ position: 2 });
 });
 
 test("a stage an older release polls for more than a day behind a live command keeps its row", () => {
@@ -440,7 +623,7 @@ test("a stage an older release polls for more than a day behind a live command k
   const first = m.row(LIVE)!;
   for (const tick of [5_000, CPU_QUEUE_UNPOLLED_MS, CPU_QUEUE_ABANDONED_MS - 5_000, CPU_QUEUE_ABANDONED_MS + 5_000]) { m.at(tick); older.check(LIVE, true); }
   m.at(CPU_QUEUE_ABANDONED_MS + 10_000);
-  expect(q.check("stage:later", true)).toMatchObject({ position: 3 });
+  expect(q.check("stage:later", true)).toMatchObject({ position: 2 });
   expect(m.row(LIVE)).toEqual(first);
   expect(older.check(LIVE, true)).toMatchObject({ since: 0, position: 2 });
 });
@@ -459,15 +642,16 @@ test("an orphan at the head stops holding an older release's live stage and a la
       if (!wait) admitted[LIVE] = tick;
       else if (tick <= CPU_QUEUE_UNPOLLED_MS) expect(wait).toMatchObject({ since: 0, position: 2 }); // within the bound the orphan counts
     }
+    q.check("stage:observer", false); // housekeeping continues after the independent command starts
     if (!("command" in admitted)) {
       const wait = q.check("command:later", true, owner);
       if (!wait) admitted.command = tick;
-      else if (!(LIVE in admitted)) expect(wait).toMatchObject({ position: tick <= CPU_QUEUE_UNPOLLED_MS ? 3 : 2 }); // never ahead of the live stage
+      else expect(wait).toMatchObject({ position: 1 }); // shared spacing can hold the independent command
     }
   }
   // The first current check past the bound passes the orphan over for both
-  // releases; the stage starts at its next tick and the command one tick later.
-  expect(admitted).toEqual({ [LIVE]: CPU_QUEUE_UNPOLLED_MS + 10_000, command: CPU_QUEUE_UNPOLLED_MS + 15_000 });
+  // releases; the stage starts at its next tick. The independent command already ran.
+  expect(admitted).toEqual({ [LIVE]: CPU_QUEUE_UNPOLLED_MS + 10_000, command: 0 });
   expect(m.row(FOREIGN)).toEqual(orphan);
   // Its instance was only restarting: its own check returns it to its place and age.
   expect(older.check(FOREIGN, false)).toMatchObject({ since: 0, position: 1 });
@@ -491,7 +675,7 @@ test("an older release's reconcile cannot return a passed-over ticket to the hea
   expect(q.check("command:second", true, owner)).toBeNull(); // held: it does not count
   older.reconcile("stage:", new Set([orphan]));
   m.at(CPU_QUEUE_UNPOLLED_MS * 3 + CPU_QUEUE_SPACING_MS);
-  expect(q.check("command:third", true, owner)).toMatchObject({ position: 2 });
+  expect(q.check("command:third", true, owner, false)).toBeNull();
   m.at(CPU_QUEUE_UNPOLLED_MS * 4 + CPU_QUEUE_SPACING_MS + 1);
   expect(q.check("command:third", true, owner)).toBeNull();
   expect(m.read("SELECT key FROM unpolled")).toEqual([{ key: orphan }]);
@@ -509,7 +693,8 @@ test("a stage an older release releases from a hold is ahead of later work befor
   older.reconcile("stage:", active, new Set()); // another fence holds it
   m.at(CPU_QUEUE_UNPOLLED_MS + 5_001);
   older.reconcile("stage:", active); // the hold ends; the stage has not ticked yet
-  expect(q.check("command:later", true, captureProcessIdentity(process.pid))).toMatchObject({ position: 2 });
+  expect(q.check("stage:later", true)).toMatchObject({ position: 2 });
+  expect(q.check("command:later", true, captureProcessIdentity(process.pid), false)).toBeNull();
   expect(older.check(LIVE, false)).toMatchObject({ since: 0, position: 1 });
   expect(m.row(LIVE)).toEqual(first);
 });
@@ -525,7 +710,8 @@ test("a stage an older release held for more than a day keeps its row and its pl
   expect(m.row(LIVE)).toEqual(first);
   m.at(CPU_QUEUE_ABANDONED_MS + 15_000);
   older.reconcile("stage:", active);
-  expect(q.check("command:later", true, owner)).toMatchObject({ position: 2 });
+  expect(q.check("stage:later", true)).toMatchObject({ position: 2 });
+  expect(q.check("command:later", true, owner, false)).toBeNull();
   expect(m.row(LIVE)).toEqual(first);
   expect(older.check(LIVE, false)).toBeNull(); // first in line and long past its own bound
   expect(q.check("command:later", true, owner)).toMatchObject({ position: 1 }); // spacing behind the stage
@@ -554,9 +740,9 @@ test("two releases opening an older queue at once never remove a live, just-poll
     return m.clock();
   }, CPU_QUEUE_SPACING_MS, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_UNPOLLED_MS);
   queues.push(q);
-  expect(other).toMatchObject({ position: 3 });
+  expect(other).toMatchObject({ position: 2 });
   expect(m.row(LIVE)).toEqual(first);
-  expect(q.check("command:later", true, owner)).toMatchObject({ position: 3 });
+  expect(q.check("command:later", true, owner)).toMatchObject({ position: 2 });
   expect(older.check(LIVE, true)).toMatchObject({ since: 0, position: 2 });
 });
 
@@ -574,8 +760,8 @@ test("releases racing to open an older queue describe it once and keep its live 
     if (code !== 0) throw new Error(`racing checker failed: ${error}`);
     return (JSON.parse(out) as { position: number }).position;
   }));
-  // Every racer queued behind the command and the live stage, none in its place.
-  expect(waits.sort()).toEqual([3, 4, 5, 6, 7, 8]);
+  // Every racer queued behind the command in its lane, none in its place.
+  expect(waits.sort()).toEqual([2, 3, 4, 5, 6, 7]);
   expect(m.row(LIVE)).toEqual(first);
   expect(m.read<{ n: number }>("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger'")).toEqual([{ n: 7 }]);
   expect(older.check(LIVE, true)).toMatchObject({ since: 0, position: 2 });
@@ -637,28 +823,33 @@ test("a head past its bound while nothing is admitted reads as a stalled queue",
   // A polled head that never claims, such as a command waiting for a slot.
   const holder = captureProcessIdentity(process.pid);
   expect(q.check("command:holder", true, holder, false)).toBeNull();
-  expect(q.check(LIVE, true)).toEqual({ since: 0, position: 2, remainingMs: CPU_QUEUE_MAX_WAIT_MS + CPU_QUEUE_SPACING_MS });
+  expect(q.check("command:follower", true, holder)).toEqual({ since: 0, position: 2, waitedMs: 0, heldBy: "queue" });
   f.at(CPU_QUEUE_MAX_WAIT_MS + CPU_QUEUE_STALE_GRACE_MS);
   q.check("command:holder", true, holder, false);
-  expect(q.check(LIVE, true)?.stalledMs).toBeUndefined();
+  expect(q.check("command:follower", true, holder)?.stalledMs).toBeUndefined();
   f.at(CPU_QUEUE_MAX_WAIT_MS + 62 * 60_000);
   q.check("command:holder", true, holder, false);
-  const wait = q.check(LIVE, true)!;
+  const wait = q.check("command:follower", true, holder)!;
   expect(wait).toMatchObject({ position: 2, stalledMs: 62 * 60_000 });
-  expect(cpuQueueDetail(wait.position, wait.remainingMs, wait.stalledMs)).toBe("Waiting for the CPU queue · 2nd · stalled for 62 min · normal priority");
+  expect(cpuQueueDetail(wait.position, wait.waitedMs, wait.stalledMs)).toBe("Waiting for the CPU queue · 2nd · stalled for 62 min · normal priority");
   // Admission moving again clears the reading at once.
   expect(q.check("command:holder", true, holder)).toBeNull();
-  expect(q.check(LIVE, true)).toEqual({ since: 0, position: 1, remainingMs: CPU_QUEUE_SPACING_MS });
+  expect(q.check("command:follower", true, holder)).toEqual({ since: 0, position: 1, waitedMs: CPU_QUEUE_MAX_WAIT_MS + 62 * 60_000, heldBy: "queue" });
 });
 
-test("the stalled wait detail parses beside the bounded one", () => {
-  expect(parseCpuQueueDetail("Waiting for the CPU queue · 2nd · up to 7 min")).toEqual({ position: 2, minutes: 7 });
-  expect(parseCpuQueueDetail(cpuQueueDetail(7, 1, 62 * 60_000))).toEqual({ position: 7, minutes: 62, priority: "normal", stalled: true });
-  expect(parseCpuQueueDetail(`${cpuQueueDetail(7, 1, 90_000)} · Viewer publication: owner; owner viewer, epoch 1`)).toEqual({ position: 7, minutes: 1, priority: "normal", stalled: true });
+test("elapsed queue and pressure details round-trip; obsolete estimates are rejected", () => {
+  expect(parseCpuQueueDetail("Waiting for the CPU queue · 2nd · up to 7 min")).toBeNull();
+  expect(cpuQueueDetail(1, 299_999, undefined, "high", "pressure")).toBe("Waiting for the CPU queue · 1st · held by CPU pressure · waited 4 min · high priority");
+  for (const suffix of ["", " · Viewer publication: owner; owner viewer, epoch 1"]) {
+    expect(parseCpuQueueDetail(`${cpuQueueDetail(1, 299_999, undefined, "high", "pressure")}${suffix}`)).toEqual({ position: 1, minutes: 4, heldBy: "pressure", priority: "high" });
+  }
+  expect(parseCpuQueueDetail(`${cpuQueueDetail(1, 0, undefined, "normal", "pressure")} · unknown detail`)).toBeNull();
+  expect(parseCpuQueueDetail(cpuQueueDetail(7, 1, 62 * 60_000))).toEqual({ position: 7, minutes: 62, heldBy: "queue", priority: "normal", stalled: true });
+  expect(parseCpuQueueDetail(`${cpuQueueDetail(7, 1, 90_000)} · Viewer publication: owner; owner viewer, epoch 1`)).toEqual({ position: 7, minutes: 1, heldBy: "queue", priority: "normal", stalled: true });
   expect(parseCpuQueueDetail("Waiting for the CPU queue · 2nd · stalled for 3 min · unknown detail")).toBeNull();
 });
 
  test.each(["high", "normal", "low"] as const)("new %s queue text round-trips beside legacy text", priority => {
-  expect(parseCpuQueueDetail(cpuQueueDetail(3, 120_000, undefined, priority))).toEqual({ position: 3, minutes: 2, priority });
-  expect(parseCpuQueueDetail(cpuQueueDetail(3, 0, 180_000, priority))).toEqual({ position: 3, minutes: 3, priority, stalled: true });
+  expect(parseCpuQueueDetail(cpuQueueDetail(3, 120_000, undefined, priority))).toEqual({ position: 3, minutes: 2, heldBy: "queue", priority });
+  expect(parseCpuQueueDetail(cpuQueueDetail(3, 0, 180_000, priority))).toEqual({ position: 3, minutes: 3, heldBy: "queue", priority, stalled: true });
  });

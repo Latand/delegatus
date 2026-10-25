@@ -43,6 +43,7 @@ import {
   startWorktreeSweep,
   stopWorktreeSweep,
   sweepMergedWorktrees,
+  worktreeSweepForeign,
   worktreeSweepMode,
   worktreeSweepStatus,
   type MergedPullRequest,
@@ -50,6 +51,7 @@ import {
   type WorktreeSweepPorts,
   type WorktreeSweepReport,
 } from "./worktreeSweep";
+import { readWorktreeProvenance, recordWorktreeProvenance, WORKTREE_PROVENANCE_FILE } from "./worktreeProvenance";
 
 /* Every repository here is a throwaway under the test's temp root, and the
    state directory is the test's own: nothing reads or removes the operator's
@@ -103,9 +105,11 @@ function repository(): string {
   return root;
 }
 
-/** A linked worktree on a new branch with one commit of its own. */
-function lane(root: string, dir: string, branch: string): { dir: string; tip: string } {
+/** A linked worktree on a new branch with one commit of its own. Delegatus
+    made it, and recorded so the way a workflow does, unless `handMade`. */
+function lane(root: string, dir: string, branch: string, handMade = false): { dir: string; tip: string } {
   git(["worktree", "add", "-q", "-b", branch, dir, "main"], root);
+  if (!handMade) expect(recordWorktreeProvenance(dir, { creator: "workflow", id: `wf-${branch}` }, new Date(0))).toBe(true);
   fs.writeFileSync(path.join(dir, `${branch.replace(/\W/g, "-")}.txt`), `${branch}\n`);
   git(["add", "."], dir);
   git(["commit", "-q", "-m", `work on ${branch}`], dir);
@@ -1558,15 +1562,15 @@ test("retention, local-only commits and stale remote-tracking refs preserve fini
   expect(branchExists(root, "pipeline/local")).toBe(true);
 });
 
-test.each(["merge-batch", "review-export", "attribution"])("an unowned %s checkout under a temp root follows the same retention and remote proof", async role => {
+test.each(["merge-batch", "review-export", "attribution"])("with the foreign opt-in, an unrecorded %s checkout under a temp root follows the same retention and remote proof", async role => {
   const root = repository(); remoteRepository(root);
   const temp = path.join(caseDir, "tmp");
   const dir = path.join(temp, `llv-${role}-fixture/checkout`);
   git(["worktree", "add", "--detach", dir, "main"], root);
-  const first = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], now: () => RETAIN_NOW }));
+  const first = await sweepMergedWorktrees(ports({ foreign: true, repositories: [root], tempRoots: [temp], now: () => RETAIN_NOW }));
   expect(first.removed).toHaveLength(0);
   expect(first.kept).toEqual([expect.objectContaining({ path: dir, reason: "retention", firstSettledAt: first.at })]);
-  const options = ports({ repositories: [root], tempRoots: [temp], previous: first, now: () => RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS });
+  const options = ports({ foreign: true, repositories: [root], tempRoots: [temp], previous: first, now: () => RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS });
   const dry = await sweepMergedWorktrees({ ...options, mode: "dry-run" });
   expect(dry.removed).toHaveLength(1);
   expect(fs.existsSync(dir)).toBe(true);
@@ -2025,8 +2029,8 @@ test("a checkout made by hand outside a temp root is never retained, however old
   const root = repository(); remoteRepository(root);
   const dir = path.join(caseDir, "hand-made");
   git(["worktree", "add", "-q", "--detach", dir, "main"], root);
-  const first = await sweepMergedWorktrees(ports({ repositories: [root], now: () => RETAIN_NOW }));
-  const later = await sweepMergedWorktrees(ports({ repositories: [root], previous: first, now: () => RETAIN_NOW + 10 * FINISHED_WORKTREE_RETENTION_MS }));
+  const first = await sweepMergedWorktrees(ports({ foreign: true, repositories: [root], now: () => RETAIN_NOW }));
+  const later = await sweepMergedWorktrees(ports({ foreign: true, repositories: [root], previous: first, now: () => RETAIN_NOW + 10 * FINISHED_WORKTREE_RETENTION_MS }));
   expect(later.removed).toEqual([]);
   expect(later.kept).toEqual([expect.objectContaining({ path: dir, reason: "no-merged-pr" })]);
   expect(later.kept[0]!.firstSettledAt).toBeUndefined();
@@ -2038,9 +2042,11 @@ test("activity restarts the retention clock of a role's temp checkout", async ()
   const temp = path.join(caseDir, "tmp");
   const dir = path.join(temp, "llv-merge-batch/checkout");
   git(["worktree", "add", "-q", "--detach", dir, "main"], root);
+  expect(recordWorktreeProvenance(dir, { creator: "merge-batch", id: "batch" })).toBe(true);
   const first = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], now: () => RETAIN_NOW }));
   const busy = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], previous: first, conversationCwds: () => [dir], now: () => RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS }));
-  expect(busy.kept).toEqual([{ path: dir, reason: "live-conversation", bytes: expect.any(Number) }]);
+  expect(busy.kept).toEqual([{ path: dir, reason: "live-conversation", bytes: expect.any(Number),
+    repository: root, observedAt: busy.at, pipelineId: undefined }]);
   const quiet = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], previous: busy, now: () => RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS + 1 }));
   expect(quiet.kept).toEqual([expect.objectContaining({ path: dir, reason: "retention" })]);
   expect(fs.existsSync(dir)).toBe(true);
@@ -2377,11 +2383,142 @@ test("a handmade checkout inside a temp root never gains role ownership", async 
   const temp = path.join(caseDir, "tmp");
   const dir = path.join(temp, "personal-checkout");
   git(["worktree", "add", "-q", "--detach", dir, "main"], root);
-  const first = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], now: () => RETAIN_NOW }));
-  const later = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], previous: first, now: () => RETAIN_NOW + 10 * FINISHED_WORKTREE_RETENTION_MS }));
+  const first = await sweepMergedWorktrees(ports({ foreign: true, repositories: [root], tempRoots: [temp], now: () => RETAIN_NOW }));
+  const later = await sweepMergedWorktrees(ports({ foreign: true, repositories: [root], tempRoots: [temp], previous: first, now: () => RETAIN_NOW + 10 * FINISHED_WORKTREE_RETENTION_MS }));
   expect(later.kept[0]!.reason).toBe("no-merged-pr");
   expect(later.kept[0]!.firstSettledAt).toBeUndefined();
   expect(fs.existsSync(dir)).toBe(true);
+});
+
+/** The creation record in a checkout's Git registration. */
+const provenanceFile = (dir: string) => path.join(git(["rev-parse", "--absolute-git-dir"], dir), WORKTREE_PROVENANCE_FILE);
+const BATCH_BRANCH = "merge-batch/22222222-2222-2222-2222-222222222222";
+
+/** Clean, merged, hand-made checkouts in every layout a Delegatus checkout
+    can have, including names and paths that look like Delegatus made them. */
+function handMadeCheckouts(root: string, temp: string) {
+  const layouts: [string, string][] = [
+    [path.join(caseDir, "widgets-pipeline-handmade"), "pipeline/handmade"],
+    [path.join(root, ".worktrees", "handmade"), "handmade/nested"],
+    [path.join(root, ".claude", "worktrees", "handmade"), "handmade/claude"],
+    [path.join(temp, "llv-review-export-handmade/checkout"), "handmade/role"],
+    [path.join(temp, "llv-merger-handmade/merge-batch-fixture/checkout"), BATCH_BRANCH],
+  ];
+  const lanes = layouts.map(([dir, branch], index) => ({ ...lane(root, dir, branch, true), branch, number: 300 + index }));
+  return { lanes, prs: lanes.map(made => merged(made.number, made.branch, made.tip)) };
+}
+
+test("a hand-made worktree whose branch has a merged PR survives every sweep while the foreign opt-in is off", async () => {
+  const root = repository();
+  const temp = path.join(caseDir, "tmp");
+  const { lanes, prs } = handMadeCheckouts(root, temp);
+  const tracked = lanes.map(made => git(["ls-files", "-s"], made.dir));
+  let previous: WorktreeSweepReport | null = null;
+  for (const at of [RETAIN_NOW, RETAIN_NOW + 2 * 3_600_000, RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS, RETAIN_NOW + 10 * FINISHED_WORKTREE_RETENTION_MS]) {
+    for (const mode of ["dry-run", "on"] as const) {
+      const report: WorktreeSweepReport = await sweepMergedWorktrees(ports({ mode, repositories: [root], tempRoots: [temp], prs, previous, now: () => at }));
+      expect(report.removed).toEqual([]);
+      expect(report.trimmed).toEqual([]);
+      expect(report.kept.map(kept => [kept.path, kept.reason]).sort()).toEqual(lanes.map(made => [made.dir, "not-created-by-delegatus"]).sort());
+      for (const kept of report.kept) expect(kept.detail).toStartWith("not created by Delegatus");
+      expect(report.keptCounts).toEqual({ "not-created-by-delegatus": lanes.length });
+      previous = report;
+    }
+  }
+  lanes.forEach((made, index) => {
+    expect(fs.existsSync(path.join(made.dir, "node_modules/dep/index.js"))).toBe(true);
+    expect(git(["ls-files", "-s"], made.dir)).toBe(tracked[index]!);
+  });
+  expect(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "worktree-map.json"))).toBe(false);
+});
+
+test("the foreign opt-in lets the same guards and proofs remove hand-made worktrees", async () => {
+  const root = repository();
+  const temp = path.join(caseDir, "tmp");
+  const { lanes, prs } = handMadeCheckouts(root, temp);
+  const dirty = lane(root, path.join(caseDir, "handmade-dirty"), "handmade/dirty", true);
+  fs.writeFileSync(path.join(dirty.dir, "notes.txt"), "not committed\n");
+  const report = await sweepMergedWorktrees(ports({ foreign: true, repositories: [root], tempRoots: [temp],
+    prs: [...prs, merged(399, "handmade/dirty", dirty.tip)], now: () => RETAIN_NOW }));
+  const batch = lanes.find(made => made.branch === BATCH_BRANCH)!;
+  expect(report.removed.map(removal => removal.path).sort()).toEqual(lanes.filter(made => made !== batch).map(made => made.dir).sort());
+  /* What held them before this setting existed holds them now. */
+  expect(Object.fromEntries(report.kept.map(kept => [kept.path, kept.reason]))).toEqual({ [batch.dir]: "retention", [dirty.dir]: "uncommitted" });
+  expect(fs.readFileSync(path.join(dirty.dir, "notes.txt"), "utf8")).toBe("not committed\n");
+});
+
+test("a Delegatus-created worktree is still retired: by its creation record, or by its pipeline from before records existed", async () => {
+  const root = repository();
+  const recorded = lane(root, path.join(caseDir, "recorded"), "wf/recorded");
+  /* A pipeline lane provisioned before creation records existed. */
+  const legacy = lane(root, path.join(caseDir, "widgets-pipeline-legacy"), "pipeline/legacy");
+  fs.rmSync(provenanceFile(legacy.dir));
+  expect(readWorktreeProvenance(legacy.dir)).toBeNull();
+  const report = await sweepMergedWorktrees(ports({ repositories: [root],
+    pipelines: [pipeline({ repoDir: root, worktreeDir: legacy.dir, branch: "pipeline/legacy" })],
+    prs: [merged(401, "wf/recorded", recorded.tip), merged(402, "pipeline/legacy", legacy.tip)] }));
+  expect(report.kept).toEqual([]);
+  expect(report.removed.map(removal => removal.path).sort()).toEqual([recorded.dir, legacy.dir].sort());
+  for (const dir of [recorded.dir, legacy.dir]) expect(fs.existsSync(dir)).toBe(false);
+});
+
+test("a merge batch checkout from before creation records is retired only while its state names it", async () => {
+  const batch = mergerBatch();
+  fs.rmSync(provenanceFile(batch.dir));
+  const orphaned = await sweepMergedWorktrees(batch.options);
+  expect(orphaned.kept).toEqual([expect.objectContaining({ path: batch.dir, reason: "not-created-by-delegatus" })]);
+  batch.state.rows[1]!.status = "needs-review";
+  batch.save();
+  const first = await sweepMergedWorktrees(batch.options);
+  expect(first.kept).toEqual([expect.objectContaining({ path: batch.dir, reason: "retention" })]);
+  const after = await sweepMergedWorktrees({ ...batch.options, previous: first, now: () => RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS });
+  expect(after.removed.map(removal => removal.path)).toEqual([batch.dir]);
+});
+
+test("a creation record proves only the registration it was written for", async () => {
+  const root = repository();
+  const made = lane(root, path.join(caseDir, "made"), "wf/made");
+  const handMade = lane(root, path.join(caseDir, "copied-record"), "handmade/copied", true);
+  fs.copyFileSync(provenanceFile(made.dir), provenanceFile(handMade.dir));
+  expect(readWorktreeProvenance(handMade.dir)).toBeNull();
+  /* A record of another repository's registration proves nothing here. */
+  const other = path.join(caseDir, "other");
+  fs.mkdirSync(other);
+  git(["init", "-q", "-b", "main"], other);
+  expect(readWorktreeProvenance(made.dir, { commonDir: path.join(other, ".git") })).toBeNull();
+  expect(readWorktreeProvenance(made.dir, { commonDir: path.join(root, ".git") })).toMatchObject({ creator: "workflow", id: "wf-wf/made" });
+  /* A moved checkout no longer matches what Git wrote at creation. */
+  const moved = lane(root, path.join(caseDir, "before-move"), "wf/moved");
+  const target = path.join(caseDir, "after-move");
+  git(["worktree", "move", moved.dir, target], root);
+  expect(readWorktreeProvenance(target)).toBeNull();
+  /* A malformed record is no record. */
+  const malformed = lane(root, path.join(caseDir, "malformed"), "wf/malformed");
+  fs.writeFileSync(provenanceFile(malformed.dir), "{");
+  const report = await sweepMergedWorktrees(ports({ repositories: [root], prs: [merged(501, "handmade/copied", handMade.tip),
+    merged(502, "wf/moved", moved.tip), merged(503, "wf/malformed", malformed.tip)] }));
+  expect(Object.fromEntries(report.kept.map(kept => [kept.path, kept.reason]))).toEqual({ [made.dir]: "no-merged-pr",
+    [handMade.dir]: "not-created-by-delegatus", [target]: "not-created-by-delegatus", [malformed.dir]: "not-created-by-delegatus" });
+  expect(report.removed).toEqual([]);
+});
+
+test("the creation record is written once, and a retry keeps the first one", () => {
+  const root = repository();
+  const dir = path.join(caseDir, "once");
+  git(["worktree", "add", "-q", "-b", "wf/once", dir, "main"], root);
+  expect(recordWorktreeProvenance(dir, { creator: "pipeline", id: "first" }, new Date(0))).toBe(true);
+  expect(recordWorktreeProvenance(dir, { creator: "pipeline", id: "second" }, new Date(1))).toBe(true);
+  expect(readWorktreeProvenance(dir)).toEqual({ version: 1, creator: "pipeline", id: "first", gitdir: path.join(fs.realpathSync(dir), ".git"), createdAt: new Date(0).toISOString() });
+  expect(fs.readdirSync(path.dirname(provenanceFile(dir))).filter(name => name.endsWith(".tmp"))).toEqual([]);
+  /* Neither the main checkout nor a missing path takes a record. */
+  expect(recordWorktreeProvenance(root, { creator: "pipeline", id: "main" })).toBe(false);
+  expect(recordWorktreeProvenance(path.join(caseDir, "absent"), { creator: "pipeline", id: "absent" })).toBe(false);
+});
+
+test("the foreign opt-in reads on only when set to on", () => {
+  expect(worktreeSweepForeign({})).toBe(false);
+  for (const value of ["", "0", "off", "false", "no", "yes please"]) expect(worktreeSweepForeign({ LLV_WORKTREE_SWEEP_FOREIGN: value })).toBe(false);
+  for (const value of ["1", "on", "true", " ON "]) expect(worktreeSweepForeign({ LLV_WORKTREE_SWEEP_FOREIGN: value })).toBe(true);
 });
 
 for (const idle of [false, true]) test.skipIf(process.platform !== "linux")(`host temp role checkouts with idle host ${idle} use namespace Git and preserve local work`, async () => {
@@ -2394,6 +2531,8 @@ for (const idle of [false, true]) test.skipIf(process.platform !== "linux")(`hos
   const canonical = path.join(canonicalRoot, "llv-host-role/checkout");
   const actual = path.join(proc, "root", canonical);
   git(["worktree", "add", "-q", "--detach", actual, "main"], root);
+  // Read back through the namespace view: the record proves who made it.
+  expect(recordWorktreeProvenance(actual, { creator: "merge-batch", id: "host-role" })).toBe(true);
   const patches: { mockRestore(): void }[] = [];
   {
     const readlink = fs.readlinkSync;
@@ -2499,7 +2638,7 @@ test.each(["role", "pipeline"])("activity while a %s checkout is young restarts 
   const dir = kind === "role" ? path.join(temp, "llv-review-export/checkout") : path.join(caseDir, "widgets-pipeline-retained");
   git(["worktree", "add", "-q", "--detach", dir, "main"], root);
   const owner = pipeline({ repoDir: root, worktreeDir: dir, branch: "", closedAt: new Date(RETAIN_NOW).toISOString() });
-  const options = ports({ repositories: [root], pipelines: kind === "pipeline" ? [owner] : [], tempRoots: [temp], now: () => RETAIN_NOW });
+  const options = ports({ foreign: kind === "role", repositories: [root], pipelines: kind === "pipeline" ? [owner] : [], tempRoots: [temp], now: () => RETAIN_NOW });
   const first = await sweepMergedWorktrees(options);
   const busy = await sweepMergedWorktrees({ ...options, previous: first, conversationCwds: () => [dir], now: () => RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS - 60_000 });
   expect(busy.kept[0]!.reason).toBe("live-conversation");
@@ -2745,8 +2884,8 @@ test("the hour applies only to pipeline lanes a remote advertises: role checkout
   const temp = path.join(caseDir, "tmp");
   const role = path.join(temp, "llv-review-export-fixture/checkout");
   git(["worktree", "add", "--detach", role, "main"], root);
-  const first = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], now: () => SETTLED }));
-  const later = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], previous: first, now: () => SETTLED + 2 * HOUR }));
+  const first = await sweepMergedWorktrees(ports({ foreign: true, repositories: [root], tempRoots: [temp], now: () => SETTLED }));
+  const later = await sweepMergedWorktrees(ports({ foreign: true, repositories: [root], tempRoots: [temp], previous: first, now: () => SETTLED + 2 * HOUR }));
   expect(later.kept).toContainEqual(expect.objectContaining({ path: role, reason: "retention",
     detail: `eligible after ${new Date(SETTLED + FINISHED_WORKTREE_RETENTION_MS).toISOString()}` }));
   expect(fs.existsSync(role)).toBe(true);
@@ -3323,6 +3462,25 @@ test("a slice's elapsed-work budget defers candidates without spending their ret
   expect(report.progress?.complete).toBe(false);
   expect(report.kept.filter(row => row.reason === "deferred")).toHaveLength(1);
   expect(fs.existsSync(first.dir) && fs.existsSync(second.dir)).toBe(true);
+});
+
+test("drilldown metadata identifies deferred owners and preserves decision observation time across slices", async () => {
+  const root = repository();
+  const a = lane(root, path.join(caseDir, "observe-a"), "observe-a");
+  const b = lane(root, path.join(caseDir, "observe-b"), "observe-b");
+  const pipelines = [a, b].map((entry, index) => pipeline({ id: `observe-${index}`, task: `Preserve export ${index}`,
+    repoDir: root, worktreeDir: entry.dir, branch: index === 0 ? "observe-a" : "observe-b", state: "running" }));
+  const firstAt = Date.parse("2026-10-23T10:00:00.000Z");
+  const first = await sweepMergedWorktrees(ports({ pipelines, maxCandidates: 1, now: () => firstAt }));
+  const observed = first.kept.find(row => row.observedAt);
+  expect(observed).toBeDefined();
+  expect(first.kept.every(row => row.repository === root && row.pipelineId?.startsWith("observe-"))).toBe(true);
+  expect(first.kept.find(row => row.reason === "deferred")?.observedAt).toBeUndefined();
+  const later = await sweepMergedWorktrees(ports({ pipelines, previous: first, maxCandidates: 1, now: () => firstAt + 60_000 }));
+  expect(later.kept.find(row => row.path === observed!.path)?.observedAt).toBe(first.at);
+  recordWorktreeSweep(later, pipelines);
+  const { readWorktreePage } = await import("./worktreeDrilldown");
+  expect(readWorktreePage(null).rows.map(row => row.task).sort()).toEqual(["Preserve export 0", "Preserve export 1"]);
 });
 
 

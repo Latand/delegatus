@@ -289,15 +289,23 @@ Delegatus memory off with them.
 | Designated seat, board maintainer | Rules, `leave_lesson`, engine memory (the Claude seat writes notes there) | Rules, the imported notes among them; `leave_lesson`; engine memory off. The seat's pointer text says its engine memory is off on this installation and that `leave_lesson` is its only memory that lasts (`roleRender.ts:15`) | Engine memory; no rules; `leave_lesson` refused with `LESSON_SWITCHED_OFF` (`roleStage.ts:160`) |
 | The operator's own Delegatus-launched conversation | Engine memory; injection hook per project | Project and machine rules at start, with a notice of its own; `leave_lesson` with scope project or machine; engine memory off; injection hook offers nothing (`memorySource`) | Engine memory; injection hook |
 | Later human turn of any non-clean conversation (automatic recall) | Engine-store notes offered when the project is switched on | Nothing offered, whichever engine, role or project switch (`memorySource`); `search_memory` still answers on request | Engine-store notes offered as today |
-| Curator | Runs | Runs, with import passes | Paused (`admission.ts:21`) |
+| Curator | Runs | Runs, with import passes | Paused (`admission.ts:21`), except import passes for the periodic sync of 4.9 |
 | A conversation started outside Delegatus with the operator's own engine homes | Engine memory | Unchanged: Delegatus edits no engine configuration file | Unchanged |
 
 For the operator's conversations, the selector is the existing text-free
 marker with `roleId: null`, which already reads the project and machine
-scopes (`roleStore.ts:109-111`). It is set at spawn and re-derived on resume
+scopes (`roleStore.ts:109-111`), plus `reader: "operator"` so the block can
+tell it from a role-less stage. It is set at spawn and re-derived on resume
 in the block that sets the seat's (`registry.ts:6320-6338`) for a root
-conversation with no role and no parent, and only while the source is
-Delegatus. The block's notice and pointer for this reader are new text in
+conversation the operator launched, and only while the source is Delegatus
+(`draining` or `active`, the phases in which the engines' memory is off). A
+launch from an external client also has no role, no parent and depth zero, so
+the shape proves nothing alone: admission stamps `operatorOrigin` on a launch
+receipt whose origin is `operator`, and the settlement that creates the
+conversation copies it onto the conversation record once. Resume, restart
+adoption, account migration and `leave_lesson` read that stamp beside the
+root shape (`src/lib/memory/operatorMemory.ts`); an external root, and a
+conversation born before the stamp existed, stay excluded. The block's notice and pointer for this reader are new text in
 `roleRender.ts:47-58`: the stage notice (`:13`) speaks of finishing stages and
 the stage pointer (`:12`) of `stage_report`, neither of which an operator
 conversation does. `leave_lesson` admits such a conversation in the binding
@@ -634,6 +642,100 @@ beyond what the list holds, and only the curator reads them. The
 import report on the window gives counts by project letter, reason and level;
 it quotes no text.
 
+### 4.9 Periodic sync while the engines' memory is on
+
+Added 2026-10-22 at the operator's request (seat conversation, voice,
+paraphrased): an installation that has imported once and then runs with the
+engines' memory on again keeps writing engine notes, and Delegatus memory
+should take them in from time to time instead of falling behind until the
+next switch.
+
+**When it runs.** Only in the Claude and Codex position, and only when an
+earlier import of this installation finished its backup and candidates (its
+record is `ready`; `memory-source.json` keeps that `importId` when the switch
+moves to the engines). An installation that never chose, or chose and never
+imported, has nothing to sync with: its first import is the switch. In
+Delegatus mode the engines' stores stop changing for everything Delegatus
+launches, and the deferred rule for notes written from outside after
+`drainedAt` stands.
+
+**What triggers it.** No timer of its own. The memory index refresh, which
+already runs on the transcript-scan cadence and already calls
+`scheduleMemoryImport()`, checks whether a sync is due from two small reads:
+the setting and the import record. Due means the record's last sync attempt
+(`sync.lastAt`, durable, so a restart neither repeats nor skips one; the
+helper stamps it with the time the due check read) is at least the interval
+old; a run that stopped at its cap is due again at the
+next refresh; a failed run is retried after one hour. A run records its
+start (`result: "running"`) once the state directory is proven apart from the
+engines' stores and before its inventory, its wait for the import lock and any
+copy, so a helper its five-minute deadline or a crash ended in any of them also
+waits that hour, and the state line names it interrupted once ten minutes have
+passed. A run the lock refused records that failure in place of its start. A
+refusal before the start (the engines' memory is no longer selected, or the
+sync is off) writes nothing. The interval is
+`memory-sync.json` under the state directory, `intervalHours` 1 to 168,
+default 24 (daily) when the file is absent, 0 for off. `PUT
+/api/memory/source` with `syncIntervalHours` writes it under the same guards
+as the switch.
+
+**What it does.** One run of the existing leased import helper on the same
+import: the delta scan of 4.6 step 2 (size and modification-time prefilter,
+hashing off the event loop, each new or changed file copied into the same
+backup under its own version directory and added to the manifest, the copy
+re-hashed against the source before any candidate is written), then candidate
+rows of the same import with the part and occurrence rules of 4.4. The
+engines' stores are only read, as in 4.2. Dedup is by content: a new
+occurrence whose normalized content hash, part, anchor and applicability
+(project, type, writer kind and role) equal an occurrence that already has a
+disposition, in this import or an earlier one and not re-pended by an undo
+(4.7), inherits that disposition and is never offered to the curator. Only new
+content becomes pending. The lookup runs inside the transaction that writes the
+candidate rows, so a curator outcome committed while the run was scanning
+covers the new copy too. An inherited copy keeps the original's pass, time and
+reason, and names the candidate whose outcome it repeats (`inheritedFrom`).
+
+**Budget.** At most 200 files are hashed per run (the prefilter skips
+unchanged files before that count); the rest wait for the next run, which is
+then due at once. The helper keeps its five-minute deadline and the
+one-job-at-a-time slot it shares with the import, so a sync never runs beside
+an import. The backup grows only by changed files. Curator spend is bounded by
+the existing pass rules: one pass at a time on the machine, at most 40
+candidates or 64 KB per pass, the project's cadence between passes.
+
+**Curation in the engines position.** The curator stays paused for ordinary
+work in that position, but a pass is admitted while that import has pending
+candidates and the sync is not off. It is an import pass as in 4.5, claimed
+only when it has a batch, and its adoptions are stored like any rule. Agents
+do not receive them while the engines' memory is selected (no rules at start,
+no lesson requests, `leave_lesson` refused, as in 3.3); they are in place when
+the switch returns to Delegatus. `LLV_ROLE_MEMORY=off` still stops all of it.
+Switching back to Delegatus starts a new import as in 4.7; everything the sync
+already dispositioned is inherited there and not offered again.
+
+**State line.** `GET /api/memory/source` gains `sync`: `{ intervalHours,
+lastAt, nextAt, added, capped, failure }`, counts only; `added` counts the
+files of the last run that the curator had not seen. The Settings row of
+slice 5 shows it in the engines position's off state, after the existing
+words: "New Claude and Codex notes are imported daily (last 3 hours ago, 4
+new)." / "Нові нотатки Claude і Codex імпортуються щодня (востаннє 3 години
+тому, 4 нові)." With the sync off:
+"Their new notes are not imported." / "Їхні нові нотатки не імпортуються." A
+failed run names its reason in place of the time.
+
+Tests (slice 8): on fixture homes, a note written after the import becomes a
+backed-up pending candidate of the same import at the next due run, and not
+before the interval; a note changed back to content an earlier pass dropped or
+adopted inherits that disposition and is never offered; a run over the cap
+leaves the rest for the next run; the sync is not due in Delegatus mode,
+before any import, or with the setting off, and its schedule survives a
+restart; every source file's hash is the same after the run; a helper process
+killed in its inventory or while it waits for the import lock leaves its start
+marked, so a restarted reader waits the hour; in the engines position the
+curator claims an import pass only while that import has pending candidates,
+never an ordinary pass, and a project due only for ordinary curation never
+stands in front of one with a pending batch.
+
 ## 5. The rule budget question
 
 ### 5.1 Budgets in code
@@ -773,8 +875,11 @@ the weekly total. No rise is described as free.
 | Trial | `drainedAt` | `drainedAt` plus 7 days |
 
 A lane belongs to the window in which its first builder attempt that no fail
-edge activated started; its reviews count when they completed within 24
-hours after the window ends. Lanes that started in the import-and-drain window are in
+edge activated started; its reviews, their findings and its fix rounds count
+when they completed (a fix round: started) within 24 hours after the window
+ends, so a closed window's numbers never change with later work. A window
+decides nothing before those 24 hours have passed at the read: the report
+shows it as provisional. Lanes that started in the import-and-drain window are in
 neither, and so is any lane with an attempt on a legacy generation (4.6). Reviewers are clean in both windows, so the judge does not change.
 
 ### 6.2 Metrics
@@ -785,8 +890,41 @@ neither, and so is any lane with an attempt on a legacy generation (4.6). Review
 | Fix rounds per lane | attempts activated by a fail edge ÷ lanes reviewed, mean with a bootstrap 95 % interval over lanes, and the median | Corroboration |
 | Repeated finding classes | findings of a second or later review round whose keyword class (rendered, contract, seam, tests, privacy, hot path) appeared in an earlier round of the same lane ÷ findings of later rounds | Corroboration. Its base rate is high (78–86 % in every window measured), so it moves little |
 | Lesson writes | lesson-request answers by kind (lesson, rewrite, none, problem, open), fix-round answers separately; seat and operator rules written | Reported |
-| Evictions | budget archives, never-curated and curated separately | Guard |
+| Evictions | budget archives, never-curated and curated separately, read from each rule's departure log | Guard |
 | Import | candidates adopted, dropped by reason, adopted rules archived later in the window | Reported |
+
+Every writer that archives a rule appends `{ at, reason, curated }` to the
+rule's `departures` (`roleConsolidate.ts` `archivedRule`), and nothing removes
+an entry: a later restore, curation or re-archive leaves a closed week's
+evictions and adopted-archive count unchanged. A curator `problem` on a
+candidate writes its agenda row already archived; that row was never an
+adopted rule and is not counted as one. Import outcomes count each curator
+disposition once: a copy a later sync or import inherited (4.9) is skipped. An archive the log cannot
+account for (a rule archived in the window with no matching departure, a scope
+history entry naming one, or a scope history that no longer reaches back over
+the window) makes the window unverified, never clean.
+
+`scripts/memory-weekly-metrics.ts --state-dir <dir>` computes this table, the
+load of 6.4, the guards of 6.5 and the decision of 6.6 from `VACUUM INTO`
+copies of the state database and the delivery ledger; with no `--baseline`
+and `--window` it takes the windows from `memory-source.json`. The keyword
+classes, the verdict reading per writer (`stage_report`, the fenced JSON
+fallback, a review-loop outcome, a retried attempt, a `needs_decision` routed
+along a fail edge, which counts as a fail) and the intervals (Wilson; Newcombe
+for a difference of shares; a seeded bootstrap over lanes for fix rounds) are
+defined in `src/lib/memory/weeklyMetrics.ts`. Held-still changes that no record
+dates (the lesson request text, the curator brief, the budgets) are passed as
+`--held-change <time>`; a builder or reviewer scaffold or preset (engine,
+model, effort) that changes inside a window is detected from the attempts,
+comparing only launches of the same project, role, effective role parameters
+and stage runtime choice, because a role renders a different scaffold and
+runtime per parameter (a builder's domain, a fix round's mode). Effective
+parameters are the ones the scaffold renders with: an omitted or blank value
+is its default, so `{}` and `{ domain: "general" }` are one variant. A missing delivery
+ledger, one without its table, or one whose oldest kept start is later than a
+start in the window cannot check the engine-memory guard: such a window is
+unverified and decides nothing, which is distinct from a ledger that reaches
+back over the window and shows no engine memory.
 
 ### 6.3 What the baseline looks like now
 
@@ -960,7 +1098,9 @@ position, the selector for the operator's root conversations, their notice
 and pointer, `leave_lesson` for them.
 Tests: in Delegatus mode an operator root conversation is spawned with
 `{ project, roleId: null }` and starts with the project and machine rules
-under its own notice; "not chosen" spawns none; its `leave_lesson` writes
+under its own notice; "not chosen" spawns none; an external root of the same
+shape gets no selector and no `leave_lesson` across resume, restart and a
+record without the stamp; its `leave_lesson` writes
 origin `operator` at project or machine and is refused at role scope; a stage
 without a request and a clean role are still refused; the seat's block
 carries the Delegatus-mode pointer only in that mode.
@@ -991,7 +1131,18 @@ with and without it in the input, even when including it would reverse the
 result, and two invalid windows in a row give the stop-and-ask outcome. One row
 set per verdict writer: `stage_report`,
 the fenced-JSON fallback, a review-loop outcome, a retried attempt and a
-parked `needs_decision`.
+parked `needs_decision`. Reviews and fix rounds appended after the grace leave
+a closed window unchanged; a week read before its grace ends, or with a
+missing, tableless or pruned ledger, gives no default; builder domains are
+separate scaffold variants, omitted and explicit default parameters are one,
+and an edit or a preset change within one invalidates the week; restoring or
+re-archiving a rule after a week leaves its evictions unchanged.
+
+**Slice 8: periodic sync while the engines' memory is on.** 4.9: the setting
+and its route field, the due check on the refresh cadence, the sync run of
+the import helper with its cap, content dedup against dispositioned
+candidates, import passes in the engines position, and `sync` in the state
+read. Tests as listed in 4.9.
 
 **Then**: the operator presses the switch (the seat asks in a form once
 slices 1 to 6 are deployed); the import runs; the trial week runs; slice 6
@@ -1027,7 +1178,7 @@ go.
 - **Continuous import of notes written outside Delegatus after the flip.**
   Delegatus-launched conversations stop writing the stores; whether outside
   sessions write enough to matter is unmeasured, and the search keeps what
-  they write.
+  they write. The periodic sync of 4.9 covers the engines position only.
 - **Importing the Codex registry, raw memories and rollout summaries.**
   History; searchable.
 - **Restoring the engine stores from the backup in the interface.** The

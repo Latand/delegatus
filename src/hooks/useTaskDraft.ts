@@ -1,12 +1,13 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { newClientRequestId, uploadTaskAttachment } from "@/components/tasks/taskApi";
 import { useComposer } from "@/hooks/useComposer";
 import { attachmentDisplayName, refusalStatusText, screenAttachments, type AttachmentRefusal } from "@/lib/attachmentIntake";
 import { getLocale, translate } from "@/lib/i18n";
 import { isTaskAttachment } from "@/lib/tasks/attachmentModel";
+import { defaultTaskDue } from "@/lib/tasks/helpers";
 import type { TaskAttachment } from "@/lib/tasks/types";
 
 /** One draft per project, shared by every creation entry point. */
@@ -73,6 +74,14 @@ export function useTaskDraft(project: string, submit: (overrideText?: string) =>
   /* One id per draft lifecycle, reused across commit retries so a double-fire
      dedups to one task; a fresh id is minted after a task lands. */
   const requestIdRef = useRef(newClientRequestId());
+  /* Preview only: persisted drafts and create bodies carry picked dates alone. */
+  const [defaultDue, setDefaultDue] = useState(() => defaultTaskDue());
+  useEffect(() => {
+    const refresh = () => setDefaultDue(defaultTaskDue());
+    const timer = setInterval(refresh, 60_000);
+    window.addEventListener("focus", refresh);
+    return () => { clearInterval(timer); window.removeEventListener("focus", refresh); };
+  }, []);
   const [dueAt, setDueAt] = useState<string | undefined>(initial.dueAt);
   const [dueTz, setDueTz] = useState<string | undefined>(initial.dueTz);
   const [attachments, setAttachments] = useState<TaskAttachment[]>(initial.attachments);
@@ -111,6 +120,7 @@ export function useTaskDraft(project: string, submit: (overrideText?: string) =>
   };
 
   const clearDue = () => {
+    setDefaultDue(defaultTaskDue());
     stateRef.current = { ...stateRef.current, dueAt: undefined, dueTz: undefined };
     setDueAt(undefined);
     setDueTz(undefined);
@@ -157,6 +167,7 @@ export function useTaskDraft(project: string, submit: (overrideText?: string) =>
 
   /** Clears the persisted draft after a successful commit (or explicit discard). */
   const reset = () => {
+    setDefaultDue(defaultTaskDue());
     requestIdRef.current = newClientRequestId();
     stateRef.current = { dueAt: undefined, dueTz: undefined, attachments: [] };
     setDueAt(undefined);
@@ -199,6 +210,7 @@ export function useTaskDraft(project: string, submit: (overrideText?: string) =>
     composer,
     dueAt,
     dueTz,
+    defaultDue,
     setDue,
     clearDue,
     attachments,

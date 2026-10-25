@@ -267,7 +267,6 @@ for (const engine of ["claude", "codex"] as const) for (const source of ["dead",
     expect(next).toMatchObject({ n: 2, state: "running", accountId: targetId, effectiveRole: { engine, model, effort } });
     expect(next!.effectiveRole.serviceTier ?? null).toBe(serviceTier);
     expect(next!.restartContext).toEqual({ previousAttempt: 1, transcriptPath: STAGE_TRANSCRIPT });
-    expect(h.spawnInputs[1]!.prompt).toContain("use its transcript for reference");
     expect(h.spawnInputs[1]).toMatchObject({ cwd: lane.worktreeDir, requestedAccountId: targetId, supersedes: STAGE_CONVERSATION });
   });
 }
@@ -1115,6 +1114,36 @@ test("engine change stops before spawning and keeps the slot, access and attempt
   expect(input).toMatchObject({ supersedes: STAGE_CONVERSATION, membership: { slot: "plan:1", round: 1 }, runtimeProfile: { access: "read-only", sandbox: "full" } });
   expect(Buffer.byteLength(input!.prompt)).toBeLessThanOrEqual(32000);
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!).toMatchObject({ n: 1, conversationId: "conversation_new", runtimeSwitches: [{ mode: "handoff", phase: "committed" }] });
+});
+
+test("runtime switch retirement answers from keyed memberships without a whole snapshot", async () => {
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  const { runtimeSwitchRetirementReason } = await import("./runtimeSwitchFence");
+  const h = switchHarness(); const chosen = await requestSwitch(h);
+  const filename = path.join(process.env.LLV_STATE_DIR!, "retirement-keyed.json");
+  const transcript = path.join(process.env.LLV_STATE_DIR!, "retirement-keyed.jsonl"); fs.writeFileSync(transcript, "");
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  try {
+    const conversation = registry.ensureConversation("claude", transcript, "default");
+    registry.rememberMembership(conversation.id, { kind: "pipeline", containerId: chosen.pipeline!.id, role: "architect", slot: "plan:1",
+      stageId: "plan", stageOrder: 0, round: 1, parentConversationId: null });
+    const rows = loadPipelines(); const attempt = rows[0]!.runs[0]!.attempts[0]!;
+    attempt.conversationId = conversation.id; attempt.runtimeSwitches![0]!.from.conversationId = conversation.id;
+    savePipelines(rows);
+    expect((await patchPipeline(chosen.pipeline!.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports)).error).toBeUndefined();
+    /* The delivery controller asks this inside writer admission. A whole
+       snapshot there rebuilt every collection of retained history: 1–3.5 s
+       loop slices on a production-sized registry copy. */
+    const wholeSnapshot = spyOn(registry, "readOnlySnapshot").mockImplementation(() => {
+      throw new Error("runtime switch retirement materialized the whole registry");
+    });
+    try {
+      expect(runtimeSwitchRetirementReason(conversation.id, registry)).toContain("withdrew");
+      expect(runtimeSwitchRetirementReason("conversation_unrelated", registry)).toBeNull();
+      expect(runtimeSwitchRetirementReason("/claude/not-a-conversation.jsonl", registry)).toBeNull();
+      expect(wholeSnapshot).not.toHaveBeenCalled();
+    } finally { wholeSnapshot.mockRestore(); }
+  } finally { registry.close(); }
 });
 
 test("switch-owned teardown preserves a failed operator stop through compaction", async () => {

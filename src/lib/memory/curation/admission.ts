@@ -7,20 +7,25 @@ import { SEAT_TICK_WAKE_INTERVAL_MS } from "@/lib/monitor/seatTick";
 import { peekSeatTickState } from "@/lib/monitor/seatTickState";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { identityAlive, livenessProbe } from "@/lib/agent/accountLiveness";
+import { entryOwners, ownerProcessAlive } from "@/lib/lifecycle/owners";
 import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 import { roleMemoryEnabled } from "../settings";
+import { canonicalProject } from "@/lib/projects/aliases";
+import { isCrossProjectRoleScope, MACHINE_SCOPE, scopeProject } from "../roleScopes";
 import { machinePassAuthority, patchPass, readPass, readPassAuthority, passIsLive, type CuratorPass } from "./store";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { curatorCallerOf } from "./guard";
 import { importBatchAccountingGap } from "../importCuration";
+import { syncCurationOpen } from "../importSync";
 
 /** Shared launch and recovery admission, also loaded by the scanner worker. */
 export interface CurationAdmissionPorts {
   sources: SeatTickAdmissionSources;
   archive?: (pass: CuratorPass) => void;
 }
-export function admissionHeld(project: string, ports: CurationAdmissionPorts): string | null {
-  if (!roleMemoryEnabled()) return "curation: paused, memory off";
+/** In the engines position only an import pass of the synced import is admitted (memory-source-switch.md §4.9). */
+export function admissionHeld(project: string, ports: CurationAdmissionPorts, pass?: Pick<CuratorPass, "importBatch"> | null): string | null {
+  if (!roleMemoryEnabled() && !syncCurationOpen(pass?.importBatch?.importId)) return "curation: paused, memory off";
   const settings = effectiveSeatTickSettings(ports.sources.settings(project), ports.sources.now(), SEAT_TICK_WAKE_INTERVAL_MS);
   if (!settings.enabled) return "curation: paused, wakes off";
   if (settings.curation?.enabled === false) return "curation: paused, curator off";
@@ -47,6 +52,29 @@ function hostEvidence(project: string, ports: CurationAdmissionPorts) {
     || wakeAt > now || now - wakeAt > 2 * settings.wakeIntervalMs) return { held: "no delivered seat wake within two intervals" } as const;
   return { held: null, seat, wakeAt } as const;
 }
+
+/** Synchronous admission evidence for memory writers. Probe only this seat's
+ * recorded processes; a setting or an unproven launch cannot host a curator. */
+export function curationAvailable(project: string, sources = defaultSeatTickAdmissionSources()): boolean {
+  const ports = { sources };
+  if (admissionHeld(project, ports)) return false;
+  const evidence = hostEvidence(project, ports);
+  if (evidence.held !== null) return false;
+  const snapshot = sources.registry().livenessConversationSnapshot(evidence.seat.conversationId!);
+  const probe = livenessProbe();
+  return Object.values(snapshot.entries).some(entry =>
+    entryOwners(entry, probe).owners.some(owner => ownerProcessAlive(owner, probe)));
+}
+
+/** Whether a pass could read `scope`. Every host's pass covers the machine and
+ * cross-project role scopes, so any active seat can host a pass for them; a
+ * project's own scopes belong to that project's host alone. */
+export function curationAvailableForScope(scope: string, writer: string, sources = defaultSeatTickAdmissionSources()): boolean {
+  const shared = scope === MACHINE_SCOPE || isCrossProjectRoleScope(scope);
+  const hosts = shared ? [...sources.activeSeats(), writer] : [scopeProject(scope) ?? writer];
+  return [...new Set(hosts.map(canonicalProject))].sort().some(project => curationAvailable(project, sources));
+}
+
 export async function hostAdmission(project: string, ports: CurationAdmissionPorts) {
   const evidence = hostEvidence(project, ports);
   if (evidence.held !== null) return evidence;
@@ -87,7 +115,7 @@ export async function curatorRecoveryGuard(conversationId: string, sources = def
       settle(current, ports, `abandoned: ${currentHostFailure}`);
       throw new DeliveryAdmissionRefusedError(`curation pass abandoned: ${currentHostFailure}`);
     }
-    const held = admissionHeld(pass.project, ports);
+    const held = admissionHeld(pass.project, ports, current);
     if (held) throw new DeliveryAdmissionRefusedError(held);
     curatorCallerOf(conversationId, withViewerOperation("memory.curation-admission", () => sources.registry().curatorConversationSnapshot(conversationId)));
   };
@@ -110,7 +138,7 @@ export function settle(pass: CuratorPass, ports: CurationAdmissionPorts, failure
   // Final state releases the machine claim even if archive placement is unavailable.
   const next = patchPass(pass.id, { state: settledFailure ? "failed" : "succeeded", failure: settledFailure, endedAt: new Date(ports.sources.now()).toISOString(), ...(finalText ? { finalText } : {}) })!;
   const counts = readPass(next.id)?.counts ?? next.counts;
-  const detail = `curation: ${settledFailure ? `failed, ${settledFailure}` : `settled ${pass.id}, ${counts.calls} calls, ${counts.changed} rules changed`}`;
+  const detail = `curation: ${next.state === "failed" ? `failed, ${next.failure}` : `settled ${pass.id}, ${counts.calls} calls, ${counts.changed} rules changed`}`;
   try { (ports.archive ?? (p => archive(p, ports.sources)))(next); }
   catch { return `${detail}; archive placement pending`; }
   return detail;

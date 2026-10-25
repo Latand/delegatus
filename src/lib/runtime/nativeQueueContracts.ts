@@ -74,6 +74,8 @@ export type NativeQueueTransition =
   | { phase: "prepared"; input: NativeQueueInput[]; binding?: NativeQueueBinding }
   | { phase: "seat-withdrawal"; reason: string }
   | { phase: "acknowledged"; nativeSubmissionId?: string; deleted?: boolean; turnId?: string }
+  /** A pre-write admission check deferred. Preserve the frozen input and retry this operation. */
+  | { phase: "deferred"; reason: string }
   | { phase: "observed-queued"; submission: NativeQueuedSubmission }
   | { phase: "withdrawn" }
   | { phase: "removed" }

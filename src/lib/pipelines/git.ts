@@ -1,3 +1,5 @@
+import { proactiveTaskExecutionError } from "@/lib/tasks/proactiveExecution";
+import { stateDir } from "@/lib/configDir";
 import { shortId } from "@/lib/shortIds";
 import { publicationFailurePhase } from "./publicationHistory";
 export { publicationFailurePhase } from "./publicationHistory";
@@ -23,6 +25,7 @@ import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifa
 import { publicationDeadlineOnly } from "./publication";
 import type { Pipeline, PipelinePublicationFailure, PipelinePublicationResult } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
+import { recordWorktreeProvenance } from "./worktreeProvenance";
 import { CpuContainmentUnavailable, wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
 import { cpuPriorityEnv } from "@/lib/runtime/cpuPriority";
 import { instanceCpuPrioritySource } from "@/lib/runtime/cpuAdmissionScope";
@@ -204,6 +207,8 @@ export async function provisionPipelineWorktree(pipeline: Pipeline, exec: ExecPo
   const base = (await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir));
   if (base.code !== 0 || !base.stdout.trim()) return failure("resolving the pipeline base ref", base);
   if (base.stdout.trim() !== pipeline.baseRef) return { ok: false, error: "the pipeline worktree does not match its persisted base" };
+  recordWorktreeProvenance(pipeline.worktreeDir, { creator: "pipeline", id: pipeline.id });
+  await prepareStageToolchain(pipeline, exec);
   return { ok: true, sha: pipeline.baseRef, baseBranch: pipeline.baseBranch };
 }
 
@@ -429,6 +434,11 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
     const unlock = await exec("git", ["worktree", "unlock", pipeline.worktreeDir], pipeline.repoDir, signal);
     if (unlock.code !== 0) return failure("unlocking the finished pipeline checkout", unlock);
   }
+  // The worktree sweep removes only checkouts with a record of who made them.
+  // The pipeline's own record names this path too, so a failed write keeps it sweepable.
+  recordWorktreeProvenance(pipeline.worktreeDir, { creator: "pipeline", id: pipeline.id });
+  await prepareStageToolchain(pipeline, (command, args, cwd) => exec(command, args, cwd, signal));
+  if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
   return { ok: true, sha: base.stdout.trim(), baseBranch: pipeline.baseBranch };
 }
 
@@ -755,10 +765,10 @@ function stageToolchainRelease(pipeline: Pipeline): (() => void) | undefined {
   } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
 }
 
-/** Settlement runs after the agent's turn, including read-only turns which
-    never installed dependencies. Share the parent checkout's installed tools
-    for the commit through an absent, ignored node_modules. Remove our link
-    afterward so a later install cannot write into the parent checkout.
+/** Provisioning shares the parent checkout's installed tools before the agent
+    can make its first hooked commit. Settlement retries this for older lanes
+    and read-only turns, then removes the borrowed link after its commit so a
+    later install cannot write into the parent checkout.
     Preserve any local install or unrelated link, including dangling links. */
 async function prepareStageToolchain(pipeline: Pipeline, exec: ExecPort): Promise<(() => void) | undefined> {
   if (path.resolve(pipeline.repoDir) === path.resolve(pipeline.worktreeDir)) return;
@@ -1570,9 +1580,18 @@ export function publicationFailureCause(failure: PipelinePublicationFailure): st
   const failed = [...new Set(lines.filter((line) => line.startsWith("(fail) ") || (line.startsWith("NEW ") && !line.includes("<runner error>")))
     .map((line) => line.slice(line.startsWith("NEW ") ? 4 : 7).replace(/ \[[\d.]+m?s\]$/, "")))];
   const tests = failed.length ? `, ${failed.length} failing test${failed.length === 1 ? "" : "s"}, first: ${failed[0]!.slice(0, 120)}` : "";
-  if (phase) return `the repository's pre-push hook failed in its "${phase}" phase (${status}${tests})`;
+  const runner = runnerNoVerdict(failure.outputTail);
+  const lost = runner ? `; the gate runner returned no verdict: ${runner}` : "";
+  if (phase) return `the repository's pre-push hook failed in its "${phase}" phase (${status}${tests}${lost})`;
+  if (runner) return `git push was refused (${status}${tests}${lost})`;
   const last = lines.filter(Boolean).at(-1);
   return `git push was refused (${status}${tests})${last ? `: ${last.slice(0, 160)}` : ""}`;
+}
+
+/** The remote gate runner's line for a started run that lost its verdict
+    (scripts/gate-runner/client.ts); its retries run on this machine. */
+function runnerNoVerdict(output: string): string | null {
+  return /^gate-runner: no verdict: ([^\n]{1,160})/m.exec(output)?.[1] ?? null;
 }
 
 /** The hook's line for a decisive check its push budget stopped before a
@@ -1590,6 +1609,9 @@ export function hookBudgetStop(output: string): { ms: number; check: string } | 
     the Viewer itself died with the push. */
 export function publicationInterruptionCause(failure?: PipelinePublicationFailure): string {
   const phase = failure ? publicationFailurePhase(failure) : null;
+  const runner = failure ? runnerNoVerdict(failure.outputTail) : null;
+  // The hook's last phase marker is its admission line when the checks ran remotely.
+  if (runner) return `the gate runner returned no verdict for the hook's checks (${runner}), and the push did not reach the remote`;
   if (failure?.hookBudgetMs) {
     const budget = `the pre-push hook's ${Math.round(failure.hookBudgetMs / 60_000)}-minute budget ran out`;
     // The check the hook named is exact; the last phase marker is a group at best.
@@ -1782,6 +1804,8 @@ export function pipelinePublicationFence(pipeline: Pipeline): string {
 const PUBLICATION_INSTALL_SUBJECT = "publication install";
 
 export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, request: PipelinePublishRequest): Promise<PipelinePublishResult> {
+  const proactiveError = proactiveTaskExecutionError(pipeline.taskIds);
+  if (proactiveError) return { ok: false, error: proactiveError };
   const operationId = crypto.randomUUID();
   const lock = path.join(pipelineArtifactsDir(pipeline.id), "publication.lock");
   let descriptor: number | null;
@@ -1829,7 +1853,8 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       }
       if (pipeline.delivery && pipeline.delivery.epoch !== current.delivery.epoch) return { error: "delivery epoch changed; reload the owner before publishing" };
       const previous = current.delivery.operation;
-      if (pipeline.delivery?.operation?.state === "pending" && previous?.id !== pipeline.delivery.operation.id) {
+      if (pipeline.delivery?.operation?.state === "pending"
+        && (previous?.id !== pipeline.delivery.operation.id || previous.state !== "pending")) {
         return { error: `publisher ${current.id} at epoch ${current.delivery.epoch} has a newer reservation; reload before publishing` };
       }
       if (previous?.state === "running") return { waiting: pipelinePublicationInFlight(current) };
@@ -1860,7 +1885,18 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
     const abort = new AbortController();
     let writeStarted = false;
     const matches = (current: Pipeline | null) => current !== null && pipelinePublicationFence(current) === fence;
-    const revalidate = () => { if (!matches(findPipelineRecord(pipeline.id))) abort.abort(); };
+    let authorityRevoked = false;
+    let identityChanged = false;
+    const revalidate = () => {
+      const current = findPipelineRecord(pipeline.id);
+      if (!matches(current)) { identityChanged = true; abort.abort(); }
+      if (current && proactiveTaskExecutionError(current.taskIds)) {
+        authorityRevoked = true;
+        // Revocation fences new work. An active push keeps its deadline and
+        // ownership cancellation, and must finish before its receipt settles.
+        if (!writeStarted) abort.abort();
+      }
+    };
     const superseded = (): PipelinePublishResult => writeStarted
       ? { ok: true, sha: request.acceptedSha, remote: "unreachable", uncertain: true,
         detail: "publication superseded after a remote write began; reconcile its outcome" }
@@ -1904,6 +1940,14 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
     const fencedExec: ExecPort = async (command, args, cwd, env, options) => {
       revalidate();
       if (abort.signal.aborted) return { code: null, stdout: "", stderr: "publication superseded" };
+      // Only observations of the in-flight effect remain authorized. Never
+      // let reconciliation open another write after proactive revocation.
+      const remoteRead = command === "timeout" && args[0] === "--signal=KILL"
+        && args[1] === REMOTE_READ_TIMEOUT && args[2] === "git" && args[3] === "ls-remote";
+      const diagnosticRead = command === "git" && (args[0] === "merge-base" || args[0] === "diff");
+      if (authorityRevoked && !(writeStarted && (remoteRead || diagnosticRead))) {
+        return { code: null, stdout: "", stderr: "publication authority revoked" };
+      }
       fs.futimesSync(descriptor, new Date(), new Date());
       const preparingDependencies = command === "bun" && args[0] === "install";
       // The push runs the repository's pre-push gates; both leave the
@@ -1933,7 +1977,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         const output = redactPublicationOutput(executed.stdout, executed.stderr);
         const tail = output.slice(-4000);
         const lines = output.split("\n");
-        const checks = [...new Set(lines.filter((line) => line.startsWith("pre-push: ")))].slice(-16);
+        const checks = [...new Set(lines.filter((line) => line.startsWith("pre-push: ") || line.startsWith("gate-runner: no verdict:")))].slice(-16);
         const tests = [...new Set(lines.filter((line) => /^(?:\(fail\) |NEW (?!.*<runner error>))/.test(line)))].slice(0, 8);
         const phases = [...checks, ...tests].filter((line) => !tail.includes(line)).map((line) => line.slice(0, 160)).join("\n");
         // Long diagnostics must not erase the hook phases or failing test names.
@@ -1962,7 +2006,9 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       ? { ok: true, sha: request.acceptedSha, remote: "unreachable", detail: `publication outcome uncertain: ${String(error)}`, uncertain: true }
       : { ok: false, error: `publication failed before a remote write: ${String(error)}` }; }
     revalidate();
-    if (abort.signal.aborted) result = superseded();
+    // Revocation fences the next effect; it cannot erase a confirmed remote
+    // receipt for the operation that was already in flight.
+    if (abort.signal.aborted && !(authorityRevoked && !identityChanged && result.ok && result.remote === "published")) result = superseded();
     if (!result.ok) result = { ...result, error: redactBounded(redactPublicationText(result.error), 4500) };
     else if (result.remote === "unreachable") result = { ...result, detail: redactBounded(redactPublicationText(result.detail), 4500) };
     if (failureEvidence && (!result.ok || result.remote === "unreachable")) {
@@ -2199,6 +2245,8 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
      limit for git to send the pack, so it ends with its own verdict or with
      a named missing one instead of being killed (scripts/local-gate.ts). */
   const pushEnv = { ...pipelinePublicationHookEnv(), ...lessons, ...engineForgeWriteEnv(),
+    LLV_GATE_LANE_ID: pipeline.id, LLV_GATE_PUSH_HEAD: acceptedSha, LLV_GATE_STATE_DIR: stateDir(),
+    ...(pipeline.cursor?.stageId ? { LLV_GATE_STAGE_ID: pipeline.cursor.stageId } : {}),
     LLV_GATE_PUSH_DEADLINE: String(publicationHookDeadline(budget.ms, Date.now())) };
   const push = (await exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir, pushEnv, { timeoutMs: budget.ms }));
   if (push.code === null) return { ok: true, sha: acceptedSha, remote: "unreachable", uncertain: true, detail: "remote write was interrupted; reconcile its outcome" };

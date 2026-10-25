@@ -1,6 +1,6 @@
 // Pre-S5 embedded-flow execution cases stay as history until S8 deletion.
 // Supported run-reviewer cases and flows/retirement.test.ts remain active.
-import { expect, test, spawn, spawnSync, fs, path, Database, reviewNote, tickPipelines, MAX_FLOW_NOTE_LENGTH, createPipelineFromRequest, loadPipelines, savePipelines, pipelineRevision, FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeRoundsUsed, pipelineCompletedUnreviewed, asStoredLegacyReviewLane, patchPipeline, closeAndDrain, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, REMOTE_BRANCH, create, PROVIDER_LIMIT_NOTICE, LIMITED_ACCOUNT, SPARE_ACCOUNT, limitInterruptedTranscript, codexUsageLimitTranscript, verdictTranscript, silentTranscript, readFixtures, usageLimitPorts, usageLimitStage, reviewPipeline, reviewStage, noteOf, CYCLE_STAGES, BUDGET_STAGES, failEveryCritique, STOP_AFTER_FIX, REVIEW_HEADS, movingHeadHarness, critiqueRound, buildRound, continueReview, movingHead, acceptHead, driveWithController, expectConvertedReview, REVIEW_LOOP_STAGE, BUILD_ONLY, publishHarness, PUBLISH_STAGES, deliveryRefusalPark, interruptedPublication } from "./engine.fixture";
+import { expect, test, spawn, spawnSync, fs, path, Database, reviewNote, tickPipelines, MAX_FLOW_NOTE_LENGTH, createPipelineFromRequest, loadPipelines, savePipelines, pipelineRevision, FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeRoundsUsed, pipelineCompletedUnreviewed, asStoredLegacyReviewLane, patchPipeline, closeAndDrain, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, finishReported, REMOTE_BRANCH, create, PROVIDER_LIMIT_NOTICE, LIMITED_ACCOUNT, SPARE_ACCOUNT, limitInterruptedTranscript, codexUsageLimitTranscript, verdictTranscript, silentTranscript, readFixtures, usageLimitPorts, usageLimitStage, reviewPipeline, reviewStage, noteOf, CYCLE_STAGES, BUDGET_STAGES, failEveryCritique, STOP_AFTER_FIX, REVIEW_HEADS, movingHeadHarness, critiqueRound, buildRound, continueReview, movingHead, acceptHead, driveWithController, expectConvertedReview, REVIEW_LOOP_STAGE, BUILD_ONLY, publishHarness, PUBLISH_STAGES, deliveryRefusalPark, interruptedPublication } from "./engine.fixture";
 
 
 test("a failover whose remaining capacity disappears waits with the limit detail (#1371)", async () => {
@@ -2084,6 +2084,55 @@ test("a stale running publication parks with its reservation, age and recovery a
   expect(loadPipelines()[0]!.cursor?.stageId).toBe("review");
 });
 
+test.each(["reject", "edit"] as const)("revocation during stage settlement preserves the active publication fence (%s)", async decision => {
+  const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
+  const { candidate, context, authority, NOW } = await import("@/lib/tasks/proactive.fixture");
+  const { mutateTasks } = await import("@/lib/tasks/store");
+  const { patchTask } = await import("@/lib/tasks/commands");
+  const { settlePendingStageGit } = await import("./engine");
+  const { pipelinePublicationFence } = await import("./git");
+  const { h, box, pipeline } = await interruptedPublication();
+  const project = pipeline.project;
+  const { task } = await admitProactiveTask({ ...candidate(`settlement-${decision}`), project }, { ...context(), project }, undefined, authority());
+  const now = () => new Date(NOW).toISOString();
+  await decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task), undefined, now);
+  pipeline.taskIds = [task.id];
+  savePipelines([pipeline]);
+  const fence = pipelinePublicationFence(pipeline);
+  const operation = pipeline.delivery!.operation!;
+  const descriptor = fs.openSync(operation.executor!.lock, "a");
+  const artifact = path.join(path.dirname(operation.executor!.lock), "retained-settlement.txt");
+  const exec = h.ports.exec;
+  let revoked = false;
+  try {
+    expect(spawnSync("flock", ["-n", "3"], { stdio: ["ignore", "pipe", "pipe", descriptor] }).status).toBe(0);
+    fs.writeFileSync(artifact, "Retain the accepted work\n", { flag: "wx" });
+    h.ports.exec = async (...args) => {
+      if (!revoked) {
+        revoked = true;
+        if (decision === "reject") await decideProactiveTask(task.id, "reject", "operator", proactiveDecisionToken(task), undefined, now);
+        else mutateTasks(tasks => {
+          const result = patchTask(tasks, task.id, { details: "Scope changed during the accepted-head read" });
+          if (!result.ok) throw new Error(result.error);
+          return { tasks: result.tasks, result: null };
+        });
+        const stale = new Date(Date.now() - 120_000);
+        fs.futimesSync(descriptor, stale, stale);
+      }
+      return await exec(...args);
+    };
+    await settlePendingStageGit(h.ports);
+    expect(revoked).toBe(true);
+    const retained = loadPipelines()[0]!;
+    expect(retained.state).toBe("running");
+    expect(pipelinePublicationFence(retained)).toBe(fence);
+    expect(retained.delivery!.operation).toMatchObject({ id: operation.id, state: "running" });
+    expect(box.order).toEqual(["commit"]);
+    expect(h.spawnInputs).toHaveLength(1);
+    expect(fs.readFileSync(artifact, "utf8")).toBe("Retain the accepted work\n");
+  } finally { h.ports.exec = exec; fs.closeSync(descriptor); }
+});
+
 for (const settled of [false, true]) {
   test(`a lane already parked on its own publisher recovers with a ${settled ? "settled" : "running"} reservation (#1939)`, async () => {
     const { h, box, pipeline } = await interruptedPublication();
@@ -2105,6 +2154,42 @@ for (const settled of [false, true]) {
     expect(recovered.runs[0]!.attempts).toHaveLength(1);
     expect(recovered.runs[0]!.attempts[0]!.state).toBe("passed");
     expect(box.order).toEqual(["commit"]);
+  });
+}
+
+for (const variant of ["published", "moved-head", "unknown-remote", "different-result-sha", "different-operation-sha", "pending", "failed"] as const) {
+  test(`a read-only pass reuses only exact settled publication evidence: ${variant}`, async () => {
+    const h = harness();
+    const box = publishHarness(h);
+    await create(h.ports, [PUBLISH_STAGES[0], { ...PUBLISH_STAGES[1], ...(variant === "moved-head" ? { role: { roleId: "builder" } } : {}) }] as never, REMOTE_BRANCH);
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    await tickPipelines([h.finish(loadPipelines()[0]!.runs[0]!.attempts[0]!.agentPath!, "pass")], h.ports);
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    const lane = loadPipelines()[0]!;
+    const operation = lane.delivery!.operation!;
+    expect(operation.state).toBe("settled");
+    expect(operation.result).toMatchObject({ ok: true, remote: "published", sha: box.passedSha });
+    const otherSha = "9".repeat(40);
+    if (variant === "moved-head") box.setLocalHead(otherSha);
+    if (variant === "unknown-remote") operation.result = { ok: true, sha: box.passedSha, remote: "unreachable", detail: "unknown" };
+    if (variant === "different-result-sha") operation.result = { ok: true, sha: otherSha, remote: "published" };
+    if (variant === "different-operation-sha") operation.sha = otherSha;
+    if (variant === "pending") operation.state = "pending";
+    if (variant === "failed") operation.result = { ok: false, error: "publication refused" };
+    savePipelines([lane]);
+    const reads = box.remoteReadAttempts();
+    await tickPipelines([h.finish(lane.runs.find(run => run.stageId === "review")!.attempts[0]!.agentPath!, "pass")], h.ports);
+    const settled = loadPipelines()[0]!;
+    if (variant === "published") {
+      expect(settled.state).toBe("completed");
+      expect(settled.delivery!.operation!.id).toBe(operation.id);
+      expect(box.remoteReadAttempts()).toBe(reads);
+    } else {
+      expect(settled.delivery!.operation!.id).not.toBe(operation.id);
+      expect(box.remoteReadAttempts()).toBeGreaterThan(reads);
+    }
   });
 }
 
@@ -2259,7 +2344,7 @@ test("retry-stage republishes a committing passed stage without rerunning its wo
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   box.setPushFails(true);
-  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "accepted output")], h.ports);
+  await tickPipelines([finishReported(h, "/codex/stage-1.jsonl", "pass", "accepted output")], h.ports);
   const parked = loadPipelines()[0]!;
   expect(parked.state).toBe("needs_decision");
   expect(parked.cursor).toMatchObject({ stageId: "build", state: "committing" });
@@ -2286,7 +2371,7 @@ test.each(["retry-stage", "publish"] as const)("publication recovery keeps the a
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   box.setPushFails(true);
-  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+  await tickPipelines([finishReported(h, "/codex/stage-1.jsonl", "pass", "done")], h.ports);
   const moved = "8".repeat(40);
   box.setLocalHead(moved);
   await patchPipeline(pipeline.id, { action: "retry-stage" }, h.ports);
@@ -2337,7 +2422,7 @@ test.each([
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   box.setPushFails(true);
-  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "accepted output")], h.ports);
+  await tickPipelines([finishReported(h, "/codex/stage-1.jsonl", "pass", "accepted output")], h.ports);
 
   const exec = h.ports.exec;
   if (cause === "moved") box.setLocalHead("8".repeat(40));

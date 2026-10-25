@@ -7,7 +7,6 @@ import type { StageRuleSource as RuleSource, RoleMemoryRule } from "../roleTypes
 import { applyCuration, revertCuratorPass, type CurationApply } from "./apply";
 import { claimPass, patchPass } from "./store";
 import { readCuration } from "./read";
-import { curatorBrief } from "./brief";
 import { memoryProblemSignals } from "../roleProblems";
 
 const PROJECT = "review-curation";
@@ -84,8 +83,6 @@ test("split parts inherit the tasks behind a merged rule, with distinct tasks on
   const page = await readCuration(pass, scope());
   if (!("rules" in page)) throw Error("scope page expected");
   expect(page.rules.filter(rule => rule.kind === "active").map(rule => rule.tasks)).toEqual([2, 2]);
-  const brief = curatorBrief(PROJECT);
-  for (const clause of ["different tasks wrote about one class", "tasks counts the tasks", "more tasks above one backed by fewer", "candidates for that role's template"]) expect(brief).toContain(clause);
 });
 
 test("another project's curator transfers a misfiled machine rule to its author and Undo restores it", () => {

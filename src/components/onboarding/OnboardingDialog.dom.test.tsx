@@ -51,7 +51,7 @@ Object.assign(globalThis, {
     }
     /* The route answers every kept write with the marker it wrote. */
     if (url.includes("/api/onboarding")) {
-      if (init?.method !== "PUT") return json({ marker: null });
+      if (init?.method !== "PUT") return onboardingRead();
       if (onboardingRefusal) return json({ error: onboardingRefusal }, 500);
       return json({ marker: { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, steps: {}, lastHealth: null, walk: null } });
     }
@@ -65,6 +65,9 @@ Object.assign(globalThis, {
     return json({ claude: { active: "", accounts: [] }, codex: { active: "", accounts: [] } });
   },
 });
+
+/* What `GET /api/onboarding` answers; the host's marker cases set it. */
+let onboardingRead: () => Promise<Response> = () => json({ marker: null });
 
 /* What `/api/external-relay` answers; the relay step's cases set it. */
 let relayBody: unknown = { relays: [], pending: [], status: [] };
@@ -154,6 +157,68 @@ test("the visual critic sits in the design and critique group on Opus high, and 
   } finally {
     flushSync(() => root.unmount());
     host.remove();
+    rolesBody = { roles: [] };
+  }
+});
+
+/* #3054: the memory cap belongs to no engine or model, so editing the row's
+   runtime keeps the saved cap; only the row's reset clears it. */
+test("a saved role memory cap survives model and engine edits and the bulk move, and reset clears it", async () => {
+  const { mergeRoleDefinitions } = await import("@/lib/roles/store");
+  const { AgentMappingTable } = await import("./AgentMappingTable");
+  const cap = 6 * 2 ** 30;
+  const roles = mergeRoleDefinitions({ builder: { config: { engine: "codex", model: "gpt-6.1-sol", effort: "high", agentMemoryMaxBytes: cap } } })
+    .map((role) => ({ ...role, promptPreview: role.promptScaffold, shipped: { config: mergeRoleDefinitions({}).find((row) => row.id === role.id)!.config } }));
+  expect(roles.find((role) => role.id === "builder")!.config.agentMemoryMaxBytes).toBe(cap);
+  rolesBody = { roles };
+  requests.length = 0;
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  const lastRolesWrite = () => requests.filter((request) => request.method === "PUT" && request.url.includes("/api/roles")).at(-1)?.body as { overrides: Record<string, { config: unknown }> } | undefined;
+  const writes = () => requests.filter((request) => request.method === "PUT" && request.url.includes("/api/roles")).length;
+  try {
+    const both = { claude: { connected: true, account: null }, codex: { connected: true, account: null } };
+    flushSync(() => root.render(<AgentMappingTable statuses={both} layout="table" onConnect={() => {}} />));
+    await until(() => Boolean(host.querySelector("[data-mapping-row='builder']")));
+    /* Only the cap differs from the shipped row, and the row still reads as changed. */
+    expect(host.querySelector("[data-mapping-reset='builder']")).not.toBeNull();
+
+    const model = host.querySelectorAll("[data-mapping-row='builder'] select")[0] as HTMLSelectElement;
+    const other = [...model.options].map((option) => option.value).find((value) => value !== "gpt-6.1-sol")!;
+    flushSync(() => { model.value = other; model.dispatchEvent(new Event("change", { bubbles: true })); });
+    await until(() => writes() === 1);
+    expect(lastRolesWrite()!.overrides.builder!.config).toMatchObject({ engine: "codex", model: other, agentMemoryMaxBytes: cap });
+    await until(() => (host.querySelectorAll("[data-mapping-row='builder'] select")[0] as HTMLSelectElement).value === "gpt-6.1-sol");
+
+    flushSync(() => (host.querySelector("[data-mapping-row='builder'] [data-engine-segment='claude']") as HTMLButtonElement).click());
+    await until(() => writes() === 2);
+    expect(lastRolesWrite()!.overrides.builder!.config).toMatchObject({ engine: "claude", agentMemoryMaxBytes: cap });
+    await until(() => Boolean(host.querySelector("[data-mapping-reset='builder']")));
+
+    flushSync(() => (host.querySelector("[data-mapping-reset='builder']") as HTMLElement).click());
+    await until(() => writes() === 3);
+    expect(lastRolesWrite()).toEqual({ overrides: { builder: { config: null } } });
+  } finally {
+    flushSync(() => root.unmount());
+    host.remove();
+  }
+
+  /* With Codex out, the banner's bulk move carries the cap onto Claude too. */
+  requests.length = 0;
+  const bulkHost = document.createElement("div");
+  document.body.appendChild(bulkHost);
+  const bulkRoot = createRoot(bulkHost);
+  try {
+    const claudeOnly = { claude: { connected: true, account: null }, codex: { connected: false, account: null } };
+    flushSync(() => bulkRoot.render(<AgentMappingTable statuses={claudeOnly} layout="table" onConnect={() => {}} />));
+    await until(() => Boolean(bulkHost.querySelector("[data-mapping-move]")));
+    (bulkHost.querySelector("[data-mapping-move]") as HTMLButtonElement).click();
+    await until(() => writes() === 1);
+    expect(lastRolesWrite()!.overrides.builder!.config).toMatchObject({ engine: "claude", agentMemoryMaxBytes: cap });
+  } finally {
+    flushSync(() => bulkRoot.unmount());
+    bulkHost.remove();
     rolesBody = { roles: [] };
   }
 });
@@ -396,19 +461,19 @@ test("#2166: a Later step is outside Back and Continue and returns to the guide 
   host.remove();
 });
 
-test("#2166: the Project step offers the projects with a folder, the one it opened over chosen", () => {
+test("#2166: the Project step offers repositories without preselecting the current project", () => {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
   const projects = [
-    { project: "notes", name: "notes-app", cwd: "/work/notes-app", conversations: 12 },
+    { project: "repo-notes", name: "notes-app", cwd: "projects/notes-app", conversations: 12 },
     { project: "unresolved", name: "Unresolved project", cwd: null, conversations: 3 },
-    { project: "todo", name: "todo-cli", cwd: "/work/todo-cli", conversations: 1 },
+    { project: "repo-todo", name: "todo-cli", cwd: "projects/todo-cli", conversations: 1 },
   ];
-  flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="project" marker={null} projects={projects} currentProject="todo" onClose={() => {}} onCreateProject={async () => ({ ok: false, code: "ERROR" })} />));
+  flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="project" marker={null} projects={projects} currentProject="repo-todo" onClose={() => {}} onCreateProject={async () => ({ ok: false, code: "ERROR" })} />));
   const rows = Array.from(host.querySelectorAll("[data-onboarding-project]"));
-  expect(rows.map((row) => row.getAttribute("data-onboarding-project"))).toEqual(["notes", "todo"]);
-  expect(host.querySelector("[data-onboarding-project=todo]")?.getAttribute("aria-checked")).toBe("true");
+  expect(rows.map((row) => row.getAttribute("data-onboarding-project"))).toEqual(["repo-notes", "repo-todo"]);
+  expect(host.querySelector("[data-onboarding-project=repo-todo]")?.getAttribute("aria-checked")).toBe("false");
   expect(host.textContent).toContain("12 conversations");
   expect(host.textContent).toContain("1 conversation");
   expect(host.querySelector("[data-create-project-form]")).toBeNull();
@@ -457,25 +522,31 @@ test("#2166: Create hands the project's draft a confirm on the chosen runtime an
   document.body.appendChild(host);
   const root = createRoot(host);
   const closes: unknown[] = [];
-  const projects = [{ project: "todo", name: "todo-cli", cwd: "/work/todo-cli", conversations: 0 }];
-  flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="orchestrator" marker={null} projects={projects} onClose={(outcome, steps) => closes.push({ outcome, steps })} />));
+  const projects = [{ project: "repo-todo", name: "todo-cli", cwd: "projects/todo-cli", conversations: 0 }];
+  flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="orchestrator" marker={null} markerStatus="read" projects={projects} onClose={(outcome, steps) => closes.push({ outcome, steps })} />));
+  chooseProject(host, "orchestrator");
   expect(host.textContent).toContain("Create its orchestrator");
   expect(host.textContent).toContain("The orchestrator takes your requests");
   expect(host.querySelector("[data-onboarding-primary]")?.textContent).toBe("Finish without it");
   await until(() => Boolean(host.querySelector<HTMLButtonElement>("[data-onboarding-orchestrator-create]:not([disabled])")) && (host.querySelector("[data-onboarding-orchestrator-runs-on]")?.textContent ?? "").includes("account Main"));
   expect(host.querySelector("[data-onboarding-orchestrator-runs-on]")?.textContent).toContain("Claude · Opus");
   expect(host.querySelector("[data-onboarding-orchestrator-runs-on]")?.textContent).toContain("high effort");
+  expect(host.querySelector("[data-onboarding-cost]")?.textContent).toContain("$0.60 for 100k uncached input + 10k output tokens");
+  expect(host.querySelector("[data-onboarding-permissions]")?.textContent).toContain("without per-action confirmations by default");
+  /* Codex is not connected, so no cheaper Codex choice is offered. */
+  expect(host.querySelector("[data-onboarding-cheaper]")).toBeNull();
+
   flushSync(() => (host.querySelector("[data-onboarding-orchestrator-create]") as HTMLElement).click());
   off();
-  expect(requests).toEqual([{ project: "todo", launch: { engine: "claude", model: "opus", effort: "high", account: "default" }, confirm: true }]);
-  expect(closes).toEqual([{ outcome: "completed", steps: { orchestrator: "done" } }]);
-  expect(takePendingSeatConfirm("todo")).toMatchObject({ project: "todo", launch: { account: "default" } });
+  expect(requests).toEqual([{ project: "repo-todo", launch: { engine: "claude", model: "opus", effort: "high", account: "default" }, confirm: true }]);
+  expect(closes).toEqual([{ outcome: "completed", steps: { project: "done", orchestrator: "done" } }]);
+  expect(takePendingSeatConfirm("repo-todo")).toMatchObject({ project: "repo-todo", launch: { account: "default" } });
   flushSync(() => root.unmount());
   host.remove();
 });
 
 test("#2166: step 3 says what is missing: a project, an engine, or a signed-in account", async () => {
-  const projects = [{ project: "todo", name: "todo-cli", cwd: "/work/todo-cli", conversations: 0 }];
+  const projects = [{ project: "repo-todo", name: "todo-cli", cwd: "projects/todo-cli", conversations: 0 }];
   const host = document.createElement("div");
   document.body.appendChild(host);
 
@@ -490,6 +561,7 @@ test("#2166: step 3 says what is missing: a project, an engine, or a signed-in a
   answerAccounts({ claude: { active: "", cli: "found", accounts: [] }, codex: { active: "", cli: "found", accounts: [] } });
   root = createRoot(host);
   flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="orchestrator" marker={null} projects={projects} onClose={() => {}} />));
+  chooseProject(host, "orchestrator");
   await until(() => (host.textContent ?? "").includes("Connect Claude or Codex first."));
   expect(host.querySelector("[data-onboarding-orchestrator-go=engines]")).not.toBeNull();
   flushSync(() => root.unmount());
@@ -501,6 +573,7 @@ test("#2166: step 3 says what is missing: a project, an engine, or a signed-in a
   answerAccounts({ claude: { active: "work", cli: "found", accounts: [signedOut] }, codex: { active: "", cli: "found", accounts: [signedIn("cx", "Codex main")] } });
   root = createRoot(host);
   flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="orchestrator" marker={null} projects={projects} onClose={() => {}} />));
+  chooseProject(host, "orchestrator");
   await until(() => Boolean(host.querySelector("[data-onboarding-orchestrator-create], [data-onboarding-orchestrator-signin]")) && (host.textContent ?? "").includes("account"));
   /* Claude has no signed-in account, so the runtime falls back to Codex. */
   expect(host.querySelector("[data-onboarding-orchestrator-runs-on]")?.textContent).toContain("Codex");
@@ -509,6 +582,7 @@ test("#2166: step 3 says what is missing: a project, an engine, or a signed-in a
   answerAccounts({ claude: { active: "work", cli: "found", accounts: [signedOut, { ...signedIn("default", "Main"), auth: { state: "signed_out" }, authPresent: true }] }, codex: { active: "", cli: "found", accounts: [] } });
   root = createRoot(host);
   flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="orchestrator" marker={null} projects={projects} onClose={() => {}} />));
+  chooseProject(host, "orchestrator");
   await until(() => Boolean(host.querySelector("[data-onboarding-orchestrator-signin]")));
   expect(host.textContent).toContain("is signed out, so the orchestrator cannot start yet.");
   expect(host.querySelector("[data-onboarding-orchestrator-signin]")?.textContent).toContain("Sign in to Claude first");
@@ -566,7 +640,7 @@ test("the guide's title names Delegatus and its last step creates the orchestrat
 /* docs/design/orchestrator-reports.md §5.6: the optional "Reports to Telegram"
    step, built from the bot panel's own pieces. Chats and names are invented. */
 
-const PROJECTS = [{ project: "widgets", name: "widgets", cwd: "/work/widgets", conversations: 2 }];
+const PROJECTS = [{ project: "repo-widgets", name: "widgets", cwd: "projects/widgets", conversations: 2 }];
 const chatView = (over: Record<string, unknown>) => ({
   chatId: "-100101", title: "Team Reports", type: "supergroup", username: null, isForum: false, member: true, alias: "team-reports",
   postAllowed: true, postable: true, seesAllMessages: false, readdToApply: false, lastMessageAt: null, lastPostAt: null, lastPostBy: null, storedMessages: 0, ...over,
@@ -580,7 +654,8 @@ function renderTelegramStep(onClose: (outcome: string, steps?: unknown) => void 
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
-  flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="telegram" marker={null} projects={PROJECTS} currentProject="widgets" onClose={onClose} />));
+  flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="telegram" marker={null} projects={PROJECTS} currentProject="repo-widgets" onClose={onClose} />));
+  chooseProject(host, "telegram");
   return { host, done: () => { flushSync(() => root.unmount()); host.remove(); } };
 }
 
@@ -622,7 +697,7 @@ test("a connected bot lists the chats that accept posts, allows another in place
   flushSync(() => (host.querySelector("[data-onboarding-report-chat=team-reports]") as HTMLElement).click());
   flushSync(() => (host.querySelector("[data-onboarding-telegram-save]") as HTMLElement).click());
   await until(() => Boolean(host.querySelector("[data-onboarding-report-saved]")));
-  expect(requests.find((request) => request.url.includes("/api/projects/settings") && request.method === "PUT")!.body).toEqual({ project: "widgets", reportTelegram: { chat: "team-reports", name: "Widgets" } });
+  expect(requests.find((request) => request.url.includes("/api/projects/settings") && request.method === "PUT")!.body).toEqual({ project: "repo-widgets", reportTelegram: { chat: "team-reports", name: "Widgets" } });
   expect(host.querySelector("[data-onboarding-report-saved]")?.textContent).toBe("Reports go to the log and to team-reports.");
   /* The destination shows at once (audit B42); the step is marked once the server keeps it. */
   await until(() => requests.some((request) => request.url.includes("/api/onboarding") && JSON.stringify(request.body) === JSON.stringify({ steps: { telegram: "done" } })));
@@ -903,4 +978,267 @@ test("the mapping marks a replaced prompt and restores the shipped one", async (
     host.remove();
     rolesBody = { schemaVersion: 2, roles: [] };
   }
+});
+
+function chooseProject(host: HTMLElement, target: "telegram" | "orchestrator"): void {
+  flushSync(() => (host.querySelector("[data-onboarding-step=project]") as HTMLElement).click());
+  flushSync(() => (host.querySelector("[data-onboarding-project]") as HTMLElement).click());
+  flushSync(() => (host.querySelector(`[data-onboarding-step=${target}]`) as HTMLElement).click());
+}
+
+test("linked earlier state is disclosed and clean start instructions preserve it", () => {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  flushSync(() => root.render(<OnboardingDialog mode="guide" marker={null} legacyState onClose={() => {}} />));
+  const notice = host.querySelector("[data-onboarding-legacy-state]")!;
+  expect(notice.textContent).toContain("existing state");
+  const action = notice.querySelector("button")!;
+  expect(action.getAttribute("aria-expanded")).toBe("false");
+  const before = requests.length;
+  flushSync(() => action.click());
+  expect(action.getAttribute("aria-expanded")).toBe("true");
+  expect(action.textContent).toBe("Hide these steps");
+  expect(notice.textContent).toContain("Stop Delegatus and its runtime service.");
+  expect(notice.textContent).toContain("Back up");
+  for (const source of ["agent-log-viewer", "~/.claude/viewer-state", "~/.claude/viewer-inbox", "live-log-viewer"]) expect(notice.textContent).toContain(source);
+  expect(requests.length).toBe(before);
+  /* A later step opens on its own heading: no notice and no opened steps. */
+  flushSync(() => host.querySelector<HTMLButtonElement>("[data-onboarding-primary]")!.click());
+  expect(host.querySelector("[data-onboarding-legacy-state]")).toBeNull();
+  expect(host.textContent).not.toContain("Stop Delegatus and its runtime service.");
+  flushSync(() => root.render(<OnboardingDialog mode="guide" marker={null} legacyState={false} onClose={() => {}} />));
+  expect(host.querySelector("[data-onboarding-legacy-state]")).toBeNull();
+  flushSync(() => root.unmount());
+  host.remove();
+});
+
+test("project search filters names and folders, excludes non-git and temporary entries, and keeps an explicit selection", () => {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  const projects = [
+    { project: "repo-alpha", name: "Alpha", cwd: "projects/alpha", conversations: 1 },
+    { project: "repo-beta", name: "Beta", cwd: "projects/backend", conversations: 2 },
+    { project: "dir-notes", name: "Notes", cwd: "projects/notes", conversations: 1 },
+    { project: "repo-temp", name: "Scratch", cwd: "tmp/scratch", conversations: 1 },
+    { project: "repo-temp-nested", name: "Nested", cwd: "projects/temp/nested", conversations: 1 },
+    { project: "repo-missing", name: "Missing", cwd: null, conversations: 1 },
+  ];
+  const render = (entries = projects) => flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="project" marker={null} projects={entries} currentProject="repo-alpha" onClose={() => {}} />));
+  render([]);
+  render(); // A late catalog must not select anything either.
+  const ids = () => Array.from(host.querySelectorAll("[data-onboarding-project]")).map((row) => row.getAttribute("data-onboarding-project"));
+  expect(ids()).toEqual(["repo-alpha", "repo-beta"]);
+  expect(host.querySelector('[role=radio][aria-checked=true]')).toBeNull();
+  const search = host.querySelector<HTMLInputElement>("input[type=search]")!;
+  const type = (value: string) => flushSync(() => {
+    search.value = value;
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  type("  ALPHA  ");
+  expect(ids()).toEqual(["repo-alpha"]);
+  type("backend");
+  expect(ids()).toEqual(["repo-beta"]);
+  flushSync(() => (host.querySelector("[data-onboarding-project=repo-beta]") as HTMLElement).click());
+  type("nothing matches");
+  expect(ids()).toEqual([]);
+  expect(host.textContent).toContain("No matching projects.");
+  type("");
+  expect(ids()).toEqual(["repo-alpha", "repo-beta"]);
+  expect(host.querySelector("[data-onboarding-project=repo-beta]")?.getAttribute("aria-checked")).toBe("true");
+  flushSync(() => root.unmount());
+  host.remove();
+});
+
+test("a new install can choose the cheaper orchestrator without changing saved roles", async () => {
+  rolesBody = { roles: [] };
+  answerAccounts({ claude: { active: "default", cli: "found", accounts: [signedIn("default", "Main")] }, codex: { active: "default", cli: "found", accounts: [signedIn("default", "Main")] }, copilot: { active: "", accounts: [] } });
+  const { onOrchestratorDraftRequest, takePendingSeatConfirm } = await import("@/components/orchestrator/draftPrefill");
+  const launches: unknown[] = [];
+  const off = onOrchestratorDraftRequest((request) => launches.push(request));
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  const closes: unknown[] = [];
+  const projects = [{ project: "repo-todo", name: "todo-cli", cwd: "projects/todo-cli", conversations: 0 }];
+  flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="orchestrator" marker={null} markerStatus="read" projects={projects} onClose={(outcome, steps) => closes.push({ outcome, steps })} />));
+  chooseProject(host, "orchestrator");
+  expect(host.textContent).toContain("Create its orchestrator");
+  expect(host.textContent).toContain("The orchestrator takes your requests");
+  expect(host.querySelector("[data-onboarding-primary]")?.textContent).toBe("Finish without it");
+  await until(() => Boolean(host.querySelector<HTMLButtonElement>("[data-onboarding-orchestrator-create]:not([disabled])")) && (host.querySelector("[data-onboarding-orchestrator-runs-on]")?.textContent ?? "").includes("account Main"));
+  expect(host.querySelector("[data-onboarding-orchestrator-runs-on]")?.textContent).toContain("Claude · Opus");
+  expect(host.querySelector("[data-onboarding-orchestrator-runs-on]")?.textContent).toContain("high effort");
+  expect(host.querySelector("[data-onboarding-cost]")?.textContent).toContain("$0.60 for 100k uncached input + 10k output tokens");
+  expect(host.querySelector("[data-onboarding-permissions]")?.textContent).toContain("without per-action confirmations by default");
+
+  expect(host.querySelector("[data-onboarding-cheaper]")?.textContent).toBe("Use cheaper Codex · GPT-6.1-Sol");
+  const writesBefore = requests.filter((request) => request.method === "PUT" && request.url.includes("/api/roles")).length;
+  flushSync(() => (host.querySelector("[data-onboarding-cheaper]") as HTMLElement).click());
+  expect(host.querySelector("[data-onboarding-cost]")?.textContent).toContain("$0.30");
+  expect(host.querySelector("[data-onboarding-cheaper]")).toBeNull();
+  expect(requests.filter((request) => request.method === "PUT" && request.url.includes("/api/roles"))).toHaveLength(writesBefore);
+  flushSync(() => (host.querySelector("[data-onboarding-orchestrator-create]") as HTMLElement).click());
+  off();
+  expect(launches).toEqual([{ project: "repo-todo", launch: { engine: "codex", model: "gpt-6.1-sol", effort: "high", account: "default" }, confirm: true }]);
+  expect(closes).toEqual([{ outcome: "completed", steps: { project: "done", orchestrator: "done" } }]);
+  expect(takePendingSeatConfirm("repo-todo")).toMatchObject({ project: "repo-todo", launch: { account: "default" } });
+  flushSync(() => root.unmount());
+  host.remove();
+});
+
+const noSteps = { engines: null, project: null, telegram: null, orchestrator: null, agents: null, phone: null, voice: null, check: null, relay: null } as const;
+const finishedMarkers = [
+  ["an existing installation", { schemaVersion: 1, completedAt: null, dismissedAt: "2026-10-01T00:00:00.000Z", reason: "existing-install", lastHealth: null, walk: null, steps: noSteps }],
+  ["a new install that completed the guide", { schemaVersion: 1, completedAt: "2026-10-01T00:00:00.000Z", dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { ...noSteps, engines: "done", project: "done", orchestrator: "done" } }],
+  ["a new install that left the guide", { schemaVersion: 1, completedAt: null, dismissedAt: "2026-10-01T00:00:00.000Z", reason: null, lastHealth: null, walk: null, steps: { ...noSteps, engines: "done" } }],
+] as const;
+
+for (const [label, marker] of finishedMarkers) {
+  test(`${label}: the reopened guide shows no cost estimate or cheaper choice`, async () => {
+    rolesBody = { roles: [] };
+    answerAccounts({ claude: { active: "default", cli: "found", accounts: [signedIn("default", "Main")] }, codex: { active: "default", cli: "found", accounts: [signedIn("default", "Main")] }, copilot: { active: "", accounts: [] } });
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    const projects = [{ project: "repo-todo", name: "todo-cli", cwd: "projects/todo-cli", conversations: 0 }];
+    flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="orchestrator" marker={marker} markerStatus="read" projects={projects} onClose={() => {}} />));
+    chooseProject(host, "orchestrator");
+    await until(() => Boolean(host.querySelector<HTMLButtonElement>("[data-onboarding-orchestrator-create]:not([disabled])")) && (host.querySelector("[data-onboarding-orchestrator-runs-on]")?.textContent ?? "").includes("account Main"));
+    expect(host.querySelector("[data-onboarding-orchestrator-create]:not([disabled])")).not.toBeNull();
+    /* The saved launch configuration is what it offers. */
+    expect(host.querySelector("[data-onboarding-orchestrator-runs-on]")?.textContent).toContain("Claude · Opus");
+    expect(host.querySelector("[data-onboarding-permissions]")?.textContent).toContain("without per-action confirmations by default");
+    expect({ cost: Boolean(host.querySelector("[data-onboarding-cost]")), cheaper: Boolean(host.querySelector("[data-onboarding-cheaper]")) }).toEqual({ cost: false, cheaper: false });
+    flushSync(() => root.unmount());
+    host.remove();
+  });
+}
+
+test("a first run still in progress keeps the cost estimate and the cheaper choice", async () => {
+  rolesBody = { roles: [] };
+  answerAccounts({ claude: { active: "default", cli: "found", accounts: [signedIn("default", "Main")] }, codex: { active: "default", cli: "found", accounts: [signedIn("default", "Main")] }, copilot: { active: "", accounts: [] } });
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { ...noSteps, engines: "done", project: "done" } } as const;
+  const projects = [{ project: "repo-todo", name: "todo-cli", cwd: "projects/todo-cli", conversations: 0 }];
+  flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="orchestrator" marker={marker} markerStatus="read" projects={projects} onClose={() => {}} />));
+  chooseProject(host, "orchestrator");
+  await until(() => Boolean(host.querySelector<HTMLButtonElement>("[data-onboarding-orchestrator-create]:not([disabled])")) && (host.querySelector("[data-onboarding-orchestrator-runs-on]")?.textContent ?? "").includes("account Main"));
+  expect(host.querySelector("[data-onboarding-cost]")?.textContent).toContain("$0.60 for 100k uncached input + 10k output tokens");
+  expect(host.querySelector("[data-onboarding-cheaper]")?.textContent).toBe("Use cheaper Codex · GPT-6.1-Sol");
+  flushSync(() => root.unmount());
+  host.remove();
+});
+
+/* The host reads the marker itself: only a successful read can make the guide
+   a first run, so a read still pending or one that failed offers neither the
+   cost estimate nor the cheaper choice, and Create keeps the saved launch. */
+const onboardingGets = () => requests.filter((request) => request.method === "GET" && request.url.includes("/api/onboarding")).length;
+const savedLaunch = { engine: "claude", model: "opus", effort: "high", account: "default" };
+const helpShown = (host: HTMLElement) => ({ cost: Boolean(host.querySelector("[data-onboarding-cost]")), cheaper: Boolean(host.querySelector("[data-onboarding-cheaper]")) });
+
+async function openHostOnOrchestrator(read: () => Promise<Response>, status: "pending" | "failed" | "read") {
+  rolesBody = { roles: [] };
+  answerAccounts({ claude: { active: "default", cli: "found", accounts: [signedIn("default", "Main")] }, codex: { active: "default", cli: "found", accounts: [signedIn("default", "Main")] }, copilot: { active: "", accounts: [] } });
+  onboardingRead = read;
+  const { OnboardingHost } = await import("./OnboardingDialog");
+  const { openOnboarding } = await import("./useOnboarding");
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  const before = onboardingGets();
+  flushSync(() => root.render(<OnboardingHost projects={[{ project: "repo-todo", name: "todo-cli", cwd: "projects/todo-cli", conversations: 0 }]} />));
+  await until(() => onboardingGets() > before);
+  expect(onboardingGets()).toBe(before + 1);
+  flushSync(() => openOnboarding("guide", "orchestrator"));
+  await until(() => Boolean(host.querySelector(`[data-onboarding-marker=${status}]`)));
+  expect(host.querySelector("[data-onboarding-dialog]")?.getAttribute("data-onboarding-marker")).toBe(status);
+  chooseProject(host, "orchestrator");
+  await until(() => Boolean(host.querySelector<HTMLButtonElement>("[data-onboarding-orchestrator-create]:not([disabled])")) && (host.querySelector("[data-onboarding-orchestrator-runs-on]")?.textContent ?? "").includes("account Main"));
+  expect(host.querySelector("[data-onboarding-orchestrator-create]:not([disabled])")).not.toBeNull();
+  expect(host.querySelector("[data-onboarding-orchestrator-runs-on]")?.textContent).toContain("Claude · Opus");
+  const done = () => {
+    flushSync(() => root.unmount());
+    host.remove();
+    onboardingRead = () => json({ marker: null });
+  };
+  return { host, done };
+}
+
+async function createLaunches(host: HTMLElement): Promise<unknown[]> {
+  const { onOrchestratorDraftRequest, takePendingSeatConfirm } = await import("@/components/orchestrator/draftPrefill");
+  const launches: unknown[] = [];
+  const off = onOrchestratorDraftRequest((request) => launches.push(request));
+  flushSync(() => (host.querySelector("[data-onboarding-orchestrator-create]") as HTMLElement).click());
+  off();
+  takePendingSeatConfirm("repo-todo");
+  return launches;
+}
+
+const unreadMarkers = [
+  ["a refused marker read", () => json({ error: "marker unreadable" }, 500)],
+  ["an unreachable marker read", () => Promise.reject(new TypeError("fetch failed"))],
+  ["a marker read answered without a marker", () => json({ legacyState: false })],
+] as const;
+
+for (const [label, read] of unreadMarkers) {
+  test(`host: ${label} offers no newcomer help and keeps the saved launch`, async () => {
+    const { host, done } = await openHostOnOrchestrator(read, "failed");
+    expect(helpShown(host)).toEqual({ cost: false, cheaper: false });
+    expect(await createLaunches(host)).toEqual([{ project: "repo-todo", launch: savedLaunch, confirm: true }]);
+    done();
+  });
+}
+
+test("host: a marker read still pending offers no newcomer help until it answers a first run", async () => {
+  let answer: (response: Response) => void = () => {};
+  const held = new Promise<Response>((resolve) => { answer = resolve; });
+  const { host, done } = await openHostOnOrchestrator(() => held, "pending");
+  expect(helpShown(host)).toEqual({ cost: false, cheaper: false });
+  answer(new Response(JSON.stringify({ marker: null }), { status: 200, headers: { "content-type": "application/json" } }));
+  await until(() => Boolean(host.querySelector("[data-onboarding-marker=read]")) && Boolean(host.querySelector("[data-onboarding-cheaper]")));
+  expect(helpShown(host)).toEqual({ cost: true, cheaper: true });
+  done();
+});
+
+test("host: a marker read still pending keeps the saved launch", async () => {
+  const { host, done } = await openHostOnOrchestrator(() => new Promise<Response>(() => {}), "pending");
+  expect(helpShown(host)).toEqual({ cost: false, cheaper: false });
+  expect(await createLaunches(host)).toEqual([{ project: "repo-todo", launch: savedLaunch, confirm: true }]);
+  done();
+});
+
+const readMarkers = [
+  ["no marker yet", null, true],
+  ["a first run in progress", { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { ...noSteps, engines: "done" } }, true],
+  ...finishedMarkers.map(([label, marker]) => [label, marker, false] as const),
+] as const;
+
+for (const [label, marker, newcomer] of readMarkers) {
+  test(`host: a read marker, ${label}, ${newcomer ? "offers" : "offers no"} newcomer help`, async () => {
+    const { host, done } = await openHostOnOrchestrator(() => json({ marker }), "read");
+    expect(helpShown(host)).toEqual({ cost: newcomer, cheaper: newcomer });
+    if (!newcomer) expect(await createLaunches(host)).toEqual([{ project: "repo-todo", launch: savedLaunch, confirm: true }]);
+    done();
+  });
+}
+
+test("temporary path segments are excluded across platforms without hiding repository names containing temp", async () => {
+  const { isGuideRepository } = await import("./ProjectStep");
+  const repository = { project: "repo-fixture", name: "Fixture", conversations: 0 };
+  for (const cwd of ["tmp/repo", "projects/.tmp/repo", "projects/TEMP/repo", "projects\\Temp\\repo"]) {
+    expect(isGuideRepository({ ...repository, cwd })).toBe(false);
+  }
+  expect(isGuideRepository({ ...repository, cwd: "projects/template" })).toBe(true);
+  expect(isGuideRepository({ ...repository, project: "dir-fixture", cwd: "projects/plain" })).toBe(false);
+});
+
+test("the guide preserves an existing installation's orchestrator runtime", async () => {
+  const { orchestratorRuntime } = await import("./OrchestratorStep");
+  const config = { engine: "codex" as const, model: "gpt-6-astra", effort: "xhigh" };
+  expect(orchestratorRuntime(config, { claude: true, codex: true })).toEqual(config);
+  expect(config).toEqual({ engine: "codex", model: "gpt-6-astra", effort: "xhigh" });
 });

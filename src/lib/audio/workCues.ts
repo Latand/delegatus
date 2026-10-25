@@ -2,7 +2,10 @@ import type { ConversationReason } from "@/components/attention";
 import type { MobileAttentionEntry } from "@/components/attention/attentionQueue";
 import type { DoneItemV1 } from "@/lib/done/types";
 import type { Pipeline, PipelineMergeState } from "@/lib/pipelines/types";
+import type { FileEntry } from "@/lib/types";
+import { cleanTitle } from "@/lib/title";
 
+import type { CaptionTarget, CaptionWhat } from "./captions";
 import type { CueRequest } from "./cues";
 
 /**
@@ -34,6 +37,12 @@ const SOUND_OF_REASON: Record<ConversationReason["kind"], "your-move" | "fault" 
   ask: null,
 };
 
+/** The longest subject a caption carries; the toast cuts it to one line anyway. */
+const CAPTION_SUBJECT_MAX = 90;
+/* A caption never decides whether a sound plays: a record missing its title yields no subject, not an error. */
+const subjectOf = (text: string | null | undefined): string | null => (typeof text === "string" ? cleanTitle(text, CAPTION_SUBJECT_MAX) || null : null);
+const laneTarget = (pipeline: Pick<Pipeline, "id" | "project">): CaptionTarget => ({ kind: "lane", pipelineId: pipeline.id, project: pipeline.project });
+
 export interface QueueCuePlan {
   /** The entries of the last certified read. */
   seen: Set<string>;
@@ -63,7 +72,15 @@ function needsYouRequest(entry: MobileAttentionEntry, now: number): CueRequest |
     case "conversation": {
       const cue = SOUND_OF_REASON[entry.item.reason.kind];
       if (!cue) return null;
-      return { cue, eventId, occurredAt: entry.item.reason.raisedAt * 1000, obligation: entry.id };
+      const file = entry.item.file as FileEntry | undefined;
+      const then: CaptionTarget = { kind: "conversation", path: file?.path, conversationId: file?.conversationId };
+      return {
+        cue,
+        eventId,
+        occurredAt: entry.item.reason.raisedAt * 1000,
+        obligation: entry.id,
+        caption: { what: entry.item.reason.kind as CaptionWhat, subject: subjectOf(file?.title), target: { kind: "needs-you", entryId: entry.id, then } },
+      };
     }
     case "pipeline":
       return {
@@ -71,11 +88,24 @@ function needsYouRequest(entry: MobileAttentionEntry, now: number): CueRequest |
         eventId,
         occurredAt: entry.row.seconds === null ? now : now - entry.row.seconds * 1000,
         obligation: entry.row.pipeline.taskIds?.[0] ?? entry.id,
+        caption: { what: "lane-decision", subject: subjectOf(entry.row.task), target: { kind: "needs-you", entryId: entry.id, then: laneTarget(entry.row.pipeline) } },
       };
     case "prototype":
-      return { cue: "your-move", eventId, occurredAt: parseTime(entry.notice.createdAt, now), obligation: entry.notice.taskId ?? entry.id };
+      return {
+        cue: "your-move",
+        eventId,
+        occurredAt: parseTime(entry.notice.createdAt, now),
+        obligation: entry.notice.taskId ?? entry.id,
+        caption: { what: "prototype", subject: subjectOf(entry.notice.title), target: { kind: "needs-you", entryId: entry.id, then: null } },
+      };
     case "update":
-      return { cue: "your-move", eventId, occurredAt: parseTime(entry.decision.at, now), obligation: entry.id };
+      return {
+        cue: "your-move",
+        eventId,
+        occurredAt: parseTime(entry.decision.at, now),
+        obligation: entry.id,
+        caption: { what: "update", subject: null, target: { kind: "needs-you", entryId: entry.id, then: null } },
+      };
   }
 }
 
@@ -168,15 +198,40 @@ export function planPipelineCues(
     for (const key of cur.passed) {
       if (was.passed.has(key)) continue;
       const completedAt = attemptCompletedAt(pipeline, key);
-      requests.push({ cue: "step", eventId: `step:${pipeline.id}:${key}`, occurredAt: parseTime(completedAt, now), pipeline: pipeline.id });
+      const stageId = key.slice(0, key.lastIndexOf(":"));
+      const stage = pipeline.stages?.find((candidate) => candidate.id === stageId);
+      requests.push({
+        cue: "step",
+        eventId: `step:${pipeline.id}:${key}`,
+        occurredAt: parseTime(completedAt, now),
+        pipeline: pipeline.id,
+        caption: { what: "step", subject: subjectOf(pipeline.task), stage: stage && { id: stage.id, kind: stage.kind, role: stage.role }, target: laneTarget(pipeline) },
+      });
     }
     if (cur.merge === "merged" && was.merge !== "merged") {
-      requests.push({ cue: "landed", eventId: `landed:${pipeline.id}`, occurredAt: parseTime(pipeline.merge?.mergedAt ?? null, now), pipeline: pipeline.id });
+      requests.push({
+        cue: "landed",
+        eventId: `landed:${pipeline.id}`,
+        occurredAt: parseTime(pipeline.merge?.mergedAt ?? null, now),
+        pipeline: pipeline.id,
+        caption: { what: "merged", subject: subjectOf(pipeline.task), pr: pipeline.merge?.prNumber ?? undefined, target: laneTarget(pipeline) },
+      });
     } else if (cur.completed && !was.completed && cur.merge === null) {
-      requests.push({ cue: "landed", eventId: `landed:${pipeline.id}`, occurredAt: parseTime(pipeline.closedAt, now), pipeline: pipeline.id });
+      requests.push({
+        cue: "landed",
+        eventId: `landed:${pipeline.id}`,
+        occurredAt: parseTime(pipeline.closedAt, now),
+        pipeline: pipeline.id,
+        caption: { what: "lane-done", subject: subjectOf(pipeline.task), target: laneTarget(pipeline) },
+      });
     }
     if (cur.merge === "blocked" && was.merge !== "blocked") {
-      requests.push({ cue: "fault", eventId: `merge-blocked:${pipeline.id}`, occurredAt: parseTime(pipeline.merge?.blockedAt ?? null, now) });
+      requests.push({
+        cue: "fault",
+        eventId: `merge-blocked:${pipeline.id}`,
+        occurredAt: parseTime(pipeline.merge?.blockedAt ?? null, now),
+        caption: { what: "merge-blocked", subject: subjectOf(pipeline.task), target: laneTarget(pipeline) },
+      });
     }
   }
   return { tracked, scope, requests };
@@ -229,11 +284,19 @@ function doneRequest(item: DoneItemV1, now: number): CueRequest | null {
   const occurredAt = parseTime(item.at, now);
   if (item.kind === "deploy") {
     const phase = item.refs?.phase;
-    if (phase === "succeeded") return { cue: "released", eventId, occurredAt, maxAgeMs: DEPLOY_FRESH_MS };
-    if (phase === "failed" || phase === "rolled-back") return { cue: "fault", eventId, occurredAt, maxAgeMs: DEPLOY_FRESH_MS };
+    if (phase === "succeeded") {
+      return { cue: "released", eventId, occurredAt, maxAgeMs: DEPLOY_FRESH_MS, caption: { what: "released", subject: subjectOf(item.title) ?? item.refs?.sha?.slice(0, 7) ?? null, target: null } };
+    }
+    if (phase === "failed" || phase === "rolled-back") {
+      return { cue: "fault", eventId, occurredAt, maxAgeMs: DEPLOY_FRESH_MS, caption: { what: phase === "failed" ? "deploy-failed" : "deploy-rolled-back", subject: null, target: null } };
+    }
     return null;
   }
-  if (item.kind === "limit") return { cue: "fault", eventId, occurredAt };
+  if (item.kind === "limit") {
+    const account = item.refs?.account;
+    const subject = account ? `${account.label ?? account.accountId} · ${account.window}` : null;
+    return { cue: "fault", eventId, occurredAt, caption: { what: "limit", subject, target: null } };
+  }
   return null;
 }
 

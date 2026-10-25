@@ -18,6 +18,8 @@ export const PROBLEM_EVIDENCE_MAX_CHARS = 1000;
 /** A rule shorter than this names nothing a later agent can act on. */
 export const RULE_MIN_CHARS = 20;
 export const MAX_LESSONS_PER_ATTEMPT = 1;
+/** Ordinary scope-history entries kept per scope; curator pass entries are kept apart. */
+export const ROLE_MEMORY_HISTORY_LIMIT = 10_000;
 
 /** A lesson's text as it is stored: trimmed, each run of spacing one space. */
 export function lessonText(value: string): string {
@@ -30,7 +32,7 @@ export function lessonTextLength(value: string): number {
   return [...lessonText(value)].length;
 }
 
-export type ScopeKind = "role" | "project" | "machine";
+export type ScopeKind = "role" | "swarm" | "project" | "machine";
 
 export type RuleState = "active" | "merged" | "archived";
 export type CuratorReason = "task-specific" | "stale" | "in-code" | "in-instructions" | "no-reader" | "contradicted" | "duplicate" | "problem";
@@ -83,7 +85,25 @@ export interface ImportRuleSource {
   sha256: string;
   importId: string;
 }
-export type RuleSource = StageRuleSource | SeatRuleSource | ImportRuleSource;
+/** The operator's own root conversation, in Delegatus mode: project and machine only. */
+export interface OperatorRuleSource {
+  origin: "operator";
+  project: string;
+  roleId: null;
+  fixRound: false;
+  conversationId: string;
+}
+export type RuleSource = StageRuleSource | SeatRuleSource | ImportRuleSource | OperatorRuleSource;
+
+/** One time a rule left the injected text, as it was then. Appended, never
+    rewritten or removed, so a later restore, curation or re-archive leaves
+    a closed week's report unchanged (memory-source-switch.md §6.5). */
+export interface RuleDeparture {
+  at: string;
+  reason: RuleLeftReason;
+  /** A curator had read the rule when it left. */
+  curated: boolean;
+}
 
 export interface RoleMemoryRule {
   kind: "rule";
@@ -101,6 +121,9 @@ export interface RoleMemoryRule {
   source: RuleSource;
   createdAt: string;
   changedAt: string;
+  /** Every archive of this rule, oldest first; absent on rules that never left
+      and on departures recorded before the log existed. */
+  departures?: RuleDeparture[];
   versionOf?: string;
   versions?: string[];
   revisedBy?: RuleRevision;
@@ -133,8 +156,9 @@ export interface ScopeHistoryEntry {
   revisionScope?: string;
   at: string;
   /** Who changed the scope: a stage agent's lesson, the operator in the rules
-      window, a curator, or the join of a scope stored under a project key that moved. */
-  by: "agent" | "operator" | "succession" | "curator";
+      window, a curator, the join of a scope stored under a project key that
+      moved, or an install transfer that brought rules from another install. */
+  by: "agent" | "operator" | "succession" | "curator" | "transfer";
   pass?: string;
   counts?: CuratorPassView["counts"];
   before?: string[];
@@ -192,7 +216,7 @@ export interface LessonRequestRow {
 export type RoleMemoryRow = RoleMemoryRule | RoleMemoryScopeRow | LessonRequestRow;
 
 export interface LessonInput {
-  scope: ScopeKind;
+  scope: Exclude<ScopeKind, "swarm">;
   /** With scope role: the role the rule is for, when it is not the writer's own. */
   role?: string;
   rule: string;

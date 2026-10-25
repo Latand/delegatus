@@ -9,6 +9,7 @@ import { agentCodexPublicationPolicy } from "../src/lib/git/agentPublicationIden
 import { report, attributeBatchTests, compareBatchTests, fileFault, INCOMPLETE_FILE, GATE_SLOT, parseReviewedPrs, batchMessage, touchedTests, noticePrs, git, patchId, MergeBatch, localGateCommands, requiredVerdict, nextRefresh, MAX_REQUIRED_CHECK_POLLS, MAX_TEST_CONFIRMATION_RUNS, commandRunner, type CommandRunner, candidateOf, type Candidate } from "./merge-batch";
 import type { TestRun, TestSite } from "./local-gate-tests";
 import { isolatedEnvironment } from "./local-gate";
+import { readWorktreeProvenance } from "../src/lib/pipelines/worktreeProvenance";
 import * as merger from "./merge-batch";
 
 const site = (name: string, file = "example.test.ts"): TestSite => ({ file, suite: "suite", name, kind: "test", occurrence: 0 });
@@ -270,6 +271,7 @@ test("real squash accepts context drift, preserves reviewed patch and defers eve
   const batch = new MergeBatch(f.repo, join(f.root, "merge-batch.json"), f.good, f.gh);
   const state = await batch.build(`12@${clean.slice(0, 9)},13@${conflict}`);
   expect(state.rows.map((row) => row.status)).toEqual(["clean", "deferred"]);
+  expect(readWorktreeProvenance(state.work)).toMatchObject({ creator: "merge-batch", id: state.branch });
   expect(patchId(state.work, `${state.tip}^`, state.tip)).toBe(patchId(f.repo, f.base, clean));
   expect(git(state.work, ["show", `${state.tip}:story.txt`])).toStartWith("first\nsecond changed\nthird\nnew fourth");
   expect(git(f.repo, ["symbolic-ref", "--short", "HEAD"])).toBe("main");

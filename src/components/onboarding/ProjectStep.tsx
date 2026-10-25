@@ -9,28 +9,28 @@ import { useLocale } from "@/lib/i18n";
 
 /**
  * Step 2, Project (#2166 §3.2): the project the orchestrator will work on.
- * The projects the rail lists that have a folder on disk are radio rows, the
- * one the guide opened over preselected, else the most recent; a project with
- * no folder (the "Unresolved project") is left out, since an orchestrator
- * cannot work there. "Open another folder" is the rail's own create form,
- * inline, and a project created there is chosen at once, so step 3 never
- * waits on the files feed to learn its folder.
+ * Repository projects outside temporary directories are searchable radio rows.
+ * Selection always comes from an explicit choice. The rail's existing create
+ * form also lets someone open another folder.
  */
 
 /** A project the guide can offer, with the folder its orchestrator works in. */
 export type GuideProject = { project: string; name: string; cwd: string | null; conversations: number };
 
 export function ProjectStep({ projects, chosen, onChoose, onCreate }: {
-  /** Listed projects, most recent first; only those with a folder are offered. */
+  /** Listed projects, most recent first; only repository identities are offered. */
   projects: readonly GuideProject[];
   chosen: GuideProject | null;
   onChoose: (project: GuideProject) => void;
   onCreate?: (name: string, root: string, options?: CreateProjectRequestOptions) => Promise<CreateProjectOutcome>;
 }) {
   const { t } = useLocale();
-  const onDisk = projects.filter((entry) => entry.cwd);
+  const [search, setSearch] = useState("");
+  const onDisk = projects.filter(isGuideRepository);
   /* A project created here a moment ago may not be in the list yet. */
   const rows = chosen && !onDisk.some((entry) => entry.project === chosen.project) ? [chosen, ...onDisk] : onDisk;
+  const query = search.trim().toLocaleLowerCase();
+  const visible = rows.filter((entry) => `${entry.name} ${entry.cwd ?? ""}`.toLocaleLowerCase().includes(query));
   const [formOpen, setFormOpen] = useState(false);
   const form = onCreate ? (
     <div data-onboarding-project-form="" className="flex flex-col gap-3 rounded-[10px] border border-accent/50 bg-card p-3">
@@ -56,8 +56,10 @@ export function ProjectStep({ projects, chosen, onChoose, onCreate }: {
   return (
     <div className="flex flex-col gap-2">
       <div className="text-label font-semibold uppercase tracking-[0.06em] text-muted">{t("onboarding.project.onDisk")}</div>
+      <input type="search" aria-label={t("activity.filter.searchAria")} placeholder={t("activity.filter.search")} value={search} onInput={(event) => setSearch(event.currentTarget.value)} className="min-h-9 rounded-[8px] border border-border bg-card px-3 text-ui text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:min-h-11" />
+      {visible.length === 0 ? <p role="status" data-onboarding-project-empty="" className="text-ui text-muted">{t("onboarding.project.noMatches")}</p> : null}
       <div role="radiogroup" aria-label={t("onboarding.project.heading")} className="flex flex-col gap-2">
-        {rows.map((entry) => {
+        {visible.map((entry) => {
           const on = entry.project === chosen?.project;
           return (
             <button
@@ -99,4 +101,13 @@ export function ProjectStep({ projects, chosen, onChoose, onCreate }: {
       ) : null}
     </div>
   );
+}
+
+/** Scanner repository identities start with repo-; dir- identities are folders.
+ * Match complete path segments so a repository named template stays visible.
+ */
+export function isGuideRepository(entry: GuideProject): boolean {
+  if (!entry.cwd || !entry.project.startsWith("repo-")) return false;
+  return !entry.cwd.replaceAll("\\", "/").split("/").some((part) => /^(?:tmp|temp|tmpdir|\.tmp|\.temp)$/i.test(part))
+    && !/^\/(?:private\/)?var\/(?:tmp|folders)(?:\/|$)/.test(entry.cwd);
 }

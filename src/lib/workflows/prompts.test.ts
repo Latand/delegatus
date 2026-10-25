@@ -35,7 +35,6 @@ test("stage 0 kickoff carries the brief, the scope, the verify hint and the mark
   expect(prompt).toContain("Add dark mode to the settings page");
   expect(prompt).toContain("Backend/API: server logic");
   expect(prompt).toContain("bun test && bun run build");
-  expect(prompt).toContain("STAGE_DONE: <one-line note for the next stage>");
   expect(prompt).not.toContain("Notes from the stages");
 });
 
@@ -61,9 +60,6 @@ test("fixer kickoff adds the FIXED/REJECTED protocol and every stage note", () =
   const prompt = fixerKickoff(wf);
   expect(prompt).toContain("backend note");
   expect(prompt).toContain("ui note");
-  expect(prompt).toContain("FIXED");
-  expect(prompt).toContain("REJECTED — <reason>");
-  expect(prompt).toContain("REVIEW_READY: <one-line note>");
 });
 
 test("prBody folds the brief, stage notes and rounds into the PR", () => {

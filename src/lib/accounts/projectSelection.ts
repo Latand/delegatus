@@ -99,8 +99,8 @@ import {
  *
  * ONE branch, and the scope is worth being exact about: only
  * `resolveHealthySpawnAccount` passes `explicit`, and only when the request
- * named an account. Its own automatic pick is unchanged, and so is every other
- * entry above — (2) `resolveProjectSpawn` in particular, where a task launch, a
+ * named an account. Every other entry above retains its binding fence —
+ * (2) `resolveProjectSpawn` in particular, where a task launch, a
  * pipeline stage, a workflow stage or the flow's pane reviewer passes a
  * `requestedId` it FORWARDED rather than one anybody chose here. That id is
  * still refused outside the pool (`managerProjectBinding.test.ts` asserts it),
@@ -156,13 +156,9 @@ export interface ProjectAccountSelectionInput {
   /** Accounts this launch has terminal evidence are temporarily unavailable. */
   unavailableIds?: readonly string[];
   /**
-   * What an UNBOUND project does when nothing was named. The two launch paths
-   * differ here and always have, so the binding must not quietly unify them:
-   * `engine-default` is the pipeline seam's historical answer (the engine's
-   * active account, with no capacity arithmetic), `capacity` is the headless
-   * reviewer path's (rate-limit-aware selection across every account). Each
-   * caller keeps its own, which is what "an unbound project is unchanged"
-   * means at this seam.
+   * Historical caller hint, retained for compatibility. Every unpinned launch
+   * now ranks its permitted accounts by capacity and binding reset (#2018),
+   * including projects with no binding. Named accounts retain their identity.
    */
   unbound?: "engine-default" | "capacity";
   /** The model this launch names, so capacity is judged on the window that
@@ -177,8 +173,8 @@ export interface ProjectAccountSelectionInput {
  *
  * Three branches, and the middle one is why this exists:
  *
- * - **Unbound project** — `allowedAccountIdsForProject` answers null, and the
- *   caller's own historical strategy decides, untouched.
+ * - **Unbound project** — every listed account is a candidate for the same
+ *   reset-aware ranking as a bound pool.
  * - **Bound project, an account named** — allowed, or decided by
  *   `requestedChoice`: a FORWARDED id outside the pool is refused, an EXPLICIT
  *   choice outside it is carried out and reported as such. Neither is ever
@@ -210,9 +206,6 @@ export function selectProjectAccount(input: ProjectAccountSelectionInput): Proje
   }
   if (requestedId && !input.requireCapacity) return { kind: "available", accountId: requestedId };
   const unavailable = new Set(input.unavailableIds ?? []);
-  if (!requestedId && allowed === null && unavailable.size === 0 && !input.accounts.some(account => guarded(account.id)) && (input.unbound ?? "engine-default") === "engine-default") {
-    return { kind: "available", accountId: input.preferredId?.trim() || null };
-  }
   const permitted = allowed === null
     ? [...input.accounts]
     : input.accounts.filter((account) => allowed.includes(account.id));
@@ -276,12 +269,8 @@ export function admitAutomaticAccountTarget(input: AutomaticAccountTargetInput):
   const guarded = blocked && !turboCreditExemptFor(input.project, targetId, input.now) ? blocked : null;
   if (guarded) return { kind: "exhausted", ...guarded, allowedAccountIds: allowed ?? [targetId] };
   if (allowed === null) {
-    /* An UNBOUND project, which is every project until somebody configures one.
-       Nobody drew a boundary here, so nothing is fenced and — exactly as in
-       `selectProjectAccount`'s `engine-default` branch — no capacity
-       arithmetic is introduced either. Adding one here would change what every
-       migration on the machine does the day this ships, on projects that
-       opted into nothing. */
+    /* An unbound migration already names its target. Preserve its historical
+       admission; the reset-aware ranking applies when choosing a new account. */
     return { kind: "available", accountId: targetId };
   }
   if (!allowed.includes(targetId)) {

@@ -20,6 +20,8 @@ import type { WorktreeSweepCache } from "./worktreeSweepCache";
 
 import { pipelineActivitySettled, type Pipeline } from "./types";
 import { pipelineLiteralGitEnv } from "./git";
+import { readWorktreeProvenance } from "./worktreeProvenance";
+import { recordWorktreeDrilldown } from "./worktreeDrilldown";
 
 /**
  * Removes the worktrees whose work is merged (#2202), and finished ones whose
@@ -37,16 +39,26 @@ import { pipelineLiteralGitEnv } from "./git";
  * yielding, and retaining that ref does not retain the checkout's disk bulk.
  *
  * Registered repositories are the ones a pipeline ran in and the ones the
- * operator created a project from; every linked worktree git lists for them is
- * a candidate, whatever its layout (`.worktrees/<name>`, `worktrees/<name>`,
+ * operator created a project from; git lists their linked worktrees, whatever
+ * the layout (`.worktrees/<name>`, `worktrees/<name>`,
  * `.claude/worktrees/<name>`, a sibling `git worktree add ../<name>`). The main
- * checkout never is.
+ * checkout is never a candidate. By default only a checkout Delegatus itself
+ * created is one (security audit of 1.15.0, finding 3): a pipeline whose
+ * record names it as its `worktreeDir` (archived ones included), merge-batch
+ * state that names it as its batch or resolution checkout, or the creation
+ * record a pipeline, a workflow or the merge batch writes into its Git
+ * registration when it adds it (`worktreeProvenance.ts`). Nothing is inferred
+ * from a name, an age or a path layout. Every other checkout is kept as
+ * `not-created-by-delegatus`, until the operator opts in with
+ * `LLV_WORKTREE_SWEEP_FOREIGN=1`; the rules below then apply to it as well.
  *
  * Each of these keeps a worktree, and the report names which one did:
  *
  * - `open-pipeline` — a pipeline that is not completed or closed, or whose
  *   close teardown or delivery has not settled, owns it, runs inside it, or
  *   runs its git in it.
+ * - `not-created-by-delegatus` — no record shows Delegatus created it, and
+ *   `LLV_WORKTREE_SWEEP_FOREIGN` is not on.
  * - `no-merged-pr` — no merged pull request has its branch as head (or is the
  *   one its pipeline delivered), and no pipeline or owned role layout makes it a
  *   finished lane: a checkout the operator made by hand stays.
@@ -146,6 +158,14 @@ export const FINISHED_WORKTREE_RETENTION_MS = 4 * 24 * HOUR_MS;
 export const PUSHED_WORKTREE_RETENTION_MS = HOUR_MS;
 /** Writes this recent hold a checkout no shorter retention applies to. */
 const QUIET_FLOOR_MS = 24 * HOUR_MS;
+/** `LLV_WORKTREE_SWEEP_FOREIGN`: `1`/`on`/`true` lets the sweep remove linked
+    worktrees no record shows Delegatus created, under the same guards and
+    proofs. Anything else, unset included, keeps them. */
+export function worktreeSweepForeign(env: Readonly<Record<string, string | undefined>> = process.env): boolean {
+  const raw = env.LLV_WORKTREE_SWEEP_FOREIGN?.trim().toLowerCase();
+  return raw === "1" || raw === "on" || raw === "true";
+}
+
 export const WORKTREE_SWEEP_INTERVAL_MS = HOUR_MS;
 /** Boot is busy enough; the first sweep waits for it to settle. */
 const FIRST_SWEEP_DELAY_MS = 10 * 60_000;
@@ -158,6 +178,7 @@ const PENDING_CONVERSATION_MS = 24 * HOUR_MS;
 
 export type WorktreeKeptReason =
   | "open-pipeline"
+  | "not-created-by-delegatus"
   | "no-merged-pr"
   | "in-use"
   | "live-conversation"
@@ -185,6 +206,7 @@ const RETRIED_REASONS: ReadonlySet<WorktreeKeptReason> = new Set<WorktreeKeptRea
 /** A retry with no deadline earlier than the next hourly sweep. */
 const NEXT_SWEEP = Number.POSITIVE_INFINITY;
 const HEAD_UNREADABLE = "HEAD unreadable";
+const NOT_CREATED_DETAIL = "not created by Delegatus: no pipeline, merge batch or creation record names it; LLV_WORKTREE_SWEEP_FOREIGN=1 lets the sweep consider it";
 
 export type MergedPullRequest = { number: number; url: string; headRefName: string; headRefOid: string };
 
@@ -199,7 +221,9 @@ export type WorktreeRemoval = {
   pipelineId?: string;
 };
 
-export type WorktreeKept = { path: string; reason: WorktreeKeptReason; detail?: string; pipelineId?: string; bytes?: number; firstSettledAt?: string };
+export type WorktreeKept = { path: string; reason: WorktreeKeptReason; detail?: string; pipelineId?: string; bytes?: number; firstSettledAt?: string;
+  /** Advisory display metadata, preserved when a later slice defers this row. */
+  repository?: string; observedAt?: string };
 
 export type WorktreeSweepReport = {
   at: string;
@@ -225,12 +249,15 @@ export type WorktreeSweepReport = {
 export type GitRun = (args: string[], cwd: string) => Promise<ExecResult>;
 
 export type SweptPipeline = Pick<Pipeline, "id" | "state" | "repoDir" | "worktreeDir" | "branch" | "delivery"> &
-  Partial<Pick<Pipeline, "closeTeardown" | "closeReport" | "activationCloseRequested" | "baseRef" | "closedAt">> & {
+  Partial<Pick<Pipeline, "task" | "closeTeardown" | "closeReport" | "activationCloseRequested" | "baseRef" | "closedAt">> & {
     runs?: Pipeline["runs"];
   };
 
 export type WorktreeSweepPorts = {
   mode: WorktreeSweepMode;
+  /** Also consider worktrees no record shows Delegatus created
+      (`LLV_WORKTREE_SWEEP_FOREIGN`). Off by default. */
+  foreign?: boolean;
   /** Advisory inventories owned by the off-thread production worker. */
   cache?: WorktreeSweepCache;
   inspect?: typeof inspectTree;
@@ -728,13 +755,16 @@ function networkRemote(url: string): boolean {
     merged batch PR alone cannot release this ownership. Read it again with
     every guard check, including through the host namespace in Docker. */
 function mergeBatchOwnership(directory: string, branch: string | null, scan: ProcessScan,
-  accessible: (directory: string) => string): { owned: boolean; hold: string | null } {
+  accessible: (directory: string) => string): { owned: boolean; hold: string | null; recorded: boolean } {
   const parent = path.dirname(directory);
   const checkout = path.basename(directory) === "checkout" && /^merge-(?:batch|resolution)-[^/]+$/.test(path.basename(parent));
   const privacy = /^privacy-main-[^/]+$/.test(path.basename(directory));
   const runDirectory = checkout ? path.dirname(parent) : privacy ? parent : null;
   const batchLayout = checkout && path.basename(parent).startsWith("merge-batch-");
   let owned = batchLayout && /^merge-batch\/[a-f0-9-]{36}$/.test(branch ?? "");
+  /* Only state naming this checkout records that the merge batch made it;
+     the layout and branch name above prove nothing about who created it. */
+  let recorded = false;
   const processes = scan.processes.map(process => ({ pid: process.pid,
     paths: process.paths.map(target => path.resolve(target.replace(/ \(deleted\)$/, ""))) }));
   const samePath = (left: string, right: string) => {
@@ -755,7 +785,7 @@ function mergeBatchOwnership(directory: string, branch: string | null, scan: Pro
     const holderDetail = holder ? `pid ${holder.pid} holds merge batch ${holder.paths.some(target => samePath(target, file)) ? "state" : "run"}` : null;
     // An open descriptor survives unlink/atomic replacement. The process
     // still owns this run even when the path no longer has a readable file.
-    if (knownLayout && holder) return { owned, hold: holderDetail };
+    if (knownLayout && holder) return { owned, hold: holderDetail, recorded };
     let state: { version?: unknown; work?: unknown; branch?: unknown; landed?: unknown;
       resolving?: { work?: unknown }; rows?: { status?: unknown; detail?: unknown }[] };
     try {
@@ -766,19 +796,20 @@ function mergeBatchOwnership(directory: string, branch: string | null, scan: Pro
         || !/^merge-batch\/[a-f0-9-]{36}$/.test(state.branch) || !Array.isArray(state.rows)) throw new Error("invalid batch state");
     } catch (error) {
       if (knownLayout && (locked || (error as NodeJS.ErrnoException).code !== "ENOENT"))
-        return { owned, hold: "merge batch ownership is unreadable or locked" };
+        return { owned, hold: "merge batch ownership is unreadable or locked", recorded };
       continue;
     }
-    if (!samePath(state.work as string, directory)
-      && (typeof state.resolving?.work !== "string" || !samePath(state.resolving.work, directory))
-      && !(privacy && knownLayout)) continue;
+    const named = samePath(state.work as string, directory)
+      || typeof state.resolving?.work === "string" && samePath(state.resolving.work, directory);
+    if (!named && !(privacy && knownLayout)) continue;
     owned = true;
+    if (named) recorded = true;
     const settled = state.landed === true && !state.resolving && state.rows!.every(row => row
       && (row.status === "needs-review" || row.status === "head-moved" || row.status === "culprit"
         || row.status === "merged" && (row.detail === "closed" || row.detail === "head moved after landing; original kept open")));
-    if (!settled || locked || holder) return { owned, hold: holder ? holderDetail : "merge batch still owns checkout" };
+    if (!settled || locked || holder) return { owned, hold: holder ? holderDetail : "merge batch still owns checkout", recorded };
   }
-  return { owned, hold: null };
+  return { owned, hold: null, recorded };
 }
 
 /** Git's linked-checkout registration is local metadata. Read it without
@@ -1014,7 +1045,8 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
   let recentWritesDue: number | undefined;
   /** `retryBy`: a failed read or a transient refusal. The next hourly sweep
       rechecks the row, or the earlier time its verdict can change. */
-  const keep = (kept: WorktreeKept, retryBy?: number) => {
+  const keep = (kept: WorktreeKept, retryBy?: number, observed = true) => {
+    if (observed) kept.observedAt = new Date(now()).toISOString();
     if (kept.reason === "recent-writes" && recentWritesDue !== undefined) dueAt.set(kept.path, recentWritesDue);
     // Live holders leave no registration trace; the next hourly sweep rechecks
     // them so the retention clock starts when they let go.
@@ -1106,6 +1138,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
   const pending = new Set(priorProgress?.pending ?? []);
   const visited = new Set<string>();
   const discovered = new Set<string>();
+  const repositoryByCheckout = new Map<string, string>();
   const selected = new Set<string>();
   ports.phase?.("discovery");
 
@@ -1172,6 +1205,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
     for (const entry of ordered) {
       const directory = resolve(entry.path);
       discovered.add(directory);
+      repositoryByCheckout.set(directory, root);
       const owners = ownersOf(ownersAtStart, directory);
       const fingerprint = JSON.stringify([entry.head, entry.branch, entry.locked, entry.prunable,
         owners.map(owner => [owner.id, owner.state, pipelineHoldsCheckout(owner), latestTerminalTime([owner])])]);
@@ -1267,6 +1301,12 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
       const busy = heldBy(initial, worktree, entry.branch);
       if (busy) {
         keep({ ...busy, ...base });
+        continue;
+      }
+      /* By default only a checkout with a record of Delegatus creating it. */
+      if (!ports.foreign && owners.length === 0 && !batch.recorded
+        && !readWorktreeProvenance(worktree, { commonDir: path.join(root, ".git"), accessible })) {
+        keep({ ...base, reason: "not-created-by-delegatus", detail: NOT_CREATED_DETAIL });
         continue;
       }
       /* A lane past its hour is screened against the advertised refs. */
@@ -1623,7 +1663,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
   // count as fresh proof and cannot enter the removal path in this slice.
   for (const directory of discovered) if (!visited.has(directory)) {
     const previous = previouslyKept.get(directory);
-    keep(previous ? { ...previous } : { path: directory, reason: "deferred" });
+    keep(previous ? { ...previous } : { path: directory, reason: "deferred" }, undefined, false);
   }
   for (const root of Object.keys(progress.cursors ?? {})) if (!roots.has(root)) delete progress.cursors![root];
   const due: Record<string, number> = {};
@@ -1638,6 +1678,8 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
   const seenKept = new Set<string>();
   ports.phase?.("accounting");
   for (const kept of report.kept) {
+    kept.repository ??= repositoryByCheckout.get(kept.path);
+    kept.pipelineId ??= ownersOf(ownersAtStart, kept.path)[0]?.id;
     // Accounting is advisory and bounded independently of retirement. A cache
     // eviction never schedules a full walk of every retained tree.
     const measured = visited.has(kept.path) && !spent();
@@ -1856,6 +1898,7 @@ export async function productionWorktreeSweepPorts(
   const access = hostTempWorktreeAccess(temp);
   return {
     mode,
+    foreign: worktreeSweepForeign(),
     close: view.close,
     previous: readWorktreeSweepReport(),
     ...access,
@@ -1876,9 +1919,15 @@ export async function productionWorktreeSweepPorts(
 }
 
 /** The last sweep in full, at `state/worktree-sweep-report.json`. */
-export function recordWorktreeSweep(report: WorktreeSweepReport): void {
+export function recordWorktreeSweep(report: WorktreeSweepReport, pipelines: readonly SweptPipeline[] = []): void {
   fs.mkdirSync(path.dirname(REPORT_FILE()), { recursive: true, mode: 0o700 });
   writeJsonDurably(REPORT_FILE(), report);
+  try { recordWorktreeDrilldown(report, pipelines); }
+  catch (error) {
+    // A derived display artifact cannot interrupt retirement, cache persistence
+    // or the next slice. The next sweep retries from its own kept rows.
+    console.error("[worktree sweep] drilldown projection failed; the next sweep will retry", error instanceof Error ? error.message : String(error));
+  }
 }
 
 /** The production sweep: mode from the environment, report to the state directory. */
@@ -1901,7 +1950,7 @@ export async function runWorktreeSweep(
     return null;
   }
   const report = await sweepMergedWorktrees(ports);
-  recordWorktreeSweep(report);
+  recordWorktreeSweep(report, ports.pipelines);
   console.log(summarizeWorktreeSweep(report));
   return report;
 }

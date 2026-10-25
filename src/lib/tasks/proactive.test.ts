@@ -12,6 +12,7 @@ import { proactiveScopeCurrent } from "./proactiveScope";
 import { compactTask, taskAcknowledgement } from "@/lib/mcp/listAnswers";
 import { encodeTask } from "@/lib/links/taskWire";
 import { legacyDatabasePath } from "@/lib/state/legacyImport";
+import { taskShowsOnBoard } from "./boardVisibility";
 import { candidate, context, NOW, authority } from "./proactive.fixture";
 
 const roots: string[] = [];
@@ -46,7 +47,9 @@ test("atomic admission counts hidden, done and failed outcomes; stable keys repl
   const target = file();
   const first = await admitProactiveTask(candidate("fold"), context(), target, authority());
   expect(first.replay).toBe(false);
+  expect(first.task.dueAt).toBeUndefined(); expect(first.task.dueTz).toBeUndefined();
   expect(first.task.board).not.toBe("hidden");
+  expect(taskShowsOnBoard(loadTasks(target)[0]!, false, { now: NOW })).toBe(true);
   expect(first.task.proactive?.candidateKey).toBe("fold");
   expect(first.task.proactive?.scopeHash).toMatch(/^[a-f0-9]{64}$/);
   expect(proactiveScopeCurrent(first.task)).toBe(true);
@@ -104,6 +107,38 @@ test("rejection survives rename, another episode, replay and ordinary saves", as
   const next = context("2026-10-23T00:00:00.000Z");
   await expect(admitProactiveTask(candidate("reject"), next, target, authority(NOW + 86_400_000, next.startedAt))).rejects.toThrow("rejected");
   expect(loadTasks(target)[0]!.id).toBe(task.id);
+  mutateTasks(tasks => ({ tasks: tasks.map(row => ({ ...row, status: "done", board: "hidden" })), result: null }), target);
+  await expect(admitProactiveTask(candidate("reject"), next, target, authority(NOW + 86_400_000, next.startedAt))).rejects.toThrow("rejected");
+  expect(loadTasks(target)).toHaveLength(1);
+});
+
+test("ordinary writes and rollback mirrors cannot add provenance to a task admission never created", async () => {
+  const target = file();
+  const { task: admitted } = await admitProactiveTask(candidate("genuine"), context(), target, authority());
+  const forged = structuredClone(admitted.proactive!);
+  const plain = createTask(loadTasks(target), { project: "atlas", text: "Ordinary accepted work", placement: "unplaced" });
+  if (!plain.ok) throw new Error(plain.error);
+  saveTasks(plain.tasks, target);
+  const plainId = plain.task.id;
+  const provenance = (id: string) => loadTasks(target).find(row => row.id === id)?.proactive;
+  mutateTasks(tasks => { tasks.find(row => row.id === plainId)!.proactive = forged; return { tasks, result: null }; }, target);
+  expect(provenance(plainId)).toBeUndefined();
+  mutateTasks(tasks => ({ tasks: tasks.map(row => row.id === plainId ? { ...row, proactive: forged } : row), result: null }), target);
+  expect(provenance(plainId)).toBeUndefined();
+  const copy = { ...structuredClone(admitted), id: "copied-candidate" };
+  saveTasks([...loadTasks(target), copy], target);
+  expect(loadTasks(target).find(row => row.id === "copied-candidate")).toBeDefined();
+  expect(provenance("copied-candidate")).toBeUndefined();
+  checkpointTaskRollbackMirrorForDemotion(target);
+  const mirror = JSON.parse(fs.readFileSync(target, "utf8"));
+  for (const row of mirror.tasks) if (row.id === plainId) row.proactive = forged;
+  mirror.tasks.push({ ...structuredClone(mirror.tasks.find((row: BoardTask) => row.id === admitted.id)), id: "mirror-added" });
+  fs.writeFileSync(target, JSON.stringify(mirror));
+  importLegacyTasks(target, { reconcile: true });
+  expect(loadTasks(target).find(row => row.id === "mirror-added")).toBeDefined();
+  for (const id of [plainId, "mirror-added"]) expect(provenance(id)).toBeUndefined();
+  expect(provenance(admitted.id)).toEqual(admitted.proactive);
+  expect(readProactiveAllowance("atlas", context().startedAt, NOW, target)).toEqual({ episodeUsed: 1, rollingUsed: 1 });
 });
 
 test("invalid candidates and stale authority leave no task or spent allowance", async () => {

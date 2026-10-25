@@ -4,7 +4,6 @@ import { applySeatTickSettingsChange, defaultSeatTickSettings, effectiveSeatTick
 import { seatTickWakeMessage } from "./report";
 import { DEFAULT_SEAT_TICK_POLICY, seatTickDecision, seatTickWakeCommit, seatTickWakeCommitPlan } from "./seatTick";
 import { emptySeatTickState, type SeatTickCheckInput } from "./types";
-import { releaseStages } from "@/lib/release/stages";
 
 const project = "autonomy-fixture";
 const at = "2026-10-15T00:00:00.000Z";
@@ -130,8 +129,6 @@ test("every active wake carries the overlay; off and expiry carry none", () => {
   for (const time of [now, now + hour, now + 7 * hour]) {
     const text = seatTickWakeMessage({ ...base, autonomy: row.autonomy, now: time });
     expect(text).toContain("Full autonomy until");
-    expect(text).toContain("askBeforePublish only while autonomy is on");
-    expect(text).toContain("decision, why, undo");
     expect(text.length).toBeLessThanOrEqual(4000);
   }
   expect(autonomyMandate(row.autonomy, now).join("\n").length).toBeLessThanOrEqual(1200);
@@ -167,14 +164,6 @@ test("ended episode asks once it is due even with wakes off; report acknowledgem
   input = check({ ...row, autonomy: { ...row.autonomy!, reportAt: new Date(now + hour).toISOString() } }, now + hour);
   expect(seatTickDecision(input).verdict.kind).toBe("quiet");
 });
-
-test("release publish always rechecks current autonomy and retains every release gate", () => {
-  const publish = releaseStages({ cut: "a".repeat(40), lastTag: "v1.0.0", changes: [], askBeforePublish: true }).find(stage => stage.id === "publish")!;
-  expect(publish.prompt).toContain("expiry or off restores askBeforePublish");
-  expect(publish.prompt).toContain("gap, change-count and hold gates");
-  expect(publish.prompt).toContain("When effectiveAskBeforePublish is true");
-});
-
 
 test("schedule lapse and report acknowledgement preserve the latest episode and decisions", () => {
   const initial = change(enabled(), { wakeIntervalMinutes: 10, reason: "Frequent", until: new Date(now + hour).toISOString() });

@@ -1117,22 +1117,34 @@ test("a corrupt SQLite pipeline row skips the tick without escalating", async ()
   const h = harness();
   await create(h.ports);
   const database = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), { strict: true });
-  database.exec("BEGIN IMMEDIATE");
-  const revision = database.query<{ revision: number }, []>(
-    "SELECT revision FROM state_collections WHERE collection = 'pipelines'",
-  ).get()!.revision + 1;
-  const key = database.query<{ row_key: string }, []>(
-    "SELECT row_key FROM state_rows WHERE collection = 'pipelines' LIMIT 1",
-  ).get()!.row_key;
-  database.query("UPDATE state_rows SET value_json = '{}', row_revision = ? WHERE collection = 'pipelines' AND row_key = ?")
-    .run(revision, key);
-  database.query("UPDATE state_collections SET revision = ? WHERE collection = 'pipelines'").run(revision);
-  database.query("INSERT INTO state_changes(collection, revision, row_key, operation) VALUES ('pipelines', ?, ?, 'upsert')")
-    .run(revision, key);
-  database.exec("COMMIT");
-  database.close();
-  expect(await tickPipelines([], h.ports)).toEqual({ pipelines: [], changed: false });
-  savePipelines([]);
+  const row = database.query<{ row_key: string; value_json: string }, []>(
+    "SELECT row_key, value_json FROM state_rows WHERE collection = 'pipelines' LIMIT 1",
+  ).get()!;
+  const writeRow = (value: string) => {
+    database.exec("BEGIN IMMEDIATE");
+    try {
+      const revision = database.query<{ revision: number }, []>(
+        "SELECT revision FROM state_collections WHERE collection = 'pipelines'",
+      ).get()!.revision + 1;
+      database.query("UPDATE state_rows SET value_json = ?, row_revision = ? WHERE collection = 'pipelines' AND row_key = ?")
+        .run(value, revision, row.row_key);
+      database.query("UPDATE state_collections SET revision = ? WHERE collection = 'pipelines'").run(revision);
+      database.query("INSERT INTO state_changes(collection, revision, row_key, operation) VALUES ('pipelines', ?, ?, 'upsert')")
+        .run(revision, row.row_key);
+      database.exec("COMMIT");
+    } catch (error) {
+      database.exec("ROLLBACK");
+      throw error;
+    }
+  };
+  try {
+    writeRow("{}");
+    expect(await tickPipelines([], h.ports)).toEqual({ pipelines: [], changed: false });
+  } finally {
+    // Malformed rows deliberately survive savePipelines([]). Restore this
+    // fixture's row and invalidate readers before another case can tick.
+    try { writeRow(row.value_json); } finally { database.close(); }
+  }
 });
 
 test("retry preserves dirty work and skip requires a clean accepted head after verdict exhaustion (#879)", async () => {

@@ -6,6 +6,7 @@ import { readFindingKey, reconcileOpenFindings, validStoredFinding } from "./fin
 import path from "node:path";
 
 import { isTaskNote } from "./note";
+import { storedDueHistory } from "./helpers";
 
 import { statePath } from "@/lib/configDir";
 import { deepFreeze } from "@/lib/deepFreeze";
@@ -25,11 +26,11 @@ import {
   type LegacyImportOutcome,
   type LegacyReconcileSummary,
 } from "@/lib/state/legacyImport";
-import { readStateImport, SqliteStateCollection, type StateImportRecord, type StateImportRow } from "@/lib/state/sqliteStateStore";
+import { readStateImport, SqliteStateCollection, type StateImportRecord, type StateImportRow, type OverdueTaskCursor } from "@/lib/state/sqliteStateStore";
 
 import { TASK_SYNC_GROUPS } from "./types";
 import { derivedStamp } from "@/lib/links/stamp";
-import { linkedContext } from "@/lib/links/linked";
+import { linkedContext, runsHere } from "@/lib/links/linked";
 import { groupDigest, snapshotGroups, stampLinkedRows, type GroupSnapshot, type TaskSyncWrite } from "@/lib/links/taskStamp";
 import { tombstoneCollection, tombstoneRowKey, type TombstoneRow } from "@/lib/links/tombstones";
 
@@ -247,6 +248,9 @@ function coerceTask(value: unknown, canonical = canonicalProject): BoardTask | n
   if (task.statusBy !== undefined && !isTaskStatusBy(task.statusBy)) delete task.statusBy;
   // A rejected checklist must not survive the raw extension spread above.
   if (!steps) delete task.steps;
+  const dueHistory = task.dueAt ? storedDueHistory(raw.dueHistory) : undefined;
+  if (dueHistory) task.dueHistory = dueHistory;
+  else delete task.dueHistory;
   if (!pinned) delete task.pos;
   /* An icon is a name or nothing; a row carrying anything else loads without one. */
   if (task.icon !== undefined && typeof task.icon !== "string") delete task.icon;
@@ -394,6 +398,15 @@ function parseLegacyBody(raw: unknown): LegacyTasksBody {
   return { ...body, migrations, mirrorOf };
 }
 
+/** Only atomic admission creates invention provenance: a mirror row cannot add
+    it to a task that never carried it. */
+function withoutAddedProvenance(row: TaskStateRow, held: TaskStateRow | undefined): TaskStateRow {
+  if (!taskRowKey(row).startsWith("t:") || row.proactive === undefined || held?.proactive !== undefined) return row;
+  const rest = { ...row };
+  delete rest.proactive;
+  return rest;
+}
+
 /** Merge a `tasks.json` that changed after the import (a rollback release wrote
     it, or an older writer raced a fence). Who changed a row is read from row
     revisions: a SQLite row not rewritten since `baseline` is the one the file
@@ -420,7 +433,7 @@ function mergeLegacyTasks(filePath: string, body: LegacyTasksBody, baseline: Sta
       const key = taskRowKey(row);
       const held = current.get(key);
       if (!held) {
-        records.push(row);
+        records.push(withoutAddedProvenance(row, undefined));
         summary.added += 1;
         summary.keys.push(key);
         continue;
@@ -441,7 +454,7 @@ function mergeLegacyTasks(filePath: string, body: LegacyTasksBody, baseline: Sta
         retainProactiveScope(incomingTask, previousTask);
         records.push(incomingTask as unknown as TaskStateRow);
       } else {
-        records.push(row);
+        records.push(withoutAddedProvenance(row, held));
       }
       summary.replaced += 1;
       summary.keys.push(key);
@@ -554,6 +567,24 @@ export function loadTasksFile(filePath = TASKS_FILE): TasksFileState {
   const collection = taskCollection(filePath, "read");
   if (!collection) return readLegacyTasksFile(filePath);
   return stateFromBody(bodyFromRows(collection.snapshot()));
+}
+
+/** The tick reads only overdue payloads, independently of the board snapshot. */
+export type OverdueBoardTask = BoardTask & { overdueSweep?: string };
+export function overdueTasks(project: string, nowMs: number, filePath = TASKS_FILE, shown: readonly string[] = [], cursor: OverdueTaskCursor | null = null, known: readonly string[] = shown): OverdueBoardTask[] {
+  const collection = taskCollection(filePath, "read");
+  if (!collection) throw new Error("overdue task selection requires the SQLite task store");
+  const canonical = canonicalProject(project);
+  const projects = [canonical, ...Object.keys(projectAliasSnapshot().aliases).filter(alias => canonicalProject(alias) === canonical)];
+  const context = linkedContext();
+  return collection.overdueTaskRows(projects, nowMs, 51, context.self?.id ?? null, shown, cursor, known)
+    .flatMap(selection => {
+      const row = collection.get(selection.row_key);
+      const task = row ? coerceTask(row) : null;
+      return task && canonicalProject(task.project) === canonical && task.status !== "done" && runsHere(task, context)
+        && task.dueAt && Date.parse(task.dueAt) <= nowMs
+        && !(task.hold?.until && Date.parse(task.hold.until) > nowMs) ? [{ ...task, ...(selection.advance ? { overdueSweep: Buffer.from(JSON.stringify([selection.priority, selection.eligible_at, selection.row_key])).toString("base64url") } : {}) }] : [];
+    });
 }
 
 /** Prepare the bounded MCP selection reader without loading the collection. */

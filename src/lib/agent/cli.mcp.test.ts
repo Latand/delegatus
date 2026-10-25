@@ -1,0 +1,203 @@
+import { afterAll, expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import crypto from "node:crypto";
+import { mcpHttpAccessToken } from "@/lib/mcp/httpAccess";
+import { freshSpecFor, prepareAgentPublicationSpec, resumeSpecForSession, withSpawnCapability } from "./cli";
+import { setCodexShellPolicyReaderForTest } from "@/lib/git/codexShellPolicy";
+import { parseCodexFeatures, setCodexFeatureReaderForTest } from "./codexSpawnPolicy";
+
+const root = fs.mkdtempSync(path.join(os.tmpdir(), "terminal-mcp-"));
+const restorePolicy = setCodexShellPolicyReaderForTest(() => ({}));
+const restoreFeatures = setCodexFeatureReaderForTest(() => parseCodexFeatures("multi_agent stable true"));
+const binary = path.join(root, "codex-list");
+fs.writeFileSync(binary, '#!/bin/sh\nprintf \'[{"name":"other"}]\'\n', { mode: 0o700 });
+afterAll(() => {
+  restorePolicy(); restoreFeatures();
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+for (const mode of ["fresh", "resume"] as const) test(`${mode} terminal materializes an unregistered HTTP Viewer after publication preparation`, async () => {
+  const previous = process.env.LLV_CODEX_BINARY;
+  process.env.LLV_CODEX_BINARY = binary;
+  try {
+    const home = path.join(root, mode); fs.mkdirSync(home);
+    const initial = mode === "fresh" ? freshSpecFor("codex", root, { codexHome: home, cleanMemory: true })
+      : resumeSpecForSession("codex", "12345678-1234-1234-1234-123456789abc", root, home, { cleanMemory: true })!;
+    const prepared = await prepareAgentPublicationSpec(initial);
+    for (const transport of [undefined, "", "stdio", "http"]) {
+      const admitted = withSpawnCapability(prepared, "a".repeat(43), {
+        ...process.env, LLV_TOKEN: undefined, DELEGATUS_MCP_TRANSPORT: undefined,
+        LLV_MCP_TRANSPORT: transport, LLV_MCP_HTTP_URL: "http://127.0.0.1:41234/api/mcp",
+      });
+      expect(admitted.command).toContain("mcp_servers.other.enabled=false");
+      expect(admitted.command).toContain("mcp_servers.viewer.enabled=true");
+      if (transport === "http") {
+        expect(admitted.command).toContain('mcp_servers.viewer.url="http://127.0.0.1:41234/api/mcp"');
+        expect(admitted.command).toContain('env_http_headers.x-llv-spawn-capability="LLV_SPAWN_CAPABILITY"');
+        expect(admitted.command).not.toContain("mcp_servers.viewer.command=");
+        expect(admitted.command).not.toContain("mcp_servers.viewer.env.");
+      } else {
+        expect(admitted.command).toContain('mcp_servers.viewer.command="bun"');
+        expect(admitted.command).toContain('mcp_servers.viewer.env_vars=["LLV_SPAWN_CAPABILITY"]');
+        expect(admitted.command).not.toContain("mcp_servers.viewer.url=");
+      }
+      if (mode === "resume") expect(admitted.command.indexOf("mcp_servers.viewer.enabled=true")).toBeLessThan(admitted.command.indexOf(" resume "));
+    }
+    const alias = withSpawnCapability(prepared, "a".repeat(43), {
+      ...process.env, LLV_TOKEN: undefined, DELEGATUS_MCP_TRANSPORT: "http", LLV_MCP_TRANSPORT: "stdio",
+    });
+    expect(alias.command).toContain("mcp_servers.viewer.url=");
+    expect(fs.existsSync(path.join(home, "config.toml"))).toBe(false);
+    expect(() => withSpawnCapability(prepared, "invalid")).toThrow("Viewer spawn capability is invalid");
+  } finally {
+    if (previous === undefined) delete process.env.LLV_CODEX_BINARY; else process.env.LLV_CODEX_BINARY = previous;
+  }
+});
+
+test("an unadmitted attach and an unrelated HTTP endpoint retain the stdio fallback", () => {
+  const previous = process.env.LLV_CODEX_BINARY;
+  process.env.LLV_CODEX_BINARY = binary;
+  try {
+    const initial = freshSpecFor("codex", root, { codexHome: root, cleanMemory: true });
+    expect(initial.command).toContain('mcp_servers.viewer.command="bun"');
+    const admitted = withSpawnCapability(initial, "b".repeat(43), {
+      NODE_ENV: "test",
+      LLV_MCP_TRANSPORT: "http", LLV_TOKEN: "fixture-access", LLV_VIEWER_PORT: "41235",
+      LLV_MCP_HTTP_URL: "http://127.0.0.1:41234/api/mcp",
+    });
+    expect(admitted.command).toContain('mcp_servers.viewer.command="bun"');
+    expect(admitted.command).not.toContain("fixture-access");
+    expect(admitted.command).not.toContain("mcp_servers.viewer.url=");
+  } finally {
+    if (previous === undefined) delete process.env.LLV_CODEX_BINARY; else process.env.LLV_CODEX_BINARY = previous;
+  }
+});
+
+test("keyed fresh and resumed terminal HTTP launches read a private credential without putting it in argv", async () => {
+  const selected = path.join(root, "keyed codex");
+  const home = path.join(root, "keyed account");
+  fs.mkdirSync(home);
+  fs.writeFileSync(selected, `#!/bin/sh
+case "$*" in *"mcp list"*) printf '[]'; exit 0 ;; esac
+[ -z "\${LLV_TOKEN:-}" ] || exit 91
+[ "$LLV_MCP_HTTP_ACCESS" = "$EXPECTED_MCP_HTTP_ACCESS" ] || exit 92
+printf 'credential received\\n'
+`, { mode: 0o700 });
+  const previous = process.env.LLV_CODEX_BINARY;
+  process.env.LLV_CODEX_BINARY = selected;
+  const source = { NODE_ENV: "test" as const, LLV_TOKEN: crypto.randomBytes(32).toString("base64url"),
+    LLV_MCP_TRANSPORT: "http", LLV_VIEWER_PORT: "41234", HOSTNAME: "127.0.0.1" };
+  const access = mcpHttpAccessToken(source)!;
+  let command = "";
+  try {
+    for (const mode of ["fresh", "resume"]) {
+      const initial = mode === "fresh" ? freshSpecFor("codex", root, { codexHome: home, cleanMemory: true })
+        : resumeSpecForSession("codex", "12345678-1234-1234-1234-123456789abc", root, home, { cleanMemory: true })!;
+      const admitted = withSpawnCapability(await prepareAgentPublicationSpec(initial), "e".repeat(43), source);
+      command = admitted.command;
+      expect(admitted.command.includes(source.LLV_TOKEN)).toBe(false);
+      expect(admitted.command.includes(access)).toBe(false);
+      expect(admitted.command).toContain('env_http_headers.x-delegatus-mcp-access="LLV_MCP_HTTP_ACCESS"');
+      const result = Bun.spawnSync(["sh", "-c", admitted.command], {
+        cwd: root, env: { ...process.env, LLV_TOKEN: undefined, LLV_MCP_HTTP_ACCESS: "untrusted-inherited-value", EXPECTED_MCP_HTTP_ACCESS: access },
+        stdout: "pipe", stderr: "pipe",
+      });
+      expect({ code: result.exitCode, output: result.stdout.toString(), error: result.stderr.toString() })
+        .toEqual({ code: 0, output: "credential received\n", error: "" });
+    }
+    const directory = path.join(home, ".llv", "spawn-mcp");
+    const files = fs.readdirSync(directory);
+    expect(files).toHaveLength(1);
+    expect(fs.statSync(path.join(directory, files[0])).mode & 0o777).toBe(0o600);
+    expect(fs.readFileSync(path.join(directory, files[0]), "utf8").trim() === access).toBe(true);
+    expect(fs.existsSync(path.join(home, "config.toml"))).toBe(false);
+    fs.unlinkSync(path.join(directory, files[0]));
+    const missing = Bun.spawnSync(["sh", "-c", command], {
+      cwd: root, env: { ...process.env, LLV_MCP_HTTP_ACCESS: access, EXPECTED_MCP_HTTP_ACCESS: access },
+      stdout: "pipe", stderr: "pipe",
+    });
+    expect(missing.exitCode).toBe(1);
+    expect(missing.stdout.toString()).toBe("");
+    expect(missing.stderr.toString().includes(access)).toBe(false);
+  } finally {
+    if (previous === undefined) delete process.env.LLV_CODEX_BINARY; else process.env.LLV_CODEX_BINARY = previous;
+  }
+});
+
+test.each(["0.0.0.0", "::", "192.0.2.10"])("a keyed %s bind keeps fresh and resumed terminal launches on stdio without a credential file", async hostname => {
+  const previous = process.env.LLV_CODEX_BINARY;
+  process.env.LLV_CODEX_BINARY = binary;
+  const home = fs.mkdtempSync(path.join(root, "non-loopback-"));
+  try {
+    for (const mode of ["fresh", "resume"]) {
+      const initial = mode === "fresh" ? freshSpecFor("codex", root, { codexHome: home, cleanMemory: true })
+        : resumeSpecForSession("codex", "12345678-1234-1234-1234-123456789abc", root, home, { cleanMemory: true })!;
+      const admitted = withSpawnCapability(await prepareAgentPublicationSpec(initial), "e".repeat(43), {
+        NODE_ENV: "test", LLV_MCP_TRANSPORT: "http", LLV_TOKEN: crypto.randomBytes(32).toString("base64url"), HOSTNAME: hostname,
+      });
+      expect(admitted.command).toContain('mcp_servers.viewer.command="bun"');
+      expect(admitted.command).not.toContain("mcp_servers.viewer.url=");
+      expect(admitted.command).not.toContain("x-delegatus-mcp-access");
+      expect(admitted.command).not.toContain("LLV_MCP_HTTP_ACCESS");
+      expect(fs.existsSync(path.join(home, ".llv", "spawn-mcp"))).toBe(false);
+    }
+  } finally {
+    if (previous === undefined) delete process.env.LLV_CODEX_BINARY; else process.env.LLV_CODEX_BINARY = previous;
+  }
+});
+
+test("a refused terminal credential write stops launch construction", () => {
+  const previous = process.env.LLV_CODEX_BINARY;
+  process.env.LLV_CODEX_BINARY = binary;
+  const home = path.join(root, "refused-access-write");
+  fs.mkdirSync(path.join(home, ".llv"), { recursive: true });
+  fs.writeFileSync(path.join(home, ".llv", "spawn-mcp"), "occupied");
+  try {
+    const initial = freshSpecFor("codex", root, { codexHome: home, cleanMemory: true });
+    expect(() => withSpawnCapability(initial, "f".repeat(43), {
+      NODE_ENV: "test", LLV_MCP_TRANSPORT: "http", LLV_TOKEN: crypto.randomBytes(32).toString("base64url"), HOSTNAME: "127.0.0.1",
+    })).toThrow();
+  } finally {
+    if (previous === undefined) delete process.env.LLV_CODEX_BINARY; else process.env.LLV_CODEX_BINARY = previous;
+  }
+});
+
+test("a registered stdio Viewer remains unchanged with an HTTP launch preference", () => {
+  const registered = path.join(root, "codex-registered");
+  fs.writeFileSync(registered, '#!/bin/sh\nprintf \'[{"name":"viewer"},{"name":"other"}]\'\n', { mode: 0o700 });
+  const previous = process.env.LLV_CODEX_BINARY; process.env.LLV_CODEX_BINARY = registered;
+  try {
+    const initial = freshSpecFor("codex", root, { codexHome: root, cleanMemory: true });
+    const admitted = withSpawnCapability(initial, "c".repeat(43), { NODE_ENV: "test", LLV_MCP_TRANSPORT: "http" });
+    expect(admitted.command).toContain("mcp_servers.viewer.enabled=true");
+    expect(admitted.command).not.toContain("mcp_servers.viewer.url=");
+    expect(admitted.command).not.toContain("mcp_servers.viewer.command=");
+  } finally {
+    if (previous === undefined) delete process.env.LLV_CODEX_BINARY; else process.env.LLV_CODEX_BINARY = previous;
+  }
+});
+
+test("fresh and resumed launches execute the selected Codex path containing spaces", () => {
+  const selected = path.join(root, "selected codex");
+  const invocationLog = path.join(root, "selected-codex-invocations.log");
+  fs.writeFileSync(selected, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${invocationLog}'\ncase "$*" in *"mcp list"*) printf '[{"name":"other"}]' ;; esac\n`, { mode: 0o700 });
+  const previous = process.env.LLV_CODEX_BINARY;
+  process.env.LLV_CODEX_BINARY = selected;
+  try {
+    const fresh = freshSpecFor("codex", root, { codexHome: root, cleanMemory: true });
+    const resumed = resumeSpecForSession("codex", "12345678-1234-1234-1234-123456789abc", root, root, { cleanMemory: true })!;
+    for (const spec of [fresh, resumed]) {
+      const result = Bun.spawnSync(["sh", "-c", spec.command], {
+        cwd: root, env: { ...process.env, CODEX_HOME: root }, stdout: "pipe", stderr: "pipe",
+      });
+      expect({ code: result.exitCode, error: result.stderr.toString() }).toEqual({ code: 0, error: "" });
+    }
+    const invocations = fs.readFileSync(invocationLog, "utf8");
+    expect(invocations).toContain("exec");
+    expect(invocations).toContain("resume");
+  } finally {
+    if (previous === undefined) delete process.env.LLV_CODEX_BINARY; else process.env.LLV_CODEX_BINARY = previous;
+  }
+});

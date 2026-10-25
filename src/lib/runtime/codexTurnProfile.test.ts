@@ -27,3 +27,17 @@ test("thread tier persists exactly and the live catalog fails closed", async () 
   expect(() => assertCatalogOffersTier(null, "gpt-6-astra", "ultrafast")).toThrow("catalog unavailable");
   expect(() => assertCatalogOffersTier(null, "gpt-6-astra", "default")).not.toThrow();
 });
+
+
+test("live tier refusal names the selected model, account and other models offering the tier", async () => {
+  const { assertCatalogOffersTier } = await import("./codexTurnProfile");
+  const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
+  const account = createManagedCodexAccount("account A");
+  const catalog = { data: [
+    { id: "gpt-6-luna", isDefault: true, serviceTiers: [{ id: "priority" }] },
+    { id: "gpt-6.1-sol", serviceTiers: [{ id: "ultrafast" }] },
+  ] };
+  expect(() => assertCatalogOffersTier(catalog, undefined, "ultrafast", account.home))
+    .toThrow(`selected account "${account.id}": account "account A" (${account.id}): gpt-6-luna offered: priority; ultrafast offered for other models on this account: gpt-6.1-sol`);
+  expect(() => assertCatalogOffersTier(catalog, "gpt-6.1-sol", "ultrafast", account.home)).not.toThrow();
+});

@@ -1,6 +1,7 @@
 import { captureProcessIdentity, processIdentityProvenDead, type ProcessIdentity } from "@/lib/processIdentity";
 import { trackMcpClaim, installMcpLifecycle, logMcpLifecycle, drainMcpClaims } from "../../../bin/mcp-lifecycle.mjs";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
+import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
 import { blockingWaitRole } from "@/lib/blockingWaits";
 import { shortIdsInAnswer, shortenHashesInText } from "@/lib/shortIds";
 import { normalizeShortIdArgs } from "./shortIdArgs";
@@ -78,6 +79,7 @@ export const MCP_TOOL_NAMES = [
   "create_task",
   "update_task",
   "create_pipeline",
+  "pipeline_checks",
   "pipeline_action",
   "stage_report",
   "leave_lesson",
@@ -146,6 +148,7 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
   "create_task",
   "update_task",
   "create_pipeline",
+  "pipeline_checks",
   "pipeline_action",
   /* Records the calling attempt's own completion, which the stage then settles
      on. A replayed clientRequestId must answer with the report the first call
@@ -1789,6 +1792,24 @@ const receiptIndexes = declaredIndexes([
         ON mcp_receipts(retention, sequence)`,
 ]);
 
+export class McpReceiptsNotReadyError extends Error {
+  constructor() {
+    super("MCP receipts are not ready. Start or restart the Viewer to prepare the receipts database, then retry the call.");
+    this.name = "McpReceiptsNotReadyError";
+  }
+}
+
+/** Readiness is checked before journal pragmas or any schema write, including
+ * after an activation fallback replaces the file beneath an MCP connection. */
+function assertReceiptsPrepared(db: BunDatabase): void {
+  const objects = new Set(db.query<{ name: string }, []>("SELECT name FROM sqlite_master").all().map(row => row.name));
+  const columns = new Set(db.query<{ name: string }, []>("PRAGMA table_info(mcp_receipts)").all().map(row => row.name));
+  const meta = new Set(db.query<{ name: string }, []>("PRAGMA table_info(mcp_receipt_meta)").all().map(row => row.name));
+  if (!objects.has("mcp_receipts") || !objects.has("mcp_receipt_meta") || !receiptIndexes.ready(objects)
+    || !["sequence", "receipt_key", "digest", "retention", "result_json", "storage_bytes", "claimed_at", "binding_json", "stage", "recovery_result_json"].every(name => columns.has(name))
+    || !["key", "value"].every(name => meta.has(name))) throw new McpReceiptsNotReadyError();
+}
+
 /**
  * Keyed durable receipts for the production MCP server.
  *
@@ -1805,7 +1826,8 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
   private readonly now: () => number;
 
   constructor(readonly filename: string, options: SqliteMcpReceiptStoreOptions = {}) {
-    fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
+    const prepare = mayRunStateStartupMutation(path.dirname(filename));
+    if (prepare) fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
     const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
     if (!sqlite) throw new Error("SQLite MCP receipts require the Bun runtime");
     /* Bound to the file at its name: a receipt store the activation fallback
@@ -1813,9 +1835,27 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
        handle. The journal mode cannot change inside a transaction, so these
        pragmas run before the schema transaction. */
     this.db = openCurrentDatabase(filename, () => {
-      const db = observeSqlite(new sqlite.Database(filename, { create: true, strict: true }), "mcp-receipts");
+      // A consumer never creates a file, even when the Viewer has not started
+      // or a durability swap left the name absent. SQLite readwrite omits CREATE.
+      if (!prepare && !fs.existsSync(filename)) throw new McpReceiptsNotReadyError();
+      let db: BunDatabase;
+      try {
+        db = observeSqlite(new sqlite.Database(filename, prepare
+          ? { create: true, strict: true } : { create: false, readwrite: true, strict: true }), "mcp-receipts");
+      } catch (error) {
+        // The name may disappear between the existence check and SQLite open.
+        if (!prepare && (error as { code?: string }).code === "SQLITE_CANTOPEN") throw new McpReceiptsNotReadyError();
+        throw error;
+      }
       try {
         db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(options.busyTimeoutMs ?? 5000))}`);
+        if (!prepare) {
+          assertReceiptsPrepared(db);
+          // These settings affect this connection only. WAL and vacuum mode
+          // belong to the Viewer's preparation, never an MCP startup attempt.
+          db.exec("PRAGMA synchronous = FULL");
+          return db;
+        }
         const walEnabled = () => db.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get()?.journal_mode === "wal";
         if (!walEnabled()) {
           try { db.exec("PRAGMA journal_mode = WAL"); }
@@ -1833,23 +1873,25 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
         db.close();
         throw error;
       }
-    }, { reopened: () => this.initializeSchema() });
+    }, { reopened: () => { if (prepare) this.initializeSchema(); } });
     this.readReceiptCountCap = Math.max(1, Math.floor(options.readReceiptCountCap ?? FILE_RECEIPT_CAP));
     this.readReceiptByteCap = Math.max(1, Math.floor(options.readReceiptByteCap ?? SQLITE_READ_RECEIPT_BYTE_CAP));
     this.boundedPendingTtlMs = Math.max(1, Math.floor(options.boundedPendingTtlMs ?? SQLITE_BOUNDED_PENDING_TTL_MS));
     this.now = options.now ?? Date.now;
     try {
-      this.initializeSchema();
-      this.importLegacyFile(options.legacyFilePath);
-      this.db.exec("BEGIN IMMEDIATE");
-      try {
-        this.pruneBoundedReceipts(this.now());
-        this.db.exec("COMMIT");
-      } catch (error) {
-        try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
-        throw error;
+      if (prepare) {
+        this.initializeSchema();
+        this.importLegacyFile(options.legacyFilePath);
+        this.db.exec("BEGIN IMMEDIATE");
+        try {
+          this.pruneBoundedReceipts(this.now());
+          this.db.exec("COMMIT");
+        } catch (error) {
+          try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+          throw error;
+        }
+        this.secureFiles();
       }
-      this.secureFiles();
     } catch (error) {
       this.db.close();
       throw error;
@@ -2067,14 +2109,12 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
 
   /**
    * Creates the tables and adds every column a database from an earlier
-   * schema lacks, in ONE write transaction. Several MCP processes start cold
-   * against the same database at once; the write lock makes one of them
-   * inspect and migrate while the others retry admission and then find
-   * the columns already there. Two processes that both inspected first would
-   * both ALTER, and the second would throw "duplicate column name".
+   * schema lacks, in ONE write transaction under the startup owner's fence.
+   * Other processes only validate the schema the Viewer prepared. The write
+   * lock serializes inspection and migration by permitted startup owners.
    */
   private initializeSchema(): void {
-    receiptIndexes.assertRepairAuthority(this.db, path.dirname(this.filename));
+    assertStateStartupMutation(path.dirname(this.filename), "MCP receipts schema preparation");
     this.db.exec("BEGIN IMMEDIATE");
     try {
       this.db.exec(`
@@ -2082,6 +2122,8 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
           key TEXT PRIMARY KEY,
           value TEXT NOT NULL
         );
+      `);
+      this.db.exec(`
         CREATE TABLE IF NOT EXISTS mcp_receipts (
           sequence INTEGER PRIMARY KEY AUTOINCREMENT,
           receipt_key TEXT NOT NULL UNIQUE,
@@ -3608,6 +3650,7 @@ export const RECOVERY_CONTRACT_DESCRIPTION = [
 ].join(" ");
 
 const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
+  pipeline_checks: "Choose Cloud or local checks for a pipeline stage, lane or its project default. Stage scope requires stageId. Cloud is the default. A null execution restores inheritance. The voice companion can ask its project orchestrator to change this setting.",
   spawn_agent: [
     "Create a Delegatus-managed agent conversation and return its durable conversation and launch ids.",
     'For role: "deployer", pass top-level confirm: "deploy" and quote the operator\'s approval in the brief. Only the target project\'s designated orchestrator seat or the operator\'s own session may launch a deployer; other callers are refused before any request is claimed. Other roles ignore confirm.',
@@ -3680,10 +3723,10 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Every accepted call is recorded on the pipeline with the calling conversation, the attempt and the time.",
     "When the project keeps learned rules, the first accepted report of a stage that is not a review carries lessonRequest: answer it with leave_lesson before the turn ends.",
   ].join(" "),
-  curate_rules: "Only the machine's live scheduled curator conversation may call. read lists this pass's scopes and import batch; scope imports reads up to 40 candidate parts / 64 KB, with every occurrence; adopt/drop/defer account for that entire batch. adopt orders use adopt:<candidate>:<index>. Ordinary scope reads page its active rules, versions, budget archives, recent departures, role scaffold, role attempts and other-project evidence within 24 KB (follow cursor). apply accounts for every active rule of the named scopes at their read revisions, orders survivors best first, and can rewrite, merge, move, split, archive with reasons or restore. Every change needs a note; role moves up to project or machine require why every role there acts on it. Split placeholders: split:<source-id>:1 for the second part and so on; the first keeps its id. Refused calls store nothing; after CURATE_STALE read again. problem [{id, statement, evidence, note}] transfers a concrete defect or mismatch to its original project seat agenda and archives it reversibly. The seat decides whether to propose a task or issue and asks the operator; create none yourself. Writes stay local. Operator-kept rules remain whole and active. Earlier texts and pass history are immutable and reversible from the learned-rules window.",
+  curate_rules: "Only the machine's live scheduled curator conversation may call. read lists this pass's scopes, import batch and any one-time machine budgetSweep candidate counts; scope imports reads up to 40 candidate parts / 64 KB, with every occurrence; adopt/drop/defer account for that entire batch. adopt orders use adopt:<candidate>:<index>. Ordinary scope reads page its active rules, versions, budget archives, unexplained sweep archives, recent departures, role scaffold, role attempts and other-project evidence within 24 KB (follow cursor). apply accounts for every active rule of the named scopes at their read revisions, orders survivors best first, and can rewrite, merge, move, split, archive with reasons or restore. Every change needs a note; role moves up to project or machine require why every role there acts on it. Split placeholders: split:<source-id>:1 for the second part and so on; the first keeps its id. Refused calls store nothing; after CURATE_STALE read again. problem [{id, statement, evidence, note}] transfers a concrete defect or mismatch to its original project seat agenda and archives it reversibly. The seat decides whether to propose a task or issue and asks the operator; create none yourself. Writes stay local. Operator-kept rules remain whole and active. Earlier texts and pass history are immutable and reversible from the learned-rules window.",
   leave_lesson: [
     "Any stage answer may include applied and misled, each up to five distinct exact ids of rules this attempt received: applied changed what you did; misled was wrong or stale. An id may appear in only one field. These measurements are optional and may accompany none, lesson, rewrite or problem.",
-    "A project's designated orchestrator seat may also call unasked, with lesson or rewrite, for a practice that can come back; a defect goes to a board task (create_task). Write no names of people, accounts, emails, tokens, ids or absolute paths.",
+    "A project's designated orchestrator seat may also call unasked, with lesson or rewrite, for a practice that can come back; a defect goes to a board task (create_task). While Delegatus memory is on, the operator's own root conversation may call unasked too, with lesson at scope project or machine or with rewrite of a rule it reads. Write no names of people, accounts, emails, tokens, ids or absolute paths.",
     "Answer the lesson request after stage_report exactly once with rewrite {id, rule, why}, lesson {scope, role?, rule, why}, problem {statement, evidence}, or none (usual for a stage handed no findings; on a fix round, say why the class cannot recur).",
     "A new lesson must change what this role does on a different task and use the narrowest true level: own-role work here; every role in this project; or every role in every project on this machine. The curator alone widens role rules across projects.",
     "Rewrite an active rule this stage reads, keeping its id and level and a reversible version. A lesson is active immediately. Task narration belongs only in the stage report: a fixed identifier check refuses it and stores nothing.",
@@ -3713,7 +3756,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   resources: "Read system memory, session count/memory totals and Delegatus's own processes. full:true or compact:false includes complete session rows. freshness reports requestedAt, the system block's capturedAt and ageMs, the session table's sessionsCapturedAt, sessionsAgeMs and sessionsStale, the cache source, and refreshSucceeded (fresh:true only). A process with no observation yet answers within a second: freshness.pending is true with reason \"collecting\", the system block is current and the session table is empty until a later call; fresh:true waits for the collection instead. When the session collector failed, the rows come from an earlier capture: sessionsStale is true and every row carries stale:true with its capturedAt, so read them as history of what ran then. viewer lists the web server, runtime host and workers with their memory; it is not actionable, since nothing in it is an agent to kill. Launched agents delegate this read to the Viewer, over either transport. A legacy stdio client without a launch capability measures locally and returns viewer:null with viewerUnavailable \"not-the-viewer\".",
   conversation_migration: "Select an explicit account for a structured conversation, automatically reseat by quota, retry, roll back or cancel a migration, withdraw an unclaimed account switch, or send messages a failed switch held on the current account. Explicit selection uses the browser account picker's semantics and never substitutes another account.",
   agent_fleet: "Read the fleet summary first for counts by engine, model, effort and account, pipeline/seat/other placement, stalled and limit-wait counts, and account session/weekly use. Counts are [live, running]; default summary stays under 2 KB with folding. detail:true or an engine/model/effort/account/state/pipelineId/conversationId filter adds per-agent rows, cached memory where available, and a 24 KB page with nextCursor. No transcript bodies or paths. Account/model/effort come from durable host, generation and launch records; absent accounts are unknown. A seat, deputy or worker sees its own project; operator root sees all; unidentified callers must name project. Name accounts as account A / account B in public bridge reports. Some counts may be partial: read coverage.",
-  agent_activity: "Use agent_fleet first for compact fleet counts and account usage. Read agent liveness, compact by default. liveOnly:true excludes gone lifecycles and dead hosts after verification; excludedGoneCount says how many were removed from the bounded observation. includeGone:true includes them. Recent unproven launches and verified live hosts remain visible; expired unproven launches are excluded. Compact answers stay within 24 KB; follow nextCursor with the same options for rows deferred by the byte budget. compact:false or full:true returns the full evidence: last transcript record, turn state, host state, provider-throttle retry time, and confirmed stalls. `compact: true` answers each conversation as {conversationId, title, turnState, lifecycle, silentForMs, stalledForMs, pipeline}, plus reason and permission {tool, command, reason, since} when the turn waits on an unanswered tool permission request (reason permission_request), and drops the transcript paths, host detail and the selection and timing reports. Every answer returns within a second and names what it could not confirm. catalog:\"pending\" means this process holds no completed conversation catalog yet: the rows are the hosts the registry names, and a later call lists the rest. catalog:\"stale\" means the rows come from an earlier catalog while a newer one is read; call again for conversations started since. evidence:\"pending\" with unverifiedCount means that many rows are projected without their transcript tail (evidenceSource \"projection\" in the full answer), and undescribedHostCount (undescribedTargetCount for a transcript the call named) counts those with no row yet; a later call returns them verified.",
+  agent_activity: "Use agent_fleet first for compact fleet counts and account usage. Read agent liveness, compact by default. liveOnly:true excludes gone lifecycles and dead hosts after verification; excludedGoneCount says how many were removed from the bounded observation. includeGone:true includes them. Recent unproven launches and verified live hosts remain visible; expired unproven launches are excluded. Compact answers stay within 24 KB; follow nextCursor with the same options for rows deferred by the byte budget. compact:false or full:true returns the full evidence: last transcript record, turn state, host state, provider-throttle retry time, and confirmed stalls. `compact: true` answers each conversation as {conversationId, title, turnState, lifecycle, silentForMs, stalledForMs, pipeline}, plus reason and permission {tool, command, reason, since} for an unanswered tool permission (reason permission_request), or question {tool, toolUseId, questions, since} for an unanswered native question (reason question); answer it with conversation_action answer using toolUseId as requestId. Compact answers drop the transcript paths, host detail and the selection and timing reports. Every answer returns within a second and names what it could not confirm. catalog:\"pending\" means this process holds no completed conversation catalog yet: the rows are the hosts the registry names, and a later call lists the rest. catalog:\"stale\" means the rows come from an earlier catalog while a newer one is read; call again for conversations started since. evidence:\"pending\" with unverifiedCount means that many rows are projected without their transcript tail (evidenceSource \"projection\" in the full answer), and undescribedHostCount (undescribedTargetCount for a transcript the call named) counts those with no row yet; a later call returns them verified.",
   lifecycle_events: "Query the durable lifecycle event journal by lineage and cursor, or poll a bounded relay digest of what changed since the last one.",
   request_attention: [
     'Use waitFor:"accepted" to return after durable acceptance with accepted:true, arrival:"pending" and handoff:null. The default waits for durable browser arrival.',
@@ -3783,7 +3826,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "`enabled: true|false` writes, and answers the same view afterwards. Only the designated orchestrator seat of the Delegatus project and the operator's own session write; any other caller, a seat of another project and a seat's parallel self included, is refused with `auto_updates_write_refused` (with a `reason`) before anything changes. Turning them on where `availability` is not `available` is refused with `auto_updates_unavailable`.",
     "Every write is recorded with who made it and when, on the setting and in the Update dialog's history. Idempotent by clientRequestId.",
   ].join(" "),
-  account_limits: "Read each account's last observed usage: per account `engine`, `accountId`, `active`, `fresh` (recent enough for the automatic switch to act on), `plan`, the `session` and `weekly` windows and every metered model tier as {usedPercent, resetsAt}, and `observedAt`. Narrow with `engine` and `accountId`. A read of the durable observations the accounts panel shows; it never asks a provider.",
+  account_limits: "Read each account's last observed usage: per account `engine`, `accountId`, `active`, `nextChosen` (the account the reset-aware selector would choose for unpinned work in the caller's project, when available), `fresh` (recent enough for the automatic switch to act on), `plan`, the `session` and `weekly` windows and every metered model tier as {usedPercent, resetsAt}, and `observedAt`. Narrow with `engine` and `accountId`; the next choice is computed before narrowing. A read of the durable observations the accounts panel shows; it never asks a provider.",
   issue_report: [
     "A Delegatus bug report on its way to Delegatus's own public repository: preview, show, publish. Nothing is filed without the digest of a preview the operator approved.",
     "action hints takes title and body and returns advisory hints (class, matched span, title/body, lines, and written/decoded reading), without storing text. Run it, then re-read the whole text yourself: hints may be false alarms and a clean result proves nothing. Remove or rewrite identifying content and operator quotes. Detector matches never refuse preview, storage or publication.",
@@ -3878,7 +3921,13 @@ const snapshotScopeSchema = z.discriminatedUnion("kind", [
    object stays open (`passthrough`) and the semantic rules — id uniqueness,
    edge targets, review-loop reachability, role parameter values — stay with the
    engine, which now answers with all of them at once. */
+const agentMemoryMaxSchema = z.number().int().min(2 ** 30).max(2 ** 40).nullable().optional()
+  .describe("Agent memory cap in bytes, 1 GiB through 1 TiB; null inherits. Launch clamps to the shared machine budget.");
+
 const pipelineStageSchema = z.object({
+  runtime: z.literal("codex-cloud").optional()
+    .describe("Run reviewer/verifier in Codex Cloud on the published lane branch. Requires engine codex, an explicit model, a capable current-cloud transport and the project's codexCloudEnvironmentId setting. Omitted keeps local execution. Builder/fix stages are not supported."),
+  agentMemoryMaxBytes: agentMemoryMaxSchema,
   /* Bounds here stay exactly as wide as the engine's: it trims before it
      checks, so a padded id it accepts must not be refused at the door. */
   id: z.string().regex(/^\s*[A-Za-z0-9_-]{1,64}\s*$/u)
@@ -4003,6 +4052,7 @@ const taskStepsInputSchema = z.array(z.object({
 })).max(TASK_STEPS_LIMIT).describe("Up to twenty checklist steps. Pipeline references derive live step motion; other references are links.");
 
 export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
+  pipeline_checks: z.object({ clientRequestId: clientRequestIdSchema, pipelineId: entityIdSchema, stageId: entityIdSchema.optional(), scope: z.enum(["stage", "lane", "project"]), execution: z.enum(["cloud", "local"]).nullable() }),
   publish_prototype_review: prototypePublishSchema,
   resend_prototype_review_telegram: z.object({ clientRequestId: clientRequestIdSchema, reviewId: z.string().regex(/^pr_[a-f0-9]{7,32}$/i) }).strict(),
   read_prototype_review: z.object({ clientRequestId: clientRequestIdSchema.optional(), taskId: z.string().min(1).optional() }).strict(),
@@ -4080,7 +4130,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Agent-facing context, kept off the human description (#1834): the prompt, the working notes, the ids, the rules, the state. Plain text, no markdown rendering, capped at 20000 characters, condensed to what an agent picking the task up actually needs. The card shows it behind one collapsed Details row; a blank value creates a task with no details."),
     placement: z.enum(["pinned", "unplaced"]).optional().describe("Omitted placement creates an unplaced task. Pinned requires pos; unplaced must omit pos."),
     pos: z.object({ x: z.number().finite(), y: z.number().finite() }).optional(),
-    dueAt: z.string().optional(),
+    dueAt: z.string(),
     dueTz: z.string().optional(),
     attachments: z.array(z.unknown()).optional(),
     board: z.enum(["shown", "hidden"]).optional()
@@ -4129,6 +4179,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     pos: z.object({ x: z.number().finite(), y: z.number().finite() }).optional(),
     dueAt: z.string().nullable().optional(),
     dueTz: z.string().nullable().optional(),
+    dueReason: z.string().optional().describe("Reason for moving a passed due date to a later instant: 1 to 200 characters. Validated against the current task before admission."),
     board: z.enum(["shown", "hidden"]).optional()
       .describe("Board membership of this task's band (#1614). hidden takes the band off the board and shown puts it back; the task itself is never removed, keeps its row in the task list and every assignment, and either direction is one write. It governs EMPTY tasks only — a task holding a durable agent association draws its band whatever this says."),
     color: z.enum(["none", ...TASK_COLORS]).optional()
@@ -4199,6 +4250,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     engine: pipelineStageSchema.shape.engine.describe("override-stage: runtime engine."),
     model: pipelineStageSchema.shape.model.describe("override-stage: runtime model, or null to inherit."),
     effort: pipelineStageSchema.shape.effort.describe("override-stage: reasoning effort, or null to inherit."),
+    agentMemoryMaxBytes: agentMemoryMaxSchema,
     serviceTier: pipelineStageSchema.shape.serviceTier.describe("override-stage: Codex tier, null to inherit; default or standard opts out."),
     access: pipelineStageSchema.shape.access.describe("override-stage: repository mutation policy."),
     account: pipelineStageSchema.shape.account.describe("override-stage: account pin, or null to clear it."),
@@ -4251,7 +4303,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     merge: z.array(z.object({ into: z.string(), from: z.array(z.string()).min(1).max(512), rule: lessonTextSchema(RULE_MIN_CHARS, RULE_MAX_CHARS), why: lessonTextSchema(1, WHY_MAX_CHARS).optional(), note: z.string().trim().min(1).max(1000) }).strict()).max(512).optional(),
     move: z.array(z.object({ id: z.string(), to: z.string(), note: z.string().trim().min(1).max(1000) }).strict()).max(512).optional(),
     split: z.array(z.object({ id: z.string(), parts: z.array(z.object({ to: z.string(), rule: lessonTextSchema(RULE_MIN_CHARS, RULE_MAX_CHARS), why: lessonTextSchema(1, WHY_MAX_CHARS).optional() }).strict()).min(2).max(16), note: z.string().trim().min(1).max(1000) }).strict()).max(512).optional(),
-    archive: z.array(z.object({ id: z.string(), reason: z.enum(["task-specific", "stale", "in-code", "in-instructions", "no-reader", "contradicted", "duplicate"]), against: z.string().optional(), where: z.string().max(512).optional(), note: z.string().trim().min(1).max(1000) }).strict()).max(512).optional(),
+    archive: z.array(z.object({ id: z.string(), reason: z.enum(["task-specific", "stale", "in-code", "in-instructions", "no-reader", "contradicted", "duplicate", "budget"]), against: z.string().optional(), where: z.string().max(512).optional(), note: z.string().trim().min(1).max(1000) }).strict()).max(512).optional(),
     adopt: z.array(z.object({ candidate: z.string(), occurrences: z.array(z.string()).min(1).max(512), parts: z.array(z.object({ to: z.string(), rule: lessonTextSchema(RULE_MIN_CHARS, RULE_MAX_CHARS), why: lessonTextSchema(1, WHY_MAX_CHARS) }).strict()).min(1).max(16), note: z.string().trim().min(1).max(1000) }).strict()).max(40).optional(),
     drop: z.array(z.object({ candidate: z.string(), occurrences: z.array(z.string()).min(1).max(512), reason: z.enum(["task-specific", "stale", "in-code", "in-instructions", "no-reader", "contradicted", "duplicate"]), where: z.string().max(512).optional(), note: z.string().trim().min(1).max(1000), forRoom: z.boolean().optional() }).strict()).max(40).optional(),
     defer: z.array(z.object({ candidate: z.string(), occurrences: z.array(z.string()).min(1).max(512) }).strict()).max(40).optional(),
@@ -4731,9 +4783,9 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     clientRequestId: clientRequestIdSchema,
     workerLimit: z.object({ value: z.number().int().min(1).max(64).nullable(), project: z.string().trim().min(1).optional(), reason: z.string().trim().min(1).max(300) }).optional(),
     overrides: z.record(z.string(), z.object({
-      config: z.object({ engine: z.string(), model: z.string(), effort: z.string(), serviceTier: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional() }).nullable().optional()
+      config: z.object({ agentMemoryMaxBytes: agentMemoryMaxSchema, engine: z.string(), model: z.string(), effort: z.string(), serviceTier: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional() }).nullable().optional()
         .describe("A full { engine, model, effort } sets the role's row; null resets it to the shipped default."),
-      variants: z.record(z.string(), z.object({ engine: z.string(), model: z.string(), effort: z.string(), serviceTier: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional() }).nullable()).optional()
+      variants: z.record(z.string(), z.object({ agentMemoryMaxBytes: agentMemoryMaxSchema, engine: z.string(), model: z.string(), effort: z.string(), serviceTier: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional() }).nullable()).optional()
         .describe("Builder and reviewer only, keyed by variant (trivial, frontend, docs, apply-fixes, frontend-fixes, docs-fixes; reviewer: trivial). A full config sets the variant, null resets it."),
       promptScaffold: z.null().optional().describe("null restores the shipped prompt text. A scaffold cannot be set from here."),
     }).passthrough()).optional()
@@ -4881,10 +4933,17 @@ export const TOOL_TRANSPORT_SCHEMAS = Object.fromEntries(MCP_TOOL_NAMES.map(tool
     // An invalid sentinel keeps a refused proposal invalid at the strict callback.
     proposal: schema.shape.proposal.catch(() => null),
   })];
-  return [toolName, toolName === "create_task" || toolName === "update_task" ? schema.extend(Object.fromEntries(
-    Object.entries(schema.shape).filter(([, fieldSchema]) => fieldSchema.isOptional())
-      .map(([field, fieldSchema]) => [field, fieldSchema.catch((context: { input: unknown } | undefined) => context?.input)]),
-  )) : schema];
+  if (toolName !== "create_task" && toolName !== "update_task") return [toolName, schema];
+  const transport = schema.extend(Object.fromEntries(
+    Object.entries(schema.shape).filter(([field, fieldSchema]) => fieldSchema.isOptional() || toolName === "create_task" && field === "dueAt")
+      .map(([field, fieldSchema]) => [field, (field === "dueAt" && toolName === "create_task" ? fieldSchema.optional() : fieldSchema)
+        .catch((context: { input: unknown } | undefined) => context?.input)]),
+  ));
+  // Advertise the strict requirement while missing/invalid dates reach our
+  // callback for TASK_DUE_REQUIRED, before any receipt is acquired.
+  return [toolName, toolName === "create_task" ? transport.meta({
+    required: Object.entries(schema.shape).filter(([, field]) => !field.isOptional()).map(([name]) => name),
+  }) : transport];
 })) as typeof TOOL_INPUT_SCHEMAS;
 
 /** Presentation only: neither a client name nor a User-Agent
@@ -4925,16 +4984,17 @@ export function createViewerMcpServer(service: McpToolService, tools: readonly M
     const schema = TOOL_INPUT_SCHEMAS[toolName];
     server.registerTool(toolName, {
       description: TOOL_DESCRIPTIONS[toolName] + (MCP_PAGE_CURSOR_TOOLS.has(toolName) ? ` ${MCP_PAGE_CURSOR_DESCRIPTION}` : ""),
-      inputSchema: shortenSchemaDescriptions(TOOL_TRANSPORT_SCHEMAS[toolName]),
+      inputSchema: shortenSchemaDescriptions(TOOL_TRANSPORT_SCHEMAS[toolName]).meta(TOOL_TRANSPORT_SCHEMAS[toolName].meta() ?? {}),
     }, async (args, extra) => {
       if (taskMutation || toolName === "voice_tools") {
         const parsed = schema.safeParse(args);
         if (!parsed.success) {
           const issues = parsed.error.issues.map(issue => ({ field: issue.path.join("."), message: issue.message }));
-          const result = failure(toolName, String((args as McpToolArgs).clientRequestId), toolName === "voice_tools" ? "INVALID_PROPOSAL" : "TASK_INVALID_FIELD",
+          const missingDue = toolName === "create_task" && ((args as McpToolArgs).dueAt === undefined || (args as McpToolArgs).dueAt === null || (args as McpToolArgs).dueAt === "");
+          const result = failure(toolName, String((args as McpToolArgs).clientRequestId), missingDue ? "TASK_DUE_REQUIRED" : toolName === "voice_tools" ? "INVALID_PROPOSAL" : "TASK_INVALID_FIELD",
             toolName === "voice_tools" ? "Invalid voice tools proposal. Use a registry package name with an optional version or a pinned entryFile; launch variables and inline credentials are refused."
               : issues.map(issue => `${issue.field}: ${issue.message}`).join("; "), false, false,
-            { field: issues[0]?.field, issues });
+            { field: missingDue ? "dueAt" : issues[0]?.field, issues });
           return response(result);
         }
       }
@@ -5078,7 +5138,10 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
         inline = created;
         created.catch(() => { if (inline === created) inline = undefined; });
       }
-      return (await inline).callTool(name, args, context);
+      let ready: McpToolService;
+      try { ready = await inline; }
+      catch (error) { return taskExecutorFailure(name, args, error); }
+      return ready.callTool(name, args, context);
     } };
   }
   const controlDependencies = productionViewerControlDependencies(hostHealthProbe);
@@ -5093,6 +5156,9 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
 }
 
 export function taskExecutorFailure(name: string, args: McpToolArgs, error: unknown): McpToolResult {
+  if (error instanceof McpReceiptsNotReadyError) {
+    return failure(name, clientRequestId(args), "receipts_not_ready", error.message, true);
+  }
   const mutation = isMutatingMcpTool(name as McpToolName);
   return failure(name, clientRequestId(args), mutation ? "outcome_unknown" : "tool_failed",
     error instanceof Error ? error.message : "task executor unavailable", !mutation, false,

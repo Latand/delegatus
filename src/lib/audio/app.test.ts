@@ -22,8 +22,10 @@ const {
 } = await import("./app");
 const { configureAudioPrefsStorage, setAudioPrefs } = await import("./prefs");
 const { FADE_OUT_SECONDS } = await import("./ambientLoop");
+const { pushSoundCaption, resetSoundCaptionsForTests, soundCaptionsSnapshot } = await import("./captions");
 
 afterEach(() => {
+  resetSoundCaptionsForTests();
   resetAppAudioForTests();
   configureAudioPrefsStorage(undefined);
 });
@@ -49,6 +51,18 @@ describe("no audio graph", () => {
     resetAppAudioForTests();
     expect(playCue({ cue: "fault", eventId: "f1" })).toBe("disabled");
     expect(playCue({ cue: "typing", eventId: "t1" })).toBe("disabled");
+  });
+
+  test("turning sound off takes the captions off the screen with it", () => {
+    const store = new Map<string, string>();
+    configureAudioPrefsStorage({ getItem: (key) => store.get(key) ?? null, setItem: (key, value) => void store.set(key, value) });
+    resetAppAudioForTests();
+    /* The first cue creates the player, which is what watches the switches. */
+    playCue({ cue: "step", eventId: "watch" });
+    pushSoundCaption({ sound: "reply", batch: 1, captions: [] });
+    expect(soundCaptionsSnapshot()).toHaveLength(1);
+    setAudioPrefs({ cuesEnabled: false });
+    expect(soundCaptionsSnapshot()).toEqual([]);
   });
 
   test("connecting and disconnecting a call is safe and leaves nothing playing", () => {

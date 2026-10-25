@@ -15,6 +15,8 @@ poll=${LLV_GATE_POLL_SECONDS:-2}
 
 # CPU placement: the same defaults as src/lib/runtime/cpuPlacement.ts. Each
 # setting is read as DELEGATUS_X, then as the LLV_X an entry point folds it into.
+# owned-runner always applies CPUWeight=10 and IOWeight=10 to the check service,
+# including the no-placement and namespace handoff paths.
 slice=${LLV_GATE_SLICE:-delegatus-agents-work.slice}
 # The machine's online CPUs whatever this process's affinity, like onlineCpuCount.
 cpus=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
@@ -60,6 +62,29 @@ verified_exec() {
 # The command runs through this script once more inside its new scope, which
 # checks the kernel's controls before it execs the command in place.
 if [[ ${1:-} == --in-cpu-scope ]]; then shift; verified_exec "$@"; fi
+
+# The pre-push parent owns local privacy and dispatches its heavy --admitted
+# half itself. Admitting the parent here would classify it as ineligible and
+# turn the runner off before that dispatch. Keep its existing execution and
+# cleanup fence without taking a local slot. Its owning service contains
+# privacy and the remote client; heavy checks take their slot on the runner.
+pre_push_parent() {
+  local script expected root directory
+  if [[ $# -eq 3 && ${1##*/} == bun && ${2##*/} == local-gate.ts && $3 == pre-push ]]; then
+    script=$2; expected=scripts/local-gate.ts
+  elif [[ $# -ge 2 && ( ${1##*/} == bash || ${1##*/} == sh ) && ${2##*/} == pre-push ]]; then
+    script=$2; expected=.githooks/pre-push
+  elif [[ ${1##*/} == pre-push ]]; then
+    script=$1; expected=.githooks/pre-push
+  else
+    return 1
+  fi
+  [[ -f $script ]] || return 1
+  directory=$(cd -- "$(dirname -- "$script")" && pwd -P) || return 1
+  root=$(git -C "$directory" rev-parse --show-toplevel 2>/dev/null) || return 1
+  root=$(cd -- "$root" && pwd -P) || return 1
+  [[ $directory/${script##*/} == "$root/$expected" && -d $root/scripts/gate-runner ]]
+}
 # Inside an agent signal domain the gate service enters the caller's
 # namespaces before the command runs (src/lib/runtime/sandboxGateEntry.ts), so
 # the command keeps the gate's limits and the agent's signal boundary. Only
@@ -82,6 +107,7 @@ run() {
   fi
   exec "${LLV_GATE_BUN:-bun}" "$(dirname "${BASH_SOURCE[0]}")/owned-runner.ts" --portable "$@"
 }
+if pre_push_parent "$@"; then run "$@"; fi
 
 # Keep the ticket until a slot is locked and its admission is committed.
 # CPU waits precede the owned runner's execution deadline.
@@ -94,6 +120,32 @@ reuse_code=0
 "${LLV_GATE_BUN:-bun}" "$admission" --reuse-slot || reuse_code=$?
 if [[ $reuse_code == 0 ]]; then run "$@"; fi
 if [[ $reuse_code != 75 ]]; then exit "$reuse_code"; fi
+# A top-level heavy command may run on the gate runner instead
+# (docs/design/remote-gate-runner.md §8.3). The runner file sits under the
+# passwd home, which agents' private HOME and XDG_CONFIG_HOME do not hide. The
+# client either exits with the remote verdict or writes "here", and the command
+# is then admitted and run on this machine as before. A saturation decision
+# is advisory: it skips no pressure, queue, slot or containment checks below.
+runner_client="$(dirname "${BASH_SOURCE[0]}")/gate-runner/client.ts"
+if [[ ${LLV_GATE_RUNNER:-} != off && ${NODE_ENV:-} != test && -f $runner_client && $(uname -s 2>/dev/null) == Linux ]] \
+  && [[ -n ${LLV_GATE_RUNNER:-} || -n ${LLV_GATE_RUNNER_CONFIG:-} || -f "$(getent passwd "$(id -u)" | cut -d: -f6)/.config/delegatus/gate-runner.json" ]]; then
+  runner_decision=$(mktemp "${TMPDIR:-/tmp}/gate-runner-decision.XXXXXXXX")
+  # The client runs as a job so a TERM or INT sent to this shell reaches it:
+  # it stops the remote run and confirms the stop before it exits.
+  LLV_GATE_RUNNER_DECISION=$runner_decision "${LLV_GATE_BUN:-bun}" "$runner_client" "$@" <&0 &
+  runner_pid=$!
+  trap 'kill -TERM "$runner_pid" 2>/dev/null || true' TERM
+  trap 'kill -INT "$runner_pid" 2>/dev/null || true' INT
+  runner_code=0
+  while :; do
+    runner_code=0; wait "$runner_pid" || runner_code=$?
+    kill -0 "$runner_pid" 2>/dev/null || break
+  done
+  trap - TERM INT
+  runner_here=$(<"$runner_decision"); rm -f -- "$runner_decision"
+  if [[ $runner_here != here ]]; then exit "$runner_code"; fi
+  export LLV_GATE_RUNNER=off
+fi
 # MSYS/Cygwin shell PIDs differ from the Windows PIDs the native Bun helper
 # probes. The shell's virtual proc file supplies its native PID.
 owner_pid=$$
@@ -126,8 +178,9 @@ if [[ -n ${LLV_CPU_WAIT_ROOTS:-} && ${LLV_CPU_WAIT_ROOTS:-} != '[]' ]]; then
   done
 fi
 queue_key="command:$$:$RANDOM:$RANDOM"
+queued_at=$(date +%s)
 while :; do
-  "${LLV_GATE_BUN:-bun}" "$admission" --wait "$queue_key" "$owner_pid"
+  "${LLV_GATE_BUN:-bun}" "$admission" --wait "$queue_key" "$owner_pid" "$queued_at"
   if ! command -v flock >/dev/null; then
     if "${LLV_GATE_BUN:-bun}" "$admission" --claim "$queue_key" "$owner_pid"; then end_cpu_wait; run "$@"; fi
   else

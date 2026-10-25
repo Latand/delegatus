@@ -102,13 +102,15 @@ export function equivalentModel(model: string, engine: RoleEngine): string {
 
 /** `config` moved onto `engine`: the row's approved runtime there, else the
     equivalent model and a clamped effort. A row locked to another engine
-    (ROLE_ENGINE_LOCKS) stays where it is. */
+    (ROLE_ENGINE_LOCKS) stays where it is. The memory cap does not depend on
+    the engine, so it moves with the row. */
 export function equivalentConfig(config: RoleConfig, engine: RoleEngine, row?: EquivalentRow): RoleConfig {
   if (config.engine === engine) return config;
   const locked = lockedEngine(row?.roleId);
   if (locked && locked !== engine) return config;
+  const memory = config.agentMemoryMaxBytes != null ? { agentMemoryMaxBytes: config.agentMemoryMaxBytes } : {};
   const target = row ? ROW_TARGETS[engine][rowKey(row)] : undefined;
-  if (target) return { ...target };
+  if (target) return { ...target, ...memory };
   const model = equivalentModel(config.model, engine);
-  return { engine, model, effort: clampEffortToScale(engine, model, config.effort) ?? config.effort };
+  return { engine, model, effort: clampEffortToScale(engine, model, config.effort) ?? config.effort, ...memory };
 }
