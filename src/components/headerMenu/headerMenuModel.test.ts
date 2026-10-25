@@ -12,7 +12,7 @@ const placements = (surface: HeaderSurface): HeaderItem[] => {
 /* Variant 3's presses from the closed menu: its first level is two, Settings and Help are three. */
 const VARIANT_3_PRESSES: Record<HeaderItem, number> = {
   activity: 2, team: 2, qr: 2, update: 2, signOut: 2,
-  language: 3, push: 3, sound: 3, awake: 3, memory: 3, key: 3, mapping: 3, workers: 3, dictation: 3, voice: 3, linked: 3, relay: 3, ping: 3, guide: 3, walk: 3,
+  language: 3, push: 3, sound: 3, awake: 3, memory: 3, memorySource: 3, key: 3, mapping: 3, workers: 3, dictation: 3, voice: 3, linked: 3, relay: 3, ping: 3, guide: 3, walk: 3,
 };
 /* Where the phone keeps what its menu does not hold: the drawer header and the Team page. */
 const PHONE_ELSEWHERE: HeaderItem[] = ["language", "qr", "push", "signOut"];
@@ -41,6 +41,13 @@ for (const surface of ["desktop", "phone"] as const) {
     expect(headerHome(surface, "workers")).toEqual({ where: "settings", presses: 3 });
     expect(headerHome(surface, "ping")!.where).toBe("settings");
     expect(headerHome(surface, "guide")).toEqual({ where: "help", presses: 3 });
+  });
+
+  test(`${surface}: the installation's memory source stands right after Shared memory on the Settings page`, () => {
+    const settings = HEADER_LAYOUTS[surface].rows.find((row) => row.kind === "page" && row.id === "settings")!;
+    const items = settings.kind === "page" ? settings.items : [];
+    expect(items.indexOf("memorySource")).toBe(items.indexOf("memory") + 1);
+    expect(headerHome(surface, "memorySource")).toEqual({ where: "settings", presses: 3 });
   });
 }
 

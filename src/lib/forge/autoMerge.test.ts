@@ -18,7 +18,7 @@ process.env.LLV_STATE_DIR = sandbox;
 const {
   MERGE_POLL_MS, MERGE_REASONS, MERGE_SETTLE_MS, MERGE_WAIT_LIMIT_MS, lanePullRequest, mergeEligible, resetAutoMergeForTests, rollupChecks, sweepAutoMerge, sweepTaskFinishes,
 } = await import("./autoMerge");
-const { ForgeAppWriteRefused } = await import("./appWrite");
+const { ForgeAppTokenSource, ForgeAppWriteRefused, forgeAppWriter, forgeWriter } = await import("./appWrite");
 const { pipelineGraphError } = await import("../pipelines/store");
 
 afterAll(() => {
@@ -101,6 +101,7 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
   let setting: MergeOnReviewSetting = { enabled: true, changedAt: iso(T0 - 3_600_000), changedBy: "operator", ...options.setting };
   let mergeRefusal: string | null = null;
   let failConfirmation = false;
+  let afterMutation: ((pipeline: Pipeline) => Promise<void>) | null = null;
   const fail = (stderr: string) => Object.assign(new Error("Command failed: gh"), { stderr });
 
   const run = async (args: string[]): Promise<string> => {
@@ -171,7 +172,8 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
     log: (line: string) => { logs.push(line); },
     now: () => clock,
     run,
-    write: async (args: string[], repository: string) => {
+    write: async (args: string[], repository: string, beforeDispatch?: () => void) => {
+      beforeDispatch?.();
       writes.push({ args, repository });
       if (writeRefusal) throw new ForgeAppWriteRefused(writeRefusal);
       return run(args);
@@ -183,6 +185,7 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
       const draft = structuredClone(pipeline);
       if (!change(draft)) return false;
       pipelines.set(id, draft);
+      if (afterMutation) await afterMutation(draft);
       return true;
     },
     setting: () => setting,
@@ -207,6 +210,7 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
     taskStatus: (id: string) => tasks.get(id),
     setSetting: (next: Partial<MergeOnReviewSetting>) => { setting = { ...setting, ...next }; },
     refuseMerges: (message: string) => { mergeRefusal = message; },
+    afterMutation: (callback: (pipeline: Pipeline) => Promise<void>) => { afterMutation = callback; },
     /** Every call that went through the App write seam, and how to refuse them. */
     writes,
     refuseAppWrites: (message: string | null) => { writeRefusal = message; },
@@ -241,6 +245,50 @@ function retainedUpdate(h: ReturnType<typeof harness>, head: string, extra: Part
 }
 
 beforeEach(() => resetAutoMergeForTests());
+
+test.each(["before-write", "credential-mint", "in-flight"] as const)("operator rejection at merge reconciles the actual effect: %s", async phase => {
+  const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
+  const { candidate, context, authority, NOW } = await import("@/lib/tasks/proactive.fixture");
+  const project = `atlas-merge-${phase}`;
+  const { task } = await admitProactiveTask({ ...candidate(`merge-${phase}`), project }, { ...context(), project }, undefined, authority());
+  const completed = lane("proactive-merge");
+  completed.taskIds = [task.id];
+  const h = harness({ lanes: [completed], prs: [openPr(11)] });
+  await h.sweep();
+  expect(h.writes).toEqual([]);
+  await decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task), undefined, () => new Date(NOW).toISOString());
+  let rejected = false;
+  const reject = async () => {
+    if (rejected) return;
+    await decideProactiveTask(task.id, "reject", "operator", proactiveDecisionToken(task));
+    rejected = true;
+  };
+  if (phase === "before-write") h.afterMutation(async pipeline => { if (pipeline.merge?.state === "merging") await reject(); });
+  else {
+    const actualWrite = h.ports.write;
+    h.ports.write = forgeWriter(h.ports.run, forgeAppWriter(sandbox, 1_000, {
+      source: { HOME: sandbox, NODE_ENV: "test" },
+      tokens: new ForgeAppTokenSource(async () => {
+        if (phase === "credential-mint") await reject();
+        return { token: "fixture", expiresAt: null };
+      }),
+      exec: async args => {
+        // exec is the real dispatch seam: rejection here follows write start.
+        if (phase === "in-flight") await reject();
+        return actualWrite(args, REPO);
+      },
+    }), () => true);
+  }
+  await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS * 3);
+  expect(rejected).toBe(true);
+  if (phase !== "in-flight") {
+    expect(h.writes).toEqual([]);
+    expect(h.merge(completed.id)).toMatchObject({ state: "blocked", reason: expect.stringContaining("rejected") });
+  } else {
+    expect(h.merges()).toHaveLength(1);
+    expect(h.merge(completed.id)).toMatchObject({ state: "merged", by: "auto-merge" });
+  }
+});
 
 describe("outstanding human reviews (#2866)", () => {
   test.each(["CLEAN", "HAS_HOOKS", "UNSTABLE", "BLOCKED", "BEHIND", "DIRTY", "UNKNOWN", "DRAFT"])("CHANGES_REQUESTED blocks in %s", async (mergeStateStatus) => {
