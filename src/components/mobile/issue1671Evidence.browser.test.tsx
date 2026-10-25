@@ -20,7 +20,7 @@ import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
 import type { FileEntry } from "@/lib/types";
 import type { TranscriptEntry } from "@/lib/voiceCompanion/transcriptRecord";
-import { captureAttentionRing, captureWorkerLimitFrames, capturePrototypeQuestions, captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
+import { captureAttentionRing, captureLaneReviewFrames, captureWorkerLimitFrames, capturePrototypeQuestions, captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
 import { playPath, recordDrag } from "@/components/kanban/dragFrameMeter";
 import { measureStageChain, stageChainFailures, type StageChainLane } from "@/components/pipelines/stageChainMeasure";
 import { stubVoiceDevices } from "@/test-helpers/voiceDevicesStub";
@@ -60,6 +60,20 @@ const runningPath = (account: string) => `/state/agent-log-viewer/shared/account
 const RUNNING_PATH = runningPath("spare");
 const VIEWPORTS = [{ width: 390, height: 844 }, { width: 430, height: 932 }] as const;
 const SCHEMES = ["light", "dark"] as const;
+
+describe("lane diff comments", () => {
+  browserTest("the phone lists a lane's changed files and opens one read-only, in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/lane-diff-comments/phone");
+    fs.rmSync(out, { recursive: true, force: true });
+    fs.mkdirSync(out, { recursive: true });
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"] });
+    try {
+      const result = await captureLaneReviewFrames(browser, out, true);
+      expect(result.failures).toEqual([]);
+      expect(result.readings.length).toBe(2 * 2 * 2);
+    } finally { await browser.close(); }
+  }, 300_000);
+});
 
 describe("phone markdown links", () => {
   browserTest("readable labels wrap at words and unbroken targets fit the phone", async () => {

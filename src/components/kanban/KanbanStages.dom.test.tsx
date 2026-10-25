@@ -322,6 +322,8 @@ test("the lane row's head opens Stages; the pipeline actions are a page of the c
   expect(host.querySelector(".menu [data-cm-back]")?.textContent).toBe("Pipeline actions");
   expect(menuLabels(host).slice(1)).toEqual([
     ["Expand stages", false, null],
+    /* docs/design/lane-diff-comments.md: the lane's one way into its review sheet. */
+    ["Review changes", false, null],
     ["Attach PR or issue to the pipeline…", false, null],
     ["Checks", false, null],
     ["Pause", false, "The pipeline does not advance until you resume it."],
