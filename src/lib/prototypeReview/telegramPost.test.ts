@@ -415,6 +415,32 @@ test("a failed automatic post is durable and readable, including a missing desti
   expect(loadTasks()[0]!.prototypeReviews![0]!).toMatchObject({ telegramPost: { state: "failed", reason: "no_relay" } });
 });
 
+test("missing Telegram destinations never wake the seat, including repeated resends", async () => {
+  await connected();
+  updateRelayStore(s => ({ ...s, relays: [] }));
+  const round = telegramRound("missing-destination-signals");
+  saveTasks([telegramTask([round])]);
+  await postPrototypeReviewToTelegram(round);
+  expect(telegramPostSignals("project-a", loadTasks(), [])).toEqual([]);
+  for (const clientRequestId of ["retry-one", "retry-two"]) {
+    const response = await resendTelegramPOST(new NextRequest("http://localhost/api/prototype-reviews", {
+      method: "POST", headers: { host: "localhost" },
+      body: JSON.stringify({ taskId: round.taskId, reviewId: round.id, clientRequestId }),
+    }));
+    expect(response.status).toBe(200);
+    expect((await response.json()).telegramPost).toMatchObject({ state: "failed", reason: "no_relay" });
+    expect(telegramPostSignals("project-a", loadTasks(), [])).toEqual([]);
+  }
+});
+
+test.each(["no_relay", "paused", "no_target", "not_configured", "invalid_owner"])(
+  "Telegram destination configuration %s is not a per-form wake item", reason => {
+    const round = telegramRound("configuration-signals");
+    round.telegramPost = { state: "failed", reason, key: round.id, at: round.createdAt };
+    expect(telegramPostSignals("project-a", [telegramTask([round])], [])).toEqual([]);
+    expect(telegramPostSignals("project-a", [], [round])).toEqual([]);
+  });
+
 test("a 238-frame nine-variant round survives a definite Telegram size refusal as a rich summary with a link", async () => {
   const { transport } = await connected();
   updateRelayStore(s => ({ ...s, relays: [destinationRelay()] }));

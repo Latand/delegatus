@@ -75,6 +75,7 @@ export interface EffectiveReportTelegram {
 }
 
 interface ProjectSettingsEntry {
+  codexCloudEnvironmentId?: string;
   agentMemoryMaxBytes?: number | null;
   mergeOnReview?: StoredSwitch;
   /** #2146: whether the project's orchestrator files bridge reports and the
@@ -125,6 +126,8 @@ function reportTelegramOf(value: unknown): ReportTelegramChoice | null {
 function entryOf(value: unknown): ProjectSettingsEntry | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const entry: ProjectSettingsEntry = {};
+  const cloud = (value as Record<string, unknown>).codexCloudEnvironmentId;
+  if (validCodexCloudEnvironmentId(cloud)) entry.codexCloudEnvironmentId = cloud.trim();
   const memory = (value as Record<string, unknown>).agentMemoryMaxBytes;
   if (validAgentMemoryMax(memory) && memory !== undefined) entry.agentMemoryMaxBytes = memory;
   for (const name of Object.keys(DEFAULTS) as ProjectSwitchName[]) {
@@ -186,6 +189,28 @@ export function bridgeReportsSetting(project: string): BridgeReportsSetting {
 
 export function bridgeReportsEnabled(project: string): boolean {
   return bridgeReportsSetting(project).enabled;
+}
+
+/** Empty disables cloud stages; an environment id is never inferred from a repository. */
+export function codexCloudEnvironmentId(project: string): string {
+  const projects = readProjects();
+  const key = project.trim();
+  return projects[canonicalProject(key)]?.codexCloudEnvironmentId ?? projects[key]?.codexCloudEnvironmentId ?? "";
+}
+
+export function validCodexCloudEnvironmentId(value: unknown): value is string {
+  return typeof value === "string" && (value.trim() === "" || /^[A-Za-z0-9][A-Za-z0-9_~-]{0,127}$/.test(value.trim()));
+}
+
+export function setCodexCloudEnvironmentId(project: string, value: string): boolean {
+  if (!validCodexCloudEnvironmentId(value)) return false;
+  return underFileLock(() => {
+    const key = canonicalProject(project.trim());
+    if (!key) return false;
+    const projects = { ...readProjects() };
+    projects[key] = { ...projects[key], codexCloudEnvironmentId: value.trim() };
+    return writeProjects(projects);
+  }, false);
 }
 
 function writeProjects(projects: Record<string, ProjectSettingsEntry>): boolean {

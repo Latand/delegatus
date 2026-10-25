@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
@@ -17,7 +18,7 @@ const MAX_TASKS = 400;
  * comma-separated list of task ids. Indexing shares one byte budget across
  * the tasks, so a cold board fills in over a few reads.
  */
-export async function GET(req: NextRequest): Promise<NextResponse<{ tasks: Record<string, AlbumSummary> } | ApiError>> {
+async function workspaceGET(req: NextRequest): Promise<NextResponse<{ tasks: Record<string, AlbumSummary> } | ApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
   const ids = [...new Set((req.nextUrl.searchParams.get("ids") ?? "").split(",").map((id) => id.trim()).filter(Boolean))].slice(0, MAX_TASKS);
@@ -26,3 +27,5 @@ export async function GET(req: NextRequest): Promise<NextResponse<{ tasks: Recor
   const tasks = await taskAlbumSummaries(known, deps);
   return NextResponse.json({ tasks }, { headers: { "cache-control": "private, no-store" } });
 }
+
+export const GET = workspaceRoute("/api/task-album", workspaceGET);

@@ -22,7 +22,7 @@ export function openOwnerAnswer(relayId:string,request:ExternalRelayRequest,runD
   entries.set(request.request_id,entry);
   return {parts:()=>entry.parts, drops:entry.drops,
     close:()=>{entry.open=false;},
-    dispose:async()=>{entry.open=false; if(entries.get(request.request_id)===entry) entries.delete(request.request_id); await removeStaged(entry.parts.attachments);},
+    dispose:async(keepFiles=false)=>{entry.open=false; if(entries.get(request.request_id)===entry) entries.delete(request.request_id); if(!keepFiles) await removeStaged(entry.parts.attachments);},
   };
 }
 export async function relayAnswerOp(conversationId:string,args:unknown) {

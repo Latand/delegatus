@@ -1,3 +1,5 @@
+import { workspaceRoute, requestWorkspaceScope, workspaceDenied } from "@/lib/team/workspaceRoute";
+import { projectForCwd } from "@/lib/scanner/describe";
 import type { promises as fsp } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -33,7 +35,7 @@ const MIME: Record<string, string> = {
  * route reads (the home directory and the evidence roots, #2084) — a
  * localhost-only tool, but there is no reason to hand out arbitrary files.
  */
-export async function GET(req: NextRequest): Promise<NextResponse<ApiError> | NextResponse> {
+async function workspaceGET(req: NextRequest): Promise<NextResponse<ApiError> | NextResponse> {
   // Same gate as the mutating routes: a drive-by page or DNS-rebind must not
   // pull local image bytes off this loopback service.
   const rejection = rejectCrossOrigin(req);
@@ -70,6 +72,8 @@ export async function GET(req: NextRequest): Promise<NextResponse<ApiError> | Ne
     /* The path was judged; the bytes come from the descriptor, and only when
        the open file lies at that path. A directory swapped for a link after
        the check must not answer with another place's picture. */
+    const workspace = requestWorkspaceScope(req);
+    if (workspace && !workspace.canReadFile(projectForCwd(path.dirname(real)))) return workspaceDenied();
     handle = await openAdmitted(real);
     if (!(await handle.stat()).isFile()) return NextResponse.json({ error: "not a file" }, { status: 404 });
     data = await handle.readFile();
@@ -89,3 +93,5 @@ export async function GET(req: NextRequest): Promise<NextResponse<ApiError> | Ne
     headers: { "content-type": mime, "cache-control": "private, max-age=60", "x-content-type-options": "nosniff" },
   });
 }
+
+export const GET = workspaceRoute("/api/image", workspaceGET);

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { knownValueFingerprint } from "./generate-privacy-known-value-fingerprints";
+import { runPrivacyTestProcess } from "./privacy-test-process";
 
 let inspectorNumber = 0;
 async function inspector(value: string, exactOnly: boolean, plaintext: boolean, catalog: string) {
@@ -23,6 +24,140 @@ async function inspector(value: string, exactOnly: boolean, plaintext: boolean, 
     });
   }
 }
+
+test("the committed catalog permits open-source prose", async () => {
+  const scanner = await inspector("unrelated fixture value", false, false,
+    join(import.meta.dir, "privacy-known-value-fingerprints.json"));
+
+  for (const spelling of ["open-source", "open source", ["open", "source"].join("")]) {
+    expect(scanner.sensitiveClasses(`the ${spelling} core`).has("known_value"), spelling).toBe(false);
+  }
+});
+
+test("the dictionary phrase remains private in identity fields and account paths", async () => {
+  const scanner = await inspector("unrelated fixture value", false, false,
+    join(import.meta.dir, "privacy-known-value-fingerprints.json"));
+  const label = ["open", "source"].join("");
+  const sources = [
+    `account_id="${label}"`, `{"accountId":"${label}"}`, `data-account-id='${label}'`,
+    JSON.stringify({ accountLabel: label }), `account_label: ${label}`, `account-label = ${label}`,
+    JSON.stringify({ account: { id: "fixture", label } }),
+    JSON.stringify({ account: { label, id: "fixture" } }, null, 2),
+    `waiting for account ${label} to reset`, `on account ${label}`,
+    `waiting for account\n${label} until a new reading shows capacity`,
+    ...["\n", "\r\n", "\t\n "].map(space => `{"accountId":${space}"${label}"}`),
+    `{"accountId"\n:\n"${label}"}`, `accountLabel\n=\n${label}`,
+    `id="${label}"`, `account_name: ${label}`, `user_id: ${label}`, `username: ${label}`, `handle = ${label}`, `hostname=${label}`, `@${label}`,
+    `accounts/claude/${label}/sessions`, `accounts/codex/${label}/sessions`,
+    `accounts/copilot/${label}/sessions`, `accounts/${label}/sessions`,
+    `accounts\\codex\\${label}\\sessions`,
+  ];
+  for (const source of sources) {
+    for (const encoded of [source, source.toUpperCase(), encodeURIComponent(source),
+      Array.from(source).map(char => `&#${char.codePointAt(0)};`).join("")]) {
+      expect(scanner.sensitiveClasses(encoded).has("known_value"), source).toBe(true);
+    }
+    expect(scanner.sensitiveClasses(source.replaceAll(label, `prefix${label}suffix`)).has("known_value"), source).toBe(false);
+  }
+});
+
+test("the configured label is private as the whole publication", async () => {
+  const scanner = await inspector("unrelated fixture value", false, false,
+    join(import.meta.dir, "privacy-known-value-fingerprints.json"));
+  const label = ["open", "source"].join("");
+  for (const source of [label, ` \n${label}\t`, label.toUpperCase(),
+    Array.from(label).map(char => `%${char.codePointAt(0)!.toString(16)}`).join(""),
+    Array.from(label).map(char => `&#${char.codePointAt(0)};`).join("")]) {
+    expect(scanner.sensitiveClasses(source).has("known_value")).toBe(true);
+  }
+  for (const source of ["open source", "open-source", `prefix${label}suffix`, `the ${label} core`, `the\n${label}\ncore`]) {
+    expect(scanner.sensitiveClasses(source).has("known_value"), source).toBe(false);
+  }
+});
+
+test.each([false, true])("standalone file labels survive UTF-16 decoding (big-endian: %s)", async (bigEndian) => {
+  const directory = mkdtempSync(join(tmpdir(), "privacy-standalone-encoding-"));
+  try {
+    const scanner = await inspector("unrelated fixture value", false, false,
+      join(import.meta.dir, "privacy-known-value-fingerprints.json"));
+    const label = ["open", "source"].join("");
+    const file = join(directory, "sample.txt");
+    for (const source of [label, ` \n${label}\t`, `the ${label} core`, `the\n${label}\ncore`]) {
+      const bytes = Buffer.from(`\ufeff${source}`, "utf16le");
+      if (bigEndian) bytes.swap16();
+      writeFileSync(file, bytes);
+      expect(scanner.inspectPaths([file], false, true, directory).has("known_value"))
+        .toBe(source.trim() === label);
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test.each(["files", "commits"] as const)("identity-context findings reach CLI inspection of %s", async (surface) => {
+  const directory = mkdtempSync(join(tmpdir(), "privacy-identity-context-"));
+  try {
+    const scanner = await inspector("unrelated fixture value", false, false,
+      join(import.meta.dir, "privacy-known-value-fingerprints.json"));
+    const label = ["open", "source"].join("");
+    const file = join(directory, "sample.txt");
+    const git = (...args: string[]) => {
+      const result = Bun.spawnSync(["git", "-C", directory, ...args], {
+        env: { ...process.env, GIT_AUTHOR_DATE: "2026-10-23T10:00:00Z", GIT_COMMITTER_DATE: "2026-10-23T10:00:00Z", GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture",
+          GIT_AUTHOR_EMAIL: "noreply@example.invalid", GIT_COMMITTER_EMAIL: "noreply@example.invalid" },
+        stdout: "pipe", stderr: "pipe",
+      });
+      expect(result.exitCode).toBe(0);
+      return result.stdout.toString().trim();
+    };
+    git("init", "--initial-branch=main");
+    git("-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "Fixture base");
+    const cli = (args: string[]) => runPrivacyTestProcess({
+      cmd: [process.execPath, join(import.meta.dir, "privacy-publication-gate.ts"),
+        "--require-known-values", "--repository", directory, ...args, "--paths", file],
+      env: { ...process.env, LLV_PRIVACY_KNOWN_VALUES: "", LLV_PRIVACY_KNOWN_VALUES_FILE: "",
+        LLV_PRIVACY_KNOWN_VALUES_FORMAT: "plain",
+        LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: join(import.meta.dir, "privacy-known-value-fingerprints.json") },
+      stdout: "pipe", stderr: "pipe",
+    });
+    for (const { source, privateValue } of [
+      ...[label, ` \n${label}\t`, label.toUpperCase(),
+        Array.from(label).map(char => `%${char.codePointAt(0)!.toString(16)}`).join(""),
+        Array.from(label).map(char => `&#${char.codePointAt(0)};`).join("")]
+        .map(source => ({ source, privateValue: true })),
+      ...[`account_id="${label}"`, JSON.stringify({ accountLabel: label }), `{"accountId":\n"${label}"}`,
+        JSON.stringify({ account: { id: "fixture", label } }),
+        JSON.stringify({ account: { label, id: "fixture" } }, null, 2),
+        `waiting for account ${label} to reset`, `on account ${label}`,
+        encodeURIComponent(JSON.stringify({ account: { id: "fixture", label } })),
+        encodeURIComponent(`waiting for account ${label} to reset`)]
+        .map(source => ({ source, privateValue: true })),
+      ...[JSON.stringify({ account: { id: "fixture", label: `prefix${label}suffix` } }),
+        `waiting for account prefix${label}suffix to reset`]
+        .map(source => ({ source, privateValue: false })),
+      ...["open-source", "open source", label]
+        .map(spelling => ({ source: `the ${spelling} core`, privateValue: false })),
+    ]) {
+      writeFileSync(file, source);
+      const args: string[] = [];
+      if (surface === "commits") {
+        const base = git("rev-parse", "HEAD");
+        git("-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", source);
+        writeFileSync(file, "safe publication prose");
+        args.push("--check-commits", "--base", base);
+      }
+      const result = await cli(args);
+      expect(result.exitCode, source).toBe(privateValue ? 1 : 0);
+      expect(result.stdout.toString(), source).toStartWith(privateValue
+        ? "PRIVACY GATE: FAIL\nknown_value: 1\n" : "PRIVACY GATE: PASS\n");
+      expect(result.stdout.toString()).not.toContain(label);
+      expect(result.stderr.toString()).toBe("");
+    }
+    expect(scanner.commitMessageFindings(directory, "HEAD").size).toBe(0);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test("plaintext and opaque inspectors preserve complete reports across Unicode publication views", async () => {
   const directory = mkdtempSync(join(tmpdir(), "privacy-plaintext-reference-"));

@@ -1,5 +1,6 @@
 // The direct comparator dispatches before isolating its samples.
 import { afterEach, expect, test } from "bun:test";
+import { LOAD_PROBE } from "./load";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -80,5 +81,5 @@ test.if(linux)("a direct comparator keeps a tree refused by privacy on this mach
   expect(result.stderr).toContain("gate-runner: running here: the privacy scan refused the tree:");
   expect(result.stdout).toContain("green head");
   expect(result.stderr).not.toContain(value);
-  expect(h.calls().filter(call => !call.command.includes("manager=ok"))).toEqual([]);
+  expect(h.calls().filter(call => !call.command.includes("manager=ok") && call.command !== LOAD_PROBE)).toEqual([]);
 }, E2E_TIMEOUT);
