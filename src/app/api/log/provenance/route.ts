@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
@@ -57,7 +58,7 @@ export interface MessageProvenanceResponse {
  * serves both engines, since a legacy paste's transcript row looks the same
  * on each.
  */
-export function GET(req: NextRequest): NextResponse<MessageProvenanceResponse | ApiError> {
+function workspaceGET(req: NextRequest): NextResponse<MessageProvenanceResponse | ApiError> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
   const path = req.nextUrl.searchParams.get("path") ?? "";
@@ -110,3 +111,5 @@ function conversationScope(path: string): (conversationId: string) => boolean {
     return () => false;
   }
 }
+
+export const GET = workspaceRoute("/api/log/provenance", workspaceGET);

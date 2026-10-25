@@ -25,16 +25,18 @@ Object.assign(globalThis, {
   localStorage: dom.localStorage,
   Node: dom.Node,
   HTMLElement: dom.HTMLElement,
+  MutationObserver: dom.MutationObserver,
   Event: dom.Event,
   CustomEvent: dom.CustomEvent,
 });
 
 const { setRuntimeBusForTests } = await import("@/hooks/runtimeBus");
 const { ReportLog } = await import("./ReportLog");
+const { setLocale } = await import("@/lib/i18n");
 const { resetBridgeReportsSettingForTests } = await import("./bridgeReportsSetting");
 const { GET } = await import("@/app/api/orchestrator/reports/route");
 const { mutateOperatorAsks } = await import("@/lib/asks/store");
-const { appendBridgeReports } = await import("@/lib/bridge/store");
+const { appendBridgeReports, readBridgeReportLog, readBridgeChannel } = await import("@/lib/bridge/store");
 const { setBridgeReports } = await import("@/lib/projects/settings");
 const { resetDismissalOverlayForTests, useDismissalOverlay } = await import("@/components/attention/dismissalOverlay");
 const { buildNeedsYouQueue } = await import("@/components/attention/attentionQueue");
@@ -45,6 +47,7 @@ const realFetch = globalThis.fetch;
 let root: Root | null = null;
 let filesListener: ((revision: number) => void) | null = null;
 let pages: ReportLogPage[] = [];
+let reportsResponse: Promise<void> | null = null;
 let requests: string[] = [];
 let settingWrites: unknown[] = [];
 let dismissals: Array<{ target: unknown; undo: boolean; surface: string }> = [];
@@ -63,6 +66,7 @@ function page(entries: ReportLogEntry[], overrides: Partial<ReportLogPage> = {})
 }
 
 beforeEach(() => {
+  setLocale("en");
   doneServer = [];
   doneWrites = [];
   resetDoneItemsForTests();
@@ -72,6 +76,7 @@ beforeEach(() => {
   dismissalRefusal = null;
   resetDismissalOverlayForTests();
   pages = [];
+  reportsResponse = null;
   dom.localStorage.clear();
   /* A live runtime bus whose `files.revision` the test fires by hand. */
   setRuntimeBusForTests({
@@ -89,6 +94,7 @@ beforeEach(() => {
     const url = String(input);
     if (url.startsWith("/api/orchestrator/reports")) {
       requests.push(url);
+      if (reportsResponse) await reportsResponse;
       const next = pages.length > 1 ? pages.shift()! : pages[0]!;
       return new Response(JSON.stringify(next));
     }
@@ -138,6 +144,65 @@ function mount(): HTMLElement {
 async function settle(): Promise<void> {
   for (let index = 0; index < 5; index += 1) await Bun.sleep(5);
 }
+
+async function mountWithDeferredReports(): Promise<HTMLElement> {
+  const response = Promise.withResolvers<void>();
+  reportsResponse = response.promise;
+  const expectedRows = pages[0]!.entries.length;
+  const host = mount();
+  expect(requests).toHaveLength(1);
+  expect(host.querySelectorAll("[data-report-entry]")).toHaveLength(0);
+  const committed = new Promise<void>((resolve, reject) => {
+    const observer = new MutationObserver(() => {
+      if (host.querySelectorAll("[data-report-entry]").length !== expectedRows) return;
+      clearTimeout(timeout);
+      observer.disconnect();
+      resolve();
+    });
+    const timeout = setTimeout(() => {
+      observer.disconnect();
+      reject(new Error("Report rows did not render after releasing the response"));
+    }, 5_000);
+    observer.observe(host, { childList: true, subtree: true });
+  });
+  response.resolve();
+  await committed;
+  return host;
+}
+
+for (const locale of ["en", "uk"] as const) {
+  test(`recorded authors and conversation links in ${locale}, with no invented legacy or unidentified link`, async () => {
+    setLocale(locale);
+    pages = [page([
+      entry(6, { author: { kind: "manager", conversationId: "conversation_old_seat", role: "orchestrator" } }),
+      entry(5, { author: { kind: "agent", conversationId: "conversation_builder", role: "builder" } }),
+      entry(4, { author: { kind: "gateway", conversationId: "conversation_voice", role: null } }),
+      entry(3, { author: { kind: "unidentified", conversationId: "javascript:alert(1)", role: null } }),
+      entry(2, { author: { kind: "agent", conversationId: null, role: null } }),
+      entry(1),
+    ])];
+    const host = await mountWithDeferredReports();
+    expect([...host.querySelectorAll("[data-report-author]")].map(node => node.textContent)).toEqual(locale === "en"
+      ? ["Orchestrator", "Builder", "Gateway", "an unidentified caller", "Agent"]
+      : ["Оркестратор", "Білдер", "Шлюз", "невідомий виклик", "Агент"]);
+    expect([...host.querySelectorAll('[data-report-link="author"]')].map(node => node.getAttribute("href"))).toEqual([
+      "#c=conversation_old_seat", "#c=conversation_builder", "#c=conversation_voice",
+    ]);
+    expect(host.querySelector('[data-report-entry="1"] [data-report-author]')).toBeNull();
+    expect(host.textContent).not.toContain("javascript:");
+    expect(settingWrites).toEqual([]);
+    expect(dismissals).toEqual([]);
+  });
+}
+
+test("an author id stays an encoded conversation hash and a custom role renders as text", async () => {
+  const id = "conversation_odd&x=<script>";
+  pages = [page([entry(1, { author: { kind: "agent", conversationId: id, role: "<img src=x onerror=alert(1)>" } })])];
+  const host = await mountWithDeferredReports();
+  expect(host.querySelector('[data-report-link="author"]')?.getAttribute("href")).toBe(`#c=${encodeURIComponent(id)}`);
+  expect(host.querySelector("img, script")).toBeNull();
+  expect(host.querySelector("[data-report-author]")?.textContent).toBe("<img src=x onerror=alert(1)>");
+});
 
 test("each entry is its time, its class word and its body as written, newest first, with #refs and card ids linked", async () => {
   pages = [page([
@@ -326,6 +391,9 @@ describe("paging back through the real route", () => {
 
   /** `count` reports, one each 50 s from 25 s past, never on an ask's minute. */
   function seedReports(count: number): { at: number; key: string }[] {
+    // Complete first-boot imports before the fixture's write transaction.
+    readBridgeReportLog();
+    readBridgeChannel();
     const inputs = Array.from({ length: count }, (_, index) => ({
       key: `report-${index}`,
       class: "completed" as const,

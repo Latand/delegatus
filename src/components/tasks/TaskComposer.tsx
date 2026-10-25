@@ -1,6 +1,6 @@
 "use client";
 
-import { CalendarClock, X } from "lucide-react";
+import { CalendarClock, RotateCcw, X } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { ComposerBar } from "@/components/ComposerBar";
@@ -10,30 +10,30 @@ import type { UseTaskDraftReturn } from "@/hooks/useTaskDraft";
 import { formatDue, fromDueInput, isOverdue, toDueInputValue } from "@/lib/tasks/helpers";
 import { getLocale, useLocale } from "@/lib/i18n";
 
-/** The deadline control: an "add deadline" pill that expands to a native
-    datetime-local, and a formatted chip (overdue-tinted) with a clear button
-    once set. The value is captured in the picker's zone and stored as a UTC
-    instant + that zone. */
+/** Shows the default before creation; a picked date can be reset to it. */
 function DueChip({ draft }: { draft: UseTaskDraftReturn }) {
   const { t } = useLocale();
   const isMobile = useIsMobile();
-  const { dueAt, dueTz, setDue, clearDue } = draft;
+  const { dueAt, dueTz, setDue, clearDue, defaultDue } = draft;
+  const shownAt = dueAt ?? defaultDue.dueAt;
+  const shownZone = dueTz ?? defaultDue.dueTz;
   const overdue = dueAt ? isOverdue(dueAt) : false;
 
   return (
-    <span className="inline-flex items-center gap-1">
+    <span data-task-due={dueAt ? "picked" : "default"} className="inline-flex items-center gap-1">
       <label
-        className={`inline-flex items-center gap-1 rounded-full font-semibold ${
+        className={`relative inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full font-semibold ${
           isMobile ? "min-h-11 px-3 text-[12px]" : "px-1.5 py-1 text-[9.5px]"
-        } ${dueAt ? (overdue ? "bg-danger-soft text-danger" : "bg-sunken text-secondary") : "bg-sunken text-secondary hover:text-accent"}`}
-        title={dueAt && dueTz ? t("tasks.dueTitle", { zone: dueTz }) : t("tasks.addDue")}
+        } ${dueAt ? (overdue ? "bg-danger-soft text-danger" : "bg-sunken text-secondary") : "border border-muted bg-sunken text-secondary hover:text-accent"}`}
+        title={t(dueAt ? "tasks.dueTitle" : "tasks.defaultDueTitle", { zone: shownZone })}
       >
         <CalendarClock className={isMobile ? "h-4 w-4" : "h-3 w-3"} aria-hidden />
-        {dueAt && dueTz ? formatDue(dueAt, dueTz, getLocale()) : t("tasks.addDue")}
+        {dueAt ? null : <span data-task-due-default>{t("tasks.defaultDueWord")} ·</span>}
+        <span>{formatDue(shownAt, shownZone, getLocale())}</span>
         <input
           type="datetime-local"
           aria-label={t("tasks.addDue")}
-          value={dueAt ? toDueInputValue(dueAt) : ""}
+          value={toDueInputValue(shownAt)}
           onChange={(event) => {
             const parsed = fromDueInput(event.target.value);
             if (parsed) setDue(parsed);
@@ -41,19 +41,20 @@ function DueChip({ draft }: { draft: UseTaskDraftReturn }) {
           }}
           /* The native control is the whole hit target but visually collapsed
              behind the chip label — a click anywhere on the pill opens it. */
-          className="w-0 opacity-0"
+          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
         />
       </label>
       {dueAt ? (
         <button
           type="button"
-          aria-label={t("tasks.clearDue")}
+          aria-label={t("tasks.resetDue")}
           onClick={clearDue}
-          className={`inline-flex items-center justify-center rounded-full text-muted hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
-            isMobile ? "h-11 w-11" : "h-4 w-4"
+          title={t("tasks.resetDue")}
+          className={`inline-flex shrink-0 items-center justify-center rounded-full text-muted hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+            isMobile ? "h-11 w-11" : "h-6 w-6"
           }`}
         >
-          <X className={isMobile ? "h-4 w-4" : "h-2.5 w-2.5"} aria-hidden />
+          <RotateCcw className={isMobile ? "h-4 w-4" : "h-3 w-3"} aria-hidden />
         </button>
       ) : null}
     </span>

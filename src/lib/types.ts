@@ -48,6 +48,7 @@ export function epochSecondsFromMs(ms: number): EpochSeconds {
 }
 
 export interface StructuredSpawnCardState {
+  memoryCap?: import("@/lib/runtime/agentMemoryConfig").AgentMemoryCap;
   launchId: string;
   clientAttemptId: string | null;
   accountId: string | null;
@@ -298,6 +299,8 @@ export interface FileEntry {
   /** The oldest tool permission request the conversation's structured host
       holds open (#2215): a Needs-you item with Allow once and Deny. */
   memoryKill?: Pick<import("@/lib/runtime/agentMemory").AgentMemoryKill, "at" | "limitBytes" | "limit" | "fatal">;
+  /** Current host allocation, refreshed after adoption; the launch keeps its receipt. */
+  memoryCap?: import("@/lib/runtime/agentMemoryConfig").AgentMemoryCap;
   pendingPermission?: PendingPermissionRequest | null;
   /** Live pane wall or fresh structured account exhaustion. */
   rateLimit?: RateLimitState | null;

@@ -51,6 +51,8 @@ test("an unpinned base without origin resolves local main without fetching", asy
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "local-base-"));
   try {
     await git(root, "init", "-q", "-b", "main");
+    await git(root, "config", "user.name", "Fixture");
+    await git(root, "config", "user.email", "noreply@example.invalid");
     await git(root, "commit", "-q", "--allow-empty", "-m", "base");
     const head = await git(root, "rev-parse", "HEAD");
     const calls: string[] = [];
@@ -2020,10 +2022,10 @@ for (const scenario of [
     fs.mkdirSync(path.dirname(path.join(box.subject.worktreeDir, scenario.file)), { recursive: true });
     const head = await box.commit(scenario.file, "accepted work\n");
     const hooks = path.join(box.root, "hooks"); fs.mkdirSync(hooks);
-    fs.writeFileSync(path.join(hooks, "pre-push"), '#!/bin/sh\nprintf "# hook deadline %s\\n" "$LLV_GATE_PUSH_DEADLINE"\n'
+    fs.writeFileSync(path.join(hooks, "pre-push"), '#!/bin/sh\nprintf "# hook deadline %s\\n" "$LLV_GATE_PUSH_DEADLINE"\nprintf "# check context %s %s %s\\n" "$LLV_GATE_LANE_ID" "$LLV_GATE_STAGE_ID" "$LLV_GATE_PUSH_HEAD"\n'
       + (scenario.refused ? 'echo "fixture gate refusal" >&2\nexit 1\n' : 'exit 0\n'), { mode: 0o700 });
     await git(box.subject.worktreeDir, "config", "core.hooksPath", hooks);
-    let observed: { ms?: number; deadline?: string; output: string } | undefined;
+    let observed: { ms?: number; deadline?: string; state?: string; output: string } | undefined;
     const exec: ExecPort = async (command, args, cwd, env, options) => {
       if (scenario.unreadable && command === "git" && args[0] === "diff" && args.includes("--no-renames")) {
         return scenario.unreadable === "truncated"
@@ -2033,14 +2035,16 @@ for (const scenario of [
       const inner = command === "systemd-run" ? args.slice(args.indexOf("--") + 1) : [command, ...args];
       const result = await realExec(command, args, cwd, env, options);
       if (inner[0] === "git" && inner[1] === "push") observed = {
-        ms: options?.timeoutMs, deadline: env?.LLV_GATE_PUSH_DEADLINE, output: result.stdout + result.stderr,
+        ms: options?.timeoutMs, deadline: env?.LLV_GATE_PUSH_DEADLINE, state: env?.LLV_GATE_STATE_DIR, output: result.stdout + result.stderr,
       };
       return result;
     };
     const result = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
     expect(observed?.ms).toBe(scenario.ms);
     expect(observed?.deadline).toMatch(/^\d+$/);
+    expect(observed?.state).toBe(process.env.LLV_STATE_DIR!);
     expect(observed?.output).toContain("# hook deadline " + observed?.deadline);
+    expect(observed?.output).toContain(`# check context ${box.subject.id} ${box.subject.cursor?.stageId ?? ""} ${head}`);
     expect(result.ok).toBe(!scenario.refused);
     expect(await box.originHead()).toBe(scenario.refused ? "" : head);
     if (scenario.refused) expect(JSON.stringify(result)).toContain("fixture gate refusal");
@@ -3089,6 +3093,100 @@ test("publication releases the SQLite lease during Git and refuses an in-flight 
     expect((await takeover)?.error).toContain("in flight");
     expect((await box.originHead())).toBe(head);
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test.each(["before-push", "after-confirm"] as const)("operator rejection fences publication and retains its real receipt: %s", async phase => {
+  const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
+  const { candidate, context, authority, NOW } = await import("@/lib/tasks/proactive.fixture");
+  const box = await publishSandbox();
+  try {
+    const { task } = await admitProactiveTask(candidate(`publication-${phase}`), context(), undefined, authority());
+    box.subject.taskIds = [task.id];
+    savePipelines([box.subject]);
+    const head = await box.commit("accepted.txt", "accepted outcome\n");
+    let effects = 0;
+    const untouched: ExecPort = async () => { effects++; throw new Error("fenced effect ran"); };
+    expect(await publishPipelineBranch(box.subject, untouched, { acceptedSha: head })).toMatchObject({ ok: false, error: expect.stringContaining("disabled") });
+    expect(effects).toBe(0);
+    await decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task), undefined, () => new Date(NOW).toISOString());
+    let rejected = false;
+    const racing: ExecPort = async (command, args, cwd, env, options) => {
+      const result = await realExec(command, args, cwd, env, options);
+      if (!rejected && (phase === "before-push" || args.includes("ls-remote") && result.stdout.startsWith(head))) {
+        await decideProactiveTask(task.id, "reject", "operator", proactiveDecisionToken(task));
+        rejected = true;
+      }
+      return result;
+    };
+    const result = await publishPipelineBranch(box.subject, racing, { acceptedSha: head });
+    expect(rejected).toBe(true);
+    if (phase === "before-push") {
+      expect(result).toMatchObject({ ok: false });
+      expect(await box.originHead()).toBe("");
+    } else {
+      expect(result).toMatchObject({ ok: true, remote: "published", sha: head });
+      expect(findPipelineRecord(box.subject.id)?.delivery?.operation).toMatchObject({ state: "settled", result: { ok: true, remote: "published" } });
+      expect(await box.originHead()).toBe(head);
+    }
+    expect(fs.readFileSync(path.join(box.subject.worktreeDir, "accepted.txt"), "utf8")).toBe("accepted outcome\n");
+    expect(await publishPipelineBranch(box.subject, untouched, { acceptedSha: head })).toMatchObject({ ok: false, error: expect.stringContaining("rejected") });
+    expect(effects).toBe(0);
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test.each(["success", "refused"] as const)("rejection during an active push preserves its child and settles the actual %s receipt", async outcome => {
+  const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
+  const { candidate, context, authority, NOW } = await import("@/lib/tasks/proactive.fixture");
+  const box = await publishSandbox();
+  if (outcome === "refused") {
+    fs.mkdirSync(path.join(box.origin, "hooks"), { recursive: true });
+    await git(box.origin, "config", "core.hooksPath", path.join(box.origin, "hooks"));
+    fs.writeFileSync(path.join(box.origin, "hooks", "pre-receive"), "#!/bin/sh\nexit 1\n", { mode: 0o700 });
+  }
+  const interval = globalThis.setInterval;
+  let watch: (() => void) | undefined;
+  globalThis.setInterval = ((callback: () => void, ms: number) => {
+    if (ms === 50) watch = callback;
+    return interval(callback, ms);
+  }) as typeof setInterval;
+  try {
+    const project = `active-push-${outcome}`;
+    const { task } = await admitProactiveTask({ ...candidate(project), project }, { ...context(), project }, undefined, authority());
+    await decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task), undefined, () => new Date(NOW).toISOString());
+    box.subject.taskIds = [task.id];
+    savePipelines([box.subject]);
+    const head = await box.commit("accepted.txt", "retained outcome\n");
+    let pushes = 0;
+    let confirmations = 0;
+    let abortedAtRejection: boolean | undefined;
+    const racing: ExecPort = async (command, args, cwd, env, options) => {
+      if (args.includes("push")) {
+        pushes++;
+        await decideProactiveTask(task.id, "reject", "operator", proactiveDecisionToken(task));
+        expect(watch).toBeDefined();
+        watch!();
+        abortedAtRejection = options?.signal?.aborted;
+      }
+      if (pushes && args.includes("ls-remote")) confirmations++;
+      return realExec(command, args, cwd, env, options);
+    };
+    const result = await publishPipelineBranch(box.subject, racing, { acceptedSha: head });
+    expect(pushes).toBe(1);
+    expect(abortedAtRejection).toBe(false);
+    expect(result).toMatchObject(outcome === "success" ? { ok: true, remote: "published", sha: head } : { ok: false });
+    expect(confirmations).toBe(outcome === "success" ? 1 : 0);
+    expect(findPipelineRecord(box.subject.id)?.delivery?.operation).toMatchObject({ state: "settled", result });
+    expect(await box.originHead()).toBe(outcome === "success" ? head : "");
+    expect(fs.readFileSync(path.join(box.subject.worktreeDir, "accepted.txt"), "utf8")).toBe("retained outcome\n");
+    let nextEffects = 0;
+    expect(await publishPipelineBranch(findPipelineRecord(box.subject.id)!, async () => {
+      nextEffects++; throw new Error("new publication must remain fenced");
+    }, { acceptedSha: head })).toMatchObject({ ok: false, error: expect.stringContaining("rejected") });
+    expect(nextEffects).toBe(0);
+  } finally {
+    globalThis.setInterval = interval;
+    fs.rmSync(box.root, { recursive: true, force: true });
+  }
 });
 
 test("a same-owner adapter retry waits on its running reservation without executing Git (#1939)", async () => {

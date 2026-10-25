@@ -101,6 +101,7 @@ test("finding identity and occurrence history stay local across linked task exch
   const arriving = peerRow({ ...fields, id: remoteId, machine: PEER }, Date.now() + 1000);
   applyTaskRows([arriving], peerLink, { filePath: file });
   expect(find(file, remoteId)).toMatchObject({ text: published.text });
+  expect(find(file, remoteId)?.dueAt).toBeUndefined(); expect(find(file, remoteId)?.dueTz).toBeUndefined();
   expect(find(file, remoteId)?.findingKey).toBeUndefined();
   expect(find(file, remoteId)?.finding).toBeUndefined();
   // A linked edit to the original task retains this install's reporter state.
@@ -590,6 +591,29 @@ test("tombstones apply through deleteTask, and a row arriving for a tombstoned i
   const self = linkedContext().self!;
   const back = readLogPage([0], { self, projects: new Set([key]), skipPrefix: installPrefix(PEER), filePath: file });
   expect(back.kind === "page" && back.rows.some((row) => row.id === id)).toBe(false);
+});
+
+test("a linked deletion cannot erase invented provenance or commit a tombstone", async () => {
+  const { admitProactiveTask, readProactiveAllowance } = await import("@/lib/tasks/proactive");
+  const { candidate, context, NOW, authority } = await import("@/lib/tasks/proactive.fixture");
+  const { repairLinkedTasks } = await import("./taskRepair");
+  setSystemTime(NOW);
+  const { file, db } = linkedInstall();
+  const episode = { ...context(), project: key };
+  const { task } = await admitProactiveTask({ ...candidate("linked-deletion"), project: key }, episode, file, authority());
+  repairLinkedTasks(file);
+  const tombstones = tombstoneCollection(db, true)!;
+  const before = loadTasks(file), graves = tombstones.snapshot();
+  const taskRevision = readStateCollectionRevision(db, "tasks"), graveRevision = readStateCollectionRevision(db, "task_tombstones");
+  const gone = `${String(NOW + 10).padStart(13, "0")}.000.${installPrefix(PEER)}`;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    expect(() => applyTaskRows([{ id: task.id, project: key, gone }], peerLink, { filePath: file, now: NOW })).toThrow("retains its provenance");
+    expect(loadTasks(file)).toEqual(before);
+    expect(tombstones.snapshot()).toEqual(graves);
+    expect(readStateCollectionRevision(db, "tasks")).toBe(taskRevision);
+    expect(readStateCollectionRevision(db, "task_tombstones")).toBe(graveRevision);
+    expect(readProactiveAllowance(key, episode.startedAt, NOW, file)).toEqual({ episodeUsed: 1, rollingUsed: 1 });
+  }
 });
 
 test("with no project linked nothing is stamped and no tombstone collection is created", () => {

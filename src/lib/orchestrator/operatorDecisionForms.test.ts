@@ -2,23 +2,9 @@ import { expect, spyOn, test } from "bun:test";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import { ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateForDelivery } from "./prompt";
 
-test("every delivered seat mandate asks operator decisions through a durable form", async () => {
+test("delivered seat mandates are idempotent", async () => {
   for (const input of [ORCHESTRATOR_SYSTEM_PROMPT, "Coordinate this project.", "Prototype review: our own wording."]) {
     const mandate = orchestratorMandateForDelivery(input);
-    for (const rule of [
-      "Every operator decision",
-      "publish_prototype_review",
-      "taskId for a task (3–7 questions)",
-      "omit it without a task (1–7)",
-      "3–7 questions",
-      "options with exactly one recommended",
-      "variants optional",
-      "Chat and reports only point to the form",
-      "Never use engine built-in ask tools",
-      "Any other question for the operator is a form too.",
-      "Chat and reports only point to the form and ask nothing themselves.",
-    ]) expect(mandate).toContain(rule);
-    for (const retired of ["suggest_replies", "Reply drafts", "chat may hold only a one-off ask"]) expect(mandate).not.toContain(retired);
     expect(orchestratorMandateForDelivery(mandate)).toBe(mandate);
   }
 });

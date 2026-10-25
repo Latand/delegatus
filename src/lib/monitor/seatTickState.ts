@@ -269,6 +269,18 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
     }) } : {}),
     ...(typeof raw.authRecoveredThrough === "number" && Number.isFinite(raw.authRecoveredThrough) ? { authRecoveredThrough: raw.authRecoveredThrough } : {}),
     ...(typeof raw.diskPressureShown === "string" ? { diskPressureShown: raw.diskPressureShown } : {}),
+    ...(raw.memoryProblemCreditOwed && typeof raw.memoryProblemCreditOwed === "object"
+      && Array.isArray((raw.memoryProblemCreditOwed as Record<string, unknown>).shown)
+      ? { memoryProblemCreditOwed: {
+        shown: conversationIds((raw.memoryProblemCreditOwed as Record<string, unknown>).shown).slice(-2_000),
+        recipient: (() => {
+          const recipient = (raw.memoryProblemCreditOwed as Record<string, unknown>).recipient;
+          if (!recipient || typeof recipient !== "object") return null;
+          const value = recipient as Record<string, unknown>;
+          return typeof value.conversationId === "string" && Number.isSafeInteger(value.seatEpoch)
+            ? { conversationId: value.conversationId, seatEpoch: value.seatEpoch as number } : null;
+        })(),
+      } } : {}),
     seatEpoch: typeof raw.seatEpoch === "number" && Number.isSafeInteger(raw.seatEpoch) ? raw.seatEpoch : null,
     unreachableSince: isoOrNull(raw.unreachableSince),
     unreachableBacklogSince: isoOrNull(raw.unreachableBacklogSince),
@@ -393,6 +405,7 @@ export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: numb
     authCardsOwed: row.authCardsOwed,
     authCredentialObserved: row.authCredentialObserved,
     diskPressureShown: row.diskPressureShown,
+    ...(row.memoryProblemCreditOwed ? { memoryProblemCreditOwed: row.memoryProblemCreditOwed } : {}),
     eventsThrough: row.eventsThrough,
     lastWakeAt: row.lastWakeAt,
     ...(row.deployResumeThrough ? { deployResumeThrough: row.deployResumeThrough } : {}),

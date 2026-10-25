@@ -154,6 +154,37 @@ test("unknown private-read correlation keeps nothing and rejects malformed answe
   for (const value of [null,[],{ ...answer,extra: [] },{ ...answer,asked: [1] }]) expect(() => boundedSummary(value,[])).toThrow("invalid");
 });
 
+test("the voice's words from an added answer on stay out: a reply written after it, and every reply of a call started with the gates held", () => {
+  const rows = (start: Record<string, unknown>) => [
+    { id: "start", kind: "session_start" as const, atMs: 0, order: 0, data: start },
+    { id: "u1", kind: "utterance" as const, atMs: 1, order: 1, data: { text: "What is playing?", final: true } },
+    // Begun before the handoff, so ordered before it, and written on after the answer arrived.
+    { id: "r1", kind: "reply" as const, atMs: 2, order: 2, data: { text: "Let me check. Fixture is on.", final: true, afterAddedResult: true } },
+    { id: "r2", kind: "reply" as const, atMs: 3, order: 3, data: { text: "Good morning.", final: true } },
+    { id: "q1", kind: "request" as const, atMs: 4, order: 4, data: { status: "sent", instruction: "Review the plan." } },
+  ];
+  expect(summaryInput(rows({})).text).toBe("utterance: What is playing?\nreply: Good morning.\nrequest (sent): Review the plan.");
+  expect(summaryInput(rows({ addedResult: true })).text).toBe("utterance: What is playing?\nrequest (sent): Review the plan.");
+});
+test("a private server's answer whose text reached the model is a private read whatever its status; a failure with no content is not", () => {
+  const rows = (data: Record<string, unknown>) => [
+    { id: "u0", kind: "utterance" as const, atMs: 0, order: 0, data: { text: "What is on the board?", final: true } },
+    { id: "r0", kind: "reply" as const, atMs: 1, order: 1, data: { text: "Nothing is open.", final: true } },
+    { id: "u1", kind: "utterance" as const, atMs: 2, order: 2, data: { text: "What is in my diary?", final: true } },
+    { id: "d1", kind: "delegation" as const, atMs: 3, order: 3, data: { delegationId: "d1" } },
+    { id: "t1", kind: "tool" as const, atMs: 4, order: 4, data: { name: "diary__read", delegationId: "d1", privateTool: true, ...data } },
+    { id: "r1", kind: "reply" as const, atMs: 5, order: 5, data: { text: "The diary answered.", final: true } },
+  ];
+  for (const status of ["done", "failed"]) {
+    const input = summaryInput(rows({ status, privateResult: true }));
+    expect(input.privateOmitted).toBe(true);
+    expect(input.text).toBe("utterance: What is on the board?\nreply: Nothing is open.");
+  }
+  const timedOut = summaryInput(rows({ status: "failed", code: "TOOL_TIMEOUT" }));
+  expect(timedOut.privateOmitted).toBe(false);
+  expect(timedOut.text).toContain("reply: The diary answered.");
+});
+
 test("a checkpoint finishing after a private read discards its tainted input and rebuilds from the safe prefix", async () => {
   const inputs: SummaryInput[] = []; let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });

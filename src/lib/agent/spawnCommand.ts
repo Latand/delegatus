@@ -1,3 +1,4 @@
+import { assertProactiveTaskExecution, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
 import type { AgentRegistry, SpawnReceipt } from "./registry";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
 import { withSpawnDiagnostics, bindSpawnDiagnostics, spawnDiagnosticError } from "./spawnDiagnostics";
@@ -77,6 +78,7 @@ import { activeDrain } from "@/lib/selfUpdate/drain";
 import { updateHoldWait } from "@/lib/selfUpdate/launchHold";
 
 import { sourceCwdStatus } from "@/app/api/spawn/sourceCwd";
+import { requestWorkspaceScope } from "@/lib/team/workspaceRoute";
 import { spawnSizingRefusal } from "@/lib/roles/sizing";
 import { launchRuntimeLabel, variantForParams } from "@/lib/roles/paramConfig";
 import { conversationRuntime } from "./conversationRuntime";
@@ -258,24 +260,29 @@ function addDir(dirs: string[], cwd: string | null, project: string): void {
 export async function spawnSuggestions(req: NextRequest): Promise<NextResponse<SuggestResponse>> {
   const project = req.nextUrl.searchParams.get("project") ?? "";
   const src = req.nextUrl.searchParams.get("src");
-  const { cwd: srcCwd, cwdExists } = sourceCwdStatus(src);
+  const source = sourceCwdStatus(src);
   const conversations = (await listFiles())
     .filter((entry) => entry.path.endsWith(".jsonl") && (entry.root === "claude-projects" || entry.root === "codex-sessions"))
     .filter((entry) => !entry.path.includes(path.sep + "subagents" + path.sep))
     .sort((a, b) => Number(b.project === project) - Number(a.project === project) || b.mtime - a.mtime)
     .slice(0, SUGGEST_SCAN_LIMIT);
 
+  // Resolve again after the catalog read: membership may change while it waits.
+  const scope = requestWorkspaceScope(req);
+  const readable = (cwd: string) => !scope || scope.owner || scope.canReadFile(projectForCwd(cwd));
+  const srcCwd = source.cwd && readable(source.cwd) ? source.cwd : null;
+  const cwdExists = srcCwd !== null && source.cwdExists;
   const dirs: string[] = srcCwd ? [srcCwd] : [];
   if (!srcCwd) {
-    for (const cwd of projectDirectoryCandidates(project, SUGGEST_MAX)) addDir(dirs, cwd, project);
+    for (const cwd of projectDirectoryCandidates(project, SUGGEST_MAX)) if (readable(cwd)) addDir(dirs, cwd, project);
   }
   for (const entry of conversations) {
     if (dirs.length >= SUGGEST_MAX) break;
     if (project && entry.project !== project) continue;
     const cwd = headCwd(entry.path, { requireDir: true });
-    addDir(dirs, cwd, project);
+    if (cwd && readable(cwd)) addDir(dirs, cwd, project);
   }
-  if (!dirs.length) dirs.push(os.homedir());
+  if (!dirs.length && (!scope || scope.owner)) dirs.push(os.homedir());
   const transport = spawnTransport();
   return NextResponse.json({
     dirs,
@@ -573,7 +580,12 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
   if (!stat.isDirectory()) {
     return NextResponse.json({ error: `not a directory: ${cwd}` }, { status: 400 });
   }
-  const authorizeLaunch = () => {
+  let relatedAuthority: (string | null)[] = [];
+  const authorizeLaunch = (receipt: SpawnReceipt | null = existingAttempt) => {
+    assertProactiveTaskExecution([...(typeof body.taskId === "string" ? [body.taskId] : []),
+      ...(receipt?.failureReporting?.taskIds ?? []),
+      ...proactiveConversationTaskIds([...relatedAuthority, receipt?.conversationId,
+        authenticatedCaller?.kind === "agent" ? authenticatedCaller.conversationId : null, supersedesConversationId], registry)]);
     if (role.value?.role === "curator") {
       const pass = machinePassAuthority();
       const project = canonicalProject(explicitProject ?? projectForCwd(cwd) ?? "");
@@ -629,6 +641,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     }), registry);
     const parent = lineage.parent;
     const reviewedConversationId = lineage.reviewed?.conversationId ?? null;
+    relatedAuthority = [parent?.conversationId ?? null, reviewedConversationId];
     /* An authenticated agent caller always resolves its own conversation as
        parent; failure here means broken caller identity. An operator-capability
        caller without src proceeds as a silent root (#341) — the API lane now
@@ -1020,6 +1033,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
           plugins,
           permissionMode,
           title: title ?? requestProfileTitle,
+          ...(role.value ? { agentMemoryRoleParams: role.value.params } : {}),
           ...(explicitProject ? { project: explicitProject } : {}),
         }),
       };
@@ -1241,7 +1255,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     ): void => {
       dependencies.defer(async () => {
         let response: SpawnResponse;
-        try { authorizeLaunch(); }
+        try { authorizeLaunch(receipt); }
         catch {
           await registry.failStructuredSpawnOffLoop(receipt.launchId, "autonomous launch authorization revoked");
           return;
@@ -1256,7 +1270,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
             imageRefs,
             registry,
             client: runtimeClient,
-            authorize: dependencies.authorizeAutonomousLaunch,
+            authorize: () => authorizeLaunch(receipt),
           });
           await recordActualSpawnAccountOffLoop(registry, receipt, account.accountId, response.path);
         } catch (error) {
@@ -1408,8 +1422,9 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       }
     }
     const startedAtMs = Date.now();
-    authorizeLaunch();
-    const pane = await (dependencies.spawnTmuxAgent ?? spawnAgentWithPrompt)(spec, bundle.payload, begun.receipt);
+    authorizeLaunch(begun.receipt);
+    const pane = await (dependencies.spawnTmuxAgent ?? spawnAgentWithPrompt)(spec, bundle.payload, begun.receipt,
+      { authorize: () => authorizeLaunch(begun.receipt) });
     const childPath = await resolveSpawnedTranscriptPath({
       engine,
       knownTranscript: spec.transcript ?? null,

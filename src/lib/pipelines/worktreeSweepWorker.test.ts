@@ -5,6 +5,7 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { WorktreeSweepWorker, stopWorktreeSweepWorker } from "./worktreeSweepWorker";
 import { SWEEP_CACHE_TREES } from "./worktreeSweepCache";
 import { runWorktreeSweep } from "./worktreeSweep";
+import { readWorktreePage } from "./worktreeDrilldown";
 
 const roots: string[] = [];
 const workers: WorktreeSweepWorker[] = [];
@@ -72,6 +73,31 @@ test("production entry runs off thread against isolated empty state", async () =
   expect(report?.errors).toEqual([]);
   expect(report?.removed).toEqual([]);
 },30_000);
+
+test("a drilldown publication failure still returns the production report and persists the worker cache", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sweep-projection-failure-")); roots.push(root);
+  const priorState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = root;
+  const target = path.join(root, "worktree-drilldown.sqlite");
+  fs.mkdirSync(target);
+  const marker = path.join(target, "keep");
+  fs.writeFileSync(marker, "owned test obstruction");
+  const worker = new WorktreeSweepWorker(); workers.push(worker);
+  try {
+    const report = await worker.run("dry-run");
+    expect(report).not.toBeNull();
+    expect(report!.errors).toEqual([]);
+    expect(JSON.parse(fs.readFileSync(path.join(root, "worktree-sweep-report.json"), "utf8"))).toEqual(report);
+    expect(JSON.parse(fs.readFileSync(path.join(root, "worktree-sweep-cache.json"), "utf8")).version).toBe(1);
+    expect(fs.readFileSync(marker, "utf8")).toBe("owned test obstruction");
+    fs.unlinkSync(marker); fs.rmdirSync(target);
+    await worker.run("dry-run");
+    expect(readWorktreePage(null).at).toBeDefined();
+  } finally {
+    await worker.close();
+    if (priorState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = priorState;
+  }
+}, 30_000);
 
 
 test("a restored full cache admits a new root within its persistent bound across real worker restarts",async()=>{

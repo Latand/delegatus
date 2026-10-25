@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { accountProjectOverrides } from "@/lib/accounts/accountOverrides";
-import { listClaudeAccounts } from "@/lib/accounts/claude";
-import { listCodexAccounts } from "@/lib/accounts/codex";
+import { activeClaudeAccountId, listClaudeAccounts } from "@/lib/accounts/claude";
+import { activeCodexAccountId, listCodexAccounts } from "@/lib/accounts/codex";
+import { selectProjectAccount } from "@/lib/accounts/projectSelection";
 import {
   accountProjectRows,
   carrierConversations,
@@ -73,6 +74,8 @@ function carriers(): CarrierConversation[] {
 
 function projectView(project: string, bindings = accountProjectBindings()) {
   const carrying = carriers();
+  const snapshot = agentRegistry().readOnlySnapshot();
+  const now = Date.now();
   const displayNames = projectAliasSnapshot().displayNames;
   /* Deliberate choices of an account outside this project's pool. Read once for
      both engines, and rendered beside the pool rather than instead of it: the
@@ -82,17 +85,29 @@ function projectView(project: string, bindings = accountProjectBindings()) {
   return {
     project,
     projectName: displayNames[project] ?? project,
-    engines: Object.fromEntries(ENGINES.map((engine) => [
-      engine,
-      projectEngineAccounts(
+    engines: Object.fromEntries(ENGINES.map((engine) => {
+      const catalog = engine === "claude" ? listClaudeAccounts() : listCodexAccounts();
+      const selected = selectProjectAccount({
         project,
         engine,
-        accountsFor(engine),
+        accounts: catalog,
+        observations: Object.values(snapshot.quotaObservations[engine]),
         bindings,
-        carryingAccountIds(carrying, project, engine),
-        overrides,
-      ),
-    ])),
+        preferredId: snapshot.engineRouting[engine].activeAccountId ?? (engine === "claude" ? activeClaudeAccountId() : activeCodexAccountId()),
+        now,
+      });
+      return [engine, {
+        ...projectEngineAccounts(
+          project,
+          engine,
+          accountsFor(engine),
+          bindings,
+          carryingAccountIds(carrying, project, engine),
+          overrides,
+        ),
+        nextChosenAccountId: selected.kind === "available" ? selected.accountId : null,
+      }];
+    })),
     bindings: bindings.filter((binding) => binding.project === project),
   };
 }

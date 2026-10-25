@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { VoiceToolHub, resolveExecutable, voiceToolEnvironment } from "./hub";
+import { VoiceToolHub, launcherCandidates, resolveExecutable, voiceToolEnvironment } from "./hub";
+import { stdioContainment } from "./containment";
 import { VoiceToolsStore } from "./store";
 import { approvalDigest, digest, type VoiceToolServer } from "./contracts";
 
@@ -524,7 +525,12 @@ test.skipIf(!stdioSandboxAvailable || !Bun.which("uv"))("uv run neither builds a
   }
 }, 45_000);
 
-test("the launcher resolves to an absolute executable file on the Viewer's PATH, skipping relative entries and non-executables", async () => {
+test("launcher paths use native separators and executable names on macOS, Windows and Linux", () => {
+  expect(launcherCandidates("bun", String.raw`C:\Tools;relative;.;D:\Bun`, "win32")).toEqual([String.raw`C:\Tools\bun.exe`, String.raw`D:\Bun\bun.exe`]);
+  for (const platform of ["darwin", "linux"] as const) expect(launcherCandidates("uv", "relative:/usr/local/bin:.:/usr/bin", platform)).toEqual(["/usr/local/bin/uv", "/usr/bin/uv"]);
+});
+
+test.skipIf(process.platform === "win32")("the launcher resolves to an absolute executable file on the Viewer's PATH, skipping relative entries and non-executables", async () => {
   const { root } = await setup();
   const [relative, plain, folder, real] = ["relative", "plain", "folder", "real"].map(name => path.join(root, name));
   for (const directory of [relative, plain, folder, real]) await fs.mkdir(directory);
@@ -762,7 +768,7 @@ test("a proposal-chosen stdio dry run cannot read or send secrets saved for anot
   await store.propose({ name: "other", title: "Other", capability: "Search", transport: { type: "stdio", command: "bun", args: ["run", entry] },
     entryFile: { path: entry, sha256: sha(source) } }, actor);
   await new VoiceToolHub(store).dryRun("other", (await store.view()).servers.other.digest);
-  expect((await store.view()).servers.other.lastDryRun?.code).toBe(stdioSandboxAvailable ? "OK" : "START_FAILED");
+  expect((await store.view()).servers.other.lastDryRun?.code).toBe(stdioSandboxAvailable ? "OK" : "CONTAINMENT_REQUIRED");
   expect(received).toBeNull();
 });
 
@@ -865,4 +871,72 @@ test("the real worker refuses a proposal-controlled Host before sending its cred
   expect(expected).toBeTruthy();
   expect(JSON.parse(output).code).toBe("SECRET_DESTINATION");
   expect(peer.requests).toEqual([]);
+});
+
+// Exercise the real helper and pinned code, including a fresh process after the confirmed run.
+test.skipIf(stdioSandboxAvailable)("unavailable containment refuses, requires a fresh owner confirmation per run, and records before code executes", async () => {
+  const { store, root } = await setup();
+  const entry = path.join(root, "server.mjs"), marker = path.join(root, "executed");
+  const source = `import fs from 'node:fs'; import readline from 'node:readline'; import {label} from './sibling.mjs';
+const record=JSON.parse(fs.readFileSync(${JSON.stringify(store.file)},'utf8')).servers.music.lastDryRun;
+if(record.confirmation?.by!=='operator'||record.confirmation.tool!=='music')process.exit(3);
+fs.writeFileSync(${JSON.stringify(marker)},record.confirmation.reason);
+readline.createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(m.id===undefined)return;
+const result=m.method==='initialize'?{protocolVersion:'2025-03-26',capabilities:{tools:{}},serverInfo:{name:'fake',version:'1'}}:{tools:[{name:'search',description:label,inputSchema:{type:'object'}}]};console.log(JSON.stringify({jsonrpc:'2.0',id:m.id,result}));});`;
+  await fs.writeFile(entry, source);
+  await fs.writeFile(path.join(root, "sibling.mjs"), "export const label = 'Host file visible';");
+  await store.propose({ name: "music", title: "Music", capability: "Search", transport: { type: "stdio", command: "bun", args: ["run", entry] },
+    entryFile: { path: entry, sha256: createHash("sha256").update(source).digest("hex") } }, actor);
+  const expected = (await store.view()).servers.music.digest;
+  const reason = (await stdioContainment()).reason!;
+  const hub = new VoiceToolHub(store);
+  await hub.dryRun("music", expected);
+  const warning = (await store.view()).servers.music.lastDryRun!;
+  const consent = { reason, runId: warning.runId! };
+  expect(warning).toEqual({ code: "CONTAINMENT_REQUIRED", at, digest: expect.any(String), containmentReason: reason, runId: expect.any(String) });
+  expect(existsSync(marker)).toBe(false);
+  await expect(hub.dryRun("music", expected, undefined, undefined, consent)).rejects.toThrow("OPERATOR_REQUIRED");
+  await expect(hub.dryRun("music", expected, undefined, () => { throw new Error("revoked"); }, consent)).rejects.toThrow("revoked");
+  expect(existsSync(marker)).toBe(false);
+  await expect(hub.dryRun("music", expected, undefined, () => {}, { ...consent, reason: reason === "MACOS" ? "WINDOWS" : "MACOS" })).rejects.toThrow("STALE_APPROVAL");
+  // A failed audit write cannot allow execution.
+  const auditBlocker = path.join(root, "voice-tools-confirmations");
+  await fs.writeFile(auditBlocker, "blocked");
+  try { await expect(hub.dryRun("music", expected, undefined, () => {}, consent)).rejects.toThrow(); }
+  finally { await fs.rm(auditBlocker); }
+  expect(existsSync(marker)).toBe(false);
+  await hub.dryRun("music", expected, undefined, () => {}, consent);
+  expect(await fs.readFile(marker, "utf8")).toBe(reason);
+  const confirmed = (await new VoiceToolsStore(root, () => at).view()).servers.music;
+  expect(confirmed.lastDryRun?.code).toBe("OK");
+  expect(confirmed.catalog?.tools[0].description).toBe("Host file visible");
+  expect(confirmed.lastDryRun?.confirmation).toEqual({ by: "operator", at, tool: "music", ...consent });
+  const auditDirectory = path.join(root, "voice-tools-confirmations");
+  const auditFiles = await fs.readdir(auditDirectory);
+  expect(auditFiles).toHaveLength(1);
+  const audit = JSON.parse(await fs.readFile(path.join(auditDirectory, auditFiles[0]), "utf8"));
+  expect(audit).toEqual({ by: "operator", at, tool: "music", ...consent, digest: expected, revision: expect.any(Number) });
+  await expect(hub.dryRun("music", confirmed.digest, undefined, () => {}, consent)).rejects.toThrow("STALE_APPROVAL");
+  await fs.rm(marker);
+  const child = spawn(process.execPath, ["-e", `import {VoiceToolHub} from './src/lib/voiceTools/hub'; import {VoiceToolsStore} from './src/lib/voiceTools/store'; const store=new VoiceToolsStore(process.argv[1]); await new VoiceToolHub(store).dryRun('music',(await store.view()).servers.music.digest);` , root],
+    { cwd: process.cwd(), env: { ...voiceToolEnvironment(root, process.env), LLV_STATE_DIR: root }, stdio: ["ignore", "ignore", "pipe"] });
+  let stderr = ""; child.stderr!.on("data", data => { stderr += data; });
+  expect(await new Promise<number | null>(resolve => child.once("close", resolve))).toBe(0);
+  expect(stderr).toBe("");
+  expect(existsSync(marker)).toBe(false);
+  expect(await fs.readdir(auditDirectory)).toEqual(auditFiles);
+  const restarted = new VoiceToolsStore(root, () => at);
+  const next = (await restarted.view()).servers.music;
+  expect(next.lastDryRun?.code).toBe("CONTAINMENT_REQUIRED");
+  const nextConsent = { reason, runId: next.lastDryRun!.runId! };
+  const restartedHub = new VoiceToolHub(restarted);
+  await expect(restartedHub.dryRun("music", next.digest, undefined, () => {}, consent)).rejects.toThrow("STALE_APPROVAL");
+  await restartedHub.dryRun("music", next.digest, undefined, () => {}, nextConsent);
+  await fs.rm(marker);
+  const stableDigest = (await restarted.view()).servers.music.digest;
+  expect(stableDigest).toBe(next.digest);
+  await restartedHub.dryRun("music", stableDigest);
+  await expect(restartedHub.dryRun("music", stableDigest, undefined, () => {}, nextConsent)).rejects.toThrow("STALE_APPROVAL");
+  expect(existsSync(marker)).toBe(false);
+  expect(await fs.readdir(auditDirectory)).toHaveLength(2);
 });

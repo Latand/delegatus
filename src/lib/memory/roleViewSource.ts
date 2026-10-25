@@ -54,6 +54,53 @@ export function roleScopeKeys(): string[] {
   return roleMemoryCollection() ? keys("s:").map(key => key.slice(2)) : [];
 }
 
+/** Cold, one-time recovery inventory. Read only archive identities, never texts
+ * or request histories. Versions and explicit operator removals stay excluded. */
+export function budgetArchiveCandidates(limit?: number): { id: string; scope: string }[] {
+  if (!roleMemoryCollection()) return [];
+  return reader().query<{ id: string; scope: string }, [number]>(`
+    SELECT json_extract(value_json, '$.id') AS id, json_extract(value_json, '$.scope') AS scope
+    FROM state_rows WHERE collection = 'role_memory' AND row_key > 'r:' AND row_key < 'r;'
+      AND json_extract(value_json, '$.state') = 'archived'
+      AND json_extract(value_json, '$.versionOf') IS NULL
+      AND (json_extract(value_json, '$.reason') = 'budget'
+        OR COALESCE(trim(json_extract(value_json, '$.reason')), '') = '')
+    ORDER BY row_key LIMIT ?
+  `).all(limit ?? -1).map(row => ({ ...row, scope: canonicalScope(row.scope) }));
+}
+
+/** A foreign recovery scope needs an accurate inventory without loading its project. */
+export function leftRuleCount(scope: string): number {
+  if (!roleMemoryCollection()) return 0;
+  const project = scopeProject(scope), rawScopes = [scope];
+  if (project) for (const alias of Object.keys(projectAliasSnapshot().aliases)) {
+    if (canonicalProject(alias) === project) rawScopes.push(scope.replace(`:${project}`, `:${alias}`));
+  }
+  return reader().query<{ count: number }, [string]>(`
+    SELECT COUNT(*) AS count FROM state_rows WHERE collection = 'role_memory'
+      AND row_key > 'r:' AND row_key < 'r;'
+      AND json_extract(value_json, '$.versionOf') IS NULL
+      AND json_extract(value_json, '$.state') IN ('archived', 'merged')
+      AND json_extract(value_json, '$.scope') IN (SELECT value FROM json_each(?))
+  `).get(JSON.stringify(rawScopes))!.count;
+}
+
+/** Curator-only evidence, restricted to the requested rule ids. Usage is
+ * attached to lesson requests even when that attempt left no new lesson. */
+export function ruleUsageCounts(ids: readonly string[]): Record<string, { applied: number; misled: number }> {
+  if (!ids.length || !roleMemoryCollection()) return {};
+  const result: Record<string, { applied: number; misled: number }> = {};
+  for (const field of ["applied", "misled"] as const) {
+    const counts = reader().query<{ id: string; count: number }, [string]>(`
+      SELECT u.value AS id, COUNT(*) AS count FROM state_rows s, json_each(s.value_json, '$.${field}') u
+      WHERE s.collection='role_memory' AND s.row_key > 'q:' AND s.row_key < 'q;'
+        AND u.value IN (SELECT value FROM json_each(?)) GROUP BY u.value
+    `).all(JSON.stringify(ids));
+    for (const row of counts) (result[row.id] ??= { applied: 0, misled: 0 })[field] = row.count;
+  }
+  return result;
+}
+
 async function projectedScopeRowsCooperatively(rowKeys: readonly string[]): Promise<RoleMemoryScopeRow[]> {
   if (!rowKeys.length) return [];
   const db = reader();

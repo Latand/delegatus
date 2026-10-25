@@ -3,7 +3,7 @@
 import { effortTierLabel } from "@/components/builderCopy";
 import { Select } from "@/components/ui/Select";
 import { effortScale } from "@/lib/agent/efforts";
-import { ENGINE_MODELS } from "@/lib/agent/models";
+import { listedModels } from "@/lib/agent/models";
 import { useLocale } from "@/lib/i18n";
 import type { CopilotModelEntry } from "@/lib/agent/copilotModels";
 
@@ -45,7 +45,7 @@ export function ReasoningControls({
   const { t } = useLocale();
   const availableModels = engine === "copilot" && copilotModels
     ? copilotModels.map((option) => ({ id: option.id, label: option.name }))
-    : ENGINE_MODELS[engine];
+    : listedModels(engine, model);
   const effortsFor = (value: string) => engine === "copilot"
     ? copilotModels?.find((item) => item.id === value)?.efforts ?? effortScale(engine, value)!
     : effortScale(engine, value)!;
