@@ -304,3 +304,65 @@ final batch verified unchanged source hashes before returning its run count.
 | `scripts/gate-slot.sh` | `64dbbbe91bb82a30ee80135afd59596a1043809ab0c5eab2daef24608c9cb2ad` |
 | `src/lib/runtime/cpuAdmission.ts` | `6dbcfb29707eaeed106cb65b228148d87d3ea9dfc6989af1fd81c6b6b5a53ba9` |
 | `scripts/gate-slot.queue.test.ts` | `c24c1f9b740416c3dbc0c1c3f25fd141f25998ad40b550f4634a909e1b1bc73c` |
+
+## Refresh with asynchronous pressure checks (2026-10-25)
+
+This refresh merges main at `d1873b4e0b495915e584a3392d12232c9d9e8243` into the prior
+refresh head `8e9796383651660178b3420d22cc604f537ef720`. The reviewed delivery
+head remains an ancestor. A final fetch before committing found the same main.
+
+The authorized integration in `scripts/cpu-admission.ts:74` samples
+`GateCpuPressure.check()` inside every SQLite retry attempt and rechecks the
+command owner both before sampling and after the sample awaits. Readiness and
+final claim both pass `requireLowPressure=true`; main's pressure/load refusal
+and reason text remain. `scripts/cpu-admission-lock.ts:8` now accepts and awaits
+promise-returning operations, so asynchronous `SQLITE_BUSY` and `SQLITE_LOCKED`
+failures use the existing bounded backoff and shared monotonic deadline.
+Main's `low_pressure` migration is retained inside the constructor's
+close-on-failure boundary. Both sides' shell and queue tests are retained.
+
+Verification used separate scratch exports with detached heads and pinned
+`origin/main` references. The branch export overlaid the resolved source; all
+seven product/test input files were byte-compared with the stage checkout after
+negative controls were restored. Dependency manifests and lockfiles matched the
+installed dependencies. Logs stayed outside the exports. Every invocation used
+`checkEnvironment` followed by `isolatedEnvironment`, including private HOME,
+XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR and a closed Viewer control URL.
+The supplied gate-slot wrapper admitted one campaign, which ran each explicit
+`bun run test <file>` sequentially through `setsid --wait` with stdin closed.
+
+| Explicit test path | Merged tree | Main |
+| --- | --- | --- |
+| `scripts/cpu-admission-lock.test.ts` | 32 pass | Absent (new file) |
+| `scripts/local-gate.noproc.test.ts` | 3 pass | 3 pass |
+| `src/lib/runtime/cpuAdmission.test.ts` | 50 pass | 50 pass |
+| `src/lib/runtime/gateCpuPressure.test.ts` | 4 pass | 4 pass |
+| `src/lib/runtime/cpuPressure.test.ts` | 8 pass | 8 pass |
+| `scripts/gate-slot.queue.test.ts` | 14 pass | 12 pass |
+| `scripts/gate-slot.test.ts` | 15 pass | 15 pass |
+| `scripts/gate-slot.namespace.integration.test.ts` | 0 pass, 5 skip | 0 pass, 5 skip |
+| `scripts/local-gate.cpuQueue.test.ts` | 2 pass | 2 pass |
+| `scripts/local-gate-tests.cpuQueue.test.ts` | 4 pass | 4 pass |
+| `scripts/local-gate.workflows.test.ts` | 4 pass | 4 pass |
+| `scripts/local-gate.receipts.test.ts` | 8 pass | 8 pass |
+| `scripts/local-gate-tests.test.ts` | 67 pass | 67 pass |
+| `scripts/local-gate.test.ts` | 69 pass | 69 pass |
+
+All rows exited 0. The namespace integration file retains its five opt-in skips
+on each side. The merged tree passed 280 tests; main passed 246.
+`scripts/local-gate.noproc.test.ts` passed all three cases on both trees,
+including owned-process cleanup. No ownership diagnostic recurred.
+
+`bun run test --preload ./src/lib/state/minimumSqlite.preload.ts
+src/lib/runtime/cpuAdmission.test.ts` passed all 50 cases on SQLite 3.39.4.
+`bunx tsc --noEmit` exited 0. The complete campaign ended with
+`FINAL ran-count 32; failures 0`, counting three expected negative controls.
+
+The added regression cases use real writer contention and asynchronous pressure
+sampling for both readiness and claim. A high retry sample refuses admission;
+a low retry sample succeeds within the lock bound. Separate cases cover
+awaited lock failures exhausting the same deadline and a real owner exiting
+while sampling is awaited. Removing the await from retry, caching the first
+pressure sample, and removing the post-sample owner check each caused its two
+targeted regression cases to fail. All mutations were restored before the
+complete suites and typecheck ran.

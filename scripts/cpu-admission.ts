@@ -3,21 +3,15 @@ import { cpuPriorityFromEnv } from "../src/lib/runtime/cpuPriority";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { CpuPressureGate, cpuPressurePolicy, DEFAULT_CPU_PRESSURE_POLICY, parseCpuPressure } from "../src/lib/runtime/cpuPressure";
+import { cpuPressurePolicy } from "../src/lib/runtime/cpuPressure";
+import { GateCpuPressure } from "../src/lib/runtime/gateCpuPressure";
 import { inheritedCpuSlot, cpuAdmissionFile, CpuAdmissionQueue, CPU_QUEUE_SPACING_MS, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_UNPOLLED_MS } from "../src/lib/runtime/cpuAdmission";
 import { reportCpuWait } from "../src/lib/runtime/cpuAdmissionBudget";
-import { cpuQueueDetail } from "../src/lib/runtime/cpuQueueText";
+import { cpuQueueDetail, ordinal } from "../src/lib/runtime/cpuQueueText";
 import { cpuOwnerIdentity, cpuOwnerStatus, cpuOwnerExited, signalSandboxContext } from "../src/lib/runtime/signalSandboxContext";
 
 const policy = cpuPressurePolicy();
-const pressure = new CpuPressureGate({ ...(policy ?? DEFAULT_CPU_PRESSURE_POLICY), releaseAfterMs: Number(process.env.LLV_GATE_PSI_RELEASE_SECONDS ?? 10) * 1000 }, {
-  now: Date.now,
-  sample: () => {
-    if (!policy) return null;
-    try { return parseCpuPressure(fs.readFileSync(process.env.LLV_GATE_PSI_FILE ?? "/proc/pressure/cpu", "utf8")); }
-    catch { return null; }
-  },
-});
+const pressure = new GateCpuPressure(policy ? { ...policy, releaseAfterMs: Number(process.env.LLV_GATE_PSI_RELEASE_SECONDS ?? 10) * 1000 } : null);
 const [mode, key, pid] = process.argv.slice(2);
 if (mode === "--reuse-slot") {
   if (inheritedCpuSlot()) process.exit(0);
@@ -77,18 +71,25 @@ try {
     return new CpuAdmissionQueue(cpuAdmissionFile(), Date.now, CPU_QUEUE_SPACING_MS, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_UNPOLLED_MS,
       { status: cpuOwnerStatus, exited: cpuOwnerExited }, 0);
   });
-  const check = () => {
+  const check = async () => {
     checkOwner();
-    return queue!.check(key, !pressure.check(), owner, mode === "--claim", priority);
+    const reason = await pressure.check();
+    // Sampling yields: the command must still own its ticket before a write.
+    checkOwner();
+    const wait = queue!.check(key, !reason, owner, mode === "--claim", priority, true);
+    return { reason, wait };
   };
   if (mode === "--claim") {
-    process.exitCode = !await lockWait(check) ? 0 : 75;
+    const { reason, wait } = await lockWait(check);
+    if (wait && reason) console.error(`gate-slot: ${reason}`);
+    process.exitCode = !wait ? 0 : 75;
   } else {
     let shown = "";
     for (;;) {
-      const wait = await lockWait(check);
+      const { reason, wait } = await lockWait(check);
       if (!wait && slotAvailable()) break;
-      const text = wait ? cpuQueueDetail(wait.position, wait.remainingMs, wait.stalledMs, wait.priority) : "Waiting for a heavy command slot";
+      const text = reason ? `${reason}${wait ? ` · ${ordinal(wait.position)} in CPU queue` : ""}`
+        : wait ? cpuQueueDetail(wait.position, wait.remainingMs, wait.stalledMs, wait.priority) : "Waiting for a heavy command slot";
       if (text !== shown) { console.error(`gate-slot: ${text}`); shown = text; }
       await Bun.sleep(Number(process.env.LLV_GATE_POLL_SECONDS ?? 2) * 1000);
     }

@@ -15,6 +15,8 @@ poll=${LLV_GATE_POLL_SECONDS:-2}
 
 # CPU placement: the same defaults as src/lib/runtime/cpuPlacement.ts. Each
 # setting is read as DELEGATUS_X, then as the LLV_X an entry point folds it into.
+# owned-runner always applies CPUWeight=10 and IOWeight=10 to the check service,
+# including the no-placement and namespace handoff paths.
 slice=${LLV_GATE_SLICE:-delegatus-agents-work.slice}
 # The machine's online CPUs whatever this process's affinity, like onlineCpuCount.
 cpus=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)

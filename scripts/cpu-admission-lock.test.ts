@@ -144,6 +144,104 @@ test("an uncontended operation returns without waiting or logging", async () => 
 });
 
 for (const code of ["SQLITE_BUSY", "SQLITE_LOCKED"]) {
+  test(`an awaited ${code} is retried within the original bound`, async () => {
+    const time = clock(), lines: string[] = [];
+    let attempts = 0;
+    const result = await admissionLockWait(120, line => lines.push(line), time)(async () => {
+      await Promise.resolve();
+      if (++attempts === 1) throw locked(code);
+      return "ready";
+    });
+    expect(result).toBe("ready");
+    expect(attempts).toBe(2);
+    expect(time.sleeps).toEqual([20]);
+    expect(lines.at(-1)).toBe("gate-slot: CPU admission queue lock acquired after 20 ms");
+  });
+
+  test(`an awaited ${code} cannot extend the lock deadline`, async () => {
+    const time = clock();
+    let attempts = 0;
+    await expect(admissionLockWait(120, () => {}, time)(async () => {
+      await Promise.resolve();
+      attempts++;
+      throw locked(code);
+    })).rejects.toThrow("deadline exceeded after 120 ms");
+    expect(attempts).toBe(3);
+    expect(time.sleeps).toEqual([20, 40, 60]);
+  });
+}
+
+for (const mode of ["--wait", "--claim"]) for (const highOnRetry of [false, true]) {
+  test(`${mode} resamples pressure after SQLITE_BUSY (high on retry: ${highOnRetry})`, async () => {
+    const f = fixture(), preload = path.join(f.dir, "pressure-retry.ts"), psi = path.join(f.dir, "pressure");
+    // The real async pressure reader and real queue run in another process.
+    // Handshakes place a writer after opening and change PSI before retrying.
+    fs.writeFileSync(preload, `
+      import { GateCpuPressure } from ${JSON.stringify(path.resolve("src/lib/runtime/gateCpuPressure.ts"))};
+      import { CpuAdmissionQueue } from ${JSON.stringify(path.resolve("src/lib/runtime/cpuAdmission.ts"))};
+      let resume, attempt = 0;
+      process.on("message", () => { const next = resume; resume = undefined; next(); });
+      process.channel?.unref();
+      const barrier = value => new Promise(resolve => { resume = resolve; process.send(value); });
+      const sample = GateCpuPressure.prototype.check;
+      GateCpuPressure.prototype.check = async function() {
+        await barrier({ kind: "sample", attempt: ++attempt });
+        return sample.call(this);
+      };
+      const check = CpuAdmissionQueue.prototype.check;
+      CpuAdmissionQueue.prototype.check = function(...args) {
+        const wait = check.apply(this, args);
+        process.send({ kind: "checked", waiting: wait !== null });
+        return wait;
+      };
+      Bun.sleep = ms => barrier({ kind: "sleep", ms });
+    `);
+    const samples: number[] = [], checks: boolean[] = [], sleeps: number[] = [];
+    let held = false, expired = false;
+    const child = Bun.spawn([process.execPath, "--preload", preload, "scripts/cpu-admission.ts", mode, "command:pressure-retry", String(process.pid)], {
+      env: { ...process.env, LLV_GATE_LOCK_DIR: f.dir, LLV_GATE_PSI_FILE: psi, DELEGATUS_CPU_PRESSURE: "on",
+        DELEGATUS_CPU_PRESSURE_HOLD: "30", DELEGATUS_CPU_PRESSURE_RELEASE: "20", LLV_GATE_CPU_PRIORITY_SOURCE: "",
+        LLV_GATE_PSI_RELEASE_SECONDS: "0", LLV_CPU_ADMISSION_LOCK_TIMEOUT_MS: "5000", LLV_GATE_POLL_SECONDS: "0.123" },
+      stdout: "ignore", stderr: "pipe",
+      ipc(message, subprocess) {
+        if (message.kind === "sample") {
+          samples.push(message.attempt);
+          fs.writeFileSync(psi, `some avg10=${highOnRetry && message.attempt === 2 ? 90 : 0}.00\n`);
+          if (message.attempt === 1) { f.writer.exec("BEGIN IMMEDIATE"); held = true; }
+          subprocess.send("sample");
+        } else if (message.kind === "sleep") {
+          sleeps.push(message.ms);
+          if (held) { f.writer.exec("COMMIT"); held = false; }
+          subprocess.send("retry");
+        } else if (message.kind === "checked") checks.push(message.waiting);
+      },
+    });
+    const output = new Response(child.stderr).text();
+    const watchdog = setTimeout(() => { expired = true; child.kill("SIGKILL"); }, 5000);
+    try {
+      const code = await child.exited, stderr = await output;
+      expect(expired, stderr).toBe(false);
+      expect(code, stderr).toBe(mode === "--claim" && highOnRetry ? 75 : 0);
+      expect(samples).toEqual(mode === "--wait" && highOnRetry ? [1, 2, 3] : [1, 2]);
+      expect(checks).toEqual(highOnRetry ? mode === "--wait" ? [true, false] : [true] : [false]);
+      expect(sleeps).toEqual(mode === "--wait" && highOnRetry ? [20, 123] : [20]);
+      expect(stderr).toContain("lock acquired after");
+      expect(stderr.includes("Waiting for measured CPU pressure")).toBe(highOnRetry);
+      expect(f.writer.query("SELECT key FROM tickets").all()).toHaveLength(mode === "--wait" || highOnRetry ? 1 : 0);
+      expect(f.writer.query<{ last: number | null }, []>("SELECT last FROM admission").get()!.last === null)
+        .toBe(mode === "--wait" || highOnRetry);
+    } finally {
+      clearTimeout(watchdog);
+      if (child.exitCode === null) child.kill("SIGKILL");
+      await child.exited;
+      await output;
+      if (held) f.writer.exec("ROLLBACK");
+      f.close();
+    }
+  }, 15_000);
+}
+
+for (const code of ["SQLITE_BUSY", "SQLITE_LOCKED"]) {
   test(`${code} yields with bounded backoff and fails at one deadline`, async () => {
     const time = clock(), lines: string[] = [];
     let attempts = 0;
@@ -221,6 +319,54 @@ test("a real writer blocking opening and checking releases on an event-loop turn
 });
 
 for (const mode of ["--wait", "--claim"]) {
+  test.skipIf(process.platform !== "linux")(`${mode} rechecks its owner after awaiting pressure`, async () => {
+    const f = fixture(), preload = path.join(f.dir, "owner-after-pressure.ts");
+    fs.writeFileSync(preload, `
+      import { GateCpuPressure } from ${JSON.stringify(path.resolve("src/lib/runtime/gateCpuPressure.ts"))};
+      // Hold periodic observation so this test requires the post-await guard.
+      const interval = globalThis.setInterval;
+      globalThis.setInterval = () => interval(() => {}, 1000);
+      GateCpuPressure.prototype.check = async function() {
+        await new Promise(resolve => {
+          process.once("message", resolve);
+          process.send("sampling");
+        });
+        return null;
+      };
+    `);
+    const owner = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], {
+      stdin: "ignore", stdout: "ignore", stderr: "ignore",
+    });
+    let sampled = false, expired = false;
+    const child = Bun.spawn([process.execPath, "--preload", preload, "scripts/cpu-admission.ts", mode, "command:owner-exited", String(owner.pid)], {
+      env: { ...process.env, LLV_GATE_LOCK_DIR: f.dir, DELEGATUS_CPU_PRESSURE: "off" },
+      stdin: "ignore", stdout: "ignore", stderr: "pipe",
+      ipc(message, subprocess) {
+        if (message === "sampling") {
+          sampled = true;
+          owner.kill("SIGTERM");
+          void owner.exited.then(() => subprocess.send("sampled"));
+        }
+      },
+    });
+    const output = new Response(child.stderr).text();
+    const watchdog = setTimeout(() => { expired = true; child.kill("SIGKILL"); }, 5000);
+    try {
+      const code = await child.exited, stderr = await output;
+      expect(expired, stderr).toBe(false);
+      expect(sampled).toBe(true);
+      expect(code, stderr).toBe(130);
+      expect(f.writer.query("SELECT key FROM tickets").all()).toEqual([]);
+      expect(f.writer.query<{ last: number | null }, []>("SELECT last FROM admission").get()!.last).toBeNull();
+    } finally {
+      clearTimeout(watchdog);
+      if (child.exitCode === null) child.kill("SIGKILL");
+      if (owner.exitCode === null) owner.kill("SIGKILL");
+      await Promise.all([child.exited, owner.exited, output]);
+      f.close();
+    }
+  }, 15_000);
+
   test.skipIf(process.platform !== "linux")(`${mode} cancels during opening lock contention after a signal`, async () => {
     const f = fixture();
     f.writer.exec("BEGIN IMMEDIATE");

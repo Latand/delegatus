@@ -5,7 +5,7 @@ export function admissionLockWait(timeoutMs = 30_000, say: (line: string) => voi
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("CPU admission lock timeout must be a positive number of milliseconds");
   let deadline: number | undefined;
   let started: number | undefined;
-  return async function retry<T>(operation: () => T): Promise<T> {
+  return async function retry<T>(operation: () => T | Promise<T>): Promise<T> {
     let delay = 20;
     let retrying = false;
     for (;;) {
@@ -13,7 +13,7 @@ export function admissionLockWait(timeoutMs = 30_000, say: (line: string) => voi
         throw new Error(`CPU admission queue lock deadline exceeded after ${timeoutMs} ms; checks did not start`);
       }
       try {
-        const result = operation();
+        const result = await operation();
         if (started !== undefined) {
           say(`gate-slot: CPU admission queue lock acquired after ${Math.round(clock.now() - started)} ms`);
           started = undefined;

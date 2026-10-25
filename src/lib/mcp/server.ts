@@ -79,6 +79,7 @@ export const MCP_TOOL_NAMES = [
   "create_task",
   "update_task",
   "create_pipeline",
+  "pipeline_checks",
   "pipeline_action",
   "stage_report",
   "leave_lesson",
@@ -147,6 +148,7 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
   "create_task",
   "update_task",
   "create_pipeline",
+  "pipeline_checks",
   "pipeline_action",
   /* Records the calling attempt's own completion, which the stage then settles
      on. A replayed clientRequestId must answer with the report the first call
@@ -3648,6 +3650,7 @@ export const RECOVERY_CONTRACT_DESCRIPTION = [
 ].join(" ");
 
 const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
+  pipeline_checks: "Choose Cloud or local checks for a pipeline stage, lane or its project default. Stage scope requires stageId. Cloud is the default. A null execution restores inheritance. The voice companion can ask its project orchestrator to change this setting.",
   spawn_agent: [
     "Create a Delegatus-managed agent conversation and return its durable conversation and launch ids.",
     'For role: "deployer", pass top-level confirm: "deploy" and quote the operator\'s approval in the brief. Only the target project\'s designated orchestrator seat or the operator\'s own session may launch a deployer; other callers are refused before any request is claimed. Other roles ignore confirm.',
@@ -3720,7 +3723,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Every accepted call is recorded on the pipeline with the calling conversation, the attempt and the time.",
     "When the project keeps learned rules, the first accepted report of a stage that is not a review carries lessonRequest: answer it with leave_lesson before the turn ends.",
   ].join(" "),
-  curate_rules: "Only the machine's live scheduled curator conversation may call. read lists this pass's scopes and import batch; scope imports reads up to 40 candidate parts / 64 KB, with every occurrence; adopt/drop/defer account for that entire batch. adopt orders use adopt:<candidate>:<index>. Ordinary scope reads page its active rules, versions, budget archives, recent departures, role scaffold, role attempts and other-project evidence within 24 KB (follow cursor). apply accounts for every active rule of the named scopes at their read revisions, orders survivors best first, and can rewrite, merge, move, split, archive with reasons or restore. Every change needs a note; role moves up to project or machine require why every role there acts on it. Split placeholders: split:<source-id>:1 for the second part and so on; the first keeps its id. Refused calls store nothing; after CURATE_STALE read again. problem [{id, statement, evidence, note}] transfers a concrete defect or mismatch to its original project seat agenda and archives it reversibly. The seat decides whether to propose a task or issue and asks the operator; create none yourself. Writes stay local. Operator-kept rules remain whole and active. Earlier texts and pass history are immutable and reversible from the learned-rules window.",
+  curate_rules: "Only the machine's live scheduled curator conversation may call. read lists this pass's scopes, import batch and any one-time machine budgetSweep candidate counts; scope imports reads up to 40 candidate parts / 64 KB, with every occurrence; adopt/drop/defer account for that entire batch. adopt orders use adopt:<candidate>:<index>. Ordinary scope reads page its active rules, versions, budget archives, unexplained sweep archives, recent departures, role scaffold, role attempts and other-project evidence within 24 KB (follow cursor). apply accounts for every active rule of the named scopes at their read revisions, orders survivors best first, and can rewrite, merge, move, split, archive with reasons or restore. Every change needs a note; role moves up to project or machine require why every role there acts on it. Split placeholders: split:<source-id>:1 for the second part and so on; the first keeps its id. Refused calls store nothing; after CURATE_STALE read again. problem [{id, statement, evidence, note}] transfers a concrete defect or mismatch to its original project seat agenda and archives it reversibly. The seat decides whether to propose a task or issue and asks the operator; create none yourself. Writes stay local. Operator-kept rules remain whole and active. Earlier texts and pass history are immutable and reversible from the learned-rules window.",
   leave_lesson: [
     "Any stage answer may include applied and misled, each up to five distinct exact ids of rules this attempt received: applied changed what you did; misled was wrong or stale. An id may appear in only one field. These measurements are optional and may accompany none, lesson, rewrite or problem.",
     "A project's designated orchestrator seat may also call unasked, with lesson or rewrite, for a practice that can come back; a defect goes to a board task (create_task). While Delegatus memory is on, the operator's own root conversation may call unasked too, with lesson at scope project or machine or with rewrite of a rule it reads. Write no names of people, accounts, emails, tokens, ids or absolute paths.",
@@ -4049,6 +4052,7 @@ const taskStepsInputSchema = z.array(z.object({
 })).max(TASK_STEPS_LIMIT).describe("Up to twenty checklist steps. Pipeline references derive live step motion; other references are links.");
 
 export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
+  pipeline_checks: z.object({ clientRequestId: clientRequestIdSchema, pipelineId: entityIdSchema, stageId: entityIdSchema.optional(), scope: z.enum(["stage", "lane", "project"]), execution: z.enum(["cloud", "local"]).nullable() }),
   publish_prototype_review: prototypePublishSchema,
   resend_prototype_review_telegram: z.object({ clientRequestId: clientRequestIdSchema, reviewId: z.string().regex(/^pr_[a-f0-9]{7,32}$/i) }).strict(),
   read_prototype_review: z.object({ clientRequestId: clientRequestIdSchema.optional(), taskId: z.string().min(1).optional() }).strict(),
@@ -4299,7 +4303,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     merge: z.array(z.object({ into: z.string(), from: z.array(z.string()).min(1).max(512), rule: lessonTextSchema(RULE_MIN_CHARS, RULE_MAX_CHARS), why: lessonTextSchema(1, WHY_MAX_CHARS).optional(), note: z.string().trim().min(1).max(1000) }).strict()).max(512).optional(),
     move: z.array(z.object({ id: z.string(), to: z.string(), note: z.string().trim().min(1).max(1000) }).strict()).max(512).optional(),
     split: z.array(z.object({ id: z.string(), parts: z.array(z.object({ to: z.string(), rule: lessonTextSchema(RULE_MIN_CHARS, RULE_MAX_CHARS), why: lessonTextSchema(1, WHY_MAX_CHARS).optional() }).strict()).min(2).max(16), note: z.string().trim().min(1).max(1000) }).strict()).max(512).optional(),
-    archive: z.array(z.object({ id: z.string(), reason: z.enum(["task-specific", "stale", "in-code", "in-instructions", "no-reader", "contradicted", "duplicate"]), against: z.string().optional(), where: z.string().max(512).optional(), note: z.string().trim().min(1).max(1000) }).strict()).max(512).optional(),
+    archive: z.array(z.object({ id: z.string(), reason: z.enum(["task-specific", "stale", "in-code", "in-instructions", "no-reader", "contradicted", "duplicate", "budget"]), against: z.string().optional(), where: z.string().max(512).optional(), note: z.string().trim().min(1).max(1000) }).strict()).max(512).optional(),
     adopt: z.array(z.object({ candidate: z.string(), occurrences: z.array(z.string()).min(1).max(512), parts: z.array(z.object({ to: z.string(), rule: lessonTextSchema(RULE_MIN_CHARS, RULE_MAX_CHARS), why: lessonTextSchema(1, WHY_MAX_CHARS) }).strict()).min(1).max(16), note: z.string().trim().min(1).max(1000) }).strict()).max(40).optional(),
     drop: z.array(z.object({ candidate: z.string(), occurrences: z.array(z.string()).min(1).max(512), reason: z.enum(["task-specific", "stale", "in-code", "in-instructions", "no-reader", "contradicted", "duplicate"]), where: z.string().max(512).optional(), note: z.string().trim().min(1).max(1000), forRoom: z.boolean().optional() }).strict()).max(40).optional(),
     defer: z.array(z.object({ candidate: z.string(), occurrences: z.array(z.string()).min(1).max(512) }).strict()).max(40).optional(),
