@@ -44,7 +44,8 @@ type Target = {
   answered_by: "install" | "service";
   fallback: "service" | "none";
   enabled: boolean;
-  engine: RelayEngine | null;
+  engine: RelayEngine | "codex-cloud" | null;
+  cloudEnvironmentId?: string | null;
   model: string | null;
   effort: string | null;
   project: string | null;
@@ -162,7 +163,7 @@ const stamp = (value: string, locale: string) => {
   return date.toLocaleString(localeTag(locale), { year, month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
 };
 
-const modelLabel = (engine: RelayEngine | null, model: string | null) => engine && model ? ENGINE_MODELS[engine].find((item) => item.id === model)?.label ?? model : null;
+const modelLabel = (engine: RelayEngine | "codex-cloud" | null, model: string | null) => engine === "codex-cloud" ? "Codex Cloud · GPT-6.1 Sol" : engine && model ? ENGINE_MODELS[engine].find((item) => item.id === model)?.label ?? model : null;
 
 const NUMBER = `h-7 rounded-control border border-border bg-card px-2 text-ui text-primary tabular-nums disabled:opacity-50 max-sm:h-11 max-sm:text-body ${FOCUS}`;
 const PHONE_SELECT = "max-sm:h-11 max-sm:text-body";
@@ -449,8 +450,9 @@ function TargetRow({ relay, target, running, signedIn, actions, open, onOpen, fr
   onOpen: () => void;
 }) {
   const { t } = useLocale();
-  const scale = target.engine ? effortScale(target.engine, target.model) ?? [] : [];
-  const noAccount = target.engine !== null && !signedIn[target.engine];
+  const localEngine = target.engine === "codex-cloud" ? "codex" : target.engine;
+  const scale = localEngine ? effortScale(localEngine, target.model) ?? [] : [];
+  const noAccount = target.engine !== null && target.engine !== "codex-cloud" && !signedIn[target.engine];
   const canAnswer = target.engine !== null && target.model !== null && !noAccount;
   const limit = target.memberLimitPerHour === undefined ? RELAY_MEMBER_ANSWERS_PER_HOUR : target.memberLimitPerHour;
   const configured = target.engine !== null && target.model !== null;
@@ -462,7 +464,7 @@ function TargetRow({ relay, target, running, signedIn, actions, open, onOpen, fr
       <div className="flex min-h-9 min-w-0 items-center gap-2 max-sm:min-h-11">
         <button type="button" aria-expanded={open} onClick={onOpen} data-external-relay-target-fold=""
           className={`flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-control px-1 text-left hover:bg-sunken max-sm:min-h-11 ${FOCUS}`}>
-          {target.engine ? <EngineMark engine={target.engine} size={14} /> : <Dot tone="muted" className="mx-1" />}
+          {target.engine ? <EngineMark engine={localEngine!} size={14} /> : <Dot tone="muted" className="mx-1" />}
           <span className="flex min-w-0 flex-1 flex-col">
             <span className="flex min-w-0 items-center gap-1.5">
               <span className="line-clamp-2 min-w-0 break-words text-ui font-semibold leading-4 text-primary" title={target.name}>{target.name}</span>
@@ -473,7 +475,7 @@ function TargetRow({ relay, target, running, signedIn, actions, open, onOpen, fr
               {configured ? (
                 <>
                   <span className="shrink-0">{modelLabel(target.engine, target.model)}</span>
-                  {target.effort ? <EffortScale effort={target.effort} color={`var(--color-${target.engine}-mark)`} /> : null}
+                  {target.effort ? <EffortScale effort={target.effort} color={`var(--color-${localEngine}-mark)`} /> : null}
                   <span className="min-w-0 truncate">{` · ${load}`}</span>
                 </>
               ) : <span className="min-w-0 truncate">{t("externalRelay.target.needsEngine")}</span>}
@@ -490,14 +492,16 @@ function TargetRow({ relay, target, running, signedIn, actions, open, onOpen, fr
         <div className="flex min-w-0 flex-col gap-1.5 pl-7 pt-1 max-sm:pl-1">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5 max-sm:flex-col max-sm:items-stretch">
             <div role="group" data-external-relay-engine="" aria-label={name("externalRelay.target.engine")} className="max-sm:[&_button]:min-h-11 max-sm:[&_button]:px-3 max-sm:[&_button]:text-ui">
-              <EngineRadioGroup engine={(target.engine ?? "") as RelayEngine} disabled={actions.busy}
+              <EngineRadioGroup engine={(target.engine === "codex-cloud" ? "" : target.engine ?? "") as RelayEngine} disabled={actions.busy}
                 onChange={(next) => { const engine = next as RelayEngine; if (engine !== target.engine) actions.patchTarget(target, { engine, model: defaultModelFor(engine), effort: null }); }} />
+              <button type="button" aria-pressed={target.engine === "codex-cloud"} disabled={actions.busy}
+                className={QUIET} onClick={() => actions.patchTarget(target, { engine: "codex-cloud", model: "gpt-6.1-sol", effort: null })}>Codex Cloud</button>
             </div>
             <div className="flex min-w-0 flex-1 items-center gap-1.5">
               <Select aria-label={name("externalRelay.target.model")} title={t("externalRelay.target.model")} value={target.model ?? ""} disabled={actions.busy || !target.engine} className={`min-w-0 flex-1 ${PHONE_SELECT}`}
-                onChange={(event) => { const model = event.target.value; actions.patchTarget(target, { model, effort: target.effort && target.engine && effortScale(target.engine, model)?.includes(target.effort) ? target.effort : null }); }}>
+                onChange={(event) => { const model = event.target.value; actions.patchTarget(target, { model, effort: target.effort && target.engine && effortScale(localEngine!, model)?.includes(target.effort) ? target.effort : null }); }}>
                 {target.model ? null : <option value="" disabled>{t("externalRelay.target.choose")}</option>}
-                {target.engine ? listedModels(target.engine, target.model).map((model) => <option key={model.id} value={model.id}>{model.label}</option>) : null}
+                {target.engine === "codex-cloud" ? <option value="gpt-6.1-sol">GPT-6.1 Sol</option> : localEngine ? listedModels(localEngine, target.model).map((model) => <option key={model.id} value={model.id}>{model.label}</option>) : null}
               </Select>
               <Select aria-label={name("externalRelay.target.effort")} title={t("externalRelay.target.effort")} value={target.effort ?? ""} disabled={actions.busy || !target.engine} className={`min-w-0 max-sm:flex-1 sm:w-28 ${PHONE_SELECT}`}
                 onChange={(event) => actions.patchTarget(target, { effort: event.target.value || null })}>
@@ -539,9 +543,15 @@ function TargetRow({ relay, target, running, signedIn, actions, open, onOpen, fr
  * when `here`, routes each to this install. A clone created from the card is
  * set up by `useCloneSetup` instead, which retries what failed.
  */
-async function adoptTargets(relayId: string, targets: Target[], engine: RelayEngine, here: boolean): Promise<void> {
+async function adoptTargets(relayId: string, targets: Target[], engine: RelayEngine | null, here: boolean, cloudHere: boolean): Promise<void> {
   const base = `/api/external-relay/relays/${encodeURIComponent(relayId)}`;
-  for (const target of targets.filter((item) => item.engine === null)) {
+  for (const target of targets) {
+    if (target.engine === "codex-cloud") {
+      if (cloudHere && target.answered_by !== "install")
+        await call(`${base}/targets/${encodeURIComponent(target.id)}`, "PATCH", { answered_by: "install" });
+      continue;
+    }
+    if (target.engine !== null || !engine) continue;
     const set = await call(base, "PATCH", { target: { id: target.id, engine, model: defaultModelFor(engine) } });
     if (set.ok && here && target.answered_by !== "install")
       await call(`${base}/targets/${encodeURIComponent(target.id)}`, "PATCH", { answered_by: "install" });
@@ -556,8 +566,7 @@ async function adoptTargets(relayId: string, targets: Target[], engine: RelayEng
  * relay's chats said is never shown here: those conversations are listed with
  * the others (the sidebar's entry for the service) and open in the agent window.
  * A relay whose descriptor lists `clone_create` adds «Створити клона» below the
- * rows (CloneCreate.tsx); the clone it creates takes the signed-in engine
- * (Claude first) and is answered here.
+ * rows (CloneCreate.tsx); new clones use Codex Cloud and are answered here.
  */
 function RelayCard({ relay: stored, status, signedIn, onChanged }: { relay: RelayView; status: StatusRow | null; signedIn: Record<RelayEngine, boolean>; onChanged: () => Promise<void> }) {
   const { t, locale } = useLocale();
@@ -596,7 +605,7 @@ function RelayCard({ relay: stored, status, signedIn, onChanged }: { relay: Rela
   const clone = useCloneCreate({ relayId: relay.id, stored: relay.cloneRequest ?? null, created: relay.cloneCreated ?? null, onChanged });
   const freshId = clone.phase.kind === "created" ? clone.phase.targetId : null;
   const fresh = freshId ? relay.targets.find((target) => target.id === freshId) ?? null : null;
-  const defaultEngine: RelayEngine | null = signedIn.claude ? "claude" : signedIn.codex ? "codex" : null;
+  const defaultEngine = "codex-cloud" as const;
   const setup = useCloneSetup({ relayId: relay.id, phase: clone.phase, recorded: relay.cloneCreated?.request_id ?? null, target: fresh, engine: defaultEngine, onChanged });
   const act = async (url: string, method: string, body?: object) => {
     setBusy(true); setError(null);
@@ -693,7 +702,7 @@ export function ExternalRelaySection({ pairEngine = null, pairDisabled = false, 
   const paired = async (relay: RelayView) => {
     const builtIn = KNOWN_RELAYS.some((item) => item.origin === relay.origin);
     const engine = pairEngine ?? (builtIn ? (signedIn.claude ? "claude" : signedIn.codex ? "codex" : null) : null);
-    if (engine) await adoptTargets(relay.id, relay.targets, engine, builtIn && signedIn[engine]);
+    await adoptTargets(relay.id, relay.targets, engine, builtIn && engine !== null && signedIn[engine], builtIn);
     await refresh();
     onPaired?.(relay);
   };

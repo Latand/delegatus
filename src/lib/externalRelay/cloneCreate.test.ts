@@ -93,7 +93,7 @@ test("request, poll and creation: the upload goes as a square JPEG, the new targ
     expect(await checkCloneRequest("celestia", "req_1")).toEqual({ status: "created", target_id: "fresh", username: "nichna_sova_bot" });
     expect(stored().cloneRequest).toBeUndefined();
     expect(stored().cloneCreated).toMatchObject({ request_id: "req_1", target_id: "fresh", name: "Нічна Сова", username: "nichna_sova_bot", photo_failed: false });
-    expect(stored().targets.map((target) => [target.id, target.engine, target.answered_by])).toEqual([["old", "claude", "install"], ["fresh", null, "install"]]);
+    expect(stored().targets.map((target) => [target.id, target.engine, target.answered_by])).toEqual([["old", "claude", "install"], ["fresh", "codex-cloud", "install"]]);
   } finally { await server.close(); }
 });
 

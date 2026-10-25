@@ -1,3 +1,4 @@
+import { projectDirectoryCandidates } from "@/lib/scanner/projectDirectories";
 import { ExternalRelayError } from "./client";
 import { answerCapabilities, checkedAnswerV2, formatSection, richAnswerInstructions } from "./answerV2";
 import { sealOwnerAnswer, ownerAnswerDrops } from "./ownerAnswer";
@@ -823,8 +824,8 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
         launched = { status: 202, body: { conversationId: turn.conversationId, initialMessage: sent.outcome === "delivered" ? "delivered" : "queued" } };
       } else {
         launched = await ports.launch({
-          engine: input.target.engine, model: input.target.model, effort: input.target.effort,
-          cwd: os.homedir(), prompt: ownerRunPrompt(input.request, input.owner, input.target.hardCapMinutes) + (input.inboundContext ? "\n" + input.inboundContext : ""),
+          engine: input.target.engine === "codex-cloud" ? "codex" : input.target.engine, model: input.target.model, effort: input.target.effort,
+          cwd: (input.target.project ? projectDirectoryCandidates(input.target.project, 1)[0] : null) ?? os.homedir(), prompt: ownerRunPrompt(input.request, input.owner, input.target.hardCapMinutes) + (input.inboundContext ? "\n" + input.inboundContext : ""),
           title: `Relay · ${input.target.name}`, clientAttemptId: turn.clientAttemptId, accountId: input.accountId,
           mcpServers: ["viewer"], plugins: [], notifyLauncher: false,
         }, authorize);

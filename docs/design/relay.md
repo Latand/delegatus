@@ -3406,3 +3406,29 @@ Agent failures retain a scrubbed diagnostic in the local answer record and
 journal, including the launch or observation step and exit code/signal when
 available. No specific cause for a short pre-transcript launch failure is
 assumed without a receipt or host error identifying it.
+
+### Codex Cloud target engine
+
+New targets select `codex-cloud`, model `gpt-6.1-sol`. Existing targets keep
+their engine. Each answer round sends the existing composed prompt to a fresh
+app-server WebSocket thread, with `approvalPolicy: never` and
+`serviceTier: ultrafast`. Restricted answers disable shell, apps and subagents.
+Service tools remain request-bound relay calls through the structured reply
+loop; they are not connected directly to the Cloud environment. Heartbeat
+steps, completion delivery and the 30-day answer record remain in the runner.
+
+The install configures `LLV_CODEX_CLOUD_URL` (a secure app-server WebSocket),
+optional `LLV_CODEX_CLOUD_TOKEN`, and `LLV_CODEX_CLOUD_ENVIRONMENT_ID` (an
+answer environment configuration id). A target can override the latter with
+`cloudEnvironmentId`. `LLV_CODEX_CLOUD_PROJECT_ENVIRONMENTS` is a JSON object
+mapping project keys to repository environment configuration ids. Repository
+bindings take precedence over the general answer environment. Owner requests
+use full access in that repository environment; without a project environment
+configuration they use the local project directory.
+
+Cloud admission does not consult local account capacity. A confirmed Cloud
+refusal or exhausted limit invokes the local path once per request. A lost
+connection after a turn starts does not prove failure and cannot duplicate an
+owner task. An interrupted turn must report terminal status before fallback.
+The Cloud transport is isolated in `src/lib/externalRelay/cloud.ts`; tests
+replace it with a fake and never connect to Cloud.
