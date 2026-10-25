@@ -35,6 +35,23 @@ function inertBindings(overrides: Partial<McpToolBindings> = {}): McpToolBinding
   } as McpToolBindings;
 }
 
+test.each([100, 101])("pipeline_action account id with %i supplementary characters keeps its UTF-16 bound before dispatch", async count => {
+  const received: unknown[] = [];
+  const resumeCondition = { kind: "account-usage", engine: "codex", accountId: "🎵".repeat(count), window: "weekly", belowPercent: 80 };
+  await withProtocolClient(inertBindings({ pipeline_action: async args => { received.push(args); return { ok: true }; } }), async client => {
+    const result = await client.callTool({ name: "pipeline_action", arguments: {
+      clientRequestId: "unicode-account", pipelineId: "paused-fixture", action: "pause", resumeCondition,
+    } });
+    if (count === 100) {
+      expect(result.isError).not.toBe(true);
+      expect(received).toEqual([expect.objectContaining({ resumeCondition })]);
+    } else {
+      expect(result.isError).toBe(true);
+      expect(received).toEqual([]);
+    }
+  });
+});
+
 test("agent_fleet advertises summary-first filters and bounded detail through the protocol", async () => {
   let received: unknown;
   await withProtocolClient(inertBindings({ agent_fleet: async args => { received = args; return { agents: { live: 0 } }; } }), async client => {
@@ -64,6 +81,45 @@ async function withProtocolClient<T>(
     await server.close();
   }
 }
+
+test.each([
+  "2026-10-26T09:00Z",
+  "2026-10-26T09:00+02:00",
+  "2026-10-26T09:00-02:00",
+  "2026-10-26T09:00:00Z",
+  "2026-10-26T09:00:00+02:00",
+  "2026-10-26T09:00:00.123Z",
+])("pipeline_action dispatches pause date %s without changing its precision", async at => {
+  const received: unknown[] = [];
+  await withProtocolClient(inertBindings({ pipeline_action: async args => { received.push(args); return {}; } }), async client => {
+    const resumeCondition = { kind: "date", at };
+    const result = await client.callTool({ name: "pipeline_action", arguments: {
+      clientRequestId: "pause-date", pipelineId: "paused-fixture", action: "pause", resumeCondition,
+    } });
+    expect(result.isError).not.toBe(true);
+    expect(received).toEqual([expect.objectContaining({ action: "pause", resumeCondition })]);
+  });
+});
+
+test.each([
+  "2026-02-29T09:00Z",
+  "2026-02-29T09:00:00+02:00",
+  "2026-10-26T24:00Z",
+  "2026-10-26T09:60Z",
+  "2026-10-26T09:00+02:60",
+  "2026-10-26T09:00",
+  "not a date",
+])("pipeline_action rejects invalid pause date %s before dispatch", async at => {
+  let calls = 0;
+  await withProtocolClient(inertBindings({ pipeline_action: async () => { calls++; return {}; } }), async client => {
+    const result = await client.callTool({ name: "pipeline_action", arguments: {
+      clientRequestId: "invalid-pause-date", pipelineId: "paused-fixture", action: "pause",
+      resumeCondition: { kind: "date", at },
+    } });
+    expect(result.isError).toBe(true);
+    expect(calls).toBe(0);
+  });
+});
 
 function requiredRoleParams(role: ReturnType<typeof listRoles>[number]): Record<string, string | number> {
   return Object.fromEntries(role.parameters.map((parameter) => {
@@ -125,8 +181,8 @@ test("spawn_agent advertises an optional account pin with project binding semant
     const tool = (await client.listTools()).tools.find((candidate) => candidate.name === "spawn_agent")!;
     expect(tool.inputSchema.properties).toHaveProperty("account");
     expect(tool.inputSchema.required ?? []).not.toContain("account");
-    const account = tool.inputSchema.properties!.account as { anyOf: { type: string }[]; description: string };
-    expect(account.anyOf.map((choice) => choice.type)).toEqual(["string", "null"]);
+    const account = tool.inputSchema.properties!.account as { type: string[]; description: string };
+    expect(account.type).toEqual(["string", "null"]);
   });
 });
 
@@ -688,18 +744,11 @@ test("create_pipeline publishes the stage contract in its tool definition", asyn
     expect(stage?.kind?.enum).toEqual(["run", "review-loop"]);
     expect(stage?.engine?.enum).toEqual(["claude", "codex"]);
     expect(stage?.role?.properties?.roleId?.enum).toEqual([...ROLE_IDS]);
-    /* The two rules the reported walk actually turned on. */
     /* #1868: the fail edge publishes what happens once its rounds are spent. */
     type EdgeSchema = { properties?: Record<string, { enum?: string[]; description?: string }>; anyOf?: EdgeSchema[] };
     const onFailSchema = stage?.onFail as EdgeSchema | undefined;
     const onFail = onFailSchema?.properties ? onFailSchema : onFailSchema?.anyOf?.find((branch) => branch.properties);
     expect(onFail?.properties?.onExhausted?.enum).toEqual(["advance", "stop-after-fix", "park"]);
-    /* #2425/#2426: terminal gates re-check the last fix and explicit stops remain. */
-
-    /* Reachability, the draft baseRef rule and the shape of a review are
-       graph-level facts no per-field schema can carry. A review is a reviewer
-       and a fix stage; review-loop is the legacy kind stored lanes keep
-       (docs/design/agent-prompt-contract.md §2.10 F). */
   });
 });
 
@@ -1027,7 +1076,7 @@ test("the published update_task schema advertises replaceable notes without auth
   await withProtocolClient(inertBindings(), async client => {
     const tool = (await client.listTools()).tools.find(tool => tool.name === "update_task")!;
     const properties = tool.inputSchema.properties!;
-    expect(properties.note).toMatchObject({ anyOf: [{ type: "string" }, { type: "null" }] });
+    expect(properties.note).toMatchObject({ type: ["string", "null"] });
     expect(properties.author).toBeUndefined();
     expect(properties.noteAuthor).toBeUndefined();
   });

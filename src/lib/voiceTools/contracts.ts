@@ -157,7 +157,10 @@ export const secretDestinationSchema = z.string().max(4096).refine(value => {
   if (/^stdio:[a-z][a-z0-9_]{1,23}(?::sha256:[a-f0-9]{64})?$/.test(value)) return true;
   try { const url = new URL(value); return !url.hostname.includes("*") && allowedHttpUrl(value) && url.origin === value; } catch { return false; }
 });
-export const secretInputSchema = z.object({ value: z.string().min(8).max(8192).optional(), destinations: z.array(secretDestinationSchema).min(1).max(32) }).strict();
+// Credential bounds match the store's JavaScript string lengths, including
+// supplementary characters; Zod 4.5+ measures .min/.max in code points.
+export const secretInputSchema = z.object({ value: z.string().max(8192).refine(value => value.length >= 8 && value.length <= 8192,
+  { message: "must be 8–8192 UTF-16 code units" }).optional(), destinations: z.array(secretDestinationSchema).min(1).max(32) }).strict();
 export const secretsSchema = z.record(secretReferenceSchema, secretInputSchema).refine(v => Object.keys(v).length <= 256)
   .refine(v => Buffer.byteLength(JSON.stringify(v)) <= voiceToolBounds.secretBytes);
 export type SecretPolicies = Record<string, string[]>;

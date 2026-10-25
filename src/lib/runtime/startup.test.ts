@@ -3093,6 +3093,7 @@ test.each(["codex", "claude"] as const)(
     const scheduledRetryDelays: number[] = [];
     const startupLogs: unknown[][] = [];
     let restoreClock = () => {};
+    let engineIdentity: { pid: number; startIdentity: string | null } | null = null;
     dependencies.schedule = (callback, delayMs) => {
       scheduledRetries.push(callback); scheduledRetryDelays.push(delayMs);
       return { unref() {} };
@@ -3104,6 +3105,7 @@ test.each(["codex", "claude"] as const)(
         viewer: { pid: number; startIdentity: string | null };
         engine: { pid: number; startIdentity: string | null };
       };
+      engineIdentity = identities.engine;
       expect(new Set([process.pid, identities.viewer.pid, identities.engine.pid]).size).toBe(3);
       expect(procBackend.processIdentity(identities.viewer.pid)).toBe(identities.viewer.startIdentity);
       expect(procBackend.processIdentity(identities.engine.pid)).toBe(identities.engine.startIdentity);
@@ -3198,6 +3200,12 @@ test.each(["codex", "claude"] as const)(
       await bindStructuredDeliveryQueue([], { registry, client: null });
       if (procBackend.pidAlive(incumbent.pid)) incumbent.kill("SIGKILL");
       await incumbent.exited;
+      if (engineIdentity
+        && engineIdentity.startIdentity !== null
+        && procBackend.processIdentity(engineIdentity.pid) === engineIdentity.startIdentity) {
+        try { process.kill(engineIdentity.pid, "SIGKILL"); } catch { /* fixture process already exited */ }
+        await waitFor(() => !procBackend.pidAlive(engineIdentity!.pid), 5_000);
+      }
       for (const replacement of replacements) {
         if (procBackend.pidAlive(replacement.pid)) replacement.kill("SIGKILL");
         await replacement.exited;
@@ -6495,5 +6503,82 @@ test("a refused pass logs its process once, preserves pipeline members and adopt
     db.close(); journal.close(); registry.close();
     if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
     fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+/* A pipeline recovery reserving its successor while startup reads the
+   membership selection used to fail the whole pass, which then repeated every
+   phase before it. Only the selection is read again now. */
+test("a membership written while startup reads its selection is read again without failing the pass", async () => {
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),"startup-membership-reselect-"));
+  const previous=process.env.LLV_STATE_DIR;process.env.LLV_STATE_DIR=directory;
+  const {registry}=structuredRestartFixture(directory,"codex","unhosted");
+  const journal=new RuntimeJournal(path.join(directory,"runtime.sqlite"),{structuredHosts:true});
+  const prepare=registry.prepareReadOnlySnapshot.bind(registry);
+  let refreshed=false,writes=0,adopted=false;
+  // Each write lands at the first yield after a preparation the selection reads.
+  registry.prepareReadOnlySnapshot=(async (...args:Parameters<typeof prepare>)=>{
+    const prepared=await prepare(...args);
+    if(refreshed&&writes<3){
+      const index=++writes;
+      setImmediate(()=>{
+        const recovered=registry.ensureConversation("codex",path.join(directory,`recovered-${index}.jsonl`),null);
+        registry.rememberMembership(recovered.id,{kind:"pipeline",containerId:`recovering-${index}`,role:"builder",slot:"build",stageId:"build",stageOrder:0,round:1,parentConversationId:null});
+      });
+    }
+    return prepared;
+  }) as typeof registry.prepareReadOnlySnapshot;
+  try {
+    await adoptStructuredHostsAtStartup({registry,client:runtimeJournalClient(journal),orchestratorSeats:()=>[],
+      refreshTranscriptState:async()=>{refreshed=true;},
+      adopt:async()=>{adopted=true;return [];},adoptClaude:async()=>[],schedule:()=>({unref(){}})});
+    expect(writes).toBe(3);expect(adopted).toBe(true);
+    expect(Object.values(registry.readOnlySnapshot().memberships).flat().map(item=>item.containerId).sort())
+      .toEqual(["recovering-1","recovering-2","recovering-3"]);
+  } finally {
+    registry.prepareReadOnlySnapshot=prepare;
+    await bindStructuredDeliveryQueue([],{registry,client:null});journal.close();registry.close();
+    if(previous===undefined)delete process.env.LLV_STATE_DIR;else process.env.LLV_STATE_DIR=previous;
+    fs.rmSync(directory,{recursive:true,force:true});
+  }
+});
+
+test("a membership moved while waiting for the registry writer refuses the startup claim", async () => {
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),"startup-membership-write-race-"));
+  const previous=process.env.LLV_STATE_DIR;process.env.LLV_STATE_DIR=directory;
+  const {registry,conversation}=structuredRestartFixture(directory,"codex","unhosted");
+  const journal=new RuntimeJournal(path.join(directory,"runtime.sqlite"),{structuredHosts:true});
+  const pipeline=buildPipeline({id:"future-claim-owner",task:"future ownership",project:"fixture",repoDir:directory,
+    stages:[{id:"build",kind:"run",prompt:"build",next:null,effectiveRole:{roleId:null,engine:"codex",model:"gpt-5.6-sol",effort:"high",access:"read-write",promptScaffold:null}}],
+    srcPath:null,srcConversationId:null,now:"2026-10-22T00:00:00.000Z"});
+  savePipelines([pipeline]);
+  const db=new (await import("bun:sqlite")).Database(path.join(directory,"state.sqlite"));
+  db.run("UPDATE state_rows SET value_json=json_set(value_json,'$.state','future-owner') WHERE collection='pipelines'");db.close();
+  registry.holdDelivery(conversation.id,"owed fixture","membership-race-key","text",[],null,{operationId:"membership-race-operation",kind:"send",policy:"queue",turnId:null});
+  const write=registry.deliveryWriteOrBusy.bind(registry);
+  let moved=false,attempted=false;
+  registry.deliveryWriteOrBusy=async (correlation,operation)=>{
+    if(correlation.label==="registry.claimStructuredHost"&&!moved){
+      await Promise.resolve();
+      registry.rememberMembership(conversation.id,{kind:"pipeline",containerId:pipeline.id,role:"builder",slot:"build",stageId:"build",stageOrder:0,round:1,parentConversationId:null});
+      moved=true;
+    }
+    return write(correlation,operation);
+  };
+  try {
+    await adoptStructuredHostsAtStartup({registry,client:runtimeJournalClient(journal),orchestratorSeats:()=>[],refreshTranscriptState:async()=>{},
+      adopt:async(received,_options,_env,_filter,_processed,hooks)=>{
+        const entry=Object.values(received.readOnlySnapshot().entries)[0]!;attempted=true;
+        expect(await hooks!.claimHost!(entry,captureProcessIdentity(process.pid))).toBeNull();
+        return [];
+      },adoptClaude:async()=>[],schedule:()=>({unref(){}})});
+    expect(attempted).toBe(true);expect(moved).toBe(true);
+    expect(registry.readOnlySnapshot().entries[`codex:${"aaaaaaaa-aaaa-0aaa-0aaa-aaaaaaaaaaaa"}`]!.claimOwner).toBeNull();
+  } finally {
+    registry.deliveryWriteOrBusy=write;
+    await bindStructuredDeliveryQueue([],{registry,client:null});journal.close();registry.close();
+    if(previous===undefined)delete process.env.LLV_STATE_DIR;else process.env.LLV_STATE_DIR=previous;
+    fs.rmSync(directory,{recursive:true,force:true});
   }
 });

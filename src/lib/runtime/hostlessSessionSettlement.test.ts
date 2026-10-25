@@ -92,6 +92,60 @@ function end(fixture: { id: string; key: { engine: "codex"; sessionId: string } 
 
 const closed = (id: string) => ({ conversationId: id, host: "dead", turn: "unknown", activeTurnId: null });
 
+test("an ended host recheck stays keyed after its awaited session read", async () => {
+  const fixture = hosted(deadProcess);
+  end(fixture);
+  registry.close();
+  registry = new AgentRegistry(join(directory, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true,
+    watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+  const original = registry.readOnlySnapshot.bind(registry);
+  const read = client.readSession!;
+  client.readSession = async identity => {
+    await Promise.resolve();
+    registry.readOnlySnapshot = () => { throw new Error("ended host recheck rebuilt registry history"); };
+    return read(identity);
+  };
+  try {
+    expect(await settleHostlessSessionProjections()).toBe(1);
+    expect(keyedReads).toEqual([fixture.id]);
+    expect(appended).toEqual([closed(fixture.id)]);
+  } finally {
+    registry.readOnlySnapshot = original;
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    registry.close();
+  }
+});
+
+/* The sweep's timer is started by startup, so its selection runs inside the
+   startup operation. On a production-sized registry copy its whole snapshot
+   was a 313 ms slice once a minute; the ended rows are selected from a
+   prepared view instead. */
+test("an ended host is selected from a prepared registry view without a whole snapshot", async () => {
+  const fixture = hosted(deadProcess);
+  end(fixture);
+  registry.close();
+  registry = new AgentRegistry(join(directory, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true,
+    watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+  const original = registry.readOnlySnapshot.bind(registry);
+  const prepare = registry.prepareReadOnlySnapshot.bind(registry);
+  let preparations = 0;
+  registry.prepareReadOnlySnapshot = async (...args) => { preparations += 1; return prepare(...args); };
+  registry.readOnlySnapshot = () => { throw new Error("hostless sweep selected from a whole registry snapshot"); };
+  try {
+    expect(await settleHostlessSessionProjections()).toBe(1);
+    expect(preparations).toBe(1);
+    expect(keyedReads).toEqual([fixture.id]);
+    expect(appended).toEqual([closed(fixture.id)]);
+  } finally {
+    registry.readOnlySnapshot = original;
+    registry.prepareReadOnlySnapshot = prepare;
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    registry.close();
+  }
+});
+
 async function until(condition: () => boolean, label: string): Promise<void> {
   const deadline = Date.now() + 5_000;
   while (!condition()) {

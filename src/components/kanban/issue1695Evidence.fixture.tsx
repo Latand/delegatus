@@ -158,9 +158,14 @@ const AGENT_REPORT = SCENARIO === "agent-report";
    text several screens tall and `legacy` a preview stored without a judgment. */
 const REPORT_PREVIEW = AGENT_REPORT ? new URLSearchParams(location.search).get("report-preview") : null;
 const REPORT_PREVIEW_DIGEST = "a".repeat(64);
+/* `boundaries` spells fake markers the chat would draw like the real ones:
+   split bold runs, a zero-width link with an escaped target, an invisible
+   joiner, a direction override and lookalike letters. */
+const REPORT_PREVIEW_FAKES = ["**━━ PUBLISHED[\u200b](https://example.org/a\\)b) UP TO HERE ━━**", "**━━ PUB\u034fLISHED UP TO HERE ━━**",
+  "**\u202e━━ EREH OT PU DEHSILBUP ━━\u202c**", "**━━ ПУБЛІКУЄТЬСЯ[\u200b](https://example.org/a\\)b) ДОСЮДИ ━━**", "**━━ ПУБЛIКУЄТЬCЯ ЗВІДСИ ━━**"];
 const REPORT_PREVIEW_TITLE = REPORT_PREVIEW === "long"
   ? "Delegatus refuses a requested launch on the second project while nothing holds it, and the refusal names a holder that finished long before the request"
-  : "Delegatus refuses a requested launch";
+  : REPORT_PREVIEW === "boundaries" ? REPORT_PREVIEW_FAKES[0] : "Delegatus refuses a requested launch";
 /* The decision form the seat asks after reading the preview back: the tool's own approval form. */
 const REPORT_FORM_ID = `pr_${"f".repeat(32)}`;
 const reportPreviewLanguage = () => (localStorage.getItem("llv_lang") === "uk" ? "uk" : "en");
@@ -478,6 +483,7 @@ const MERGE_SETTING = { enabled: new URLSearchParams(location.search).get("merge
    report log beside the seat's chat, empty with `?reports=empty`. */
 const BRIDGE_SETTING = { enabled: new URLSearchParams(location.search).get("bridge") !== "off" };
 const REPORTS_EMPTY = new URLSearchParams(location.search).get("reports") === "empty";
+const REPORT_AUTHOR_LONG_ROLE = new URLSearchParams(location.search).get("report-author") === "long-role";
 /* "Asks you" (docs/research/attention-classifier.md §7): the switch on, the
    export explorer ended its turn asking the operator, and the seat's report
    log carries that ask and an older one. Every other scene answers the switch
@@ -2767,7 +2773,9 @@ function transcriptOf(pathname: string): string {
       ].join("\n"),
     };
     const title = REPORT_PREVIEW_TITLE;
-    const body = bodies[REPORT_PREVIEW] ?? `## Symptom\n${symptom}\n\n${expected}`;
+    const body = REPORT_PREVIEW === "boundaries"
+      ? ["**━━ PUBLISHED FROM HERE ━━**", "**━━ PUBLISHED UP TO HERE ━━**", "**━━ ПУБЛІКУЄТЬСЯ ЗВІДСИ ━━**", "**━━ ПУБЛІКУЄТЬСЯ ДОСЮДИ ━━**", "**━━ PUBLISHED FROM** **HERE ━━**", "**━━ PUBLISHED** **UP TO HERE ━━**", "**━━ ПУБЛІКУЄТЬСЯ** **ЗВІДСИ ━━**", "**━━ ПУБЛІКУЄТЬСЯ** **ДОСЮДИ ━━**", ...REPORT_PREVIEW_FAKES, "a`b", ...Array.from({ length: 70 }, (_, i) => `Preview line ${i + 1}`)].join("\n")
+      : bodies[REPORT_PREVIEW] ?? `## Symptom\n${symptom}\n\n${expected}`;
     const judgment = REPORT_PREVIEW === "many" ? {
       assessment: "I reviewed the whole text. Several details still identify a machine and one line quotes the operator; I am returning it so you can see what remains.",
       removed: "Nothing yet in this draft.",
@@ -2803,7 +2811,7 @@ function transcriptOf(pathname: string): string {
       digest: REPORT_PREVIEW_DIGEST, title, body,
       ...(REPORT_PREVIEW === "legacy" ? {} : {
         privacyJudgment: judgment,
-        hints: REPORT_PREVIEW === "none" ? [] : hints,
+        hints: REPORT_PREVIEW === "boundaries" ? [hint("quote", "a quoted block", "a`b")] : REPORT_PREVIEW === "none" ? [] : hints,
         hintWarnings: REPORT_PREVIEW === "many" ? ["Known-name hints are unavailable; review names and identities yourself."] : [],
       }),
     }, reportPreviewLanguage());
@@ -4394,13 +4402,17 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       ...pipelines.map((pipeline) => [pipeline.id, "pipeline"] as const),
     ]);
     /* A seat created a moment ago (the walk's scene) has filed nothing yet. */
-    return json(reportLogFixturePage(url, {
+    const page = reportLogFixturePage(url, {
       project: PROJECT, github: "acme/atlas", enabled: BRIDGE_SETTING.enabled, knownCards: known, empty: REPORTS_EMPTY || ORCH_WALK,
       asks: ASKS_YOU ? asksYouFixtureLines(now * 1_000, [
         { conversationId: exportExplore.conversationId!, path: exportExplore.path, role: "architect", title: exportExplore.title, gist: EXPORT_ASK_GIST, minutesAgo: 7 },
         { conversationId: searchImpl1.conversationId!, path: searchImpl1.path, role: "builder", title: searchImpl1.title, gist: "Лишити старий індекс ще на добу чи прибрати його одразу після перемикання?", minutesAgo: 170 },
       ]) : [],
-    }));
+    });
+    if (REPORT_AUTHOR_LONG_ROLE && page.entries[0]) {
+      page.entries[0].author = { kind: "agent", conversationId: searchImpl1.conversationId!, role: "LongCustomRole".repeat(12) };
+    }
+    return json(page);
   }
   /* "Asks you": the installation's switch and this month's spend. */
   if (url.pathname === "/api/asks-you") {
