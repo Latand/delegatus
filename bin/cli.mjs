@@ -205,7 +205,7 @@ function withoutTerminalDiagnostics(text) {
     .filter((line) => {
       const plain = line.replace(/\x1b\[[0-9;]*m/g, "");
       return !NEXT_STARTUP_LINE.test(plain) && (process.env.JOURNAL_STREAM !== undefined
-        || !/^\[(?:viewer loop-gap|performance summary)\] /.test(plain));
+        || !/^\[(?:viewer loop-gap|performance summary|state transaction-hold)\] /.test(plain));
     })
     .join("\n");
 }

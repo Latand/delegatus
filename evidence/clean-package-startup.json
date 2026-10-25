@@ -1,4 +1,5 @@
 {
+  "latestVerification": "transactionHoldFollowup",
   "recordedAt": "2026-10-23T13:15:59.874733+00:00",
   "baseRevision": "134a29c63d68d6934d6222c89d5103df3ab4721c",
   "packageVersion": "1.15.0",
@@ -1863,5 +1864,535 @@
     },
     "harnessNotes": "An early source check lost the wrapper heap option. Full typecheck after package builds also included generated Next route types and reached the heap limit; the final source check uses a clean export. An early exact-output fixture inherited the real gate service user bus and printed its OOM-policy warning; final exposure checks isolate that transport. Initial listener-startup fixture failures reproduced on main. No source change was made to work around those observations.",
     "reportText": "Applied Codex Cloud run 88 unchanged in the five requested source files and merged the 1.16.0 main update. Final isolated runs printed 148 lines on main and 8 on the branch, with retention errors reduced from one to zero. Both launchers exited cleanly with no recorded children left running.\n\nAll 11 branch test files and all 9 files present on main passed: 316 branch tests and 312 main tests, with 29 and 29 existing skips. Fresh-source typecheck and ESLint passed. Every terminal line and earlier check outcome is retained in `evidence/clean-package-startup.json`.\n\nOne timing diagnostic still escapes: `[state transaction-hold]`, reporting a transaction hold of 103 ms. Its producer is `src/lib/state/sqliteStateStore.ts:581`; the Cloud filter at `bin/cli.mjs:209` handles only loop-gap and performance-summary prefixes. Extending that filter and the existing exposure fixture would depart from the instruction to apply the Cloud diff unchanged. Should the filter gain this prefix and its regression case (recommended), or should the exact Cloud patch remain with this limitation? The proposed hunk is recorded with the evidence."
+  },
+  "transactionHoldFollowup": {
+    "outcome": "pass",
+    "recordedAt": "2026-10-25T23:55:33.628412+00:00",
+    "startingRevision": "d62bfe94de88d3499bb5e61c77d769803dd44ea7",
+    "baseRevision": "b027e190da6a4cb1ce1a38cf10c87d198ae3bc39",
+    "cloudRun": 88,
+    "runtime": {
+      "bun": "1.4.0",
+      "node": "v22.16.0",
+      "nativeCodex": "0.162.1"
+    },
+    "approvedAdjustment": "Extend only the launcher timing-prefix filter and existing exposure fixture for state transaction-hold. The other Cloud source files retain the run-88 blobs.",
+    "sourceSha256": {
+      "bin/cli.exposure.integration.test.ts": "a49b593565a0babcc7eb665b5b0451d394f190a2161296f7223247964b0d1817",
+      "bin/cli.mjs": "629264f01df86c609b66bd3a24890b90132a0cf3ce69c19d952111c38d8b766f",
+      "src/lib/selfUpdate/retention.test.ts": "9607877e010fcaa11014382105f76ce00243637a7de158c2ec72146577d64e97",
+      "src/lib/selfUpdate/retention.ts": "d9945c342b9b7d4bde47de437dcdd85dcf51bd5c7ce538c53cb5a90dd090d5d8",
+      "src/lib/startupDiagnostics.ts": "a34a115d0d415a226fdeef4c53b4b9b561f4111219ef97e883ebfdb97f5d4c1f"
+    },
+    "unchangedCloudBlobs": {
+      "src/lib/selfUpdate/retention.test.ts": true,
+      "src/lib/selfUpdate/retention.ts": true,
+      "src/lib/startupDiagnostics.ts": true
+    },
+    "method": "One gate-slot admission, sequential explicit test files, typecheck, ESLint, regression mutation, package builds, packs, isolated global installs and first runs. Tests use checkEnvironment and isolatedEnvironment with private HOME, XDG directories, LLV_STATE_DIR and TMPDIR. Temp directories use an open procfs directory alias into the private scratch area to keep fixture socket names within the Unix limit. Typecheck uses a clean source export, separate from both package-build exports, with a 6 GB Node heap. Packages are built with node scripts/prepack.mjs, packed with bun pm pack --ignore-scripts and installed with bun add -g --ignore-scripts --backend=copyfile. First runs use env -i, a free port, --no-open, telemetry disabled and a closed control URL; observe 65 seconds after HTTP readiness and the retention report, then send SIGINT and check recorded process identities.",
+    "terminalNormalization": "Every line is retained; private scratch roots use neutral placeholders and generated UUIDs use stable resource labels.",
+    "checks": [
+      {
+        "name": "test-cli.exposure.integration.test.ts",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "./bin/cli.exposure.integration.test.ts"
+        ],
+        "exit": 0,
+        "seconds": 38.6,
+        "passed": 23,
+        "failed": 0,
+        "skipped": 0
+      },
+      {
+        "name": "test-cli.selfUpdate.integration.test.ts",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "./bin/cli.selfUpdate.integration.test.ts"
+        ],
+        "exit": 0,
+        "seconds": 69.89,
+        "passed": 32,
+        "failed": 0,
+        "skipped": 0
+      },
+      {
+        "name": "test-cli.selfUpdate.terminal.integration.test.ts",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "./bin/cli.selfUpdate.terminal.integration.test.ts"
+        ],
+        "exit": 0,
+        "seconds": 79.5,
+        "passed": 33,
+        "failed": 0,
+        "skipped": 29
+      },
+      {
+        "name": "test-cli.selfUpdate.webRestart.integration.test.ts",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "./bin/cli.selfUpdate.webRestart.integration.test.ts"
+        ],
+        "exit": 0,
+        "seconds": 108.15,
+        "passed": 39,
+        "failed": 0,
+        "skipped": 0
+      },
+      {
+        "name": "test-codexAppServerHost.injectResponses.test.ts",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "./src/lib/runtime/codexAppServerHost.injectResponses.test.ts"
+        ],
+        "exit": 0,
+        "seconds": 34.55,
+        "passed": 7,
+        "failed": 0,
+        "skipped": 0
+      },
+      {
+        "name": "test-retention.test.ts",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "./src/lib/selfUpdate/retention.test.ts"
+        ],
+        "exit": 0,
+        "seconds": 109.33,
+        "passed": 122,
+        "failed": 0,
+        "skipped": 0
+      },
+      {
+        "name": "test-viewerLoopMonitor.test.ts",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "./src/lib/viewerLoopMonitor.test.ts"
+        ],
+        "exit": 0,
+        "seconds": 0.56,
+        "passed": 10,
+        "failed": 0,
+        "skipped": 0
+      },
+      {
+        "name": "test-cli.selfUpdate.divergedApply.integration.test.ts",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "./bin/cli.selfUpdate.divergedApply.integration.test.ts"
+        ],
+        "exit": 0,
+        "seconds": 6.58,
+        "passed": 5,
+        "failed": 0,
+        "skipped": 0
+      },
+      {
+        "name": "test-cli.selfUpdate.coldRecovery.integration.test.ts",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "./bin/cli.selfUpdate.coldRecovery.integration.test.ts"
+        ],
+        "exit": 0,
+        "seconds": 200.41,
+        "passed": 36,
+        "failed": 0,
+        "skipped": 0
+      },
+      {
+        "name": "test-blockingWaits.test.ts",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "./src/lib/blockingWaits.test.ts"
+        ],
+        "exit": 0,
+        "seconds": 2.19,
+        "passed": 6,
+        "failed": 0,
+        "skipped": 0
+      },
+      {
+        "name": "test-startupDiagnostics.test.ts",
+        "command": [
+          "bun",
+          "test",
+          "--timeout=60000",
+          "./src/lib/startupDiagnostics.test.ts"
+        ],
+        "exit": 0,
+        "seconds": 0.83,
+        "passed": 3,
+        "failed": 0,
+        "skipped": 0
+      },
+      {
+        "name": "types",
+        "command": [
+          "node",
+          "node_modules/typescript/bin/tsc",
+          "--noEmit",
+          "--incremental",
+          "false"
+        ],
+        "exit": 0,
+        "seconds": 436.12,
+        "passed": 0,
+        "failed": 0,
+        "skipped": 0
+      },
+      {
+        "name": "lint",
+        "command": [
+          "bun",
+          "node_modules/eslint/bin/eslint.js",
+          "bin/cli.mjs",
+          "bin/cli.exposure.integration.test.ts",
+          "src/lib/selfUpdate/retention.ts",
+          "src/lib/selfUpdate/retention.test.ts",
+          "src/lib/startupDiagnostics.ts"
+        ],
+        "exit": 0,
+        "seconds": 8.6,
+        "passed": 0,
+        "failed": 0,
+        "skipped": 0
+      }
+    ],
+    "regressionMutation": {
+      "name": "transaction-filter-red",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "bin/cli.exposure.integration.test.ts",
+        "--test-name-pattern",
+        "selects diagnostics"
+      ],
+      "exit": 1,
+      "seconds": 4.32,
+      "passed": 3,
+      "failed": 2,
+      "skipped": 0
+    },
+    "packageChecks": [
+      {
+        "name": "branch-build",
+        "command": [
+          "node",
+          "scripts/prepack.mjs"
+        ],
+        "exit": 0,
+        "seconds": 447.82,
+        "passed": 0,
+        "failed": 0,
+        "skipped": 0
+      },
+      {
+        "name": "branch-pack",
+        "command": [
+          "bun",
+          "pm",
+          "pack",
+          "--ignore-scripts",
+          "--filename",
+          "$SCRATCH/branch.tgz"
+        ],
+        "exit": 0,
+        "seconds": 4.48,
+        "passed": 0,
+        "failed": 0,
+        "skipped": 0
+      },
+      {
+        "name": "branch-first-run-driver",
+        "command": [
+          "python3",
+          "$SCRATCH/first-run.py",
+          "branch"
+        ],
+        "exit": 0,
+        "seconds": 75.86,
+        "passed": 0,
+        "failed": 0,
+        "skipped": 0
+      },
+      {
+        "name": "main-build",
+        "command": [
+          "node",
+          "scripts/prepack.mjs"
+        ],
+        "exit": 0,
+        "seconds": 482.85,
+        "passed": 0,
+        "failed": 0,
+        "skipped": 0
+      },
+      {
+        "name": "main-pack",
+        "command": [
+          "bun",
+          "pm",
+          "pack",
+          "--ignore-scripts",
+          "--filename",
+          "$SCRATCH/main.tgz"
+        ],
+        "exit": 0,
+        "seconds": 4.47,
+        "passed": 0,
+        "failed": 0,
+        "skipped": 0
+      },
+      {
+        "name": "main-first-run-driver",
+        "command": [
+          "python3",
+          "$SCRATCH/first-run.py",
+          "main"
+        ],
+        "exit": 0,
+        "seconds": 78.78,
+        "passed": 0,
+        "failed": 0,
+        "skipped": 0
+      }
+    ],
+    "packageSha256": {
+      "branch": "ab5872cd5327a29639e1aef6ac5c2351d6a06825aa5c0c3e2d6bfadf8cfda59e",
+      "main": "35216f672c7ea8bc6f275b9d3c7954d3214acb95ebc7ed369167571dc03dee0b"
+    },
+    "firstRuns": {
+      "branch": {
+        "installedCliSha256": "629264f01df86c609b66bd3a24890b90132a0cf3ce69c19d952111c38d8b766f",
+        "installExit": 0,
+        "revision": "d62bfe94de88d3499bb5e61c77d769803dd44ea7",
+        "childCleanup": {
+          "recordedProcesses": 16,
+          "remainingLivePids": []
+        },
+        "ready": true,
+        "exit": 0,
+        "error": null,
+        "durationSeconds": 71.84,
+        "lines": 7,
+        "nonemptyLines": 7,
+        "terminalLines": [
+          "  Open http://127.0.0.1:49097/ in your browser.",
+          "  Claude Code CLI and Codex CLI were not found. Install either to run an orchestrator:",
+          "  Claude Code: curl -fsSL https://claude.ai/install.sh | bash",
+          "  Codex: curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+          "  Claude Desktop requires a separate CLI. Codex.app may include a CLI; check its installation.",
+          "  After installing, restart Delegatus and open the setup guide.",
+          "Delegatus sends a random id, version, OS, architecture and install kind to delegatus.org once a day. Turn off in Settings, with DELEGATUS_TELEMETRY=0 or DO_NOT_TRACK=1."
+        ],
+        "port": 49097,
+        "command": "env -i PATH=<private Bun bin>:/usr/bin:/bin HOME=<private> XDG_CONFIG_HOME=<private> XDG_CACHE_HOME=<private> XDG_DATA_HOME=<private> XDG_STATE_HOME=<private> XDG_RUNTIME_DIR=<private> TMPDIR=<private> LLV_STATE_DIR=<private> NODE_ENV=production LLV_LANG=en DELEGATUS_TELEMETRY=0 NEXT_TELEMETRY_DISABLED=1 LLV_VIEWER_CONTROL_URL=http://127.0.0.1:1 LANG=C.UTF-8 bun bin/cli.mjs --port <free port> --no-open",
+        "retentionErrors": []
+      },
+      "main": {
+        "installedCliSha256": "be1edd1bac6af75a2ef62c527c1ba5938df8540b92da10f60f071f218db66a10",
+        "installExit": 0,
+        "revision": "b027e190da6a4cb1ce1a38cf10c87d198ae3bc39",
+        "childCleanup": {
+          "recordedProcesses": 19,
+          "remainingLivePids": []
+        },
+        "ready": true,
+        "exit": 0,
+        "error": null,
+        "durationSeconds": 74.14,
+        "lines": 147,
+        "nonemptyLines": 147,
+        "terminalLines": [
+          "  ✳ Delegatus v1.16.0",
+          "  Open http://127.0.0.1:38641/ in your browser.",
+          "  Claude Code CLI and Codex CLI were not found. Install either to run an orchestrator:",
+          "  Claude Code: curl -fsSL https://claude.ai/install.sh | bash",
+          "  Codex: curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+          "  Claude Desktop requires a separate CLI. Codex.app may include a CLI; check its installation.",
+          "  After installing, restart Delegatus and open the setup guide.",
+          "  Ctrl+C — stop.  --tailscale — access from your phone.",
+          "  DELEGATUS_DEBUG=1 — show startup diagnostics.",
+          "[runtime host] journal schema: 0/1, committed batches 0",
+          "[runtime host] journal checkpoint-reconciliation: 0/0, committed batches 0",
+          "[runtime host] journal receipt-backfill: 0/0, committed batches 0",
+          "[runtime host] journal integrity-check: 0/13, committed batches 0",
+          "[runtime host] journal hash-chain: 0/0, committed batches 0",
+          "[viewer loop-gap] {\"gapMs\":1537,\"operations\":[{\"name\":\"loop-profiler.settings\",\"durationMs\":1509,\"completed\":false,\"count\":1,\"readBytes\":0,\"decodedJsonBytes\":0}],\"gc\":{\"source\":\"unavailable\",\"count\":null,\"ms\":null,\"reason\":\"gc-entry-unsupported\"},\"heap\":{\"source\":\"unavailable\",\"sampleFrom\":565.607926,\"sampleTo\":2109.568688,\"deltaBytes\":null,\"allocatedBytes\":null,\"freedBytes\":null,\"allocationUnavailable\":\"no-cheap-cumulative-counters\",\"unavailable\":\"nonblocking-heap-sampling-unavailable\",\"beforeBytes\":null,\"afterBytes\":null},\"role\":\"viewer\",\"pid\":3908900,\"start\":\"resource-1\",\"timeOrigin\":1792972391480.8657,\"revision\":\"b027e190da6a4cb1ce1a38cf10c87d198ae3bc39\",\"sequence\":1,\"lastTick\":562.905539,\"tick\":2109.568688,\"utc\":\"2026-10-25T23:53:13.591Z\",\"pendingOperations\":1,\"activeDropped\":0,\"completedDropped\":0,\"logDropped\":0,\"requests\":{\"dropped\":0,\"omitted\":0,\"records\":[]},\"reads\":{\"source\":\"linux-thread-rchar\",\"byteCoverage\":\"sampled-exclusive\",\"sampleLimit\":{\"calls\":32,\"windowMs\":10},\"windowMs\":1546.663149,\"namedSyncMs\":0.2717079999999896,\"byteAttributedSyncMs\":0,\"workerSyncMs\":0,\"attributedFraction\":0,\"observerMs\":11.044,\"samplerDegraded\":false,\"workerBatches\":0,\"workerTransportDropped\":0,\"readBytes\":0,\"decodedJsonBytes\":0,\"sampledCalls\":0,\"unsampledCalls\":0,\"unavailableCalls\":1,\"dropped\":0,\"droppedMs\":0,\"droppedBytes\":0,\"omitted\":0,\"top\":[{\"operation\":\"loop-profiler.settings\",\"reader\":\"operation\",\"connection\":0,\"connections\":[],\"connectionSamplesDropped\":0,\"calls\":1,\"syncMs\":0.2717079999999896,\"readBytes\":0,\"decodedJsonBytes\":0,\"sampledCalls\":0,\"unsampledCalls\":0,\"unavailableCalls\":1,\"failed\":0}],\"operations\":[{\"name\":\"loop-profiler.settings\",\"readBytes\":0,\"decodedJsonBytes\":0}]},\"attribution\":{\"pending\":0,\"dropped\":0,\"droppedMs\":0,\"omitted\":0,\"slices\":[],\"coverage\":\"partial\",\"unresolved\":\"unknown-runtime-or-native\"},\"scheduler\":{\"available\":true,\"samples\":16,\"rss\":{\"source\":\"proc-status-worker\",\"beforeBytes\":156393472,\"afterBytes\":225337344,\"deltaBytes\":68943872,\"peakBytes\":243822592,\"sampleFromUtcMs\":1792972392064,\"sampleToUtcMs\":1792972393473},\"stall\":{\"sequence\":1,\"monotonicUs\":1587939,\"heartbeatUs\":565824,\"utcMs\":1792972393069,\"site\":\"unknown-runtime-or-native\",\"ageMs\":1022.115,\"rssBeforeBytes\":-1,\"rssBytes\":156393472,\"rssBeforeUtcMs\":-1,\"rssUtcMs\":1792972392064},\"runMs\":1460.756847,\"queueMs\":null,\"throttleMs\":17.529,\"readBytes\":17513618,\"readCalls\":339,\"maxSamplingGapMs\":102.754,\"lastSampleAgeMs\":18,\"sites\":[{\"site\":\"unknown-runtime-or-native\",\"samples\":16}]}}",
+          "[viewer] Open http://127.0.0.1:38641.",
+          "[identity-wave] registry migration {",
+          "  dryRun: false,",
+          "  alreadyCompleted: false,",
+          "  retitled: 0,",
+          "  rekeyed: 0,",
+          "  quarantinedRekeys: 0,",
+          "  edgesStamped: 0,",
+          "}",
+          "[structured hosts] startup pass admitted {",
+          "  trigger: \"startup-retry\",",
+          "  completed: false,",
+          "  generationChanged: false,",
+          "}",
+          "[structured hosts] startup progress {",
+          "  pid: 3908900,",
+          "  phase: \"refreshing transcripts\",",
+          "  state: \"pending\",",
+          "  previousPhase: null,",
+          "  previousPhaseMs: null,",
+          "}",
+          "[structured hosts] startup progress {",
+          "  pid: 3908900,",
+          "  phase: \"adopting Codex hosts\",",
+          "  state: \"pending\",",
+          "  previousPhase: \"refreshing transcripts\",",
+          "  previousPhaseMs: 41,",
+          "}",
+          "[structured hosts] startup progress {",
+          "  pid: 3908900,",
+          "  phase: \"adopting Claude hosts\",",
+          "  state: \"pending\",",
+          "  previousPhase: \"adopting Codex hosts\",",
+          "  previousPhaseMs: 3,",
+          "}",
+          "[structured hosts] startup progress {",
+          "  pid: 3908900,",
+          "  phase: \"reconciling structured hosts\",",
+          "  state: \"pending\",",
+          "  previousPhase: \"adopting Claude hosts\",",
+          "  previousPhaseMs: 3,",
+          "}",
+          "[structured hosts] startup progress {",
+          "  pid: 3908900,",
+          "  phase: \"finalizing structured delivery\",",
+          "  state: \"pending\",",
+          "  previousPhase: \"reconciling structured hosts\",",
+          "  previousPhaseMs: 5,",
+          "}",
+          "[structured hosts] startup progress {",
+          "  pid: 3908900,",
+          "  phase: \"registering structured delivery hosts\",",
+          "  state: \"pending\",",
+          "  previousPhase: \"finalizing structured delivery\",",
+          "  previousPhaseMs: 3,",
+          "}",
+          "[structured hosts] startup progress {",
+          "  pid: 3908900,",
+          "  phase: \"reading fallback runtime snapshot\",",
+          "  state: \"pending\",",
+          "  previousPhase: \"registering structured delivery hosts\",",
+          "  previousPhaseMs: 1,",
+          "}",
+          "[structured hosts] startup progress {",
+          "  pid: 3908900,",
+          "  phase: \"publishing historical host fallbacks\",",
+          "  state: \"pending\",",
+          "  previousPhase: \"reading fallback runtime snapshot\",",
+          "  previousPhaseMs: 1,",
+          "}",
+          "[structured hosts] startup progress {",
+          "  pid: 3908900,",
+          "  phase: \"reconciling terminal delivery receipts\",",
+          "  state: \"pending\",",
+          "  previousPhase: \"publishing historical host fallbacks\",",
+          "  previousPhaseMs: 1,",
+          "}",
+          "[structured hosts] startup progress {",
+          "  pid: 3908900,",
+          "  phase: \"draining startup delivery queue\",",
+          "  state: \"pending\",",
+          "  previousPhase: \"reconciling terminal delivery receipts\",",
+          "  previousPhaseMs: 2,",
+          "}",
+          "[structured hosts] startup progress {",
+          "  pid: 3908900,",
+          "  phase: \"recovering orchestrator deliveries\",",
+          "  state: \"pending\",",
+          "  previousPhase: \"draining startup delivery queue\",",
+          "  previousPhaseMs: 2,",
+          "}",
+          "[structured hosts] startup progress {",
+          "  pid: 3908900,",
+          "  phase: \"recovering interrupted deliveries\",",
+          "  state: \"pending\",",
+          "  previousPhase: \"recovering orchestrator deliveries\",",
+          "  previousPhaseMs: 5,",
+          "}",
+          "[structured hosts] startup progress {",
+          "  pid: 3908900,",
+          "  phase: \"kicking recovered deliveries\",",
+          "  state: \"pending\",",
+          "  previousPhase: \"recovering interrupted deliveries\",",
+          "  previousPhaseMs: 2,",
+          "}",
+          "[structured hosts] startup progress {",
+          "  pid: 3908900,",
+          "  phase: \"recovering pending spawns\",",
+          "  state: \"pending\",",
+          "  previousPhase: \"kicking recovered deliveries\",",
+          "  previousPhaseMs: 26,",
+          "}",
+          "[structured hosts] startup progress {",
+          "  pid: 3908900,",
+          "  phase: \"ready\",",
+          "  state: \"ready\",",
+          "  previousPhase: \"recovering pending spawns\",",
+          "  previousPhaseMs: 20,",
+          "}",
+          "Delegatus sends a random id, version, OS, architecture and install kind to delegatus.org once a day. Turn off in Settings, with DELEGATUS_TELEMETRY=0 or DO_NOT_TRACK=1.",
+          "[blocking-wait] {\"site\":\"state-write-lock\",\"stateWait\":{\"callSite\":\"state.lease\",\"reason\":\"sqlite\",\"outcome\":\"success\",\"attempts\":1,\"maxSliceMs\":7.763457000000017,\"backoffMs\":0,\"synchronousSleepMs\":0,\"release\":null,\"pid\":3908900,\"processKind\":\"viewer\"},\"role\":\"viewer\",\"durationMs\":50.2,\"synchronous\":false,\"subject\":\"pipelines\",\"label\":\"state.lease\",\"operationId\":null,\"at\":\"2026-10-25T23:53:18.802Z\"}",
+          "[self-update] retention removed 0; reclaimed 0 cache bytes; 1 error(s)",
+          "[viewer loop-gap] {\"gapMs\":2766,\"operations\":[{\"name\":\"loop-profiler.collect\",\"durationMs\":5267,\"completed\":false,\"count\":1,\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"self-update.retention\",\"durationMs\":2835,\"completed\":false,\"count\":1,\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"controller.scan\",\"durationMs\":2579,\"completed\":true,\"count\":1,\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"attention.reconcile\",\"durationMs\":2463,\"completed\":true,\"count\":1,\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"http.render\",\"durationMs\":2078,\"completed\":false,\"count\":2,\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"files.get\",\"durationMs\":2017,\"completed\":false,\"count\":2,\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"pipelines.controller-read\",\"durationMs\":101,\"completed\":true,\"count\":1,\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"forge.auto-merge\",\"durationMs\":48,\"completed\":true,\"count\":2,\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"forge.sweep\",\"durationMs\":40,\"completed\":true,\"count\":1,\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"orchestrator.deputy\",\"durationMs\":23,\"completed\":true,\"count\":1,\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"state.document\",\"durationMs\":5,\"completed\":true,\"count\":4,\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"pipelines.controller-checkpoint\",\"durationMs\":5,\"completed\":true,\"count\":1,\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"pipelines.controller-schedule\",\"durationMs\":2,\"completed\":true,\"count\":1,\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"controller.pipelines\",\"durationMs\":2,\"completed\":true,\"count\":1,\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"registry.read\",\"durationMs\":1,\"completed\":true,\"count\":1,\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"orchestrator.seat-channel\",\"durationMs\":0,\"completed\":true,\"count\":1,\"readBytes\":0,\"decodedJsonBytes\":0}],\"gc\":{\"source\":\"unavailable\",\"count\":null,\"ms\":null,\"reason\":\"gc-entry-unsupported\"},\"heap\":{\"source\":\"unavailable\",\"sampleFrom\":4610.391443,\"sampleTo\":7385.901834,\"deltaBytes\":null,\"allocatedBytes\":null,\"freedBytes\":null,\"allocationUnavailable\":\"no-cheap-cumulative-counters\",\"unavailable\":\"nonblocking-heap-sampling-unavailable\",\"beforeBytes\":null,\"afterBytes\":null},\"role\":\"viewer\",\"pid\":3908900,\"start\":\"resource-1\",\"timeOrigin\":1792972391480.8657,\"revision\":\"b027e190da6a4cb1ce1a38cf10c87d198ae3bc39\",\"sequence\":2,\"lastTick\":4610.391443,\"tick\":7385.901834,\"utc\":\"2026-10-25T23:53:18.867Z\",\"pendingOperations\":6,\"activeDropped\":0,\"completedDropped\":0,\"logDropped\":0,\"requests\":{\"dropped\":0,\"omitted\":0,\"records\":[{\"id\":\"resource-2\",\"method\":\"other\",\"start\":2958.510814,\"deadline\":12958.512781,\"events\":[{\"site\":28,\"at\":2958.571901,\"bytes\":0,\"failed\":false},{\"site\":29,\"at\":2959.585873,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":2959.634235,\"bytes\":0,\"failed\":false},{\"site\":32,\"at\":2963.474533,\"bytes\":0,\"failed\":false},{\"site\":33,\"at\":2963.50194,\"bytes\":85,\"failed\":false},{\"site\":34,\"at\":2963.762544,\"bytes\":85,\"failed\":false}]},{\"id\":\"resource-3\",\"method\":\"other\",\"start\":2971.625607,\"deadline\":12971.625763,\"events\":[{\"site\":28,\"at\":2971.640362,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":2972.042856,\"bytes\":0,\"failed\":false},{\"site\":32,\"at\":2980.123321,\"bytes\":0,\"failed\":false},{\"site\":33,\"at\":2980.138498,\"bytes\":151,\"failed\":false},{\"site\":34,\"at\":2980.182839,\"bytes\":151,\"failed\":false}]},{\"id\":\"resource-4\",\"method\":\"other\",\"start\":3000.080318,\"deadline\":13000.080414,\"events\":[{\"site\":28,\"at\":3000.087636,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":3000.233397,\"bytes\":0,\"failed\":false},{\"site\":32,\"at\":3000.709302,\"bytes\":0,\"failed\":false},{\"site\":33,\"at\":3000.723019,\"bytes\":155,\"failed\":false},{\"site\":34,\"at\":3000.774524,\"bytes\":155,\"failed\":false}]},{\"id\":\"resource-5\",\"method\":\"other\",\"start\":3020.073033,\"deadline\":13020.073139,\"events\":[{\"site\":28,\"at\":3020.086083,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":3020.332146,\"bytes\":0,\"failed\":false},{\"site\":32,\"at\":3020.713793,\"bytes\":0,\"failed\":false},{\"site\":33,\"at\":3020.723336,\"bytes\":155,\"failed\":false},{\"site\":34,\"at\":3020.755157,\"bytes\":155,\"failed\":false}]},{\"id\":\"resource-6\",\"method\":\"other\",\"start\":3043.422005,\"deadline\":13043.422155,\"events\":[{\"site\":28,\"at\":3043.42989,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":3043.643723,\"bytes\":0,\"failed\":false},{\"site\":32,\"at\":3047.058789,\"bytes\":0,\"failed\":false},{\"site\":33,\"at\":3047.100491,\"bytes\":85,\"failed\":false},{\"site\":34,\"at\":3047.204465,\"bytes\":85,\"failed\":false}]},{\"id\":\"resource-7\",\"method\":\"snapshot\",\"start\":3047.885406,\"deadline\":33047.885574,\"events\":[{\"site\":28,\"at\":3047.891513,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":3048.089302,\"bytes\":0,\"failed\":false},{\"site\":32,\"at\":3049.869251,\"bytes\":0,\"failed\":false},{\"site\":33,\"at\":3049.88995,\"bytes\":262,\"failed\":false},{\"site\":34,\"at\":3050.101654,\"bytes\":262,\"failed\":false}]},{\"id\":\"resource-8\",\"method\":\"files\",\"start\":5368.996032,\"deadline\":null,\"events\":[{\"site\":57,\"at\":5369.014497,\"bytes\":0,\"failed\":false}]},{\"id\":\"resource-9\",\"method\":\"files\",\"start\":7379.590477,\"deadline\":null,\"events\":[{\"site\":57,\"at\":7379.605337,\"bytes\":0,\"failed\":false}]}]},\"reads\":{\"source\":\"linux-thread-rchar\",\"byteCoverage\":\"sampled-exclusive\",\"sampleLimit\":{\"calls\":32,\"windowMs\":10},\"windowMs\":2775.510391,\"namedSyncMs\":108.16590400000518,\"byteAttributedSyncMs\":0.01003099999979895,\"workerSyncMs\":0,\"attributedFraction\":0.0000036141100506508433,\"observerMs\":12.846999999999998,\"samplerDegraded\":false,\"workerBatches\":0,\"workerTransportDropped\":0,\"readBytes\":0,\"decodedJsonBytes\":79,\"sampledCalls\":0,\"unsampledCalls\":205,\"unavailableCalls\":353,\"dropped\":0,\"droppedMs\":0,\"droppedBytes\":0,\"omitted\":91,\"top\":[{\"operation\":\"pipelines.controller-read\",\"reader\":\"state.exec\",\"connection\":0,\"connections\":[80,81,83,84],\"connectionSamplesDropped\":0,\"calls\":24,\"syncMs\":34.42258999999649,\"readBytes\":0,\"decodedJsonBytes\":0,\"sampledCalls\":0,\"unsampledCalls\":5,\"unavailableCalls\":19,\"failed\":0},{\"operation\":\"forge.sweep\",\"reader\":\"operation\",\"connection\":0,\"connections\":[],\"connectionSamplesDropped\":0,\"calls\":1,\"syncMs\":12.15369600000031,\"readBytes\":0,\"decodedJsonBytes\":0,\"sampledCalls\":0,\"unsampledCalls\":0,\"unavailableCalls\":1,\"failed\":0},{\"operation\":\"state.document\",\"reader\":\"state.exec\",\"connection\":0,\"connections\":[75,79],\"connectionSamplesDropped\":0,\"calls\":16,\"syncMs\":4.90871000000152,\"readBytes\":0,\"decodedJsonBytes\":0,\"sampledCalls\":0,\"unsampledCalls\":5,\"unavailableCalls\":11,\"failed\":0},{\"operation\":\"pipelines.controller-read\",\"reader\":\"state.close\",\"connection\":0,\"connections\":[80,81,83,84],\"connectionSamplesDropped\":0,\"calls\":4,\"syncMs\":4.89295200000015,\"readBytes\":0,\"decodedJsonBytes\":0,\"sampledCalls\":0,\"unsampledCalls\":0,\"unavailableCalls\":4,\"failed\":0},{\"operation\":\"forge.auto-merge\",\"reader\":\"operation\",\"connection\":0,\"connections\":[],\"connectionSamplesDropped\":0,\"calls\":2,\"syncMs\":4.443866000002345,\"readBytes\":0,\"decodedJsonBytes\":0,\"sampledCalls\":0,\"unsampledCalls\":0,\"unavailableCalls\":2,\"failed\":0},{\"operation\":\"http.render\",\"reader\":\"http.render\",\"connection\":0,\"connections\":[],\"connectionSamplesDropped\":0,\"calls\":2,\"syncMs\":3.9567310000011275,\"readBytes\":0,\"decodedJsonBytes\":0,\"sampledCalls\":0,\"unsampledCalls\":0,\"unavailableCalls\":2,\"failed\":0},{\"operation\":\"files.get\",\"reader\":\"operation\",\"connection\":0,\"connections\":[],\"connectionSamplesDropped\":0,\"calls\":2,\"syncMs\":3.6106530000006387,\"readBytes\":0,\"decodedJsonBytes\":0,\"sampledCalls\":0,\"unsampledCalls\":0,\"unavailableCalls\":2,\"failed\":0},{\"operation\":\"state.write-wait\",\"reader\":\"state.exec\",\"connection\":0,\"connections\":[76,77],\"connectionSamplesDropped\":0,\"calls\":9,\"syncMs\":3.5941449999991164,\"readBytes\":0,\"decodedJsonBytes\":0,\"sampledCalls\":0,\"unsampledCalls\":5,\"unavailableCalls\":4,\"failed\":0},{\"operation\":\"state.prepare\",\"reader\":\"state.prepare\",\"connection\":0,\"connections\":[2,76,77,6,41],\"connectionSamplesDropped\":0,\"calls\":19,\"syncMs\":2.9504620000034265,\"readBytes\":0,\"decodedJsonBytes\":0,\"sampledCalls\":0,\"unsampledCalls\":11,\"unavailableCalls\":8,\"failed\":0},{\"operation\":\"orchestrator.deputy\",\"reader\":\"operation\",\"connection\":0,\"connections\":[],\"connectionSamplesDropped\":0,\"calls\":1,\"syncMs\":2.779717999999775,\"readBytes\":0,\"decodedJsonBytes\":0,\"sampledCalls\":0,\"unsampledCalls\":0,\"unavailableCalls\":1,\"failed\":0},{\"operation\":\"pipelines.controller-checkpoint\",\"reader\":\"state.exec\",\"connection\":82,\"connections\":[82],\"connectionSamplesDropped\":0,\"calls\":6,\"syncMs\":2.4929000000011,\"readBytes\":0,\"decodedJsonBytes\":0,\"sampledCalls\":0,\"unsampledCalls\":0,\"unavailableCalls\":6,\"failed\":0},{\"operation\":\"pipelines.controller-read\",\"reader\":\"state.write-wait\",\"connection\":0,\"connections\":[],\"connectionSamplesDropped\":0,\"calls\":8,\"syncMs\":2.3160410000018743,\"readBytes\":0,\"decodedJsonBytes\":0,\"sampledCalls\":0,\"unsampledCalls\":1,\"unavailableCalls\":7,\"failed\":0},{\"operation\":\"state.document\",\"reader\":\"operation\",\"connection\":0,\"connections\":[],\"connectionSamplesDropped\":0,\"calls\":4,\"syncMs\":2.0241100000002916,\"readBytes\":0,\"decodedJsonBytes\":0,\"sampledCalls\":0,\"unsampledCalls\":2,\"unavailableCalls\":2,\"failed\":0},{\"operation\":\"files.get\",\"reader\":\"files.key\",\"connection\":0,\"connections\":[],\"connectionSamplesDropped\":0,\"calls\":2,\"syncMs\":1.7131540000032217,\"readBytes\":0,\"decodedJsonBytes\":0,\"sampledCalls\":0,\"unsampledCalls\":0,\"unavailableCalls\":2,\"failed\":0},{\"operation\":\"files.get\",\"reader\":\"state.exec\",\"connection\":0,\"connections\":[78,55],\"connectionSamplesDropped\":0,\"calls\":24,\"syncMs\":1.5834480000021358,\"readBytes\":0,\"decodedJsonBytes\":0,\"sampledCalls\":0,\"unsampledCalls\":13,\"unavailableCalls\":11,\"failed\":0},{\"operation\":\"state.document\",\"reader\":\"state.write-wait\",\"connection\":0,\"connections\":[],\"connectionSamplesDropped\":0,\"calls\":12,\"syncMs\":1.5265959999978804,\"readBytes\":0,\"decodedJsonBytes\":0,\"sampledCalls\":0,\"unsampledCalls\":5,\"unavailableCalls\":7,\"failed\":0}],\"operations\":[{\"name\":\"state.document\",\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"state.prepare\",\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"state.get\",\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"state.write-wait\",\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"state.run\",\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"state.exec\",\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"state.close\",\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"state.iterate\",\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"state.all\",\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"state.pipelines.get\",\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"state.tasks.get\",\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"state.tasks.all\",\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"state.json\",\"readBytes\":0,\"decodedJsonBytes\":79},{\"name\":\"orchestrator.deputy\",\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"orchestrator.seat-channel\",\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"prototype.state\",\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"attention.reconcile\",\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"http.render\",\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"files.get\",\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"registry.read\",\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"pipelines.controller-schedule\",\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"controller.pipelines\",\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"pipelines.controller-read\",\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"forge.sweep\",\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"forge.auto-merge\",\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"spawn-notice.prune\",\"readBytes\":0,\"decodedJsonBytes\":0},{\"name\":\"pipelines.controller-checkpoint\",\"readBytes\":0,\"decodedJsonBytes\":0}]},\"attribution\":{\"pending\":3,\"dropped\":0,\"droppedMs\":0,\"omitted\":0,\"slices\":[{\"sequence\":386,\"span\":386,\"parent\":0,\"site\":\"state.lease-release\",\"kind\":\"sync\",\"start\":7355.133397,\"end\":7367.593682,\"count\":1,\"totalMs\":12.460285000000113,\"maxMs\":12.460285000000113,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":12.460285000000113},{\"sequence\":375,\"span\":375,\"parent\":0,\"site\":\"state.write-wait\",\"kind\":\"sync\",\"start\":7326.580189,\"end\":7337.469122,\"count\":1,\"totalMs\":10.88893300000018,\"maxMs\":10.88893300000018,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":10.88893300000018},{\"sequence\":371,\"span\":371,\"parent\":0,\"site\":\"state.write-wait\",\"kind\":\"sync\",\"start\":7271.750284,\"end\":7279.494213,\"count\":1,\"totalMs\":7.7439290000002075,\"maxMs\":7.7439290000002075,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":7.7439290000002075},{\"sequence\":377,\"span\":377,\"parent\":375,\"site\":\"state.lease-commit\",\"kind\":\"sync\",\"start\":7330.246854,\"end\":7336.22602,\"count\":1,\"totalMs\":5.9791660000000775,\"maxMs\":5.9791660000000775,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":5.9791660000000775},{\"sequence\":384,\"span\":384,\"parent\":0,\"site\":\"state.write-wait\",\"kind\":\"sync\",\"start\":7349.746244,\"end\":7354.783041,\"count\":1,\"totalMs\":5.036796999999751,\"maxMs\":5.036796999999751,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":5.036796999999751},{\"sequence\":359,\"span\":359,\"parent\":0,\"site\":\"files.key\",\"kind\":\"sync\",\"start\":7187.563345,\"end\":7192.175189,\"count\":1,\"totalMs\":4.611844000000019,\"maxMs\":4.611844000000019,\"rows\":0,\"bytes\":0,\"failed\":false,\"correlation\":\"resource-8\",\"overlapMs\":4.611844000000019},{\"sequence\":372,\"span\":372,\"parent\":371,\"site\":\"state.write-wait\",\"kind\":\"sync\",\"start\":7271.847935,\"end\":7276.002371,\"count\":1,\"totalMs\":4.154435999999805,\"maxMs\":4.154435999999805,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":4.154435999999805},{\"sequence\":355,\"span\":355,\"parent\":0,\"site\":\"http.render\",\"kind\":\"sync\",\"start\":5307.854755,\"end\":5311.663737,\"count\":1,\"totalMs\":3.8089819999995598,\"maxMs\":3.8089819999995598,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":3.8089819999995598},{\"sequence\":368,\"span\":368,\"parent\":0,\"site\":\"state.write-wait\",\"kind\":\"sync\",\"start\":7195.273835,\"end\":7198.605827,\"count\":1,\"totalMs\":3.331992000000355,\"maxMs\":3.331992000000355,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":3.331992000000355},{\"sequence\":376,\"span\":376,\"parent\":375,\"site\":\"state.write-wait\",\"kind\":\"sync\",\"start\":7326.784458,\"end\":7329.586143,\"count\":1,\"totalMs\":2.8016850000003615,\"maxMs\":2.8016850000003615,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":2.8016850000003615},{\"sequence\":379,\"span\":379,\"parent\":0,\"site\":\"state.write-wait\",\"kind\":\"sync\",\"start\":7339.000184,\"end\":7341.707859,\"count\":1,\"totalMs\":2.7076749999996537,\"maxMs\":2.7076749999996537,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":2.7076749999996537},{\"sequence\":346,\"span\":346,\"parent\":0,\"site\":\"state.write-wait\",\"kind\":\"sync\",\"start\":4706.383886,\"end\":4708.98817,\"count\":1,\"totalMs\":2.604284000000007,\"maxMs\":2.604284000000007,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":2.604284000000007},{\"sequence\":381,\"span\":381,\"parent\":0,\"site\":\"state.write-wait\",\"kind\":\"sync\",\"start\":7343.705261,\"end\":7345.766485,\"count\":1,\"totalMs\":2.0612240000000384,\"maxMs\":2.0612240000000384,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":2.0612240000000384},{\"sequence\":344,\"span\":344,\"parent\":0,\"site\":\"state.write-wait\",\"kind\":\"sync\",\"start\":4702.606817,\"end\":4704.623623,\"count\":1,\"totalMs\":2.0168060000005426,\"maxMs\":2.0168060000005426,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":2.0168060000005426},{\"sequence\":373,\"span\":373,\"parent\":371,\"site\":\"state.lease-commit\",\"kind\":\"sync\",\"start\":7276.587692,\"end\":7278.584712,\"count\":1,\"totalMs\":1.997019999999793,\"maxMs\":1.997019999999793,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":1.997019999999793},{\"sequence\":361,\"span\":361,\"parent\":359,\"site\":\"state.write-wait\",\"kind\":\"sync\",\"start\":7188.838568,\"end\":7190.581192,\"count\":1,\"totalMs\":1.7426239999995232,\"maxMs\":1.7426239999995232,\"rows\":0,\"bytes\":0,\"failed\":false,\"correlation\":\"resource-8\",\"overlapMs\":1.7426239999995232},{\"sequence\":349,\"span\":349,\"parent\":0,\"site\":\"state.write-wait\",\"kind\":\"sync\",\"start\":4716.19538,\"end\":4717.723507,\"count\":1,\"totalMs\":1.5281269999995857,\"maxMs\":1.5281269999995857,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":1.5281269999995857},{\"sequence\":383,\"span\":383,\"parent\":0,\"site\":\"state.lease-release\",\"kind\":\"sync\",\"start\":7346.086981,\"end\":7347.523046,\"count\":1,\"totalMs\":1.4360649999998714,\"maxMs\":1.4360649999998714,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":1.4360649999998714},{\"sequence\":362,\"span\":362,\"parent\":359,\"site\":\"state.write-wait\",\"kind\":\"sync\",\"start\":7190.610525,\"end\":7191.51964,\"count\":1,\"totalMs\":0.9091150000003836,\"maxMs\":0.9091150000003836,\"rows\":0,\"bytes\":0,\"failed\":false,\"correlation\":\"resource-8\",\"overlapMs\":0.9091150000003836},{\"sequence\":347,\"span\":347,\"parent\":0,\"site\":\"state.write-wait\",\"kind\":\"sync\",\"start\":4709.029394,\"end\":4709.927978,\"count\":1,\"totalMs\":0.8985839999995733,\"maxMs\":0.8985839999995733,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":0.8985839999995733},{\"sequence\":365,\"span\":365,\"parent\":0,\"site\":\"registry.snapshot\",\"kind\":\"sync\",\"start\":7194.058527,\"end\":7194.94122,\"count\":1,\"totalMs\":0.8826929999995627,\"maxMs\":0.8826929999995627,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":0.8826929999995627},{\"sequence\":370,\"span\":370,\"parent\":0,\"site\":\"state.write-wait\",\"kind\":\"sync\",\"start\":7260.485773,\"end\":7261.303845,\"count\":1,\"totalMs\":0.8180720000000292,\"maxMs\":0.8180720000000292,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":0.8180720000000292},{\"sequence\":369,\"span\":369,\"parent\":0,\"site\":\"state.write-wait\",\"kind\":\"sync\",\"start\":7198.6411,\"end\":7199.423779,\"count\":1,\"totalMs\":0.7826789999999164,\"maxMs\":0.7826789999999164,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":0.7826789999999164},{\"sequence\":378,\"span\":378,\"parent\":0,\"site\":\"forge.auto-merge.read\",\"kind\":\"sync\",\"start\":7337.824441,\"end\":7338.589224,\"count\":1,\"totalMs\":0.7647830000005342,\"maxMs\":0.7647830000005342,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":0.7647830000005342},{\"sequence\":350,\"span\":350,\"parent\":0,\"site\":\"state.write-wait\",\"kind\":\"sync\",\"start\":4717.753071,\"end\":4718.38893,\"count\":1,\"totalMs\":0.6358589999999822,\"maxMs\":0.6358589999999822,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":0.6358589999999822},{\"sequence\":342,\"span\":342,\"parent\":0,\"site\":\"state.write-wait\",\"kind\":\"sync\",\"start\":4701.903414,\"end\":4702.52892,\"count\":1,\"totalMs\":0.6255059999994046,\"maxMs\":0.6255059999994046,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":0.6255059999994046},{\"sequence\":345,\"span\":345,\"parent\":0,\"site\":\"state.write-wait\",\"kind\":\"sync\",\"start\":4704.650071,\"end\":4705.225798,\"count\":1,\"totalMs\":0.57572700000037,\"maxMs\":0.57572700000037,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":0.57572700000037},{\"sequence\":374,\"span\":374,\"parent\":0,\"site\":\"forge.auto-merge.read\",\"kind\":\"sync\",\"start\":7322.812245,\"end\":7323.165145,\"count\":1,\"totalMs\":0.3528999999998632,\"maxMs\":0.3528999999998632,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":0.3528999999998632},{\"sequence\":343,\"span\":343,\"parent\":342,\"site\":\"state.write-wait\",\"kind\":\"sync\",\"start\":4702.269665,\"end\":4702.519141,\"count\":1,\"totalMs\":0.24947599999995873,\"maxMs\":0.24947599999995873,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":0.24947599999995873},{\"sequence\":388,\"span\":388,\"parent\":0,\"site\":\"http.render\",\"kind\":\"sync\",\"start\":7377.267799,\"end\":7377.506962,\"count\":1,\"totalMs\":0.23916300000018964,\"maxMs\":0.23916300000018964,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":0.23916300000018964},{\"sequence\":351,\"span\":351,\"parent\":0,\"site\":\"state.write-wait\",\"kind\":\"sync\",\"start\":4722.485546,\"end\":4722.652183,\"count\":1,\"totalMs\":0.16663700000026438,\"maxMs\":0.16663700000026438,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":0.16663700000026438},{\"sequence\":387,\"span\":387,\"parent\":0,\"site\":\"forge.auto-merge.read\",\"kind\":\"sync\",\"start\":7371.462118,\"end\":7371.618256,\"count\":1,\"totalMs\":0.15613799999937328,\"maxMs\":0.15613799999937328,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":0.15613799999937328},{\"sequence\":352,\"span\":352,\"parent\":351,\"site\":\"state.write-wait\",\"kind\":\"sync\",\"start\":4722.498222,\"end\":4722.646733,\"count\":1,\"totalMs\":0.14851099999941653,\"maxMs\":0.14851099999941653,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":0.14851099999941653},{\"sequence\":358,\"span\":358,\"parent\":0,\"site\":\"files.key\",\"kind\":\"sync\",\"start\":7187.41946,\"end\":7187.529808,\"count\":1,\"totalMs\":0.11034800000015821,\"maxMs\":0.11034800000015821,\"rows\":0,\"bytes\":0,\"failed\":false,\"correlation\":\"resource-8\",\"overlapMs\":0.11034800000015821},{\"sequence\":366,\"span\":366,\"parent\":0,\"site\":\"state.write-wait\",\"kind\":\"sync\",\"start\":7195.124575,\"end\":7195.213681,\"count\":1,\"totalMs\":0.08910600000035629,\"maxMs\":0.08910600000035629,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":0.08910600000035629},{\"sequence\":353,\"span\":353,\"parent\":0,\"site\":\"state.write-wait\",\"kind\":\"sync\",\"start\":4724.460891,\"end\":4724.548849,\"count\":1,\"totalMs\":0.08795800000007148,\"maxMs\":0.08795800000007148,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":0.08795800000007148},{\"sequence\":367,\"span\":367,\"parent\":366,\"site\":\"state.write-wait\",\"kind\":\"sync\",\"start\":7195.134572,\"end\":7195.210139,\"count\":1,\"totalMs\":0.07556699999986449,\"maxMs\":0.07556699999986449,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":0.07556699999986449},{\"sequence\":354,\"span\":354,\"parent\":353,\"site\":\"state.write-wait\",\"kind\":\"sync\",\"start\":4724.473324,\"end\":4724.54317,\"count\":1,\"totalMs\":0.06984600000032515,\"maxMs\":0.06984600000032515,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":0.06984600000032515},{\"sequence\":360,\"span\":360,\"parent\":359,\"site\":\"state.write-wait\",\"kind\":\"sync\",\"start\":7188.583661,\"end\":7188.650599,\"count\":1,\"totalMs\":0.06693799999993644,\"maxMs\":0.06693799999993644,\"rows\":0,\"bytes\":0,\"failed\":false,\"correlation\":\"resource-8\",\"overlapMs\":0.06693799999993644},{\"sequence\":382,\"span\":382,\"parent\":0,\"site\":\"state.write-wait\",\"kind\":\"sync\",\"start\":7345.881109,\"end\":7345.940798,\"count\":1,\"totalMs\":0.05968899999970745,\"maxMs\":0.05968899999970745,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":0.05968899999970745},{\"sequence\":348,\"span\":348,\"parent\":0,\"site\":\"state.write-wait\",\"kind\":\"sync\",\"start\":4710.233021,\"end\":4710.29169,\"count\":1,\"totalMs\":0.058669000000008964,\"maxMs\":0.058669000000008964,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":0.058669000000008964},{\"sequence\":385,\"span\":385,\"parent\":0,\"site\":\"state.write-wait\",\"kind\":\"sync\",\"start\":7354.915395,\"end\":7354.972174,\"count\":1,\"totalMs\":0.056779000000460655,\"maxMs\":0.056779000000460655,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":0.056779000000460655},{\"sequence\":380,\"span\":380,\"parent\":0,\"site\":\"state.write-wait\",\"kind\":\"sync\",\"start\":7341.811732,\"end\":7341.855677,\"count\":1,\"totalMs\":0.04394499999943946,\"maxMs\":0.04394499999943946,\"rows\":0,\"bytes\":0,\"failed\":false,\"overlapMs\":0.04394499999943946},{\"sequence\":357,\"span\":357,\"parent\":0,\"site\":\"files.scan\",\"kind\":\"await\",\"start\":5370.06485,\"end\":7186.874863,\"count\":1,\"totalMs\":1816.8100130000003,\"maxMs\":1816.8100130000003,\"rows\":0,\"bytes\":0,\"failed\":false,\"correlation\":\"resource-8\",\"overlapMs\":1816.8100130000003},{\"sequence\":356,\"span\":356,\"parent\":0,\"site\":\"http.dispatch\",\"kind\":\"event\",\"start\":5369.006969,\"end\":5369.014497,\"count\":1,\"totalMs\":0.007528000000093016,\"maxMs\":0.007528000000093016,\"rows\":0,\"bytes\":0,\"failed\":false,\"correlation\":\"resource-8\",\"overlapMs\":0.007528000000093016},{\"sequence\":389,\"span\":389,\"parent\":0,\"site\":\"http.dispatch\",\"kind\":\"event\",\"start\":7379.599685,\"end\":7379.605337,\"count\":1,\"totalMs\":0.00565199999982724,\"maxMs\":0.00565199999982724,\"rows\":0,\"bytes\":0,\"failed\":false,\"correlation\":\"resource-9\",\"overlapMs\":0.00565199999982724}],\"coverage\":\"partial\",\"unresolved\":\"unknown-runtime-or-native\"},\"scheduler\":{\"available\":true,\"samples\":29,\"rss\":{\"source\":\"proc-status-worker\",\"beforeBytes\":270876672,\"afterBytes\":402923520,\"deltaBytes\":132046848,\"peakBytes\":442380288,\"sampleFromUtcMs\":1792972395584,\"sampleToUtcMs\":1792972398698},\"stall\":{\"sequence\":1,\"monotonicUs\":1587939,\"heartbeatUs\":565824,\"utcMs\":1792972393069,\"site\":\"unknown-runtime-or-native\",\"ageMs\":1022.115,\"rssBeforeBytes\":-1,\"rssBytes\":156393472,\"rssBeforeUtcMs\":-1,\"rssUtcMs\":1792972392064},\"runMs\":2528.470944,\"queueMs\":null,\"throttleMs\":61.549,\"readBytes\":23653454,\"readCalls\":1335,\"maxSamplingGapMs\":102.774,\"lastSampleAgeMs\":68,\"sites\":[{\"site\":\"unknown-runtime-or-native\",\"samples\":28},{\"site\":\"state.write-wait\",\"samples\":1}]},\"jsProfile\":{\"status\":\"captured\",\"from\":2118.482023,\"to\":7571.713302,\"intervalUs\":10000,\"frames\":{\"samples\":360,\"inspectedSamples\":360,\"sampleCap\":4096,\"depthCap\":32,\"frameCap\":128,\"topN\":16,\"rows\":[{\"function\":\"k\",\"file\":\".next/server/webpack-runtime.js\",\"line\":1,\"column\":141,\"self\":0,\"total\":19,\"selfWeight\":0,\"totalWeight\":0.05277777777777778},{\"function\":\"aA\",\"file\":\".next/server/chunks/51448.js\",\"line\":1,\"column\":21647,\"self\":0,\"total\":2,\"selfWeight\":0,\"totalWeight\":0.005555555555555556},{\"function\":\"g\",\"file\":\".next/server/chunks/57205.js\",\"line\":1,\"column\":9630,\"self\":0,\"total\":2,\"selfWeight\":0,\"totalWeight\":0.005555555555555556},{\"function\":\"O\",\"file\":\".next/server/chunks/68979.js\",\"line\":1,\"column\":5417,\"self\":0,\"total\":1,\"selfWeight\":0,\"totalWeight\":0.002777777777777778},{\"function\":\"U\",\"file\":\".next/server/chunks/68979.js\",\"line\":1,\"column\":6784,\"self\":0,\"total\":1,\"selfWeight\":0,\"totalWeight\":0.002777777777777778},{\"function\":\"ai\",\"file\":\".next/server/chunks/85879.js\",\"line\":80,\"column\":868,\"self\":0,\"total\":1,\"selfWeight\":0,\"totalWeight\":0.002777777777777778},{\"function\":\"ai\",\"file\":\".next/server/chunks/85879.js\",\"line\":80,\"column\":1041,\"self\":0,\"total\":1,\"selfWeight\":0,\"totalWeight\":0.002777777777777778},{\"function\":\"o\",\"file\":\".next/server/chunks/93619.js\",\"line\":1,\"column\":298,\"self\":0,\"total\":1,\"selfWeight\":0,\"totalWeight\":0.002777777777777778},{\"function\":\"o\",\"file\":\".next/server/chunks/93619.js\",\"line\":1,\"column\":441,\"self\":0,\"total\":1,\"selfWeight\":0,\"totalWeight\":0.002777777777777778}]}}}",
+          "[limits] Codex app-server probe for default failed: Codex app-server protocol error: cannot identify executable version with --version",
+          "[limits] Codex app-server probe for default failed: Codex app-server protocol error: cannot identify executable version with --version",
+          "[performance summary] {\"pid\":3908813,\"start\":\"resource-10\",\"timeOrigin\":1792972390866.0234,\"revision\":\"b027e190da6a4cb1ce1a38cf10c87d198ae3bc39\",\"role\":\"runtime-host\",\"monotonic\":60306.834336,\"utc\":\"2026-10-25T23:54:11.172Z\",\"requests\":{\"dropped\":0,\"omitted\":1,\"records\":[{\"id\":\"resource-3\",\"method\":\"other\",\"start\":3587.076661,\"deadline\":null,\"events\":[{\"site\":31,\"at\":3587.118911,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":3587.912425,\"bytes\":150,\"failed\":false}]},{\"id\":\"resource-4\",\"method\":\"other\",\"start\":3615.18529,\"deadline\":null,\"events\":[{\"site\":31,\"at\":3615.197633,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":3615.451839,\"bytes\":154,\"failed\":false}]},{\"id\":\"resource-5\",\"method\":\"other\",\"start\":3635.281582,\"deadline\":null,\"events\":[{\"site\":31,\"at\":3635.292612,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":3635.497573,\"bytes\":154,\"failed\":false}]},{\"id\":\"resource-6\",\"method\":\"other\",\"start\":3658.630111,\"deadline\":null,\"events\":[{\"site\":31,\"at\":3658.650235,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":3659.228314,\"bytes\":84,\"failed\":false}]},{\"id\":\"resource-7\",\"method\":\"snapshot\",\"start\":3663.07626,\"deadline\":null,\"events\":[{\"site\":31,\"at\":3663.089167,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":3664.55035,\"bytes\":261,\"failed\":false}]},{\"id\":\"resource-11\",\"method\":\"other\",\"start\":8319.245715,\"deadline\":null,\"events\":[{\"site\":31,\"at\":8319.267727,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":8319.686286,\"bytes\":154,\"failed\":false}]},{\"id\":\"resource-12\",\"method\":\"other\",\"start\":14004.425741,\"deadline\":null,\"events\":[{\"site\":31,\"at\":14004.444312,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":14004.781909,\"bytes\":154,\"failed\":false}]},{\"id\":\"resource-13\",\"method\":\"other\",\"start\":19004.931035,\"deadline\":null,\"events\":[{\"site\":31,\"at\":19004.947031,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":19006.081111,\"bytes\":154,\"failed\":false}]},{\"id\":\"resource-14\",\"method\":\"other\",\"start\":24005.215544,\"deadline\":null,\"events\":[{\"site\":31,\"at\":24005.229259,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":24005.549902,\"bytes\":154,\"failed\":false}]},{\"id\":\"resource-15\",\"method\":\"other\",\"start\":29005.568139,\"deadline\":null,\"events\":[{\"site\":31,\"at\":29005.590891,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":29005.942748,\"bytes\":154,\"failed\":false}]},{\"id\":\"resource-16\",\"method\":\"other\",\"start\":34006.028912,\"deadline\":null,\"events\":[{\"site\":31,\"at\":34006.048712,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":34006.223085,\"bytes\":154,\"failed\":false}]},{\"id\":\"resource-17\",\"method\":\"other\",\"start\":39007.698031,\"deadline\":null,\"events\":[{\"site\":31,\"at\":39007.731642,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":39008.070992,\"bytes\":154,\"failed\":false}]},{\"id\":\"resource-18\",\"method\":\"other\",\"start\":45007.008161,\"deadline\":null,\"events\":[{\"site\":31,\"at\":45007.037114,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":45007.340117,\"bytes\":154,\"failed\":false}]},{\"id\":\"resource-19\",\"method\":\"other\",\"start\":50008.275929,\"deadline\":null,\"events\":[{\"site\":31,\"at\":50008.305518,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":50008.647803,\"bytes\":154,\"failed\":false}]},{\"id\":\"resource-20\",\"method\":\"other\",\"start\":55007.938494,\"deadline\":null,\"events\":[{\"site\":31,\"at\":55007.968908,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":55008.21759,\"bytes\":154,\"failed\":false}]},{\"id\":\"resource-21\",\"method\":\"other\",\"start\":60008.247514,\"deadline\":null,\"events\":[{\"site\":31,\"at\":60008.289163,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":60008.724772,\"bytes\":154,\"failed\":false}]}]},\"logDropped\":0}",
+          "[performance summary] {\"pid\":3908900,\"start\":\"resource-1\",\"timeOrigin\":1792972391480.8657,\"revision\":\"b027e190da6a4cb1ce1a38cf10c87d198ae3bc39\",\"role\":\"viewer\",\"monotonic\":60513.755747,\"utc\":\"2026-10-25T23:54:11.994Z\",\"requests\":{\"dropped\":0,\"omitted\":3,\"records\":[{\"id\":\"resource-5\",\"method\":\"other\",\"start\":3020.073033,\"deadline\":13020.073139,\"events\":[{\"site\":28,\"at\":3020.086083,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":3020.332146,\"bytes\":0,\"failed\":false},{\"site\":32,\"at\":3020.713793,\"bytes\":0,\"failed\":false},{\"site\":33,\"at\":3020.723336,\"bytes\":155,\"failed\":false},{\"site\":34,\"at\":3020.755157,\"bytes\":155,\"failed\":false}]},{\"id\":\"resource-6\",\"method\":\"other\",\"start\":3043.422005,\"deadline\":13043.422155,\"events\":[{\"site\":28,\"at\":3043.42989,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":3043.643723,\"bytes\":0,\"failed\":false},{\"site\":32,\"at\":3047.058789,\"bytes\":0,\"failed\":false},{\"site\":33,\"at\":3047.100491,\"bytes\":85,\"failed\":false},{\"site\":34,\"at\":3047.204465,\"bytes\":85,\"failed\":false}]},{\"id\":\"resource-7\",\"method\":\"snapshot\",\"start\":3047.885406,\"deadline\":33047.885574,\"events\":[{\"site\":28,\"at\":3047.891513,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":3048.089302,\"bytes\":0,\"failed\":false},{\"site\":32,\"at\":3049.869251,\"bytes\":0,\"failed\":false},{\"site\":33,\"at\":3049.88995,\"bytes\":262,\"failed\":false},{\"site\":34,\"at\":3050.101654,\"bytes\":262,\"failed\":false}]},{\"id\":\"resource-8\",\"method\":\"files\",\"start\":5368.996032,\"deadline\":null,\"events\":[{\"site\":57,\"at\":5369.014497,\"bytes\":0,\"failed\":false},{\"site\":58,\"at\":7590.690792,\"bytes\":0,\"failed\":false}]},{\"id\":\"resource-9\",\"method\":\"files\",\"start\":7379.590477,\"deadline\":null,\"events\":[{\"site\":57,\"at\":7379.605337,\"bytes\":0,\"failed\":false},{\"site\":58,\"at\":7590.701627,\"bytes\":0,\"failed\":false}]},{\"id\":\"resource-11\",\"method\":\"other\",\"start\":7703.702372,\"deadline\":17703.702509,\"events\":[{\"site\":28,\"at\":7703.721381,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":7704.153314,\"bytes\":0,\"failed\":false},{\"site\":32,\"at\":7705.567388,\"bytes\":0,\"failed\":false},{\"site\":33,\"at\":7705.582721,\"bytes\":155,\"failed\":false},{\"site\":34,\"at\":7705.65374,\"bytes\":155,\"failed\":false}]},{\"id\":\"resource-12\",\"method\":\"other\",\"start\":13388.646641,\"deadline\":23388.647692,\"events\":[{\"site\":28,\"at\":13388.665417,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":13389.352393,\"bytes\":0,\"failed\":false},{\"site\":32,\"at\":13395.762696,\"bytes\":0,\"failed\":false},{\"site\":33,\"at\":13395.797582,\"bytes\":155,\"failed\":false},{\"site\":34,\"at\":13395.977451,\"bytes\":155,\"failed\":false}]},{\"id\":\"resource-13\",\"method\":\"other\",\"start\":18389.539946,\"deadline\":28389.540151,\"events\":[{\"site\":28,\"at\":18389.554956,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":18389.893973,\"bytes\":0,\"failed\":false},{\"site\":32,\"at\":18392.459513,\"bytes\":0,\"failed\":false},{\"site\":33,\"at\":18392.493844,\"bytes\":155,\"failed\":false},{\"site\":34,\"at\":18392.597783,\"bytes\":155,\"failed\":false}]},{\"id\":\"resource-14\",\"method\":\"other\",\"start\":23389.788926,\"deadline\":33389.789068,\"events\":[{\"site\":28,\"at\":23389.805133,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":23390.168205,\"bytes\":0,\"failed\":false},{\"site\":32,\"at\":23390.839437,\"bytes\":0,\"failed\":false},{\"site\":33,\"at\":23390.860004,\"bytes\":155,\"failed\":false},{\"site\":34,\"at\":23390.930755,\"bytes\":155,\"failed\":false}]},{\"id\":\"resource-15\",\"method\":\"other\",\"start\":28390.138701,\"deadline\":38390.138811,\"events\":[{\"site\":28,\"at\":28390.153027,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":28390.499357,\"bytes\":0,\"failed\":false},{\"site\":32,\"at\":28391.212881,\"bytes\":0,\"failed\":false},{\"site\":33,\"at\":28391.227325,\"bytes\":155,\"failed\":false},{\"site\":34,\"at\":28391.284611,\"bytes\":155,\"failed\":false}]},{\"id\":\"resource-16\",\"method\":\"other\",\"start\":33390.739345,\"deadline\":43390.73945,\"events\":[{\"site\":28,\"at\":33390.75186,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":33391.060837,\"bytes\":0,\"failed\":false},{\"site\":32,\"at\":33391.477237,\"bytes\":0,\"failed\":false},{\"site\":33,\"at\":33391.483256,\"bytes\":155,\"failed\":false},{\"site\":34,\"at\":33391.516686,\"bytes\":155,\"failed\":false}]},{\"id\":\"resource-17\",\"method\":\"other\",\"start\":38392.316315,\"deadline\":48392.316451,\"events\":[{\"site\":28,\"at\":38392.326556,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":38392.627332,\"bytes\":0,\"failed\":false},{\"site\":32,\"at\":38398.095128,\"bytes\":0,\"failed\":false},{\"site\":33,\"at\":38398.123541,\"bytes\":155,\"failed\":false},{\"site\":34,\"at\":38398.182071,\"bytes\":155,\"failed\":false}]},{\"id\":\"resource-18\",\"method\":\"other\",\"start\":44391.588267,\"deadline\":54391.58836,\"events\":[{\"site\":28,\"at\":44391.605934,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":44391.965873,\"bytes\":0,\"failed\":false},{\"site\":32,\"at\":44392.710223,\"bytes\":0,\"failed\":false},{\"site\":33,\"at\":44392.733768,\"bytes\":155,\"failed\":false},{\"site\":34,\"at\":44392.807705,\"bytes\":155,\"failed\":false}]},{\"id\":\"resource-19\",\"method\":\"other\",\"start\":49392.733663,\"deadline\":59392.733952,\"events\":[{\"site\":28,\"at\":49392.788735,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":49393.223862,\"bytes\":0,\"failed\":false},{\"site\":32,\"at\":49394.047147,\"bytes\":0,\"failed\":false},{\"site\":33,\"at\":49394.065432,\"bytes\":155,\"failed\":false},{\"site\":34,\"at\":49394.120122,\"bytes\":155,\"failed\":false}]},{\"id\":\"resource-20\",\"method\":\"other\",\"start\":54392.375071,\"deadline\":64392.375216,\"events\":[{\"site\":28,\"at\":54392.386418,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":54392.721682,\"bytes\":0,\"failed\":false},{\"site\":32,\"at\":54393.643916,\"bytes\":0,\"failed\":false},{\"site\":33,\"at\":54393.65893,\"bytes\":155,\"failed\":false},{\"site\":34,\"at\":54393.725999,\"bytes\":155,\"failed\":false}]},{\"id\":\"resource-21\",\"method\":\"other\",\"start\":59392.781603,\"deadline\":69392.78173799999,\"events\":[{\"site\":28,\"at\":59392.798341,\"bytes\":0,\"failed\":false},{\"site\":30,\"at\":59393.163188,\"bytes\":0,\"failed\":false},{\"site\":32,\"at\":59394.046273,\"bytes\":0,\"failed\":false},{\"site\":33,\"at\":59394.064411,\"bytes\":155,\"failed\":false},{\"site\":34,\"at\":59394.136789,\"bytes\":155,\"failed\":false}]}]},\"logDropped\":0}",
+          "[limits] Codex app-server probe for default failed: Codex app-server protocol error: cannot identify executable version with --version",
+          "[files response worker] retired: viewer exit {",
+          "  pid: 3909574,",
+          "  rssBytes: 130789376,",
+          "}"
+        ],
+        "port": 38641,
+        "command": "env -i PATH=<private Bun bin>:/usr/bin:/bin HOME=<private> XDG_CONFIG_HOME=<private> XDG_CACHE_HOME=<private> XDG_DATA_HOME=<private> XDG_STATE_HOME=<private> XDG_RUNTIME_DIR=<private> TMPDIR=<private> LLV_STATE_DIR=<private> NODE_ENV=production LLV_LANG=en DELEGATUS_TELEMETRY=0 NEXT_TELEMETRY_DISABLED=1 LLV_VIEWER_CONTROL_URL=http://127.0.0.1:1 LANG=C.UTF-8 bun bin/cli.mjs --port <free port> --no-open",
+        "retentionErrors": [
+          "Error: ENOENT: no such file or directory, lstat '$SCRATCH/main-first-run/xdg_cache_home/delegatus/self-update/b53e431811c58727/releases'"
+        ]
+      }
+    },
+    "priorMainTests": "cloudRun88Refresh.checks.main-tests records the passing paired test files on the same main revision; this follow-up changes only the launcher prefix and exposure regression.",
+    "reportText": "A fresh package start now prints 7 terminal lines, compared with 147 on the merged main revision. Startup progress, loop-gap, performance summaries and transaction-hold timing reports stay out of ordinary output. Debug and service journal output retain diagnostics, and real errors still reach the terminal.\n\nThe self-update error came from treating a release-cache directory that does not exist yet as a failure. A missing cache is now empty; invalid roots still report errors. Codex Cloud run 88 supplied the original fix. The approved follow-up adds the transaction-hold filter and its regression case; the other Cloud files remain unchanged.\n\nAll 11 branch test files passed (316 tests; 29 existing skips). Typecheck and ESLint passed. Removing the added filter makes both ordinary-output regression cases fail; all three journal/debug cases still pass. Both clean first runs exited successfully with no recorded children left running. Every terminal line and the earlier main test comparison are in evidence/clean-package-startup.json. Committed with hooks enabled; nothing pushed.",
+    "baseRecheck": {
+      "observedOriginMain": "d4da0cc9492615c31a9cd2935190ebf9d590e82a",
+      "sourcePathsChangedSinceMergedBase": []
+    },
+    "evidenceValidation": {
+      "sourceCopiesAndInstalledLaunchersMatch": true,
+      "lineCountsMatch": true,
+      "allBranchChecksPassed": true,
+      "regressionRefusesOldFilter": true,
+      "childCleanupComplete": true
+    }
   }
 }

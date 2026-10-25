@@ -180,6 +180,7 @@ let at = 0;
 const monitor = createViewerLoopMonitor(undefined, () => at, createPerformanceSpans(() => at));
 at = 61000;
 monitor.tick();
+console.warn("[state transaction-hold] " + JSON.stringify({ collection: "fixture", heldMs: 103, role: process.env.LLV_STATE_OWNER }));
 setTimeout(() => {
   const line = "[performance summary] " + JSON.stringify({ role: process.env.LLV_STATE_OWNER });
   process.stderr.write(line.slice(0, 12));
@@ -784,11 +785,11 @@ for (const scenario of [
             .toEqual({ quiet: scenario.quiet });
         }
         const deadline = Date.now() + 10_000;
-        const diagnosticLines = () => output.split(/\r?\n/).filter(line => /^\[(viewer loop-gap|performance summary)\]/.test(line));
+        const diagnosticLines = () => output.split(/\r?\n/).filter(line => /^\[(viewer loop-gap|performance summary|state transaction-hold)\]/.test(line));
         while (output.split("fixture diagnostics complete").length < 3 && child.exitCode === null && Date.now() < deadline) await Bun.sleep(25);
-        expect(diagnosticLines()).toHaveLength(scenario.quiet === "1" ? 0 : 6);
+        expect(diagnosticLines()).toHaveLength(scenario.quiet === "1" ? 0 : 8);
         for (const role of ["viewer", "runtime-host"]) {
-          for (const prefix of ["[viewer loop-gap] ", "[performance summary] "]) {
+          for (const prefix of ["[viewer loop-gap] ", "[performance summary] ", "[state transaction-hold] "]) {
             const reports = diagnosticLines().filter(line => line.startsWith(prefix)).map(line => JSON.parse(line.slice(prefix.length)));
             expect(reports.filter(report => report.role === role)).toHaveLength(scenario.quiet === "1" ? 0 : prefix === "[performance summary] " ? 2 : 1);
           }
