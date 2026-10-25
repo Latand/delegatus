@@ -2440,7 +2440,7 @@ export async function recordDemotionInterruption(
       the last awaited read and before the record is written. */
   evidenceStands: () => boolean = () => true,
 ): Promise<boolean> {
-  const snapshot = registry.readOnlySnapshot();
+  const snapshot = startupHostSnapshot(registry, key);
   const hostKey = sessionKeyId(key);
   const entry = snapshot.entries[hostKey];
   const conversation = registryConversationsForEntryKey(snapshot, hostKey).find((candidate) =>
@@ -2468,7 +2468,7 @@ export async function recordDemotionInterruption(
     catch (error) { controllerDiagnosticError("[viewer release] orchestrator seat lookup failed while recording an interruption", { hostKey, error }); }
     // Seat discovery can observe a completion. Validate after every evidence
     // source, immediately before marking custody and recording the cut.
-    const fresh = registry.readOnlySnapshot();
+    const fresh = startupHostSnapshot(registry, key);
     const currentEntry = fresh.entries[hostKey];
     const currentConversation = fresh.conversations[conversation.id];
     if (!currentEntry || !currentConversation || custody(currentEntry, currentConversation) !== expected || !evidenceStands()) return false;
@@ -2531,7 +2531,7 @@ const NO_IDLE_HOST_CUT: IdleHostCut = { backgroundTasks: [], selfStartedWork: fa
  */
 async function idleHostCut(registry: AgentRegistry, key: SessionKey): Promise<IdleHostCut> {
   if (key.engine !== "claude") return NO_IDLE_HOST_CUT;
-  const conversation = Object.values(registry.readOnlySnapshot().conversations).find((candidate) =>
+  const conversation = registryConversationsForEntryKey(startupHostSnapshot(registry, key), sessionKeyId(key)).find((candidate) =>
     candidate.engine === key.engine && candidate.generations.at(-1)?.id === key.sessionId);
   const transcriptPath = conversation && !conversation.supersededBy ? conversation.generations.at(-1)!.path : null;
   if (!transcriptPath) return NO_IDLE_HOST_CUT;
@@ -2624,11 +2624,11 @@ export async function handOverHostForDemotion(
 ): Promise<boolean> {
   if (current.pid == null || current.processStartIdentity == null) return false;
   const owner = captureProcessIdentity(current.pid, undefined, current.processStartIdentity);
-  const observed = registry.readOnlySnapshot().entries[sessionKeyId(key)];
+  const observed = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
   let marked = false;
   const markHandoff = () => {
     if (marked) return;
-    const latest = registry.readOnlySnapshot().entries[sessionKeyId(key)];
+    const latest = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
     if (!latest || latest.claimOwner !== observed?.claimOwner || latest.claimEpoch !== observed?.claimEpoch
       || latest.structuredHost?.writerClaimEpoch !== observed?.structuredHost?.writerClaimEpoch) {
       throw new Error(`structured host ${sessionKeyId(key)} changed before Viewer demotion`);
@@ -2644,7 +2644,7 @@ export async function handOverHostForDemotion(
     /* By the generation identity index: a scan of every conversation took
        long enough under retained history for a working engine's transcript
        to move between these reads on every attempt (#2761). */
-    const conversation = registryConversationsForEntryKey(registry.readOnlySnapshot(), sessionKeyId(key)).find((candidate) =>
+    const conversation = registryConversationsForEntryKey(startupHostSnapshot(registry, key), sessionKeyId(key)).find((candidate) =>
       candidate.engine === key.engine && candidate.generations.at(-1)?.id === key.sessionId);
     const transcriptPath = conversation?.generations.at(-1)?.path;
     const before = transcriptPath ? idleHostEvidenceIdentity(key.sessionId, transcriptPath) : null;

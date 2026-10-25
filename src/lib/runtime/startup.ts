@@ -1229,7 +1229,7 @@ async function rowsTheNudgeNeverAnswers(
 ): Promise<Set<string>> {
   const snapshot = await preparedStartupSnapshot(registry);
   const answered = new Set([...held, ...found, ...settled]);
-  for await (const conversation of startupConversationRows(snapshot)) {
+  for await (const conversation of startupHostedConversationRows(snapshot)) {
     const generation = conversation.generations.at(-1);
     /* Resolved against the snapshot in hand: a keyed transaction per retained
        conversation held the event loop for a fifth of a second (#2761). */
@@ -1253,7 +1253,7 @@ async function interruptedCodexConversations(
 ): Promise<ReadonlyMap<string, ViewerConversationId>> {
   const snapshot = prepared ?? await preparedStartupSnapshot(registry);
   const selected: Array<readonly [string, ViewerConversationId]> = [];
-  for await (const conversation of startupConversationRows(snapshot)) {
+  for await (const conversation of startupHostedConversationRows(snapshot)) {
     const matches = (() => {
     const generation = conversation.generations.at(-1);
     if (conversation.engine !== "codex" || !generation) return [];
@@ -1624,22 +1624,22 @@ async function startupRuntimeConversationIds(
   scope: ReadonlySet<string> | null = null,
 ): Promise<string[]> {
   const snapshot = prepared ?? await preparedStartupSnapshot(registry);
-  const selected: string[] = [];
-  for await (const conversation of startupConversationRows(snapshot)) {
-    const matches = (() => {
-    // Resolved against the snapshot in hand: one keyed transaction per retained conversation is the cost avoided here.
+  const selected = new Set<string>();
+  const take = (canonicalId: ViewerConversationId) => {
+    for (const id of conversationIdsResolvingTo(snapshot, canonicalId)) {
+      if (snapshot.conversations[id]) selected.add(id);
+    }
+  };
+  // Owed conversations need runtime evidence even without a resident host.
+  for (const id of owedConversationIds) take(resolveConversationAlias(snapshot, id as ViewerConversationId));
+  for await (const conversation of startupHostedConversationRows(snapshot)) {
     const canonicalId = resolveConversationAlias(snapshot, conversation.id);
-    if (owedConversationIds.has(canonicalId)) return [conversation.id];
     const canonical = snapshot.conversations[canonicalId] ?? conversation;
     const generation = canonical.generations.at(-1);
-    if (scope && generation && !scope.has(sessionKeyId({ engine: canonical.engine, sessionId: generation.id }))) return [];
-    return generation && snapshot.entries[sessionKeyId({ engine: canonical.engine, sessionId: generation.id })]?.structuredHost
-      ? [conversation.id]
-      : [];
-    })();
-    selected.push(...matches);
+    if (scope && generation && !scope.has(sessionKeyId({ engine: canonical.engine, sessionId: generation.id }))) continue;
+    if (generation && snapshot.entries[sessionKeyId({ engine: canonical.engine, sessionId: generation.id })]?.structuredHost) take(canonicalId);
   }
-  return selected;
+  return [...selected];
 }
 
 async function readStartupRuntime(

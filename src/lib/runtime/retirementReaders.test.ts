@@ -8,6 +8,8 @@ import { runStructuredHostRetirementSweep } from "./structuredHostRetirement";
 import { adoptStructuredHostsAtStartup, pipelineStartupMemberships, pipelineStartupMembershipsAsync, startupConversationRows } from "./startup";
 import { demoteSkippedStructuredRegistryHosts, reconcileDeadStructuredRegistryHostsOffLoop } from "./registry";
 import { determined } from "./determinable";
+import { handOverHostForDemotion } from "./structuredDeliveryController";
+import { captureProcessIdentity } from "@/lib/processIdentity";
 
 const NOW = Date.parse("2026-10-16T00:00:00Z");
 const CREATED = new Date(NOW).toISOString();
@@ -272,6 +274,72 @@ test("restart recognition, transcript refresh and adoption selection read only c
           pipelineEvidence: () => ({ settled: new Set(), deferred: new Set() }),
           adopt: async () => { throw boundary; },
         })).rejects.toBe(boundary);
+        results.push(reads);
+      } finally { registry.close(); }
+    }
+    expect(results[0]).toBeGreaterThan(0);
+    expect(results[1]).toBe(results[0]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("demotion reads only its own host while a peer advances registry progress", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "demotion-hosted-readers-"));
+  const results: number[] = [];
+  try {
+    for (const history of [10, 100]) {
+      const directory = path.join(root, String(history)); fs.mkdirSync(directory);
+      const filename = path.join(directory, "registry.sqlite");
+      const seed = new SqliteAgentRegistryStore(filename, { initialSnapshot: seeded(directory, history), normalize: normalizeRegistry }); seed.close();
+      let reads = 0, healthReads = 0;
+      const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, {
+        sqliteMode: "sqlite", onSqliteRowPayloadRead: (collection, count) => { if (collection === "conversations") reads += count; },
+      });
+      const peer = new SqliteAgentRegistryStore(filename, { normalize: normalizeRegistry });
+      const owner = captureProcessIdentity(process.pid);
+      const current = { status: "idle" as const, sessionKey: "reader-0", endpoint: "fixture", pid: owner.pid,
+        processStartIdentity: owner.startIdentity, eventCursor: 0, protocolVersion: null,
+        activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null };
+      try {
+        reads = 0;
+        expect(await handOverHostForDemotion(registry, { engine: "codex", sessionId: "reader-0" }, current, { seats: () => [] }, async () => {
+          await Promise.resolve();
+          peer.mutate(file => { file.entries["codex:reader-0"]!.updatedAt = "2026-10-25T00:00:00.000Z"; }, false);
+          healthReads++;
+          return current;
+        })).toBe(false);
+        expect(healthReads).toBe(1);
+        results.push(reads);
+      } finally { peer.close(); registry.close(); }
+    }
+    expect(results[0]).toBeGreaterThan(0);
+    expect(results[1]).toBe(results[0]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("runtime startup evidence reads hosted aliases and owed conversations without expanding retained history", async () => {
+  const { structuredStartupSignals } = await import("./startup");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-hosted-readers-"));
+  const results: number[] = [];
+  try {
+    for (const history of [10, 100]) {
+      const directory = path.join(root, String(history)); fs.mkdirSync(directory);
+      const initial = seeded(directory, history);
+      initial.conversations.conversation_reader_alias = { ...initial.conversations.conversation_reader_1!, id: "conversation_reader_alias" };
+      const filename = path.join(directory, "registry.sqlite");
+      const seed = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry });
+      while (seed.archiveInactive(1000)) { /* Keep unrelated payloads cold. */ } seed.close();
+      let reads = 0;
+      const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, {
+        sqliteMode: "sqlite", onSqliteRowPayloadRead: (collection, count) => { if (collection === "conversations") reads += count; },
+      });
+      const selected: string[] = [];
+      const client = { readSession: async (identity: { conversationId: string }) => { selected.push(identity.conversationId); return null; },
+        effectBatch: async () => [] } as unknown as import("./client").RuntimeHostClient;
+      try {
+        reads = 0;
+        const signals = await structuredStartupSignals(registry, client, new Set(["conversation_reader_7"]));
+        expect(selected.sort()).toEqual(["conversation_reader_0", "conversation_reader_7", "conversation_reader_alias"]);
+        expect(signals.pendingOperationConversationIds.size).toBe(0);
         results.push(reads);
       } finally { registry.close(); }
     }
