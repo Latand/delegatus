@@ -2050,6 +2050,55 @@ test("resume waits for a short account mutation and starts one successor", async
   } finally { release(); await holder; await recovery.catch(() => {}); }
 });
 
+/* Recovery runs from the pipeline controller and the delivery queue, often
+   while startup still settles. On a production-sized registry copy each whole
+   snapshot here rebuilt retained history on the serving loop: 0.3-0.4 s for
+   the candidate, 3 s inside writer admission for the predecessor epoch. Each
+   check names one host and one launch, so each is a keyed read. */
+test("resume reads its candidate, claim epoch and admission custody without a whole registry snapshot", async () => {
+  const sessionId = crypto.randomUUID();
+  const cwd = path.join(sandbox, `keyed-${sessionId}`);
+  const artifactPath = path.join(cwd, `${sessionId}.jsonl`);
+  fs.mkdirSync(cwd, { recursive: true });
+  fs.writeFileSync(artifactPath, "");
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const key = { engine: "codex" as const, sessionId };
+  try {
+    const conversation = registry.ensureConversation("codex", artifactPath, "default");
+    registry.upsert({ key, artifactPath, cwd, accountId: "default",
+      launchProfile: emptyLaunchProfile({ cwd, title: "Resume from keyed custody" }), status: "dead", host: null,
+      structuredHost: { kind: "codex-app-server", endpoint: "stdio:released", process: null, eventCursor: 2, protocolVersion: "v2",
+        writerClaimEpoch: 4, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+      claimEpoch: 4, claimOwner: null, pendingAction: null });
+    const wholeSnapshot = spyOn(registry, "readOnlySnapshot").mockImplementation(() => {
+      throw new Error("structured recovery materialized the whole registry");
+    });
+    const admitted: number[] = [];
+    try {
+      const result = await recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id }, {
+        registry, client: {} as RuntimeHostClient, transport: () => "structured", park: () => null,
+        resolveAccount: () => ({ engine: "codex", accountId: "default", kind: "legacy", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
+        spawn: async (input) => {
+          // The production spawn's resume claim, under the same writer admission.
+          const claim = await registry.deliveryWriteOrBusy({ label: "registry.resume-claim" }, () => {
+            input.resumeAdmission!.beforeClaim();
+            return registry.claimStructuredHost(key, captureProcessIdentity(process.pid), { allowUnhosted: true });
+          });
+          if (!claim?.claimOwner) throw new Error("fixture resume claim is unavailable");
+          input.resumeAdmission!.claimed(claim);
+          admitted.push(claim.claimEpoch);
+          return { ok: true, target: null, path: artifactPath, launchId: input.receipt.launchId, conversationId: conversation.id,
+            launched: true, retrySafe: false, initialMessage: "delivered", state: "settled" };
+        }, requestDeliveryDrain: () => {},
+      });
+      expect(result).toMatchObject({ spawned: true, conversationId: conversation.id });
+      // The successor took the next epoch after the predecessor read under admission.
+      expect(admitted).toEqual([5]);
+      expect(wholeSnapshot).not.toHaveBeenCalled();
+    } finally { wholeSnapshot.mockRestore(); }
+  } finally { registry.close(); }
+});
+
 /* docs/design/delivery-progress-and-drain.md, P4/P9 and C5. */
 test("an account authorization lost after the recovery's admission ends its launch off the loop, correlated, and starts nothing", async () => {
   const { sqliteRegistryFixture, registryLockHolder, whileRegistryWriterHeld } = await import("@/lib/agent/registryLockHolderFixture");

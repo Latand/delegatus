@@ -41,6 +41,7 @@ const {
   sendReceiptFor,
   settleDueSends,
   mirrorSettledReceipts,
+  mirrorSettledReceiptsAsync,
 } = await import("./sendSettlement");
 const { handleRuntimeOperationQuery, handleRuntimeRetry } = await import("./http");
 const { NextRequest } = await import("next/server");
@@ -283,6 +284,29 @@ function stalePortFor(
 function receiptOf(active: Fixture, operationId: string) {
   return sendReceiptFor(active.registry.readOnlySnapshot(), operationId);
 }
+
+for (const status of ["delivered", "failed"] as const) test(`journal ${status} settlement rereads only its operation after I/O`, async () => {
+  const now = Date.parse("2026-10-22T00:00:00Z");
+  const active = fixture(`keyed-journal-${status}`, { sqlite: true, now: () => now });
+  const original = active.registry.readOnlySnapshot.bind(active.registry);
+  try {
+    const { operationId } = acceptSend(active, { clientMessageId: `keyed-journal-${status}`, operationId: `operation-keyed-${status}` });
+    active.journal.transitionOperation(operationId, "delivering");
+    active.journal.transitionOperation(operationId, status, status === "failed" ? { reason: "executor refused" } : {});
+    const client = { ...active.client, operationStatus: async (...args: Parameters<RuntimeHostClient["operationStatus"]>) => {
+      const result = await active.client.operationStatus(...args);
+      active.registry.readOnlySnapshot = () => { throw new Error("settlement rebuilt registry history after journal I/O"); };
+      return result;
+    } };
+    expect(await resolveSendReceipt(operationId, { registry: active.registry, client, now: () => now, progress: null }))
+      .toMatchObject({ operationId, state: status, evidence: "delivery-journal" });
+    expect(sendReceiptFor(active.registry.deliverySnapshotForOperation(operationId), operationId)?.state).toBe(status);
+  } finally {
+    active.registry.readOnlySnapshot = original;
+    active.registry.close();
+    active.close();
+  }
+});
 
 test("an accepted send that the journal delivered reconciles rather than being reported lost", async () => {
   const active = fixture("delivered");
@@ -2877,4 +2901,119 @@ test("seat inbox registry binding is atomic and a subsequent single dispatch cle
     expect(await reopened.bindDeliveryOperationGenerationOffLoop(members[0]!.id, active.generationId)).toBe(true);
     expect(new AgentRegistry(active.registryPath).readOnlySnapshot().deliveryOperationOwners[members[0]!.id]!.batchId).toBeUndefined();
   } finally { active.close(); }
+});
+
+for (const refuses of [false, true]) test(`settlement sweep prepares selection and uses keyed receipts (refusal=${refuses})`, async () => {
+  const active = fixture(`prepared-sweep-${refuses}`, { sqlite: true, now: () => Date.parse("2026-10-22T00:00:00Z") });
+  const read = active.registry.readOnlySnapshot.bind(active.registry);
+  const prepare = active.registry.prepareReadOnlySnapshot.bind(active.registry);
+  try {
+    const { operationId } = acceptSend(active, { clientMessageId: "prepared-sweep", operationId: "operation-prepared-sweep" });
+    active.journal.transitionOperation(operationId, "delivering");
+    active.journal.transitionOperation(operationId, "delivered");
+    const file = await prepare();
+    let preparations = 0;
+    active.registry.prepareReadOnlySnapshot = async () => { preparations++; if (refuses) throw new Error("selection unavailable"); return file; };
+    active.registry.readOnlySnapshot = () => { throw new Error("settlement sweep refreshed the whole registry synchronously"); };
+    // Acceptance reads the real clock, so the sweep's frozen clock follows it.
+    const sweepAt = AFTER_THE_WINDOW();
+    const sweep = settleDueSends({ registry: active.registry, client: active.client, now: () => sweepAt, progress: null });
+    if (refuses) {
+      await expect(sweep).rejects.toThrow("selection unavailable");
+      expect(sendReceiptFor(active.registry.deliverySnapshotForOperation(operationId), operationId)?.state).toBe("in-flight");
+    } else {
+      expect((await sweep).settled).toEqual([{ operationId, state: "delivered", duplicateRisk: false }]);
+      mirrorSettledReceipts(active.registry, { open: () => [{ operationId } as import("./deliveryProgress").DeliveryProgressRecord], uncertain: () => [], settle: () => {} });
+    }
+    expect(preparations).toBe(1);
+  } finally {
+    active.registry.readOnlySnapshot = read; active.registry.prepareReadOnlySnapshot = prepare;
+    active.registry.close(); active.close();
+  }
+});
+
+for (const expired of [false, true]) test(`progress mirror rechecks its owner and deadline between slices (expired=${expired})`, async () => {
+  const active = fixture(`mirror-slices-${expired}`, { sqlite: true });
+  const read = active.registry.readOnlySnapshot.bind(active.registry);
+  let turn: ReturnType<typeof setImmediate> | undefined;
+  try {
+    const { operationId } = acceptSend(active, { clientMessageId: "mirror-slices", operationId: "operation-mirror-slices" });
+    active.journal.transitionOperation(operationId, "delivering"); active.journal.transitionOperation(operationId, "delivered");
+    await resolveSendReceipt(operationId, { registry: active.registry, client: active.client, progress: null });
+    active.registry.readOnlySnapshot = () => { throw new Error("progress mirror rebuilt history"); };
+    let owned = true, settled = 0;
+    const progress = { open: () => Array.from({ length: 33 }, () => ({ operationId } as import("./deliveryProgress").DeliveryProgressRecord)),
+      uncertain: () => [], settle: () => { settled++; if (settled === 1) turn = setImmediate(() => { owned = false; }); } };
+    await expect(mirrorSettledReceiptsAsync(active.registry, progress, Date.parse("2026-10-22T00:00:00Z"), () => {
+      if (!owned) throw new Error("owner retired");
+    }, expired ? 0 : performance.now() + 30_000)).rejects.toThrow(expired ? "deadline exceeded" : "owner retired");
+    expect(expired ? settled === 0 : settled > 0 && settled <= 16).toBe(true);
+  } finally {
+    if (turn) clearImmediate(turn);
+    active.registry.readOnlySnapshot = read; active.registry.close(); active.close();
+  }
+});
+
+test("concurrent asynchronous sweep selections claim a conversation only at dispatch", async () => {
+  const active = fixture("parallel-sweep-selection", { sqlite: true, now: () => Date.parse("2026-10-22T00:00:00Z") });
+  const prepare = active.registry.prepareReadOnlySnapshot.bind(active.registry);
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let entered!: () => void;
+  const reading = new Promise<void>(resolve => { entered = resolve; });
+  let ready!: () => void;
+  const selecting = new Promise<void>(resolve => { ready = resolve; });
+  const releases: Array<() => void> = [];
+  const sweeps: Array<ReturnType<typeof settleDueSends>> = [];
+  try {
+    const { operationId } = acceptSend(active, { clientMessageId: "parallel-sweep", operationId: "operation-parallel-sweep" });
+    const second = acceptSend(active, { clientMessageId: "parallel-sweep-second", operationId: "operation-parallel-sweep-second" });
+    for (const id of [operationId, second.operationId]) {
+      active.journal.transitionOperation(id, "delivering"); active.journal.transitionOperation(id, "delivered");
+    }
+    const file = await prepare();
+    active.registry.prepareReadOnlySnapshot = async () => new Promise(resolve => {
+      releases.push(() => resolve(file)); if (releases.length === 2) ready();
+    });
+    let statusReads = 0;
+    const client = { ...active.client, operationStatus: async (...args: Parameters<RuntimeHostClient["operationStatus"]>) => {
+      statusReads++; entered(); await held; return active.client.operationStatus(...args);
+    } };
+    const running = new Set<string>();
+    const sweepAt = AFTER_THE_WINDOW();
+    sweeps.push(settleDueSends({ registry: active.registry, client, running, progress: null, now: () => sweepAt }));
+    sweeps.push(settleDueSends({ registry: active.registry, client, running, progress: null, now: () => sweepAt }));
+    await selecting; for (const resume of releases) resume();
+    await reading; await new Promise<void>(resolve => setImmediate(resolve));
+    expect(statusReads).toBe(1);
+    release();
+    expect((await Promise.all(sweeps)).flatMap(result => result.settled)).toEqual([
+      { operationId, state: "delivered", duplicateRisk: false },
+      { operationId: second.operationId, state: "delivered", duplicateRisk: false },
+    ]);
+    expect(running.size).toBe(0);
+  } finally {
+    release(); for (const resume of releases) resume(); await Promise.allSettled(sweeps);
+    active.registry.prepareReadOnlySnapshot = prepare; active.registry.close(); active.close();
+  }
+});
+
+for (const when of ["preparation", "selection"] as const) test(`a settlement selection whose controller retires during ${when} writes no later deadlines or receipts`, async () => {
+  const active = fixture("retired-sweep-selection", { sqlite: true, now: () => Date.parse("2026-10-22T00:00:00Z") });
+  const prepare = active.registry.prepareReadOnlySnapshot.bind(active.registry);
+  let owned = true, deadlines = 0, reads = 0;
+  try {
+    const { operationId } = acceptSend(active, { clientMessageId: "retired-sweep", operationId: "operation-retired-sweep" });
+    acceptSend(active, { clientMessageId: "retired-sweep-second", operationId: "operation-retired-sweep-second" });
+    const file = await prepare();
+    active.registry.prepareReadOnlySnapshot = async () => { if (when === "preparation") owned = false; return file; };
+    const client = { ...active.client, operationStatus: async () => { reads++; return null; } };
+    const sweepAt = AFTER_THE_WINDOW();
+    await expect(settleDueSends({ registry: active.registry, client, progress: null,
+      now: () => sweepAt, onDeadline: () => { deadlines++; queueMicrotask(() => { owned = false; }); },
+      assertActive: () => { if (!owned) throw new Error("settlement owner retired"); },
+    })).rejects.toThrow("settlement owner retired");
+    expect(deadlines).toBe(when === "preparation" ? 0 : 1); expect(reads).toBe(0);
+    expect(sendReceiptFor(active.registry.deliverySnapshotForOperation(operationId), operationId)?.state).toBe("in-flight");
+  } finally { active.registry.prepareReadOnlySnapshot = prepare; active.registry.close(); active.close(); }
 });
