@@ -61,7 +61,7 @@ async function harness(words = ["one", "two"]) {
   let release!: () => void, hookCode: number | null | undefined;
   const held = new Promise<void>(resolve => { release = resolve; });
   const pressureFile = path.join(directory, "pressure");
-  fs.writeFileSync(pressureFile, ""); // A permissive sample still respects FIFO.
+  fs.writeFileSync(pressureFile, "some avg10=0.00 avg60=0.00 avg300=0.00 total=0\n"); // Idle PSI still respects FIFO.
   const adapter = engine.defaultPipelinePorts();
   const ports = {
     cpuPressureHold: adapter.cpuPressureHold, cpuAdmissionReconcile: adapter.cpuAdmissionReconcile,
