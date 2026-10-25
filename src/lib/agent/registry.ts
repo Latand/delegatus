@@ -6224,7 +6224,10 @@ export class AgentRegistry {
         const canonical = resolveConversationAlias(file, conversation.id);
         for (const id of conversationIdsResolvingTo(file, canonical)) {
           if (file.conversationAliases[id]) result.conversationAliases[id] = file.conversationAliases[id]!;
-          if (file.conversations[id] && !result.conversations[id]) result.conversations[id] = clone(file.conversations[id]!);
+          if (!result.conversations[id]) {
+            const current = file.conversations[id];
+            if (current) result.conversations[id] = clone(current);
+          }
           if (file.memberships[id]) result.memberships[id] = clone(file.memberships[id]!);
         }
       }
