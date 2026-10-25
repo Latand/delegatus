@@ -56,7 +56,9 @@ const delivery = spyOn(registry, "deliveryWriteNow").mockImplementation(<T>(corr
     clock += mode === "cutoff" || mode === "released-at-cutoff" ? 3_000 : 2_100;
     if (mode !== "cutoff") {
       const child = writer!;
-      (child.stdin as import("bun").FileSink).end("release\n");
+      const stdin = child.stdin as import("bun").FileSink;
+      stdin.write("release\n");
+      stdin.end();
       release = child.exited.then(code => { if (code !== 0) throw Error(`writer exited with ${code}`); });
     }
   }
