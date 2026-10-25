@@ -1,11 +1,12 @@
 import * as pipelineStore from "@/lib/pipelines/store";
+import * as admissionSources from "@/lib/monitor/seatTickAdmissionSources";
 import { chooseSource } from "../fixtures/source";
 import { afterEach, beforeEach, expect, test, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { AgentRegistry } from "@/lib/agent/registry";
+import { AgentRegistry, type AgentRegistryEntry, type RegistryFile } from "@/lib/agent/registry";
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
 import { stopWorktreeSweepWorker } from "@/lib/pipelines/worktreeSweepWorker";
 import { defaultSeatTickSources } from "@/lib/monitor/seatTickSources";
@@ -475,6 +476,51 @@ test("archive evidence, notes and active counterparts are required", () => {
   refusal(p, input({ [scope]: [] }, { archive: [{ id: one, reason: "stale", note: "" }] }), "CURATE_INVALID");
   for (const where of [undefined, "missing.ts", "../elsewhere.ts"]) refusal(p, input({ [scope]: [] }, { archive: [{ id: one, reason: "in-code", note: "The test enforces the same condition.", where }] }), "CURATE_EVIDENCE");
   refusal(p, input({ [scope]: [] }, { archive: [{ id: one, reason: "contradicted", note: "The current instructions support its counterpart.", against: one }] }), "CURATE_INVALID");
+});
+test.each(["in-code", "in-instructions", "stale"] as const)("foreign recovery rejects host repository evidence for %s and preserves the archive", reason => {
+  const foreign = roleScope("recovery-other", "builder");
+  const id = fixture(foreign, { state: "archived", reason: "budget" });
+  const p = pass();
+  expect(p.scopes).toContain(foreign);
+  const before = row(id);
+  refusal(p, input({ [foreign]: [] }, { restore: [id], archive: [{ id, reason, where: "AGENTS.md:1", note: "This instruction file exists only in the sweep host." }] }), "CURATE_EVIDENCE");
+  expect(row(id)).toEqual(before);
+  ended(p);
+  const ownerRepo = path.join(dir, "owner-repository");
+  fs.mkdirSync(ownerRepo);
+  fs.writeFileSync(path.join(ownerRepo, "AGENTS.md"), "Check the owning project's repository before retiring guidance.\n");
+  const owner = claimPass({ project: "recovery-other", repoDir: ownerRepo, now: NOW + 2000 })!;
+  applyCuration(owner, input({ [foreign]: [] }, { restore: [id], archive: [{ id, reason, where: "AGENTS.md:1", note: "The owning project's admitted repository supplies this evidence." }] }), at(3000));
+  expect(row(id)).toMatchObject({ state: "archived", reason, where: "AGENTS.md:1" });
+});
+
+test("moving a foreign recovery rule to a shared scope cannot borrow the host's evidence", () => {
+  const foreign = roleScope("recovery-other", "builder");
+  const id = fixture(foreign, { state: "archived", reason: "budget" });
+  const p = pass();
+  applyCuration(p, input({ [foreign]: [], machine: [id] }, { restore: [id], move: [{ id, to: "machine", note: "Broaden the recovered condition to every project." }] }), at(100));
+  refusal(p, input({ machine: [] }, { archive: [{ id, reason: "in-instructions", where: "AGENTS.md", note: "Attempt to use the host's file after a move." }] }), "CURATE_EVIDENCE");
+  // Its original project remains part of the rule's provenance after a prior call.
+  // Shared guidance can still be judged from its text without repository evidence.
+  applyCuration(p, input({ machine: [] }, { archive: [{ id, reason: "stale", note: "The condition no longer applies across projects." }] }), at(200));
+  expect(row(id)).toMatchObject({ state: "archived", reason: "stale" });
+});
+
+test("a shared part split from foreign recovery keeps its repository provenance", () => {
+  const foreign = roleScope("recovery-other", "builder");
+  const id = fixture(foreign, { state: "archived", reason: "budget", source: {
+    project: "recovery-other", pipelineId: "foreign-fixture", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_foreign",
+  } });
+  const p = pass();
+  const result = applyCuration(p, input({ [foreign]: [], machine: [id, `split:${id}:1`] }, { restore: [id], split: [{
+    id, note: "Preserve both obligations in shared guidance.", parts: [
+      { to: "machine", rule: "Check ownership before writing shared state." },
+      { to: "machine", rule: "Check the revision before writing shared state." },
+    ],
+  }] }), at(100));
+  const child = result.placeholders[`split:${id}:1`];
+  refusal(p, input({ machine: [id] }, { archive: [{ id: child, reason: "in-code", where: "AGENTS.md", note: "Attempt to retire a foreign condition using the host file." }] }), "CURATE_EVIDENCE");
+  expect(row(child).state).toBe("active");
 });
 test.each([roleScope(PROJECT, "visual-critic"), "role:*:builder", projectScope(PROJECT), "machine"])("move to %s and undo restores both scope lists", to => {
   const scope = roleScope(PROJECT, "builder"), one = fixture(scope), p = pass();
@@ -1223,6 +1269,44 @@ test("a pass restores a budget archive by integrating all its conditions", () =>
   expect(row(active).rule).toBe(integrated);
   expect(row(archived)).toMatchObject({ state: "merged", mergedInto: active });
   expect(readPass(p.id)!.counts).toMatchObject({ restored: 1, merged: 1 });
+});
+
+for (const count of [38, 39]) test.each(["missing", "retired", "unwoken", "gone", "unproven", "live"] as const)(`retention checks host admission with ${count} existing rules: %s`, kind => {
+  const scope = roleScope(PROJECT, "builder");
+  const ids = Array.from({ length: count }, (_, i) => fixture(scope, {
+    id: `r_host_${String(i).padStart(3, "0")}`, createdAt: at(i), curatedAt: at(),
+    rule: `Preserve condition category ${i}: ${"check durable evidence ".repeat(20)}`.slice(0, 300),
+    ...(i === 0 ? { keptByOperatorAt: at(), createdAt: at(-3000) } : {}),
+  }));
+  expect(scopeChars(ids.map(row))).toBeLessThan(ROLE_MEMORY_BOUND * 1.25);
+  const f = hostingFixture();
+  f.seat();
+  const registry = f.sources.registry();
+  const identity = captureProcessIdentity(process.pid);
+  const entry = {
+    key: { engine: "codex", sessionId: "retention-seat" }, artifactPath: path.join(dir, "seat.jsonl"),
+    cwd: dir, status: "idle", host: null, claimOwner: null, claimEpoch: 1, updatedAt: at(),
+    structuredHost: { kind: "codex-app-server", process: kind === "unproven" ? null : {
+      pid: process.pid, startIdentity: kind === "gone" ? "retired-process-identity" : identity.startIdentity,
+    }, writerClaimEpoch: 1 },
+  } as AgentRegistryEntry;
+  registry.livenessConversationSnapshot = () => ({ entries: { seat: entry } }) as unknown as RegistryFile;
+  if (kind === "missing") f.seats.clear();
+  if (kind === "retired") registry.conversation = () => ({ supersededBy: { conversationId: "conversation_successor" } }) as never;
+  if (kind === "unwoken") writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 1 });
+  const sources = spyOn(admissionSources, "defaultSeatTickAdmissionSources").mockReturnValue(f.sources);
+  try {
+    const source: RuleSource = { project: PROJECT, pipelineId: "host-retention", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_host_retention" };
+    recordLessonRequest({ ...source, at: at(2000) });
+    const incoming = leaveLessons({ source, request: source, lessons: [{ scope: "role", rule: `Preserve new conditions: ${"check complete obligations ".repeat(20)}`.slice(0, 300), why }], none: null, now: at(2000) }).left[0];
+    const emergency = count === 39 && kind !== "live";
+    expect(incoming.archived).toEqual(emergency ? [ids[1]] : []);
+    expect(row(ids[0]).state).toBe("active");
+    expect(row(incoming.id).state).toBe("active");
+    expect(row(ids[1]).state).toBe(emergency ? "archived" : "active");
+    if (emergency) expect(incoming.scopeChars).toBeLessThanOrEqual(ROLE_MEMORY_BOUND * 1.25);
+    if (count === 39 && kind === "live") expect(incoming.scopeChars).toBeGreaterThan(ROLE_MEMORY_BOUND * 1.25);
+  } finally { sources.mockRestore(); }
 });
 
 test("a busy curator permits emergency eviction by evidence while keeping the returned and incoming rules", () => {

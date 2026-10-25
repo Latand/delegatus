@@ -7,6 +7,7 @@ import { SEAT_TICK_WAKE_INTERVAL_MS } from "@/lib/monitor/seatTick";
 import { peekSeatTickState } from "@/lib/monitor/seatTickState";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { identityAlive, livenessProbe } from "@/lib/agent/accountLiveness";
+import { entryOwners, ownerProcessAlive } from "@/lib/lifecycle/owners";
 import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 import { roleMemoryEnabled } from "../settings";
 import { machinePassAuthority, patchPass, readPass, readPassAuthority, passIsLive, type CuratorPass } from "./store";
@@ -49,6 +50,20 @@ function hostEvidence(project: string, ports: CurationAdmissionPorts) {
     || wakeAt > now || now - wakeAt > 2 * settings.wakeIntervalMs) return { held: "no delivered seat wake within two intervals" } as const;
   return { held: null, seat, wakeAt } as const;
 }
+
+/** Synchronous admission evidence for memory writers. Probe only this seat's
+ * recorded processes; a setting or an unproven launch cannot host a curator. */
+export function curationAvailable(project: string, sources = defaultSeatTickAdmissionSources()): boolean {
+  const ports = { sources };
+  if (admissionHeld(project, ports)) return false;
+  const evidence = hostEvidence(project, ports);
+  if (evidence.held !== null) return false;
+  const snapshot = sources.registry().livenessConversationSnapshot(evidence.seat.conversationId!);
+  const probe = livenessProbe();
+  return Object.values(snapshot.entries).some(entry =>
+    entryOwners(entry, probe).owners.some(owner => ownerProcessAlive(owner, probe)));
+}
+
 export async function hostAdmission(project: string, ports: CurationAdmissionPorts) {
   const evidence = hostEvidence(project, ports);
   if (evidence.held !== null) return evidence;

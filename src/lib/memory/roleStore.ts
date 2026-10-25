@@ -46,11 +46,14 @@ import {
 /** Resolve evidence only for an emergency overflow, using the same task lineage
  * and application marks exposed to the curator. */
 function retentionPolicy(project: string) {
+  // Admission reaches host policy, which imports memory during initialization.
+  // Resolve it only when a writer runs, after that module graph has settled.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- synchronous writers must defer this cycle
+  const { curationAvailable } = require("./curation/admission") as typeof import("./curation/admission");
   // Settings may initialize their collection: read them before the memory write.
-  const settings = readSeatTickSettings(canonicalProject(project));
-  const enabled = roleMemoryEnabled() && settings.enabled && effectiveCurationSetting(settings).enabled;
+  const available = curationAvailable(canonicalProject(project));
   return {
-    get canCurate() { return enabled && !passIsLive(machinePassAuthority()); },
+    get canCurate() { return available && !passIsLive(machinePassAuthority()); },
     evidence: (active: readonly RoleMemoryRule[], pending?: LessonRequestRow | null) => {
       const stored = roleMemoryCollection()?.snapshot() ?? [];
       // The current answer's validated application marks are not committed yet.

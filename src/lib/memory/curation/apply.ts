@@ -4,6 +4,7 @@ import { prepareImportEdits } from "./importApply";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
 import path from "node:path";
+import { canonicalProject } from "@/lib/projects/aliases";
 import { ROLE_IDS } from "@/lib/roles/types";
 import { roleIsClean } from "../eligibility";
 import { swarmRulesEnabled } from "../settings";
@@ -109,7 +110,7 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
       if (protectedOperation && rule.keptByOperatorAt) refuse("CURATE_KEPT", "the operator returned this rule; keep it whole and active");
       dispositions.add(id); touched.add(id); return work.get(id)!;
     };
-    const importRows = prepareImportEdits(fresh, input, now, { work, created, placeholders, get: tx.get, target, text, note, evidence: where => evidence(pass.repoDir, where) });
+    const importRows = prepareImportEdits(fresh, input, now, { work, created, placeholders, get: tx.get, target, text, note, evidence: where => evidence(fresh.repoDir, where) });
     for (const id of input.restore ?? []) {
       if (work.has(id)) refuse("CURATE_PARTITION", "restore ids must be distinct archived rules");
       const row = tx.get(`r:${id}`);
@@ -173,7 +174,17 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
           || !swarmRulesForRole(role).some(entry => item.where === `swarm:${entry.id}`)) {
           refuse("CURATE_EVIDENCE", "swarm evidence requires in-instructions and an entry for this role in the receiving pack");
         }
-      } else if (item.reason === "in-code" || item.reason === "in-instructions" || item.where) evidence(pass.repoDir, item.where);
+      } else if (item.reason === "in-code" || item.reason === "in-instructions" || item.where) {
+        // Recovery may include unrelated projects. Even moving a recovered rule
+        // into a shared scope cannot make this host's files evidence for it.
+        const original = get(item.id);
+        const recoveryScope = Object.entries(fresh.budgetSweepCandidates ?? {}).find(([, ids]) => ids.includes(item.id))?.[0];
+        const project = scopeProject(recoveryScope ?? original.scope) ?? original.source.project;
+        if (project && project !== "*" && canonicalProject(project) !== canonicalProject(fresh.project)) {
+          refuse("CURATE_EVIDENCE", "repository evidence is unavailable for this rule's project; judge it from its text");
+        }
+        evidence(fresh.repoDir, item.where);
+      }
       if ((item.reason === "contradicted" || item.reason === "duplicate") && !item.against) refuse("CURATE_INVALID", "contradiction or duplicate needs an active counterpart");
       work.set(item.id, { ...archivedRule(rule, now, item.reason, true), note: item.note, where: item.where, against: item.against });
     }
