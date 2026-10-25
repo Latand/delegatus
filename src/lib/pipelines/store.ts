@@ -1360,9 +1360,10 @@ async function preparePipelineEvidence(mode: "startup" | "health" | "ownership" 
   finally { if (!budget && pendingEvidence.get(pendingKey) === pending) pendingEvidence.delete(pendingKey); }
 }
 
-export async function loadPipelineOwnershipForStartupAsync(): Promise<PipelineStartupOwnership[]> {
+export async function loadPipelineOwnershipForStartupAsync(ids?: readonly string[], conversationIds?: ReadonlySet<string>): Promise<PipelineStartupOwnership[]> {
   const evidence = admittedEvidence.getStore()?.current ?? await preparePipelineEvidence("ownership");
-  return (evidence.ownership ?? evidence.pipelines.map(startupOwnership)).map(row => ({ ...row,
+  const selected = ids && new Set(ids);
+  return (evidence.ownership ?? evidence.pipelines.map(startupOwnership)).filter(row => !selected || selected.has(row.id) || row.attempts.some(attempt => attempt.conversationId !== null && conversationIds?.has(attempt.conversationId))).map(row => ({ ...row,
     attempts: row.attempts.map(attempt => ({ ...attempt })), survivors: row.survivors.map(identity => ({ ...identity })) }));
 }
 
