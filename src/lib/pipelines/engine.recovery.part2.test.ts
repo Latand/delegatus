@@ -501,14 +501,14 @@ test.each([
     }
     const ports = defaultPipelinePorts();
     const spawn = ports.spawnAgent;
-    await drainStageActivations({ ...ports, structuredDeliveryPublication: () => "ready",
+    await drainStageActivations({ ...ports, now: () => process.env.LLV_TEST_CLOCK, structuredDeliveryPublication: () => "ready",
       spawnAgent: (input) => spawn(input, async (reservation) => {
         fs.writeFileSync(process.env.LLV_TEST_MARKER, reservation.launchId);
         process.exit(0);
       }),
     });
     process.exit(2);
-  `], { cwd: process.cwd(), env: { ...process.env, LLV_TEST_REGISTRY: registryPath, LLV_TEST_MARKER: marker, LLV_TEST_FAILURE: failed ? "1" : "0" }, stdout: "pipe", stderr: "pipe" });
+  `], { cwd: process.cwd(), env: { ...process.env, LLV_TEST_REGISTRY: registryPath, LLV_TEST_MARKER: marker, LLV_TEST_FAILURE: failed ? "1" : "0", LLV_TEST_CLOCK: h.ports.now() }, stdout: "pipe", stderr: "pipe" });
   expect(await child.exited).toBe(0);
   const launch = fs.readFileSync(marker, "utf8");
   const before = loadPipelines()[0]!.runs[0]!.attempts[0]!;
@@ -574,9 +574,9 @@ test.each(["before-recovery", "account-lock"] as const)("recovering an unsubmitt
       transcriptRoot: process.env.LLV_STATE_DIR, env: { NODE_ENV: "test" },
     }});
     registry.beginSpawnRequestAsync = async () => { process.exit(0); };
-    await drainStageActivations({ ...defaultPipelinePorts(), structuredDeliveryPublication: () => "ready" });
+    await drainStageActivations({ ...defaultPipelinePorts(), now: () => process.env.LLV_TEST_CLOCK, structuredDeliveryPublication: () => "ready" });
     process.exit(2);
-  `], { cwd: process.cwd(), env: { ...process.env, LLV_TEST_REGISTRY: registryPath }, stdout: "pipe", stderr: "pipe" });
+  `], { cwd: process.cwd(), env: { ...process.env, LLV_TEST_REGISTRY: registryPath, LLV_TEST_CLOCK: h.ports.now() }, stdout: "pipe", stderr: "pipe" });
   expect(await child.exited).toBe(0);
   const before = structuredClone(loadPipelines()[0]!.runs[0]!.attempts[0]!);
   expect(before).toMatchObject({ launchId: null, spawnCalls: 1, activation: { phase: "reserving", owner: { pid: child.pid } } });

@@ -7045,7 +7045,7 @@ async function spawnRunStage(
         const spawnAdmissionDeadline = performance.now() + Math.max(0, remainingMs);
         if (remainingMs <= 0) {
           const failure = pipeline.stateDetail?.match(/^stage spawn deferred: (.*); retry at /)?.[1];
-          throw failure && isTransientStructuredSpawnFailure(failure) ? new Error(failure)
+          throw failure && (isTransientStructuredSpawnFailure(failure) || isLaunchAdmissionContention(new Error(failure))) ? new Error(failure)
             : new RegistryWriterBusyError("spawn admission", "lane deadline exhausted");
         }
         spawned = await ports.spawnAgent({
