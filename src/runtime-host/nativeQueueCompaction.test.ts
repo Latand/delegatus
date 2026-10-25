@@ -6,6 +6,8 @@ import path from "node:path";
 import { once } from "node:events";
 import { RuntimeJournal } from "./journal";
 import { RuntimeHost } from "./host";
+import { applyEvent, installSnapshot, type RuntimeEnvelope, type RuntimeSnapshot } from "@/components/runtime/runtimeModel";
+import { projectNativeQueue } from "@/components/nativeQueueView";
 import { serveRuntimeHost } from "./socket";
 import { NativeCodexQueue, NativeQueueProtocolRefusal, type NativeQueuedSubmission } from "@/lib/runtime/nativeCodexQueue";
 import { NativeQueueExecutor } from "@/lib/runtime/nativeQueueExecutor";
@@ -87,6 +89,7 @@ function harness(journal: RuntimeJournal) {
   let active: string | null = "active-a";
   let liveBinding = binding;
   let loseNextReply = false;
+  let addGate: Promise<void> | null = null;
   let evidence: () => Promise<NativeQueueProof | null> = async () => null;
   const queue = new NativeCodexQueue({ rpc: async (method, params) => {
     if (method === "thread/queue/list") return { data: items, nextCursor: null };
@@ -98,6 +101,8 @@ function harness(journal: RuntimeJournal) {
       const queuedSubmission = { id: `native-${++next}`, clientUserMessageId: params.clientUserMessageId as string, input: params.input as NativeQueuedSubmission["input"] };
       items.push(queuedSubmission);
       result = { queuedSubmission };
+      /* The engine has the message; the reply that says so is still on its way. */
+      if (addGate) await addGate;
     } else if (method === "thread/queue/update") {
       const item = items.find(row => row.id === params.queuedSubmissionId)!;
       item.input = params.input as NativeQueuedSubmission["input"];
@@ -140,6 +145,12 @@ function harness(journal: RuntimeJournal) {
     executor, client, writes, settled, proofFor,
     get items() { return items; },
     loseNextReply() { loseNextReply = true; },
+    /** Holds every queue/add reply until the returned release runs. */
+    holdAddReply(): () => void {
+      let release!: () => void;
+      addGate = new Promise<void>(resolve => { release = () => { addGate = null; resolve(); }; });
+      return release;
+    },
     idle() { active = null; nativeSession(journal, { activeTurnId: null }); },
     switchAccount() { liveBinding = { ...binding, accountId: "account-b" }; },
     /** Canonical history as the host reader would answer it, per entry. */
@@ -616,4 +627,159 @@ test("the compacted-proof settlement crosses the production socket with its own 
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     journal.close();
   }
+});
+
+test("a canonical proof through the operation tells the session once, only for the entry it proves", async () => {
+  const filename = journalFile();
+  const journal = open(filename);
+  nativeSession(journal);
+  const h = harness(journal);
+  // Two entries with the same words and different ids; only the first is consumed.
+  for (const id of ["op-consumed", "op-still-queued"]) {
+    const add = nativeCommand(id, { text: "same words" });
+    journal.executeOperation(add);
+    await h.executor.execute(add);
+  }
+  const seqBefore = tailSeq(filename);
+  h.canonical(entry => entry.entryId === "op-consumed" ? h.proofFor(entry.entryId) : null);
+  expect(await h.executor.reconcile(conversationId)).toBeTrue();
+
+  const states = Object.fromEntries(journal.nativeQueueRead(conversationId).map(row => [row.entryId, row.state]));
+  expect(states).toEqual({ "op-consumed": "delivered", "op-still-queued": "queued" });
+  const changed = eventsAfter(filename, seqBefore).filter(event => event.kind === "native-queue-changed");
+  expect(changed.map(event => [event.scope, (event.payload as { entryId: string }).entryId])).toEqual([[`session:${conversationId}`, "op-consumed"]]);
+
+  // Proof seen again by a later pass appends nothing more.
+  const seqAfter = tailSeq(filename);
+  await h.executor.reconcile(conversationId);
+  expect(eventsAfter(filename, seqAfter).filter(event => event.kind === "native-queue-changed")).toEqual([]);
+  journal.close();
+});
+
+test("the journal event of a proof reaches the browser model as one native queue revision, and a replayed proof adds none", async () => {
+  const filename = journalFile();
+  const journal = open(filename);
+  nativeSession(journal);
+  const h = harness(journal);
+  const add = nativeCommand("op-consumed");
+  journal.executeOperation(add);
+  await h.executor.execute(add);
+  const before = tailSeq(filename);
+  const model = installSnapshot({ schemaVersion: 1, snapshotSeq: before, retentionFloorSeq: 0, runtime: { hostEpoch: 1, health: "ready" }, filesRevision: 0,
+    sessions: [{ conversationId, sessionKey: { engine: "codex", sessionId: binding.threadId }, hostKind: "codex-app-server", host: "hosted", turn: "running",
+      provenance: "structured", revision: 1, attentionIds: [], recentReceipts: [], accountId: binding.accountId, parentConversationId: null, flowId: null,
+      workflowId: null, cwd: "/tmp", artifactPath: null, capabilities: { steer: true, structuredAttention: true }, activeTurnId: "active-a", drift: null }],
+    attentions: [], recentOperations: [], edges: [], flows: [], workflows: [], tasks: [] } as unknown as RuntimeSnapshot);
+  const revisionAfter = (replayFrom: number) => {
+    let store = model;
+    for (const event of journal.replay(replayFrom).events as unknown as RuntimeEnvelope[]) {
+      const result = applyEvent(store, event);
+      if (result.outcome === "applied") store = result.store;
+    }
+    return store.sessions[conversationId]?.nativeQueueRevision ?? 0;
+  };
+  expect(revisionAfter(before)).toBe(0);
+  h.canonical(entry => h.proofFor(entry.entryId));
+  await h.executor.reconcile(conversationId);
+  const settled = journal.replay(before).events.filter(event => event.kind === "native-queue-changed");
+  expect(settled.map(event => event.scope)).toEqual([{ type: "session", id: conversationId }]);
+  expect(revisionAfter(before)).toBe(1);
+  await h.executor.reconcile(conversationId);
+  expect(revisionAfter(before)).toBe(1);
+  journal.close();
+});
+
+test("a pass that cannot reach the host fails with its reason while an entry is owed, and answers false when nothing is", async () => {
+  const journal = open(journalFile());
+  nativeSession(journal);
+  const h = harness(journal);
+  const unreachable = new NativeQueueExecutor({ client: h.client, resolveHost: () => null, binding: () => binding });
+  expect(await unreachable.reconcile(conversationId)).toBeFalse();
+  const add = nativeCommand("op-owed");
+  journal.executeOperation(add);
+  await h.executor.execute(add);
+  await expect(unreachable.reconcile(conversationId)).rejects.toThrow("no host for the conversation");
+  journal.close();
+});
+
+test("settled rows owe nothing to an unreachable host: removed-only and delivered-only answer false", async () => {
+  const journal = open(journalFile());
+  nativeSession(journal);
+  const h = harness(journal);
+  const unreachable = new NativeQueueExecutor({ client: h.client, resolveHost: () => null, binding: () => binding });
+  const removedAdd = nativeCommand("op-removed");
+  journal.executeOperation(removedAdd);
+  await h.executor.execute(removedAdd);
+  const del = nativeCommand("op-delete", { action: "delete", entryId: "op-removed", expectedRevision: 1 });
+  journal.executeOperation(del);
+  await h.executor.execute(del);
+  expect(journal.nativeQueueRead(conversationId).map(row => row.state)).toEqual(["removed"]);
+  expect(await unreachable.reconcile(conversationId)).toBeFalse();
+
+  const deliveredAdd = nativeCommand("op-delivered");
+  journal.executeOperation(deliveredAdd);
+  await h.executor.execute(deliveredAdd);
+  h.canonical(entry => entry.entryId === "op-delivered" ? h.proofFor(entry.entryId) : null);
+  await h.executor.reconcile(conversationId);
+  expect(journal.nativeQueueRead(conversationId).map(row => row.state).sort()).toEqual(["delivered", "removed"]);
+  expect(await unreachable.reconcile(conversationId)).toBeFalse();
+  journal.close();
+});
+
+test("an engine proof that arrives before the delayed queue acknowledgement stays delivered, and a same-text entry with another id stays queued", async () => {
+  const journal = open(journalFile());
+  nativeSession(journal);
+  const h = harness(journal);
+  const echo = nativeCommand("op-echo", { text: "same words" });
+  const other = nativeCommand("op-other", { text: "same words" });
+  journal.executeOperation(echo);
+  journal.executeOperation(other);
+  const release = h.holdAddReply();
+  const delayed = h.executor.execute(echo);
+  // The add reached the engine and the engine already consumed it, but the reply is not here.
+  for (let attempt = 0; attempt < 50 && !h.items.length; attempt++) await new Promise(resolve => setTimeout(resolve, 5));
+  expect(h.items.length).toBe(1);
+  h.canonical(entry => entry.entryId === "op-echo" ? h.proofFor(entry.entryId) : null);
+  await h.executor.reconcile(conversationId);
+  expect(journal.nativeQueueRead(conversationId).find(row => row.entryId === "op-echo")?.state).toBe("delivered");
+
+  release();
+  await delayed;
+  expect(journal.nativeQueueRead(conversationId).find(row => row.entryId === "op-echo")?.state).toBe("delivered");
+  expect(journal.operationResult("op-echo")?.receipt.status).toBe("delivered");
+
+  // The other id with the same words is admitted afterwards and keeps waiting.
+  await h.executor.execute(other);
+  expect(await h.executor.reconcile(conversationId)).toBeTrue();
+  const rows = journal.nativeQueueRead(conversationId);
+  expect(Object.fromEntries(rows.map(row => [row.entryId, row.state]))).toEqual({ "op-echo": "delivered", "op-other": "queued" });
+  const view = projectNativeQueue({ entries: rows, native: null, turn: "running" });
+  expect(view.rows.map(row => row.entryId)).toEqual(["op-other"]);
+  journal.close();
+});
+
+test("a removed entry whose receipt cannot be read does not hold back the proof of a consumed entry behind it", async () => {
+  const journal = open(journalFile());
+  nativeSession(journal);
+  const h = harness(journal);
+  for (const id of ["op-removed", "op-consumed"]) {
+    const add = nativeCommand(id);
+    journal.executeOperation(add);
+    await h.executor.execute(add);
+  }
+  const del = nativeCommand("op-delete", { action: "delete", entryId: "op-removed", expectedRevision: 1 });
+  journal.executeOperation(del);
+  await h.executor.execute(del);
+  expect(journal.nativeQueueRead(conversationId).find(row => row.entryId === "op-removed")?.state).toBe("removed");
+
+  h.canonical(entry => h.proofFor(entry.entryId));
+  const real = h.client.operationStatus;
+  h.client.operationStatus = async id => {
+    if (id === "op-removed") throw new Error("receipt read failed");
+    return real(id);
+  };
+  // The failed read leaves the pass pending, and the consumed entry still settles.
+  expect(await h.executor.reconcile(conversationId)).toBeTrue();
+  expect(journal.nativeQueueRead(conversationId).find(row => row.entryId === "op-consumed")?.state).toBe("delivered");
+  journal.close();
 });

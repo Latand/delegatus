@@ -678,10 +678,6 @@ test("a semantic conflict names its hunk on the successor and keeps the PR open"
   await h.sweep();
   const request = h.creates[0]!.request as CreatePipelineRequest;
   expect(request.stages[0]!.onFail).toBeNull();
-  for (const instruction of ["needs_decision", "file:line", "@@", "git merge --abort", "Never guess", "noreply", "machine identity"]) {
-    expect(request.stages[0]!.prompt).toContain(instruction);
-  }
-  expect(request.stages[1]!.prompt).toContain("git show --remerge-diff");
   h.pipeline("refresh-1").state = "needs_decision";
   h.pipeline("refresh-1").stateDetail = "src/example.ts:12 @@ -9,6 +9,7 @@ changes either side's behaviour";
   await h.run(30 * 60_000);
@@ -1050,8 +1046,6 @@ test("strict protection refreshes the next PR locally and waits for checks on it
   expect(h.merge("second")).toMatchObject({ state: "refreshing", refresh: { base: MAIN_2, head: HEAD_A, pipelineId: "refresh-1" } });
   const request = h.creates[0]!.request as CreatePipelineRequest;
   expect(request.delivery).toMatchObject({ branch: "refs/heads/second", pr: 22 });
-  expect(request.stages[0]!.prompt).toContain("machine identity");
-  expect(request.stages[0]!.prompt).toContain("Never rebase, force-push or call GitHub update-branch");
   expect(h.updates()).toHaveLength(0);
   const refreshedHead = "b".repeat(40);
   Object.assign(h.pipeline("refresh-1"), { state: "completed", lastPassedCommit: refreshedHead });

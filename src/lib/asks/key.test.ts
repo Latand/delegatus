@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { GET, PUT } from "@/app/api/asks-you/key/route";
 import { openRouterKeyPath, readOpenRouterApiKey } from "./settings";
 import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
@@ -24,15 +25,17 @@ afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 function request(body: unknown, headers: Record<string, string> = {}) {
-  return new NextRequest("http://localhost/api/asks-you/key", { method: "PUT", headers: { host: "localhost", origin: "http://localhost", "sec-fetch-site": "same-origin", "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
+  return new NextRequest("http://localhost/api/asks-you/key", { method: "PUT", headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "localhost", origin: "http://localhost", "sec-fetch-site": "same-origin", "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
 }
 for (const existing of [false, true]) test(`staging refuses before reading the body and preserves the shared key (${existing})`, async () => {
   const filename = openRouterKeyPath();
   if (existing) expect((await PUT(request({ key: "fixture-production-key" }))).status).toBe(200);
-  const before = fs.existsSync(path.dirname(filename)) ? fs.readdirSync(path.dirname(filename)) : [];
   process.env.LLV_STAGING = "1";
   process.env.LLV_STATE_DIR = path.join(root, "config/delegatus/state-staging");
+  // The page's session (and the staging state directory its key lives in)
+  // exists before the operator types the key.
   const req = request({ key: "fixture-staging-typed-key" });
+  const before = fs.existsSync(path.dirname(filename)) ? fs.readdirSync(path.dirname(filename)) : [];
   const response = await PUT(req);
   expect(response.status).toBe(409);
   expect(req.bodyUsed).toBe(false);

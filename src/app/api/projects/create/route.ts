@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { createManualProject } from "@/lib/projects/curation";
 import { suggestionRoots } from "@/lib/projects/suggestionRoots";
@@ -24,6 +25,8 @@ const FAILURE_STATUS: Record<string, number> = {
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const rejection = rejectCrossOrigin(request);
   if (rejection) { rejection.headers.set("Cache-Control", "no-store"); return rejection; }
+  const authority = requireOperatorAuthority(request);
+  if (!authority.ok) return NextResponse.json({ error: authority.error }, { status: authority.status, headers });
   let payload: unknown = null;
   try {
     payload = await request.json();
@@ -47,6 +50,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   /* The same roots the picker suggests from bound what may be created
      (issue #1223): a typed path outside the directories the viewer knows is
      refused here, mkdir opt-in included. */
+  // Reading the body yields; a rotated or revoked session must not admit a root.
+  const currentAuthority = requireOperatorAuthority(request);
+  if (!currentAuthority.ok) return NextResponse.json({ error: currentAuthority.error }, { status: currentAuthority.status, headers });
   const result = createManualProject(name, root, existing, {
     createMissingRoot: record?.createRoot === true,
     allowedRoots: suggestionRoots(),

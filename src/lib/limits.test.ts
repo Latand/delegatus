@@ -1390,6 +1390,7 @@ test("concurrent Claude refreshes share one provider request at each retry bound
 test.each([
   "2026-10-23T06:15:13.499Z",
   "2026-10-25T23:59:59.499Z",
+  "2026-10-26T00:00:00.500Z",
   "2026-10-26T00:00:00.501Z",
 ])("a weekly-only Codex account charts its weekly window and names the missing 5h one (%s)", async (instant) => {
   // The production shape behind issue #606: the provider reports a single
@@ -1419,11 +1420,14 @@ test.each([
     // Freeze the whole read at a UTC instant, including Sunday/Monday rollover.
     setSystemTime(new Date(now));
     const burndown = await readBurndown({
-      codexLiveReader: async () => ({
-        primary: { usedPercent: 52, resetsAt, windowDurationMins: 10_080 },
-        secondary: null,
-        planType: "pro",
-      }),
+      codexLiveReader: async () => {
+        expect(Date.now()).toBe(now);
+        return {
+          primary: { usedPercent: 52, resetsAt, windowDurationMins: 10_080 },
+          secondary: null,
+          planType: "pro",
+        };
+      },
     });
     expect(burndown.codexAccountId).toBe(account.id);
     const weekly = burndown.codex!.weekly;

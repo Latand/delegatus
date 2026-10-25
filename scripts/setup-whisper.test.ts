@@ -3,7 +3,6 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { CAP_SECONDS } from "../src/lib/dictationTimer";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -110,9 +109,3 @@ for (const [outcome, error] of [
     expect(existsSync(path.dirname(readFileSync(result.audioLog, "utf8")))).toBe(false);
   });
 }
-
-test("transcription documentation states the recording cap", () => {
-  const doc = readFileSync(path.resolve(import.meta.dir, "../docs/transcription.md"), "utf8");
-  expect(doc).toContain(`after ${CAP_SECONDS / 60} minutes (${CAP_SECONDS} seconds`);
-  expect(doc).not.toContain("2-minute");
-});

@@ -13,6 +13,7 @@ import path from "node:path";
 import sharp from "sharp";
 import { Database } from "bun:sqlite";
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { loadTasks, saveTasks } from "@/lib/tasks/store";
 import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
 import { viewerMcpBindings, productionViewerControlDependencies } from "@/lib/mcp/bindings";
@@ -108,7 +109,7 @@ afterEach(async () => { savePipelines([]); for (const root of roots.splice(0)) a
 test("another project's caller replaying a review read under the same key learns nothing of it", async () => {
   const published = await as(CAPABILITY.a, async () => service().callTool("publish_prototype_review", await input("publish-a", "task-a")));
   expect(published).toMatchObject({ ok: true, taskId: "task-a" });
-  const decided = await reviewPOST(request("/api/tasks/task-a/prototypes", { reviewId: published.reviewId, chosen: [1], comment: "Private comment of project A" }), "task-a", world());
+  const decided = await reviewPOST(request("/api/tasks/task-a/prototypes", { reviewId: published.reviewId, chosen: [1], comment: "Private comment of project A" }, { cookie: `llv_operator=${soloBrowserSession()}` }), "task-a", world());
   expect(decided.status).toBe(200);
   const args = { clientRequestId: "read-review", taskId: "task-a" };
   const first = await as(CAPABILITY.a, () => service().callTool("read_prototype_review", args));

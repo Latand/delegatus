@@ -1,3 +1,5 @@
+import { serviceTierRefusal } from "@/lib/accounts/codexServiceTiers";
+import { listCodexAccounts } from "@/lib/accounts/codex";
 import { StructuredSendRefusedError } from "./engineHost";
 import type { RuntimeSendSettings } from "./contracts";
 import { isKnownEffortTier } from "@/lib/agent/efforts";
@@ -29,10 +31,21 @@ export function launchServiceTier(profile: { serviceTier?: string | null; fast: 
   return profile.serviceTier === "standard" ? "default" : profile.serviceTier ?? (profile.fast === true ? "priority" : undefined);
 }
 
-export function assertCatalogOffersTier(catalog: unknown, model: string | undefined, tier: string | undefined): void {
+export function assertCatalogOffersTier(catalog: unknown, model: string | undefined, tier: string | undefined, accountHome?: string): void {
   if (!tier || tier === "default" || tier === "standard") return;
   const rows = catalog && typeof catalog === "object" && "data" in catalog && Array.isArray(catalog.data) ? catalog.data : [];
   const row = rows.find(row => row && typeof row === "object" && (model ? row.id === model || row.model === model : row.isDefault === true));
   const offered = Array.isArray(row?.serviceTiers) ? row.serviceTiers.map((value: { id?: unknown }) => value?.id).filter((id: unknown) => typeof id === "string") : [];
-  if (!offered.includes(tier)) throw new Error(`requested Codex service tier ${tier} is not offered for ${model ?? "default model"} on this account; offered: ${offered.join(", ") || "none (catalog unavailable)"}`);
+  if (!offered.includes(tier)) {
+    const account = listCodexAccounts().find(value => accountHome ? value.home === accountHome : value.id === "default");
+    const id = account?.id ?? "unregistered-account";
+    const selectedModel = model ?? row?.model ?? row?.id ?? "default model (unresolved)";
+    throw new Error(serviceTierRefusal([{
+      id, label: account?.label,
+      tiers: Array.isArray(row?.serviceTiers) ? offered : null,
+      alternativeModels: rows.filter(value => value !== row && Array.isArray(value?.serviceTiers)
+        && value.serviceTiers.some((entry: { id?: unknown }) => entry?.id === tier))
+        .map(value => value.model ?? value.id).filter((value): value is string => typeof value === "string"),
+    }], selectedModel, tier, id, "selected"));
+  }
 }

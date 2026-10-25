@@ -32,6 +32,9 @@ test("native queue journal preserves mutation identity and content through the p
     const input = [{ type: "text" as const, text: "Привіт 🌍" }];
     await client.nativeQueueTransition("op-socket", { phase: "prepared", input });
     await expect(client.nativeQueueTransition("op-socket", { phase: "prepared", input })).rejects.toThrow("moved");
+    await client.nativeQueueTransition("op-socket", { phase: "deferred", reason: "fixture admission deferred" });
+    expect(await client.operationStatus("op-socket")).toMatchObject({ receipt: { status: "queued", reason: "fixture admission deferred" } });
+    await client.nativeQueueTransition("op-socket", { phase: "prepared", input });
     await client.nativeQueueTransition("op-socket", { phase: "uncertain", reason: "fixture lost acknowledgement" });
     expect((await client.nativeQueueRead("conversation_socket"))[0]).toMatchObject({ state: "uncertain", versions: [{ input, requestedRuntime: { serviceTierForTurn: "priority" } }] });
     expect((await client.command(command)).replayed).toBeTrue();

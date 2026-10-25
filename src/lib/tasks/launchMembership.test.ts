@@ -182,7 +182,8 @@ test("a recovered receipt re-establishes membership from its durable fields befo
     ports((input) => { commits.push(input); return { ok: true, tasks: [], taskIds: ["held"], created: [], changed: false }; }),
   );
   expect(result.ok && result.taskIds).toEqual(["held"]);
-  expect(commits).toEqual([{ project: "chosen", origin: { kind: "launch", key: "attempt-q" }, title: "Queued until later", description: "Continue the queued work", titled: true, identity: { launchId: "launch-q", conversationId: "conversation_q", clientAttemptId: "attempt-q", engine: "claude" }, admit: expect.any(Function) }]);
+  expect(commits).toEqual([{ project: "chosen", origin: { kind: "launch", key: "attempt-q" }, title: "Queued until later", description: "Continue the queued work", titled: true, identity: { launchId: "launch-q", conversationId: "conversation_q", clientAttemptId: "attempt-q", engine: "claude" }, admit: expect.any(Function),
+    admitRelated: { identities: [{ conversationId: "conversation_q" }], admit: expect.any(Function) } }]);
   expect(() => admitRecoveredLaunch(
     { launchId: "launch-q", conversationId: "conversation_q", engine: "claude", cwd: "/repo", clientAttemptId: null, explicitProject: null, launchProfile: {}, launchDisplay: null },
     ports(() => { throw new Error("EISDIR: illegal operation on a directory"); }),

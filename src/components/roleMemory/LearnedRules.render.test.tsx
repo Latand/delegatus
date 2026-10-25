@@ -267,3 +267,39 @@ for (const order of ["refusal first", "acceptance first"] as const) {
     }
   });
 }
+
+for (const cause of ["memorySource", "override"] as const) test(`rules stopped by ${cause === "memorySource" ? "the Settings row's engines position" : "the kill switch"} say which, in both languages`, async () => {
+  const dom = new Window();
+  dom.HTMLElement.prototype.scrollIntoView = () => {};
+  const globals = { window: dom, document: dom.document, navigator: dom.navigator, HTMLElement: dom.HTMLElement };
+  const prior = new Map(Object.keys(globals).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  Object.assign(globalThis, globals);
+  installActEnv();
+  const oldFetch = globalThis.fetch;
+  const view = { project: "paused-window", enabled: false, ...(cause === "memorySource" ? { pausedBy: "memorySource" } : {}), scopes: [{ ...scope(100), scope: "project:paused-window" }],
+    curation: { lastAt: null, nextAt: null, newLessons: 0, passes: [] } };
+  globalThis.fetch = (async () => Response.json(view)) as unknown as typeof fetch;
+  const host = dom.document.createElement("div"); dom.document.body.append(host);
+  const root = createRoot(host as unknown as HTMLElement);
+  try {
+    for (const lang of ["en", "uk"] as const) {
+      setLocale(lang);
+      await act(async () => { root.render(<RulesWindow key={lang} project="paused-window" onClose={() => {}} />); await new Promise(resolve => setTimeout(resolve, 0)); });
+      const banner = dom.document.querySelector("[data-rules-window-off]")!;
+      expect(banner.getAttribute("data-rules-window-off")).toBe(cause);
+      expect(banner.textContent).toBe(translate(lang, cause === "memorySource" ? "roleMemory.pausedBySource" : "roleMemory.off"));
+      if (cause === "memorySource") {
+        /* It names the Settings row by its own title and leaves the override unnamed. */
+        expect(banner.textContent).toContain(translate(lang, "memorySource.title"));
+        expect(banner.textContent).not.toContain("LLV_ROLE_MEMORY");
+      }
+      expect(dom.document.querySelector("summary")!.textContent).toContain(translate(lang, cause === "memorySource" ? "roleMemory.paused" : "roleMemory.off"));
+    }
+  } finally {
+    setLocale("en");
+    await act(() => root.unmount());
+    globalThis.fetch = oldFetch;
+    for (const [key, value] of prior) if (value) Object.defineProperty(globalThis, key, value); else Reflect.deleteProperty(globalThis, key);
+    await dom.happyDOM.close();
+  }
+});
