@@ -1,11 +1,12 @@
 import * as pipelineStore from "@/lib/pipelines/store";
+import * as admissionSources from "@/lib/monitor/seatTickAdmissionSources";
 import { chooseSource } from "../fixtures/source";
-import { afterEach, beforeEach, expect, test, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { AgentRegistry } from "@/lib/agent/registry";
+import { AgentRegistry, type AgentRegistryEntry, type RegistryFile } from "@/lib/agent/registry";
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
 import { stopWorktreeSweepWorker } from "@/lib/pipelines/worktreeSweepWorker";
 import { defaultSeatTickSources } from "@/lib/monitor/seatTickSources";
@@ -13,14 +14,13 @@ import { input as tickInput } from "@/lib/boardMaintenance/testFixture";
 import { roleIsClean } from "../eligibility";
 import { ROLE_MEMORY_BOUND, CURATION_INTERVAL_MS, type RoleMemoryRule, type RuleSource } from "../roleTypes";
 import { scopeChars } from "../roleConsolidate";
-import { canonicalScope, leaveLessons, newRuleId, projectView, recordLessonRequest, learnedRulesBlock, roleMemoryCollection, roleScope, projectScope, restoreRule, deleteRule, storedLessonTexts } from "../roleStore";
+import { canonicalScope, joinMovedScopes, leaveLessons, newRuleId, projectView, recordLessonRequest, learnedRulesBlock, learnedRulesSnapshot, roleMemoryCollection, roleScope, projectScope, restoreRule, deleteRule, storedLessonTexts } from "../roleStore";
 import { applyCuration, revertCuratorPass, type CurationApply } from "./apply";
 import { claimPass, readPassAuthority, currentPassAuthority, machinePassAuthority, passForConversationAuthority, currentPass, curationPanelRuns, curationStatus, curationView, machinePass, patchPass, readPass, type CuratorPass } from "./store";
 import { curatorCallerOf } from "./guard";
 import { readCuration } from "./read";
 import { productionCurationController } from "./run";
 import { permitCuratorTool } from "@/lib/mcp/toolAllowlist";
-import { CURATOR_CHECKLIST } from "./brief";
 import { reconcileSeatTick, runSeatTickCheck } from "@/lib/monitor/seatTickController";
 import { emptySeatTickState } from "@/lib/monitor/types";
 import { writeSeatTickState } from "@/lib/monitor/seatTickState";
@@ -35,6 +35,7 @@ import { loadTasks } from "@/lib/tasks/store";
 import { admitReservedLaunch } from "@/lib/tasks/launchMembership";
 import { groupHideState } from "@/lib/tasks/groupHide";
 import { commitTaskMembership } from "@/lib/tasks/membership";
+import { recordMemoryDelivery } from "../deliveryLedger";
 
 const PROJECT = "curation-fixture";
 const NOW = Date.parse("2026-10-11T00:00:00Z");
@@ -67,7 +68,7 @@ function row(id: string): RoleMemoryRule {
 function fixture(scope = roleScope(PROJECT, "builder"), extra: Partial<RoleMemoryRule> = {}) {
   const source: RuleSource = { project: PROJECT, pipelineId: "fixture", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: ["conversation", "fixture"].join("_") };
   return roleMemoryCollection(true)!.boundedPatch(20, tx => {
-    const id = newRuleId(tx);
+    const id = extra.id ?? newRuleId(tx);
     tx.put({ kind: "rule", id, scope, rule: text, why, state: "active", hints: [], source, createdAt: at(), changedAt: at(), ...extra });
     const held = tx.get(`s:${scope}`);
     tx.put({ kind: "scope", scope, revision: held?.kind === "scope" ? held.revision + 1 : 1, history: held?.kind === "scope" ? held.history : [], active: [...(held?.kind === "scope" ? held.active : []), ...(extra.state && extra.state !== "active" ? [] : [id])] });
@@ -476,6 +477,51 @@ test("archive evidence, notes and active counterparts are required", () => {
   for (const where of [undefined, "missing.ts", "../elsewhere.ts"]) refusal(p, input({ [scope]: [] }, { archive: [{ id: one, reason: "in-code", note: "The test enforces the same condition.", where }] }), "CURATE_EVIDENCE");
   refusal(p, input({ [scope]: [] }, { archive: [{ id: one, reason: "contradicted", note: "The current instructions support its counterpart.", against: one }] }), "CURATE_INVALID");
 });
+test.each(["in-code", "in-instructions", "stale"] as const)("foreign recovery rejects host repository evidence for %s and preserves the archive", reason => {
+  const foreign = roleScope("recovery-other", "builder");
+  const id = fixture(foreign, { state: "archived", reason: "budget" });
+  const p = pass();
+  expect(p.scopes).toContain(foreign);
+  const before = row(id);
+  refusal(p, input({ [foreign]: [] }, { restore: [id], archive: [{ id, reason, where: "AGENTS.md:1", note: "This instruction file exists only in the sweep host." }] }), "CURATE_EVIDENCE");
+  expect(row(id)).toEqual(before);
+  ended(p);
+  const ownerRepo = path.join(dir, "owner-repository");
+  fs.mkdirSync(ownerRepo);
+  fs.writeFileSync(path.join(ownerRepo, "AGENTS.md"), "Check the owning project's repository before retiring guidance.\n");
+  const owner = claimPass({ project: "recovery-other", repoDir: ownerRepo, now: NOW + 2000 })!;
+  applyCuration(owner, input({ [foreign]: [] }, { restore: [id], archive: [{ id, reason, where: "AGENTS.md:1", note: "The owning project's admitted repository supplies this evidence." }] }), at(3000));
+  expect(row(id)).toMatchObject({ state: "archived", reason, where: "AGENTS.md:1" });
+});
+
+test("moving a foreign recovery rule to a shared scope cannot borrow the host's evidence", () => {
+  const foreign = roleScope("recovery-other", "builder");
+  const id = fixture(foreign, { state: "archived", reason: "budget" });
+  const p = pass();
+  applyCuration(p, input({ [foreign]: [], machine: [id] }, { restore: [id], move: [{ id, to: "machine", note: "Broaden the recovered condition to every project." }] }), at(100));
+  refusal(p, input({ machine: [] }, { archive: [{ id, reason: "in-instructions", where: "AGENTS.md", note: "Attempt to use the host's file after a move." }] }), "CURATE_EVIDENCE");
+  // Its original project remains part of the rule's provenance after a prior call.
+  // Shared guidance can still be judged from its text without repository evidence.
+  applyCuration(p, input({ machine: [] }, { archive: [{ id, reason: "stale", note: "The condition no longer applies across projects." }] }), at(200));
+  expect(row(id)).toMatchObject({ state: "archived", reason: "stale" });
+});
+
+test("a shared part split from foreign recovery keeps its repository provenance", () => {
+  const foreign = roleScope("recovery-other", "builder");
+  const id = fixture(foreign, { state: "archived", reason: "budget", source: {
+    project: "recovery-other", pipelineId: "foreign-fixture", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_foreign",
+  } });
+  const p = pass();
+  const result = applyCuration(p, input({ [foreign]: [], machine: [id, `split:${id}:1`] }, { restore: [id], split: [{
+    id, note: "Preserve both obligations in shared guidance.", parts: [
+      { to: "machine", rule: "Check ownership before writing shared state." },
+      { to: "machine", rule: "Check the revision before writing shared state." },
+    ],
+  }] }), at(100));
+  const child = result.placeholders[`split:${id}:1`];
+  refusal(p, input({ machine: [id] }, { archive: [{ id: child, reason: "in-code", where: "AGENTS.md", note: "Attempt to retire a foreign condition using the host file." }] }), "CURATE_EVIDENCE");
+  expect(row(child).state).toBe("active");
+});
 test.each([roleScope(PROJECT, "visual-critic"), "role:*:builder", projectScope(PROJECT), "machine"])("move to %s and undo restores both scope lists", to => {
   const scope = roleScope(PROJECT, "builder"), one = fixture(scope), p = pass();
   applyCuration(p, input({ [scope]: [], [to]: [one] }, { move: [{ id: one, to, note: "Every role at the target level acts on this guidance." }] }), at(100));
@@ -769,7 +815,6 @@ test("the v1 row kinds and optional metadata survive an apply, and clean curator
   expect(rows.some(r => r.kind === "rule" && r.versionOf === one)).toBe(true);
   expect(rows.some(r => r.kind === "scope" && r.scope === "role:*:builder" && r.active.includes(one))).toBe(true);
   expect(roleIsClean("curator")).toBe(true);
-  for (const outcome of ["task-specific", "stale", "in-code", "in-instructions", "no-reader", "contradicted"]) expect(CURATOR_CHECKLIST).toContain(outcome);
 });
 test("a direct health check has no curator; tick hooks run around gathering and failures reach the journal", async () => {
   fixture(); const registry = new AgentRegistry(path.join(dir, "registry.json"));
@@ -910,7 +955,7 @@ test("pressure survives a failed pass, and the durable interval bounds retries a
     if (i === 0) expect(curationStatus(PROJECT, NOW + 31 * 60_000).due).toBe(false);
     if (i === 1) expect(curationStatus(PROJECT, NOW + 31 * 60_000)).toMatchObject({ due: false, pressure: true });
   }
-  // Real write paths must never archive a never-curated rule for budget.
+  // Available curation integrates every lesson before any budget archive.
   expect(roleMemoryCollection()!.snapshot().filter(row => row.kind === "rule" && row.reason === "budget" && !row.curatedAt)).toEqual([]);
   const early = pass(NOW + CURATION_INTERVAL_MS + 1000);
   expect(early).not.toBeNull();
@@ -925,7 +970,9 @@ test("pressure survives a failed pass, and the durable interval bounds retries a
   const retried = pass(NOW + 2 * CURATION_INTERVAL_MS + 2000);
   expect(retried).not.toBeNull();
   const active = [...ids, ...added].filter(id => row(id).state === "active");
-  applyCuration(retried, input({ [scope]: active }), at(2 * CURATION_INTERVAL_MS + 3000));
+  applyCuration(retried, input({ [scope]: active.filter(id => !ids.slice(0, 6).includes(id)) }, {
+    merge: [{ into: added[0], from: ids.slice(0, 6), rule: "Check ownership and pending guidance before publication or writing shared state.", note: "Integrate the shared ownership conditions before reducing the scope." }],
+  }), at(2 * CURATION_INTERVAL_MS + 3000));
   for (const id of added) expect(row(id).curatedAt).toBeTruthy();
   expect(curationStatus(PROJECT, NOW + 2 * CURATION_INTERVAL_MS + 63 * 60_000).due).toBe(false);
 });
@@ -1194,4 +1241,250 @@ test("a curator archive, its undo and a split keep each rule's departure log for
   expect(row(archived).departures).toEqual([{ at: at(100), reason: "stale", curated: true }]);
   expect(read()).toEqual({ evictions: { neverCurated: 0, curated: 0 }, adoptedArchived: 0, complete: true });
   expect(windowDepartures(roleMemoryCollection()!.snapshot() as never, { from: at(1500), to: at(3000) }).complete).toBe(true);
+});
+
+test("an over-bound append requests a pass immediately and respects the machine claim", () => {
+  const scope = roleScope(PROJECT, "builder");
+  for (let i = 0; i < 32; i++) fixture(scope, { rule: `Preserve guidance category ${i}: ${"check durable evidence ".repeat(20)}`.slice(0, 300), curatedAt: at() });
+  const initial = pass();
+  ended(initial);
+  const source: RuleSource = { project: PROJECT, pipelineId: "overflow", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_overflow" };
+  recordLessonRequest({ ...source, at: at(2000) });
+  const result = leaveLessons({ source, request: source, lessons: [{ scope: "role", rule: "Keep every condition when integrating a new operational lesson into existing guidance.", why }], none: null, now: at(2000) });
+  expect(result.left[0].archived).toEqual([]);
+  expect(projectView(PROJECT).scopes.find(s => s.scope === scope)!.active).toHaveLength(33);
+  expect(curationStatus(PROJECT, NOW + 2000)).toMatchObject({ due: true, pressure: true, trigger: "pressure" });
+  const next = pass(NOW + 2000);
+  expect(next).not.toBeNull();
+  expect(pass(NOW + 3000)).toBeNull();
+});
+
+test("a pass restores a budget archive by integrating all its conditions", () => {
+  const scope = roleScope(PROJECT, "builder");
+  const active = fixture(scope, { rule: "Check ownership before writing shared state." });
+  const archived = fixture(scope, { rule: "Check the revision before writing shared state.", state: "archived", reason: "budget" });
+  const p = pass();
+  const integrated = "Check ownership and the revision before writing shared state.";
+  applyCuration(p, input({ [scope]: [active] }, { restore: [archived], merge: [{ into: active, from: [archived], rule: integrated, note: "Both preconditions govern shared writes." }] }), at(100));
+  expect(row(active).rule).toBe(integrated);
+  expect(row(archived)).toMatchObject({ state: "merged", mergedInto: active });
+  expect(readPass(p.id)!.counts).toMatchObject({ restored: 1, merged: 1 });
+});
+
+for (const count of [38, 39]) test.each(["missing", "retired", "unwoken", "gone", "unproven", "live"] as const)(`retention checks host admission with ${count} existing rules: %s`, kind => {
+  const scope = roleScope(PROJECT, "builder");
+  const ids = Array.from({ length: count }, (_, i) => fixture(scope, {
+    id: `r_host_${String(i).padStart(3, "0")}`, createdAt: at(i), curatedAt: at(),
+    rule: `Preserve condition category ${i}: ${"check durable evidence ".repeat(20)}`.slice(0, 300),
+    ...(i === 0 ? { keptByOperatorAt: at(), createdAt: at(-3000) } : {}),
+  }));
+  expect(scopeChars(ids.map(row))).toBeLessThan(ROLE_MEMORY_BOUND * 1.25);
+  const f = hostingFixture();
+  f.seat();
+  const registry = f.sources.registry();
+  const identity = captureProcessIdentity(process.pid);
+  const entry = {
+    key: { engine: "codex", sessionId: "retention-seat" }, artifactPath: path.join(dir, "seat.jsonl"),
+    cwd: dir, status: "idle", host: null, claimOwner: null, claimEpoch: 1, updatedAt: at(),
+    structuredHost: { kind: "codex-app-server", process: kind === "unproven" ? null : {
+      pid: process.pid, startIdentity: kind === "gone" ? "retired-process-identity" : identity.startIdentity,
+    }, writerClaimEpoch: 1 },
+  } as AgentRegistryEntry;
+  registry.livenessConversationSnapshot = () => ({ entries: { seat: entry } }) as unknown as RegistryFile;
+  if (kind === "missing") f.seats.clear();
+  if (kind === "retired") registry.conversation = () => ({ supersededBy: { conversationId: "conversation_successor" } }) as never;
+  if (kind === "unwoken") writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 1 });
+  const sources = spyOn(admissionSources, "defaultSeatTickAdmissionSources").mockReturnValue(f.sources);
+  try {
+    const source: RuleSource = { project: PROJECT, pipelineId: "host-retention", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_host_retention" };
+    recordLessonRequest({ ...source, at: at(2000) });
+    const incoming = leaveLessons({ source, request: source, lessons: [{ scope: "role", rule: `Preserve new conditions: ${"check complete obligations ".repeat(20)}`.slice(0, 300), why }], none: null, now: at(2000) }).left[0];
+    const emergency = count === 39 && kind !== "live";
+    expect(incoming.archived).toEqual(emergency ? [ids[1]] : []);
+    expect(row(ids[0]).state).toBe("active");
+    expect(row(incoming.id).state).toBe("active");
+    expect(row(ids[1]).state).toBe(emergency ? "archived" : "active");
+    if (emergency) expect(incoming.scopeChars).toBeLessThanOrEqual(ROLE_MEMORY_BOUND * 1.25);
+    if (count === 39 && kind === "live") expect(incoming.scopeChars).toBeGreaterThan(ROLE_MEMORY_BOUND * 1.25);
+  } finally { sources.mockRestore(); }
+});
+
+describe("emergency retention asks every project whose pass reads the scope", () => {
+  const OTHER = "curation-other-host";
+  const cases: { name: string; scope: string; lesson: "machine" | "project"; seatOn: string | null; archived: boolean }[] = [
+    { name: "machine rules count a live host on another project", scope: "machine", lesson: "machine", seatOn: OTHER, archived: false },
+    { name: "machine rules with no live host anywhere evict", scope: "machine", lesson: "machine", seatOn: null, archived: true },
+    { name: "a project's own rules are not hosted by another project", scope: projectScope(PROJECT), lesson: "project", seatOn: OTHER, archived: true },
+    { name: "a project's own rules count its own host", scope: projectScope(PROJECT), lesson: "project", seatOn: PROJECT, archived: false },
+  ];
+  for (const { name, scope, lesson, seatOn, archived } of cases) test(name, () => {
+    const ids = Array.from({ length: 39 }, (_, i) => fixture(scope, {
+      id: `r_shared_${String(i).padStart(2, "0")}`, createdAt: at(i), curatedAt: at(),
+      rule: `Preserve condition category ${i}: ${"check durable evidence ".repeat(20)}`.slice(0, 300),
+    }));
+    expect(scopeChars(ids.map(row))).toBeLessThan(ROLE_MEMORY_BOUND * 1.25);
+    const f = hostingFixture();
+    if (seatOn) f.seat(seatOn);
+    const entry = {
+      key: { engine: "codex", sessionId: "retention-seat" }, artifactPath: path.join(dir, "seat.jsonl"),
+      cwd: dir, status: "idle", host: null, claimOwner: null, claimEpoch: 1, updatedAt: at(),
+      structuredHost: { kind: "codex-app-server", process: { pid: process.pid, startIdentity: captureProcessIdentity(process.pid).startIdentity }, writerClaimEpoch: 1 },
+    } as AgentRegistryEntry;
+    f.sources.registry().livenessConversationSnapshot = () => ({ entries: { seat: entry } }) as unknown as RegistryFile;
+    const sources = spyOn(admissionSources, "defaultSeatTickAdmissionSources").mockReturnValue(f.sources);
+    try {
+      const source: RuleSource = { project: PROJECT, pipelineId: "shared-host", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_shared_host" };
+      recordLessonRequest({ ...source, at: at(2000) });
+      const incoming = leaveLessons({ source, request: source, lessons: [{ scope: lesson, rule: `Preserve new conditions: ${"check complete obligations ".repeat(20)}`.slice(0, 300), why }], none: null, now: at(2000) }).left[0];
+      expect(incoming.archived).toEqual(archived ? [ids[0]] : []);
+      expect(row(ids[0]).state).toBe(archived ? "archived" : "active");
+      expect(row(incoming.id).state).toBe("active");
+      if (archived) expect(incoming.scopeChars).toBeLessThanOrEqual(ROLE_MEMORY_BOUND * 1.25);
+      else expect(incoming.scopeChars).toBeGreaterThan(ROLE_MEMORY_BOUND * 1.25);
+    } finally { sources.mockRestore(); }
+  });
+});
+
+test("a busy curator permits emergency eviction by evidence while keeping the returned and incoming rules", () => {
+  const scope = roleScope(PROJECT, "builder");
+  const ids = Array.from({ length: 39 }, (_, i) => fixture(scope, {
+    id: `r_emergency_${String(i).padStart(2, "0")}`, createdAt: at(i),
+    rule: `Preserve condition category ${i}: ${"check durable evidence ".repeat(20)}`.slice(0, 300),
+    curatedAt: i === 1 ? undefined : at(),
+    ...(i === 0 ? { keptByOperatorAt: at(), createdAt: at(-3000) } : {}),
+  }));
+  const source: RuleSource = { project: PROJECT, pipelineId: "evidence", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_evidence" };
+  recordLessonRequest({ ...source, at: at() });
+  roleMemoryCollection()!.boundedPatch(128, tx => {
+    const request = tx.get("q:evidence:build:1");
+    if (request?.kind !== "request") throw Error("request missing");
+    tx.put({ ...request, ruleIds: ids.filter((_, index) => index !== 1) });
+  });
+  pass();
+  const incomingSource = { ...source, pipelineId: "emergency" };
+  recordLessonRequest({ ...incomingSource, at: at(2000) });
+  const incoming = leaveLessons({ source: incomingSource, request: incomingSource, lessons: [{ scope: "role", rule: "Preserve new conditions until the curator can integrate them with existing guidance.", why }], none: null, now: at(2000) }).left[0];
+  expect(incoming.archived).toEqual([ids[1]]);
+  expect(row(ids[0]).state).toBe("active");
+  expect(row(incoming.id).state).toBe("active");
+  expect(row(ids[1])).toMatchObject({ state: "archived", reason: "budget" });
+  expect(row(ids[2]).state).toBe("active");
+});
+
+test.each(["unapplied", "applied"])("emergency retention credits application marks reported with the new lesson: %s", async usage => {
+  const applied = usage === "applied";
+  const scope = roleScope(PROJECT, "builder");
+  const ids = Array.from({ length: 39 }, (_, i) => fixture(scope, {
+    id: `r_${i.toString(16).padStart(16, "0")}`, createdAt: at(i),
+    rule: `Preserve condition category ${i}: ${"check durable evidence ".repeat(20)}`.slice(0, 300),
+  }));
+  const source: RuleSource = { project: PROJECT, pipelineId: "application-evidence", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_application" };
+  recordLessonRequest({ ...source, at: at() });
+  roleMemoryCollection()!.boundedPatch(2, tx => {
+    const request = tx.get("q:application-evidence:build:1");
+    if (request?.kind !== "request") throw Error("request missing");
+    tx.put({ ...request, ruleIds: ids });
+  });
+  pass();
+  const incomingSource = { ...source, pipelineId: "application-append" };
+  recordLessonRequest({ ...incomingSource, at: at(2000) });
+  await recordMemoryDelivery({ engine: "codex", conversationId: incomingSource.conversationId, attempt: incomingSource, cwd: dir, nativeMemoryEnabled: false }, false,
+    () => learnedRulesSnapshot(PROJECT, "builder"));
+  const incoming = leaveLessons({ source: incomingSource, request: incomingSource, lessons: [{ scope: "role", rule: "Preserve new conditions until the curator can integrate them with existing guidance.", why }], none: null, applied: applied ? [ids[0]] : [], now: at(2000) }).left[0];
+  expect(incoming.archived).toEqual([ids[applied ? 1 : 0]]);
+  expect(row(ids[applied ? 0 : 1]).state).toBe("active");
+  expect(row(ids[applied ? 1 : 0])).toMatchObject({ state: "archived", reason: "budget" });
+});
+
+test("the one-time sweep includes old archives across projects and keeps per-scope receipts across restart", async () => {
+  const scope = roleScope(PROJECT, "builder"), foreign = roleScope("recovery-other", "builder");
+  const active = fixture(scope, { id: "r_recovery_active", rule: "Check ownership before writing shared state." });
+  const budget = fixture(scope, { id: "r_recovery_budget", rule: "Check the revision before writing shared state.", state: "archived", reason: "budget", changedAt: at(-1000) });
+  const unexplained = fixture(foreign, { id: "r_recovery_unexplained", state: "archived", changedAt: at(-1000) });
+  fixture(foreign, { id: "r_recovery_deleted", state: "archived", reason: "deleted" });
+  fixture(foreign, { id: "r_recovery_version", state: "archived", reason: "budget", versionOf: unexplained });
+  fixture(foreign, { id: "r_recovery_stale", state: "archived", reason: "stale" });
+  const p = pass();
+  expect(p.budgetSweepCandidates).toEqual({ [scope]: [budget], [foreign]: [unexplained] });
+  const inventory = await readCuration(p);
+  expect(inventory.budgetSweep).toEqual([{ scope, candidates: 1 }, { scope: foreign, candidates: 1 }]);
+  expect(inventory.scopes.find(row => row.scope === foreign)).toMatchObject({ revision: 4, left: 3 });
+  const page = await readCuration(p, foreign);
+  if (!("rules" in page)) throw Error("scope page expected");
+  expect(page.rules.some(row => row.id === unexplained && row.kind === "left")).toBe(true);
+  const child = Bun.spawn([process.execPath, "--eval", `import { readPassAuthority } from ${JSON.stringify(path.join(import.meta.dir, "store.ts"))}; console.log(JSON.stringify(readPassAuthority(${JSON.stringify(p.id)})?.budgetSweepCandidates));`], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+  const [output, error, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect({ exit, error }).toEqual({ exit: 0, error: "" });
+  expect(JSON.parse(output)).toEqual(p.budgetSweepCandidates);
+  applyCuration(p, input({ [scope]: [active] }, { restore: [budget], merge: [{ into: active, from: [budget], rule: "Check ownership and the revision before writing shared state.", note: "Integrate both shared-write preconditions." }] }), at(100));
+  applyCuration(p, input({ [foreign]: [unexplained] }, { restore: [unexplained] }), at(200));
+  ended(p);
+  const expected = [{ scope, candidates: 1, restored: 0, integrated: 1, remaining: 0 }, { scope: foreign, candidates: 1, restored: 1, integrated: 0, remaining: 0 }];
+  expect(readPass(p.id)?.budgetSweep).toEqual(expected);
+  deleteRule(unexplained, at(2000));
+  expect(readPass(p.id)?.budgetSweep).toEqual(expected);
+  const restarted = Bun.spawn([process.execPath, "--eval", `import { claimPass, readPass } from ${JSON.stringify(path.join(import.meta.dir, "store.ts"))}; const next = claimPass({ project: ${JSON.stringify(PROJECT)}, repoDir: null, now: ${NOW + CURATION_INTERVAL_MS + 3000} }); console.log(JSON.stringify({ sweep: next?.budgetSweepCandidates ?? null, prior: readPass(${JSON.stringify(p.id)})?.budgetSweep }));`], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+  const [nextOutput, nextError, nextExit] = await Promise.all([new Response(restarted.stdout).text(), new Response(restarted.stderr).text(), restarted.exited]);
+  expect({ exit: nextExit, error: nextError }).toEqual({ exit: 0, error: "" });
+  expect(JSON.parse(nextOutput)).toEqual({ sweep: null, prior: expected });
+});
+
+test("an archive-only machine requests recovery and an incomplete pass retries without losing candidates", async () => {
+  const scope = roleScope("recovery-only", "builder");
+  const archived = fixture(scope, { id: "r_recovery_only", state: "archived", reason: "budget" });
+  expect(curationStatus(PROJECT, NOW)).toMatchObject({ active: true, due: true });
+  const first = pass();
+  ended(first, CURATION_INTERVAL_MS + 1000);
+  expect(readPassAuthority(first.id)).toMatchObject({ state: "failed", failure: "budget-sweep-incomplete: 1 scopes" });
+  const child = Bun.spawn([process.execPath, "--eval", `import { claimPass } from ${JSON.stringify(path.join(import.meta.dir, "store.ts"))}; console.log(JSON.stringify(claimPass({ project: ${JSON.stringify(PROJECT)}, repoDir: null, now: ${NOW + CURATION_INTERVAL_MS + 2000} })));`], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+  const [output, error, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect({ exit, error }).toEqual({ exit: 0, error: "" });
+  expect(JSON.parse(output)).toBeNull();
+  const next = pass(NOW + 2 * CURATION_INTERVAL_MS + 2000);
+  expect(next.budgetSweepCandidates).toEqual({ [scope]: [archived] });
+  applyCuration(next, input({ [scope]: [] }, { restore: [archived], archive: [{ id: archived, reason: "stale", note: "The current implementation has removed the behavior behind this condition." }] }), at(2 * CURATION_INTERVAL_MS + 2100));
+  ended(next, 2 * CURATION_INTERVAL_MS + 2200);
+  expect(readPass(next.id)).toMatchObject({ state: "succeeded", budgetSweep: [{ scope, candidates: 1, restored: 0, integrated: 0, remaining: 1 }] });
+  expect(pass(NOW + 3 * CURATION_INTERVAL_MS + 3000)).toBeNull();
+});
+
+test("curator budget archives require remaining pressure and keep a stated reason", () => {
+  const scope = roleScope(PROJECT, "builder");
+  const ids = Array.from({ length: 31 }, (_, i) => fixture(scope, { id: `r_budget_${String(i).padStart(2, "0")}`, rule: `Preserve guidance class ${i}: ${"check complete conditions ".repeat(15)}`.slice(0, 300) }));
+  const last = fixture(scope, { id: "r_budget_last", rule: `Preserve final guidance: ${"check complete conditions ".repeat(15)}`.slice(0, 300) });
+  const p = pass();
+  const edit = { archive: [{ id: last, reason: "budget" as const, note: "After integrating related guidance, this condition still exceeds the scope budget and has the least task support." }] };
+  applyCuration(p, input({ [scope]: ids }, edit), at(100));
+  expect(row(last)).toMatchObject({ state: "archived", reason: "budget", note: edit.archive[0].note });
+  restoreRule(last, at(200));
+  refusal(p, input({ [scope]: [] }, { archive: ids.concat(last).map(id => ({ id, reason: "budget", note: "Remove all guidance for room." })) }), "CURATE_KEPT");
+});
+
+test("a curator cannot budget-archive guidance that fits after integration", () => {
+  const scope = roleScope(PROJECT, "builder"), one = fixture(scope), p = pass();
+  refusal(p, input({ [scope]: [] }, { archive: [{ id: one, reason: "budget", note: "Attempt to remove useful guidance despite available room." }] }), "CURATE_BUDGET");
+  expect(row(one).state).toBe("active");
+});
+
+test("emergency succession ranks duplicate guidance by the tasks being combined in that write", () => {
+  const scope = roleScope(PROJECT, "builder"), oldProject = "succession-before";
+  const ids = Array.from({ length: 40 }, (_, i) => fixture(scope, { id: `r_succession_${String(i).padStart(2, "0")}`, createdAt: at(-1000 + i), changedAt: at(i), rule: `Preserve guidance class ${i}: ${"check complete conditions ".repeat(15)}`.slice(0, 300) }));
+  const duplicate = fixture(roleScope(oldProject, "builder"), { id: "r_succession_duplicate", rule: row(ids[0]).rule });
+  for (const [pipelineId, project, ruleIds] of [["support-current", PROJECT, ids], ["support-old", oldProject, [duplicate]]] as const) {
+    const source: RuleSource = { project, pipelineId, stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_succession" };
+    recordLessonRequest({ ...source, at: at() });
+    roleMemoryCollection()!.boundedPatch(2, tx => {
+      const request = tx.get(`q:${pipelineId}:build:1`);
+      if (request?.kind !== "request") throw Error("request missing");
+      tx.put({ ...request, ruleIds: [...ruleIds] });
+    });
+  }
+  pass();
+  persistProjectAliases([{ source: oldProject, target: PROJECT, displayName: "Succession evidence" }]);
+  joinMovedScopes(at(100));
+  expect(row(duplicate)).toMatchObject({ state: "merged", mergedInto: ids[0] });
+  expect(row(ids[0]).state).toBe("active");
+  expect(row(ids[1])).toMatchObject({ state: "archived", reason: "budget" });
+  const view = projectView(PROJECT).scopes.find(row => row.scope === scope)!;
+  expect(view.active.find(row => row.id === ids[0])?.tasks).toBe(2);
 });
