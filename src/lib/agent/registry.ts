@@ -4,6 +4,7 @@ import { liveRootSession } from "@/lib/root/adopt";
 import { StateLockDeferredError, stateLockAttempt, stateLockDeferral, waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
+import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
 import { normalizeHostMemory, type HostMemoryState } from "@/lib/runtime/agentMemoryState";
 import { normalizeHostEndCause, type HostEndCause } from "@/lib/runtime/hostEndCause";
 import { recordBlockingWait, withWaitCorrelation, currentWaitCorrelation, type BlockingWaitCorrelation } from "@/lib/blockingWaits";
@@ -5801,10 +5802,10 @@ export class AgentRegistry {
   }
 
   /** Production boot and the candidate gate share the cooperative first view. */
-  async prepareReadOnlySnapshot(signal?: AbortSignal): Promise<RegistryFile> {
+  async prepareReadOnlySnapshot(signal?: AbortSignal, options: { recoveryIndexes?: boolean } = {}): Promise<RegistryFile> {
     signal?.throwIfAborted();
     if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) {
-      return (await this.sqliteStore.prepareReadOnlySnapshot(signal)).file;
+      return (await this.sqliteStore.prepareReadOnlySnapshot(signal, options)).file;
     }
     return this.readOnlySnapshot();
   }
@@ -5953,7 +5954,7 @@ export class AgentRegistry {
     });
   }
 
-  deliverySnapshotForOperation(operationId: string): RegistryFile {
+  deliverySnapshotForOperation(operationId: string, options: { recipientEvidence?: boolean } = {}): RegistryFile {
     return this.readKeyed(file => {
       const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
       const owner = file.deliveryOperationOwners[operationId];
@@ -5963,11 +5964,31 @@ export class AgentRegistry {
         if (delivery) result.heldDeliveries[delivery.id] = clone(delivery);
       }
       for (const delivery of registryRowsMatching(file, "heldDeliveries", "command.operationId", operationId)) result.heldDeliveries[delivery.id] = clone(delivery);
-      /* A held send's receipt names what it waits for, which the owning
-         conversation's switch phase decides. */
-      for (const delivery of Object.values(result.heldDeliveries)) {
-        const conversation = delivery.state === "held" ? file.conversations[delivery.conversationId] : undefined;
-        if (conversation) result.conversations[conversation.id] = clone(conversation);
+      /* Receipt-only readers need a held conversation's switch phase.
+         Settlement also needs the recipient generations and host turn state,
+         including a compacted attempt's old generation after succession. */
+      const ids = new Set(Object.values(result.heldDeliveries)
+        .filter(delivery => options.recipientEvidence || delivery.state === "held")
+        .map(delivery => delivery.conversationId));
+      if (options.recipientEvidence && owner) ids.add(owner.conversationId);
+      for (const id of ids) {
+        const canonical = resolveConversationAlias(file, id);
+        const conversation = file.conversations[canonical];
+        for (const identity of conversationIdentities(file, canonical)) {
+          if (file.conversationAliases[identity]) result.conversationAliases[identity] = file.conversationAliases[identity]!;
+        }
+        if (!conversation) continue;
+        result.conversations[canonical] = clone(conversation);
+        if (!options.recipientEvidence) continue;
+        for (const generation of conversation.generations) {
+          const key = `${conversation.engine}:${generation.id}`;
+          if (file.entries[key]) result.entries[key] = clone(file.entries[key]!);
+        }
+        for (const pathname of new Set([...conversation.generations.map(generation => generation.path), ...conversation.continuityPaths])) {
+          for (const entry of registryRowsMatching(file, "entries", "artifactPath", pathname)) {
+            result.entries[sessionKeyId(entry.key)] = clone(entry);
+          }
+        }
       }
       return result;
     });
@@ -6113,6 +6134,25 @@ export class AgentRegistry {
     return this.readKeyed(file => clone(file.receipts[launchId] ?? null));
   }
 
+  /** What structured recovery reads for one host: its row, optionally one
+      launch receipt and one lineage edge, and the small quota table its park
+      check asks. Recovery asks inside writer admission, where a whole snapshot
+      rebuilt retained history on the serving loop. */
+  structuredRecoveryFacts(key: SessionKey, options: { launchId?: string; conversationId?: string } = {}): Pick<RegistryFile, "entries" | "receipts" | "lineageEdges" | "quotaObservations"> {
+    return this.readKeyed(file => {
+      const entryKey = sessionKeyId(key);
+      const entry = file.entries[entryKey];
+      const receipt = options.launchId ? file.receipts[options.launchId] : undefined;
+      const edge = options.conversationId ? file.lineageEdges[options.conversationId] : undefined;
+      return {
+        entries: entry ? { [entryKey]: clone(entry) } : {},
+        receipts: receipt ? { [options.launchId!]: clone(receipt) } : {},
+        lineageEdges: edge ? { [options.conversationId!]: clone(edge) } : {},
+        quotaObservations: clone(file.quotaObservations),
+      };
+    });
+  }
+
   /** Fresh, keyed evidence for one launch across asynchronous controller reads.
       Returns its latest generation and original native entry only. */
   spawnEvidence(launchId: string): {
@@ -6156,6 +6196,63 @@ export class AgentRegistry {
     });
   }
 
+  /** One startup host and its membership identities, under a keyed read
+      transaction. Linked-task admission optionally includes path identities.
+      No lazy row or lookup escapes into the ownership callback. */
+  startupHostSnapshot(key: SessionKey, includeArtifactPath = false): RegistryFile {
+    return this.readKeyed(file => {
+      const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
+      const entryKey = sessionKeyId(key);
+      const entry = file.entries[entryKey];
+      if (entry) result.entries[entryKey] = clone(entry);
+      // Linked-task admission also recognizes a generation by its artifact.
+      // Keep that existing path fallback without enumerating other hosts.
+      const selectedKeys = includeArtifactPath && entry && this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
+        ? this.sqliteStore.conversationKeysForHost(entryKey, entry.artifactPath) : undefined;
+      const conversations = includeArtifactPath && entry
+        ? selectedKeys ? selectedKeys.flatMap(id => file.conversations[id] ? [file.conversations[id]!] : [])
+          : Object.values(file.conversations).filter(conversation => conversation.generations.some(generation =>
+            (conversation.engine === key.engine && generation.id === key.sessionId) || generation.path === entry.artifactPath))
+        : registryConversationsForEntryKey(file, entryKey);
+      // Admission's path fallback chooses in collection order. Insert those
+      // matches before expanding aliases, which may have another identity.
+      if (includeArtifactPath) for (const conversation of conversations) result.conversations[conversation.id] = clone(conversation);
+      for (const conversation of conversations) {
+        const canonical = resolveConversationAlias(file, conversation.id);
+        for (const id of conversationIdsResolvingTo(file, canonical)) {
+          if (file.conversationAliases[id]) result.conversationAliases[id] = file.conversationAliases[id]!;
+          if (file.conversations[id] && !result.conversations[id]) result.conversations[id] = clone(file.conversations[id]!);
+          if (file.memberships[id]) result.memberships[id] = clone(file.memberships[id]!);
+        }
+      }
+      return result;
+    }, { skipColdKeyInitialization: true });
+  }
+
+  /** Current resource-planning facts, without decoding retained dead hosts. */
+  structuredHostPlanningFacts(conversationId: ViewerConversationId | null | undefined): {
+    liveAgents: number; memberships: DurableConversationMembership[];
+    conversation: { agentRole: string | null; project: string | undefined; launchProfile: LaunchProfile | undefined } | null;
+  } {
+    return this.readKeyed(file => {
+      const keys = this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
+        ? this.sqliteStore.memoryPlanningEntryKeys() : undefined;
+      const entries = keys ? keys.flatMap(key => file.entries[key] ? [file.entries[key]!] : []) : Object.values(file.entries);
+      const canonical = conversationId ? resolveConversationAlias(file, conversationId) : null;
+      const conversation = canonical ? file.conversations[canonical] : undefined;
+      const launchProfile = conversation?.generations.at(-1)?.launchProfile;
+      return {
+        liveAgents: entries.filter(entry => entry.structuredHost && entry.status !== "dead" && entry.status !== "unhosted").length + 1,
+        memberships: canonical ? clone(file.memberships[canonical] ?? []) : [],
+        conversation: conversation ? {
+          agentRole: conversation.agentRole,
+          project: conversation.projectOwnership?.project,
+          launchProfile: launchProfile ? clone(launchProfile) : undefined,
+        } : null,
+      };
+    }, { skipColdKeyInitialization: true });
+  }
+
   /** Existing reaper hygiene owns these bounded storage-only moves. */
   archiveInactiveRows(limit?: number): number {
     assertStateStartupMutation(path.dirname(this.filename),"agent registry archive");
@@ -6167,8 +6264,8 @@ export class AgentRegistry {
   }
 
   /** Structured ownership rows, including released rows needed by recovery. */
-  structuredHostEntries(): AgentRegistryEntry[] {
-    const file = this.readOnlySnapshot();
+  structuredHostEntries(prepared?: RegistryFile): AgentRegistryEntry[] {
+    const file = prepared ?? this.readOnlySnapshot();
     return registryRowsMatching(file, "entries", "structuredHost.kind",
       ["codex-app-server", "claude-broker", "copilot-acp"]).map(entry => clone(entry));
   }
@@ -6211,6 +6308,31 @@ export class AgentRegistry {
           if (canonical !== launcher) result.conversationAliases[launcher] = canonical;
         }
       }
+      return result;
+    }, { skipColdKeyInitialization: true });
+  }
+
+  /** Selection is conservative across batches. Recovery still rereads each
+      receipt and fences its current owner before any effect. */
+  async prepareSpawnRecoverySnapshot(launchIds: readonly string[] = [], runtimeConversations: readonly string[] = [],
+    assertActive: () => void = () => {}): Promise<RegistryFile> {
+    return withViewerOperation("runtime.spawn-recovery", async () => {
+      await yieldToRuntime();
+      assertActive();
+      const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
+      const inputs = [
+        ...[...new Set(launchIds)].map(id => ({ launch: id, conversation: undefined })),
+        ...[...new Set(runtimeConversations)].map(id => ({ launch: undefined, conversation: id })),
+      ];
+      await forEachCooperatively(inputs, input => {
+        assertActive();
+        const selected = performanceSpans.sync("runtime.startup.select", () => this.spawnRecoverySnapshot(
+          input.launch === undefined ? [] : [input.launch], input.conversation === undefined ? [] : [input.conversation]));
+        for (const collection of ["entries", "receipts", "memberships", "conversationAliases"] as const) {
+          Object.assign(result[collection], selected[collection]);
+        }
+      }, { batchSize: 8, timeBudgetMs: 8 });
+      assertActive();
       return result;
     });
   }
@@ -6255,13 +6377,16 @@ export class AgentRegistry {
 
   reportFailedLaunch(receipt: SpawnReceipt, options: { announce?: boolean; now?: number } = {}): void {
     const launcherId = receipt.launcher?.conversationId;
-    const file = this.readOnlySnapshot();
-    const canonical = launcherId ? resolveConversationAlias(file, launcherId) : null;
-    const launcherProject = canonical
-      ? file.memberships[canonical]?.find(membership => membership.kind === "orchestrator")?.containerId
-      : undefined;
+    const launcher = launcherId ? this.readKeyed(file => {
+      const canonical = resolveConversationAlias(file, launcherId);
+      return {
+        project: file.memberships[canonical]?.find(membership => membership.kind === "orchestrator")?.containerId,
+        superseded: Boolean(file.conversations[canonical]?.supersededBy),
+      };
+    }, { skipColdKeyInitialization: true }) : null;
+    const launcherProject = launcher?.project;
     settleFailedLaunch(receipt, undefined, { ...options,
-      ...(canonical && file.conversations[canonical]?.supersededBy ? { announce: false } : {}),
+      ...(launcher?.superseded ? { announce: false } : {}),
       launcherProject, onProgress: progress => {
         this.deliveryWriteNow({ label: "spawn.failure-report", operationId: receipt.launchId }, () => this.mutate(current => {
           const row = current.receipts[receipt.launchId];
@@ -8683,7 +8808,7 @@ export class AgentRegistry {
       proves the exact current generation and whose full recorded ownership is
       still live. This is intentionally a startup-only repair: an incomplete,
       mismatched, handoff, or unverifiable row remains untouched. */
-  repairCompletedStructuredSpawnMarkers(): number {
+  repairCompletedStructuredSpawnMarkers(key?: SessionKey): number {
     const canRepair = (file: RegistryFile, entry: AgentRegistryEntry): boolean => {
       if (entry.pendingAction !== "spawn"
         || entry.host !== null
@@ -8713,7 +8838,7 @@ export class AgentRegistry {
         || !owner
         || !hasCompleteProcessIdentity(process)
         || !hasCompleteProcessIdentity(owner)) return false;
-      const conversation = Object.values(file.conversations).find((candidate) =>
+      const conversation = registryConversationsForEntryKey(file, sessionKeyId(entry.key)).find((candidate) =>
         candidate.engine === entry.key.engine
           && candidate.generations.at(-1)?.id === entry.key.sessionId
           && !candidate.supersededBy);
@@ -8726,6 +8851,13 @@ export class AgentRegistry {
         && this.ownerAlive(process)
         && this.ownerAlive(owner);
     };
+    if (key) return this.mutate(file => {
+      const entry = file.entries[sessionKeyId(key)];
+      if (!entry || !canRepair(file, entry)) return 0;
+      entry.pendingAction = null;
+      entry.updatedAt = now();
+      return 1;
+    });
     const snapshot = this.readOnlySnapshot();
     if (!Object.values(snapshot.entries).some((entry) => canRepair(snapshot, entry))) return 0;
     return this.mutate((file) => {

@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { afterAll, afterEach, expect, setSystemTime, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -152,7 +153,7 @@ test("default answers contain short ids, with a repeatable service size census",
     ["list_pipelines", "open,compact", { project: "repo-1234567890abcdef1234567890abcdef", state: "open", compact: true }],
     ["agent_activity", "liveOnly,compact", { project: "repo-1234567890abcdef1234567890abcdef", liveOnly: true, compact: true }],
     ["agent_activity", "default", { project: "repo-1234567890abcdef1234567890abcdef" }],
-    ["create_task", "details", { project: "repo-1234567890abcdef1234567890abcdef", text: "New board work", details: "Context. ".repeat(600), board: "hidden" }],
+    ["create_task", "details", withTaskDue({ project: "repo-1234567890abcdef1234567890abcdef", text: "New board work", details: "Context. ".repeat(600), board: "hidden" })],
     ["update_task", "status", { taskId: "task-0", status: "blocked" }],
     ["get_task", "default", { taskId: "task-0" }],
     ["get_pipeline", "default", { pipelineId: pipelines[0]!.id }],

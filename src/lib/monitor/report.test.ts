@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { seatTickProposalRef } from "./cards";
 import { ORCHESTRATOR_SEAT_TICK_CONTRACT, ORCHESTRATOR_VIEWER_CLOCK_HEADING } from "@/lib/orchestrator/prompt";
 
-import { SEAT_TICK_CONTRACT_POINTER, SEAT_TICK_NO_SELF_SCHEDULE, SEAT_TICK_PROMPT_PREVIEW_LIMIT, seatTickProposalMessage, seatTickWakeMessage } from "./report";
+import { SEAT_TICK_CONTRACT_POINTER, SEAT_TICK_NO_SELF_SCHEDULE, SEAT_TICK_PROMPT_PREVIEW_LIMIT, seatTickBullet, seatTickProposalMessage, seatTickWakeMessage, seatTickWakePayload } from "./report";
 
 /**
  * The seat tick's two briefs (#1245), rendered by the module that already
@@ -11,6 +11,47 @@ import { SEAT_TICK_CONTRACT_POINTER, SEAT_TICK_NO_SELF_SCHEDULE, SEAT_TICK_PROMP
  */
 
 const PROJECT = "viewer";
+
+test("a new monitor note and unavailable evidence leave a complete detail summary beside twenty roster rows", () => {
+  const now = Date.parse("2026-10-25T06:00:00Z");
+  const lanes = Array.from({ length: 20 }, (_, n) => ({ id: `lane${String(n).padStart(4, "0")}`,
+    title: `Exporter ${n} ${"long title ".repeat(10)}`, reason: "decision: build stopped", sinceMs: now - (120 - n) * 60_000 }));
+  const input = { project: PROJECT, now, seatOwnedLanes: lanes,
+    items: [{ kind: "ask" as const, id: lanes[0]!.id, label: "Inspect the failed build. ".repeat(101) }],
+    reasons: [{ kind: "worker-ask" as const, detail: "a stage waits on the seat" }], deferred: 19, signals: [],
+    gaps: [{ source: "pull-requests" as const, gap: "command-failed" as const, detail: "command-failed" },
+      { source: "children" as const, gap: "registry-unreadable" as const, detail: "registry-unreadable" }],
+    operatorInstructions: "Inspect failed work. ".repeat(24).slice(0, 480),
+    monitorPrompt: "Inspect the build and review queues. ".repeat(200),
+    mandateCarriesContract: true, workers: { limit: 3, source: "default", machine: 3, running: 0 },
+    snapshotAt: new Date(now).toISOString(),
+  };
+  const payload = seatTickWakePayload(input);
+  expect(payload.text.length).toBeLessThanOrEqual(4_000);
+  expect(`\n${payload.text}\n`).toContain(`\n${seatTickBullet(payload.items[0]!)}\n`);
+  expect(payload.items[0]!.label.length).toBeLessThan(input.items[0]!.label.length);
+  for (const lane of lanes) expect(payload.text.split("\n").some(line => line.startsWith(`- ${lane.id}`))).toBe(true);
+  expect(payload.text).toContain(input.operatorInstructions);
+  for (const gap of input.gaps) expect(payload.text).toContain(gap.detail);
+});
+
+test("a full parked-lane roster compacts long fields while retaining the contract and the wake bound", () => {
+  const now = Date.parse("2026-10-25T06:00:00Z");
+  const lanes = Array.from({ length: 20 }, (_, n) => ({ id: `waiting-${n}`, title: `Export ${n} ${"довга назва ".repeat(50)}`,
+    reason: `decision: ${"build stopped ".repeat(100)}`, sinceMs: now - (120 + n) * 60_000 }));
+  const text = seatTickWakeMessage({ project: PROJECT, now, seatOwnedLanes: lanes,
+    items: [{ kind: "ask", id: "waiting-0", label: "Inspect the failed build ".repeat(100) }],
+    reasons: [{ kind: "worker-ask", detail: "a stage waits on the seat" }], deferred: 19, signals: [],
+    monitorPrompt: "Inspect outstanding builds. ".repeat(100),
+  });
+  expect(text.length).toBeLessThanOrEqual(4_000);
+  for (const lane of lanes) {
+    const line = text.split("\n").find(line => line.startsWith(`- ${lane.id} |`));
+    expect(line).toContain("decision");
+    expect(line).toContain("2h");
+  }
+  expectContractClauses(text);
+});
 
 /** A wake to a seat whose mandate may not state the contract ends with every
     clause, the last of them last, so nothing was lopped off the foot. */

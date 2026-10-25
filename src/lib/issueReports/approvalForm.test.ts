@@ -110,3 +110,10 @@ test.each(["en", "uk"] as const)("viewer-context delivery text preserves the str
     expect(issueReportFormLanguage(round(form), OTHER)).toBeNull();
   }
 });
+
+
+test("reworded approval text alone never approves a report", () => {
+  for (const text of ["YES, PUBLISH REPORT", " yes  publish report! ", "Yes. publish report,"]) {
+    expect(issueReportDecisionApproves(decision({ comment: `${text} ${PREVIEW.digest}`, answers: [] }))).toBe(false);
+  }
+});

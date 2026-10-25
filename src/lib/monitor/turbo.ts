@@ -270,7 +270,7 @@ function tierSummary(plan: readonly TurboPlanAccount[], label: (id: string) => s
 }
 
 /** The overlay every wake carries while Turbo is on (§2.4). `unchanged`: the seat already saw this revision. */
-export function turboMandate(setting: TurboSetting | null | undefined, now: number, unchanged = false, label?: (id: string) => string): string[] {
+export function turboMandate(setting: TurboSetting | null | undefined, now: number, unchanged = false, label?: (id: string) => string, compact = false): string[] {
   if (!turboActive(setting, now)) return [];
   label ??= planLabel(setting!.plan);
   const until = setting!.until ?? "turned off";
@@ -281,6 +281,7 @@ export function turboMandate(setting: TurboSetting | null | undefined, now: numb
   const credits = approved.length
     ? `Paid credits: approved for ${approved.join(", ")} on this project until ${until}.`
     : `Paid credits: not approved; Delegatus ends Turbo on a credit-holding account at ${TURBO_CREDIT_MARGIN_PERCENT} %.`;
+  if (compact) return ["", `Turbo on until ${until} (operator): allowed Codex accounts use included limits faster, fastest catalog tier (${tierSummary(setting!.plan, label)}). ${credits} Delegatus switches live Codex. Set serviceTier for upcoming stages (override-stage, no applyNow) and launches (spawn/create). Accounts/bindings/worker limits/Claude unchanged.`];
   return ["", `Turbo on until ${until} (operator). Allowed Codex accounts may spend included limits faster: each runs its fastest catalog tier (${tierSummary(setting!.plan, label)}). ${credits} Delegatus switches live Codex conversations itself. You decide upcoming Codex stages and new Codex launches: set serviceTier (override-stage, no applyNow; spawn/create). Accounts, bindings, worker limits and Claude unchanged.`];
 }
 

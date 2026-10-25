@@ -1930,10 +1930,14 @@ test("production-sized SQLite registry admits every ten-lane write beside a conc
     /* The first open imported the 14 MB JSON and kept it renamed (#1870). */
     expect(fs.existsSync(filename)).toBeFalse();
     fs.writeFileSync(start, "start");
-    for (const { child } of children) {
-      assertStateChildSuccess(await child.exited, await new Response(child.stderr).text());
+    const outcomes = await Promise.all([...children.map(({ child }) => child), reader]
+      .map(child => Promise.all([child.exited, new Response(child.stderr).text()])));
+    let diagnosticCount = 0;
+    for (const [code, output] of outcomes) {
+      assertStateChildSuccess(code, output);
+      diagnosticCount += output.split("\n").filter(line => line.startsWith("[blocking-wait] ")).length;
     }
-    assertStateChildSuccess(await reader.exited, await new Response(reader.stderr).text());
+    console.info(`[agent registry benchmark] timed wait diagnostics: ${diagnosticCount}`);
     const measurements = children.map(({ result }) => JSON.parse(fs.readFileSync(result, "utf8")) as {
       durations: number[];
       writerWaits: number[];
