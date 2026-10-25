@@ -183,7 +183,32 @@ function socketReady(socketPath) {
   });
 }
 
-function jsonRequest(port, pathname, method = "GET", body = undefined) {
+/** Opens the operator's page session the way a browser tab does: a top-level
+    navigation, whose response sets the session cookie operator actions need. */
+function openPageSession(port) {
+  return new Promise((resolve, reject) => {
+    const request = http.request({
+      hostname: "127.0.0.1",
+      port,
+      path: "/",
+      method: "GET",
+      timeout: 30_000,
+      headers: { accept: "text/html", "sec-fetch-mode": "navigate", "sec-fetch-dest": "document", "sec-fetch-site": "none" },
+    }, (response) => {
+      response.resume();
+      response.once("end", () => {
+        const cookie = (response.headers["set-cookie"] ?? []).map((value) => value.split(";")[0]).find((value) => value.startsWith("llv_operator="));
+        if (cookie) resolve(cookie);
+        else reject(new Error(`page navigation opened no operator session (status ${response.statusCode ?? 0})`));
+      });
+    });
+    request.once("timeout", () => request.destroy(new Error("page navigation timed out")));
+    request.once("error", reject);
+    request.end();
+  });
+}
+
+function jsonRequest(port, pathname, method = "GET", body = undefined, cookie = undefined) {
   return new Promise((resolve, reject) => {
     const encoded = body === undefined ? undefined : Buffer.from(JSON.stringify(body));
     const request = http.request({
@@ -195,6 +220,7 @@ function jsonRequest(port, pathname, method = "GET", body = undefined) {
       headers: {
         origin: `http://127.0.0.1:${port}`,
         "sec-fetch-site": "same-origin",
+        ...(cookie ? { cookie } : {}),
         ...(encoded ? { "content-type": "application/json", "content-length": String(encoded.byteLength) } : {}),
       },
     }, (response) => {
@@ -284,6 +310,7 @@ async function stopCliAndVerifyHost(child, runtimeHost, output) {
 }
 
 async function runPipelineSmoke(port, repoDirectory, baseRef, child, output) {
+  const session = await openPageSession(port);
   const created = await jsonRequest(port, "/api/pipelines", "POST", {
     task: "packed structured pipeline",
     repoDir: repoDirectory,
@@ -297,12 +324,12 @@ async function runPipelineSmoke(port, repoDirectory, baseRef, child, output) {
       "prompt": "Return the smoke verdict.",
       next: null,
     }],
-  });
+  }, session);
   if (created.status !== 201 || typeof created.body?.pipeline?.id !== "string") {
     throw new Error(`pipeline creation failed with ${created.status}: ${JSON.stringify(created.body)}`);
   }
   const id = created.body.pipeline.id;
-  const started = await jsonRequest(port, `/api/pipelines/${id}`, "PATCH", { action: "start" });
+  const started = await jsonRequest(port, `/api/pipelines/${id}`, "PATCH", { action: "start" }, session);
   if (started.status !== 200 || started.body?.pipeline?.state !== "provisioning") {
     throw new Error(`pipeline start failed with ${started.status}: ${JSON.stringify(started.body)}`);
   }
@@ -310,8 +337,8 @@ async function runPipelineSmoke(port, repoDirectory, baseRef, child, output) {
   let lastPipeline = null;
   while (Date.now() < deadline && child.exitCode === null && child.signalCode === null) {
     await probe(port, "/api/files");
-    await jsonRequest(port, "/api/pipelines/tick", "POST");
-    const response = await jsonRequest(port, "/api/pipelines");
+    await jsonRequest(port, "/api/pipelines/tick", "POST", undefined, session);
+    const response = await jsonRequest(port, "/api/pipelines", "GET", undefined, session);
     const pipeline = response.body?.pipelines?.find((candidate) => candidate.id === id);
     lastPipeline = pipeline ?? null;
     if (pipeline?.state === "needs_decision") {

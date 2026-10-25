@@ -1438,6 +1438,56 @@ describe("subscription API consent", () => {
   }, 120_000);
 });
 
+describe("telemetry opt-outs", () => {
+  browserTest("locked telemetry hides notices in both languages, themes and product widths", async () => {
+    const out = path.resolve(".artifacts/telemetry-opt-outs"); fs.mkdirSync(out, { recursive: true });
+    let locked = false;
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/telemetry": () => Response.json({ enabled: !locked, locked, noticeDismissed: false }),
+      "/api/subscription-api-consent": { version: 1, enabled: false, source: "default" },
+    });
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const phone of [false, true]) for (const off of [false, true]) {
+        locked = off;
+        const viewport = phone ? { width: 390, height: 844 } : { width: 1000, height: 700 };
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-settings&header=1&lang=${lang}`, viewport, theme, lang, "reduce", phone);
+        try {
+          if (off) {
+            await page.locator(phone ? '[data-mobile2-open="menu"]' : "[data-rail-menu]").first().click();
+            await page.locator(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").click();
+            await page.locator(phone ? '[data-mobile2-menu-row="ping"]' : "[data-rail-menu-ping]").click();
+          } else {
+            await page.locator("[data-telemetry-notice]").getByRole("button", { name: translate(lang, "headerMenu.ping"), exact: true }).click();
+          }
+          const dialog = page.locator("[data-telemetry-settings]"); await dialog.waitFor();
+          const toggle = dialog.getByRole("switch", { name: translate(lang, "telemetry.label"), exact: true });
+          await toggle.waitFor();
+          expect(await toggle.isDisabled()).toBe(off);
+          expect(await toggle.isChecked()).toBe(!off);
+          const { telemetryNotice } = await import("../../../bin/telemetry-notice.mjs");
+          expect((await dialog.innerText()).includes(telemetryNotice[lang])).toBe(!off);
+          const name = `${phone ? "phone" : "desktop"}-${lang}-${theme}-${off ? "off" : "on"}`;
+          await dialog.screenshot({ path: path.join(out, `${name}-settings.png`) });
+          await dialog.getByRole("button", { name: translate(lang, "telemetry.close"), exact: true }).click();
+          if (!off) await page.locator("[data-telemetry-notice]").waitFor();
+          const noticeCount = await page.locator("[data-telemetry-notice]").count();
+          expect(noticeCount).toBe(off ? 0 : 1);
+          await page.screenshot({ path: path.join(out, `${name}-page.png`) });
+          expect(pageErrors).toEqual([]);
+          readings.push({ lang, theme, viewport, locked: off, noticeCount, switchDisabled: off, settingsNotice: !off });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/telemetry", { recursive: true });
+      const sources = ["src/components/telemetry/TelemetrySettings.tsx", "src/components/kanban/kanbanBoard.browser.test.tsx"];
+      fs.writeFileSync("evidence/telemetry/opt-outs.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx",
+        command: "LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<browser> bun test src/components/kanban/kanbanBoard.browser.test.tsx -t 'telemetry opt-outs'",
+        sources: Object.fromEntries(sources.map(source => [source, createHash("sha256").update(fs.readFileSync(source)).digest("hex")])), readings }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
+
 describe("swarm release rules", () => {
   browserTest("consent, refused save and read-only scope fit both languages, themes and viewports", async () => {
     const out = path.resolve(".artifacts/swarm-rules"); fs.mkdirSync(out, { recursive: true });

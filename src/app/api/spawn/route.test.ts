@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 
 import { createSpawnAttempt, spawnRequestBody } from "@/components/draftSpawn";
 import { agentRegistry, AgentRegistry } from "@/lib/agent/registry";
@@ -459,6 +460,7 @@ test("direct spawn records one durable operator gesture while MCP service spawn 
     {
       method: "POST",
       headers: {
+        cookie: `llv_operator=${soloBrowserSession()}`,
         host: "127.0.0.1",
         origin: "http://127.0.0.1",
         "sec-fetch-site": "same-origin",
@@ -577,7 +579,7 @@ test("one accepted direct spawn produces one input after ledger and transcript i
       process.env.NEXT_PUBLIC_RUNTIME_UI = "1";
       const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
       const memberId = "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-      let cookie = "";
+      let cookie = `llv_operator=${soloBrowserSession()}`;
       if (mode === "team") {
         const team = teamStore();
         team.insertMember({ id: memberId, name: "Owner", role: "owner", status: "active", color: "teal",

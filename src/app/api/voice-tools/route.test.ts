@@ -304,8 +304,9 @@ test("a same-origin local client cannot approve a successfully probed server", a
     await hub.dryRun("music", (await store.view()).servers.music.digest);
     const ready = (await store.view()).servers.music;
     expect(ready.lastDryRun?.code).toBe("OK"); expect(contacts).toBeGreaterThan(0);
+    // Without a page session the solo install refuses before the owner check.
     const response = await POST(request("POST", { action: "approve", name: "music", digest: ready.digest }, { cookie: "" }));
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(403);
     expect((await new VoiceToolsStore(store.directory).view()).servers.music.state).toBe("pending");
   } finally {
     await peer.stop(true);

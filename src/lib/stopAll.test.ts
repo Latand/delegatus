@@ -10,6 +10,7 @@ import { POST as createInvite } from "@/app/api/team/invites/route";
 import { POST as join } from "@/app/api/team/join/[code]/route";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/capabilityHeader";
 import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
+import { OPERATOR_COOKIE, soloBrowserSession } from "@/lib/agent/operatorSession";
 import { MEMBER_COOKIE } from "@/lib/team/sessions";
 import { resetTeamStoreForTests } from "@/lib/team/store";
 
@@ -51,7 +52,8 @@ function ports(overrides: Partial<StopAllPorts> = {}): StopAllPorts & { starts: 
 }
 
 const browser = { host: "127.0.0.1:8898", origin: "http://127.0.0.1:8898", "sec-fetch-site": "same-origin", "content-type": "application/json" };
-const post = (body: unknown, headers: Record<string, string> = browser) =>
+const soloBrowser = () => ({ ...browser, cookie: `${OPERATOR_COOKIE}=${soloBrowserSession()}` });
+const post = (body: unknown, headers: Record<string, string> = soloBrowser()) =>
   new NextRequest("http://127.0.0.1:8898/api/stop-all", { method: "POST", headers, body: body === undefined ? undefined : JSON.stringify(body) });
 
 test("a confirmed stop starts the release's own stop-all on this Viewer's state directory", async () => {
@@ -88,10 +90,11 @@ test("the route refuses without the confirmation, from another origin and from a
   expect(unconfirmed.status).toBe(400);
   expect(await unconfirmed.json()).toMatchObject({ code: "confirm-required" });
   expect((await postStopAll(post(undefined), fake)).status).toBe(400);
-  const foreign = await postStopAll(post({ confirm: true }, { ...browser, origin: "https://elsewhere.example", "sec-fetch-site": "cross-site" }), fake);
+  expect((await postStopAll(post({ confirm: true }, browser), fake)).status).toBe(403);
+  const foreign = await postStopAll(post({ confirm: true }, { ...soloBrowser(), origin: "https://elsewhere.example", "sec-fetch-site": "cross-site" }), fake);
   expect(foreign.status).toBe(403);
   setCallerConversationResolverForTests(() => "conversation_some_worker");
-  const agent = await postStopAll(post({ confirm: true }, { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: "c".repeat(43) }), fake);
+  const agent = await postStopAll(post({ confirm: true }, { ...soloBrowser(), [VIEWER_SPAWN_CAPABILITY_HEADER]: "c".repeat(43) }), fake);
   expect(agent.status).toBe(403);
   expect(fake.starts).toEqual([]);
 });
@@ -115,7 +118,7 @@ test("on a team install only the owner's browser starts the stop", async () => {
   const asMember = await postStopAll(post({ confirm: true }, { ...browser, cookie: `${MEMBER_COOKIE}=${member}` }), fake);
   expect(asMember.status).toBe(403);
   expect(await asMember.json()).toMatchObject({ code: "owner_required" });
-  expect((await postStopAll(post({ confirm: true }), fake)).status).toBe(401);
+  expect((await postStopAll(post({ confirm: true }, browser), fake)).status).toBe(403);
   expect(fake.starts).toEqual([]);
   const asOwner = await postStopAll(post({ confirm: true }, { ...browser, cookie: `${MEMBER_COOKIE}=${owner}` }), fake);
   expect(asOwner.status).toBe(202);
