@@ -18,13 +18,20 @@ function installBudgetLanes(rig: ReturnType<typeof harness>, long = false) {
   return lanes;
 }
 
-test("a configured autonomy wake still delivers twenty parked seat lanes", async () => {
+for (const turboEnabled of [false, true]) for (const shipped of [false, true]) {
+test(`a configured autonomy wake${turboEnabled ? " with Turbo" : ""} still delivers twenty parked seat lanes to a ${shipped ? "shipped" : "bespoke"} seat`, async () => {
   const settings = { ...defaultSeatTickSettings(PROJECT), reason: "Check failed builds. ".repeat(25).slice(0, 500),
     monitorPrompt: "Inspect the build and review queues. ".repeat(300).slice(0, 7_622),
     autonomy: { enabled: true, startedAt: new Date(NOW).toISOString(), until: new Date(NOW + 8 * 60 * MINUTE).toISOString(),
       endedAt: null, endReason: null, updatedAt: new Date(NOW).toISOString(),
       setBy: { kind: "gateway" as const, project: null, conversationId: null, seatEpoch: null }, why: null, decisions: [] } };
-  const rig = harness({ state: OVERDUE, settings });
+  const rig = harness({ state: OVERDUE, settings: { ...settings,
+    turbo: turboEnabled ? { ...settings.autonomy,
+      plan: [{ accountId: "acct-priority", label: "Priority", plan: "pro", tiers: { "gpt-6.1-sol": "priority" as const }, hadCredits: false }],
+      credits: { approved: false, accounts: [], approvedAt: null, withdrawnAt: null, withdrawnBy: null, withdrawnWhy: null },
+      switches: [] } : null },
+    seat: { conversationId: CONVERSATION, seatEpoch: 7, path: null,
+      mandate: shipped ? ORCHESTRATOR_SYSTEM_PROMPT : "Coordinate this project's builds and reviews.", promptVersion: shipped ? 55 : null } });
   const lanes = installBudgetLanes(rig);
   expect((await runSeatTickCheck(PROJECT, rig.deps))?.verdict).toBe("wake");
   expect(rig.sent).toHaveLength(1);
@@ -38,8 +45,13 @@ test("a configured autonomy wake still delivers twenty parked seat lanes", async
     const minutes = (NOW - lane.sinceMs) / MINUTE;
     expect(row).toContain(minutes === 120 ? "2h" : `1h ${minutes - 60}m`);
   }
-  expect(rig.written.at(-1)!.itemsShown!.length).toBeGreaterThan(0);
+  const shown = rig.written.at(-1)!.itemsShown!;
+  expect(shown.length).toBeGreaterThan(0);
+  const detail = text.split("\n").find(line => line.startsWith("- [ask] lane0000 — "))!;
+  expect(detail === `- [ask] lane0000 — ${lanes[0]!.title}: ${lanes[0]!.reason}`
+    || /… \[summary; .+ holds the full item\]$/.test(detail)).toBe(true);
 });
+}
 
 test("a full roster with unavailable sources makes detail progress and then respects cadence", async () => {
   const rig = harness({ state: OVERDUE, pullRequestsUnavailable: "command-failed",

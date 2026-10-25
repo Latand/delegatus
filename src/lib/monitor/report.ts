@@ -162,7 +162,9 @@ export const SEAT_TICK_CONTRACT_POINTER = `Contract: the "${ORCHESTRATOR_VIEWER_
     that paragraph surviving a seat's edit, so it states the ban too. */
 export const SEAT_TICK_NO_SELF_SCHEDULE = "Do not schedule yourself. Delegatus ticks this seat; a self-scheduled monitor is refused practice.";
 
-function seatTickContractLines(mandateCarriesContract: boolean): string[] {
+function seatTickContractLines(mandateCarriesContract: boolean, compact = false): string[] {
+  if (compact && !mandateCarriesContract) return ["", "Contract:",
+    "Delegatus ticks this seat; do not self-schedule. Handle listed items first, then ONE bounded project-board pass: list_pipelines (completed/parked/spawn failures and their open PRs), agent_activity liveOnly (live/stalled), open tasks without running work. Act on stalled work. Record every outcome on card/pipeline. If unable, set task hold with reason; that is the only stop. Never wait on operator. seat_tick_settings controls tick on/off/cadence per project with a board reason. File owed/due bridge reports under listed keys before turn ends."];
   return mandateCarriesContract
     ? ["", SEAT_TICK_CONTRACT_POINTER]
     : ["", "Contract:", `- ${SEAT_TICK_NO_SELF_SCHEDULE}`, ...ORCHESTRATOR_SEAT_TICK_CONTRACT.map((clause) => `- ${clause}`)];
@@ -372,10 +374,10 @@ export function seatTickWakeMessage(input: {
     ? ["", `Standing monitor note (${input.monitorPrompt.length} chars): seat_tick_settings verbose:true reads it.`]
     : null;
   const turbo = turboMandate(input.turbo, input.now ?? Date.now(), input.turboUnchanged);
-  const reservation = (compactRoster = false) => {
+  const reservation = (compactRoster = false, compactRules = false) => {
     const sections = [
-      autonomy,
-      turbo,
+      compactRules ? autonomyMandate(input.autonomy, input.now ?? Date.now(), input.autonomyUnchanged, true) : autonomy,
+      compactRules ? turboMandate(input.turbo, input.now ?? Date.now(), input.turboUnchanged, undefined, true) : turbo,
       (compactRoster && input.snapshotAt ? ["", `Snapshot at ${input.snapshotAt}. Re-read if delayed.`] : snapshotSection(input.snapshotAt, !!input.workers)),
       (input.reportLines && input.reportLines.length > 0 ? ["", compactLedger ? "Reports:" : "Bridge reports:", ...input.reportLines.map((line) => `- ${line}`)] : []),
       seatTickInstructionSections({ reason: input.operatorInstructions ?? null, instructionLines: input.instructionLines }),
@@ -387,7 +389,7 @@ export function seatTickWakeMessage(input: {
       (compactRoster && input.workers
       ? ["", `Worker limit ${input.workers.limit} (${input.workers.source}; machine ${input.workers.machine}), running ${input.workers.running}; overrides mandate/launch.`]
       : autonomy.length && input.workers ? ["", `Worker limit ${input.workers.limit} (${input.workers.source}; machine ${input.workers.machine}); running ${input.workers.running}. Overrides mandate/launch limits.`] : workerSection(input.workers)),
-      seatTickContractLines(input.mandateCarriesContract === true),
+      seatTickContractLines(input.mandateCarriesContract === true, compactRules),
     ];
     return sections.flatMap(section => compactRoster && section[0] === "" ? section.slice(1) : section);
   };
@@ -417,8 +419,10 @@ export function seatTickWakeMessage(input: {
     const detailBudget = first ? Math.min(redactMonitorText(seatTickBullet(first)).length,
       redactMonitorText(seatTickBullet(seatTickItemSummary(first, 0))).length) + 1 : 0;
     const headBudget = prefix.length + detailBudget + 2; // newline and truncation marker
-    for (const compact of [false, true]) {
-      const tail = compact ? reservation(true) : reserved;
+    // The last form also compacts rules: combined autonomy, Turbo and a
+    // legacy contract can otherwise consume the roster's entire budget.
+    for (const [compact, compactRules] of [[false, false], [true, false], [true, true]]) {
+      const tail = compact ? reservation(true, compactRules) : reserved;
       const roster = seatOwnedLaneSection(input.seatOwnedLanes, input.now ?? Date.now(),
         SEAT_TICK_MESSAGE_LIMIT - redactMonitorText(tail.join("\n")).trimEnd().length - headBudget - 2, compact);
       if (roster) return boundedSeatTickMessage(lines, [...roster, ...tail]);
