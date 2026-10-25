@@ -519,6 +519,7 @@ are at `3736d5e4`.
 | Lines | Test | What it asserts | Verdict | Why; for trim, the lines to keep and drop |
 |---|---|---|---|---|
 | 977-986 | the Live backend answers board questions with read tools and the prompt keeps talk-first | nothing sent; instruction wording | **trim** | keep 983; drop 984 |
+| barge-in during a backend await keeps reports held when the older request finishes | interrupt command dispatch; an embedded instruction phrase; report holding and release | **trim** | keep the command type and every delivery, report and ordering check; drop the authored content matcher inside the command assertion |
 
 ### `src/lib/voiceCompanion/tools.test.ts`
 
@@ -873,6 +874,8 @@ are at `3736d5e4`.
 |---|---|---|---|---|
 | 163 onward | a large delivered stage prompt is backed by a private file | file-backed bytes, mode, input data, role section and fixed completion instruction | **trim** | keep file content, mode, input substitution, section marker and lifecycle checks; drop the fixed stage-report instruction sentence |
 | 280-299 | read-only stages preserve declared outputs and tell the agent their write boundary | outputs stored; output path in the prompt; an instruction phrase | **trim** | keep 294, 297; drop 298 |
+| a merger stage resolves through production role lookup during pipeline normalization | role parameters and runtime selection; an embedded scaffold phrase | **trim** | keep role parameters, engine, model, effort and access; drop the authored scaffold matcher and its obsolete comment |
+| a visual-critic stage is accepted and launches read-only on the role's runtime | saved role, runtime and launch access; an embedded scaffold phrase | **trim** | keep the saved role and runtime fields, ticks and launch-access assertion; drop the authored scaffold matcher |
 
 ### `src/lib/pipelines/legacyReviewDefinition.test.ts`
 

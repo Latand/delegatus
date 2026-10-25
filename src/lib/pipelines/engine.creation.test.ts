@@ -1332,8 +1332,6 @@ test("a merger stage resolves through production role lookup during pipeline nor
       model: "gpt-6.1-sol",
       effort: "high",
       access: "read-write",
-      /* The batch procedure is the project's own; Delegatus names it in CONTRIBUTING.md. */
-      promptScaffold: expect.stringContaining("Merge through the batch procedure the project's instruction files name"),
     },
   });
 });
@@ -1347,7 +1345,7 @@ test("a visual-critic stage is accepted and launches read-only on the role's run
   h.ports.roleLookup = pipelineRoleLookup;
   await create(h.ports, [{ id: "shots", kind: "run", role: { roleId: "visual-critic" }, prompt: "Judge the frames", next: null }] as never);
   const expected = { roleId: "visual-critic", engine: "claude", model: "opus", effort: "high", access: "read-only" };
-  expect(loadPipelines()[0]!.stages[0]).toMatchObject({ role: { roleId: "visual-critic" }, effectiveRole: { ...expected, promptScaffold: expect.stringContaining("You are a Visual-critic.") } });
+  expect(loadPipelines()[0]!.stages[0]).toMatchObject({ role: { roleId: "visual-critic" }, effectiveRole: expected });
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   expect(h.spawnInputs[0]).toMatchObject({ role: expected, runtimeProfile: { access: "read-only" } });
