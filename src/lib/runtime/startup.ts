@@ -3010,7 +3010,8 @@ async function adoptStructuredHostsPass(
     }
     assertActive();
     adoptedHosts = nextAdoptedHosts;
-    const heldEntries = heldHostKeys.size ? (await preparedStartupSnapshot(registry)).entries : {};
+    const heldEntries = heldHostKeys.size || failures.size || retryEntries.length
+      ? (await preparedStartupSnapshot(registry)).entries : {};
     const held = new Map([...heldHostKeys].flatMap((key) => {
       const stamp = stamps.get(key);
       const entry = heldEntries[key];
