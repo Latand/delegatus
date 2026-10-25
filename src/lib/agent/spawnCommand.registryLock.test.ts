@@ -6,6 +6,8 @@ import { assertStateChildSuccess } from "@/lib/state/stateChildResult.fixture";
 
 const cases = ["direct", "relay"].flatMap(route => ["constructor", "writer"].flatMap(site => ["no", "yes"].map(revoked => ({ route, site, revoked }))))
   .concat(["validation", "refusal", "agent-refusal", "drain"].map(route => ({ route, site: "constructor", revoked: "no" })))
+  .concat(["no", "yes"].map(revoked => ({ route: "drain-released", site: "constructor", revoked })))
+  .concat([{ route: "drain-started", site: "constructor", revoked: "no" }])
   .concat(["no", "yes"].map(revoked => ({ route: "continuation", site: "constructor", revoked })));
 for (const { route, site, revoked } of cases) {
   test(`${route} launch waits for the registry ${site} and rechecks authorization (revoked=${revoked})`, async () => {
@@ -26,12 +28,12 @@ for (const { route, site, revoked } of cases) {
       expect(result.error).not.toBe("database is locked");
       expect(result.settledBeforeRelease).toBe(false);
       if (site === "constructor") expect(result.attempts).toBeGreaterThan(1);
-      if (["validation", "refusal", "agent-refusal", "drain"].includes(route)) {
-        expect(result.status).toBe(route === "validation" ? 200 : route === "drain" ? 503 : 400);
+      if (["validation", "refusal", "agent-refusal", "drain", "drain-started"].includes(route)) {
+        expect(result.status).toBe(route === "validation" ? 200 : route.startsWith("drain") ? 503 : 400);
         expect(result.dispatches).toBe(0);
         expect(result.receipt).toBe(false);
-        expect(result.fenced).toBe(route !== "drain");
-        if (route === "drain") expect(result.code).toBe("AUTO_UPDATE_DRAIN");
+        expect(result.fenced).toBe(!route.startsWith("drain"));
+        if (route.startsWith("drain")) expect(result.code).toBe("AUTO_UPDATE_DRAIN");
       } else if (revoked === "yes") {
         expect(result.status).toBeGreaterThanOrEqual(400);
         expect(result.error).toBe("fixture launch revoked");

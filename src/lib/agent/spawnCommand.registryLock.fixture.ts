@@ -19,6 +19,7 @@ import { drainFile, writeDrain, releaseDrain } from "@/lib/selfUpdate/drain";
 import { sendOwnerContinuation } from "@/lib/externalRelay/ownerRun";
 
 const [route, site, revoked] = process.argv.slice(2);
+const draining = route?.startsWith("drain") === true;
 setSystemTime(new Date("2026-10-25T00:00:00.000Z"));
 let nextId = 0;
 const ids = spyOn(crypto, "randomUUID").mockImplementation(() =>
@@ -115,7 +116,8 @@ let settled = false, yielded = false;
 let outcome: { status: number; error: string | null } = { status: 0, error: null };
 try {
   Object.assign(productionSpawnCommandDependencies, dependencies);
-  if (route === "drain") writeDrain(drainFile(), { id: "fixture-launch-drain", target: "a".repeat(40), since: "2026-10-25T00:00:00.000Z", until: 0, persistent: true });
+  const startDrain = () => writeDrain(drainFile(), { id: "fixture-launch-drain", target: "a".repeat(40), since: "2026-10-25T00:00:00.000Z", until: 0, persistent: true });
+  if (draining && route !== "drain-started") startDrain();
   await holder.hold();
   const request = new NextRequest("http://127.0.0.1/api/spawn", { method: "POST", headers, body: JSON.stringify(body) });
   let responseCode: string | null = null;
@@ -126,7 +128,7 @@ try {
         engine: "claude", model: null, effort: null, project: null, concurrency: 1, hardCapMinutes: 1 }, dependencies.authorizeAutonomousLaunch!)
       .then(result => result && !result.ok ? { status: result.status, body: { error: result.error } }
         : { status: 202, body: { error: null } })
-    : route === "relay" || route === "drain"
+    : route === "relay" || draining
     ? launchAutonomousConversation(body, dependencies.authorizeAutonomousLaunch, { structured: true })
     : (route === "validation" ? executeSpawnAdmissionValidation(request, dependencies) : executeSpawnRequest(request, dependencies))
       .then(async response => ({ status: response.status, body: await response.json() })))
@@ -138,6 +140,8 @@ try {
   await new Promise<void>(resolve => setImmediate(() => { yielded = true; resolve(); }));
   const settledBeforeRelease = settled;
   if (revoked === "yes") authorized = false;
+  if (route === "drain-started") startDrain();
+  if (route === "drain-released") releaseDrain(drainFile(), "fixture-launch-drain");
   await holder.release();
   await pending;
   if (outcome.status === 202) await dispatched.promise;
@@ -153,7 +157,7 @@ try {
   await holder.close();
   registry?.close();
   if (route === "continuation") (process as typeof process & { __llvAgentRegistry?: AgentRegistry }).__llvAgentRegistry?.close();
-  if (route === "drain") releaseDrain(drainFile(), "fixture-launch-drain");
+  if (draining) releaseDrain(drainFile(), "fixture-launch-drain");
   ids.mockRestore();
   setSystemTime();
 }
