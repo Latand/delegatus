@@ -33,7 +33,8 @@ import { readBatchLanding } from "./batchLanding";
  * lease: the `gh` calls happen with no lock held, and each result is written
  * under the pipeline lock against the record read again inside it.
  *
- * A conflict or BEHIND base starts visible refresh work (docs/design/auto-refresh-conflicting-prs.md).
+ * A conflict, BEHIND base, or red check on an outdated base starts visible
+ * refresh work (docs/design/auto-refresh-conflicting-prs.md).
  * The refresh stage resolves it and publishes through the pipeline gate.
  * What cannot be settled by waiting blocks with one plain sentence and goes to
  * the operator (§4.6).
@@ -508,36 +509,47 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true):
       required = await requiredContexts(merge.repository, view.baseRefName || "main", ports);
     }
     decision = decideMerge(merge, view, required, now);
-    const needsRefresh = decision.kind === "refresh" || (decision.kind === "block" && decision.reason === MERGE_REASONS.conflict);
+    const red = view.checks.find(check => check.verdict === "red");
+    const failedCheck = decision.kind === "block" && red && decision.reason === checkFailedReason(red.name);
+    const needsRefresh = failedCheck || decision.kind === "refresh" || (decision.kind === "block" && decision.reason === MERGE_REASONS.conflict);
     const refreshRefusal = decision.kind === "refresh"
       ? "Delegatus could not start the refresh: the PR is behind its base and has no eligible delivery refresh"
-      : MERGE_REASONS.conflict;
+      : decision.kind === "block" ? decision.reason : MERGE_REASONS.conflict;
     if (needsRefresh && ports.startRefresh
       && refreshAdmission(read, ports.loadPipelines(), ports.setting(read.project))) {
       const baseBranch = await refreshBaseBranch(read, view.baseRefName, ports);
       const base = (await ports.run(["api", `repos/${merge.repository}/branches/${encodeURIComponent(baseBranch)}`, "--jq", ".commit.sha"])).trim();
       if (!/^[0-9a-f]{40}$/i.test(base)) throw new Error("gh returned no base tip");
-      if (!refreshAdmission(read, ports.loadPipelines(), ports.setting(read.project))) {
-        await commit(ports, read, (live) => block(live, refreshRefusal, now));
+      // Compare immutable SHAs: soft protection need not report BEHIND.
+      const mergeBase = failedCheck
+        ? (await ports.run(["api", `repos/${merge.repository}/compare/${base}...${view.headRefOid}`, "--jq", ".merge_base_commit.sha"])).trim()
+        : null;
+      if (failedCheck && !/^[0-9a-f]{40}$/i.test(mergeBase!)) throw new Error("gh returned no merge base");
+      // A refresh that already tried this base leaves a real red check blocked
+      // with its original reason, even if its builder did not merge the base.
+      if (!failedCheck || (mergeBase !== base && read.refreshOf?.base !== base)) {
+        if (!refreshAdmission(read, ports.loadPipelines(), ports.setting(read.project))) {
+          await commit(ports, read, (live) => block(live, refreshRefusal, now));
+          return;
+        }
+        if (read.refreshOf?.base === base) {
+          await commit(ports, read, (live) => block(live, MERGE_REASONS.refreshSameBase, now));
+          return;
+        }
+        const reserved = await commit(ports, read, (live, current) => {
+          if (!refreshAdmission(current, ports.loadPipelines(), ports.setting(current.project))) { block(live, refreshRefusal, now); return; }
+          live.state = "refreshing";
+          live.reason = null;
+          live.nextReadAt = null;
+          live.refresh = refreshReservation(read, base, view!.headRefOid, now, baseBranch);
+          live.readFailures = 0;
+        });
+        if (reserved) {
+          const current = ports.loadPipelines().find((lane) => lane.id === read.id);
+          if (current?.merge?.state === "refreshing") await startRefresh(current, ports);
+        }
         return;
       }
-      if (read.refreshOf?.base === base) {
-        await commit(ports, read, (live) => block(live, MERGE_REASONS.refreshSameBase, now));
-        return;
-      }
-      const reserved = await commit(ports, read, (live, current) => {
-        if (!refreshAdmission(current, ports.loadPipelines(), ports.setting(current.project))) { block(live, refreshRefusal, now); return; }
-        live.state = "refreshing";
-        live.reason = null;
-        live.nextReadAt = null;
-        live.refresh = refreshReservation(read, base, view!.headRefOid, now, baseBranch);
-        live.readFailures = 0;
-      });
-      if (reserved) {
-        const current = ports.loadPipelines().find((lane) => lane.id === read.id);
-        if (current?.merge?.state === "refreshing") await startRefresh(current, ports);
-      }
-      return;
     }
     if (decision.kind === "refresh") decision = { kind: "block", reason: refreshRefusal };
   } catch (error) {
