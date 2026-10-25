@@ -90,16 +90,23 @@ function runtimeSessionKey(value: unknown): { engine: "codex" | "claude" | "copi
   return { engine, sessionId };
 }
 
-function idempotency(body: Record<string, unknown>, operationId: string | undefined): string {
-  return requiredId(body.idempotencyKey ?? operationId, "idempotencyKey");
+function idempotency(body: Record<string, unknown>, operationId: string | undefined, durableReplay = false): string {
+  const value = body.idempotencyKey ?? operationId;
+  if (!durableReplay) return requiredId(value, "idempotencyKey");
+  /* Effects are durable projections, not new API input. Older writers accepted
+     colon-delimited keys (for example, seat-tick keys); keep replaying those
+     already-admitted operations without widening the public command grammar. */
+  const id = typeof value === "string" ? value.trim() : "";
+  if (!id || /\s/.test(id) || id.length > 200) throw new Error("idempotencyKey is invalid");
+  return id;
 }
 
-export function parseRuntimeCommand(kind: RuntimeOperationKind, value: unknown): RuntimeOperationCommand {
+export function parseRuntimeCommand(kind: RuntimeOperationKind, value: unknown, options: { durableReplay?: boolean } = {}): RuntimeOperationCommand {
   const body = object(value);
   if (Buffer.byteLength(JSON.stringify(body)) > MAX_OPERATION_BYTES) throw new Error("request body exceeds 256 KiB");
   const conversationId = requiredId(body.conversationId, "conversationId");
   const operationId = optionalId(body.operationId, "operationId");
-  const idempotencyKey = idempotency(body, operationId);
+  const idempotencyKey = idempotency(body, operationId, options.durableReplay === true);
   const turnId = optionalNullableId(body.turnId, "turnId");
 
   if (kind === "native-queue") {
