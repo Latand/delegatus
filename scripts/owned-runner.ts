@@ -13,6 +13,7 @@ import { cpuSlotForOwner, inheritedCpuSlot } from "../src/lib/runtime/cpuAdmissi
 import { runSandboxGate, guardSandboxGate } from "../src/lib/runtime/sandboxGateRunner";
 import { cpuOwnerIdentity, hostProcessIdentity, signalSandboxContext } from "../src/lib/runtime/signalSandboxContext";
 import { sandboxGateEntryCommand } from "../src/lib/runtime/sandboxGateEntry";
+import { gateServiceProperties } from "../src/lib/runtime/cpuPlacement";
 
 /** `namespace` marks a caller inside an agent signal domain. Its identities
  * are translated to the host, where the service checks them, and the service
@@ -21,6 +22,15 @@ type Launch = { command: string[]; cwd: string; env: NodeJS.ProcessEnv; owner: P
 const args = process.argv.slice(2);
 const timeoutMs = Number(process.env.LLV_OWNED_RUN_TIMEOUT_MS ?? 900_000);
 if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error("owned runner needs a positive finite deadline");
+
+// Resolve automatic admission before dispatch so fallback has the same owner,
+// deadline and signal handlers as an explicitly portable invocation.
+if (process.platform === "linux" && args.length && !args[0]!.startsWith("--")
+  && !signalSandboxContext()
+  && (!Bun.which("systemd-run") || spawnSync("systemctl", ["--user", "show-environment"], { stdio: "ignore", timeout: 5_000 }).status !== 0)) {
+  console.error("owned runner: no reachable user systemd manager; using the documented portable cleanup fallback");
+  args.unshift("--portable");
+}
 
 if (args[0] === "--namespace-guardian") {
   await guardSandboxGate(args[1]!);
@@ -48,10 +58,15 @@ if (args[0] === "--namespace-guardian") {
   process.exit(stopped || code);
 } else if (args[0] === "--portable") {
   // The fallback uses the same spawn ledger and independent guardian as direct
-  // test runs. On Linux the gate refuses to lose kernel cgroup containment.
+  // test runs. This is also the documented Linux fallback when no user
+  // systemd manager is reachable (for example, in a development container).
   admitPortableTestRunner();
   const command = args.slice(1);
   if (!command.length) throw new Error("owned runner needs a command");
+  const parent = process.env.LLV_OWNED_RUN_PARENT_IDENTITY
+    ? JSON.parse(process.env.LLV_OWNED_RUN_PARENT_IDENTITY) as ProcessIdentity : undefined;
+  const parentAlive = () => !parent || (processIdentityStatus(parent) === "alive" && !procBackend.processExited(parent.pid));
+  if (!parentAlive()) process.exit(137);
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-owned-run-"));
   fs.chmodSync(directory, 0o700);
   const ledger = path.join(directory, "children.jsonl");
@@ -61,22 +76,46 @@ if (args[0] === "--namespace-guardian") {
   const budget = cpuWaitBudget(process.env);
   const slot = inheritedCpuSlot() ?? cpuSlotForOwner(captureProcessIdentity(process.pid));
   if (slot) budget.env.LLV_GATE_SLOT_LEASE = JSON.stringify(slot);
-  const child = spawn(command[0]!, command.slice(1), { stdio: "inherit", env: budget.env });
+  // A portable child cannot inherit a native parent's scope admission.
+  delete budget.env.LLV_OWNED_TEST_RUNNER_PID;
+  delete budget.env.LLV_OWNED_TEST_RUN_CGROUP;
+  // exec binds admission to the command PID, just as the systemd service does.
+  // A test preload can consequently accept this run without attempting to
+  // re-enter another runner.
+  const portableCommand = process.platform === "linux"
+    ? ["/bin/bash", "-c", 'export LLV_PORTABLE_TEST_RUNNER_PID=$$; exec "$@"', "owned-command", ...command]
+    : command;
+  const child = spawn(portableCommand[0]!, portableCommand.slice(1), { stdio: "inherit", env: budget.env });
   if (child.pid) fs.appendFileSync(ledger, `${JSON.stringify(captureProcessIdentity(child.pid))}\n`);
   const close = new Promise<number>(resolve => {
     child.once("exit", (code, signal) => resolve(code ?? (signal === "SIGTERM" ? 143 : 137)));
     child.once("error", () => resolve(1));
   });
   let interrupted = 0;
-  const cancel = (code: number) => { interrupted ||= code; void stopFixtureProcess(child); };
-  process.on("SIGTERM", () => cancel(143)); process.on("SIGINT", () => cancel(130));
+  let cleanup: Promise<void> | undefined, cleanupFailed = false;
+  const cancel = (code: number, signal: NodeJS.Signals = "SIGTERM") => {
+    interrupted ||= code;
+    cleanup ??= (async () => {
+      if (signal === "SIGINT") {
+        child.kill(signal);
+        await Promise.race([close, Bun.sleep(500)]);
+      }
+      await stopFixtureProcess(child);
+    })().catch(error => {
+      cleanupFailed = true;
+      console.error(`owned runner: portable cleanup failed: ${error.message}`);
+    });
+  };
+  const parentTimer = setInterval(() => { if (!parentAlive()) cancel(137); }, 100);
+  process.on("SIGTERM", () => cancel(143)); process.on("SIGINT", () => cancel(130, "SIGINT"));
   const stopTimer = cpuBudgetTimer(timeoutMs, budget.elapsed, () => cancel(124));
   const code = await close;
-  stopTimer(); budget.close();
+  await cleanup;
+  clearInterval(parentTimer); stopTimer(); budget.close();
   fs.writeFileSync(`${ledger}.done`, "done");
   await Promise.race([guardian.exited, Bun.sleep(3_000).then(() => { guardian.kill("SIGKILL"); throw new Error("owned runner guardian exceeded cleanup deadline"); })]);
   fs.rmSync(directory, { recursive: true, force: true });
-  process.exit(interrupted || code || guardian.exitCode || 0);
+  process.exit(cleanupFailed ? 1 : interrupted || code || guardian.exitCode || 0);
 } else if (args[0] === "--service") {
   const file = args[1]!;
   const launch: Launch = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -155,7 +194,7 @@ if (args[0] === "--namespace-guardian") {
     catch (error) { throw new Error(`owned runner cannot verify its supervising process from the gate service: ${(error as Error).message}`); }
   }
   fs.writeFileSync(file, JSON.stringify({ command: args, cwd: process.cwd(), env: process.env, owner, parent, unit, timeoutMs, ...(sandbox ? { namespace: true as const } : {}) } satisfies Launch), { mode: 0o600 });
-  const cpu = process.env.LLV_OWNED_RUN_CPU_SLICE ? [`--slice=${process.env.LLV_OWNED_RUN_CPU_SLICE}`, "-p", "CPUWeight=100", "-p", `CPUQuota=${process.env.LLV_OWNED_RUN_CPU_QUOTA}%`, "-p", "CPUQuotaPeriodSec=20ms"] : [];
+  const cpu = gateServiceProperties();
   const service = spawn("systemd-run", [...cpu, "--user", "--quiet", "--wait", "--pipe", "--collect", `--unit=${unit}`, "--service-type=exec", "-p", "KillMode=control-group", "-p", "TimeoutStopSec=2s", "-p", "WatchdogSec=60s", "-p", "NotifyAccess=all", "-p", `MemoryMax=${process.env.LLV_GATE_MEM ?? "8G"}`, "--", process.execPath, import.meta.path, "--service", file], { stdio: "inherit" });
   const close = new Promise<number>(resolve => {
     service.once("exit", (code, signal) => resolve(code ?? (signal === "SIGTERM" ? 143 : 137)));

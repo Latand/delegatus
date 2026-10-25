@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setSystemTime, test } from "bun:test";
 import worker, { type DataPoint, type Env } from "./worker";
 
 function harness() {
@@ -162,8 +162,14 @@ describe("private stats", () => {
   const pair = crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
   const encoded = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
   const day = (offset: number) => new Date(Date.now() - offset * 86_400_000).toISOString().slice(0, 10);
-  function config() {
-    return { ...harness().env, STATS_ACCESS_TEAM_DOMAIN: `test-${randomUUID()}.cloudflareaccess.com`, STATS_ACCESS_AUD: "fixture-audience", STATS_ACCOUNT_ID: "a".repeat(32), STATS_AE_TOKEN: "fixture-credential" };
+  function config(issuer: string = randomUUID()) {
+    return { ...harness().env, STATS_ACCESS_TEAM_DOMAIN: `test-${issuer}.cloudflareaccess.com`, STATS_ACCESS_AUD: "fixture-audience", STATS_ACCOUNT_ID: "a".repeat(32), STATS_AE_TOKEN: "fixture-credential" };
+  }
+  async function renderStatsFixture(name: string, html: string) {
+    if (!process.env.STATS_RENDER_DIR) return;
+    const { mkdir } = await import("node:fs/promises");
+    await mkdir(process.env.STATS_RENDER_DIR, { recursive: true });
+    await Bun.write(`${process.env.STATS_RENDER_DIR}/${name}.html`, html);
   }
   async function token(env: Env, claims: Record<string, unknown> = {}, header: Record<string, unknown> = {}) {
     const input = `${encoded({ alg: "RS256", kid: "test-key", ...header })}.${encoded({ iss: `https://${env.STATS_ACCESS_TEAM_DOMAIN}`, aud: [env.STATS_ACCESS_AUD], exp: Math.floor(Date.now() / 1000) + 600, ...claims })}`;
@@ -172,6 +178,7 @@ describe("private stats", () => {
   }
   const request = (jwt?: string, path = "/stats", method = "GET") => new Request(`https://example.com${path}`, { method, headers: jwt ? { "Cf-Access-Jwt-Assertion": jwt } : {} });
   function sqlRows(sql: string): Record<string, unknown>[] {
+    if (sql.includes("FROM swarm_usage")) return [{ rule: "r_0123456789abcdef", reports: 8, delivered: 20, applied: 5, misled: 3, misled_reports: 2 }];
     if (sql.includes("max(timestamp)")) return [{ newest: `${day(0)} 12:34:56` }];
     if (sql.includes("AS event")) return ["copy_prompt", "copy_legacy", "demo_start", "fullscreen_open"].flatMap((event, e) => Array.from({ length: 30 }, (_, i) => ({ day: day(29 - i), event, total: (i * 7 + e * 3) % 23 })));
     if (sql.includes("AS label") || sql.includes("AS os")) return sql.includes("blob2 AS label") ? [{ label: "1.9.0", total: "38" }, { label: "1.8.0", total: "12" }] : sql.includes("AS os") ? [{ os: "linux", arch: "x64", total: 28 }, { os: "darwin", arch: "arm64", total: 22 }] : [{ label: "packaged", total: 28 }, { label: "checkout", total: 16 }, { label: "docker", total: 6 }];
@@ -233,22 +240,18 @@ describe("private stats", () => {
         expect(response.status).toBe(200); expect(response.headers.get("cache-control")).toBe("private, no-store");
         expect(response.headers.get("content-security-policy")).toContain("default-src 'none'");
         const html = await response.text();
-        for (const section of ["Today", "Last 7 days", "Last 30 days", "Daily active installs", "New installs per day", "Version", "OS / architecture", "Install kind", "Landing actions per day", "Newest ping", "linux / x64", "1.9.0", "packaged", "copy prompt", "demo start", "fullscreen open", "12:34:56"]) expect(html).toContain(section);
+        for (const section of ["Today", "Last 7 days", "Last 30 days", "Daily active installs", "New installs per day", "Version", "OS / architecture", "Install kind", "Landing actions per day", "Newest ping", "linux / x64", "1.9.0", "packaged", "copy prompt", "demo start", "fullscreen open", "12:34:56", "Swarm rule usage", "r_0123456789abcdef", "25.0%", "Misled install-days"]) expect(html).toContain(section);
         expect(html).toContain(">50</strong>");
         expect(html).not.toContain(env.STATS_AE_TOKEN!); expect(html).not.toContain(env.STATS_ACCOUNT_ID!); expect(html).not.toContain("<script");
         // Optional local review output comes from the actual authenticated handler.
-        if (process.env.STATS_RENDER_DIR && path === "/stats") {
-          const { mkdir } = await import("node:fs/promises");
-          await mkdir(process.env.STATS_RENDER_DIR, { recursive: true });
-          await Bun.write(`${process.env.STATS_RENDER_DIR}/mocked-stats.html`, html);
-        }
+        if (path === "/stats") await renderStatsFixture("mocked-stats", html);
       }
       expect(calls.filter(call => call.url.endsWith("/certs"))).toHaveLength(1);
-      const sqlCalls = calls.filter(call => call.url.endsWith("/sql")); expect(sqlCalls).toHaveLength(20);
+      const sqlCalls = calls.filter(call => call.url.endsWith("/sql")); expect(sqlCalls).toHaveLength(22);
       for (const call of sqlCalls) {
         expect(call.init?.method).toBe("POST"); expect(call.init?.headers).toEqual({ Authorization: `Bearer ${env.STATS_AE_TOKEN}`, "Content-Type": "text/plain" });
         expect(call.init?.signal).toBeDefined(); const sql = String(call.init?.body);
-        expect(sql).not.toContain("toDate("); expect(sql).not.toContain("concat("); expect(sql).toContain("timestamp >="); expect(sql).toContain("timestamp <="); expect(sql).toMatch(/LIMIT (1|30|100|120) FORMAT JSON$/);
+        expect(sql).not.toContain("toDate("); expect(sql).not.toContain("concat("); expect(sql).toContain("timestamp >="); expect(sql).toContain("timestamp <="); expect(sql).toMatch(/LIMIT (1|30|100|120|1000) FORMAT JSON$/);
       }
       expect(sqlCalls.some(call => String(call.init?.body).includes("sum(_sample_interval * double1)"))).toBe(true);
       const newSql = String(sqlCalls.find(call => String(call.init?.body).includes("first_seen"))?.init?.body);
@@ -297,7 +300,8 @@ describe("private stats", () => {
     const env = config();
     await withUpstream(async () => {
       const html = await (await worker.fetch(request(await token(env)), env)).text();
-      expect(html).toContain("No retained pings"); expect(html).toContain("No landing actions"); expect(html).toContain(">0</strong>"); expect(html).not.toContain("NaN");
+      expect(html).toContain("No swarm usage in this period."); expect(html).toContain("No retained pings"); expect(html).toContain("No landing actions"); expect(html).toContain(">0</strong>"); expect(html).not.toContain("NaN");
+      await renderStatsFixture("empty-stats", html);
     }, { sql: () => Response.json({ data: [] }) });
   });
   test("metric labels are escaped as text", async () => {
@@ -307,8 +311,45 @@ describe("private stats", () => {
       expect(html).toContain("&lt;script&gt;"); expect(html).not.toContain("<script>");
     }, { sql: sql => Response.json({ data: sql.includes("AS label") ? [{ label: "<script>alert('x')</script>", total: 1 }] : sqlRows(sql) }) });
   });
+  test("swarm aggregates are bounded, sampling-weighted and contain no identity or version breakdown", async () => {
+    setSystemTime(new Date("2026-10-23T12:00:00.000Z"));
+    const env = config("swarm-aggregates");
+    try {
+      await withUpstream(async calls => {
+        await worker.fetch(request(await token(env)), env);
+        const sql = String(calls.find(call => String(call.init?.body).includes("FROM swarm_usage"))?.init?.body);
+        for (const fragment of ["index1 AS rule", "sum(_sample_interval) AS reports", "sum(_sample_interval * double1)", "sum(_sample_interval * double2)", "sum(_sample_interval * double3)", "sum(if(double3 > 0, _sample_interval, 0))", "GROUP BY rule", "LIMIT 1000"]) expect(sql).toContain(fragment);
+        expect(sql).not.toContain("blob");
+        expect(sql).not.toContain("DISTINCT");
+        expect(sql).toContain("timestamp >= toDateTime('2026-09-24 00:00:00')");
+        expect(sql).toContain("timestamp <= toDateTime('2026-10-23 12:00:00')");
+      });
+    } finally { setSystemTime(); }
+  });
+  test("swarm query failure stays inline and zero deliveries have no applied rate", async () => {
+    setSystemTime(new Date("2026-10-23T12:00:00.000Z"));
+    const env = config("swarm-failure");
+    try {
+      await withUpstream(async () => {
+        const html = await (await worker.fetch(request(await token(env)), env)).text();
+        expect(html).toContain("Swarm rule usage");
+        expect(html).toContain("Data unavailable");
+        expect(html).toContain("packaged");
+        await renderStatsFixture("unavailable-stats", html);
+      }, { sql: sql => sql.includes("FROM swarm_usage") ? new Response("unavailable", { status: 503 }) : Response.json({ data: sqlRows(sql) }) });
+      await withUpstream(async () => {
+        const html = await (await worker.fetch(request(await token(env)), env)).text();
+        expect(html).toContain("&lt;rule&gt;");
+        expect(html).toContain("<span class=\"swarm-label\">Applied rate</span>—</td>");
+        expect(html).not.toContain("NaN");
+        expect(html).not.toContain("Infinity");
+        await renderStatsFixture("zero-stats", html);
+      }, { sql: sql => Response.json({ data: sql.includes("FROM swarm_usage") ? [{ rule: "<rule>", reports: 1, delivered: 0, applied: 0, misled: 0, misled_reports: 0 }] : sqlRows(sql) }) });
+    } finally { setSystemTime(); }
+  });
   test("Worker-first config covers stats and both API routes", async () => {
     const config = JSON.parse(await Bun.file(`${import.meta.dir}/wrangler.jsonc`).text());
+    expect(config.analytics_engine_datasets).toContainEqual({ binding: "SWARM_USAGE", dataset: "swarm_usage" });
     expect(config.assets.run_worker_first).toEqual(["/api/*", "/stats", "/stats/"]);
     expect(config.vars.STATS_ACCESS_TEAM_DOMAIN).toMatch(/\.cloudflareaccess\.com$/);
     expect(config.vars.STATS_ACCESS_AUD).toBeTruthy(); expect(config.vars.STATS_AE_TOKEN).toBeUndefined(); expect(config.vars.STATS_ACCOUNT_ID).toBeUndefined();

@@ -7,6 +7,7 @@ import { LAYER } from "@/components/layers";
 import { useModalLayer } from "@/components/modalLayer";
 import { useMobileNavStore } from "@/components/mobile/mobileNav";
 import { createCompanionStore } from "@/hooks/useVoiceCompanion";
+import { useActiveVoiceInput, useVoiceOutputFellBack } from "@/lib/audio/voiceDevices";
 import { useLocale } from "@/lib/i18n";
 import type { Locale, VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
 import { companionErrorMessage } from "@/lib/voiceCompanion/errors";
@@ -386,12 +387,17 @@ export function PhoneVoiceCompanion({ adapter, project, locale: sessionLocale, s
   }, [menu, connected]);
 
   /* What the session says went wrong, once per failure, after the session asked for is ready. */
+  /* The microphone this call listens to and whether the chosen devices were there (voiceDevices). */
+  const micInUse = useActiveVoiceInput();
+  const speakersFellBack = useVoiceOutputFellBack();
   const awaiting = store.awaiting();
   /* A dropped call is said as a drop, whatever failure ended it; a reconnect says the call goes on. */
   const sessionNotice = state.resumable && !awaiting ? { key: `drop:${state.resumable.sessionId}`, code: "CONNECTION_LOST" }
     : state.error && !awaiting ? { key: `error:${state.generation}:${state.error}`, code: state.error, resetsAt: state.errorResetsAt }
     : state.closure?.incomplete && state.usage?.backend !== "codex" && !awaiting ? { key: `closure:${state.generation}`, code: "FINALIZATION_INCOMPLETE" }
-    : state.reconnected && connected && !awaiting ? { key: `restored:${state.generation}`, code: "CONNECTION_RESTORED" } : null;
+    : state.reconnected && connected && !awaiting ? { key: `restored:${state.generation}`, code: "CONNECTION_RESTORED" }
+    : connected && micInUse?.fellBack ? { key: `device-in:${state.generation}`, code: "MICROPHONE_FALLBACK" }
+    : connected && speakersFellBack ? { key: `device-out:${state.generation}`, code: "SPEAKERS_FALLBACK" } : null;
   const seenNotice = useRef<string | null>(null);
   useEffect(() => {
     if (!sessionNotice || seenNotice.current === sessionNotice.key) return;
@@ -577,6 +583,7 @@ export function PhoneVoiceCompanion({ adapter, project, locale: sessionLocale, s
         {menu ? (
           <div className="pvc-pop" role="menu" aria-label="Delegatus" data-phone-voice-pop style={pop}>
             <p className="pvc-status" data-phone-voice-status><span className="vc-dot" aria-hidden /><b>{phaseLabel}</b>{connected ? <span data-phone-voice-clock>· {clock}</span> : null}</p>
+            {connected && micInUse?.label ? <p className="pvc-mic" data-phone-voice-mic><Mic size={12} aria-hidden /><span className="pvc-mic-name">{t("voiceCompanion.micInUse", { name: micInUse.label })}</span></p> : null}
             {live ? (
               <>
                 <button type="button" role="menuitem" className="pvc-row" data-phone-voice-mute disabled={!connected} onClick={toggleMute}>

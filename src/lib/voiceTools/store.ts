@@ -9,8 +9,8 @@ import { COMPANION_TOOL_REGISTRY } from "@/lib/voiceCompanion/tools";
 import { commitSeals, seal, validSeal } from "./seal";
 import { servingServer, snapshotServer, type VoiceToolSnapshot } from "./snapshot";
 import { verifyEntry } from "./entry";
-import { approvalDigest, digest, emptyRegistry, literalValues, packageLaunch, probeDigest, proposalSchema, secretsSchema, secretReferences, secretDestination,
-  assertSecretDestinations, secretReferenceSchema, secretDestinationSchema, type SecretPolicies, selectionSchema, toolName, validateCatalog, voiceToolBounds, type ProbeResult, type Tool, type VoiceToolServer, type VoiceToolsRegistry, type VoiceToolsView } from "./contracts";
+import { containmentReasonSchema, uncontainedConsentSchema, uncontainedConfirmationSchema, approvalDigest, digest, emptyRegistry, literalValues, packageLaunch, probeDigest, proposalSchema, secretsSchema, secretReferences, secretDestination,
+  assertSecretDestinations, secretReferenceSchema, secretDestinationSchema, type UncontainedConsent, type UncontainedConfirmation, type SecretPolicies, selectionSchema, toolName, validateCatalog, voiceToolBounds, type ProbeResult, type Tool, type VoiceToolServer, type VoiceToolsRegistry, type VoiceToolsView } from "./contracts";
 
 export class VoiceToolsError extends Error {
   constructor(public code: string) { super(code); }
@@ -128,7 +128,10 @@ async function parseRegistry(input: unknown, directory: string, policies: Secret
       || !(proposedBy.conversationId === null || typeof proposedBy.conversationId === "string")
       || !selectionSchema.safeParse(tools).success
       || approval !== null && (!approval || approval.by !== "operator" || typeof approval.at !== "string" || typeof approval.digest !== "string")
-      || lastDryRun !== null && (!lastDryRun || typeof lastDryRun.at !== "string" || typeof lastDryRun.digest !== "string" || !probeCodes.has(lastDryRun.code))) return fail("REGISTRY_UNAVAILABLE");
+      || lastDryRun !== null && (!lastDryRun || typeof lastDryRun.at !== "string" || typeof lastDryRun.digest !== "string" || !probeCodes.has(lastDryRun.code)
+        || lastDryRun.containmentReason !== undefined && !containmentReasonSchema.safeParse(lastDryRun.containmentReason).success
+        || lastDryRun.code === "CONTAINMENT_REQUIRED" && !uncontainedConsentSchema.safeParse({ reason: lastDryRun.containmentReason, runId: lastDryRun.runId }).success
+        || lastDryRun.confirmation !== undefined && (!uncontainedConfirmationSchema.safeParse(lastDryRun.confirmation).success || lastDryRun.confirmation.tool !== name))) return fail("REGISTRY_UNAVAILABLE");
     const { name: parsedName, ...defaults } = proposal;
     if (parsedName !== name) return fail("REGISTRY_UNAVAILABLE");
     Object.assign(raw, defaults);
@@ -147,7 +150,7 @@ async function parseRegistry(input: unknown, directory: string, policies: Secret
   return registry;
 }
 const NO_CHANGE = Symbol("no registry change");
-const probeCodes = new Set(["OK", "START_FAILED", "PROTOCOL_ERROR", "TIMEOUT", "CATALOG_BOUNDS", "SECRET_ECHO", "MISSING_SECRET", "SECRET_DESTINATION", "ENTRY_CHANGED", "BUSY", "CANCELLED"]);
+const probeCodes = new Set(["OK", "CONTAINMENT_REQUIRED", "START_FAILED", "PROTOCOL_ERROR", "TIMEOUT", "CATALOG_BOUNDS", "SECRET_ECHO", "MISSING_SECRET", "SECRET_DESTINATION", "ENTRY_CHANGED", "BUSY", "CANCELLED"]);
 
 /** One Viewer owner. Every mutation re-reads under the async cross-process lock. */
 export class VoiceToolsStore {
@@ -299,10 +302,28 @@ export class VoiceToolsStore {
     });
     return input;
   }
+  async confirmUncontained(name: string, expected: string, consent: UncontainedConsent, authorize: () => void) {
+    let confirmation!: UncontainedConfirmation;
+    await this.mutate(async registry => {
+      const server = this.server(registry, name, expected);
+      if (server.transport.type !== "stdio" || server.lastDryRun?.code !== "CONTAINMENT_REQUIRED"
+        || server.lastDryRun.containmentReason !== consent.reason || server.lastDryRun.runId !== consent.runId || server.lastDryRun.digest !== probeDigest(name, server)) return fail("STALE_APPROVAL");
+      confirmation = { by: "operator", at: this.now(), tool: name, ...consent };
+      const directory = path.join(this.directory, "voice-tools-confirmations");
+      await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+      const record = { ...confirmation, digest: expected, revision: registry.revision };
+      await atomicJson(path.join(directory, `${digest(record).slice(7)}.json`), record, authorize);
+      // Consumed before execution. Audit files are never read as permission for a later run.
+      server.lastDryRun = { code: "CANCELLED", at: this.now(), digest: probeDigest(name, server), confirmation };
+    }, authorize);
+    return confirmation;
+  }
   async recordProbe(name: string, expected: string, result: ProbeResult): Promise<void> {
     await this.mutate(registry => {
       const server = this.server(registry, name, expected);
-      server.lastDryRun = { code: result.code, at: this.now(), digest: probeDigest(name, server) };
+      server.lastDryRun = { code: result.code, at: this.now(), digest: probeDigest(name, server),
+        ...(result.containmentReason ? { containmentReason: result.containmentReason } : {}),
+        ...(result.code === "CONTAINMENT_REQUIRED" ? { runId: digest({ name, expected, revision: registry.revision }) } : {}), ...(result.confirmation ? { confirmation: result.confirmation } : {}) };
       if (result.code === "ENTRY_CHANGED") { server.state = "pending"; server.approval = null; }
       if (result.code === "OK" && result.catalog) {
         assertNoSecrets(result.catalog, this.secrets);
