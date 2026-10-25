@@ -28,6 +28,54 @@ async function saveSecrets(store: VoiceToolsStore, values: Record<string, string
   return store.saveSecrets(destinations, authorize);
 }
 
+test.each([4, 4096])("a %i-character supplementary Unicode secret writes and reloads in a fresh process", async count => {
+  const { store, root } = await setup();
+  await store.propose(proposal(), actor);
+  const value = "🎵".repeat(count);
+  await saveSecrets(store, { "music-token": value });
+  const persisted = JSON.parse(await fs.readFile(path.join(root, "voice-tools-secrets.json"), "utf8"));
+  expect(persisted["music-token"].value).toBe(value);
+  const reader = Bun.spawn([process.execPath, "-e", `
+    import { VoiceToolsStore } from ${JSON.stringify(path.join(import.meta.dir, "store.ts"))};
+    const store = new VoiceToolsStore(process.argv[1]);
+    console.log(JSON.stringify(await store.view()));
+    await store.saveSecrets({ "music-token": { destinations: ["https://example.invalid"] } });
+  `, root], { env: process.env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const [exit, stdout, stderr] = await Promise.all([reader.exited, new Response(reader.stdout).text(), new Response(reader.stderr).text()]);
+  expect(exit, stderr).toBe(0);
+  expect(JSON.parse(stdout).servers.music.missingSecrets).toEqual([]);
+  expect(stdout).not.toContain(value);
+  expect(JSON.parse(await fs.readFile(path.join(root, "voice-tools-secrets.json"), "utf8"))["music-token"].value).toBe(value);
+});
+
+test.each(["🎵".repeat(3) + "a", "🎵".repeat(4096) + "a"])("invalid Unicode secret boundary %# leaves persisted values unchanged", async value => {
+  const { store, root } = await setup();
+  await store.propose(proposal(), actor);
+  await saveSecrets(store, { "music-token": "synthetic-voice-credential" });
+  const file = path.join(root, "voice-tools-secrets.json");
+  const before = await fs.readFile(file, "utf8");
+  await expect(saveSecrets(store, { "music-token": value })).rejects.toThrow("INVALID_REQUEST");
+  expect(await fs.readFile(file, "utf8")).toBe(before);
+});
+
+test.each([
+  ["legacy", 4096, true], ["current", 4096, true],
+  ["legacy", 4097, false], ["current", 4097, false],
+] as const)("%s stored secret with %i supplementary characters keeps its bound after restart", async (format, count, valid) => {
+  const { root } = await setup();
+  const value = "🎵".repeat(count);
+  const entry = format === "legacy" ? value : { value, destinations: ["https://example.invalid"] };
+  await fs.writeFile(path.join(root, "voice-tools-secrets.json"), JSON.stringify({ music: entry }), { mode: 0o600 });
+  const reader = Bun.spawn([process.execPath, "-e", `
+    import { VoiceToolsStore } from ${JSON.stringify(path.join(import.meta.dir, "store.ts"))};
+    try { await new VoiceToolsStore(process.argv[1]).load(); console.log("loaded"); }
+    catch (error) { console.log(error.code); }
+  `, root], { env: process.env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const [exit, stdout, stderr] = await Promise.all([reader.exited, new Response(reader.stdout).text(), new Response(reader.stderr).text()]);
+  expect(exit, stderr).toBe(0);
+  expect(stdout.trim()).toBe(valid ? "loaded" : "REGISTRY_UNAVAILABLE");
+});
+
 test("secret values live only in the owner-only file; public views show a secret header by name", async () => {
   const { store, root } = await setup();
   await store.propose(proposal(), actor);
