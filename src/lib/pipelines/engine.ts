@@ -5312,8 +5312,8 @@ function afterCommitRepair(attempt: PipelineStageAttempt, reason: string): strin
   for (const asked of [attempt.commitRepair?.detail, attempt.publicationRepair?.detail]) {
     if (asked && !reason.includes(asked)) reason += `\nThe stage was asked once to repair this earlier refusal:\n${asked}`;
   }
-  const action = "Fix the reported commit/hook failure, then use retry-stage to commit the existing outputs without rerunning the agent.";
-  return (reason.startsWith("committing the passed stage:") || attempt.commitRepair?.outcome?.status === "rejected")
+  const action = "Fix the reported staging/commit/hook failure, then use retry-stage to commit the existing outputs without rerunning the agent.";
+  return (/^(?:staging|committing) the passed stage:/.test(reason) || attempt.commitRepair?.outcome?.status === "rejected")
     && !reason.includes(action) ? `${reason}\n${action}` : reason;
 }
 
@@ -5326,7 +5326,7 @@ async function retryPassedStageCommit(pipeline: Pipeline, ports: PipelinePorts):
   if (pipeline.state !== "needs_decision" || pipeline.cursor?.state !== "committing"
     || !attempt || attempt.verdict?.status !== "pass"
     || (attempt.commitRepair?.outcome?.status !== "rejected"
-      && !attempt.error?.startsWith("committing the passed stage:")
+      && !/^(?:staging|committing) the passed stage:/.test(attempt.error ?? "")
       && !passedStageCustodyPark(pipeline, attempt))) return null;
   if (pipeline.delivery?.operation?.state === "running") return { error: "publisher is still in flight; reconcile before retrying settlement", status: 409 };
   if (attempt.conversationId) {
