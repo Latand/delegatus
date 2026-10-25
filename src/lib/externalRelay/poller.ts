@@ -1,6 +1,9 @@
-import { confirmOwnerStop, type OwnerRunPorts } from "./ownerRun";
+import { ownerTierFor } from "./profile";
+import { ownerTurnDiagnostic } from "./diagnostic";
+import { deliverOwnerLateAnswer } from "./ownerLateDelivery";
+import { ownerFailureAnswer, confirmOwnerStop, type OwnerRunPorts } from "./ownerRun";
 import { ownerRelayFailureReplyAuthorized } from "./ownerAuthority";
-import { changeRun, OWNER_RELEASED_CUSTODY_RETENTION_MS, ownerStopPending } from "./store";
+import { changeRun, changeRunAsync, OWNER_RELEASED_CUSTODY_RETENTION_MS, ownerStopPending } from "./store";
 import { sweepConversationsAsync } from "./conversations";
 import { readRelaySwitches } from "./switches";
 import fs from "node:fs";
@@ -13,9 +16,9 @@ import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/st
 import { isStagingMode } from "@/lib/staging";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { noteRelayOutcome, relayActivity } from "./activity";
-import { pruneAnswerRecords, relayAnswersRoot, settleInterruptedAnswer, type RelayAnswerDelivery } from "./answers";
+import { readAnswerRecord, pruneAnswerRecords, relayAnswersRoot, settleInterruptedAnswer, type RelayAnswerDelivery } from "./answers";
 import { discoverRelay, ExternalRelayError, fetchRelayTargets, isUnknownFeatureRefusal, relayCall } from "./client";
-import { RELAY_OWNER_TOOLS, RELAY_TOOLS_ON_DEMAND } from "./protocol";
+import { requestSchema, RELAY_OWNER_TOOLS, RELAY_TOOLS_ON_DEMAND, type ExternalRelayCompletion } from "./protocol";
 import { RELAY_MEDIA_ANY_DOCUMENT } from "./mediaInputValidation";
 import {
   advertisedSlots,
@@ -32,6 +35,7 @@ import {
   readRunLedger,
   updateRelayStore,
   type PairedRelay,
+  type RunRecord,
 } from "./store";
 
 export type PollerState =
@@ -101,9 +105,50 @@ export function wakeExternalRelayPoller(id: string) {
   const loop = loops.get(id);
   if (loop?.state !== "rate_limited") loop?.wake?.();
 }
+/** Older custody rows retained the input in the answer record. Reconstruct only
+ * from that record and the already verified owner request, never from chat text. */
+function ownerRecoveryRequest(run: RunRecord, relay: PairedRelay): unknown | null {
+  if (run.ownerTurn?.rawRequest) return run.ownerTurn.rawRequest;
+  const record = readAnswerRecord(run.relayId, run.targetId, run.requestId);
+  if (!record?.profile?.owner || !run.ownerTurn?.request) return null;
+  const parsed = requestSchema.safeParse({ request_id: run.requestId, lease_id: run.leaseId,
+    kind: "answer", target_id: run.targetId, claimed_at: record.claimedAt ?? run.startedAt,
+    features: record.features, ...(record.chatKey ? { chat: { key: record.chatKey } } : {}),
+    input: record.input, answer: { max_chars: relay.limits.max_answer_chars, progress: "none" },
+    liveness: { poll_freshness_s: 60, claim_window_s: 5, ack_window_s: 10, heartbeat_interval_s: 10, stall_window_s: 45 } });
+  if (!parsed.success) return null;
+  const owner = ownerTierFor({ ownerTier: true }, parsed.data);
+  return owner && owner.text === run.ownerTurn.request.text && owner.requestText === run.ownerTurn.request.requestText
+    ? parsed.data : null;
+}
+
+const ownerRecoveries = new Set<string>();
 export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Promise<void> {
   assertStateStartupMutation(externalRelayFile("runs"), "external-relay-sweep");
   for (const run of readRunLedger().runs) {
+    if (ownerRecoveries.has(run.requestId)) continue;
+    // /complete may already have posted the answer. Neither restarting execution
+    // nor /send can reconcile that request-scoped delivery without duplicating it.
+    if (run.ownerTurn?.completionAttempt && !run.completionAccepted && !ownerStopPending(run)
+      && (run.capacityReleased || run.ownerTurn.confirmed)) continue;
+    if (run.ownerTurn?.lateAnswer && !run.completionAccepted && !ownerStopPending(run)) {
+      if (relayRequestInFlight(run.requestId) || processMatches(run.ownerPid, run.ownerIdentity) && run.ownerPid !== process.pid) continue;
+      const relay = readRelayStore().relays.find(item => item.id === run.relayId);
+      if (!relay || !ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId)) continue;
+      ownerRecoveries.add(run.requestId);
+      try {
+        const pending = run.ownerTurn.lateAnswer;
+        const sent = await deliverOwnerLateAnswer(relay, run.requestId, pending.body, pending.files,
+          () => ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId));
+        if (sent.delivery === "accepted") {
+          settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, "accepted", run.conversationId,
+            pending.body.outcome === "answered" ? pending.body.answer : null, true);
+          removeRunDirectory(run.runDir);
+          dropRun(run.requestId);
+        }
+      } finally { ownerRecoveries.delete(run.requestId); }
+      continue;
+    }
     // Accepted completion already ended execution. Finish abandoned cleanup
     // without controlling a host or sending a second service completion.
     // An unconfirmed owner stop still needs control below first.
@@ -123,11 +168,14 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
     // (the previous Viewer during a handover) keeps custody until it exits.
     const ownerHolds = () => ownerAlive && (run.ownerPid !== process.pid || relayRequestInFlight(run.requestId));
     if (ownerHolds()) continue;
+    const interruptedOwner = !!run.ownerTurn && (!run.ownerTurn.cancel || run.ownerTurn.restartPending === true) && !run.ownerTurn.diagnostic;
     if (run.ownerTurn) {
       if (ownerAlive && !run.ownerTurn.cancel) continue;
       if (!ownerAlive) {
         run.ownerTurn.admissionComplete = true;
-        changeRun(run.requestId, r => ({ ...r, ownerTurn: { ...r.ownerTurn!, admissionComplete: true } }));
+        if (interruptedOwner) run.ownerTurn.restartPending = true;
+        changeRun(run.requestId, r => ({ ...r, ownerTurn: { ...r.ownerTurn!, admissionComplete: true,
+          ...(interruptedOwner ? { restartPending: true } : {}) } }));
       }
       if (!run.ownerTurn.cancel) {
         run.ownerTurn.cancel = "kill";
@@ -150,10 +198,36 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
     };
     // The accepted completion already reached the requester. Stop custody
     // only held capacity and files until the host confirmed the stop.
+    if (held.ownerTurn?.completionAttempt && !held.completionAccepted) continue;
     if (held.completionAccepted || held.capacityReleased) {
       removeRunDirectory(run.runDir);
       settle();
       continue;
+    }
+    if (held.ownerTurn?.lateAnswer) continue;
+    const recoveryRelay = readRelayStore().relays.find(item => item.id === run.relayId);
+    const recoveryRequest = recoveryRelay && ownerRecoveryRequest(held, recoveryRelay);
+    if (recoveryRelay && recoveryRequest && held.ownerTurn && !held.ownerTurn.restartRetries
+      && interruptedOwner
+      && recoveryRelay.paused === false && recoveryRelay.targets.some(target => target.id === run.targetId && target.enabled && target.ownerTier)) {
+      changeRun(run.requestId, row => ({ ...row, ownerTurn: { ...row.ownerTurn!, restartRetries: 1 } }));
+      ownerRecoveries.add(run.requestId);
+      void runClaimedRequest(recoveryRelay, recoveryRequest, undefined, { ownerPorts, ownerRecovery: held })
+        .catch(error => console.error("Owner relay restart retry failed", error instanceof Error ? error.name : "unknown"))
+        .finally(() => ownerRecoveries.delete(run.requestId));
+      continue;
+    }
+    if (recoveryRelay && recoveryRequest && interruptedOwner && held.ownerTurn?.restartRetries) {
+      const request = requestSchema.parse(recoveryRequest);
+      const owner = held.ownerTurn.context ?? ownerTierFor({ ownerTier: true }, request);
+      const diagnostic = ownerTurnDiagnostic("exception", "The owner retry was interrupted by another install restart. Resend the request.");
+      const answer = owner && ownerFailureAnswer(request, owner, diagnostic, [recoveryRelay.credential]);
+      if (answer) {
+        changeRun(run.requestId, row => ({ ...row, ownerTurn: { ...row.ownerTurn!, diagnostic,
+          lateAnswer: { body: { lease_id: run.leaseId, outcome: "answered", answer, duration_ms: Math.max(0, Date.now() - Date.parse(run.startedAt)) }, files: [] } } }));
+        console.error("Owner relay restart retry exhausted", JSON.stringify({ requestId: run.requestId, diagnostic }));
+        continue;
+      }
     }
     if (run.ownerTurn) noteRelayOutcome(run.relayId, "failed:cancelled");
     const relay = readRelayStore().relays.find(
@@ -164,30 +238,70 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
     // saved scrubbed reason while the request is open and the owner target
     // still authorizes the reply; otherwise the generic restart failure.
     const saved = held.ownerTurn?.failureReply;
+    if (relay && saved && Date.now() >= Date.parse(saved.until)
+      && ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId)) {
+      const body = { lease_id: run.leaseId, outcome: "answered" as const, answer: saved.answer,
+        duration_ms: Math.max(0, Date.now() - Date.parse(run.startedAt)) };
+      changeRun(run.requestId, row => ({ ...row, ownerTurn: { ...row.ownerTurn!, lateAnswer: { body, files: [] } } }));
+      const sent = await deliverOwnerLateAnswer(relay, run.requestId, body, [],
+        () => ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId));
+      if (sent.delivery === "accepted") {
+        settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, "accepted", held.conversationId, saved.answer, true);
+        removeRunDirectory(run.runDir);
+        dropRun(run.requestId);
+      }
+      continue;
+    }
     const answer = saved && Date.now() < Date.parse(saved.until)
       && ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId) ? saved.answer : null;
     if (relay) {
+      const body: ExternalRelayCompletion = answer
+        ? { lease_id: run.leaseId, outcome: "answered", answer, duration_ms: Math.max(0, Date.now() - Date.parse(run.startedAt)) }
+        : { lease_id: run.leaseId, outcome: "failed", reason: "install_restarted", detail: null };
+      if (answer) {
+        // Claim delivery custody under the ledger lock before the service can
+        // post. A crash or missing ACK must never authorize a later /send.
+        let claimed = false;
+        await changeRunAsync(run.requestId, row => {
+          if (!row.ownerTurn || row.completionAccepted || row.ownerTurn.completionAttempt || row.ownerTurn.lateAnswer) return row;
+          claimed = true;
+          return { ...row, ownerTurn: { ...row.ownerTurn, completionAttempt: { body, files: [] } } };
+        }, Date.now() + 5000);
+        if (!claimed) continue;
+      }
       try {
         await relayCall(
           relay.api_base,
           `/requests/${encodeURIComponent(run.requestId)}/complete`,
           "POST",
-          answer
-            ? { lease_id: run.leaseId, outcome: "answered", answer, duration_ms: Math.max(0, Date.now() - Date.parse(run.startedAt)) }
-            : {
-                lease_id: run.leaseId,
-                outcome: "failed",
-                reason: "install_restarted",
-                detail: null,
-              },
+          body,
           relay.credential,
+          { prepareBody: () => {
+            if (answer && !ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId))
+              throw new ExternalRelayError("cancelled", 401);
+            return body;
+          } },
         );
         delivery = "accepted";
       } catch (error) {
         // A terminal refusal proves this completion was not accepted; a
         // transient error leaves its delivery uncertain.
-        if (error instanceof ExternalRelayError && [400, 401, 404, 409, 413, 426].includes(error.status))
+        if (error instanceof ExternalRelayError && [400, 401, 404, 409, 413, 426].includes(error.status)
+          && !(answer && error.status === 409 && error.code === "already_completed"))
           delivery = "refused";
+      }
+      if (answer) {
+        await changeRunAsync(run.requestId, row => ({ ...row,
+          ...(delivery === "accepted" ? { completionAccepted: true as const } : {}),
+          ...(delivery === "unconfirmed" ? { capacityReleased: true as const } : {}),
+          ownerTurn: { ...row.ownerTurn!, ...(delivery !== "unconfirmed" ? { completionAttempt: undefined } : {}) },
+        }), Date.now() + 5000);
+        if (delivery !== "accepted") {
+          // Keep uncertain attempts fenced. A definite refusal leaves the
+          // saved reply eligible for late delivery once its deadline passes.
+          settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, delivery, held.conversationId, answer);
+          continue;
+        }
       }
     }
     removeRunDirectory(run.runDir);

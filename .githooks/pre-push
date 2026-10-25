@@ -7,4 +7,15 @@ for name in GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CONFIG GIT_CONFIG_PARAMETERS GI
   unset "$name"
 done
 for name in ${!GIT_CONFIG_KEY_@} ${!GIT_CONFIG_VALUE_@}; do unset "$name"; done
+# Bind the check to the ref Git is actually sending, including explicit SHA pushes.
+if [ ! -t 0 ]; then
+  while read -r local_ref local_sha remote_ref remote_sha; do
+    [[ "$local_sha" =~ ^0+$ ]] && continue
+    if [[ -n "${LLV_GATE_PUSH_HEAD:-}" && "$LLV_GATE_PUSH_HEAD" != "$local_sha" ]]; then
+      echo "pre-push: check each distinct pushed head separately" >&2
+      exit 1
+    fi
+    export LLV_GATE_PUSH_HEAD="$local_sha"
+  done
+fi
 exec bun scripts/local-gate.ts pre-push

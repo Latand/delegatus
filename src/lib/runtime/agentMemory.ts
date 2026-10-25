@@ -462,6 +462,10 @@ export class AgentMemoryCell {
           || !this.canSignal(sample)) continue;
         if (identity(sample.pid) !== sample.identity) continue;
         this.killedThisTick.add(sample.pid);
+        if (sample.pid === this.exitProcess?.pid) {
+          recordHostStop(this.exitProcess, "SIGKILL", "agent-memory-enforcement");
+          if (!this.canSignal(target) || !this.canSignal(sample)) continue;
+        }
         try {
           (this.ports.kill ?? ((pid) => process.kill(pid, "SIGKILL")))(sample.pid);
           signalledDescendant = true;
@@ -506,6 +510,10 @@ export class AgentMemoryCell {
       try { (this.ports.runner ?? run)("systemctl", ["--user", "kill", "--signal=SIGKILL", this.plan.unit]); } catch { /* An empty scope has already been collected. */ }
     } else {
       for (const sample of this.lastSample) if (this.canSignal(sample)) {
+        if (sample.pid === this.exitProcess?.pid) {
+          recordHostStop(this.exitProcess, "SIGKILL", "agent-memory-enforcement");
+          if (!this.canSignal(sample)) continue;
+        }
         try { (this.ports.kill ?? ((pid) => process.kill(pid, "SIGKILL")))(sample.pid); } catch { /* Already gone. */ }
       }
     }

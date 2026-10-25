@@ -133,7 +133,7 @@ for (const recovery of ["automatic", "retry-stage", "publish"] as const) for (co
     attempt.startedAt = now; attempt.completedAt = null;
     attempt.launchId = `unsettled-${shape}-${recovery}`;
     attempt.state = "committing";
-    const guard = await prepareStageGitGuard(attempt.launchId, h.repo, realExec, now);
+    const guard = await prepareStageGitGuard(attempt.launchId, h.repo, realExec, now, async () => {});
     const identity = agentPublicationIdentityEnv({ ...process.env, ...guard });
     const made = await realExec("git", ["commit", "--allow-empty", "-m", "accepted stage output"], h.repo,
       { ...identity, ...guard, GIT_AUTHOR_DATE: now, GIT_COMMITTER_DATE: now });
@@ -305,7 +305,7 @@ for (const action of ["publish", "retry-stage"] as const) for (const suffix of [
     const now = "2026-10-20T10:00:00.000Z";
     attempt.startedAt = now; attempt.completedAt = null; attempt.launchId = launchId;
     attempt.state = "needs_decision";
-    const guard = await prepareStageGitGuard(launchId, h.repo, realExec, now);
+    const guard = await prepareStageGitGuard(launchId, h.repo, realExec, now, async () => {});
     const identity = agentPublicationIdentityEnv({ ...process.env, ...guard });
     const env = { ...identity, ...guard, GIT_AUTHOR_DATE: now, GIT_COMMITTER_DATE: now };
     // An unrecorded head has no receipt: its object is written outside a
@@ -374,7 +374,7 @@ test("publish acceptedSha accepts a custody-parked head equal to the passed comm
     const now = "2026-10-20T10:00:00.000Z";
     attempt.startedAt = now; attempt.completedAt = null; attempt.launchId = launchId;
     attempt.state = "needs_decision";
-    await prepareStageGitGuard(launchId, h.repo, realExec, now);
+    await prepareStageGitGuard(launchId, h.repo, realExec, now, async () => {});
     const refusal = `stage push refused: commit ${"f".repeat(40)} was not created in the attempt worktree during this attempt; commit in the lane worktree and let Delegatus publish`;
     fs.writeFileSync(path.join(stageGitReceiptDirectory(launchId), "refused"), `${refusal}\n`);
     h.lane.lastPassedCommit = h.head;

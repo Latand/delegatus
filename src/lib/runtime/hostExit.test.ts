@@ -7,6 +7,35 @@ import { captureProcessIdentity } from "@/lib/processIdentity";
 import { statePath } from "@/lib/configDir";
 import { hostExitText, observeHostExit, readHostExit, recordHostExit, recordHostStop, withHostStopOrigin } from "./hostExit";
 import { terminateStructuredHostTree } from "./structuredHostControl";
+import { AgentMemoryCell, type AgentMemoryPlan } from "./agentMemory";
+
+for (const mode of ["descendant", "fatal-cleanup"] as const) test(`memory ${mode} records the native host stop before signalling it`, () => {
+  const root = 2147482800;
+  const native = { pid: root + 1, startIdentity: `fixture-memory-${mode}`, bootEpoch: "fixture-boot" };
+  const samples = [
+    { pid: root, identity: "fixture-memory-root", rss: 200, name: "launcher" },
+    { pid: native.pid, identity: native.startIdentity, rss: 1, name: "host" },
+    { pid: root + 2, identity: "fixture-memory-tool", rss: 101, name: "tool" },
+  ];
+  const killed: number[] = [];
+  const plan = { mechanism: "watchdog", platform: "linux", unit: null, limitBytes: 100, budgetBytes: 1000 } as AgentMemoryPlan;
+  const cell = new AgentMemoryCell(plan, {
+    now: () => 100_000, identity: pid => samples.find(sample => sample.pid === pid)?.identity ?? null,
+    readPpid: () => root, sample: () => samples,
+    kill: pid => {
+      if (pid === native.pid) expect(readHostExit(native)?.stop).toMatchObject({ path: "agent-memory-enforcement", signal: "SIGKILL" });
+      killed.push(pid);
+    },
+  });
+  try {
+    cell.attach(root);
+    cell.setExitProcess(native);
+    cell.sample(new Map());
+    cell.killSample(samples[mode === "descendant" ? 0 : 2]!, "agent");
+    if (mode === "fatal-cleanup") cell.settleExit({ expected: false });
+    expect(killed).toEqual(mode === "descendant" ? [native.pid, root + 2, root] : [root + 2, root, native.pid, root + 2]);
+  } finally { cell.close(); }
+});
 
 for (const mode of ["delegatus", "external"] as const) test(`real host exit persists ${mode} sender and signal across a reader restart`, async () => {
   const child = spawn(process.execPath, ["-e", 'setInterval(()=>{},1000); process.stdout.write("ready\\n")'], { detached: true, stdio: ["ignore", "pipe", "pipe"] });

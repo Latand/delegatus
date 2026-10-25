@@ -666,7 +666,7 @@ export async function terminateStructuredHostTree(
       try {
         withHostStopOrigin(dependencies.stopOrigin ?? { path: "structured-host-kill", operationId: ref.sessionId ?? String(pid) },
           () => { if (processIdentityStatus(expected, identityProbe) === "alive") recordHostStop(expected, value, "structured-host-kill"); });
-        const changed = identityRefusal() ?? authorityRefusal();
+        const changed = identityRefusal();
         if (changed) throw new Error(changed.error);
         signal(target, value);
       } catch (error) {
