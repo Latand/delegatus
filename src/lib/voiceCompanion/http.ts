@@ -26,10 +26,13 @@ export function ownsCompanionSession(starter: SessionStarter, session: StoredSes
 export function companionOperator(req: NextRequest): NextResponse | null {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
-  if (req.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER) || !operatorBrowserRequest(req))
-    return NextResponse.json({ code: "OPERATOR_REQUIRED", error: "Open this control in Delegatus." }, { status: 403 });
-  try { companionStarter(req); } catch (error) { return companionFailure(error); }
-  return null;
+  const refused = () => NextResponse.json({ code: "OPERATOR_REQUIRED", error: "Open this control in Delegatus." }, { status: 403 });
+  if (req.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER)) return refused();
+  // A team install answers a missing, revoked or expired member session with
+  // the sign-in refusal before the page check, as its identity gate does.
+  try { companionStarter(req); }
+  catch (error) { return error instanceof Error && error.message === "OPERATOR_REQUIRED" ? refused() : companionFailure(error); }
+  return operatorBrowserRequest(req) ? null : refused();
 }
 export async function companionBody(req: NextRequest, limit = 96_000): Promise<Record<string, unknown>> {
   const body = await req.text();

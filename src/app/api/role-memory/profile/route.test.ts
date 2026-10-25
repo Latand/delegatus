@@ -3,9 +3,10 @@ import { NextRequest } from "next/server";
 import { GET, POST } from "./route";
 import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 
 afterEach(() => setCallerConversationResolverForTests(null));
-const post = (body: unknown, headers: Record<string, string> = {}) => POST(new NextRequest("http://localhost/api/role-memory/profile", { method: "POST", headers: { Host: "localhost", Origin: "http://localhost", "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) }));
+const post = (body: unknown, headers: Record<string, string> = {}) => POST(new NextRequest("http://localhost/api/role-memory/profile", { method: "POST", headers: { Cookie: `llv_operator=${soloBrowserSession()}`, Host: "localhost", Origin: "http://localhost", "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) }));
 
 test("reads do not create a profile and reject missing or unsupported locales", async () => {
   expect((await GET(new NextRequest("http://localhost/api/role-memory/profile?project=sample-route"))).status).toBe(400);

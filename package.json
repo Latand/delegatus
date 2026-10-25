@@ -49,20 +49,23 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.0",
+    "@sigstore/bundle": "3.1.0",
+    "@sigstore/tuf": "3.1.1",
+    "@sigstore/verify": "2.1.1",
     "@simplewebauthn/browser": "14.0.0",
     "@simplewebauthn/server": "14.0.3",
     "entities": "^8.0.0",
     "highlight.js": "^11.11.1",
     "lucide-react": "^1.23.0",
-    "next": "16.4.1",
+    "next": "16.4.2",
     "pdfjs-dist": "^6.2.108",
     "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "sharp": "0.35.5",
-    "zod": "4.6.6",
-    "ws": "8.21.0"
+    "ws": "8.21.0",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@eslint/compat": "2.1.1",
@@ -75,7 +78,7 @@
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
     "eslint": "^10",
-    "eslint-config-next": "16.3.8",
+    "eslint-config-next": "16.4.2",
     "happy-dom": "21.0.4",
     "playwright-core": "1.62.1",
     "tailwindcss": "^4",
@@ -110,6 +113,7 @@
   },
   "license": "MIT",
   "overrides": {
+    "body-parser": "^2.4.0",
     "fast-uri": "^3.1.6"
   },
   "patchedDependencies": {
