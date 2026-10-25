@@ -14,7 +14,8 @@
   },
   "analytics_engine_datasets": [
     { "binding": "SITE_EVENTS", "dataset": "site_events" },
-    { "binding": "INSTALLS", "dataset": "installs" }
+    { "binding": "INSTALLS", "dataset": "installs" },
+    { "binding": "SWARM_USAGE", "dataset": "swarm_usage" }
   ],
   "routes": [
     { "pattern": "delegatus.org", "custom_domain": true },

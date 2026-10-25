@@ -1,3 +1,4 @@
+import { workspaceRoute, requestWorkspaceScope } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { requestSession, teamMode } from "@/lib/team/sessions";
@@ -7,15 +8,17 @@ import { activityOperation } from "@/lib/activity/operation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export async function GET(req: NextRequest): Promise<NextResponse> {
+async function workspaceGET(req: NextRequest): Promise<NextResponse> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
   return activityOperation("activity.tokens.read", async () => {
     try {
       const mode = teamMode(), session = requestSession(req);
+      const scope = requestWorkspaceScope(req);
       const body = await activityTokensResponse(req.nextUrl.searchParams, {
         mode: session ? "team" : mode, memberId: session?.member.id ?? null,
         canChoose: session ? session.member.role === "owner" : mode === "solo",
+        ...(scope && !scope.owner ? { workspaceProjects: scope.projectFilter } : {}),
       });
       return NextResponse.json(body, { headers: { "Cache-Control": "no-store" } });
     } catch (error) {
@@ -24,3 +27,5 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     }
   });
 }
+
+export const GET = workspaceRoute("/api/activity/tokens", workspaceGET, true);

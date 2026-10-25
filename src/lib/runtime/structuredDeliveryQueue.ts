@@ -22,7 +22,7 @@ import {
   type StructuredMessageContent,
 } from "./structuredContent";
 import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
-import { StructuredRecoveryHeldForUpdateError, type StructuredRecoveryRequest } from "./structuredRecovery";
+import { StructuredRecoveryHeldForUpdateError, StructuredRecoverySynchronizingError, type StructuredRecoveryRequest } from "./structuredRecovery";
 import type { DeliveryProgressNote, DeliveryProgressRecord, DeliveryProgressSink } from "./deliveryProgress";
 import { ACTIVE_DELIVERY_PHASES, type DeliveryWaitReason } from "./deliveryWaitReason";
 import { roleMemoryRevisionToken, ROLE_MEMORY_CHANGED_MESSAGE, RoleMemoryRefusal } from "@/lib/memory/roleStore";
@@ -80,6 +80,10 @@ export interface StructuredDeliveryQueuePort {
   /** Startup owns recovery for hosts it has not registered yet. Leave their
    * original operations pending while already registered hosts keep serving. */
   deferTarget?(conversationId: string): boolean;
+  /** After restart-cut recognition, explicit sends may use normal keyed
+   * recovery without waiting for unrelated startup rows. This grants no
+   * engine-write authority and never admits automatic idle continuations. */
+  canRecoverDeferredTarget?(conversationId: string): boolean;
   /** A reconfigure withdrawn before its claim, or whose claimed switch was cancelled (#1705). */
   reconfigureCancelled?(effect: StructuredReconfigureEffect): boolean;
   /** The failed account switch holding this conversation's messages, or null (#1846). */
@@ -1110,12 +1114,18 @@ export class StructuredDeliveryQueue {
         if (this.port.deferTarget?.(conversationId)) {
           const deferred = grouped.get(conversationId) ?? [];
           // Explicit termination uses the recorded session identity without
-          // adopting its host. Keep sends and automatic idle retirement behind
-          // startup's ownership fence; drainTarget still enforces handoff and
-          // the control's original settlement deadline.
-          const kills: DeliveryEffect[] = [];
+          // adopting its host. Once cut recognition permits keyed recovery,
+          // explicit sends also take the normal fenced path. Automatic work
+          // and configuration changes still wait for startup completion.
+          const admitted: DeliveryEffect[] = [];
+          // Never send past a configuration change or another held effect
+          // that the ordinary per-conversation drain would process first.
+          const recoverSends = this.port.canRecoverDeferredTarget?.(conversationId)
+            && deferred.every(effect => (effect.kind === "send" && !effect.onlyIfIdle)
+              || (effect.kind === "kill" && !effect.onlyIfIdle));
           for (const effect of deferred) {
-            if (effect.kind === "kill" && !effect.onlyIfIdle) kills.push(effect);
+            if ((effect.kind === "kill" && !effect.onlyIfIdle)
+              || (effect.kind === "send" && !effect.onlyIfIdle && recoverSends)) admitted.push(effect);
             else this.noteWait(effect, "startup", { wake: "event" });
           }
           const settleKilledReconfigures = async () => {
@@ -1126,11 +1136,11 @@ export class StructuredDeliveryQueue {
               }
             }
           };
-          if (kills.length === 0) { await settleKilledReconfigures(); return true; }
+          if (admitted.length === 0) { await settleKilledReconfigures(); return true; }
           const killedGenerations = new Set<string>();
           let blocked: boolean;
           try {
-            blocked = await this.drainTarget(kills, lane, undefined, killedGenerations);
+            blocked = await this.drainTarget(admitted, lane, undefined, killedGenerations);
           } finally {
             for (const effect of deferred) {
               if (isReconfigureEffect(effect) && (effect.sessionKey
@@ -1139,7 +1149,7 @@ export class StructuredDeliveryQueue {
             }
           }
           await settleKilledReconfigures();
-          return blocked || kills.length < deferred.length;
+          return blocked || admitted.length < deferred.length;
         }
         for (const prepare of targetPreparations.get(conversationId) ?? []) await prepare();
         return this.drainTarget(grouped.get(conversationId) ?? [], lane);
@@ -3269,7 +3279,7 @@ export class StructuredDeliveryQueue {
    * in recovery arrives unmarked and settles failed with every other failure,
    * since trying again there could reserve a second successor.
    */
-  private async recoverUnavailableHost(effect: Pick<DeliveryEffect, "conversationId" | "operationId"> & { origin?: MessageOrigin }, status?: StructuredOperationStatus | null): Promise<void> {
+  private async recoverUnavailableHost(effect: DeliveryEffect & { origin?: MessageOrigin }, status?: StructuredOperationStatus | null): Promise<void> {
     if (!this.recoverHost) return;
     try {
       const recovered = await this.recoverHost(effect.conversationId, {
@@ -3282,10 +3292,22 @@ export class StructuredDeliveryQueue {
         this.rerun = true;
         return;
       }
+      if (this.port.deferTarget?.(effect.conversationId)) {
+        // A live predecessor may still be on its way to registration. A
+        // refused competing recovery must not fail its original message.
+        this.noteWait(effect, "startup", { wake: "retry" });
+        this.retrySoon();
+        return;
+      }
       await this.transitionUnlessSettled(effect.operationId, "failed", {
         reason: "structured host recovery did not start; retry the operation",
       });
     } catch (error) {
+      if (error instanceof StructuredRecoverySynchronizingError && this.port.deferTarget?.(effect.conversationId)) {
+        this.noteWait(effect, "startup", { wake: "retry" });
+        this.retrySoon();
+        return;
+      }
       if (error instanceof StructuredRecoveryHeldForUpdateError) {
         this.retrySoon();
         return;

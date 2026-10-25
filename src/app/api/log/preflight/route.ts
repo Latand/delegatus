@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import fs from "node:fs/promises";
 
 import { NextRequest, NextResponse } from "next/server";
@@ -17,7 +18,7 @@ const MAX_PREFLIGHT_PATHS = 10_000;
 
 type PreflightResponse = { ok: true } | ApiError;
 
-export async function POST(req: NextRequest): Promise<NextResponse<PreflightResponse>> {
+async function workspacePOST(req: NextRequest): Promise<NextResponse<PreflightResponse>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
 
@@ -65,3 +66,5 @@ export async function POST(req: NextRequest): Promise<NextResponse<PreflightResp
   }
   return NextResponse.json({ ok: true });
 }
+
+export const POST = workspaceRoute("/api/log/preflight", workspacePOST);

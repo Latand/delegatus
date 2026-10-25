@@ -734,7 +734,7 @@ test("create_pipeline publishes the stage contract in its tool definition", asyn
     const stage = stages?.items?.properties;
 
     expect(Object.keys(stage ?? {}).sort()).toEqual([
-      "access", "account", "agentMemoryMaxBytes", "effort", "engine", "id", "kind", "model", "next", "onFail", "outputs", "prompt", "role", "sandbox", "serviceTier",
+      "access", "account", "agentMemoryMaxBytes", "effort", "engine", "id", "kind", "model", "next", "onFail", "outputs", "prompt", "role", "runtime", "sandbox", "serviceTier",
     ]);
     expect(stage?.kind?.enum).toEqual(["run", "review-loop"]);
     expect(stage?.engine?.enum).toEqual(["claude", "codex"]);
@@ -1240,5 +1240,18 @@ test("seat_tick_settings advertises and forwards the independent curation timer"
     expect(result.isError).not.toBe(true);
     expect(received).toMatchObject({ curation: { enabled: false, intervalHours: 12 } });
     expect((await client.callTool({ name: "seat_tick_settings", arguments: { clientRequestId: "curation-invalid", curation: { enabled: "yes" } } })).isError).toBe(true);
+  });
+});
+
+test("Cloud execution choices are available through MCP with strict values", async () => {
+  let received: unknown;
+  await withProtocolClient(inertBindings({ pipeline_checks: async args => { received = args; return { effective: args.execution }; } }), async client => {
+    const tool = (await client.listTools()).tools.find(tool => tool.name === "pipeline_checks");
+    expect(tool).toBeDefined();
+    expect((await client.callTool({ name: "pipeline_checks", arguments: { clientRequestId: "cloud-choice", pipelineId: "lane-fixture", scope: "lane", execution: "local" } })).isError).not.toBe(true);
+    expect(received).toMatchObject({ scope: "lane", execution: "local" });
+    expect((await client.callTool({ name: "pipeline_checks", arguments: { clientRequestId: "cloud-stage-choice", pipelineId: "lane-fixture", scope: "stage", stageId: "verify", execution: "cloud" } })).isError).not.toBe(true);
+    expect(received).toMatchObject({ scope: "stage", stageId: "verify", execution: "cloud" });
+    expect((await client.callTool({ name: "pipeline_checks", arguments: { clientRequestId: "cloud-invalid", pipelineId: "lane-fixture", scope: "lane", execution: "invalid" } })).isError).toBe(true);
   });
 });
