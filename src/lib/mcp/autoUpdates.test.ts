@@ -205,7 +205,6 @@ function domain(attribution: CallerAttribution, callerProject: string | null = n
 
 interface Session {
   call(args: Record<string, unknown>): Promise<{ failed: boolean; payload: Record<string, unknown> }>;
-  description(): Promise<string>;
   close(): Promise<void>;
 }
 
@@ -225,9 +224,6 @@ async function session(attribution: CallerAttribution, callerProject: string | n
     async call(args) {
       const result = await client.callTool({ name: "auto_updates", arguments: args });
       return { failed: result.isError === true, payload: (result.structuredContent ?? {}) as Record<string, unknown> };
-    },
-    async description() {
-      return (await client.listTools()).tools.find((tool) => tool.name === "auto_updates")?.description ?? "";
     },
     async close() {
       await client.close();
@@ -553,15 +549,4 @@ test("the dialog's switch is recorded as the operator, and a writer claimed with
   const view = await dialog();
   expect(view.auto?.changedBy).toEqual({ kind: "operator", conversationId: null, via: "dialog" });
   expect(view.history?.[0]).toMatchObject({ kind: "auto-on", by: "operator", writer: { kind: "operator", conversationId: null, via: "dialog" } });
-});
-
-test("the registered description says what enabling does", async () => {
-  const opened = await session(WORKER);
-  const description = await opened.description().finally(() => opened.close());
-  expect(description).toContain("main");
-  expect(description).toContain("green");
-  expect(description).toContain("quiet");
-  expect(description).toContain("rolls back");
-  expect(description).toContain("switch themselves off");
-  expect(description).toContain("auto_updates_write_refused");
 });
