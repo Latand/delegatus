@@ -4,7 +4,7 @@ import { effectiveSeatTickSettings, readSeatTickSettings } from "@/lib/monitor/s
 import { orchestratorSeatForCurrentProject } from "@/lib/orchestrator/seatProjectIdentity";
 import { canonicalProject, projectAliasKeys } from "@/lib/projects/aliases";
 import { legacyDatabasePath } from "@/lib/state/legacyImport";
-import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
+import { initializeStateCollections, readStateCollectionRevision, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { createTask, type CreateTaskInput } from "./commands";
 import { TASKS_FILE, patchTaskCompanion } from "./store";
@@ -13,7 +13,8 @@ import type { BoardTask } from "./types";
 
 const DAY = 86_400_000;
 type Allowance = { key: string; kind: "allowance"; episode: string; used: number; admissions: number[] };
-type Candidate = { key: string; kind: "candidate"; taskId: string; rejected: boolean };
+type Candidate = { key: string; kind: "candidate"; taskId: string; rejected: boolean; decisionRevision?: number;
+  adopted?: { at: string; taskId: string; scopeHash?: string; scopeRevision?: number } };
 type Row = Allowance | Candidate;
 const seed = { collection: "proactive_allowance", schemaVersion: 1, migrationId: "proactive-allowance-v1", key: (row: Row) => row.key, loadRecords: (): Row[] => [] };
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -45,7 +46,13 @@ function decode(value: unknown): Row | null {
   if (!value || typeof value !== "object") return null;
   const row = value as Row;
   if (typeof row.key !== "string") return null;
-  if (row.kind === "candidate") return typeof row.taskId === "string" && typeof row.rejected === "boolean" ? row : null;
+  if (row.kind === "candidate") return typeof row.taskId === "string" && typeof row.rejected === "boolean"
+    && (row.decisionRevision === undefined || Number.isSafeInteger(row.decisionRevision) && row.decisionRevision >= 0)
+    && (row.adopted === undefined || (row.adopted !== null && typeof row.adopted === "object"
+      && row.adopted.taskId === row.taskId && typeof row.adopted.at === "string" && Number.isFinite(Date.parse(row.adopted.at))
+      && (row.adopted.scopeHash === undefined && row.adopted.scopeRevision === undefined
+        || typeof row.adopted.scopeHash === "string" && /^[a-f0-9]{64}$/.test(row.adopted.scopeHash)
+          && typeof row.adopted.scopeRevision === "number" && Number.isSafeInteger(row.adopted.scopeRevision) && row.adopted.scopeRevision >= 0))) ? row : null;
   return row.kind === "allowance" && typeof row.episode === "string" && Number.isFinite(Date.parse(row.episode))
     && Number.isInteger(row.used) && row.used >= 0 && row.used <= 2
     && Array.isArray(row.admissions) && row.admissions.length <= 2 && row.admissions.every(Number.isFinite) ? row : null;
@@ -135,7 +142,7 @@ export async function admitProactiveTask(input: CreateTaskInput & { candidateKey
   } finally { store.close(); }
 }
 
-/** Internal transition; operator-attributed transports belong to slice 3. */
+/** Candidate-key rejection shares the operator command's decision revision. */
 export async function rejectProactiveCandidate(project: string, candidate: string, file = TASKS_FILE): Promise<void> {
   const store = collection(file, false);
   if (!store) throw new Error("candidate not found");
@@ -147,7 +154,104 @@ export async function rejectProactiveCandidate(project: string, candidate: strin
         return row ? [row] : [];
       });
       if (!rows.length) throw new Error("candidate not found");
-      for (const row of rows) tx.put({ ...row, rejected: true });
+      const revision = nextDecisionRevision(rows);
+      for (const row of rows) tx.put({ ...row, rejected: true, adopted: undefined, decisionRevision: revision });
     }, 5_000);
+  } finally { store.close(); }
+}
+
+function nextDecisionRevision(rows: readonly Candidate[]): number {
+  const revision = Math.max(0, ...rows.map(row => row.decisionRevision ?? 0));
+  if (revision === Number.MAX_SAFE_INTEGER) throw new Error("proactive decision revision exhausted; operator recovery required");
+  return revision + 1;
+}
+
+function readDecision(task: BoardTask, file: string): { rejected: boolean; adopted: boolean; revision: number } {
+  if (!task.proactive) return { rejected: false, adopted: false, revision: 0 };
+  const store = collection(file, false);
+  try {
+    const rows = projectKeys(task.project).flatMap(project => {
+      const row = store?.get(candidateKey(project, task.proactive!.candidateKey));
+      if (row && row.kind !== "candidate") throw new Error("invalid candidate receipt");
+      return row ? [row] : [];
+    });
+    if (!rows.length || rows.some(row => row.taskId !== task.id)) throw new Error("candidate receipt has no matching task; operator recovery required");
+    // Legacy receipts have no accepted scope and require a fresh operator decision.
+    const scopeHash = proactiveScopeHash(task);
+    return { rejected: rows.some(row => row.rejected), adopted: rows.every(row => row.adopted?.taskId === task.id
+      && row.adopted.scopeRevision === task.proactive!.scopeRevision && row.adopted.scopeHash === scopeHash),
+      revision: Math.max(0, ...rows.map(row => row.decisionRevision ?? 0)) };
+  } finally { store?.close(); }
+}
+
+/** Indexed, durable decisions; ordinary task writes cannot manufacture adoption. */
+export function proactiveCandidateDecision(task: BoardTask, file = TASKS_FILE): { rejected: boolean; adopted: boolean } {
+  const { rejected, adopted } = readDecision(task, file);
+  return { rejected, adopted };
+}
+
+export interface ProactiveDecisionToken { taskId: string; decisionRevision: number; scopeRevision: number; scopeHash: string }
+
+export function validProactiveDecisionToken(value: unknown): value is ProactiveDecisionToken {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const token = value as ProactiveDecisionToken;
+  return typeof token.taskId === "string" && token.taskId.length > 0 && token.taskId.length <= 200
+    && Number.isSafeInteger(token.decisionRevision) && token.decisionRevision >= 0
+    && Number.isSafeInteger(token.scopeRevision) && token.scopeRevision >= 0
+    && typeof token.scopeHash === "string" && /^[a-f0-9]{64}$/.test(token.scopeHash);
+}
+
+/** A read grants no authority. Adoption compares this entire tuple again
+ * under the task/decision transaction, after all admission waits. */
+export function proactiveDecisionToken(task: BoardTask, file = TASKS_FILE): ProactiveDecisionToken {
+  return proactiveDecisionSnapshot(task, file).expected;
+}
+
+/** The displayed decision and its revision belong to one observation. A
+ * concurrent family write holds the response for a fresh read. */
+export function proactiveDecisionSnapshot(task: BoardTask, file = TASKS_FILE): {
+  decision: { rejected: boolean; adopted: boolean }; expected: ProactiveDecisionToken;
+} {
+  if (!task.proactive) throw new Error("invented task not found");
+  const database = legacyDatabasePath(file);
+  const before = readStateCollectionRevision(database, seed.collection);
+  const { rejected, adopted, revision } = readDecision(task, file);
+  if (readStateCollectionRevision(database, seed.collection) !== before) throw new Error("proactive decision changed while reading; reload before deciding");
+  return { decision: { rejected, adopted }, expected: { taskId: task.id, decisionRevision: revision,
+    scopeRevision: task.proactive.scopeRevision, scopeHash: proactiveScopeHash(task) } };
+}
+
+/** Caller identity is supplied by the authenticated transport, never its body.
+ * Adoption changes authority only; artifacts, rejection history and counts stay.
+ * Rejection revokes adoption but never removes the retained task or its work. */
+export async function decideProactiveTask(taskId: string, decision: "reject" | "adopt", actor: "operator" | "agent",
+  expected: ProactiveDecisionToken, file = TASKS_FILE, now: () => string = () => new Date().toISOString()): Promise<BoardTask> {
+  if (actor !== "operator") throw new Error("only the operator may reject or adopt invented work");
+  if (decision !== "reject" && decision !== "adopt") throw new Error("invalid proactive decision");
+  if (!validProactiveDecisionToken(expected)) throw new Error("expected task scope and decision revision are required");
+  expected = { ...expected };
+  const store = collection(file, false);
+  if (!store) throw new Error("candidate not found");
+  try {
+    return await patchTaskCompanion<Row, BoardTask>(store, get => {
+      const task = get(taskId);
+      if (!task?.proactive) throw new Error("invented task not found");
+      const rows = projectKeys(task.project).flatMap(project => {
+        const row = store.get(candidateKey(project, task.proactive!.candidateKey));
+        if (row && (row.kind !== "candidate" || row.taskId !== task.id)) throw new Error("candidate receipt has no matching task");
+        return row ? [row] : [];
+      });
+      if (!rows.length) throw new Error("candidate not found");
+      const revision = nextDecisionRevision(rows);
+      if (expected.taskId !== task.id || expected.decisionRevision !== revision - 1) throw new Error("proactive decision changed; reload before deciding");
+      if (decision === "adopt" && (expected.scopeRevision !== task.proactive.scopeRevision || expected.scopeHash !== proactiveScopeHash(task))) {
+        throw new Error("invented task scope changed; reload before adopting");
+      }
+      const at = decision === "adopt" ? now() : null;
+      if (at !== null && !Number.isFinite(Date.parse(at))) throw new Error("invalid proactive decision time");
+      const records = rows.map(row => ({ ...row, rejected: decision === "reject" || row.rejected,
+        decisionRevision: revision, adopted: at ? { at, taskId, scopeHash: expected.scopeHash, scopeRevision: expected.scopeRevision } : undefined }));
+      return { records, result: task };
+    }, file);
   } finally { store.close(); }
 }

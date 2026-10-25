@@ -593,6 +593,29 @@ test("tombstones apply through deleteTask, and a row arriving for a tombstoned i
   expect(back.kind === "page" && back.rows.some((row) => row.id === id)).toBe(false);
 });
 
+test("a linked deletion cannot erase invented provenance or commit a tombstone", async () => {
+  const { admitProactiveTask, readProactiveAllowance } = await import("@/lib/tasks/proactive");
+  const { candidate, context, NOW, authority } = await import("@/lib/tasks/proactive.fixture");
+  const { repairLinkedTasks } = await import("./taskRepair");
+  setSystemTime(NOW);
+  const { file, db } = linkedInstall();
+  const episode = { ...context(), project: key };
+  const { task } = await admitProactiveTask({ ...candidate("linked-deletion"), project: key }, episode, file, authority());
+  repairLinkedTasks(file);
+  const tombstones = tombstoneCollection(db, true)!;
+  const before = loadTasks(file), graves = tombstones.snapshot();
+  const taskRevision = readStateCollectionRevision(db, "tasks"), graveRevision = readStateCollectionRevision(db, "task_tombstones");
+  const gone = `${String(NOW + 10).padStart(13, "0")}.000.${installPrefix(PEER)}`;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    expect(() => applyTaskRows([{ id: task.id, project: key, gone }], peerLink, { filePath: file, now: NOW })).toThrow("retains its provenance");
+    expect(loadTasks(file)).toEqual(before);
+    expect(tombstones.snapshot()).toEqual(graves);
+    expect(readStateCollectionRevision(db, "tasks")).toBe(taskRevision);
+    expect(readStateCollectionRevision(db, "task_tombstones")).toBe(graveRevision);
+    expect(readProactiveAllowance(key, episode.startedAt, NOW, file)).toEqual({ episodeUsed: 1, rollingUsed: 1 });
+  }
+});
+
 test("with no project linked nothing is stamped and no tombstone collection is created", () => {
   const { file, db } = linkedInstall({ link: false });
   const task = create(file, "Shared on one side only");

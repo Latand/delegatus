@@ -1323,15 +1323,16 @@ describe("decision form keeps the operator's typed answer", () => {
 });
 
 describe("CPU admission queue", () => {
-  browserTest("the waiting card shows queue position and remaining minutes, or a stalled queue, in en and uk", async () => {
+  browserTest("the waiting card shows queue position, pressure and elapsed minutes, or a stalled queue, in en and uk", async () => {
     const out = path.resolve(".artifacts/cpu-queue");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
-    const browser = await chromium.launch(LAUNCH);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
     const readings: unknown[] = [];
     try {
-      for (const theme of ["light", "dark"] as const) for (const stalled of [false, true]) for (const lang of ["en", "uk"] as const) for (const width of [1440, 1000, 390]) {
-        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=cpu-queue${stalled ? "-stalled" : ""}`, { width, height: 900 }, theme, lang, "reduce", width === 390);
+      for (const theme of ["light", "dark"] as const) for (const state of ["queue", "pressure", "stalled"] as const) for (const lang of ["en", "uk"] as const) for (const width of [1440, 1000, 390]) {
+        const stalled = state === "stalled";
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=${state === "pressure" ? "cpu-pressure" : `cpu-queue${stalled ? "-stalled" : ""}`}`, { width, height: 900 }, theme, lang, "reduce", width === 390);
         try {
           if (width === 390) await page.locator('[data-phone-kanban-tab="assigned"]').click();
           const selector = width === 390 ? '[data-phone-card="task:t-search"]' : card("t-search");
@@ -1340,15 +1341,17 @@ describe("CPU admission queue", () => {
           await line.waitFor(); await target.scrollIntoViewIfNeeded();
           const text = stalled
             ? lang === "en" ? "CPU queue is stalled · 7th · nothing started for 62 min · High" : "Черга CPU стоїть · 7-й · нічого не стартувало 62 хв · Високий"
-            : lang === "en" ? "Waiting for the CPU queue · 2nd · up to 7 min · High" : "Чекає черги CPU · 2-й · до 7 хв · Високий";
+            : state === "pressure"
+              ? lang === "en" ? "Held by CPU pressure · 1st in the CPU queue · waited 4 min · High" : "Стримує навантаження CPU · 1-й у черзі CPU · чекає 4 хв · Високий"
+              : lang === "en" ? "Waiting for the CPU queue · 2nd · waited 7 min · High" : "Чекає черги CPU · 2-й · чекає 7 хв · Високий";
           expect(await line.textContent()).toBe(text);
           expect(await target.textContent()).toContain("#2190");
           expect(await target.locator('[data-motion="working"]').count()).toBe(0);
           const geometry = await line.evaluate(element => ({ clipped: element.scrollWidth > element.clientWidth + 1, width: element.clientWidth, text: element.textContent }));
           expect(geometry.clipped).toBe(false);
           expect(pageErrors).toEqual([]);
-          await target.screenshot({ path: path.join(out, `${stalled ? "stalled" : "variant-1"}-${width}-${lang}-${theme}.png`) });
-          readings.push({ lang, theme, viewport: width, ...(stalled ? { stalled } : {}), ...geometry });
+          await target.screenshot({ path: path.join(out, `${state}-${width}-${lang}-${theme}.png`) });
+          readings.push({ lang, theme, viewport: width, state, ...geometry });
           if (width === 390) {
             await target.click();
             const lane = page.locator('[data-phone-task-lane="p-search"]');
@@ -1367,8 +1370,8 @@ describe("CPU admission queue", () => {
               expect(box.clipped).toBe(false); expect(box.visible).toBe(true);
               expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
               expect(pageErrors).toEqual([]);
-              await page.screenshot({ path: path.join(out, `phone-${stalled ? "stalled-" : ""}${surface}-${lang}-${theme}.png`) });
-              readings.push({ lang, theme, viewport: width, surface, ...(stalled ? { stalled } : {}), ...box });
+              await page.screenshot({ path: path.join(out, `phone-${state}-${surface}-${lang}-${theme}.png`) });
+              readings.push({ lang, theme, viewport: width, surface, state, ...box });
             }
           }
         } finally { await context.close(); }
@@ -16026,7 +16029,11 @@ describe("orchestrator reports: the setup guide's optional Reports to Telegram s
           try {
             await page.waitForSelector("[data-kanban-board], [data-mobile-shell], main", { timeout: 30_000 });
             await page.waitForTimeout(1_000);
-            await page.evaluate(() => window.dispatchEvent(new CustomEvent("llv:open-onboarding", { detail: { mode: "guide", step: "telegram" } })));
+            /* The guide preselects no project, so the step's project is chosen on the Project step first. */
+            await page.evaluate(() => window.dispatchEvent(new CustomEvent("llv:open-onboarding", { detail: { mode: "guide", step: "project" } })));
+            await page.locator(`[data-onboarding-project="repo-${"6".repeat(32)}"]`).click();
+            if (!(await page.locator("[data-onboarding-step=telegram]").isVisible())) await page.locator("[data-onboarding-step-list-toggle]").click();
+            await page.locator("[data-onboarding-step=telegram]").click();
             await page.waitForSelector("[data-onboarding-telegram]", { state: "visible", timeout: 10_000 });
             await page.waitForTimeout(state === "none" ? 500 : 1_200);
             const reading = await page.evaluate(() => {
@@ -23425,6 +23432,48 @@ describe("task chip native queue presentation", () => {
     fs.mkdirSync("evidence/task-chip-to-orchestrator", { recursive: true });
     fs.writeFileSync("evidence/task-chip-to-orchestrator/native-queue.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
   }, 120_000);
+});
+
+describe("native queue after a matching proof", () => {
+  browserTest("the proven row and its acknowledgement hint leave and a same-text pending row stays, desktop and phone, en and uk, light and dark", async () => {
+    const out = path.resolve(".artifacts/native-queue-proof");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, args: [...(LAUNCH.args ?? []), "--disable-gpu"] });
+    const cases: Record<string, unknown>[] = [];
+    const hint = { en: "1 message is waiting for Codex to acknowledge it", uk: "1 повідомлення чекає на підтвердження від Codex." };
+    try {
+      for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 390]) {
+        const seen: Record<string, { rows: (string | null)[]; notice: string | null; count: string | null }> = {};
+        for (const proof of ["before", "after"] as const) {
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=native-queue-proof&proof=${proof}`, { width, height: 700 }, theme, locale, "reduce", width === 390);
+          try {
+            await page.reload();
+            const panel = page.locator('[data-testid="native-queue-panel"]');
+            await panel.waitFor();
+            await page.evaluate(() => document.fonts.ready);
+            const notice = panel.locator('[data-testid="native-queue-notice"]');
+            seen[proof] = {
+              rows: await panel.locator('[data-testid="native-queue-row"]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-entry"))),
+              notice: (await notice.count()) ? ((await notice.first().textContent()) ?? "").trim() : null,
+              count: ((await panel.locator('[data-testid="native-queue-count"]').first().textContent()) ?? "").trim(),
+            };
+            expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBeFalse();
+            expect(pageErrors).toEqual([]);
+            await page.screenshot({ path: path.join(out, `${locale}-${theme}-${width}-${proof}.png`) });
+          } finally { await context.close(); }
+        }
+        expect(seen.before!.rows).toEqual(["entry-b", "entry-a"]);
+        expect(seen.before!.notice).toContain(hint[locale]);
+        expect(seen.after!.rows).toEqual(["entry-b"]);
+        expect(seen.after!.notice).toBeNull();
+        cases.push({ locale, theme, width, rowsBefore: seen.before!.rows, noticeBefore: seen.before!.notice, countBefore: seen.before!.count,
+          rowsAfter: seen.after!.rows, noticeAfter: seen.after!.notice, countAfter: seen.after!.count });
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.mkdirSync("evidence/native-queue-proof", { recursive: true });
+    fs.writeFileSync("evidence/native-queue-proof/frames.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
+  }, 180_000);
 });
 
 describe("passive task status note", () => {
@@ -38372,6 +38421,147 @@ describe("sound captions", () => {
   }
 });
 
+describe("installer guide: old state, project search, newcomer clarity", () => {
+  browserTest("each new state of the setup guide is whole on screen in both languages and themes", async () => {
+    const server = await serveEvidenceFixture(fs.mkdtempSync(path.join(os.tmpdir(), "installer-guide-")));
+    const browser: Browser = await chromium.launch(LAUNCH);
+    const out = path.resolve(process.env.INSTALLER_GUIDE_OUT ?? ".artifacts/installer-guide");
+    fs.mkdirSync(out, { recursive: true });
+    const failures: string[] = [];
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [390, 768, 1280]) {
+        const opened = await openFixture(browser, `${server.base}?scenario=orchestrator-first&guide=installer#p=atlas`, { width, height: 844 }, theme, lang, "no-preference", width === 390);
+        const { page, pageErrors } = opened;
+        const at = `${lang}-${theme}-${width}`;
+        /* Every text line of the element sits inside the guide's scroller and the window, measured from text ranges. */
+        const frame = async (state: string, selectors: string[]) => {
+          await page.locator(selectors.at(-1)!).evaluate((node) => node.scrollIntoView({ block: "end" }));
+          for (const selector of selectors) {
+            const cut = await page.evaluate((target) => {
+              const node = document.querySelector(target);
+              if (!node) return "missing";
+              const range = document.createRange();
+              range.selectNodeContents(node);
+              const lines = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+              const clip = (node.closest(".overflow-y-auto") ?? document.documentElement).getBoundingClientRect();
+              const top = Math.max(0, clip.top) - 0.5, bottom = Math.min(innerHeight, clip.bottom) + 0.5;
+              const outside = lines.filter((rect) => rect.top < top || rect.bottom > bottom || rect.left < -0.5 || rect.right > innerWidth + 0.5);
+              return lines.length === 0 ? "no text" : outside.length ? `${outside.length} of ${lines.length} lines cut` : null;
+            }, selector);
+            if (cut) failures.push(`${at} ${state}: ${selector} ${cut}`);
+          }
+          const sideways = await page.locator("[data-onboarding-dialog]").evaluate((node) => node.scrollWidth - node.clientWidth);
+          if (sideways > 1) failures.push(`${at} ${state}: the guide scrolls sideways by ${sideways}px`);
+          await page.screenshot({ path: path.join(out, `${at}-${state}.png`) });
+        };
+        const goStep = async (step: string) => {
+          const target = page.locator(`[data-onboarding-step=${step}]`);
+          if (!(await target.isVisible())) await page.locator("[data-onboarding-step-list-toggle]").click();
+          await target.click();
+        };
+        const text = (selector: string) => page.locator(selector).first().innerText();
+        try {
+          await page.waitForSelector("[data-kanban-board], [data-mobile-shell], main");
+          await page.evaluate(() => window.dispatchEvent(new CustomEvent("llv:open-onboarding", { detail: { mode: "guide", step: "engines" } })));
+          await page.waitForSelector("[data-onboarding-legacy-state]");
+          await page.waitForSelector("[data-onboarding-claude-signin]");
+          const notice = page.locator("[data-onboarding-legacy-state]");
+          const reading: Record<string, unknown> = { at };
+          reading.notice = await notice.locator("p").first().innerText();
+          reading.claudeSignin = await text("[data-onboarding-claude-signin]");
+          if (reading.notice !== translate(lang, "onboarding.legacy.notice")) failures.push(`${at}: notice reads ${reading.notice}`);
+          if (reading.claudeSignin !== translate(lang, "onboarding.engines.isolatedSignin")) failures.push(`${at}: Claude line reads ${reading.claudeSignin}`);
+          await frame("engines-notice", ["[data-onboarding-legacy-state]"]);
+          await frame("engines-claude", ["[data-onboarding-claude-signin]"]);
+          await notice.locator("button").click();
+          reading.cleanStartExpanded = await notice.locator("button").getAttribute("aria-expanded");
+          reading.cleanStartLabel = await notice.locator("button").innerText();
+          if (reading.cleanStartLabel !== translate(lang, "onboarding.legacy.hideSteps")) failures.push(`${at}: open toggle reads ${reading.cleanStartLabel}`);
+          await frame("engines-clean-start", ["[data-onboarding-legacy-state]"]);
+          /* Later steps open on their own heading: the notice and the opened instructions stay on the first step. */
+          const opensOnHeading = async (step: string) => {
+            const first = await page.locator("[data-onboarding-dialog] .overflow-y-auto").last().evaluate((node) => node.firstElementChild?.tagName ?? null);
+            const notices = await page.locator("[data-onboarding-legacy-state]").count();
+            if (first !== "H2" || notices !== 0) failures.push(`${at}: ${step} opens on ${first} with ${notices} notice(s)`);
+          };
+
+          await goStep("project");
+          await page.waitForSelector("[data-onboarding-project]");
+          await opensOnHeading("project");
+          const rows = () => page.locator("[data-onboarding-project]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-onboarding-project")));
+          reading.rows = await rows();
+          reading.checked = await page.locator('[data-onboarding-project][aria-checked="true"]').count();
+          if (JSON.stringify(reading.rows) !== JSON.stringify([`repo-${"1".repeat(32)}`, `repo-${"2".repeat(32)}`, `repo-${"3".repeat(32)}`])) failures.push(`${at}: picker lists ${JSON.stringify(reading.rows)}`);
+          if (reading.checked !== 0) failures.push(`${at}: a project is preselected`);
+          await frame("project", ["[role=radiogroup]"]);
+          const search = page.locator("[data-onboarding-dialog] input[type=search]");
+          await search.fill("harbor");
+          reading.searched = await rows();
+          if (JSON.stringify(reading.searched) !== JSON.stringify([`repo-${"2".repeat(32)}`])) failures.push(`${at}: search lists ${JSON.stringify(reading.searched)}`);
+          /* The phone context has a coarse pointer, and every phone target is at least 44px tall. */
+          if (width === 390) {
+            reading.searchHeight = await search.evaluate((node) => node.getBoundingClientRect().height);
+            if (Number(reading.searchHeight) < 44) failures.push(`${at}: the project search is ${reading.searchHeight}px tall, under the 44px phone target`);
+          }
+          await frame("project-search", ["[role=radiogroup]"]);
+          await search.fill("nothing like this");
+          reading.empty = await text("[data-onboarding-project-empty]");
+          if (reading.empty !== translate(lang, "onboarding.project.noMatches")) failures.push(`${at}: empty search reads ${reading.empty}`);
+          if (!String(reading.empty).includes(translate(lang, "activity.filter.search").split(" ").at(-1)!)) failures.push(`${at}: empty search names another noun than the field: ${reading.empty}`);
+          await frame("project-empty", ["[data-onboarding-project-empty]"]);
+          await search.fill("");
+          await page.locator(`[data-onboarding-project="repo-${"1".repeat(32)}"]`).click();
+
+          await goStep("orchestrator");
+          await page.waitForSelector("[data-onboarding-cheaper]");
+          await opensOnHeading("orchestrator");
+          const dollars = lang === "uk" ? "$0,60" : "$0.60";
+          reading.permissions = await text("[data-onboarding-permissions]");
+          reading.cost = await text("[data-onboarding-cost]");
+          reading.cheaper = await text("[data-onboarding-cheaper]");
+          if (reading.permissions !== translate(lang, "onboarding.orchestrator.permissions")) failures.push(`${at}: permissions read ${reading.permissions}`);
+          if (!String(reading.cost).includes(dollars)) failures.push(`${at}: estimate reads ${reading.cost}`);
+          const sizes = await page.evaluate(() => ["[data-onboarding-permissions]", "[data-onboarding-cost]"].map((selector) => getComputedStyle(document.querySelector(selector)!).fontSize));
+          const notesSize = await page.locator("[data-onboarding-permissions]").evaluate((node) => getComputedStyle(node.parentElement!.firstElementChild!).fontSize);
+          if (sizes.some((size) => size !== notesSize)) failures.push(`${at}: the notes use ${sizes.join("/")} beside ${notesSize}`);
+          /* The cheaper choice is a text action beside the estimate: no frame and no fill, so Create stays the one filled control. */
+          const cheaperStyle = await page.locator("[data-onboarding-cheaper]").evaluate((node) => { const style = getComputedStyle(node); return { border: style.borderTopWidth, fill: style.backgroundColor, width: node.getBoundingClientRect().width, parent: node.parentElement!.getBoundingClientRect().width }; });
+          reading.cheaperStyle = cheaperStyle;
+          if (cheaperStyle.border !== "0px" || cheaperStyle.fill !== "rgba(0, 0, 0, 0)" || cheaperStyle.width > cheaperStyle.parent + 0.5) failures.push(`${at}: the cheaper choice is drawn as a control: ${JSON.stringify(cheaperStyle)}`);
+          if (!String(reading.cheaper).endsWith("Codex · GPT-6.1-Sol")) failures.push(`${at}: cheaper choice reads ${reading.cheaper}`);
+          await frame("orchestrator-copy", ["[data-onboarding-permissions]", "[data-onboarding-cost]"]);
+          await frame("orchestrator-cheaper", ["[data-onboarding-cost]", "[data-onboarding-cheaper]"]);
+          await page.locator("[data-onboarding-orchestrator-change=runs-on]").click();
+          await page.locator("[data-onboarding-orchestrator] select").first().waitFor();
+          reading.modelOptions = await page.locator("[data-onboarding-orchestrator] select").evaluateAll((nodes) => nodes.flatMap((node) => [...(node as HTMLSelectElement).options].map((option) => option.textContent ?? "")));
+          const haiku = (reading.modelOptions as string[]).filter((label) => /haiku 5\.5/i.test(label));
+          if (haiku.length > 1 || haiku.some((label) => /alias/i.test(label))) failures.push(`${at}: Haiku 5.5 listed as ${JSON.stringify(haiku)}`);
+          await page.locator("[data-onboarding-orchestrator-change=runs-on]").click();
+          await page.locator("[data-onboarding-cheaper]").click();
+          await page.waitForFunction(() => document.querySelector("[data-onboarding-cost]")?.textContent?.includes("$0.30") || document.querySelector("[data-onboarding-cost]")?.textContent?.includes("$0,30"));
+          reading.costAfter = await text("[data-onboarding-cost]");
+          reading.runsOnAfter = await text("[data-onboarding-orchestrator-runs-on]");
+          reading.cheaperAfter = await page.locator("[data-onboarding-cheaper]").count();
+          if (reading.cheaperAfter !== 0) failures.push(`${at}: the cheaper choice is still offered after it was taken`);
+          await frame("orchestrator-chosen", ["[data-onboarding-orchestrator-runs-on]", "[data-onboarding-cost]"]);
+          if (pageErrors.length) failures.push(`${at}: page errors ${pageErrors.join(" | ")}`);
+          readings.push(reading);
+        } catch (error) {
+          failures.push(`${at}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+          await page.screenshot({ path: path.join(out, `${at}-failed.png`) }).catch(() => {});
+        } finally {
+          await opened.context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ readings, failures }, null, 2) + "\n");
+    expect(failures).toEqual([]);
+  }, 600_000);
+});
 
 describe("new task default deadline", () => {
   browserTest("default, picked and reset deadlines render in both languages and themes", async () => {
