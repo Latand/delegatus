@@ -2084,6 +2084,55 @@ test("a stale running publication parks with its reservation, age and recovery a
   expect(loadPipelines()[0]!.cursor?.stageId).toBe("review");
 });
 
+test.each(["reject", "edit"] as const)("revocation during stage settlement preserves the active publication fence (%s)", async decision => {
+  const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
+  const { candidate, context, authority, NOW } = await import("@/lib/tasks/proactive.fixture");
+  const { mutateTasks } = await import("@/lib/tasks/store");
+  const { patchTask } = await import("@/lib/tasks/commands");
+  const { settlePendingStageGit } = await import("./engine");
+  const { pipelinePublicationFence } = await import("./git");
+  const { h, box, pipeline } = await interruptedPublication();
+  const project = pipeline.project;
+  const { task } = await admitProactiveTask({ ...candidate(`settlement-${decision}`), project }, { ...context(), project }, undefined, authority());
+  const now = () => new Date(NOW).toISOString();
+  await decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task), undefined, now);
+  pipeline.taskIds = [task.id];
+  savePipelines([pipeline]);
+  const fence = pipelinePublicationFence(pipeline);
+  const operation = pipeline.delivery!.operation!;
+  const descriptor = fs.openSync(operation.executor!.lock, "a");
+  const artifact = path.join(path.dirname(operation.executor!.lock), "retained-settlement.txt");
+  const exec = h.ports.exec;
+  let revoked = false;
+  try {
+    expect(spawnSync("flock", ["-n", "3"], { stdio: ["ignore", "pipe", "pipe", descriptor] }).status).toBe(0);
+    fs.writeFileSync(artifact, "Retain the accepted work\n", { flag: "wx" });
+    h.ports.exec = async (...args) => {
+      if (!revoked) {
+        revoked = true;
+        if (decision === "reject") await decideProactiveTask(task.id, "reject", "operator", proactiveDecisionToken(task), undefined, now);
+        else mutateTasks(tasks => {
+          const result = patchTask(tasks, task.id, { details: "Scope changed during the accepted-head read" });
+          if (!result.ok) throw new Error(result.error);
+          return { tasks: result.tasks, result: null };
+        });
+        const stale = new Date(Date.now() - 120_000);
+        fs.futimesSync(descriptor, stale, stale);
+      }
+      return await exec(...args);
+    };
+    await settlePendingStageGit(h.ports);
+    expect(revoked).toBe(true);
+    const retained = loadPipelines()[0]!;
+    expect(retained.state).toBe("running");
+    expect(pipelinePublicationFence(retained)).toBe(fence);
+    expect(retained.delivery!.operation).toMatchObject({ id: operation.id, state: "running" });
+    expect(box.order).toEqual(["commit"]);
+    expect(h.spawnInputs).toHaveLength(1);
+    expect(fs.readFileSync(artifact, "utf8")).toBe("Retain the accepted work\n");
+  } finally { h.ports.exec = exec; fs.closeSync(descriptor); }
+});
+
 for (const settled of [false, true]) {
   test(`a lane already parked on its own publisher recovers with a ${settled ? "settled" : "running"} reservation (#1939)`, async () => {
     const { h, box, pipeline } = await interruptedPublication();
