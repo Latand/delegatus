@@ -790,6 +790,8 @@ test("delivery gives a v57 mandate the maintenance practice and the current rule
 
 /* The short form retains the full form's rule numbering. */
 test("the seat's mandate carries all sixteen working rules in their short form", () => {
+  expect(ORCHESTRATOR_SYSTEM_PROMPT.split(WORKING_RULES_SHORT)).toHaveLength(2);
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain(WORKING_RULES);
   const numbers = (text: string) => text.split("\n").flatMap((line) => line.match(/^(\d+)\. /)?.[1] ?? []);
   expect(numbers(WORKING_RULES_SHORT)).toEqual(numbers(WORKING_RULES));
   expect(numbers(WORKING_RULES_SHORT)).toHaveLength(16);

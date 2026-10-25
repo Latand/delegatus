@@ -283,7 +283,7 @@ are at `3736d5e4`.
 | 1154-1165 | delivery sends a v56 mandate's proposals to a decision form by exact match | v56 upgrade | **keep** | behaviour |
 | 1178-1194 | the mandate states the maintenance practice after the declared-outputs bullet | bullet wording, position and lint | **delete-block** | phrases and placement in a constant |
 | 1200-1218 | delivery gives a v57 mandate the maintenance practice and the current rule 16 by exact match | v57 upgrade | **keep** | behaviour |
-| 1224-1232 | the seat's mandate carries all sixteen working rules in their short form | short rules inside the mandate; numbering parity; phrases | **trim** | keep 1227-1229 (full/short rule numbering parity and sixteen rules); drop 1225-1226, 1230-1231 (constant inclusion, phrases and placement against authored wording) |
+| 1224-1232 | the seat's mandate carries all sixteen working rules in their short form | short rules inside the mandate; numbering parity; phrases | **trim** | keep 1225-1229 (the short form is composed into the mandate once, the full form is omitted, full/short rule numbering matches and sixteen rules remain); drop 1230-1231 (phrases and placement against authored wording) |
 | 1238-1260 | a seat's launch prompt carries the evidence and publication duties of rules 6 and 12 | roleSpawnPrompt carries the short rules once; duty phrases | **trim** | keep 1239-1243 (the launch built by roleSpawnPrompt holds the short rules once and not the full ones); drop 1244-1259 |
 
 ### `src/lib/roles/registry.test.ts`
@@ -1495,8 +1495,9 @@ The ordinary commit hooks repeat staged whitespace, privacy and scoped lint.
 
 The completion-channel test in `src/lib/pipelines/prompts.test.ts` retains its
 original rendering setup and single-JSON-fence assertion. The working-rules
-test in `src/lib/orchestrator/prompt.test.ts` retains its original numeric
-rule-count and full/short numbering-parity assertions. Both blocks are trimmed
+test in `src/lib/orchestrator/prompt.test.ts` retains its original short-form
+composition, full-form omission, numeric rule-count and full/short
+numbering-parity assertions. Both blocks are trimmed
 existing tests; their authored wording assertions were removed.
 
 The reviewer parameter test in `src/lib/pipelines/roles.test.ts` retains its
