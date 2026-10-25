@@ -328,7 +328,7 @@ for (const collections of [["pipelines","pipelines_archive","flows"], ["pipeline
       return row;
     });
     const laterRow=pipeline("later_steady");
-    const root=path.dirname(f.filename),ready=path.join(root,"reader-ready"),signals=path.join(root,"reader-yields"),acks=path.join(root,"writer-acks"),writerRows=path.join(root,"writer-rows.json");
+    const root=path.dirname(f.filename),ready=path.join(root,"reader-ready"),startMarker=path.join(root,"reader-read-started"),signals=path.join(root,"reader-yields"),acks=path.join(root,"writer-acks"),writerRows=path.join(root,"writer-rows.json");
     fs.mkdirSync(signals);fs.mkdirSync(acks);
     fs.writeFileSync(writerRows,JSON.stringify(laterRow));
     const home=path.join(root,"child-home");fs.mkdirSync(home);
@@ -336,10 +336,13 @@ for (const collections of [["pipelines","pipelines_archive","flows"], ["pipeline
     const readerSource=`
       const fs=await import("node:fs"),path=await import("node:path");
       const {readHistoryProjection,historyAttemptCounts,historyPipelineRef,historyFleetLimitWaits}=await import(process.argv[1]);
-      const filename=process.argv[2],ready=process.argv[3],signals=process.argv[4],acks=process.argv[5];
+      const filename=process.argv[2],ready=process.argv[3],signals=process.argv[4],acks=process.argv[5],startMarker=process.argv[8];
       const collections=JSON.parse(process.argv[6]),rows=JSON.parse(process.argv[7]);
-      const started=performance.now(),deadline=started+1000;let signaled=false,yields=0;
+      let signaled=false,yields=0;
       const waitForCommit=signal=>new Promise(resolve=>{const timer=setInterval(()=>{if(fs.existsSync(path.join(acks,String(signal)))){clearInterval(timer);resolve();}},1);});
+      // Module import and process start precede this line; only the read is timed.
+      const started=performance.now(),deadline=started+1000;
+      fs.writeFileSync(startMarker,String(performance.timeOrigin+started));
       try{
         const answer=await readHistoryProjection(db=>({
           counts:historyAttemptCounts(db,"fixture",${NOW}),
@@ -367,11 +370,14 @@ for (const collections of [["pipelines","pipelines_archive","flows"], ["pipeline
     let reader:ReturnType<typeof Bun.spawn>|undefined,writer:ReturnType<typeof Bun.spawn>|undefined,readerFinished=false;
     try{
       rows.forEach(row=>f.put(row));
-      const readerStartedAt=performance.now();
-      reader=Bun.spawn([process.execPath,"-e",readerSource,path.join(import.meta.dir,"historyProjection.ts"),f.filename,ready,signals,acks,JSON.stringify(collections),JSON.stringify(rows)],
+      reader=Bun.spawn([process.execPath,"-e",readerSource,path.join(import.meta.dir,"historyProjection.ts"),f.filename,ready,signals,acks,JSON.stringify(collections),JSON.stringify(rows),startMarker],
         {env,stdout:"pipe",stderr:"pipe"});
-      const startedAt=performance.now();
-      while(!fs.existsSync(ready)&&performance.now()-startedAt<1000)await new Promise(resolve=>setTimeout(resolve,2));
+      // The external window starts when the reader begins its read, not at spawn.
+      const markerWaitedAt=performance.now();
+      while(!fs.existsSync(startMarker)&&performance.now()-markerWaitedAt<30_000)await new Promise(resolve=>setTimeout(resolve,2));
+      expect(fs.existsSync(startMarker)).toBe(true);
+      const readStartedAt=Number(fs.readFileSync(startMarker,"utf8"))-performance.timeOrigin;
+      while(!fs.existsSync(ready)&&performance.now()-readStartedAt<1000)await new Promise(resolve=>setTimeout(resolve,2));
       expect(fs.existsSync(ready)).toBe(true);
       writer=Bun.spawn([process.execPath,"-e",writerSource,f.filename,ready,signals,acks,writerRows],{env,stdout:"pipe",stderr:"pipe"});
       const committed=path.join(acks,"1"),committedAt=performance.now();
@@ -379,7 +385,7 @@ for (const collections of [["pipelines","pipelines_archive","flows"], ["pipeline
       expect(fs.existsSync(committed)).toBe(true);
       const readerResult=await Promise.race([
         Promise.all([reader.exited,new Response(reader.stdout as ReadableStream<Uint8Array>).text(),new Response(reader.stderr as ReadableStream<Uint8Array>).text()]).then(([code,out,stderr])=>{readerFinished=true;return {code,out,stderr};}),
-        new Promise<never>((_,reject)=>setTimeout(()=>reject(new Error("projection reader exceeded external 1000 ms deadline")),Math.max(0,readerStartedAt+1000-performance.now()))),
+        new Promise<never>((_,reject)=>setTimeout(()=>reject(new Error("projection reader exceeded external 1000 ms deadline")),Math.max(0,readStartedAt+1000-performance.now()))),
       ]);
       const parsed=JSON.parse(readerResult.out.trim()) as {ok:boolean;elapsed:number;answer?:{counts:Record<string,number>;refs:Array<{pipelineId:string}|null>;waits:Array<[string,unknown]>;keys:string[]};error?:string};
       expect(readerResult.code).toBe(0);expect(parsed.ok).toBe(true);
@@ -446,6 +452,32 @@ test("captured identities include updates and deletions before projection and de
     expect(answer.keys).toEqual(["initial_a","initial_b"]);
     expect(f.db.query<{row_key:string},[]>("SELECT row_key FROM history_pending ORDER BY row_key").all()).toEqual([{row_key:"initial_a"}]);
     expect(await f.read(db=>historyAttemptCounts(db,"fixture",NOW))).toEqual({builder:4,reviewer:0});
+  } finally {f.db.close();}
+});
+
+test("an identity a peer reader already drained is not projected again under the write lock",async()=>{
+  const f=fixture();
+  const rows=[pipeline("initial_a"),pipeline("initial_b"),pipeline("initial_c")];
+  try {
+    rows.forEach(row=>f.put(row));
+    let peerDrained=false,projectionsAfterPeer=0;
+    const query=spyOn(Database.prototype,"query");
+    try {
+      const answer=await f.read(db=>({counts:historyAttemptCounts(db,"fixture",NOW),
+        keys:db.query<{row_key:string},[]>("SELECT row_key FROM history_inputs ORDER BY row_key").all().map(row=>row.row_key),
+      }),{onYield:async()=>{
+        if(peerDrained)return;peerDrained=true;
+        // A peer reader that captured the same identities drains them all first.
+        await f.read(db=>historyAttemptCounts(db,"fixture",NOW));
+        query.mockClear();
+      }});
+      projectionsAfterPeer=query.mock.calls.filter(([sql])=>String(sql).includes("json_valid(value_json)")).length;
+      expect(answer.counts).toEqual({builder:3,reviewer:0});
+      expect(answer.keys).toEqual(["initial_a","initial_b","initial_c"]);
+    } finally {query.mockRestore();}
+    expect(peerDrained).toBe(true);
+    expect(projectionsAfterPeer).toBe(0);
+    expect(f.db.query<{n:number},[]>("SELECT count(*) AS n FROM history_pending").get()!.n).toBe(0);
   } finally {f.db.close();}
 });
 

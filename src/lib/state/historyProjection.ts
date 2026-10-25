@@ -368,6 +368,13 @@ export async function readHistoryProjection<T>(read: (db: Database) => T, option
             throw new DatabaseReplacedError(`${filename} was replaced while history projection was projecting a row`);
           }
           assertWriter();
+          if (pending && !db.query("SELECT 1 FROM history_pending WHERE collection=? AND row_key=?").get(pending.collection,pending.row_key)) {
+            // A peer reader already projected this identity after capture.
+            assertWriter();
+            db.exec("COMMIT");
+            next++;
+            return null;
+          }
           if (pending) {
             const allowedStamps=new Map<string,{before:string;after:string}>();
             for(const [key,cache] of shared.counts){
