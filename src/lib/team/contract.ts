@@ -307,7 +307,7 @@ export function safeNextPath(value: unknown): string {
 
 /* ---- workspaces (docs/design/workspaces.md §13) --------------------------- */
 
-/** A named set of projects (slice (a): a filter, restricting nobody). */
+/** A named set of projects whose membership bounds human project access. */
 export interface Workspace {
   /** "w_" + 16 random bytes, hex, minted by the client so a retry is safe. */
   id: string;
@@ -332,8 +332,10 @@ export type WorkspacesView =
   | { mode: "solo" }
   | {
     mode: "team";
-    /** The owner's: only the owner creates, renames, deletes and places. */
+    /** Only the owner creates, renames and deletes workspaces. */
     canManage: boolean;
+    /** Workspaces this person may invite into and manage membership in. */
+    managedWorkspaceIds?: string[];
     /** Sorted by name in the installation's locale. */
     workspaces: Workspace[];
     /** Only with `?catalog=1`: every project the installation knows. */

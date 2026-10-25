@@ -22,7 +22,9 @@ import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
 
 import { emptyStore } from "@/components/runtime/runtimeModel";
+import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import type { FileEntry, StructuredSpawnCardState } from "@/lib/types";
+import type { BoardProjectStateV1 } from "@/lib/view/types";
 
 const actualRuntimeHooks = await import("@/hooks/useRuntime");
 const actualConversationCatalogHooks = await import("@/hooks/useConversationCatalog");
@@ -65,14 +67,19 @@ const OVERRIDES: Record<string, unknown> = {
   cancelAnimationFrame: (id: number) => clearTimeout(id),
   ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
   IntersectionObserver: class { observe() {} unobserve() {} disconnect() {} takeRecords() { return []; } },
-  fetch: (async (input: string | URL | Request) => {
+  fetch: (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
+    const method = (init?.method ?? "GET").toUpperCase();
     if (url.startsWith("/api/board")) {
-      const board = {
-        schemaVersion: 1, revision: 1, updatedAt: new Date(0).toISOString(), pathAliases: {}, explicitManual: boardManual,
-        prefs: { manual: boardManual, hidden: [], expanded: [], favorites: [], foldedEngineChildIds: [], expandedEngineTrayParentIds: [], viewMode: null, taskPanelOpen: false },
-      };
-      return { ok: true, status: 200, json: async () => ({ board }), text: async () => JSON.stringify({ board }) };
+      if (method === "GET") {
+        const board = boardState(boardManual);
+        return { ok: true, status: 200, json: async () => ({ ok: true, board }), text: async () => JSON.stringify({ ok: true, board }) };
+      }
+      /* The board's own reconcile-roots write lands as the server would apply it. */
+      const body = JSON.parse(String(init?.body)) as { mutations?: BoardMutationV1[] };
+      const board = applyBoardMutations(boardState(boardManual), body.mutations ?? []);
+      boardManual = board.prefs.manual;
+      return { ok: true, status: 200, json: async () => ({ ok: true, applied: true, board }), text: async () => JSON.stringify({ ok: true, applied: true, board }) };
     }
     const body = url.startsWith("/api/conversations") ? { items: [], nextCursor: null } : {};
     return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
@@ -80,6 +87,14 @@ const OVERRIDES: Record<string, unknown> = {
 };
 /** Paths the stored board pins by hand. */
 let boardManual: string[] = [];
+const boardState = (manual: string[]): BoardProjectStateV1 => ({
+  schemaVersion: 1,
+  revision: 1,
+  updatedAt: new Date(0).toISOString(),
+  pathAliases: {},
+  explicitManual: manual,
+  prefs: { manual, hidden: [], expanded: [], favorites: [], foldedEngineChildIds: [], expandedEngineTrayParentIds: [], viewMode: null, taskPanelOpen: false },
+});
 const HAS: Record<string, boolean> = {};
 const SAVED: Record<string, unknown> = {};
 
@@ -206,14 +221,16 @@ test("a failed-delivery launch record on a scanned transcript path never hides t
   boardManual = [path];
   const host = mount([conversationWithFailedLaunchRecord(path)]);
 
-  /* The conversation is real board content: it must keep its tile on the Board (the kanban, #1695). */
-  expect(await waitFor(() => host.querySelector(`[data-member="${path}"]`) !== null)).toBe(true);
+  /* The conversation is real board content: it must keep its card on the Board
+     even when the current layout presents that quiet card folded. */
+  const card = `[data-kanban-card="lineage:conversation-launch-claim-1"]`;
+  expect(await waitFor(() => host.querySelector(card) !== null)).toBe(true);
 
   await settle();
   /* The launch-history drawer is gone (#1765); what this guards is the
      conversation, which keeps its tile whatever the record says. */
   expect(host.querySelector('[data-testid="launch-history"]')).toBeNull();
-  expect(host.querySelector(`[data-member="${path}"]`)).not.toBeNull();
+  expect(host.querySelector(card)?.textContent).toContain("Finished conversation");
 });
 
 test("a pathless terminal receipt is still shelved and never becomes a board card", async () => {
@@ -222,11 +239,14 @@ test("a pathless terminal receipt is still shelved and never becomes a board car
   const beside = "/claude-projects/repo-fixture/conversation-beside.jsonl";
   boardManual = ["spawn:launch-claim-2"];
   const host = mount([{ ...conversationWithFailedLaunchRecord(beside), spawn: undefined } as FileEntry, pathlessReceipt("launch-claim-2")]);
-  expect(await waitFor(() => host.querySelector(`[data-kanban-board] [data-member="${beside}"]`) !== null)).toBe(true);
+  expect(await waitFor(() => host.querySelector('[data-kanban-board] [data-kanban-card="lineage:conversation-launch-claim-1"]') !== null)).toBe(true);
   await settle();
 
+  /* The board's own writes leave the hand pin in place, so the receipt is still asked for. */
+  expect(boardManual).toContain("spawn:launch-claim-2");
   expect(host.querySelector('[data-kanban-board] [data-member="spawn:launch-claim-2"]')).toBeNull();
   expect(host.querySelector('[data-kanban-board] [data-link-path="spawn:launch-claim-2"]')).toBeNull();
+  expect(host.querySelector('[data-kanban-card="lineage:conversation-launch-claim-2"]')).toBeNull();
   /* The launch-history drawer is gone (#1765); the receipt is still claimed
      off the board rather than drawn as a card. */
   expect(host.querySelector('[data-testid="launch-history"]')).toBeNull();
