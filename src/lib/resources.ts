@@ -2487,7 +2487,10 @@ export function createResourcesReader(
     workerProcessRuntime?: ResourceWorkerProcessRuntime;
   } = {},
 ): ResourcesReader {
-  const inProcess = options.inProcess ?? process.env.LLV_RESOURCE_COLLECTOR_IN_PROCESS === "1";
+  /* The worker collector is fail-closed when it cannot prove kernel process
+     containment. That proof exists only on Linux; running the read-only
+     collector in this Viewer process is the portable path on macOS/Windows. */
+  const inProcess = options.inProcess ?? (process.env.LLV_RESOURCE_COLLECTOR_IN_PROCESS === "1" || process.platform !== "linux");
   const collectorId = options.collectorId ?? (inProcess
     ? `in-process:${process.pid}:${crypto.randomUUID()}`
     : `worker:${process.pid}:${crypto.randomUUID()}`);
