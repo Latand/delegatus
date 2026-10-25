@@ -8275,6 +8275,12 @@ export function viewerMcpBindings(
       (args: McpToolArgs, context?: McpToolCallContext) => deployExactSha(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
       { authorizeReceipt: () => { deploySeatAuthority(domainDependencies); } },
     ),
+    pipeline_checks: (args, context) => {
+      assertPipelineSeatAuthority(domainDependencies);
+      return viewerControlForCall(controlDependencies, context).post(`/api/pipelines/${encodeURIComponent(required(args, "pipelineId"))}/checks`, {
+        scope: args.scope, execution: args.execution, stageId: args.stageId,
+      }, {}, context);
+    },
     get_pipeline: reads.get_pipeline,
     board_snapshot: (args) => boardSnapshot(args, domainDependencies),
     list_flows: (args) => Promise.resolve(listFlows(args, domainDependencies)),
