@@ -3,109 +3,213 @@
     "lang": "en",
     "theme": "light",
     "viewport": 1440,
+    "state": "queue",
     "clipped": false,
-    "width": 428,
-    "text": "Waiting for the CPU queue · 2nd · up to 7 min · High"
+    "width": 418,
+    "text": "Waiting for the CPU queue · 2nd · waited 7 min · High"
   },
   {
     "lang": "en",
     "theme": "light",
     "viewport": 1000,
+    "state": "queue",
     "clipped": false,
-    "width": 676,
-    "text": "Waiting for the CPU queue · 2nd · up to 7 min · High"
+    "width": 651,
+    "text": "Waiting for the CPU queue · 2nd · waited 7 min · High"
   },
   {
     "lang": "en",
     "theme": "light",
     "viewport": 390,
+    "state": "queue",
     "clipped": false,
-    "width": 255,
-    "text": "Waiting for the CPU queue · 2nd · up to 7 min · High"
+    "width": 263,
+    "text": "Waiting for the CPU queue · 2nd · waited 7 min · High"
   },
   {
     "lang": "en",
     "theme": "light",
     "viewport": 390,
     "surface": "task",
+    "state": "queue",
     "clipped": false,
     "visible": true,
-    "text": "Waiting for the CPU queue · 2nd · up to 7 min · High"
+    "text": "Waiting for the CPU queue · 2nd · waited 7 min · High"
   },
   {
     "lang": "en",
     "theme": "light",
     "viewport": 390,
     "surface": "stages",
+    "state": "queue",
     "clipped": false,
     "visible": true,
-    "text": "Waiting for the CPU queue · 2nd · up to 7 min · High"
+    "text": "Waiting for the CPU queue · 2nd · waited 7 min · High"
   },
   {
     "lang": "uk",
     "theme": "light",
     "viewport": 1440,
+    "state": "queue",
     "clipped": false,
-    "width": 428,
-    "text": "Чекає черги CPU · 2-й · до 7 хв · Високий"
+    "width": 418,
+    "text": "Чекає черги CPU · 2-й · чекає 7 хв · Високий"
   },
   {
     "lang": "uk",
     "theme": "light",
     "viewport": 1000,
+    "state": "queue",
     "clipped": false,
-    "width": 676,
-    "text": "Чекає черги CPU · 2-й · до 7 хв · Високий"
+    "width": 651,
+    "text": "Чекає черги CPU · 2-й · чекає 7 хв · Високий"
   },
   {
     "lang": "uk",
     "theme": "light",
     "viewport": 390,
+    "state": "queue",
     "clipped": false,
-    "width": 211,
-    "text": "Чекає черги CPU · 2-й · до 7 хв · Високий"
+    "width": 227,
+    "text": "Чекає черги CPU · 2-й · чекає 7 хв · Високий"
   },
   {
     "lang": "uk",
     "theme": "light",
     "viewport": 390,
     "surface": "task",
+    "state": "queue",
     "clipped": false,
     "visible": true,
-    "text": "Чекає черги CPU · 2-й · до 7 хв · Високий"
+    "text": "Чекає черги CPU · 2-й · чекає 7 хв · Високий"
   },
   {
     "lang": "uk",
     "theme": "light",
     "viewport": 390,
     "surface": "stages",
+    "state": "queue",
     "clipped": false,
     "visible": true,
-    "text": "Чекає черги CPU · 2-й · до 7 хв · Високий"
+    "text": "Чекає черги CPU · 2-й · чекає 7 хв · Високий"
   },
   {
     "lang": "en",
     "theme": "light",
     "viewport": 1440,
-    "stalled": true,
+    "state": "pressure",
     "clipped": false,
-    "width": 428,
+    "width": 418,
+    "text": "Held by CPU pressure · 1st in the CPU queue · waited 4 min · High"
+  },
+  {
+    "lang": "en",
+    "theme": "light",
+    "viewport": 1000,
+    "state": "pressure",
+    "clipped": false,
+    "width": 651,
+    "text": "Held by CPU pressure · 1st in the CPU queue · waited 4 min · High"
+  },
+  {
+    "lang": "en",
+    "theme": "light",
+    "viewport": 390,
+    "state": "pressure",
+    "clipped": false,
+    "width": 267,
+    "text": "Held by CPU pressure · 1st in the CPU queue · waited 4 min · High"
+  },
+  {
+    "lang": "en",
+    "theme": "light",
+    "viewport": 390,
+    "surface": "task",
+    "state": "pressure",
+    "clipped": false,
+    "visible": true,
+    "text": "Held by CPU pressure · 1st in the CPU queue · waited 4 min · High"
+  },
+  {
+    "lang": "en",
+    "theme": "light",
+    "viewport": 390,
+    "surface": "stages",
+    "state": "pressure",
+    "clipped": false,
+    "visible": true,
+    "text": "Held by CPU pressure · 1st in the CPU queue · waited 4 min · High"
+  },
+  {
+    "lang": "uk",
+    "theme": "light",
+    "viewport": 1440,
+    "state": "pressure",
+    "clipped": false,
+    "width": 418,
+    "text": "Стримує навантаження CPU · 1-й у черзі CPU · чекає 4 хв · Високий"
+  },
+  {
+    "lang": "uk",
+    "theme": "light",
+    "viewport": 1000,
+    "state": "pressure",
+    "clipped": false,
+    "width": 651,
+    "text": "Стримує навантаження CPU · 1-й у черзі CPU · чекає 4 хв · Високий"
+  },
+  {
+    "lang": "uk",
+    "theme": "light",
+    "viewport": 390,
+    "state": "pressure",
+    "clipped": false,
+    "width": 267,
+    "text": "Стримує навантаження CPU · 1-й у черзі CPU · чекає 4 хв · Високий"
+  },
+  {
+    "lang": "uk",
+    "theme": "light",
+    "viewport": 390,
+    "surface": "task",
+    "state": "pressure",
+    "clipped": false,
+    "visible": true,
+    "text": "Стримує навантаження CPU · 1-й у черзі CPU · чекає 4 хв · Високий"
+  },
+  {
+    "lang": "uk",
+    "theme": "light",
+    "viewport": 390,
+    "surface": "stages",
+    "state": "pressure",
+    "clipped": false,
+    "visible": true,
+    "text": "Стримує навантаження CPU · 1-й у черзі CPU · чекає 4 хв · Високий"
+  },
+  {
+    "lang": "en",
+    "theme": "light",
+    "viewport": 1440,
+    "state": "stalled",
+    "clipped": false,
+    "width": 418,
     "text": "CPU queue is stalled · 7th · nothing started for 62 min · High"
   },
   {
     "lang": "en",
     "theme": "light",
     "viewport": 1000,
-    "stalled": true,
+    "state": "stalled",
     "clipped": false,
-    "width": 676,
+    "width": 651,
     "text": "CPU queue is stalled · 7th · nothing started for 62 min · High"
   },
   {
     "lang": "en",
     "theme": "light",
     "viewport": 390,
-    "stalled": true,
+    "state": "stalled",
     "clipped": false,
     "width": 267,
     "text": "CPU queue is stalled · 7th · nothing started for 62 min · High"
@@ -115,7 +219,7 @@
     "theme": "light",
     "viewport": 390,
     "surface": "task",
-    "stalled": true,
+    "state": "stalled",
     "clipped": false,
     "visible": true,
     "text": "CPU queue is stalled · 7th · nothing started for 62 min · High"
@@ -125,7 +229,7 @@
     "theme": "light",
     "viewport": 390,
     "surface": "stages",
-    "stalled": true,
+    "state": "stalled",
     "clipped": false,
     "visible": true,
     "text": "CPU queue is stalled · 7th · nothing started for 62 min · High"
@@ -134,25 +238,25 @@
     "lang": "uk",
     "theme": "light",
     "viewport": 1440,
-    "stalled": true,
+    "state": "stalled",
     "clipped": false,
-    "width": 428,
+    "width": 418,
     "text": "Черга CPU стоїть · 7-й · нічого не стартувало 62 хв · Високий"
   },
   {
     "lang": "uk",
     "theme": "light",
     "viewport": 1000,
-    "stalled": true,
+    "state": "stalled",
     "clipped": false,
-    "width": 676,
+    "width": 651,
     "text": "Черга CPU стоїть · 7-й · нічого не стартувало 62 хв · Високий"
   },
   {
     "lang": "uk",
     "theme": "light",
     "viewport": 390,
-    "stalled": true,
+    "state": "stalled",
     "clipped": false,
     "width": 267,
     "text": "Черга CPU стоїть · 7-й · нічого не стартувало 62 хв · Високий"
@@ -162,7 +266,7 @@
     "theme": "light",
     "viewport": 390,
     "surface": "task",
-    "stalled": true,
+    "state": "stalled",
     "clipped": false,
     "visible": true,
     "text": "Черга CPU стоїть · 7-й · нічого не стартувало 62 хв · Високий"
@@ -172,7 +276,7 @@
     "theme": "light",
     "viewport": 390,
     "surface": "stages",
-    "stalled": true,
+    "state": "stalled",
     "clipped": false,
     "visible": true,
     "text": "Черга CPU стоїть · 7-й · нічого не стартувало 62 хв · Високий"
@@ -181,109 +285,213 @@
     "lang": "en",
     "theme": "dark",
     "viewport": 1440,
+    "state": "queue",
     "clipped": false,
-    "width": 428,
-    "text": "Waiting for the CPU queue · 2nd · up to 7 min · High"
+    "width": 418,
+    "text": "Waiting for the CPU queue · 2nd · waited 7 min · High"
   },
   {
     "lang": "en",
     "theme": "dark",
     "viewport": 1000,
+    "state": "queue",
     "clipped": false,
-    "width": 676,
-    "text": "Waiting for the CPU queue · 2nd · up to 7 min · High"
+    "width": 651,
+    "text": "Waiting for the CPU queue · 2nd · waited 7 min · High"
   },
   {
     "lang": "en",
     "theme": "dark",
     "viewport": 390,
+    "state": "queue",
     "clipped": false,
-    "width": 255,
-    "text": "Waiting for the CPU queue · 2nd · up to 7 min · High"
+    "width": 263,
+    "text": "Waiting for the CPU queue · 2nd · waited 7 min · High"
   },
   {
     "lang": "en",
     "theme": "dark",
     "viewport": 390,
     "surface": "task",
+    "state": "queue",
     "clipped": false,
     "visible": true,
-    "text": "Waiting for the CPU queue · 2nd · up to 7 min · High"
+    "text": "Waiting for the CPU queue · 2nd · waited 7 min · High"
   },
   {
     "lang": "en",
     "theme": "dark",
     "viewport": 390,
     "surface": "stages",
+    "state": "queue",
     "clipped": false,
     "visible": true,
-    "text": "Waiting for the CPU queue · 2nd · up to 7 min · High"
+    "text": "Waiting for the CPU queue · 2nd · waited 7 min · High"
   },
   {
     "lang": "uk",
     "theme": "dark",
     "viewport": 1440,
+    "state": "queue",
     "clipped": false,
-    "width": 428,
-    "text": "Чекає черги CPU · 2-й · до 7 хв · Високий"
+    "width": 418,
+    "text": "Чекає черги CPU · 2-й · чекає 7 хв · Високий"
   },
   {
     "lang": "uk",
     "theme": "dark",
     "viewport": 1000,
+    "state": "queue",
     "clipped": false,
-    "width": 676,
-    "text": "Чекає черги CPU · 2-й · до 7 хв · Високий"
+    "width": 651,
+    "text": "Чекає черги CPU · 2-й · чекає 7 хв · Високий"
   },
   {
     "lang": "uk",
     "theme": "dark",
     "viewport": 390,
+    "state": "queue",
     "clipped": false,
-    "width": 211,
-    "text": "Чекає черги CPU · 2-й · до 7 хв · Високий"
+    "width": 227,
+    "text": "Чекає черги CPU · 2-й · чекає 7 хв · Високий"
   },
   {
     "lang": "uk",
     "theme": "dark",
     "viewport": 390,
     "surface": "task",
+    "state": "queue",
     "clipped": false,
     "visible": true,
-    "text": "Чекає черги CPU · 2-й · до 7 хв · Високий"
+    "text": "Чекає черги CPU · 2-й · чекає 7 хв · Високий"
   },
   {
     "lang": "uk",
     "theme": "dark",
     "viewport": 390,
     "surface": "stages",
+    "state": "queue",
     "clipped": false,
     "visible": true,
-    "text": "Чекає черги CPU · 2-й · до 7 хв · Високий"
+    "text": "Чекає черги CPU · 2-й · чекає 7 хв · Високий"
   },
   {
     "lang": "en",
     "theme": "dark",
     "viewport": 1440,
-    "stalled": true,
+    "state": "pressure",
     "clipped": false,
-    "width": 428,
+    "width": 418,
+    "text": "Held by CPU pressure · 1st in the CPU queue · waited 4 min · High"
+  },
+  {
+    "lang": "en",
+    "theme": "dark",
+    "viewport": 1000,
+    "state": "pressure",
+    "clipped": false,
+    "width": 651,
+    "text": "Held by CPU pressure · 1st in the CPU queue · waited 4 min · High"
+  },
+  {
+    "lang": "en",
+    "theme": "dark",
+    "viewport": 390,
+    "state": "pressure",
+    "clipped": false,
+    "width": 267,
+    "text": "Held by CPU pressure · 1st in the CPU queue · waited 4 min · High"
+  },
+  {
+    "lang": "en",
+    "theme": "dark",
+    "viewport": 390,
+    "surface": "task",
+    "state": "pressure",
+    "clipped": false,
+    "visible": true,
+    "text": "Held by CPU pressure · 1st in the CPU queue · waited 4 min · High"
+  },
+  {
+    "lang": "en",
+    "theme": "dark",
+    "viewport": 390,
+    "surface": "stages",
+    "state": "pressure",
+    "clipped": false,
+    "visible": true,
+    "text": "Held by CPU pressure · 1st in the CPU queue · waited 4 min · High"
+  },
+  {
+    "lang": "uk",
+    "theme": "dark",
+    "viewport": 1440,
+    "state": "pressure",
+    "clipped": false,
+    "width": 418,
+    "text": "Стримує навантаження CPU · 1-й у черзі CPU · чекає 4 хв · Високий"
+  },
+  {
+    "lang": "uk",
+    "theme": "dark",
+    "viewport": 1000,
+    "state": "pressure",
+    "clipped": false,
+    "width": 651,
+    "text": "Стримує навантаження CPU · 1-й у черзі CPU · чекає 4 хв · Високий"
+  },
+  {
+    "lang": "uk",
+    "theme": "dark",
+    "viewport": 390,
+    "state": "pressure",
+    "clipped": false,
+    "width": 267,
+    "text": "Стримує навантаження CPU · 1-й у черзі CPU · чекає 4 хв · Високий"
+  },
+  {
+    "lang": "uk",
+    "theme": "dark",
+    "viewport": 390,
+    "surface": "task",
+    "state": "pressure",
+    "clipped": false,
+    "visible": true,
+    "text": "Стримує навантаження CPU · 1-й у черзі CPU · чекає 4 хв · Високий"
+  },
+  {
+    "lang": "uk",
+    "theme": "dark",
+    "viewport": 390,
+    "surface": "stages",
+    "state": "pressure",
+    "clipped": false,
+    "visible": true,
+    "text": "Стримує навантаження CPU · 1-й у черзі CPU · чекає 4 хв · Високий"
+  },
+  {
+    "lang": "en",
+    "theme": "dark",
+    "viewport": 1440,
+    "state": "stalled",
+    "clipped": false,
+    "width": 418,
     "text": "CPU queue is stalled · 7th · nothing started for 62 min · High"
   },
   {
     "lang": "en",
     "theme": "dark",
     "viewport": 1000,
-    "stalled": true,
+    "state": "stalled",
     "clipped": false,
-    "width": 676,
+    "width": 651,
     "text": "CPU queue is stalled · 7th · nothing started for 62 min · High"
   },
   {
     "lang": "en",
     "theme": "dark",
     "viewport": 390,
-    "stalled": true,
+    "state": "stalled",
     "clipped": false,
     "width": 267,
     "text": "CPU queue is stalled · 7th · nothing started for 62 min · High"
@@ -293,7 +501,7 @@
     "theme": "dark",
     "viewport": 390,
     "surface": "task",
-    "stalled": true,
+    "state": "stalled",
     "clipped": false,
     "visible": true,
     "text": "CPU queue is stalled · 7th · nothing started for 62 min · High"
@@ -303,7 +511,7 @@
     "theme": "dark",
     "viewport": 390,
     "surface": "stages",
-    "stalled": true,
+    "state": "stalled",
     "clipped": false,
     "visible": true,
     "text": "CPU queue is stalled · 7th · nothing started for 62 min · High"
@@ -312,25 +520,25 @@
     "lang": "uk",
     "theme": "dark",
     "viewport": 1440,
-    "stalled": true,
+    "state": "stalled",
     "clipped": false,
-    "width": 428,
+    "width": 418,
     "text": "Черга CPU стоїть · 7-й · нічого не стартувало 62 хв · Високий"
   },
   {
     "lang": "uk",
     "theme": "dark",
     "viewport": 1000,
-    "stalled": true,
+    "state": "stalled",
     "clipped": false,
-    "width": 676,
+    "width": 651,
     "text": "Черга CPU стоїть · 7-й · нічого не стартувало 62 хв · Високий"
   },
   {
     "lang": "uk",
     "theme": "dark",
     "viewport": 390,
-    "stalled": true,
+    "state": "stalled",
     "clipped": false,
     "width": 267,
     "text": "Черга CPU стоїть · 7-й · нічого не стартувало 62 хв · Високий"
@@ -340,7 +548,7 @@
     "theme": "dark",
     "viewport": 390,
     "surface": "task",
-    "stalled": true,
+    "state": "stalled",
     "clipped": false,
     "visible": true,
     "text": "Черга CPU стоїть · 7-й · нічого не стартувало 62 хв · Високий"
@@ -350,7 +558,7 @@
     "theme": "dark",
     "viewport": 390,
     "surface": "stages",
-    "stalled": true,
+    "state": "stalled",
     "clipped": false,
     "visible": true,
     "text": "Черга CPU стоїть · 7-й · нічого не стартувало 62 хв · Високий"

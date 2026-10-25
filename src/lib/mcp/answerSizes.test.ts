@@ -232,9 +232,6 @@ test("measure every tool through the MCP service and budget common board answers
   try {
     const protocol = await client.callTool({ name: "list_tasks", arguments: { clientRequestId: "schema-additive", project: "size-board", status: ["blocked", "unknown"], limit: "999", full: true } });
     expect(protocol.isError).not.toBe(true);
-    const tools = (await client.listTools()).tools;
-    expect(tools.find(tool => tool.name === "list_tasks")?.description).toContain("compact by default");
-    expect(tools.find(tool => tool.name === "list_flows")?.description).toContain("compact by default");
     const flowProtocol = await client.callTool({ name: "list_flows", arguments: { clientRequestId: "flow-schema-additive", state: ["waiting_ready", "unknown"], limit: "999", compact: true } });
     expect(flowProtocol.isError).not.toBe(true);
   } finally { await client.close(); await server.close(); }

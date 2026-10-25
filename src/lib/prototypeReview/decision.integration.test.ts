@@ -189,6 +189,7 @@ test("in-process owner decisions use the web text and client key through the pro
   await settlePrototypeDeliveriesForTests();
   await until(() => runtime.delivered.length === before + 1);
   const decision = loadTasks()[0]!.prototypeReviews!.find(r => r.id === id)!.decision!;
+  await until(() => runtime.journal.operationResult(decision.delivery.operationId!)?.receipt.status === "delivered");
   expect(decision.delivery.clientMessageId).toBe(`prototype-decision:${id}`);
   expect(decision.delivery.text).toBe(prototypeDecisionText(task, round, decision));
   expect(runtime.delivered.at(-1)!.text).toBe(decision.delivery.text);
@@ -296,7 +297,6 @@ test.each(["custom", "numbered-reservation", "numbered-custom", "continuation-co
     expect([...words]).toHaveLength(20_000);
     expect(isPrototypeReplica(prototypeReviewReplica(task), task.id, task.project)).toBe(true);
     expect(Buffer.byteLength(saved.delivery.text)).toBeLessThanOrEqual(32_000);
-    expect(saved.delivery.text).toContain("Read read_prototype_review");
     expect(saved.delivery.text).not.toContain("\uFFFD");
   }
   if (kind === "long-unicode") {

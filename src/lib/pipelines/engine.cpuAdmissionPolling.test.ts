@@ -54,6 +54,7 @@ async function until(check: () => boolean) {
 
 async function harness(words = ["one", "two"]) {
   const launches: { title: string; at: number }[] = [];
+  const admissions: number[] = [];
   machineCpuAdmissionQueue();
   const db = new Database(cpuAdmissionFile());
   db.exec("PRAGMA busy_timeout=5000");
@@ -61,10 +62,15 @@ async function harness(words = ["one", "two"]) {
   let release!: () => void, hookCode: number | null | undefined;
   const held = new Promise<void>(resolve => { release = resolve; });
   const pressureFile = path.join(directory, "pressure");
-  fs.writeFileSync(pressureFile, "some avg10=0.00 avg60=0.00 avg300=0.00 total=0\n"); // Idle PSI still respects FIFO.
+  fs.writeFileSync(pressureFile, "some avg10=90.00 total=1\n"); // A stable gate hold makes the queue barrier observable.
   const adapter = engine.defaultPipelinePorts();
   const ports = {
-    cpuPressureHold: adapter.cpuPressureHold, cpuAdmissionReconcile: adapter.cpuAdmissionReconcile,
+    cpuPressureHold: (...args: Parameters<NonNullable<engine.PipelinePorts["cpuPressureHold"]>>) => {
+      const hold = adapter.cpuPressureHold!(...args);
+      if (!hold) admissions.push(db.query<{ last: number }, []>("SELECT last FROM admission WHERE id = 1").get()!.last);
+      return hold;
+    },
+    cpuAdmissionReconcile: adapter.cpuAdmissionReconcile,
     cpuAdmissionSuspend: adapter.cpuAdmissionSuspend, drainHold: adapter.drainHold,
     exec: async (_command: string, args: string[], cwd: string) => {
       const pipeline = loadPipelines().find(p => p.worktreeDir === cwd);
@@ -72,7 +78,7 @@ async function harness(words = ["one", "two"]) {
       if (args[0] === "commit") {
         const result = await realExec("bash", ["scripts/gate-slot.sh", "true"], process.cwd(), {
           ...process.env, DELEGATUS_AGENT_CPU: "off", DELEGATUS_CPU_PRESSURE: "on",
-          LLV_GATE_PSI_FILE: pressureFile, LLV_GATE_POLL_SECONDS: "0.02", LLV_GATE_SLOT_LEASE: "",
+          LLV_GATE_PSI_FILE: pressureFile, LLV_GATE_POLL_SECONDS: "0.02", LLV_GATE_PSI_RELEASE_SECONDS: "0", LLV_GATE_SLOT_LEASE: "",
         }, { signal: abort.signal, timeoutMs: 1000 });
         hookCode = result.code;
         await held; // Keep the main tick held after the real hook settles.
@@ -121,7 +127,9 @@ async function harness(words = ["one", "two"]) {
   attempt.state = "committing";
   attempt.verdict = { status: "pass", confidence: 1 };
   savePipelines(rows);
-  return { ports, launches, db, age, release, abort, hookCode: () => hookCode,
+  return { ports, launches, admissions, db, age, release, abort,
+    releaseCpu: () => fs.writeFileSync(pressureFile, "some avg10=0.00 total=1\n"),
+    hookCode: () => hookCode,
     hookQueued: () => !!db.query("SELECT key FROM tickets WHERE owner IS NOT NULL").get(),
     close: () => db.close() };
 }
@@ -133,11 +141,17 @@ test("expired pipeline heads start in FIFO with real spacing while their predece
   try {
     await until(h.hookQueued);
     h.age();
+    await until(() => h.launches.length === 3);
+    expect(h.hookCode()).toBeUndefined();
+    h.releaseCpu();
     await until(() => h.hookCode() !== undefined);
     expect(h.hookCode()).toBe(0);
     expect(finished).toBe(false);
     expect(h.launches.map(item => item.title)).toEqual(["one · build", "two · build", "three · build"]);
-    expect(h.launches[2]!.at - h.launches[1]!.at).toBeGreaterThanOrEqual(CPU_QUEUE_SPACING_MS - 50);
+    expect(h.admissions).toHaveLength(3);
+    for (let index = 1; index < h.admissions.length; index++) {
+      expect(h.admissions[index]! - h.admissions[index - 1]!).toBeGreaterThanOrEqual(CPU_QUEUE_SPACING_MS);
+    }
     expect(h.db.query("SELECT key FROM tickets").all()).toEqual([]);
   } finally { h.abort.abort(); h.release(); await pending; h.close(); }
   expect(h.launches).toHaveLength(3);
@@ -152,7 +166,7 @@ test.each(["pause", "close", "update"] as const)("pipeline %s releases a head fo
     const second = loadPipelines()[1]!;
     if (action === "update") writeDrain(drainFile(), { id: "update", target: "candidate", since: new Date().toISOString(), until: 0, persistent: true });
     else expect((await engine.patchPipeline(second.id, { action }, h.ports)).error).toBeUndefined();
-    h.age();
+    h.age(); h.releaseCpu();
     await until(() => h.hookCode() !== undefined);
     expect(h.hookCode()).toBe(0);
     expect(finished).toBe(false);
@@ -179,6 +193,8 @@ test.each(["failure", "snapshot"] as const)("pipeline admission retries a transi
     await until(h.hookQueued);
     refuse = true;
     h.age();
+    await until(() => h.launches.length === 2);
+    h.releaseCpu();
     await until(() => h.hookCode() !== undefined);
     expect(h.hookCode()).toBe(0);
     expect(h.launches).toHaveLength(2);
@@ -201,6 +217,8 @@ test("a slow admitted launch leaves later CPU heads polling and their reserved a
   try {
     await until(h.hookQueued);
     h.age();
+    await until(() => loadPipelines()[2]!.runs[0]!.attempts.at(-1)!.activation?.phase === "reserved");
+    h.releaseCpu();
     await until(() => h.hookCode() !== undefined);
     expect(h.hookCode()).toBe(0);
     expect(finished).toBe(false);
@@ -218,7 +236,7 @@ test.each(["unbound", "rebinding"] as const)("a %s delivery controller suspends 
   try {
     await until(h.hookQueued);
     h.ports.structuredDeliveryPublication = () => publication;
-    h.age();
+    h.age(); h.releaseCpu();
     await until(() => h.hookCode() !== undefined);
     expect(h.hookCode()).toBe(0);
     expect(h.launches).toHaveLength(1);
@@ -243,6 +261,8 @@ test.each(["memory", "controller", "provider"] as const)("a future %s retry susp
     const key = h.db.query<{ key: string; seq: number }, [string]>("SELECT key, seq FROM tickets WHERE key LIKE ?").get(`%:${second.id}:%`)!;
     expect(h.db.query("SELECT key FROM suspended WHERE key = ?").get(key.key)).not.toBeNull();
     h.age();
+    await until(() => h.launches.length === 2);
+    h.releaseCpu();
     await until(() => h.hookCode() !== undefined);
     expect(h.hookCode()).toBe(0);
     expect(h.launches.map(item => item.title)).toEqual(["one · build", "three · build"]);
@@ -277,6 +297,8 @@ test("an expired run head progresses when a queued review becomes retired", asyn
     await h.ports.cpuAdmissionReconcile?.(h.ports);
     expect(observing).toBe(false);
     h.age();
+    await until(() => h.launches.length === 2);
+    h.releaseCpu();
     await until(() => h.hookCode() !== undefined);
     expect(h.hookCode()).toBe(0);
     expect(h.launches.map(item => item.title)).toEqual(["one · build", "three · build"]);
@@ -292,6 +314,7 @@ test("a retired review releases its CPU ticket without advancing its stored lane
     const rows = loadPipelines(), stage = rows[1]!.stages[0]!;
     stage.kind = "review-loop"; stage.access = "read-only"; stage.effectiveRole.access = "read-only";
     savePipelines(rows);
+    h.releaseCpu();
     await until(() => h.hookCode() !== undefined);
     expect(h.hookCode()).toBe(0);
     expect(loadPipelines()[1]!.state).toBe("running");

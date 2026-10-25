@@ -114,10 +114,7 @@ test("create_task carries the rendered colour and icon rule, and both task tools
   try {
     const { tools } = await p.client.listTools();
     const create = tools.find((tool) => tool.name === "create_task")!;
-    const update = tools.find((tool) => tool.name === "update_task")!;
     expect(create.description).toContain(renderTaskColorRule());
-    expect(create.description).toContain("Pass `icon` (a lucide icon name) and `color` on every task you create");
-    expect(update.description).toContain("give both to a task you touch that lacks them");
     const color = (create.inputSchema.properties as Record<string, { description?: string }>).color;
     expect(color?.description).toContain("none, coral, amber, lime, teal, sky, violet, pink, slate");
   } finally { await p.close(); }

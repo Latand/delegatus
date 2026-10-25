@@ -1,3 +1,4 @@
+import { proactiveTaskExecutionError } from "@/lib/tasks/proactiveExecution";
 import { stateDir } from "@/lib/configDir";
 import { shortId } from "@/lib/shortIds";
 import { publicationFailurePhase } from "./publicationHistory";
@@ -1803,6 +1804,8 @@ export function pipelinePublicationFence(pipeline: Pipeline): string {
 const PUBLICATION_INSTALL_SUBJECT = "publication install";
 
 export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, request: PipelinePublishRequest): Promise<PipelinePublishResult> {
+  const proactiveError = proactiveTaskExecutionError(pipeline.taskIds);
+  if (proactiveError) return { ok: false, error: proactiveError };
   const operationId = crypto.randomUUID();
   const lock = path.join(pipelineArtifactsDir(pipeline.id), "publication.lock");
   let descriptor: number | null;
@@ -1882,7 +1885,18 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
     const abort = new AbortController();
     let writeStarted = false;
     const matches = (current: Pipeline | null) => current !== null && pipelinePublicationFence(current) === fence;
-    const revalidate = () => { if (!matches(findPipelineRecord(pipeline.id))) abort.abort(); };
+    let authorityRevoked = false;
+    let identityChanged = false;
+    const revalidate = () => {
+      const current = findPipelineRecord(pipeline.id);
+      if (!matches(current)) { identityChanged = true; abort.abort(); }
+      if (current && proactiveTaskExecutionError(current.taskIds)) {
+        authorityRevoked = true;
+        // Revocation fences new work. An active push keeps its deadline and
+        // ownership cancellation, and must finish before its receipt settles.
+        if (!writeStarted) abort.abort();
+      }
+    };
     const superseded = (): PipelinePublishResult => writeStarted
       ? { ok: true, sha: request.acceptedSha, remote: "unreachable", uncertain: true,
         detail: "publication superseded after a remote write began; reconcile its outcome" }
@@ -1926,6 +1940,14 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
     const fencedExec: ExecPort = async (command, args, cwd, env, options) => {
       revalidate();
       if (abort.signal.aborted) return { code: null, stdout: "", stderr: "publication superseded" };
+      // Only observations of the in-flight effect remain authorized. Never
+      // let reconciliation open another write after proactive revocation.
+      const remoteRead = command === "timeout" && args[0] === "--signal=KILL"
+        && args[1] === REMOTE_READ_TIMEOUT && args[2] === "git" && args[3] === "ls-remote";
+      const diagnosticRead = command === "git" && (args[0] === "merge-base" || args[0] === "diff");
+      if (authorityRevoked && !(writeStarted && (remoteRead || diagnosticRead))) {
+        return { code: null, stdout: "", stderr: "publication authority revoked" };
+      }
       fs.futimesSync(descriptor, new Date(), new Date());
       const preparingDependencies = command === "bun" && args[0] === "install";
       // The push runs the repository's pre-push gates; both leave the
@@ -1984,7 +2006,9 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       ? { ok: true, sha: request.acceptedSha, remote: "unreachable", detail: `publication outcome uncertain: ${String(error)}`, uncertain: true }
       : { ok: false, error: `publication failed before a remote write: ${String(error)}` }; }
     revalidate();
-    if (abort.signal.aborted) result = superseded();
+    // Revocation fences the next effect; it cannot erase a confirmed remote
+    // receipt for the operation that was already in flight.
+    if (abort.signal.aborted && !(authorityRevoked && !identityChanged && result.ok && result.remote === "published")) result = superseded();
     if (!result.ok) result = { ...result, error: redactBounded(redactPublicationText(result.error), 4500) };
     else if (result.remote === "unreachable") result = { ...result, detail: redactBounded(redactPublicationText(result.detail), 4500) };
     if (failureEvidence && (!result.ok || result.remote === "unreachable")) {
