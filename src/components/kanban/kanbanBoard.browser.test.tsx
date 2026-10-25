@@ -1,3 +1,4 @@
+import { captureTaskDueFrames } from "@/components/kanban/issue1695BrowserHarness";
 import type { FileEntry } from "@/lib/types";
 import { staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
 import { BoardEncoder } from "@/lib/boardEncoding";
@@ -38070,4 +38071,16 @@ describe("sound captions", () => {
       failures,
     }, null, 2) + "\n");
   }
+});
+
+
+describe("new task default deadline", () => {
+  browserTest("default, picked and reset deadlines render in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/task-due-composer/desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"], ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try { await captureTaskDueFrames(browser, server.base, out, false); }
+    finally { await browser.close(); server.stop(); }
+  }, 900_000);
 });

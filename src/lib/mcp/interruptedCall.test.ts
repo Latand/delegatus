@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -36,6 +37,7 @@ for (const store of ["SqliteMcpReceiptStore", "FileMcpReceiptStore"]) {
           };
           const receipts = new CutStore(${JSON.stringify(path.join(root, "receipts"))});
           const result = await createMcpToolService(bindings, receipts).callTool(${JSON.stringify(tool)}, {
+            ...${JSON.stringify(tool === "create_task" ? withTaskDue({}) : {})},
             clientRequestId: "interrupted-edit", project: "fixture", taskId: "task_fixture", text: "Edited task", full: true,
           });
           console.log(JSON.stringify(result));
