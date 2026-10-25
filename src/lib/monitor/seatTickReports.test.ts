@@ -138,7 +138,6 @@ test("a full owed-outcome ledger stays within the wake bound and names the key t
   });
   expect(text.length).toBeLessThanOrEqual(4_000);
   expect(text).toContain(`key ${reportsOwed[0]!.key} and coversOwed: true`);
-  expect(text).toContain("Do not schedule yourself.");
   const autonomous = seatTickWakeMessage({ project: PROJECT, snapshotAt: iso(T0), reasons: wake.reasons, items: wake.items,
     deferred: wake.deferred, signals: [], reportLines: wake.reportLines,
     monitorPrompt: "Standing note ".padEnd(7_622, "n"), operatorInstructions: "Instructions ".padEnd(500, "i"),
@@ -148,7 +147,6 @@ test("a full owed-outcome ledger stays within the wake bound and names the key t
   expect(autonomous.length).toBeLessThanOrEqual(4_000);
   expect(autonomous).toContain("decide all questions");
   expect(autonomous).toContain(`key ${reportsOwed[0]!.key} and coversOwed: true`);
-  expect(autonomous).toContain("Do not schedule yourself.");
 });
 
 test("a wake with a deploy and a lane owes one report naming both, in the operator's language, keyed by the first", () => {

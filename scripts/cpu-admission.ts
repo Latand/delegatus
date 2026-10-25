@@ -11,7 +11,7 @@ import { cpuOwnerIdentity, cpuOwnerStatus, cpuOwnerExited, signalSandboxContext 
 
 const policy = cpuPressurePolicy();
 const pressure = new GateCpuPressure(policy ? { ...policy, releaseAfterMs: Number(process.env.LLV_GATE_PSI_RELEASE_SECONDS ?? 10) * 1000 } : null);
-const [mode, key, pid] = process.argv.slice(2);
+const [mode, key, pid, queuedAt] = process.argv.slice(2);
 if (mode === "--reuse-slot") {
   if (inheritedCpuSlot()) process.exit(0);
   if (process.env.LLV_GATE_SLOT_LEASE && signalSandboxContext()) {
@@ -57,6 +57,7 @@ function slotAvailable(): boolean {
   }
   return false;
 }
+const queuedSince = Number.isFinite(Number(queuedAt)) ? Number(queuedAt) * 1000 : Date.now();
 const endWait = reportCpuWait();
 const cancel = () => { queue.cancel(key); endWait(); process.exit(130); };
 process.on("SIGTERM", cancel); process.on("SIGINT", cancel);
@@ -69,8 +70,11 @@ try {
     const reason = await pressure.check();
     const wait = queue.check(key, !reason, owner, false, priority, true);
     if (!wait && slotAvailable()) break;
-    const text = reason ? `${reason}${wait ? ` · ${ordinal(wait.position)} in CPU queue` : ""}`
-      : wait ? cpuQueueDetail(wait.position, wait.remainingMs, wait.stalledMs, wait.priority) : "Waiting for a heavy command slot";
+    const waitedMinutes = Math.floor(Math.max(0, Date.now() - queuedSince) / 60_000);
+    const text = wait
+      ? wait.heldBy === "pressure" && reason ? `${reason} · ${ordinal(wait.position)} in CPU queue · waited ${Math.floor(wait.waitedMs / 60_000)} min`
+        : cpuQueueDetail(wait.position, wait.waitedMs, wait.stalledMs, wait.priority, wait.heldBy)
+      : `Waiting for a heavy command slot · all ${Number(process.env.LLV_GATE_SLOTS ?? 6)} busy · waited ${waitedMinutes} min`;
     if (text !== shown) { console.error(`gate-slot: ${text}`); shown = text; }
     await Bun.sleep(Number(process.env.LLV_GATE_POLL_SECONDS ?? 2) * 1000);
   }

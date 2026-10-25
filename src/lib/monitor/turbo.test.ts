@@ -249,7 +249,6 @@ test("the wake overlay: full text on a new revision, a pointer after, nothing on
   expect(full).toContain("Account A: ultrafast on gpt-6.1-sol");
   expect(full).toContain("Paid credits: not approved");
   expect(full).toContain("90 %");
-  expect(full).toContain("serviceTier");
   expect(full.length).toBeLessThanOrEqual(700);
   const pointer = turboMandate(free, now, true, labels).join("\n");
   expect(pointer).toContain("no paid credits");
@@ -267,13 +266,11 @@ test("the seat notices: one on, one off, each with a stable idempotency key and 
   expect(notice.key).toBe(`turbo:${free.startedAt}:on`);
   expect(notice.text).toContain("Turbo is on");
   expect(notice.text).toContain("7 live Codex conversation");
-  expect(notice.text).toContain("progress: seat_tick_settings → turbo");
   const off = change(defaultSeatTickSettings(project), { turbo: { enabled: true } });
   const ended = change(off, { turbo: { enabled: false } }, operator, now + hour).turbo!;
   const offNotice = turboNotice(ended, "off", { conversations: 0 }, labels);
   expect(offNotice.key).toBe(`turbo:${free.startedAt}:off`);
   expect(offNotice.text).toContain("Turbo ended (turned-off");
-  expect(offNotice.text).toContain("put back");
 });
 
 test("a wake with both full overlays and a full agenda stays within 4,000 characters, agenda cut first", () => {

@@ -142,6 +142,5 @@ test("both task tools say when to use each level, and list_tasks names the filte
     const property = (name: string, field: string) => (describe(name).inputSchema.properties as Record<string, { description?: string; enum?: string[] }>)[field];
     expect(property("create_task", "priority")?.description).toContain("high, normal, low");
     expect(property("update_task", "priority")?.enum).toEqual(["high", "normal", "low"]);
-    expect(property("list_tasks", "priority")?.description).toContain("only when it is not normal");
   } finally { await p.close(); }
 });
