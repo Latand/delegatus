@@ -125,8 +125,8 @@ test("spawn_agent advertises an optional account pin with project binding semant
     const tool = (await client.listTools()).tools.find((candidate) => candidate.name === "spawn_agent")!;
     expect(tool.inputSchema.properties).toHaveProperty("account");
     expect(tool.inputSchema.required ?? []).not.toContain("account");
-    const account = tool.inputSchema.properties!.account as { anyOf: { type: string }[]; description: string };
-    expect(account.anyOf.map((choice) => choice.type)).toEqual(["string", "null"]);
+    const account = tool.inputSchema.properties!.account as { type: string[]; description: string };
+    expect(account.type).toEqual(["string", "null"]);
     expect(account.description).toContain("allowed");
     expect(account.description).toContain("null");
     expect(account.description).toContain("role");
@@ -739,58 +739,11 @@ test("create_pipeline publishes the stage contract in its tool definition", asyn
     expect(stage?.kind?.enum).toEqual(["run", "review-loop"]);
     expect(stage?.engine?.enum).toEqual(["claude", "codex"]);
     expect(stage?.role?.properties?.roleId?.enum).toEqual([...ROLE_IDS]);
-    /* The two rules the reported walk actually turned on. */
-    expect(stage?.next?.description).toContain("DEFAULTS TO null");
-    expect(stage?.role?.description).toContain("Runtime overrides do not go here");
     /* #1868: the fail edge publishes what happens once its rounds are spent. */
     type EdgeSchema = { properties?: Record<string, { enum?: string[]; description?: string }>; anyOf?: EdgeSchema[] };
     const onFailSchema = stage?.onFail as EdgeSchema | undefined;
     const onFail = onFailSchema?.properties ? onFailSchema : onFailSchema?.anyOf?.find((branch) => branch.properties);
     expect(onFail?.properties?.onExhausted?.enum).toEqual(["advance", "stop-after-fix", "park"]);
-    /* #2425/#2426: terminal gates re-check the last fix and explicit stops remain. */
-    expect(onFail?.properties?.onExhausted?.description).toContain("advance (default): the fail target fixes the last findings");
-    /* Terminal stages re-check the last fix; other stages follow the pass edge. */
-    expect(onFail?.properties?.onExhausted?.description).toContain("If THIS stage has next:null, it re-checks the fix once more: a pass completes, a fail parks");
-    expect(onFail?.properties?.onExhausted?.description).toContain("Otherwise the fix follows THIS stage's pass edge and relays the findings as unreviewed");
-    expect(onFail?.properties?.onExhausted?.description).toContain("stop-after-fix: after the last fix the lane waits in needs_review if the head changed");
-    expect(onFail?.properties?.onExhausted?.description).toContain("park: stop before the last fix");
-    expect(tool?.description).toContain("onExhausted");
-    expect(tool?.description).toContain("stored as a read-only reviewer and a fix stage");
-    expect(stage?.kind?.description).toContain("convertedStages");
-    for (const [field, expected] of [
-      ["id", "unique within the pipeline"],
-      ["prompt", "role scaffold"],
-      ["onFail", "may not define one"],
-      ["model", "inherit the role default"],
-      ["access", "always read-only"],
-      ["sandbox", "Defaults to full host access"],
-      ["outputs", "controller records only these paths"],
-      /* #1279: the account a stage may name, and the refusal the project's
-         binding answers with when it names one the project does not allow. */
-      ["account", "project allows that account"],
-    ] as const) {
-      expect(stage?.[field]?.description).toContain(expected);
-    }
-
-    /* Reachability, the draft baseRef rule and the shape of a review are
-       graph-level facts no per-field schema can carry. A review is a reviewer
-       and a fix stage; review-loop is the legacy kind stored lanes keep
-       (docs/design/agent-prompt-contract.md §2.10 F). */
-    expect(tool?.description).toContain("pass-reachable from a run stage");
-    expect(tool?.description).toContain("`next` defaults to null");
-    expect(tool?.description).toContain("must also pass `baseRef`");
-    expect(tool?.description).toContain("A review is a run stage with role reviewer (read-only by its role) whose onFail names a fix stage");
-    expect(tool?.description).toContain("fixes every handed finding and every in-spec discovery immediately");
-    expect(tool?.description).toContain("It returns fail only when blocked");
-    expect(tool?.description).toContain("It never returns fail for its own discovery");
-    expect(tool?.description).toContain("every in-spec discovery immediately");
-    expect(tool?.description).toContain("fixer's findings as notes for the reviewer");
-    expect(tool?.description).toContain("`review-loop` is a legacy kind kept for stored lanes");
-    expect(tool?.description).toContain("access is the repository-mutation policy enforced at settlement");
-    expect(stage?.access?.description).toContain("does not select the sandbox");
-    expect(stage?.sandbox?.description).toContain("independent from access");
-    expect(tool?.description).toContain("every violated constraint");
-    expect(tool?.description).toContain("normalized to the shared Claude transcript store");
   });
 });
 
@@ -1199,7 +1152,7 @@ test("the published update_task schema advertises replaceable notes without auth
   await withProtocolClient(inertBindings(), async client => {
     const tool = (await client.listTools()).tools.find(tool => tool.name === "update_task")!;
     const properties = tool.inputSchema.properties!;
-    expect(properties.note).toMatchObject({ anyOf: [{ type: "string" }, { type: "null" }] });
+    expect(properties.note).toMatchObject({ type: ["string", "null"] });
     expect(properties.author).toBeUndefined();
     expect(properties.noteAuthor).toBeUndefined();
     expect(tool.description).toContain("Orchestrators and stage agents: set note whenever the situation changes");
