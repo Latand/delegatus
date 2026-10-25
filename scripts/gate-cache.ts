@@ -71,12 +71,10 @@ export function gateToolFiles(root: string): string[] {
     if (seen.has(relative)) continue;
     seen.add(relative);
     const file = path.join(root, relative);
-    if (!existsSync(file) || !statSync(file).isFile()) continue;
-    // Imported JSON remains an input, with no module imports to scan.
-    if (relative.endsWith(".json")) continue;
-    // The original interpreter line stays bound by fileFingerprint.
+    // Data imports remain receipt inputs, but only source files have imports to scan.
+    if (!existsSync(file) || !statSync(file).isFile() || !/\.[cm]?[jt]sx?$/.test(file)) continue;
     const source = readFileSync(file, "utf8").replace(/^#![^\r\n]*/, "");
-    for (const imported of (file.endsWith(".tsx") ? tsx : ts).scanImports(source)) {
+    for (const imported of (/\.[jt]sx$/.test(file) ? tsx : ts).scanImports(source)) {
       if (!imported.path.startsWith(".") && !imported.path.startsWith("@/")) continue;
       const target = imported.path.startsWith("@/") ? path.join(root, "src", imported.path.slice(2)) : path.resolve(path.dirname(file), imported.path);
       const resolved = [target, `${target}.ts`, `${target}.tsx`, `${target}.js`, path.join(target, "index.ts")]
@@ -120,6 +118,14 @@ export function checkEnvironment(env: Partial<NodeJS.ProcessEnv>): NodeJS.Proces
   if (result.PATH !== undefined) result.PATH = result.PATH.split(path.delimiter)
     .filter(entry => !(entry && (path.resolve(entry) === forge || /[/\\]delegatus[/\\]agent-forge[/\\]/.test(`${path.resolve(entry)}/`)))).join(path.delimiter);
   return result;
+}
+
+/** Portable check inputs, including declared absences. Placement and private
+ * roots are supplied by each executor; PATH selects that executor's tools. */
+export function checkInputEnvironment(env: Partial<NodeJS.ProcessEnv>): Record<string, string | null> {
+  const declared = declaredInputs(env);
+  const names = new Set([...Object.keys(env).filter(name => KEYED.test(name) && name !== "PATH"), ...declared]);
+  return Object.fromEntries([...names].sort().map(name => [name, Object.hasOwn(env, name) ? env[name] ?? null : null]));
 }
 
 /** The host a check ran on, read from the signal boundary when there is one:

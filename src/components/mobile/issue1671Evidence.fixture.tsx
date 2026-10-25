@@ -39,6 +39,7 @@ import { attachVoiceOutput, openVoiceMicrophone, type VoiceMicrophone } from "@/
 import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import type { FileEntry } from "@/lib/types";
+import { createChecksFixtureRoute, type ChecksFixtureMode } from "@/components/pipelines/pipelineChecksFixture";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
 
 /* `?synced=1` (docs/design/synced-task-card.md §8): the kanban scene's project is a linked one
@@ -255,9 +256,10 @@ const files: FileEntry[] = [
     activity: "live", proc: "running", pid: 4_401, mtime: now - 20,
     /* A real launch model, not a one-word one: the bar line has to hold
        `fable-5-1 · high` beside the state phrase and the account (#1795). */
-    model: "fable-5-1", effort: "high",
+    model: new URLSearchParams(location.search).get("model") || "fable-5-1", effort: "high",
     ...reviewerLineage,
     lastTurn: { startedAt: (now - 400) * 1_000, endedAt: null },
+    ...(new URLSearchParams(location.search).has("wake") ? { pendingWakeup: { fireAt: Date.now() + 12 * 60_000, reason: "check the rollout" } } : {}),
     ...(MENU_STATE === "limit" ? { rateLimit: { source: "account", accountId: "reserve-account-7", window: "session", resetAt: now + 40 * 60 } } : {}),
     ...(MENU_STATE === "held" ? { migration: { intentId: "intent-menu-held", trigger: "manual", phase: "waiting-turn", targetAccountId: "relief", heldDeliveries: 12, failure: null } } : {}),
     /* `?launch=1`: the running conversation waits on an answer, so the focus
@@ -553,6 +555,11 @@ const evidence = {
   pipelineAnswerDelayMs: 0,
 };
 Object.assign(window, { evidence });
+/* The lane ⋯ sheet's checks choice: «lane-decision» stands on «implement»,
+   whose own Cloud differs from the lane's Local; `?checks=` frames the read
+   and write failures. */
+const phoneChecks = createChecksFixtureRoute((new URLSearchParams(location.search).get("checks") ?? "ok") as ChecksFixtureMode, { lanes: { "lane-decision": "local" }, stages: { "lane-decision implement": "cloud" } });
+Object.assign(window, { phoneCheckPosts: phoneChecks.posts });
 
 /* No log stream in the fixture: the source fails at once, the way a Viewer
    behind a proxy that drops SSE does, and the bus falls back to the file poll
@@ -1886,6 +1893,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/tmux" && method === "POST") {
     evidence.runtimeRequests.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
     return json(STRUCTURED ? { ok: true, structured: true } : { ok: true, outcome: "pending", operationId: "reconfigure-evidence" });
+  }
+  if (url.pathname.startsWith("/api/pipelines/") && url.pathname.endsWith("/checks")) {
+    const answer = await phoneChecks.answer(decodeURIComponent(url.pathname.split("/")[3] ?? ""), method, url.searchParams, init?.body ? String(init.body) : null);
+    return json(answer.body, answer.status);
   }
   if (url.pathname.startsWith("/api/pipelines/") && method === "PATCH") {
     const id = decodeURIComponent(url.pathname.split("/").pop() ?? "");
