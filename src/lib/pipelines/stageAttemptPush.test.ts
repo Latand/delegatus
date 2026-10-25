@@ -869,8 +869,11 @@ test("four host-loss attempts preserve their receipt ancestry", async () => {
 
 // Issue #3158: an account usage guard failed a replacement whose launch had
 // been refused for capacity, so it never reserved a launch, and replaced it.
-// The persisted chain is launched -> never launched -> launched.
-test.each(["settles", "forged transcript edge", "unreceipted commit"] as const)("a usage-guard chain through a never-launched attempt: %s", async variant => {
+// Pin both a short chain and the observed attempt-72 scale. Every skipped
+// attempt must preserve lineage without authorizing unreceipted commits.
+test.each([1, 70].flatMap(count =>
+  (["settles", "forged transcript edge", "unreceipted commit"] as const).map(variant => [count, variant] as const),
+))("a usage-guard chain through %i never-launched attempts: %s", async (refusedCount, variant) => {
   const f = await fixture();
   const childLaunch = `stage-proof-guard-chain-${nextFixture}`;
   try {
@@ -890,11 +893,17 @@ test.each(["settles", "forged transcript edge", "unreceipted commit"] as const)(
     }
     const foreign = await f.own("rev-parse", "HEAD");
     Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, "2026-10-16T10:00:00.000Z", async () => {}));
-    const child = { ...f.attempt, n: 3, launchId: childLaunch, startedAt: "2026-10-16T10:00:00.000Z", completedAt: NOW,
+    const refusedAttempts = Array.from({ length: refusedCount }, (_, index) => ({
+      ...refused, n: index + 2,
+      restartContext: index === 0 ? refused.restartContext : { previousAttempt: index + 1, transcriptPath: null },
+      restartRecovery: { bootId: "guard-stop", requestedAt: refused.completedAt!, lastRecordAt: null,
+        replacementAttempt: index + 3 },
+    } as PipelineStageAttempt));
+    const child = { ...f.attempt, n: refusedCount + 2, launchId: childLaunch, startedAt: "2026-10-16T10:00:00.000Z", completedAt: NOW,
       state: "passed", agentPath: "/stage/guard-3.jsonl",
-      restartContext: { previousAttempt: 2, transcriptPath: variant === "forged transcript edge" ? first.agentPath : null } } as PipelineStageAttempt;
+      restartContext: { previousAttempt: refusedCount + 1, transcriptPath: variant === "forged transcript edge" ? first.agentPath : null } } as PipelineStageAttempt;
     const head = await f.commit("replacement output after the reset");
-    f.pipeline.runs = [{ stageId: "build", attempts: [first, refused, child] }] as never;
+    f.pipeline.runs = [{ stageId: "build", attempts: [first, ...refusedAttempts, child] }] as never;
     await f.push();
     const result = await settleStageAttemptPush(f.pipeline, child, realExec, NOW);
     if (variant === "settles") expect(result).toEqual({ ok: true, sha: head });
