@@ -296,3 +296,24 @@ test("a Claude and a Codex account both named default are two rows with their ow
   expect(one.list.map(row => row.key)).toEqual(["codex:default"]);
   expect(one.totals.input).toBe(both.list.find(row => row.key === "codex:default")!.counts.input);
 });
+
+
+test("workspace keys filter every token projection, fold aliases and exclude unknown projects", async () => {
+  seed("allowed-old");
+  seed("foreign", { project: "project-foreign" });
+  seed("unknown", { project: "project-undiscovered" });
+  seed("previous-allowed", { at: USAGE_NOW - 7 * DAY });
+  seed("previous-unknown", { project: "project-undiscovered", at: USAGE_NOW - 7 * DAY });
+  const scoped = { ...owner, canChoose: false, workspaceProjects: { allowed: ["project-new"] } };
+  const got = await activityTokensResponse(new URLSearchParams("range=7d&stack=project&list=project&compare=previous"), scoped, deps());
+  expect(got.totals.requests).toBe(1);
+  expect(got.previous?.totals.requests).toBe(1);
+  expect(got.list.map(row => row.key)).toEqual(["project-new"]);
+  expect(got.series.flatMap(row => row.parts).map(row => row.key)).toEqual(["project-new"]);
+  expect(JSON.stringify(got)).not.toContain("project-undiscovered");
+  expect(JSON.stringify(got)).not.toContain("project-foreign");
+  const removed = await activityTokensResponse(new URLSearchParams("range=7d&stack=project&list=project&compare=previous"), { ...scoped, workspaceProjects: { allowed: [] } }, deps());
+  expect(removed.totals.requests).toBe(0);
+  expect(removed.previous?.totals.requests).toBe(0);
+  expect(removed.list).toEqual([]);
+});

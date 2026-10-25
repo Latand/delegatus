@@ -28,17 +28,6 @@ const result = await Bun.build({
       source='import { whenVisible } from "@preview-visibility";\n'+source.replace(seam,seam+'.then(async value => { await whenVisible(file.path); return value; }, async error => { await whenVisible(file.path); throw error; })');
       return {contents:source,loader:'tsx'};
     });
-    if(process.env.BOARD_PRODUCTION==='1' && process.env.BOARD_COUNTERS==='1') build.onLoad({filter:/\/SchemeBoard\.tsx$/}, async args => {
-      let source=fs.readFileSync(args.path,'utf8');
-      source=source.replace('  const tile = gridTilePx(cam.z);', `
-        globalThis.__productionBoard = {
-          snapshot: () => ({cam, vp, nodes: layout.nodes.map(({file,...rect})=>({...rect,path:file.path})), groups:layout.groups, tasks:placedTasks, expanded, selected, shown: typeof taskScene !== "undefined" && taskScene ? [...taskScene.shown] : null, edgeCrossings:layout.edges.filter(edge=>edge.routeCrosses).length, routes:[...taskRoutes], taskEdges}),
-          reader: setSelected, camera: ({x,y,z}) => glideToCamera({x,y,zoom:z}), zoom: zoomTo, focus: stableSelect, expand: stableExpand, collapse: () => setExpanded(null),
-        };
-        const tile = gridTilePx(cam.z);`);
-      return {contents:source,loader:'tsx'};
-    });
-
     if(process.env.BOARD_PRODUCTION==='1' && process.env.BOARD_COUNTERS==='1') build.onLoad({filter:/\/TmuxComposer\.tsx$/}, async args=>{
       let source=fs.readFileSync(args.path,'utf8');
       const start=source.indexOf('    const prune = () =>');
@@ -64,12 +53,6 @@ const result = await Bun.build({
       source=source.replace('(listener: () => void) => (bus ? bus.subscribe(listener) : () => {}),','(listener: () => void) => (bus ? bus.subscribe(() => {audit("callback");listener();}) : () => {}),');
       source=source.replace('const next = selectorRef.current(bus.getState());','audit("selector");const next = selectorRef.current(bus.getState());');
       return {contents:source,loader:'ts'};
-    });
-    if(process.env.BOARD_PRODUCTION==='1' && process.env.BOARD_COUNTERS==='1') build.onLoad({filter:/\/nodes\.tsx$/}, async args => {
-      let source=fs.readFileSync(args.path,'utf8');
-      source=source.replace('const NodeShell = memo(function NodeShell(props: NativeNodeProps) {', 'const NodeShell = memo(function NodeShell(props: NativeNodeProps) { globalThis.__shellCounters ??= {}; globalThis.__shellCounters[props.node.file.path]=(globalThis.__shellCounters[props.node.file.path]??0)+1;');
-      source=source.replace(/(function NodeChrome\([^]*?\) \{)/, '$1 globalThis.__chromeCounters??={};globalThis.__chromeCounters[node.file.path]=(globalThis.__chromeCounters[node.file.path]??0)+1;');
-      return {contents:source,loader:'tsx'};
     });
     if(process.env.BOARD_COUNTERS==='1') build.onLoad({filter:/\/(board\.tsx|fixtures\.ts)$/}, async args => {
       let source=fs.readFileSync(args.path,'utf8');
@@ -101,7 +84,6 @@ const result = await Bun.build({
       return {contents:source,loader:'tsx'};
     });
 
-    build.onResolve({ filter: /^@native-board$/ }, () => ({ path: path.join(repo, 'src/components/scheme/SchemeBoard.tsx') }));
     if(process.env.BOARD_PRODUCTION!=='1') build.onResolve({ filter: /(?:^|\/)SchemeBoard(?:\.tsx)?$/ }, () => ({ path: path.join(here, 'board.tsx') }));
     if(process.env.BOARD_PRODUCTION!=='1') build.onResolve({ filter: /(?:^|\/)useLogTail(?:\.ts)?$/ }, () => ({ path: path.join(here, 'memory-log.ts') }));
     build.onResolve({ filter: /^@\// }, args => ({ path: Bun.resolveSync(path.join(repo, 'src', args.path.slice(2)), args.importer ? path.dirname(args.importer) : repo) }));

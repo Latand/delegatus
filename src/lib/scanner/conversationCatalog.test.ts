@@ -176,3 +176,12 @@ test("an OpenClaw conversation lists and searches beside Claude and Codex rows",
     root: "openclaw-sessions",
   });
 });
+
+test("a pagination cursor is bound to its member and permission snapshot", () => {
+  const catalog = Array.from({ length: 5 }, (_, index) => entry(index));
+  const first = paginateConversationCatalog(catalog, { limit: 1, authorityScope: "member-a:workspace-a" });
+  expect(() => paginateConversationCatalog([], { cursor: first.nextCursor, authorityScope: "member-b:workspace-b" })).toThrow(ExpiredConversationCatalogCursorError);
+  expect(() => paginateConversationCatalog([], { cursor: first.nextCursor, authorityScope: "member-a:workspace-b" })).toThrow(ExpiredConversationCatalogCursorError);
+  expect(() => paginateConversationCatalog([], { cursor: first.nextCursor })).toThrow(ExpiredConversationCatalogCursorError);
+  expect(paginateConversationCatalog([], { cursor: first.nextCursor, authorityScope: "member-a:workspace-a" }).items).toHaveLength(4);
+});

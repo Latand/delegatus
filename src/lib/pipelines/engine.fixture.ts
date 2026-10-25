@@ -354,7 +354,7 @@ async function realWorktreeLane(name: string, stages: unknown[], publication?: "
     const launchId = `native-${input.clientAttemptId}`;
     const spawned = await spawnAgent(input, async reservation => {
       await onReserved({ ...reservation, launchId });
-      const guard = await prepareStageGitGuard(launchId, input.cwd, realExec, h.ports.now());
+      const guard = await prepareStageGitGuard(launchId, input.cwd, realExec, h.ports.now(), () => onReserved({ ...reservation, launchId }));
       const source = await repositoryPublicationSource(input.cwd, { ...process.env, ...guard }, realExec);
       agentEnv = { ...guard, ...agentPublicationIdentityEnv(source) };
       agentWorktree = input.cwd;

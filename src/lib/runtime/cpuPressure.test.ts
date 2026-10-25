@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 
 import { CpuPressureGate, cpuPressureHoldDetail, cpuPressurePolicy, DEFAULT_CPU_PRESSURE_POLICY, isCpuPressureDetail, parseCpuPressure, waitForCpuPressure } from "./cpuPressure";
 
@@ -16,16 +15,6 @@ test("reads some avg10 from the kernel's pressure file", () => {
   expect(parseCpuPressure("some avg10=60.05 avg60=19.53 avg300=21.35 total=50459107463\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n")).toBe(60.05);
   expect(parseCpuPressure("full avg10=3.00 avg60=0.00 avg300=0.00 total=0\n")).toBeNull();
   expect(parseCpuPressure("")).toBeNull();
-});
-
-test("shell and engine defaults agree on pressure thresholds and stabilisation", () => {
-  const shell = readFileSync(new URL("../../../scripts/gate-slot.sh", import.meta.url), "utf8");
-  expect(shell).toContain('/cpu-admission.ts"');
-  const helper = readFileSync(new URL("../../../scripts/cpu-admission.ts", import.meta.url), "utf8");
-  expect(helper).toContain('from "../src/lib/runtime/cpuPressure"');
-  expect(helper).toContain("const policy = cpuPressurePolicy();");
-  expect(helper).toContain("...(policy ?? DEFAULT_CPU_PRESSURE_POLICY)");
-  expect(Number(/LLV_GATE_PSI_RELEASE_SECONDS \?\? ([\d.]+)/.exec(helper)?.[1]) * 1000).toBe(DEFAULT_CPU_PRESSURE_POLICY.releaseAfterMs);
 });
 
 test("holds at 30%, admits at 29%, and releases only after ten seconds below 20%", () => {

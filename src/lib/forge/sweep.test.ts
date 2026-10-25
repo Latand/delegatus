@@ -86,6 +86,27 @@ const entry = () => readForgeCache(file).data.repositories[REPO]!;
 const isSearch = (args: string[]) => args.includes("--search");
 
 describe("the sweep", () => {
+  test("gh 2.23 rejecting closingIssuesReferences still completes the repository cache", async () => {
+    const h = harness((args) => {
+      if (args[0] === "api" && args[1] === "graphql") {
+        return { data: { repository: { p0: { closingIssuesReferences: { nodes: [], pageInfo: { hasNextPage: false } } } } } };
+      }
+      if (args.at(-1)?.includes("closingIssuesReferences")) {
+        return Object.assign(new Error('Unknown JSON field: "closingIssuesReferences"'), { stderr: 'Unknown JSON field: "closingIssuesReferences"' });
+      }
+      const legacy = row({ number: 7, headRefName: "pipeline/lane-a" });
+      delete (legacy as Partial<typeof legacy>).closingIssuesReferences;
+      return [legacy];
+    });
+
+    expect(await h.sweep()).toEqual([REPO]);
+    expect(entry()).toMatchObject({
+      completeSince: new Date(T0).toISOString(),
+      lastError: null,
+      prs: { "7": { headRefName: "pipeline/lane-a", closes: [] } },
+    });
+  });
+
   test("old gh falls back to GraphQL and preserves closing issue links", async () => {
     const h = harness((args) => {
       if (args[0] === "api" && args[1] === "graphql") return { data: { repository: { p0: { closingIssuesReferences: { nodes: [{ number: 42, url: "https://github.com/acme/widgets/issues/42" }], pageInfo: { hasNextPage: false } } } } } };
