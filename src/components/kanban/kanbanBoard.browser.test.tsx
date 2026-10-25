@@ -14300,6 +14300,79 @@ describe("#2146 the orchestrator's report log beside its chat, and the Bridge re
   }, 900_000);
 });
 
+describe("group chat adapted to report authors", () => {
+  browserTest("recorded authors link to their conversation on desktop and phone", async () => {
+    const out = path.resolve(".artifacts/report-authors");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(out, "fixture"));
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 915, 390]) for (const kind of ["manager", "long-role"] as const) {
+        const phone = width === 390;
+        const conversation = kind === "manager" ? "conversation_orchestrator" : "conversation_search-impl-1";
+        const label = kind === "manager" ? translate(lang, "render.senderRoleOrchestrator") : "LongCustomRole".repeat(12);
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?report-author=${kind}`, { width, height: 900 }, theme, lang, "reduce", phone);
+        try {
+          if (phone) {
+            await page.locator("[data-mobile2-seat-open]").click();
+            await page.locator('[data-mobile2-open="reports"]').click();
+          } else {
+            const toggle = page.locator("[data-kanban-seat] [data-report-log-toggle]");
+            await toggle.waitFor();
+            if (await toggle.getAttribute("data-report-log-toggle") === "closed") {
+              const notificationDismiss = page.locator("[data-attention-toast-dismiss]");
+              await notificationDismiss.waitFor();
+              await notificationDismiss.click();
+              await toggle.click();
+            }
+          }
+          const row = page.locator("[data-report-entry]").first();
+          await row.waitFor();
+          await row.scrollIntoViewIfNeeded();
+          const author = row.locator('[data-report-link="author"]');
+          await author.waitFor();
+          expect(await row.locator("[data-report-author]").innerText()).toBe(label);
+          expect(await author.getAttribute("href")).toBe(`#c=${conversation}`);
+          const geometry = await row.evaluate(element => {
+            const problems: string[] = [];
+            const rowBox = element.getBoundingClientRect();
+            if (element.scrollWidth > element.clientWidth + 1) problems.push("row horizontal overflow");
+            const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+            for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+              if (!node.textContent?.trim()) continue;
+              const parent = node.parentElement!;
+              const range = document.createRange(); range.selectNodeContents(node);
+              for (const rect of range.getClientRects()) {
+                if (!rect.width || !rect.height) continue;
+                if (rect.left < rowBox.left - 1 || rect.right > rowBox.right + 1) problems.push("text outside row");
+                if (rect.left < 0 || rect.right > innerWidth || rect.top < 0 || rect.bottom > innerHeight) problems.push("viewport");
+                for (let ancestor: HTMLElement | null = parent; ancestor; ancestor = ancestor.parentElement) {
+                  const style = getComputedStyle(ancestor), box = ancestor.getBoundingClientRect();
+                  if (style.overflowX !== "visible" && (rect.left < box.left - 1 || rect.right > box.right + 1)) problems.push("horizontal clip");
+                  if (style.overflowY !== "visible" && (rect.top < box.top - 1 || rect.bottom > box.bottom + 1)) problems.push("vertical clip");
+                }
+                const hit = document.elementFromPoint((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2);
+                if (!hit || !parent.contains(hit)) problems.push("covered text");
+              }
+            }
+            return { problems, scroll: element.parentElement!.parentElement!.scrollTop, focus: document.activeElement?.tagName };
+          });
+          expect(geometry.problems).toEqual([]);
+          if (phone) expect((await author.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+          const frame = `${lang}-${theme}-${width}-${kind}.png`;
+          await row.screenshot({ path: path.join(out, frame) });
+          await author.click();
+          await page.waitForFunction(id => location.hash === `#c=${id}`, conversation);
+          expect(pageErrors).toEqual([]);
+          readings.push({ lang, theme, width, kind, frame, ...geometry });
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "rendered.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2));
+    } finally { await browser.close(); server.stop(); }
+  }, 300_000);
+});
+
 describe("the report log opens beside the seat's chat only where the chat keeps its width", () => {
   /*
    * The seat's report log (#2146) opened beside the chat from a 720 px seat as
