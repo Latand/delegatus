@@ -4130,7 +4130,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Agent-facing context, kept off the human description (#1834): the prompt, the working notes, the ids, the rules, the state. Plain text, no markdown rendering, capped at 20000 characters, condensed to what an agent picking the task up actually needs. The card shows it behind one collapsed Details row; a blank value creates a task with no details."),
     placement: z.enum(["pinned", "unplaced"]).optional().describe("Omitted placement creates an unplaced task. Pinned requires pos; unplaced must omit pos."),
     pos: z.object({ x: z.number().finite(), y: z.number().finite() }).optional(),
-    dueAt: z.string().optional(),
+    dueAt: z.string(),
     dueTz: z.string().optional(),
     attachments: z.array(z.unknown()).optional(),
     board: z.enum(["shown", "hidden"]).optional()
@@ -4933,10 +4933,17 @@ export const TOOL_TRANSPORT_SCHEMAS = Object.fromEntries(MCP_TOOL_NAMES.map(tool
     // An invalid sentinel keeps a refused proposal invalid at the strict callback.
     proposal: schema.shape.proposal.catch(() => null),
   })];
-  return [toolName, toolName === "create_task" || toolName === "update_task" ? schema.extend(Object.fromEntries(
-    Object.entries(schema.shape).filter(([, fieldSchema]) => fieldSchema.isOptional())
-      .map(([field, fieldSchema]) => [field, fieldSchema.catch((context: { input: unknown } | undefined) => context?.input)]),
-  )) : schema];
+  if (toolName !== "create_task" && toolName !== "update_task") return [toolName, schema];
+  const transport = schema.extend(Object.fromEntries(
+    Object.entries(schema.shape).filter(([field, fieldSchema]) => fieldSchema.isOptional() || toolName === "create_task" && field === "dueAt")
+      .map(([field, fieldSchema]) => [field, (field === "dueAt" && toolName === "create_task" ? fieldSchema.optional() : fieldSchema)
+        .catch((context: { input: unknown } | undefined) => context?.input)]),
+  ));
+  // Advertise the strict requirement while missing/invalid dates reach our
+  // callback for TASK_DUE_REQUIRED, before any receipt is acquired.
+  return [toolName, toolName === "create_task" ? transport.meta({
+    required: Object.entries(schema.shape).filter(([, field]) => !field.isOptional()).map(([name]) => name),
+  }) : transport];
 })) as typeof TOOL_INPUT_SCHEMAS;
 
 /** Presentation only: neither a client name nor a User-Agent
@@ -4977,16 +4984,17 @@ export function createViewerMcpServer(service: McpToolService, tools: readonly M
     const schema = TOOL_INPUT_SCHEMAS[toolName];
     server.registerTool(toolName, {
       description: TOOL_DESCRIPTIONS[toolName] + (MCP_PAGE_CURSOR_TOOLS.has(toolName) ? ` ${MCP_PAGE_CURSOR_DESCRIPTION}` : ""),
-      inputSchema: shortenSchemaDescriptions(TOOL_TRANSPORT_SCHEMAS[toolName]),
+      inputSchema: shortenSchemaDescriptions(TOOL_TRANSPORT_SCHEMAS[toolName]).meta(TOOL_TRANSPORT_SCHEMAS[toolName].meta() ?? {}),
     }, async (args, extra) => {
       if (taskMutation || toolName === "voice_tools") {
         const parsed = schema.safeParse(args);
         if (!parsed.success) {
           const issues = parsed.error.issues.map(issue => ({ field: issue.path.join("."), message: issue.message }));
-          const result = failure(toolName, String((args as McpToolArgs).clientRequestId), toolName === "voice_tools" ? "INVALID_PROPOSAL" : "TASK_INVALID_FIELD",
+          const missingDue = toolName === "create_task" && ((args as McpToolArgs).dueAt === undefined || (args as McpToolArgs).dueAt === null || (args as McpToolArgs).dueAt === "");
+          const result = failure(toolName, String((args as McpToolArgs).clientRequestId), missingDue ? "TASK_DUE_REQUIRED" : toolName === "voice_tools" ? "INVALID_PROPOSAL" : "TASK_INVALID_FIELD",
             toolName === "voice_tools" ? "Invalid voice tools proposal. Use a registry package name with an optional version or a pinned entryFile; launch variables and inline credentials are refused."
               : issues.map(issue => `${issue.field}: ${issue.message}`).join("; "), false, false,
-            { field: issues[0]?.field, issues });
+            { field: missingDue ? "dueAt" : issues[0]?.field, issues });
           return response(result);
         }
       }

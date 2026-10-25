@@ -592,6 +592,28 @@ test.each(["main", "release/stable"])("a PR successor names the forge base and i
 });
 
 
+test("a reserved refresh replays the same source and target after branch metadata changes", async () => {
+  const value = finished();
+  value.baseBranch = "topic";
+  const h = harness({ lanes: [value], prs: [{ ...conflicting(), base: "release/stable" }] });
+  h.setCreateMode("throw");
+  await h.sweep();
+  const reservation = structuredClone(h.merge("finished")!.refresh!);
+  const request = structuredClone(h.creates[0]!.request as CreatePipelineRequest);
+  h.pipeline("finished").baseBranch = "another-checkout-base";
+  h.prs.get(11)!.base = "another-integration-base";
+  h.setBase(MAIN_2);
+  h.setCreateMode("ok");
+  await h.sweep();
+  expect(h.creates).toHaveLength(2);
+  expect(h.creates[1]!.request).toEqual(request);
+  expect(h.creates[1]!.options).toEqual(h.creates[0]!.options);
+  expect(h.merge("finished")!.refresh).toEqual({ ...reservation, pipelineId: "refresh-1" });
+  expect(request.baseBranch).toBe("release/stable");
+  expect(request.stages[0]!.prompt).toContain("Merge current origin/release/stable into this PR's delivery branch refs/heads/topic");
+  expect(request.spec).toContain(`base release/stable at ${MAIN_1}; reviewed head ${HEAD_A}; delivery refs/heads/topic`);
+});
+
 test("a legacy reservation replays with the forge base after a failed creation", async () => {
   const value = finished();
   value.baseBranch = "topic";

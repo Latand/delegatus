@@ -1,3 +1,4 @@
+import { operatorTimeZone } from "@/lib/operator/settings";
 import { requestWorkspaceScope, filterWorkspaceRows, workspaceRoute, assertWorkspaceProject } from "@/lib/team/workspaceRoute";
 import fs from "node:fs";
 
@@ -89,6 +90,7 @@ async function workspacePOST(req: NextRequest): Promise<NextResponse<{ ok: true;
       /* An attachment ref only becomes task-owned once its bytes are actually
          in the store — a stale/forged ref is rejected loudly, never dangling. */
       attachmentExists: (att) => fs.existsSync(attachmentPath(att)),
+      defaultDue: true, dueTimeZone: operatorTimeZone() ?? undefined,
       explicit: true, seatHolding: taskSeatHoldingSnapshot(), statusActor: OPERATOR_PAUSE_RESUME_ACTOR,
     });
     if (outcome.ok) assertWorkspaceProject(req, outcome.task.project);

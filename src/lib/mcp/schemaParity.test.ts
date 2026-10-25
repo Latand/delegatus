@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { expect, test } from "bun:test";
 import { registerPipelineTick } from "@/lib/pipelines/controllerSignal";
 registerPipelineTick(async () => {});
@@ -864,13 +865,13 @@ test("task coordinates publish finite axes and retain pinned-update position sem
       /* update_task's taskId became optional with the first-action refinement
          (#1586): `refine` defaults to the calling conversation's own pending
          task; every other update still needs the id (enforced in the binding). */
-      expect(tool.inputSchema.required?.slice().sort()).toEqual(name === "create_task" ? ["clientRequestId", "project", "text"] : ["clientRequestId"]);
+      expect(tool.inputSchema.required?.slice().sort()).toEqual(name === "create_task" ? ["clientRequestId", "dueAt", "project", "text"] : ["clientRequestId"]);
       if (name === "update_task") {
         const refine = (tool.inputSchema.properties as Record<string, { properties?: Record<string, { type?: string }> }> | undefined)?.refine;
         expect(refine?.properties?.text?.type).toBe("string");
       }
       for (const invalid of [null, {}, { x: 1 }, { y: 2 }, { x: "1", y: 2 }, { x: Infinity, y: 0 }, { x: NaN, y: 0 }]) {
-        const args = { clientRequestId: "invalid-coordinate", project: "fixture-project", text: "task", taskId: "task-fixture", pos: invalid };
+        const args = { ...(name === "create_task" ? withTaskDue({}) : {}), clientRequestId: "invalid-coordinate", project: "fixture-project", text: "task", taskId: "task-fixture", pos: invalid };
         const parsed = TOOL_INPUT_SCHEMAS[name].safeParse(args);
         expect(parsed.success).toBe(false);
         expect(parsed.error?.issues.some(issue => issue.path[0] === "pos")).toBe(true);

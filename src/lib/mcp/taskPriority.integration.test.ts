@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 /**
  * Task priority through MCP and HTTP: create_task and update_task take it,
  * list_tasks filters by it and carries it in compact rows only when it is not
@@ -62,12 +63,12 @@ const json = (url: string, method: string, body: Record<string, unknown>) =>
 test("create_task and update_task take a priority; normal clears it; list_tasks filters by it and shows it only when not normal", async () => {
   const p = await protocol();
   try {
-    const high = await p.call("create_task", { project: "priority-project", text: "Fix the broken deploy", priority: "high" });
+    const high = await p.call("create_task", withTaskDue({ project: "priority-project", text: "Fix the broken deploy", priority: "high" }));
     expect(high).toMatchObject({ ok: true, task: { priority: "high" } });
     expect(high.changedFields).toContain("priority");
-    const normal = await p.call("create_task", { project: "priority-project", text: "Write the notes" });
-    const low = await p.call("create_task", { project: "priority-project", text: "Tidy the helpers", priority: "low" });
-    const odd = await p.call("create_task", { project: "priority-project", text: "Odd one", priority: "asap" });
+    const normal = await p.call("create_task", withTaskDue({ project: "priority-project", text: "Write the notes" }));
+    const low = await p.call("create_task", withTaskDue({ project: "priority-project", text: "Tidy the helpers", priority: "low" }));
+    const odd = await p.call("create_task", withTaskDue({ project: "priority-project", text: "Odd one", priority: "asap" }));
     expect(odd.ok).toBe(true);
     expect("priority" in odd.task).toBe(false);
     expect(odd.notes).toEqual(['priority "asap" is not one of high, normal, low, so the task is normal']);

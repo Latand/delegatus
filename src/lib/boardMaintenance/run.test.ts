@@ -65,6 +65,7 @@ for (const enabled of [true, false]) test(`launch brief reads this project's mer
 test("card exists before spawn, with icon, colour, description and task binding in body", async () => {
   const h = harness(); await h.controller.launchIfDue(input());
   const run = h.run(), card = tasks().find(t => t.id === run.taskId)!;
+  expect(card.dueAt).toBeUndefined(); expect(card.dueTz).toBeUndefined();
   expect(card).toMatchObject({ icon: "brush-cleaning", color: "slate" }); expect(card.text).toContain("30.09 12:00 · Обслуговування дошки"); expect(card.details).toStartWith("Delegatus board maintenance run");
   expect(h.bodies[0]).toMatchObject({ role: "maintainer", taskId: card.id, cwd: "/fixtures/repository", project: PROJECT, clientAttemptId: run.runId });
 });

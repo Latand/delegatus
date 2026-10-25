@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 /**
  * Agent-facing `details` through both published surfaces (#1834): the MCP
  * `create_task` / `update_task` / `get_task` / `list_tasks` tools an agent
@@ -79,7 +80,7 @@ const json = (body: unknown, method: string) => new NextRequest("http://localhos
 test("create_task carries details, update_task sets, replaces and clears it, and text is never touched", async () => {
   const p = await protocol();
   try {
-    const created = await p.call("create_task", { project: "details-project", text: HUMAN, details: CONTEXT });
+    const created = await p.call("create_task", withTaskDue({ project: "details-project", text: HUMAN, details: CONTEXT }));
     expect(created.task.details).toBe(CONTEXT);
     expect(created.task.text).toBe(HUMAN);
     const id = created.task.id;
@@ -113,8 +114,8 @@ test("list_tasks truncates details and says so; get_task still answers with the 
   const p = await protocol();
   try {
     const long = "state ".repeat(LIST_TASKS_DETAILS_CHARS);
-    const created = await p.call("create_task", { project: "details-list", text: HUMAN, details: long });
-    const short = await p.call("create_task", { project: "details-list", text: "Short one\nNo long context.", details: "brief" });
+    const created = await p.call("create_task", withTaskDue({ project: "details-list", text: HUMAN, details: long }));
+    const short = await p.call("create_task", withTaskDue({ project: "details-list", text: "Short one\nNo long context.", details: "brief" }));
 
     const listed = await p.call("list_tasks", { project: "details-list" });
     const cut = listed.tasks!.find((row) => row.id === created.task.id)!;

@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import * as pipelineStore from "@/lib/pipelines/store";
 import * as admissionSources from "@/lib/monitor/seatTickAdmissionSources";
 import { chooseSource } from "../fixtures/source";
@@ -871,7 +872,7 @@ test("guard binds an early receipt and admits only the machine's live curator co
   expect(() => curatorCallerOf(id, snapshot)).toThrow(/not a curator/);
   snapshot.conversations[id].agentRole = "curator"; ended(p);
   expect(() => curatorCallerOf(id, snapshot)).toThrow(/live pass/);
-  expect(permitCuratorTool("create_task", {})).toHaveProperty("allowed", false);
+  expect(permitCuratorTool("create_task", withTaskDue({}))).toHaveProperty("allowed", false);
   expect(permitCuratorTool("curate_rules", { action: "apply" })).toHaveProperty("allowed", true);
   expect(permitCuratorTool("role_presets", {})).toHaveProperty("allowed", true);
   expect(permitCuratorTool("role_presets", { overrides: [] })).toHaveProperty("allowed", false);

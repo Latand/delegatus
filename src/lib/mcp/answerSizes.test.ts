@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -116,7 +117,7 @@ test("measure every tool through the MCP service and budget common board answers
     ["list_pipelines", "open,compact", { project: "size-board", state: "open", compact: true }],
     ["agent_activity", "liveOnly,compact", { project: "size-board", liveOnly: true, compact: true }],
     ["agent_activity", "default", { project: "size-board" }],
-    ["create_task", "details", { project: "size-board", text: "New board work", details: "Context. ".repeat(600), board: "hidden" }],
+    ["create_task", "details", withTaskDue({ project: "size-board", text: "New board work", details: "Context. ".repeat(600), board: "hidden" })],
     ["update_task", "status", { taskId: "task-0", status: "blocked" }],
     ["get_task", "default", { taskId: "task-0" }],
     ["get_pipeline", "default", { pipelineId: pipelines[0]!.id }],
@@ -383,7 +384,7 @@ test("acknowledgements name created and refined fields; a missing keyed pipeline
     patchPipeline: async () => ({ error: "pipeline not found", status: 404 }),
   } as never);
   await expect(bindings.pipeline_action({ clientRequestId: "missing-keyed", pipelineId: "absent", action: "set-position", pos: { x: 1, y: 2 } })).rejects.toThrow("pipeline not found");
-  const created = await bindings.create_task({ clientRequestId: "created-fields", project: "created-board", text: "Created fields", dueAt: "2027-01-01T00:00:00.000Z", dueTz: "UTC" }) as any;
+  const created = await bindings.create_task(withTaskDue({ clientRequestId: "created-fields", project: "created-board", text: "Created fields", dueTz: "UTC" })) as any;
   expect(created.changedFields).toContain("dueAt");
   expect(created.changedFields).toContain("dueTz");
   const tasks = loadTasks();
