@@ -152,6 +152,7 @@ interface ControllerState {
      shares this object and has no such hook. */
   settleHostlessSessions?: (() => Promise<number>) | null;
   updateStartupDeferral?: ((conversationId: string, deferred: boolean) => void) | null;
+  allowStartupRecovery?: (() => void) | null;
   completeActive: ((adopted: readonly StructuredDeliveryHost[], progress?: (phase: StructuredHostStartupPhase) => void, assertActive?: () => void, deferredConversationIds?: ReadonlySet<string>) => Promise<void>) | null;
   stopActive: () => void;
   lastDrainError?: string | null;
@@ -231,6 +232,7 @@ function retireStructuredDeliveryPublication(): void {
   state.settleHostlessSessions = null;
   state.completeActive = null;
   state.updateStartupDeferral = null;
+  state.allowStartupRecovery = null;
   setStructuredDeliveryKick(null);
   markStructuredDeliveryControllerUnavailable();
 }
@@ -786,6 +788,7 @@ export async function bindStructuredDeliveryQueue(
   // the remaining hosts. Their original queued operations must wait for those
   // seats instead of attempting competing recovery and terminalizing them.
   let startupPending = dependencies.deferStartupWork === true;
+  let startupRecoveryReady = !startupPending;
   let deferredStartupConversations = new Set<string>();
   let scheduleAutomaticRetry = () => {};
   let requestDrain = () => {};
@@ -945,6 +948,9 @@ export async function bindStructuredDeliveryQueue(
         || (deferredStartupConversations.size > 0
           && deferredStartupConversations.has(resolveConversationAlias(registry.readOnlySnapshot(), conversationId as ViewerConversationId))))
         && hostResolver(registry, hosts)(conversationId) === null,
+      canRecoverDeferredTarget: (conversationId) => startupRecoveryReady
+        && (deferredStartupConversations.size === 0
+          || !deferredStartupConversations.has(resolveConversationAlias(registry.readOnlySnapshot(), conversationId as ViewerConversationId))),
       reconfigureCancelled: (effect) => registry.reconfigureCancelled(effect.conversationId as ViewerConversationId, effect.operationId),
       switchHold: (conversationId) => registry.switchHold(conversationId as ViewerConversationId),
       /* Off the loop (rule c). The hold is written before the switch is
@@ -1357,13 +1363,14 @@ export async function bindStructuredDeliveryQueue(
       const recovered = await recover({
         path: generation.path,
         conversationId: conversation.id,
+        ...(startupPending ? { reconnectLiveHost: true } : {}),
         ...admission,
       }, {
         registry,
         client,
         requestDeliveryDrain: requestDrain,
       });
-      return recovered?.spawned === true;
+      return recovered?.spawned === true || recovered?.reconnected === true;
     },
     (effect, ownership) => applyStructuredReconfigure(effect, {
       ...dependencies.reconfigure,
@@ -2053,6 +2060,7 @@ export async function bindStructuredDeliveryQueue(
       state.settleHostlessSessions = null;
       state.completeActive = null;
       state.updateStartupDeferral = null;
+      state.allowStartupRecovery = null;
       setStructuredDeliveryKick(null);
     }
   };
@@ -2164,6 +2172,11 @@ export async function bindStructuredDeliveryQueue(
     if (stopped || state.activeQueue !== queue) throw new StructuredDeliveryControllerUnavailableError();
     if (deferred) deferredStartupConversations.add(conversationId);
     else deferredStartupConversations.delete(conversationId);
+  };
+  state.allowStartupRecovery = () => {
+    if (stopped || state.activeQueue !== queue) throw new StructuredDeliveryControllerUnavailableError();
+    startupRecoveryReady = true;
+    requestDrain();
   };
   state.settleHostlessSessions = settleHostlessSessions;
   const settleIntervalMs = dependencies.hostlessSettleIntervalMs ?? HOSTLESS_SETTLE_INTERVAL_MS;
@@ -2331,6 +2344,14 @@ export async function publishStructuredDeliveryHost(
 export function updateStructuredStartupDeferral(registry: AgentRegistry, conversationId: string, deferred: boolean): void {
   if (state.activeRegistry !== registry || !state.updateStartupDeferral) throw new StructuredDeliveryControllerUnavailableError();
   state.updateStartupDeferral(conversationId, deferred);
+}
+
+/** Restart-cut recognition has fenced undecided rows. Explicit messages may
+ * now use ordinary per-conversation recovery while the historical sweep runs.
+ * Recovery still checks each row's cut, custody and pipeline authority. */
+export function allowStructuredStartupRecovery(registry: AgentRegistry): void {
+  if (state.activeRegistry !== registry || !state.allowStartupRecovery) return;
+  state.allowStartupRecovery();
 }
 
 export async function completeStructuredDeliveryQueueStartup(

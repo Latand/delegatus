@@ -17,6 +17,7 @@ import {
   type CopilotAcpHostOptions,
 } from "./copilotAcpHost";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
+import { mcpHttpAccessToken, MCP_HTTP_ACCESS_HEADER } from "@/lib/mcp/httpAccess";
 
 import type { RuntimeEventStore } from "./eventStore";
 import type { RuntimeEvent } from "./engineHost";
@@ -344,6 +345,25 @@ describe("CopilotAcpHost", () => {
       tools: ["*"],
     });
     expect(viewer).not.toHaveProperty("command");
+  });
+
+  test("a keyed installation puts local MCP access only in Copilot's server definition", async () => {
+    const key = crypto.randomBytes(32).toString("base64url");
+    const viewer = await writtenViewerConfig({ ...dockerShape(), env: { LLV_MCP_TRANSPORT: "http", LLV_TOKEN: key, HOSTNAME: "127.0.0.1" } });
+    const headers = viewer.headers as Record<string, string>;
+    expect(headers[MCP_HTTP_ACCESS_HEADER] === mcpHttpAccessToken({ LLV_TOKEN: key })).toBe(true);
+    expect(headers[VIEWER_SPAWN_CAPABILITY_HEADER]).toBe("c".repeat(43));
+    expect(JSON.stringify(viewer).includes(key)).toBe(false);
+    expect(viewer).not.toHaveProperty("env");
+  });
+
+  test.each(["0.0.0.0", "::", "192.0.2.10"])("a keyed %s bind keeps Copilot on stdio without an HTTP credential", async hostname => {
+    const viewer = await writtenViewerConfig({ ...dockerShape(), env: {
+      LLV_MCP_TRANSPORT: "http", LLV_TOKEN: crypto.randomBytes(32).toString("base64url"), HOSTNAME: hostname,
+    } });
+    expect(viewer).toMatchObject({ type: "local", command: "bun" });
+    expect(viewer).not.toHaveProperty("url");
+    expect(JSON.stringify(viewer)).not.toContain(MCP_HTTP_ACCESS_HEADER);
   });
 
   test("allowSubagents keeps the native sub-agent tools; a non-bypass profile omits --allow-all", async () => {

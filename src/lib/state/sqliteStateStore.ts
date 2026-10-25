@@ -406,6 +406,15 @@ const stateSchema = [
     WHERE collection='tasks' AND json_valid(value_json)
       AND json_type(value_json,'$.findingKey')='text' AND json_type(value_json,'$.status')='text'
       AND json_extract(value_json,'$.status') <> 'done'`,
+  `CREATE INDEX IF NOT EXISTS state_rows_task_due ON state_rows(
+    json_extract(value_json,'$.project'),
+    coalesce(json_extract(value_json,'$.machine'),''),
+    CASE json_extract(value_json,'$.priority') WHEN 'high' THEN 0 WHEN 'low' THEN 2 ELSE 1 END,
+    coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0),
+    round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000), row_key)
+    WHERE collection='tasks' AND json_valid(value_json)
+      AND json_type(value_json,'$.dueAt')='text' AND json_type(value_json,'$.status')='text'
+      AND json_extract(value_json,'$.status') <> 'done'`,
   ...["text", "status", "look", "place", "links", "machine", "handover"].map(field => `CREATE INDEX IF NOT EXISTS state_rows_task_stamp_${field}
       ON state_rows(json_extract(value_json,'$.project'), json_extract(value_json,'$.sync.s.${field}') DESC)
       WHERE collection='tasks' AND json_valid(value_json) AND json_type(value_json,'$.sync.s.${field}')='text'`),
@@ -467,6 +476,13 @@ const stateSchema = [
 ];
 const stateSchemaNames = stateSchema.map(sql => /^CREATE (?:UNIQUE )?(?:TABLE|INDEX|TRIGGER) IF NOT EXISTS (\w+)/.exec(sql)![1]!);
 
+function taskDueIndexCurrent(db: Database): boolean {
+  const sql = db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE type='index' AND name='state_rows_task_due'").get()?.sql;
+  const expected = stateSchema.find(statement => statement.startsWith("CREATE INDEX IF NOT EXISTS state_rows_task_due ON"))!;
+  const normalize = (statement: string) => statement.replace("IF NOT EXISTS ", "").replace(/\s+/g, " ").trim();
+  return sql !== undefined && normalize(sql) === normalize(expected);
+}
+
 function openRawDatabase(filename: string): Database {
   const db = connectRawDatabase(filename);
   try {
@@ -483,6 +499,7 @@ function openRawDatabase(filename: string): Database {
           && pipelineControllerReferencesReady(db, names)
           && (pipelineControllerReferencesCurrent(db) || !mayRunStateStartupMutation(path.dirname(filename)))
           && pipelineEvidenceIndexReady(db)
+          && taskDueIndexCurrent(db)
           && db.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get()?.journal_mode === "wal"
           && db.query<{ name: string }, []>("PRAGMA table_info(state_collections)").all().some(row => row.name === "change_floor")
           && db.query<{ name: string }, []>("PRAGMA table_info(state_imports)").all().some(row => row.name === "reconciled_sha256")) return db;
@@ -494,6 +511,7 @@ function openRawDatabase(filename: string): Database {
         db.exec("PRAGMA journal_mode = WAL");
         db.exec("PRAGMA auto_vacuum = INCREMENTAL");
         db.exec("BEGIN IMMEDIATE");
+        if (!taskDueIndexCurrent(db)) db.exec("DROP INDEX IF EXISTS state_rows_task_due");
         for (const sql of stateSchema) db.exec(sql);
         const collectionColumns = db.query<{ name: string }, []>("PRAGMA table_info(state_collections)").all();
         if (!collectionColumns.some((column) => column.name === "change_floor")) {
@@ -1245,6 +1263,112 @@ function sharedStateReadonlyDatabase(filename: string): Database {
   return db;
 }
 
+export type OverdueTaskCursor = readonly [priority: number, dueAt: number, rowKey: string];
+type OverdueTaskRow = { row_key: string; priority: number; eligible_at: number; advance: number | null };
+
+/** Seek each eligible hold partition, then merge bounded pages in due-date
+ * order. Future holds and foreign machines are excluded by index prefixes;
+ * the fixed head retains daily repeats, discovery excludes known dates, and
+ * the sweep excludes recent deliveries before its page limit. */
+export const OVERDUE_TASK_KEYS_SQL = `
+  WITH RECURSIVE owners AS (
+    SELECT DISTINCT p.value AS project, m.value AS machine, q.value AS priority
+    FROM json_each(?1) p, json_each(?2) m, json_each('[0,1,2]') q
+  ), scopes(project, machine, priority, held_until) AS (
+    SELECT project, machine, priority, -9007199254740991 FROM owners
+    UNION ALL
+    SELECT project, machine, priority, (
+      SELECT coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0) FROM state_rows INDEXED BY state_rows_task_due
+      WHERE collection='tasks' AND json_valid(value_json)
+          AND json_type(value_json,'$.dueAt')='text' AND json_type(value_json,'$.status')='text'
+          AND json_extract(value_json,'$.status') <> 'done'
+          AND json_extract(value_json,'$.project')=scopes.project
+          AND coalesce(json_extract(value_json,'$.machine'),'')=scopes.machine
+          AND CASE json_extract(value_json,'$.priority') WHEN 'high' THEN 0 WHEN 'low' THEN 2 ELSE 1 END=scopes.priority
+        AND coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0)>scopes.held_until AND coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0)<=?3
+      ORDER BY coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0) LIMIT 1
+    ) FROM scopes WHERE held_until IS NOT NULL
+  ), pages AS MATERIALIZED (
+    SELECT priority, (
+      SELECT json_group_array(json_object('key', row_key, 'due', due)) FROM (
+        SELECT row_key, round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) AS due
+        FROM state_rows INDEXED BY state_rows_task_due
+        WHERE collection='tasks' AND json_valid(value_json)
+          AND json_type(value_json,'$.dueAt')='text' AND json_type(value_json,'$.status')='text'
+          AND json_extract(value_json,'$.status') <> 'done'
+          AND json_extract(value_json,'$.project')=scopes.project
+          AND coalesce(json_extract(value_json,'$.machine'),'')=scopes.machine
+          AND CASE json_extract(value_json,'$.priority') WHEN 'high' THEN 0 WHEN 'low' THEN 2 ELSE 1 END=scopes.priority
+          AND coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0)=scopes.held_until
+          AND round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) <= ?3
+        ORDER BY round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000), row_key LIMIT 25
+      )
+    ) AS repeat_rows, (
+      SELECT json_group_array(json_object('key', row_key, 'due', due)) FROM (
+        SELECT row_key, round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) AS due
+        FROM state_rows INDEXED BY state_rows_task_due
+        WHERE collection='tasks' AND json_valid(value_json)
+          AND json_type(value_json,'$.dueAt')='text' AND json_type(value_json,'$.status')='text'
+          AND json_extract(value_json,'$.status') <> 'done'
+          AND json_extract(value_json,'$.project')=scopes.project
+          AND coalesce(json_extract(value_json,'$.machine'),'')=scopes.machine
+          AND CASE json_extract(value_json,'$.priority') WHEN 'high' THEN 0 WHEN 'low' THEN 2 ELSE 1 END=scopes.priority
+          AND coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0)=scopes.held_until
+          AND round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) <= ?3
+          AND row_key || ':' || CAST(round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) AS INTEGER) NOT IN (SELECT value FROM json_each(?7))
+        ORDER BY round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000), row_key LIMIT 51
+      )
+    ) AS head_rows, (
+      SELECT json_group_array(json_object('key', row_key, 'due', due)) FROM (
+        SELECT row_key, round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) AS due
+        FROM state_rows INDEXED BY state_rows_task_due
+        WHERE collection='tasks' AND json_valid(value_json)
+          AND json_type(value_json,'$.dueAt')='text' AND json_type(value_json,'$.status')='text'
+          AND json_extract(value_json,'$.status') <> 'done'
+          AND json_extract(value_json,'$.project')=scopes.project
+          AND coalesce(json_extract(value_json,'$.machine'),'')=scopes.machine
+          AND CASE json_extract(value_json,'$.priority') WHEN 'high' THEN 0 WHEN 'low' THEN 2 ELSE 1 END=scopes.priority
+          AND coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0)=scopes.held_until
+          AND round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) <= ?3
+          AND scopes.priority=json_extract(?6,'$[0]') AND round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000)=json_extract(?6,'$[1]') AND row_key>json_extract(?6,'$[2]')
+          AND row_key || ':' || CAST(round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) AS INTEGER) NOT IN (SELECT value FROM json_each(?4))
+        ORDER BY round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000), row_key LIMIT 51
+      )
+    ) AS same_rows, (
+      SELECT json_group_array(json_object('key', row_key, 'due', due)) FROM (
+        SELECT row_key, round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) AS due
+        FROM state_rows INDEXED BY state_rows_task_due
+        WHERE collection='tasks' AND json_valid(value_json)
+          AND json_type(value_json,'$.dueAt')='text' AND json_type(value_json,'$.status')='text'
+          AND json_extract(value_json,'$.status') <> 'done'
+          AND json_extract(value_json,'$.project')=scopes.project
+          AND coalesce(json_extract(value_json,'$.machine'),'')=scopes.machine
+          AND CASE json_extract(value_json,'$.priority') WHEN 'high' THEN 0 WHEN 'low' THEN 2 ELSE 1 END=scopes.priority
+          AND coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0)=scopes.held_until
+          AND round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) <= ?3
+          AND scopes.priority >= coalesce(json_extract(?6,'$[0]'), -1) AND round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000)>CASE WHEN scopes.priority=json_extract(?6,'$[0]') THEN json_extract(?6,'$[1]') ELSE -9007199254740991 END
+          AND row_key || ':' || CAST(round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) AS INTEGER) NOT IN (SELECT value FROM json_each(?4))
+        ORDER BY round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000), row_key LIMIT 51
+      )
+    ) AS later_rows FROM scopes WHERE held_until IS NOT NULL
+  ), expanded AS MATERIALIZED (
+    SELECT priority, CASE WHEN batch.key < 2 THEN batch.key ELSE 2 END AS pass,
+      json_extract(item.value,'$.key') AS row_key, json_extract(item.value,'$.due') AS due
+    FROM pages, json_each(json_array(repeat_rows, head_rows, same_rows, later_rows)) batch, json_each(batch.value) item
+  ), head AS MATERIALIZED (
+    SELECT row_key, priority, due FROM expanded WHERE pass=0 ORDER BY priority, due, row_key LIMIT 25
+  ), discovery AS MATERIALIZED (
+    SELECT row_key, priority, due FROM expanded WHERE pass=1 ORDER BY priority, due, row_key LIMIT 25
+  ), sweep AS MATERIALIZED (
+    SELECT row_key, priority, due FROM expanded WHERE pass=2 ORDER BY priority, due, row_key LIMIT 51
+  ), combined AS (
+    SELECT * FROM head UNION SELECT * FROM discovery UNION SELECT * FROM sweep
+  )
+  SELECT row_key, priority, due AS eligible_at,
+    row_key=(SELECT row_key FROM sweep ORDER BY priority, due, row_key LIMIT 1) AS advance
+  FROM combined ORDER BY priority, due, row_key LIMIT ?5
+`;
+
 export class SqliteStateCollection<T> {
   private readonly readDb: Database;
   private localCache: CollectionCache<T> | null = null;
@@ -1538,6 +1662,19 @@ export class SqliteStateCollection<T> {
         AND json_extract(value_json,'$.project')=? AND json_extract(value_json,'$.findingKey')=?
       ORDER BY row_order, row_key
     `).all(project, findingKey).map(row => row.row_key);
+  }
+
+  /** One indexed read; rejected holds and remote rows never reach the decoder. */
+  overdueTaskKeys(projects: readonly string[], nowMs: number, limit = 51, machine: string | null = null, shown: readonly string[] = [], cursor: OverdueTaskCursor | null = null, known: readonly string[] = shown): string[] {
+    return this.overdueTaskRows(projects, nowMs, limit, machine, shown, cursor, known).map(row => row.row_key);
+  }
+
+  overdueTaskRows(projects: readonly string[], nowMs: number, limit = 51, machine: string | null = null, shown: readonly string[] = [], cursor: OverdueTaskCursor | null = null, known: readonly string[] = shown): OverdueTaskRow[] {
+    if (!projects.length) return [];
+    if (!Number.isFinite(nowMs) || !Number.isSafeInteger(limit) || limit < 1 || limit > 51) throw new Error("invalid overdue task selection");
+    const machines = machine ? ["", machine] : [""];
+    return this.readDb.query<OverdueTaskRow, [string, string, number, string, number, string, string]>(OVERDUE_TASK_KEYS_SQL)
+      .all(JSON.stringify([...new Set(projects)]), JSON.stringify(machines), nowMs, JSON.stringify(shown), limit, JSON.stringify(cursor), JSON.stringify(known));
   }
 
   /** Release an evicted document owner's connection. */
@@ -2163,6 +2300,58 @@ export class SqliteStateCollection<T> {
 
   async patch<C = never>(prepare: () => { records: readonly T[]; deleteKeys?: readonly string[]; appendKeys?: readonly string[]; companion?: CompanionPatch<C> }, options: { fenceOwner?: boolean; companion?: SqliteStateCollection<C> } = {}): Promise<void> {
     await waitForStateLock("state.patch", () => this.patchSync(prepare, options), { subject: this.options.collection });
+  }
+
+  /** Upserts across any number of collections of one database in a single
+      SQLite transaction: the companion write generalised. Leases are taken in
+      collection-name order, like `patchSync`, so two such writers cannot
+      deadlock. `beforeCommit` runs inside the transaction after every merge;
+      a throw there rolls every collection back. */
+  static commitPatchesSync(
+    patches: readonly { collection: SqliteStateCollection<unknown>; records: readonly unknown[]; deleteKeys?: readonly string[] }[],
+    options: {
+      /** Runs first inside the transaction, with the committed revision and row
+          count of any collection; a throw rolls back before anything is written. */
+      beforeMerge?: (read: { revision(collection: string): number | null; rows(collection: string): number }) => void;
+      beforeCommit?: () => void;
+      busyMessage?: string;
+    } = {},
+  ): void {
+    if (!patches.length) return;
+    const filename = patches[0]!.collection.filename;
+    const names = new Set<string>();
+    for (const patch of patches) {
+      if (patch.collection.filename !== filename) throw new Error("a combined state write needs collections of one database");
+      if (names.has(patch.collection.options.collection)) throw new Error(`duplicate collection in a combined state write: ${patch.collection.options.collection}`);
+      names.add(patch.collection.options.collection);
+    }
+    assertSqliteWriteAuthority(filename);
+    const ordered = [...patches].sort((a, b) => a.collection.options.collection.localeCompare(b.collection.options.collection));
+    const leases: { collection: SqliteStateCollection<unknown>; token: string }[] = [];
+    try {
+      for (const patch of ordered) leases.push({ collection: patch.collection, token: patch.collection.acquireLeaseSync() });
+      const db = connectDatabase(filename);
+      let changed = false;
+      try {
+        withImmediateTransaction(db, options.busyMessage ?? "state is busy", () => {
+          assertSqliteWriteAuthority(filename);
+          options.beforeMerge?.({
+            revision: collection => db.query<{ revision: number }, [string]>("SELECT revision FROM state_collections WHERE collection = ?").get(collection)?.revision ?? null,
+            rows: collection => db.query<{ count: number }, [string]>("SELECT COUNT(*) AS count FROM state_rows WHERE collection = ?").get(collection)?.count ?? 0,
+          });
+          for (const [index, patch] of ordered.entries()) {
+            if (patch.collection.mergeRows(db, leases[index]!.token, patch.records, patch.deleteKeys ?? [])) changed = true;
+          }
+          options.beforeCommit?.();
+        });
+      } finally { db.close(); }
+      if (changed) {
+        secureDatabaseFiles(filename);
+        for (const patch of ordered) patch.collection.invalidateAfterCommit();
+      }
+    } finally {
+      for (const lease of leases.reverse()) lease.collection.releaseLeaseSync(lease.token);
+    }
   }
 
   /** One prepared, indexed revision reader per in-flight pipeline operation.

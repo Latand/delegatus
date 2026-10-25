@@ -5,7 +5,7 @@ import { readWorktreeRecoveries } from "@/lib/projects/worktreeRecoveryStore";
 
 import { statePath } from "@/lib/configDir";
 import { writeJsonDurably } from "@/lib/state/durableJson";
-import { withFileTransactionSync } from "@/lib/state/fileTransaction";
+import { withFileTransaction, withFileTransactionSync } from "@/lib/state/fileTransaction";
 
 import {
   isLifecycleEventType,
@@ -239,52 +239,60 @@ export function readLifecycleJournal(): LifecycleJournalFile {
  */
 export function appendLifecycleEvents(inputs: LifecycleEventInput[]): { appended: LifecycleEvent[]; skipped: number } {
   if (inputs.length === 0) return { appended: [], skipped: 0 };
-  return withFileTransactionSync(lifecycleJournalPath(), "lifecycle journal is busy", () => {
-    const file = readJournalFile();
-    const spawnFailureKeys = file.spawnFailureKeys ?? (file.spawnFailureKeys = []);
-    const known = new Set<string>([...file.events.map((event) => event.id), ...file.retired,
-      ...spawnFailureKeys.map(lifecycleEventId)]);
-    const appended: LifecycleEvent[] = [];
-    let skipped = 0;
-    let spawnFailureKeysChanged = false;
-    for (const input of inputs) {
-      if (input.type === "spawn_failed" && input.key.startsWith("spawn:") && input.key.endsWith(":failed")
-        && !spawnFailureKeys.includes(input.key)) {
-        spawnFailureKeys.push(input.key);
-        spawnFailureKeysChanged = true;
-      }
-      const id = lifecycleEventId(input.key);
-      if (known.has(id)) {
-        skipped += 1;
-        continue;
-      }
-      known.add(id);
-      file.lastSeq += 1;
-      const event: LifecycleEvent = {
-        id,
-        seq: file.lastSeq,
-        at: input.at,
-        type: input.type,
-        state: LIFECYCLE_STATE_FOR_EVENT[input.type],
-        project: input.project ?? null,
-        pipelineId: input.pipelineId ?? null,
-        stageId: input.stageId ?? null,
-        attempt: Number.isInteger(input.attempt) ? input.attempt as number : null,
-        conversationId: input.conversationId ?? null,
-        role: input.role ?? null,
-        summary: operatorSafeSummary(input.summary),
-      };
-      file.events.push(event);
-      appended.push(event);
+  return withFileTransactionSync(lifecycleJournalPath(), "lifecycle journal is busy", () => appendInTransaction(inputs));
+}
+
+/** Background producers wait asynchronously on the same journal admission. */
+export async function appendLifecycleEventsAsync(inputs: LifecycleEventInput[]): Promise<{ appended: LifecycleEvent[]; skipped: number }> {
+  if (inputs.length === 0) return { appended: [], skipped: 0 };
+  return withFileTransaction(lifecycleJournalPath(), "lifecycle journal is busy", () => appendInTransaction(inputs));
+}
+
+function appendInTransaction(inputs: LifecycleEventInput[]): { appended: LifecycleEvent[]; skipped: number } {
+  const file = readJournalFile();
+  const spawnFailureKeys = file.spawnFailureKeys ?? (file.spawnFailureKeys = []);
+  const known = new Set<string>([...file.events.map((event) => event.id), ...file.retired,
+    ...spawnFailureKeys.map(lifecycleEventId)]);
+  const appended: LifecycleEvent[] = [];
+  let skipped = 0;
+  let spawnFailureKeysChanged = false;
+  for (const input of inputs) {
+    if (input.type === "spawn_failed" && input.key.startsWith("spawn:") && input.key.endsWith(":failed")
+      && !spawnFailureKeys.includes(input.key)) {
+      spawnFailureKeys.push(input.key);
+      spawnFailureKeysChanged = true;
     }
-    if (appended.length === 0 && !spawnFailureKeysChanged) return { appended, skipped };
-    if (file.events.length > LIFECYCLE_JOURNAL_CAPACITY) {
-      const trimmed = file.events.splice(0, file.events.length - LIFECYCLE_JOURNAL_CAPACITY);
-      file.retired = [...file.retired, ...trimmed.map((event) => event.id)].slice(-RETIRED_ID_CAPACITY);
+    const id = lifecycleEventId(input.key);
+    if (known.has(id)) {
+      skipped += 1;
+      continue;
     }
-    writeJournalFile(file);
-    return { appended, skipped };
-  });
+    known.add(id);
+    file.lastSeq += 1;
+    const event: LifecycleEvent = {
+      id,
+      seq: file.lastSeq,
+      at: input.at,
+      type: input.type,
+      state: LIFECYCLE_STATE_FOR_EVENT[input.type],
+      project: input.project ?? null,
+      pipelineId: input.pipelineId ?? null,
+      stageId: input.stageId ?? null,
+      attempt: Number.isInteger(input.attempt) ? input.attempt as number : null,
+      conversationId: input.conversationId ?? null,
+      role: input.role ?? null,
+      summary: operatorSafeSummary(input.summary),
+    };
+    file.events.push(event);
+    appended.push(event);
+  }
+  if (appended.length === 0 && !spawnFailureKeysChanged) return { appended, skipped };
+  if (file.events.length > LIFECYCLE_JOURNAL_CAPACITY) {
+    const trimmed = file.events.splice(0, file.events.length - LIFECYCLE_JOURNAL_CAPACITY);
+    file.retired = [...file.retired, ...trimmed.map((event) => event.id)].slice(-RETIRED_ID_CAPACITY);
+  }
+  writeJournalFile(file);
+  return { appended, skipped };
 }
 
 /** Whether an idempotency key has already been appended or retired. */

@@ -86,6 +86,7 @@ import {
   type SpawnRejection,
 } from "./spawnAdmission";
 import { roleIsClean } from "@/lib/memory/eligibility";
+import { normalizeAgentMemoryCap, type AgentMemoryCap } from "@/lib/runtime/agentMemoryConfig";
 import { applyOperatorMemorySelector, operatorRootConversation } from "@/lib/memory/operatorMemory";
 import { sessionKeyFromTranscript, sessionKeyId, type SessionKey } from "./sessionKey";
 import {
@@ -268,6 +269,7 @@ export interface QueuedPinnedSpawn {
 }
 
 export interface SpawnReceipt {
+  memoryCap?: AgentMemoryCap;
   launchId: string;
   /** Client-owned idempotency key. Legacy callers leave this null. */
   clientAttemptId: string | null;
@@ -1264,7 +1266,13 @@ export function serviceTierForSpeed(tier: string | null | undefined, fast: boole
 
 function mergeResumeLaunchProfile(current: LaunchProfile, requested: LaunchProfile): LaunchProfile {
   const tier = requested.serviceTier ?? current.serviceTier;
+  /* A stage cap carries over unless the resume names one; an explicit null
+     clears it back to the project and role defaults. */
+  const memoryMax = requested.agentMemoryMaxBytes !== undefined ? requested.agentMemoryMaxBytes : current.agentMemoryMaxBytes;
+  const memoryRoleParams = requested.agentMemoryRoleParams ?? current.agentMemoryRoleParams;
   return {
+    ...(memoryMax !== undefined ? { agentMemoryMaxBytes: memoryMax } : {}),
+    ...(memoryRoleParams ? { agentMemoryRoleParams: memoryRoleParams } : {}),
     cwd: requested.cwd || current.cwd,
     model: requested.model ?? current.model,
     effort: requested.effort ?? current.effort,
@@ -4053,6 +4061,7 @@ function normalizePendingOrchestratorSeatIdentity(value: unknown): IdentityWaveS
 }
 
 function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnReceipt {
+  const memoryCap = normalizeAgentMemoryCap(value.memoryCap);
   const state = value.state === "completed" || value.state === "failed" || value.state === "pane-bound" || value.state === "host-verified" || value.state === "prompt-delivered" || value.state === "path-pending" || value.state === "conflicted"
     ? value.state
     : "starting";
@@ -4061,6 +4070,7 @@ function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnRe
     : null;
   return {
     ...value,
+    memoryCap: memoryCap ?? undefined,
     clientAttemptId: typeof value.clientAttemptId === "string" ? value.clientAttemptId : null,
     requestDigest: typeof value.requestDigest === "string" ? value.requestDigest : null,
     ...(value.identityWaveTitleBackfill === true ? { identityWaveTitleBackfill: true as const } : {}),
@@ -6221,14 +6231,23 @@ export class AgentRegistry {
   /** Current resource-planning facts, without decoding retained dead hosts. */
   structuredHostPlanningFacts(conversationId: ViewerConversationId | null | undefined): {
     liveAgents: number; memberships: DurableConversationMembership[];
+    conversation: { agentRole: string | null; project: string | undefined; launchProfile: LaunchProfile | undefined } | null;
   } {
     return this.readKeyed(file => {
       const keys = this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
         ? this.sqliteStore.memoryPlanningEntryKeys() : undefined;
       const entries = keys ? keys.flatMap(key => file.entries[key] ? [file.entries[key]!] : []) : Object.values(file.entries);
+      const canonical = conversationId ? resolveConversationAlias(file, conversationId) : null;
+      const conversation = canonical ? file.conversations[canonical] : undefined;
+      const launchProfile = conversation?.generations.at(-1)?.launchProfile;
       return {
         liveAgents: entries.filter(entry => entry.structuredHost && entry.status !== "dead" && entry.status !== "unhosted").length + 1,
-        memberships: conversationId ? clone(file.memberships[resolveConversationAlias(file, conversationId)] ?? []) : [],
+        memberships: canonical ? clone(file.memberships[canonical] ?? []) : [],
+        conversation: conversation ? {
+          agentRole: conversation.agentRole,
+          project: conversation.projectOwnership?.project,
+          launchProfile: launchProfile ? clone(launchProfile) : undefined,
+        } : null,
       };
     }, { skipColdKeyInitialization: true });
   }
@@ -7245,6 +7264,16 @@ export class AgentRegistry {
       if (receipt.state === "starting") receipt.state = "pane-bound";
       return clone(receipt);
     });
+  }
+
+  async recordSpawnMemoryCapOffLoop(launchId: string, cap: AgentMemoryCap): Promise<void> {
+    const normalized = normalizeAgentMemoryCap(cap);
+    if (!normalized) throw new Error("invalid agent memory cap");
+    await this.deliveryWriteOrBusy({ label: "spawn.memory-cap", operationId: launchId }, () => this.mutate((file) => {
+      const receipt = file.receipts[launchId];
+      if (!receipt || receipt.state === "failed" || receipt.state === "conflicted") throw new Error("launch ended before memory planning");
+      receipt.memoryCap = normalized;
+    }));
   }
 
   markSpawnHostVerified(launchId: string, host: TmuxHostEvidence): SpawnReceipt {

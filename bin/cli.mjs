@@ -44,7 +44,7 @@ if (!process.env.LLV_STATE_OWNER) process.env.LLV_STATE_OWNER = "launcher";
 
 const DEFAULT_PORT = 8898;
 const DEFAULT_HOSTNAME = "127.0.0.1";
-const READINESS_TIMEOUT_MS = 15_000;
+const READINESS_TIMEOUT_MS = 90_000;
 const READINESS_INTERVAL_MS = 200;
 // Socket timeout for a single readiness probe. The probe hits /api/files,
 // which scans every log under ~/.claude and ~/.codex; with a few hundred
@@ -57,8 +57,7 @@ const RUNTIME_HOST_READINESS_INTERVAL_MS = 100;
 const RUNTIME_HOST_RESTART_BASE_MS = 500;
 const RUNTIME_HOST_RESTART_MAX_MS = 10_000;
 const RUNTIME_HOST_STABLE_UPTIME_MS = 30_000;
-/* A restart onto a freshly built release starts `next start` cold, which
-   takes 10–30 s on a full checkout (#2007); the first start keeps its budget. */
+/* A freshly built release and a reboot both start `next start` cold. */
 const RESTART_READINESS_TIMEOUT_MS = 90_000;
 
 const cliPath = fileURLToPath(import.meta.url);
@@ -1044,6 +1043,16 @@ async function main() {
     });
     return;
   }
+  /* `delegatus export` / `delegatus import` (install-memory-transfer §4.2): a
+     loopback client of the running Viewer. It starts nothing. */
+  if (process.argv[2] === "export" || process.argv[2] === "import") {
+    const packageRoot = launcherCheckout || findPackageRoot(cliDir);
+    const { runTransferCommand } = await import("./transfer.mjs");
+    process.exitCode = await runTransferCommand(process.argv[2], process.argv.slice(3), {
+      stateDirectory: cliRuntimeHostConfig(packageRoot).stateDirectory,
+    });
+    return;
+  }
   const options = parseArgs(process.argv.slice(2));
   /* Phone access turned on from the setup guide is remembered as a file; its
      presence stands for --tailscale. */
@@ -1567,7 +1576,7 @@ function handOffLauncher({ checkout, entry, record }) {
       if (child.pid) {
         try { recorded = JSON.parse(readFileSync(record, "utf8"))?.launcher?.pid === child.pid; } catch { /* no record */ }
       }
-      const oneShot = process.argv[2] === "team" || process.argv.slice(2).some((arg) => ["-v", "--version", "-h", "--help"].includes(arg));
+      const oneShot = ["team", "export", "import"].includes(process.argv[2]) || process.argv.slice(2).some((arg) => ["-v", "--version", "-h", "--help"].includes(arg));
       if (!recorded && !forwarded && !oneShot) {
         console.error(`[self-update] installed launcher could not start (${spawnError?.message || `exit ${status}`}); using the checkout launcher.`);
         done(false);
@@ -1629,7 +1638,7 @@ try {
   const custodyModule = join(cliDir, "launcher-credentials.mjs");
   if (existsSync(custodyModule)) {
     const { restoreLauncherCredentials } = await import("./launcher-credentials.mjs");
-    const oneShot = process.argv[2] === "team" || process.argv.slice(2).some((arg) => ["-v", "--version", "-h", "--help"].includes(arg));
+    const oneShot = ["team", "export", "import"].includes(process.argv[2]) || process.argv.slice(2).some((arg) => ["-v", "--version", "-h", "--help"].includes(arg));
     restoreLauncherCredentials(launcherCheckout || findPackageRoot(cliDir), process.env, { launch: !oneShot });
   } else if (process.env.LLV_LAUNCHER_CREDENTIAL_HANDOFF === "1") throw new Error("This launcher cannot read protected handoff credentials; keep the current launcher running.");
   const selectedLauncher = releaseLauncher();

@@ -13,6 +13,18 @@ test("moving a role between engines picks the equivalent model and keeps or clam
   expect(equivalentConfig(same, "claude")).toBe(same);
 });
 
+test("an engine move keeps the row's memory cap, through an approved row target or the equivalent model", () => {
+  const cap = 6 * 2 ** 30;
+  expect(equivalentConfig({ engine: "codex", model: "gpt-6.1-sol", effort: "high", agentMemoryMaxBytes: cap }, "claude", { roleId: "builder" }))
+    .toMatchObject({ engine: "claude", agentMemoryMaxBytes: cap });
+  expect(equivalentConfig({ engine: "codex", model: "gpt-6.1-sol", effort: "high", agentMemoryMaxBytes: cap }, "claude"))
+    .toEqual({ engine: "claude", model: "opus", effort: "high", agentMemoryMaxBytes: cap });
+  expect(equivalentConfig({ engine: "claude", model: "opus", effort: "high", agentMemoryMaxBytes: cap }, "codex", { roleId: "architect" }))
+    .toEqual({ engine: "codex", model: "gpt-6.1-sol", effort: "high", agentMemoryMaxBytes: cap });
+  /* No cap stays no cap: the moved row carries no key the store would read as a change. */
+  expect("agentMemoryMaxBytes" in equivalentConfig({ engine: "codex", model: "gpt-6.1-sol", effort: "high", agentMemoryMaxBytes: null }, "claude", { roleId: "builder" })).toBe(false);
+});
+
 test("the GPT-6 models have Claude equivalents, and Sonnet no longer lands on a Terra the GPT-6 line lacks", () => {
   expect(equivalentModel("gpt-6-sol", "claude")).toBe("opus");
   expect(equivalentModel("gpt-6.1-sol", "claude")).toBe("opus");

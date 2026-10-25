@@ -213,6 +213,15 @@ test("spawn_agent reaches spawn validation through the operator admission lane",
   expect(fs.readFileSync(path.join(sandbox, "operator-spawn-capability"), "utf8").trim()).toMatch(/^[A-Za-z0-9_-]{43}$/);
 });
 
+test("spawn_agent returns the effective cap and budget clamp from its launch receipt", async () => {
+  const cap = { limitBytes: 8 * 2 ** 30, requestedBytes: 12 * 2 ** 30, source: "stage", clamped: true, enforced: true,
+    note: "Requested memory cap clamped to the shared machine budget." };
+  const binding = viewerMcpBindings(undefined, { post: async () => ({ ok: true, memoryCap: cap,
+    conversationId: "conversation_memory", launchId: "launch_memory", path: null, state: "path-pending", initialMessage: "queued", transport: "structured" }) }).spawn_agent;
+  const answer = await binding({ clientRequestId: "memory-launch-answer", engine: "codex", cwd: process.cwd(), prompt: "Build the task" });
+  expect(answer.memoryCap).toEqual(cap);
+});
+
 test("spawn_agent rejects an explicit model outside the engine catalog before control-plane admission", async () => {
   const requests: Record<string, unknown>[] = [];
   const spawnAgent = viewerMcpBindings(undefined, {
@@ -1726,6 +1735,73 @@ test("list_pipelines applies project, state, and closed filters to the durable r
   expect(listed.count).toBe(1);
   expect(listed.pipelines.map((row) => ({ id: row.id, project: row.project, state: row.state })))
     .toEqual([{ id: "pipeline_live", project: "viewer", state: "running" }]);
+});
+
+test.each([false, true])("list_pipelines resolves archived ids with the same filters and cursors (indexed: %s)", async (indexed) => {
+  const rows = [
+    { id: "pipeline_archived", project: "viewer", state: "closed", createdAt: "2026-10-01T00:00:00.000Z" },
+    { id: "pipeline_completed", project: "viewer", state: "completed", createdAt: "2026-10-02T00:00:00.000Z" },
+    { id: "pipeline_foreign", project: "other", state: "closed", createdAt: "2026-10-03T00:00:00.000Z" },
+  ];
+  const read = (id: string) => rows.find(row => row.id === id) ?? null;
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    getPipelines: () => { throw new Error("explicit ids traversed the hot registry"); },
+    listPipelineRecords: () => { throw new Error("explicit ids traversed the hot registry"); },
+    ...(indexed ? { pipelineSelectionSource: () => ({ filename: "unused-for-keyed-reads", read: () => null }) } : {}),
+    readPipelineRecord: read,
+    callerAttribution: () => ({ kind: "manager", conversationId: "conversation_seat" }),
+    authorizedSeats: () => [{ conversationId: "conversation_seat", project: "viewer" }],
+  } as never);
+
+  const args = { ids: [...rows.map(row => row.id), "missing", rows[0]!.id], includeClosed: true, compact: true, limit: 1 };
+  const first = await bindings.list_pipelines(args);
+  expect(first).toMatchObject({ count: 1, total: 2, hasMore: true, pipelines: [{ id: "pipeline_completed" }] });
+  const next = await bindings.list_pipelines({ ...args, cursor: first.nextCursor });
+  expect(next).toMatchObject({ count: 1, total: 2, hasMore: false, pipelines: [{ id: "pipeline_archived", state: "closed" }] });
+  await expect(bindings.list_pipelines({ ...args, state: ["closed", "completed"], limit: 10 }))
+    .resolves.toMatchObject({ count: 2, total: 2 });
+  await expect(bindings.list_pipelines({ ...args, includeClosed: false, limit: 10 }))
+    .resolves.toMatchObject({ count: 1, pipelines: [{ id: "pipeline_completed" }] });
+  await expect(bindings.list_pipelines({ ...args, state: "running" })).resolves.toMatchObject({ count: 0 });
+  await expect(bindings.list_pipelines({ ...args, ids: "missing" })).resolves.toMatchObject({ count: 0 });
+  await expect(bindings.list_pipelines({ ...args, project: "other" }))
+    .rejects.toMatchObject({ details: { code: "cross_project_refused" } });
+});
+
+test.each([false, true])("list_pipelines filters archived ids by PR query before paging (indexed: %s)", async (indexed) => {
+  const rows = [
+    { id: "pipeline_archived", project: "viewer", state: "closed", task: "PR #2800 archive selector", createdAt: "2026-10-01T00:00:00.000Z" },
+    { id: "pipeline_completed", project: "viewer", state: "completed", task: "PR #2800 completed selector", createdAt: "2026-10-02T00:00:00.000Z" },
+    { id: "pipeline_foreign", project: "other", state: "closed", task: "PR #2800 foreign selector", createdAt: "2026-10-03T00:00:00.000Z" },
+    { id: "pipeline_nonmatching", project: "viewer", state: "closed", task: "PR #2801 other selector", createdAt: "2026-10-04T00:00:00.000Z" },
+  ];
+  const reads: string[] = [];
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    getPipelines: () => { throw new Error("explicit PR query traversed the hot registry"); },
+    listPipelineRecords: () => { throw new Error("explicit PR query traversed the hot registry"); },
+    ...(indexed ? { pipelineSelectionSource: () => ({ filename: "unused-for-keyed-pr-reads", read: () => { throw new Error("explicit PR query read the hot source"); } }) } : {}),
+    readPipelineRecord: (id: string) => { reads.push(id); return rows.find(row => row.id === id) ?? null; },
+    callerAttribution: () => ({ kind: "manager", conversationId: "conversation_seat" }),
+    authorizedSeats: () => [{ conversationId: "conversation_seat", project: "viewer" }],
+  } as never);
+
+  const args = { ids: [...rows.map(row => row.id), "missing", rows[0]!.id], query: "PR 2800", includeClosed: true, limit: 1 };
+  const first = await bindings.list_pipelines(args);
+  expect(first).toMatchObject({ count: 1, total: 2, hasMore: true, pipelines: [{ id: "pipeline_completed" }] });
+  expect(reads).toEqual([...rows.map(row => row.id), "missing"].sort());
+  // A foreign record changing its PR cannot reset this project's cursor.
+  rows[2]!.task = "PR #2801 foreign selector";
+  const next = await bindings.list_pipelines({ ...args, cursor: first.nextCursor });
+  expect(next).toMatchObject({ count: 1, total: 2, hasMore: false, pipelines: [{ id: "pipeline_archived" }] });
+  await expect(bindings.list_pipelines({ ...args, ids: "pipeline_archived", query: "PR 2801" }))
+    .resolves.toMatchObject({ count: 0, total: 0 });
+  await expect(bindings.list_pipelines({ ...args, includeClosed: false }))
+    .resolves.toMatchObject({ count: 1, total: 1, pipelines: [{ id: "pipeline_completed" }] });
+  await expect(bindings.list_pipelines({ ...args, state: "running" })).resolves.toMatchObject({ count: 0, total: 0 });
+  await expect(bindings.list_pipelines({ ...args, updatedSince: "2026-10-02T00:00:00.000Z", limit: 10 }))
+    .resolves.toMatchObject({ count: 1, total: 1, pipelines: [{ id: "pipeline_completed" }] });
+  await expect(bindings.list_pipelines({ ...args, project: "other" }))
+    .rejects.toMatchObject({ details: { code: "cross_project_refused" } });
 });
 
 /* #863: the list is a board-card projection, not the registry records. Detail —
