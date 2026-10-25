@@ -222,11 +222,19 @@ export class NativeQueueExecutor {
 
   async reconcile(conversationId: string): Promise<boolean> {
     const { client } = this.port;
-    const host = this.port.resolveHost(conversationId);
-    if (!host?.nativeQueue || !client.nativeQueueRead || !client.nativeQueueTransition) return false;
-    const binding = this.port.binding(conversationId);
-    if (!binding) return false;
+    if (!client.nativeQueueRead || !client.nativeQueueTransition) return false;
     const records = await client.nativeQueueRead(conversationId);
+    const host = this.port.resolveHost(conversationId);
+    const binding = this.port.binding(conversationId);
+    if (!host?.nativeQueue || !binding) {
+      /* An early exit that answered "nothing pending" ended the retry chain while
+         an unproven entry was still owed. Entries waiting keep the pass failing,
+         with its reason, so the host's backoff brings it back. */
+      const owed = records.filter(entry => !entry.proof && entry.state !== "refused").length;
+      if (!owed) return false;
+      const reason = !host ? "no host for the conversation" : !host.nativeQueue ? "the host has no native queue reader" : "no native queue binding";
+      throw new Error(`native queue reconcile unavailable (${owed} owed): ${reason}`);
+    }
     const unknownMutations = records.filter(entry => sameNativeQueueBinding(entry.binding, binding) && entry.mutationOperationId && entry.versions.some(version => version.operationId === entry.mutationOperationId && version.input));
     if (unknownMutations.length) {
       let snapshot;

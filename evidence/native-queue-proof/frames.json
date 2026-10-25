@@ -1,0 +1,69 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "cases": [
+    {
+      "locale": "en",
+      "theme": "light",
+      "width": 1440,
+      "rowsBefore": 2,
+      "rowsAfter": 1,
+      "samePendingTextKept": true
+    },
+    {
+      "locale": "en",
+      "theme": "light",
+      "width": 390,
+      "rowsBefore": 2,
+      "rowsAfter": 1,
+      "samePendingTextKept": true
+    },
+    {
+      "locale": "en",
+      "theme": "dark",
+      "width": 1440,
+      "rowsBefore": 2,
+      "rowsAfter": 1,
+      "samePendingTextKept": true
+    },
+    {
+      "locale": "en",
+      "theme": "dark",
+      "width": 390,
+      "rowsBefore": 2,
+      "rowsAfter": 1,
+      "samePendingTextKept": true
+    },
+    {
+      "locale": "uk",
+      "theme": "light",
+      "width": 1440,
+      "rowsBefore": 2,
+      "rowsAfter": 1,
+      "samePendingTextKept": true
+    },
+    {
+      "locale": "uk",
+      "theme": "light",
+      "width": 390,
+      "rowsBefore": 2,
+      "rowsAfter": 1,
+      "samePendingTextKept": true
+    },
+    {
+      "locale": "uk",
+      "theme": "dark",
+      "width": 1440,
+      "rowsBefore": 2,
+      "rowsAfter": 1,
+      "samePendingTextKept": true
+    },
+    {
+      "locale": "uk",
+      "theme": "dark",
+      "width": 390,
+      "rowsBefore": 2,
+      "rowsAfter": 1,
+      "samePendingTextKept": true
+    }
+  ]
+}

@@ -769,6 +769,11 @@ export async function bindStructuredDeliveryQueue(
     /** Watchdog and background settlement cadences; 0 leaves each to a direct call. */
     watchdogIntervalMs?: number;
     settlementSweepMs?: number;
+    /** How long a native queue canonical read may stay unanswered before a
+        pass logs it and starts its replacement; tests shorten it. */
+    nativeReconcileDeadlineMs?: number;
+    /** The clock behind that deadline; tests pass their own. */
+    now?: () => number;
   } = {},
 ): Promise<void> {
   const client = dependencies.client === undefined ? runtimeHostClient() : dependencies.client;
@@ -793,9 +798,16 @@ export async function bindStructuredDeliveryQueue(
   let scheduleAutomaticRetry = () => {};
   let requestDrain = () => {};
   /* A canonical read that never answers must not hold the conversation's proof
-     forever: past this bound a later pass starts its own read. */
-  const NATIVE_RECONCILE_DEADLINE_MS = 60_000;
-  const nativeReconciliations = new Map<string, { startedAt: number; read: Promise<void> }>();
+     forever: past this bound the pass logs it, settles it as a failure and
+     starts one replacement. The abandoned read cannot be cancelled, so it is
+     counted until it answers: a conversation has at most two reads outstanding
+     (the abandoned one and its replacement), never one per pass. */
+  const nativeReconcileDeadlineMs = dependencies.nativeReconcileDeadlineMs ?? 60_000;
+  const nativeNow = dependencies.now ?? Date.now;
+  const nativeReconciliations = new Map<string, { startedAt: number; token: number; read: Promise<void> }>();
+  const nativeReadsOutstanding = new Map<string, number>();
+  let nativeReadToken = 0;
+  const unresolvedNativeHosts = new Set<string>();
   const nativeRetries = new Map<string, RetryBackoff>();
   const seatRecipient = (conversationId: string) => {
     const snapshot = registry.conversationDeliverySnapshot({ conversationId });
@@ -993,7 +1005,7 @@ export async function bindStructuredDeliveryQueue(
         const readyHosts = [...hosts].filter(([key, host]) => {
           if (!host.nativeQueue) return false;
           const retry = nativeRetries.get(key);
-          if (retry && !retry.ready()) { scheduleAutomaticRetry(); return false; }
+          if (retry && !retry.ready(nativeNow())) { scheduleAutomaticRetry(); return false; }
           return true;
         });
         // A cooldown wake must not rebuild the registry snapshot either.
@@ -1002,23 +1014,43 @@ export async function bindStructuredDeliveryQueue(
         for (const [key] of readyHosts) {
           const entry = entries[key];
           const conversationId = entry ? conversationIdForEntry(registry, entry) : null;
-          if (!conversationId) continue;
+          if (!conversationId) {
+            if (!unresolvedNativeHosts.has(key)) {
+              unresolvedNativeHosts.add(key);
+              console.warn("[structured delivery] native queue reconcile skipped: the host has no conversation", { host: key });
+            }
+            continue;
+          }
+          unresolvedNativeHosts.delete(key);
           const running = nativeReconciliations.get(conversationId);
           if (running) {
-            if (Date.now() - running.startedAt < NATIVE_RECONCILE_DEADLINE_MS) continue;
-            console.warn("[structured delivery] native queue reconcile exceeded its deadline; starting another", { conversationId });
+            if ((nativeReadsOutstanding.get(conversationId) ?? 0) >= 2) continue;
+            // A later pass has to come back to find the read past its deadline.
+            if (nativeNow() - running.startedAt < nativeReconcileDeadlineMs) { scheduleAutomaticRetry(); continue; }
           }
           const retry = nativeRetries.get(key) ?? new RetryBackoff();
           nativeRetries.set(key, retry);
+          if (running) {
+            console.warn("[structured delivery] native queue reconcile exceeded its deadline; starting its replacement", { conversationId });
+            retry.fail(nativeNow());
+          }
+          const token = ++nativeReadToken;
+          const owns = () => nativeReconciliations.get(conversationId)?.token === token;
+          nativeReadsOutstanding.set(conversationId, (nativeReadsOutstanding.get(conversationId) ?? 0) + 1);
           // Canonical reads cannot hold up interrupt/answer or other sends.
           const read: Promise<void> = nativeQueueExecutor.reconcile(conversationId)
-            .then(pending => { retry.reset(); if (pending) scheduleAutomaticRetry(); })
+            .then(pending => { if (owns()) { retry.reset(); if (pending) scheduleAutomaticRetry(); } })
             .catch(error => {
+              if (!owns()) return;
               console.warn("[structured delivery] native queue reconcile failed", { conversationId, error: error instanceof Error ? error.message : String(error) });
-              retry.fail(); scheduleAutomaticRetry();
+              retry.fail(nativeNow()); scheduleAutomaticRetry();
             })
-            .finally(() => { if (nativeReconciliations.get(conversationId)?.read === read) nativeReconciliations.delete(conversationId); });
-          nativeReconciliations.set(conversationId, { startedAt: Date.now(), read });
+            .finally(() => {
+              const left = (nativeReadsOutstanding.get(conversationId) ?? 1) - 1;
+              if (left > 0) nativeReadsOutstanding.set(conversationId, left); else nativeReadsOutstanding.delete(conversationId);
+              if (owns()) nativeReconciliations.delete(conversationId);
+            });
+          nativeReconciliations.set(conversationId, { startedAt: nativeNow(), token, read });
         }
       },
       ...(typeof client.events === "function" ? { events: (afterEventSeq: number) => client.events(afterEventSeq) } : {}),

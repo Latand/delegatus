@@ -6,6 +6,7 @@ import path from "node:path";
 import { once } from "node:events";
 import { RuntimeJournal } from "./journal";
 import { RuntimeHost } from "./host";
+import { applyEvent, installSnapshot, type RuntimeEnvelope, type RuntimeSnapshot } from "@/components/runtime/runtimeModel";
 import { serveRuntimeHost } from "./socket";
 import { NativeCodexQueue, NativeQueueProtocolRefusal, type NativeQueuedSubmission } from "@/lib/runtime/nativeCodexQueue";
 import { NativeQueueExecutor } from "@/lib/runtime/nativeQueueExecutor";
@@ -642,6 +643,52 @@ test("a canonical proof through the operation tells the session once, only for t
   const seqAfter = tailSeq(filename);
   await h.executor.reconcile(conversationId);
   expect(eventsAfter(filename, seqAfter).filter(event => event.kind === "native-queue-changed")).toEqual([]);
+  journal.close();
+});
+
+test("the journal event of a proof reaches the browser model as one native queue revision, and a replayed proof adds none", async () => {
+  const filename = journalFile();
+  const journal = open(filename);
+  nativeSession(journal);
+  const h = harness(journal);
+  const add = nativeCommand("op-consumed");
+  journal.executeOperation(add);
+  await h.executor.execute(add);
+  const before = tailSeq(filename);
+  const model = installSnapshot({ schemaVersion: 1, snapshotSeq: before, retentionFloorSeq: 0, runtime: { hostEpoch: 1, health: "ready" }, filesRevision: 0,
+    sessions: [{ conversationId, sessionKey: { engine: "codex", sessionId: binding.threadId }, hostKind: "codex-app-server", host: "hosted", turn: "running",
+      provenance: "structured", revision: 1, attentionIds: [], recentReceipts: [], accountId: binding.accountId, parentConversationId: null, flowId: null,
+      workflowId: null, cwd: "/tmp", artifactPath: null, capabilities: { steer: true, structuredAttention: true }, activeTurnId: "active-a", drift: null }],
+    attentions: [], recentOperations: [], edges: [], flows: [], workflows: [], tasks: [] } as unknown as RuntimeSnapshot);
+  const revisionAfter = (replayFrom: number) => {
+    let store = model;
+    for (const event of journal.replay(replayFrom).events as unknown as RuntimeEnvelope[]) {
+      const result = applyEvent(store, event);
+      if (result.outcome === "applied") store = result.store;
+    }
+    return store.sessions[conversationId]?.nativeQueueRevision ?? 0;
+  };
+  expect(revisionAfter(before)).toBe(0);
+  h.canonical(entry => h.proofFor(entry.entryId));
+  await h.executor.reconcile(conversationId);
+  const settled = journal.replay(before).events.filter(event => event.kind === "native-queue-changed");
+  expect(settled.map(event => event.scope)).toEqual([{ type: "session", id: conversationId }]);
+  expect(revisionAfter(before)).toBe(1);
+  await h.executor.reconcile(conversationId);
+  expect(revisionAfter(before)).toBe(1);
+  journal.close();
+});
+
+test("a pass that cannot reach the host fails with its reason while an entry is owed, and answers false when nothing is", async () => {
+  const journal = open(journalFile());
+  nativeSession(journal);
+  const h = harness(journal);
+  const unreachable = new NativeQueueExecutor({ client: h.client, resolveHost: () => null, binding: () => binding });
+  expect(await unreachable.reconcile(conversationId)).toBeFalse();
+  const add = nativeCommand("op-owed");
+  journal.executeOperation(add);
+  await h.executor.execute(add);
+  await expect(unreachable.reconcile(conversationId)).rejects.toThrow("no host for the conversation");
   journal.close();
 });
 

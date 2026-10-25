@@ -23201,6 +23201,39 @@ describe("task chip native queue presentation", () => {
   }, 120_000);
 });
 
+describe("native queue after a matching proof", () => {
+  browserTest("the proven row leaves and a same-text pending row stays, desktop and phone, en and uk, light and dark", async () => {
+    const out = path.resolve(".artifacts/native-queue-proof");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, args: [...(LAUNCH.args ?? []), "--disable-gpu"] });
+    const cases: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 390]) {
+        const counts: Record<string, number> = {};
+        for (const proof of ["before", "after"] as const) {
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=native-queue-proof&proof=${proof}`, { width, height: 700 }, theme, locale, "reduce", width === 390);
+          try {
+            await page.reload();
+            const panel = page.locator('[data-testid="native-queue-panel"]');
+            await panel.waitFor();
+            await page.evaluate(() => document.fonts.ready);
+            const rows = panel.locator('[data-testid="native-queue-row"]');
+            counts[proof] = await rows.count();
+            expect(await rows.evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-entry")))).toEqual(proof === "before" ? ["entry-a", "entry-b"] : ["entry-b"]);
+            expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBeFalse();
+            expect(pageErrors).toEqual([]);
+            await page.screenshot({ path: path.join(out, `${locale}-${theme}-${width}-${proof}.png`) });
+          } finally { await context.close(); }
+        }
+        cases.push({ locale, theme, width, rowsBefore: counts.before, rowsAfter: counts.after, samePendingTextKept: true });
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.mkdirSync("evidence/native-queue-proof", { recursive: true });
+    fs.writeFileSync("evidence/native-queue-proof/frames.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
+  }, 180_000);
+});
+
 describe("passive task status note", () => {
   browserTest("provider reset retry time is readable on existing cards in both languages", async () => {
     const out = path.resolve(".artifacts/provider-limit-recovery");

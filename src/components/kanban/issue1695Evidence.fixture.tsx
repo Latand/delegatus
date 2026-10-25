@@ -5003,6 +5003,16 @@ const queueTaskPreview = <div className="p-3"><NativeQueuePanel
   error={null} thread={{ model: null, effort: null }} cardId="conversation_task_queue" mintKey={() => "task-queue-edit"}
   submit={async () => ({ ok: true })} onRefresh={() => {}} t={(key, params) => translate(UK ? "uk" : "en", key, params)}
 /><div className="mt-3"><SeatDeputyChip deputy={taskDeputy} /><DeputyBlock deputy={taskDeputy} /></div></div>;
+/* A proof landed on one of two same-text entries: before it both wait, after it only the other id remains. */
+const proofAfter = new URLSearchParams(location.search).get("proof") === "after";
+const proofRow = (id: string) => ({ entryId: `entry-${id}`, clientUserMessageId: `client-${id}`, nativeSubmissionId: `native-${id}`, revision: 1, text: "Check the memory profile",
+  images: [], imageCount: 0, state: "queued" as const, reason: null,
+  busy: false, observedInNative: true, dispatchedRevision: null, proven: false, requestedRuntime: null, actions: ["edit", "delete"] as ("edit" | "delete")[], blocked: null });
+const queueProofPreview = <div className="p-3"><NativeQueuePanel
+  view={{ rows: proofAfter ? [proofRow("b")] : [proofRow("a"), proofRow("b")], nativeStale: false, canStart: false, activeTurnId: null, reorderable: [], notice: null }}
+  unresolved={[]} error={null} thread={{ model: null, effort: null }} cardId="conversation_proof_queue" mintKey={() => "proof-queue-edit"}
+  submit={async () => ({ ok: true })} onRefresh={() => {}} t={(key, params) => translate(UK ? "uk" : "en", key, params)}
+/></div>;
 /* The companion over the real Viewer. The simulator's one effect is `dispatch`, which here makes the delegated
    message appear in the seat's transcript; the orchestrator's answer joins it when the simulator reports one.
    The page gives up the strip the companion docks into, as a host surface is asked to. */
@@ -5186,7 +5196,7 @@ createRoot(document.getElementById("root")!).render(SCENARIO === "workspaces-tea
   <div className="bg-panel" style={{ width: diskDensity === "full" ? "100%" : 248, marginTop: "auto" }}>
     <ResourcesFooter density={diskDensity === "full" ? "full" : diskDensity === "detail" ? "detail" : "line"} />
   </div>
-) : SCENARIO === "task-queue-preview" ? queueTaskPreview : SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
+) : SCENARIO === "task-queue-preview" ? queueTaskPreview : SCENARIO === "native-queue-proof" ? queueProofPreview : SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
   new URLSearchParams(location.search).has("mapping") ? <div className="p-6"><AgentMappingTable statuses={{ claude: { connected: true, account: null }, codex: { connected: true, account: null } }} layout={innerWidth < 640 ? "card" : "table"} onConnect={() => {}} /></div> : <div className="p-6" style={{ paddingTop: 400 }}>
     <RuntimePill file={{ ...searchVer2, engine: "codex", root: "codex-sessions", model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" }} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />
   </div>
