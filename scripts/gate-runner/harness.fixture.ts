@@ -26,6 +26,8 @@ export function git(cwd: string, ...args: string[]): string {
 export interface StubSettings {
   /** Probes exit 255. */
   failProbe?: boolean;
+  /** Fresh routing load response, independent of the cached health probe. */
+  loadProbe?: string;
   /** Kill the ssh session once the run's output contains this text. */
   killOn?: string;
   /** Kill the ssh session of a run once this file exists, as a lost connection does. */
@@ -66,6 +68,8 @@ const flush = () => fs.appendFileSync(logFile, JSON.stringify(record) + "\\n");
 if (settings.failProbe && command.includes("manager=ok")) { flush(); process.exit(255); }
 if (settings.failOn && command.includes(settings.failOn)) { flush(); process.exit(255); }
 if (settings.hangOn && command.includes(settings.hangOn)) { flush(); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 600000); process.exit(1); }
+// Keep remote execution fixtures independent of host load.
+if (command.includes("cut -d ' ' -f1 /proc/loadavg")) { flush(); process.stdout.write(settings.loadProbe ?? "load=0\\ncpus=16\\n"); process.exit(0); }
 if (settings.packFile && command.includes("pack-outputs")) { flush(); process.stdout.write(fs.readFileSync(settings.packFile)); process.exit(0); }
 const env = { HOME: runnerHome, USER: process.env.USER, LANG: "C.UTF-8",
   PATH: [...(settings.remotePath ?? []), "/usr/local/bin", "/usr/bin", "/bin"].join(":"),

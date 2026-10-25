@@ -11,6 +11,7 @@ import { passkeyFeedback, passkeyFeedbackText, passkeyUnavailableText } from "@/
 import { MemberAvatar } from "./MemberAvatar";
 import { errorText, TelegramCodeForm, type TelegramState } from "./SignInCard";
 import { refreshTeamView } from "./teamClient";
+import { useWorkspaces } from "./workspacesClient";
 import { BUTTON, Field, INPUT, loopbackLink, relativeTime, TeamDialog, teamRequest } from "./ui";
 
 type TeamMember = TeamView["members"][number];
@@ -36,6 +37,9 @@ function presence(t: TFunction, member: TeamMember, locale: "en" | "uk"): string
 export function MembersTab({ view }: { view: TeamView }) {
   const { t, locale } = useLocale();
   const owner = view.me?.role === "owner";
+  const workspaces = useWorkspaces();
+  const inviteChoices = workspaces?.mode === "team" ? workspaces.workspaces.filter(workspace => owner || workspaces.managedWorkspaceIds?.includes(workspace.id)) : [];
+  const canInvite = owner || inviteChoices.length > 0;
   const [invites, setInvites] = useState<OpenInvite[]>([]);
   const [requests, setRequests] = useState<JoinRequest[]>([]);
   const [dialog, setDialog] = useState<"invite" | "approve" | { member: string } | null>(null);
@@ -52,21 +56,21 @@ export function MembersTab({ view }: { view: TeamView }) {
   const shown = (member: TeamMember): TeamMember => (drawn[member.id] ? { ...member, ...drawn[member.id] } as TeamMember : member);
 
   const loadInvites = useCallback(async () => {
-    if (!owner) return;
+    if (!canInvite) return;
     const answer = await teamRequest<{ invites: OpenInvite[]; requests: JoinRequest[] }>("/api/team/invites");
     if (answer.ok) {
       setInvites(answer.body.invites);
       setRequests(answer.body.requests);
-    }
-  }, [owner]);
+    } else setError(errorText(t, answer));
+  }, [canInvite, t]);
 
   useEffect(() => {
     void loadInvites();
-    if (!owner) return;
+    if (!canInvite) return;
     /* A join request arrives from Telegram while the page is open. */
     const timer = window.setInterval(() => { if (document.visibilityState === "visible") void loadInvites(); }, 10_000);
     return () => window.clearInterval(timer);
-  }, [loadInvites, owner]);
+  }, [loadInvites, canInvite]);
 
   const answerRequest = async (id: string, approve: boolean) => {
     setError(null);
@@ -76,7 +80,9 @@ export function MembersTab({ view }: { view: TeamView }) {
   };
 
   const withdraw = async (id: string) => {
-    await teamRequest(`/api/team/invites/${id}`, { method: "DELETE" });
+    setError(null);
+    const answer = await teamRequest(`/api/team/invites/${id}`, { method: "DELETE" });
+    if (!answer.ok) return setError(errorText(t, answer));
     await loadInvites();
   };
 
@@ -90,7 +96,7 @@ export function MembersTab({ view }: { view: TeamView }) {
         <button type="button" className={BUTTON.small} onClick={() => setDialog("approve")} data-team-approve-open="">
           <Smartphone className="h-3.5 w-3.5" aria-hidden />{t("team.approveDevice")}
         </button>
-        {owner ? (
+        {canInvite ? (
           <button type="button" className={BUTTON.smallPrimary} onClick={() => setDialog("invite")} data-team-invite-open="">
             <UserPlus className="h-3.5 w-3.5" aria-hidden />{t("team.invite")}
           </button>
@@ -122,7 +128,7 @@ export function MembersTab({ view }: { view: TeamView }) {
         ))}
       </ul>
 
-      {owner && invites.length ? (
+      {canInvite && invites.length ? (
         <section aria-label={t("team.invite.open")}>
           <h2 className="mb-1.5 px-1 text-label font-semibold text-secondary">{t("team.invite.open")}</h2>
           <ul className="overflow-hidden rounded-surface border border-border bg-card">
@@ -142,7 +148,7 @@ export function MembersTab({ view }: { view: TeamView }) {
 
       {error ? <p role="alert" className="rounded-control bg-danger-soft px-3 py-2 text-ui text-danger">{error}</p> : null}
 
-      {dialog === "invite" ? <InviteDialog onClose={() => { setDialog(null); void loadInvites(); }} /> : null}
+      {dialog === "invite" ? <InviteDialog owner={owner} workspaces={inviteChoices} ready={workspaces !== null} onClose={() => { setDialog(null); void loadInvites(); }} /> : null}
       {dialog === "approve" ? <ApproveDeviceDialog onClose={() => setDialog(null)} /> : null}
       {selected ? <MemberDialog member={shown(selected)} stored={selected} view={view} onDraw={draw} onClose={() => setDialog(null)} /> : null}
     </div>
@@ -205,28 +211,33 @@ function MemberRow({ member, me, canEdit, onOpen, locale, t }: {
 
 /** Invite someone (§6.3): a name, optional, and a link that works once for
     seven days. The link is shown here once and never again. */
-function InviteDialog({ onClose }: { onClose: () => void }) {
+function InviteDialog({ onClose, owner, workspaces, ready }: { onClose: () => void; owner: boolean; workspaces: { id: string; name: string }[]; ready: boolean }) {
   const { t, locale } = useLocale();
   const [name, setName] = useState("");
-  const [link, setLink] = useState<{ url: string; expiresAt: string } | null>(null);
+  const [chosen, setChosen] = useState<string | null>(null);
+  const workspaceId = chosen ?? (owner ? "" : workspaces[0]?.id ?? "");
+  const valid = ready && (workspaceId === "" ? owner : workspaces.some(workspace => workspace.id === workspaceId));
+  const [link, setLink] = useState<{ url: string; expiresAt: string; workspaceName: string | null } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const create = async () => {
+    if (!valid) return;
     setBusy(true);
     setError(null);
-    const answer = await teamRequest<{ url: string; expiresAt: string }>("/api/team/invites", { body: { name } });
+    const answer = await teamRequest<{ url: string; expiresAt: string }>("/api/team/invites", { body: { name, workspaceId: workspaceId || null } });
     setBusy(false);
     if (!answer.ok) return setError(errorText(t, answer));
-    setLink(answer.body);
+    setLink({ ...answer.body, workspaceName: workspaces.find(workspace => workspace.id === workspaceId)?.name ?? null });
   };
   return (
     <TeamDialog title={t("team.invite.title")} onClose={onClose} closeLabel={t("common.close")} testId="invite">
       {link ? (
         <div className="flex flex-col gap-3" data-team-invite-link="">
+          <p className="break-words text-ui font-semibold text-primary" data-team-invite-scope="">{link.workspaceName ?? t("workspaces.invite.none")}</p>
           <div className="flex justify-center rounded-control border border-border bg-card p-2">
             <AccessQrImage url={link.url} size={196} />
           </div>
-          <AccessQrLink url={link.url} copyLabel={t("common.copy")} />
+          <div title={link.url}><AccessQrLink url={link.url} copyLabel={t("common.copy")} /></div>
           {loopbackLink(link.url) ? <p className="rounded-control bg-warning-soft px-3 py-2 text-label leading-snug text-warning" data-team-invite-loopback="">{t("team.invite.loopback")}</p> : null}
           <p className="text-label leading-snug text-muted">{t("team.invite.note", { time: relativeTime(link.expiresAt, locale, Date.now(), "long") })}</p>
           <button type="button" className={BUTTON.secondary} onClick={onClose}>{t("team.done")}</button>
@@ -236,7 +247,13 @@ function InviteDialog({ onClose }: { onClose: () => void }) {
           <Field label={t("team.invite.name")}>
             <input className={INPUT} value={name} maxLength={60} autoFocus onChange={(event) => setName(event.target.value)} data-team-invite-name="" />
           </Field>
-          <button type="submit" disabled={busy} className={BUTTON.primary} data-team-invite-create="">{t("team.invite.create")}</button>
+          <Field label={t("workspaces.invite.workspace")}>
+            <select className={`${INPUT} w-full min-w-0`} value={workspaceId} title={workspaces.find(workspace => workspace.id === workspaceId)?.name ?? t("workspaces.invite.none")} onChange={event => setChosen(event.target.value)} data-team-invite-workspace="">
+              {owner ? <option value="">{t("workspaces.invite.none")}</option> : null}
+              {workspaces.map(workspace => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}
+            </select>
+          </Field>
+          <button type="submit" disabled={busy || !valid} className={BUTTON.primary} data-team-invite-create="">{t("team.invite.create")}</button>
           {error ? <p role="alert" className="text-ui text-danger">{error}</p> : null}
         </form>
       )}

@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
 import { seatDeputyView } from "@/lib/orchestrator/deputyView";
@@ -20,7 +21,7 @@ import type { ApiError } from "@/lib/types";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function POST(req: NextRequest): Promise<NextResponse<Record<string, unknown> | ApiError>> {
+async function workspacePOST(req: NextRequest): Promise<NextResponse<Record<string, unknown> | ApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return NextResponse.json({ ...await rejection.json(), admission: "refused" }, { status: rejection.status });
   /* A deputy holds the seat's authority, so only the operator and the voice
@@ -68,7 +69,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<Record<string
    (docs/design/ghost-seat.md §6.1): the canonical rows of its block in the
    seat's feed. `missing` says the transcript is gone, so an expanded block can
    say so instead of drawing nothing. */
-export async function GET(req: NextRequest): Promise<NextResponse<Record<string, unknown> | ApiError>> {
+async function workspaceGET(req: NextRequest): Promise<NextResponse<Record<string, unknown> | ApiError>> {
   const project = req.nextUrl.searchParams.get("project")?.trim();
   if (project) {
     try {
@@ -84,3 +85,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<Record<string,
   const lines = readDeputyOwnLines(deputy);
   return NextResponse.json({ askId, lines: lines ?? [], missing: lines === null });
 }
+
+export const POST = workspaceRoute("/api/orchestrator/ghost", workspacePOST);
+
+export const GET = workspaceRoute("/api/orchestrator/ghost", workspaceGET);

@@ -5999,9 +5999,23 @@ async function listPipelines(
   const scope = { project: boardReadProject(args, dependencies), states, includeClosed: args.includeClosed === true,
     ids: stringSet(args.ids), query: normalizedBoardQuery(text(args.query)), updatedSince: sinceTime(args.updatedSince),
     queryIds: undefined as string[] | undefined };
+  // Resolve explicit ids once so PR matching and paging share the same
+  // hot-or-archive records without traversing either collection.
+  const requested = scope.ids.length && dependencies.readPipelineRecord
+    ? new Map(scope.ids.flatMap(id => {
+      const row = dependencies.readPipelineRecord!(id);
+      return row ? [[id, row] as const] : [];
+    }))
+    : undefined;
   const number = pullRequestQuery(scope.query);
-  if (number !== null) scope.queryIds = pipelineReferenceRows(dependencies, scope.project).filter(row => pipelineMatchesPr(row, number)).map(row => row.id).sort();
-  const source = dependencies.pipelineSelectionSource?.();
+  if (number !== null) scope.queryIds = (requested ? [...requested.values()] : pipelineReferenceRows(dependencies, scope.project))
+    .filter(row => (!scope.project || canonicalProject(row.project) === scope.project) && pipelineMatchesPr(row, number)).map(row => row.id).sort();
+  const hotSource = dependencies.pipelineSelectionSource?.();
+  // Explicit ids share get_pipeline's hot-or-archive lookup. Keep ordinary
+  // lists on their scalar selection index and materialize only requested rows.
+  const source = hotSource && requested
+    ? { ...hotSource, read: (id: string) => requested.get(id) ?? null }
+    : hotSource;
   /* #2059: the compact row names its PR in one string, the full forms carry
      every resolved link. */
   const project = (source: Pipeline) => {
@@ -6013,7 +6027,9 @@ async function listPipelines(
   };
   const page = source ? boardSelection(source.filename, "pipelines").page(source, scope, args.cursor,
     Math.max(1, Math.min(200, integer(args.limit, PIPELINE_LIST_DEFAULT_LIMIT))), project)
-    : await listPageAsync(dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines, {
+    : await listPageAsync(requested
+      ? [...requested.values()]
+      : dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines, {
     scope, cursor: args.cursor, limit: Math.max(1, Math.min(200, integer(args.limit, PIPELINE_LIST_DEFAULT_LIMIT))),
     identity: pipeline => ({ id: pipeline.id, time: pipeline.createdAt ?? "" }),
     matches: pipeline => (!scope.project || canonicalProject(pipeline.project) === scope.project)
@@ -8256,6 +8272,12 @@ export function viewerMcpBindings(
       (args: McpToolArgs, context?: McpToolCallContext) => deployExactSha(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
       { authorizeReceipt: () => { deploySeatAuthority(domainDependencies); } },
     ),
+    pipeline_checks: (args, context) => {
+      assertPipelineSeatAuthority(domainDependencies);
+      return viewerControlForCall(controlDependencies, context).post(`/api/pipelines/${encodeURIComponent(required(args, "pipelineId"))}/checks`, {
+        scope: args.scope, execution: args.execution, stageId: args.stageId,
+      }, {}, context);
+    },
     get_pipeline: reads.get_pipeline,
     board_snapshot: (args) => boardSnapshot(args, domainDependencies),
     list_flows: (args) => Promise.resolve(listFlows(args, domainDependencies)),

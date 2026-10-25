@@ -1,3 +1,4 @@
+import { workspaceScope } from "@/lib/team/workspaceAccess";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { catalogProjectNames } from "@/lib/activity/report";
@@ -22,16 +23,19 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   if (authed instanceof NextResponse) return authed;
   try {
     const params = req.nextUrl.searchParams;
+    const scope = workspaceScope(authed.store, authed.live.member.id);
+    if (params.has("project") && scope.access(params.get("project")) === "none") return teamJson({ error: "workspace access denied", code: "workspace_forbidden" }, 403);
+    const projects = authed.store.eventProjects().filter(project => scope.access(project) !== "none");
     const events = authed.store.events({
+      ...(!scope.owner ? { visibleProjects: projects, ownUnscopedMember: authed.live.member.id } : {}),
       before: params.get("before"),
       memberId: params.get("member"),
       project: params.get("project"),
       actions: params.get("scope") === "all" ? null : WORK_ACTIONS,
       limit: PAGE + 1,
     });
-    const page = events.slice(0, PAGE);
+    const page = events.filter(event => scope.owner || (event.project ? scope.access(event.project) !== "none" : event.actor.kind === "member" && event.actor.memberId === authed.live.member.id)).slice(0, PAGE);
     const members = authed.store.members().map(memberSummary);
-    const projects = authed.store.eventProjects();
     /* Projects are named the way the Activity dashboard names them. */
     const names = await catalogProjectNames().catch(() => new Map<string, string>());
     return teamJson({
