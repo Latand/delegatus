@@ -1,4 +1,4 @@
-import { agentRegistry } from "@/lib/agent/registry";
+import { agentRegistry, type RegistryFile } from "@/lib/agent/registry";
 import { recordHostExit } from "@/lib/runtime/hostExit";
 import { expect, test, spawn, makeStructuredAttempt, pinStageHead, AccountAuthenticationRequiredError, ProjectAccountRefusedError, selectProjectAccount, IDLE_TURN_QUIET_MS, tickPipelines, createPipelineFromRequest, loadPipelines, savePipelines, patchPipeline, entry, harness, create, structuredLatest, runningStructuredStage, LIMITED_ACCOUNT, SPARE_ACCOUNT, stageTranscript, readFixtures, providerQuotaRecord, SILENT_RUN, stageWhoseStopMovesTheTranscript, recoveryReport, providerRecoveryHarness, parkedAccountCases, parkedAccountHarness } from "./engine.fixture";
 import type { DurableQuotaObservation, PipelinePorts, StageTurnEvidence } from "./engine.fixture";
@@ -676,7 +676,7 @@ test("exit lookup stays bound to the attempt launch when a successor is current"
       [`codex:${newKey.sessionId}`]: { hostExitProcess: newProcess } },
     conversations: { ...current.conversations, [conversationId]: { id: conversationId, engine: "codex", generations: [oldKey, newKey].map(key => ({ id: key.sessionId })) } },
     receipts: { ...current.receipts, "exit-old-launch": { key: oldKey, conversationId }, "exit-unrelated-launch": { key: newKey, conversationId: "conversation_unrelated_exit" } },
-  } as unknown as ReturnType<AgentRegistry["readOnlySnapshot"]>;
+  } as unknown as RegistryFile;
   const read = spyOn(registry, "readOnlySnapshot").mockReturnValue(view);
   try {
     const ports = defaultPipelinePorts();
