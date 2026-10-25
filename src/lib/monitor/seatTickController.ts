@@ -1459,6 +1459,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
       /* A settled child's final message rides on its line (#1881), read from
          its transcript's tail now that the wake is going out. */
       items: renderedVerdict.kind === "wake" ? renderedVerdict.items : [],
+      seatOwnedLanes: verdict.seatOwnedLanes,
       deferred: verdict.deferred,
       /* Said once, as counts (#1749, #1783): the children this check declined
          to list because their outcomes are a retired seat's, not this one's,

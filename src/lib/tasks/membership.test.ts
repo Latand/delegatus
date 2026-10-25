@@ -56,6 +56,29 @@ function entry(index: number, extra: Partial<FileEntry> = {}): FileEntry {
 
 const tmpFile = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), "llv-membership-")), "tasks.json");
 
+test.each(["missing", "rejected", "accepted"] as const)("retained authority is checked before joining an unrelated explicit target: %s", state => {
+  const existing = [task("ordinary", "fixture"), ...(state === "missing" ? [] : [task("retained", "fixture")])];
+  const before = structuredClone(existing);
+  const inspected: string[][] = [];
+  const result = ensureTaskMembership(existing, { project: "fixture", origin: { kind: "launch", key: "retained-authority" },
+    identity: { conversationId: "conversation_retained_child" }, explicitTaskIds: ["ordinary"],
+    admitRelated: { identities: [], taskIds: ["retained"], admit: tasks => {
+      inspected.push(tasks.map(row => row.id));
+      return state === "rejected" ? { error: "fixture authority rejected", status: 403, code: "PROACTIVE_EXECUTION_FENCED" } : null;
+    } },
+  }, { now: () => now, id: () => { throw new Error("must not create a placeholder"); } });
+  expect(existing).toEqual(before);
+  expect(inspected).toEqual(state === "missing" ? [] : [["retained"]]);
+  if (state === "accepted") {
+    expect(result.ok && result.taskIds).toEqual(["ordinary"]);
+    expect(result.ok && result.tasks.find(row => row.id === "ordinary")?.assignments).toHaveLength(1);
+    expect(result.ok && result.tasks.find(row => row.id === "retained")).toEqual(before[1]);
+  } else {
+    expect(result).toMatchObject({ ok: false, status: 403, code: "PROACTIVE_EXECUTION_FENCED" });
+    expect(!result.ok && result.error).toContain(state === "missing" ? "unavailable" : "rejected");
+  }
+});
+
 test("a global launch mints one placeholder keyed by its attempt; the replay converges on it and the identity fill is idempotent", () => {
   const first = ensureTaskMembership([], { project: "fixture", origin: { kind: "launch", key: "attempt-1" }, title: "Restore search results\nmore prompt", identity: { clientAttemptId: "attempt-1", engine: "claude" } }, deps);
   expect(first.ok).toBe(true);
@@ -63,6 +86,7 @@ test("a global launch mints one placeholder keyed by its attempt; the replay con
   expect(first.created.length).toBe(1);
   const created = first.tasks.find((candidate) => candidate.id === first.taskIds[0])!;
   expect(created.text).toBe("Restore search results");
+  expect(created.dueAt).toBeUndefined(); expect(created.dueTz).toBeUndefined();
   expect(created.origin).toEqual({ kind: "launch", key: "attempt-1", refinement: "pending" });
   expect(created.assignments).toEqual([{ clientAttemptId: "attempt-1", path: null, panePid: null, state: "linked", error: null, at: now, engine: "claude" }]);
   expect(created.status).toBe("assigned");

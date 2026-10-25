@@ -1,3 +1,4 @@
+import { proactiveTaskExecutionError } from "@/lib/tasks/proactiveExecution";
 import { stateDir } from "@/lib/configDir";
 import { shortId } from "@/lib/shortIds";
 import { publicationFailurePhase } from "./publicationHistory";
@@ -207,6 +208,7 @@ export async function provisionPipelineWorktree(pipeline: Pipeline, exec: ExecPo
   if (base.code !== 0 || !base.stdout.trim()) return failure("resolving the pipeline base ref", base);
   if (base.stdout.trim() !== pipeline.baseRef) return { ok: false, error: "the pipeline worktree does not match its persisted base" };
   recordWorktreeProvenance(pipeline.worktreeDir, { creator: "pipeline", id: pipeline.id });
+  await prepareStageToolchain(pipeline, exec);
   return { ok: true, sha: pipeline.baseRef, baseBranch: pipeline.baseBranch };
 }
 
@@ -435,6 +437,8 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
   // The worktree sweep removes only checkouts with a record of who made them.
   // The pipeline's own record names this path too, so a failed write keeps it sweepable.
   recordWorktreeProvenance(pipeline.worktreeDir, { creator: "pipeline", id: pipeline.id });
+  await prepareStageToolchain(pipeline, (command, args, cwd) => exec(command, args, cwd, signal));
+  if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
   return { ok: true, sha: base.stdout.trim(), baseBranch: pipeline.baseBranch };
 }
 
@@ -761,10 +765,10 @@ function stageToolchainRelease(pipeline: Pipeline): (() => void) | undefined {
   } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
 }
 
-/** Settlement runs after the agent's turn, including read-only turns which
-    never installed dependencies. Share the parent checkout's installed tools
-    for the commit through an absent, ignored node_modules. Remove our link
-    afterward so a later install cannot write into the parent checkout.
+/** Provisioning shares the parent checkout's installed tools before the agent
+    can make its first hooked commit. Settlement retries this for older lanes
+    and read-only turns, then removes the borrowed link after its commit so a
+    later install cannot write into the parent checkout.
     Preserve any local install or unrelated link, including dangling links. */
 async function prepareStageToolchain(pipeline: Pipeline, exec: ExecPort): Promise<(() => void) | undefined> {
   if (path.resolve(pipeline.repoDir) === path.resolve(pipeline.worktreeDir)) return;
@@ -1800,6 +1804,8 @@ export function pipelinePublicationFence(pipeline: Pipeline): string {
 const PUBLICATION_INSTALL_SUBJECT = "publication install";
 
 export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, request: PipelinePublishRequest): Promise<PipelinePublishResult> {
+  const proactiveError = proactiveTaskExecutionError(pipeline.taskIds);
+  if (proactiveError) return { ok: false, error: proactiveError };
   const operationId = crypto.randomUUID();
   const lock = path.join(pipelineArtifactsDir(pipeline.id), "publication.lock");
   let descriptor: number | null;
@@ -1879,7 +1885,18 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
     const abort = new AbortController();
     let writeStarted = false;
     const matches = (current: Pipeline | null) => current !== null && pipelinePublicationFence(current) === fence;
-    const revalidate = () => { if (!matches(findPipelineRecord(pipeline.id))) abort.abort(); };
+    let authorityRevoked = false;
+    let identityChanged = false;
+    const revalidate = () => {
+      const current = findPipelineRecord(pipeline.id);
+      if (!matches(current)) { identityChanged = true; abort.abort(); }
+      if (current && proactiveTaskExecutionError(current.taskIds)) {
+        authorityRevoked = true;
+        // Revocation fences new work. An active push keeps its deadline and
+        // ownership cancellation, and must finish before its receipt settles.
+        if (!writeStarted) abort.abort();
+      }
+    };
     const superseded = (): PipelinePublishResult => writeStarted
       ? { ok: true, sha: request.acceptedSha, remote: "unreachable", uncertain: true,
         detail: "publication superseded after a remote write began; reconcile its outcome" }
@@ -1923,6 +1940,14 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
     const fencedExec: ExecPort = async (command, args, cwd, env, options) => {
       revalidate();
       if (abort.signal.aborted) return { code: null, stdout: "", stderr: "publication superseded" };
+      // Only observations of the in-flight effect remain authorized. Never
+      // let reconciliation open another write after proactive revocation.
+      const remoteRead = command === "timeout" && args[0] === "--signal=KILL"
+        && args[1] === REMOTE_READ_TIMEOUT && args[2] === "git" && args[3] === "ls-remote";
+      const diagnosticRead = command === "git" && (args[0] === "merge-base" || args[0] === "diff");
+      if (authorityRevoked && !(writeStarted && (remoteRead || diagnosticRead))) {
+        return { code: null, stdout: "", stderr: "publication authority revoked" };
+      }
       fs.futimesSync(descriptor, new Date(), new Date());
       const preparingDependencies = command === "bun" && args[0] === "install";
       // The push runs the repository's pre-push gates; both leave the
@@ -1981,7 +2006,9 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       ? { ok: true, sha: request.acceptedSha, remote: "unreachable", detail: `publication outcome uncertain: ${String(error)}`, uncertain: true }
       : { ok: false, error: `publication failed before a remote write: ${String(error)}` }; }
     revalidate();
-    if (abort.signal.aborted) result = superseded();
+    // Revocation fences the next effect; it cannot erase a confirmed remote
+    // receipt for the operation that was already in flight.
+    if (abort.signal.aborted && !(authorityRevoked && !identityChanged && result.ok && result.remote === "published")) result = superseded();
     if (!result.ok) result = { ...result, error: redactBounded(redactPublicationText(result.error), 4500) };
     else if (result.remote === "unreachable") result = { ...result, detail: redactBounded(redactPublicationText(result.detail), 4500) };
     if (failureEvidence && (!result.ok || result.remote === "unreachable")) {

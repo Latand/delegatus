@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { afterEach, expect, test } from "bun:test";
 import os from "node:os";
 import path from "node:path";
@@ -132,13 +133,13 @@ test("the stdio bridge bounds concurrent transport calls and frees admission aft
     return Response.json({ jsonrpc: "2.0", id: body.id, result: { content: [], structuredContent: { ok: true, toolName: body.params.name } } });
   });
   const service = await createProductionViewerMcpService(false, true);
-  const pending = Array.from({ length: 32 }, (_, n) => service.callTool("create_task", { clientRequestId: `bounded-${n}` }));
+  const pending = Array.from({ length: 32 }, (_, n) => service.callTool("create_task", withTaskDue({ clientRequestId: `bounded-${n}` })));
   try {
-    expect(await service.callTool("create_task", { clientRequestId: "bounded-next" })).toMatchObject({ ok: false, retryable: true });
+    expect(await service.callTool("create_task", withTaskDue({ clientRequestId: "bounded-next" }))).toMatchObject({ ok: false, retryable: true });
   } finally { release(); }
   expect((await Promise.all(pending)).every(result => result.ok)).toBe(true);
   expect(reached).toBe(32);
-  expect(await service.callTool("create_task", { clientRequestId: "bounded-next" })).toMatchObject({ ok: true });
+  expect(await service.callTool("create_task", withTaskDue({ clientRequestId: "bounded-next" }))).toMatchObject({ ok: true });
   expect(reached).toBe(33);
 });
 
@@ -218,12 +219,12 @@ test("a task mutation whose reply is lost replays once through the Viewer and re
   });
   const service = await createProductionViewerMcpService(false, true);
   const args = { clientRequestId: "write-replay", project: "fixture", text: "A task", placement: "unplaced" };
-  expect(await service.callTool("create_task", args)).toMatchObject({ ok: false, code: "outcome_unknown", details: { nextAction: "original-key-lookup" } });
-  expect(await service.callTool("create_task", args)).toMatchObject({ ok: true, taskId: "task-1", replayed: true });
+  expect(await service.callTool("create_task", withTaskDue(args))).toMatchObject({ ok: false, code: "outcome_unknown", details: { nextAction: "original-key-lookup" } });
+  expect(await service.callTool("create_task", withTaskDue(args))).toMatchObject({ ok: true, taskId: "task-1", replayed: true });
   expect(effects).toBe(1);
-  expect(await service.callTool("create_task", { ...args, text: "Changed payload" })).toMatchObject({ ok: false });
+  expect(await service.callTool("create_task", withTaskDue({ ...args, text: "Changed payload" }))).toMatchObject({ ok: false });
   permitted = false;
-  const denied = await service.callTool("create_task", args);
+  const denied = await service.callTool("create_task", withTaskDue(args));
   expect(denied).toMatchObject({ ok: false });
   expect(JSON.stringify(denied)).not.toContain("task-1");
   expect(effects).toBe(1);

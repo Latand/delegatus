@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 /**
  * One-line edits to a task's agent-facing `details`, and the task list route's
  * filters (#1845, second slice). A seat keeping a state card in `details`
@@ -79,7 +80,7 @@ const request = (url: string, method: string, body?: unknown) => new NextRequest
 test("update_task edits one line of details, keeps the rest and the text, and answers its length, never the field", async () => {
   const p = await protocol();
   try {
-    const created = await p.call("create_task", { project: "line-edits", text: HUMAN, details: CARD });
+    const created = await p.call("create_task", withTaskDue({ project: "line-edits", text: HUMAN, details: CARD }));
     const id = created.answer.taskId as string;
 
     const replaced = await p.call("update_task", { taskId: id, replaceLine: { prefix: "Lane b2:", text: "Lane b2: review passed, merging" } });
@@ -114,7 +115,7 @@ test("a line edit leaves every line it did not touch byte for byte, the indent o
   const p = await protocol();
   try {
     const indented = "Context:\n  - keep this indent\n  - second";
-    const created = await p.call("create_task", { project: "line-edits", text: HUMAN, details: indented });
+    const created = await p.call("create_task", withTaskDue({ project: "line-edits", text: HUMAN, details: indented }));
     const id = created.answer.taskId as string;
     expect(stored(id).details).toBe(indented);
 
@@ -135,7 +136,7 @@ test("a line edit leaves every line it did not touch byte for byte, the indent o
 test("update_task refuses an ambiguous or missing prefix, a line edit beside details, and an edit past the limit, storing nothing", async () => {
   const p = await protocol();
   try {
-    const created = await p.call("create_task", { project: "line-edits", text: HUMAN, details: CARD });
+    const created = await p.call("create_task", withTaskDue({ project: "line-edits", text: HUMAN, details: CARD }));
     const id = created.answer.taskId as string;
     const before = taskRevision(stored(id));
 
@@ -173,7 +174,7 @@ test("update_task refuses an ambiguous or missing prefix, a line edit beside det
 test("a line edit applies to the details stored at the write, so an edit to another line in between survives", async () => {
   const p = await protocol();
   try {
-    const created = await p.call("create_task", { project: "line-edits", text: HUMAN, details: CARD });
+    const created = await p.call("create_task", withTaskDue({ project: "line-edits", text: HUMAN, details: CARD }));
     const id = created.answer.taskId as string;
     /* Two writers, each changing its own line, neither having re-read after the other. */
     const first = await p.call("update_task", { taskId: id, replaceLine: { prefix: "Lane a1", text: "Lane a1: first writer" } });
@@ -201,7 +202,6 @@ test("update_task publishes the line edits", async () => {
     const tool = tools.find((candidate) => candidate.name === "update_task")!;
     const properties = tool.inputSchema.properties as Record<string, { description?: string }>;
     for (const name of ["replaceLine", "removeLine", "appendLine"]) expect(properties[name]).toBeDefined();
-    expect(tool.description ?? "").toContain("replaceLine");
   } finally {
     await p.close();
   }

@@ -193,6 +193,30 @@ test("raw scan paths join registry continuity, role, task and pipeline without u
   expect(reads).toBe(1);
 });
 
+test.each(["conversation", "path", "both"])("raw scan snapshot rows recover pipeline and task from the persisted attempt by %s", (match) => {
+  const raw = file(78);
+  const pipeline = {
+    id: "lane", state: "running", taskIds: ["release"], stages: [{ id: "build" }],
+    runs: [{ stageId: "build", attempts: [{
+      ...(match !== "path" ? { conversationId: raw.conversationId } : {}),
+      ...(match !== "conversation" ? { agentPath: raw.path } : {}), state: "running",
+    }] }],
+  };
+  const tasks = [{ id: "release", project: a, assignments: [], chosen: false }];
+  const feed = new AgentFeed("raw-pipeline-attempt", () => [raw], () => tasks as never, () => [pipeline] as never, () => () => false,
+    { snapshot: () => ({ conversations: {}, memberships: {}, lineageEdges: {} }), seats: () => [] });
+
+  expect(feed.page(null, projects).rows![0]).toMatchObject({
+    task: "release", t: "build stage", pl: { id: "lane", stage: "build", stageState: "running" },
+  });
+  const unrelated = new AgentFeed("unrelated-pipeline-attempt", () => [file(79)], () => tasks as never, () => [pipeline] as never, () => () => false,
+    { snapshot: () => ({ conversations: {}, memberships: {}, lineageEdges: {} }), seats: () => [] });
+  const row = unrelated.page(null, projects).rows![0];
+  expect(row).toMatchObject({ t: "claude agent" });
+  expect(row).not.toHaveProperty("task");
+  expect(row).not.toHaveProperty("pl");
+});
+
 test("designated old seat survives age and fifty-row priority and idle refresh reads no snapshot", () => {
   const old = { ...file(88, a, "done"), conversationId: undefined, lastAgentWorkAt: timestamp - 172_800_000 } as FileEntry;
   const files = [old, ...Array.from({ length: 60 }, (_, n) => file(n + 100))];

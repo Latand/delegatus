@@ -22,7 +22,7 @@ import { PhoneStep, type PhoneStepOutcome } from "./PhoneStep";
 import { ProjectStep, type GuideProject } from "./ProjectStep";
 import { RelayStep } from "./RelayStep";
 import { TelegramReportsStep } from "./TelegramReportsStep";
-import { putOnboarding, useOnboarding, type OnboardingMode } from "./useOnboarding";
+import { putOnboarding, unfinishedFirstRun, useOnboarding, type OnboardingMarkerStatus, type OnboardingMode } from "./useOnboarding";
 import { VoiceStep } from "./VoiceStep";
 
 /**
@@ -124,23 +124,20 @@ export function firstOpenStep(marker: Pick<OnboardingMarker, "steps"> | null): O
   return GUIDE.find((step) => marker?.steps[step] !== "done" && !(OPTIONAL.includes(step) && marker?.steps[step] === "skipped")) ?? GUIDE[0]!;
 }
 
-/** The project the Project step starts on: the one the guide opened over when
-    it has a folder, else the most recent that has one. */
-function preferredProject(projects: readonly GuideProject[], current: string | null): GuideProject | null {
-  const onDisk = projects.filter((entry) => entry.cwd);
-  return onDisk.find((entry) => entry.project === current) ?? onDisk[0] ?? null;
-}
-
-export function OnboardingDialog({ mode, initialStep, marker, onClose, projects = [], currentProject = null, checkMinutes = DEFAULT_CHECK_MINUTES, onCreateProject }: {
+export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pending", onClose, projects = [], legacyState = false, checkMinutes = DEFAULT_CHECK_MINUTES, onCreateProject }: {
   mode: OnboardingMode;
   /** Open the guide on this step (the QR popover opens it on Phone). */
   initialStep?: OnboardingStepId | null;
   marker: OnboardingMarker | null;
+  /** Whether `marker` came from a successful read; only a read one can make
+      this a first run that is offered the newcomer help. */
+  markerStatus?: OnboardingMarkerStatus;
   /** `steps` rides on the same write as the outcome. */
   onClose: (outcome: "dismissed" | "completed", steps?: Partial<Record<OnboardingStepId, OnboardingStepState>>) => void;
   /** The projects the rail lists, most recent first, with their folders. */
   projects?: readonly GuideProject[];
   currentProject?: string | null;
+  legacyState?: boolean;
   checkMinutes?: number;
   /** The rail's own project creation, for "Open another folder". */
   onCreateProject?: (name: string, root: string, options?: CreateProjectRequestOptions) => Promise<CreateProjectOutcome>;
@@ -159,20 +156,19 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
   /* The guide step a "Later" step returns to. */
   const [lastGuide, setLastGuide] = useState<OnboardingGuideStepId>(() => isGuideStep(current) ? current : firstOpenStep(marker));
   const [steps, setSteps] = useState<Record<OnboardingStepId, OnboardingStepState>>(() => ({ ...Object.fromEntries(ONBOARDING_STEP_IDS.map((id) => [id, null])), ...marker?.steps }) as Record<OnboardingStepId, OnboardingStepState>);
-  /* The project step 3 works on; the catalog may arrive after the guide
-     opens, so the preferred one is taken once it does, until the user picks. */
-  const [chosen, setChosen] = useState<GuideProject | null>(() => preferredProject(projects, currentProject));
-  const picked = useRef(false);
-  useEffect(() => {
-    if (picked.current || chosen) return;
-    const preferred = preferredProject(projects, currentProject);
-    /* eslint-disable-next-line react-hooks/set-state-in-effect -- the catalog answered after the guide opened */
-    if (preferred) setChosen(preferred);
-  }, [projects, currentProject, chosen]);
-  const choose = (project: GuideProject) => {
-    picked.current = true;
-    setChosen(project);
-  };
+  const [chosen, setChosen] = useState<GuideProject | null>(null);
+  const [cleanStart, setCleanStart] = useState(false);
+  const choose = (project: GuideProject) => setChosen(project);
+  /* The notice rides on the first guide step and on the step the guide opened
+     on, so a later step opens on its own heading. */
+  const [noticeStep] = useState<OnboardingGuideStepId>(lastGuide);
+  const stateNotice = view === "guide" && legacyState && (current === GUIDE[0] || current === noticeStep) ? (
+    <div role="status" data-onboarding-legacy-state="" className="mb-4 rounded-[10px] border border-border bg-sunken p-3 text-ui text-secondary">
+      <p>{t("onboarding.legacy.notice")}</p>
+      <button type="button" aria-expanded={cleanStart} onClick={() => setCleanStart((value) => !value)} className="mt-2 min-h-8 font-semibold text-accent hover:underline max-sm:min-h-11">{t(cleanStart ? "onboarding.legacy.hideSteps" : "onboarding.legacy.cleanStart")}</button>
+      {cleanStart ? <p className="mt-2 whitespace-pre-line">{t("onboarding.legacy.instructions")}</p> : null}
+    </div>
+  ) : null;
   /* What the Phone step ended on: leaving it counts it done only once phone
      access is on, and skipped otherwise. */
   const phoneOutcome = useRef<PhoneStepOutcome | null>(null);
@@ -375,6 +371,7 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
       onCreate={create}
       onReadFirst={readFirst}
       onOpenSeat={openSeat}
+      newcomer={unfinishedFirstRun(marker, markerStatus)}
     />
   ) : (
     <EnginesStep claude={claude} codex={codex} cli={cli} now={now} onRecheck={recheckAll} />
@@ -471,6 +468,7 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
         tabIndex={-1}
         data-onboarding-dialog={view}
         data-onboarding-current={view === "guide" ? current : undefined}
+        data-onboarding-marker={markerStatus}
         className={`fixed inset-0 ${Z.modal} flex flex-col bg-canvas outline-none`}
       >
         <header className="shrink-0 border-b border-border bg-raised pt-[env(safe-area-inset-top)]">
@@ -499,6 +497,7 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
         </header>
         {stepListOpen ? <div className="shrink-0 border-b border-border bg-sunken p-2">{stepList}</div> : null}
         <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto scroll-pb-6 px-4 pb-6 pt-4">
+          {stateNotice}
           {heading}
           <div className={heading ? "mt-4" : ""}>{content}</div>
         </div>
@@ -521,6 +520,7 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
         tabIndex={-1}
         data-onboarding-dialog={view}
         data-onboarding-current={view === "guide" ? current : undefined}
+        data-onboarding-marker={markerStatus}
         className={`flex ${checkTall ? "h-[820px]" : "h-[640px]"} max-h-[calc(100vh-96px)] w-[920px] max-w-full flex-col overflow-hidden rounded-[12px] border border-border bg-card shadow-2 outline-none`}
       >
         <header className="flex h-[52px] shrink-0 items-center gap-2 border-b border-border bg-raised px-4">
@@ -540,6 +540,7 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
           {/* scroll-pb-6: what a step scrolls into view keeps the body's own
             breathing room above the fixed footer, rather than ending flush. */}
           <div ref={bodyRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto scroll-pb-6 bg-card p-6">
+            {stateNotice}
             {heading}
             <div className={heading ? "mt-4" : ""}>{content}</div>
           </div>
@@ -561,7 +562,7 @@ export function OnboardingHost({ projects, currentProject, onCreateProject }: {
   currentProject?: string | null;
   onCreateProject?: (name: string, root: string, options?: CreateProjectRequestOptions) => Promise<CreateProjectOutcome>;
 }) {
-  const { mode, step, opening, marker, checkMinutes, close } = useOnboarding();
+  const { mode, step, opening, marker, markerStatus, legacyState, checkMinutes, close } = useOnboarding();
   if (!mode) return null;
   return (
     <OnboardingDialog
@@ -569,6 +570,8 @@ export function OnboardingHost({ projects, currentProject, onCreateProject }: {
       mode={mode}
       initialStep={step}
       marker={marker}
+      markerStatus={markerStatus}
+      legacyState={legacyState}
       onClose={close}
       projects={projects}
       currentProject={currentProject}

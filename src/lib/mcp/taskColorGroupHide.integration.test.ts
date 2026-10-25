@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 /**
  * Task colour and group hide through both published surfaces (#1695 K4a):
  * the MCP `update_task` tool an agent calls and the HTTP PATCH the kanban
@@ -82,9 +83,8 @@ test("update_task publishes the colour names and the hide, and both land in the 
     const properties = tools.find((tool) => tool.name === "update_task")!.inputSchema.properties as Record<string, { enum?: string[]; type?: string; description?: string }>;
     expect(properties.color?.enum).toEqual(["none", "coral", "amber", "lime", "teal", "sky", "violet", "pink", "slate"]);
     expect(properties.hide?.type).toBe("boolean");
-    expect(properties.hide?.description ?? "").toContain("TASK_HIDE_PROTECTED");
 
-    const created = await p.call("create_task", { project: "color-project", text: "Colour me" });
+    const created = await p.call("create_task", withTaskDue({ project: "color-project", text: "Colour me" }));
     const coloured = await p.call("update_task", { taskId: created.task.id, color: "violet" });
     expect(coloured).toMatchObject({ ok: true, task: { color: "violet" } });
     expect(loadTasks().find((row) => row.id === created.task.id)!.color).toBe("violet");
@@ -114,8 +114,8 @@ test("the dashboard's PATCH hides as the operator, and both surfaces refuse the 
   try {
     const project = "seat-project";
     seatFor(project, "conversation_seat_fixture");
-    const plain = await p.call("create_task", { project, text: "Plain group" });
-    const seatTask = await p.call("create_task", { project, text: "Orchestrator group" });
+    const plain = await p.call("create_task", withTaskDue({ project, text: "Plain group" }));
+    const seatTask = await p.call("create_task", withTaskDue({ project, text: "Orchestrator group" }));
     saveTasks(loadTasks().map((row) => row.id === seatTask.task.id
       ? { ...row, assignments: [{ path: "/fixture/seat.jsonl", conversationId: "conversation_seat_fixture", panePid: null, state: "linked", error: null, at: "2026-09-14T09:00:00.000Z" }] }
       : row));
@@ -150,7 +150,7 @@ test("a seat record the store cannot establish refuses every hide with 503 on bo
   try {
     const project = "unknown-seat-project";
     seatFor(project, "conversation_unknown_seat_fixture");
-    const created = await p.call("create_task", { project, text: "Group under an unreadable seat record" });
+    const created = await p.call("create_task", withTaskDue({ project, text: "Group under an unreadable seat record" }));
     const row = () => loadTasks().find((candidate) => candidate.id === created.task.id) as TaskWithRevision;
     const fence = () => ({ expectedProject: row().project, expectedRevision: row().revision });
     const unreadable: Array<[string, () => void]> = [

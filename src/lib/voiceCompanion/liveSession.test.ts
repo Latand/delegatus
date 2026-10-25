@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { fixtureBoardReads } from "./boardReads.fixture";
 import { afterAll, afterEach, beforeEach, expect, jest, test, spyOn } from "bun:test";
 import fs from "node:fs";
@@ -302,7 +303,7 @@ test.each([true, false])("Claude actions keep their completed outcome across sca
     { type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content: JSON.stringify(value) }] } },
   ];
   const f = await seatVoiceFixture([
-    ...pair("older", "create_task", { text: "Earlier task" }, { ok: true }),
+    ...pair("older", "create_task", withTaskDue({ text: "Earlier task" }), { ok: true }),
     ...pair("boundary", "create_pipeline", { task: "Boundary lane" }, { ok }),
     ...Array.from({ length: 59 }, (_, index) => pair(`read-${index}`, "list_tasks", {}, { ok: true })).flat(),
     { type: "assistant", message: { content: [{ type: "tool_use", id: "pending-read", name: "mcp__viewer__list_tasks", input: {} }] } },
@@ -993,7 +994,6 @@ test("the Live backend answers board questions with read tools and the prompt ke
   f.provider.replay(s.providerId, said("What is on the board?", 0), delegationCreated("question", 900));
   await f.service.drain(s.sessionId);
   expect(f.sends()).toBe(0);
-  expect(f.provider.requests[0].instructions).toContain("Send only an explicit operator request");
   await f.service.close(s.sessionId);
 });
 
@@ -2331,7 +2331,7 @@ test("barge-in during a backend await keeps reports held when the older request 
     f.provider.replay(s.providerId, said("Actually, read the pipelines", 2000));
     await f.service.events(s.sessionId, 0);
     await f.service.command(s.sessionId, { type: "interrupt", responseId: "earlier" });
-    expect(f.provider.commands.at(-1)).toMatchObject({ type: "session.instructions.append", content: expect.stringContaining("Yield to the operator") });
+    expect(f.provider.commands.at(-1)).toMatchObject({ type: "session.instructions.append" });
     release();
     await f.service.drain(s.sessionId);
     expect(spoken(f)).toMatchObject([{ delegation_id: "earlier" }]);

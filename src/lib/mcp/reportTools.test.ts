@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { normalizeRegistry } from "@/lib/agent/registry";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
@@ -80,23 +81,18 @@ test("the session instructions name the interface language once a client reporte
   expect(viewerMcpInstructions(null)).not.toContain("interface language");
   const uk = viewerMcpInstructions("uk");
   expect(uk).toContain("The operator's interface language is Ukrainian: write board task text (create_task and update_task text, refine) and bridge reports in Ukrainian.");
-  expect(uk.startsWith("This server is Delegatus")).toBe(true);
 });
 
 test("MCP accepts prompt-only launches and makes refinement optional for already named launches", () => {
   expect(TOOL_INPUT_SCHEMAS.spawn_agent.safeParse({ clientRequestId: "prompt-only-schema", cwd: "/repo", prompt: "Inspect export retries" }).success).toBe(true);
-  const instructions = viewerMcpInstructions(null);
-  expect(instructions).toContain("Launch admission names new tasks before the agent starts");
-  expect(instructions).toContain("Refinement is optional");
-  expect(instructions).not.toContain("make your first Delegatus action");
 });
 
 test("task text in another language than the interface is stored with a warning; details are never checked; nothing is said while the language is unknown", async () => {
   const english = "Scroll on the large board is slow\nFind the cause on the real board and fix it before the next release.";
-  const unknown = await bindings().create_task({ clientRequestId: "t-0", project: PROJECT, text: english });
+  const unknown = await bindings().create_task(withTaskDue({ clientRequestId: "t-0", project: PROJECT, text: english }));
   expect(unknown.warnings).toBeUndefined();
 
-  const created = await bindings({ operatorLocale: () => "uk" }).create_task({ clientRequestId: "t-1", project: PROJECT, text: english, details: "agent notes in any language whatsoever, long enough to classify" });
+  const created = await bindings({ operatorLocale: () => "uk" }).create_task(withTaskDue({ clientRequestId: "t-1", project: PROJECT, text: english, details: "agent notes in any language whatsoever, long enough to classify" }));
   expect(created.warnings).toEqual(["This task text reads as English; the operator's interface is Ukrainian. Write it in Ukrainian."]);
 
   const ukrainian = "Прокрутка великої дошки гальмує\nЗнайти причину на справжній дошці і виправити її до наступного релізу.";

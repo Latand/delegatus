@@ -1,5 +1,5 @@
 import type { NextConfig } from "next";
-import { PHASE_PRODUCTION_BUILD } from "next/constants";
+import { PHASE_DEVELOPMENT_SERVER, PHASE_PRODUCTION_BUILD } from "next/constants";
 
 /* DELEGATUS_STANDALONE and DELEGATUS_DEV_ORIGINS fold into the LLV_ names
    read below (docs/design/rename-delegatus.md §5). */
@@ -84,6 +84,11 @@ const nextConfig: NextConfig = {
 };
 
 export default function configureNext(phase: string): NextConfig {
+  if (phase === PHASE_DEVELOPMENT_SERVER) {
+    // Bun can exit tsc before its large --showConfig stdout pipe is flushed.
+    // Read the same project through the installed TypeScript API at startup.
+    return { ...nextConfig, experimental: { ...nextConfig.experimental, useTypeScriptCli: false } };
+  }
   if (phase === PHASE_PRODUCTION_BUILD) {
     // Every build entry point loads this config before Next launches TypeScript.
     // Preserve unrelated Node options and any larger caller-supplied heap.

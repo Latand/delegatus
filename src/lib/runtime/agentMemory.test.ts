@@ -107,6 +107,27 @@ for (const alive of [false, true]) test(`scope cleanup records only a native hos
     expect(readHostExit(native)?.stop?.path ?? null).toBe(alive ? "agent-memory-scope-reap" : null);
   } finally { fixture.dispose(); }
 });
+test("launch population varies automatic caps while repeated descendant OOMs leave the session running", () => {
+  // The launch population, rather than the engine or role, explains these caps.
+  expect([1, 5, 7, 10, 12].map((liveAgents) => agentMemoryCeiling(30 * GIB, liveAgents).limitBytes / GIB))
+    .toEqual([12.5, 10, 7, 5, 4]);
+  expect(agentMemoryCeiling(30 * GIB, 12, {}, { project: 6 * GIB, role: 8 * GIB, stage: 12 * GIB }))
+    .toMatchObject({ limitBytes: 12 * GIB, requestedBytes: 12 * GIB, source: "stage", clamped: false });
+
+  const fixture = fakeCell();
+  try {
+    for (let kills = 1; kills <= 3; kills++) {
+      fs.writeFileSync(fixture.file, `oom ${kills}\noom_kill ${kills}\n`);
+      fixture.notify();
+      expect(fixture.cell.snapshot()).toMatchObject({ kills, lastKill: { limit: "agent", fatal: false } });
+      expect(fixture.cell.fatalMemoryExit).toBe(false);
+      expect(fixture.calls).toEqual([]);
+    }
+    // An orderly session exit after recovering from child failures is not fatal.
+    expect(fixture.cell.settleExit({ expected: true })?.fatal).toBe(false);
+    expect(fixture.calls).toEqual([]);
+  } finally { fixture.dispose(); }
+});
 for (const kind of ["agent", "shared", "system"] as const) test(`fake cgroup attributes ${kind} kills and retains fatal evidence after collection`, () => {
   const fixture = fakeCell();
   try {

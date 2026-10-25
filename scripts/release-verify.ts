@@ -157,8 +157,7 @@ export async function verifyRelease(tag: string, cut: string | null, ports: Veri
       return { errors: [`workflow failed: ${failed.databaseId}\n${log.slice(-2000)}`] };
     }
     const manifest = await ports.registry(`${registryURL}/${version}`);
-    const packument = await ports.registry(registryURL);
-    const tags = packument?.["dist-tags"] as { latest?: string } | undefined;
+    const tags = await ports.registry(`https://registry.npmjs.org/-/package/${encodeURIComponent(tagged.name)}/dist-tags`) as { latest?: string } | null;
     const images: PublishedRelease["images"] = [];
     const imageInspector: ImageInspector = { fallback: false };
     if (selected.every(r => r?.conclusion === "success")) {

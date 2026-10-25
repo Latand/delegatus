@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -66,16 +67,17 @@ test("task-only project keys are indexed before short-key writes and collisions 
   let writes = 0;
   const { createMcpToolService, MemoryMcpReceiptStore } = await import("@/lib/mcp/server");
   const service = createMcpToolService({ create_task: async () => { writes++; return { task: task("unexpected", right) }; } } as never, new MemoryMcpReceiptStore());
-  const refused = await service.callTool("create_task", { project: prefix, text: "must refuse" });
+  const refused = await service.callTool("create_task", withTaskDue({ project: prefix, text: "must refuse" }));
   expect(refused).toMatchObject({ ok: false, code: "ambiguous_project" });
   expect(writes).toBe(0);
   saveTasks([task("task-only-a", left)]);
   const fresh = JSON.parse(await freshProcess(`
+    const { withTaskDue } = await import("./src/lib/tasks/taskDue.fixture.ts");
     const { viewerMcpBindings } = await import("./src/lib/mcp/bindings.ts");
     const { createMcpToolService, MemoryMcpReceiptStore } = await import("./src/lib/mcp/server.ts");
     const service = createMcpToolService(viewerMcpBindings(), new MemoryMcpReceiptStore());
     const listed = await service.callTool("list_tasks", { project: "${left.slice(0, 17)}" });
-    const guarded = await service.callTool("create_task", { clientRequestId: "fresh-process-expected-project", project: "${left}", expectedProject: "${left.slice(0, 17)}", text: "Fresh process guarded task" });
+    const guarded = await service.callTool("create_task", withTaskDue({ clientRequestId: "fresh-process-expected-project", project: "${left}", expectedProject: "${left.slice(0, 17)}", text: "Fresh process guarded task" }));
     console.log(JSON.stringify({ listed, guarded }));
   `)) as { listed: Record<string, unknown>; guarded: Record<string, unknown> };
   expect(fresh.listed).toMatchObject({ ok: true, tasks: [{ id: "task-only-a", project: prefix }] });

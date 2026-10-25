@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { afterAll, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -75,7 +76,7 @@ test("pipeline_action attach-link takes #2059, 2059 and a URL as one link, and g
 
 test("update_task attachLinks and detachLinks edit the task's own links, and get_task resolves them", async () => {
   const bindings = viewerMcpBindings();
-  const created = await bindings.create_task({ clientRequestId: "work-links-task", project: "widgets-board", text: "Chips on cards" }) as { taskId: string };
+  const created = await bindings.create_task(withTaskDue({ clientRequestId: "work-links-task", project: "widgets-board", text: "Chips on cards" })) as { taskId: string };
   const taskId = created.taskId;
   const attached = await bindings.update_task({ clientRequestId: "work-links-task-attach", taskId, attachLinks: ["https://github.com/acme/widgets/issues/7", "acme/widgets#8"], linkKind: "pr" }) as { changedFields: string[] };
   expect(attached.changedFields).toContain("workLinks");

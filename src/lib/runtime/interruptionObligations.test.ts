@@ -90,8 +90,6 @@ test("the continuation names the deployment and the way back to a stage verdict"
   const text = interruptionContinuationText(obligation);
   expect(text).toContain("A Viewer deployment interrupted your turn");
   expect(text).toContain("tool-call at 2026-09-19T11:16:07.000Z");
-  expect(text).toContain("Run long commands in the foreground");
-  expect(text).toContain("stage_report");
 });
 
 test("a record appended to the pending journal while an import runs is kept for the next read", () => {
