@@ -610,3 +610,16 @@ test("stage tier narrows selection and the durable launch profile; role fallback
     expect(priority.pipeline?.stages[0]).toMatchObject({ serviceTier: "priority", effectiveRole: { serviceTier: "priority", serviceTierSource: "explicit" } });
   } finally { resolve.mockRestore(); }
 });
+
+test("create_pipeline accepts ultrafast from an allowed legacy model catalogue", async () => {
+  const { accountA, accountB, ports } = await tierOverrideFixture();
+  fs.writeFileSync(path.join(accountB.home, "models_cache.json"), JSON.stringify({ models: [
+    { slug: "gpt-6.1-sol", additional_speed_tiers: ["fast", "ultrafast"] },
+  ] }));
+  const result = await createPipelineFromRequest({ ...draft(accountB.id), stages: [{
+    ...draft(accountB.id).stages[0]!, engine: "codex", model: "gpt-6.1-sol", effort: "high", serviceTier: "ultrafast",
+  }] }, ports, { allowOperatorDraftWithoutLineage: true });
+  expect(result.error).toBeUndefined();
+  expect(result.pipeline?.stages[0]?.effectiveRole.serviceTier).toBe("ultrafast");
+  expect(result.pipeline?.stages[0]?.account).not.toBe(accountA.id);
+});

@@ -628,9 +628,9 @@ test("one conflict starts one visible refresh on the same task and delivery, wit
   expect(h.creates[0]).toMatchObject({
     request: { taskIds: ["task-one"], finishesTask: ["task-one"], delivery: { branch: "refs/heads/topic", pr: 11 }, publication: "remote-branch", autoStart: true,
       stages: [
-        { id: "refresh", role: { roleId: "builder" }, next: "review", onFail: null },
+        { id: "refresh", role: { roleId: "merger" }, next: "review", onFail: null },
         { id: "review", role: { roleId: "reviewer" }, next: null, onFail: { to: "fix", maxRounds: 1, onExhausted: "advance" } },
-        { id: "fix", role: { roleId: "builder", params: { mode: "apply-fixes" } }, next: "review" },
+        { id: "fix", role: { roleId: "merger" }, next: "review" },
       ] },
     options: { creationRequest: { key: expect.stringMatching(/^auto-refresh:[0-9a-f]{64}$/) }, refreshOf: { pipelineId: "finished", base: MAIN_1, lineage: { srcConversationId: "seat-one" } } },
   });
@@ -1336,4 +1336,26 @@ test("persisted refresh reservations replay only within the head limit", async (
   expect(h.creates).toHaveLength(2); // First failed call, then the head replay.
   expect(h.merge("queued-0")!.refresh!.pipelineId).toBe("refresh-1");
   expect(h.merge("queued-1")!.refresh!.pipelineId).toBeNull();
+});
+
+test.each([true, false])("refresh stages select an allowed fast account (ultrafast=%s)", async ultrafast => {
+  const { refreshRequest } = await import("./autoRefresh");
+  const value = finished();
+  value.merge = { prNumber: 11, refresh: { base: MAIN_1, head: HEAD_A } } as PipelineMerge;
+  const accounts = ["account-a", "account-b", "account-c"].map((id, index) => {
+    const home = path.join(sandbox, `${id}-${ultrafast}`);
+    fs.mkdirSync(home, { recursive: true });
+    fs.writeFileSync(path.join(home, "models_cache.json"), JSON.stringify({ models: [{
+      slug: "gpt-6.1-sol", additional_speed_tiers: index === 2 ? ["ultrafast"] : index === 1 ? [ultrafast ? "ultrafast" : "fast"] : [],
+    }] }));
+    return { id, home };
+  });
+  const request = refreshRequest(value, "main", { accounts, allowed: ["account-a", "account-b"] });
+  for (const stage of request.stages) {
+    expect(stage).toMatchObject({ account: "account-b", serviceTier: ultrafast ? "ultrafast" : "priority",
+      engine: "codex", model: "gpt-6.1-sol", effort: "high" });
+  }
+  expect(request.stages.map(stage => stage.role?.roleId)).toEqual(["merger", "reviewer", "merger"]);
+  const restricted = refreshRequest(value, "main", { accounts, allowed: ["account-a"] });
+  expect(restricted.stages.every(stage => !stage.serviceTier && !stage.account)).toBe(true);
 });

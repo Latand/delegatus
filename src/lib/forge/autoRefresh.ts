@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { listCodexAccounts } from "@/lib/accounts/codex";
+import { allowedAccountIdsForProject } from "@/lib/accounts/projectBindings";
+import { tierOffers } from "@/lib/accounts/codexServiceTiers";
 import type { CreatePipelineRequest, Pipeline, PipelineRefresh } from "@/lib/pipelines/types";
 import type { MergeOnReviewSetting } from "@/lib/projects/settings";
 import { mergeEligible } from "./autoMerge";
@@ -50,13 +53,25 @@ export function refreshWasRequested(lane: Pipeline, pipelines: readonly Pipeline
     && merge.prNumber === lane.merge!.prNumber && merge.refresh?.base === base && merge.refresh.head === head);
 }
 
-/** Rebuilt solely from the durable reservation so a replay keeps its facts. */
-export function refreshRequest(lane: Pipeline, legacyBase = "main"): CreatePipelineRequest {
+/** Replay keeps the durable reservation facts and rechecks current tier availability. */
+export function refreshRequest(lane: Pipeline, legacyBase = "main", catalog = {
+  accounts: listCodexAccounts() as readonly { id: string; home: string }[],
+  allowed: allowedAccountIdsForProject(lane.project, "codex"),
+}): CreatePipelineRequest {
   const merge = lane.merge!;
   const refresh = merge.refresh!;
   const target = lane.delivery!.target;
   const base = refresh.baseBranch ?? legacyBase;
   const facts = `PR #${merge.prNumber}; finished lane ${lane.id}; base ${base} at ${refresh.base}; reviewed head ${refresh.head}; delivery ${target.branch}.`;
+  const model = "gpt-6.1-sol";
+  const accounts = catalog.accounts.filter(account => catalog.allowed === null || catalog.allowed.includes(account.id));
+  // Prefer ultrafast anywhere in the allowed pool, then priority. A missing
+  // tier catalogue must not prevent the merge resolution from being refreshed.
+  const tier = ["ultrafast", "priority"].map(serviceTier => ({
+    serviceTier, account: tierOffers(accounts, model, serviceTier).offering[0],
+  })).find(choice => choice.account);
+  const runtime = { engine: "codex" as const, model, effort: "high", ...(tier ?? {}) };
+  const merger = { roleId: "merger" as const, params: { prs: `${merge.prNumber}@${refresh.head}` } };
   return {
     task: `#${merge.prNumber} ${lane.task.split("\n")[0]!.slice(0, 60)}: merge current ${base}, review the merge resolution only`,
     taskIds: lane.taskIds,
@@ -71,15 +86,15 @@ A content-preserving refresh from ${base} gets one review of the resolution only
 ${facts}
 Both sides keep their behaviour. Commits use the enforced Delegatus machine identity plus the engine's noreply Co-Authored-By trailer. Never rebase, force-push or call GitHub update-branch. A semantic conflict parks needs_decision with its file:line and @@ hunk. Review only the resolution. The project's checks must pass.`,
     stages: [
-      { id: "refresh", kind: "run", role: { roleId: "builder" }, next: "review", onFail: null,
+      { id: "refresh", kind: "run", role: merger, ...runtime, next: "review", onFail: null,
         "prompt": `Merge current origin/${base} into this PR's delivery branch ${target.branch} as a merge commit on top of reviewed head ${refresh.head}. ${facts}
 Resolve every conflict so the PR keeps its behaviour and ${base} keeps everything it merged. Never rebase, force-push or call GitHub update-branch. The launch environment enforces the Delegatus machine identity; keep your engine's noreply Co-Authored-By trailer.
 Run tests of files the PR touches and files the resolution changed, by explicit path using the project's test command and the assembled gate guidance, with isolated HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR, and a closed LLV_VIEWER_CONTROL_URL.
 If resolving a conflict would change either side's behaviour, run git merge --abort and report needs_decision with exactly one finding naming the file:line, the @@ hunk header and the behaviour each resolution would change. This stage has no fail edge. Never guess.` },
-      { id: "review", kind: "run", role: { roleId: "reviewer" }, next: null,
+      { id: "review", kind: "run", role: { roleId: "reviewer" }, ...runtime, next: null,
         onFail: { to: "fix", maxRounds: 1, onExhausted: "advance" },
         "prompt": `Review only the refresh merge on PR #${merge.prNumber}: git show --remerge-diff of the merge commit on top of ${refresh.head}, plus ${base}'s changes to files the PR touches (git diff ${refresh.head}...<merge>^2 -- <those files>). Confirm no hunk of either side was lost or changed in behaviour and focused tests pass on the merged head. The PR's own changes passed review at ${refresh.head}; do not review them again.` },
-      { id: "fix", kind: "run", role: { roleId: "builder", params: { mode: "apply-fixes" } }, next: "review", onFail: null,
+      { id: "fix", kind: "run", role: merger, ...runtime, next: "review", onFail: null,
         "prompt": `Fix the resolution findings on this PR's delivery branch ${target.branch}. Never rebase, force-push or call update-branch. Your verdict is pass unless blocked.` },
     ],
   };
