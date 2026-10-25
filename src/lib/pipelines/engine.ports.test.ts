@@ -1,6 +1,31 @@
 import { assertCpuReadGuardSurvivesSpyRestoration } from "./engineEnvironment.fixture";
 import { expect, spyOn, test, crypto, fs, path, accountManager, engineModule, defaultPipelinePorts, pipelineClaudePermissionMode, tickPipelines, AgentRegistry, setAgentRegistryForTests, loadPipelines, savePipelines, pipelineIdentity, patchPipeline, entry, finishReported, realWorktreeLane, successorOnPullRequestBranch } from "./engine.fixture";
 import type { PipelinePorts } from "./engine.fixture";
+import { bindHostExitWriter, recordHostExit } from "@/lib/runtime/hostExit";
+import { captureProcessIdentity } from "@/lib/processIdentity";
+
+test("pipeline death evidence waits for the independent native waiter's receipt", async () => {
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "pending-exit-agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const identity = { pid: 2147482599, startIdentity: "fixture-pending-exit-port", bootEpoch: "fixture-boot" };
+  const binding = fs.mkdtempSync(path.join(process.env.TMPDIR!, "pending-exit-port-"));
+  setAgentRegistryForTests(registry);
+  try {
+    const launch = registry.beginSpawn("codex", "fixtures", { title: "Pending native exit fixture" });
+    const sessionId = "00000000-0000-0000-0000-000000000000";
+    registry.stageStructuredSpawn(launch.launchId, { key: { engine: "codex", sessionId }, artifactPath: `fixtures/rollout-2026-10-25T00-00-00-${sessionId}.jsonl`,
+      cwd: "fixtures", accountId: null, status: "dead", host: null, claimEpoch: 1, claimOwner: null, pendingAction: null,
+      structuredHost: { kind: "codex-app-server", process: identity, exitProcess: identity, endpoint: "stdio:fixture",
+        eventCursor: 0, protocolVersion: null, writerClaimEpoch: 1, activeTurnRef: "open-turn", pendingAttention: [], activeFlags: [] } });
+    bindHostExitWriter(binding, identity, captureProcessIdentity(process.pid));
+    const ports = defaultPipelinePorts();
+    expect(await ports.conversationHostUnavailableSince!(launch.conversationId)).toBeUndefined();
+    expect(await ports.conversationHostProcess!(launch.conversationId)).toMatchObject({ state: "unknown" });
+    recordHostExit(identity, null, "SIGKILL");
+    expect(await ports.conversationHostUnavailableSince!(launch.conversationId)).toBeTruthy();
+    expect(await ports.conversationHostProcess!(launch.conversationId)).toMatchObject({ state: "gone" });
+    expect(ports.conversationHostEnded!(launch.conversationId, launch.launchId)).toBe("exit: signal SIGKILL; no Delegatus stop recorded");
+  } finally { setAgentRegistryForTests(null); registry.close(); fs.rmSync(binding, { recursive: true, force: true }); }
+});
 
 test("default pane liveness keeps failed or unreadable tmux observations alive", async () => {
   const observations: Awaited<ReturnType<typeof import("@/lib/tmux").panePidMap>>[] = [

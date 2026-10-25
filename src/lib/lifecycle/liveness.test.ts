@@ -2395,6 +2395,8 @@ test("full activity evidence retains the exit and stop source of a gone structur
   entry.hostExitProcess = entry.structuredHost!.process!;
   withHostStopOrigin({ path: "idle-retirement-sweep", operationId: "sweep-fixture-operation" }, () => recordHostStop(entry.hostExitProcess, "SIGTERM", "fallback"));
   recordHostExit(entry.hostExitProcess, null, "SIGTERM");
+  entry.previousHostExit = { process: { pid: 2147482997, startIdentity: "fixture-previous-activity-exit", bootEpoch: "fixture-boot" },
+    stop: null, exit: { code: 137, signal: null, at: new Date(FROZEN_AT).toISOString() } };
   const snapshot = await agentLivenessSnapshot({}, sources({
     listFiles: async () => [fileEntry({ path: transcript })],
     registrySnapshot: () => ({ entries: { host: entry }, conversations: {} }),
@@ -2403,4 +2405,5 @@ test("full activity evidence retains the exit and stop source of a gone structur
   }));
   expect(snapshot.conversations[0]!.hostExit).toEqual(readHostExit(entry.hostExitProcess));
   expect(snapshot.conversations[0]!.hostExit).toMatchObject({ stop: { path: "idle-retirement-sweep", operationId: "sweep-fixture-operation" }, exit: { code: null, signal: "SIGTERM" } });
+  expect(snapshot.conversations[0]!.previousHostExit).toEqual(entry.previousHostExit);
 });

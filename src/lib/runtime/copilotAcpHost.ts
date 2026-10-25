@@ -362,7 +362,7 @@ export class CopilotAcpHost implements EngineHost {
     this.childStartIdentity = nativeProcessId(child) ? this.processIdentity(nativeProcessId(child)!) : null;
     this.exitProcess = signalDomain(child)?.native ?? hostExitProcess(nativeProcessId(child), this.childStartIdentity);
     this.memoryCell?.setExitProcess(this.exitProcess);
-    observeHostExit(child, this.exitProcess);
+    if (!signalDomain(child)) observeHostExit(child, this.exitProcess);
     this.releaseCleanup = options.releaseCleanup ?? null;
     this.cursor = options.initialEventCursor ?? 0;
     /* ACP advertises `promptCapabilities.image`; images ride `session/prompt`
@@ -1048,7 +1048,8 @@ export class CopilotAcpHost implements EngineHost {
       return true;
     }
     if (this.terminationStarted || this.reaped) return true;
-    recordHostStop(this.exitProcess, "EOF", "copilot-host-release");
+    if (!this.reaped && this.childStartIdentity !== null && this.processIdentity(nativeProcessId(this.child)!) === this.childStartIdentity
+      && !procBackend.processExited(nativeProcessId(this.child)!)) recordHostStop(this.exitProcess, "EOF", "copilot-host-release");
     try { this.child.stdin.end(); } catch { /* already closed */ }
     if (!this.signalReleaseGroup("SIGTERM")) return false;
     this.terminationStarted = true;

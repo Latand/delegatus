@@ -306,6 +306,31 @@ test("a runtime-confirmed exit receives no fallback group signal", async () => {
   expect(signals).toEqual([]);
 });
 
+for (const refused of [false, true]) test(`a detached host completing setsid during the receipt write persists its group (refused=${refused})`, async () => {
+  const root = refused ? 5_520 : 5_510;
+  let running = true;
+  let detached = false;
+  const signals: number[] = [];
+  const captures: number[][] = [];
+  const realSync = fs.fsyncSync;
+  const sync = spyOn(fs, "fsyncSync").mockImplementation(fd => {
+    realSync(fd);
+    detached = true;
+  });
+  try {
+    const result = await terminateStructuredHostTree(ref({ pid: root, startIdentity: `${root}:setsid-boundary` }), {
+      pidAlive: () => running, processIdentity: pid => running ? `${pid}:setsid-boundary` : null,
+      ppidMap: () => new Map(detached ? [[root, 1], [root + 1, root]] : [[root, 1]]), processGroupId: () => detached ? root : 4_000,
+      protectedPids: () => new Set(),
+      persistCapturedTree: async identities => { captures.push(identities.map(identity => identity.pid)); return !refused || captures.length === 1; },
+      signal: (target) => { signals.push(target); running = false; },
+    });
+    expect(result.ok).toBe(!refused);
+    expect(signals).toEqual(refused ? [] : [-root]);
+    expect(captures).toEqual([[root], [root, root + 1]]);
+  } finally { sync.mockRestore(); }
+});
+
 test("a disowned structured session with a live recorded process falls back to its process group (#1324)", async () => {
   const tree = spawnFixtureTree();
   const retired: Array<{ key: SessionKey; expected: ProcessIdentity }> = [];

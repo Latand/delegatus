@@ -1448,7 +1448,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     this.childStartIdentity = nativeProcessId(child) ? this.processIdentity(nativeProcessId(child)!) : null;
     this.exitProcess = signalDomain(child)?.native ?? hostExitProcess(nativeProcessId(child), this.childStartIdentity);
     this.memoryCell?.setExitProcess(this.exitProcess);
-    observeHostExit(child, this.exitProcess);
+    if (!signalDomain(child) && !(child instanceof CodexSocketTransport)) observeHostExit(child, this.exitProcess);
     this.onEventCursorRecovery = options.onEventCursorRecovery;
     this.resolveImagePath = options.resolveImagePath ?? ((ref) => {
       const store = runtimeImageStore();
@@ -3528,6 +3528,9 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       return true;
     }
     if (this.terminationStarted) return true;
+    if (!this.reaped && this.childProcessOwnership() === "owned" && !procBackend.processExited(nativeProcessId(this.child)!)) {
+      recordHostStop(this.exitProcess, "EOF", this.dead ? "codex-host-fault" : "codex-host-release");
+    }
     try { this.child.stdin.end(); } catch { /* already closed */ }
     const ownership = this.childProcessOwnership();
     if (signalDomain(this.child) && ownership === "gone") {

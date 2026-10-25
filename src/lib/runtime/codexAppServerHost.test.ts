@@ -6832,6 +6832,31 @@ for (const { midAnswer = false, graceful = false, reconnectFailure, crashBeforeW
   }
 }, 30_000);
 
+test("Codex records its stop before EOF can end the native host", async () => {
+  const server = new FakeAppServer("host-eof-thread");
+  let nativeAlive = true;
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: () => server as never,
+    processIdentity: () => nativeAlive ? "fixture-codex-eof" : null, pidAlive: () => nativeAlive, signalProcess: () => {} });
+  const process = (await host.health()).exitProcess!;
+  const beforeEof: { value: ReturnType<typeof readHostExit> } = { value: null };
+  let deliveredEof = false;
+  const end = spyOn(server.stdin, "end").mockImplementation(() => {
+    if (!deliveredEof) {
+      deliveredEof = true;
+      beforeEof.value = readHostExit(process);
+      nativeAlive = false;
+      queueMicrotask(() => { server.emit("exit", 0, null); server.emit("close", 0, null); });
+    }
+    return server.stdin;
+  });
+  try {
+    await withHostStopOrigin({ path: "deploy-cut", operationId: "eof-operation" }, () => host.release());
+    expect(end).toHaveBeenCalled();
+    expect(beforeEof.value?.stop).toMatchObject({ path: "deploy-cut", operationId: "eof-operation", signal: "EOF" });
+    expect(readHostExit(process)?.exit).toMatchObject({ code: 0, signal: null });
+  } finally { end.mockRestore(); await host.release(); }
+});
+
 for (const ending of ["release", "external", "code"] as const) test(`Codex host exit observer retains ${ending} status and source after release`, async () => {
   const server = new FakeAppServer("host-exit-thread");
   const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server),

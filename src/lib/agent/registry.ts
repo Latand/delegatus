@@ -1,5 +1,6 @@
 import { agentSignalDomainAlive, normalizeAgentSignalDomain, normalizeSignalBoundaryOff, type AgentSignalDomain, type SignalBoundaryOff } from "@/lib/runtime/agentSignalSandbox";
 import { liveRootSession } from "@/lib/root/adopt";
+import { hostExitWriterPending, readHostExit, reclaimHostExit, type HostExitRecord } from "@/lib/runtime/hostExit";
 import { StateLockDeferredError, stateLockAttempt, stateLockDeferral, waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
@@ -223,6 +224,9 @@ export interface AgentRegistryEntry {
   structuredHost?: StructuredHostColumns | null;
   /** Original identity retained after the host columns are retired. */
   hostExitProcess?: ProcessIdentity;
+  /** Replaced natives whose independent waiter has not completed yet. */
+  pendingHostExits?: { process: ProcessIdentity; launchId: string | null }[];
+  previousHostExit?: HostExitRecord;
   /** Exact process identities left alive by a partial structured-host kill. */
   structuredTerminationSurvivors?: ProcessIdentity[];
   /** Names the newest capture of those identities. A capture withdrawn after
@@ -271,6 +275,9 @@ export interface QueuedPinnedSpawn {
 }
 
 export interface SpawnReceipt {
+  /** Terminal native evidence retained with this launch, including an open
+      pipeline attempt whose session row has since acquired another host. */
+  hostExit?: HostExitRecord;
   memoryCap?: AgentMemoryCap;
   launchId: string;
   /** Client-owned idempotency key. Legacy callers leave this null. */
@@ -7489,6 +7496,16 @@ export class AgentRegistry {
       launchProfile: receipt.launchProfile,
       updatedAt: createdAt,
     };
+    const previous = file.entries[sessionKeyId(entry.key)];
+    const previousProcess = previous?.hostExitProcess ?? previous?.structuredHost?.exitProcess ?? previous?.structuredHost?.process;
+    const nextProcess = full.structuredHost?.exitProcess ?? full.structuredHost?.process ?? full.hostExitProcess;
+    if (nextProcess) full.hostExitProcess = nextProcess;
+    if (previous?.previousHostExit) full.previousHostExit = previous.previousHostExit;
+    const pendingExits = [...(previous?.pendingHostExits ?? [])];
+    if (previousProcess && (!nextProcess || !sameRecordedProcessIdentity(previousProcess, nextProcess))) {
+      pendingExits.push({ process: previousProcess, launchId: previous?.structuredHostOperationId ?? null });
+    }
+    if (pendingExits.length) full.pendingHostExits = pendingExits;
     file.entries[sessionKeyId(entry.key)] = full;
     receipt.key = entry.key;
     receipt.artifactPath = entry.artifactPath;
@@ -7523,7 +7540,7 @@ export class AgentRegistry {
   }
 
   stageStructuredSpawn(launchId: string, entry: Omit<AgentRegistryEntry, "updatedAt">): SpawnSettlement {
-    return this.mutate((file) => {
+    return this.mutateHostExit(entry.key, (file) => {
       const paths = new Set([entry.artifactPath]);
       const signature = migrationReadinessSignature(file, entry.key.engine, paths);
       const staged = this.settleSpawnInFile(file, launchId, {
@@ -8033,8 +8050,54 @@ export class AgentRegistry {
     });
   }
 
+  /** A replacement transfers completed evidence into the existing launch
+      history before reclaiming its two files. Pending waiters remain named
+      by the row and are reconciled by its next host lifecycle update. */
+  private mutateHostExit<T>(key: SessionKey, change: (file: RegistryFile) => T): T {
+    const reclaimed: ProcessIdentity[] = [];
+    const result = this.mutate(file => {
+      const id = sessionKeyId(key);
+      const before = file.entries[id];
+      const prior = before?.hostExitProcess ?? before?.structuredHost?.exitProcess ?? before?.structuredHost?.process;
+      const pending = [...(before?.pendingHostExits ?? [])];
+      const result = change(file);
+      const after = file.entries[id];
+      if (!after) return result;
+      if (!after.previousHostExit && before?.previousHostExit) after.previousHostExit = before.previousHostExit;
+      const current = after.hostExitProcess ?? after.structuredHost?.exitProcess ?? after.structuredHost?.process;
+      if (prior && (!current || !sameRecordedProcessIdentity(prior, current))) pending.push({ process: prior, launchId: before?.structuredHostOperationId ?? null });
+      pending.push(...(after.pendingHostExits ?? []));
+      const retained = new Map<string, { process: ProcessIdentity; launchId: string | null }>();
+      const seen = new Set<string>();
+      for (const item of pending) {
+        const identity = item.process;
+        const processKey = JSON.stringify([identity.pid, identity.startIdentity, identity.bootEpoch ?? null]);
+        if (seen.has(processKey)) continue;
+        seen.add(processKey);
+        if (current && sameRecordedProcessIdentity(identity, current)) continue;
+        const evidence = readHostExit(identity);
+        if (!evidence || evidence.unavailable || processIdentityStatus(identity) !== "dead" || hostExitWriterPending(identity)) {
+          retained.set(processKey, item);
+          continue;
+        }
+        const receipt = item.launchId ? file.receipts[item.launchId] : null;
+        if (receipt?.key?.engine === key.engine && receipt.key.sessionId === key.sessionId && !receipt.hostExit) receipt.hostExit = clone(evidence);
+        after.previousHostExit = clone(evidence);
+        reclaimed.push(identity);
+      }
+      if (retained.size) after.pendingHostExits = [...retained.values()];
+      else delete after.pendingHostExits;
+      return result;
+    });
+    for (const identity of reclaimed) {
+      try { reclaimHostExit(identity); }
+      catch (error) { console.error("[host exit] could not reclaim retained receipts", error); }
+    }
+    return result;
+  }
+
   upsert(entry: Omit<AgentRegistryEntry, "updatedAt">): AgentRegistryEntry {
-    return this.mutate((file) => {
+    return this.mutateHostExit(entry.key, (file) => {
       const keyId = sessionKeyId(entry.key);
       const existing = file.entries[keyId];
       const survivors = existing?.structuredTerminationSurvivors ?? [];
@@ -8066,7 +8129,7 @@ export class AgentRegistry {
     structuredHost: StructuredHostColumns | null,
     status?: AgentHostStatus,
   ): AgentRegistryEntry {
-    return this.mutate((file) => {
+    return this.mutateHostExit(key, (file) => {
       const keyId = sessionKeyId(key);
       const entry = file.entries[keyId];
       if (!entry) throw new Error("agent registry entry is missing");
@@ -8104,7 +8167,7 @@ export class AgentRegistry {
     confirmedSurvivors: readonly ProcessIdentity[] = [],
     expectedCustody?: StructuredHostCustody | null,
   ): boolean {
-    return this.mutate((file) => {
+    return this.mutateHostExit(key, (file) => {
       const keyId = sessionKeyId(key);
       const entry = file.entries[keyId];
       if (!entry) return false;
@@ -8392,7 +8455,7 @@ export class AgentRegistry {
     claimEpoch: number,
     releaseClaim = false,
   ): AgentRegistryEntry | null {
-    return this.mutate((file) => {
+    return this.mutateHostExit(key, (file) => {
       const keyId = sessionKeyId(key);
       const entry = file.entries[keyId];
       if (!entry?.structuredHost
@@ -8425,7 +8488,7 @@ export class AgentRegistry {
       const changedHostPaths = activeHostPathsChangedByEntry(file, keyId, replacement);
       const readinessBefore = migrationReadinessSignature(file, key.engine, changedHostPaths);
       entry.structuredHost = replacement.structuredHost;
-      if (normalizedHost?.exitProcess) entry.hostExitProcess = normalizedHost.exitProcess;
+      entry.hostExitProcess = normalizedHost?.exitProcess ?? normalizedHost?.process ?? entry.hostExitProcess;
       entry.status = status;
       entry.pendingAction = replacement.pendingAction;
       if (releaseClaim) entry.claimOwner = null;

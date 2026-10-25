@@ -7,6 +7,7 @@ import { processIdentityStatus, type ProcessIdentity } from "@/lib/processIdenti
 import { redactBounded } from "@/lib/monitor/redact";
 import type { AgentMemoryCell } from "./agentMemory";
 import { STDERR_READ_BYTES, startupStderrText, withoutUnterminatedSecret } from "./startupStderr";
+import { bindHostExitWriter } from "./hostExit";
 
 export interface AgentSignalDomain {
   policyVersion: 1;
@@ -52,6 +53,7 @@ export async function spawnManagedEngine(command: string, args: string[], option
   memory: AgentMemoryCell | null | undefined, injected?: EngineSpawn, sourceEnv = options.env ?? process.env,
   transportSpawn?: EngineSpawn): Promise<ChildProcessWithoutNullStreams> {
   if (injected) return (memory?.wrapSpawn(injected) ?? injected)(command, args, options);
+  options = { ...options, env: { ...(options.env ?? process.env), LLV_HOST_EXIT_RECEIPTS: "1" } };
   const base = memory?.wrapSpawn(transportSpawn) ?? transportSpawn ?? ((cmd, argv, opts) => spawn(cmd, argv, { ...opts, stdio: ["pipe", "pipe", "pipe"] }));
   const scope = memory && (memory.plan.mechanism === "scope" || memory.plan.cpu) ? memory.plan.unit : null;
   const capabilityEnv = sourceEnv.LLV_GATE_SLOT_LEASE ? { ...(options.env ?? process.env), LLV_GATE_SLOT_LEASE: sourceEnv.LLV_GATE_SLOT_LEASE } : undefined;
@@ -284,7 +286,7 @@ export function spawnHeadlessSignalSandbox(command: string, args: string[], opti
   return child;
 }
 
-function launcherFile(): string {
+export function launcherFile(): string {
   // The cache is visible on both sides of the container-to-host transition.
   // Source also ships in the npm bin directory and in the standalone image.
   const source = resolveSignalTooling().launcher;
@@ -418,6 +420,7 @@ export async function spawnSignalSandbox(command: string, args: string[], option
         const domain = parsed.domain;
         if (parsed.handle !== child.pid || domain.directory !== directory || !agentSignalDomainAlive(domain)) throw new Error("agent signal sandbox unavailable: launch identity could not be verified");
         domains.set(child, domain);
+        if (env.LLV_HOST_EXIT_RECEIPTS === "1") bindHostExitWriter(directory, domain.native, domain.monitor);
         fs.writeFileSync(path.join(directory, "exec.json"), "true", { mode: 0o600 });
         return child;
       }

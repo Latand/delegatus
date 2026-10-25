@@ -321,7 +321,8 @@ export class AgentMemoryCell {
           if (this.plan.cpu) invalidateCpuContainmentProbe();
         }
       });
-      if (child.pid) {
+      const attach = () => {
+        if (!child.pid) return;
         const pid = child.pid;
         this.attach(pid, child);
         if (this.pid === null) {
@@ -335,7 +336,13 @@ export class AgentMemoryCell {
           }, 10);
           this.attachTimer.unref();
         }
-      }
+      };
+      // Socket launches expose the native handle after their independent
+      // waiter starts. Keep that waiter outside the host's memory tree and
+      // attach to the same native root an ordinary spawn would have returned.
+      const ready = (child as ChildProcessWithoutNullStreams & { spawnReady?: Promise<void> }).spawnReady;
+      if (ready) void ready.then(attach, () => {}).catch(error => { this.close(); child.emit("error", error); });
+      else attach();
       child.once("error", () => this.close());
       return child;
     };
@@ -506,7 +513,9 @@ export class AgentMemoryCell {
   }
   private reap(): void {
     if (this.plan.mechanism === "scope" && this.plan.unit) {
-      recordHostStop(this.exitProcess, "SIGKILL", "agent-memory-scope-reap");
+      const native = this.exitProcess;
+      if (native?.startIdentity && (this.ports.identity ?? procBackend.processIdentity)(native.pid) === native.startIdentity
+        && !procBackend.processExited(native.pid)) recordHostStop(native, "SIGKILL", "agent-memory-scope-reap");
       try { (this.ports.runner ?? run)("systemctl", ["--user", "kill", "--signal=SIGKILL", this.plan.unit]); } catch { /* An empty scope has already been collected. */ }
     } else {
       for (const sample of this.lastSample) if (this.canSignal(sample)) {

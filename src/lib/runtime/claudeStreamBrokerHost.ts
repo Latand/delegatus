@@ -1,4 +1,4 @@
-import { hostExitProcess, observeHostExit, recordHostStop, withHostStopOrigin } from "./hostExit";
+import { hostExitProcess, observeHostExit, readHostExit, recordHostStop, withHostStopOrigin } from "./hostExit";
 import { nativeProcessId, signalDomain, signalAgentDomain, signalBoundaryOff, spawnManagedEngine } from "./agentSignalSandbox";
 import { memoryField, memoryKillText } from "./agentMemoryState";
 import { CLAUDE_CHILD_EXITED, claudeHostEndText, HOST_END_REASON_MAX_CHARS, type HostEndCause } from "./hostEndCause";
@@ -758,7 +758,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     this.childStartIdentity = nativeProcessId(child) ? this.processIdentity(nativeProcessId(child)!) : null;
     this.exitProcess = signalDomain(child)?.native ?? hostExitProcess(nativeProcessId(child), this.childStartIdentity);
     this.memoryCell?.setExitProcess(this.exitProcess);
-    observeHostExit(child, this.exitProcess);
+    if (!signalDomain(child)) observeHostExit(child, this.exitProcess);
     this.releaseCleanup = options.releaseCleanup ?? null;
     this.cursor = options.initialEventCursor ?? 0;
     this.protocolVersion = auth.version ?? null;
@@ -789,6 +789,11 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     child.on("error", (error) => this.fail(new Error(`Claude child failed: ${safeError(error)}`)));
     // Exit arrives before inherited pipes close; reap OOM survivors immediately.
     child.on("exit", (code, signal) => {
+      if (signalDomain(child)) {
+        const native = readHostExit(this.exitProcess)?.exit;
+        code = native?.code ?? null;
+        signal = (native?.signal ?? null) as NodeJS.Signals | null;
+      }
       const kill = this.memoryCell?.settleExit({ expected: this.releasing || this.released });
       if (kill?.fatal && !this.releasing && !this.released) {
         const reason = memoryKillText(kill);
@@ -800,6 +805,11 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       this.noteChildExit(code, signal);
     });
     child.on("close", (code, signal) => {
+      if (signalDomain(child)) {
+        const native = readHostExit(this.exitProcess)?.exit;
+        code = native?.code ?? null;
+        signal = (native?.signal ?? null) as NodeJS.Signals | null;
+      }
       this.memoryCell?.settleExit({ expected: this.releasing || this.released });
       this.noteChildExit(code, signal);
       this.reaped = true;
@@ -1944,7 +1954,8 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     if (this.terminationStarted || this.reaped) return true;
     if (!this.releaseFenceHolds()) return false;
     this.clearCaptureRetry();
-    recordHostStop(this.exitProcess, "EOF", "claude-host-release");
+    if (!this.reaped && this.childStartIdentity !== null && this.processIdentity(nativeProcessId(this.child)!) === this.childStartIdentity
+      && !procBackend.processExited(nativeProcessId(this.child)!)) recordHostStop(this.exitProcess, "EOF", "claude-host-release");
     try { this.child.stdin.end(); } catch { /* already closed */ }
     if (!this.signalReleaseGroup("SIGTERM")) return false;
     this.terminationStarted = true;

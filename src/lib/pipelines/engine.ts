@@ -1,4 +1,4 @@
-import { hostExitText, readHostExit } from "@/lib/runtime/hostExit";
+import { hostExitText, hostExitWriterPending, readHostExit } from "@/lib/runtime/hostExit";
 import { settledPublicationForHead } from "./publicationEvidence";
 import { codexCloudEnvironmentId } from "@/lib/projects/settings";
 import { CLOUD_STAGE_TIMEOUT_MS, cloudPollDelay, cloudStageConfigurationError, cloudServiceTierError, cloudTransportError, validCloudTaskReference, validCloudThreadReference, type CloudStageClient, type CloudStageAttempt } from "./cloudStage";
@@ -1662,6 +1662,14 @@ export function defaultPipelinePorts(
   let flowSnapshot: Flow[] | null = null;
   let interruptions: InterruptionObligation[] | null = null;
   const snapshot = () => registrySnapshot ??= registry.readOnlySnapshot();
+  const exitStatusPending = (conversationId: string): boolean => {
+    const current = snapshot();
+    const conversation = current.conversations[conversationId as ViewerConversationId];
+    const generation = conversation?.generations.at(-1);
+    const entry = conversation && generation ? current.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })] : null;
+    const identity = entry?.hostExitProcess ?? entry?.structuredHost?.exitProcess ?? entry?.structuredHost?.process;
+    return Boolean(identity && hostExitWriterPending(identity) && processIdentityStatus(identity) === "dead");
+  };
   /* The newest cut recorded for a conversation; the store lists oldest first. */
   const newestCut = (conversationId: string): InterruptionObligation | null => {
     if (!conversationId.startsWith("conversation_")) return null;
@@ -2143,6 +2151,7 @@ export function defaultPipelinePorts(
       if (sessions.some(session => !["dead", "unhosted", "conflict"].includes(session.host)
         && (session.turn === "running" || session.turn === "interrupt_requested" || session.attentionIds.length > 0))) return true;
       if (sessions.every(session => ["dead", "unhosted", "conflict"].includes(session.host))) {
+        if (exitStatusPending(conversationId)) return null;
         /* A host may be adopted again during this controller pass. Do not let
            affirmative death evidence poison later liveness checks in the tick. */
         runtimeReads.reset();
@@ -2160,6 +2169,7 @@ export function defaultPipelinePorts(
         const session = await runtimeReads.session(client, conversationId);
         if (!session || session.attentionIds.length > 0 || session.host === "conflict") return null;
         if (session.host === "dead" || session.host === "unhosted") {
+          if (exitStatusPending(conversationId)) return null;
           const conversation = registry.conversation(conversationId as ViewerConversationId);
           const generation = conversation?.generations.at(-1);
           if (conversation?.engine === "codex" && generation) {
@@ -2198,7 +2208,7 @@ export function defaultPipelinePorts(
       if (!key) return undefined;
       const entry = current.entries[sessionKeyId(key)];
       if (!entry) return generation.createdAt;
-      if (entry.status === "dead" || entry.status === "unhosted") return entry.updatedAt;
+      if (entry.status === "dead" || entry.status === "unhosted") return exitStatusPending(conversationId) ? undefined : entry.updatedAt;
       /* A row that still reads live proves nothing about the process behind it:
          a redeploy leaves the pid of a host that no longer exists, and a host
          relaunched over a severed turn can sit forever with nothing to run
@@ -2211,9 +2221,8 @@ export function defaultPipelinePorts(
         ...dependencies.liveness,
         snapshot: current,
       });
-      return liveness?.state === "severed" && liveness.since !== null
-        ? new Date(liveness.since).toISOString()
-        : null;
+      if (liveness?.state !== "severed" || liveness.since === null) return null;
+      return exitStatusPending(conversationId) ? undefined : new Date(liveness.since).toISOString();
     },
     conversationHostProcess: async (conversationId) => {
       if (!conversationId.startsWith("conversation_")) return { state: "unknown", pid: null };
@@ -2231,6 +2240,7 @@ export function defaultPipelinePorts(
       /* The process is asked before the row: a terminal row can stand over a
          live engine process (#2790). */
       if (proven) return { state: "alive", pid };
+      if (exitStatusPending(conversationId)) return { state: "unknown", pid };
       if (entry.status === "dead" || entry.status === "unhosted") return { state: "gone", pid };
       if (!host.expected) return { state: "unknown", pid };
       if (!host.present) return { state: "gone", pid };
@@ -2249,7 +2259,7 @@ export function defaultPipelinePorts(
       if (!key) return null;
       const entry = current.entries[sessionKeyId(key)];
       const ended = entry?.structuredHost?.ended;
-      const evidence = readHostExit(entry?.hostExitProcess ?? entry?.structuredHost?.exitProcess ?? entry?.structuredHost?.process);
+      const evidence = receipt?.hostExit ?? readHostExit(entry?.hostExitProcess ?? entry?.structuredHost?.exitProcess ?? entry?.structuredHost?.process);
       return [ended ? claudeHostEndText(ended) : null, hostExitText(evidence)].filter(Boolean).join("; ");
     },
     conversationInterruption: (conversationId) => {

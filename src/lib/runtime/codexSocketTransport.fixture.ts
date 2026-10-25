@@ -1,5 +1,5 @@
 import { readHostExit } from "./hostExit";
-import { captureProcessIdentity } from "@/lib/processIdentity";
+import { statePath } from "@/lib/configDir";
 // An owned process boundary lets the parent independently bound startup and teardown.
 import fs from "node:fs";
 import path from "node:path";
@@ -7,12 +7,24 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawnSync } from "node:child_process";
 import { CodexSocketTransport } from "./codexSocketTransport";
 import { spawnManagedEngine } from "./agentSignalSandbox";
+import { AgentMemoryCell, tickAgentMemoryWatchdogs, type AgentMemoryPlan } from "./agentMemory";
 
 const [root, mode] = process.argv.slice(2);
 const launcher = mode?.startsWith("managed") || mode?.startsWith("throw") ? "managed" : mode?.startsWith("shim") ? "shim" : undefined;
 const directory = fs.openSync(root!, "r");
-process.env.HOME = `/proc/${process.pid}/fd/${directory}`;
+process.env.HOME = process.env.HOST_EXIT_TEST_HOME ?? `/proc/${process.pid}/fd/${directory}`;
+if (mode === "replacement-read") {
+  const owner = JSON.parse(fs.readFileSync(path.join(root!, "owner.json"), "utf8"));
+  const transport = await CodexSocketTransport.reconnect(owner);
+  const ended = new Promise(resolve => transport.once("exit", resolve));
+  process.kill(owner.process.pid, "SIGKILL");
+  await ended;
+  process.stdout.write(JSON.stringify(readHostExit(owner.process)));
+  process.exit(0);
+}
 const marker = path.join(root!, "ready");
+const receipts = statePath("host-exits");
+const beforeReceipts = new Set(fs.existsSync(receipts) ? fs.readdirSync(receipts) : []);
 const clock = Date.now;
 if (mode === "timeout" || mode === "ownership") Date.now = () => clock() + (fs.existsSync(marker) ? 11_000 : 0);
 const peer = `
@@ -35,7 +47,7 @@ const peer = `
     process.exit(23);
   }
   if (mode === "signal" || mode === "wrappedsignal") process.kill(process.pid, "SIGTERM");
-  if (mode === "success" || mode === "chatty" || mode.startsWith("observed")) {
+  if (mode === "success" || mode === "chatty" || mode.startsWith("observed") || mode === "replacement-launch") {
     const server = Bun.serve({ unix: file,
       fetch(request, server) { return server.upgrade(request) ? undefined : new Response("fixture"); },
       websocket: { message(socket, message) {
@@ -69,6 +81,8 @@ const peer = `
 let sink: number | undefined;
 let peerProcess: ChildProcessWithoutNullStreams | undefined;
 let peerClosed = false;
+const memory = mode === "observedmemory" ? new AgentMemoryCell({ mechanism: "watchdog", platform: "linux", unit: null,
+  limitBytes: 1024 ** 3, budgetBytes: 1024 ** 3, reserveBytes: 0, totalBytes: 1024 ** 3, score: 500 } as AgentMemoryPlan) : null;
 try {
   let command0 = mode === "missing" ? path.join(root!, "missing-binary") : process.execPath;
   const env0: NodeJS.ProcessEnv = { ...process.env, PEER_MODE: mode, PEER_MARKER: marker };
@@ -100,7 +114,7 @@ try {
     if (launcher) return spawnManagedEngine(command, args, options, null, undefined, options.env ?? process.env, base);
     const diagnostic = path.join(root!, "wrapper.stderr");
     fs.rmSync(diagnostic, { force: true });
-    peerProcess = base(command, args, mode === "wrapped" || mode === "chatty"
+    peerProcess = (memory?.wrapSpawn(base) ?? base)(command, args, mode === "wrapped" || mode === "chatty"
       ? { ...options, env: { ...options.env, NODE_ENV: options.env?.NODE_ENV ?? "test", LLV_SIGNAL_DIAGNOSTIC: diagnostic } } : options);
     peerProcess.once("close", () => { peerClosed = true; });
     // The retained descriptor outlives the diagnostic name the transport unlinks.
@@ -118,6 +132,14 @@ try {
     return peerProcess;
   });
   try {
+    memory?.setExitProcess({ pid: transport.pid, startIdentity: transport.startIdentity, bootEpoch: transport.bootEpoch });
+    if (mode === "replacement-launch") {
+      const owner = { endpoint: transport.endpoint, process: { pid: transport.pid, startIdentity: transport.startIdentity, bootEpoch: transport.bootEpoch } };
+      fs.writeFileSync(path.join(root!, "owner.json"), JSON.stringify(owner));
+      transport.disconnect();
+      process.stdout.write(JSON.stringify(owner));
+      process.exit(0);
+    }
     if (fs.existsSync(path.join(path.dirname(transport.endpoint.slice("codex-unix:".length)), "startup.stderr"))) {
       throw new Error("startup diagnostic name survived successful connection");
     }
@@ -138,12 +160,25 @@ try {
       detail += `; sink ${afterConnected}/${sinkSize()}`;
     }
     if (mode?.startsWith("observed")) {
+      const reader = transport as unknown as { processEnded(): void };
+      const processEnded = reader.processEnded;
+      if (mode === "observedreclaimed") reader.processEnded = () => {};
       const exited = new Promise<{code:number|null; signal:string|null}>(resolve => transport.once("exit", (code, signal) => resolve({code, signal})));
-      if (mode === "observedsignal") peerProcess!.kill("SIGKILL");
+      if (mode === "observedmemory") { memory!.plan.limitBytes = 1; tickAgentMemoryWatchdogs([memory!]); }
+      else if (mode === "observedsignal" || mode === "observedreclaimed") process.kill(transport.pid, "SIGKILL");
       else transport.stdin.write("exit23\n");
+      const identity = { pid: transport.pid, startIdentity: transport.startIdentity, bootEpoch: transport.bootEpoch };
+      let before: ReturnType<typeof readHostExit> | undefined;
+      if (mode === "observedreclaimed") {
+        if (!peerClosed) await new Promise<void>(resolve => peerProcess!.once("close", () => resolve()));
+        before = readHostExit(identity);
+        (await import("./hostExit")).reclaimHostExit(identity);
+        reader.processEnded = processEnded;
+        reader.processEnded();
+      }
       const observed = await exited;
-      const evidence = readHostExit(captureProcessIdentity(transport.pid, undefined, transport.startIdentity));
-      detail = JSON.stringify({ observed, evidence });
+      const evidence = readHostExit(identity);
+      detail = JSON.stringify({ observed, evidence, before });
     }
     process.stdout.write(JSON.stringify({ error: detail }));
   } finally {
@@ -155,8 +190,10 @@ try {
     }
   }
 } catch (error) {
-  process.stdout.write(JSON.stringify({ error: (error as Error).message }));
+  const orphanReceipts = fs.existsSync(receipts) ? fs.readdirSync(receipts).filter(file => !beforeReceipts.has(file)).length : 0;
+  process.stdout.write(JSON.stringify({ error: (error as Error).message, orphanReceipts }));
 } finally {
+  memory?.close();
   Date.now = clock;
   fs.closeSync(directory);
 }

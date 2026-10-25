@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { EventEmitter } from "node:events";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { statePath } from "@/lib/configDir";
-import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 
 export interface HostStopOrigin { path: string; operationId: string }
 export interface HostExitRecord {
@@ -13,6 +13,7 @@ export interface HostExitRecord {
   exit: { at: string; code: number | null; signal: string | null } | null;
   unavailable?: string;
 }
+type HostExitSummary = Pick<HostExitRecord, "exit" | "stop" | "unavailable">;
 
 const globals = globalThis as typeof globalThis & { __delegatusHostStopOrigin?: AsyncLocalStorage<HostStopOrigin> };
 const origin = globals.__delegatusHostStopOrigin ??= new AsyncLocalStorage<HostStopOrigin>();
@@ -20,12 +21,28 @@ export function withHostStopOrigin<T>(source: HostStopOrigin, run: () => T): T {
   return origin.run(origin.getStore() ?? source, run);
 }
 
-/** A host owns two bounded receipts. Separate slots keep an exit
+/** A host owns two bounded receipts and a transient waiter identity. Separate slots keep an exit
  * observer and a signal sender from overwriting each other's evidence. They
  * require no registry lock, including at the synchronous signal boundary. */
-function slot(process: ProcessIdentity, kind: "stop" | "exit"): string {
+function slot(process: ProcessIdentity, kind: "stop" | "exit" | "writer"): string {
   const key = createHash("sha256").update(JSON.stringify([process.pid, process.startIdentity, process.bootEpoch ?? null])).digest("hex");
   return statePath("host-exits", `${key}.${kind}.json`);
+}
+
+/** The independent native waiter receives only its own immutable output slot. */
+export function bindHostExitWriter(directory: string, process: ProcessIdentity, writer = captureProcessIdentity(globalThis.process.pid)): void {
+  record(slot(process, "writer"), writer);
+  fs.writeFileSync(path.join(directory, "host-exit.json"), JSON.stringify({ file: slot(process, "exit") }), { mode: 0o600 });
+}
+
+export function hostExitWriterPending(process: ProcessIdentity): boolean {
+  try {
+    const writer = read<ProcessIdentity>(slot(process, "writer"));
+    return writer !== null && processIdentityStatus(writer) !== "dead";
+  } catch { return false; }
+}
+export function hostExitWriterRegistered(process: ProcessIdentity): boolean {
+  return fs.existsSync(slot(process, "writer"));
 }
 function read<T>(file: string): T | null {
   try {
@@ -73,23 +90,45 @@ export function recordHostStop(process: ProcessIdentity | null | undefined, sign
     record(file, { ...next, at: new Date().toISOString() }, true);
   } catch (error) { console.error("[host exit] could not persist stop intent", error); }
 }
-export function recordHostExit(process: ProcessIdentity | null | undefined, code: number | null | undefined, signal: string | null | undefined): void {
-  if (!process?.startIdentity || code === undefined && signal === undefined) return;
+export function recordHostExit(process: ProcessIdentity | null | undefined, code: number | null | undefined, signal: string | null | undefined): boolean {
+  if (!process?.startIdentity || code === undefined && signal === undefined) return false;
   try {
     record(slot(process, "exit"), { code: code ?? null, signal: signal ?? null, at: new Date().toISOString() });
-  } catch (error) { console.error("[host exit] could not persist exit status", error); }
+    fs.rmSync(slot(process, "writer"), { force: true });
+    return true;
+  } catch (error) { console.error("[host exit] could not persist exit status", error); return false; }
 }
 export function observeHostExit(child: EventEmitter, process: ProcessIdentity | null): void {
-  const observe = (code: number | null, signal: string | null) => recordHostExit(process, code, signal);
+  if (process?.startIdentity && !readHostExit(process)?.exit) {
+    try { record(slot(process, "writer"), captureProcessIdentity(globalThis.process.pid)); }
+    catch (error) { console.error("[host exit] could not retain wait owner", error); }
+  }
+  const observe = (code: number | null, signal: string | null) => {
+    if (!recordHostExit(process, code, signal)) return;
+    child.off("exit", observe);
+    child.off("close", observe);
+  };
   child.once("exit", observe);
   child.once("close", observe);
+}
+
+/** Called only after the owning row/attempt durably retained terminal evidence. */
+export function reclaimHostExit(process: ProcessIdentity): void {
+  for (const kind of ["stop", "exit", "writer"] as const) fs.rmSync(slot(process, kind), { force: true });
 }
 export function readHostExit(process: ProcessIdentity | null | undefined): HostExitRecord | null {
   if (!process?.startIdentity) return null;
   try { return { process, stop: read(slot(process, "stop")), exit: read(slot(process, "exit")) }; }
   catch { return { process, stop: null, exit: null, unavailable: "host exit receipts could not be read" }; }
 }
-export function hostExitText(evidence: HostExitRecord | null): string {
+/** Startup can fail before the native identity is admitted to a host row. */
+export function readHostExitSpool(directory: string): HostExitSummary | null {
+  try {
+    const exit = read<HostExitRecord["exit"]>(path.join(directory, "native-exit.json"));
+    return exit ? { exit, stop: read<HostExitRecord["stop"]>(path.join(directory, "native-stop.json")) } : null;
+  } catch { return null; }
+}
+export function hostExitText(evidence: HostExitSummary | null): string {
   if (evidence?.unavailable) return "exit: status unavailable; Delegatus stop evidence unavailable";
   const exit = evidence?.exit;
   const status = exit?.signal ? `signal ${exit.signal}` : exit?.code !== null && exit?.code !== undefined ? `code ${exit.code}` : "status unavailable";
