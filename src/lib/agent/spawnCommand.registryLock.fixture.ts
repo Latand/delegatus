@@ -44,7 +44,7 @@ const work: Promise<void>[] = [];
 const cwd = path.join(root, "workspace");
 fs.mkdirSync(cwd, { recursive: true });
 const account = { engine: "claude" as const, accountId: "fixture-account", kind: "managed" as const,
-  home: path.join(root, "account"), transcriptRoot: path.join(root, "projects"), env: { NODE_ENV: "test" } };
+  home: path.join(root, "account"), transcriptRoot: path.join(root, "projects"), env: { NODE_ENV: "test" as const } };
 const dependencies: SpawnCommandDependencies = {
   ...productionSpawnCommandDependencies,
   registry: () => {
@@ -103,7 +103,7 @@ const transactionProbe = spyOn(databasePrototype, "transaction").mockImplementat
   } };
   // Bun's transaction methods are readonly. Preserve its callable and all
   // descriptors while observing immediate(), rather than mutating the native.
-  return Object.defineProperties((...args: never[]) => Reflect.apply(prepared as unknown as (...args: never[]) => unknown, prepared, args), properties) as Transaction;
+  return Object.defineProperties((...args: never[]) => Reflect.apply(prepared as unknown as (...args: never[]) => unknown, prepared, args), properties) as unknown as Transaction;
 });
 const originalDependencies = { ...productionSpawnCommandDependencies };
 const body = { clientAttemptId: `writer_${route}_${site}_${revoked}`, engine: "claude", model: "sonnet",

@@ -23,7 +23,8 @@ for (const { route, site, revoked } of cases) {
       const result = JSON.parse(stdout);
       expect(result.yielded).toBe(true);
       if (site === "constructor") { expect(result.constructorBusy).toBe(true); expect(result.errno).toBe(5); }
-      expect(result.settledBeforeRelease, result.error ?? "launch completed while the writer was held").toBe(false);
+      expect(result.error).not.toBe("database is locked");
+      expect(result.settledBeforeRelease).toBe(false);
       if (site === "constructor") expect(result.attempts).toBeGreaterThan(1);
       if (["validation", "refusal", "agent-refusal", "drain"].includes(route)) {
         expect(result.status).toBe(route === "validation" ? 200 : route === "drain" ? 503 : 400);
