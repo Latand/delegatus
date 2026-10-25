@@ -519,7 +519,7 @@ are at `3736d5e4`.
 | Lines | Test | What it asserts | Verdict | Why; for trim, the lines to keep and drop |
 |---|---|---|---|---|
 | 977-986 | the Live backend answers board questions with read tools and the prompt keeps talk-first | nothing sent; instruction wording | **trim** | keep 983; drop 984 |
-| barge-in during a backend await keeps reports held when the older request finishes | interrupt command dispatch; an embedded instruction phrase; report holding and release | **trim** | keep the command type and every delivery, report and ordering check; drop the authored content matcher inside the command assertion |
+| follow-up | barge-in during a backend await keeps reports held when the older request finishes | interrupt command dispatch; an embedded instruction phrase; report holding and release | **trim** | keep the command type and every delivery, report and ordering check; drop the authored content matcher inside the command assertion |
 
 ### `src/lib/voiceCompanion/tools.test.ts`
 
@@ -874,8 +874,8 @@ are at `3736d5e4`.
 |---|---|---|---|---|
 | 163 onward | a large delivered stage prompt is backed by a private file | file-backed bytes, mode, input data, role section and fixed completion instruction | **trim** | keep file content, mode, input substitution, section marker and lifecycle checks; drop the fixed stage-report instruction sentence |
 | 280-299 | read-only stages preserve declared outputs and tell the agent their write boundary | outputs stored; output path in the prompt; an instruction phrase | **trim** | keep 294, 297; drop 298 |
-| a merger stage resolves through production role lookup during pipeline normalization | role parameters and runtime selection; an embedded scaffold phrase | **trim** | keep role parameters, engine, model, effort and access; drop the authored scaffold matcher and its obsolete comment |
-| a visual-critic stage is accepted and launches read-only on the role's runtime | saved role, runtime and launch access; an embedded scaffold phrase | **trim** | keep the saved role and runtime fields, ticks and launch-access assertion; drop the authored scaffold matcher |
+| follow-up | a merger stage resolves through production role lookup during pipeline normalization | role parameters and runtime selection; an embedded scaffold phrase | **trim** | keep role parameters, engine, model, effort and access; drop the authored scaffold matcher and its obsolete comment |
+| follow-up | a visual-critic stage is accepted and launches read-only on the role's runtime | saved role, runtime and launch access; an embedded scaffold phrase | **trim** | keep the saved role and runtime fields, ticks and launch-access assertion; drop the authored scaffold matcher |
 
 ### `src/lib/pipelines/legacyReviewDefinition.test.ts`
 
@@ -1510,3 +1510,147 @@ the delivered clauses that its occurrence and idempotence checks use. Its
 obsolete original-clause data and ignored tuple column are gone. The three
 audit rows above classify these blocks as trim. No replacement tests were
 added.
+
+## Completed fix verification
+
+Recorded 2026-10-25T10:35:14+00:00.
+The run of all explicit test paths used committed tree `13c67fea8ab87f2aecd3be5061068a65341bca7b`
+and captured main `d1873b4e0b495915e584a3392d12232c9d9e8243`. A later main merge produced
+checked code tree `8fcc19883cac667f2d02ee306cb5d2c3afd26b89`, against main
+`4ff19e8f709f31af4e6fcc5d2417e384f001da6c`. The 15 touched tests changed by that merge and
+the other eight touched MCP files were rerun. The cleanup added no tests;
+main's behavior tests and fixture updates were retained.
+
+Every command used the controller-supplied gate-slot wrapper, one file at a
+time: `bun test ./<path> --timeout=60000`, with private JUnit reports.
+`checkEnvironment` preceded `isolatedEnvironment`; HOME, XDG directories,
+TMPDIR and LLV_STATE_DIR were private, and LLV_VIEWER_CONTROL_URL used closed
+loopback port 1. Scratch checkouts had detached, pinned HEADs and origin/main
+refs and matching manifest/lockfile dependencies. An external preload used
+the existing ownership test seam to recognize only the stage's private
+scratch root as temporary, including in Bun fixture children. It changed no
+repository test or assertion.
+
+The full run reached all 79 surviving touched paths: 54 green files, 18 with
+collected failures and seven setup refusals. Collected failures matched main
+or received bounded confirmation. Main reproduced both HTTP pending-message
+failures in those confirmations.
+Those two cases varied at their 30-second limit: they passed in the full main
+run and timed out in main and branch confirmation. HTTP cleanup/fetch
+diagnostics varied with these timeouts; the filtered run on captured main also
+reproduced the `Unable to connect` and child server exit diagnostics. The one
+process identity reported by confirmation teardown was independently verified
+dead. An earlier complete
+HTTP pair matched all 24 cases, with 6 passes, 18 failures and 13 between-test
+errors on each side.
+
+Seven MCP files stop before collection at their unchanged
+`TASKS_FILE.startsWith(sandbox + path.sep)` assertion, identically on main and
+the branch. The shared preload's Codex feature fixture reaches tasks/store
+through memory/source, importStore, sqliteStateStore, historyProjection,
+flows/store, registry and spawnAdmission, binding the exported path before
+these files set their own roots. Their test bodies remain unverified on both
+sides; the behavioral setup guards remain. The latest merged fixtures were
+run and compared again. One native caller lifetime case in the stdio suite
+differed between the full samples. Its filtered confirmation passed once on
+main and once on the branch; the original failure remains in the table.
+
+The latest staged merge passed `bunx tsc --noEmit` before its plain commit,
+and its committed tree matched the recorded staged tree. The full run's
+typecheck also passed. Scoped ESLint found zero introduced errors and 27
+matching base errors; the latest scoped rerun passed. Privacy with
+`--require-known-values --check-commits --base <captured-main> --paths <paths>`
+passed. Whitespace and the ordinary commit hooks passed; no hook was skipped.
+
+The existing JSON-fence test rejected a duplicate rendered JSON fence. The
+existing numbering test rejected a changed short-form rule number. Both
+scratch mutations were restored byte-for-byte; no replacement tests or
+committed drivers were added.
+
+Counts below are pass / fail / errors between tests or in hooks. Latest-merge rows
+supersede the corresponding full-run rows. Setup refusal means no test body
+executed. A green branch needed no baseline run. The full run retained seven
+existing skips: four in `src/lib/externalRelay/runner.test.ts` and three in
+`src/lib/pipelines/engine.creation.test.ts`; they are excluded from pass/fail counts.
+
+| Test path | Branch counts | Main sample | Evidence |
+|---|---|---|---|
+| `scripts/first-message-design.test.ts` | 1 / 0 / 0 | not needed | full run: green |
+| `scripts/setup-whisper.test.ts` | 3 / 0 / 0 | not needed | full run: green |
+| `src/app/api/roles/route.test.ts` | 13 / 0 / 0 | not needed | full run: green |
+| `src/app/typingLatencyEvidence.test.ts` | 4 / 0 / 0 | not needed | full run: green |
+| `src/lib/agent/operatorQuestionPolicy.native.test.ts` | 1 / 0 / 0 | not needed | full run: green |
+| `src/lib/agent/spawnAdmission.test.ts` | 7 / 0 / 0 | not needed | full run: green |
+| `src/lib/attention/seatAgenda.test.ts` | 4 / 0 / 0 | not needed | full run: green |
+| `src/lib/boardMaintenance/run.test.ts` | 32 / 0 / 0 | not needed | latest merge: green |
+| `src/lib/boardMaintenance/text.test.ts` | 5 / 0 / 0 | not needed | full run: green |
+| `src/lib/externalRelay/mediaInput.test.ts` | 37 / 0 / 0 | not needed | full run: green |
+| `src/lib/externalRelay/ownerOutboundContext.test.ts` | 17 / 5 / 0 | 17 / 5 / 0 | full run: matching failures |
+| `src/lib/externalRelay/ownerRelayContract.test.ts` | 4 / 0 / 0 | not needed | full run: green |
+| `src/lib/externalRelay/ownerTier.test.ts` | 53 / 1 / 0 | 53 / 1 / 0 | full run: matching failures |
+| `src/lib/externalRelay/prompt.test.ts` | 11 / 0 / 0 | not needed | full run: green |
+| `src/lib/externalRelay/runner.test.ts` | 318 / 2 / 0 | 318 / 2 / 0 | full run: matching failures |
+| `src/lib/flows/prompts.test.ts` | 2 / 0 / 0 | not needed | full run: green |
+| `src/lib/forge/autoRefresh.test.ts` | 69 / 0 / 0 | not needed | latest merge: green |
+| `src/lib/links/seatMessages.http.test.ts` | 6 / 18 / 13 | 8 / 16 / 11 | full run: matched failures; timeout confirmations above |
+| `src/lib/mcp/answerSizes.test.ts` | 8 / 0 / 0 | not needed | latest merge: green |
+| `src/lib/mcp/autoUpdates.test.ts` | 16 / 4 / 0 | 17 / 4 / 0 | latest merge: matching failures |
+| `src/lib/mcp/issueReport.test.ts` | 41 / 0 / 0 | not needed | latest merge: green |
+| `src/lib/mcp/leaveLesson.test.ts` | 18 / 0 / 0 | not needed | latest merge: green |
+| `src/lib/mcp/pageCursors.integration.test.ts` | 3 / 0 / 0 | not needed | latest merge: green |
+| `src/lib/mcp/reportTools.test.ts` | 5 / 1 / 0 | 5 / 1 / 0 | latest merge: matching failures |
+| `src/lib/mcp/retirementStatus.integration.test.ts` | 16 / 2 / 0 | 3 / 15 / 2 | latest merge: matching failures |
+| `src/lib/mcp/retryStageLaunch.integration.test.ts` | 2 / 4 / 0 | 2 / 4 / 0 | latest merge: matching failures |
+| `src/lib/mcp/schemaParity.test.ts` | 36 / 0 / 0 | not needed | latest merge: green |
+| `src/lib/mcp/server.test.ts` | 100 / 0 / 0 | not needed | latest merge: green |
+| `src/lib/mcp/spawnDeployer.test.ts` | 15 / 2 / 0 | 15 / 2 / 0 | latest merge: matching failures |
+| `src/lib/mcp/stdio.integration.test.ts` | 35 / 18 / 0 | 36 / 17 / 0 | latest merge: matching failures; native-hook confirmation above |
+| `src/lib/mcp/taskBoardVisibility.integration.test.ts` | setup refusal | same setup refusal | latest merge: matching setup refusal |
+| `src/lib/mcp/taskColor.integration.test.ts` | setup refusal | same setup refusal | latest merge: matching setup refusal |
+| `src/lib/mcp/taskColorGroupHide.integration.test.ts` | setup refusal | same setup refusal | latest merge: matching setup refusal |
+| `src/lib/mcp/taskDetails.integration.test.ts` | setup refusal | same setup refusal | latest merge: matching setup refusal |
+| `src/lib/mcp/taskFinding.integration.test.ts` | 4 / 0 / 0 | not needed | latest merge: green |
+| `src/lib/mcp/taskIcon.integration.test.ts` | setup refusal | same setup refusal | latest merge: matching setup refusal |
+| `src/lib/mcp/taskLineEdits.integration.test.ts` | setup refusal | same setup refusal | latest merge: matching setup refusal |
+| `src/lib/mcp/taskPriority.integration.test.ts` | setup refusal | same setup refusal | latest merge: matching setup refusal |
+| `src/lib/memory/operatorMemory.test.ts` | 18 / 0 / 0 | not needed | full run: green |
+| `src/lib/memory/roleDelivery.test.ts` | 33 / 1 / 0 | 33 / 1 / 0 | full run: matching failures |
+| `src/lib/memory/roleLane.test.ts` | 2 / 0 / 1 | 2 / 0 / 1 | full run: matching failures |
+| `src/lib/memory/swarm.test.ts` | 32 / 0 / 0 | not needed | full run: green |
+| `src/lib/monitor/autonomy.test.ts` | 10 / 0 / 0 | not needed | full run: green |
+| `src/lib/monitor/report.test.ts` | 15 / 0 / 0 | not needed | full run: green |
+| `src/lib/monitor/seatTick.test.ts` | 151 / 0 / 0 | not needed | full run: green |
+| `src/lib/monitor/seatTickController.agenda.test.ts` | 76 / 6 / 0 | 76 / 6 / 0 | full run: matching failures |
+| `src/lib/monitor/seatTickController.reporting.test.ts` | 24 / 28 / 0 | 24 / 28 / 0 | full run: matching failures |
+| `src/lib/monitor/seatTickReports.test.ts` | 16 / 0 / 0 | not needed | full run: green |
+| `src/lib/monitor/turbo.test.ts` | 12 / 0 / 0 | not needed | full run: green |
+| `src/lib/monitor/workerLimitWake.test.ts` | 2 / 0 / 0 | not needed | full run: green |
+| `src/lib/orchestrator/boardReport.test.ts` | 18 / 0 / 0 | not needed | full run: green |
+| `src/lib/orchestrator/handoffDigest.test.ts` | 19 / 0 / 0 | not needed | full run: green |
+| `src/lib/orchestrator/operatorDecisionForms.test.ts` | 4 / 0 / 0 | not needed | full run: green |
+| `src/lib/orchestrator/prompt.test.ts` | 38 / 0 / 0 | not needed | full run: green |
+| `src/lib/pipelines/engine.creation.test.ts` | 95 / 0 / 0 | not needed | full run: green |
+| `src/lib/pipelines/legacyReviewDefinition.test.ts` | 21 / 0 / 0 | not needed | full run: green |
+| `src/lib/pipelines/prompts.test.ts` | 15 / 0 / 0 | not needed | full run: green |
+| `src/lib/pipelines/roles.test.ts` | 34 / 0 / 0 | not needed | full run: green |
+| `src/lib/pipelines/runtimeSwitch.test.ts` | 167 / 0 / 0 | not needed | full run: green |
+| `src/lib/pipelines/stageInput.test.ts` | 15 / 2 / 0 | 12 / 5 / 0 | full run: matching failures |
+| `src/lib/pipelines/testGuidance.test.ts` | 2 / 0 / 0 | not needed | full run: green |
+| `src/lib/prototypeReview/decision.integration.test.ts` | 14 / 0 / 0 | not needed | full run: green |
+| `src/lib/prototypeReview/decision.test.ts` | 4 / 0 / 0 | not needed | full run: green |
+| `src/lib/release/run.test.ts` | 27 / 0 / 0 | not needed | full run: green |
+| `src/lib/release/stages.test.ts` | 2 / 0 / 0 | not needed | full run: green |
+| `src/lib/roles/registry.test.ts` | 22 / 0 / 0 | not needed | full run: green |
+| `src/lib/roles/workerLimit.test.ts` | 3 / 0 / 0 | not needed | full run: green |
+| `src/lib/runtime/codexAppServerHost.test.ts` | 240 / 0 / 0 | not needed | full run: green |
+| `src/lib/runtime/interruptionObligations.test.ts` | 25 / 0 / 0 | not needed | full run: green |
+| `src/lib/runtime/releaseInterruption.test.ts` | 127 / 7 / 0 | 127 / 7 / 0 | full run: matching failures |
+| `src/lib/runtime/startup.test.ts` | 154 / 4 / 0 | 154 / 4 / 0 | full run: matching failures |
+| `src/lib/runtime/voicePersona.test.ts` | 5 / 0 / 0 | not needed | full run: green |
+| `src/lib/runtime/voicePersonaRole.test.ts` | 13 / 0 / 0 | not needed | full run: green |
+| `src/lib/voiceCompanion/liveSession.test.ts` | 129 / 0 / 0 | not needed | latest merge: green |
+| `src/lib/voiceCompanion/ownerHistoryRecording.test.ts` | 52 / 0 / 0 | not needed | full run: green |
+| `src/lib/voiceCompanion/provider.test.ts` | 8 / 0 / 0 | not needed | full run: green |
+| `src/lib/voiceCompanion/sessionConfig.test.ts` | 9 / 0 / 0 | not needed | full run: green |
+| `src/lib/voiceCompanion/tools.test.ts` | 12 / 1 / 0 | 12 / 1 / 0 | full run: matching failures |
+| `src/lib/workflows/prompts.test.ts` | 5 / 0 / 0 | not needed | full run: green |
