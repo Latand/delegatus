@@ -10,6 +10,8 @@ import { identityAlive, livenessProbe } from "@/lib/agent/accountLiveness";
 import { entryOwners, ownerProcessAlive } from "@/lib/lifecycle/owners";
 import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 import { roleMemoryEnabled } from "../settings";
+import { canonicalProject } from "@/lib/projects/aliases";
+import { isCrossProjectRoleScope, MACHINE_SCOPE, scopeProject } from "../roleScopes";
 import { machinePassAuthority, patchPass, readPass, readPassAuthority, passIsLive, type CuratorPass } from "./store";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { curatorCallerOf } from "./guard";
@@ -62,6 +64,15 @@ export function curationAvailable(project: string, sources = defaultSeatTickAdmi
   const probe = livenessProbe();
   return Object.values(snapshot.entries).some(entry =>
     entryOwners(entry, probe).owners.some(owner => ownerProcessAlive(owner, probe)));
+}
+
+/** Whether a pass could read `scope`. Every host's pass covers the machine and
+ * cross-project role scopes, so any active seat can host a pass for them; a
+ * project's own scopes belong to that project's host alone. */
+export function curationAvailableForScope(scope: string, writer: string, sources = defaultSeatTickAdmissionSources()): boolean {
+  const shared = scope === MACHINE_SCOPE || isCrossProjectRoleScope(scope);
+  const hosts = shared ? [...sources.activeSeats(), writer] : [scopeProject(scope) ?? writer];
+  return [...new Set(hosts.map(canonicalProject))].sort().some(project => curationAvailable(project, sources));
 }
 
 export async function hostAdmission(project: string, ports: CurationAdmissionPorts) {

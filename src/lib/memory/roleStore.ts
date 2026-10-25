@@ -44,30 +44,35 @@ import {
    same aliases without writing. */
 
 /** Resolve evidence only for an emergency overflow, using the same task lineage
- * and application marks exposed to the curator. */
-function retentionPolicy(project: string) {
+ * and application marks exposed to the curator. Whether a pass can run is
+ * decided per scope, across every project whose pass would read it. */
+function retentionPolicy(project: string, scopes: readonly string[]) {
   // Admission reaches host policy, which imports memory during initialization.
   // Resolve it only when a writer runs, after that module graph has settled.
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- synchronous writers must defer this cycle
-  const { curationAvailable } = require("./curation/admission") as typeof import("./curation/admission");
+  const { curationAvailableForScope } = require("./curation/admission") as typeof import("./curation/admission");
   // Settings may initialize their collection: read them before the memory write.
-  const available = curationAvailable(canonicalProject(project));
+  const available = new Map([...new Set(scopes)].map(scope => [scope, curationAvailableForScope(scope, canonicalProject(project))]));
+  const evidence = (active: readonly RoleMemoryRule[], pending?: LessonRequestRow | null) => {
+    const stored = roleMemoryCollection()?.snapshot() ?? [];
+    // The current answer's validated application marks are not committed yet.
+    const all = pending ? stored.map(row => row.kind === "request" && key(row) === key(pending) ? pending : row) : stored;
+    const byId = new Map(all.flatMap(row => row.kind === "rule" ? [[row.id, row] as const] : []));
+    // Succession can combine duplicate task lineages in this write. Its
+    // transaction is not yet visible to the snapshot reader.
+    for (const rule of active) byId.set(rule.id, rule);
+    const tasks = taskCounter(all, byId);
+    return new Map(active.map(rule => {
+      const applications = all.flatMap(row => row.kind === "request" && row.applied?.includes(rule.id) ? [row.at] : []);
+      return [rule.id, { tasks: tasks(rule.id), applied: applications.length, lastAppliedAt: applications.sort().at(-1) }];
+    }));
+  };
   return {
-    get canCurate() { return available && !passIsLive(machinePassAuthority()); },
-    evidence: (active: readonly RoleMemoryRule[], pending?: LessonRequestRow | null) => {
-      const stored = roleMemoryCollection()?.snapshot() ?? [];
-      // The current answer's validated application marks are not committed yet.
-      const all = pending ? stored.map(row => row.kind === "request" && key(row) === key(pending) ? pending : row) : stored;
-      const byId = new Map(all.flatMap(row => row.kind === "rule" ? [[row.id, row] as const] : []));
-      // Succession can combine duplicate task lineages in this write. Its
-      // transaction is not yet visible to the snapshot reader.
-      for (const rule of active) byId.set(rule.id, rule);
-      const tasks = taskCounter(all, byId);
-      return new Map(active.map(rule => {
-        const applications = all.flatMap(row => row.kind === "request" && row.applied?.includes(rule.id) ? [row.at] : []);
-        return [rule.id, { tasks: tasks(rule.id), applied: applications.length, lastAppliedAt: applications.sort().at(-1) }];
-      }));
-    },
+    evidence,
+    forScope: (scope: string) => ({
+      get canCurate() { return available.get(scope) === true && !passIsLive(machinePassAuthority()); },
+      evidence,
+    }),
   };
 }
 const COLLECTION = "role_memory";
@@ -170,7 +175,10 @@ export function joinMovedScopes(now = new Date().toISOString()): void {
   const resolve = scopeResolver();
   const moved = roleScopeKeys().filter(scope => resolve(scope) !== scope);
   if (!moved.length) return;
-  const policies = new Map(moved.map(scope => [scope, retentionPolicy(scopeProject(resolve(scope)) ?? "*")]));
+  const policies = new Map(moved.map(scope => {
+    const into = resolve(scope);
+    return [scope, retentionPolicy(scopeProject(into) ?? "*", [into]).forScope(into)] as const;
+  }));
   held.boundedPatch(4096, (tx) => {
     const rulesOf = (ids: readonly string[]) => ids.flatMap((id) => { const row = tx.get(`r:${id}`); return row?.kind === "rule" ? [row] : []; });
     for (const from of moved) {
@@ -337,7 +345,10 @@ function writeLessonAnswer(input: LessonWriteInput & { request?: Pick<LessonRequ
   if (project === "*" || Number(input.lessons.length > 0) + Number(input.rewrite !== undefined) + Number(input.none !== null) + Number(input.problem !== undefined) !== 1
     || input.lessons.length > MAX_LESSONS_PER_ATTEMPT || input.lessons.some(lesson => !["role", "project", "machine"].includes(lesson.scope))) throw new RoleMemoryRefusal("LESSON_INVALID", "give exactly one of none, rewrite, lesson or problem for a concrete project");
   joinMovedScopes(now);
-  const basePolicy = retentionPolicy(project);
+  const lessonScope = (lesson: LessonInput) => lesson.scope === "machine" ? MACHINE_SCOPE
+    : lesson.scope === "project" ? projectScope(project)
+    : roleScope(project, lesson.role ?? input.source.roleId!);
+  const basePolicy = retentionPolicy(project, input.rewrite ? readableScopes(project, input.source.roleId) : input.lessons.map(lessonScope));
   const result = roleMemoryCollection(true)!.boundedPatch(4096, (tx) => {
     const requested = input.request ? tx.get(requestKey(input.request.pipelineId, input.request.stageId, input.request.attempt)) : null;
     const request = requested?.kind === "request" ? requested : null;
@@ -352,10 +363,10 @@ function writeLessonAnswer(input: LessonWriteInput & { request?: Pick<LessonRequ
       if (input.applied !== undefined) request.applied = [...applied];
       if (input.misled !== undefined) request.misled = [...misled];
     }
-    const policy = {
-      get canCurate() { return basePolicy.canCurate; },
+    const policyFor = (scope: string) => ({
+      get canCurate() { return basePolicy.forScope(scope).canCurate; },
       evidence: (active: readonly RoleMemoryRule[]) => basePolicy.evidence(active, request),
-    };
+    });
     if (input.problem && request) {
       tx.put({ ...request, problem: input.problem });
       return { left: [], none: null, problem: input.problem };
@@ -383,7 +394,7 @@ function writeLessonAnswer(input: LessonWriteInput & { request?: Pick<LessonRequ
       const { updated, version } = versionedRule(tx, target, { rule: input.rewrite.rule, why: input.rewrite.why, hints: rulePrivacyHints(`${input.rewrite.rule}\n${input.rewrite.why}`) }, { by: "agent", at: now, source: { ...input.source, project } });
       const order = !target.curatedAt && !target.keptByOperatorAt ? [...held.active.filter(id => id !== target.id), target.id] : held.active;
       const active = order.flatMap(id => { const row = tx.get(`r:${id}`); return row?.kind === "rule" ? [row] : []; });
-      const retained = retainWithPolicy(active, now, new Set([target.id]), ROLE_MEMORY_BOUND, policy);
+      const retained = retainWithPolicy(active, now, new Set([target.id]), ROLE_MEMORY_BOUND, policyFor(scope));
       for (const changed of retained.changed) tx.put(changed);
       const revision = held.revision + 1;
       tx.put({ ...held, revision, active: retained.active.map(rule => rule.id), history: keepHistory([...held.history, { revision, revisionScope: held.revisionScope ?? scope, at: now, by: "agent" as const, added: [], merged: [], archived: retained.archived, rewritten: [{ id: target.id, version }] }]) });
@@ -391,9 +402,7 @@ function writeLessonAnswer(input: LessonWriteInput & { request?: Pick<LessonRequ
       return { left: [{ action: "rewrite" as const, id: updated.id, version, scope, state: updated.state, scopeChars: scopeChars(retained.active), archived: retained.archived, hints: updated.hints }], none: null };
     }
     for (const lesson of input.lessons) {
-      const scope = lesson.scope === "machine" ? MACHINE_SCOPE
-        : lesson.scope === "project" ? projectScope(project)
-        : roleScope(project, lesson.role ?? input.source.roleId!);
+      const scope = lessonScope(lesson);
       const held = tx.get(`s:${scope}`);
       const current: RoleMemoryScopeRow = held?.kind === "scope" ? held : { kind: "scope", scope, revision: 0, active: [], history: [] };
       const active = current.active.flatMap((id) => { const row = tx.get(`r:${id}`); return row?.kind === "rule" ? [row] : []; });
@@ -402,7 +411,7 @@ function writeLessonAnswer(input: LessonWriteInput & { request?: Pick<LessonRequ
         kind: "rule", id: newRuleId(tx), scope, rule: lesson.rule, why: lesson.why,
         state: "active", hints, source: { ...input.source, project }, createdAt: now, changedAt: now,
       };
-      const outcome = appendWithPolicy(active, incoming, now, ROLE_MEMORY_BOUND, policy);
+      const outcome = appendWithPolicy(active, incoming, now, ROLE_MEMORY_BOUND, policyFor(scope));
       for (const changed of outcome.changed) tx.put(changed);
       const revision = current.revision + 1;
       tx.put({
@@ -444,7 +453,9 @@ export function deleteRule(ruleId: string, now = new Date().toISOString()): Role
 /** Undo, and the way back for any rule that left: it returns to its scope using the same retention policy as an append. */
 export function restoreRule(ruleId: string, now = new Date().toISOString()): RoleMemoryRule {
   joinMovedScopes(now);
-  const policy = retentionPolicy(rule(ruleId)?.source.project ?? "*");
+  const stored = rule(ruleId);
+  const policyScope = stored ? canonicalScope(stored.scope) : "";
+  const policy = retentionPolicy(stored?.source.project ?? "*", [policyScope]).forScope(policyScope);
   return roleMemoryCollection(true)!.boundedPatch(4096, (tx) => {
     const rule = tx.get(`r:${ruleId}`);
     if (rule?.kind !== "rule") throw new RoleMemoryRefusal("RULE_NOT_FOUND", "no such rule");
@@ -474,7 +485,9 @@ export function restoreRule(ruleId: string, now = new Date().toISOString()): Rol
 /** Restore an earlier text on its original rule and retain the text it replaces. */
 export function revertRule(versionId: string, now = new Date().toISOString()): RoleMemoryRule {
   joinMovedScopes(now);
-  const policy = retentionPolicy(rule(versionId)?.source.project ?? "*");
+  const versionOf = rule(versionId)?.versionOf, stored = versionOf ? rule(versionOf) : null;
+  const policyScope = stored ? canonicalScope(stored.scope) : "";
+  const policy = retentionPolicy(stored?.source.project ?? rule(versionId)?.source.project ?? "*", [policyScope]).forScope(policyScope);
   const result = roleMemoryCollection(true)!.boundedPatch(4096, tx => {
     const version = tx.get(`r:${versionId}`);
     const current = version?.kind === "rule" && version.versionOf ? tx.get(`r:${version.versionOf}`) : null;

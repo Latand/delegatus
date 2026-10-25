@@ -1,7 +1,7 @@
 import * as pipelineStore from "@/lib/pipelines/store";
 import * as admissionSources from "@/lib/monitor/seatTickAdmissionSources";
 import { chooseSource } from "../fixtures/source";
-import { afterEach, beforeEach, expect, test, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
@@ -1307,6 +1307,42 @@ for (const count of [38, 39]) test.each(["missing", "retired", "unwoken", "gone"
     if (emergency) expect(incoming.scopeChars).toBeLessThanOrEqual(ROLE_MEMORY_BOUND * 1.25);
     if (count === 39 && kind === "live") expect(incoming.scopeChars).toBeGreaterThan(ROLE_MEMORY_BOUND * 1.25);
   } finally { sources.mockRestore(); }
+});
+
+describe("emergency retention asks every project whose pass reads the scope", () => {
+  const OTHER = "curation-other-host";
+  const cases: { name: string; scope: string; lesson: "machine" | "project"; seatOn: string | null; archived: boolean }[] = [
+    { name: "machine rules count a live host on another project", scope: "machine", lesson: "machine", seatOn: OTHER, archived: false },
+    { name: "machine rules with no live host anywhere evict", scope: "machine", lesson: "machine", seatOn: null, archived: true },
+    { name: "a project's own rules are not hosted by another project", scope: projectScope(PROJECT), lesson: "project", seatOn: OTHER, archived: true },
+    { name: "a project's own rules count its own host", scope: projectScope(PROJECT), lesson: "project", seatOn: PROJECT, archived: false },
+  ];
+  for (const { name, scope, lesson, seatOn, archived } of cases) test(name, () => {
+    const ids = Array.from({ length: 39 }, (_, i) => fixture(scope, {
+      id: `r_shared_${String(i).padStart(2, "0")}`, createdAt: at(i), curatedAt: at(),
+      rule: `Preserve condition category ${i}: ${"check durable evidence ".repeat(20)}`.slice(0, 300),
+    }));
+    expect(scopeChars(ids.map(row))).toBeLessThan(ROLE_MEMORY_BOUND * 1.25);
+    const f = hostingFixture();
+    if (seatOn) f.seat(seatOn);
+    const entry = {
+      key: { engine: "codex", sessionId: "retention-seat" }, artifactPath: path.join(dir, "seat.jsonl"),
+      cwd: dir, status: "idle", host: null, claimOwner: null, claimEpoch: 1, updatedAt: at(),
+      structuredHost: { kind: "codex-app-server", process: { pid: process.pid, startIdentity: captureProcessIdentity(process.pid).startIdentity }, writerClaimEpoch: 1 },
+    } as AgentRegistryEntry;
+    f.sources.registry().livenessConversationSnapshot = () => ({ entries: { seat: entry } }) as unknown as RegistryFile;
+    const sources = spyOn(admissionSources, "defaultSeatTickAdmissionSources").mockReturnValue(f.sources);
+    try {
+      const source: RuleSource = { project: PROJECT, pipelineId: "shared-host", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_shared_host" };
+      recordLessonRequest({ ...source, at: at(2000) });
+      const incoming = leaveLessons({ source, request: source, lessons: [{ scope: lesson, rule: `Preserve new conditions: ${"check complete obligations ".repeat(20)}`.slice(0, 300), why }], none: null, now: at(2000) }).left[0];
+      expect(incoming.archived).toEqual(archived ? [ids[0]] : []);
+      expect(row(ids[0]).state).toBe(archived ? "archived" : "active");
+      expect(row(incoming.id).state).toBe("active");
+      if (archived) expect(incoming.scopeChars).toBeLessThanOrEqual(ROLE_MEMORY_BOUND * 1.25);
+      else expect(incoming.scopeChars).toBeGreaterThan(ROLE_MEMORY_BOUND * 1.25);
+    } finally { sources.mockRestore(); }
+  });
 });
 
 test("a busy curator permits emergency eviction by evidence while keeping the returned and incoming rules", () => {
