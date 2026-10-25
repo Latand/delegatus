@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -34,7 +35,7 @@ for (const engine of ["codex-mcp-client", "claude-code"] as const) {
 
 test("task validation refusals are text-only before service dispatch", async () => {
   await withClient("codex-mcp-client", 0, async client => {
-    const response = await client.callTool({ name: "create_task", arguments: { clientRequestId: "fixture-invalid", project: "repo-fixture", text: "Inspect the transport", details: 42 } });
+    const response = await client.callTool({ name: "create_task", arguments: withTaskDue({ clientRequestId: "fixture-invalid", project: "repo-fixture", text: "Inspect the transport", details: 42 }) });
     expect(response.isError).toBe(true);
     expect(response).not.toHaveProperty("structuredContent");
     expect(JSON.parse((response.content as Array<{ text: string }>)[0].text)).toMatchObject({ ok: false, code: "TASK_INVALID_FIELD" });

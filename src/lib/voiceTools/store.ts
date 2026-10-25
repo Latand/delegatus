@@ -16,8 +16,10 @@ export class VoiceToolsError extends Error {
 }
 const fail = (code: string): never => { throw new VoiceToolsError(code); };
 const hasSecret = (secrets: Record<string, string>, ref: string) => Object.hasOwn(secrets, ref) && !!secrets[ref];
-const legacySecretsSchema = z.record(secretReferenceSchema, z.string().min(1).max(8192)).refine(v => Object.keys(v).length <= 256);
-const persistedSecretsSchema = z.record(secretReferenceSchema, z.object({ value: z.string().min(1).max(8192), destinations: z.array(secretDestinationSchema).max(32), mac: z.string().optional() }).strict())
+// Keep the stored credential bound identical for current and legacy records.
+const storedSecretValue = z.string().min(1).max(8192).refine(value => value.length <= 8192);
+const legacySecretsSchema = z.record(secretReferenceSchema, storedSecretValue).refine(v => Object.keys(v).length <= 256);
+const persistedSecretsSchema = z.record(secretReferenceSchema, z.object({ value: storedSecretValue, destinations: z.array(secretDestinationSchema).max(32), mac: z.string().optional() }).strict())
   .refine(v => Object.keys(v).length <= 256);
 function validProposal(input: unknown, defaultCwd: string) {
   const parsed = proposalSchema.safeParse(input);

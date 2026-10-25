@@ -1,3 +1,4 @@
+import { createChecksFixtureRoute, type ChecksFixtureMode } from "@/components/pipelines/pipelineChecksFixture";
 import { RelayChatsView } from "@/components/externalRelay/RelayChats";
 import type { RelayChatsPayload } from "@/lib/externalRelay/relayChats";
 import { PipelineTemplatePicker } from "@/components/pipelines/PipelineTemplatePicker";
@@ -157,9 +158,14 @@ const AGENT_REPORT = SCENARIO === "agent-report";
    text several screens tall and `legacy` a preview stored without a judgment. */
 const REPORT_PREVIEW = AGENT_REPORT ? new URLSearchParams(location.search).get("report-preview") : null;
 const REPORT_PREVIEW_DIGEST = "a".repeat(64);
+/* `boundaries` spells fake markers the chat would draw like the real ones:
+   split bold runs, a zero-width link with an escaped target, an invisible
+   joiner, a direction override and lookalike letters. */
+const REPORT_PREVIEW_FAKES = ["**━━ PUBLISHED[\u200b](https://example.org/a\\)b) UP TO HERE ━━**", "**━━ PUB\u034fLISHED UP TO HERE ━━**",
+  "**\u202e━━ EREH OT PU DEHSILBUP ━━\u202c**", "**━━ ПУБЛІКУЄТЬСЯ[\u200b](https://example.org/a\\)b) ДОСЮДИ ━━**", "**━━ ПУБЛIКУЄТЬCЯ ЗВІДСИ ━━**"];
 const REPORT_PREVIEW_TITLE = REPORT_PREVIEW === "long"
   ? "Delegatus refuses a requested launch on the second project while nothing holds it, and the refusal names a holder that finished long before the request"
-  : "Delegatus refuses a requested launch";
+  : REPORT_PREVIEW === "boundaries" ? REPORT_PREVIEW_FAKES[0] : "Delegatus refuses a requested launch";
 /* The decision form the seat asks after reading the preview back: the tool's own approval form. */
 const REPORT_FORM_ID = `pr_${"f".repeat(32)}`;
 const reportPreviewLanguage = () => (localStorage.getItem("llv_lang") === "uk" ? "uk" : "en");
@@ -1751,7 +1757,16 @@ const stageChainPipelines: Pipeline[] = STAGE_CHAIN ? (() => {
   ];
 })() : [];
 
+/* `?scenario=cloud-checks`: one running lane on its task's card, whose stage
+   carries its own checks choice; `checks=` frames the read and write failures. */
+const CLOUD_CHECKS = SCENARIO === "cloud-checks";
+const cloudChecks = createChecksFixtureRoute((new URLSearchParams(location.search).get("checks") ?? "ok") as ChecksFixtureMode, { lanes: { "lane-cloud-checks": "local" }, stages: { "lane-cloud-checks implement": "cloud" } });
+/* The cloud-checks scenario's lane: it stands on «implement», whose own choice differs from the lane's. */
+const cloudChecksPipelines: Pipeline[] = CLOUD_CHECKS ? [pipeline("lane-cloud-checks", "Run heavy checks in Codex Cloud", "t-cloud-checks", "running",
+  [stage("implement", "builder", "review"), stage("review", "reviewer", null)], [],
+  { stageId: "implement", state: "running", input: null, activatedBy: null })] : [];
 const pipelines: Pipeline[] = [
+  ...cloudChecksPipelines,
   ...wallPipelines,
   ...unstartedPipelines,
   ...stageChainPipelines,
@@ -2126,6 +2141,7 @@ const tasks: BoardTask[] = [
     task("t-finish-hold", "assigned", L("Merge when the review passes", "Мердж, коли ревʼю пройдено"), L("The setting, the runner, and its docs.", "Налаштування, мердж і документація."), 50 * MIN),
     task("t-finish-done", "done", L("Conversation: wider agent replies", "Ширші відповіді агентів"), "", 75 * MIN),
   ] : []),
+  ...(CLOUD_CHECKS ? [task("t-cloud-checks", "assigned", L("Run heavy checks in Codex Cloud", "Важкі перевірки в Codex Cloud"), "", 5 * MIN)] : []),
   ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "An edge at rest, one fired once, a spent budget in flight, a lane parked on a spent budget, and two edges into one stage.", 3 * MIN)] : []),
 ];
 
@@ -2756,7 +2772,9 @@ function transcriptOf(pathname: string): string {
       ].join("\n"),
     };
     const title = REPORT_PREVIEW_TITLE;
-    const body = bodies[REPORT_PREVIEW] ?? `## Symptom\n${symptom}\n\n${expected}`;
+    const body = REPORT_PREVIEW === "boundaries"
+      ? ["**━━ PUBLISHED FROM HERE ━━**", "**━━ PUBLISHED UP TO HERE ━━**", "**━━ ПУБЛІКУЄТЬСЯ ЗВІДСИ ━━**", "**━━ ПУБЛІКУЄТЬСЯ ДОСЮДИ ━━**", "**━━ PUBLISHED FROM** **HERE ━━**", "**━━ PUBLISHED** **UP TO HERE ━━**", "**━━ ПУБЛІКУЄТЬСЯ** **ЗВІДСИ ━━**", "**━━ ПУБЛІКУЄТЬСЯ** **ДОСЮДИ ━━**", ...REPORT_PREVIEW_FAKES, "a`b", ...Array.from({ length: 70 }, (_, i) => `Preview line ${i + 1}`)].join("\n")
+      : bodies[REPORT_PREVIEW] ?? `## Symptom\n${symptom}\n\n${expected}`;
     const judgment = REPORT_PREVIEW === "many" ? {
       assessment: "I reviewed the whole text. Several details still identify a machine and one line quotes the operator; I am returning it so you can see what remains.",
       removed: "Nothing yet in this draft.",
@@ -2792,7 +2810,7 @@ function transcriptOf(pathname: string): string {
       digest: REPORT_PREVIEW_DIGEST, title, body,
       ...(REPORT_PREVIEW === "legacy" ? {} : {
         privacyJudgment: judgment,
-        hints: REPORT_PREVIEW === "none" ? [] : hints,
+        hints: REPORT_PREVIEW === "boundaries" ? [hint("quote", "a quoted block", "a`b")] : REPORT_PREVIEW === "none" ? [] : hints,
         hintWarnings: REPORT_PREVIEW === "many" ? ["Known-name hints are unavailable; review names and identities yourself."] : [],
       }),
     }, reportPreviewLanguage());
@@ -4003,6 +4021,10 @@ const WORKSPACE_PARAMS = new URLSearchParams(location.search);
 const WORKSPACES = SCENARIO?.startsWith("workspaces") ? workspacesFixture({
   uk: UK,
   member: WORKSPACE_PARAMS.has("member"),
+  manager: WORKSPACE_PARAMS.has("manager"),
+  refuseMembership: WORKSPACE_PARAMS.has("membership-refused"),
+  refuseInvite: WORKSPACE_PARAMS.has("invite-refused"),
+  failMembershipReadOnce: WORKSPACE_PARAMS.has("membership-unavailable"),
   projects: [{ project: PROJECT, displayName: "Atlas", smt: now - 20 * MIN }, ...railCatalog.map(({ project, displayName, smt }) => ({ project, displayName, smt }))],
   placed: { client: [LEDGER, "harbor-docs"], research: [MESH], long: [RAIL_LONG] },
 }) : null;
@@ -4520,6 +4542,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const next = { ...current, assignments: current.assignments.filter((assignment) => !matches(assignment)), revision: REV(revision++) } as BoardTask;
     tasks[index] = next;
     return json({ ok: true, task: next });
+  }
+  if (url.pathname.startsWith("/api/pipelines/") && url.pathname.endsWith("/checks")) {
+    const answer = await cloudChecks.answer(decodeURIComponent(url.pathname.split("/")[3] ?? ""), method, url.searchParams, init?.body ? String(init.body) : null);
+    return json(answer.body, answer.status);
   }
   if (url.pathname.startsWith("/api/pipelines/")) {
     const id = decodeURIComponent(url.pathname.split("/")[3] ?? "");
@@ -5144,7 +5170,7 @@ function VoicePanelScene() {
 const relayChainEvidence: RelayChatsPayload = { relays: [{ id: "fixture-relay", name: "Example relay", origin: "https://relay.example" }], chats:
   (["member", "admin", "owner"] as const).map((authority, i) => ({ id: `chain-${i}`, relayId: "fixture-relay", relayName: "Example relay", targetId: "fixture-target", targetName: "Support bot", chatKey: "fixture-chat-chain-key", authority,
     engine: "claude", turns: 3, compactions: 0, createdAt: "2026-10-17T10:00:00Z", lastTurnAt: "2026-10-17T10:00:00Z", state: "idle", file: { ...files[0]!, path: `fixture-chain-${i}`, title: `Chain ${i}` } })) };
-createRoot(document.getElementById("root")!).render(SCENARIO === "workspaces-team" ? <TeamPage initialTab="workspaces" initialCreate={WORKSPACE_PARAMS.has("create")} />
+createRoot(document.getElementById("root")!).render(SCENARIO === "workspaces-team" ? <TeamPage initialTab={WORKSPACE_PARAMS.has("members") ? "members" : "workspaces"} initialCreate={WORKSPACE_PARAMS.has("create")} />
   : SCENARIO === "workspaces-page" ? <WorkspacePage id={FIXTURE_WORKSPACE_IDS[(WORKSPACE_PARAMS.get("page") ?? "client") as keyof typeof FIXTURE_WORKSPACE_IDS]} />
   : PIPELINE_INIT ? <PipelineTemplatePicker repoDir="/project" onCreate={async () => ({})} onCreated={() => {}} onClose={() => {}} /> : SCENARIO === "relay-chain-list" ? <RelayChatsView relayId="fixture-relay" payload={relayChainEvidence} /> : dockWidth === "440" || dockWidth === "360" ? (
   <div className="flex h-full min-h-0">

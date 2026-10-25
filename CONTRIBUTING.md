@@ -459,7 +459,8 @@ share one set of slots; `LLV_GATE_LOCK_DIR` overrides the directory. Stage start
 the head can start under sustained pressure, with two seconds between admissions.
 A test, a driver or any instance on a state directory of its own queues its
 stage starts in `<state>/cpu-gate`, never in the machine queue; a stage ticket
-nobody polls for a minute is passed over.
+nobody polls for a minute is passed over, and so is a command ticket whose
+owner the kernel cannot verify once it stops checking in.
 Queue waits are excluded from hook and command execution budgets. On Linux a
 gate then runs in its own scope in
 `delegatus-agents-work.slice` with a 300% CPU quota; without a reachable user

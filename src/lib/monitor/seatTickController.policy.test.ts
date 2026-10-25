@@ -903,19 +903,37 @@ test("a seat that rotated between the decision and the send is never woken", asy
   const rig = harness({
     pipelines: OPEN_LANE,
     state: OVERDUE,
-    rotateBeforeSend: { conversationId: SUCCESSOR, seatEpoch: 8, path: null },
   });
+  let rotations = 0;
+  // Snapshot publication follows evidence refresh, before the final decision
+  // and send. Rotate here so extra opening probes cannot move the race earlier.
+  rig.deps.sources!.recordDeploySnapshots = () => {
+    expect(rig.sent).toEqual([]);
+    rig.seat = { conversationId: SUCCESSOR, seatEpoch: 8, path: null };
+    rotations += 1;
+  };
   const record = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rotations).toBe(1);
   expect(rig.sent).toEqual([]);
-  expect(record!.delivery).toMatchObject({ outcome: "seat-rotated" });
+  expect(record).toMatchObject({ verdict: "wake", seatEpoch: 7, delivery: { outcome: "seat-rotated" } });
   expect(rig.written.at(-1)!.lastWakeAt).toBe(OVERDUE.lastWakeAt);
+  expect(rig.written.at(-1)!.outstandingWake).toBeNull();
 });
 
 test("a seat revoked with no successor is likewise refused at the send", async () => {
-  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE, rotateBeforeSend: null });
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
+  let revocations = 0;
+  rig.deps.sources!.recordDeploySnapshots = () => {
+    expect(rig.sent).toEqual([]);
+    rig.seat = null;
+    revocations += 1;
+  };
   const record = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(revocations).toBe(1);
   expect(rig.sent).toEqual([]);
-  expect(record!.delivery).toMatchObject({ outcome: "seat-rotated" });
+  expect(record).toMatchObject({ verdict: "wake", seatEpoch: 7, delivery: { outcome: "seat-rotated" } });
+  expect(rig.written.at(-1)!.lastWakeAt).toBe(OVERDUE.lastWakeAt);
+  expect(rig.written.at(-1)!.outstandingWake).toBeNull();
 });
 
 /* The finding this rule exists for: a delivery the layer accepted is not a

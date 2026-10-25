@@ -212,6 +212,24 @@ for (const { tool, args, chips } of MCP_CASES) {
   });
 }
 
+test("in Ukrainian the live row and the canonical card read the same Ukrainian title (#2250)", () => {
+  setLocale("uk");
+  const args = { project: "viewer", text: "Audit MCP cards" };
+  const card = document.createElement("div");
+  document.body.append(card);
+  const cardRoot = createRoot(card);
+  roots.add(cardRoot);
+  flushSync(() => { cardRoot.render(<McpCallCard event={canonicalMcpEvent("create_task", args)} availableConversationIds={new Set()} />); });
+  const live = mount([{
+    itemId: "toolu_uk_create_task", text: "", phase: "awaiting-echo", startedAt: AT, completedAt: null,
+    tool: { name: "mcp__viewer__create_task", engine: "claude", status: "run", args },
+  }]);
+  const liveTitle = live.querySelector<HTMLElement>("[data-live-mcp-title]")!;
+  expect(liveTitle.textContent).toBe("Створення задачі: Audit MCP cards");
+  expect(card.querySelector("[data-mcp-title]")?.textContent).toBe(liveTitle.textContent);
+  expect(live.querySelector("[role=status]")?.getAttribute("aria-label")).toBe("Створення…");
+});
+
 test("a call whose result the journal's bound dropped reads as finished with its outcome omitted: no spinner, no check, no error styling", () => {
   const host = mount([
     {
@@ -277,7 +295,8 @@ for (const lang of ["en", "uk"] as const) {
       /* An outcome nobody knows is announced by no assistive label at all —
          the row prints the word instead, so the reader sees it too. */
       const announced = row.querySelector("[aria-label]:not([aria-hidden])");
-      expect(announced?.getAttribute("aria-label") ?? "").toBe(aria ?? "");
+      /* The pending mark reads the call's verb, in the reader's language (#2250). */
+      expect(announced?.getAttribute("aria-label") ?? "").toBe(lang === "uk" && aria === "Linking…" ? "Прив’язка…" : aria ?? "");
       if (text) {
         expect(row.textContent).toContain(lang === "en" ? text : translate("uk", "feed.liveToolOutcomeOmitted"));
       }

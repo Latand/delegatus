@@ -406,11 +406,23 @@ for (const pass of [false, true]) test(`dead-host reconciliation preserves custo
   const entry = f.registry.readOnlySnapshot().entries[`codex:${SESSION}`]!;
   const replace = () => f.registry.upsert({ ...entry, claimOwner: "replacement", claimEpoch: 8,
     structuredHost: { ...entry.structuredHost!, writerClaimEpoch: 8 } });
+  const write = f.registry.deliveryWriteOrBusy.bind(f.registry);
+  let replacements = 0;
+  // Selection also checks cancellation before writer admission. Change custody
+  // only after the held writer admits the mutation whose observation is stale.
+  f.registry.deliveryWriteOrBusy = (options, mutation) => write(options, () => {
+    if (options.label === (pass ? "registry.dead-hosts" : "registry.dead-host")) {
+      replace();
+      replacements++;
+    }
+    return mutation();
+  });
   try {
     await held(f, async () => {
-      if (pass) await reconcileDeadStructuredRegistryHostsOffLoop(f.registry, () => false, replace);
-      else await reconcileDeadStructuredRegistryHostOffLoop(f.registry, conversation.id, KEY, replace);
+      if (pass) await reconcileDeadStructuredRegistryHostsOffLoop(f.registry, () => false);
+      else await reconcileDeadStructuredRegistryHostOffLoop(f.registry, conversation.id, KEY);
     });
+    expect(replacements).toBe(1);
     expect(f.registry.readOnlySnapshot().entries[`codex:${SESSION}`]).toMatchObject({ claimOwner: "replacement", claimEpoch: 8 });
-  } finally { f.registry.close(); }
+  } finally { f.registry.deliveryWriteOrBusy = write; f.registry.close(); }
 });
