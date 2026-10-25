@@ -56,6 +56,24 @@ test("a run from a linked worktree links the primary checkout, which survives th
   }
 });
 
+test("successive linked worktree runs never repoint skills at the last temporary checkout", () => {
+  const first = join(sandbox, "lane-a");
+  const second = join(sandbox, "lane-b");
+  git(primary, "worktree", "add", "--detach", "-q", first);
+  git(primary, "worktree", "add", "--detach", "-q", second);
+
+  linkSkills(first, { home, tempRoot: NOT_TEMP });
+  linkSkills(second, { home, tempRoot: NOT_TEMP });
+
+  const [claudeSkills, codexSkills] = roots();
+  expect(readlinkSync(join(claudeSkills, "review-loop"))).toBe(join(primary, ".claude", "skills", "review-loop"));
+  expect(readlinkSync(join(codexSkills, "review-loop"))).toBe(join(primary, ".claude", "skills", "review-loop"));
+
+  git(primary, "worktree", "remove", "--force", second);
+  expect(existsSync(join(claudeSkills, "review-loop", "SKILL.md"))).toBe(true);
+  expect(existsSync(join(codexSkills, "review-loop", "SKILL.md"))).toBe(true);
+});
+
 test("a dangling Delegatus skill link is repaired on the next run; other skills are never touched", () => {
   const [claudeSkills] = roots();
   mkdirSync(claudeSkills, { recursive: true });

@@ -443,7 +443,10 @@ describe("team install: no credential a teammate holds outlives the membership",
 
   test("a revoked member holding everything the product gave them is refused every read", async () => {
     const jar = new Jar();
-    const invite = await (await inviteRoute(route("/api/team/invites", { body: { name: "Ivan" }, cookie: ownerCookie }))).json() as { url: string };
+    const { createWorkspace } = await import("@/lib/team/workspaces");
+    const workspaceId = `w_${"f".repeat(32)}`;
+    createWorkspace(teamStore(), teamStore().owner()!, { id: workspaceId, name: "Revocation fixture", projects: ["repo-fixture"] });
+    const invite = await (await inviteRoute(route("/api/team/invites", { body: { name: "Ivan", workspaceId }, cookie: ownerCookie }))).json() as { url: string };
     open(invite.url, jar);
     const code = new URL(invite.url).pathname.split("/").at(-1)!;
     const joined = await joinRoute(route(`/api/team/join/${code}`, { body: { name: "Ivan" } }), { params: Promise.resolve({ code }) });

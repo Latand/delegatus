@@ -13,6 +13,7 @@ import { cpuSlotForOwner, inheritedCpuSlot } from "../src/lib/runtime/cpuAdmissi
 import { runSandboxGate, guardSandboxGate } from "../src/lib/runtime/sandboxGateRunner";
 import { cpuOwnerIdentity, hostProcessIdentity, signalSandboxContext } from "../src/lib/runtime/signalSandboxContext";
 import { sandboxGateEntryCommand } from "../src/lib/runtime/sandboxGateEntry";
+import { gateServiceProperties } from "../src/lib/runtime/cpuPlacement";
 
 /** `namespace` marks a caller inside an agent signal domain. Its identities
  * are translated to the host, where the service checks them, and the service
@@ -193,7 +194,7 @@ if (args[0] === "--namespace-guardian") {
     catch (error) { throw new Error(`owned runner cannot verify its supervising process from the gate service: ${(error as Error).message}`); }
   }
   fs.writeFileSync(file, JSON.stringify({ command: args, cwd: process.cwd(), env: process.env, owner, parent, unit, timeoutMs, ...(sandbox ? { namespace: true as const } : {}) } satisfies Launch), { mode: 0o600 });
-  const cpu = process.env.LLV_OWNED_RUN_CPU_SLICE ? [`--slice=${process.env.LLV_OWNED_RUN_CPU_SLICE}`, "-p", "CPUWeight=100", "-p", `CPUQuota=${process.env.LLV_OWNED_RUN_CPU_QUOTA}%`, "-p", "CPUQuotaPeriodSec=20ms"] : [];
+  const cpu = gateServiceProperties();
   const service = spawn("systemd-run", [...cpu, "--user", "--quiet", "--wait", "--pipe", "--collect", `--unit=${unit}`, "--service-type=exec", "-p", "KillMode=control-group", "-p", "TimeoutStopSec=2s", "-p", "WatchdogSec=60s", "-p", "NotifyAccess=all", "-p", `MemoryMax=${process.env.LLV_GATE_MEM ?? "8G"}`, "--", process.execPath, import.meta.path, "--service", file], { stdio: "inherit" });
   const close = new Promise<number>(resolve => {
     service.once("exit", (code, signal) => resolve(code ?? (signal === "SIGTERM" ? 143 : 137)));

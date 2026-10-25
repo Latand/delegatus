@@ -47,6 +47,7 @@ test("atomic admission counts hidden, done and failed outcomes; stable keys repl
   const target = file();
   const first = await admitProactiveTask(candidate("fold"), context(), target, authority());
   expect(first.replay).toBe(false);
+  expect(first.task.dueAt).toBeUndefined(); expect(first.task.dueTz).toBeUndefined();
   expect(first.task.board).not.toBe("hidden");
   expect(taskShowsOnBoard(loadTasks(target)[0]!, false, { now: NOW })).toBe(true);
   expect(first.task.proactive?.candidateKey).toBe("fold");
