@@ -66,14 +66,13 @@ import {
  *   plane cannot answer for at all — is not a turn the tick may wait behind
  *   forever, because the seat's own dead host is exactly the condition a wake
  *   exists to clear.
- * - **Every wake waits out the project's wake interval.** One hour by default,
- *   with no exception and no reason allowed to jump it: a terminal lane event
- *   is the FIRST thing the next wake carries, never a reason to raise one
- *   early. The bound is what the ADR's cost argument rests on — one resume per
- *   project per interval. What sets the interval is the project's own recorded
- *   settings (#1275, and the ADR amendment it carries): the seat governs its
- *   own tick, deliberately and with the reason on the record, and a project
- *   nobody configured runs on the default hour exactly as before.
+ * - **Ordinary wakes wait out the project's wake interval.** One hour by
+ *   default, with the terminal lane event first among its reasons. An
+ *   unannounced deploy the seat started has its own settlement deadline and
+ *   can become due while the ordinary interval is still quiet. What sets the
+ *   ordinary interval is the project's own recorded settings (#1275, and the
+ *   ADR amendment it carries): a project nobody configured runs on the default
+ *   hour exactly as before.
  * - **Nothing here creates or wakes anything.** The decision names what is
  *   owed; the controller sends it, re-reads the seat epoch before it does, and
  *   only a delivered send advances a stamp. The one thing a check may settle on
@@ -838,8 +837,9 @@ function elapsed(since: string | null, now: number, window: number): boolean {
 }
 
 /**
- * The one gate every wake passes, exported so the gather can apply the SAME
- * clause rather than a second copy of it.
+ * The ordinary wake interval gate, exported so the gather can apply the same
+ * clause rather than a second copy of it. Deploy settlement carries a
+ * separate deadline flag into the decision.
  *
  * It reads `lastWakeAt`, which the project keeps across a rotation, so an
  * incoming seat inherits the bound rather than a clean slate the predecessor's
@@ -1251,11 +1251,13 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   const autonomous = autonomyActive(input.settings.autonomy, input.now);
   const endReports = pendingAutonomyReports(input.settings, input.now);
   const reminders = seatTickReminders(input);
+  const seatOwnedLanes = (input.workerAsks ?? []).flatMap(ask => ask.seatOwnedLane ? [ask.seatOwnedLane] : [])
+    .sort((a, b) => (a.sinceMs ?? Number.POSITIVE_INFINITY) - (b.sinceMs ?? Number.POSITIVE_INFINITY) || a.id.localeCompare(b.id));
   const overdueIds = new Set((input.overdueTasks ?? []).map(task => task.id));
   const unstarted = input.tasks.filter((task) => !overdueIds.has(task.id) && !taskIsOverdue(task, input.now) && (isUnstarted(task, input.now, input.policy.backlogAfterMs)
     || autonomous && !task.accepted && !taskHasBlocker(task, input.now) && task.status === "inbox" && !task.owned && !task.runsOn));
   const backlog = input.tasks.filter((task) => !task.accepted && !taskHasBlocker(task, input.now) && task.status === "assigned" && !task.owned && !task.runsOn).length - unstarted.filter(task => task.status === "assigned").length;
-  const openWork = hasOpenWork(input);
+  const openWork = hasOpenWork(input) || seatOwnedLanes.length > 0;
   /* The bound shortens while the seat's own children are moving (#1881): a
      child that settled or stalled since the last wake is due at the next
      check, and running children bring the interval wake to a quarter of an
@@ -1278,7 +1280,8 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   const childInterval = childrenSettled
     ? SEAT_TICK_SETTLED_CHILD_WAKE_INTERVAL_MS
     : liveChildren.length > 0 ? SEAT_TICK_RUNNING_CHILD_WAKE_INTERVAL_MS : Number.POSITIVE_INFINITY;
-  const wakeDue = seatTickWakeDue(input.state.lastWakeAt, input.now, Math.min(input.settings.wakeIntervalMs, childInterval));
+  const wakeDue = input.deploySettlementWakeDue === true
+    || seatTickWakeDue(input.state.lastWakeAt, input.now, Math.min(input.settings.wakeIntervalMs, childInterval));
 
   const observed: SeatTickProjectState = { ...base, stalledSeen: stalledNow };
 
@@ -1310,7 +1313,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   }
 
   const laneEvents = input.events.filter(event => isOwedEvent(event, input));
-  const intervalAgenda = input.pipelines.some(pipeline => isOpenLane(pipeline) && !pipeline.pausedBy) || runningChildren.length > 0 || input.signals.some(signal => signal.actionable !== false);
+  const intervalAgenda = seatOwnedLanes.length > 0 || input.pipelines.some(pipeline => isOpenLane(pipeline) && !pipeline.pausedBy) || runningChildren.length > 0 || input.signals.some(signal => signal.actionable !== false);
   const candidates: SeatTickWakeReason[] = [];
   if (endReports.length && (wakeDue || input.state.autonomySummaryFor !== endReports[0]!.startedAt)) candidates.push({ kind: "autonomy-ended", detail: "the autonomy episode ended; its report is owed" });
   if (autonomous && wakeDue && !input.pipelines.some(isOpenLane) && runningChildren.length === 0 && unstarted.length === 0) {
@@ -1357,8 +1360,9 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   }
   /* A worker or a stage waiting on the seat (docs/design/attention-auto-resolve.md)
      is off the operator's list because the seat answers it first, so it is
-     due on the next check like a settled child: each wait is shown once per
-     seat, and the delivered-item ledger keeps it from repeating. */
+     due on the next check like a settled child. The delivered-item ledger
+     suppresses duplicate first alerts; lanes still owned by the seat repeat
+     at cadence until the board routes them elsewhere or clears them. */
   const asks = input.workerAsks ?? [];
   if (asks.length > 0) {
     const more = asks.length > 1 ? ` and ${asks.length - 1} more` : "";
@@ -1435,9 +1439,12 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
 
   const periodicLaneIds = new Set(input.pipelines.filter(lane => isOpenLane(lane) && !lane.pausedBy).map(lane => lane.id));
   const periodicChildIds = new Set(liveChildren.map(child => child.conversationId));
+  // Showing a lane's detail cannot discharge a wait the board still owns.
+  const periodicAskIds = new Set(seatOwnedLanes.map(lane => lane.id));
   const periodicItem = (item: SeatTickItem) => (item.kind === "pipeline" && periodicLaneIds.has(item.id) && !item.stallToken)
-    || (item.kind === "child" && periodicChildIds.has(item.id) && !item.outcomeIds?.length && !item.stallToken);
-  const hasPeriodicWork = periodicLaneIds.size > 0 || periodicChildIds.size > 0;
+    || (item.kind === "child" && periodicChildIds.has(item.id) && !item.outcomeIds?.length && !item.stallToken)
+    || (wakeDue && item.kind === "ask" && periodicAskIds.has(item.id));
+  const hasPeriodicWork = periodicLaneIds.size > 0 || periodicChildIds.size > 0 || periodicAskIds.size > 0;
   const shownItems = new Set(input.state.itemsShown ?? []);
   const composed = wakeItems({ input, ownLanes, stalled: persistedStalls, stalledChildren: persistedChildStalls, harvest, runningChildren, laneEvents, unstarted, reminders })
     .map(item => {
@@ -1448,7 +1455,13 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
     // A newly owed settlement remains deliverable even if its PR was shown.
     || (item.laneAnnouncement && !input.state.announcedLanes.includes(item.laneAnnouncement)));
   // Unseen obligations retain their place ahead of routine live-work repeats.
-  const all = [...pendingItems, ...composed.filter(item => periodicItem(item) && !pendingItems.includes(item))];
+  // Delivery moves a version to the end of itemsShown. Reuse that durable
+  // order to rotate repeated lane detail after every never-shown obligation.
+  const detailOrder = new Map((input.state.itemsShown ?? []).map((version, index) => [version, index]));
+  const repeats = composed.filter(item => periodicItem(item) && !pendingItems.includes(item));
+  const repeatedAsks = repeats.filter(item => item.kind === "ask").sort((a, b) =>
+    (detailOrder.get(a.itemVersion ?? "") ?? -1) - (detailOrder.get(b.itemVersion ?? "") ?? -1));
+  const all = [...pendingItems, ...repeatedAsks, ...repeats.filter(item => item.kind !== "ask")];
   const forReason = (kind: SeatTickWakeReasonKind): SeatTickItem[] => all.filter(item => {
     switch (kind) {
       case "unmerged-pr": return item.kind === "pull-request";
@@ -1479,7 +1492,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
        versioned work remains eligible to initialize it past an exhausted
        whole-reason retry guard. */
     const unseenPage = pending.some(item => item.itemVersion && !shownItems.has(item.itemVersion));
-    if (!(reason.kind === "interval" && hasPeriodicWork) && reason.kind !== "autonomy-ended" && !(reason.kind === "autonomy-idle" && !input.state.autonomyShown?.startsWith(`${input.settings.autonomy?.startedAt}:`)) && !unseenPage && guardCount(input.state, reason.kind, input.changeFingerprint) >= input.policy.retryGuard) {
+    if (!(reason.kind === "interval" && hasPeriodicWork) && !(reason.kind === "worker-ask" && wakeDue && periodicAskIds.size > 0) && reason.kind !== "autonomy-ended" && !(reason.kind === "autonomy-idle" && !input.state.autonomyShown?.startsWith(`${input.settings.autonomy?.startedAt}:`)) && !unseenPage && guardCount(input.state, reason.kind, input.changeFingerprint) >= input.policy.retryGuard) {
       guardHeld += 1;
       cards.push({
         ref: seatTickRetryGuardRef(reason.kind),
@@ -1575,6 +1588,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
         ...(catchUp ? { catchUp } : {}),
         reasons,
         items,
+        ...(seatOwnedLanes.length ? { seatOwnedLanes } : {}),
         activeStallTokens: [...stalled.map(entry => laneStallToken(entry.pipeline)), ...stalledKids.map(entry => childStallToken(entry.child))],
         pendingMergeSeqs: laneEvents.filter(event => event.type === "pipeline_merged").map(event => event.seq),
         deferred: catchUp ? 0 : Math.max(0, offered.length - input.policy.itemsPerWake),

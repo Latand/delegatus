@@ -23,7 +23,7 @@ afterAll(() => Object.assign(process.env, inheritedGitConfig));
    over a store of its own and must never read or write the operator's. */
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-commit-repair-"));
 const { createPipelineFromRequest, defaultPipelinePorts, patchPipeline, tickPipelines } = await import("./engine");
-const { commitPipelineStage } = await import("./git");
+const { commitPipelineStage, provisionPipelineWorktree, provisionPipelineWorktreeAsync } = await import("./git");
 const { findPipelineRecord, loadPipelines, pipelineArtifactsDir, savePipelines } = await import("./store");
 const { pipelineCorpus } = await import("./fixtures/corpus");
 const { realExec } = await import("@/lib/workflows/provision");
@@ -112,6 +112,38 @@ function writeOutput(repo: string, relative: string, content: string) {
   fs.mkdirSync(path.dirname(path.join(repo, relative)), { recursive: true });
   fs.writeFileSync(path.join(repo, relative), content);
 }
+
+test.each(["sync", "async"] as const)("%s provisioning supports the first hooked commit in a fresh worktree", async mode => {
+  const box = hookedRepo();
+  try {
+    fs.writeFileSync(path.join(box.repo, "package.json"), "{}\n");
+    fs.writeFileSync(path.join(box.repo, ".gitignore"), "node_modules/\n");
+    fs.mkdirSync(path.join(box.repo, "scripts"));
+    fs.writeFileSync(path.join(box.repo, "scripts/lint.ts"), 'import { ESLint } from "eslint";\nconst results = await new ESLint().lintFiles(["source.ts"]);\nif (results.some(result => result.errorCount)) process.exit(1);\n');
+    fs.copyFileSync(path.resolve("eslint.config.mjs"), path.join(box.repo, "eslint.config.mjs"));
+    box.run("add", ".");
+    box.run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "lint configuration");
+    fs.symlinkSync(path.resolve("node_modules"), path.join(box.repo, "node_modules"), "dir");
+    const subject = { ...box.subject, branch: "lane", baseBranch: "main", baseRef: box.run("rev-parse", "HEAD"), worktreeDir: path.join(box.root, "lane") };
+    expect(fs.existsSync(subject.worktreeDir)).toBe(false);
+    const provisioned = mode === "sync"
+      ? await provisionPipelineWorktree(subject, box.exec)
+      : await provisionPipelineWorktreeAsync(subject, (command, args, cwd) => Promise.resolve(box.exec(command, args, cwd)));
+    expect(provisioned).toMatchObject({ ok: true });
+    fs.writeFileSync(path.join(box.repo, ".git/hooks/pre-commit"), `#!/bin/sh\n'${process.execPath}' --no-install scripts/lint.ts\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(subject.worktreeDir, "source.ts"), "export const value = 2;\n");
+    expect((await box.exec("git", ["add", "source.ts"], subject.worktreeDir)).code).toBe(0);
+    const commit = await box.exec("git", ["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "first stage change"], subject.worktreeDir);
+    expect(commit, commit.stderr).toMatchObject({ code: 0 });
+    // Exercise real lint refusal too, so a silently skipped hook cannot pass.
+    fs.writeFileSync(path.join(subject.worktreeDir, "source.ts"), "export const value: any = 2;\n");
+    await box.exec("git", ["add", "source.ts"], subject.worktreeDir);
+    const refused = await box.exec("git", ["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "invalid stage change"], subject.worktreeDir);
+    expect(refused.code).not.toBe(0);
+    expect(refused.stdout + refused.stderr).not.toContain("Cannot find module");
+    expect(box.calls.join("\n")).not.toContain("bun install");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
 
 test.each([
   ["installed", "node_modules"], ["fixed-on-retry", "node_modules"],

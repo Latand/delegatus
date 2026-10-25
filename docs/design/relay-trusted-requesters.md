@@ -1,339 +1,721 @@
-# Trusted relay requesters, per project
+# Trusted relay requesters: a per-project list now, workspaces later
 
-Status: proposed for #3131. Design only. Code references checked at
-`adce57649`. The checkout contains workspace slice (a). The accepted workspace
-plan requires (b) for membership/visibility and (c) for the MCP fence. Non-owner
-elevation remains blocked until those slices and a separate project execution
-boundary exist; workspace level 2 leaves shell access shared.
+Status: revised for #3131 after the operator's decision of 2026-10-24. Design
+only. Every code reference was checked against `main` at `e5c6c0468`, after
+workspace slice (b) (#3255) and the owner-turn restart retry (#3332) merged. This
+revision replaces the 2026-10-20 proposal merged in #3293; what changed is
+listed in §1, and what that proposal had that is now cut is kept in §8.
 
-## The operator's problem
+## 0. Originating requirement
 
-The originating requirement (#3131, 2026-10-20), paraphrased: let the owner
-allow verified relay requesters to start elevated runs restricted to one
-project's working directory, board calls, hosts and credentials. The operator's
-whole home and unrelated projects must remain inaccessible. Provide owner-only
-MCP and board management, audit changes, and show who triggered each run.
-Messaging the clone alone grants no permission. Explain access refusals clearly.
+**The operator, 2026-10-24, decision form on the board task for this design,
+comment verbatim:**
 
-Today the target's owner switch and the service's owner flag decide whether a
-message becomes a normal Delegatus agent with host access. A project allowlist
-must become the local source of that permission within a project execution
-boundary. Workspace filtering and the MCP fence alone cannot provide the shell,
-host and credential isolation this requirement needs.
+> Если рабочий просторы уже готови, э-э, или. Когда они будут готовы, то тогда
+> можно сделать разделение по ещё и по про- по просторам. Если там будет
+> изоляция, то можно теоретически подключать для каждого рабочего простора
+> своего. Ну, свой для каждого рабочего простора, нет, для каждого проекта.
+> Слушай, я даже не знаю, надо как-то сделать, чтобы, типа, когда будет простор,
+> это тогда, типа. Если есть прост- простір для этого человека, да, по этому ID,
+> то тогда он может в рамках этого простора делать что хочет. Ну, то есть так.
+> Потому что там будет изоляция. А до этого, если у нас есть список...
+> Доверенных користувачів, то тогда мы можем спокойно давать. Им права для всей
+> машины, пока нет просторов. Дозволи можна... Ты говоришь, седьмой вопрос: я
+> думаю, да, один проект. Только не один підтверджений запитувач. В каждом
+> проекте может быть свои запитувачи. Я б, наверно, для. Проекта бы делал не.
+> Это прям сложно, нужно продумать. Если ты, у тебя есть твой простір,. То ты,
+> наверно, добавлять никого не можешь, ты всё равно нужно, чтобы могли добавлять
+> пользования машины только, только владелец. А вот если есть простір и ты уже
+> там в нём,. Ты доверенный користу- ну, ты его власник, по телеграму привязал.
+> То ты, соответственно, можешь в рамках этого простора запускать. Ну вот, не
+> знаю. А если другой человек, ну тоже, а если просторов много, он находится и в
+> том, и в том, и в том. Ну тогда доступы есть просто куб. Тогда как бы своего
+> рода изоляция должна работать так. Чтоб позволить в один из проектов любой.
+> Подумай как-то так.
 
-## Choices
+**The answers on the same form, 2026-10-24:**
 
-| Variant | Concrete behavior | Trade-off |
-|---|---|---|
-| A. Defer delegation | Keep the existing owner-only path while the execution boundary is unavailable; ship policy preparation only. | Safe interim state; non-owner elevation stays blocked and #3131 remains incomplete. |
-| B. Isolated project executor, owner-managed grants **(recommended after prerequisites)** | A verified requester with an explicit project grant runs in an executor exposing only that project's files, hosts and credentials. The service owner also needs a grant. | Preserves one management surface; requires a separately designed and verified execution boundary as well as workspace (b) and (c). |
-| C. Separate isolated installation per project | Apply the same owner-managed grants in a dedicated installation under a separate OS identity or equivalent container boundary, with project-only mounts, credentials and host access. | Can satisfy the boundary with deployment separation; multiplies installations and logins. Sharing the operator's OS user, mounting its home or using a host-privileged container defeats it. |
-
-Choose B as the eventual policy, with A as the release state until the execution
-boundary is available and verified. C is an alternative only when its deployment
-proves the same project-level isolation; a workspace containing several projects
-cannot expose all of them to a single-project grant. Keep the target's enable
-switch as a second gate, labelled “Allow elevated runs” in the UI. No wildcard,
-workspace-wide grant, role-based grant or implicit owner exemption. Chat
-administrator status is not local host trust.
-The service still decides which chat tools a requester may use; a local grant
-must not manufacture `is_owner` or unlock service owner tools.
-
-## Current code and state affected
-
-The table identifies current code and the proposed changes for project grants.
-
-| Boundary | Evidence and required change |
+| Question (numbering of the form) | Answer |
 |---|---|
-| Elevation selection | `src/lib/externalRelay/profile.ts:14` checks `ownerTier`, strict owner/non-anonymous flags and triggering-message authorship. Split verified-message selection from the proposed local grant decision. |
-| Wire identity | `src/lib/externalRelay/protocol.ts:117` carries an opaque requester key and role booleans. It does not establish that the key is stable across chats, targets or re-pairing. Verify that contract before allowing grants. |
-| Target project and switch | `src/lib/externalRelay/store.ts:18` and `src/lib/externalRelay/store.ts:24`; target writes are validated in `src/app/api/external-relay/relays/[id]/route.ts:83` and `src/app/api/external-relay/relays/[id]/route.ts:97`. Project selection is configuration, never a project named in message text. |
-| Admission and special path | `src/lib/externalRelay/runner.ts:550` selects the owner message, prototype path and profile before conversation selection at `src/lib/externalRelay/runner.ts:568` and account selection at `src/lib/externalRelay/runner.ts:579`. Apply the grant before all elevated paths, including prototype and replay. |
-| Durable authority | `src/lib/externalRelay/store.ts:102` stores owner-turn metadata. `src/lib/externalRelay/ownerAuthority.ts:22`, `src/lib/externalRelay/ownerAuthority.ts:64` and `src/lib/externalRelay/ownerAuthority.ts:89` recheck settings for live authority, replies and async tools. Recovery and queued operations use `src/lib/externalRelay/ownerAuthority.ts:106` and `src/lib/externalRelay/ownerAuthority.ts:119`. Persist the grant binding and recheck it at each boundary. |
-| Downstream delegation | `src/lib/externalRelay/ownerAuthority.ts:45` asserts installation-owner authority; `src/lib/externalRelay/ownerAuthority.ts:52` only constrains project routing for a bridge report. Replace that assertion for trusted non-owner requesters and enforce the granted project for every elevated relay handoff. |
-| Conversation reuse | `src/lib/externalRelay/conversations.ts:14` records requester and authority; matching at `src/lib/externalRelay/conversations.ts:272` scopes a chain. Add project and grant generation to elevated reuse, so old sessions cannot restore revoked authority. |
-| Launch environment and board title | `src/lib/externalRelay/ownerRun.ts:682` launches in the operator's home; `src/lib/externalRelay/ownerRun.ts:683` titles the run with only the target name. Replace the execution environment for project grants and persist requester attribution before launch. |
-| Policy editing | `src/lib/externalRelay/routeGuard.ts:9` guards relay settings; `src/lib/team/http.ts:59` provides the team owner check. Both proposed management surfaces need authenticated owner authorization; the current relay route guard alone does not prove human ownership. |
-| Workspace placement | `src/lib/team/workspaces.ts:26` explicitly describes slice (a) as filtering only; `src/lib/team/workspaces.ts:57` takes an alias snapshot and `src/lib/team/workspaces.ts:99` resolves placement. Integrate slice (b) visibility and slice (c) MCP fencing after merge, following `docs/design/workspaces.md:332` and the accepted Unassigned decision at `docs/design/workspaces.md:448`. |
-| Persistence and audit | `src/lib/externalRelay/store.ts:131` provides private atomic file writes; `src/lib/team/events.ts:49` supports project-scoped events. Add policy transactions and durable local audit; team activity may project those events but must not be the only audit on solo installs. |
-| Refusal protocol | `src/lib/externalRelay/protocol.ts:422` enumerates decline reasons; there is no authorization-specific reason. Negotiate a dedicated reason and service-visible refusal copy before rollout. |
+| Q4 When may a trusted non-owner start elevated runs? | (b) «Вже зараз, за списком довірених» — now, from a list of trusted requesters. |
+| Q5 Who manages the list, and where? | (a) «Лише власник установки, з дошки або MCP, з підтвердженням і журналом» — only the installation owner, from the board or the MCP tool, with confirmation and an audit log. |
+| Q6 What happens to targets the old switch enabled? | (b) «Залишити як є, вважати дозволом» — they stay enabled and count as a grant. |
+| Q7 How broad is one grant? | (a), corrected in the comment: one project, and each project has its own set of requesters, which can hold several people. |
 
-## Proposed policy and matching
+**The requirement this design answers, from the two together.** Before
+workspaces exist, a requester on the owner's trusted list may start elevated
+relay runs, and those runs have the rights of the whole machine. The list is
+kept per project: each project has its own set of requesters. Only the
+installation owner adds or removes people, from the board or the MCP tool, with
+a confirmation and an audit log. Targets the old switch enabled keep working.
+Once isolated workspaces exist, a person who belongs to a workspace and is
+bound to it through Telegram may run anything inside that workspace; a person in
+several workspaces has access in each, with isolation between them. Only the
+machine's owner adds people to the machine.
 
-Store a versioned installation-local policy beside relay state, outside the
-repository: `relay-trusted-requesters.json`. A policy has a revision and project
-records. Each grant contains the canonical project key, local relay pairing ID,
-credential/pairing generation, opaque requester key, unique grant ID, creation
-time and human editor ID. Display labels are optional local presentation data,
-never matching keys. A removal advances the revision; re-adding creates a new
-grant ID. Keep audit records for add, remove, migration and refused edits.
-Use a locked read-modify-write and atomic replacement, with revision checks to
-reject stale UI saves instead of overwriting another edit. Keep policy changes,
-audit entries and idempotency receipts in the same versioned snapshot so they
-commit together; an audit-write failure must leave the grant unchanged.
+The earlier requirement of #3131 (2026-10-20, paraphrased in #3293) asked for a
+project-restricted boundary before any non-owner elevation. The 2026-10-24
+answers replace that one decision (rule 13: a later answer replaces only what it
+names). The parts it does not name still stand: the owner manages the list from
+both surfaces, changes are audited, a message to the clone alone grants nothing,
+and each run shows who triggered it.
 
-Matching is exact and local:
+## 1. What changed from #3293
 
-1. Strictly parse the authenticated service request. Require a nonempty requester
+| #3293 (2026-10-20) | This revision |
+|---|---|
+| No non-owner elevation until a project execution boundary, workspace slice (b) and the MCP fence (c) exist. | Phase 1 ships now: trusted non-owners get elevated runs with whole-machine reach. The boundary becomes the entry condition of phase 2 (§5.1). |
+| Existing `ownerTier` targets blocked until reviewed. | They keep working: the switch reads as a paired-owner entry on that target (§4.4). |
+| A separate policy file, a second per-target switch and an explicit refusal reason negotiated with the service. | Entries live on the target record that every authority check already reads; the entry list itself is the switch; people not on the list get today's ordinary answer (§4.2, §8). |
+| "The grant follows the project across targets." | Not possible: the service's requester key is per target (`docs/design/relay.md:1482`). An entry is per project and per target (§4.1). |
+| Enrolment by picking an observed requester. | A one-time code the person sends to the clone (§4.5); a display name proves nothing. |
+| Management confirmation designed from scratch. | Reuses the voice-tools pattern: MCP proposes, the Telegram-signed-in paired owner approves in the browser (§4.6). |
+
+## 2. The two phases at a glance
+
+| | Phase 1: trusted list (build now) | Phase 2: isolated workspaces (after §5.1 holds) |
+|---|---|---|
+| Who may start an elevated run | A requester on the target's entry list for the target's project, or the machine owner where an entry for them exists. The owner of a second pairing counts as a requester (§4.1). | Phase 1's entries, plus every member of the workspace that holds the target's project whose relay key is linked to their Delegatus member (§5.2) and whom the machine owner has admitted (Q2, Q3). |
+| What the run can reach | Everything the installation's OS user can reach: every project, credential and host. The agent's Viewer tools are as today's owner turn's; a seat handoff goes only to the entry's project (§4.7). | Only the workspace: its checkouts, accounts, credentials and hosts, enforced below the shell (§5.1). A non-owner run on a project outside every isolated workspace runs in a contained outside boundary; only the machine owner's runs keep the OS user (§5.7). |
+| Who adds people | The installation owner only. | The installation owner only (Q3 settles what a workspace manager's invite does). |
+| Identity | The service's opaque per-target requester key, enrolled by a one-time code. | The same key, linked to a member who signed in with Telegram. |
+
+The phases share one decision function, one entry store, one confirmation path
+and one audit log. Phase 2 adds a second source of admission (workspace
+membership) and a narrower place to run; it removes nothing from phase 1.
+
+## 3. Current code and state (checked at `e5c6c0468`)
+
+| Boundary | What the code does today | Change |
+|---|---|---|
+| Elevation selection | `src/lib/externalRelay/profile.ts:14-21`: `ownerTierFor` returns an owner instruction only when `target.ownerTier === true`, `requester.is_owner === true`, `is_anonymous_admin === false`, and the `respond_to` message is authored by `requester.key` and not by the clone. | Becomes `elevatedRequesterFor(target, request)` (§4.2). The strict wire checks stay. |
+| What `is_owner` means | `docs/design/relay-owner-tier.md:100-107`: the service sets it when the author is the person who confirmed the pairing. That person is the pairing's own `owner` (`src/lib/externalRelay/pairing.ts:102-110`), one per paired relay. | A paired-owner entry keeps that meaning, and gets the owner's reach only when that pairing's owner is the machine owner (§4.1). |
+| One owner per installation | Assumed, never checked. Nothing in `src/lib/externalRelay` or the relay routes requires two pairings to share an owner. `src/lib/externalRelay/ownerDestination.ts:24,34` picks one target across all pairings (one with the switch on, else the first enabled one the install answers) and takes that target's relay owner as the owner. `src/lib/team/actor.ts:30-42` (`telegramOwnerActor`) treats the owner of any unpaused pairing as the team owner when the owner member has no Telegram link. `docs/design/workspaces.md:65` and `:116` describe one paired owner per installation. | The decision compares each pairing's owner with the machine owner (§4.1); a second pairing's owner is a trusted requester, never the owner. |
+| Requester identity | `src/lib/externalRelay/protocol.ts:117-124`: six fields, `key` plus five service booleans. `docs/design/relay.md:1482`: `author.key` is opaque and stable per target, and the service must not send platform user ids. `src/lib/externalRelay/protocol.ts:101-113`: each message also carries `author.name`, a display name. | One person has a different key on each clone. Entries are per target; a display name never matches anything. |
+| Target settings | `src/lib/externalRelay/store.ts:10-26`: `project` and the optional `ownerTier` switch. Written by `src/app/api/external-relay/relays/[id]/route.ts:21-117` (allowed keys at `:50`, `ownerTier` validated at `:97`). The guard `src/lib/externalRelay/routeGuard.ts:9-23` refuses cross-origin calls, refuses `owner_required` whenever `accessKeyWithheld` is true (`:12-13`), refuses an agent conversation (`:14-19`) and refuses in staging. `src/lib/team/actor.ts:105-115` makes `accessKeyWithheld` true in team mode for an agent, an anonymous caller and a member whose role is not `owner`, and false for a Viewer `service` actor (`:65-66`) and in solo mode. So the PATCH already admits only the team owner, the solo operator or a Viewer service. It does not ask for the Telegram-paired-owner proof `authenticatedOwner` gives (below), and it admits the `service` actor. | The PATCH route stops accepting `ownerTier`. Entries get their own route that requires `authenticatedOwner` and refuses the `service` actor (§4.6). |
+| Other writers of the target list | `src/lib/externalRelay/store.ts:523-539` (`mergeRelayTargets`, poller refresh at `src/lib/externalRelay/poller.ts:398-408`) keeps every local field of a kept target and drops a target the service no longer lists. `src/app/api/external-relay/relays/[id]/targets/[targetId]/route.ts:46-60` spreads the kept item. `src/lib/externalRelay/pairing.ts:114` builds a new pairing's targets from scratch. | Entries survive refreshes and routing edits; a dropped target loses them; a new pairing starts with none. This is the wanted behaviour, and slice 1's tests pin it. |
+| Admission | `src/lib/externalRelay/runner.ts:650-657`: the prototype path tests the owner with the switch forced on, then `owner = … ownerTierFor(target, request)`. `:660` (added by #3332) replaces the instruction with the recorded `ownerTurn.context` when an owner turn is retried after a restart. `:671` derives the conversation authority. `:682-684` picks the account from `target.project`. `:710-715` writes `ownerTurn` into the run record. | The decision runs at `:657`, before the restart retry reuses anything; the run record carries the matched entry (§4.3). The prototype path stays paired-owner only. |
+| Durable authority | `src/lib/externalRelay/store.ts:103`: the `ownerTurn` record. `src/lib/externalRelay/ownerAuthority.ts:22-36`, `:80-91`, `:96-110`, `:113-121`, `:126-135` recheck `target.ownerTier === true` at live lookup, reply, async MCP, recovery and continuation. | Each recheck tests the run's entry instead (§4.3). They already read `relays.json`, so no new read is added. |
+| Revocation | `src/lib/i18n/en.ts:345` promises that switching off "stops active and pending owner turns and blocks their replies at once". The relay PATCH and DELETE (`src/app/api/external-relay/relays/[id]/route.ts:111`, `:123`) call `revokeOwnerRuns` (`src/lib/externalRelay/ownerRun.ts:625`), which cancels every owner turn of that relay whose `ownerRelayAuthorized` recheck now fails; `ownerRun.ts:387-418` retires the queued first prompt and held deliveries ("owner relay turn revoked"). No team-store write calls it. | Removing an entry fails the same rechecks and its write calls `revokeOwnerRuns`; so does every member write that can change a tier (§4.3). |
+| Conversation reuse | `src/lib/externalRelay/conversations.ts:213-214` maps elevation to authority `owner-tier`; `:272` matches a pin on requester key, authority and engine. | A requester entry gets authority `trusted:<entry id>` (§4.3). |
+| Launch | `src/lib/externalRelay/ownerRun.ts:60` builds the owner prompt; its first line names the owner ("You work for the owner of this Delegatus install…", `:65`) and `ownerClosingRules` (`:90`) repeats "the owner" and "operator authority"; `:827-828` launches in the OS user's home with title `Relay · <target>`. | Same launch; prompt wording and title name the trusted requester (§4.7). |
+| Seat handoff | `src/lib/externalRelay/ownerAuthority.ts:40-48` wraps the request as "The install owner delegated this request … carries operator authority"; `:52-60` constrains the project only when a bridge report is attached. | For a requester entry the wording names the requester, and the project check applies to every handoff (§4.7). |
+| Other readers of the switch | `src/lib/externalRelay/ownerDestination.ts:24` prefers a target with `ownerTier` when picking the owner's review destination. `src/lib/transfer/sections.ts:127` and `:290` export `ownerTier` with a target's settings. `src/components/externalRelay/ExternalRelaySection.tsx:481` and `:519-524` draw the switch; `src/lib/i18n/en.ts:344-346` and `src/lib/i18n/uk.ts:343-345` its text. | `ownerDestination` prefers an enabled target on a pairing whose owner is the machine owner (§4.1), then today's order, so reviews and the owner check below go to the machine owner's pairing even before any entry exists. Transfer carries paired-owner entries as it carries the switch today and never carries requester entries or links. The switch row becomes the entry list (§4.8). |
+| Owner proof | `src/lib/team/actor.ts:52-59` (`authenticatedOwner`): a live Telegram session of a member with role `owner` whose Telegram id equals the paired owner's. Used by `src/app/api/telegram/bot/confirmation/route.ts:18-24` and `src/lib/voiceTools/http.ts:12-20`. `src/lib/team/http.ts:59-64` (`requireOwner`) checks the team role only. On a solo install there is no team store, so no session exists and `authenticatedOwner` never passes. | Adding an entry uses `authenticatedOwner`, the stronger of the two; removing one also admits the solo operator (§4.6). |
+| Processes that run the rechecks | The Viewer runs the relay runner and the routes. The MCP task executor is a separate long-lived child: `taskExecutorLaunch` (`src/lib/mcp/taskExecutor.ts:131-139`) names `src/lib/mcpTask.worker.ts`, and `:262` starts it with owner `mcp`; it imports the bindings (`mcpTask.worker.ts:24`), and its `create_task` calls `ownerRelayCaller` (`src/lib/mcp/bindings.ts:2205`, `:7782-7785`), which reaches `liveOwnerRelayConversation`. The team store is SQLite in WAL mode (`src/lib/team/store.ts:273`); each process caches only its database handle (`:809-822`), and `owner()` (`:414-417`) is a one-row query. | Every recheck, in every process, reads the owner and membership through that handle at the moment it decides; no process keeps its own copy (§4.1). |
+| Propose-then-approve | `src/lib/voiceTools/http.ts:29`: the MCP side may only `list`, `status` and `propose`; approval happens in the browser. `src/lib/telegram/bot/fileConfirmations.ts:58-67`: a confirmation link with a ten-minute expiry. | The MCP tool follows the same split (§4.6). |
+| Workspaces | Slice (b), membership and the human route gate, merged as #3255: `workspace_members` holds each member's role, `manager` or `member` (`src/lib/team/store.ts:365-372`), read by `workspaceMemberships` (`:692-696`) and written by `putWorkspaceMember` and `removeWorkspaceMember` (`:698-706`). Its route table lists the relay routes as `owner` (`docs/workspace-human-routes.md:119-129`), which today's guard already enforces (Target settings row). The MCP fence, slice (c), is not started. `docs/design/workspaces.md:249`: level 2 leaves the agent's shell unrestricted; `:286` names level 4 as the only level that contains a workspace's agent; `:447` lets a manager invite people into a workspace. | Phase 2 depends on (b), (c) and an execution boundary (§5.1). |
+
+## 4. Phase 1: the trusted list
+
+### 4.1 What an entry is
+
+An entry lives on the relay target record in `relays.json`, under
+`requesters: { revision, entries[] }`. Each entry has:
+
+- `id`, unique and never reused; removing and re-adding creates a new id;
+- `kind`: `paired-owner` (matches the request whose `is_owner` is true) or
+  `requester` (matches one requester key);
+- `key`, for `requester` entries only: the opaque per-target key the
+  enrolment code proved (§4.5);
+- `project`: the canonical project key the entry was granted for;
+- `label`: the owner's local name for the person, unique on the target;
+- `addedAt`, and `source`: `board`, `mcp` or `earlier-switch`.
+
+Entries sit on the target because the requester key exists only per target
+(`docs/design/relay.md:1482`), and because every authority recheck already reads
+this file. The project's set of requesters is the union of the entries on the
+targets routed to that project; the board shows it per target, under the
+project the target names. An entry matches only while the target's canonical
+project equals the entry's `project`: routing a target to another project
+suspends its entries until the owner re-adds people there, so trust granted for
+one project never moves to another. Entries are capped at 50 per target, which
+bounds what the synchronous rechecks read.
+
+**Owner reach belongs to the machine owner alone.** `is_owner` names the owner
+of one pairing (§3), and an installation can hold pairings confirmed by
+different people. So an entry also has a tier, computed, never stored:
+
+- `owner` tier: a `paired-owner` entry whose relay's `owner` is a Telegram
+  identity equal to the machine owner's Telegram id;
+- `requester` tier: every `requester` entry, and a `paired-owner` entry on any
+  other pairing, or on any pairing while the machine owner's Telegram id is
+  unknown.
+
+The machine owner's Telegram id is the linked Telegram id of the team store's
+`owner` member (`owner()`, `src/lib/team/store.ts:414-417`). The decision and
+every recheck read it with `owner()` at the moment they decide, through the
+database handle each process already caches (`:809-822`). No process keeps a
+copy of the answer: the rechecks also run in the MCP task executor, a separate
+long-lived process (§3), and a copy refreshed by member writes would refresh
+only in the Viewer, where those writes happen. A SQLite read in WAL mode sees
+every write committed before it, from any process. The read is one row from a
+small table, beside the two JSON files each recheck already reads; slice 1
+records its cost on the relay path. If a team store exists and cannot be opened
+or read, the id is unknown, so the read fails toward `requester` tier. On an
+install with no team store (every solo install), or whose owner member has no
+Telegram link, it is the relay owner's id when every paired relay names the
+same Telegram owner, which is the single-pairing case today's switch serves;
+when pairings name different owners it is unknown. An `owner`-tier entry gives
+the owner's wording, the owner's conversation authority and, in phase 2, the
+owner's unbounded reach. A `requester`-tier `paired-owner` entry is a grant to
+that pairing's owner as a trusted requester: the board labels it "Owner of
+pairing <relay name>", and everything §4.3, §4.7, §5.3 and §5.7 say about
+requester entries applies to it. In phase 1 both tiers reach the whole
+machine; the tier decides what the run says about itself, where its seat
+handoffs may go, and what phase 2 narrows.
+
+### 4.2 The decision
+
+`elevatedRequesterFor(target, request)` returns an instruction and the matched
+entry, or nothing:
+
+1. The wire checks of `profile.ts:16-19` hold: a requester block, a nonempty
    key, `is_anonymous_admin === false`, and a `respond_to` message authored by
-   that key with `author.self === false`. History, forwarded text, display names,
-   handles, supplied role claims inside text and chat titles grant nothing.
-2. Resolve the configured target project through the existing canonical project
-   resolver. A null, unknown or ambiguous project cannot elevate. Check the
-   current workspace placement and slice (b) availability rules. Do not infer a
-   project from the chat, previous conversation, current browser selection or
-   request text. Bridge-report context must agree with the configured project.
-3. Require an enabled, unpaused target with elevated runs enabled, and an exact
-   grant for `(canonical project, pairing generation, requester key)`. No entry,
-   unreadable policy, invalid schema or uncertain identity means refusal.
-4. Require workspace slice (c)'s MCP fence and a ready project executor that
-   enforces the execution boundary below. Neither a configured working directory
-   nor workspace membership suffices. An unavailable boundary refuses elevation.
-5. Before reserving an elevated conversation or spawning, persist that tuple,
-   grant ID, workspace placement, executor binding and attribution with the run.
-   Recheck current policy and execution binding at spawn, continuation, MCP
-   actions, delegation and answer delivery. A policy revision change prompts
-   re-evaluation; an unrelated edit does not revoke a
-   still-present grant. A removed-and-re-added grant does not revive an old run.
+   that key and not by the clone. Message text, history, forwarded messages,
+   display names and chat titles grant nothing.
+2. The relay is not paused and the target is enabled.
+3. An entry on this target matches: `paired-owner` when `is_owner === true`;
+   `requester` when the key is equal. Its `project` equals the canonical form
+   of `target.project`. A `requester` entry needs a non-null project; a
+   `paired-owner` entry carried from the old switch may hold `null` and then
+   matches only while the target has no project, as today.
+4. The entry's tier is computed (§4.1). The instruction is the owner's for an
+   `owner`-tier entry and the trusted requester's for every other.
 
-The service must document the key's identity scope and stability. If keys are
-chat-scoped, include the authenticated chat scope in both grant and run; do not
-pretend that a grant follows a person to another chat. If stability cannot be
-established, block elevated enrollment. Re-pairing invalidates grants even if
-labels and keys look the same. Credential rotation within a proven unchanged
-pairing may retain them; a changed identity cannot.
+A request that matches nothing gets today's restricted answer, exactly as a
+non-owner does on a switched-on target now. No refusal reason is added to the
+wire, and nobody outside learns who is on the list.
 
-Use canonical keys for reads and writes so deleted worktrees and repository
-renames follow established project identity. If aliases join conflicting policy
-records, refuse elevation until the owner reconciles them; never union grants
-silently. Moving a project to another workspace suspends its grants for owner
-review. Renaming a workspace changes nothing. Under the accepted workspace
-plan, Unassigned is visible to the owner and workspace managers from slice (b).
-Only the owner may prepare grants there; keep them suspended until the project
-has a workspace placement and a verified executor. Visibility grants no relay
-policy-management permission.
+The prototype path (`runner.ts:571-577`, `:632`) stays as it is: only the
+service-identified paired owner can answer a prototype review.
 
-A grant permits elevated relay requests for its project. The external requester
-need not sign in to Delegatus and gains no team membership, workspace browsing
-or policy-editing permission.
-Pass the granted project through slice (c)'s workspace MCP fence and every
-child or handoff. Add the narrower project check to every tool and delegation
-path; a workspace fence still allows several projects. Describe the authority
-in prompts as “trusted requester for this project.” Replace today's unrestricted
-owner-authority text before enabling project grants.
+### 4.3 Binding a run to its entry
 
-## Execution prerequisite and release block
+The run record's `ownerTurn` gains `entry: { id, kind, tier, project, label }`,
+written before the run is reserved, as `ownerTurn` is today. Every recheck in
+`ownerAuthority.ts` replaces `target.ownerTier === true` with "the entry with
+this id is still on this target, still matches the target's project, and still
+has the recorded tier". A run admitted at `owner` tier whose pairing owner no
+longer equals the machine owner's Telegram id (the owner member relinked
+Telegram, or a second pairing made the id unknown) fails the recheck and stops;
+it is not continued at a lower tier. A run recorded before the upgrade has no
+`entry` and is read as the target's paired-owner entry with its tier computed
+then, so a running owner turn keeps its authority across the deploy. A turn
+retried after a restart (`runner.ts:660`) reuses its recorded context only when
+the decision at `:657` admits the same entry id again.
 
-The accepted level-2 workspace choice explicitly leaves shell reads unrestricted
-(`docs/design/workspaces.md:249`). Its slice (c) MCP fence is a separate required
-gate. Both B and C need an execution boundary that enforces all of the following:
+Removing an entry fails the next recheck, and the entry write then calls
+`revokeOwnerRuns` for the relay (`ownerRun.ts:625`), as the switch does today,
+which stops the turn, retires its queued first prompt and blocks its replies
+(`ownerRun.ts:387-418`). A tier can also change without a write to the run's
+own relay: the owner member relinks or loses Telegram or changes role or
+status, a new pairing names a different owner, or, in phase 2, a member is
+removed from a workspace. The Viewer route that makes each of those writes
+calls `revokeOwnerRuns` for every paired relay after it commits, so a demoted
+turn stops at once, before its next recheck runs. An unrelated edit (another
+entry, the target's model) leaves a running turn alone, because the recheck
+looks for its own entry id. A removed and re-added person gets a new id, so an
+old run or pin does not revive.
 
-- The working directory and exposed checkout belong to the granted project.
-  Files, transcripts and credentials of other projects, and the operator's home,
-  remain inaccessible to shell commands, including absolute-path, parent-path
-  and symlink reads. Environment variables, inherited descriptors and agent
-  configuration cannot carry unrelated secrets into the executor.
-- Remote hosts and credentials are project-specific. An SSH agent, general forge
-  credential, cloud identity or unrestricted proxy into the operator's machine
-  cannot turn a project grant into access to other projects. Network and remote
-  authorization must enforce the allowed host/resource set.
-- Children, continuations, recovery, tools and handoffs retain the same project
-  boundary. A full-access local seat or helper cannot execute on the requester's
-  behalf outside it. Boundary identity is persisted and rechecked after restart;
-  absence or mismatch refuses admission and further authority.
+Reply-chain reuse keeps an `owner`-tier entry on authority `owner-tier`, so the
+machine owner's existing pins continue. A `requester`-tier entry, including a
+paired-owner entry on another person's pairing, uses `trusted:<entry id>`, so
+two requesters never share a conversation, a re-added person starts a fresh
+one, and an owner pin never carries a non-owner's turn. A pin that another
+pairing's owner made under the old switch carries `owner-tier` and stops
+matching, so that person's next message starts a fresh conversation.
 
-The executor implementation/deployment is deferred to a separate design and
-verification effort. This document authorizes no new shared-user full-access
-launch path. Until that prerequisite is delivered, keep non-owner elevation
-disabled even when policy, workspace (b), and workspace (c) have shipped. Test
-attempted access to a second project's checkout, a second project's credentials
-and an unrelated host through every execution path before release.
+### 4.4 Targets the old switch enabled
 
-## Who edits it and what they see
+No migration step runs at startup. A target whose record still has
+`ownerTier: true` is read as carrying one `paired-owner` entry with the id
+`earlier-switch-<target id>`, source `earlier-switch`, and the target's current
+project. The first entry write on that target stores the entry explicitly,
+drops `ownerTier`, and writes an audit row saying it came from the earlier
+switch. Until then nothing on disk changes, so a rollback to the previous
+release finds the switch where it left it. The owner can remove the entry like
+any other.
 
-Only the installation's human owner manages the list, through project settings →
-Relay → Trusted requesters and a proposed `relay_trusted_requesters` MCP tool.
-Both call the same server-side owner authorization, policy transaction and audit
-writer. Team UI access requires a live owner session. Solo UI access requires
-the authenticated local operator settings session. Workspace managers may see
-availability status for accessible projects, including Unassigned, but cannot
-inspect or edit the requester list.
+Its tier follows §4.1. On the machine owner's pairing the board shows it as
+"Paired owner (from the earlier switch)" and it keeps today's behaviour
+exactly. On a pairing whose owner is someone else it still elevates that person,
+as the switch does today (Q6: it counts as a grant), but at `requester` tier:
+"Owner of pairing <relay name> (from the earlier switch)", the requester's
+wording, the handoff project check, and narrowing in phase 2.
 
-The MCP tool has `list`, `add` and `remove` actions. `list` returns the project's
-policy revision and grants. `add` names the canonical project and an observed,
-service-verified enrollment candidate; `remove` names its existing grant ID.
-Mutations carry an expected policy revision and an idempotency key. The server
-resolves candidates and projects itself and rejects stale revisions.
+Until it is written down, the carried entry takes the target's current project,
+so it would follow the target into another project, against §4.1's rule that a
+move suspends entries. The routing PATCH closes that: a request that changes
+the project of a target still holding `ownerTier: true` first materialises the
+entry with the old project, in the same locked write and with its audit row,
+and the move then suspends it like any other entry. Without that step the gap
+would be harmless for the machine owner, whose reach is the whole machine
+anyway, and not for another pairing's owner.
 
-MCP management requires a separately authenticated owner-management principal,
-never authority inherited from an agent launch or relay request. An owner client
-may list or prepare an exact add/remove operation. For writes, the server shows
-the owner a confirmation in the authenticated settings session, bound to the
-operation, project, requester, policy revision and requesting client. The client
-then applies it through MCP using the recorded approval. Approval is single-use;
-changed operations, a stale revision, a lost owner session, decline or no answer
-require a fresh confirmation and cause no policy write. UI confirmations bind
-the same values. The audit records editor, approving owner, action, grant,
-project, time and before/after revision; replay returns the original receipt.
+For a new target the machine owner adds themselves with one press ("Add me");
+`is_owner` already identifies them, so no code is needed. "Add me" is offered
+and accepted only on a target whose relay's `owner.id` equals the Telegram id of
+the signed-in owner session that passed `authenticatedOwner` (§4.6). On another
+person's pairing it is refused, because the stored entry would match that
+pairing's owner, not the person who pressed it; the owner enrols that person
+with a code like anyone else.
 
-Relay, service and ordinary agent principals are refused before list, proposal
-or apply, even if otherwise elevated or carrying `is_owner`. They cannot grant
-themselves management credentials, answer the owner's confirmation, or replay
-another client's approval. Owner management credentials stay outside project
-executors. Adding a relay requester grants no policy-management authority.
+### 4.5 Enrolling a person
 
-Show each grant's local label, relay, identity scope, added time and active or
-suspended state. Enroll by selecting a requester observed in an authenticated
-relay request, then explicitly confirming the project and its isolated execution
-scope. The same candidate and confirmation appear in MCP management.
-An observation is only an enrollment candidate, never automatic approval.
-Do not accept arbitrary display-name entry as identity proof. The relay settings
-link to the same project policy; multiple targets for one project share it.
+A requester key cannot be typed or looked up: it is opaque, per target, and the
+service never sends a platform id. A display name is chosen by its holder and
+can copy anyone's. So enrolment proves the key by a message:
 
-Removal takes effect immediately for new authority checks. Cancel queued work
-and request interruption of running turns; report “Access removed; stopping
-current work” until stop confirmation. Do not promise to undo completed actions
-or stop an OS operation already in flight. Suppress generated output after
-revocation; a fixed status notice may explain the stop without carrying agent
-content. Previously delegated work already admitted needs explicit cancellation
-tracking; revocation is not complete merely because the relay conversation stops.
+1. The owner, signed in, opens the target, presses "Add person" and types a
+   label. The project must be set. The server creates a pending enrolment bound
+   to relay, target, label and the owner's session: a short single-use code,
+   valid ten minutes, at most one per target. Pending enrolments are held in
+   the Viewer's memory, as file-send confirmations are; a restart drops them
+   and the owner starts again.
+2. The owner gives the person the code. The person sends it to the clone,
+   preferably in a private chat with it.
+3. The runner checks pending codes before choosing a profile, only while one
+   exists for that target. A message carries the code when the code is a
+   whole word of its text and the rest is only @-mentions and whitespace: in a
+   group the clone is usually addressed with a mention ("@clone 4K7Q-92"), so
+   the text rarely equals the code. On the first such message the runner
+   records the author key, chat, display name and time on the pending
+   enrolment, answers that message with a fixed line ("Code received. The
+   owner will confirm."), and runs no agent.
+4. The owner sees the candidate (display name, chat title, time), asks the
+   person whether the fixed line answered their own message, and confirms.
+   The entry and its audit row are written together (§4.6).
 
-## Durable requester attribution
+The candidate's display name cannot tell the owner who sent the code, since a
+name can copy anyone's. What protects enrolment is that the code stays between
+the owner and the person, preferably in a private chat, and that the person
+sees the fixed line under their own message. A message carrying the code from a
+different author before confirmation marks the candidate contested: it gets the
+fixed line "This code was already used; ask the owner for a new one.", the
+candidate can then only be declined, and a new code is needed. If someone else
+sent first and the person saw no fixed line, the owner declines.
 
-Before admission, the relay run stores an immutable attribution snapshot:
-canonical project, pairing generation, verified requester binding, grant ID,
-local display label at admission, a stable local discriminator and request/run
-binding. Persist it with the authority record before launch; failure to store it
-refuses launch. The verified wire key stays in private relay state. The label
-and discriminator are presentation only and never authorize actions.
+### 4.6 Management: board and MCP, confirmation, audit
 
-Carry the attribution reference through launch receipts into conversation and
-board records, and into child task/pipeline records created for this request.
-Those readers resolve the stored snapshot after restart and archival; they do
-not depend on the current grant list. Conversation reuse must match the grant
-and requester so two requesters cannot share a misleading origin label. Every
-continuation retains its own request attribution. Revocation retains the
-historical snapshot, and later label edits affect future runs only.
+One server module writes entries; two surfaces call it.
 
-On the board, show `Relay · <target> · <local requester label>` with a stable
-local discriminator whenever labels collide; the run details also show the
-admission-time label and whether that grant has since been removed. Apply the
-existing project visibility rules. Raw requester keys, service user IDs, pairing
-IDs and internal grant/run identifiers never become display labels or public
-report content. Public exports use generic requester aliases while preserving
-the distinction between requesters. Existing runs without a snapshot show
-“Requester not recorded”; never infer one from the current target or grant list.
+- **Board.** The target's settings block lists its entries with label, kind,
+  tier, project, added time and state (active, or suspended because the target
+  moved to another project). Add, Add me and Remove act in place. Adding and
+  "Add me" check `authenticatedOwner(req, ownerReviewDestination().chatId)`,
+  the check file sends and voice tools use: a live Telegram session of the team
+  owner whose Telegram id is the owner of the review destination's pairing,
+  which the `ownerDestination` change (§3) points at the machine owner's
+  pairing. "Add me" adds the §4.4 check against the target's own pairing. A
+  teammate's session, a bearer-key script, an agent and the `service` actor the
+  relay PATCH admits today (§3) cannot pass it. Removing narrows trust, so a
+  remove admits whoever the relay routes admit today except the `service`
+  actor: the team owner and, on a solo install, the operator. Nobody is left
+  holding a grant they cannot withdraw, including an entry carried from the
+  earlier switch. A solo install, where `authenticatedOwner` never passes
+  (§3), can list and remove entries and cannot add any until the owner sets up
+  the team with Telegram sign-in, as with voice tools today (Q5). Each write
+  shows a confirmation naming the person, the target, the project and, for a
+  `requester`-tier entry, the reach: "Until isolated workspaces exist, this
+  person's runs can read and change everything this computer's account can:
+  every project, its credentials and its hosts."
+- **MCP.** `relay_trusted_requesters` with `list`, `start_enrolment`
+  (relay, target, label) and `remove` (entry id). Like voice tools
+  (`voiceTools/http.ts:29`), the tool never writes: `start_enrolment` returns
+  the code and a confirmation link, and `remove` returns a confirmation link.
+  The owner opens the link in the browser, where the same owner checks and
+  confirmation apply. A link is single-use, bound to the operation and the
+  target's `requesters.revision`, and expires after ten minutes; a stale
+  revision refuses and asks for a new link. Every operation is refused to a
+  conversation that is itself a relay run (`liveOwnerRelayConversation`,
+  `ownerAuthority.ts:13`), so a trusted requester's agent cannot list the
+  people or propose one.
+- **Audit.** `<state>/external-relay/trusted-requesters-audit.jsonl`, mode
+  0600, append-only. One row per add, remove, earlier-switch materialisation,
+  declined confirmation and expired code: time, action, relay, target, project,
+  entry id, label, surface, proposing conversation (MCP), approving owner
+  member id (`operator` on a solo install), and revision before and after.
+  The row is appended and synced under the `relays.json` lock before the store
+  is replaced; if the append fails, the entry is not written. The board shows
+  the target's history from this file. It holds no requester key, platform id
+  or chat text.
 
-## Refusal experience
+Phase 1 trust is machine-wide, and the confirmation and audit should be read
+with that in mind. They stop a mistaken click and an agent that tries to act for
+the owner. They do not stop a trusted requester's own agent, which runs as the
+installation's OS user and can edit `relays.json` or the audit file directly.
+The confirmation text says so in plain words, and §6 tests nothing that phase 1
+cannot keep.
 
-An elevation-enabled target returns an explicit authorization refusal when a
-grant check fails. Silent downgrades and service handoffs would obscure whether
-host work actually started. Targets with elevation off retain their
-ordinary restricted-answer behavior.
+### 4.7 What the run says about itself
 
-- Requester: “This request cannot run with elevated access for this project.
-  Ask the installation owner to review relay access. No elevated run started.”
-- Missing project: “Elevated access is unavailable until the installation owner
-  selects a project for this relay target. No elevated run started.”
-- Mid-run revocation: “Access was removed. This run is stopping. Work already
-  completed may remain.” Use “stopped” only after confirmation.
-- Operator: a project-visible event with time, request reference, local requester
-  label and a precise reason such as unlisted requester, unknown identity,
-  suspended placement or unavailable policy. Offer “Review access,” never an
-  automatic retry or one-click approval from the request itself.
+- Title: `Relay · <target>` for an `owner`-tier entry, as today;
+  `Relay · <target> · <label>` for a `requester`-tier entry
+  (`ownerRun.ts:814`). The
+  run's record keeps the label from admission, so a later rename or removal
+  does not rewrite history.
+- Prompt (`ownerRun.ts:65`, and `ownerClosingRules` at `:91`) and seat
+  directive (`ownerAuthority.ts:45`): for a `requester`-tier entry, "the owner"
+  becomes "<label>, a trusted requester for project
+  <project>", and "carries operator authority" becomes "carries this trusted
+  requester's authority for project <project>".
+- Seat handoff: `ownerRelayTargetMatches` (`ownerAuthority.ts:52-60`) already
+  refuses a bridge-report handoff to another project; for a `requester`-tier
+  entry it refuses every handoff whose project differs from the entry's. This keeps the
+  per-project sets meaningful at the Viewer: a person trusted on project A
+  cannot direct project B's seat in the owner's name. It is a guard against
+  mistakes; the shell can still reach project B in phase 1.
+- Unchanged: the service decides which chat tools a requester gets, from its own
+  role flags; a local entry never sets `is_owner` and unlocks no owner-audience
+  service tool. Account choice still follows `target.project`
+  (`runner.ts:601-603`). The per-member hourly limit (`profile.ts:37-38`) still
+  counts a trusted requester who is not a chat admin.
 
-Do not expose list membership, other requesters, internal project keys, paths or
-request contents in the chat refusal. Coalesce repeated refusal events in the
-UI without losing bounded diagnostic counts. Keep the wire's terminal outcome
-idempotent under retries. Add `requester_not_trusted` (and a fixed safe status
-mapping) through service capability negotiation; on older services use a
-supported terminal refusal with generic safe copy only after integration proves
-it will not trigger fallback execution. Otherwise leave elevation disabled.
+### 4.8 Board surface
 
-## Delivery slices and acceptance
+The switch row "Full agent for the owner" in `ExternalRelaySection.tsx:519-524`
+becomes "Trusted requesters" with the list, Add person and Add me, in the same
+settings block (no new screen, per the project's reuse rule). The caption at
+`:481` reads "N trusted" when entries exist. Strings land in `en.ts` and
+`uk.ts`. The rendered evidence goes through the existing drivers named in
+`AGENTS.md`, in en and uk, light and dark, desktop and phone, with the states
+empty, one paired owner from the earlier switch, an earlier-switch entry on
+another person's pairing, two people with entries, a
+suspended entry, a pending code and a candidate awaiting confirmation.
 
-### 1. Contract and durable policy
+## 5. Phase 2: isolated workspaces
 
-Depends on workspace (b)'s human visibility contract. Confirm requester-key scope
-and refusal semantics with the service contract. Add schema, lock/revision
-behavior, grant IDs, both owner-only management surfaces and audit. Policy may be
-prepared while execution prerequisites are pending; grants remain inactive.
-No elevation behavior changes in this slice.
+### 5.1 What must be true before a workspace member gets unrestricted runs
 
-Acceptance: an authenticated owner can list/add/remove through both board UI and
-MCP, observing the same policy revision and mutation receipts. Each add/remove
-has a durable audit record. Missing owner authentication, member, manager, agent
-and service access, relay self-grants, forged confirmations and replay by another
-client fail on both
-surfaces. Decline and silence write nothing. Stale saves conflict; successful
-idempotent retries write once. Corrupt/missing policy is denied.
-Tests cover alias conflict, deleted-worktree identity, re-pairing and workspace
-move suspension. No identities are seeded from repository fixtures or chat text.
+The operator's model gives workspace members unrestricted runs "because there
+will be isolation". The workspace level chosen on 2026-10-20, level 2, isolates
+attention and the Viewer's tools; it leaves the agent's shell running as the
+installation's OS user with every checkout and credential readable
+(`docs/design/workspaces.md:249`). Level 2 alone therefore cannot carry phase 2.
+Phase 2 starts for a workspace only when all of these hold for that workspace,
+each shown by a test that tries to break it:
 
-### 2. End-to-end authority and refusal
+1. **Membership exists.** Workspace slice (b) merged as #3255 (§3). What
+   remains is that the relay reads membership live on every request and
+   recheck (§5.3).
+2. **The Viewer's tools are fenced.** Slice (c), the MCP fence, refuses any
+   tool call or handoff naming a project outside the run's workspace.
+3. **The shell is contained.** The run's processes run under an OS identity (a
+   user or container per workspace; level 4 at `docs/design/workspaces.md:277-290`
+   is one way) that can read and write only that workspace's checkouts,
+   transcripts and its own state, never the installation's state directory
+   (condition 6). Absolute paths, `..`, symlinks, `/proc` of other
+   processes and inherited file descriptors do not reach another workspace or
+   the operator's home.
+4. **Credentials and hosts are the workspace's.** Engine accounts, `gh`
+   credentials, SSH keys and agents, cloud identities and the environment
+   handed to the run are the workspace's own. No socket, helper or proxy back
+   into the operator's account is reachable.
+5. **Every path keeps the boundary.** Children, continuations, recovered runs,
+   relay replies and seat handoffs start inside the same boundary. The run
+   records which boundary it ran in, and a recheck after restart refuses
+   authority on a mismatch.
+6. **Nothing outside reaches in.** Conditions 3 and 4 keep W's runs inside W;
+   this one keeps everyone else's out. Once any workspace W is isolated, no run
+   except an `owner`-tier run executes as the installation's OS user. Every
+   other elevated run, wherever its project sits (another workspace,
+   Unassigned, a workspace without a boundary), runs under an identity that
+   cannot read or write W's checkouts, transcripts, state or credentials, and
+   holds no credential that reaches W's hosts or W's repositories on the forge.
+   No such run can read or write the state that grants admission either: the
+   installation's state directory (`relays.json` with its entries and links,
+   the run ledger the rechecks trust, the team store with its membership, the
+   audit file) and any key or session the Viewer's write routes accept. Without
+   this, a person trusted only on an Unassigned project could read W's
+   credentials, or write themselves into W's membership or an `owner`-tier
+   entry, which defeats both isolation (§5.5) and the rule that only the
+   machine owner adds people (§5.6). Phase 1's warning that a trusted agent can
+   edit `relays.json` (§4.6) stops being true here, and slice 3 tests that it
+   has. Agents that non-owner members start from the board need the same
+   containment; that belongs to the workspace design, and this design requires
+   it for relay runs.
 
-Release depends independently on merged workspace (b), slice (c)'s MCP fence,
-and the separately verified execution boundary. Without any one of them, keep
-non-owner elevation blocked. Gate all elevated paths with the same decision,
-bind durable runs and attribution, fence MCP and handoffs to the granted project,
-update requester wording and integrate the negotiated terminal refusal. Keep
-service-role authorization separate.
+How the boundary is built (one installation per workspace, or one installation
+starting agents under per-workspace users) is the subject of its own design.
+Q1 asks whether the operator wants this bar or accepts level 2.
 
-Acceptance: with every prerequisite proved, a listed non-owner succeeds inside
-the project boundary; an unlisted service owner fails. With either fence absent,
-even a listed non-owner fails before spawn. From direct runs, prototype, replay,
-continuation, recovered runs, MCP tools, children and handoffs, attempt reads of
-another project's files/credentials, the operator's home, unrelated hosts and
-out-of-project resources on an allowed host: each is denied without disclosure
-or side effects. Exercise traversal, symlinks, inherited secrets and attempts to
-use a local privileged helper. Missing, anonymous, spoofed, mismatched-message
-and wrong-pairing identities fail before spawn. Null project, cross-project
-tools/handoffs, prototype, replay, restart and old conversation reuse cannot
-bypass the grant. Remove a grant during queued
-spawn, continuation, tool use and delivery: each refuses further authority,
-requests stop and emits only safe status. Unrelated edits preserve valid runs.
-Integration tests prove no fallback agent runs after an authorization refusal.
+### 5.2 Binding a relay requester to a member through Telegram
 
-### 3. Operator UI and rollout
+A member signs in to Delegatus with Telegram (`src/lib/team/telegramSignIn.ts`),
+which proves their Telegram account. The relay never sends that account's id,
+so the link from a relay key to the member uses the code of §4.5, started by
+the member in their own session: "Link my Telegram chats with <clone>". The
+member sends the code to the clone and confirms the candidate. The link records
+(relay, target, key) → member id, appears in the owner's audit log, and grants
+nothing by itself. A member who uses two clones links twice, because the key
+differs per clone. Removing the member, or the member unlinking, ends the link.
 
-Add project policy controls, refusal history and successful-run attribution,
-translated in English and Ukrainian. Keep enrollment visibly pending while
-execution prerequisites are unavailable. On upgrade show existing enabled
-targets as “Review required” and block elevated admission until explicit
-enrollment and all execution prerequisites pass; never silently seed an owner
-grant. Review each configured project, requester and affected target together.
+### 5.3 The decision in phase 2
 
-Acceptance: existing restricted targets continue normally; every previously
-elevated target requires review. Desktop and phone, light and dark, show active,
-suspended, empty, stale-save and stopping states using existing browser drivers.
-Two allowed requesters on one target produce visibly distinct board runs,
-including identical local labels. Restart, archive/reload, edit a grant label,
-then remove it: both runs retain their original distinct attribution without
-exposing wire identities. Child records retain the origin. Older unattributed
-runs show the explicit unknown state. Use existing board browser-driver cases
-for these rendered checks in both languages/themes and desktop/phone widths.
-Focused tests run with isolated state roots. A service lacking the required
-identity/refusal contract cannot enable the feature. Disabling the feature must
-not restore legacy owner-flag-only elevation. This design change itself requires
-no runtime test or product-code change.
+For a request on target T, with project P = the canonical project of T and W =
+the workspace that holds P:
 
-## Questions for the operator
+1. Phase 1's wire checks (§4.2 steps 1-2).
+2. If an `owner`-tier entry on T matches (§4.1, §4.2 step 3): run with the
+   owner's reach, as in phase 1, even when the machine owner is also a member
+   of W.
+3. Else, if W is isolated (§5.1) and the key is linked to a member who holds a
+   qualifying role in W (Q2) and was admitted by the machine owner (Q3): run
+   inside W's boundary with W's fence.
+4. Else, if a `requester`-tier entry on T matches (§4.2 step 3), including a
+   paired-owner entry on another person's pairing: run inside W's boundary when
+   W is isolated. When P sits outside every isolated workspace (Unassigned, or
+   a workspace without a boundary), run machine-wide only while no workspace on
+   the machine is isolated. Once one is, run inside the outside boundary
+   (§5.7), or give the restricted answer while that boundary does not exist
+   (condition 6 of §5.1, Q4).
+5. Else the restricted answer.
 
-1. **When may a trusted non-owner start elevated runs?** Recommended: variant B
-   only after workspace (b), MCP fence (c) and verified project execution
-   isolation. Keep variant A until then; level 2 alone cannot satisfy #3131.
-   Require an explicit grant for everyone, including the service owner.
-2. **Who may manage grants, and where?** Recommended: only the human installation
-   owner, through both board UI and the owner-authenticated MCP tool, with exact
-   human confirmation for writes and a shared audit. Managers gain no grant
-   authority from workspace management.
-3. **Should a denial become a restricted answer?** Recommended: no for an
-   elevation-enabled target; send an explicit terminal refusal. Keep ordinary
-   restricted targets available as a deliberate alternative.
-4. **What happens to current owner-enabled targets?** Recommended: block until
-   reviewed, with a guided enrollment screen; do not infer consent from the old switch.
-5. **Should trust follow workspace moves and re-pairing?** Recommended: suspend
-   on workspace moves and invalidate on re-pairing; require owner review.
-6. **How broad is one grant?** Recommended: one project and one proven requester
-   identity scope within one pairing, across that project's targets. No wildcard
-   or expiry in the first slice; removal revokes subsequent authority immediately.
+The owner step comes first so that a machine owner who joins a workspace keeps
+the reach §5.7 promises; membership never confines the machine owner. It wins
+only through an `owner`-tier entry, so the owner of another pairing who is a
+member of W is confined to W by step 3 or step 4.
+
+The workspace comes from T's configured project, never from the message, the
+chat or an earlier conversation. Run binding, rechecks and revocation are
+phase 1's (§4.3), with membership added to what each recheck reads: removing a
+member from W stops their workspace-admitted runs the same way removing an
+entry does. Membership, unlike entries, lives in the team store. Each recheck
+reads it the way §4.1 reads the owner: `workspaceMemberships` for the linked
+member (`src/lib/team/store.ts:692-696`), through the process's cached handle,
+at the moment it decides, in the Viewer and in the MCP task executor alike. No
+process keeps its own copy, so a membership removed in one process stops the
+run when another process rechecks it, and the removing route also calls
+`revokeOwnerRuns` (§4.3).
+
+### 5.4 Per-project sets and workspace membership
+
+Inside an isolated workspace, membership covers every project in it: "в рамках
+этого простора делать что хочет". The per-project sets keep doing what they do
+in phase 1 for people who are not members: the owner can trust a person on one
+project of W without making them a member of W, and that person's runs are
+contained in W's boundary like everyone else's.
+
+### 5.5 A person in several workspaces
+
+Each clone routes to one project, and each project sits in one workspace, so
+each request runs in exactly one workspace. A member of W1 and W2 who writes to
+a clone routed to a W1 project runs inside W1; the same person writing to a
+clone routed to a W2 project runs inside W2. The two runs share no files,
+credentials or conversation pins (the pin's authority names the workspace), and
+the fence refuses a W1 run's handoff to a W2 seat even though the person
+belongs to both. A clone that serves several workspaces would make the
+workspace depend on the message, so it is not offered (§8).
+
+### 5.6 Who adds people
+
+The machine owner alone adds entries (phase 1) and admits members to relay
+elevation (phase 2). The workspace decision of 2026-10-20 let a workspace
+manager invite people into a workspace (`docs/design/workspaces.md:447`); the
+2026-10-24 comment says only the machine owner adds people to the machine. Both
+can hold if a manager's invite still gives Viewer membership and the owner's
+confirmation is what turns on relay elevation for that member. Q3 asks this.
+
+### 5.7 The transition for existing list entries
+
+When a workspace becomes isolated, nothing is converted and nothing is widened:
+
+- An entry on a project in that workspace keeps admitting its person, and from
+  that moment their runs start inside the workspace's boundary. Their reach
+  narrows from the whole machine to the workspace, which is what isolation is
+  for.
+- The owner gets one review list for the workspace: each such entry with
+  "Keep as a project entry", "Make a member of the workspace" (an invite the
+  person accepts) or "Remove". Until the owner answers, the entry keeps working
+  in its narrowed form.
+- Entries on projects outside any isolated workspace (Unassigned, or a
+  workspace without a boundary) lose machine-wide reach when the first
+  workspace becomes isolated, because their runs as the installation's OS user
+  could read that workspace and rewrite who is admitted (§5.1 condition 6).
+  They run inside one outside boundary: a contained identity built by the same
+  executor as a workspace's, which reaches the checkouts of the projects
+  outside isolated workspaces and only the credentials the owner assigns to it,
+  none of which reach an isolated workspace's hosts or repositories. If the
+  outside boundary does not exist when a workspace is isolated, those entries
+  give the restricted answer until it does, and the review list names them
+  with "Move the project into an isolated workspace" or "Remove". Q4 asks
+  whether the operator wants this.
+- `owner`-tier entries are unchanged: the machine owner's runs keep the
+  owner's reach (§5.3 step 2). A paired-owner entry keeps that reach only while
+  its relay's `owner.id` equals the machine owner's Telegram id (§4.1). A
+  paired-owner entry on another person's pairing, including one carried from
+  the earlier switch, is a `requester`-tier entry: it narrows to the workspace
+  like any other, and nobody escapes a workspace by owning a second pairing.
+
+## 6. Delivery slices and acceptance
+
+### Slice 1: entries, decision and rechecks (phase 1 core)
+
+`elevatedRequesterFor`, the entry schema on the target, the earlier-switch
+reading, the run's `entry`, every recheck in `ownerAuthority.ts`, conversation
+authority, prompt and title wording, the handoff project check, the
+`ownerDestination` preference, the transfer rule and the PATCH route refusing
+`ownerTier`.
+
+Acceptance, each as a test run by file path with isolated state:
+
+- A target with `ownerTier: true` and no entries elevates the paired owner and
+  nobody else, before and after the first entry write; the materialised entry
+  carries source `earlier-switch` and one audit row.
+- A `requester` entry elevates exactly that key on that target; the same key on
+  another target, the right key with `is_anonymous_admin: true`, a mismatched
+  `respond_to` author, a message by the clone, and a display name equal to the
+  label all get the restricted answer.
+- Routing the target to another project suspends its entries; routing it back
+  restores them. Routing a target that still holds `ownerTier: true` first
+  materialises the earlier-switch entry with the old project and its audit row,
+  so the move suspends it too.
+- Two pairings with different owners: A owned by the machine owner, B owned by
+  someone else, each with a target. An earlier-switch target on B elevates B's
+  owner at `requester` tier (requester wording and title, `trusted:<entry id>`
+  authority, handoff refused to another project) while A's elevates the machine
+  owner at `owner` tier. "Add me" on B's target is refused through the route
+  and through an MCP link, and writes no entry. With the owner member's
+  Telegram link removed, the two pairings make the machine owner's id unknown,
+  and A's entry reads at `requester` tier; a running `owner`-tier turn on A
+  is stopped by that member write's `revokeOwnerRuns` before any recheck runs.
+- The owner is read fresh in every process. With the Viewer's test process and
+  a real MCP task executor started on the same isolated state, an `owner`-tier
+  run's conversation passes `ownerRelayCaller` in the executor; a member write
+  in the first process then relinks the owner's Telegram directly in the store,
+  without the route's `revokeOwnerRuns`, so only the executor's own read can
+  notice it, and the executor's
+  next `create_task` from that conversation is refused owner-relay treatment,
+  with no restart of either process. A team store that exists and fails to
+  open reads the machine owner's id as unknown.
+- Removing an entry during a queued spawn, a running turn, a continuation and an
+  async MCP call stops the turn through the existing path and blocks its reply;
+  editing another entry leaves the turn running. A run recorded before the
+  upgrade keeps its authority.
+- A requester entry's seat handoff to another project is refused; to its own
+  project it is delivered.
+- Poller refresh and the routing PATCH keep entries; a target the service drops
+  loses them; a new pairing has none; transfer export carries no requester entry.
+
+### Slice 2: enrolment, management and audit
+
+The code flow in the runner, the owner-only route, the MCP tool, the
+confirmation page, the audit file and the board list.
+
+Acceptance: an owner adds a person through the board and through an MCP link,
+and both write one entry and one audit row. A teammate's session, a bearer-key
+request, an agent conversation and a relay-run conversation are refused on both
+surfaces. A stale revision, an expired or reused link, a declined confirmation
+and an audit append failure write no entry. A code sent by the wrong person
+yields a candidate the owner can decline, and the spent code admits nobody. A
+second author sending the same code marks the candidate contested and gets the
+fixed refusal line; a contested candidate cannot be confirmed. A code addressed
+with a mention ("@clone <code>") is accepted; a code inside other text is not.
+The entry route refuses the Viewer `service` actor. On a solo install, adding
+and "Add me" are refused and removing an entry, including the carried
+earlier-switch entry, succeeds and writes its audit row.
+Rendered evidence through the existing drivers covers the states of §4.8.
+
+### Slice 3: phase 2, per workspace
+
+Starts only when §5.1's six conditions hold for a workspace and Q1-Q4 are
+answered. Member linking, the membership source of admission, running inside
+the workspace boundary, the review list of §5.7, and the threat tests: from a
+direct run, a continuation, a recovered run, a child and a handoff, try to read
+another workspace's checkout and credentials, the operator's home and an
+unrelated host, through absolute paths, `..`, symlinks and inherited secrets;
+each fails without side effects. From outside: with W isolated, a run admitted
+by a `requester`-tier entry on an Unassigned project, and one admitted by
+membership of another workspace, try to read W's checkout, transcripts and
+credentials, push to W's repository with whatever forge credential they hold,
+and write `relays.json` (an entry or an `owner`-tier claim), the run ledger,
+the team store (W's membership) and the audit file; each fails without side
+effects, and the same Unassigned entry gives the restricted answer while no
+outside boundary exists. A membership removed by the Viewer stops the member's
+run when the MCP task executor rechecks it. With two pairings of different
+owners, the second pairing's owner, holding an entry carried from the earlier
+switch and membership of the isolated workspace W, runs inside W's boundary,
+while the machine owner, also a member of W, keeps the owner's reach.
+
+## 7. Validation against the requirement
+
+| The requirement says | Where |
+|---|---|
+| Trusted non-owners may run elevated now, from a list | §4.2, slice 1 |
+| They get rights for the whole machine while there are no workspaces | §2, §4.6 (the confirmation says so), §4.7 |
+| Each project has its own set of requesters | §4.1 (entries bound to a project; moving a target suspends them), §4.4 (the earlier switch too), §4.7 (handoff check) |
+| Only the installation owner manages it, from the board or MCP, with confirmation and an audit log | §4.6 |
+| Targets the old switch enabled stay enabled and count as a grant | §4.4 |
+| With isolated workspaces, a member bound through Telegram may run anything inside their workspace | §5.1-§5.3 |
+| Only the machine owner adds people to the machine | §4.1 (owner reach only for the machine owner's pairing), §4.4 ("Add me"), §4.6, §5.1 condition 6 (no non-owner run can write admission state once a workspace is isolated), §5.6, Q3 |
+| A person in several workspaces has access in each, isolated from each other | §5.5, §5.1 condition 6 (runs outside a workspace cannot reach in) |
+| Still standing from #3131: a message alone grants nothing; each run shows who triggered it | §4.2 step 1, §4.5, §4.7 |
+
+## 8. Deferred — not currently justified
+
+- **A project execution boundary for phase 1.** #3293 required one before any
+  non-owner elevation. The operator chose machine-wide trust until workspaces;
+  the boundary moves to phase 2 (§5.1).
+- **An explicit wire refusal (`requester_not_trusted`) and capability
+  negotiation.** People not on the list get today's restricted answer, which
+  needs no protocol change and discloses nothing.
+- **A second per-target "Allow elevated runs" switch.** The entry list is the
+  switch; an empty list is off.
+- **A separate policy file with its own lock and idempotency receipts.** Entries
+  on the target reuse the store, lock and atomic write every recheck already
+  reads.
+- **Enrolment by picking a requester seen in recent requests.** Display names
+  are chosen by their holders; the code proves the key (§4.5).
+- **A cross-target identity from the service** (a stable per-pairing user key,
+  or an attested platform id). It would let one enrolment cover all of a
+  project's clones, and needs a service change the relay protocol currently
+  forbids (`docs/design/relay.md:1482`).
+- **Wildcard, role-based ("every chat admin") and expiring entries.**
+- **A clone serving several workspaces**, which would choose the workspace from
+  the message (§5.5).
+- **Public-export aliases for requesters and team-activity projection of the
+  audit.** The audit holds no identities to alias, and the board's history view
+  covers solo and team installs alike.
+- **An implicit trust of the machine owner on new targets.** One press adds them
+  (§4.4); nothing is trusted without an entry.
+
+## 9. Questions for the operator
+
+1. **What isolation must a workspace have before its members get unrestricted
+   relay runs?** Level 2, chosen on 2026-10-20, leaves the shell able to read
+   every project and credential, so "can do anything inside the workspace"
+   would in fact reach the whole machine. Recommended: require a per-workspace
+   OS identity that contains the shell, credentials and hosts (§5.1, level 4 or
+   an equivalent executor); until a workspace has it, its members use phase 1's
+   list like anyone else.
+2. **Which workspace roles get unrestricted runs?** Recommended: every member
+   and manager of the workspace, because members already direct agents there
+   from the board, and the relay is one more way to do the same.
+3. **Can a workspace manager's invite turn on relay elevation?** The 2026-10-20
+   decision lets managers invite people into a workspace; the 2026-10-24 comment
+   says only the machine owner adds people to the machine. Recommended: a
+   manager's invite gives Viewer membership as decided; relay elevation for that
+   member starts only after the machine owner confirms it once, with the same
+   confirmation and audit as a list entry.
+4. **After the first workspace is isolated, what happens to list entries on
+   projects outside every isolated workspace?** Keeping their whole-machine
+   reach would let a person trusted only on an Unassigned project read the
+   isolated workspace's files and credentials and write themselves into its
+   membership or an owner entry, since their runs act as this computer's
+   account (§5.1 condition 6). Recommended: they run inside one contained
+   outside boundary with only the credentials you assign to it; until that
+   boundary exists they get the ordinary restricted answer, and the review list
+   offers to move their project into an isolated workspace or remove them
+   (§5.7). Entries on isolated projects narrow to their workspace
+   automatically.
+5. **Is a one-time code acceptable for adding a person?** The person sends a
+   short code to the clone, sees the fixed reply under their own message, and
+   the owner confirms with them before accepting the candidate (§4.5); this is
+   the only way to tell people apart, since the relay gives each person an
+   opaque key per clone and names prove nothing. Adding a person needs a board
+   session signed in with Telegram as the owner, so a solo install without a
+   team can remove entries and cannot add any until you set up the team, as
+   with voice tools (§4.6). Recommended: yes to the code, and the same code
+   links a member's Telegram chats in phase 2; keep the Telegram sign-in for
+   adding.

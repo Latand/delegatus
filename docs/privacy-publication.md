@@ -177,14 +177,18 @@ The generator emits a status and count. Raw labels stay out of its diagnostics
 and the generated catalog. Preserve per-value policy in the private input so
 regeneration retains it.
 
-The committed catalog is the source of truth for the `exactOnly` policy added
-in #2391. Its entry was selected by fingerprint because the original raw input
-was generated elsewhere and is unavailable locally. Before the next regeneration
-from a raw file, add `exactOnly: true` to that value's JSON line and use
-`--json-lines`, as shown above. Never copy the raw value into public evidence.
-Regenerating from an unmarked line removes the flag and restores compact
-matching. Review the generated catalog diff before committing: retain each
-existing `exactOnly: true` entry unless its policy change was explicitly approved.
+The ambiguous dictionary-phrase fingerprint was removed in #2261 so ordinary
+open-source prose passes. The gate rejects the label as the entire published
+content and retains its digest for identity fields
+(account id, label, username, handle and hostname), account-path segments, handle
+mentions and values following a textual account marker. Serialized account
+responses expose bare id and label keys, which receive the same protection.
+These checks run after the same decoding as other known values,
+across file contents, metadata, OCR and commit text. Keep the global entry out
+of regenerated catalogs. Other private-label fingerprints and the scanner's compact and `exactOnly` policies
+remain in force. Review every generated catalog diff before committing;
+retain each private entry and its policy unless its change was explicitly
+approved. Never copy a raw private value into public evidence.
 
 ## Approved public values
 

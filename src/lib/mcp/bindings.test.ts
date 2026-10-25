@@ -1737,6 +1737,73 @@ test("list_pipelines applies project, state, and closed filters to the durable r
     .toEqual([{ id: "pipeline_live", project: "viewer", state: "running" }]);
 });
 
+test.each([false, true])("list_pipelines resolves archived ids with the same filters and cursors (indexed: %s)", async (indexed) => {
+  const rows = [
+    { id: "pipeline_archived", project: "viewer", state: "closed", createdAt: "2026-10-01T00:00:00.000Z" },
+    { id: "pipeline_completed", project: "viewer", state: "completed", createdAt: "2026-10-02T00:00:00.000Z" },
+    { id: "pipeline_foreign", project: "other", state: "closed", createdAt: "2026-10-03T00:00:00.000Z" },
+  ];
+  const read = (id: string) => rows.find(row => row.id === id) ?? null;
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    getPipelines: () => { throw new Error("explicit ids traversed the hot registry"); },
+    listPipelineRecords: () => { throw new Error("explicit ids traversed the hot registry"); },
+    ...(indexed ? { pipelineSelectionSource: () => ({ filename: "unused-for-keyed-reads", read: () => null }) } : {}),
+    readPipelineRecord: read,
+    callerAttribution: () => ({ kind: "manager", conversationId: "conversation_seat" }),
+    authorizedSeats: () => [{ conversationId: "conversation_seat", project: "viewer" }],
+  } as never);
+
+  const args = { ids: [...rows.map(row => row.id), "missing", rows[0]!.id], includeClosed: true, compact: true, limit: 1 };
+  const first = await bindings.list_pipelines(args);
+  expect(first).toMatchObject({ count: 1, total: 2, hasMore: true, pipelines: [{ id: "pipeline_completed" }] });
+  const next = await bindings.list_pipelines({ ...args, cursor: first.nextCursor });
+  expect(next).toMatchObject({ count: 1, total: 2, hasMore: false, pipelines: [{ id: "pipeline_archived", state: "closed" }] });
+  await expect(bindings.list_pipelines({ ...args, state: ["closed", "completed"], limit: 10 }))
+    .resolves.toMatchObject({ count: 2, total: 2 });
+  await expect(bindings.list_pipelines({ ...args, includeClosed: false, limit: 10 }))
+    .resolves.toMatchObject({ count: 1, pipelines: [{ id: "pipeline_completed" }] });
+  await expect(bindings.list_pipelines({ ...args, state: "running" })).resolves.toMatchObject({ count: 0 });
+  await expect(bindings.list_pipelines({ ...args, ids: "missing" })).resolves.toMatchObject({ count: 0 });
+  await expect(bindings.list_pipelines({ ...args, project: "other" }))
+    .rejects.toMatchObject({ details: { code: "cross_project_refused" } });
+});
+
+test.each([false, true])("list_pipelines filters archived ids by PR query before paging (indexed: %s)", async (indexed) => {
+  const rows = [
+    { id: "pipeline_archived", project: "viewer", state: "closed", task: "PR #2800 archive selector", createdAt: "2026-10-01T00:00:00.000Z" },
+    { id: "pipeline_completed", project: "viewer", state: "completed", task: "PR #2800 completed selector", createdAt: "2026-10-02T00:00:00.000Z" },
+    { id: "pipeline_foreign", project: "other", state: "closed", task: "PR #2800 foreign selector", createdAt: "2026-10-03T00:00:00.000Z" },
+    { id: "pipeline_nonmatching", project: "viewer", state: "closed", task: "PR #2801 other selector", createdAt: "2026-10-04T00:00:00.000Z" },
+  ];
+  const reads: string[] = [];
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    getPipelines: () => { throw new Error("explicit PR query traversed the hot registry"); },
+    listPipelineRecords: () => { throw new Error("explicit PR query traversed the hot registry"); },
+    ...(indexed ? { pipelineSelectionSource: () => ({ filename: "unused-for-keyed-pr-reads", read: () => { throw new Error("explicit PR query read the hot source"); } }) } : {}),
+    readPipelineRecord: (id: string) => { reads.push(id); return rows.find(row => row.id === id) ?? null; },
+    callerAttribution: () => ({ kind: "manager", conversationId: "conversation_seat" }),
+    authorizedSeats: () => [{ conversationId: "conversation_seat", project: "viewer" }],
+  } as never);
+
+  const args = { ids: [...rows.map(row => row.id), "missing", rows[0]!.id], query: "PR 2800", includeClosed: true, limit: 1 };
+  const first = await bindings.list_pipelines(args);
+  expect(first).toMatchObject({ count: 1, total: 2, hasMore: true, pipelines: [{ id: "pipeline_completed" }] });
+  expect(reads).toEqual([...rows.map(row => row.id), "missing"].sort());
+  // A foreign record changing its PR cannot reset this project's cursor.
+  rows[2]!.task = "PR #2801 foreign selector";
+  const next = await bindings.list_pipelines({ ...args, cursor: first.nextCursor });
+  expect(next).toMatchObject({ count: 1, total: 2, hasMore: false, pipelines: [{ id: "pipeline_archived" }] });
+  await expect(bindings.list_pipelines({ ...args, ids: "pipeline_archived", query: "PR 2801" }))
+    .resolves.toMatchObject({ count: 0, total: 0 });
+  await expect(bindings.list_pipelines({ ...args, includeClosed: false }))
+    .resolves.toMatchObject({ count: 1, total: 1, pipelines: [{ id: "pipeline_completed" }] });
+  await expect(bindings.list_pipelines({ ...args, state: "running" })).resolves.toMatchObject({ count: 0, total: 0 });
+  await expect(bindings.list_pipelines({ ...args, updatedSince: "2026-10-02T00:00:00.000Z", limit: 10 }))
+    .resolves.toMatchObject({ count: 1, total: 1, pipelines: [{ id: "pipeline_completed" }] });
+  await expect(bindings.list_pipelines({ ...args, project: "other" }))
+    .rejects.toMatchObject({ details: { code: "cross_project_refused" } });
+});
+
 /* #863: the list is a board-card projection, not the registry records. Detail —
    the spec body, stage prompts, and every attempt's relay input and transcript
    tail — belongs to get_pipeline, which still returns the whole record. */
@@ -4449,7 +4516,8 @@ test("task placement bindings require atomic guards and classify field refusals 
   }
   // Child imports happen only after every root has been isolated. The parent
   // file already imports bindings for its existing dependency-injected tests.
-  const child = Bun.spawn([process.execPath, "-e", `
+  const child = Bun.spawn([process.execPath, "-e", `import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
+
     import fs from "node:fs";
     import { viewerMcpBindings } from "./src/lib/mcp/bindings";
     import { createMcpToolService, MemoryMcpReceiptStore } from "./src/lib/mcp/server";
@@ -4462,13 +4530,13 @@ test("task placement bindings require atomic guards and classify field refusals 
     import { persistedTaskState } from "./src/lib/tasks/storeFixture";
     if (!TASKS_FILE.startsWith(process.env.LLV_STATE_DIR + "/")) throw new Error("state escaped sandbox");
     const service = createMcpToolService(viewerMcpBindings(), new MemoryMcpReceiptStore());
-    const created = await service.callTool("create_task", { clientRequestId: "binding-position-create", project: "fixture-project", text: "task" });
+    const created = await service.callTool("create_task", withTaskDue({ clientRequestId: "binding-position-create", project: "fixture-project", text: "task" }));
     if (!created.ok) throw new Error(created.error);
     const before = persistedTaskState(TASKS_FILE);
     const missing = await service.callTool("update_task", { clientRequestId: "binding-missing-guard", taskId: created.taskId, pos: { x: 0, y: 0 } });
     const invalid = [];
     for (const [index, pos] of [null, {}, { x: 1 }, { x: Infinity, y: 1 }, { x: 0, y: NaN }].entries()) {
-      invalid.push(await service.callTool("create_task", { clientRequestId: "binding-invalid-pos-" + index, project: "fixture-project", text: "task", placement: "pinned", pos }));
+      invalid.push(await service.callTool("create_task", withTaskDue({ clientRequestId: "binding-invalid-pos-" + index, project: "fixture-project", text: "task", placement: "pinned", pos })));
     }
     console.log(JSON.stringify({ missing, invalid, unchanged: persistedTaskState(TASKS_FILE) === before }));
   `], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
@@ -4491,7 +4559,8 @@ test("MCP task writes normalize holds, preserve step operator reasons and server
   for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "TMPDIR"]) {
     const dir = path.join(sandbox, key); fs.mkdirSync(dir); env[key] = dir;
   }
-  const child = Bun.spawn([process.execPath, "-e", `
+  const child = Bun.spawn([process.execPath, "-e", `import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
+
     import { Client } from "@modelcontextprotocol/sdk/client/index.js";
     import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
     import { viewerMcpBindings } from "./src/lib/mcp/bindings";
@@ -4525,10 +4594,10 @@ test("MCP task writes normalize holds, preserve step operator reasons and server
       ...(index === 5 ? { hold: { kind: "worker", note: "Waiting for capacity", by: "operator", conversationId: "conversation_spoofed" } } : {}),
     }));
     try {
-    const created = await call("create_task", {
+    const created = await call("create_task", withTaskDue({
       clientRequestId: "hold-create-bound", project: "fixture-project", text: "Track a waiting reason", full: true, steps,
       hold: { kind: "worker", note: "Waiting for capacity", by: "operator", since: "2000-01-01T00:00:00.000Z", conversationId: "conversation_spoofed" },
-    });
+    }));
     const createdTask = created.task;
     conversationId = "conversation_update_bound";
     const updated = await call("update_task", {
@@ -4536,11 +4605,11 @@ test("MCP task writes normalize holds, preserve step operator reasons and server
       hold: { kind: "worker", note: "Capacity is still full", by: "operator", since: "2001-01-01T00:00:00.000Z", conversationId: "conversation_spoofed" },
     });
     const read = await call("get_task", { clientRequestId: "hold-read-bound", taskId: created.taskId });
-    const normalizedCreate = await call("create_task", {
+    const normalizedCreate = await call("create_task", withTaskDue({
       clientRequestId: "hold-create-normalized", project: "fixture-project", text: "Normalize waiting reasons", full: true,
       hold: { kind: "unknown-kind", note: "x".repeat(201) },
       steps: [{ id: "long", text: "Wait", state: "open", hold: { kind: "unknown-kind", note: "x".repeat(201) } }],
-    });
+    }));
     const unknownUpdate = await call("update_task", {
       clientRequestId: "hold-update-unknown", taskId: normalizedCreate.taskId, full: true,
       hold: { kind: "unknown-kind", note: "z".repeat(201) },

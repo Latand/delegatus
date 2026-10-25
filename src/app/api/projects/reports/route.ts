@@ -1,3 +1,4 @@
+import { workspaceRoute, requestWorkspaceScope, filterWorkspaceRows } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
 import { projectReportOverview, type ProjectReportLine } from "@/lib/projects/reportDestination";
@@ -17,8 +18,10 @@ export interface ProjectReportsResponse {
   projects: ProjectReportLine[];
 }
 
-export async function GET(request: NextRequest): Promise<NextResponse> {
+async function workspaceGET(request: NextRequest): Promise<NextResponse> {
   const rejected = rejectCrossOrigin(request);
   if (rejected) { rejected.headers.set("Cache-Control", "no-store"); return rejected; }
-  return NextResponse.json({ ok: true, projects: projectReportOverview() } satisfies ProjectReportsResponse, { headers: { "Cache-Control": "no-store" } });
+  return NextResponse.json({ ok: true, projects: filterWorkspaceRows(requestWorkspaceScope(request), projectReportOverview()) } satisfies ProjectReportsResponse, { headers: { "Cache-Control": "no-store" } });
 }
+
+export const GET = workspaceRoute("/api/projects/reports", workspaceGET, true);

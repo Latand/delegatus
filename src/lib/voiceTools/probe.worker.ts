@@ -3,7 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
+import { CallToolResultSchema, ErrorCode, McpError, type JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import Ajv from "ajv";
 import { constants } from "node:fs";
 import path from "node:path";
@@ -11,19 +11,31 @@ import * as fs from "node:fs/promises";
 import { assertSecretDestinations, type SecretPolicies, digest, launchShapingEnv, packageLaunch, validateCatalog, voiceToolBounds, type VoiceToolServer, type ContainmentReason } from "./contracts";
 import { stdioContainment } from "./containment";
 import { verifyEntry } from "./entry";
+import { encodedForms } from "../voiceCompanion/credentialMask";
 
-let received = 0;
-const input: Buffer[] = [];
-for await (const chunk of process.stdin) {
-  received += chunk.length;
-  if (received > 3 * 1024 * 1024) process.exit(1);
-  input.push(chunk);
+/** Lines of the owned input pipe. A dry run sends one request and closes it; a session keeps it open for calls. */
+async function* inputLines(): AsyncGenerator<string> {
+  let buffer = Buffer.alloc(0);
+  for await (const chunk of process.stdin) {
+    buffer = Buffer.concat([buffer, chunk]);
+    for (let end = buffer.indexOf(10); end >= 0; end = buffer.indexOf(10)) {
+      yield buffer.subarray(0, end).toString("utf8");
+      buffer = buffer.subarray(end + 1);
+    }
+    if (buffer.length > 3 * 1024 * 1024) process.exit(1);
+  }
+  if (buffer.length) yield buffer.toString("utf8");
 }
-const request = JSON.parse(Buffer.concat(input).toString("utf8")) as {
+const lines = inputLines();
+const first = await lines.next();
+if (first.done) process.exit(1);
+const request = JSON.parse(first.value) as {
   confirmUncontained?: ContainmentReason;
   name: string; server: VoiceToolServer; secrets: Record<string, string>; policies?: SecretPolicies; home: string;
   /** Chosen by the Viewer (hub.ts): the launcher's absolute path, an empty Bun config and an empty folder. */
   launch: { executable: string; config: string; runDir: string; runRoot: string; stateDirectory: string } | null;
+  /** A voice call's session (sessions.ts): stay connected and answer calls of these approved input schemas. */
+  mode?: "session"; approved?: Record<string, Record<string, unknown>>;
 };
 const resolveValues = (values: Record<string, { value: string } | { secretRef: string }>): Record<string, string> =>
   Object.fromEntries(Object.entries(values).map(([key, entry]) => [key, "value" in entry ? entry.value : request.secrets[entry.secretRef]]));
@@ -41,8 +53,8 @@ async function sandboxLayout(launch: { runRoot: string; stateDirectory: string }
   return { executable, base, runDir, home, mapPath: (file: string) => isWithin(launch.runRoot, file) ? path.join(runDir, path.relative(launch.runRoot, file)) : file };
 }
 let containmentReason: ContainmentReason | undefined;
-let wireBytes = 0;
-function count(bytes: number) { wireBytes += bytes; if (wireBytes > voiceToolBounds.wireBytes) throw new Error("CATALOG_BOUNDS"); }
+let wireBytes = 0, wireLimit: number = voiceToolBounds.wireBytes;
+function count(bytes: number) { wireBytes += bytes; if (wireBytes > wireLimit) throw new Error("CATALOG_BOUNDS"); }
 
 /** SDK stdio's unbounded line buffer is inappropriate for an untrusted catalog. */
 class BoundedStdio implements Transport {
@@ -230,13 +242,89 @@ const boundedFetch = async (input: string | URL | Request, init?: RequestInit): 
   return new Response(stream, { status: response.status, statusText: response.statusText, headers: response.headers });
 };
 
+const write = (value: unknown) => new Promise<void>(resolve => process.stdout.write(JSON.stringify(value) + "\n", () => resolve()));
+// A secret is masked as written and in every form an answer can encode it: JSON escaping inside structuredContent, a
+// percent-encoded URL, base64 and base64url.
+const masked = (text: string) => Object.values(request.secrets).filter(secret => secret.length >= 8).flatMap(secret => [secret, ...encodedForms(secret)])
+  .reduce((value, form) => value.replaceAll(form, "[masked]"), text);
+function cutText(text: string, limit: number): string {
+  if (Buffer.byteLength(text) <= limit) return text;
+  const marker = `\n[cut: the answer is longer than ${Math.round(limit / 1024)} KB]`;
+  let kept = "";
+  for (const char of text) { if (Buffer.byteLength(kept + char) > limit - Buffer.byteLength(marker)) break; kept += char; }
+  return kept + marker;
+}
+/** A tool result as the backend receives it (design §3.5 step 5); mapped here, so the Viewer only reads a bounded line. */
+function mapResult(result: Record<string, unknown>) {
+  const texts: string[] = [], images: { mime: string; data: string }[] = [], omitted = new Set<string>();
+  let imageBytes = 0;
+  for (const item of Array.isArray(result.content) ? result.content as Record<string, unknown>[] : []) {
+    if (item?.type === "text" && typeof item.text === "string") texts.push(item.text);
+    else if (item?.type === "image" && typeof item.data === "string" && typeof item.mimeType === "string" && /^image\/(?:png|jpeg|webp|gif)$/.test(item.mimeType)) {
+      const bytes = Math.floor(item.data.length * 3 / 4);
+      if (images.length < voiceToolBounds.callImages && bytes <= voiceToolBounds.callImageBytes && imageBytes + bytes <= voiceToolBounds.callImagesBytes && /^[A-Za-z0-9+/]*={0,2}$/.test(item.data)) {
+        images.push({ mime: item.mimeType, data: item.data }); imageBytes += bytes;
+      } else omitted.add("image");
+    } else omitted.add(typeof item?.type === "string" && /^[a-z_]{1,32}$/.test(item.type) ? item.type : "unknown");
+  }
+  let text = texts.join("\n");
+  if (!text && result.structuredContent && typeof result.structuredContent === "object") text = JSON.stringify(result.structuredContent);
+  return { status: result.isError === true ? "failed" : "done", ...(result.isError === true ? { code: "TOOL_ERROR" } : {}),
+    content: cutText(masked(text), voiceToolBounds.callTextBytes), omitted: [...omitted].sort(), images };
+}
+/** Session mode: one approved server for the voice calls of this Viewer, one call at a time (the hub serializes them). */
+async function serve(connected: Client, live: unknown[]): Promise<void> {
+  let tools: unknown = null;
+  try { tools = validateCatalog(request.name, live); } catch { /* A catalog outside the bounds is drift: every approved tool reads as changed. */ }
+  const ajv = new Ajv({ strict: false, allErrors: false, validateFormats: false });
+  const validators = new Map(Object.entries(request.approved ?? {}).map(([tool, schema]) => [tool, ajv.compile(schema)]));
+  let closed = false;
+  const lost = new Promise<void>(resolve => { connected.onclose = () => { closed = true; resolve(); }; });
+  await write({ type: "ready", tools });
+  const running = new Map<string, AbortController>();
+  const work: Promise<void>[] = [];
+  const answer = async (command: Record<string, unknown>) => {
+    const id = String(command.id).slice(0, 64), tool = String(command.tool);
+    const validate = validators.get(tool);
+    if (!validate) return write({ type: "result", id, status: "failed", code: "TOOL_NOT_ALLOWED" });
+    if (!command.arguments || typeof command.arguments !== "object" || Array.isArray(command.arguments) || !validate(command.arguments)) return write({ type: "result", id, status: "failed", code: "INVALID_TOOL_ARGUMENTS" });
+    const controller = new AbortController();
+    running.set(id, controller);
+    // Each call has its own incoming-byte bound; a server that floods it is stopped.
+    wireBytes = 0; wireLimit = voiceToolBounds.callWireBytes;
+    const timeout = Math.min(Math.max(Number(command.timeoutMs) || 15_000, 1), 60_000);
+    try {
+      const result = await connected.request({ method: "tools/call", params: { name: tool, arguments: command.arguments as Record<string, unknown> } }, CallToolResultSchema,
+        { signal: controller.signal, timeout, maxTotalTimeout: timeout });
+      await write({ type: "result", id, ...mapResult(result as Record<string, unknown>) });
+    } catch (error) {
+      // A JSON-RPC error or an answer outside the result schema is the tool's failure; a lost transport is the server's.
+      const timedOut = controller.signal.aborted || error instanceof McpError && error.code === ErrorCode.RequestTimeout;
+      const answered = error instanceof McpError || (error as Error)?.name === "ZodError";
+      await write({ type: "result", id, status: "failed", code: closed ? "TOOL_SERVER_UNAVAILABLE" : timedOut ? "TOOL_TIMEOUT" : answered ? "TOOL_ERROR" : "TOOL_SERVER_UNAVAILABLE" });
+    } finally { running.delete(id); }
+  };
+  const reading = (async () => {
+    for await (const line of lines) {
+      let command: Record<string, unknown>;
+      try { command = JSON.parse(line); } catch { continue; }
+      if (command?.type === "cancel") running.get(String(command.id))?.abort();
+      else if (command?.type === "call") work.push(answer(command));
+    }
+  })();
+  // The Viewer closing the pipe ends the session; so does the server going away.
+  await Promise.race([reading, lost]);
+  for (const controller of running.values()) controller.abort();
+  await Promise.allSettled(work);
+}
+
 let client: Client | undefined;
 let answer: unknown;
 try {
   assertSecretDestinations(request.name, request.server, request.policies ?? {});
   await verifyEntry(request.server);
   const transport = request.server.transport;
-  client = new Client({ name: "delegatus-voice-tools-probe", version: "1" });
+  client = new Client({ name: request.mode === "session" ? "delegatus-voice-tools" : "delegatus-voice-tools-probe", version: "1" });
   const connection = transport.type === "stdio" ? new BoundedStdio()
     : new StreamableHTTPClientTransport(new URL(transport.url), { fetch: boundedFetch,
       requestInit: { headers: resolveValues(transport.headers) }, reconnectionOptions: { maxRetries: 0, initialReconnectionDelay: 1000, maxReconnectionDelay: 1000, reconnectionDelayGrowFactor: 1 } });
@@ -255,14 +343,21 @@ try {
   // No echo from the peer, including fields discarded during normalization, may escape.
   const raw = JSON.stringify(tools);
   if (Object.values(request.secrets).some(secret => secret.length >= 8 && (raw.includes(secret) || raw.includes(JSON.stringify(secret).slice(1, -1))))) throw new Error("SECRET_ECHO");
-  const ajv = new Ajv({ strict: false, allErrors: false, validateFormats: false });
-  const catalog = validateCatalog(request.name, tools, schema => { ajv.removeSchema(); ajv.compile(schema); });
-  answer = { code: "OK", catalog: { digest: digest(catalog), fetchedAt: new Date().toISOString(), tools: catalog } };
+  if (request.mode === "session") await serve(client, tools);
+  else {
+    const ajv = new Ajv({ strict: false, allErrors: false, validateFormats: false });
+    const catalog = validateCatalog(request.name, tools, schema => { ajv.removeSchema(); ajv.compile(schema); });
+    answer = { code: "OK", catalog: { digest: digest(catalog), fetchedAt: new Date().toISOString(), tools: catalog } };
+  }
 } catch (error) {
   const message = error instanceof Error ? error.message : "";
   answer = { code: ["CONTAINMENT_REQUIRED", "START_FAILED", "CATALOG_BOUNDS", "SECRET_ECHO", "SECRET_DESTINATION", "ENTRY_CHANGED"].includes(message) ? message : "PROTOCOL_ERROR", ...(containmentReason ? { containmentReason } : {}) };
 } finally {
   // The parent deadline also owns close; a peer cannot extend it during shutdown.
   await client?.close().catch(() => undefined);
+}
+if (request.mode === "session") {
+  if (answer) await write({ type: "failed", ...(answer as object) });
+  process.exit(0);
 }
 process.stdout.write(JSON.stringify(answer), () => process.exit(0));

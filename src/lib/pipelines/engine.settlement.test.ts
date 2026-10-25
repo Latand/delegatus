@@ -2148,6 +2148,42 @@ for (const settled of [false, true]) {
   });
 }
 
+for (const variant of ["published", "moved-head", "unknown-remote", "different-result-sha", "different-operation-sha", "pending", "failed"] as const) {
+  test(`a read-only pass reuses only exact settled publication evidence: ${variant}`, async () => {
+    const h = harness();
+    const box = publishHarness(h);
+    await create(h.ports, [PUBLISH_STAGES[0], { ...PUBLISH_STAGES[1], ...(variant === "moved-head" ? { role: { roleId: "builder" } } : {}) }] as never, REMOTE_BRANCH);
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    await tickPipelines([h.finish(loadPipelines()[0]!.runs[0]!.attempts[0]!.agentPath!, "pass")], h.ports);
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    const lane = loadPipelines()[0]!;
+    const operation = lane.delivery!.operation!;
+    expect(operation.state).toBe("settled");
+    expect(operation.result).toMatchObject({ ok: true, remote: "published", sha: box.passedSha });
+    const otherSha = "9".repeat(40);
+    if (variant === "moved-head") box.setLocalHead(otherSha);
+    if (variant === "unknown-remote") operation.result = { ok: true, sha: box.passedSha, remote: "unreachable", detail: "unknown" };
+    if (variant === "different-result-sha") operation.result = { ok: true, sha: otherSha, remote: "published" };
+    if (variant === "different-operation-sha") operation.sha = otherSha;
+    if (variant === "pending") operation.state = "pending";
+    if (variant === "failed") operation.result = { ok: false, error: "publication refused" };
+    savePipelines([lane]);
+    const reads = box.remoteReadAttempts();
+    await tickPipelines([h.finish(lane.runs.find(run => run.stageId === "review")!.attempts[0]!.agentPath!, "pass")], h.ports);
+    const settled = loadPipelines()[0]!;
+    if (variant === "published") {
+      expect(settled.state).toBe("completed");
+      expect(settled.delivery!.operation!.id).toBe(operation.id);
+      expect(box.remoteReadAttempts()).toBe(reads);
+    } else {
+      expect(settled.delivery!.operation!.id).not.toBe(operation.id);
+      expect(box.remoteReadAttempts()).toBeGreaterThan(reads);
+    }
+  });
+}
+
 test("a builder that already pushed the accepted commit settles without another push (#1939)", async () => {
   const h = harness();
   const box = publishHarness(h);

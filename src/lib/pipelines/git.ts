@@ -1,3 +1,4 @@
+import { stateDir } from "@/lib/configDir";
 import { shortId } from "@/lib/shortIds";
 import { publicationFailurePhase } from "./publicationHistory";
 export { publicationFailurePhase } from "./publicationHistory";
@@ -206,6 +207,7 @@ export async function provisionPipelineWorktree(pipeline: Pipeline, exec: ExecPo
   if (base.code !== 0 || !base.stdout.trim()) return failure("resolving the pipeline base ref", base);
   if (base.stdout.trim() !== pipeline.baseRef) return { ok: false, error: "the pipeline worktree does not match its persisted base" };
   recordWorktreeProvenance(pipeline.worktreeDir, { creator: "pipeline", id: pipeline.id });
+  await prepareStageToolchain(pipeline, exec);
   return { ok: true, sha: pipeline.baseRef, baseBranch: pipeline.baseBranch };
 }
 
@@ -434,6 +436,8 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
   // The worktree sweep removes only checkouts with a record of who made them.
   // The pipeline's own record names this path too, so a failed write keeps it sweepable.
   recordWorktreeProvenance(pipeline.worktreeDir, { creator: "pipeline", id: pipeline.id });
+  await prepareStageToolchain(pipeline, (command, args, cwd) => exec(command, args, cwd, signal));
+  if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
   return { ok: true, sha: base.stdout.trim(), baseBranch: pipeline.baseBranch };
 }
 
@@ -745,10 +749,10 @@ function stageToolchainRelease(pipeline: Pipeline): (() => void) | undefined {
   } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
 }
 
-/** Settlement runs after the agent's turn, including read-only turns which
-    never installed dependencies. Share the parent checkout's installed tools
-    for the commit through an absent, ignored node_modules. Remove our link
-    afterward so a later install cannot write into the parent checkout.
+/** Provisioning shares the parent checkout's installed tools before the agent
+    can make its first hooked commit. Settlement retries this for older lanes
+    and read-only turns, then removes the borrowed link after its commit so a
+    later install cannot write into the parent checkout.
     Preserve any local install or unrelated link, including dangling links. */
 async function prepareStageToolchain(pipeline: Pipeline, exec: ExecPort): Promise<(() => void) | undefined> {
   if (path.resolve(pipeline.repoDir) === path.resolve(pipeline.worktreeDir)) return;
@@ -1854,7 +1858,8 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       }
       if (pipeline.delivery && pipeline.delivery.epoch !== current.delivery.epoch) return { error: "delivery epoch changed; reload the owner before publishing" };
       const previous = current.delivery.operation;
-      if (pipeline.delivery?.operation?.state === "pending" && previous?.id !== pipeline.delivery.operation.id) {
+      if (pipeline.delivery?.operation?.state === "pending"
+        && (previous?.id !== pipeline.delivery.operation.id || previous.state !== "pending")) {
         return { error: `publisher ${current.id} at epoch ${current.delivery.epoch} has a newer reservation; reload before publishing` };
       }
       if (previous?.state === "running") return { waiting: pipelinePublicationInFlight(current) };
@@ -2224,6 +2229,8 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
      limit for git to send the pack, so it ends with its own verdict or with
      a named missing one instead of being killed (scripts/local-gate.ts). */
   const pushEnv = { ...pipelinePublicationHookEnv(), ...lessons, ...engineForgeWriteEnv(),
+    LLV_GATE_LANE_ID: pipeline.id, LLV_GATE_PUSH_HEAD: acceptedSha, LLV_GATE_STATE_DIR: stateDir(),
+    ...(pipeline.cursor?.stageId ? { LLV_GATE_STAGE_ID: pipeline.cursor.stageId } : {}),
     LLV_GATE_PUSH_DEADLINE: String(publicationHookDeadline(budget.ms, Date.now())) };
   const push = (await exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir, pushEnv, { timeoutMs: budget.ms }));
   if (push.code === null) return { ok: true, sha: acceptedSha, remote: "unreachable", uncertain: true, detail: "remote write was interrupted; reconcile its outcome" };

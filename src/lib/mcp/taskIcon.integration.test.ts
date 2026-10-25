@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 /**
  * Task icons through every published surface (#2102): MCP `create_task`,
  * `update_task`, `list_tasks` and `get_task`, the HTTP create and PATCH the
@@ -70,7 +71,7 @@ test("create_task and update_task publish icon, tell agents to set it, and store
       expect({ name, told: tool.description?.includes("`icon`") }).toEqual({ name, told: true });
     }
 
-    const created = await p.call("create_task", { project: "icon-project", text: "Fix the crash", icon: "lucide:Bug" });
+    const created = await p.call("create_task", withTaskDue({ project: "icon-project", text: "Fix the crash", icon: "lucide:Bug" }));
     expect(created).toMatchObject({ ok: true, task: { icon: "bug" } });
     expect(created.notes).toBeUndefined();
     expect(created.changedFields).toContain("icon");
@@ -92,7 +93,7 @@ test("create_task and update_task publish icon, tell agents to set it, and store
 test("an unknown icon is never an error: it is stored as none and the answer says so, on MCP and HTTP alike", async () => {
   const p = await protocol();
   try {
-    const created = await p.call("create_task", { project: "icon-project", text: "Ship the release", icon: "starship" });
+    const created = await p.call("create_task", withTaskDue({ project: "icon-project", text: "Ship the release", icon: "starship" }));
     expect(created.ok).toBe(true);
     expect("icon" in created.task).toBe(false);
     expect(created.notes?.[0]).toContain('"starship" is not a lucide icon name');
@@ -106,14 +107,14 @@ test("an unknown icon is never an error: it is stored as none and the answer say
     const cleared = await p.call("update_task", { taskId: created.task.id, icon: null });
     expect(cleared.ok).toBe(true);
     /* No schema refuses what the command clamps: null on create, a number on update. */
-    const nullOnCreate = await p.call("create_task", { project: "icon-project", text: "No icon yet", icon: null });
+    const nullOnCreate = await p.call("create_task", withTaskDue({ project: "icon-project", text: "No icon yet", icon: null }));
     expect(nullOnCreate.ok).toBe(true);
     expect("icon" in nullOnCreate.task).toBe(false);
     expect(nullOnCreate.notes).toBeUndefined();
     const numberOnUpdate = await p.call("update_task", { taskId: created.task.id, icon: 42 });
     expect(numberOnUpdate.ok).toBe(true);
     expect(numberOnUpdate.notes?.[0]).toContain("icon must be a lucide icon name");
-    const objectOnCreate = await p.call("create_task", { project: "icon-project", text: "Odd icon", icon: { name: "bug" } });
+    const objectOnCreate = await p.call("create_task", withTaskDue({ project: "icon-project", text: "Odd icon", icon: { name: "bug" } }));
     expect(objectOnCreate.ok).toBe(true);
     expect(objectOnCreate.notes?.[0]).toContain("icon must be a lucide icon name");
 

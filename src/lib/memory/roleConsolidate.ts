@@ -1,16 +1,8 @@
 import { ROLE_MEMORY_BOUND, type RoleMemoryRule, type RuleLeftReason } from "./roleTypes";
 
-/* Consolidation applies the budget to curated rules without a model call: a lesson
-   that repeats an active rule (case, spacing and a closing full stop aside)
-   merges into it; curation order decides what leaves when the scope exceeds
-   its bound. Never-curated lessons wait for a curator; only curated rules
-   may leave for budget. Every symbol counts: "x > 0" and "x < 0", or "set -x" and
-   "set +x", ask for different things. Similar wording is never merged: two
-   rules that share most of their words can still ask for different things, or
-   opposite ones, and only a model could combine them without losing one.
-   Every rule that leaves the injected text keeps its record, its state and
-   the reason, so the window's history shows it; nothing is deleted (operator,
-   2026-10-02: «Может быть, они потом понадобятся»). */
+/* Exact duplicates combine without a model. Distinct lessons wait for the
+   curator to integrate their conditions. Emergency budget archives are reversible
+   and use evidence, never curation status, to choose what leaves. */
 
 export function codePoints(text: string): number {
   return [...text].length;
@@ -44,7 +36,7 @@ export function sameRule(a: string, b: string): boolean {
 }
 
 export interface AppendOutcome {
-  /** The scope's active rules after the append, in order of leaving. */
+  /** The scope's active rules after the append, in stored order. */
   active: RoleMemoryRule[];
   /** Records whose state changed, the incoming one included when it merged into an older rule. */
   changed: RoleMemoryRule[];
@@ -61,23 +53,38 @@ export function leavingOrder(rules: readonly RoleMemoryRule[]): RoleMemoryRule[]
   ];
 }
 
-/** The same bound applies to append, rewrite, succession and operator Return. */
-export function retainRules(rules: readonly RoleMemoryRule[], at: string, protectedIds: ReadonlySet<string> = new Set(), bound = ROLE_MEMORY_BOUND): Pick<AppendOutcome, "active" | "changed" | "archived"> {
+export interface RetentionPolicy {
+  canCurate: boolean;
+  evidence: (rules: readonly RoleMemoryRule[]) => ReadonlyMap<string, { tasks: number; applied: number; lastAppliedAt?: string }>;
+}
+
+/** Only unavailable curation permits emergency eviction beyond 125% of target. */
+export function retainRules(rules: readonly RoleMemoryRule[], at: string, protectedIds: ReadonlySet<string> = new Set(), bound = ROLE_MEMORY_BOUND, policy?: RetentionPolicy): Pick<AppendOutcome, "active" | "changed" | "archived"> {
   const active = leavingOrder(rules);
   const changed: RoleMemoryRule[] = [];
   const archived: string[] = [];
-  while (active.length > 1 && scopeChars(active) > bound) {
-    let index = active.findIndex(rule => !!rule.curatedAt && !protectedIds.has(rule.id) && !rule.keptByOperatorAt);
-    if (index < 0) index = active.findIndex(rule => !!rule.curatedAt && !protectedIds.has(rule.id));
-    if (index < 0) break;
-    const [left] = active.splice(index, 1);
-    changed.push(archivedRule(left!, at, "budget"));
-    archived.push(left!.id);
+  const ceiling = bound * 1.25;
+  if (scopeChars(active) <= ceiling || policy?.canCurate) return { active, changed, archived };
+  const evidence = policy?.evidence(active);
+  const newest = active.reduce((latest, rule) => rule.createdAt > latest.createdAt
+    || rule.createdAt === latest.createdAt && rule.id > latest.id ? rule : latest, active[0]);
+  const candidates = active.filter(rule => rule.id !== newest?.id && !protectedIds.has(rule.id) && !rule.keptByOperatorAt).sort((a, b) => {
+    const left = evidence?.get(a.id), right = evidence?.get(b.id);
+    return (left?.tasks ?? 0) - (right?.tasks ?? 0)
+      || (left?.applied ?? 0) - (right?.applied ?? 0)
+      || (left?.lastAppliedAt ?? a.createdAt).localeCompare(right?.lastAppliedAt ?? b.createdAt) || a.id.localeCompare(b.id);
+  });
+  while (active.length > 1 && scopeChars(active) > ceiling && candidates.length) {
+    const left = candidates.shift()!;
+    active.splice(active.findIndex(rule => rule.id === left.id), 1);
+    const value = evidence?.get(left.id);
+    changed.push({ ...archivedRule(left, at, "budget"), note: `Emergency budget archive: ${value?.tasks ?? 0} backing tasks, ${value?.applied ?? 0} applications; oldest application or creation breaks ties. Curation unavailable.` });
+    archived.push(left.id);
   }
   return { active, changed, archived };
 }
 
-export function appendRule(active: readonly RoleMemoryRule[], incoming: RoleMemoryRule, at: string, bound = ROLE_MEMORY_BOUND): AppendOutcome {
+export function appendRule(active: readonly RoleMemoryRule[], incoming: RoleMemoryRule, at: string, bound = ROLE_MEMORY_BOUND, policy?: RetentionPolicy): AppendOutcome {
   const next = leavingOrder(active);
   const changed: RoleMemoryRule[] = [];
   const added: string[] = [];
@@ -97,7 +104,7 @@ export function appendRule(active: readonly RoleMemoryRule[], incoming: RoleMemo
     changed.push(incoming);
     added.push(incoming.id);
   }
-  const retained = retainRules(next, at, new Set([duplicate?.id ?? incoming.id]), bound);
+  const retained = retainRules(next, at, new Set([duplicate?.id ?? incoming.id]), bound, policy);
   return { active: retained.active, changed: [...changed, ...retained.changed], added, merged, archived: retained.archived };
 }
 

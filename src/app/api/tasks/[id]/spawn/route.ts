@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -10,7 +11,7 @@ import {
   resolveProjectSpawnAccount,
 } from "@/lib/accounts/manager";
 import { AccountProjectBindingsUnreadableError } from "@/lib/accounts/projectBindings";
-import { tierOffers } from "@/lib/accounts/codexServiceTiers";
+import { codexServiceTierRefusal, tierOffers } from "@/lib/accounts/codexServiceTiers";
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import type { AccountContext } from "@/lib/accounts/contracts";
@@ -303,7 +304,7 @@ async function postTaskSpawn(
   if (engine === "codex" && serviceTier) {
     const offers = launchModel ? tierOffers([{ id: account.accountId, home: account.home }], launchModel, serviceTier) : null;
     if (!offers?.offering.length) return NextResponse.json({
-      error: `selected account does not offer serviceTier ${serviceTier}; offered: ${offers?.offered.join(", ") || "none"}`,
+      error: codexServiceTierRefusal([{ id: account.accountId, home: account.home }], launchModel ?? "unknown model", serviceTier, account.accountId, "selected"),
       code: "service_tier_unavailable",
     }, { status: 409 });
   }
@@ -546,10 +547,12 @@ async function postTaskSpawn(
   }
 }
 
-export const POST = Object.assign(
+const workspacePOST = Object.assign(
   async (req: NextRequest, ctx: TaskRouteContext): Promise<NextResponse<TaskSpawnResponse | ApiError>> => await postTaskSpawn(req, ctx),
   /* `productionDependencies` rides along so a test can keep the real account
      resolution — the one #1279's rule lives in — while substituting the task
      store and the pane it must never reach. */
   { withDependencies: postTaskSpawn, productionDependencies },
 );
+
+export const POST = workspaceRoute("/api/tasks/[id]/spawn", workspacePOST);
