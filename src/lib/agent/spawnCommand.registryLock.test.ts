@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { z } from "zod";
 import { assertStateChildSuccess } from "@/lib/state/stateChildResult.fixture";
 
 const cases = ["direct", "relay"].flatMap(route => ["constructor", "writer"].flatMap(site => ["no", "yes"].map(revoked => ({ route, site, revoked }))))
@@ -21,7 +22,15 @@ for (const { route, site, revoked } of cases) {
     const deadline = setTimeout(() => child.kill(), 20_000);
     try {
       const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-      assertStateChildSuccess(code, stderr);
+      const transactionTiming = z.strictObject({ collection: z.string().min(1).optional(),
+        heldMs: z.number().int().min(50), pid: z.literal(child.pid), role: z.literal("unowned") });
+      const diagnostics = stderr.split(/\r?\n/).filter(line => {
+        const prefix = "[state transaction-hold] ";
+        if (!line.startsWith(prefix)) return true;
+        try { return !transactionTiming.safeParse(JSON.parse(line.slice(prefix.length))).success; }
+        catch { return true; }
+      }).join("\n");
+      assertStateChildSuccess(code, diagnostics);
       const result = JSON.parse(stdout);
       expect(result.yielded).toBe(true);
       if (site === "constructor") { expect(result.constructorBusy).toBe(true); expect(result.errno).toBe(5); }
