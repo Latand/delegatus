@@ -40,9 +40,14 @@ export function installPipelineEvidenceIndex(db: Database, directory: string): v
 }
 
 export function pipelineEvidenceIndexReady(db: Database): boolean {
+  return pipelineEvidenceSchemaReady(db) && Boolean(db.query("SELECT 1 FROM pipeline_evidence_clock WHERE id=1").get());
+}
+
+/** The schema half of readiness: it reads sqlite_master only, so one answer
+    holds for as long as the file's schema_version does. */
+export function pipelineEvidenceSchemaReady(db: Database): boolean {
   const rows = db.query<{ name: string; sql: string }, []>(
     "SELECT name,sql FROM sqlite_master WHERE name IN ('pipeline_evidence_clock','pipeline_evidence_rows','pipeline_evidence_insert','pipeline_evidence_update','pipeline_evidence_delete','pipeline_evidence_changed')",
   ).all();
-  return historyProjectionReady(db) && rows.length === 6 && rows.some(row => row.sql === revisionIndex) && triggers.every(sql => rows.some(row => row.sql === sql))
-    && Boolean(db.query("SELECT 1 FROM pipeline_evidence_clock WHERE id=1").get());
+  return historyProjectionReady(db) && rows.length === 6 && rows.some(row => row.sql === revisionIndex) && triggers.every(sql => rows.some(row => row.sql === sql));
 }

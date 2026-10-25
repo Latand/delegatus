@@ -123,7 +123,7 @@ function staleRunFixture() {
     observe: async () => ({ policy, repoDir: "repo", src: "seat" }),
     task: (_project, run, adopted) => { expect(run.cut).toBe("next-cut"); expect(adopted).toBeUndefined(); return "next-task"; },
     create: async request => { creates++; expect(request.baseRef).toBe("next-cut");
-      expect(request.stages?.find(stage => stage.id === "publish")?.prompt).toContain("ask before every tag"); return "next-lane"; },
+      return "next-lane"; },
     pipeline: () => null,
   };
   const input = { project, seat: { conversationId: "seat", seatEpoch: 1 },

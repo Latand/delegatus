@@ -31,10 +31,11 @@ export function liveProposalRefusal(instruction: string, inputs: readonly Operat
   const repeated = turn !== undefined && earlier.some(row => row.turn !== undefined && row.turn < turn && requestText(row.instruction) === requestText(instruction));
   return repeated && !renewed ? "already_requested" : null;
 }
+/** Whether the operator's own words decline or take back what waits for them: "No.", "Cancel it.", "Don't send it.", «Ні, не треба». */
+export const spokenDecline = (text: string): boolean => REFUSED.test(text) || retractsRequest(text);
 export function waitingConfirmationWithdrawn(inputs: readonly OperatorInput[], sourceTurn?: number): boolean {
   const later = sourceTurn === undefined ? inputs.slice(-1) : inputs.filter(row => (row.turn ?? -1) > sourceTurn);
-  const text = words(later).slice(-2_000);
-  return REFUSED.test(text) || retractsRequest(text);
+  return spokenDecline(words(later).slice(-2_000));
 }
 
 const QUOTES = /["“”„«»]/u;

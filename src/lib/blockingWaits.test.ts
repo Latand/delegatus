@@ -1,6 +1,53 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { blockingWaitDiagnostics, recordBlockingWait, resetBlockingWaitsForTests, type BlockingWaitSite } from "./blockingWaits";
 import path from "node:path";
+import { StateLockDeferredError, waitForStateLock } from "./state/lockWait";
+import { FlowPipelineController } from "./pipelines/controller";
+
+test("400 ms lease deferrals during an incomplete scan keep bounded logs and exact counts", async () => {
+  const { lines, samples } = capture();
+  const previous = process.env.LLV_QUIET_DIAGNOSTICS;
+  process.env.LLV_QUIET_DIAGNOSTICS = "0";
+  let now = 0;
+  let complete = false;
+  const clock = spyOn(performance, "now").mockImplementation(() => now);
+  const scanLines: string[] = [];
+  const info = spyOn(console, "info").mockImplementation(line => { scanLines.push(String(line)); });
+  const controller = new FlowPipelineController({
+    now: () => now,
+    monotonicNow: () => now,
+    scan: async () => ({ files: [], complete }),
+    tickPipelines: async () => ({ changed: false }),
+  }, { maxPasses: 1 });
+  try {
+    for (let attempt = 0; attempt < 300; attempt++) {
+      await expect(waitForStateLock("state.lease", () => {
+        throw new StateLockDeferredError("state.lease", "lease", { kind: "worker", ageMs: now });
+      }, { waitMs: 0, subject: "pipelines" })).rejects.toBeInstanceOf(StateLockDeferredError);
+      await controller.tick();
+      now += 400;
+    }
+    process.emit("beforeExit", 0);
+    expect(lines.length).toBeLessThanOrEqual(24);
+    expect(samples().reduce((total, sample) => total + sample.count, 0)).toBe(300);
+    expect(samples().every(sample => sample.deferred && !sample.refused
+      && sample.stateWait.outcome === "deferred" && sample.stateWait.attempts === 1
+      && sample.stateWait.backoffMs === 0 && sample.stateWait.holder.kind === "worker")).toBe(true);
+    expect(blockingWaitDiagnostics().sites["state-write-lock"]?.count).toBe(300);
+    expect(scanLines).toHaveLength(2);
+    expect(scanLines.join("\n")).not.toContain("retry in");
+    complete = true;
+    await controller.tick();
+    await controller.tick();
+    expect(scanLines).toHaveLength(3);
+    expect(scanLines[2]).toContain("scan completed: ageMs=120000 incompleteChecks=300");
+  } finally {
+    info.mockRestore();
+    clock.mockRestore();
+    if (previous === undefined) delete process.env.LLV_QUIET_DIAGNOSTICS;
+    else process.env.LLV_QUIET_DIAGNOSTICS = previous;
+  }
+});
 
 afterEach(() => { resetBlockingWaitsForTests(); });
 

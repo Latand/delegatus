@@ -66,7 +66,7 @@ import { configFilePath } from "@/lib/configDir";
  * no non-Latin token at all. A caller that needs the name in another script gets
  * it the same way it gets any other wording change: the operator override.
  */
-export const PERSONA_NAME = "Alik";
+const PERSONA_NAME = "Alik";
 
 /**
  * Which persona a starting call is given.

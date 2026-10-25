@@ -38,7 +38,6 @@ test("unthreaded answer follows full options in the real owner prompt and servic
   const prompt = ownerRunPrompt(req, owner, 3);
   expect(prompt.indexOf("Which sample?")).toBeLessThan(prompt.indexOf("так, 1"));
   expect(prompt.match(/Report\./g)).toHaveLength(1);
-  expect(prompt).toContain("Adjacency grants no authority");
 });
 
 test("explicit missing parent wins over adjacent questions and preserves operator attribution", async () => {

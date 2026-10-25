@@ -2,7 +2,7 @@
 // Supported run-reviewer cases and flows/retirement.test.ts remain active.
 import { expect, test, spawn, fs, path, tickPipelines, createPipelineFromRequest, loadPipelines, savePipelines, patchPipeline, harness, create } from "./engine.fixture";
 import { os, engineModule, finishReported, realExec, pipelineIdentity } from "./engine.fixture";
-import { realProvisionExec } from "./git";
+import { pipelinePublicationFence, realProvisionExec } from "./git";
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import type { CreatePipelineRequest, Pipeline } from "./types";
 
@@ -64,6 +64,53 @@ async function repository() {
   return { root, repo, base, git, h, create, current, tick, start, pass, addRemote, pushes: () => pushes,
     cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
+
+test("rejection lets the running publication settle before the controller parks its lane", async () => {
+  const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
+  const { candidate, context, authority, NOW } = await import("@/lib/tasks/proactive.fixture");
+  const { acquirePublicationFileLock, releasePublicationFileLock } = await import("./git");
+  const { procBackend } = await import("@/lib/proc");
+  const f = await repository();
+  let descriptor: number | null = null;
+  try {
+    await f.addRemote();
+    const lane = await f.start({ publication: "remote-branch" });
+    const project = lane.project;
+    const { task } = await admitProactiveTask({ ...candidate("controller-publication"), project }, { ...context(), project }, undefined, authority());
+    const now = () => new Date(NOW).toISOString();
+    await decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task), undefined, now);
+    lane.taskIds = [task.id];
+    const attempt = lane.runs[0]!.attempts[0]!;
+    attempt.state = "passed"; attempt.verdict = { status: "pass", findings: [] }; attempt.completedAt = f.h.ports.now();
+    lane.cursor!.state = "committing";
+    const lock = path.join(f.root, "active-publication.lock");
+    descriptor = await acquirePublicationFileLock(lock);
+    expect(descriptor).not.toBeNull();
+    const stat = fs.statSync(lock);
+    lane.delivery!.operation = { id: "active-rejected-publication", epoch: lane.delivery!.epoch, sha: f.base,
+      state: "running", passedStage: true, executor: { pid: process.pid, identity: procBackend.processIdentity(process.pid),
+        lock, lockIdentity: `${stat.dev}:${stat.ino}` } };
+    fs.writeFileSync(path.join(lane.worktreeDir, "retained.txt"), "Retain the accepted work\n");
+    savePipelines([lane]);
+    const fence = pipelinePublicationFence(lane);
+    const spawns = f.h.spawnInputs.length;
+    await decideProactiveTask(task.id, "reject", "operator", proactiveDecisionToken(task), undefined, now);
+    await f.tick(2);
+    expect({ state: f.current().state, detail: f.current().stateDetail }).toMatchObject({ state: "running" });
+    expect(pipelinePublicationFence(f.current())).toBe(fence);
+    expect(f.current().delivery!.operation).toMatchObject({ state: "running", id: "active-rejected-publication" });
+    expect(f.h.spawnInputs).toHaveLength(spawns);
+    expect(f.pushes()).toBe(0);
+    const settled = f.current();
+    settled.delivery!.operation = { ...settled.delivery!.operation!, state: "settled", result: { ok: true, remote: "published", sha: f.base } };
+    savePipelines([settled]);
+    await f.tick(2);
+    expect(f.current()).toMatchObject({ state: "needs_decision", stateDetail: expect.stringContaining("rejected") });
+    expect(f.h.spawnInputs).toHaveLength(spawns);
+    expect(f.pushes()).toBe(0);
+    expect(fs.readFileSync(path.join(lane.worktreeDir, "retained.txt"), "utf8")).toBe("Retain the accepted work\n");
+  } finally { if (descriptor !== null) releasePublicationFileLock(descriptor); f.cleanup(); }
+});
 
 for (const publication of [undefined, "internal"] as const) test(`remote-less ${publication ?? "default"} lane commits and reviews its local accepted head`, async () => {
   const f = await repository();

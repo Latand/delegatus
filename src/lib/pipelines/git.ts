@@ -1,3 +1,4 @@
+import { proactiveTaskExecutionError } from "@/lib/tasks/proactiveExecution";
 import { stateDir } from "@/lib/configDir";
 import { shortId } from "@/lib/shortIds";
 import { publicationFailurePhase } from "./publicationHistory";
@@ -207,6 +208,7 @@ export async function provisionPipelineWorktree(pipeline: Pipeline, exec: ExecPo
   if (base.code !== 0 || !base.stdout.trim()) return failure("resolving the pipeline base ref", base);
   if (base.stdout.trim() !== pipeline.baseRef) return { ok: false, error: "the pipeline worktree does not match its persisted base" };
   recordWorktreeProvenance(pipeline.worktreeDir, { creator: "pipeline", id: pipeline.id });
+  await prepareStageToolchain(pipeline, exec);
   return { ok: true, sha: pipeline.baseRef, baseBranch: pipeline.baseBranch };
 }
 
@@ -435,6 +437,8 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
   // The worktree sweep removes only checkouts with a record of who made them.
   // The pipeline's own record names this path too, so a failed write keeps it sweepable.
   recordWorktreeProvenance(pipeline.worktreeDir, { creator: "pipeline", id: pipeline.id });
+  await prepareStageToolchain(pipeline, (command, args, cwd) => exec(command, args, cwd, signal));
+  if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
   return { ok: true, sha: base.stdout.trim(), baseBranch: pipeline.baseBranch };
 }
 
@@ -603,27 +607,12 @@ async function finishInterruptedCheckout(pipeline: Pipeline, branch: string, sta
 async function changedWorktreePaths(
   exec: ExecPort,
   cwd: string,
-  declaredOutputs: readonly string[] = [],
 ): Promise<{ ok: true; paths: string[] } | { ok: false; error: string }> {
   const tracked = (await exec("git", ["diff", "--name-only", "--no-renames", "-z", "HEAD", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], cwd));
   if (tracked.code !== 0) return failure("checking tracked stage output paths", tracked);
   const untracked = (await exec("git", ["ls-files", "--others", "--exclude-standard", "-z", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], cwd));
   if (untracked.code !== 0) return failure("checking untracked stage output paths", untracked);
-  let ignoredOutputs = "";
-  if (declaredOutputs.length > 0) {
-    const ignored = (await exec(
-      "git",
-      ["ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", ...declaredOutputs, ...CONTROLLER_ARTIFACT_PATHSPECS],
-      cwd,
-    ));
-    if (ignored.code !== 0) return failure("checking ignored declared stage output paths", ignored);
-    // A directory declaration does not opt every ignored descendant into a
-    // commit. Only a file named exactly by the stage may bypass .gitignore.
-    ignoredOutputs = ignored.stdout.split("\0")
-      .filter((candidate) => declaredOutputs.includes(candidate))
-      .join("\0");
-  }
-  const paths = `${tracked.stdout}\0${untracked.stdout}\0${ignoredOutputs}`.split("\0").filter(Boolean);
+  const paths = `${tracked.stdout}\0${untracked.stdout}`.split("\0").filter(Boolean);
   return { ok: true, paths: [...new Set(paths)] };
 }
 
@@ -734,7 +723,7 @@ async function recoverStageCommit(
   const paths = committed.stdout.split("\0").filter(Boolean);
   if (paths.length !== new Set(receipt.paths).size
     || paths.some((file) => !receipt.paths.includes(file) || !pathIsDeclaredOutput(file, declaredOutputs))) return null;
-  const remaining = await changedWorktreePaths(exec, cwd, declaredOutputs);
+  const remaining = await changedWorktreePaths(exec, cwd);
   if (!remaining.ok) return remaining;
   if (remaining.paths.length) return { ok: false, error: "the owned stage commit has newer worktree changes; preserve them before recovery" };
   const unstage = await unstageControllerArtifacts(exec, cwd);
@@ -761,10 +750,10 @@ function stageToolchainRelease(pipeline: Pipeline): (() => void) | undefined {
   } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
 }
 
-/** Settlement runs after the agent's turn, including read-only turns which
-    never installed dependencies. Share the parent checkout's installed tools
-    for the commit through an absent, ignored node_modules. Remove our link
-    afterward so a later install cannot write into the parent checkout.
+/** Provisioning shares the parent checkout's installed tools before the agent
+    can make its first hooked commit. Settlement retries this for older lanes
+    and read-only turns, then removes the borrowed link after its commit so a
+    later install cannot write into the parent checkout.
     Preserve any local install or unrelated link, including dangling links. */
 async function prepareStageToolchain(pipeline: Pipeline, exec: ExecPort): Promise<(() => void) | undefined> {
   if (path.resolve(pipeline.repoDir) === path.resolve(pipeline.worktreeDir)) return;
@@ -871,14 +860,18 @@ export async function commitPipelineStage(
     const unstage = await unstageControllerArtifacts(exec, pipeline.worktreeDir);
     return unstage ?? { ok: true, sha };
   };
+  const stagingFailure = (result: ExecResult): PipelineGitResult => ({
+    ok: false,
+    error: `${failure("staging the passed stage", result).error}\nWorktree changes:\n${status.stdout.trimEnd()}`,
+  });
   let changedOutputPaths: string[] = [];
   if (!allowCommit) {
     if (declaredOutputs.length === 0) {
       if (!status.stdout.trim()) return settleWithoutCommit();
       return { ok: false, error: `read-only stage ${stageId} modified the pipeline worktree` };
     }
-    const changed = (await changedWorktreePaths(exec, pipeline.worktreeDir, declaredOutputs));
-    if (!changed.ok) return changed;
+    const changed = (await changedWorktreePaths(exec, pipeline.worktreeDir));
+    if (!changed.ok) return { ok: false, error: `staging the passed stage: ${changed.error}` };
     const refused = changed.paths.filter((candidate) => !pathIsDeclaredOutput(candidate, declaredOutputs));
     if (refused.length > 0) {
       return { ok: false, error: `read-only stage ${stageId} modified undeclared worktree paths` };
@@ -889,22 +882,41 @@ export async function commitPipelineStage(
     return settleWithoutCommit();
   }
   if (control?.recoveryHead !== undefined) return unrecoveredRetry;
-  const add = (await exec(
-    "git",
-    ["add", ...(allowCommit ? ["-A", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS] : ["-f", "-A", "--", ...changedOutputPaths])],
-    pipeline.worktreeDir,
-  ));
-  if (add.code !== 0) return failure("staging the passed stage", add);
+  if (allowCommit) {
+    // With exclusion pathspecs, `add -A .` can reject an ignored directory
+    // even when it contains tracked files. Update the index's tracked paths
+    // first, then add only eligible untracked files using literal pathspecs.
+    const tracked = await exec("git", ["add", "-u", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], pipeline.worktreeDir);
+    if (tracked.code !== 0) return stagingFailure(tracked);
+    const untracked = await exec("git", ["ls-files", "--others", "--exclude-standard", "-z", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], pipeline.worktreeDir);
+    if (untracked.code !== 0) return stagingFailure(untracked);
+    const paths = untracked.stdout.split("\0").filter(Boolean);
+    for (let start = 0; start < paths.length; start += 100) {
+      const add = await exec("git", ["add", "--", ...paths.slice(start, start + 100).map(file => `:(top,literal)${file}`)], pipeline.worktreeDir);
+      if (add.code !== 0) return stagingFailure(add);
+    }
+  } else {
+    const tracked = await exec("git", ["add", "-u", "--", ...changedOutputPaths.map(file => `:(top,literal)${file}`)], pipeline.worktreeDir);
+    if (tracked.code !== 0) return stagingFailure(tracked);
+    const untracked = await exec("git", ["ls-files", "--others", "--exclude-standard", "-z", "--", ...declaredOutputs], pipeline.worktreeDir);
+    if (untracked.code !== 0) return stagingFailure(untracked);
+    const outputPaths = new Set(changedOutputPaths);
+    const eligibleUntracked = untracked.stdout.split("\0").filter((candidate) => candidate && outputPaths.has(candidate));
+    for (let start = 0; start < eligibleUntracked.length; start += 100) {
+      const add = await exec("git", ["add", "--", ...eligibleUntracked.slice(start, start + 100).map(file => `:(top,literal)${file}`)], pipeline.worktreeDir);
+      if (add.code !== 0) return stagingFailure(add);
+    }
+  }
   if (!allowCommit) {
     const staged = (await exec(
       "git",
       ["diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD", "--", ...declaredOutputs],
       pipeline.worktreeDir,
     ));
-    if (staged.code !== 0) return failure("verifying staged declared output paths", staged);
+    if (staged.code !== 0) return stagingFailure(staged);
     const stagedPaths = new Set(staged.stdout.split("\0").filter(Boolean));
     const missing = changedOutputPaths.find((candidate) => !stagedPaths.has(candidate));
-    if (missing) return { ok: false, error: `declared output ${missing} was not staged` };
+    if (missing) return stagingFailure({ code: 1, stdout: "", stderr: `declared output ${missing} was not staged` });
   }
   const unstage = await unstageControllerArtifacts(exec, pipeline.worktreeDir);
   if (unstage) return unstage;
@@ -1800,6 +1812,8 @@ export function pipelinePublicationFence(pipeline: Pipeline): string {
 const PUBLICATION_INSTALL_SUBJECT = "publication install";
 
 export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, request: PipelinePublishRequest): Promise<PipelinePublishResult> {
+  const proactiveError = proactiveTaskExecutionError(pipeline.taskIds);
+  if (proactiveError) return { ok: false, error: proactiveError };
   const operationId = crypto.randomUUID();
   const lock = path.join(pipelineArtifactsDir(pipeline.id), "publication.lock");
   let descriptor: number | null;
@@ -1879,7 +1893,18 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
     const abort = new AbortController();
     let writeStarted = false;
     const matches = (current: Pipeline | null) => current !== null && pipelinePublicationFence(current) === fence;
-    const revalidate = () => { if (!matches(findPipelineRecord(pipeline.id))) abort.abort(); };
+    let authorityRevoked = false;
+    let identityChanged = false;
+    const revalidate = () => {
+      const current = findPipelineRecord(pipeline.id);
+      if (!matches(current)) { identityChanged = true; abort.abort(); }
+      if (current && proactiveTaskExecutionError(current.taskIds)) {
+        authorityRevoked = true;
+        // Revocation fences new work. An active push keeps its deadline and
+        // ownership cancellation, and must finish before its receipt settles.
+        if (!writeStarted) abort.abort();
+      }
+    };
     const superseded = (): PipelinePublishResult => writeStarted
       ? { ok: true, sha: request.acceptedSha, remote: "unreachable", uncertain: true,
         detail: "publication superseded after a remote write began; reconcile its outcome" }
@@ -1923,6 +1948,14 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
     const fencedExec: ExecPort = async (command, args, cwd, env, options) => {
       revalidate();
       if (abort.signal.aborted) return { code: null, stdout: "", stderr: "publication superseded" };
+      // Only observations of the in-flight effect remain authorized. Never
+      // let reconciliation open another write after proactive revocation.
+      const remoteRead = command === "timeout" && args[0] === "--signal=KILL"
+        && args[1] === REMOTE_READ_TIMEOUT && args[2] === "git" && args[3] === "ls-remote";
+      const diagnosticRead = command === "git" && (args[0] === "merge-base" || args[0] === "diff");
+      if (authorityRevoked && !(writeStarted && (remoteRead || diagnosticRead))) {
+        return { code: null, stdout: "", stderr: "publication authority revoked" };
+      }
       fs.futimesSync(descriptor, new Date(), new Date());
       const preparingDependencies = command === "bun" && args[0] === "install";
       // The push runs the repository's pre-push gates; both leave the
@@ -1981,7 +2014,9 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       ? { ok: true, sha: request.acceptedSha, remote: "unreachable", detail: `publication outcome uncertain: ${String(error)}`, uncertain: true }
       : { ok: false, error: `publication failed before a remote write: ${String(error)}` }; }
     revalidate();
-    if (abort.signal.aborted) result = superseded();
+    // Revocation fences the next effect; it cannot erase a confirmed remote
+    // receipt for the operation that was already in flight.
+    if (abort.signal.aborted && !(authorityRevoked && !identityChanged && result.ok && result.remote === "published")) result = superseded();
     if (!result.ok) result = { ...result, error: redactBounded(redactPublicationText(result.error), 4500) };
     else if (result.remote === "unreachable") result = { ...result, detail: redactBounded(redactPublicationText(result.detail), 4500) };
     if (failureEvidence && (!result.ok || result.remote === "unreachable")) {

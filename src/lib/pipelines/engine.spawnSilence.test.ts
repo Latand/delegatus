@@ -1,9 +1,20 @@
-import { expect, test, aliveStagedLaunch, stagedRecoveryHarness, stageHostChild, productionHostSeams, defaultPipelinePorts, loadPipelines, setAgentRegistryForTests, tickPipelines, patchPipeline, savePipelines, fs, path, harness, durableStageTurnEvidence } from "./engine.fixture";
+import { afterAll, expect, test, aliveStagedLaunch, stagedRecoveryHarness, stageHostChild, productionHostSeams, defaultPipelinePorts, loadPipelines, setAgentRegistryForTests, tickPipelines, patchPipeline, savePipelines, fs, path, harness, durableStageTurnEvidence } from "./engine.fixture";
 
 const BUDGET = 10 * 60_000;
 
-async function silentLaunch(unpublished = false) {
+/* A test that times out never reaches its finally, so the host it started
+   would outlive the file and fail the preload's owned-children teardown.
+   Every host this file starts is ended once more after its last test. */
+const hosts: Awaited<ReturnType<typeof stageHostChild>>[] = [];
+async function ownedHost() {
   const host = await stageHostChild();
+  hosts.push(host);
+  return host;
+}
+afterAll(async () => { for (const host of hosts.splice(0)) await host.end(); });
+
+async function silentLaunch(unpublished = false) {
+  const host = await ownedHost();
   const f = unpublished
     ? await stagedRecoveryHarness("timeout", { hostProcess: host.process, nativeTranscript: true, startedAt: Date.parse("2026-10-19T12:00:00Z") })
     : await aliveStagedLaunch({ hostProcess: host.process, nativeTranscript: true, startedAt: Date.parse("2026-10-19T12:00:00Z") });
@@ -364,7 +375,7 @@ test.each(["writer", "generation", "transcript", "pause"] as const)("a newer %s 
 
 test.each(["generation", "writer"] as const)("a newer %s during host observation prevents signalling either host", async change => {
   const f = await silentLaunch();
-  const peer = await stageHostChild();
+  const peer = await ownedHost();
   try {
     const readHost = f.h.ports.conversationHostProcess!;
     let changed = false;

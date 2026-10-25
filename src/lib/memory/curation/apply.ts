@@ -4,6 +4,7 @@ import { prepareImportEdits } from "./importApply";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
 import path from "node:path";
+import { canonicalProject } from "@/lib/projects/aliases";
 import { ROLE_IDS } from "@/lib/roles/types";
 import { roleIsClean } from "../eligibility";
 import { swarmRulesEnabled } from "../settings";
@@ -22,7 +23,7 @@ export interface CurationApply {
   merge?: { into: string; from: string[]; rule: string; why?: string; note: string }[];
   move?: { id: string; to: string; note?: string }[];
   split?: { id: string; parts: { to: string; rule: string; why?: string }[]; note: string }[];
-  archive?: { id: string; reason: CuratorReason; against?: string; where?: string; note: string }[];
+  archive?: { id: string; reason: CuratorReason | "budget"; against?: string; where?: string; note: string }[];
   adopt?: { candidate: string; occurrences: string[]; parts: { to: string; rule: string; why: string }[]; note: string }[];
   drop?: { candidate: string; occurrences: string[]; reason: CuratorReason; where?: string; note: string; forRoom?: boolean }[];
   defer?: { candidate: string; occurrences: string[] }[];
@@ -109,7 +110,7 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
       if (protectedOperation && rule.keptByOperatorAt) refuse("CURATE_KEPT", "the operator returned this rule; keep it whole and active");
       dispositions.add(id); touched.add(id); return work.get(id)!;
     };
-    const importRows = prepareImportEdits(fresh, input, now, { work, created, placeholders, get: tx.get, target, text, note, evidence: where => evidence(pass.repoDir, where) });
+    const importRows = prepareImportEdits(fresh, input, now, { work, created, placeholders, get: tx.get, target, text, note, evidence: where => evidence(fresh.repoDir, where) });
     for (const id of input.restore ?? []) {
       if (work.has(id)) refuse("CURATE_PARTITION", "restore ids must be distinct archived rules");
       const row = tx.get(`r:${id}`);
@@ -162,7 +163,7 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
       }
       work.set(item.into, { ...into, ...text(item.rule, item.why ?? into.why), note: item.note, ...(item.from.some(id => work.get(id)?.operatorCorrection) ? { operatorCorrection: true as const } : {}), mergedFrom: [...(into.mergedFrom ?? []), ...item.from] }); touched.add(item.into);
     }
-    const reasons: CuratorReason[] = ["task-specific", "stale", "in-code", "in-instructions", "no-reader", "contradicted", "duplicate"];
+    const reasons: (CuratorReason | "budget")[] = ["task-specific", "stale", "in-code", "in-instructions", "no-reader", "contradicted", "duplicate", "budget"];
     for (const item of input.archive ?? []) {
       const rule = dispose(item.id, true);
       if (moved.has(item.id) || mergedTargets.has(item.id) || !reasons.includes(item.reason)) refuse("CURATE_PARTITION", "archive needs one valid disposition");
@@ -173,7 +174,17 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
           || !swarmRulesForRole(role).some(entry => item.where === `swarm:${entry.id}`)) {
           refuse("CURATE_EVIDENCE", "swarm evidence requires in-instructions and an entry for this role in the receiving pack");
         }
-      } else if (item.reason === "in-code" || item.reason === "in-instructions" || item.where) evidence(pass.repoDir, item.where);
+      } else if (item.reason === "in-code" || item.reason === "in-instructions" || item.where) {
+        // Recovery may include unrelated projects. Even moving a recovered rule
+        // into a shared scope cannot make this host's files evidence for it.
+        const original = get(item.id);
+        const recoveryScope = Object.entries(fresh.budgetSweepCandidates ?? {}).find(([, ids]) => ids.includes(item.id))?.[0];
+        const project = scopeProject(recoveryScope ?? original.scope) ?? original.source.project;
+        if (project && project !== "*" && canonicalProject(project) !== canonicalProject(fresh.project)) {
+          refuse("CURATE_EVIDENCE", "repository evidence is unavailable for this rule's project; judge it from its text");
+        }
+        evidence(fresh.repoDir, item.where);
+      }
       if ((item.reason === "contradicted" || item.reason === "duplicate") && !item.against) refuse("CURATE_INVALID", "contradiction or duplicate needs an active counterpart");
       work.set(item.id, { ...archivedRule(rule, now, item.reason, true), note: item.note, where: item.where, against: item.against });
     }
@@ -196,6 +207,13 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
       const active = ids.map(id => work.get(id)!);
       if (scopeChars(active) > ROLE_MEMORY_BOUND) refuse("CURATE_BOUND", "the resulting scope exceeds its character bound");
       orders.set(item.scope, ids.slice().reverse());
+    }
+    for (const item of input.archive ?? []) if (item.reason === "budget") {
+      const archived = work.get(item.id)!;
+      const survivors = (orders.get(archived.scope) ?? []).map(id => work.get(id)!);
+      if (scopeChars([...survivors, archived]) <= ROLE_MEMORY_BOUND) {
+        refuse("CURATE_BUDGET", "restore guidance that fits after integration; budget archives require remaining scope pressure");
+      }
     }
     for (const [id, rule] of work) {
       if (rule.state === "active" && !ordered.has(id)) refuse("CURATE_PARTITION", "every active rule needs an order or disposition");

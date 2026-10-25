@@ -1,15 +1,16 @@
+import { AsyncResource } from "node:async_hooks";
 import fs from "node:fs";
 import os from "node:os";
 import net from "node:net";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { FakeEngineHost, createFakeDeliveryLedger } from "./fixtures/fakeEngineHost";
 import path from "node:path";
-import { expect, spyOn, test } from "bun:test";
+import { expect, setSystemTime, spyOn, test } from "bun:test";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry, type AgentRegistryEntry } from "@/lib/agent/registry";
 import type { BoardTask } from "@/lib/tasks/types";
-import type { StartupRowRetry } from "./startupRowRetries";
+import { startupRowRetries, type StartupRowRetry } from "./startupRowRetries";
 import { procBackend } from "@/lib/proc";
 import { RuntimeJournal } from "@/runtime-host/journal";
 
@@ -105,6 +106,60 @@ test("one blocked row completes boot and sixty subsequent admissions reuse it", 
   }
 });
 
+test("a missing rollout is retired once without blocking an unrelated startup adoption", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-missing-rollout-isolation-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  setSystemTime(new Date("2026-10-19T00:00:00Z"));
+  try {
+    const missingId = "25300000-0000-0000-0000-000000000080";
+    const healthyId = "25300000-0000-0000-0000-000000000081";
+    passedOverRow(registry, directory, missingId, "unhosted", "handoff");
+    passedOverRow(registry, directory, healthyId, "unhosted", "handoff");
+    const missingKey = `codex:${missingId}`;
+    fs.unlinkSync(registry.readOnlySnapshot().entries[missingKey]!.artifactPath);
+    for (const id of [missingId, healthyId]) {
+      const key = `codex:${id}`;
+      const entry = registry.readOnlySnapshot().entries[key]!;
+      registry.upsert({ ...entry, claimOwner: null });
+    }
+    const attempts = new Map<string, number>();
+    const ledger = createFakeDeliveryLedger();
+    const host = Object.assign(new FakeEngineHost(ledger), {
+      setWriterFence: () => {}, onEvent: () => () => {}, onStateChange: () => () => {},
+    });
+    const dependencies: StructuredStartupDependencies = {
+      registry, client: runtimeJournalClient(journal), orchestratorSeats: () => [],
+      refreshTranscriptState: async () => {}, resolveCodexOwner: () => null,
+      resolveClaudeOwner: () => null, adoptClaude: async () => [],
+      pipelineEvidence: () => ({ settled: new Set(), deferred: new Set() }),
+      schedule: () => ({ unref() {} }),
+      adoptCodexHost: async id => {
+        attempts.set(id, (attempts.get(id) ?? 0) + 1);
+        if (id === missingId) throw new Error("no rollout found for thread id fixture");
+        return host as never;
+      },
+    };
+    await adoptStructuredHostsAtStartup(dependencies);
+    await adoptStructuredHostsAtStartup(dependencies);
+
+    expect(attempts.get(missingId)).toBe(1);
+    expect(attempts.get(healthyId)).toBe(1);
+    expect(registry.readOnlySnapshot().entries[missingKey]).toMatchObject({
+      status: "unhosted", pendingAction: "handoff", claimOwner: null,
+      structuredHost: { process: null, ended: { reason: "missing-rollout" } },
+    });
+    expect(fs.existsSync(`${registry.filename}.startup-retries`)
+      ? fs.readdirSync(`${registry.filename}.startup-retries`).filter(file => file.endsWith(".json"))
+      : []).toEqual([]);
+  } finally {
+    setSystemTime();
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close(); registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test.skipIf(process.platform === "win32").each(["missing-rollout", "transient"])("%s with a live socket owner settles safely", async refusal => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-q-"));
   fs.chmodSync(directory, 0o700);
@@ -176,6 +231,7 @@ test.skipIf(process.platform === "win32").each(["missing-rollout", "transient"])
     const { statePath } = await import("@/lib/configDir");
     const card = loadTasks(statePath("tasks.json")).find(task => task.text.includes(key));
     expect(card?.text).toContain("adoption-failed");
+    expect(card?.dueAt).toBeUndefined(); expect(card?.dueTz).toBeUndefined();
     expect(refreshes).toBe(1);
     // Neither quarantine nor a failed attach retires the live owner.
     expect(registry.readOnlySnapshot().entries[key]!.structuredHost?.process?.pid).toBe(process.pid);
@@ -193,6 +249,73 @@ test.skipIf(process.platform === "win32").each(["missing-rollout", "transient"])
     logs.mockRestore(); now.mockRestore();
     await bindStructuredDeliveryQueue([], { registry, client: null }); journal.close();
     await new Promise<void>(resolve => server.close(() => resolve()));
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+/* A row timer fires after the pass that armed it has ended. The pass's own
+   five-minute deadline must not reach it: the timer checks only that the
+   release is still active, and the pass it starts carries a fresh deadline. */
+test.each([false, true])("a row timer delayed past the pass deadline still retries (retired: %p)", async retired => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-row-late-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const sessionId = "25300000-0000-0000-0000-000000000078";
+  const key = `codex:${sessionId}`;
+  passedOverRow(registry, directory, sessionId, "unhosted", "handoff");
+  let clock = Date.parse("2026-10-16T12:00:00Z");
+  const now = spyOn(Date, "now").mockImplementation(() => clock);
+  const realMonotonic = performance.now.bind(performance);
+  let monotonicOffset = 0;
+  const monotonic = spyOn(performance, "now").mockImplementation(() => realMonotonic() + monotonicOffset);
+  const timers: { callback: () => void; delay: number }[] = [];
+  let pipelineReads = 0;
+  let active = true;
+  let adoptions = 0;
+  const host = Object.assign(new FakeEngineHost(createFakeDeliveryLedger()), { setWriterFence: () => {}, onEvent: () => () => {}, onStateChange: () => () => {} });
+  const dependencies: StructuredStartupDependencies = {
+    registry, client: runtimeJournalClient(journal), orchestratorSeats: () => [],
+    refreshTranscriptState: async () => {}, resolveCodexOwner: () => null,
+    resolveClaudeOwner: () => null, adoptClaude: async () => [],
+    assertActive: () => { if (!active) throw new Error("release retired"); },
+    pipelineEvidence: () => { pipelineReads++; return { settled: new Set(), deferred: new Set() }; },
+    schedule: (callback, delay) => { timers.push({ callback, delay }); return {}; },
+    adoptCodexHost: async () => { adoptions++; return host as never; },
+  };
+  const rows = startupRowRetries(registry) as unknown as { tail: Promise<unknown> };
+  const fireLate = async () => {
+    const timer = timers.shift(); expect(timer).toBeDefined();
+    clock += Math.max(timer!.delay, 301_000); monotonicOffset += 301_000;
+    timer!.callback();
+    await rows.tail.catch(() => {});
+    if (active) await adoptStructuredHostsAtStartup(dependencies);
+  };
+  try {
+    await adoptStructuredHostsAtStartup(dependencies);
+    expect(timers).toHaveLength(1);
+    expect(startupRowRetries(registry).get(key)).toMatchObject({ reason: "incumbent-owned", attempts: 1 });
+    const readsAfterBoot = pipelineReads;
+    if (retired) {
+      active = false;
+      await fireLate();
+      expect(pipelineReads).toBe(readsAfterBoot);
+      expect(timers).toHaveLength(0);
+      return;
+    }
+    await fireLate();
+    expect(pipelineReads).toBeGreaterThan(readsAfterBoot);
+    expect(adoptions).toBe(0);
+    expect(timers).toHaveLength(1);
+    expect(startupRowRetries(registry).get(key)).toMatchObject({ reason: "incumbent-owned", attempts: 2 });
+    // The incumbent lets go: the next late timer settles the row and arms nothing.
+    registry.upsert({ ...registry.readOnlySnapshot().entries[key]!, claimOwner: null });
+    await fireLate();
+    expect(adoptions).toBe(1);
+    expect(startupRowRetries(registry).get(key)).toBeUndefined();
+    expect(timers).toHaveLength(0);
+  } finally {
+    monotonic.mockRestore(); now.mockRestore();
+    await bindStructuredDeliveryQueue([], { registry, client: null }); journal.close();
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
@@ -494,6 +617,63 @@ test("an unreadable restart-cut row installs capped pending-work admission on it
   }
 });
 
+
+/* A real timer runs its callback in the async context that armed it, which
+   carries the arming pass's read budget. The held-row probe fires after that
+   pass's deadline and must read the registry under no deadline but its own. */
+test("a held-row probe armed by an ended pass reads past that pass's deadline", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-held-probe-late-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const sessionId = "25300000-0000-0000-0000-000000000080";
+  const key = `codex:${sessionId}`;
+  passedOverRow(registry, directory, sessionId, "unhosted", "handoff");
+  let clock = Date.parse("2026-10-16T12:00:00Z");
+  const now = spyOn(Date, "now").mockImplementation(() => clock);
+  const realMonotonic = performance.now.bind(performance);
+  let monotonicOffset = 0;
+  const monotonic = spyOn(performance, "now").mockImplementation(() => realMonotonic() + monotonicOffset);
+  const logs = spyOn(console, "error");
+  const scheduled: { callback: () => void; delay: number }[] = [];
+  const host = Object.assign(new FakeEngineHost(createFakeDeliveryLedger()), {
+    setWriterFence: () => {}, onEvent: () => () => {}, onStateChange: () => () => {},
+  });
+  const dependencies: StructuredStartupDependencies = {
+    registry, client: runtimeJournalClient(journal), orchestratorSeats: () => [],
+    resolveCodexOwner: () => null, resolveClaudeOwner: () => null, adoptClaude: async () => [],
+    refreshTranscriptState: async () => {},
+    readHostTurnRecord: () => ({ state: "unreadable", reason: "fixture ledger is unreadable" }),
+    pipelineEvidence: () => ({ settled: new Set(), deferred: new Set() }),
+    adoptCodexHost: async () => host as never,
+    // As setTimeout does, keep the arming context for the callback.
+    schedule: (callback, delay) => { scheduled.push({ callback: AsyncResource.bind(callback), delay }); return {}; },
+  };
+  try {
+    await adoptStructuredHostsAtStartup(dependencies);
+    const row = registry.readOnlySnapshot().entries[key]!;
+    registry.upsert({ ...row, status: "live", claimOwner: null, structuredHost: { ...row.structuredHost!, process: null } });
+    const first = scheduled.shift(); expect(first).toBeDefined();
+    clock += first!.delay; first!.callback();
+    const deadline = performance.now() + 3000;
+    while (structuredStartupDeferral() === null && performance.now() < deadline) await Bun.sleep(1);
+    expect(restartCutEvidenceHolds(key)).toBe(true);
+    const previousProbe = structuredStartupDeferral()!.nextProbeMs;
+    const index = scheduled.findLastIndex(task => task.delay === previousProbe);
+    expect(index).toBeGreaterThanOrEqual(0);
+    const [probe] = scheduled.splice(index, 1);
+    clock += probe!.delay; monotonicOffset += 301_000;
+    logs.mockClear();
+    probe!.callback();
+    const probeDeadline = performance.now() + 3000;
+    while (structuredStartupDeferral()?.nextProbeMs === previousProbe && performance.now() < probeDeadline) await Bun.sleep(1);
+    expect(structuredStartupDeferral()?.nextProbeMs).not.toBe(previousProbe);
+    expect(logs.mock.calls.filter(([message]) => String(message).includes("probe failed"))).toEqual([]);
+  } finally {
+    logs.mockRestore(); monotonic.mockRestore(); now.mockRestore();
+    await bindStructuredDeliveryQueue([], { registry, client: null }); journal.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test.each(["fresh", "legacy"])("%s missing rollout retires after one app-server refusal and stays retired across boot", async mode => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-rollout-terminal-"));

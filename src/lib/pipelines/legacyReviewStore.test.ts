@@ -88,7 +88,10 @@ test("hot legacy rows load with every recorded field, including fields no reader
 });
 
 test("archived rows and archived drafts decode through the legacy type, never skipped", async () => {
-  savePipelines([closedLane(), fiveDraft("draft001"), draft("empty001", [], { hiddenAt: OLD })]);
+  const closed = closedLane();
+  // This archive fixture's recorded hosts have already been proved gone.
+  closed.terminalReap = { rounds: 1, stopped: 0, lastAt: OLD, settledAt: OLD, settledAttempts: ["build:1", "review:1"] };
+  savePipelines([closed, fiveDraft("draft001"), draft("empty001", [], { hiddenAt: OLD })]);
   expect(await archiveSettledPipelines(Date.parse("2026-09-22T00:00:00.000Z"))).toBe(3);
   expect(loadPipelines()).toEqual([]);
   const archived = loadArchivedPipelines();

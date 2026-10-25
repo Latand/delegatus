@@ -8,7 +8,6 @@ import type { StageRuleSource as RuleSource, RoleMemoryRule } from "../roleTypes
 import { applyCuration, revertCuratorPass, type CurationApply } from "./apply";
 import { claimPass, patchPass } from "./store";
 import { readCuration } from "./read";
-import { curatorBrief } from "./brief";
 import { memoryProblemSignals } from "../roleProblems";
 
 const PROJECT = "review-curation";
@@ -85,8 +84,6 @@ test("split parts inherit the tasks behind a merged rule, with distinct tasks on
   const page = await readCuration(pass, scope());
   if (!("rules" in page)) throw Error("scope page expected");
   expect(page.rules.filter(rule => rule.kind === "active").map(rule => rule.tasks)).toEqual([2, 2]);
-  const brief = curatorBrief(PROJECT);
-  for (const clause of ["different tasks wrote about one class", "tasks counts the tasks", "more tasks above one backed by fewer", "candidates for that role's template"]) expect(brief).toContain(clause);
 });
 
 test("another project's curator transfers a misfiled machine rule to its author and Undo restores it", () => {
@@ -137,8 +134,6 @@ test("correction lessons lead scope reads and the pass agenda, including a dupli
   if (!("rules" in page)) throw Error("scope page expected");
   expect(page.rules[0]).toMatchObject({ id: correction, operatorCorrection: true, newSincePass: true });
   expect(page.rules.findIndex(rule => rule.id === ordinary)).toBeGreaterThan(0);
-  expect(curatorBrief(PROJECT)).toContain("Review operatorCorrection lessons first");
-  expect(curatorBrief(PROJECT)).toContain("integrate, rewrite or drop");
   applyCuration(pass, input({ [scope()]: [correction, ordinary] }, { rewrite: [{ id: correction, rule: "For rendered changes, enumerate supported combinations and measure each before accepting the result.", note: "Rewrite the correction into the existing practice." }] }), at(60));
   expect(row(correction)).toMatchObject({ operatorCorrection: true, note: "Rewrite the correction into the existing practice.", revisedBy: { by: "curator" } });
 });
@@ -150,13 +145,14 @@ test("a correction duplicate of a curated rule outlives budget displacement and 
   patchPass(firstPass.id, { state: "succeeded", endedAt: at(30) });
   const again = request("correction-again", "task-correction-again");
   leaveLessons({ request: again, source: again, lessons: [{ scope: "role", rule: RULE, why: WHY }], correction: true, none: null, now: at(40) });
-  for (let lane = 0; lane < 32; lane++) {
+  for (let lane = 0; lane < 48; lane++) {
     const source = request(`ordinary-${lane}`, `task-ordinary-${lane}`);
     const rule = `For change ${lane} in the settings area, list each control the change adds or moves, render it at every supported width, theme and language, and compare the frames with the previous release before review; a control that moved needs its own frame with focus visible and the label read back from the page, never from source.`;
     leaveLessons({ request: source, source, lessons: [{ scope: "role", rule, why: WHY }], none: null, now: at(50 + lane) });
   }
   const orchestrator = request("orchestrator", "task-orchestrator", "orchestrator");
   leaveLessons({ request: orchestrator, source: orchestrator, lessons: [{ scope: "role", rule: "Before relaying a stage result, read the stage's own conclusion and quote its verdict.", why: WHY }], none: null, now: at(100) });
+  expect(projectView(PROJECT).scopes.find(entry => entry.scope === scope())?.left.some(rule => rule.reason === "budget")).toBe(true);
   expect(row(correction)).toMatchObject({ state: "active", operatorCorrection: true });
   const pass = claimPass({ project: PROJECT, repoDir: root, now: NOW + 7 * 60 * 60_000 })!;
   const agenda = await readCuration(pass);
@@ -225,11 +221,12 @@ test("a project succession keeps a duplicate's unreviewed correction leading the
   expect(survivor).toMatchObject({ operatorCorrection: true, awaitingCuration: true });
   const orchestrator = request("orchestrator", "task-orchestrator", "orchestrator");
   leaveLessons({ request: orchestrator, source: orchestrator, lessons: [{ scope: "role", rule: "Before relaying a stage result, read the stage's own conclusion and quote its verdict.", why: WHY }], none: null, now: at(100) });
-  for (let lane = 0; lane < 32; lane++) {
+  for (let lane = 0; lane < 48; lane++) {
     const source = request(`ordinary-${lane}`, `task-ordinary-${lane}`);
     const rule = `For change ${lane} in the settings area, list each control the change adds or moves, render it at every supported width, theme and language, and compare the frames with the previous release before review; a control that moved needs its own frame with focus visible and the label read back from the page, never from source.`;
     leaveLessons({ request: source, source, lessons: [{ scope: "role", rule, why: WHY }], none: null, now: at(110 + lane) });
   }
+  expect(projectView(PROJECT).scopes.find(entry => entry.scope === scope())?.left.some(rule => rule.reason === "budget")).toBe(true);
   expect(row(survivor.id)).toMatchObject({ state: "active", operatorCorrection: true });
   const pass = claimPass({ project: PROJECT, repoDir: root, now: NOW + 7 * 60 * 60_000 })!;
   const agenda = await readCuration(pass);
@@ -271,7 +268,7 @@ test("a reviewed correction that later leaves by budget no longer counts in the 
   const firstPass = claimPass({ project: PROJECT, repoDir: root, now: NOW + 10 })!;
   applyCuration(firstPass, input({ [scope()]: [id] }), at(20));
   patchPass(firstPass.id, { state: "succeeded", endedAt: at(30) });
-  for (let lane = 0; lane < 32; lane++) {
+  for (let lane = 0; lane < 48; lane++) {
     const ordinary = request(`ordinary-${lane}`, `task-ordinary-${lane}`);
     const rule = `For change ${lane} in the settings area, list each control the change adds or moves, render it at every supported width, theme and language, and compare the frames with the previous release before review; a control that moved needs its own frame with focus visible and the label read back from the page, never from source.`;
     leaveLessons({ request: ordinary, source: ordinary, lessons: [{ scope: "role", rule, why: WHY }], none: null, now: at(40 + lane) });

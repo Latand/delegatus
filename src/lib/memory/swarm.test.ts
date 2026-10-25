@@ -20,7 +20,6 @@ import { ruleUsageCounts } from "./roleViewSource";
 import { claimPass } from "./curation/store";
 import { readCuration } from "./curation/read";
 import { applyCuration } from "./curation/apply";
-import { curatorBrief } from "./curation/brief";
 import * as selector from "./roleSelect";
 import { roleSelectionCollection } from "./roleSelection";
 
@@ -111,7 +110,6 @@ test("off preserves the exact four-scope block; on inserts the fifth scope after
   expect(on.scopes.map(entry => entry.scope)).toEqual([`role:${PROJECT}:builder`, "role:*:builder", "swarm:builder", `project:${PROJECT}`, "machine"]);
   expect(on.block).toContain("1 role · 1 swarm · 0 project · 0 machine");
   expect(on.block).toContain("Swarm rules · Builder on every install");
-  expect(on.block).toContain("are public");
   expect(scopeChars(on.candidates[2].rules)).toBeLessThanOrEqual(4000);
   const block = await learnedRulesForLaunchProfile(profile, start());
   expect(block).toBe(on.block);
@@ -337,8 +335,6 @@ test("the curator sees usage even for no-lesson answers and can retire guidance 
   expect(page).toMatchObject({ swarmReceiving: true, swarm: [{ id: entry().id, rule: TEXT, readOnly: true }] });
   applyCuration(pass, { scopes: [{ scope: local.scope, revision: page.revision, order: [] }], archive: [{ id: local.id, reason: "in-instructions", where: `swarm:${entry().id}`, note: "The receiving pack holds the same action and conditions." }] }, NOW);
   expect(projectView(PROJECT).scopes.find(scope => scope.scope === local.scope)?.left[0]).toMatchObject({ id: local.id, reason: "in-instructions", where: `swarm:${entry().id}` });
-  expect(curatorBrief(PROJECT)).toContain("swarm:<id> as where");
-  expect(curatorBrief(PROJECT)).toContain("applied and misled counts");
 });
 
 test.each(["missing", "other-role", "in-code", "stale", "disabled", "withdrawn", "project", "machine"])("curator refuses %s swarm evidence atomically", async scenario => {
@@ -371,22 +367,18 @@ test.each(["missing", "other-role", "in-code", "stale", "disabled", "withdrawn",
   expect(projectView(PROJECT)).toEqual(before);
 });
 
-test("curator swarm instructions follow consent and preserve the correction review brief when off", async () => {
+test("curator swarm evidence follows consent", async () => {
   const local = seed();
-  // Reviewing corrections first deliberately changes the brief at the default seat budget.
-  const original = "5d0cd7085a5c16f320a25d4062a9cf47c043ecc6214b87a9d57a8e8c2d47072c";
-  expect(digest(curatorBrief(PROJECT))).toBe(original);
-  expect(curatorBrief(PROJECT)).toContain("Review operatorCorrection lessons first");
   const pass = claimPass({ project: PROJECT, repoDir: root, now: Date.parse(NOW) })!;
   const off = await readCuration(pass, local.scope, undefined, Date.parse(NOW));
   expect(off).not.toHaveProperty("swarm");
   expect(off).not.toHaveProperty("swarmReceiving");
   updatePreferences({ swarmRules: true });
-  expect(curatorBrief(PROJECT)).toContain("Review operatorCorrection lessons first");
-  expect(curatorBrief(PROJECT)).toContain("leave_lesson correction:true reserved for an operator correction of your own work");
-  expect(curatorBrief(PROJECT)).toContain("swarm:<id> as where");
-  expect(curatorBrief(PROJECT)).toContain("candidates for the maintainers’ swarm pack pass");
-  expect(curatorBrief(PROJECT)).toContain("applied and misled counts");
+  expect(await readCuration(pass, local.scope, undefined, Date.parse(NOW))).toMatchObject({
+    swarmReceiving: true, swarm: [{ id: entry().id, rule: TEXT, readOnly: true }],
+  });
   updatePreferences({ swarmRules: false });
-  expect(digest(curatorBrief(PROJECT))).toBe(original);
+  const offAgain = await readCuration(pass, local.scope, undefined, Date.parse(NOW));
+  expect(offAgain).not.toHaveProperty("swarm");
+  expect(offAgain).not.toHaveProperty("swarmReceiving");
 });

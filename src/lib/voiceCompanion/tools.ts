@@ -4,7 +4,7 @@ import { READ_TOOL_NAMES, type CompanionBoardReads } from "./boardReads";
 import type { CallRequest, CompanionAdmission, OperatorAttempt } from "./admission";
 import { DELEGATION_REASONS, deliveryFailureReason, nothingSent } from "./delegationOutcome";
 import { askGist, liveEndRefusal, requestText, VOICE_ASK_MAX_CHARS, VOICE_ASK_ENVELOPE_CHARS } from "./liveGate";
-import { READ_SCHEMAS, validToolValue, type ToolProperty } from "./readSchemas";
+import { READ_SCHEMAS, validToolValue, withoutUnlistedNulls, type ToolProperty } from "./readSchemas";
 
 export interface CompanionToolContext {
   project: string | null;
@@ -202,8 +202,8 @@ export async function runCompanionTool(context: CompanionToolContext, name: stri
   const session = context.admission.session(context.sessionId);
   if (session.closed) throw new Error("SESSION_CLOSED");
   if (!args || typeof args !== "object" || Array.isArray(args)) throw new Error("INVALID_TOOL_ARGUMENTS");
-  const values = args as Record<string, unknown>;
   const properties = entry.parameters.properties;
+  const values = entry.class === "board-read" ? withoutUnlistedNulls(properties, args as Record<string, unknown>) : args as Record<string, unknown>;
   if (Object.keys(values).some(key => !Object.hasOwn(properties, key))
     || entry.parameters.required.some(key => !validToolValue(properties[key],values[key]))) throw new Error("INVALID_TOOL_ARGUMENTS");
   const result = await entry.handler(context, values);

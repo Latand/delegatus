@@ -7,6 +7,7 @@ import { z } from "zod";
 import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { COMPANION_TOOL_REGISTRY } from "@/lib/voiceCompanion/tools";
 import { commitSeals, seal, validSeal } from "./seal";
+import { servingServer, snapshotServer, type VoiceToolSnapshot } from "./snapshot";
 import { verifyEntry } from "./entry";
 import { containmentReasonSchema, uncontainedConsentSchema, uncontainedConfirmationSchema, approvalDigest, digest, emptyRegistry, literalValues, packageLaunch, probeDigest, proposalSchema, secretsSchema, secretReferences, secretDestination,
   assertSecretDestinations, secretReferenceSchema, secretDestinationSchema, type UncontainedConsent, type UncontainedConfirmation, type SecretPolicies, selectionSchema, toolName, validateCatalog, voiceToolBounds, type ProbeResult, type Tool, type VoiceToolServer, type VoiceToolsRegistry, type VoiceToolsView } from "./contracts";
@@ -16,8 +17,10 @@ export class VoiceToolsError extends Error {
 }
 const fail = (code: string): never => { throw new VoiceToolsError(code); };
 const hasSecret = (secrets: Record<string, string>, ref: string) => Object.hasOwn(secrets, ref) && !!secrets[ref];
-const legacySecretsSchema = z.record(secretReferenceSchema, z.string().min(1).max(8192)).refine(v => Object.keys(v).length <= 256);
-const persistedSecretsSchema = z.record(secretReferenceSchema, z.object({ value: z.string().min(1).max(8192), destinations: z.array(secretDestinationSchema).max(32), mac: z.string().optional() }).strict())
+// Keep the stored credential bound identical for current and legacy records.
+const storedSecretValue = z.string().min(1).max(8192).refine(value => value.length <= 8192);
+const legacySecretsSchema = z.record(secretReferenceSchema, storedSecretValue).refine(v => Object.keys(v).length <= 256);
+const persistedSecretsSchema = z.record(secretReferenceSchema, z.object({ value: storedSecretValue, destinations: z.array(secretDestinationSchema).max(32), mac: z.string().optional() }).strict())
   .refine(v => Object.keys(v).length <= 256);
 function validProposal(input: unknown, defaultCwd: string) {
   const parsed = proposalSchema.safeParse(input);
@@ -148,6 +151,7 @@ async function parseRegistry(input: unknown, directory: string, policies: Secret
   await validatePersistedCatalogs(catalogsToCompile);
   return registry;
 }
+const NO_CHANGE = Symbol("no registry change");
 const probeCodes = new Set(["OK", "CONTAINMENT_REQUIRED", "START_FAILED", "PROTOCOL_ERROR", "TIMEOUT", "CATALOG_BOUNDS", "SECRET_ECHO", "MISSING_SECRET", "SECRET_DESTINATION", "ENTRY_CHANGED", "BUSY", "CANCELLED"]);
 
 /** One Viewer owner. Every mutation re-reads under the async cross-process lock. */
@@ -197,11 +201,12 @@ export class VoiceToolsStore {
   private async mutate<T>(change: (registry: VoiceToolsRegistry) => Promise<T> | T, authorize?: () => void): Promise<T> {
     await this.load();
     await fs.mkdir(this.directory, { recursive: true, mode: 0o700 });
-    return withFileTransactionAsync(this.file, "VOICE_TOOLS_BUSY", async () => {
+    const result = await withFileTransactionAsync(this.file, "VOICE_TOOLS_BUSY", async () => {
       await this.reload();
       authorize?.();
       const candidate = structuredClone(this.registry);
       const result = await change(candidate);
+      if (result === NO_CHANGE) return result;
       authorize?.();
       candidate.revision++;
       assertNoSecrets(candidate, this.secrets);
@@ -210,6 +215,49 @@ export class VoiceToolsStore {
       commitSeals(path.join(this.directory, "approval"), Object.values(candidate.servers).flatMap(server => server.approval?.mac ? [server.approval.mac] : []));
       this.registry = candidate;
       return result;
+    });
+    // Running sessions learn of revocation from the commit, not from a later file read.
+    for (const listener of this.listeners) { try { listener(); } catch { /* A listener never undoes a committed write. */ } }
+    return result;
+  }
+  private readonly listeners = new Set<() => void>();
+  /** Called after every committed registry write of this owner. */
+  onCommit(listener: () => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
+  /** The registry revision this owner holds in memory. */
+  get revision(): number { return this.registry.revision; }
+  /** A server whose approval stands, read from memory only (design §3.5 step 2). */
+  serving(name: string): VoiceToolServer | null {
+    const server = Object.hasOwn(this.registry.servers, name) ? this.registry.servers[name] : undefined;
+    return server && servingServer(server) ? server : null;
+  }
+  /** What a call starts with: the approved servers and their selected tools, from memory; no file and no server (§4.3). */
+  snapshot(): VoiceToolSnapshot {
+    const servers = Object.entries(this.registry.servers).flatMap(([name, server]) => { const row = snapshotServer(name, server); return row ? [row] : []; })
+      .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+    return { revision: this.registry.revision, servers };
+  }
+  /** Secret values the snapshot's servers reference. They join a call's masking list and nothing else. */
+  secretValues(names: readonly string[]): string[] {
+    return [...new Set(names.flatMap(name => { const server = this.serving(name); return server ? secretReferences(server) : []; })
+      .flatMap(ref => hasSecret(this.secrets, ref) ? [this.secrets[ref]] : []))];
+  }
+  /** A session start, from memory: the approval must be the one the call took, and every credential bound to this server. */
+  sessionInput(name: string, approval: string) {
+    const server = this.serving(name);
+    if (!server || server.approval!.digest !== approval) return fail("TOOL_REVOKED");
+    this.checkDestinations(name, server);
+    return { server: structuredClone(server), secrets: Object.fromEntries(secretReferences(server).map(ref => [ref, this.secrets[ref]])), policies: structuredClone(this.policies) };
+  }
+  /**
+   * A live server no longer matches what was approved (§3.7). Catalog drift keeps the approval, so the approved
+   * tools keep serving; a changed entry file removes it, so the server does not start until it is approved again.
+   */
+  async markChanged(name: string, approval: string, revoke: boolean): Promise<void> {
+    await this.mutate(registry => {
+      const server = Object.hasOwn(registry.servers, name) ? registry.servers[name] : undefined;
+      if (!server || server.approval?.digest !== approval || !revoke && server.state === "changed") return NO_CHANGE;
+      server.state = "changed";
+      if (revoke) server.approval = null;
     });
   }
   async propose(input: unknown, actor: VoiceToolServer["proposedBy"], authorize?: () => void): Promise<void> {
@@ -326,7 +374,8 @@ export class VoiceToolsStore {
     this.checkDestinations(name, server);
     if (!server.catalog || server.lastDryRun?.code !== "OK" || server.lastDryRun.digest !== probeDigest(name, server)) return fail("DRY_RUN_REQUIRED");
     try { await verifyEntry(server); } catch { return fail("ENTRY_CHANGED"); }
-    const enabled = Object.entries(registry.servers).filter(([key, value]) => key === name || value.state === "enabled");
+    // A server changed since approval keeps serving its approved tools, so it counts toward the per-call bounds.
+    const enabled = Object.entries(registry.servers).filter(([key, value]) => key === name || servingServer(value));
     if (enabled.length > voiceToolBounds.enabledServers) return fail("SELECTION_BOUNDS");
     const selected = enabled.flatMap(([key, value]) => value.catalog?.tools.filter(tool => value.tools[tool.name]?.enabled).map(tool => ({
       type: "function", name: toolName(key, tool.name), description: tool.description, parameters: tool.inputSchema, strict: false,

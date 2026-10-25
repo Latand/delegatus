@@ -33,6 +33,72 @@ function fixture() {
     close: () => { db.close(); fs.rmSync(dir, { recursive: true, force: true }); } };
 }
 
+for (const hasFlock of [false, true]) test.skipIf(process.platform === "win32")(`a claim failure stops the gate before checks start (flock: ${hasFlock})`, async () => {
+  const f = fixture(), bin = path.join(f.dir, "bin"), helper = path.join(f.dir, "helper");
+  fs.mkdirSync(bin);
+  for (const command of ["date", "mkdir", "dirname", "mktemp", "touch", "rm", "sleep"]) {
+    fs.symlinkSync(execFileSync("which", [command], { encoding: "utf8" }).trim(), path.join(bin, command));
+  }
+  fs.writeFileSync(helper, `#!/bin/bash
+case "$2" in
+  --reuse-slot) exit 75 ;;
+  --watch-wait) echo ready > "$3/ready"; while [[ ! -f "$3/done" ]]; do /bin/sleep 0.01; done; exit 0 ;;
+  --wait) exit 0 ;;
+  --claim) echo 'gate-slot: CPU admission queue lock deadline exceeded; checks did not start' >&2; exit 1 ;;
+  *) exit 99 ;;
+esac
+`, { mode: 0o755 });
+  try {
+    const result = await realExec("/bin/bash", ["scripts/gate-slot.sh", "/bin/bash", "-c", 'echo started > "$CPU_QUEUE_OUTPUT"'], process.cwd(), {
+      ...f.env, LLV_GATE_BUN: helper, LLV_GATE_RUNNER: "off", LLV_CPU_WAIT_ROOTS: "[]", LLV_GATE_SLOTS: "1",
+      PATH: hasFlock ? process.env.PATH : bin,
+    }, { timeoutMs: 5000 });
+    expect(result.code, result.stderr).toBe(1);
+    expect(result.stderr).toContain("lock deadline exceeded");
+    expect(fs.existsSync(f.env.CPU_QUEUE_OUTPUT)).toBe(false);
+  } finally { f.close(); }
+});
+
+test.each([1, 6])("%i real slot locks stay exclusive while an independent stage starts", async slots => {
+  const f = fixture(), controls: AbortController[] = [], pending: Promise<Awaited<ReturnType<typeof realExec>>>[] = [];
+  const release = path.join(f.dir, "release");
+  const env = { ...f.env, LLV_GATE_SLOTS: String(slots), CPU_SLOT_RELEASE: release };
+  const lines = () => fs.existsSync(f.env.CPU_QUEUE_OUTPUT) ? fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8").trim().split("\n") : [];
+  const stderr = path.join(f.dir, "last-stderr");
+  const q = new CpuAdmissionQueue(path.join(f.dir, "admission.sqlite"));
+  const script = 'echo start >> "$CPU_QUEUE_OUTPUT"; while [[ ! -f "$CPU_SLOT_RELEASE" ]]; do sleep 0.02; done; echo end >> "$CPU_QUEUE_OUTPUT"';
+  try {
+    fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, "some avg10=0.00 total=1\n");
+    for (let index = 0; index <= slots; index++) {
+      const control = new AbortController(); controls.push(control);
+      const command = ["bash", "scripts/gate-slot.sh", "bash", "-c", script];
+      pending.push(Promise.resolve(index === slots
+        ? realExec("bash", ["-c", 'exec "$@" 2>"$CPU_SLOT_STDERR"', "slot-fixture", ...command], process.cwd(), { ...env, CPU_SLOT_STDERR: stderr }, { timeoutMs: 60_000, signal: control.signal })
+        : realExec(command[0]!, command.slice(1), process.cwd(), env, { timeoutMs: 60_000, signal: control.signal })));
+      if (index < slots) await until(() => lines().length === index + 1);
+    }
+    await until(() => fs.existsSync(stderr) && fs.readFileSync(stderr, "utf8").includes(`Waiting for a heavy command slot · all ${slots} busy · waited 0 min`));
+    expect(lines()).toEqual(Array.from({ length: slots }, () => "start"));
+    for (let slot = 1; slot <= slots; slot++) {
+      const probe = Bun.spawnSync(["flock", "-n", path.join(f.dir, `llv-heavy-gate.slot${slot}.lock`), "true"]);
+      expect(probe.exitCode).toBe(1);
+    }
+    // Poll only until the shared spacing permits the stage's real check.
+    await until(() => q.check("stage:independent", true) === null);
+    expect(lines()).toHaveLength(slots);
+    expect(f.db.query("SELECT key FROM stage_admissions").all()).toEqual([{ key: "stage:independent" }]);
+    fs.writeFileSync(release, "release");
+    const results = await Promise.all(pending);
+    expect(results.map(result => result.code), JSON.stringify(results)).toEqual(Array.from({ length: slots + 1 }, () => 0));
+    let active = 0, maximum = 0;
+    for (const line of lines()) { active += line === "start" ? 1 : -1; maximum = Math.max(maximum, active); expect(active).toBeLessThanOrEqual(slots); expect(active).toBeGreaterThanOrEqual(0); }
+    expect(maximum).toBe(slots); expect(active).toBe(0); expect(lines()).toHaveLength(2 * (slots + 1));
+  } finally {
+    fs.writeFileSync(release, "release"); controls.forEach(control => control.abort());
+    await Promise.allSettled(pending); q.close(); f.close();
+  }
+}, 90_000);
+
 test("gate-slot keeps pressure mandatory beyond ten minutes and preserves FIFO through slot acquisition", async () => {
   const f = fixture();
   const pending: Promise<unknown>[] = [];

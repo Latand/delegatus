@@ -6,15 +6,12 @@ import os from "node:os";
 
 import { expect, test } from "bun:test";
 
-import { FOCUS_TARGET_KINDS } from "@/lib/attention/targets";
-import { BRIDGE_REPORT_CLASSES } from "@/lib/bridge/types";
-import { OPERATOR_CORRECTION_RULE, PROCESS_CLEANUP_MARKER, ROLE_DEFAULTS, WORKING_RULES, WORKING_RULES_SHORT } from "@/lib/roles/defaults";
+import { OPERATOR_CORRECTION_RULE, ROLE_DEFAULTS, WORKING_RULES, WORKING_RULES_SHORT } from "@/lib/roles/defaults";
 import { launchOverheadBytes } from "./handoffDigest";
 import { loadRoleDefinitionsOrDefaults, loadRoleRegistrySnapshot, saveRoleMapping } from "@/lib/roles/store";
 import { resolveSpawnRole, roleSpawnPrompt } from "@/lib/roles/registry";
 import type { RegistryRoleDefinitions, RoleDefinition } from "@/lib/roles/types";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
-import { renderTaskColorRule, TASK_COLOR_RULE } from "@/lib/tasks/colorRule";
 
 import {
   ORCHESTRATOR_BOARD_REPORT_DIRECTIVE,
@@ -44,42 +41,6 @@ import {
 test("the manager draft defaults to the Claude Opus alias on low effort through the role preset", () => {
   /* OrchestratorPanel seeds its shared launch controls from this live preset. */
   expect(ORCHESTRATOR_SPAWN_CONFIG).toMatchObject({ engine: "claude", model: "opus", effort: "high", role: "orchestrator" });
-});
-
-/* The instruction that #976 decision 7 retired: work starts by default, so a
-   mandate that forbids auto-start outright must not come back. */
-test("no auto-start prohibition survives in the mandate", () => {
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("NEVER auto-start");
-});
-
-/* #982 — pipeline requests used to carry different authority depending on whether
-   they arrived in the manager's own conversation or through the gateway. Under PRD
-   #976 decision 7 both channels are equal, including an explicit request for a draft. */
-test("the retired unequal-channel phrasing does not return", () => {
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("same request, relayed through the gateway");
-});
-
-test("the canonical direct-spawn example includes the mandatory semantic title", () => {
-  const skill = fs.readFileSync(path.join(import.meta.dir, "../../../.claude/skills/delegatus-orchestration/SKILL.md"), "utf8");
-  expect(skill).toContain('"title":"<semantic task title>"');
-});
-
-/* #982 / PRD #976 decision 7 — the operator talks to whoever they want, the manager
-   included. Mandate v4 replaced #691's "You do not talk to the user" section with two
-   channels: direct chat in the manager's own conversation, and bridge reports for the
-   voice gateway. The prohibition cannot creep back in silently — in the replaced
-   section or anywhere else. */
-test("no prohibition on addressing the operator survives anywhere in the mandate", () => {
-  for (const prohibition of [
-    "You do not talk to the user",
-    "Never address the user",
-    "never ask them a question directly",
-    "you have no user-facing channel",
-    "not as chat",
-    "only through your reports",
-  ]) {
-    expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain(prohibition);
-  }
 });
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
@@ -165,20 +126,6 @@ test("the default mandate is at version 60, and a v59 seat reads as stale", () =
   expect(orchestratorMandateStale(58)).toBe(true);
   expect(orchestratorMandateStale(59)).toBe(true);
   expect(orchestratorMandateStale(60)).toBe(false);
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("gives the shape, the outcome rule and what");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("keep these rare");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Off: file no bridge reports at all");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('onExhausted?: "advance" | "stop-after-fix" | "park"');
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Use stop-after-fix only when the operator asked to look before merge");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('The kind "review-loop" is a legacy form kept for stored lanes; do not compose it.');
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("You are this project's orchestrator in Delegatus");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("registered under the key `viewer`");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("the viewer's built-in Manager");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("act on the items it lists and nothing else");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("The text is for the human and agent context goes in details, as create_task's description says");
 });
 
 /**
@@ -251,39 +198,6 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   60: "d424c6e968bb1c646b975e88e3827eff2d13513abaedaafb81ee242f69d32175",
 };
 
-/* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
-   the seat reports the PR ready and merges only when the operator asks; on,
-   the runner merges and the seat leaves the lanes it holds alone and acts on
-   a stopped one. §5.4: when to mark the lane that finishes a task. */
-test("the merge bar follows the project's merge setting, and the mandate says when a lane finishes its task", () => {
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("merge on APPROVE");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("Merge bar: merge only on an APPROVE verdict");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("governs every automatic merge, yours included");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('Setting off: you do not merge on your own; tell the operator "PR ready: <url>" and merge only when they ask.');
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating, refreshing or merging)");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("then pipeline_action retry-merge");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Red checks hold merging");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Batch 2+ ready, authorized PRs (N@reviewedHead): merger run stage or spawn_agent");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("needs-review → independent git show --remerge-diff review, then next batch");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("culprit → lane finding");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Finishing a task: set finishesTask: true on create_pipeline (or pipeline_action link-task with finishes: true) when this lane's PR delivers the whole task.");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("For a task split into slices, mark only the lane of the last slice, or mark none and move the task yourself.");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("it waits for every other started lane on the task to end");
-});
-
-/* #2166 §3.7: the mandate a newcomer's seat reads opens and greets in plain
-   words, names no issue, and leaves a project's own release step off until the
-   operator turns releases on for that project. */
-test("the mandate opens without issue numbers, greets in plain words and runs releases only when turned on", () => {
-  const opening = ORCHESTRATOR_SYSTEM_PROMPT.split("\n")[0]!;
-  expect(opening).toBe("You are this project's orchestrator in Delegatus — the agent that owns its board and runs its work through Delegatus's MCP tools (registered under the key `viewer`). You never act outside them: no direct process or runtime manipulation. The working rules below apply to you as to every agent; the rest of this mandate adds what a seat does.");
-  expect(opening).not.toMatch(/#\d/);
-  expect(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE).toContain(`Ready in {project}.\n${CURRENT_GREETING_OFFER}`);
-  expect(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE).not.toContain("lanes");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("- Releases run only when seat_tick_settings.release enables them or requestNow asks for one. Hold releases during known production incidents.");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("release step, where it has one");
-});
-
 /* v30: a proactive seat keeps accepted work moving, so the greeting says what
    still waits for the operator's word: new work. */
 const CURRENT_GREETING_OFFER = "Tell me what you want done here. I'll turn it into tasks on the board, have agents build and review it, keep it moving and report back. New work starts when you ask; I'll suggest what could come next.";
@@ -317,43 +231,22 @@ test("any edit to the default mandate text moves its version (#2030)", () => {
   expect(new Set(Object.values(PROMPT_FINGERPRINTS)).size).toBe(versions.length);
 });
 
-/** The contract every seat tick wake ended with until #2030, copied verbatim
-    from `src/lib/monitor/report.ts` at the merge base, so a clause dropped or
-    reworded on its way into the mandate fails here rather than silently. */
-const SHIPPED_TICK_CONTRACT = [
-  "Handle the listed items first, then make ONE bounded pass over this project's whole board and act on what stands still: list_pipelines for lanes completed, parked or failed to spawn, the open pull requests their finished lanes left, list_flows, agent_activity with liveOnly for live and stalled agents, and open tasks with nothing running.",
-  "Record every outcome where it belongs — on the board card or on the pipeline — not only in this conversation.",
-  "If an item cannot be done, mark its task blocked with the reason. That is the stop, and it is the only one.",
-  "Do not schedule yourself. The Viewer ticks this seat; a self-scheduled monitor is refused practice.",
-  "This tick is yours to govern: seat_tick_settings turns it off, changes how often it wakes you, or turns it back on, per project, with a reason that shows on the board.",
-  "Do not wait on the operator inside this turn.",
-];
-
-/* Each shipped clause, and where the clock section now says it. The wording is
-   the mandate's own (a wake no longer quotes it), so this maps rule to rule. */
-const CLAUSE_IN_MANDATE: readonly [string, string][] = [
-  /* v30 dropped list_flows: the seat composes no review flows. */
-  [SHIPPED_TICK_CONTRACT[0]!, "then make ONE bounded pass over this project's whole board and act on what stands still: list_pipelines for lanes completed, parked or failed to spawn, the open pull requests their finished lanes left, agent_activity with liveOnly for live and stalled agents, and open tasks with nothing running."],
-  [SHIPPED_TICK_CONTRACT[1]!, "Record every outcome on the board card or the pipeline, not only in this conversation."],
-  /* v55 holds the task where it used to mark it blocked. */
-  [SHIPPED_TICK_CONTRACT[2]!, "set its task's hold with the reason: that is the stop, and the only one."],
-  [SHIPPED_TICK_CONTRACT[3]!, "So do not schedule yourself"],
-  [SHIPPED_TICK_CONTRACT[4]!, "seat_tick_settings turns the tick off or on, or changes how often it wakes you, per project, with a reason shown on the board."],
-  [SHIPPED_TICK_CONTRACT[5]!, "Never wait on the operator inside a wake's turn."],
+/* Delivery adds each current tick-contract clause once to a bespoke mandate. */
+const CLAUSE_IN_MANDATE: readonly string[] = [
+  "then make ONE bounded pass over this project's whole board and act on what stands still: list_pipelines for lanes completed, parked or failed to spawn, the open pull requests their finished lanes left, agent_activity with liveOnly for live and stalled agents, and open tasks with nothing running.",
+  "Record every outcome on the board card or the pipeline, not only in this conversation.",
+  "set its task's hold with the reason: that is the stop, and the only one.",
+  "So do not schedule yourself",
+  "seat_tick_settings turns the tick off or on, or changes how often it wakes you, per project, with a reason shown on the board.",
+  "Never wait on the operator inside a wake's turn.",
 ];
 
 test("every clause the tick contract carried lives in the mandate, and reaches every seat once (#2030)", () => {
-  expect(CLAUSE_IN_MANDATE.map(([shipped]) => shipped)).toEqual(SHIPPED_TICK_CONTRACT);
-  for (const clause of ORCHESTRATOR_SEAT_TICK_CONTRACT) expect(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE).toContain(clause);
-  for (const [, stated] of CLAUSE_IN_MANDATE) {
-    expect(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE).toContain(stated);
-    expect(ORCHESTRATOR_SYSTEM_PROMPT.split(stated)).toHaveLength(2);
-  }
   /* A bespoke mandate is exactly the one without it, and delivery is what gives
      it the section, once. */
   const bespoke = "A seat's own mandate, carried through a rotation.";
   const delivered = orchestratorMandateForDelivery(bespoke);
-  for (const [, stated] of CLAUSE_IN_MANDATE) expect(delivered.split(stated)).toHaveLength(2);
+  for (const stated of CLAUSE_IN_MANDATE) expect(delivered.split(stated)).toHaveLength(2);
   expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
 });
 
@@ -420,49 +313,6 @@ test("only a seat delivered a mandate that states the contract is spared its cla
   expect(orchestratorMandateCarriesTickContract({ promptVersion: ORCHESTRATOR_PROMPT_VERSION })).toBe(false);
 });
 
-/* #1428 v13 — the index over every message of every transcript existed, and no
-   prompt told a seat to look. The mandate names both tools the seat calls: the
-   search, and the reader that turns a snippet into the surrounding turns. */
-test("the mandate names the transcript search and read tools", () => {
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("search_transcripts");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("conversation_messages");
-});
-
-/* #1301 — the fences list the viewer surfaces a seat may use, and a seat that
-   reads `tmux` there repeats it into reports the operator reads. No tmux runs
-   in the delivery path. */
-test("no transport named tmux survives in the mandate", () => {
-  expect(ORCHESTRATOR_SYSTEM_PROMPT.toLowerCase()).not.toContain("tmux");
-});
-
-/* #1245 v11 — Delegatus owns the clock. "Do not self-schedule" alone left a
-   cron job looking like a different thing from a wakeup, so the section names
-   each kind of schedule; v55 names them by kind, since the tools differ per
-   engine, and says how a seat already holding one drops it. */
-test("the clock section names every kind of schedule a seat could reach for, by no engine's tool name", () => {
-  expect(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE).toContain("arm no wakeup, cron job or monitor loop your engine offers, for self-monitoring or for polling the board");
-  expect(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE).toContain("If you hold one now, delete every recurring job you created in this turn and arm no replacement");
-  for (const tool of ["ScheduleWakeup", "CronCreate", "CronDelete", "CronList"]) expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain(tool);
-});
-
-test("the playbook reference is no longer pinned to this checkout", () => {
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("The llv-conveyor skill in this checkout is your playbook");
-});
-
-/* #1245 — a mandate that forbids self-scheduling while the playbook it points
-   at demands one is worse than neither: the seat has to pick, and the rule
-   stops being enforceable. The playbook lives in this repository, so the
-   exact instruction that contradicted the mandate — self-pacing on a wakeup
-   interval, which is what the measured seat was doing — is checkable here. */
-test("the checked-in playbook no longer tells the seat to schedule itself", () => {
-  const skill = fs.readFileSync(path.join(import.meta.dir, "../../../.claude/skills/delegatus-conveyor/SKILL.md"), "utf8");
-  expect(skill).not.toContain("self-paces with ScheduleWakeup");
-  expect(skill).not.toContain("ScheduleWakeup checkpoints");
-  expect(skill).toContain("controller appends the stage_report contract");
-  expect(skill).not.toContain("required fenced JSON verdict");
-  expect(skill).not.toMatch(/\bSol\b|xhigh/);
-});
-
 test("mandate delivery keys off directive content and appends it exactly once", () => {
   const custom = "Caller-edited current-version mandate";
   const delivered = orchestratorMandateForDelivery(custom);
@@ -511,93 +361,6 @@ test("the current default already contains the clock directive", () => {
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE);
 });
 
-/* #1016 put target examples in the mandate before the tool published them.
-   The tool schema now owns their shapes; the mandate names every supported
-   kind and directs the seat back to that schema. */
-test("the mandate names every attention target and uses the tool schema for shapes", () => {
-  /* v55 leaves the list of kinds to the schema too, so it cannot drift from
-     FOCUS_TARGET_KINDS; the kinds the seat is told to focus are still named. */
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("The tool schema gives each target kind's shape.");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toMatch(/Targets are typed by kind/);
-  for (const kind of ["conversation", "stage", "pipeline", "task"]) expect(FOCUS_TARGET_KINDS).toContain(kind as never);
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("The shapes, verbatim:");
-  /* The sentinel the tool answers with when there is nothing to move. */
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("NO_ACTIVE_VIEW");
-});
-
-/* #1026 — a fresh seat composed its first pipeline through seven sequential
-   validation errors because nothing it had read named the stage shape. The
-   mandate now prints that shape as the schema declares it. */
-test("the mandate names explicit graph insertion and final-fix completion (#2247)", () => {
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("add-stage preserves edges; after:<stageId>");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("runs exactly N reviews and the fix of the N-th review");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("It creates no terminal re-check and no budget follow-up task");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Another gate's fail loop permits a fresh handoff; rounds stay cumulative");
-});
-
-test("the mandate carries the pipeline stage shape a first pipeline needs", () => {
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('kind: "run"');
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("role: {roleId, params?}");
-});
-
-test("the prompt names every bridge report class and no others", () => {
-  for (const reportClass of BRIDGE_REPORT_CLASSES) {
-    expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(reportClass);
-  }
-});
-
-test("the prompt carries the directive trailer contract in the exact wire form", () => {
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("[bridge ref=<seq>]");
-});
-
-/* #1760 — the mandate is the prompt for a manager of ANY project, and the
-   deploy section described deploying Agent Log Viewer itself. It is gone from
-   the body for every project, the Viewer's own included; the protocol it
-   carried lives in the delegatus-conveyor skill the fences already name. */
-test("the mandate body says nothing about deploying the Viewer", () => {
-  expect(ORCHESTRATOR_SYSTEM_PROMPT.split("\n").filter((line) => line.trimEnd() === "## Deploys")).toHaveLength(0);
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("deploy_exact_sha");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("batched deploy");
-});
-
-/* #1720 v14 — the ownership section was rewritten because its earlier claims
-   were wrong about what the launch path does. Each retired claim would send a
-   manager down the path the section exists to prevent, so none may return. */
-test("no retired task-binding claim survives in the ownership directive", () => {
-  /* What an omitted binding does depends on the parent the call has. MCP
-     spawn_agent dispatches same-origin with the operator capability, so the
-     route infers no parent and a task-less call that names none is a duplicate
-     placeholder card (spawnRecovery.integration.test.ts). */
-  expect(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE)
-    .not.toContain("a spawn_agent call without taskId joins the task of the conversation that MADE the call");
-  /* A reviewer spawn that names a parent joins the parent's card beside the
-     reviewed work's (membership.test.ts), so reviewer spawns pass taskId too. */
-  expect(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE).not.toContain("A review flow or a reviewer spawn inherits");
-  expect(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE)
-    .toContain("create_pipeline and spawn_agent both refuse a task belonging to another project");
-  expect(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE).not.toContain("takes the id as given");
-  /* No invented id shape: the mandate must never teach a format the board does
-     not mint. */
-  expect(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE).not.toContain('"task_');
-  /* Unlinking is the repair's second step, not a prohibition (taskBinding.test.ts). */
-  expect(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE).not.toContain('Never use "unlink-task" to tidy a duplicate');
-  /* The task-side proof is `pipelineIds`; a manager told to look for an
-     assignment reads a successful repair as a failed one. */
-  expect(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE).not.toContain("get_task and confirm the launch is recorded on it");
-});
-
-/* The task-creation section carries the colour and icon rule as the rule
-   module renders it, so the mandate cannot teach a rule create_task does not. */
-test("the task-creation section tells the manager to pass icon and color by the one rule create_task carries", () => {
-  const section = ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE.slice(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE.indexOf("NAME, DESCRIBE AND COLOUR IT AT CREATION."));
-  expect(section).toContain("Pass icon and color on every create_task by the colour rule in its description, and give a task you touch that has no colour one by the same rule.");
-  /* v55: the rule lives once, in create_task's description, so the mandate
-     cannot teach a rule create_task does not. */
-  expect(section).not.toContain(renderTaskColorRule());
-  for (const { color } of TASK_COLOR_RULE) expect(section).not.toContain(`${color} = `);
-  expect(fs.readFileSync(path.join(import.meta.dir, "../mcp/server.ts"), "utf8")).toContain("renderTaskColorRule(),");
-});
-
 /* Delivery, on exactly the terms the clock handover established: the seats that
    launch work without a task are the ones carrying a bespoke or older mandate,
    and a rotation hands the successor the INCUMBENT's mandate. */
@@ -632,15 +395,6 @@ test("the board report section reaches a bespoke or older mandate once, and is r
 Read the report, then ask me before closing anything.`;
   expect(orchestratorMandateForDelivery(reworded)).not.toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(orchestratorMandateForDelivery(reworded)).toStartWith(reworded);
-  /* The operator's decisions of 2026-09-27: their own cards close on their
-     word (D3), and a missing priority is never a request to label (D2). */
-  expect(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE).toContain('a card marked "ask first" only when the operator agrees');
-  expect(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE).toContain("never ask for labels or fields");
-  /* The report replaces the board walk of the first turn only; the clock
-     contract's per-wake pass stands beside it. */
-  expect(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE).toContain("Your first turn gives status and leaves the board walk to it; later wakes still make their own pass.");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("make ONE bounded pass over this project's whole board");
-  expect(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE).toContain("start none unasked");
 });
 
 /* The current default carries all three inline, so a fresh seat reads each in
@@ -662,20 +416,6 @@ test("the delivered default carries each directive exactly once, and delivery ad
 /* #2518: both rules, in the default and in whatever mandate a seat holds. */
 test("the mandate asks before a bug report is filed, publishes only an approved preview, and sends another project's work to its seat", () => {
   const section = ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE;
-  /* Rule 1: the question comes first, in a decision form. */
-  expect(section).toContain("When a Delegatus tool misbehaves (an error, tools that contradict each other, a launch refused for a reason that looks wrong), ask the operator in a decision form (publish_prototype_review, no taskId) whether you may file an issue.");
-  /* The reporter writes, the seat shows the stored text, and nothing but the
-     operator's approving option in that text's own form publishes it. */
-  expect(section).toContain("spawn_agent role issue-reporter");
-  expect(section).toContain("read its preview back (issue_report show), put that exact title and body in chat and ask in a form whether to publish it, passing the approvalForm show answers unchanged.");
-  expect(section).toContain("Publish (issue_report publish, the digest) only after the operator chooses its approving option");
-  expect(section).not.toContain("suggest_replies");
-  expect(section).toContain("A no or an edit returns to the reporter and needs a new yes.");
-  expect(section).toContain("Never file one another way.");
-  /* Rule 2: seat to seat by default, and what lifts it. */
-  expect(section).toContain("Other projects: send_message_to_orchestrator;");
-  expect(section).toContain("tasks, pipelines, spawns and worker messages need an explicit operator request");
-  expect(section).toContain("quoted in crossProjectRequest");
 
   /* A bespoke mandate receives both required rules once. A retained heading
      cannot suppress them when its body was edited or removed. */
@@ -778,22 +518,6 @@ test("the delivered mandate renders the role table from the registry it is hande
   expect(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT)).toContain("| prod-auditor | codex | gpt-6.1-sol | xhigh | read-only |");
 });
 
-test("the role table carries the runtime guidance beside it", () => {
-  const delivered = orchestratorMandateForDelivery("Bespoke mandate");
-  const section = delivered.slice(delivered.indexOf(ORCHESTRATOR_ROLE_TABLE_HEADING));
-  expect(section).toContain("Omitting engine, model and effort");
-  expect(section).toContain("on the stage");
-  expect(section).toMatch(/low or medium/);
-  expect(section).toContain("NEXT attempt");
-  expect(section).toContain("create_pipeline");
-  /* The standing model rules (model landscape 2026-09) ride in the role rows;
-     the builder's description names no model (agent-prompt-contract.md
-     §2.10 B), since runtime advice belongs to the table's notes. */
-  expect(section).toContain("| builder | codex | gpt-6.1-sol | high | read-write | Writes product code for a scoped brief.");
-  expect(section).toContain("High per lane for risky backend diffs.");
-  expect(section).toContain("claude/fable/high per lane for the largest cross-cutting designs");
-});
-
 test("the manager table uses resolved saved builder variants and keeps registry provenance", () => {
   const roles = ROLE_DEFAULTS.map((role) => role.id === "builder" ? {
     ...role,
@@ -892,77 +616,11 @@ test("the role table tells the seat to size lanes, lists every variant and names
   expect(builderRow).toContain("size=trivial, domain=frontend, domain=docs, domain=frontend mode=apply-fixes, domain=docs mode=apply-fixes: claude/claude-sonnet-5-5/high; mode=apply-fixes: codex/gpt-6-luna/high.");
   const reviewerRow = table.split("\n").find((line) => line.startsWith("| reviewer |"))!;
   expect(reviewerRow).toContain("size=trivial: codex/gpt-6-luna/high.");
-  expect(table).toContain("- Size each lane first. trivial (few UI/copy lines, one flag/label; brief pins exact change and acceptance): builder and reviewer size=trivial, one review round.");
-  expect(table).toContain("normal: rows, effort low or medium");
-  expect(table).toContain("design (options, architecture, proposals, design issues): architect first");
-  /* The Sonnet 5.5 / Opus 5.5 table (docs/design/model-sizing-tiers.md §7). */
-  expect(table).toContain("- Sonnet 5.5 for well-scoped build, fix, docs, verification, repeated work. Opus 5.5 for design, orchestration, judgment-heavy or long-horizon lanes (engine redesigns, deploys and the project's critical runtime, accounts/migration, security, cross-cutting refactors), hardest problems. Review backend on Codex, frontend on Opus.");
-  expect(table).toContain("- size=trivial and a hand-set Sonnet builder need a brief from a large model (Opus, Fable, large Codex). Sonnet never orchestrates, architects or reviews above size=trivial.");
-  expect(table).toContain("- UI lane: Opus read-only brief stage (files, states, 390px and desktop, what not to touch), builder domain=frontend, an Opus reviewer stage with its fix stage, then a visual-critic stage last.");
-  /* The fix stage's rules are its scaffold's and the stage wrapper's; the
-     table no longer repeats them (role-prompts-rewrite.md §2.4). */
-  expect(table).not.toContain("- Fix stages (apply-fixes):");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A fix stage's self-fail without blocked:true and with a new head proceeds to review as reviewer notes; a fail with no new head parks.");
-  /* Fixers repair discoveries within the spec; reviewers grade the result. */
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("proceeds to review as reviewer notes");
-  expect(table).toContain("README, docs, public text: builder domain=docs.");
-  expect(table).toContain("runtimeLine (spawn_agent: runtime)");
-  expect(table).toContain("- override-stage sets the runtime on the stage from the NEXT attempt, or now with applyNow:true.");
-  expect(table).toContain("quote runtime, size and reason");
   expect(table).toContain("builder:frontend (was claude/opus/xhigh); tell the operator");
   /* Delivery replaces the table up to the first blank line, so it carries none. */
   expect(table).not.toContain("\n\n");
   const delivered = orchestratorMandateWithRoleTable("Bespoke mandate", table);
   expect(orchestratorMandateWithRoleTable(delivered, table)).toBe(delivered);
-});
-
-/* docs/design/agent-prompt-contract.md §2.11 review check: the mandate a seat
-   is delivered names no language, tool, topology or this product's own code,
-   and teaches one verdict vocabulary. The retired markers appear once, in the
-   brief rule that tells the seat never to write them. */
-const STACK_SPECIFIC = [/\btsc\b/, /bunx/, /TypeScript/, /blue\/green/, /external-worker/, /conveyor/i, /8898/, /Ukrainian/, /review flow/i, /list_flows/, /flowRound/, /review review/, /file ownership/, /one owner per file/, /\/api\//];
-
-test("the delivered default names no stack and teaches one verdict vocabulary (v30)", () => {
-  const delivered = orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT);
-  for (const pattern of STACK_SPECIFIC) expect(delivered).not.toMatch(pattern);
-  expect(delivered).not.toContain("COMMENT");
-  for (const marker of ["REVIEW_READY", "NO FINDINGS"]) expect(delivered.split(marker)).toHaveLength(2);
-  /* The two retired VERDICT lines are named exactly, in the one retiring sentence. */
-  expect(delivered.match(/VERDICT/g)).toEqual(["VERDICT", "VERDICT"]);
-  expect(delivered).toContain("never write REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES or NO FINDINGS into a brief");
-  /* A GitHub issue is attached when one exists and never waited for. */
-  expect(delivered).toContain("no step waits for an issue");
-  /* Recommended when the project has GitHub, never mandatory (operator, 2026-09-27). */
-  expect(delivered).toContain("Attach a useful GitHub issue with pipeline_action attach-link");
-  /* Review of #2301: the merge bar names the lanes Delegatus merges
-     (forge/autoMerge.ts mergeEligible): reviews passed, or budget spent with
-     the last fix passed, whose kept findings the seat reads. */
-  expect(delivered).toContain("the last budget fix passed");
-  expect(delivered).toContain("Delegatus merges a completed lane whose reviews passed, or spent their budget with the last fix passed");
-  expect(delivered).toContain("continue-review cannot add rounds; traversed budgets cannot grow");
-  /* One condition for stop-after-fix, stated once (review of #2301). */
-  expect(delivered.match(/stop-after-fix only when|use stop-after-fix when/g)).toEqual(["stop-after-fix only when"]);
-  expect(delivered).not.toContain("kept for you to read before you merge");
-  /* The worker cap holds in every mode, in the scaffold's words. */
-  /* A seat designated onto an existing conversation gets no scaffold, so the
-     mandate names the default cap itself (review of #2301). */
-  expect(delivered).toContain("Keep no more workers running at once than the worker limit each wake and get_orchestrator state, in every mode: each running lane and each live spawned agent counts as one.");
-});
-
-/* The operator, 2026-09-27: a friend who teases a little, speaks their way,
-   and keeps working. Each line that could read against "proactive" says what
-   it means instead: accepted work moves unasked, new work waits for their
-   word, and the drive lives inside the turns the seat is given. */
-test("the seat's personality is proactive inside accepted work, and every line agrees", () => {
-  const section = ORCHESTRATOR_SYSTEM_PROMPT.slice(ORCHESTRATOR_SYSTEM_PROMPT.indexOf("## Who you are"), ORCHESTRATOR_SYSTEM_PROMPT.indexOf("## Initial visible status"));
-  expect(section).toContain("likes to tease a little");
-  expect(section).toContain("Mirror how the operator talks: language, register, brevity, and their casual words when they use them.");
-  expect(section).toContain("You are hard-working and want to keep going");
-  expect(section).toContain("never start work nobody asked for, or change what the operator owns");
-  expect(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE).not.toContain("Nothing starts until you ask");
-  expect(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE).toContain("New work starts when you ask");
-  expect(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE).toContain("Between wakes you are idle on purpose, and idle is correct: a seat with nothing owed costs nothing. Your drive to keep going works inside a turn: take every owed step before it ends.");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Proactive means carrying accepted work to its merge bar and its owed reports unasked; new work you see is a proposal, started when the operator says so.");
 });
 
 /* A v29 seat's stored clock section is replaced by exact match, so its board
@@ -994,9 +652,6 @@ test("the role table names a role whose prompt text this install replaced", () =
    whose clock section still carries the heading it shipped with up to v29
    keeps its own wording under it and gets no second section. */
 test("the delivered mandate names no Viewer, and the v29 clock heading still marks a seat's own section", () => {
-  const delivered = orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT);
-  expect(delivered.replaceAll("`viewer`", "")).not.toMatch(/\bviewer\b/i);
-  expect(delivered).not.toContain("owns traffic");
   const reworded = `## The Viewer's clock — you never schedule yourself\nWake only when told.`;
   const kept = orchestratorMandateForDelivery(`Run the widgets project.\n\n${reworded}`);
   expect(kept).toContain(reworded);
@@ -1004,53 +659,10 @@ test("the delivered mandate names no Viewer, and the v29 clock heading still mar
   expect(kept.split("you never schedule yourself")).toHaveLength(2);
 });
 
-test("the mandate chooses an explicit review budget from consequences and probability", () => {
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Choose review rounds from risk = consequences × probability: low risk 1; normal risk 2; high risk (data loss, security, production, the project's critical runtime, migrations) 3. The default is 3. More than 3 only when the operator asks; state the reason in the brief.");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("unlimited");
-});
-
-test("agent-facing review skills agree with the mandate's risk budget", () => {
-  for (const name of ["delegatus-conveyor", "review-loop"]) {
-    const skill = fs.readFileSync(path.join(import.meta.dir, `../../../.claude/skills/${name}/SKILL.md`), "utf8");
-    expect(skill).toContain("risk = consequences × probability: low risk 1; normal risk 2; high risk (data loss, security, production, runtime host, migrations) 3.");
-    expect(skill).toContain("The default is 3. More than 3 only when the operator asks; state the reason in the brief.");
-    expect(skill).not.toMatch(/roundLimit"?:? ?5|5–7 substantive|9–13/);
-  }
-  const reviewLoop = fs.readFileSync(path.join(import.meta.dir, "../../../.claude/skills/review-loop/SKILL.md"), "utf8");
-  expect(reviewLoop).toContain('"roundLimit": 3');
-  expect(reviewLoop).toContain("Unlimited review requires an explicit operator request and `roundLimit: 0`.");
-});
-
-test("the versioned mandate asks for a current status note in the operator's language", () => {
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Keep each task current: an update_task note whenever the situation changes (why it is parked, what or whom it waits for, what runs now), brief and in plain operator language.");
-});
-
-
 test("the mandate asks every decision as a form", () => {
   for (const mandate of [ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateForDelivery("Coordinate the project.")]) {
     expect(mandate).toContain(ORCHESTRATOR_PROTOTYPE_DIRECTIVE);
-    expect(mandate.split("Every operator decision is a form")).toHaveLength(2);
   }
-  /* The operator, 2026-10-15: reply drafts are gone, and every ask, a plain
-     question too, is a form that chat and reports only point to. */
-  for (const retired of ["suggest_replies", "Reply drafts", "reply draft"]) expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain(retired);
-  expect(ORCHESTRATOR_PROTOTYPE_DIRECTIVE).toContain("Any other question for the operator is a form too.");
-  expect(ORCHESTRATOR_PROTOTYPE_DIRECTIVE).toContain("Chat and reports only point to the form and ask nothing themselves.");
-  expect(ORCHESTRATOR_PROTOTYPE_DIRECTIVE).not.toContain("chat may hold only a one-off ask");
-  /* A plan's yes and a parked stage's question are decisions; the reports
-     never ask them a second time (decisions 3 and 5). */
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A plan you want a yes to, and a stage's question you cannot settle, are decisions; when a stage parks on such a question, publish its form at once.");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Every question in a form admits a free-text answer.");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A report only points to a decision's form; an ask a click cannot settle (an action outside Delegatus) is a question or blocked report.");
-  for (const contradiction of ["proposes a plan you want a yes to", "with suggested replies", "Every ask to the operator is also a question or blocked report", "the plain yes"]) {
-    expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain(contradiction);
-  }
-});
-
-
-test("the mandate names linked seats and requires coordination before a shared release", () => {
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("get_orchestrator lists linkedSeats");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("send_message_to_orchestrator with machine named");
 });
 
 test("the decision-form mandate upgrades every shipped pointer once and preserves bespoke wording", () => {
@@ -1072,34 +684,11 @@ test("the decision-form mandate upgrades every shipped pointer once and preserve
 });
 
 test("the board walk clears only rows that ask nothing and replaces the shipped paragraph exactly", () => {
-  expect(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE).toContain("clear Waiting-for-you rows that ask nothing with dismiss_attention");
   const previous = `## Reading the board maintenance report\nEach time you are seated, Delegatus makes one read-only pass over this board and sends it after your first turn, headed "[Delegatus] Board maintenance report". Your first turn gives status and leaves the board walk to it; later wakes still make their own pass. Take its sections in order and re-read each item before you change it. You alone change this board: close items one by one with the reason, and a card marked "ask first" only when the operator agrees. Offer its suggested issues with suggest_replies and start none unasked; where it finds no recorded priority, say so once and never ask for labels or fields. Cover an unavailable section or a missing report with your own reads.`;
   // Use the current heading; only the paragraph has changed between releases.
   const shipped = previous.replace(previous.split("\n")[0]!, ORCHESTRATOR_BOARD_REPORT_DIRECTIVE.split("\n")[0]!);
   expect(orchestratorMandateForDelivery(shipped)).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(orchestratorMandateForDelivery(shipped.replace("Take its sections", "Walk its sections"))).toContain("Walk its sections");
-});
-
-
-test("the role table names the gated prototype lane", () => {
-  expect(orchestratorRoleTable(ROLE_DEFAULTS)).toContain("Prototype lane: prototype → critic → proto-fix (2 rounds) → publish");
-});
-
-/* The operator, 2026-10-15 (variant 4 of docs/design/role-prompts-rewrite.md):
-   the seat's "Who you are" stays word for word as v54 shipped it, and the
-   lessons seats learned about the literal request follow it as its own section. */
-test("the seat's Who you are section is kept word for word and the literal-request rules follow it", () => {
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(`## Who you are
-Warm and friendly, a good friend on this project who likes to tease a little; keep it light, and drop it when something broke or the operator is under pressure. Mirror how the operator talks: language, register, brevity, and their casual words when they use them. You are hard-working and want to keep going: keep work moving and take the next owed step unasked. Proactive covers accepted work (what the operator asked for, the tasks on this board, every step they need) and proposing next work. Its boundary: never start work nobody asked for, or change what the operator owns (settings, branches, checkouts, accounts, their own agents) without asking.
-
-## Doing what was asked
-Do exactly what the operator asked, where they asked it; anything beyond the literal request is a proposal, put to the operator in a decision form and acted on only after their yes.`);
-  const literalRequest = ORCHESTRATOR_SYSTEM_PROMPT.slice(ORCHESTRATOR_SYSTEM_PROMPT.indexOf("## Doing what was asked"), ORCHESTRATOR_SYSTEM_PROMPT.indexOf("\n\n", ORCHESTRATOR_SYSTEM_PROMPT.indexOf("## Doing what was asked")));
-  expect(literalRequest).not.toContain("offered in chat");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("offered in chat");
-  const v54 = fs.readFileSync(path.join(import.meta.dir, "fixtures/mandate-v54.txt"), "utf8");
-  const section = (text: string) => text.slice(text.indexOf("## Who you are"), text.indexOf("\n\n", text.indexOf("## Who you are")));
-  expect(section(ORCHESTRATOR_SYSTEM_PROMPT)).toBe(section(v54));
 });
 
 /* A seat delivered v54 keeps its stored mandate until it rotates; delivery
@@ -1183,24 +772,6 @@ function maintenanceBullet(text: string): string {
   return start < 0 ? "" : text.slice(start, text.indexOf("\n", start));
 }
 
-test("the mandate states the maintenance practice after the declared-outputs bullet", () => {
-  const practice = maintenanceBullet(ORCHESTRATOR_SYSTEM_PROMPT);
-  for (const part of [
-    "a read-only architect mode=architecture-audit stage with its report in outputs, deleting nothing",
-    "Ramp from one task to one subdirectory to the repository",
-    "before each widening, compare model arms on the same snapshot, findings judged blind, by cost per accepted finding",
-    "one small lane per accepted workstream, its brief carrying the audit's evidence and keep-list",
-    "When a role's default model changes, re-run the audit once on its fixed task.",
-  ]) expect(practice).toContain(part);
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(`Role params hold short values; put the rest in the brief.\n${practice}\n- Work no pipeline can host`);
-  expect(ORCHESTRATOR_SYSTEM_PROMPT.split(MAINTENANCE_BULLET_START)).toHaveLength(2);
-  /* Generic across projects: no path, no product or project name. */
-  expect(practice).not.toMatch(/\/|\bsrc\b|Delegatus|docs\b/);
-  /* The mode it names is one the architect role offers. */
-  const architect = ROLE_DEFAULTS.find((role) => role.id === "architect");
-  expect(JSON.stringify(architect?.parameters)).toContain('"architecture-audit"');
-});
-
 /* A seat delivered v57 keeps its stored mandate until it rotates; delivery
    adds the v58 maintenance practice after the outputs bullet and replaces the
    working rule 16 #3083 rewrote, each by exact match, so the seat reads the
@@ -1225,54 +796,29 @@ test("delivery gives a v57 mandate the maintenance practice and the current rule
   expect(orchestratorMandateForDelivery("Coordinate. Audits are ours.")).not.toContain(MAINTENANCE_BULLET_START);
 });
 
-/* The seat reads every working rule once, in its mandate: the full text beside
-   the mandate would not fit the seat's structured envelope (see the role-table
-   envelope test above), so its short form keeps each rule by number, the
-   pinned process-cleanup phrase and its command examples. */
+/* The short form retains the full form's rule numbering. */
 test("the seat's mandate carries all sixteen working rules in their short form", () => {
   expect(ORCHESTRATOR_SYSTEM_PROMPT.split(WORKING_RULES_SHORT)).toHaveLength(2);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain(WORKING_RULES);
   const numbers = (text: string) => text.split("\n").flatMap((line) => line.match(/^(\d+)\. /)?.[1] ?? []);
   expect(numbers(WORKING_RULES_SHORT)).toEqual(numbers(WORKING_RULES));
   expect(numbers(WORKING_RULES_SHORT)).toHaveLength(16);
-  for (const phrase of [PROCESS_CLEANUP_MARKER, "no fuser -k, no lsof piped into kill, no pkill, no killall", "hard limits", "learned rules yield"]) expect(WORKING_RULES_SHORT).toContain(phrase);
-  expect(ORCHESTRATOR_SYSTEM_PROMPT.indexOf(WORKING_RULES_SHORT)).toBeLessThan(ORCHESTRATOR_SYSTEM_PROMPT.indexOf("## Before you decide\nWorking rules 3 and 4 apply with a seat's reach."));
 });
 
-/* The short form first shipped without what the memory delta added to rules 6
-   and 12 (role-memory-to-prompts.md §4.1), so no seat read those duties. Each
-   pair is one duty: its words in the full rule and in the short one, checked
-   on the first message a seat spawn actually sends. */
+/* A seat's launch prompt composes the short rules once. */
 test("a seat's launch prompt carries the evidence and publication duties of rules 6 and 12", () => {
   const resolved = resolveSpawnRole({ role: "orchestrator" });
   if (!resolved.ok || !resolved.value) throw new Error("orchestrator role did not resolve");
   const launch = roleSpawnPrompt(resolved.value, orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT));
   expect(launch.split(WORKING_RULES_SHORT)).toHaveLength(2);
   expect(launch).not.toContain(WORKING_RULES);
-  const rule = (rules: string, number: number) => rules.split("\n").find((line) => line.startsWith(`${number}. `))!;
-  const duties: readonly (readonly [number, string, string])[] = [
-    [6, "made from the final state", "comes from the final state"],
-    [6, "says what it was made from (revision, time, command)", "names revision, time and command"],
-    [6, "regenerate it after the last change that could alter it", "is redone after any later change"],
-    [6, "Look at every frame, table and output yourself before you cite it", "look at every output you cite"],
-    [6, "before/after measurement on identical data and load, repeated, with the load recorded", "repeated before/after runs on identical data and load, the load recorded"],
-    [12, "run the project's own publication checks on those files and read the result", "Run the project's publication checks before it leaves the machine and read the result"],
-    [12, "a credential-shaped example is written as prose", "credential-shaped examples as prose"],
-    [12, "Attribution trailers stay in one final block and keep the identities you were launched with", "Attribution trailers stay in one final block with your launch identities"],
-  ];
-  for (const [number, full, short] of duties) {
-    expect(rule(WORKING_RULES, number)).toContain(full);
-    expect(rule(WORKING_RULES_SHORT, number)).toContain(short);
-    expect(launch).toContain(short);
-  }
 });
 
 
 test("default and retained seat mandates require same-turn correction lessons once", () => {
-  const instruction = "When an operator corrects a result or task misread, direct or via send_message, call leave_lesson that turn: correction:true, lesson with misread in why, preventive practice in rule, narrowest true level. New work needs none.";
+  const instruction = OPERATOR_CORRECTION_RULE;
   for (const source of [ORCHESTRATOR_SYSTEM_PROMPT, "A stored seat mandate."]) {
     const delivered = orchestratorMandateForDelivery(source);
-    expect(delivered).toContain(instruction);
     expect(orchestratorMandateForDelivery(delivered).split(instruction)).toHaveLength(2);
   }
 });

@@ -286,6 +286,7 @@ test.each([true, false])("no reply-draft pill renders under the latest turn or a
   /* A few more turns of the event loop, where the pills' read used to land. */
   for (let turn = 0; turn < 10; turn += 1) await new Promise((resolve) => setTimeout(resolve, 5));
   expect(host.querySelectorAll("[data-reply-suggestions], [data-reply-suggestion]")).toHaveLength(0);
+  expect(host.textContent).not.toContain("Yes, publish report ");
   expect(host.querySelector('[aria-label="Suggested replies — tap one to put it in the composer"]')).toBeNull();
   expect(requested.filter((url) => url.includes("/api/log/suggestions"))).toEqual([]);
 });

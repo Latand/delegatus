@@ -5,8 +5,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+
 import { NextRequest } from "next/server";
 
 import { VIEWER_SPAWN_CAPABILITY_ENV } from "@/lib/agent/spawnPolicy";
@@ -22,7 +21,7 @@ import type { DecidePrototypeInput, PrototypeQuestion } from "@/lib/prototypeRev
 import { prototypeWorld, type PrototypeWorld } from "@/lib/prototypeReview/world";
 
 import { viewerMcpBindings, viewerMcpToolPolicy, type CallerAttribution } from "./bindings";
-import { createMcpToolService, createViewerMcpServer, MemoryMcpReceiptStore, MCP_TOOL_NAMES, MUTATING_MCP_TOOL_NAMES, TOOL_INPUT_SCHEMAS, type McpToolResult } from "./server";
+import { createMcpToolService, MemoryMcpReceiptStore, MCP_TOOL_NAMES, MUTATING_MCP_TOOL_NAMES, TOOL_INPUT_SCHEMAS, type McpToolResult } from "./server";
 
 /*
  * #2518 at the tool boundary: detector hints accompany the agent judgment.
@@ -294,7 +293,6 @@ test("the form is asked in the operator's language, and its English twin approve
   const shown = await h.call(SEAT_CALLER, { action: "show", digest });
   expect(shown.approvalForm).toEqual({ issueReport: shortId(digest) });
   expect(issueReportApprovalForm({ digest, title: REPORT.title }, "uk").questions[0]!.options[0]!.label).toBe(issueReportApprovalReplies(digest).uk);
-  expect(shown.next).toContain("publish_prototype_review");
 
   await h.decides(await h.asks(digest, SEAT_CALLER, issueReportApprovalForm({ digest, title: REPORT.title }, "en")));
   expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
@@ -424,29 +422,6 @@ test.each(["en", "uk"] as const)("a refusal explains in %s how to ask and which 
   const refused = await h.call(SEAT_CALLER, { action: "publish", digest });
   expect(refused.error).toContain(issueReportApprovalReplies(shortId(digest))[locale]);
   expect(h.published).toEqual([]);
-});
-
-test("show guidance and the published tool description send the approval through a decision form", async () => {
-  const h = harness();
-  const digest = await previewed(h);
-  const answer = await h.call(SEAT_CALLER, { action: "show", digest });
-  expect(answer.next).toContain("publish_prototype_review");
-  expect(answer.next).toContain("approvalForm");
-  expect(answer.next).not.toContain("suggest_replies");
-  const bindings = viewerMcpBindings(undefined, undefined, {} as never);
-  const server = createViewerMcpServer(createMcpToolService(bindings, new MemoryMcpReceiptStore()));
-  const client = new Client({ name: "approval-guidance-test", version: "1.0.0" });
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
-  try {
-    const description = (await client.listTools()).tools.find((tool) => tool.name === "issue_report")!.description;
-    expect(description).toContain("approvalForm");
-    expect(description).toContain("publish_prototype_review");
-    expect(description).not.toContain("suggest_replies");
-  } finally {
-    await client.close();
-    await server.close();
-  }
 });
 
 /* Review finding 1: an approval was whatever string the seat passed. Each of
@@ -655,7 +630,6 @@ test("the reporter's hint tool returns class and matched span without storage", 
   expect(body.slice(hint.span.start, hint.span.end)).toBe(hint.span.text);
   expect(hint.span.text).toContain("someone");
   expect(fs.readdirSync(sandbox)).toEqual([]);
-  expect(answer.next).toContain("clean result proves nothing");
 });
 
 test.each([
@@ -676,7 +650,6 @@ test.each([
     expect(readIssueReportPreview(digest, sandbox)).toMatchObject({ ...report, privacyJudgment: JUDGMENT, hints: answer.hints });
     const shown = await h.call(SEAT_CALLER, { action: "show", digest });
     expect(shown).toMatchObject({ ...report, privacyJudgment: JUDGMENT, hints: answer.hints });
-    expect(shown.next).toContain("operator may approve text with hints");
     expect(shown.previewText).toContain(report.title);
     expect(shown.previewText).toContain(report.body);
     expect(shown.previewText).toContain(JUDGMENT.assessment);

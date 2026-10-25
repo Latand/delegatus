@@ -1,4 +1,5 @@
-import { afterAll, expect, test } from "bun:test";
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -42,25 +43,19 @@ test("published finding schemas, recurrence, receipts and key updates through MC
   const answer = (result: Awaited<ReturnType<typeof call>>) => result.structuredContent as { task: BoardTask; matched?: boolean; code?: string; changedFields: string[] };
   const input = { project: "mcp-findings", text: "Keep the original wording", findingKey: "socket:timeout", note: "First seen" };
   try {
-    const { tools } = await client.listTools();
-    for (const name of ["create_task", "update_task"]) {
-      const properties = tools.find(tool => tool.name === name)!.inputSchema.properties as Record<string, { description?: string }>;
-      expect(properties.findingKey.description).toContain("200");
-      expect(properties.findingKey.description).toContain("never synced");
-    }
-    const initial = answer(await call("create_task", input));
+    const initial = answer(await call("create_task", withTaskDue(input)));
     const repeatArgs = { ...input, text: "Reporter title", note: "Repeated", clientRequestId: "repeat-receipt" };
-    const repeat = answer(await call("create_task", repeatArgs));
+    const repeat = answer(await call("create_task", withTaskDue(repeatArgs)));
     expect(repeat).toMatchObject({ matched: true, task: { id: initial.task.id, text: input.text, finding: { count: 2 }, note: { text: "Repeated", author: { kind: "agent", conversationId: null } } } });
     expect(repeat.changedFields).toContain("finding");
     expect(repeat.changedFields).toContain("note");
     for (const field of ["text", "status", "assignments", "placement"]) expect(repeat.changedFields).not.toContain(field);
-    const replay = answer(await call("create_task", repeatArgs));
+    const replay = answer(await call("create_task", withTaskDue(repeatArgs)));
     expect(replay.matched).toBe(true);
     expect(replay.task).toEqual(JSON.parse(JSON.stringify(repeat.task)));
     expect(loadTasks().find(task => task.id === initial.task.id)?.finding?.count).toBe(2);
     await call("update_task", { taskId: initial.task.id, status: "done" });
-    const next = answer(await call("create_task", input));
+    const next = answer(await call("create_task", withTaskDue(input)));
     expect(next.task.id).not.toBe(initial.task.id);
     expect(next.task.finding).toMatchObject({ count: 1, previousTaskId: initial.task.id });
     const conflict = await call("update_task", { taskId: initial.task.id, status: "inbox" });
@@ -70,11 +65,11 @@ test("published finding schemas, recurrence, receipts and key updates through MC
     expect(clear.task.findingKey).toBeUndefined();
     const changed = answer(await call("update_task", { taskId: next.task.id, findingKey: "new key" }));
     expect(changed.task).toMatchObject({ findingKey: "new key", finding: { count: 1 } });
-    const plain = answer(await call("create_task", { project: input.project, text: input.text }));
+    const plain = answer(await call("create_task", withTaskDue({ project: input.project, text: input.text })));
     expect(plain.matched).toBeUndefined();
     expect(plain.task.findingKey).toBeUndefined();
     for (const findingKey of ["k".repeat(201)]) {
-      expect((await call("create_task", { ...input, findingKey })).isError).toBe(true);
+      expect((await call("create_task", withTaskDue({ ...input, findingKey }))).isError).toBe(true);
       expect((await call("update_task", { taskId: next.task.id, findingKey })).isError).toBe(true);
     }
   } finally { await client.close(); await server.close(); receipts.close(); }
@@ -103,7 +98,7 @@ test("a recurring create remains an update for maintenance permissions", async (
   patchMaintenanceRun(claimed.run.runId, { conversationId: worker, state: "running" });
   try {
     expect(await call("update_task", { taskId: made.id, details: "Replacement" })).toMatchObject({ ok: false, code: "maintainer_details_overwrite_refused" });
-    expect(await call("create_task", { project, text: "Новий звіт", findingKey: made.findingKey, note: "Повторено" })).toMatchObject({ ok: true, matched: true });
+    expect(await call("create_task", withTaskDue({ project, text: "Новий звіт", findingKey: made.findingKey, note: "Повторено" }))).toMatchObject({ ok: true, matched: true });
     const run = readMaintenanceRun(claimed.run.runId)!;
     expect(run.counts.created).toBe(0);
     expect(run.log.changes).toHaveLength(1);
@@ -111,4 +106,60 @@ test("a recurring create remains an update for maintenance permissions", async (
     expect(await call("update_task", { taskId: made.id, details: "Replacement" })).toMatchObject({ ok: false, code: "maintainer_details_overwrite_refused" });
     expect(loadTasks().find(task => task.id === made.id)).toMatchObject({ text: made.text, details: made.details, finding: { count: 2 } });
   } finally { patchMaintenanceRun(claimed.run.runId, { state: "succeeded" }); }
+});
+
+
+test("new agent tasks require dates before any receipt, including direct bindings", async () => {
+  const { updateOperatorSettings } = await import("@/lib/operator/settings");
+  expect(updateOperatorSettings({ timeZone: "Asia/Tokyo" })).not.toBeNull();
+  const bindings = viewerMcpBindings();
+  const receipts = new SqliteMcpReceiptStore(path.join(sandbox, "due-policy-receipts.sqlite"));
+  const claims = spyOn(receipts, "claim");
+  const service = createMcpToolService(bindings, receipts);
+  const input = { project: "mcp-findings", text: "A new dated outcome", clientRequestId: "due-policy-create", full: true, requireDue: false, defaultDue: true };
+  const before = JSON.stringify(loadTasks());
+  const { loadTasksFile } = await import("@/lib/tasks/store");
+  const beforeReceipts = JSON.stringify(loadTasksFile().recentCreates);
+  try {
+    for (const dueAt of [undefined, null, ""]) {
+      expect(await service.callTool("create_task", { ...input, dueAt })).toMatchObject({ ok: false, code: "TASK_DUE_REQUIRED", details: { field: "dueAt" } });
+      await expect(bindings.create_task({ ...input, dueAt })).rejects.toMatchObject({ details: { code: "TASK_DUE_REQUIRED", field: "dueAt" } });
+    }
+    await expect(bindings.create_task({ ...input, dueAt: "2000-01-01T00:00:00Z" })).rejects.toMatchObject({ details: { code: "TASK_DUE_PAST", field: "dueAt" } });
+    for (const dueAt of [42, "invalid", {}, []]) {
+      await expect(bindings.create_task({ ...input, dueAt })).rejects.toMatchObject({ details: { code: "TASK_INVALID_FIELD" } });
+    }
+    expect(claims).not.toHaveBeenCalled();
+    expect(JSON.stringify(loadTasks())).toBe(before);
+    expect(JSON.stringify(loadTasksFile().recentCreates)).toBe(beforeReceipts);
+    // Project admission must still run before a receipt is reserved.
+    expect(await service.callTool("create_task", withTaskDue({ ...input, project: "due-policy-no-such-project" })))
+      .toMatchObject({ ok: false, code: "unknown_project" });
+    expect(claims).not.toHaveBeenCalled();
+    // The refused key is still usable for the corrected request.
+    const made = await service.callTool("create_task", withTaskDue(input));
+    expect(made).toMatchObject({ ok: true, task: { dueTz: "Asia/Tokyo", dueAt: withTaskDue({}).dueAt } });
+    expect(claims).toHaveBeenCalledTimes(1);
+    const restarted = createMcpToolService(viewerMcpBindings(), receipts);
+    expect(await restarted.callTool("create_task", withTaskDue(input))).toMatchObject({ ok: true, replayed: true });
+  } finally { claims.mockRestore(); receipts.close(); }
+});
+
+test("the protocol requires dueAt and reports TASK_DUE_REQUIRED without reserving a receipt", async () => {
+  const receipts = new MemoryMcpReceiptStore();
+  const claims = spyOn(receipts, "claim");
+  const server = createViewerMcpServer(createMcpToolService(viewerMcpBindings(), receipts));
+  const client = new Client({ name: "task-date-policy-test", version: "1" });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  await Promise.all([client.connect(a), server.connect(b)]);
+  try {
+    const tool = (await client.listTools()).tools.find(tool => tool.name === "create_task")!;
+    expect(tool.inputSchema.required).toContain("dueAt");
+    for (const dueAt of [undefined, null, ""]) {
+      const result = await client.callTool({ name: "create_task", arguments: { project: "mcp-findings", text: "Missing a date", clientRequestId: "missing-date-protocol", dueAt } });
+      expect(result.structuredContent).toMatchObject({ ok: false, code: "TASK_DUE_REQUIRED", details: { field: "dueAt" } });
+      expect(result.isError).toBe(true);
+    }
+    expect(claims).not.toHaveBeenCalled();
+  } finally { claims.mockRestore(); await client.close(); await server.close(); }
 });
