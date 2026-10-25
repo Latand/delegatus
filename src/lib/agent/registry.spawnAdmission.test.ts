@@ -1,11 +1,10 @@
 import { expect, spyOn, test } from "bun:test";
-import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { AgentRegistry } from "./registry";
 import { blockingWaitDiagnostics, resetBlockingWaitsForTests } from "@/lib/blockingWaits";
-import { productionLaunchMembershipPorts } from "@/lib/tasks/launchMembership";
+import { assertStateChildSuccess } from "@/lib/state/stateChildResult.fixture";
 
 const input = { engine: "codex" as const, cwd: "/fixture", transport: "structured" as const,
   clientAttemptId: "contended-membership", launchProfile: { title: "Writer admission" } };
@@ -18,26 +17,36 @@ function fixture(waitMs?: number, sqliteMode: "sqlite" | "off" = "sqlite") {
   return { registry, filename, cleanup() { registry.close(); fs.rmSync(directory, { recursive: true, force: true }); } };
 }
 
-test("spawn membership record waits through a writer held longer than the old two-second budget", async () => {
-  const f = fixture();
-  const peer = new Database(f.filename.replace(/\.json$/, ".sqlite"));
-  let held = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const commit = spyOn(productionLaunchMembershipPorts, "commit").mockImplementation(() => {
-    peer.exec("BEGIN IMMEDIATE"); held = true;
-    timer = setTimeout(() => { peer.exec("ROLLBACK"); held = false; }, 2_100);
-    return { ok: true, tasks: [], taskIds: ["fixture-task"], created: [], changed: false };
+test.each(["unlocked", "old-budget", "cutoff", "released-at-cutoff", "queue-cutoff", "membership-cutoff"] as const)(
+  "spawn membership admission uses a controlled clock and an independent writer (%s)", async mode => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "spawn-admission-child-"));
+  const child = Bun.spawn([process.execPath, "src/lib/agent/registry.spawnAdmission.fixture.ts", mode], {
+    env: { ...process.env, LLV_STATE_DIR: directory }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
   });
+  // This parent can stop a stuck child's synchronous work as well as awaits.
+  const deadline = setTimeout(() => { if (child.exitCode === null) child.kill("SIGKILL"); }, 10_000);
   try {
-    const result = await f.registry.beginSpawnRequestAsync(input);
-    expect(result.kind).toBe("created");
-    expect(f.registry.spawnReceipt(result.receipt.launchId)?.membershipAdmitted).toBe(true);
-    // The dispatch boundary may take the writer: admission has released it.
-    peer.exec("BEGIN IMMEDIATE"); peer.exec("ROLLBACK");
+    const [output, errors, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    assertStateChildSuccess(code, errors);
+    const result = JSON.parse(output);
+    if (mode === "queue-cutoff" || mode === "membership-cutoff") expect(result.failedProbes).toBe(0);
+    else expect(result.failedProbes).toBeGreaterThan(0);
+    expect(result.elapsed).toBe(mode.endsWith("cutoff") ? 3_000 : 2_100);
+    expect(result.wait).toBeDefined();
+    if (mode === "unlocked") {
+      expect(result).toMatchObject({ result: "created", membershipAdmitted: true, unlocked: true });
+    } else {
+      expect(result.result).toContain("delivery record's write lock");
+      expect(result.membershipAdmitted).toBe(false);
+      expect(Math.max(...result.requestedWaits)).toBeLessThanOrEqual(mode === "old-budget" ? 2_000 : 3_000);
+    }
   } finally {
-    clearTimeout(timer); if (held) peer.exec("ROLLBACK"); peer.close(); commit.mockRestore(); f.cleanup();
+    clearTimeout(deadline);
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await child.exited;
+    fs.rmSync(directory, { recursive: true, force: true });
   }
-}, 10_000);
+}, 15_000);
 
 async function holder(filename: string, sqliteMode: "sqlite" | "off" | "state" | "startup" = "sqlite") {
   const child = Bun.spawn([process.execPath, "-e", `

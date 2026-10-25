@@ -6403,15 +6403,24 @@ export class AgentRegistry {
       terminal rejection receipt when the initiating origin is a denied role
       or the child would exceed the nesting-depth ceiling. */
   /** Bounded, non-blocking admission for request and controller paths. */
-  async beginSpawnRequestAsync(input: SpawnRequest, guard?: () => void): Promise<SpawnBeginResult> {
+  async beginSpawnRequestAsync(input: SpawnRequest, guard?: () => void, options: {
+    /** Absolute monotonic cutoff supplied by a caller with a persisted budget. */
+    deadline?: number;
+  } = {}): Promise<SpawnBeginResult> {
     const caller = input.purpose === "resume-successor" ? "resume" : "spawn";
     // One bounded admission slice; the pipeline persists its longer lane deadline.
     // Membership can need a separate state writer, so two seconds is not enough
     // to admit and then record it under load.
-    const deadline = performance.now() + (this.writerDeadlineMs ?? 30_000);
+    const deadline = Math.min(options.deadline ?? Infinity, performance.now() + (this.writerDeadlineMs ?? 30_000));
     const busy = (label: string) => new RegistryWriterBusyError(label, this.writerHolderDetail());
     const remaining = () => Math.max(0, deadline - performance.now());
-    const written = await this.accountMutationWrite(`${caller} admission`, () => this.reserveSpawnRequest(input), guard, { waitMs: remaining() });
+    const check = (label: string) => {
+      if (performance.now() >= deadline) throw busy(label);
+      guard?.();
+    };
+    check(`${caller} admission`);
+    const written = await this.accountMutationWrite(`${caller} admission`, () => this.reserveSpawnRequest(input),
+      () => check(`${caller} admission`), { waitMs: remaining() });
     if (!written.acquired) throw busy(`${caller} admission`);
     const result = written.value;
     if (result.kind === "created" || result.kind === "replay") {
@@ -6421,7 +6430,7 @@ export class AgentRegistry {
       const admission = await waitForStateLock(`${caller}.membership`, async () => {
         try {
           return await withAccountMutationLockAsync(() => {
-            guard?.();
+            check(`${caller} membership`);
             return this.admitSpawnMembership(input, result);
           }, { caller: `${caller} membership`, waitMs: remaining() });
         } catch (error) {
@@ -6433,10 +6442,11 @@ export class AgentRegistry {
         await new Promise<void>(resolve => setImmediate(resolve));
         const recorded = await this.accountMutationWrite(`${caller} membership record`, () => {
           this.recordSpawnMembership(result.receipt, admission.taskIds);
-        }, guard, { waitMs: remaining() });
+        }, () => check(`${caller} membership record`), { waitMs: remaining() });
         if (!recorded.acquired) throw busy(`${caller} membership record`);
       }
     }
+    check(`${caller} admission`);
     return result;
   }
 

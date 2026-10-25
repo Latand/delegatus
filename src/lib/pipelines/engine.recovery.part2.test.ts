@@ -1,5 +1,6 @@
 import { expect, spyOn, test, spawn, fs, path, accountManager, engineModule, defaultPipelinePorts, tickPipelines, AgentRegistry, setAgentRegistryForTests, createPipelineFromRequest, loadPipelines, savePipelines, patchPipeline, RUN_STAGES, ORIGIN_MAIN_SHA, harness, durableStageTurnEvidence, create, forbiddenSleep, frozenWallClock, HOST_UNAVAILABLE, failedReceipt, stagedRecoveryHarness, aliveStagedLaunch, stageHostChild, productionHostSeams, activationDrainFixture, expectPipelineLeaseFree, reserveActivationOnly } from "./engine.fixture";
 import type { Snapshot, PipelinePorts } from "./engine.fixture";
+import { assertStateChildSuccess } from "@/lib/state/stateChildResult.fixture";
 
 const RAW_ADMISSION_BUSY = ["database is locked", "database is busy", "SQLITE_BUSY", "SQLITE_LOCKED",
   "the delivery record's write lock is held by another writer (spawn membership record); holder=registry.staged-recovery pid=321 age=2500ms"] as const;
@@ -1102,7 +1103,7 @@ test.each(RAW_ADMISSION_BUSY.flatMap(message => (["released", "exhausted"] as co
       const [output, errors, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
       expect({ code, errors }).toMatchObject({ code: 0 });
       const result = JSON.parse(output);
-      expect({ calls: result.calls, detail: result.pipeline.stateDetail }).toMatchObject({ calls: 1 });
+      expect({ calls: result.calls, detail: result.pipeline.stateDetail }).toMatchObject({ calls: 0 });
       expect(result.pipeline).toMatchObject({ state: "needs_decision", worktreeDir: waiting.worktreeDir });
       expect(result.pipeline.runs[0].attempts).toHaveLength(1);
       expect(result.pipeline.runs[0].attempts[0]).toMatchObject({ n: 1, launchId: null, conversationId: null, spawnCalls: 2,
@@ -1181,3 +1182,59 @@ test.each(["registry", "account-commit", "lease", "deferred", "wrapped-deferred"
   expect(h.spawnInputs).toHaveLength(1);
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ n: 1, state: "running", launchId: "launch-1", spawnCalls: 2 });
 });
+
+
+test("the final three seconds of a persisted spawn wait survive a controller restart", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  frozenWallClock(h);
+  const busy = RAW_ADMISSION_BUSY.at(-1)!;
+  h.ports.spawnAgent = async () => { throw new Error(busy); };
+  await tickPipelines([], h.ports);
+  const waiting = loadPipelines()[0]!;
+  const startedAt = waiting.runs[0]!.attempts[0]!.controllerWait!.startedAt;
+  const child = Bun.spawn([process.execPath, "-e", `
+    const { spyOn } = await import("bun:test");
+    const { defaultPipelinePorts, tickPipelines } = await import("./src/lib/pipelines/engine.ts");
+    const { loadPipelines } = await import("./src/lib/pipelines/store.ts");
+    const { accountManager } = await import("./src/lib/accounts/manager.ts");
+    const { AgentRegistry, setAgentRegistryForTests } = await import("./src/lib/agent/registry.ts");
+    let monotonic = 1000, wall = Number(process.env.LLV_TEST_CLOCK);
+    Object.defineProperty(performance, "now", { configurable: true, value: () => monotonic });
+    const registry = new AgentRegistry(process.env.LLV_STATE_DIR + "/restart-admission.json");
+    setAgentRegistryForTests(registry);
+    spyOn(accountManager, "resolveProjectSpawn").mockImplementation(engine => ({ kind: "available", account: {
+      engine, accountId: "fixture-account", kind: "managed", home: process.env.LLV_STATE_DIR,
+      transcriptRoot: process.env.LLV_STATE_DIR, env: { NODE_ENV: "test" },
+    }}));
+    const waits = [];
+    spyOn(registry, "accountMutationWrite").mockImplementation(async (_label, _write, _guard, options) => {
+      waits.push(options.waitMs);
+      wall += options.waitMs; monotonic += options.waitMs;
+      return { acquired: false };
+    });
+    const defaults = defaultPipelinePorts();
+    await tickPipelines([], { ...defaults,
+      now: () => new Date(wall).toISOString(), exec: async () => ({ code: 0, stdout: "", stderr: "" }),
+      worktreePresent: () => true, sourcePathAllowed: () => false, engineReadiness: () => "connected",
+      cpuPressureHold: () => null, cpuAdmissionReconcile: () => {}, drainHold: () => null,
+      structuredDeliveryPublication: () => "ready", scheduleTick: () => {}, spawnReceipt: () => null,
+    });
+    const pipeline = loadPipelines()[0];
+    process.stdout.write(JSON.stringify({ waits, wall, pipeline }));
+    registry.close();
+    process.exit(0);
+  `], { cwd: process.cwd(), env: { ...process.env, LLV_TEST_CLOCK: String(Date.parse(startedAt) + 597_000) }, stdout: "pipe", stderr: "pipe" });
+  const deadline = setTimeout(() => { if (child.exitCode === null) child.kill("SIGKILL"); }, 10_000);
+  try {
+    const [output, errors, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    assertStateChildSuccess(code, errors);
+    const result = JSON.parse(output);
+    expect(result.waits).toEqual([3_000]);
+    expect(result.wall).toBe(Date.parse(startedAt) + 600_000);
+    expect(result.pipeline).toMatchObject({ state: "needs_decision" });
+    expect(result.pipeline.stateDetail).toContain("over 600s");
+    expect(result.pipeline.runs[0].attempts[0].controllerWait).toMatchObject({ startedAt, budgetMs: 600_000, rounds: 1 });
+  } finally { clearTimeout(deadline); if (child.exitCode === null) child.kill("SIGKILL"); await child.exited; }
+}, 15_000);
