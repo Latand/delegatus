@@ -2900,9 +2900,10 @@ async function adoptStructuredHostsPass(
        retire a publication this pass has no client to replace — and every spawn
        in the process would fail until some later pass rebound it (#1191). */
     if (controllerBoundEarly) {
-      const contestedSnapshot = await preparedStartupSnapshot(registry);
+      const contestedSnapshot = contestedHostKeys.length || delayedRows.size
+        ? await preparedStartupSnapshot(registry) : undefined;
       const contestedConversations = new Set([...contestedHostKeys, ...delayedRows].flatMap(key => {
-        const entry = contestedSnapshot.entries[key];
+        const entry = contestedSnapshot!.entries[key];
         const conversation = entry && registry.conversationForPath(entry.artifactPath);
         return conversation ? [registry.canonicalConversationId(conversation.id)] : [];
       }));
@@ -2949,9 +2950,10 @@ async function adoptStructuredHostsPass(
         latestMessages,
         pipelineEvidence.settled,
       );
-      const continuationSnapshot = await preparedStartupSnapshot(registry);
+      const continuationSnapshot = owedInterruptions.some(obligation => obligation.state === "owed")
+        ? await preparedStartupSnapshot(registry) : undefined;
       const readyInterruptions = owedInterruptions.filter(obligation => {
-        if (obligation.state !== "owed" || !newerInterruptionMessages(registry, obligation, continuationSnapshot, latestMessages).some(message => message.pending)) return true;
+        if (obligation.state !== "owed" || !newerInterruptionMessages(registry, obligation, continuationSnapshot!, latestMessages).some(message => message.pending)) return true;
         waitingContinuationHostKeys.add(obligation.hostKey);
         return false;
       });
@@ -2989,10 +2991,11 @@ async function adoptStructuredHostsPass(
        whole of it waits for the re-probe; without one it runs now, so an
        unrelated lane's queued or superseded launch is reconciled by this boot
        whatever another pipeline's survivor is doing. */
-    const bulkSnapshot = await preparedStartupSnapshot(registry);
+    const pendingReceipts = typeof registry.openSpawnReceipts === "function" ? registry.openSpawnReceipts()
+      : registryOpenSpawnReceipts(await preparedStartupSnapshot(registry));
     pipelineEvidence = await readBulkEvidence("recovering pending spawns");
     const fencedReceipts = fencedPendingSpawnReceipts(registry, pipelineEvidence.deferred,
-      bulkSnapshot);
+      pendingReceipts);
     if (client && fencedReceipts.length === 0 && !rowRetry) {
       await reportProgress("recovering pending spawns");
       await withViewerOperation("runtime.spawn-recovery", () => recoverPendingStructuredSpawns(registry, client, {
@@ -3110,9 +3113,9 @@ async function adoptStructuredHostsPass(
 /** Launch receipts still on their way to a host whose reserved conversation
     the pipeline evidence fences. Settled, failed and conflicted receipts are
     history; everything else is provisioning the fence covers. */
-function fencedPendingSpawnReceipts(registry: AgentRegistry, deferred: ReadonlySet<string>, prepared?: RegistryFile): SpawnReceipt[] {
+function fencedPendingSpawnReceipts(registry: AgentRegistry, deferred: ReadonlySet<string>, prepared?: readonly SpawnReceipt[]): SpawnReceipt[] {
   if (deferred.size === 0) return [];
-  return registryOpenSpawnReceipts(prepared ?? startupSnapshot(registry)).filter((receipt) =>
+  return (prepared ?? registryOpenSpawnReceipts(startupSnapshot(registry))).filter((receipt) =>
     receipt.state !== "completed"
     && receipt.state !== "failed"
     && receipt.state !== "conflicted"

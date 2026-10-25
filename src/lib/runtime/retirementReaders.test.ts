@@ -281,6 +281,56 @@ test("startup does not prepare an unused snapshot before asking for pipeline evi
   } finally { observed.mockRestore(); registry.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test("empty startup finalization skips unused selections and captures open receipts before its evidence fence", async () => {
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { bindStructuredDeliveryQueue } = await import("./structuredDeliveryController");
+  const { structuredStartupStatus } = await import("./startupStatus");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-empty-finalization-"));
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"));
+  const client = {
+    snapshot: async () => journal.snapshot(),
+    events: async (after: number) => journal.replay(after),
+    waitEvents: async (after: number) => journal.replay(after),
+    operation: async (event: Parameters<RuntimeJournal["append"]>[0]) => journal.append(event),
+    command: async (command: Parameters<RuntimeJournal["executeOperation"]>[0]) => journal.executeOperation(command),
+    operationStatus: async (id: string) => journal.operationResult(id),
+    effectBatch: async () => [],
+  } as unknown as import("./client").RuntimeHostClient;
+  const preparations: string[] = [];
+  const prepare = registry.prepareReadOnlySnapshot.bind(registry);
+  const observed = spyOn(registry, "prepareReadOnlySnapshot").mockImplementation((...args) => {
+    preparations.push(structuredStartupStatus({ LLV_STRUCTURED_HOSTS: "1" })?.phase ?? "initial");
+    return prepare(...args);
+  });
+  let capturedReceipts = false, fencedAfterCapture = false;
+  const open = registry.openSpawnReceipts.bind(registry);
+  const receipts = spyOn(registry, "openSpawnReceipts").mockImplementation(() => {
+    capturedReceipts = true;
+    return open();
+  });
+  try {
+    expect(await adoptStructuredHostsAtStartup({
+      registry, client, orchestratorSeats: () => [],
+      pipelineEvidence: () => {
+        if (capturedReceipts) fencedAfterCapture = true;
+        return { settled: new Set(), deferred: new Set() };
+      },
+    })).toEqual([]);
+    // The controller still prepares its marker-repair selection. There is no
+    // contested host or continuation selection to prepare beside it.
+    expect(preparations.filter(phase => phase === "finalizing structured delivery")).toHaveLength(1);
+    expect(preparations).not.toContain("recovering orchestrator deliveries");
+    expect(preparations).not.toContain("kicking recovered deliveries");
+    expect(capturedReceipts).toBe(true);
+    expect(fencedAfterCapture).toBe(true);
+  } finally {
+    observed.mockRestore(); receipts.mockRestore();
+    await bindStructuredDeliveryQueue([]);
+    journal.close(); registry.close(); fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("restart recognition, transcript refresh and adoption selection read only current hosted conversations", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-hosted-readers-"));
   const results: number[] = [];
