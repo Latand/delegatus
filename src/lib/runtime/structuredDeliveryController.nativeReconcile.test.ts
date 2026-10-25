@@ -100,6 +100,21 @@ test("an entry queued while busy and consumed later reaches delivered on the ret
   } finally { await s.f.cleanup(); }
 });
 
+test("a host without a native queue is logged once across reconcile passes and its entry stays queued", async () => {
+  const s = await seeded(["op-pending"]);
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    (s.host as unknown as { nativeQueue: unknown }).nativeQueue = undefined;
+    await bind(s, { ...s.f.client, ...journalClient(s.f.journal) } as RuntimeHostClient);
+    await kickStructuredDeliveryQueue();
+    await kickStructuredDeliveryQueue();
+    const skips = warn.mock.calls.filter(call => String(call[0]).includes("has no native queue"));
+    expect(skips.length).toBe(1);
+    expect(JSON.stringify(skips[0])).toContain(s.f.key.sessionId);
+    expect(states(s)).toEqual({ "op-pending": "queued" });
+  } finally { warn.mockRestore(); await s.f.cleanup(); }
+});
+
 test("one failed canonical read is followed by recovery on its own", async () => {
   const s = await seeded(["op-consumed"]);
   s.evidenceState.consumed.add("op-consumed");

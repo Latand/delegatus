@@ -809,6 +809,7 @@ export async function bindStructuredDeliveryQueue(
   let nativeReadToken = 0;
   const unresolvedNativeHosts = new Set<string>();
   const coolingNativeHosts = new Set<string>();
+  const queuelessNativeHosts = new Set<string>();
   const nativeRetries = new Map<string, RetryBackoff>();
   const seatRecipient = (conversationId: string) => {
     const snapshot = registry.conversationDeliverySnapshot({ conversationId });
@@ -1004,7 +1005,14 @@ export async function bindStructuredDeliveryQueue(
       nativeQueueReconcile: async () => {
         if (!client.nativeQueueRead) return;
         const readyHosts = [...hosts].filter(([key, host]) => {
-          if (!host.nativeQueue) return false;
+          if (!host.nativeQueue) {
+            if (!queuelessNativeHosts.has(key)) {
+              queuelessNativeHosts.add(key);
+              console.warn("[structured delivery] native queue reconcile skipped: the host has no native queue", { host: key });
+            }
+            return false;
+          }
+          queuelessNativeHosts.delete(key);
           const retry = nativeRetries.get(key);
           if (retry && !retry.ready(nativeNow())) {
             if (!coolingNativeHosts.has(key)) {
