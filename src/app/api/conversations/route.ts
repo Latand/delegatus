@@ -1,3 +1,4 @@
+import { requestWorkspaceScope, filterWorkspaceRows, workspaceRoute } from "@/lib/team/workspaceRoute";
 import { scopeConversationCatalog, catalogEntryToFileEntry, conversationCatalogReady, conversationCatalogSnapshot, ExpiredConversationCatalogCursorError, loadConversationCatalogPage } from "@/lib/scanner/conversationCatalog";
 import { conversationSearchProjection } from "@/lib/scanner/conversationSearchProjection";
 import { searchTextForTranscript } from "@/lib/scanner/describe";
@@ -17,7 +18,7 @@ function pageLimit(value: string | null): number | undefined {
   return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
-export async function GET(request: Request): Promise<Response> {
+async function workspaceGET(request: Request): Promise<Response> {
   const url = new URL(request.url);
   if (!conversationCatalogReady()) await refreshConversationCatalog();
   // Cursor pages keep their frozen ordering. New reads reconcile membership
@@ -32,7 +33,7 @@ export async function GET(request: Request): Promise<Response> {
   const deputies = deputyConversationRefs();
   const hiddenPaths = new Set(deputies?.paths ?? []);
   const hiddenIds = new Set(deputies?.conversationIds ?? []);
-  const source = conversationCatalogSnapshot().filter((entry) => !hiddenPaths.has(entry.path));
+  const source = filterWorkspaceRows(requestWorkspaceScope(request), conversationCatalogSnapshot()).filter((entry) => !hiddenPaths.has(entry.path));
   const hydrateSearchText = (entry: (typeof source)[number]) => {
     const text = searchTextForTranscript(entry.path, entry.size, entry.engine);
     return {
@@ -41,7 +42,9 @@ export async function GET(request: Request): Promise<Response> {
       firstPrompt: text.firstPrompt ?? "",
     };
   };
+  const scope = requestWorkspaceScope(request);
   const options = {
+    authorityScope: scope ? JSON.stringify([scope.memberId, scope.projectFilter]) : "",
     project: url.searchParams.get("project")?.trim() || undefined,
     query,
     cursor: url.searchParams.get("cursor"),
@@ -55,7 +58,9 @@ export async function GET(request: Request): Promise<Response> {
       page = await loadConversationCatalogPage([], options, undefined, query ? undefined : hydrateSearchText);
       overlaySessionTitles(page.items);
     } else if (query) {
-      const scoped = scopeConversationCatalog(source, sessionProjectProjection().projectByPath, options.project);
+      // Registry ownership can move a row out of the caller's workspaces; the
+      // page total is counted after that, so it never counts rows owned elsewhere.
+      const scoped = filterWorkspaceRows(scope, scopeConversationCatalog(source, sessionProjectProjection().projectByPath, options.project));
       const projected = await conversationSearchProjection().search(scoped, query, {
         signal: request.signal,
         projectTitle: searchSessionTitleProjector(),
@@ -71,7 +76,7 @@ export async function GET(request: Request): Promise<Response> {
       const projectEntries = source.map(catalogEntryToFileEntry);
       overlaySessionProjects(projectEntries);
       const projectByPath = new Map(projectEntries.map((entry) => [entry.path, entry.project]));
-      const projected = source.map((entry) => ({ ...entry, project: projectByPath.get(entry.path) ?? entry.project }));
+      const projected = filterWorkspaceRows(scope, source.map((entry) => ({ ...entry, project: projectByPath.get(entry.path) ?? entry.project })));
       page = await loadConversationCatalogPage(projected, options, undefined, hydrateSearchText);
       overlaySessionTitles(page.items);
     }
@@ -81,7 +86,7 @@ export async function GET(request: Request): Promise<Response> {
     /* A cursor page reads the ordering frozen at its first page, and a row
        can be addressed by another path than the one the record holds: its
        conversation id catches both. */
-    const shown = page.items.filter((item) => !hiddenPaths.has(item.path) && !(item.conversationId && hiddenIds.has(item.conversationId)));
+    const shown = filterWorkspaceRows(requestWorkspaceScope(request), page.items).filter((item) => !hiddenPaths.has(item.path) && !(item.conversationId && hiddenIds.has(item.conversationId)));
     if (shown.length !== page.items.length) page = { ...page, items: shown, total: Math.max(0, page.total - (page.items.length - shown.length)) };
     return Response.json(page);
   } catch (error) {
@@ -91,3 +96,5 @@ export async function GET(request: Request): Promise<Response> {
     throw error;
   }
 }
+
+export const GET = workspaceRoute("/api/conversations", workspaceGET, true);

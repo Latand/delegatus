@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
 import { conversationHostPOST } from "@/app/api/conversation-host/handlers";
@@ -13,7 +14,7 @@ export const dynamic = "force-dynamic";
  * original recipient before resolving the current seat; MCP may carry its
  * frozen recipient. The shared delivery handler owns admission, authorship
  * and receipts. */
-export async function POST(req: NextRequest): Promise<NextResponse> {
+async function workspacePOST(req: NextRequest): Promise<NextResponse> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return NextResponse.json({ ...await rejection.json(), admission: "refused" }, { status: rejection.status });
   let body: Record<string, unknown>;
@@ -69,3 +70,5 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }),
   }));
 }
+
+export const POST = workspaceRoute("/api/orchestrator/message", workspacePOST);

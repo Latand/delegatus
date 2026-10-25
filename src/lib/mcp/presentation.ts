@@ -1,3 +1,5 @@
+import { translate, type MessageKey, type TFunction } from "@/lib/i18n/core";
+
 export type McpCallIcon =
   | "bot"
   | "message"
@@ -26,7 +28,7 @@ const LINK_LABEL_KEYS: Record<string, "mcp.link.task" | "mcp.link.pipeline" | "m
 
 /** An entity chip's label in the interface language. */
 export function mcpLinkLabel(t: (key: (typeof LINK_LABEL_KEYS)[string]) => string, link: McpCallLink): string {
-  const key = LINK_LABEL_KEYS[link.label];
+  const key = Object.hasOwn(LINK_LABEL_KEYS, link.label) ? LINK_LABEL_KEYS[link.label] : undefined;
   return key ? t(key) : link.label;
 }
 
@@ -34,6 +36,8 @@ export type McpCallDescription = {
   icon: McpCallIcon;
   verb: string;
   title: string;
+  /** The whole line for a hover, when the visible title leaves a detail out. */
+  tooltip?: string;
   subtitle: string;
   links: McpCallLink[];
 };
@@ -56,6 +60,28 @@ function string(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+/* An action's verb and title keys. The action comes from the call's own
+   arguments, so a name like `toString` or `__proto__` must miss the table and
+   read as the fallback instead of an inherited property. */
+function actionKeys(actions: Record<string, [MessageKey, MessageKey]>, action: string, fallback: [MessageKey, MessageKey]): [MessageKey, MessageKey] {
+  return Object.hasOwn(actions, action) ? actions[action] : fallback;
+}
+
+/* The receipt states `message_receipt` answers, read in the interface
+   language; a state outside them is drawn as written. */
+const RECEIPT_STATE_KEYS: Record<string, MessageKey> = {
+  delivered: "mcp.call.receiptState.delivered",
+  failed: "mcp.call.receiptState.failed",
+  "in-flight": "mcp.call.receiptState.inFlight",
+};
+
+/* The same states as the opening word of a delivery check's title. */
+const RECEIPT_LEAD_KEYS: Record<string, MessageKey> = {
+  delivered: "mcp.call.receiptLead.delivered",
+  failed: "mcp.call.receiptLead.failed",
+  "in-flight": "mcp.call.receiptLead.inFlight",
+};
+
 function compact(value: string, limit = 120): string {
   const normalized = value.replace(/\s+/g, " ").trim();
   return normalized.length > limit ? normalized.slice(0, limit - 1) + "…" : normalized;
@@ -76,6 +102,26 @@ function entityLink(kind: "task" | "pipeline", id: string): McpCallLink[] {
   return [{ kind, id, label, href: `#${kind}=${encodeURIComponent(id)}` }];
 }
 
+/* Titles and verbs are written in the language `t` reads (#2250). Callers that
+   are not drawing a row (the deputy note's links) keep the English default. */
+const english: TFunction = (key, params) => translate("en", key, params);
+
+/* What a request or a needs-you flag is about, named in the interface language;
+   a kind this build does not know is shown as written. */
+const KIND_KEYS: Record<string, MessageKey> = {
+  conversation: "mcp.call.kind.conversation",
+  task: "mcp.call.kind.task",
+  pipeline: "mcp.call.kind.pipeline",
+  target: "mcp.call.kind.target",
+};
+
+const TASK_STATUS_KEYS: Record<string, MessageKey> = {
+  inbox: "tasks.status.inbox",
+  assigned: "tasks.status.assigned",
+  blocked: "tasks.status.blocked",
+  done: "tasks.status.done",
+};
+
 function replaySubtitle(result: Record<string, unknown>, detail: string): string {
   const replay = result.replay === true || result.replayed === true;
   return [replay ? "Replay" : "", detail].filter(Boolean).join(" · ");
@@ -85,20 +131,24 @@ export function describeMcpCall(
   toolName: string,
   argsValue: unknown,
   resultValue?: unknown,
+  t: TFunction = english,
 ): McpCallDescription {
   const args = record(argsValue);
   const result = record(resultValue);
+  /* An optional `: <scope>` after a title, the same in both languages. */
+  const scoped = (value: string) => (value ? `: ${value}` : "");
+  const kindName = (kind: string) => (Object.hasOwn(KIND_KEYS, kind) ? t(KIND_KEYS[kind]) : kind);
 
   if (toolName === "spawn_agent") {
     const profile = [string(args.model) || string(args.engine), string(args.effort), string(args.role)]
       .filter(Boolean)
       .join(" ");
     const prompt = compact(string(args.prompt));
-    const subject = [profile, prompt].filter(Boolean).join(" · ") || "new worker";
+    const subject = [profile, prompt].filter(Boolean).join(" · ") || t("mcp.call.newWorker");
     return {
       icon: "bot",
-      verb: "Creating",
-      title: `Creating agent: ${subject}`,
+      verb: t("mcp.verb.creating"),
+      title: t("mcp.call.spawnAgent", { subject }),
       subtitle: string(result.transcriptPath),
       links: conversationLink(result),
     };
@@ -108,8 +158,10 @@ export function describeMcpCall(
     const conversationId = string(result.conversationId) || string(args.conversationId);
     return {
       icon: "message",
-      verb: "Sending",
-      title: `Sending message${conversationId ? ` to ${conversationId}` : ""}: ${compact(string(args.text)) || "message"}`,
+      verb: t("mcp.verb.sending"),
+      title: conversationId
+        ? t("mcp.call.sendMessageTo", { conversation: conversationId, text: compact(string(args.text)) || t("mcp.call.messageFallback") })
+        : t("mcp.call.sendMessage", { text: compact(string(args.text)) || t("mcp.call.messageFallback") }),
       subtitle: replaySubtitle(result, string(result.operationId)),
       links: conversationId
         ? [{ kind: "conversation", id: conversationId, label: "Open conversation", href: `#c=${encodeURIComponent(conversationId)}` }]
@@ -119,12 +171,22 @@ export function describeMcpCall(
 
   if (toolName === "message_receipt") {
     const operationId = string(result.operationId) || string(args.operationId);
-    const state = string(result.state) || "unknown";
+    const rawState = string(result.state);
+    const state = !rawState
+      ? t("mcp.call.unknownState")
+      : Object.hasOwn(RECEIPT_STATE_KEYS, rawState) ? t(RECEIPT_STATE_KEYS[rawState]) : rawState;
+    const lead = !rawState
+      ? t("mcp.call.receiptLead.unknown")
+      : Object.hasOwn(RECEIPT_LEAD_KEYS, rawState) ? t(RECEIPT_LEAD_KEYS[rawState]) : rawState;
     const conversationId = string(result.conversationId);
+    /* The state leads the visible title so a phone's short row still tells a
+       delivered check from a failed one; the operation id (36 characters of
+       UUID) rides in the tooltip and the Details payload. */
     return {
       icon: "message",
-      verb: "Checking",
-      title: `Checking delivery of ${operationId || "a send"}: ${state}`,
+      verb: t("mcp.verb.checking"),
+      title: t("mcp.call.receiptTitle", { state: lead }),
+      tooltip: t("mcp.call.messageReceipt", { operation: operationId || t("mcp.call.aSend"), state }),
       subtitle: string(result.reason),
       links: conversationId
         ? [{ kind: "conversation", id: conversationId, label: "Open conversation", href: `#c=${encodeURIComponent(conversationId)}` }]
@@ -136,8 +198,8 @@ export function describeMcpCall(
     const id = entityId(result, "task");
     return {
       icon: "task",
-      verb: "Creating",
-      title: `Creating task: ${compact(string(args.text)) || "untitled task"}`,
+      verb: t("mcp.verb.creating"),
+      title: t("mcp.call.createTask", { text: compact(string(args.text)) || t("mcp.call.untitledTask") }),
       subtitle: replaySubtitle(result, string(args.project)),
       links: entityLink("task", id),
     };
@@ -145,11 +207,12 @@ export function describeMcpCall(
 
   if (toolName === "update_task") {
     const id = entityId(result, "task") || string(args.taskId);
-    const change = string(args.status) || compact(string(args.text)) || "details";
+    const status = string(args.status);
+    const change = (Object.hasOwn(TASK_STATUS_KEYS, status) ? t(TASK_STATUS_KEYS[status]) : status) || compact(string(args.text)) || t("mcp.call.taskDetails");
     return {
       icon: "task",
-      verb: "Updating",
-      title: `Updating task${id ? ` ${id}` : ""}: ${change}`,
+      verb: t("mcp.verb.updating"),
+      title: id ? t("mcp.call.updateTaskId", { id, change }) : t("mcp.call.updateTask", { change }),
       subtitle: replaySubtitle(result, ""),
       links: entityLink("task", id),
     };
@@ -159,8 +222,8 @@ export function describeMcpCall(
     const id = entityId(result, "pipeline");
     return {
       icon: "pipeline",
-      verb: "Creating",
-      title: `Creating pipeline: ${compact(string(args.task)) || "untitled pipeline"}`,
+      verb: t("mcp.verb.creating"),
+      title: t("mcp.call.createPipeline", { task: compact(string(args.task)) || t("mcp.call.untitledPipeline") }),
       subtitle: replaySubtitle(result, string(args.repoDir)),
       links: entityLink("pipeline", id),
     };
@@ -169,19 +232,20 @@ export function describeMcpCall(
   if (toolName === "pipeline_action") {
     const id = entityId(result, "pipeline") || string(args.pipelineId);
     const action = string(args.action) || "update";
-    const actionVerb: Record<string, string> = {
-      start: "Starting",
-      pause: "Pausing",
-      resume: "Resuming",
-      "retry-stage": "Retrying",
-      "skip-stage": "Skipping stage in",
-      close: "Closing",
-      delete: "Deleting",
+    const actions: Record<string, [MessageKey, MessageKey]> = {
+      start: ["mcp.verb.starting", "mcp.call.pipeline.start"],
+      pause: ["mcp.verb.pausing", "mcp.call.pipeline.pause"],
+      resume: ["mcp.verb.resuming", "mcp.call.pipeline.resume"],
+      "retry-stage": ["mcp.verb.retrying", "mcp.call.pipeline.retryStage"],
+      "skip-stage": ["mcp.verb.skippingStage", "mcp.call.pipeline.skipStage"],
+      close: ["mcp.verb.closing", "mcp.call.pipeline.close"],
+      delete: ["mcp.verb.deleting", "mcp.call.pipeline.delete"],
     };
+    const [verbKey, titleKey] = actionKeys(actions, action, ["mcp.verb.updating", "mcp.call.pipeline.update"]);
     return {
       icon: "pipeline",
-      verb: actionVerb[action] ?? "Updating",
-      title: `${actionVerb[action] ?? "Updating"} pipeline${id ? ` ${id}` : ""}`,
+      verb: t(verbKey),
+      title: t(titleKey, { target: id ? ` ${id}` : "" }),
       subtitle: replaySubtitle(result, action),
       links: entityLink("pipeline", id),
     };
@@ -192,8 +256,8 @@ export function describeMcpCall(
     const pipelineId = string(result.pipelineId) || string(args.pipelineId);
     return {
       icon: "link",
-      verb: "Linking",
-      title: `Linking task to pipeline: ${taskId || "task"} → ${pipelineId || "pipeline"}`,
+      verb: t("mcp.verb.linking"),
+      title: t("mcp.call.linkTask", { task: taskId || t("mcp.call.kind.task"), pipeline: pipelineId || t("mcp.call.kind.pipeline") }),
       subtitle: replaySubtitle(result, ""),
       links: [...entityLink("task", taskId), ...entityLink("pipeline", pipelineId)],
     };
@@ -203,8 +267,8 @@ export function describeMcpCall(
     const scope = string(args.project) || string(args.query);
     return {
       icon: "conversation",
-      verb: "Listing",
-      title: `Listing conversations${scope ? `: ${compact(scope)}` : ""}`,
+      verb: t("mcp.verb.listing"),
+      title: t("mcp.call.listConversations", { scope: scoped(scope ? compact(scope) : "") }),
       subtitle: replaySubtitle(result, typeof result.count === "number" ? `${result.count} found` : ""),
       links: [],
     };
@@ -215,8 +279,8 @@ export function describeMcpCall(
     const total = typeof result.total === "number" ? `${result.total} ${result.order === "relevance" ? "conversations" : "matches"}` : "";
     return {
       icon: "conversation",
-      verb: "Searching",
-      title: `Searching transcripts${query ? `: ${query}` : ""}`,
+      verb: t("mcp.verb.searching"),
+      title: t("mcp.call.searchTranscripts", { scope: scoped(query) }),
       subtitle: replaySubtitle(result, total),
       links: [],
     };
@@ -230,8 +294,8 @@ export function describeMcpCall(
       : [];
     return {
       icon: "conversation",
-      verb: "Opening",
-      title: `Opening conversation: ${conversationId || transcriptPath || "conversation"}`,
+      verb: t("mcp.verb.opening"),
+      title: t("mcp.call.getConversation", { target: conversationId || transcriptPath || t("mcp.call.kind.conversation") }),
       subtitle: replaySubtitle(result, transcriptPath),
       links,
     };
@@ -245,8 +309,8 @@ export function describeMcpCall(
       : [];
     return {
       icon: "conversation",
-      verb: "Reading",
-      title: `Reading messages: ${conversationId || transcriptPath || "conversation"}`,
+      verb: t("mcp.verb.reading"),
+      title: t("mcp.call.conversationMessages", { target: conversationId || transcriptPath || t("mcp.call.kind.conversation") }),
       subtitle: replaySubtitle(result, transcriptPath),
       links,
     };
@@ -259,8 +323,8 @@ export function describeMcpCall(
     const revision = string(result.revision) || string(args.revision);
     return {
       icon: "deploy",
-      verb: "Deploying",
-      title: `Deploying release ${revision ? revision.slice(0, 12) : "(current HEAD)"}`,
+      verb: t("mcp.verb.deploying"),
+      title: t("mcp.call.deploy", { revision: revision ? revision.slice(0, 12) : t("mcp.call.currentHead") }),
       subtitle: replaySubtitle(result, string(result.deploymentId)),
       links: [],
     };
@@ -270,8 +334,8 @@ export function describeMcpCall(
     const id = entityId(result, "pipeline") || string(args.pipelineId);
     return {
       icon: "pipeline",
-      verb: "Opening",
-      title: `Opening pipeline: ${id || "pipeline"}`,
+      verb: t("mcp.verb.opening"),
+      title: t("mcp.call.getPipeline", { id: id || t("mcp.call.kind.pipeline") }),
       subtitle: replaySubtitle(result, string(record(result.pipeline).state)),
       links: entityLink("pipeline", id),
     };
@@ -280,8 +344,8 @@ export function describeMcpCall(
   if (toolName === "board_snapshot") {
     return {
       icon: "conversation",
-      verb: "Reading",
-      title: `Reading board snapshot${string(args.project) ? `: ${compact(string(args.project))}` : ""}`,
+      verb: t("mcp.verb.reading"),
+      title: t("mcp.call.boardSnapshot", { scope: scoped(compact(string(args.project))) }),
       subtitle: replaySubtitle(result, typeof result.count === "number" ? `${result.count} conversations` : ""),
       links: [],
     };
@@ -290,8 +354,8 @@ export function describeMcpCall(
   if (toolName === "list_flows") {
     return {
       icon: "pipeline",
-      verb: "Listing",
-      title: `Listing flows${string(args.project) ? `: ${compact(string(args.project))}` : ""}`,
+      verb: t("mcp.verb.listing"),
+      title: t("mcp.call.listFlows", { scope: scoped(compact(string(args.project))) }),
       subtitle: replaySubtitle(result, typeof result.count === "number" ? `${result.count} found` : ""),
       links: [],
     };
@@ -301,8 +365,8 @@ export function describeMcpCall(
     const id = string(args.flowId) || string(result.flowId);
     return {
       icon: "pipeline",
-      verb: "Opening",
-      title: `Opening flow: ${id || "flow"}`,
+      verb: t("mcp.verb.opening"),
+      title: t("mcp.call.getFlow", { id: id || t("mcp.call.flowFallback") }),
       subtitle: replaySubtitle(result, string(record(result.flow).state)),
       links: [],
     };
@@ -311,21 +375,21 @@ export function describeMcpCall(
   if (toolName === "flow_action") {
     const id = string(args.flowId) || string(result.flowId);
     const action = string(args.action);
-    const verbs: Record<string, string> = {
-      pause: "Pausing",
-      resume: "Resuming",
-      advance: "Advancing",
-      "retry-round": "Retrying",
-      "cancel-round": "Cancelling round in",
-      extend: "Extending",
-      "another-round": "Starting another round in",
-      close: "Closing",
+    const actions: Record<string, [MessageKey, MessageKey]> = {
+      pause: ["mcp.verb.pausing", "mcp.call.flow.pause"],
+      resume: ["mcp.verb.resuming", "mcp.call.flow.resume"],
+      advance: ["mcp.verb.advancing", "mcp.call.flow.advance"],
+      "retry-round": ["mcp.verb.retrying", "mcp.call.flow.retryRound"],
+      "cancel-round": ["mcp.verb.cancellingRound", "mcp.call.flow.cancelRound"],
+      extend: ["mcp.verb.extending", "mcp.call.flow.extend"],
+      "another-round": ["mcp.verb.startingRound", "mcp.call.flow.anotherRound"],
+      close: ["mcp.verb.closing", "mcp.call.flow.close"],
     };
-    const verb = verbs[action] ?? "Updating";
+    const [verbKey, titleKey] = actionKeys(actions, action, ["mcp.verb.updating", "mcp.call.flow.update"]);
     return {
       icon: "pipeline",
-      verb,
-      title: `${verb} flow${id ? ` ${id}` : ""}`,
+      verb: t(verbKey),
+      title: t(titleKey, { target: id ? ` ${id}` : "" }),
       subtitle: replaySubtitle(result, action),
       links: [],
     };
@@ -334,8 +398,8 @@ export function describeMcpCall(
   if (toolName === "list_pipelines") {
     return {
       icon: "pipeline",
-      verb: "Listing",
-      title: `Listing pipelines${string(args.project) ? `: ${compact(string(args.project))}` : ""}`,
+      verb: t("mcp.verb.listing"),
+      title: t("mcp.call.listPipelines", { scope: scoped(compact(string(args.project))) }),
       subtitle: replaySubtitle(result, typeof result.count === "number" ? `${result.count} found` : ""),
       links: [],
     };
@@ -344,21 +408,21 @@ export function describeMcpCall(
   if (toolName === "conversation_action") {
     const conversationId = string(result.conversationId) || string(args.conversationId);
     const action = string(args.action);
-    const verbs: Record<string, string> = {
-      interrupt: "Interrupting",
-      kill: "Killing",
-      resume: "Resuming",
-      compact: "Compacting",
-      "dialog-key": "Answering dialog in",
-      permission: "Answering a permission request in",
-      archive: "Archiving",
-      unarchive: "Unarchiving",
+    const actions: Record<string, [MessageKey, MessageKey]> = {
+      interrupt: ["mcp.verb.interrupting", "mcp.call.conversation.interrupt"],
+      kill: ["mcp.verb.killing", "mcp.call.conversation.kill"],
+      resume: ["mcp.verb.resuming", "mcp.call.conversation.resume"],
+      compact: ["mcp.verb.compacting", "mcp.call.conversation.compact"],
+      "dialog-key": ["mcp.verb.answeringDialog", "mcp.call.conversation.dialogKey"],
+      permission: ["mcp.verb.answeringPermission", "mcp.call.conversation.permission"],
+      archive: ["mcp.verb.archiving", "mcp.call.conversation.archive"],
+      unarchive: ["mcp.verb.unarchiving", "mcp.call.conversation.unarchive"],
     };
-    const verb = verbs[action] ?? "Controlling";
+    const [verbKey, titleKey] = actionKeys(actions, action, ["mcp.verb.controlling", "mcp.call.conversation.control"]);
     return {
       icon: "message",
-      verb,
-      title: `${verb} conversation${conversationId ? ` ${conversationId}` : ""}`,
+      verb: t(verbKey),
+      title: t(titleKey, { target: conversationId ? ` ${conversationId}` : "" }),
       subtitle: replaySubtitle(result, string(result.operationId)),
       links: conversationId
         ? [{ kind: "conversation", id: conversationId, label: "Open conversation", href: `#c=${encodeURIComponent(conversationId)}` }]
@@ -369,8 +433,8 @@ export function describeMcpCall(
   if (toolName === "operator_snapshot") {
     return {
       icon: "conversation",
-      verb: "Reading",
-      title: "Reading operator snapshot",
+      verb: t("mcp.verb.reading"),
+      title: t("mcp.call.operatorSnapshot"),
       subtitle: replaySubtitle(result, string(record(result.view).mode)),
       links: [],
     };
@@ -379,8 +443,8 @@ export function describeMcpCall(
   if (toolName === "list_tasks") {
     return {
       icon: "task",
-      verb: "Listing",
-      title: `Listing tasks${string(args.project) ? `: ${compact(string(args.project))}` : ""}`,
+      verb: t("mcp.verb.listing"),
+      title: t("mcp.call.listTasks", { scope: scoped(compact(string(args.project))) }),
       subtitle: replaySubtitle(result, typeof result.count === "number" ? `${result.count} found` : ""),
       links: [],
     };
@@ -390,8 +454,8 @@ export function describeMcpCall(
     const id = entityId(result, "task") || string(args.taskId);
     return {
       icon: "task",
-      verb: "Opening",
-      title: `Opening task: ${id || "task"}`,
+      verb: t("mcp.verb.opening"),
+      title: t("mcp.call.getTask", { id: id || t("mcp.call.kind.task") }),
       subtitle: replaySubtitle(result, string(record(result.task).status)),
       links: entityLink("task", id),
     };
@@ -401,8 +465,8 @@ export function describeMcpCall(
     const id = string(args.deploymentId) || string(result.deploymentId) || string(args.operationId) || string(result.operationId);
     return {
       icon: "deploy",
-      verb: "Reading",
-      title: `Reading deployment status${id ? `: ${id}` : ""}`,
+      verb: t("mcp.verb.reading"),
+      title: t("mcp.call.deploymentStatus", { scope: scoped(id) }),
       subtitle: replaySubtitle(result, string(record(result.deployment).state) || string(record(record(result.operation).receipt).status)),
       links: [],
     };
@@ -411,8 +475,8 @@ export function describeMcpCall(
   if (toolName === "resources") {
     return {
       icon: "tool",
-      verb: "Reading",
-      title: "Reading resources",
+      verb: t("mcp.verb.reading"),
+      title: t("mcp.call.resources"),
       subtitle: replaySubtitle(result, Array.isArray(result.sessions) ? `${result.sessions.length} sessions` : ""),
       links: [],
     };
@@ -421,12 +485,19 @@ export function describeMcpCall(
   if (toolName === "conversation_migration") {
     const conversationId = string(result.conversationId) || string(args.conversationId);
     const action = string(args.action);
-    const verbs: Record<string, string> = { reseat: "Reseating", retry: "Retrying", rollback: "Rolling back", cancel: "Cancelling", withdraw: "Withdrawing", "keep-current": "Releasing held messages of" };
-    const verb = verbs[action] ?? "Migrating";
+    const actions: Record<string, [MessageKey, MessageKey]> = {
+      reseat: ["mcp.verb.reseating", "mcp.call.migration.reseat"],
+      retry: ["mcp.verb.retrying", "mcp.call.migration.retry"],
+      rollback: ["mcp.verb.rollingBack", "mcp.call.migration.rollback"],
+      cancel: ["mcp.verb.cancelling", "mcp.call.migration.cancel"],
+      withdraw: ["mcp.verb.withdrawing", "mcp.call.migration.withdraw"],
+      "keep-current": ["mcp.verb.releasingHeld", "mcp.call.migration.keepCurrent"],
+    };
+    const [verbKey, titleKey] = actionKeys(actions, action, ["mcp.verb.migrating", "mcp.call.migration.migrate"]);
     return {
       icon: "conversation",
-      verb,
-      title: `${verb} conversation migration${conversationId ? ` for ${conversationId}` : ""}`,
+      verb: t(verbKey),
+      title: t(titleKey, { target: conversationId ? ` ${t("mcp.call.migrationFor", { id: conversationId })}` : "" }),
       subtitle: replaySubtitle(result, string(result.operationId)),
       links: conversationId
         ? [{ kind: "conversation", id: conversationId, label: "Open conversation", href: `#c=${encodeURIComponent(conversationId)}` }]
@@ -435,13 +506,13 @@ export function describeMcpCall(
   }
 
   if (toolName === "agent_activity") {
-    const scope = string(args.conversationId) || string(args.project) || "all live agents";
+    const scope = string(args.conversationId) || string(args.project) || t("mcp.call.allLiveAgents");
     const stalled = typeof result.stalledCount === "number" ? result.stalledCount : null;
     const counted = typeof result.count === "number" ? `${result.count} checked` : "";
     return {
       icon: "conversation",
-      verb: "Checking",
-      title: `Checking agent activity: ${compact(scope)}`,
+      verb: t("mcp.verb.checking"),
+      title: t("mcp.call.agentActivity", { scope: compact(scope) }),
       subtitle: replaySubtitle(result, [counted, stalled ? `${stalled} stalled` : ""].filter(Boolean).join(" · ")),
       links: conversationLink(args),
     };
@@ -457,8 +528,8 @@ export function describeMcpCall(
       : (typeof result.count === "number" ? `${result.count} event(s)` : "");
     return {
       icon: "pipeline",
-      verb: digest ? "Polling" : "Reading",
-      title: `${digest ? "Polling lifecycle digest" : "Reading lifecycle events"}${scope ? `: ${compact(scope)}` : ""}`,
+      verb: t(digest ? "mcp.verb.polling" : "mcp.verb.reading"),
+      title: t(digest ? "mcp.call.lifecycleDigest" : "mcp.call.lifecycleEvents", { scope: scoped(scope ? compact(scope) : "") }),
       subtitle: replaySubtitle(result, detail),
       links: entityLink("pipeline", string(args.pipelineId)),
     };
@@ -473,8 +544,8 @@ export function describeMcpCall(
     const opening = string(args.intent) === "open";
     return {
       icon: "conversation",
-      verb: "Asking",
-      title: `Asking to ${opening ? "open" : "show"} a ${kind}`,
+      verb: t("mcp.verb.asking"),
+      title: t(opening ? "mcp.call.askOpen" : "mcp.call.askShow", { kind: kindName(kind) }),
       subtitle: replaySubtitle(result, compact(string(args.reason))),
       links: kind === "conversation" && string(target.path)
         ? []
@@ -483,7 +554,7 @@ export function describeMcpCall(
   }
 
   if (toolName === "dismiss_attention") {
-    if (args.target === undefined) return { icon: "task", verb: "Reading", title: "Waiting for you", subtitle: replaySubtitle(result, `${typeof result.count === "number" ? result.count : 0} rows · ${typeof result.staleCount === "number" ? result.staleCount : 0} with stale evidence`), links: [] };
+    if (args.target === undefined) return { icon: "task", verb: t("mcp.verb.reading"), title: t("mcp.call.waitingForYou"), subtitle: replaySubtitle(result, `${typeof result.count === "number" ? result.count : 0} rows · ${typeof result.staleCount === "number" ? result.staleCount : 0} with stale evidence`), links: [] };
     /* A needs-you flag cleared off the operator's board, or brought back: what
        kind of thing, and whether anything actually moved. */
     const target = record(args.target);
@@ -494,16 +565,16 @@ export function describeMcpCall(
     if (args.escalate !== undefined) {
       return {
         icon: kind === "conversation" ? "conversation" : "pipeline",
-        verb: undo ? "Withdrawing" : "Escalating",
-        title: undo ? `Taking back an escalated ${kind}` : `Asking the operator about a ${kind}`,
+        verb: t(undo ? "mcp.verb.withdrawing" : "mcp.verb.escalating"),
+        title: t(undo ? "mcp.call.takeBackEscalation" : "mcp.call.escalate", { kind: kindName(kind) }),
         subtitle: replaySubtitle(result, undo ? "" : compact(string(record(args.escalate).reviewId))),
         links: kind === "conversation" ? conversationLink({ conversationId: string(target.conversationId) }) : entityLink("pipeline", string(target.pipelineId)),
       };
     }
     return {
       icon: kind === "conversation" ? "conversation" : kind === "task" ? "task" : "pipeline",
-      verb: undo ? "Flagging" : "Clearing",
-      title: undo ? `Flagging a ${kind} again` : `Clearing needs-you on a ${kind}`,
+      verb: t(undo ? "mcp.verb.flagging" : "mcp.verb.clearing"),
+      title: t(undo ? "mcp.call.flagAgain" : "mcp.call.clearNeedsYou", { kind: kindName(kind) }),
       subtitle: replaySubtitle(result, Array.isArray(result.dismissed) && !cleared ? "already clear" : ""),
       links: kind === "conversation"
         ? conversationLink({ conversationId: string(target.conversationId) })
@@ -517,13 +588,18 @@ export function describeMcpCall(
     const project = string(result.project) || string(args.project);
     const changed = result.changed === true;
     const off = args.enabled === false;
-    const interval = typeof args.wakeIntervalMinutes === "number" ? `${args.wakeIntervalMinutes} min` : "";
+    const minutes = typeof args.wakeIntervalMinutes === "number" ? args.wakeIntervalMinutes : null;
+    const target = project ? ` ${t("mcp.call.tickFor", { project: compact(project) })}` : "";
     return {
       icon: "tool",
-      verb: changed ? "Setting" : "Reading",
-      title: changed
-        ? `${off ? "Turning off" : "Setting"} the seat tick${project ? ` for ${compact(project)}` : ""}${off ? "" : interval ? `: one wake per ${interval}` : ""}`
-        : `Reading seat tick settings${project ? `: ${compact(project)}` : ""}`,
+      verb: t(changed ? "mcp.verb.setting" : "mcp.verb.reading"),
+      title: !changed
+        ? t("mcp.call.tickRead", { scope: scoped(project ? compact(project) : "") })
+        : off
+          ? t("mcp.call.tickOff", { target })
+          : minutes !== null
+            ? t("mcp.call.tickEvery", { target, minutes })
+            : t("mcp.call.tickSet", { target }),
       subtitle: replaySubtitle(result, compact(string(args.reason))),
       links: [],
     };
@@ -531,8 +607,8 @@ export function describeMcpCall(
 
   return {
     icon: "tool",
-    verb: "Running",
-    title: `Running MCP tool: ${toolName || "unknown"}`,
+    verb: t("mcp.verb.running"),
+    title: t("mcp.call.runningTool", { tool: toolName || t("mcp.call.unknownTool") }),
     subtitle: "",
     links: [],
   };

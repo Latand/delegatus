@@ -40,6 +40,8 @@ export interface ConversationCatalogQuery {
   query?: string;
   cursor?: string | null;
   limit?: number;
+  /** A server-derived member and permission signature; never a query parameter. */
+  authorityScope?: string;
 }
 
 interface Cursor {
@@ -48,6 +50,7 @@ interface Cursor {
 }
 
 interface CatalogPaginationSnapshot {
+  authorityScope: string;
   items: ConversationCatalogEntry[];
   total: number;
 }
@@ -56,6 +59,7 @@ const DEFAULT_PAGE_SIZE = 40;
 const MAX_PAGE_SIZE = 100;
 const catalogStore = globalThis as typeof globalThis & {
   __llvConversationCatalog?: ConversationCatalogEntry[];
+  __llvConversationByPath?: ReadonlyMap<string, ConversationCatalogEntry>;
   __llvConversationProjects?: ReadonlySet<string>;
   __llvConversationCatalogGeneration?: number;
   __llvConversationPagination?: Map<number, CatalogPaginationSnapshot>;
@@ -73,8 +77,13 @@ export class ExpiredConversationCatalogCursorError extends Error {
 
 export function replaceConversationCatalog(entries: ConversationCatalogEntry[]): void {
   catalogStore.__llvConversationCatalog = entries;
+  catalogStore.__llvConversationByPath = new Map(entries.map(entry => [entry.path, entry]));
   catalogStore.__llvConversationProjects = new Set(entries.map(entry => entry.project));
   catalogStore.__llvConversationCatalogGeneration = (catalogStore.__llvConversationCatalogGeneration ?? 0) + 1;
+}
+
+export function conversationCatalogEntry(path: string): ConversationCatalogEntry | null {
+  return catalogStore.__llvConversationByPath?.get(path) ?? null;
 }
 
 export function conversationCatalogSnapshot(): readonly ConversationCatalogEntry[] {
@@ -114,11 +123,11 @@ function decodeCursor(value: string | null | undefined): Cursor | null {
   }
 }
 
-function rememberPagination(items: ConversationCatalogEntry[]): number {
+function rememberPagination(items: ConversationCatalogEntry[], authorityScope = ""): number {
   const snapshots = paginationSnapshots();
   const snapshot = (catalogStore.__llvConversationPaginationSequence ?? 0) + 1;
   catalogStore.__llvConversationPaginationSequence = snapshot;
-  snapshots.set(snapshot, { items: [...items], total: items.length });
+  snapshots.set(snapshot, { items: [...items], total: items.length, authorityScope });
   let retainedRows = [...snapshots.values()].reduce((total, page) => total + page.items.length, 0);
   while ((snapshots.size > MAX_PAGINATION_SNAPSHOTS || retainedRows > MAX_PAGINATION_ROWS) && snapshots.size > 1) {
     const oldest = snapshots.keys().next().value!;
@@ -153,7 +162,7 @@ export function paginateConversationCatalog(
   let snapshot: CatalogPaginationSnapshot;
   if (cursor) {
     const remembered = paginationSnapshots().get(cursor.snapshot);
-    if (remembered) {
+    if (remembered && remembered.authorityScope === (options.authorityScope ?? "")) {
       snapshotId = cursor.snapshot;
       offset = cursor.offset;
       snapshot = remembered;
@@ -166,7 +175,7 @@ export function paginateConversationCatalog(
       .filter((entry) => matchesQuery(entry, options.query ?? ""))
       .sort((left, right) => right.mtime - left.mtime || left.path.localeCompare(right.path))
       .map((entry) => entry.firstPrompt ? { ...entry, firstPrompt: "" } : entry);
-    snapshotId = rememberPagination(matching);
+    snapshotId = rememberPagination(matching, options.authorityScope);
     offset = 0;
     snapshot = paginationSnapshots().get(snapshotId)!;
   }

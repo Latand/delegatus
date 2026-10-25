@@ -11,7 +11,8 @@ import type { OwnerTurnDiagnostic } from "./diagnostic";
  * One read-only record per relayed request this install claimed (relay.md
  * §B.2): the input as the service sent it, the answer or hand-off, timing and
  * outcome. A record is kept for RELAY_ANSWER_RETENTION_DAYS after it ended.
- * It never holds the credential or the lease id, and nothing resumes from it.
+ * It never holds the credential or the lease id. Legacy owner recovery may
+ * reuse its input only alongside the durable verified owner request.
  *
  * Layout: `external-relay/answers/<relay>/<target>/<started ms>_<request>.json`,
  * so a target's newest records are its last file names.
@@ -220,12 +221,17 @@ export type AnswerRecorder = NonNullable<ReturnType<typeof answerRecorder>>;
 
 /** Settles a record a dead owner left running, as the orphan sweep settles its lease. */
 export function settleInterruptedAnswer(relayId: string, targetId: string, requestId: string, delivery: RelayAnswerDelivery, conversationId?: string,
-  answer?: ExternalRelayAnswer | null): void {
+  answer?: ExternalRelayAnswer | null, deliveredLate = false): void {
   try {
     for (const file of recordFiles(targetDir(relayId, targetId), requestId)) {
       const record = readRecord(file);
       if (!record) continue;
       if (record.state !== "running") {
+        if (deliveredLate) {
+          writeRecord(file, { ...record, delivery, ...(answer ? { answer, outcome: "answered" } : {}),
+            ...(conversationId ? { conversationId } : {}) });
+          continue;
+        }
         if (conversationId && record.conversationId !== conversationId) writeRecord(file, { ...record, conversationId });
         continue;
       }

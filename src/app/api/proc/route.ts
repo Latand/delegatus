@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import path from "node:path";
 
 import { NextRequest, NextResponse } from "next/server";
@@ -45,7 +46,7 @@ async function derivePid(pathname: string): Promise<number | null | "invalid" | 
   return "invalid";
 }
 
-export async function POST(req: NextRequest): Promise<NextResponse<KillResponse | ApiError>> {
+async function workspacePOST(req: NextRequest): Promise<NextResponse<KillResponse | ApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
 
@@ -76,3 +77,5 @@ export async function POST(req: NextRequest): Promise<NextResponse<KillResponse 
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }
 }
+
+export const POST = workspaceRoute("/api/proc", workspacePOST);
