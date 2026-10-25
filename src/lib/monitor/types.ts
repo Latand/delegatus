@@ -360,6 +360,8 @@ export type SeatTickVerdict =
     catchUp?: { key: string; from: string; through: string; covers: string[] };
     reasons: SeatTickWakeReason[];
     items: SeatTickItem[];
+    /** Every lane the board routes to the seat, independent of detail credit. */
+    seatOwnedLanes?: SeatTickSeatOwnedLane[];
     /** Current stall episodes let a landed wake retire stale episode history
         without evicting an unchanged conversation behind unrelated wakes. */
     activeStallTokens?: string[];
@@ -1334,6 +1336,14 @@ export interface SeatTickRefusalRun {
   settingsUpdatedAt: string | null;
 }
 
+/** Compact facts from the board's ownership projection, independent of detail. */
+export interface SeatTickSeatOwnedLane {
+  id: string;
+  title: string;
+  reason: string;
+  sinceMs: number | null;
+}
+
 /** One wait routed to the seat: the conversation or lane that asked, the
     exact wait, and one bounded line with the question and the answer path. */
 export interface SeatTickWorkerAskInput {
@@ -1342,6 +1352,10 @@ export interface SeatTickWorkerAskInput {
   /** The conversation id (or transcript path) that asked, or the lane id. */
   id: string;
   label: string;
+  /** Original wait time, used for oldest-first detail selection. */
+  sinceMs?: number | null;
+  /** The board's seat-owned lane, also carried when its detail was shown. */
+  seatOwnedLane?: SeatTickSeatOwnedLane;
 }
 
 export interface SeatTickCheckInput {

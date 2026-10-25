@@ -25,6 +25,8 @@ export class LiveTranscript {
   /** Text of segments the bounded history dropped, kept only to find a
    * credential that began in them. */
   private readonly dropped: Record<Speaker, string> = { operator: "", companion: "" };
+  /** The companion's recent words with the arrival each came at, so the server can read what the voice said after a mark. */
+  private readonly spoken: Array<[number, string]> = [];
   constructor(private readonly secrets: readonly string[] = []) {}
   private cleaned(speaker: Speaker): Map<Segment, string> {
     const rows = this.segments.filter(row => row.speaker === speaker);
@@ -69,6 +71,7 @@ export class LiveTranscript {
     }
     current!.fragments.push([startMs, endMs]);
     current!.lastArrival = ++this.arrival;
+    if (speaker === "companion") { this.spoken.push([this.arrival, delta]); if (this.spoken.length > 512) this.spoken.shift(); }
     current!.text = (current!.text + delta).slice(0, 4_000);
     current!.endMs = Math.max(current!.endMs, endMs);
     events.push(this.snapshot(current!), ...this.republished(speaker, current!));
@@ -102,6 +105,8 @@ export class LiveTranscript {
   latestTurn(): number | undefined { return this.turn || undefined; }
   /** Server-owned order of accepted speech fragments. */
   arrivalCount(): number { return this.arrival; }
+  /** What the companion said after an arrival mark, unmasked: read on the server only, never sent anywhere. */
+  companionSince(arrival: number): string { return this.spoken.filter(([at]) => at > arrival).map(([, text]) => text).join(""); }
   /** The masked record, oldest first. A segment that received any speech after
    * the privacy mark is withheld whole, even if it began before the mark. */
   record(options: { withholdCompanionFrom?: number } = {}): Array<{ speaker: Speaker; text: string }> {

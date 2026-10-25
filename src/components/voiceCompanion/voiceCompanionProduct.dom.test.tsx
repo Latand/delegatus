@@ -16,6 +16,8 @@ import type { CompanionSettings } from "@/lib/voiceCompanion/storage";
  */
 
 const harness = installOnboardingDom();
+// Call-state tests use no animation timeline or layout engine.
+Object.defineProperty(harness.dom.HTMLElement.prototype, "animate", { configurable: true, writable: true, value: undefined });
 installActEnv();
 /* The floating component reads the page through the window's own globals. */
 const view = harness.dom as unknown as Window & typeof globalThis;
