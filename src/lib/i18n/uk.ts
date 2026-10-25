@@ -7307,6 +7307,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "memoryProfile.retry": "Спробувати ще",
   "memoryProfile.summarizing": "Підсумовую…",
   "memoryProfile.loading": "Підсумки з’являються, щойно готові. Вікно можна закрити.",
+  "memoryProfile.reading": "Читаю профіль…",
+  "roleMemory.reading": "Читаю вивчені правила…",
   "memoryProfile.errorAccount": "Акаунт Claude для цього проєкту недоступний. Перевірте акаунти та спробуйте ще раз.",
   "memoryProfile.errorSize": "Пам’ять перевищує ліміт підсумку. Правила можна прочитати нижче.",
   "memoryProfile.error": "Не вдалося підсумувати. Спробуйте ще раз.",
