@@ -29,16 +29,22 @@ export function refreshAdmission(lane: Pipeline, pipelines: readonly Pipeline[],
   });
 }
 
+/** The child retains this immutable key in both the hot and archived stores. */
+export function refreshTupleKey(lane: Pipeline, base: string, head: string): string {
+  const tuple = [lane.merge!.repository, lane.merge!.prNumber, head, base];
+  return `auto-refresh:${createHash("sha256").update(JSON.stringify(tuple)).digest("hex")}`;
+}
+
 export function refreshReservation(lane: Pipeline, base: string, head: string, now: number, baseBranch?: string): PipelineRefresh {
   const attempt = lane.merge!.attempts;
-  const key = `auto-refresh:${lane.id}:${attempt}`;
+  const key = refreshTupleKey(lane, base, head);
   return { attempt, base, head, key, ...(baseBranch ? { baseBranch } : {}),
     digest: createHash("sha256").update(JSON.stringify([key, base, head, lane.merge!.prNumber, ...(baseBranch ? [baseBranch] : [])])).digest("hex"),
     requestedAt: new Date(now).toISOString(), pipelineId: null };
 }
 
-/** A reservation belongs to the PR/head/base even when another lane carries
- * the queue next. Retained reservations also survive scheduler restarts. */
+/** Hot reservations cover pending creation and older children with lane-based
+ * keys. Created tuple-keyed children are also looked up in the durable index. */
 export function refreshWasRequested(lane: Pipeline, pipelines: readonly Pipeline[], base: string, head: string): boolean {
   return pipelines.some(({ merge }) => merge?.repository === lane.merge!.repository
     && merge.prNumber === lane.merge!.prNumber && merge.refresh?.base === base && merge.refresh.head === head);

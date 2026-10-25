@@ -11,7 +11,8 @@ import type { MergeOnReviewSetting } from "@/lib/projects/settings";
 /* The merge runner (#2187 §4.3-§4.4) against a fake `gh` and clock: invented
    repositories, heads and checks, no network. The stores resolve their state
    directory at import, so a sandbox is pinned before the first store read. */
-const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-auto-refresh-"));
+const sandbox = process.env.REFRESH_LIFECYCLE_STATE ?? fs.mkdtempSync(path.join(os.tmpdir(), "llv-auto-refresh-"));
+fs.mkdirSync(sandbox, { recursive: true });
 const previousStateDir = process.env.LLV_STATE_DIR;
 process.env.LLV_STATE_DIR = sandbox;
 
@@ -23,7 +24,7 @@ const { ForgeAppWriteRefused } = await import("./appWrite");
 afterAll(() => {
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousStateDir;
-  fs.rmSync(sandbox, { recursive: true, force: true });
+  if (!process.env.REFRESH_LIFECYCLE_STATE) fs.rmSync(sandbox, { recursive: true, force: true });
 });
 
 const REPO = "acme/widgets";
@@ -179,6 +180,7 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
       return run(args);
     },
     loadPipelines: () => [...pipelines.values()].map((pipeline) => structuredClone(pipeline)),
+    loadRefreshByKey: (key: string) => byKey.get(key) ?? null,
     mutate: async (id: string, change: (pipeline: Pipeline) => boolean) => {
       const pipeline = pipelines.get(id);
       if (!pipeline) return false;
@@ -329,6 +331,90 @@ test("a green PR behind main merges under soft protection without refreshing", a
   expect(h.calls.some(args => args[1]?.includes("/compare/"))).toBe(false);
 });
 
+test.each(["retry", "archive"] as const)("the durable refresh bound survives %s and a process restart", async mode => {
+  const name = `the durable refresh bound survives ${mode} and a process restart`;
+  if (!process.env.REFRESH_LIFECYCLE_PHASE) {
+    const root = path.join(sandbox, `lifecycle-${mode}`);
+    for (const phase of ["prepare", "verify"]) {
+      const child = Bun.spawn([process.execPath, "test", import.meta.path, "--test-name-pattern", `^${name}$`], {
+        env: { ...process.env, REFRESH_LIFECYCLE_PHASE: phase, REFRESH_LIFECYCLE_STATE: root },
+        stdin: "ignore", stdout: "pipe", stderr: "pipe",
+      });
+      const [out, err, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      expect(exit, `${phase}: ${out}\n${err}`).toBe(0);
+    }
+    return;
+  }
+  const store = await import("@/lib/pipelines/store");
+  const { productionAutoMergePorts } = await import("./autoMerge");
+  const { mergeOnReviewSetting, setMergeOnReview } = await import("@/lib/projects/settings");
+  const makeLane = (id: string) => {
+    const source = finished();
+    const value = store.buildPipeline({ id, task: "Refresh bound", project: source.project, repoDir: source.repoDir,
+      stages: source.stages, srcPath: null, srcConversationId: null, now: iso(T0), state: "draft" });
+    Object.assign(value, { state: "completed", cursor: null, closedAt: iso(T0), lastPassedCommit: HEAD_A,
+      delivery: { ...structuredClone(optionsLaneDelivery), ownerId: id } });
+    for (const run of value.runs) run.attempts = [{
+      n: 1, state: "passed", effectiveRole: run.stageId === "review" ? REVIEWER : BUILDER,
+      launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+      startedAt: iso(T0), completedAt: iso(T0), output: null, verdict: { status: "pass" }, error: null,
+    } as Pipeline["runs"][number]["attempts"][number]];
+    return value;
+  };
+  const h = harness({ lanes: [finished()], mergeBase: MAIN_1,
+    prs: [openPr(11, { checks: [green("ci"), red("optional-audit")] })] });
+  h.setBase(MAIN_2);
+  let starts = 0;
+  const ports = productionAutoMergePorts({
+    loadPipelines: store.loadPipelinesForList, now: () => T0, run: h.ports.run,
+    setting: mergeOnReviewSetting, activeSeat: async () => null,
+    write: async () => { throw new Error("unexpected forge write"); },
+    startRefresh: async (_request, options) => {
+      starts++;
+      const child = makeLane(`child-${process.env.REFRESH_LIFECYCLE_PHASE}-${starts}`);
+      child.state = "closed";
+      child.creationRequest = options.creationRequest;
+      child.refreshOf = { pipelineId: options.refreshOf.pipelineId, base: options.refreshOf.base };
+      store.savePipelines([...store.loadPipelines(), child]);
+      return { pipeline: child };
+    },
+  });
+  if (process.env.REFRESH_LIFECYCLE_PHASE === "prepare") {
+    setMergeOnReview("repo-fixture", true, "operator", iso(T0 - 3_600_000));
+    store.savePipelines([makeLane("original")]);
+    await sweepAutoMerge(ports);
+    expect(starts).toBe(1);
+    expect(store.loadPipelines().find(p => p.id === "original")!.merge!.refresh).toMatchObject({
+      base: MAIN_2, head: HEAD_A, pipelineId: "child-prepare-1",
+    });
+    if (mode === "retry") {
+      const { patchPipeline } = await import("@/lib/pipelines/engine");
+      const retried = await patchPipeline("original", { action: "retry-merge" });
+      expect("pipeline" in retried).toBe(true);
+      expect(store.loadPipelines().find(p => p.id === "original")!.merge!.refresh).toBeUndefined();
+    } else {
+      expect(await store.archiveSettledPipelines(T0 + 4 * 24 * 60 * 60_000)).toBe(2);
+      expect(store.loadPipelinesForList()).toHaveLength(0);
+      store.savePipelines([makeLane("next")]);
+    }
+    return;
+  }
+  const carrier = mode === "retry" ? "original" : "next";
+  await sweepAutoMerge(ports);
+  expect(starts).toBe(0);
+  expect(store.loadPipelines().find(p => p.id === carrier)!.merge).toMatchObject({
+    state: "blocked", reason: 'check "optional-audit" failed',
+  });
+  // The same immutable child receipt must not consume a newer main's tuple.
+  h.setBase("3".repeat(40));
+  const { patchPipeline } = await import("@/lib/pipelines/engine");
+  const retried = await patchPipeline(carrier, { action: "retry-merge" });
+  expect("pipeline" in retried).toBe(true);
+  await sweepAutoMerge(ports);
+  expect(starts).toBe(1);
+  expect(store.loadPipelines().find(p => p.id === carrier)!.merge!.refresh).toMatchObject({ base: "3".repeat(40), head: HEAD_A });
+});
+
 test("completed lanes on one PR share the refresh bound across a process restart", async () => {
   const verifyBound = async (h: ReturnType<typeof harness>, existingCreations: number) => {
     await h.run(10 * MERGE_POLL_MS);
@@ -379,7 +465,7 @@ test("completed lanes on one PR share the refresh bound across a process restart
   await verifyBound(h, 1);
 });
 
-test.each(["same", "repository", "PR", "head", "base"] as const)("a retained refresh reservation distinguishes the %s tuple", async difference => {
+test.each(["same", "repository", "PR", "head", "base"] as const)("an immutable refresh receipt distinguishes the %s tuple", async difference => {
   const h = harness({ mergeBase: MAIN_1, lanes: [finished()], prs: [conflicting()] });
   h.setBase(MAIN_2);
   await h.sweep();
@@ -393,6 +479,14 @@ test.each(["same", "repository", "PR", "head", "base"] as const)("a retained ref
   if (difference === "PR") previous.prNumber = 12;
   if (difference === "head") previous.refresh!.head = "b".repeat(40);
   if (difference === "base") previous.refresh!.base = "3".repeat(40);
+  // Seed a child for the chosen tuple, then drop the mutable parent evidence.
+  const { refreshReservation } = await import("./autoRefresh");
+  const receipt = h.pipeline("refresh-1");
+  const reservation = refreshReservation(h.pipeline("finished"), previous.refresh!.base, previous.refresh!.head, T0, "main");
+  receipt.creationRequest = { key: reservation.key, digest: reservation.digest };
+  h.byKey.clear();
+  h.byKey.set(reservation.key, receipt);
+  delete previous.refresh;
   const next = finished();
   next.id = "next";
   next.delivery!.ownerId = next.id;
@@ -404,7 +498,10 @@ test.each(["same", "repository", "PR", "head", "base"] as const)("a retained ref
   expect(h.writes).toEqual([]);
 });
 
-test.each(["base read", "comparison", "reservation"])("a matching reservation arriving during %s prevents another refresh", async seam => {
+test.each([
+  ["base read", "carrier"], ["comparison", "carrier"], ["reservation", "carrier"],
+  ["base read", "child"], ["comparison", "child"], ["reservation", "child"],
+] as const)("a matching reservation arriving during %s on the %s prevents another refresh", async (seam, evidence) => {
   const prior = harness({ lanes: [finished()], prs: [conflicting()] });
   prior.setBase(MAIN_2);
   await prior.sweep();
@@ -412,24 +509,42 @@ test.each(["base read", "comparison", "reservation"])("a matching reservation ar
   Object.assign(reserved, { id: "previous", state: "closed", hiddenAt: iso(T0) });
   const h = harness({ mergeBase: MAIN_1, lanes: [finished()], prs: [openPr(11, { checks: [red("ci")] })] });
   h.setBase(MAIN_2);
+  const insert = () => {
+    if (evidence === "carrier") h.add(reserved);
+    else {
+      const child = prior.pipeline("refresh-1");
+      h.byKey.set(child.creationRequest!.key, child);
+    }
+  };
   const run = h.ports.run;
   let compared = false;
   h.ports.run = async args => {
     const raw = await run(args);
-    if (seam === "base read" && args.at(-1) === ".commit.sha") h.add(reserved);
+    if (seam === "base read" && args.at(-1) === ".commit.sha") insert();
     if (args[1]?.includes("/compare/")) {
       compared = true;
-      if (seam === "comparison") h.add(reserved);
+      if (seam === "comparison") insert();
     }
     return raw;
   };
   const mutate = h.ports.mutate;
   h.ports.mutate = async (id, change) => {
-    if (compared && seam === "reservation") h.add(reserved);
+    if (compared && seam === "reservation") insert();
     return mutate(id, change);
   };
   await h.sweep();
   expect(h.merge("finished")).toMatchObject({ state: "blocked", reason: 'check "ci" failed' });
+  expect(h.merge("finished")!.refresh).toBeUndefined();
+  expect(h.creates).toEqual([]);
+  expect(h.writes).toEqual([]);
+});
+
+test("an unavailable refresh receipt lookup starts no work and takes the bounded read-failure path", async () => {
+  const h = harness({ mergeBase: MAIN_1, lanes: [finished()], prs: [openPr(11, { checks: [red("ci")] })] });
+  h.setBase(MAIN_2);
+  h.ports.loadRefreshByKey = () => { throw new Error("receipt lookup unavailable"); };
+  await h.run(3 * MERGE_POLL_MS);
+  expect(h.merge("finished")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.unreachable, readFailures: 3 });
   expect(h.merge("finished")!.refresh).toBeUndefined();
   expect(h.creates).toEqual([]);
   expect(h.writes).toEqual([]);
@@ -517,7 +632,7 @@ test("one conflict starts one visible refresh on the same task and delivery, wit
         { id: "review", role: { roleId: "reviewer" }, next: null, onFail: { to: "fix", maxRounds: 1, onExhausted: "advance" } },
         { id: "fix", role: { roleId: "builder", params: { mode: "apply-fixes" } }, next: "review" },
       ] },
-    options: { creationRequest: { key: "auto-refresh:finished:0" }, refreshOf: { pipelineId: "finished", base: MAIN_1, lineage: { srcConversationId: "seat-one" } } },
+    options: { creationRequest: { key: expect.stringMatching(/^auto-refresh:[0-9a-f]{64}$/) }, refreshOf: { pipelineId: "finished", base: MAIN_1, lineage: { srcConversationId: "seat-one" } } },
   });
   expect(h.writes).toHaveLength(0);
 });
@@ -802,7 +917,7 @@ test("an old stopped conflict starts no refresh until an explicit retry", async 
   merge.attempts += 1;
   await h.sweep();
   expect(h.creates).toHaveLength(1);
-  expect((h.creates[0]!.options as RefreshOptions).creationRequest.key).toBe("auto-refresh:finished:1");
+  expect((h.creates[0]!.options as RefreshOptions).creationRequest.key).toMatch(/^auto-refresh:[0-9a-f]{64}$/);
 });
 
 

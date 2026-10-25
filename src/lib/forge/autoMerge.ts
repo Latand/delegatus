@@ -3,13 +3,13 @@ import { performanceSpans } from "@/lib/performanceSpans";
 import { yieldToRuntime } from "@/lib/cooperative";
 import { withControllerPipelineScope } from "@/lib/pipelines/controllerScope";
 import os from "node:os";
-import { refreshAdmission, refreshRequest, refreshReservation, refreshWasRequested, type RefreshLineage, type RefreshOptions } from "./autoRefresh";
+import { refreshAdmission, refreshRequest, refreshReservation, refreshTupleKey, refreshWasRequested, type RefreshLineage, type RefreshOptions } from "./autoRefresh";
 import { realExec } from "@/lib/workflows/provision";
 
 import { githubRunner, type GithubRunner } from "@/lib/monitor/githubEvidence";
 import { ForgeAppWriteRefused, forgeAppWriter, forgeWriter, type ForgeAppWriter } from "./appWrite";
 import { failEdgeExhaustion } from "@/lib/pipelines/failEdgeBudget";
-import { loadArchivedPipelinesForOwnership, loadPipelinesForList, loadPipelinesForListAsync, withPipelineMutation } from "@/lib/pipelines/store";
+import { loadArchivedPipelinesForOwnership, loadPipelinesForList, loadPipelinesForListAsync, pipelineDeliveryLookup, withPipelineMutation } from "@/lib/pipelines/store";
 import { openPipelinesOnTask } from "@/lib/pipelines/taskFinish";
 import { PIPELINE_MERGE_LIVE_STATES, type Pipeline, type PipelineMerge, type PipelineMergeMethod, type PipelineStage } from "@/lib/pipelines/types";
 import { mergeOnReviewSetting, type MergeOnReviewSetting } from "@/lib/projects/settings";
@@ -66,6 +66,8 @@ export interface AutoMergePorts {
   loadPipelines: () => readonly Pipeline[];
   /** Indexed ancestry reads for refreshes whose originals have archived. */
   loadRefreshAncestors?: (ids: readonly string[]) => readonly Pipeline[];
+  /** Indexed immutable creation receipts, including closed and archived children. */
+  loadRefreshByKey?: (key: string) => Pipeline | null;
   /** Fill the shared immutable view cooperatively before synchronous lookups. */
   prepareRead?: () => Promise<void>;
   /** Applies `change` to the live record under the pipeline lock and persists
@@ -539,7 +541,8 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true):
         const reserved = await commit(ports, read, (live, current) => {
           const pipelines = ports.loadPipelines();
           if (!refreshAdmission(current, pipelines, ports.setting(current.project))) { block(live, refreshRefusal, now); return; }
-          if (refreshWasRequested(current, pipelines, base, view!.headRefOid)) {
+          if (refreshWasRequested(current, pipelines, base, view!.headRefOid)
+            || ports.loadRefreshByKey?.(refreshTupleKey(current, base, view!.headRefOid))) {
             block(live, failedCheck ? refreshRefusal : MERGE_REASONS.refreshSameBase, now);
             return;
           }
@@ -1213,6 +1216,7 @@ export function productionAutoMergePorts(overrides: Partial<AutoMergePorts> & Pi
   return {
     now: Date.now,
     loadRefreshAncestors: loadArchivedPipelinesForOwnership,
+    loadRefreshByKey: key => pipelineDeliveryLookup({ requestKey: key }),
     refreshConcurrency: Number(process.env.LLV_MERGE_REFRESH_CONCURRENCY ?? 1),
     run,
     write: forgeWriter(run, forgeAppWriter(os.tmpdir(), GH_TIMEOUT_MS)),
