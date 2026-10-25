@@ -24,6 +24,7 @@ import { TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE } from "./telegramConnectorEnv";
 import {
   claudeCliAuthStatus,
   claudeHostEndText,
+  terminalClaudeExitReason,
   ClaudeStreamBrokerHost,
   CLAUDE_TREE_UNCAPTURED,
   type ClaudeStreamBrokerHostOptions,
@@ -291,6 +292,112 @@ function fakeSpawn(
     return child as unknown as ChildProcessWithoutNullStreams;
   };
 }
+
+describe("root container Claude launches (#3205)", () => {
+  const sessionId = ["00000000", "0000", "4000", "8000", "000000003205"].join("-");
+  const refusal = "--dangerously-skip-permissions cannot be used with root/sudo privileges";
+  const reason = "the Claude CLI refused bypass permissions under root; set IS_SANDBOX=1 in the container environment or run as a non-root user";
+  const signalProcess = () => { throw new Error("ESRCH"); };
+
+  test.each([undefined, "", "0", "1"])("forwards only the supplied IS_SANDBOX value (%s) on fresh and resumed launches", async (value) => {
+    for (const resume of [false, true]) {
+      const captured: { options?: SpawnOptionsWithoutStdio } = {};
+      const options: ClaudeStreamBrokerHostOptions = {
+        cwd: "/repo", sessionId, signalProcess, env: { NODE_ENV: "test", IS_SANDBOX: value },
+        eventStore: new MemoryEventStore(), deliveryLedger: new RecordingDeliveryLedger(), readTranscript: () => [],
+        readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+        spawnProcess: fakeSpawn(new FakeClaude(new RecordingDeliveryLedger()), captured),
+      };
+      const host = resume ? await ClaudeStreamBrokerHost.adopt(sessionId, options) : await ClaudeStreamBrokerHost.start(options);
+      try {
+        expect(captured.options?.env?.IS_SANDBOX).toBe(value);
+        expect(Object.hasOwn(captured.options!.env!, "IS_SANDBOX")).toBe(value !== undefined);
+        expect((await host.health()).status).toBe("idle");
+      } finally { await host.release(); }
+    }
+  });
+
+  test.each([false, true])("retains only the canonical root refusal in pending work and persisted state (split: %s)", async (split) => {
+    const child = new FakeClaude(new RecordingDeliveryLedger());
+    const store = new MemoryEventStore();
+    const host = await ClaudeStreamBrokerHost.start({
+      cwd: "/repo", sessionId, signalProcess, env: { NODE_ENV: "test" },
+      eventStore: store, deliveryLedger: new RecordingDeliveryLedger(), readTranscript: () => [],
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      spawnProcess: fakeSpawn(child, {}),
+    });
+    const states: HostState[] = [];
+    host.onStateChange(state => states.push(state));
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-root-exit-"));
+    try {
+      const pending = host.send({ id: "initial-root-message", text: "begin" }).then(() => null, (error: Error) => error.message);
+      const diagnostic = `private provider diagnostic\n${refusal}\nprivate trailing diagnostic`;
+      if (split) {
+        const boundary = diagnostic.indexOf("root/sudo") + 4;
+        child.stderr.write(diagnostic.slice(0, boundary));
+        child.emit("exit", 1, null);
+        child.stderr.write(diagnostic.slice(boundary));
+      } else {
+        child.stderr.write(diagnostic);
+        child.emit("exit", 1, null);
+      }
+      child.emit("close", 1, null);
+      expect(await pending).toBe(reason);
+      expect(host.terminalExitReason()).toBe(reason);
+      const health = await host.health();
+      expect(health.ended).toMatchObject({ kind: "child-exit", code: 1, reason });
+      expect(claudeHostEndText(health.ended!)).toBe(reason);
+      expect(states.at(-1)?.ended?.reason).toBe(reason);
+      expect(JSON.stringify(store.load(sessionId))).not.toContain("private");
+      const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+      const key = { engine: "claude" as const, sessionId };
+      registry.upsert({ key, artifactPath: `/sessions/${sessionId}.jsonl`, cwd: "/repo", accountId: null,
+        status: "dead", host: null, structuredHost: claudeHostColumns(health, 1), claimEpoch: 1, claimOwner: null, pendingAction: null });
+      const reopened = new AgentRegistry(registry.filename, undefined, undefined, { sqliteMode: "off" });
+      expect(reopened.readOnlySnapshot().entries[`claude:${sessionId}`]?.structuredHost?.ended?.reason).toBe(reason);
+      expect(fs.readFileSync(registry.filename, "utf8")).not.toContain("private");
+    } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test("unknown diagnostics remain private and existing missing-session exits stay canonical", async () => {
+    expect(terminalClaudeExitReason("private provider diagnostic")).toBeNull();
+    expect(terminalClaudeExitReason("No conversation found with session ID: private-id")).toBe("the Claude CLI found no conversation with this session id");
+    const child = new FakeClaude(new RecordingDeliveryLedger());
+    const store = new MemoryEventStore();
+    const host = await ClaudeStreamBrokerHost.start({
+      cwd: "/repo", sessionId, signalProcess, env: { NODE_ENV: "test" },
+      eventStore: store, deliveryLedger: new RecordingDeliveryLedger(), readTranscript: () => [],
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      spawnProcess: fakeSpawn(child, {}),
+    });
+    try {
+      child.stderr.write("private provider diagnostic");
+      child.emit("exit", 1, null); child.emit("close", 1, null);
+      expect(host.terminalExitReason()).toBeNull();
+      expect(claudeHostEndText((await host.health()).ended!)).toBe("Claude child exited with code 1");
+      expect(JSON.stringify(store.load(sessionId))).not.toContain("private");
+    } finally { await host.release(); }
+  });
+
+  test("managed startup rejects with the canonical cause when Claude exits during MCP discovery", async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "claude-root-startup-"));
+    const child = new FakeClaude(new RecordingDeliveryLedger());
+    child.stdin.removeAllListeners("data");
+    child.stdin.once("data", () => {
+      child.stderr.write(`private diagnostic\n${refusal}`);
+      child.emit("exit", 1, null); child.emit("close", 1, null);
+    });
+    try {
+      await expect(ClaudeStreamBrokerHost.start({
+        cwd: home, claudeConfigDir: home, sessionId, signalProcess, env: { NODE_ENV: "test" },
+        eventStore: new MemoryEventStore(), deliveryLedger: new RecordingDeliveryLedger(), readTranscript: () => [],
+        readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+        spawnProcess: fakeSpawn(child, {}),
+      })).rejects.toThrow(`Viewer MCP launch failed: ${reason}`);
+      expect(child.inputs).toEqual([]);
+    } finally { fs.rmSync(home, { recursive: true, force: true }); }
+  });
+});
 
 test("Claude refuses fresh and adopted launches with missing or empty Viewer tools before accepting work", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "claude-mcp-launch-"));
@@ -2246,13 +2353,27 @@ describe("ClaudeStreamBrokerHost", () => {
       subtype: "can_use_tool", tool_name: "Bash", input: { command: "rm -rf $R/*.json" },
       decision_reason: "Dangerous rm operation on possibly-empty variable path: $R/*.json", decision_reason_type: "safetyCheck",
     } });
-    child.emitJson({ type: "control_request", request_id: "question", request: { subtype: "can_use_tool", tool_name: "AskUserQuestion", input: { questions: [] }, tool_use_id: "toolu_question" } });
+    child.emitJson({ type: "control_request", request_id: "question", request: { subtype: "can_use_tool", tool_name: "AskUserQuestion", input: { questions: [{ question: "Continue?" }] }, tool_use_id: "toolu_question" } });
     await Bun.sleep(0);
     const pending = await host.health();
     expect(pending.providerRetry).toBeNull();
     expect(pending.pendingAttention).toEqual(["permission-safety", "question"]);
     /* The question is bound to the transcript tool use it answers; a permission is not. */
     expect(pending.pendingToolUses).toEqual([{ id: "question", toolUseId: "toolu_question" }]);
+    expect(pending.pendingQuestions).toEqual([{
+      id: "question", toolUseId: "toolu_question", tool: "AskUserQuestion", questions: [{ prompt: "Continue?", options: [] }], since: expect.any(String),
+    }]);
+    // Exercise the production serializer and the reader used after a restart.
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-question-registry-"));
+    const filename = path.join(directory, "registry.json");
+    const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+    const key = { engine: "claude" as const, sessionId: host.identity.sessionId };
+    registry.upsert({ key, artifactPath: path.join(directory, "worker.jsonl"), cwd: directory,
+      accountId: null, status: "live", host: null, structuredHost: claudeHostColumns(pending, 1),
+      claimEpoch: 1, claimOwner: null, pendingAction: null });
+    const reopened = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+    expect(reopened.readOnlySnapshot().entries[`claude:${key.sessionId}`]?.structuredHost?.pendingQuestions)
+      .toEqual(pending.pendingQuestions);
     /* The question is the transcript's to surface; only the permission is listed. */
     expect(pending.pendingPermissions).toEqual([{
       id: "permission-safety",
@@ -2269,6 +2390,7 @@ describe("ClaudeStreamBrokerHost", () => {
     child.emitJson({ type: "control_cancel_request", request_id: "question" });
     await Bun.sleep(0);
     expect((await host.health()).pendingToolUses).toBeUndefined();
+    expect((await host.health()).pendingQuestions).toEqual([]);
     await host.release();
   });
 

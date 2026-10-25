@@ -169,7 +169,7 @@ export function KanbanMenu({ anchor, label, items, onClose }: KanbanMenuProps) {
   );
 }
 
-export function KanbanPopover({ anchor, label, onClose, children, initialFocus = "button", className, within }: {
+export function KanbanPopover({ anchor, label, onClose, children, initialFocus = "button", className, within, reflow }: {
   anchor: HTMLElement;
   /** The surface the anchor sits in; the popover does not hang past its left edge. */
   within?: HTMLElement | null;
@@ -179,6 +179,9 @@ export function KanbanPopover({ anchor, label, onClose, children, initialFocus =
   /** Selector of what takes focus on open. */
   initialFocus?: string;
   className?: string;
+  /** Content that arrives after opening changes the popover's size: each new
+      value places it again, without moving focus. */
+  reflow?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useMenuDismiss(ref, anchor, onClose);
@@ -187,6 +190,9 @@ export function KanbanPopover({ anchor, label, onClose, children, initialFocus =
     place(ref.current, anchor, within);
     ref.current.querySelector<HTMLElement>(initialFocus)?.focus();
   }, [anchor, initialFocus, within]);
+  useLayoutEffect(() => {
+    if (ref.current && reflow !== undefined) place(ref.current, anchor, within);
+  }, [reflow, anchor, within]);
   return (
     <div ref={ref} className={`popover${className ? ` ${className}` : ""}`} role="dialog" aria-label={label}>
       {children}

@@ -170,6 +170,22 @@ test("every density says what the desktop says: the stage names, the stage state
   expect(texts(screen, ".pb-loops li")).toEqual([`↺ ${t("kanban.loopRest", { from: "Verify", to: "Implement", count: 2 })}`]);
 });
 
+test("a paused pipeline keeps its held stage neutral without requesting attention (#2279)", () => {
+  for (const lang of ["en", "uk"] as const) {
+    setLocale(lang);
+    const paused = searchPipeline({ state: "paused", pausedState: "running" } as Partial<Pipeline>);
+    const host = mount(<PipelineBlock summary={summarizePipeline(paused)} density="screen" nowMs={NOW_MS} />);
+    const held = host.querySelector('.pb-stage[data-stage="verify"]');
+
+    expect(held?.getAttribute("data-stage-held")).toBe("1");
+    expect(held?.classList.contains("tone-idle")).toBe(true);
+    expect(held?.classList.contains("tone-needs")).toBe(false);
+    expect(held?.querySelector(".pb-stage-state")?.textContent).toBe(translate(lang, "pipelineState.paused"));
+    expect(held?.querySelector(".mglyph")?.getAttribute("data-glyph-state")).toBe("waiting");
+    expect(held?.querySelector(".mglyph")?.hasAttribute("data-live")).toBe(false);
+  }
+});
+
 test("the column-balance reader finds every stage pill through its current name element (#2299)", () => {
   const host = mount(<PipelineBlock summary={summarizePipeline(searchPipeline())} density="card" nowMs={NOW_MS} />);
   const pills = [...host.querySelectorAll<HTMLElement>(".pb-pill[data-stage]")];
@@ -562,4 +578,24 @@ test("the flag on the lane row: finishes the task, finished it, and finishes it 
   expect(screen.querySelector('.pb-links-row [data-pipeline-finish="marked"]')?.textContent).toBe("завершує задачу");
   const screenWaits = mount(<PipelineBlock summary={done({ finishesTaskIds: [TASK], taskFinishWaits: [{ taskId: TASK, since: iso(30), open: ["p-a", "p-b"] }] })} density="task" taskId={TASK} nowMs={NOW_MS} onOpenStage={() => {}} />);
   expect(screenWaits.querySelector('p[data-pipeline-finish="waits"]')?.textContent).toBe("завершить задачу, коли закінчаться ще 2 пайплайни");
+});
+
+test("screen stage rows disclose only the latest attempt memory cap", () => {
+  for (const cap of [
+    { limitBytes: 8 * 2 ** 30, requestedBytes: 12 * 2 ** 30, source: "stage" as const, enforced: true, clamped: true },
+    { limitBytes: null, requestedBytes: null, source: "automatic" as const, enforced: false, clamped: false },
+    undefined,
+  ]) {
+    const pipeline = searchPipeline();
+    const attempts = pipeline.runs.find(run => run.stageId === "implement")!.attempts;
+    attempts[0]!.memoryCap = { limitBytes: 4 * 2 ** 30, requestedBytes: 4 * 2 ** 30, source: "stage", enforced: true, clamped: false };
+    attempts[1]!.memoryCap = cap;
+    const host = mount(<PipelineBlock summary={summarizePipeline(pipeline)} density="screen" nowMs={NOW_MS} />);
+    click(host.querySelector("[data-passed-fold]"));
+    const note = host.querySelector('[data-stage="implement"] [data-agent-memory-cap]');
+    expect(note?.textContent ?? null).toBe(cap === undefined ? null : cap.enforced
+      ? `${translate("en", "agentMemory.cap", { size: 8 })} ${translate("en", "agentMemory.clamped", { size: 12 })}`
+      : translate("en", "agentMemory.unenforced"));
+    expect(host.querySelector('[data-stage="review"] [data-agent-memory-cap]')).toBeNull();
+  }
 });

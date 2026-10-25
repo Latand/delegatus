@@ -86,3 +86,19 @@ test("/api/tmux/targets answers from the last completed scan without waiting for
   expect(await response.json()).toEqual({ targets: { first: "agents:4.0" } });
   expect(completedScanOptions).toEqual({ revalidate: false });
 });
+
+test("/api/tmux/targets never answers a pid beside a supplied path the transcript roots refuse", async () => {
+  pidResolutionFiles = undefined;
+  pidTargets = new Map([[11, "agents:9.0"]]);
+
+  const response = await POST(request({
+    reqs: [
+      { id: "conversation", pid: 11, path: "conversation_0000000000000000" },
+      { id: "launch", pid: 11, path: "spawn:launch-fixture" },
+    ],
+  }));
+
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ targets: { conversation: null, launch: null } });
+  expect(pidResolutionFiles).toBeUndefined();
+});

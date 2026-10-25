@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -322,7 +323,7 @@ for (const tool of ["rotate_orchestrator", "seat_tick_settings", "create_orchest
 test("create_task stores the canonical project for a named board", async () => {
   seat("target-project", "Example Board");
   const h = harness();
-  const result = await h.service.callTool("create_task", { project: " eXAMPLE bOARD ", text: "Synthetic task", crossProjectRequest: "Create this task on that board", clientRequestId: "named-task" });
+  const result = await h.service.callTool("create_task", withTaskDue({ project: " eXAMPLE bOARD ", text: "Synthetic task", crossProjectRequest: "Create this task on that board", clientRequestId: "named-task" }));
   expect(result).toMatchObject({ ok: true, task: { project: "target-project" } });
   expect(h.scans()).toBe(0);
 });

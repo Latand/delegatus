@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import path, { join } from "node:path";
@@ -568,7 +569,7 @@ describe("Viewer MCP transcript detection", () => {
         invocation: {
           server: "viewer",
           tool: "create_task",
-          arguments: { clientRequestId: "task-431", project: "viewer", text: "Audit MCP cards" },
+          arguments: withTaskDue({ clientRequestId: "task-431", project: "viewer", text: "Audit MCP cards" }),
         },
       },
     });
@@ -1064,7 +1065,7 @@ describe("Codex assistant prose coalescing", () => {
 
   test("keeps review, citation, and blob payloads intact while coalescing their sources", () => {
     const review = "VERDICT: APPROVE\n\nSummary: parser contract holds.";
-    const citation = "<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2|note=[contract]\n</citation_entries>\n<rollout_ids>\n019f4944-97f1-7f20-bd8b-7c3c23085bb0\n</rollout_ids>\n</oai-mem-citation>";
+    const citation = "<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2|note=[contract]\n</citation_entries>\n<rollout_ids>\nfixture-rollout-record\n</rollout_ids>\n</oai-mem-citation>";
     const variants = [review, `${review}\n\n${citation}`, "x".repeat(20_001)];
     for (const text of variants) {
       for (const [first, second] of [
@@ -2364,19 +2365,19 @@ test("a realtime delegation row renders as a voice turn, not raw XML", () => {
      `<realtime_delegation>` envelope; feeding that through untouched put the
      markup itself in the operator's transcript (#664). */
   const parsed = parseRealtimeDelegation(
-    "<realtime_delegation>\n  <input>Перевір дошку</input>\n  <transcript_delta>user: Алло\nassistant: Слухаю</transcript_delta>\n</realtime_delegation>",
+    "<realtime_delegation>\n  <input>Перевірити тестові дані</input>\n  <transcript_delta>учасник: умовне питання\nвідповідь: умовна відповідь</transcript_delta>\n</realtime_delegation>",
   );
-  expect(parsed).toEqual({ input: "Перевір дошку", delta: "user: Алло\nassistant: Слухаю" });
+  expect(parsed).toEqual({ input: "Перевірити тестові дані", delta: "учасник: умовне питання\nвідповідь: умовна відповідь" });
 });
 
 test("a delegation envelope truncated mid-transcript still yields its turn", () => {
   /* The rolling transcript tail is what gets cut when the envelope is long, so
      the closing tag cannot be required. */
   const parsed = parseRealtimeDelegation(
-    "<realtime_delegation>\n  <input>Що далі</input>\n  <transcript_delta>assistant: Зроз",
+    "<realtime_delegation>\n  <input>Тестовий крок</input>\n  <transcript_delta>відповідь: умовний урив",
   );
-  expect(parsed?.input).toBe("Що далі");
-  expect(parsed?.delta).toBe("assistant: Зроз");
+  expect(parsed?.input).toBe("Тестовий крок");
+  expect(parsed?.delta).toBe("відповідь: умовний урив");
 });
 
 test("ordinary user text is never mistaken for a voice turn", () => {

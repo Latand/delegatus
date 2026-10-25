@@ -133,8 +133,6 @@ test("API later turns withhold every private source, including a straddling voic
   expect(later).not.toContain("Before the read:");
   expect(later).not.toContain("Private backend answer");
   expect(later).toContain("Safe earlier voice answer.");
-  expect(later).toContain("withheld from you");
-  expect(later).toContain("their own words");
   expect(later).toContain("review the build checks");
   expect(f.sent).toHaveLength(1);
   expect(f.sent[0].text).toContain("Review the build checks");

@@ -15,7 +15,7 @@ export interface CloneSendInput {
 }
 export type CloneSendResult = { kind: "sent"; messageId: number; messageKey: string; sentAt: number; replayed: boolean }
   | { kind: "refused"; code: TelegramBotErrorCode; fallback: boolean; retryAfterSeconds?: number; invalidate?: "stale" | "unsupported" }
-  | { kind: "uncertain" };
+  | { kind: "uncertain"; cause?: "send_uncertain" | "idempotency_conflict" };
 const receipt = z.object({ message_id: z.number().int().positive(), message_key: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/),
   sent_at: z.string().datetime({ offset: true }), replayed: z.boolean() });
 export function clonePayloadSupported(input: CloneSendInput): boolean {
@@ -32,7 +32,7 @@ export function classifyCloneFailure(error: unknown): CloneSendResult | null {
   }
   if (error.status === 429) return { kind: "refused", code: "rate_limited", fallback: false,
     retryAfterSeconds: Math.max(1, Math.ceil(error.retryAfterSeconds ?? 1)) };
-  if (error.status === 409 && ["send_uncertain", "idempotency_conflict"].includes(error.code)) return { kind: "uncertain" };
+  if (error.status === 409 && ["send_uncertain", "idempotency_conflict"].includes(error.code)) return { kind: "uncertain", cause: error.code as "send_uncertain" | "idempotency_conflict" };
   const code = error.status === 409 && ["clone_inactive", "clone_not_in_chat"].includes(error.code) ? "bot_not_in_chat"
     : unused[error.status];
   if (!code) return error.code === "dns_error" ? { kind: "refused", code: "network_failed", fallback: true } : null;
@@ -81,7 +81,7 @@ export async function sendAsClone(relay: PairedRelay, targetId: string, input: C
           }
           // No exception text, body or arbitrary relay code leaves this boundary.
           const classified = classifyCloneFailure(error);
-          if (classified) { outcome = unresolvedAttempt ? { kind: "uncertain" } : classified; break; }
+          if (classified) { outcome = unresolvedAttempt && classified.kind !== "uncertain" ? { kind: "uncertain" } : classified; break; }
           unresolvedAttempt = true;
           if (error instanceof ExternalRelayError && error.status === 409 && error.code === "send_in_progress")
             delay = Math.max(100, Math.ceil((error.retryAfterSeconds ?? 1) * 1000));

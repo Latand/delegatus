@@ -1,3 +1,4 @@
+import { proactiveConversationTaskIds, proactiveExecutionError } from "./proactiveExecution";
 import { AccountCommitBusyError } from "@/lib/accounts/accountMutationContext";
 import { stateLockDeferral } from "@/lib/state/lockWait";
 import { appendLifecycleEvents } from "@/lib/lifecycle/journal";
@@ -78,7 +79,14 @@ export class LaunchMembershipError extends Error {
 }
 
 /** M.4 seam 2: no agent process starts here for a task another machine runs. */
+const proactiveAdmission: MembershipAdmission = (tasks) => {
+  const proactive = proactiveExecutionError(tasks);
+  return proactive ? { error: proactive, status: 403, code: "PROACTIVE_EXECUTION_FENCED" } : null;
+};
+
 export const launchAdmission: MembershipAdmission = (tasks) => {
+  const proactive = proactiveAdmission(tasks);
+  if (proactive) return proactive;
   const refusal = firstRunsElsewhere(tasks);
   return refusal ? { error: refusal.error, status: refusal.status, code: refusal.code } : null;
 };
@@ -157,10 +165,12 @@ export interface LaunchMembershipPorts {
   pipelineContext: (pipelineId: string) => PipelineLaunchContext | null;
   projectForCwd: (cwd: string) => string | null;
   seatIdentity?: (project: string) => MembershipIdentity | null;
+  retainedTaskIds?: (conversationIds: readonly string[]) => string[];
 }
 
 export const productionLaunchMembershipPorts: LaunchMembershipPorts = {
   commit: (input) => commitTaskMembership(input),
+  retainedTaskIds: proactiveConversationTaskIds,
   pipelineContext: (pipelineId) => {
     const pipeline = loadPipelinesForProjection().find((pipeline) => pipeline.id === pipelineId);
     return pipeline ? { taskIds: pipeline.taskIds, brief: pipeline.spec?.trim() || pipeline.task } : null;
@@ -187,8 +197,15 @@ export function admitReservedLaunch(
 ): MembershipResult {
   let result: MembershipResult;
   try {
-    const input: MembershipInput = { ...launchMembershipInput(launch, receipt, ports.pipelineContext, ports.projectForCwd, ports.seatIdentity), admit: launchAdmission };
+    const identities = [...new Set([launch.parentConversationId, launch.reviewsConversationId, receipt.conversationId]
+      .filter((id): id is string => !!id))].map(conversationId => ({ conversationId }));
+    const taskIds = ports.retainedTaskIds?.(identities.map(identity => identity.conversationId)) ?? [];
+    const input: MembershipInput = { ...launchMembershipInput(launch, receipt, ports.pipelineContext, ports.projectForCwd, ports.seatIdentity),
+      admit: launchAdmission, admitRelated: { identities, ...(taskIds.length ? { taskIds } : {}), admit: proactiveAdmission } };
     result = ports.commit(input);
+    // Receipt-owned targets survive detaching the visible assignment. Carry
+    // them into this launch so its dispatch, descendants and recovery stay fenced.
+    if (result.ok && taskIds.length) result = { ...result, taskIds: [...new Set([...result.taskIds, ...taskIds])] };
   } catch (error) {
     if (error instanceof AccountCommitBusyError || stateLockDeferral(error)) throw error;
     const code = error && typeof error === "object" && "code" in error ? error.code : null;

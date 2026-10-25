@@ -360,6 +360,8 @@ export type SeatTickVerdict =
     catchUp?: { key: string; from: string; through: string; covers: string[] };
     reasons: SeatTickWakeReason[];
     items: SeatTickItem[];
+    /** Every lane the board routes to the seat, independent of detail credit. */
+    seatOwnedLanes?: SeatTickSeatOwnedLane[];
     /** Current stall episodes let a landed wake retire stale episode history
         without evicting an unchanged conversation behind unrelated wakes. */
     activeStallTokens?: string[];
@@ -1149,6 +1151,8 @@ export interface SeatTickProjectState {
   diskPressureShown?: string;
   /** Latest delivered versions, bounded to 2000 recent agenda items. */
   itemsShown?: string[];
+  /** Problem versions whose delivered credit awaits the asynchronous memory read. */
+  memoryProblemCreditOwed?: { shown: string[]; recipient: { conversationId: string; seatEpoch: number } | null };
   accounting?: { filename: string; revision: number; gap: string | null };
   seatEpoch: number | null;
   lastCheckAt: string | null;
@@ -1332,6 +1336,14 @@ export interface SeatTickRefusalRun {
   settingsUpdatedAt: string | null;
 }
 
+/** Compact facts from the board's ownership projection, independent of detail. */
+export interface SeatTickSeatOwnedLane {
+  id: string;
+  title: string;
+  reason: string;
+  sinceMs: number | null;
+}
+
 /** One wait routed to the seat: the conversation or lane that asked, the
     exact wait, and one bounded line with the question and the answer path. */
 export interface SeatTickWorkerAskInput {
@@ -1340,6 +1352,10 @@ export interface SeatTickWorkerAskInput {
   /** The conversation id (or transcript path) that asked, or the lane id. */
   id: string;
   label: string;
+  /** Original wait time, used for oldest-first detail selection. */
+  sinceMs?: number | null;
+  /** The board's seat-owned lane, also carried when its detail was shown. */
+  seatOwnedLane?: SeatTickSeatOwnedLane;
 }
 
 export interface SeatTickCheckInput {
@@ -1397,6 +1413,9 @@ export interface SeatTickCheckInput {
       (#2063). Absent reads as none. */
   settledMaintenance?: readonly MaintenanceRun[];
   settledDeploys?: readonly SeatTickDeployInput[];
+  /** A deploy-only check carries an unannounced settlement deadline, so its
+      delivery must not inherit an unrelated recent wake's quiet period. */
+  deploySettlementWakeDue?: boolean;
   /** The seat's own standalone children (#1465), bounded and project-scoped,
       with already-harvested terminal ones removed. Empty when the seat spawned
       nothing, and empty when the registry could not be read — the field below

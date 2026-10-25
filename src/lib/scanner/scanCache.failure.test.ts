@@ -148,3 +148,48 @@ test("a retained scan failure stays diagnostic while controller ticks succeed an
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("an aborted replacement preserves failure age without poisoning the next controller tick", async () => {
+  resetFilesRouteCacheForTests();
+  let now = 100_000;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const failure = new Error("fixture scanner initialization refused");
+  const cancellation = new Error("fixture cancelled generation");
+  cancellation.name = "AbortError";
+  let scans = 0;
+  let sweeps = 0;
+  setFileCatalogMembershipProbeForTests(async () => null);
+  setFileScanRunnerForTests(async () => {
+    scans++;
+    if (scans === 1) throw failure;
+    if (scans === 2) throw cancellation;
+    return { files: [], projectCatalog: [], complete: true };
+  });
+  const controller = new FlowPipelineController({
+    now: () => now,
+    scan: controllerFileScan,
+    tickPipelines: async () => ({ changed: false }),
+    sweepForgeLinks: () => { sweeps++; },
+    sweepAutoMerge: () => { sweeps++; },
+    sweepSpawnNotices: () => { sweeps++; },
+    log: () => {},
+  });
+  try {
+    await expect(completedFileScan()).rejects.toBe(failure);
+    now += 5_000;
+    await expect(completedFileScan()).rejects.toBe(cancellation);
+    expect(scans).toBe(2);
+    // The aborted generation must neither reset the original failure's age
+    // nor prevent the next controller wake from completing a fresh scan.
+    const pending = completedFileScan({ wait: false });
+    await expect(pending).rejects.toMatchObject({ generation: 1, failedAt: 100_000, ageMs: 5_000 });
+    await completedFileScan();
+    await controller.tick();
+    expect(scans).toBe(3);
+    expect(sweeps).toBe(3);
+    expect(await controllerFileScan()).toEqual({ files: [], complete: true });
+    expect(controller.idle()).toBe(true);
+  } finally {
+    clock.mockRestore();
+  }
+});

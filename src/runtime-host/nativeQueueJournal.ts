@@ -258,6 +258,11 @@ export class NativeQueueJournal {
       }
       if (version.input && JSON.stringify(version.input) !== JSON.stringify(transition.input)) throw new Error("native queue prepared payload changed");
       version.input = transition.input;
+    } else if (transition.phase === "deferred") {
+      /* The native write never began. Keep the frozen input and mutation
+         identity so the original operation, rather than a replacement key,
+         retries through the native queue path. */
+      entry.reason = transition.reason;
     } else if (transition.phase === "withdrawn") {
       if (command.action !== "send-now") throw new Error("native queue withdrawal is invalid");
       if (!entry.proof) entry.state = "withdrawn";

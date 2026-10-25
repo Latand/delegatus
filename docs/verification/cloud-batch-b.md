@@ -135,3 +135,60 @@ were unchanged. `git fetch origin main`, `git merge --ff-only origin/main`,
 `git diff --check` and local `bun run privacy:check` exited 0. The final
 commit-hook outcome and the post-commit publication scan are recorded in the
 stage report.
+
+## Main refresh on 2026-10-25
+
+The refresh starts at `3a453c68b16a8c24ccc10d4919f04767e8fe3705`
+and merges fetched main `f06917340108777a3368f957cce21d670351dafb`.
+The sole conflict is main's deletion of
+`src/components/pipelines/PipelineStrip.render.test.tsx`: #3282 removed the
+unreachable strip and its tests. The resolution keeps that deletion and moves
+the #2279 pin to `src/components/pipelines/PipelineBlock.dom.test.tsx`.
+In both languages it checks that a paused lane's held stage has the neutral
+tone, says paused, and draws a waiting glyph without a live pulse. This keeps
+the issue's requirement that paused lanes appear neutral on the current surface.
+The other five retained pins merge mechanically.
+
+Checks use disposable exports with the fetched main revision fixed as the
+baseline. Dependencies match the merged manifest and lockfile. Each test gets
+private HOME, XDG, temporary and state directories through `checkEnvironment`
+then `isolatedEnvironment`, plus a closed Viewer control URL. The stage's
+installed `gate-slot.sh` admits the sequential batch; each explicit file runs
+with `bun run test`, the normal preload and JUnit reporting.
+
+| Test file | Merged tree | Captured main |
+| --- | --- | --- |
+| `src/components/pipelines/PipelineBlock.dom.test.tsx` | Exit 1: 23 pass, 2 fail | Exit 1: 21 pass, the same 2 failures |
+| `src/components/kanban/KanbanStages.dom.test.tsx` | Exit 1: 44 pass, 2 fail | Exit 1: 43 pass, the same 2 failures |
+| `src/lib/accounts/codex.test.ts` | Exit 0: 36 pass | Not needed: green merged tree |
+| `src/instrumentation.test.ts` | Exit 0: 49 pass | Not needed: green merged tree |
+| `src/lib/pipelines/parkedPublication.test.ts` | Exit 0: isolation wrapper passes, including the retained dependency-install pin | Not needed: green merged tree |
+| `src/lib/accounts/spawnHealth.test.ts` | Exit 0: 86 pass, including all four requested-account uncertainty cases | Not needed: green merged tree |
+| `src/components/kanban/kanbanBoard.browser.test.tsx -t 'columns balanced\|#1695 K5a'` | Exit 0: both gated browser cases pass | Not needed: green merged tree |
+
+Full-file baseline runs use the same dependency versions, isolation and runner.
+The two DOM JUnit comparisons report zero introduced failures. The existing failures
+are the card/task variants of "CPU waiting preserves ... work links and stage
+controls" and both variants of "a failed terminal budget card sends a bounded
+revision-checked grant". Their assertions are unchanged.
+
+The migrated #2279 case also has a negative control. In the disposable export,
+forcing the held stage's tone to `needs` makes
+`bun run test src/components/pipelines/PipelineBlock.dom.test.tsx -t 'a paused pipeline keeps its held stage neutral'`
+exit 1 at the neutral-tone assertion. Restoring the source makes the same
+command exit 0. No production mutation is retained.
+
+The sequential batch completed with `RAN_COUNT=11` across seven explicit files,
+including both baseline runs and the negative/restored controls. Its first
+browser invocation exited 1 before running either case: Chromium's socket path
+exceeded the platform limit beneath the nested test temporary root. A fresh
+gated invocation with a short alias into the same private scratch tree passed
+both cases (exit 0). Browser gating was explicitly enabled, with a configured
+Chromium executable and the normal test preload throughout.
+
+An initial privacy scan of the uncommitted export returned `inspection_error`
+and a notice that its requested base was not an ancestor of its recorded HEAD.
+Commit-hook and final committed-range privacy results are recorded in the stage
+report. The native macOS workflow runs after publication. Later main commits
+arrived while the checks waited for CPU admission; all results above use the
+captured main revision named at the start of this section.

@@ -38,6 +38,7 @@ test("service launches reuse one hidden task per project through admission and a
     admit(body);
     const tasks = loadTasks(path.join(directory, "tasks.json"));
     expect(tasks).toHaveLength(1);
+    expect(tasks[0]?.dueAt).toBeUndefined(); expect(tasks[0]?.dueTz).toBeUndefined();
     expect(tasks[0]).toMatchObject({ status: "done", board: "hidden" });
     expect(groupHideState(tasks[0], { members: [{ path: "transcript.jsonl", pendingQuestion: null, waitingInput: null }], pipelines: [] }).hidden).toBe(true);
   }

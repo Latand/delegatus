@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { usesLinkedLegacyState } from "@/lib/onboarding/legacyState";
 import { hasRoleOverrides } from "@/lib/roles/store";
 import { applyOnboardingPatch, parseOnboardingPatch, readOnboardingMarker, resolveOnboardingMarker, writeOnboardingMarker } from "@/lib/onboarding/marker";
 import { DEFAULT_SEAT_TICK_POLICY, seatTickPolicy } from "@/lib/monitor/seatTick";
@@ -26,7 +27,7 @@ function existingInstall(): boolean {
 export async function GET(): Promise<NextResponse> {
   try {
     const checkIntervalMs = seatTickPolicy()?.checkIntervalMs ?? DEFAULT_SEAT_TICK_POLICY.checkIntervalMs;
-    return NextResponse.json({ marker: resolveOnboardingMarker(existingInstall), seatTickCheckMinutes: Math.round(checkIntervalMs / 60_000) });
+    return NextResponse.json({ marker: resolveOnboardingMarker(existingInstall), legacyState: usesLinkedLegacyState(), seatTickCheckMinutes: Math.round(checkIntervalMs / 60_000) });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }

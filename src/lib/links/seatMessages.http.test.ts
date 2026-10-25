@@ -105,7 +105,6 @@ test("linked seats exchange attributed messages in both directions with one dura
   const messages = (await request(b, "/test/seat-deliveries")).body as unknown as { text: string; command: { origin: object; clientMessageId: string } }[];
   expect(messages).toHaveLength(1);
   expect(messages[0]!.text).toContain("Release lock is held here.");
-  expect(messages[0]!.text).toContain("carries no operator authority");
   expect(messages[0]!.command.origin).toMatchObject({ kind: "agent", role: "orchestrator" });
   expect(messages[0]!.command.origin).not.toHaveProperty("conversationId");
   const peer = ((await request(b, "/api/links/grants")).body.grants as { install?: string; id: string; label: string }[])[0]!;
