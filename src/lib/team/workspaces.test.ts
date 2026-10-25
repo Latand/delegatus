@@ -242,19 +242,21 @@ describe("alias resolution", () => {
 });
 
 describe("schema", () => {
-  test("a store written before workspaces opens, gains both tables and keeps schema 1 and its indexes", () => {
+  test("a store written before workspaces opens, gains workspace tables and keeps schema 1 and its indexes", () => {
     resetTeamStoreForTests();
     const filename = teamStoreFile();
     /* Rewind the file to what the release before wrote: no workspace tables. */
     const legacy = new Database(filename);
     const indexesBefore = legacy.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_autoindex_workspaces%' ORDER BY name").all();
-    legacy.exec("DROP TABLE workspaces; DROP TABLE workspace_projects;");
+    legacy.exec("DROP TABLE workspaces");
+    legacy.exec("DROP TABLE workspace_projects");
+    legacy.exec("DROP TABLE workspace_members");
     legacy.close();
     const reopened = new TeamStore(filename);
     try {
       const db = new Database(filename, { readonly: true });
       const tables = db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'workspace%' ORDER BY name").all();
-      expect(tables.map((row) => row.name)).toEqual(["workspace_projects", "workspaces"]);
+      expect(tables.map((row) => row.name)).toEqual(["workspace_members", "workspace_projects", "workspaces"]);
       expect(db.query<{ value: string }, []>("SELECT value FROM meta WHERE key = 'schema'").get()?.value).toBe("1");
       const indexesAfter = db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_autoindex_workspaces%' ORDER BY name").all();
       expect(indexesAfter).toEqual(indexesBefore);

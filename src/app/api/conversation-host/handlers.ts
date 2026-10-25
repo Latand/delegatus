@@ -106,11 +106,12 @@ async function targetForRequest(
   filePath: string,
 ): Promise<string | null> {
   const files = (await dependencies.completedFileScan()).snapshot.files;
-  if (filePath && pathAllowed(filePath)) {
-    /* A transcript path names the conversation being addressed. Its canonical
-       host therefore wins over a client-side pid that may have exited and
-       been recycled for another session between scanner polls. */
-    return dependencies.canonicalTranscriptTarget(await currentTranscriptHosts(dependencies, files), filePath);
+  if (filePath) {
+    /* A supplied path names the conversation being addressed, and it is what
+       the workspace gate authorized. Its canonical host therefore wins over a
+       client-side pid, which may have been recycled for another session or
+       name a process the path never authorized. */
+    return pathAllowed(filePath) ? dependencies.canonicalTranscriptTarget(await currentTranscriptHosts(dependencies, files), filePath) : null;
   }
   return pid === null ? null : dependencies.resolveRequestedTmuxTarget(pid, files);
 }
