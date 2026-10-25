@@ -292,8 +292,8 @@ test("empty startup finalization skips unused selections and captures open recei
     snapshot: async () => journal.snapshot(),
     events: async (after: number) => journal.replay(after),
     waitEvents: async (after: number) => journal.replay(after),
-    operation: async (event: Parameters<RuntimeJournal["append"]>[0]) => journal.append(event),
-    command: async (command: Parameters<RuntimeJournal["executeOperation"]>[0]) => journal.executeOperation(command),
+    operation: async (event: Parameters<typeof journal.append>[0]) => journal.append(event),
+    command: async (command: Parameters<typeof journal.executeOperation>[0]) => journal.executeOperation(command),
     operationStatus: async (id: string) => journal.operationResult(id),
     effectBatch: async () => [],
   } as unknown as import("./client").RuntimeHostClient;
