@@ -27,6 +27,8 @@ const { applyConversationAction } = await import("@/lib/conversation/actions");
 const { callerConversationId } = await import("@/lib/agent/operatorAuthority");
 const { dispatchStructuredControl } = await import("@/lib/runtime/structuredControls");
 const { ClaudeStreamBrokerHost } = await import("@/lib/runtime/claudeStreamBrokerHost");
+const { bindClaudeHostPersistence, flushStructuredHostPersistence } = await import("@/lib/runtime/registry");
+const { pendingQuestionFor } = await import("@/lib/scanner/questions");
 const { FileRuntimeEventStore } = await import("@/lib/runtime/eventStore");
 const { bindStructuredDeliveryQueue, releaseStructuredDeliveryHost } = await import("@/lib/runtime/structuredDeliveryController");
 const { kickStructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliverySignal");
@@ -55,7 +57,7 @@ async function eventually(check: () => boolean | Promise<boolean>): Promise<void
   throw new Error("conversation control did not settle");
 }
 
-test.each(["kill", "interrupt"])("MCP %s reaches a live structured host through the Viewer without an agent runtime socket", async (firstAction) => {
+test.each(["kill", "interrupt", "answer"])("MCP %s reaches a live structured host through the Viewer without an agent runtime socket", async (firstAction) => {
   const registry = agentRegistry();
   const caller = registry.beginSpawn("claude", sandbox, { cwd: sandbox, title: "Conversation control caller" });
   process.env.LLV_SPAWN_CAPABILITY = registry.rotateSpawnCapabilityForReceipt(caller.launchId);
@@ -68,7 +70,7 @@ test.each(["kill", "interrupt"])("MCP %s reaches a live structured host through 
   const runtimeClient = new UnixRuntimeHostClient(socketPath);
   let child: ChildProcessWithoutNullStreams | undefined;
   let childExited = false;
-  const protocolLog = path.join(sandbox, "provider-input.ndjson");
+  const protocolLog = path.join(sandbox, `${firstAction}-provider-input.ndjson`);
   // Only the provider CLI is simulated. The broker, controller, runtime journal,
   // socket transport, HTTP route, MCP bindings, service and protocol are real.
   const provider = `
@@ -80,7 +82,17 @@ test.each(["kill", "interrupt"])("MCP %s reaches a live structured host through 
       fs.appendFileSync(process.argv[1], line + "\\n");
       if (frame.type === "user") {
         if (frame.message.content[0].text === "/compact") output({ type: "system", subtype: "compact_boundary", session_id: frame.session_id });
-        else output({ ...frame, isReplay: true, uuid: "fixture-user" });
+        else {
+          output({ ...frame, isReplay: true, uuid: "fixture-user" });
+          if (process.argv[2] === "answer") output({ type: "control_request", request_id: "host-question", request: {
+            subtype: "can_use_tool", tool_name: "AskUserQuestion", tool_use_id: "toolu_question",
+            input: { questions: [{ question: "Which scope?", multiSelect: false, options: [{ label: "All" }, { label: "Small (Recommended)" }] }] }
+          } });
+        }
+      }
+      if (frame.type === "control_response" && frame.response.request_id === "host-question") {
+        output({ type: "control_response", response: { subtype: "success", request_id: "host-question" } });
+        output({ type: "result", subtype: "success", result: "Answered" });
       }
       if (frame.type === "control_request" && frame.request.subtype === "interrupt") {
         output({ type: "control_response", response: { subtype: "success", request_id: frame.request_id } });
@@ -94,7 +106,7 @@ test.each(["kill", "interrupt"])("MCP %s reaches a live structured host through 
     readTranscript: () => [],
     eventStore: new FileRuntimeEventStore(path.join(sandbox, "events")),
     spawnProcess: () => {
-      child = spawn(process.execPath, ["-e", provider, protocolLog], { cwd: sandbox, env: process.env, stdio: ["pipe", "pipe", "pipe"] });
+      child = spawn(process.execPath, ["-e", provider, protocolLog, firstAction], { cwd: sandbox, env: process.env, stdio: ["pipe", "pipe", "pipe"] });
       child.once("exit", () => { childExited = true; });
       return child;
     },
@@ -105,7 +117,9 @@ test.each(["kill", "interrupt"])("MCP %s reaches a live structured host through 
     },
   });
   const key = { engine: "claude" as const, sessionId: host.identity.sessionId };
-  const transcriptPath = path.join(sandbox, `${key.sessionId}.jsonl`);
+  const transcriptPath = path.join(process.env.LLV_CLAUDE_HOME!, "projects", "-repo", `${key.sessionId}.jsonl`);
+  fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
+  fs.writeFileSync(transcriptPath, "{}\n");
   const health = await host.health();
   registry.settleSpawn(target.receipt.launchId, {
     key, artifactPath: transcriptPath, cwd: sandbox, accountId: null, status: "live", host: null,
@@ -117,6 +131,9 @@ test.each(["kill", "interrupt"])("MCP %s reaches a live structured host through 
     },
     claimEpoch: 1, claimOwner: "structured-host:fixture", pendingAction: null,
   });
+  const stopPersistence = firstAction === "answer"
+    ? await bindClaudeHostPersistence(registry, key, host, "structured-host:fixture", 1)
+    : async () => {};
   await bindStructuredDeliveryQueue([{ key, host }], { registry, client: runtimeClient });
   // This closure is the Viewer's runtime connection. MCP still sees no socket.
   setConversationHostDependenciesForTests({
@@ -129,6 +146,13 @@ test.each(["kill", "interrupt"])("MCP %s reaches a live structured host through 
       resumeConversation: async () => { throw new Error("unexpected legacy resume"); },
       compactConversation: async () => { throw new Error("unexpected legacy compact"); },
       answerDialogKey: async () => { throw new Error("unexpected legacy dialog"); },
+      // The simulated provider is not a native CLI in process discovery. Read
+      // its real transcript with the process identity this fixture owns.
+      pendingQuestion: async pathname => {
+        const stat = fs.statSync(pathname);
+        return pendingQuestionFor({ root: "claude-projects", path: pathname, size: stat.size,
+          mtime: stat.mtimeMs / 1000, proc: "running", pid: child!.pid! } as import("@/lib/types").FileEntry);
+      },
     }),
   });
   const requests: Array<{ body: Record<string, unknown>; caller: string | null }> = [];
@@ -144,16 +168,49 @@ test.each(["kill", "interrupt"])("MCP %s reaches a live structured host through 
   const client = new Client({ name: "conversation-control-test", version: "1" });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await Promise.all([client.connect(a), server.connect(b)]);
-  const call = async (action: string) => (await client.callTool({ name: "conversation_action", arguments: {
-    clientRequestId: `control-${action}`, conversationId: target.receipt.conversationId, action,
+  let answerRequestId = "toolu_stale";
+  const call = async (action: string, clientRequestId = `control-${action}`) => (await client.callTool({ name: "conversation_action", arguments: {
+    clientRequestId, conversationId: target.receipt.conversationId, action,
     // Caller claims must not replace the capability's server-attributed identity.
     callerConversationId: target.receipt.conversationId, actor: { kind: "operator" },
+    ...(action === "answer" ? { requestId: answerRequestId, answers: [1] } : {}),
   } })).structuredContent as { ok: boolean; error?: string; operationId: string };
   try {
     expect(runtimeHostClient()).toBeNull();
     expect(childExited).toBe(false);
     await host.send({ id: "running-turn", text: "Hold this turn open" });
     expect((await host.health()).activeTurnRef).toBe("running-turn");
+    if (firstAction === "answer") {
+      await eventually(async () => (await host.health()).pendingQuestions?.length === 1);
+      fs.writeFileSync(transcriptPath, JSON.stringify({ type: "assistant", timestamp: "2026-09-30T05:15:00.000Z",
+        sessionId: key.sessionId, cwd: sandbox, message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_question",
+          name: "AskUserQuestion", input: { questions: [{ question: "Which scope?", header: "Scope", multiSelect: false,
+            options: [{ label: "All", description: "" }, { label: "Small (Recommended)", description: "" }] }] } }] } }) + "\n");
+      await flushStructuredHostPersistence(host);
+      expect(registry.readOnlySnapshot().entries[`claude:${key.sessionId}`]?.structuredHost?.pendingQuestions)
+        .toMatchObject([{ toolUseId: "toolu_question", questions: [{ prompt: "Which scope?", options: ["Small (Recommended)", "All"] }] }]);
+      const activity = (await client.callTool({ name: "agent_activity", arguments: {
+        clientRequestId: "waiting-question", conversationId: target.receipt.conversationId,
+      } })).structuredContent as { conversations: Array<{ reason: string; lifecycle: string; question: { toolUseId: string; since: string } }> };
+      expect(activity.conversations).toMatchObject([{ lifecycle: "waiting", reason: "question",
+        question: { toolUseId: "toolu_question", questions: [{ prompt: "Which scope?", options: ["Small (Recommended)", "All"] }] } }]);
+      expect(Number.isFinite(Date.parse(activity.conversations[0]!.question.since))).toBe(true);
+      expect(await call("answer", "control-stale-answer")).toMatchObject({ ok: false });
+      expect((await host.health()).pendingQuestions).toHaveLength(1);
+      expect((await host.health()).activeTurnRef).toBe("running-turn");
+      answerRequestId = activity.conversations[0]!.question.toolUseId;
+      const answered = await call("answer");
+      expect(answered).toMatchObject({ ok: true });
+      await eventually(() => journal.operationResult(answered.operationId)?.receipt.status === "answered");
+      await eventually(async () => (await host.health()).activeTurnRef === null);
+      expect((await host.health()).pendingQuestions).toEqual([]);
+      const frames = fs.readFileSync(protocolLog, "utf8").trim().split("\n").map(line => JSON.parse(line));
+      expect(frames.filter(frame => frame.type === "control_response")).toMatchObject([{
+        response: { request_id: "host-question", response: { behavior: "allow", updatedInput: { answers: { "Which scope?": "Small" } } } },
+      }]);
+      expect(childExited).toBe(false);
+      await stopPersistence();
+    }
     if (firstAction === "interrupt") {
       expect(await call("resume")).toMatchObject({ ok: true, outcome: "resumed", spawned: false });
       expect(await call("dialog-key")).toMatchObject({ ok: false, error: "structured host does not support the dialog-key control" });
@@ -175,7 +232,7 @@ test.each(["kill", "interrupt"])("MCP %s reaches a live structured host through 
     await eventually(() => childExited);
     await eventually(() => journal.operationResult(killed.operationId)?.receipt.status === "delivered");
     expect(registry.readOnlySnapshot().entries[`claude:${key.sessionId}`]?.status).toBe("dead");
-    expect(requests.map(request => request.body.action)).toEqual(firstAction === "interrupt" ? ["resume", "dialog-key", "interrupt", "compact", "kill"] : ["kill"]);
+    expect(requests.map(request => request.body.action)).toEqual(firstAction === "interrupt" ? ["resume", "dialog-key", "interrupt", "compact", "kill"] : firstAction === "answer" ? ["answer", "answer", "kill"] : ["kill"]);
     expect(requests.every(request => request.caller === caller.conversationId)).toBe(true);
     expect(requests.every(request => request.body.actor === undefined && request.body.callerConversationId === undefined)).toBe(true);
     expect(runtimeHostClient()).toBeNull();
@@ -185,6 +242,7 @@ test.each(["kill", "interrupt"])("MCP %s reaches a live structured host through 
     receipts.close();
     viewer.stop(true);
     setConversationHostDependenciesForTests(null);
+    await stopPersistence();
     await releaseStructuredDeliveryHost(key);
     await kickStructuredDeliveryQueue();
     await bindStructuredDeliveryQueue([], { registry, client: null });

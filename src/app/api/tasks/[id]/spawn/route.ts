@@ -11,7 +11,7 @@ import {
   resolveProjectSpawnAccount,
 } from "@/lib/accounts/manager";
 import { AccountProjectBindingsUnreadableError } from "@/lib/accounts/projectBindings";
-import { tierOffers } from "@/lib/accounts/codexServiceTiers";
+import { codexServiceTierRefusal, tierOffers } from "@/lib/accounts/codexServiceTiers";
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import type { AccountContext } from "@/lib/accounts/contracts";
@@ -304,7 +304,7 @@ async function postTaskSpawn(
   if (engine === "codex" && serviceTier) {
     const offers = launchModel ? tierOffers([{ id: account.accountId, home: account.home }], launchModel, serviceTier) : null;
     if (!offers?.offering.length) return NextResponse.json({
-      error: `selected account does not offer serviceTier ${serviceTier}; offered: ${offers?.offered.join(", ") || "none"}`,
+      error: codexServiceTierRefusal([{ id: account.accountId, home: account.home }], launchModel ?? "unknown model", serviceTier, account.accountId, "selected"),
       code: "service_tier_unavailable",
     }, { status: 409 });
   }

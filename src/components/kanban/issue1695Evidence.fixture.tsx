@@ -183,7 +183,7 @@ const DRAG_BOARD = SCENARIO === "drag-board";
 /* The orchestrator's wires (docs/design/orchestrator-arrows.md): the pipelines board, with the seat
    owning some of its lanes. */
 const ARROWS = SCENARIO === "orchestrator-arrows";
-const CPU_QUEUE = SCENARIO === "cpu-queue" || SCENARIO === "cpu-queue-stalled";
+const CPU_QUEUE = SCENARIO === "cpu-queue" || SCENARIO === "cpu-queue-stalled" || SCENARIO === "cpu-pressure";
 const PIPELINES = PROJECT_DERIVATION || SCENARIO === "pipelines" || STAGES || FLAT || SYNCED || DRAG_BOARD || ARROWS || CPU_QUEUE;
 /* #1846: `&runtime=structured` answers the runtime snapshot with one structured session, for the running
    verify conversation, so its composer's runtime pill and the board's account chip both draw. */
@@ -392,6 +392,12 @@ const STAGE_CHAIN = SCENARIO === "stage-chain";
 const SEAT_CLS = SCENARIO === "seat-create-cls";
 const ORCH_FIRST = SCENARIO === "orchestrator-first" || SEAT_CLS;
 const ORCH_FIRST_OVERVIEW = SCENARIO === "orchestrator-first-overview";
+/* The setup guide on a fresh install that still runs on linked earlier state
+   (`guide=installer`): the guide opens by itself with the old-state notice, no
+   role is overridden, both engines are signed in, and the catalog adds three
+   repositories beside a plain folder and a checkout under a temporary
+   directory, which the project picker leaves out. */
+const INSTALLER_GUIDE = ORCH_FIRST && new URLSearchParams(location.search).get("guide") === "installer";
 /* The seat case opens as the create draft and leaves it when Confirm is pressed. */
 const FM_SEAT = FIRST_MESSAGE && FM_CASE === "s";
 const NO_SEAT = ORCH_FIRST || ORCH_FIRST_OVERVIEW || FM_SEAT;
@@ -587,6 +593,15 @@ const flowOf = (id: string) => (PIPELINES ? { flowId: id } : {});
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
 const MIN = 60;
+const INSTALLER_PROJECTS = INSTALLER_GUIDE ? [
+  { project: `repo-${"1".repeat(32)}`, displayName: "atlas-api", projectRoot: "/repo/atlas-api", conversations: 4, smt: now - 30 * MIN },
+  { project: `repo-${"2".repeat(32)}`, displayName: "harbor-docs", projectRoot: "/repo/harbor-docs", conversations: 2, smt: now - 2 * 60 * MIN },
+  { project: `repo-${"3".repeat(32)}`, displayName: "ledger-export", projectRoot: "/repo/ledger-export", conversations: 1, smt: now - 26 * 60 * MIN },
+  { project: `dir-${"4".repeat(32)}`, displayName: "notes", projectRoot: "/repo/notes", conversations: 1, smt: now - 40 * MIN },
+  { project: `repo-${"5".repeat(32)}`, displayName: "scratch-checkout", projectRoot: "/tmp/scratch-checkout", conversations: 1, smt: now - 10 * MIN },
+] : [];
+/* The guide preselects no project and lists repositories only, so the Telegram step's case picks this one first. */
+const TELEGRAM_REPOSITORY = { project: `repo-${"6".repeat(32)}`, displayName: "atlas", projectRoot: "/repo/atlas", conversations: 1, smt: now - MIN };
 const REV = (n: number) => `task-v1:00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
 function conversation(id: string, title: string, over: Record<string, unknown> = {}): FileEntry {
@@ -1843,7 +1858,7 @@ const pipelines: Pipeline[] = [
 if (CPU_QUEUE) {
   Object.assign(searchVer2, { activity: "idle", proc: null, pid: null, authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: iso(5 * MIN) }, lastTurn: { startedAt: (now - 400) * 1_000, endedAt: (now - 300) * 1_000 } });
   const waiting = pipelines.find(p => p.id === "p-search")!;
-  waiting.stateDetail = `Waiting for the CPU queue · ${SCENARIO === "cpu-queue-stalled" ? "7th · stalled for 62 min" : "2nd · up to 7 min"} · high priority · Viewer publication: owner; owner viewer, epoch 1`;
+  waiting.stateDetail = `Waiting for the CPU queue · ${SCENARIO === "cpu-queue-stalled" ? "7th · stalled for 62 min" : SCENARIO === "cpu-pressure" ? "1st · held by CPU pressure · waited 4 min" : "2nd · waited 7 min"} · high priority · Viewer publication: owner; owner viewer, epoch 1`;
   waiting.cursor = { stageId: "verify", state: "pending", input: null, activatedBy: null };
   waiting.runs.find(r => r.stageId === "verify")!.attempts = [attempt(3, "pending", null, { startedAt: null })] as Pipeline["runs"][number]["attempts"];
 }
@@ -4069,6 +4084,15 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     && ["/api/orchestrator/seat", "/api/orchestrator/seat/status", "/api/operator/settings"].includes(url.pathname)) {
     return serverFetch(url.pathname + url.search, init);
   }
+  if (INSTALLER_GUIDE && url.pathname === "/api/onboarding") {
+    const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, steps: {}, lastHealth: null, walk: null };
+    if (method === "PUT") return json({ marker: { ...marker, ...(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>), steps: {} } });
+    return json({ marker, legacyState: true, seatTickCheckMinutes: 10 });
+  }
+  if (INSTALLER_GUIDE && url.pathname === "/api/roles") return json({ roles: [] });
+  if (INSTALLER_GUIDE && url.pathname === "/api/accounts" && method === "GET") {
+    return json({ ...accountsBody, claude: { ...accountsBody.claude, cli: "found" }, codex: { ...accountsBody.codex, cli: "found" } });
+  }
   if (ACCOUNT_PICKER && url.pathname === "/api/accounts" && method === "GET") {
     const held = Number(PICKER_PARAMS.get("pickerdelay") ?? 0);
     if (held > 0) await new Promise((resolve) => setTimeout(resolve, held));
@@ -4300,13 +4324,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       : NEEDS_FILTER
       ? { files: needsFiles, projectCatalog: [{ project: PROJECT, conversations: needsFiles.length, smt: now }], flows: [], pipelines: needsPipelines, tasks: needsTasks }
       : ORCH_FIRST || (FM_SEAT && !fm.confirmed)
-      ? { files: SEAT_CLS ? files : [], projectCatalog: [{ project: PROJECT, conversations: SEAT_CLS ? files.length : 0, smt: now }], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
+      ? { files: SEAT_CLS ? files : [], projectCatalog: [{ project: PROJECT, conversations: SEAT_CLS ? files.length : 0, smt: now }, ...INSTALLER_PROJECTS], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
       : {
         files: shown,
         projectCatalog: [...new Set(shown.map((file) => file.project))].filter((project) => !railCatalog.some((entry) => entry.project === project)).map((project) => {
           const own = shown.filter((file) => file.project === project);
           return { project, conversations: own.length, smt: Math.max(...own.map((file) => file.mtime)) };
-        }).concat(railCatalog),
+        }).concat(railCatalog, TELEGRAM_STEP ? [TELEGRAM_REPOSITORY] : []),
         ...(RAIL ? { crownedProjects: [LEDGER, "harbor-docs"] } : {}),
         flows: OVERVIEW_QUIET ? [] : flows,
         pipelines: OVERVIEW_QUIET ? [] : pipelines,
@@ -4917,7 +4941,48 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   /* The rail's footer, so the frames that fold it away (#1802) have something
      to fold: invented machine figures and one invented limit window. */
-  if (url.pathname.startsWith("/api/resources")) {
+  if (url.pathname === "/api/resources/worktrees") {
+    const state = new URLSearchParams(location.search).get("worktree-state");
+    if (state === "loading") return new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+    });
+    if (state === "offline") throw new TypeError("Fixture connection unavailable");
+    if (state === "unavailable" || state === "denied" || state === "changed")
+      return Response.json({ error: state }, { status: state === "denied" ? 403 : state === "changed" ? 409 : 503 });
+    const at = "2026-10-23T10:00:00.000Z";
+    const respond = () => {
+      const start = Number(url.searchParams.get("cursor") ?? 0);
+      /* `variant`: a dry-run report holding the strings the ordinary rows do not reach (a pipeline id instead of a task, a checkout with no repository, an unrecorded size and time, a twelve-digit size, the longest reasons). */
+      if (state === "variant") {
+        const rows = [
+          { task: null, pipelineId: "lane-7f3a2c91", repository: "atlas", checkout: "worktrees/export-1", reason: "not-created-by-delegatus", bytes: 987654321098, observedAt: at },
+          { task: L("Keep the unpublished export and its source evidence for the audit", "Зберегти неопублікований експорт і його докази для аудиту"), pipelineId: "lane-2", repository: null, checkout: "~/.agents/tools/atlas-feature-with-a-very-long-sibling-checkout-name", reason: "changed-during-inspection", bytes: 3145728, observedAt: "2026-10-22T09:00:00.000Z" },
+          { task: null, pipelineId: null, repository: "atlas", checkout: "worktrees/export-3", reason: "ignored-files", bytes: null, observedAt: null },
+          { task: L("Preserve checkout 4", "Зберегти робоче дерево 4"), pipelineId: "lane-4", repository: "atlas", checkout: "worktrees/export-4", reason: "holds-worktree", bytes: 12 * 1073741824, observedAt: at },
+        ];
+        return json({ at, mode: "dry-run", total: rows.length, start: 0, rows, previousCursor: null, nextCursor: null });
+      }
+      const rows = state === "empty" ? [] : Array.from({ length: 10 }, (_, index) => ({
+        task: index === 1 ? null : L(`Preserve checkout ${index + 1}`, `Зберегти робоче дерево ${index + 1}`),
+        pipelineId: index === 1 ? null : `lane-${index + 1}`,
+        repository: "atlas",
+        checkout: index === 2 ? "../checkouts/retain-the-unpublished-export-and-its-source-evidence" : `worktrees/export-${index + 1}`,
+        reason: (["open-pipeline", "not-created-by-delegatus", "local-only-commits", "ignored-files", "retention"] as const)[index % 5],
+        bytes: index === 4 ? null : (index + 1) * 1048576,
+        // Fresh sweep decisions follow the report clock by milliseconds or seconds.
+        observedAt: index === 4 ? null : index === 2 ? "2026-10-23T09:59:59.999Z" : `2026-10-23T10:00:0${index % 2}.${String(index + 1).padStart(3, "0")}Z`,
+      }));
+      return json({ at, mode: "on", total: rows.length, start, rows: rows.slice(start, start + 4),
+        previousCursor: start ? String(Math.max(0, start - 4)) : null, nextCursor: start + 4 < rows.length ? String(start + 4) : null });
+    };
+    /* `hold`: the page request stays pending until the driver calls `__releaseWorktreePage`, so a frame can be taken while the next page loads. */
+    if (state === "hold") return new Promise<Response>((resolve, reject) => {
+      (window as unknown as { __releaseWorktreePage: () => void }).__releaseWorktreePage = () => resolve(respond());
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+    });
+    return respond();
+  }
+  if (url.pathname === "/api/resources") {
     const diskRole = new URLSearchParams(location.search).get("disk-role");
     const diskWarning = new URLSearchParams(location.search).get("disk-level") === "warning";
     const host = (target: string, title: string, over: Record<string, unknown>) => ({
@@ -4925,6 +4990,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       rssBytes: 600 * 1024 ** 2, swapBytes: 0, procCount: 3, model: "opus", role: "builder", conversationId: null, stage: "implement", ownership: "owned", seat: false, turnBusy: false, ...over,
     });
     return json({
+      ...(new URLSearchParams(location.search).has("worktree-state") ? { worktreeSweep: {
+        at: "2026-10-23T10:00:00.000Z", mode: "on", summary: "", removed: 0, removedBytes: 0, trimmedBytes: 0,
+        keptCounts: { "local-only-commits": 10 }, keptBytes: { "local-only-commits": 78 * 1048576 }, waitsForDecision: 10, waitsForDecisionBytes: 78 * 1048576,
+      } } : {}),
       ...(diskRole ? { diskPressure: {
         at: iso(0), episode: iso(MIN), warningBytes: 10 * 1024 ** 3, criticalBytes: 2 * 1024 ** 3,
         /* `all`: one 256 GiB volume under state, worktrees and temp, with every consumer measured; `disk-level=warning` leaves it above the admission threshold. */

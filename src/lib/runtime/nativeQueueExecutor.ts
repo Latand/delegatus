@@ -201,7 +201,7 @@ export class NativeQueueExecutor {
       }
     } catch (error) {
       if (error instanceof StructuredDispatchDeferredError && !actuated) {
-        if (prepared) await client.transitionOperation(command.operationId, "queued", { reason: error.message });
+        if (prepared) await transition({ phase: "deferred", reason: error.message });
         note("evidence-unreadable", error.message);
         return false;
       }

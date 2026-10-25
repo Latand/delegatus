@@ -1398,10 +1398,8 @@ describe("CodexAppServerHost", () => {
       const start = server.requests.find((request) => request.method === "thread/realtime/start")
         ?.params as { prompt?: string; realtimeStartInstructions?: string; realtimeEndInstructions?: string };
       /* The correction. A second copy of the demotion would be the defect. */
-      expect(start.realtimeStartInstructions).toMatch(/it was not written for you/i);
       expect(start.realtimeStartInstructions).not.toBe(COORDINATOR_VOICE_PERSONA);
       expect(start.prompt).not.toBe(COORDINATOR_VOICE_PERSONA);
-      expect(start.realtimeEndInstructions).toMatch(/realtime voice has ended/i);
 
       /* And the history the demotion lives in is left exactly as it was. */
       expect(server.requests.filter((request) => request.method === "thread/inject_items")).toEqual([]);

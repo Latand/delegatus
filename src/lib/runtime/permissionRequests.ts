@@ -48,6 +48,15 @@ export interface PendingPermissionRequest {
   since: string;
 }
 
+export interface PendingQuestionRequest {
+  id: string;
+  /** The transcript tool use accepted by conversation_action answer. */
+  toolUseId?: string;
+  tool: string;
+  questions: Array<{ prompt: string; options: string[]; multiSelect?: boolean }>;
+  since: string;
+}
+
 type JsonObject = Record<string, unknown>;
 
 function record(value: unknown): JsonObject | null {
@@ -107,6 +116,54 @@ export function pendingPermissionFrom(id: string, attention: unknown, since: str
     reasonType: text(source.decision_reason_type),
     since,
   };
+}
+
+/** The bounded operator-facing content of an AskUserQuestion request. */
+export function pendingQuestionFrom(id: string, attention: unknown, since: string): PendingQuestionRequest | null {
+  const source = record(attention);
+  const tool = toolRequestName(attention);
+  if (!source || tool !== "AskUserQuestion") return null;
+  const input = record(source.input);
+  const raw = Array.isArray(input?.questions) ? input.questions : Array.isArray(source.questions) ? source.questions : [];
+  const questions = raw.slice(0, 7).flatMap((value) => {
+    const question = record(value);
+    const prompt = text(question?.question) ?? text(question?.prompt);
+    if (!prompt) return [];
+    // Match the transcript question card's option numbering for MCP answers.
+    const options = Array.isArray(question?.options)
+      ? question.options.slice(0, 6).flatMap(value => {
+          const option = record(value);
+          const label = text(option?.label);
+          return label ? [label.trim()] : [];
+        }).sort((a, b) => Number(/\(Recommended\)\s*$/i.test(b)) - Number(/\(Recommended\)\s*$/i.test(a)))
+          .map(label => bounded(label, 256))
+      : [];
+    return [{ prompt: bounded(prompt, 512), options,
+      ...(typeof question?.multiSelect === "boolean" ? { multiSelect: question.multiSelect } : {}) }];
+  });
+  const toolUseId = text(source.tool_use_id);
+  return questions.length ? { id, ...(toolUseId ? { toolUseId } : {}), tool, questions, since } : null;
+}
+
+export function normalizePendingQuestions(value: unknown): PendingQuestionRequest[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((candidate) => {
+    const source = record(candidate);
+    const id = text(source?.id);
+    const tool = text(source?.tool);
+    const since = text(source?.since);
+    const toolUseId = text(source?.toolUseId);
+    if (!id || tool !== "AskUserQuestion" || !since || !Array.isArray(source?.questions)) return [];
+    const questions = source.questions.slice(0, 7).flatMap(value => {
+      const question = record(value);
+      const prompt = text(question?.prompt);
+      if (!prompt) return [];
+      return [{ prompt: bounded(prompt, 512), options: Array.isArray(question?.options)
+        ? question.options.slice(0, 6).flatMap(option => text(option) ? [bounded(text(option)!, 256)] : []) : [],
+        ...(typeof question?.multiSelect === "boolean" ? { multiSelect: question.multiSelect } : {}) }];
+    });
+    return questions.length ? [{ id, ...(toolUseId ? { toolUseId } : {}), tool, questions, since }] : [];
+  });
 }
 
 /** The deny message an automatic answer carries: the engine's own reason,

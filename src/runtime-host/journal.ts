@@ -878,6 +878,7 @@ export class RuntimeJournal {
   nativeQueueTransition(operationId: string, transition: NativeQueueTransition): RuntimeOperationResult {
     const original = this.operationResult(operationId);
     const status = transition.phase === "prepared" || transition.phase === "withdrawn" ? "delivering"
+      : transition.phase === "deferred" ? "queued"
       : transition.phase === "seat-withdrawal" ? "failed"
       : (transition.phase === "acknowledged" || transition.phase === "observed-queued") ? original?.receipt.kind === "send" ? "queued" : "applied"
       : transition.phase === "proven" ? "delivered"
