@@ -65,9 +65,12 @@ export function pipelineSwitchFence(operationId: string): PipelineSwitchFence | 
 }
 
 /** Read the membership's pipeline only; unrelated conversations do no pipeline scan.
- * Retained attempts keep this fence after the replacement has started. */
-export function runtimeSwitchRetirementReason(conversationId: string, registry: Pick<AgentRegistry, "readOnlySnapshot">): string | null {
-  const memberships = registry.readOnlySnapshot().memberships[conversationId as `conversation_${string}`] ?? [];
+ * Retained attempts keep this fence after the replacement has started. The
+ * memberships come from one keyed read: callers ask inside writer admission,
+ * where a whole snapshot rebuilds every collection of retained history. */
+export function runtimeSwitchRetirementReason(conversationId: string, registry: Pick<AgentRegistry, "conversationMemberships">): string | null {
+  if (!conversationId.startsWith("conversation_")) return null;
+  const memberships = registry.conversationMemberships(conversationId as `conversation_${string}`);
   for (const member of memberships) {
     if (member.kind !== "pipeline") continue;
     const pipeline = findPipelineRecord(member.containerId);
