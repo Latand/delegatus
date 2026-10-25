@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
 import { DismissalError, dismissAttention, parseDismissalTarget } from "@/lib/attention/dismissals";
@@ -18,7 +19,7 @@ const headers = { "Cache-Control": "no-store" };
  * the surface they clicked on. Agents reach the same service through the
  * `dismiss_attention` MCP tool, which attributes them on the server.
  */
-export async function POST(request: NextRequest): Promise<NextResponse> {
+async function workspacePOST(request: NextRequest): Promise<NextResponse> {
   const rejection = rejectCrossOrigin(request);
   if (rejection) {
     rejection.headers.set("Cache-Control", "no-store");
@@ -39,3 +40,5 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return attentionFailure(error);
   }
 }
+
+export const POST = workspaceRoute("/api/attention/dismissals", workspacePOST);

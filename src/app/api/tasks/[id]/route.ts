@@ -1,3 +1,4 @@
+import { workspaceRoute, assertWorkspaceProject } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
@@ -34,7 +35,7 @@ type TaskRouteContext = {
     Clamp notes and resolved links still travel, as they do on any other edit. */
 type LineEditAnswer = { ok: true; taskId: string; revision: string; detailsLength: number; updatedAt: string; workLinks?: ResolvedWorkLinks; notes?: string[] };
 
-export async function PATCH(
+async function workspacePATCH(
   req: NextRequest,
   ctx: TaskRouteContext,
 ): Promise<NextResponse<{ ok: true; task: BoardTask; workLinks?: ResolvedWorkLinks; notes?: string[] } | LineEditAnswer | ApiError>> {
@@ -56,6 +57,7 @@ export async function PATCH(
   const { id } = await ctx.params;
   const before: { status: string | null } = { status: null };
   const result = mutateTasks((tasks) => {
+    assertWorkspaceProject(req, tasks.find(task => task.id === id)?.project);
     before.status = tasks.find((task) => task.id === id)?.status ?? null;
     /* The dashboard is the operator; a group hide is refused for the task
        holding the project's orchestrator seat. */
@@ -98,15 +100,20 @@ export async function PATCH(
   return NextResponse.json({ ok: true, task: taskForResponse(req, result.task), ...extras });
 }
 
-export async function DELETE(_req: NextRequest, ctx: TaskRouteContext): Promise<NextResponse<{ ok: true } | ApiError>> {
+async function workspaceDELETE(_req: NextRequest, ctx: TaskRouteContext): Promise<NextResponse<{ ok: true } | ApiError>> {
   const rejection = rejectCrossOrigin(_req);
   if (rejection) return rejection;
 
   const { id } = await ctx.params;
   const result = mutateTasks((tasks) => {
+    assertWorkspaceProject(_req, tasks.find(task => task.id === id)?.project);
     const outcome = deleteTask(tasks, id);
     return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };
   });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });
   return NextResponse.json({ ok: true });
 }
+
+export const PATCH = workspaceRoute("/api/tasks/[id]", workspacePATCH);
+
+export const DELETE = workspaceRoute("/api/tasks/[id]", workspaceDELETE);

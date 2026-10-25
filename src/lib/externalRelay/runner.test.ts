@@ -32,6 +32,7 @@ import { prototypeCopyLine, prototypeReference } from "@/lib/prototypeReview/tel
 import { prototypeDecisionText } from "@/lib/prototypeReview/decision";
 import { RelayLeaseTransport } from "./relayLeaseTransport";
 import { answerCapabilities, checkedAnswerV2 } from "./answerV2";
+import { cloneReceipt } from "./clone.fixture";
 import { richRequest } from "./rich.fixture";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-runner-test-"));
 process.env.LLV_STATE_DIR = path.join(root, "state");
@@ -1105,18 +1106,18 @@ test("an immediately admitted owner can answer in the final ten seconds", async 
   } finally { await server.close(); }
 }, 10000);
 
-test("a confirmed owner run completes a readable timeout at the service deadline", async () => {
+test("a confirmed owner run outlives the service deadline and delivers its answer late", async () => {
   const completions: unknown[] = [];
   const stops: string[] = [];
   const server = await startTestRelay((req, body) => {
-    if (req.url?.endsWith("/complete")) completions.push(body);
-    return { body: { status: "accepted", duplicate: false } };
+    if (req.url?.endsWith("/send")) completions.push(body);
+    return { body: req.url?.endsWith("/send") ? cloneReceipt() : { status: "accepted", duplicate: false } };
   });
   const paired = relay(`${server.origin}/v1`);
   paired.targets[0]!.ownerTier = true;
   updateRelayStore(s => ({ ...s, relays: [paired] }));
   try {
-    const result = await runClaimedRequest(paired, { ...contextRequest, request_id: "rq_confirmed_past_deadline",
+    const result = await runClaimedRequest(paired, { ...contextRequest, owner_delivery: { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: 12 }, request_id: "rq_confirmed_past_deadline",
       deadline_at: new Date(Date.now() + 700).toISOString(),
       input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
       ownerPorts: {
@@ -1125,8 +1126,8 @@ test("a confirmed owner run completes a readable timeout at the service deadline
         stop: async (_id, action) => { stops.push(action); }, pollMs: 5,
       },
     });
-    expect(result).toMatchObject({ outcome: "answered", answer: { action: "reply", text: expect.stringMatching(/ran out of time/i) } });
-    expect(stops).toEqual(["interrupt"]);
+    expect(result).toMatchObject({ outcome: "answered", answer: { action: "reply", text: "Done" } });
+    expect(stops).toEqual([]);
     expect(completions).toHaveLength(1);
   } finally { await server.close(); }
 }, 10000);
@@ -3307,12 +3308,16 @@ for (const worker of [false, true]) test(`owner runner exception with a refused 
   const relayStore = await import("./store");
   const completions: { body: unknown; at: number }[] = [];
   const service = await startTestRelay((req, body) => {
-    if (req.url?.endsWith("/complete")) completions.push({ body, at: Date.now() });
-    return { body: { status: "ok" } };
+    if (req.url?.endsWith("/complete") || req.url?.endsWith("/send")) completions.push({
+      body: req.url.endsWith("/send") ? { outcome: "answered", answer: { action: "reply", text: (body as { text: string }).text, reply_to: "m1" } } : body,
+      at: Date.now(),
+    });
+    return { body: req.url?.endsWith("/send") ? cloneReceipt() : { status: "ok" } };
   });
   const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
   paired.targets[0]!.fallback = "none";
   updateRelayStore(s => ({ ...s, relays: [paired] }));
+  paired.targets[0]!.hardCapMinutes = 1500 / 60_000;
   const requestId = `owner_exception_bound_${worker}`;
   const conversationId = `conversation_exception_bound_${worker}`;
   const write = relayStore.changeRunAsync;
@@ -3330,7 +3335,7 @@ for (const worker of [false, true]) test(`owner runner exception with a refused 
   const deadlineAt = Date.now() + 1500;
   let done: ReturnType<typeof runClaimedRequestWithLeaseWorker> | undefined;
   try {
-    done = runClaimedRequestWithLeaseWorker(paired, { ...contextRequest, request_id: requestId, deadline_at: new Date(deadlineAt).toISOString(),
+    done = runClaimedRequestWithLeaseWorker(paired, { ...contextRequest, owner_delivery: { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: 12 }, request_id: requestId, deadline_at: new Date(deadlineAt).toISOString(),
       answer: { ...contextRequest.answer, max_chars: 4000 },
       input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, { leaseWorker: worker, ownerPorts: ports });
     const completion = await done;
@@ -3360,8 +3365,10 @@ for (const recovery of ["answered", "revoked", "completed", "expired"] as const)
 test(`a fresh process recovers an abandoned diagnosed owner failure: ${recovery}`, async () => {
   const completions: unknown[] = [];
   const service = await startTestRelay((req, body) => {
-    if (req.url?.endsWith("/complete")) completions.push(body);
-    return { body: { status: "ok" } };
+    if (req.url?.endsWith("/complete") || req.url?.endsWith("/send")) completions.push(
+      req.url.endsWith("/send") ? { outcome: "answered", answer: { action: "reply", text: (body as { text: string }).text, reply_to: "m1" } } : body,
+    );
+    return { body: req.url?.endsWith("/send") ? cloneReceipt() : { status: "ok" } };
   });
   const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
   paired.targets[0]!.fallback = "none";
@@ -3369,7 +3376,7 @@ test(`a fresh process recovers an abandoned diagnosed owner failure: ${recovery}
   const requestId = `owner_restart_${recovery}`;
   const conversationId = `conversation_restart_${recovery}`;
   const reason = "fixture launch refused";
-  const request = { ...contextRequest, request_id: requestId, claimed_at: new Date().toISOString(), deadline_at: new Date(Date.now() + 60_000).toISOString(),
+  const request = { ...contextRequest, owner_delivery: { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: 12 }, request_id: requestId, claimed_at: new Date().toISOString(), deadline_at: new Date(Date.now() + 60_000).toISOString(),
     answer: { ...contextRequest.answer, max_chars: 4000 },
     input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } };
   // The real runner produces the custody; its process then exits while the
@@ -3411,8 +3418,8 @@ test(`a fresh process recovers an abandoned diagnosed owner failure: ${recovery}
       stop: async () => {}, stopRetryMs: 1,
     };
     await sweepExternalRelayOrphans(ports);
-    if (recovery === "answered") {
-      expect(completions).toEqual([expect.objectContaining({ lease_id: request.lease_id, outcome: "answered",
+    if (recovery === "answered" || recovery === "expired") {
+      expect(completions).toEqual([expect.objectContaining({ outcome: "answered",
         answer: expect.objectContaining({ action: "reply", text: expect.stringContaining(reason) }) })]);
       expect(readAnswerRecord(paired.id, "target_1", requestId)).toMatchObject({ state: "finished", outcome: "answered", delivery: "accepted",
         diagnostic: { source: "launch" }, answer: { text: expect.stringContaining(reason) } });
@@ -3439,8 +3446,10 @@ for (const worker of [false, true]) test(`owner ${seam} failure keeps its runtim
   const { observeOwnerContinuation, observeOwnerTurn } = await import("./ownerRun");
   const completions: unknown[] = [], journal: unknown[][] = [];
   const service = await startTestRelay((req, body) => {
-    if (req.url?.endsWith("/complete")) completions.push(body);
-    return { body: { status: "ok" } };
+    if (req.url?.endsWith("/complete") || req.url?.endsWith("/send")) completions.push(
+      req.url.endsWith("/send") ? { outcome: "answered", answer: { action: "reply", text: (body as { text: string }).text, reply_to: "m1" } } : body,
+    );
+    return { body: req.url?.endsWith("/send") ? cloneReceipt() : { status: "ok" } };
   });
   const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
   paired.targets[0]!.fallback = "none";
@@ -3711,12 +3720,15 @@ for (const worker of [false, true]) test(`a live owner run whose stop never conf
   const { OWNER_STOP_PENDING_LIMIT_MS } = await import("./ownerRun");
   const completions: unknown[] = [];
   const service = await startTestRelay((req, body) => {
-    if (req.url?.endsWith("/complete")) completions.push(body);
-    return { body: { status: "ok" } };
+    if (req.url?.endsWith("/complete") || req.url?.endsWith("/send")) completions.push(
+      req.url.endsWith("/send") ? { outcome: "answered", answer: { action: "reply", text: (body as { text: string }).text, reply_to: "m1" } } : body,
+    );
+    return { body: req.url?.endsWith("/send") ? cloneReceipt() : { status: "ok" } };
   });
   const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
   paired.targets[0]!.fallback = "none";
   updateRelayStore(s => ({ ...s, relays: [paired] }));
+  paired.targets[0]!.hardCapMinutes = 1500 / 60_000;
   const requestId = `live_stop_bound_${worker}`;
   let stops = 0, skew = 0, finished = false, recover = false;
   let reached!: () => void, pastBound!: () => void;
@@ -3735,7 +3747,7 @@ for (const worker of [false, true]) test(`a live owner run whose stop never conf
   };
   let done: ReturnType<typeof runClaimedRequestWithLeaseWorker> | undefined;
   try {
-    done = runClaimedRequestWithLeaseWorker(paired, { ...contextRequest, request_id: requestId, deadline_at: new Date(Date.now() + 1500).toISOString(),
+    done = runClaimedRequestWithLeaseWorker(paired, { ...contextRequest, owner_delivery: { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: 12 }, request_id: requestId, deadline_at: new Date(Date.now() + 1500).toISOString(),
       input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, { leaseWorker: worker, timeoutMs: 20, ownerPorts: ports });
     void done.then(() => { finished = true; });
     await refused;
@@ -3780,8 +3792,10 @@ for (const age of ["within", "past"] as const) test(`owner stop that stays uncon
   const { relayPollerStatus } = await import("./poller");
   const completions: unknown[] = [];
   const service = await startTestRelay((req, body) => {
-    if (req.url?.endsWith("/complete")) completions.push(body);
-    return { body: { status: "ok" } };
+    if (req.url?.endsWith("/complete") || req.url?.endsWith("/send")) completions.push(
+      req.url.endsWith("/send") ? { outcome: "answered", answer: { action: "reply", text: (body as { text: string }).text, reply_to: "m1" } } : body,
+    );
+    return { body: req.url?.endsWith("/send") ? cloneReceipt() : { status: "ok" } };
   });
   const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
   updateRelayStore(s => ({ ...s, relays: [paired] }));

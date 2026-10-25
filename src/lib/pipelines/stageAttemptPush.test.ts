@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -18,7 +18,7 @@ async function fixture(legacy = false, successor = false, prBase?: { mainBeforeC
   const baseEnv = { ...process.env, ...Object.fromEntries(Object.keys(process.env).filter(key => key.startsWith("GIT_")).map(key => [key, undefined])),
     HOME: root, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: path.join(root, "absent-git-config"), GIT_CONFIG_COUNT: "0",
     GIT_AUTHOR_DATE: "2026-10-16T09:00:00Z", GIT_COMMITTER_DATE: "2026-10-16T09:00:00Z" };
-  const env = { ...baseEnv };
+  const env: NodeJS.ProcessEnv = { ...baseEnv };
   const git = async (cwd: string, ...args: string[]) => {
     const r = await realExec("git", args, cwd, cwd === lane ? env : baseEnv);
     expect(r.code, r.stderr).toBe(0); return r.stdout.trim();
@@ -54,7 +54,7 @@ async function fixture(legacy = false, successor = false, prBase?: { mainBeforeC
     delivery: { active: true, disposition: "owner", ownerId: "proof", publish: "enabled",
       target: { remote, repository: projectIdentityFromRemote(remote, lane)!.project, branch: "refs/heads/pipeline/proof" } } } as Pipeline;
   if (!legacy) {
-    Object.assign(env, await prepareStageGitGuard(launchId, lane, realExec, START));
+    Object.assign(env, await prepareStageGitGuard(launchId, lane, realExec, START, async () => {}));
   }
   Object.assign(env, agentPublicationIdentityEnv({ ...env, HOME: root }));
   const own = async (...args: string[]) => await git(lane, ...args);
@@ -64,6 +64,211 @@ async function fixture(legacy = false, successor = false, prBase?: { mainBeforeC
   return { root, lane, remote, foreign, env, git, own, commit, push, settle, pipeline, attempt, receipt: stageGitReceiptDirectory(launchId),
     close: async () => { await fs.rm(root, { recursive: true, force: true }); await fs.rm(stageGitReceiptDirectory(launchId), { recursive: true, force: true }); } };
 }
+
+test.each(["commit", "push"] as const)("a superseded producer cannot %s; an explicit fix stage restores publication", async action => {
+  const f = await fixture();
+  const review = `stage-proof-review-${nextFixture}`, fix = `stage-proof-fix-${nextFixture}`;
+  try {
+    await f.push();
+    const remoteBefore = await f.git(f.remote, "rev-parse", "refs/heads/pipeline/proof");
+    const reviewed = await f.commit("producer output ready for review");
+    await prepareStageGitGuard(review, f.lane, realExec, "2026-10-16T10:00:00.000Z", async () => {});
+    // Each command is a fresh Git process using the old producer's environment.
+    const command = action === "commit" ? ["commit", "--no-verify", "--allow-empty", "-m", "late producer output"]
+      : ["push", "origin", "HEAD:refs/heads/pipeline/proof"];
+    const denied = await realExec("git", command, f.lane, f.env);
+    expect(denied.code).not.toBe(0);
+    expect(denied.stderr).toContain("a successor owns this worktree");
+    expect(await f.own("rev-parse", "HEAD")).toBe(reviewed);
+    expect(await f.git(f.remote, "rev-parse", "refs/heads/pipeline/proof")).toBe(remoteBefore);
+    // Opening a fix stage grants its own binding; the old one stays revoked.
+    Object.assign(f.env, await prepareStageGitGuard(fix, f.lane, realExec, "2026-10-16T11:00:00.000Z", async () => {}));
+    const fixed = await f.commit("fix requested by a new stage");
+    await f.push();
+    expect(await f.git(f.remote, "rev-parse", "refs/heads/pipeline/proof")).toBe(fixed);
+  } finally {
+    await fs.rm(stageGitReceiptDirectory(review), { recursive: true, force: true });
+    await fs.rm(stageGitReceiptDirectory(fix), { recursive: true, force: true });
+    await f.close();
+  }
+});
+
+test("a restarted preparation cannot reclaim its superseded worktree binding", async () => {
+  const f = await fixture();
+  const review = `stage-proof-review-restart-${nextFixture}`;
+  try {
+    await prepareStageGitGuard(review, f.lane, realExec, "2026-10-16T10:00:00.000Z", async () => {});
+    const child = Bun.spawn([process.execPath, "--eval", `
+      const {prepareStageGitGuard}=await import("./src/lib/git/stageAttemptGuard.ts");
+      const {realExec}=await import("./src/lib/workflows/provision.ts");
+      await prepareStageGitGuard(process.env.PROOF_LAUNCH,process.env.PROOF_LANE,realExec,process.env.PROOF_START, async () => {});
+    `], { cwd: process.cwd(), env: { ...process.env, PROOF_LAUNCH: f.attempt.launchId!, PROOF_LANE: f.lane, PROOF_START: START }, stdout: "pipe", stderr: "pipe" });
+    const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+    expect(code).not.toBe(0);
+    expect(stderr).toContain("superseded by another attempt");
+    const owner = await fs.readFile(path.join(f.receipt, "owner"), "utf8");
+    expect(await fs.readFile(owner, "utf8")).toBe(stageGitReceiptDirectory(review));
+    await prepareStageGitGuard(review, f.lane, realExec, "2026-10-16T10:00:00.000Z", async () => {});
+  } finally {
+    await fs.rm(stageGitReceiptDirectory(review), { recursive: true, force: true });
+    await f.close();
+  }
+});
+
+test.each(["rev-parse --absolute-git-dir", "rev-parse HEAD"])("a successor admitted during %s keeps its worktree fence", async lookup => {
+  const f = await fixture();
+  const seam = lookup === "rev-parse HEAD" ? "head" : "git-directory";
+  const delayed = `stage-proof-delayed-${seam}`, review = `stage-proof-racing-review-${seam}`;
+  try {
+    const activation = path.join(f.root, "active-launch");
+    await fs.writeFile(activation, delayed);
+    let successor: Record<string, string> = {};
+    const exec: typeof realExec = async (...args) => {
+      const result = await realExec(...args);
+      if (args[0] === "git" && args[1].join(" ") === lookup) {
+        await fs.writeFile(activation, review);
+        successor = await prepareStageGitGuard(review, f.lane, realExec, "2026-10-16T10:00:00.000Z", async () => {});
+      }
+      return result;
+    };
+    await expect(prepareStageGitGuard(delayed, f.lane, exec, "2026-10-16T09:00:00.000Z", async () => {
+      if (await fs.readFile(activation, "utf8") !== delayed) throw new Error("superseded by another attempt");
+    }))
+      .rejects.toThrow("superseded by another attempt");
+    const owner = await fs.readFile(path.join(f.receipt, "owner"), "utf8");
+    expect(await fs.readFile(owner, "utf8")).toBe(stageGitReceiptDirectory(review));
+    expect(await fs.access(owner + ".lock").then(() => true, () => false)).toBe(false);
+    Object.assign(f.env, successor);
+    const made = await f.commit("successor retains commit authority");
+    await f.push();
+    expect(await f.git(f.remote, "rev-parse", "refs/heads/pipeline/proof")).toBe(made);
+  } finally {
+    await fs.rm(stageGitReceiptDirectory(delayed), { recursive: true, force: true });
+    await fs.rm(stageGitReceiptDirectory(review), { recursive: true, force: true });
+    await f.close();
+  }
+});
+
+// These probes intercept Git through a POSIX executable and use native symlinks.
+test.skipIf(process.platform === "win32").each([
+  ["commit", "absent"], ["push", "absent"],
+  ["commit", "self"], ["push", "self"],
+  ["commit", "chained"], ["push", "chained"],
+] as const)("ownership is rechecked after guard work: %s / %s", async (action, forwarding) => {
+  const f = await fixture();
+  const review = `stage-proof-no-hook-${action}-${forwarding}`;
+  try {
+    await f.push();
+    const remoteBefore = await f.git(f.remote, "rev-parse", "refs/heads/pipeline/proof");
+    if (action === "push") await f.commit("producer output awaiting publication");
+    const before = await f.own("rev-parse", "HEAD");
+    const hook = action === "commit" ? "reference-transaction" : "pre-push";
+    let chained: string | undefined;
+    if (forwarding !== "absent") {
+      const hooks = path.join(f.lane, ".githooks");
+      await fs.mkdir(hooks);
+      const target = path.join(hooks, hook);
+      if (forwarding === "self") await fs.symlink(path.join(f.env.LLV_AGENT_GIT_GUARD_DIR!, hook), target);
+      else {
+        await fs.writeFile(target, "#!/bin/sh\nexit 91\n", { mode: 0o700 });
+        chained = target;
+      }
+      await f.own("config", "core.hooksPath", hooks);
+    }
+    const originalGit = Bun.which("git")!;
+    const bin = path.join(f.root, "bin");
+    await fs.mkdir(bin);
+    const marker = path.join(f.root, "handoff");
+    const successor = stageGitReceiptDirectory(review);
+    const owner = await fs.readFile(path.join(f.receipt, "owner"), "utf8");
+    const script = path.join(f.root, "admit-successor.ts");
+    await fs.writeFile(script, `
+      const {prepareStageGitGuard} = await import(${JSON.stringify(path.resolve("src/lib/git/stageAttemptGuard.ts"))});
+      const {realExec} = await import(${JSON.stringify(path.resolve("src/lib/workflows/provision.ts"))});
+      await prepareStageGitGuard(process.env.PROOF_REVIEW, process.env.PROOF_LANE, realExec, ${JSON.stringify(NOW)}, async () => {});
+    `);
+    await fs.writeFile(path.join(bin, "git"), `#!/bin/sh
+if { [ "$PROOF_ACTION" = commit ] && [ "$*" = "show -s --no-show-signature --format=%T %P $5" ]; } ||
+   { [ "$PROOF_ACTION" = push ] && [ "$*" = "-C $PROOF_LANE remote get-url --push origin" ]; }; then
+  if mkdir "$PROOF_MARKER" 2>/dev/null; then
+    (cd "$PROOF_PROJECT" && "$PROOF_BUN" "$PROOF_SCRIPT") || exit 1
+  fi
+fi
+exec "$PROOF_GIT" "$@"
+`, { mode: 0o700 });
+    const env = { ...f.env, PATH: `${bin}${path.delimiter}${f.env.PATH}`, GIT_EXEC_PATH: bin, PROOF_GIT: originalGit,
+      LLV_AGENT_GIT_CHAINED_HOOK: chained, PROOF_ACTION: action, PROOF_REVIEW: review, PROOF_LANE: f.lane, PROOF_MARKER: marker,
+      PROOF_PROJECT: process.cwd(), PROOF_BUN: process.execPath, PROOF_SCRIPT: script };
+    const args = action === "commit" ? ["commit", "--allow-empty", "-m", "superseded during guard work"]
+      : ["push", "origin", "HEAD:refs/heads/pipeline/proof"];
+    const denied = await realExec("git", args, f.lane, env);
+    expect(await fs.readFile(owner, "utf8"), denied.stderr).toBe(successor);
+    expect(denied.code).not.toBe(0);
+    expect(denied.stderr).toContain("a successor owns this worktree");
+    expect(await f.own("rev-parse", "HEAD")).toBe(before);
+    expect(await f.git(f.remote, "rev-parse", "refs/heads/pipeline/proof")).toBe(remoteBefore);
+  } finally {
+    await fs.rm(stageGitReceiptDirectory(review), { recursive: true, force: true });
+    await f.close();
+  }
+});
+
+test.each(["binding", "handoff"] as const)("disk exhaustion during the owner %s keeps the previous owner and permits a retry", async phase => {
+  const f = await fixture();
+  const review = `stage-proof-disk-${phase}-${nextFixture}`;
+  const owner = await fs.readFile(path.join(f.receipt, "owner"), "utf8");
+  const noSpace = () => { throw Object.assign(new Error("fixture disk is full"), { code: "ENOSPC" }); };
+  const write = fs.writeFile, rename = fs.rename;
+  const fault = phase === "binding"
+    ? spyOn(fs, "writeFile").mockImplementation((...args) => String(args[0]) === path.join(stageGitReceiptDirectory(review), "owner") ? noSpace() : write(...args))
+    : spyOn(fs, "rename").mockImplementation((...args) => String(args[1]) === owner ? noSpace() : rename(...args));
+  try {
+    await expect(prepareStageGitGuard(review, f.lane, realExec, "2026-10-16T10:00:00.000Z", async () => {}))
+      .rejects.toMatchObject({ code: "ENOSPC" });
+    expect(await fs.readFile(owner, "utf8")).toBe(f.receipt);
+    expect(await fs.access(owner + ".lock").then(() => true, () => false)).toBe(false);
+    fault.mockRestore();
+    await prepareStageGitGuard(review, f.lane, realExec, "2026-10-16T10:00:00.000Z", async () => {});
+    expect(await fs.readFile(owner, "utf8")).toBe(stageGitReceiptDirectory(review));
+  } finally {
+    fault.mockRestore();
+    await fs.rm(stageGitReceiptDirectory(review), { recursive: true, force: true });
+    await f.close();
+  }
+});
+
+test.each(["pre-push", "reference-transaction"] as const)("ownership is rechecked after a repository %s hook", async hook => {
+  const f = await fixture();
+  try {
+    await f.push();
+    const remoteBefore = await f.git(f.remote, "rev-parse", "refs/heads/pipeline/proof");
+    if (hook === "pre-push") await f.commit("producer output awaiting publication");
+    const before = await f.own("rev-parse", "HEAD");
+    const hooks = path.join(f.root, "repository-hooks");
+    await fs.mkdir(hooks);
+    await f.own("config", "core.hooksPath", hooks);
+    await fs.writeFile(path.join(hooks, hook), `#!/bin/sh
+printf '%s\\n' "$@" > "$PROOF_ARGS"
+cat > "$PROOF_INPUT"
+if [ "${hook}" = pre-push ] || [ "$1" = prepared ]; then
+  printf '%s' successor > "$PROOF_OWNER"
+fi
+`, { mode: 0o700 });
+    const env = { ...f.env, PROOF_OWNER: await fs.readFile(path.join(f.receipt, "owner"), "utf8"),
+      PROOF_INPUT: path.join(f.root, "input"), PROOF_ARGS: path.join(f.root, "args") };
+    const args = hook === "pre-push" ? ["push", "origin", "HEAD:refs/heads/pipeline/proof"]
+      : ["commit", "--allow-empty", "-m", "superseded inside repository hook"];
+    const denied = await realExec("git", args, f.lane, env);
+    expect(denied.code).not.toBe(0);
+    expect(denied.stderr).toContain("a successor owns this worktree");
+    expect(await f.own("rev-parse", "HEAD")).toBe(before);
+    expect(await f.git(f.remote, "rev-parse", "refs/heads/pipeline/proof")).toBe(remoteBefore);
+    if (hook === "pre-push") {
+      expect(await fs.readFile(env.PROOF_ARGS, "utf8")).toBe(`origin\n${f.remote}\n`);
+      expect(await fs.readFile(env.PROOF_INPUT, "utf8")).toBe(`HEAD ${before} refs/heads/pipeline/proof ${remoteBefore}\n`);
+    }
+  } finally { await f.close(); }
+});
 
 test.each(["before", "after"] as const)("PR-base successor settles a merge of main advanced %s lane creation", async timing => {
   const f = await fixture(false, true, { mainBeforeCreation: timing === "before" });
@@ -85,6 +290,38 @@ test.each(["before", "after"] as const)("PR-base successor settles a merge of ma
     expect(await commitAndAdoptStageBranch(f.pipeline, "build", realExec, () => [f.pipeline], undefined,
       () => {}, null, undefined, undefined, f.attempt, NOW)).toEqual({ ok: true, sha: head });
     expect(await f.own("rev-parse", "HEAD")).toBe(head);
+  } finally { await f.close(); }
+});
+
+test("a pushed stage head is proved before controller staging can sweep scratch files or name an ignored artifact directory (#2631)", async () => {
+  const f = await fixture();
+  try {
+    f.pipeline.repoDir = f.lane;
+    await fs.writeFile(path.join(f.lane, ".gitignore"), ".artifacts/\n");
+    await fs.mkdir(path.join(f.lane, ".artifacts"));
+    await fs.writeFile(path.join(f.lane, ".artifacts", "kept.txt"), "tracked despite the directory ignore\n");
+    await f.own("add", ".gitignore");
+    await f.own("add", "-f", ".artifacts/kept.txt");
+    await f.own("commit", "-m", "stage result");
+    const head = await f.own("rev-parse", "HEAD");
+    await f.push();
+    await fs.writeFile(path.join(f.lane, "stage.log"), "scratch output\n");
+    const calls: string[][] = [];
+    const exec: typeof realExec = async (command, args, cwd, env, options) => {
+      calls.push([command, ...args]);
+      return realExec(command, args, cwd, env, options);
+    };
+
+    const settled = await commitAndAdoptStageBranch(f.pipeline, "build", exec, () => [f.pipeline], undefined,
+      () => {}, null, undefined, undefined, f.attempt, NOW);
+
+    expect(calls.some(([command, action]) => command === "git" && action === "add")).toBe(false);
+    expect(settled).toEqual({ ok: false,
+      error: "settling the stage push: adoption requires a clean owned lane branch; both tips are preserved" });
+    expect(await f.own("diff", "--cached", "--name-only")).toBe("");
+    expect(await fs.readFile(path.join(f.lane, "stage.log"), "utf8")).toBe("scratch output\n");
+    expect(await f.own("rev-parse", "HEAD")).toBe(head);
+    expect(await f.git(f.remote, "rev-parse", "refs/heads/pipeline/proof")).toBe(head);
   } finally { await f.close(); }
 });
 
@@ -263,7 +500,7 @@ test("B: a controller-created replacement link proves a completed parent without
     const parent = { ...f.attempt, n: 1, state: "failed", completedAt: NOW, agentPath: "/stage/parent.jsonl" } as PipelineStageAttempt;
     childLaunch = `stage-proof-generic-replacement-${nextFixture}`;
     await fs.rm(stageGitReceiptDirectory(childLaunch), { recursive: true, force: true });
-    Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, START));
+    Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, START, async () => {}));
     const child = { ...f.attempt, n: 2, launchId: childLaunch, startedAt: START, completedAt: NOW, state: "passed",
       agentPath: "/stage/child.jsonl", restartContext: { previousAttempt: 1, transcriptPath: parent.agentPath } } as PipelineStageAttempt;
     const head = await f.commit("replacement output");
@@ -296,7 +533,7 @@ test.each(["own commit, receipt lost", "own hooks-off commit", "imported commit"
 
     childLaunch = `stage-proof-manual-silent-retry-${nextFixture}`;
     await fs.rm(stageGitReceiptDirectory(childLaunch), { recursive: true, force: true });
-    Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, START));
+    Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, START, async () => {}));
     const child = { ...f.attempt, n: 2, launchId: childLaunch, startedAt: START, completedAt: NOW, state: "passed",
       agentPath: "/stage/manual-retry.jsonl", restartContext: { previousAttempt: 1, transcriptPath: parent.agentPath } } as PipelineStageAttempt;
     const head = await f.commit("manual retry output");
@@ -381,7 +618,7 @@ test.each((["accepted", "accepted replacement", "published"] as const).flatMap(p
     let lost: PipelineStageAttempt | null = null;
     if (proof === "accepted replacement") {
       const launchId = `${childLaunch}-lost`;
-      Object.assign(f.env, await prepareStageGitGuard(launchId, f.lane, realExec, "2026-10-16T09:45:00.000Z"));
+      Object.assign(f.env, await prepareStageGitGuard(launchId, f.lane, realExec, "2026-10-16T09:45:00.000Z", async () => {}));
       lostLaunch = launchId;
       lost = { ...parent, n: 2, launchId, startedAt: "2026-10-16T09:45:00.000Z", completedAt: "2026-10-16T09:55:00.000Z",
         state: "failed", verdict: null, agentPath: "/stage/lost.jsonl", restartRecovery: { bootId: "lost-host", requestedAt: "2026-10-16T09:55:00.000Z",
@@ -389,7 +626,7 @@ test.each((["accepted", "accepted replacement", "published"] as const).flatMap(p
       await f.commit("lost attempt output");
     }
     const startedAt = "2026-10-16T10:00:00.000Z";
-    Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, startedAt));
+    Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, startedAt, async () => {}));
     const previous = lost ?? parent;
     const child = { ...f.attempt, n: lost ? 3 : 2, launchId: childLaunch, startedAt, state: "passed",
       agentPath: "/stage/later.jsonl", ...(proof !== "accepted" ? {
@@ -483,12 +720,12 @@ test.each(["another worktree", "hooks off", "missing receipt"] as const)(
       }
 
       const lostStartedAt = "2026-10-16T09:30:00.000Z";
-      Object.assign(f.env, await prepareStageGitGuard(lostLaunch, f.lane, realExec, lostStartedAt));
+      Object.assign(f.env, await prepareStageGitGuard(lostLaunch, f.lane, realExec, lostStartedAt, async () => {}));
       const lost = { ...f.attempt, n: 1, launchId: lostLaunch, startedAt: lostStartedAt, completedAt: "2026-10-16T09:45:00.000Z",
         state: "failed", agentPath: "/stage/divergent-lost.jsonl", restartRecovery: { bootId: "lost-host",
           requestedAt: "2026-10-16T09:45:00.000Z", lastRecordAt: null, replacementAttempt: 2 } } as PipelineStageAttempt;
       const childStartedAt = "2026-10-16T10:00:00.000Z";
-      Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, childStartedAt));
+      Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, childStartedAt, async () => {}));
       const child = { ...f.attempt, n: 2, launchId: childLaunch, startedAt: childStartedAt, completedAt: NOW,
         state: "passed", agentPath: "/stage/divergent-child.jsonl",
         restartContext: { previousAttempt: 1, transcriptPath: lost.agentPath, cause: "host-lost" } } as PipelineStageAttempt;
@@ -535,7 +772,7 @@ test.each(["another worktree", "hooks off", "missing receipt"] as const)(
         if (origin === "missing receipt") await fs.rm(path.join(f.receipt, "commits", divergent));
       }
 
-      Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, "2026-10-16T10:00:00.000Z"));
+      Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, "2026-10-16T10:00:00.000Z", async () => {}));
       await f.own("merge", "--no-ff", "-m", "restore the accepted boundary", accepted);
       const head = await f.commit("ordinary retry output");
       const pushed = await realExec("git", ["push", "--no-verify", "origin", "HEAD:refs/heads/pipeline/proof"], f.lane, f.env);
@@ -562,7 +799,7 @@ test("an ordinary retry settles a recorded prefix from its failed predecessor", 
     const inherited = await f.commit("recorded predecessor output");
     const parent = { ...f.attempt, n: 1, state: "failed", completedAt: "2026-10-16T09:30:00.000Z",
       agentPath: "/stage/recorded-retry-parent.jsonl" } as PipelineStageAttempt;
-    Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, "2026-10-16T10:00:00.000Z"));
+    Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, "2026-10-16T10:00:00.000Z", async () => {}));
     const child = { ...f.attempt, n: 2, launchId: childLaunch, startedAt: "2026-10-16T10:00:00.000Z",
       completedAt: NOW, state: "passed", agentPath: "/stage/recorded-retry-child.jsonl" } as PipelineStageAttempt;
     const head = await f.commit("ordinary retry continuation");
@@ -584,7 +821,7 @@ test("an ordinary retry settles unpublished history receipted by an earlier pass
     const inherited = await f.commit("passed predecessor output");
     const parent = { ...f.attempt, n: 1, state: "passed", completedAt: "2026-10-16T09:30:00.000Z",
       verdict: { status: "pass", summary: "accepted by review" }, agentPath: "/stage/passed-predecessor.jsonl" } as PipelineStageAttempt;
-    Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, "2026-10-16T10:00:00.000Z"));
+    Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, "2026-10-16T10:00:00.000Z", async () => {}));
     const child = { ...f.attempt, n: 2, launchId: childLaunch, startedAt: "2026-10-16T10:00:00.000Z",
       completedAt: NOW, state: "passed", agentPath: "/stage/passed-predecessor-retry.jsonl" } as PipelineStageAttempt;
     const head = await f.commit("retry output");
@@ -609,7 +846,7 @@ test("four host-loss attempts preserve their receipt ancestry", async () => {
       const startedAt = n === 1 ? START : `2026-10-16T${String(8 + n).padStart(2, "0")}:00:00.000Z`;
       if (n > 1) {
         launches.push(launchId);
-        Object.assign(f.env, await prepareStageGitGuard(launchId, f.lane, realExec, startedAt));
+        Object.assign(f.env, await prepareStageGitGuard(launchId, f.lane, realExec, startedAt, async () => {}));
       }
       const attempt = { ...f.attempt, n, launchId, startedAt, completedAt: `2026-10-16T${String(8 + n).padStart(2, "0")}:30:00.000Z`,
         state: n === 4 ? "passed" : "failed", agentPath: `/stage/chain-${n}.jsonl`,
@@ -655,7 +892,7 @@ test.each([1, 70].flatMap(count =>
       expect(made.code, made.stderr).toBe(0);
     }
     const foreign = await f.own("rev-parse", "HEAD");
-    Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, "2026-10-16T10:00:00.000Z"));
+    Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, "2026-10-16T10:00:00.000Z", async () => {}));
     const refusedAttempts = Array.from({ length: refusedCount }, (_, index) => ({
       ...refused, n: index + 2,
       restartContext: index === 0 ? refused.restartContext : { previousAttempt: index + 1, transcriptPath: null },
@@ -1546,7 +1783,7 @@ test.each(["host-lost replacement", "operator retry"] as const)(
         agentPath: "/stage/killed.jsonl", ...(lineage === "host-lost replacement" ? { restartRecovery: { bootId: "killed-host",
           requestedAt: "2026-10-16T09:30:00.000Z", lastRecordAt: null, replacementAttempt: 2 } } : {}) } as PipelineStageAttempt;
       await fs.rm(stageGitReceiptDirectory(childLaunch), { recursive: true, force: true });
-      Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, "2026-10-16T10:00:00.000Z"));
+      Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, "2026-10-16T10:00:00.000Z", async () => {}));
       const child = { ...f.attempt, n: 2, launchId: childLaunch, startedAt: "2026-10-16T10:00:00.000Z", completedAt: NOW,
         state: "passed", agentPath: "/stage/after-kill.jsonl",
         ...(lineage === "host-lost replacement" ? { restartContext: { previousAttempt: 1, transcriptPath: parent.agentPath, cause: "host-lost" } } : {}),
@@ -1575,7 +1812,7 @@ test("a same-identity commit made in the lane after the attempt ended is still r
     expect(late.code, late.stderr).toBe(0);
     const foreign = await f.own("rev-parse", "HEAD");
     await fs.rm(path.join(f.receipt, "commits", foreign));
-    Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, "2026-10-16T10:00:00.000Z"));
+    Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, "2026-10-16T10:00:00.000Z", async () => {}));
     const child = { ...f.attempt, n: 2, launchId: childLaunch, startedAt: "2026-10-16T10:00:00.000Z", completedAt: NOW,
       state: "passed", agentPath: "/stage/after-end.jsonl" } as PipelineStageAttempt;
     await f.commit("retry output");

@@ -15,6 +15,8 @@ poll=${LLV_GATE_POLL_SECONDS:-2}
 
 # CPU placement: the same defaults as src/lib/runtime/cpuPlacement.ts. Each
 # setting is read as DELEGATUS_X, then as the LLV_X an entry point folds it into.
+# owned-runner always applies CPUWeight=10 and IOWeight=10 to the check service,
+# including the no-placement and namespace handoff paths.
 slice=${LLV_GATE_SLICE:-delegatus-agents-work.slice}
 # The machine's online CPUs whatever this process's affinity, like onlineCpuCount.
 cpus=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
@@ -122,7 +124,8 @@ if [[ $reuse_code != 75 ]]; then exit "$reuse_code"; fi
 # (docs/design/remote-gate-runner.md §8.3). The runner file sits under the
 # passwd home, which agents' private HOME and XDG_CONFIG_HOME do not hide. The
 # client either exits with the remote verdict or writes "here", and the command
-# is then admitted and run on this machine as before.
+# is then admitted and run on this machine as before. A saturation decision
+# is advisory: it skips no pressure, queue, slot or containment checks below.
 runner_client="$(dirname "${BASH_SOURCE[0]}")/gate-runner/client.ts"
 if [[ ${LLV_GATE_RUNNER:-} != off && ${NODE_ENV:-} != test && -f $runner_client && $(uname -s 2>/dev/null) == Linux ]] \
   && [[ -n ${LLV_GATE_RUNNER:-} || -n ${LLV_GATE_RUNNER_CONFIG:-} || -f "$(getent passwd "$(id -u)" | cut -d: -f6)/.config/delegatus/gate-runner.json" ]]; then
