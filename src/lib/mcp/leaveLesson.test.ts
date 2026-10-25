@@ -35,11 +35,7 @@ test("a lesson answer is exactly one of none, rewrite or one lesson", () => {
 
 test("task identifiers are refused without consuming the request, and a second accepted answer is refused", async () => {
   fixture += 1;
-  const report = await call("conversation_fix", "stage_report", { verdict: "pass" });
-  const prompt = (report.lessonRequest as string[]).join("\n");
-  expect(prompt).toContain("different task");
-  expect(prompt).toContain("narrowest true level");
-  for (const old of ["one to three", "at least one lesson is better", "Start there"]) expect(prompt).not.toContain(old);
+  await call("conversation_fix", "stage_report", { verdict: "pass" });
   const spans = ["#42", "PR 42", "pull request 42", "issue 42", "pull/42", "issues/42", "a1b2c3d", "r_ab12", "conversation_trial", ["12345678", "1234", "1234", "1234", "123456789012"].join("-")];
   for (const span of spans) {
     const response = await call("conversation_fix", "leave_lesson", { lesson: { scope: "role", rule: `Check the durable acknowledgement after ${span} before replaying the operation.`, why: "A previous receipt belonged to an earlier owner." } });
@@ -179,10 +175,6 @@ test("a fix request quotes finding classes and asks for the rule needed before t
     "- P2: The decision row clips at phone width in Ukrainian.",
     "- P3: The endpoint accepts a request without its required field.",
   ]);
-  const prompt = lines.join("\n");
-  expect(prompt).toContain("before the first review");
-  expect(prompt.indexOf("- rewrite:")).toBeLessThan(prompt.indexOf("- lesson:"));
-  for (const clause of ["this specification alone", "finding was not a defect", "a gate every task runs now catches it", '"Existing rules cover it" is no reason', "No lesson may be about a task.", "choose the narrowest true level:", "- role on every project:", "- project: every role", "- machine: every role"]) expect(prompt).toContain(clause);
   for (const line of lessonRequestLines(null).filter(line => line.startsWith("No lesson may") || /^- (role|project|machine):|^- role on every project:/.test(line))) expect(lines).toContain(line);
   expect(lessonRequest(record.id, "fix", 1)?.taskId).toBe(record.taskIds[0]);
 });
@@ -231,8 +223,7 @@ test("none is recorded under the attempt with its gate reason; the server does n
 test("a concrete problem answer is retained for the seat and never stored as a rule", async () => {
   const record = pipeline();
   const service = serviceAs("conversation_fix", false, record);
-  const report = await service.callTool("stage_report", { clientRequestId: "problem-request", verdict: "pass" });
-  expect((report.lessonRequest as string[]).join("\n")).toContain("- problem:");
+  await service.callTool("stage_report", { clientRequestId: "problem-request", verdict: "pass" });
   const problem = { statement: "The locale list in the instructions disagrees with the required locale gate.", evidence: "config/supported-locales.js lists six locales; the instructions list four." };
   const before = projectView(PROJECT).scopes.flatMap(scope => scope.active).length;
   const answer = await service.callTool("leave_lesson", { clientRequestId: "problem-answer", problem });

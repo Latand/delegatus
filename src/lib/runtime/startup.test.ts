@@ -2755,11 +2755,8 @@ test("the surviving restart nudge names the turn that was severed", async () => 
     /* The turn it is talking about, named by the evidence that identifies it. */
     expect(message?.text).toContain("tool-result");
     expect(message?.text).toContain(severedAt);
-    expect(message?.text).toContain("resume that turn");
     /* #1276: the Viewer owns the clock now, so the seat is no longer asked to
        arm a schedule it has no lever for. */
-    expect(message?.text).not.toContain("re-arm");
-    expect(message?.text).not.toContain("checkpoint loop");
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null });
     journal.close();

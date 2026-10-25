@@ -370,11 +370,14 @@ test.each(["failed", "uncertain", "rotate-during-status", "recovery-wait", "rese
   f.registry.deliveryWrite = async (label, mutation, ...rest) => {
     if (holder && label.label === "delivery.direct-admission") {
       await holder.hold();
-      const pending = write(label, mutation, ...rest);
+      // Observe the write before awaiting lock release, then forward its outcome.
+      const pending = write(label, mutation, ...rest).then(value => ({ value }), error => ({ error }));
       await new Promise<void>(resolve => setTimeout(() => { timerAdvanced = true; resolve(); }, 0));
       rotate();
       await holder.release();
-      return pending;
+      const outcome = await pending;
+      if ("error" in outcome) throw outcome.error;
+      return outcome.value;
     }
     return write(label, mutation, ...rest);
   };

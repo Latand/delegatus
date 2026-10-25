@@ -525,6 +525,7 @@ for (const confirmed of [false, true]) test(`startup terminal reconciliation ret
     ledger.recordQueued(generationId, { id: operationId, text }, "turn-started");
     if (confirmed) expect(ledger.confirmDelivered(generationId, operationId, "terminal-evidence-user", "operation-bound")).toBe("accepted");
     const client = { ...emptyJournalClient(journal),
+      append: async (event: Parameters<typeof journal.append>[0]) => journal.append(event),
       transitionOperation: async (id: string, status: Parameters<typeof journal.transitionOperation>[1], details: Parameters<typeof journal.transitionOperation>[2], options: Parameters<typeof journal.transitionOperation>[3]) => journal.transitionOperation(id, status, details, options),
     } as import("./client").RuntimeHostClient;
     await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true,
