@@ -30,6 +30,7 @@ import { appendRuntimeLiveTurnDelta, runtimeLiveTurnItems, type RuntimeLiveTurn 
 import { adoptCodexRegistryHosts, bindCodexHostPersistence, codexHostColumns, persistCodexHost, startCodexStructuredHost, structuredHostsEnabled } from "./registry";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import type { RuntimeHostClient } from "./client";
+import { NativeQueueExecutor } from "./nativeQueueExecutor";
 import { bindStructuredDeliveryQueue } from "./structuredDeliveryController";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { questionsResolution } from "@/components/runtime/ConversationAttention";
@@ -3089,6 +3090,63 @@ describe("CodexAppServerHost", () => {
       turnId: "turn-1",
     });
     await host.release();
+  });
+
+  describe("native queue proof of an entry the engine consumed", () => {
+    const queueEntry = (threadId: string, overrides: Partial<NativeQueueRecord["versions"][number]> = {}): NativeQueueRecord => ({
+      entryId: "consumed-entry", conversationId: "conversation_fixture",
+      binding: {threadId, accountId: "fixture"}, clientUserMessageId: "consumed-entry", nativeSubmissionId: "native-submission",
+      revision: 1, versions: [{revision: 1, operationId: "consumed-entry", text: "Look at this", images: [], contentDigest: "fixture-digest",
+        origin: {kind: "operator"}, ...overrides}],
+      profilePolicy: "thread-at-dispatch", state: "queued", mutationOperationId: null,
+      dispatchedRevision: null, dispatchedTurnId: null, proof: null, reason: null,
+    });
+
+    test("an adopted thread whose resume omitted its transcript path still proves a consumed entry", async () => {
+      const server = new FakeAppServer("pathless-native-thread");
+      server.userAgent = "codex_desktop_app/0.154.0 (Linux)";
+      server.paginatedHistory = true;
+      server.omitThreadPath = true;
+      const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+      try {
+        const entry = queueEntry("pathless-native-thread");
+        entry.versions[0].input = await host.nativeQueue!.prepare(entry, entry.versions[0]);
+        server.readTurns = [{id: "turn-1", status: "completed", items: [
+          {type: "userMessage", id: "canonical-user", clientId: entry.clientUserMessageId, content: entry.versions[0].input}]}];
+        expect(await host.nativeQueue!.evidenceBatch!([entry])).toEqual([expect.objectContaining({itemId: "canonical-user"})]);
+        expect(await host.nativeQueue!.evidence(entry)).toMatchObject({itemId: "canonical-user"});
+        // The executor's pass over this real host moves the consumed entry to delivered.
+        const transitions: Array<{ id: string; phase: string }> = [];
+        const executor = new NativeQueueExecutor({ resolveHost: () => host, binding: () => entry.binding, client: {
+          nativeQueueRead: async () => [entry],
+          operationStatus: async () => ({ receipt: { status: "queued" } }),
+          nativeQueueTransition: async (id: string, transition: { phase: string }) => { transitions.push({ id, phase: transition.phase }); },
+        } as unknown as RuntimeHostClient });
+        expect(await executor.reconcile("conversation_fixture")).toBeFalse();
+        expect(transitions).toEqual([{ id: "consumed-entry", phase: "proven" }]);
+        expect(server.requests.some(r => r.method === "turn/start" || r.method === "turn/steer" || r.method === "thread/queue/add")).toBeFalse();
+      } finally { await host.release(); }
+    }, 15000);
+
+    test("an image entry the engine recorded as a data URL is proven", async () => {
+      const server = new FakeAppServer("image-native-thread");
+      server.userAgent = "codex_desktop_app/0.154.0 (Linux)";
+      server.paginatedHistory = true;
+      const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+      try {
+        const bytes = Buffer.from("fixture-image-bytes");
+        const { createHash } = await import("node:crypto");
+        const image = {sha256: createHash("sha256").update(bytes).digest("hex"), mime: "image/png" as const, bytes: bytes.length};
+        const entry = queueEntry("image-native-thread", {images: [image]});
+        entry.versions[0].input = [
+          {type: "localImage", path: `/runtime-images/${image.sha256}.png`},
+          {type: "text", text: "Look at this", text_elements: []},
+        ];
+        server.readTurns = [{id: "turn-1", status: "completed", items: [{type: "userMessage", id: "canonical-user", clientId: entry.clientUserMessageId,
+          content: [{type: "image", url: `data:image/png;base64,${bytes.toString("base64")}`}, {type: "text", text: "Look at this", text_elements: []}]}]}];
+        expect(await host.nativeQueue!.evidenceBatch!([entry])).toEqual([expect.objectContaining({itemId: "canonical-user"})]);
+      } finally { await host.release(); }
+    }, 15000);
   });
 
   test("confirms native queue delivery and materialization across 316 turns within existing bounds", async () => {
