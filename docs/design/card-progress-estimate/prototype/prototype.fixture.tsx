@@ -15,15 +15,17 @@
  *   3  a short bar in the state line, beside the status dot.
  *
  * Each variant draws the same cards: no estimate (a dashed empty track),
- * 0 %, 35 % working, 65 % waiting for the PR's checks (its dot's popover
- * open), 100 % that still waits for an answer, a report two days old
- * (softened), and on the desktop a Done card at 100 %. The popover keeps the product's own words first and adds the
- * estimate and its age on a line of its own.
+ * 0 %, 35 % working, 65 % waiting for the PR's checks (its dot's words
+ * shown: the desktop's popover open beside the state line, a caption under
+ * the card on the phone), 100 % that still waits for an answer, a report two
+ * days old (softened), and on the desktop a Done card at 100 %. The words keep
+ * the product's own first and add the estimate and its age on a line of
+ * their own.
  *
  * Query string: ?variant=1|2|3&device=desktop|phone&lang=uk|en&theme=light|dark
  */
 
-import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
 
@@ -35,7 +37,6 @@ import { setRuntimeUiEnabledForTests } from "@/hooks/runtimeBus";
 import { KanbanBoard } from "@/components/kanban/KanbanBoard";
 import { MobileKanban } from "@/components/mobile/MobileKanban";
 import { cardStatePopover, type CardState } from "@/components/kanban/cardState";
-import { TooltipBubble } from "@/components/TooltipBubble";
 import { humanizeDuration } from "@/components/turnDuration";
 
 /* ---------- what is drawn ---------- */
@@ -194,7 +195,7 @@ const CARDS: CardSpec[] = [
     }),
   },
 ];
-/** The card whose dot's popover is open in every frame: the design's own example, a waiting card at 65 %. */
+/** The card whose dot's words every frame shows (the desktop's open popover, the phone's caption): the design's own example, a waiting card at 65 %. */
 const POPOVER_CARD = "t-65";
 
 const PIPELINES = CARDS.map((card) => card.pipeline);
@@ -227,24 +228,39 @@ function estimateLine(estimate: Estimate): string {
 
 /* ---------- the bar ---------- */
 
-/** The track and its fill, in the product's own tokens: the strong border's
-    tone for the track (dashed when nothing was reported), the secondary text
-    tone for the fill, and the muted text tone once the report is older than a
-    day. No status colour: the dot keeps those. */
+/** The track and its fill, in the product's own tokens. The track is a 1 px
+    outline (dashed, with nothing inside, when nothing was reported) in the
+    muted text tone eased toward the card: 3.2:1 against the light card, 3.6:1
+    against the dark one. Inside it lies the default border tone, and the fill
+    on that: the secondary text tone, and the muted text tone once the report
+    is older than a day, each at least 3.9:1 against the inside. A solid 2 px track under a solid fill cannot
+    hold 3:1 at both steps with a softened fill (README.md, «The bar's look»).
+    No status colour: the dot keeps those. */
 const BAR_CSS = `
-[data-proto-progress] { display: block; height: 2px; border-radius: 1px; pointer-events: none; overflow: hidden; }
-[data-proto-progress="known"], [data-proto-progress="stale"] { background: var(--border-strong); }
-[data-proto-progress="unknown"] { background: repeating-linear-gradient(90deg, var(--border-strong) 0 4px, transparent 4px 8px); }
-[data-proto-progress] > [data-proto-fill] { display: block; height: 100%; border-radius: 1px; background: var(--color-secondary); }
-[data-proto-progress="stale"] > [data-proto-fill] { background: color-mix(in srgb, var(--color-muted) 60%, var(--border-strong)); }
-/* Variant 1: inside the card's bottom padding, inset by the card's own horizontal padding. */
-[data-proto-variant="1"] [data-proto-host] { position: absolute; left: 12px; right: 12px; bottom: 4px; }
+:root { --proto-track: color-mix(in srgb, var(--color-muted) 78%, var(--surface-card)); }
+[data-proto-progress] { display: block; box-sizing: border-box; height: 5px; border: 1px solid var(--proto-track); border-radius: 999px; background: var(--border-default); pointer-events: none; overflow: hidden; }
+[data-proto-progress="unknown"] { border-style: dashed; background: none; }
+[data-proto-progress] > [data-proto-fill] { display: block; height: 100%; border-radius: 999px; background: var(--color-secondary); }
+[data-proto-progress="stale"] > [data-proto-fill] { background: var(--color-muted); }
+/* Variant 1: in the card's bottom padding, inset by the card's own horizontal
+   padding. The padding grows by 4 px so the bar keeps a clear gap below the
+   last row, a framed phone card's «Answer» button included. */
+[data-proto-variant="1"] [data-proto-host] { position: absolute; left: 12px; right: 12px; bottom: 5px; }
+[data-proto-variant="1"] .kb .card:has(> [data-proto-host]) { padding-bottom: 16px; }
 /* The phone's face and frame set no position of their own; the desktop card already does. */
-[data-proto-variant="1"] :is([data-phone-card], [data-phone-card-frame]):has(> [data-proto-host]) { position: relative; }
-/* Variant 2: under the title, inside the gap that already follows the title row. */
-[data-proto-variant="2"] [data-proto-host] { display: block; margin: -4px 0 -4px; padding-left: ${PHONE ? "0" : "22px"}; }
-/* Variant 3: a short fixed-width track beside the dot, level with its centre. */
-[data-proto-variant="3"] [data-proto-host] { flex: none; width: 32px; margin-top: 7px; margin-left: -2px; }
+[data-proto-variant="1"] :is([data-phone-card], [data-phone-card-frame]):has(> [data-proto-host]) { position: relative; padding-bottom: 16px; }
+/* Variant 2: under the title row, centred between the title's last line and
+   the state line (CardBar sets the margins, since the title row's height
+   depends on its controls). */
+[data-proto-variant="2"] [data-proto-host] { display: block; padding-left: ${PHONE ? "0" : "22px"}; }
+/* A phone card with a dismissal beside its face: the bar runs on under the
+   dismissal, to the same right edge as every other card's. */
+[data-proto-variant="2"] [data-phone-card]:has(+ [data-phone-card-dismiss]) > [data-proto-host] { margin-right: -32px; }
+/* Variant 3: a short capsule beside the dot, level with its centre. */
+[data-proto-variant="3"] [data-proto-progress] { height: 8px; }
+[data-proto-variant="3"] [data-proto-host] { flex: none; width: 36px; margin-top: 4px; margin-left: -1px; }
+/* The desktop's open popover, beside the state line (DesktopPopover). */
+[data-proto-pop-placed] .card-state-pop { left: var(--proto-pop-left) !important; top: var(--proto-pop-top) !important; }
 `;
 
 function Bar({ card }: { card: CardSpec }) {
@@ -270,7 +286,7 @@ function Bar({ card }: { card: CardSpec }) {
 /* ---------- inserting into the product's own markup ---------- */
 
 /** Waits for a place the product renders, hands back a node inserted there, and inserts it again if the product redraws it. */
-function useInsertedHost(find: () => { parent: Element; before: Element | null } | null, tag: "div" | "span" = "span"): HTMLElement | null {
+function useInsertedHost(find: () => { parent: Element; before: Element | null } | null, tag: "div" | "span" = "span", mark = "protoHost"): HTMLElement | null {
   const [host, setHost] = useState<HTMLElement | null>(null);
   useEffect(() => {
     let made: HTMLElement | null = null;
@@ -279,7 +295,7 @@ function useInsertedHost(find: () => { parent: Element; before: Element | null }
       const spot = find();
       if (!spot) return;
       made = document.createElement(tag);
-      made.dataset.protoHost = "";
+      made.dataset[mark] = "";
       spot.parent.insertBefore(made, spot.before);
       setHost(made);
     };
@@ -287,7 +303,7 @@ function useInsertedHost(find: () => { parent: Element; before: Element | null }
     const observer = new MutationObserver(attempt);
     observer.observe(document.body, { childList: true, subtree: true });
     return () => observer.disconnect();
-  }, [find, tag]);
+  }, [find, tag, mark]);
   return host;
 }
 
@@ -309,9 +325,51 @@ function barSpot(id: string, variant: Variant): { parent: Element; before: Eleme
   return dot ? { parent: dot.parentElement!, before: dot.nextElementSibling } : null;
 }
 
+/** Variant 2: moves the bar to the middle of the space between the title's
+    last line and the state line, keeping the state line where it is. */
+function centreUnderTitle(host: HTMLElement, id: string) {
+  const card = cardElement(id);
+  const title = card?.querySelector(PHONE ? "[data-phone-card-title]" : ".title");
+  const line = card?.querySelector(".card-state");
+  if (!title || !line) return;
+  host.style.marginTop = host.style.marginBottom = "";
+  /* The words' line boxes, not their elements' boxes: the desktop title is a 28 px rename button. */
+  const lines = (element: Element) => {
+    const rects: DOMRect[] = [];
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) if (rect.width) rects.push(rect);
+    }
+    return rects;
+  };
+  const titleLines = lines(title);
+  const stateLines = lines(line.querySelector(".card-state-words") ?? line);
+  if (!titleLines.length || !stateLines.length) return;
+  const titleBottom = Math.max(...titleLines.map((rect) => rect.bottom));
+  const stateTop = Math.min(...stateLines.map((rect) => rect.top));
+  const bar = host.getBoundingClientRect();
+  const shift = Math.round((titleBottom + stateTop - bar.height) / 2 - bar.top);
+  host.style.marginTop = `${shift}px`;
+  host.style.marginBottom = `${-shift}px`;
+}
+
 function CardBar({ card }: { card: CardSpec }) {
   const find = useMemo(() => () => barSpot(card.id, VARIANT), [card.id]);
   const host = useInsertedHost(find);
+  useEffect(() => {
+    if (!host || VARIANT !== 2) return;
+    /* Again whenever the card or its title changes size: the board settles its layout over several frames. */
+    const centre = () => centreUnderTitle(host, card.id);
+    const observer = new ResizeObserver(centre);
+    const element = cardElement(card.id);
+    if (element) observer.observe(element);
+    const title = element?.querySelector(PHONE ? "[data-phone-card-title]" : ".title");
+    if (title) observer.observe(title);
+    centre();
+    return () => observer.disconnect();
+  }, [host, card.id]);
   return host ? createPortal(<Bar card={card} />, host) : null;
 }
 
@@ -362,42 +420,82 @@ function DesktopPopover({ card }: { card: CardSpec }) {
     return words ? { parent: words.parentElement!, before: null } : null;
   }, []);
   const host = useInsertedHost(find);
-  /* The bubble placed itself for the product's one line: the added line makes
-     it taller, so it measures again, as it does on a resize. */
+  /* The product opens the bubble above the dot, over the card's own title (and
+     in variant 2 over its bar). The prototype opens it beside the state line
+     instead: level with the line's top, 12 px after the words of every row it
+     spans, so it covers neither the title, nor any bar, nor any words. The product's bubble keeps its words and its
+     layer; only its place moves. It measures again once the added line makes
+     it taller, and on every resize. */
   useEffect(() => {
-    if (host) requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
-  }, [host]);
+    if (!host) return;
+    const place = () => {
+      const cardBox = cardElement(card.id);
+      const line = cardBox?.querySelector<HTMLElement>(".card-state");
+      const bubble = document.querySelector(".card-state-pop");
+      if (!cardBox || !line || !bubble) return;
+      const top = line.getBoundingClientRect().top - 4;
+      const bottom = top + bubble.getBoundingClientRect().height;
+      /* The right end of the words on every row the bubble spans. */
+      let textRight = line.getBoundingClientRect().left;
+      const walker = document.createTreeWalker(cardBox, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.textContent?.trim()) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const rect of range.getClientRects()) if (rect.width && rect.top < bottom && rect.bottom > top) textRight = Math.max(textRight, rect.right);
+      }
+      const root = document.documentElement;
+      root.style.setProperty("--proto-pop-left", `${Math.round(textRight + 12)}px`);
+      root.style.setProperty("--proto-pop-top", `${Math.round(top)}px`);
+      root.dataset.protoPopPlaced = "";
+    };
+    const frame = requestAnimationFrame(() => { window.dispatchEvent(new Event("resize")); place(); });
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => { cancelAnimationFrame(frame); window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); };
+  }, [host, card.id]);
   return host ? createPortal(<span className="block" data-proto-estimate-line="">{estimateLine(card.estimate)}</span>, host) : null;
 }
 
 /** The phone's dot is passive inside its one-button card, so the product
-    draws no popover there; the frame shows the same words in the same bubble,
-    anchored to that dot (README.md, «The phone»). */
-function PhonePopover({ card }: { card: CardSpec }) {
-  const ref = useRef<Element | null>(null);
+    draws no popover there. The frame prints the same words as a caption under
+    the card, outside it, so the card's title and bar stay in view
+    (README.md, «The phone»). */
+function PhoneCaption({ card }: { card: CardSpec }) {
   const [owner, setOwner] = useState<CardState["owner"] | null>(null);
+  const find = useMemo(() => () => {
+    const face = cardElement(card.id);
+    if (!face) return null;
+    /* The card's own entry in the column's list: the outermost box that holds this card and no other. */
+    let entry: Element = face;
+    while (entry.parentElement && entry.parentElement.querySelectorAll("[data-phone-card]").length === 1) entry = entry.parentElement;
+    return entry.parentElement ? { parent: entry.parentElement, before: entry.nextElementSibling } : null;
+  }, [card.id]);
+  /* Its own mark: the bar's host rules (variant 1 places it absolutely) must not reach it. */
+  const host = useInsertedHost(find, "div", "protoCaptionHost");
   useEffect(() => {
-    const find = () => {
+    const read = () => {
       const dot = cardElement(card.id)?.querySelector(".card-state-dot");
-      if (!dot || ref.current === dot) return;
-      ref.current = dot;
-      setOwner(dot.getAttribute("data-owner") as CardState["owner"]);
+      if (dot) setOwner(dot.getAttribute("data-owner") as CardState["owner"]);
     };
-    find();
-    const observer = new MutationObserver(find);
+    read();
+    const observer = new MutationObserver(read);
     observer.observe(document.body, { childList: true, subtree: true });
     return () => observer.disconnect();
   }, [card.id]);
-  const settled = useSettled();
-  if (!owner || !settled) return null;
+  if (!host || !owner) return null;
   /* The waiting card stands since its PR's merge request, as `laneState` reads it. */
   const since = card.pipeline.merge?.requestedAt ? Date.parse(card.pipeline.merge.requestedAt) : NOW_MS;
   const words = cardStatePopover(t as never, { owner } as CardState, humanizeDuration((NOW_MS - since) / 1000, LANG));
-  return (
-    <TooltipBubble anchorRef={ref as RefObject<Element | null>} side="top" align="left" className="card-state-pop">
-      <span data-card-state-pop={owner}>{words}</span>
-      <span className="block" data-proto-estimate-line="">{estimateLine(card.estimate)}</span>
-    </TooltipBubble>
+  return createPortal(
+    <div className="flex flex-col gap-1 px-1 pt-0.5 text-caption text-muted" data-proto-phone-caption="">
+      <span>{L("↑ What the dot says (on the phone: in the card's description and the opened task)", "↑ Що каже крапка (на телефоні — в описі картки й відкритій задачі)")}</span>
+      <span className="card-state-pop block self-start">
+        <span className="block" data-card-state-pop={owner}>{words}</span>
+        <span className="block" data-proto-estimate-line="">{estimateLine(card.estimate)}</span>
+      </span>
+    </div>,
+    host,
   );
 }
 
@@ -464,7 +562,9 @@ const LEGEND_LABELS: Record<string, string> = {
   "t-none": L("no estimate", "без оцінки"),
   "t-zero": "0%",
   "t-35": L("35%, working", "35%, працює"),
-  "t-65": L("65%, waiting for checks (popover open)", "65%, чекає перевірок (підказку відкрито)"),
+  "t-65": PHONE
+    ? L("65%, waiting for checks (the dot's words under it)", "65%, чекає перевірок (слова крапки під нею)")
+    : L("65%, waiting for checks (popover open)", "65%, чекає перевірок (підказку відкрито)"),
   "t-stale": L("50%, reported 2 days ago", "50%, оцінка 2-денної давності"),
   "t-done": L("100%, merged", "100%, змерджено"),
 };
@@ -509,7 +609,7 @@ function Frame({ children }: { children: ReactNode }) {
       {children}
       <style>{BAR_CSS}</style>
       {CARDS.map((card) => <CardBar key={card.id} card={card} />)}
-      {PHONE ? <PhonePopover card={byId.get(POPOVER_CARD)!} /> : <DesktopPopover card={byId.get(POPOVER_CARD)!} />}
+      {PHONE ? <PhoneCaption card={byId.get(POPOVER_CARD)!} /> : <DesktopPopover card={byId.get(POPOVER_CARD)!} />}
     </div>
   );
 }

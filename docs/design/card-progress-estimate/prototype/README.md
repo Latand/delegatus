@@ -8,9 +8,9 @@ product code.
 
 | Variant | Where the bar sits | The design's name |
 |---|---|---|
-| 1 | a 2 px track inside the card's bottom padding, inset by the card's own horizontal padding | A (recommended) |
-| 2 | the same track under the title, inside the gap that already follows the title row | B |
-| 3 | a short 32 px track in the state line, between the status dot and its words | C |
+| 1 | a 5 px track in the card's bottom padding, inset by the card's own horizontal padding | A (recommended) |
+| 2 | the same track under the title, centred between the title's last line and the state line | B |
+| 3 | a short 36 × 8 px capsule in the state line, between the status dot and its words | C |
 
 Each frame prints its variant number and name in a band above the board, in
 the frame's language. The band also has a legend that lists each card's
@@ -30,14 +30,14 @@ Every variant draws the same cards in «In progress» / «У роботі»:
 | Import contacts from Google | ≈0%, 6 min ago | working | solid empty track |
 | Card payments: 3-D Secure | ≈35%, 18 min ago | working | a third filled |
 | Dark theme in settings | ≈100%, 9 min ago | needs your answer: the deploy stage asked a question | full, though the task is not done |
-| Search filters reset after going back from a product page | ≈65%, 12 min ago | waiting for PR #418 checks | two thirds; **its dot's popover is open** |
+| Search filters reset after going back from a product page | ≈65%, 12 min ago | waiting for PR #418 checks | two thirds; **its dot's words are shown** (desktop: the popover open; phone: a caption under the card) |
 | Orders page is slow on phones | ≈50%, 2 days ago | waiting: paused | half, in the softened tone |
 
 The desktop also draws a finished task in «Done» / «Готові»: «Receipts by email»,
 ≈100%, merged. It shows the bar on the narrow 280 px shelf card. On the phone
 that card is in the Done tab, off the frame.
 
-The popover keeps the product's words first («Waiting for 40m» / «Чекає вже
+The dot's words keep the product's own first («Waiting for 40m» / «Чекає вже
 40 хв»). A second line adds the estimate and its age: «Agent estimate ≈65% ·
 reported 12m ago» / «Оцінка агента ≈65% · 12 хв тому». A report older than a
 day says «Last agent estimate» / «Остання оцінка агента». A card with no report
@@ -47,12 +47,33 @@ says «No agent estimate yet» / «Агент ще не оцінив».
 
 The bar uses the product's tokens and adds no colour:
 
-- the track is `--border-strong`;
+- the track is a 1 px outline in `--color-muted` mixed 78% with the card's
+  surface, rounded at both ends;
+- inside the outline lies `--border-default`;
 - the fill is `--color-secondary`;
-- an estimate older than 24 hours fills in `--color-muted` mixed with the track
-  tone, which is softer in both themes;
-- an absent estimate is the same track tone, dashed (4 px on, 4 px off), with no
-  fill.
+- an estimate older than 24 hours fills in plain `--color-muted`, a step
+  softer;
+- an absent estimate is the same outline, dashed, with nothing inside.
+
+Measured in the rendered pages (WCAG relative luminance, light / dark):
+
+| Pair | Light | Dark |
+|---|---|---|
+| track outline against the card | 3.28:1 | 3.63:1 |
+| fill against the inside of the track | 5.56:1 | 5.51:1 |
+| stale fill against the inside of the track | 3.90:1 | 4.14:1 |
+| fill against the card | 7.25:1 | 6.80:1 |
+| stale fill against the card | 5.10:1 | 5.11:1 |
+
+The design asks for a solid 2 px track. A solid track under a solid fill
+cannot clear 3:1 at both steps while the stale fill stays softer. In light
+theme, a track at 3:1 against the card leaves too little range for a fill
+that is softer than the secondary text tone and still 3:1 against the track.
+The outline marks the track's extent at 3:1 against the card. The fill then
+sits on the light inside of the track, and every fill clears 3:1 there. So 0%
+reads as an empty capsule and the stale estimate as a lighter fill. The
+track is 5 px tall in variants 1 and 2, and 8 px in variant 3, where a 2 px
+track read as a dash.
 
 Status colours stay on the dot. The bar has no tab stop and no pointer
 handler. A known estimate is a `progressbar` (0–100) named for its task, with
@@ -61,31 +82,52 @@ from assistive technology.
 
 ## What the frames show about each variant
 
-- **Variant 1** never shares a row with text. The open popover covers no bar,
-  because the dot sits above the bottom edge. On the phone, a card with a row
-  under its face (the «Answer» button) is drawn as a frame, so the bar runs
-  along the frame's bottom edge, under the button.
-- **Variant 2** sits between the title and the state line, where it reads
-  like a rule under the title. The dot's popover opens upward over the title,
-  so it covers the start of the bar on the very card whose estimate it
-  explains: on the phone, most of the 65% fill. The checks
-  record this (`popCoversBar: t-65` in every variant 2 frame).
-- **Variant 3** keeps the bar next to the dot. At 32 px, 0% and an absent
-  estimate differ only by dashes, and 35% is an 11 px fill. On a card whose
-  state line wraps (the phone's «Needs your answer» card), the words start
-  37 px further right (the track plus the line's gap).
+- **Variant 1** never shares a row with text. The card's bottom padding grows
+  by 4 px, so the bar keeps a gap of at least 5 px below the last row. On the
+  phone, a card with a row under its face (the «Answer» button) is drawn as a
+  frame. There the bar runs along the frame's bottom edge, 10 px under the
+  button's border, which stays whole.
+- **Variant 2** sits under the whole title row, badge included, centred
+  between the title's last line and the state line (equal gaps within 1 px).
+  Every card's bar ends at the same right edge. On the phone, a card with a
+  dismissal beside its face runs its bar on under the dismissal. The bar adds
+  about 11 px to each card.
+- **Variant 3** keeps the bar next to the dot. On a card whose state line
+  wraps (the phone's «Needs your answer» card), the words start 42 px further
+  right (the capsule plus the line's gap). The extra width wraps that line
+  sooner than in variants 1 and 2.
 
-The popover opens upward over its own card's title in every variant. This is
-the product's hover popover as it is today; the prototype does not change
-where it opens.
+## Where the desktop popover opens
+
+Today the dot's popover opens above the dot. It covers the start of the
+card's own title, and in variant 2 the start of the bar it explains. The
+prototype opens the product's bubble beside the state line instead, so the
+operator can tell which card it explains. Its top is level with the state
+line, 4 px above it. It starts 12 px after the words of every row it spans,
+and covers no title, no bar and no words of any card. The checks record this
+in every desktop frame. At 820 px the bubble runs 8–24 px past the card's right
+edge; in variant 3 in English its last 12 px lie over the empty collapsed
+«Waiting» column beside it.
+
+The product would place it the same way in every variant:
+
+- **Variant 1**: beside the state line. The bar is at the bottom edge,
+  below the rows the bubble spans.
+- **Variant 2**: beside the state line, never above it, since the bar lies
+  between the title and the state line.
+- **Variant 3**: beside the state line, after its words; the bar is before
+  them.
+
+`TooltipBubble` today opens only above or below its anchor, so this needs a
+side placement there.
 
 ## The phone
 
 The phone's card is one button, so its dot is passive and the product draws no
 popover there. The design puts the same words into the card's accessible
-description and the opened task. Each phone frame draws the desktop's bubble
-with the same words, anchored to the passive dot, so the operator can read them
-at 390 px. The product would not show it there.
+description and the opened task. Each phone frame prints those words as a
+caption under the 65% card, outside it, so the card's title and bar stay in
+view. The product would not show the caption.
 
 ## Files
 
@@ -100,12 +142,13 @@ at 390 px. The product would not show it there.
 
 - Desktop: `KanbanBoard` with closed `KanbanCard`s and their real
   `CardStateLine`. The open popover is the product's own `CardStateDot`
-  bubble, opened by a mouse hover on the 65% card. Phone: `MobileKanban` with
+  bubble, opened by a mouse hover on the 65% card and then moved beside its
+  state line. Phone: `MobileKanban` with
   its own cards.
 - New: the bar (inserted into the real card at each variant's place), the
-  popover's second line, and on the phone a `TooltipBubble` anchored to the
-  passive dot. All of them use the product's existing classes and tokens. No
-  new colour, font or card shape.
+  popover's second line and its place beside the state line, and on the
+  phone the caption under the card. All of them use the product's existing
+  classes and tokens. No new colour, font or card shape.
 - The fixture's tasks, lanes, PR numbers and times are invented. The clock is
   frozen at 16:30 Kyiv time on 2026-10-24.
 
@@ -138,12 +181,15 @@ does at that width, so the Done column runs past the right edge.
 Before each capture, the checks measured:
 
 - every bar's text ranges in its card: no bar overlaps text;
-- the bar's offset from the card's bottom edge and its width;
-- that the popover lies inside the viewport, which cards and bars it covers,
-  and that it covers no other card;
+- the bar's offset from the card's bottom edge, its width and its right edge;
+- in variant 2, the gaps above and below the bar;
+- in variant 1 on the phone, the gap between the «Answer» button and the bar;
+- the contrast of the track and the fills, from their computed colours;
+- that the popover lies inside the viewport, and which cards, bars and words
+  it covers;
 - on the phone, in a 390 × 844 viewport before it grows, that every
   In-progress card's bar is on the first screen.
 
 The popover opens only after every bar is in place and two frames have
-painted. Its added line then makes the bubble measure itself again, so it sits
-where a hover on a settled board would put it.
+painted. It is then placed beside the state line, and placed again on every
+resize.
