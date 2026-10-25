@@ -1,16 +1,16 @@
 {
-  "capturedAt": "2026-10-23T20:03:28.012Z",
+  "capturedAt": "2026-10-25T16:37:49.369Z",
   "sourceDigests": {
-    "src/components/kanban/kanbanBoard.browser.test.tsx": "05d9194398129b7be77ef86132134dc7d05bf84610082ab6d161b85ff5ddead3",
-    "src/components/mobile/issue1671Evidence.browser.test.tsx": "4db64c9509d07c42e85feff2cfd7eb7ab780db03d480b20e8d3f5fd8fc346c7a",
-    "src/components/conversation/conversationWindowEvidence.fixture.tsx": "0710fc07b046d7f07ff83e30ec1cf6245eba822df1312ce1d2a43d39bb5690a5",
-    "src/components/kanban/issue1695BrowserHarness.ts": "84fa08a05197b9b4238ed0d265d4982617bc6188f18bef0fabe0b95aa0ffaf70",
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "8d15350d5de5a762d9727fca4e008a6190c42ce7ee893c6e1a49647a9f98d627",
+    "src/components/mobile/issue1671Evidence.browser.test.tsx": "960ac0034144b7d6376eb0f84d1f18187fffe18c3558aaae6cfe6beb416f3743",
+    "src/components/conversation/conversationWindowEvidence.fixture.tsx": "afe6b98b430f8918f23e734569ef82a1872e38146dd3149e1c3e4c5fdaa0587c",
+    "src/components/kanban/issue1695BrowserHarness.ts": "af79cc91f6bad5696fd74299b6b42dd5c2edafeef297d6444c2c466352f9486e",
     "src/components/pipelines/StageSetupResult.tsx": "fdcca3b5dcaf6bd21295ae2b85646b37c36b10dbec39a45dfaf3b6b7d30054e2",
     "src/components/pipelines/StagePlaceholderPane.tsx": "104570955e150a74a3827f6b3e5c1d96f1494607ceb7ad76fa0e5834a50a8175",
-    "src/components/pipelines/VerdictPopover.tsx": "ebaf5764633df2a389255702ab969070b0ea6441ae327e66ba74430ad400a99d",
-    "src/components/mobile/MobilePipelineScreen.tsx": "84d191293e37f40d15c68e61c42196017d869f6a6c4cc1f1feca3d622602fbb4",
-    "src/lib/i18n/en.ts": "d202b27f67803b54a5734b6fe352811a753ebd809e1d203f37402928ac72f1c6",
-    "src/lib/i18n/uk.ts": "3f686462b24227dc91e764a7895b09b5c550d40e79c5b32ebf2ac4a574e9dfe2"
+    "src/components/kanban/StagesSheet.tsx": "aff7bd26bc1f11b7875277c9918fc0a78c9c62703c18d69bdc86a0f1eed63eaf",
+    "src/components/mobile/MobilePipelineScreen.tsx": "c2ec2694a2831b7d023c3670bb3784a03a3a1aee5c729b4647e3a002a4a73b03",
+    "src/lib/i18n/en.ts": "a79a245b685df5be3bad89c912c1bff77844381dc991024a5470c22f26793d2b",
+    "src/lib/i18n/uk.ts": "3c53361d7bd370e82d7963635f988691d1b87c96ee19686ec582475906c0033b"
   },
   "readings": [
     {
