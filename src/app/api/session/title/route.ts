@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -33,7 +34,7 @@ type PatchTitleResponse =
   | { ok: true; override: SessionTitleOverride | null; revision: number }
   | (ApiError & { conflict?: SessionTitleOverride | null });
 
-export async function PATCH(req: NextRequest): Promise<NextResponse<PatchTitleResponse>> {
+async function workspacePATCH(req: NextRequest): Promise<NextResponse<PatchTitleResponse>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
 
@@ -94,3 +95,5 @@ export async function PATCH(req: NextRequest): Promise<NextResponse<PatchTitleRe
 
   return NextResponse.json({ ok: true, override: outcome.override, revision: outcome.revision });
 }
+
+export const PATCH = workspaceRoute("/api/session/title", workspacePATCH);

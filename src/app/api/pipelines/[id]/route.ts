@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
@@ -63,7 +64,7 @@ function pipelineControlAdmission(req: NextRequest): { actor: PauseResumeActor }
   }
 }
 
-export async function GET(
+async function workspaceGET(
   _req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ): Promise<NextResponse<{ ok: true; pipeline: Pipeline; revision: string; stageDigests: Record<string, string>; graphDigest: string } | ApiError>> {
@@ -86,7 +87,7 @@ export async function GET(
   }
 }
 
-export async function PATCH(
+async function workspacePATCH(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ): Promise<NextResponse<{ ok: true; pipeline: Pipeline; revision: string; close?: PipelineCloseReport; graphEdit?: PipelineGraphEdit; convertedStages?: PipelinePatchResult["convertedStages"]; legacyReview?: PipelinePatchResult["legacyReview"]; workLinks?: ResolvedWorkLinks; taskWorkLinks?: Record<string, ResolvedWorkLinks> } | PipelineApiError>> {
@@ -154,7 +155,7 @@ export async function PATCH(
   }
 }
 
-export async function DELETE(
+async function workspaceDELETE(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ): Promise<NextResponse<{ ok: true; pipeline: Pipeline } | ApiError>> {
@@ -171,3 +172,9 @@ export async function DELETE(
     return NextResponse.json({ error: error instanceof Error ? error.message : "could not delete pipeline" }, { status: 500 });
   }
 }
+
+export const GET = workspaceRoute("/api/pipelines/[id]", workspaceGET);
+
+export const PATCH = workspaceRoute("/api/pipelines/[id]", workspacePATCH);
+
+export const DELETE = workspaceRoute("/api/pipelines/[id]", workspaceDELETE);

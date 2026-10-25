@@ -20,7 +20,7 @@ function controlFrame(event: string, data: unknown): string {
 }
 
 /** SSE blocks on the runtime-host waiter and pulls one bounded replay batch at a time. */
-export function runtimeEventStream(client: RuntimeHostClient, after: number, signal: AbortSignal): ReadableStream<Uint8Array> {
+export function runtimeEventStream(client: RuntimeHostClient, after: number, signal: AbortSignal, authorizeBatch?: () => (event: RuntimeEvent) => boolean): ReadableStream<Uint8Array> {
   let cursor = after;
   let stopped = false;
   let pulling = false;
@@ -40,11 +40,12 @@ export function runtimeEventStream(client: RuntimeHostClient, after: number, sig
         }
         if (replay.events.length > 0) {
           const frames: string[] = [];
+          const allowed = authorizeBatch?.();
           for (const event of replay.events) {
-            frames.push(messageFrame(event, event.seq));
+            if (!allowed || allowed(event)) frames.push(messageFrame(event, event.seq));
             cursor = event.seq;
           }
-          controller.enqueue(encoder.encode(frames.join("")));
+          controller.enqueue(encoder.encode(frames.join("") || ": heartbeat\n\n"));
         } else {
           controller.enqueue(encoder.encode(`: heartbeat published=${cursor}\n${controlFrame("heartbeat", { publishedSeq: cursor })}`));
         }

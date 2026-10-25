@@ -30,6 +30,7 @@ const sandboxes: string[] = [];
 const originalStateDir = process.env.LLV_STATE_DIR;
 
 afterEach(() => {
+  setCallerConversationResolverForTests(null);
   setBridgeGatewaySourcesForTests(null);
   setBridgeScopeResolverForTests(null);
   if (originalStateDir === undefined) delete process.env.LLV_STATE_DIR;
@@ -59,6 +60,8 @@ function sandbox(): void {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-bridge-route-"));
   sandboxes.push(dir);
   process.env.LLV_STATE_DIR = path.join(dir, "state");
+  // Import the channel collection before reports open a write transaction.
+  expect(readBridgeChannel()).toBeNull();
   /* A real root lineage, so the route resolves the same durable identity
      production does rather than an injected one. */
   recordRootSession({ conversationId: "conversation_root", path: null });

@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -37,7 +38,7 @@ test("real MCP binding checks the live pass before dispatch and receipt replay",
   const resolveCaller = dependencies.callerAttribution!;
   dependencies.callerAttribution = () => { resolutions++; return resolveCaller(); };
   const policy = viewerMcpToolPolicy(dependencies, false, () => ({ registrySnapshot: () => snapshot } as never));
-  expect(policy.permit("create_task", {})).toHaveProperty("allowed", false);
+  expect(policy.permit("create_task", withTaskDue({}))).toHaveProperty("allowed", false);
   expect(policy.permit("curate_rules", { action: "apply" })).toHaveProperty("allowed", true);
   const service = createMcpToolService(viewerMcpBindings(undefined, undefined, dependencies), new MemoryMcpReceiptStore(), policy);
   const call = async (args: Parameters<typeof service.callTool>[1]) => {

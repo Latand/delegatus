@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
@@ -19,7 +20,7 @@ type TaskRouteContext = {
  * the album, so the pictures new since then can be marked; an album already
  * open passes the mark it opened with as `since` and keeps its marks.
  */
-export async function GET(req: NextRequest, context: TaskRouteContext): Promise<NextResponse<AlbumPage | ApiError>> {
+async function workspaceGET(req: NextRequest, context: TaskRouteContext): Promise<NextResponse<AlbumPage | ApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
   const { id } = await context.params;
@@ -35,7 +36,7 @@ export async function GET(req: NextRequest, context: TaskRouteContext): Promise<
 
 /** The operator opened the album: everything it showed, up to `through` (the
     newest picture's timestamp), is seen. */
-export async function POST(req: NextRequest, context: TaskRouteContext): Promise<NextResponse<{ ok: true; lastOpenedAt: number } | ApiError>> {
+async function workspacePOST(req: NextRequest, context: TaskRouteContext): Promise<NextResponse<{ ok: true; lastOpenedAt: number } | ApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
   const { id } = await context.params;
@@ -45,3 +46,7 @@ export async function POST(req: NextRequest, context: TaskRouteContext): Promise
   const lastOpenedAt = markTaskAlbumSeen(id, body?.through, deps);
   return NextResponse.json({ ok: true, lastOpenedAt });
 }
+
+export const GET = workspaceRoute("/api/tasks/[id]/album", workspaceGET);
+
+export const POST = workspaceRoute("/api/tasks/[id]/album", workspacePOST);

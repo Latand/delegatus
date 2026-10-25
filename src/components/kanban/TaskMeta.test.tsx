@@ -41,3 +41,13 @@ test("a task with neither draws nothing", () => {
   expect(hasTaskMeta({ attachments: images(1) })).toBe(true);
   expect(renderToStaticMarkup(<TaskMeta task={{}} nowMs={NOW} />)).toBe("");
 });
+
+
+test("old undated tasks never gain an overdue badge as time passes", () => {
+  for (const nowMs of [NOW, NOW + 1000 * 24 * 60 * 60 * 1000]) {
+    const markup = renderToStaticMarkup(<TaskMeta task={{ attachments: images(1) }} nowMs={nowMs} />);
+    expect(text(markup)).toBe("📎 1");
+    expect(markup).not.toContain("data-task-due");
+    expect(markup).not.toContain(translate("en", "cardState.overdue"));
+  }
+});
