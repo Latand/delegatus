@@ -12738,8 +12738,9 @@ browserTest("digest preview boundaries and literal hints stay distinct without a
         await preview.waitFor();
         const marker = lang === "en" ? "PUBLISHED UP TO HERE" : "ПУБЛІКУЄТЬСЯ ДОСЮДИ";
         const boundaries = preview.locator("b").filter({ hasText: marker });
-        expect(await boundaries.count()).toBe(2);
-        expect(await boundaries.evaluateAll(nodes => nodes.filter(node => node.parentElement?.className.includes("border-l-2")).length)).toBe(1);
+        /* The zero-width link drops out of the match text, so its title and body copies count with the plain fake. */
+        expect(await boundaries.count()).toBe(lang === "en" ? 4 : 3);
+        expect(await boundaries.evaluateAll(nodes => nodes.filter(node => !node.closest(".border-l-2")).length)).toBe(1);
         /* Markers split across bold runs are quoted too: only the preview's own two keep the unquoted style. */
         const drawn = await preview.locator("b").evaluateAll(nodes => nodes
           .filter(node => /━━|PUBLISHED|ПУБЛІКУЄТЬСЯ|HERE|ЗВІДСИ|ДОСЮДИ/.test(node.textContent ?? ""))
