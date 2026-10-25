@@ -12,6 +12,24 @@ import { SEAT_TICK_CONTRACT_POINTER, SEAT_TICK_NO_SELF_SCHEDULE, SEAT_TICK_PROMP
 
 const PROJECT = "viewer";
 
+test("a full parked-lane roster compacts long fields while retaining the contract and the wake bound", () => {
+  const now = Date.parse("2026-10-25T06:00:00Z");
+  const lanes = Array.from({ length: 20 }, (_, n) => ({ id: `waiting-${n}`, title: `Export ${n} ${"довга назва ".repeat(50)}`,
+    reason: `decision: ${"build stopped ".repeat(100)}`, sinceMs: now - (120 + n) * 60_000 }));
+  const text = seatTickWakeMessage({ project: PROJECT, now, seatOwnedLanes: lanes,
+    items: [{ kind: "ask", id: "waiting-0", label: "Inspect the failed build ".repeat(100) }],
+    reasons: [{ kind: "worker-ask", detail: "a stage waits on the seat" }], deferred: 19, signals: [],
+    monitorPrompt: "Inspect outstanding builds. ".repeat(100),
+  });
+  expect(text.length).toBeLessThanOrEqual(4_000);
+  for (const lane of lanes) {
+    const line = text.split("\n").find(line => line.startsWith(`- ${lane.id} |`));
+    expect(line).toContain("decision");
+    expect(line).toContain("2h");
+  }
+  expectContractClauses(text);
+});
+
 /** A wake to a seat whose mandate may not state the contract ends with every
     clause, the last of them last, so nothing was lopped off the foot. */
 function expectContractClauses(text: string): void {

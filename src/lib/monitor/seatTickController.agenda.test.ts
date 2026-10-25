@@ -1,6 +1,47 @@
 import { expect, spyOn, test, fs, path, spawn, Database, SANDBOX, SESSIONS, SEAT_TICK_NO_SELF_SCHEDULE, reconcileSeatTick, runSeatTickCheck, SEAT_TICK_WAKE_UNRESOLVED_REF, startSeatTick, stopSeatTick, writeDrain, drainFile, releaseDrain, DEFAULT_SEAT_TICK_POLICY, defaultSeatTickSettings, readSeatTickState, writeSeatTickState, appendSeatTickRecord, readSeatTickRecords, SeatTickAccounting, outcomeIdentity, FileRuntimeEventStore, statePath, setAgentRegistryForTests, emptyLaunchProfile, sessionKeyFromTranscript, ORCHESTRATOR_SHIPPED_CLOCK_OPENING, ORCHESTRATOR_SEAT_TICK_CONTRACT, ORCHESTRATOR_SYSTEM_PROMPT, ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE, emptySeatTickState, PROJECT, CONVERSATION, SUCCESSOR, NOW, MINUTE, harness, OVERDUE, outstandingWake, OPEN_LANE, terminalEvent, FINISHED_LANE, standingGap, MONITOR_PROMPT, PROMPT_HEADING, seatTickNoteRevisionForTest, promptSettings, LEDGER_NOTE, busyBoard, CURRENT_SEAT, REPLACEMENT_PROMPT, reservationLayer, HELD, heldWake, nextCheck, childFixture, childRig, ago, recordedWake } from "./seatTickController.fixture";
 import type { SeatTickRunRecord, AgentLivenessRecord, ConversationMessage } from "./seatTickController.fixture";
 
+test("the controller delivers the full seat-owned roster while detail remains capped", async () => {
+  const rig = harness({ state: OVERDUE });
+  const lanes = Array.from({ length: 20 }, (_, n) => ({
+    id: `parked-${n}`, title: `Repair exporter ${n}`, reason: "decision: build stopped", sinceMs: NOW - (40 - n) * MINUTE,
+  }));
+  rig.deps.sources!.workerAsks = async () => lanes.map(lane => ({
+    id: lane.id, key: `lane:${lane.id}:decision`, label: `${lane.title}: inspect the failed build and resolve it`,
+    sinceMs: lane.sinceMs, seatOwnedLane: lane,
+  }));
+  const record = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(record?.verdict).toBe("wake");
+  expect(rig.sent).toHaveLength(1);
+  const text = rig.sent[0]!.text;
+  expect(text.length).toBeLessThanOrEqual(4_000);
+  for (const lane of lanes) expect(text).toContain(`- ${lane.id} | ${lane.title} |`);
+  // The roster alone never acknowledges detail that the capped agenda omitted.
+  const shown = rig.written.at(-1)!.itemsShown ?? [];
+  expect(shown).toHaveLength(DEFAULT_SEAT_TICK_POLICY.itemsPerWake);
+});
+
+test("the controller keeps delivering at cadence with one parked lane and no events", async () => {
+  const rig = harness({ state: OVERDUE });
+  let now = NOW;
+  rig.deps.sources!.now = () => now;
+  rig.deps.sources!.workerAsks = async () => [{ id: "parked-build", key: "lane:parked-build:decision",
+    label: "Repair exporter: resolve the failed build", sinceMs: NOW - 120 * MINUTE,
+    seatOwnedLane: { id: "parked-build", title: "Repair exporter", reason: "decision: build failed", sinceMs: NOW - 120 * MINUTE } }];
+  for (let cycle = 0; cycle < 4; cycle++) {
+    now = NOW + cycle * 60 * MINUTE;
+    expect((await runSeatTickCheck(PROJECT, rig.deps))?.verdict).toBe("wake");
+    expect(rig.sent).toHaveLength(cycle + 1);
+    expect(rig.sent.at(-1)!.text).toContain("- parked-build | Repair exporter |");
+    now += 60 * MINUTE - 1;
+    expect((await runSeatTickCheck(PROJECT, rig.deps))?.verdict).toBe("quiet");
+    expect(rig.sent).toHaveLength(cycle + 1);
+  }
+  rig.deps.sources!.workerAsks = async () => [];
+  now = NOW + 4 * 60 * MINUTE;
+  expect((await runSeatTickCheck(PROJECT, rig.deps))?.verdict).not.toBe("wake");
+});
+
 
 test("a seat mid-turn is skipped without a send and without consuming the event cursor", async () => {
   const rig = harness({

@@ -17,6 +17,7 @@ import type {
   RequestState,
   SeatTickEvidenceGap,
   SeatTickItem,
+  SeatTickSeatOwnedLane,
   SeatTickSignalInput,
   SeatTickSkippedChildren,
   SeatTickUnreadableChild,
@@ -234,6 +235,29 @@ function snapshotSection(snapshotAt: string | undefined, compact: boolean): stri
   return snapshotAt ? ["", `Snapshot at ${snapshotAt}${compact ? ". Re-read delayed work." : "; age = time since then. Re-read delayed agendas and notes."}`] : [];
 }
 
+/** The roster never spends detailed-item credit. Reserve every identity before
+ * bounding the detail, shortening descriptive fields across all rows together. */
+function seatOwnedLaneSection(lanes: readonly SeatTickSeatOwnedLane[], now: number, budget: number): string[] {
+  const flat = (value: string) => redactMonitorText(value).replace(/\s+/g, " ").trim();
+  const clip = (value: string, limit: number) => value.length <= limit ? value : `${value.slice(0, limit - 1).trimEnd()}…`;
+  const rows = [...lanes].sort((a, b) => (a.sinceMs ?? Infinity) - (b.sinceMs ?? Infinity) || a.id.localeCompare(b.id));
+  for (const limit of [90, 60, 40, 24, 12, 8]) {
+    const lines = ["", `Waiting on seat (${rows.length}; oldest first):`, ...rows.map(lane => {
+      const minutes = lane.sinceMs === null ? null : Math.max(0, Math.floor((now - lane.sinceMs) / 60_000));
+      const age = minutes === null ? "age unknown" : minutes < 60 ? `${minutes}m`
+        : `${Math.floor(minutes / 60)}h${minutes % 60 ? ` ${minutes % 60}m` : ""}`;
+      const reason = flat(lane.reason);
+      // Keep the stop class whole even at the smallest descriptive width.
+      const colon = reason.indexOf(":");
+      const why = colon < 0 ? clip(reason, Math.max(limit, 12))
+        : `${reason.slice(0, colon)}${limit > 8 ? `: ${clip(reason.slice(colon + 1).trim(), limit)}` : ""}`;
+      return `- ${flat(lane.id)} | ${clip(flat(lane.title), limit)} | ${why} | ${age}`;
+    })];
+    if (lines.join("\n").length <= budget) return lines;
+  }
+  throw new Error("seat-owned lane roster exceeds wake budget after compaction");
+}
+
 export function seatTickWakeMessage(input: {
   catchUp?: { key: string; from: string; through: string };
   compactCatchUpManifest?: boolean;
@@ -251,6 +275,7 @@ export function seatTickWakeMessage(input: {
   snapshotAt?: string;
   reasons: readonly SeatTickWakeReason[];
   items: readonly SeatTickItem[];
+  seatOwnedLanes?: readonly SeatTickSeatOwnedLane[];
   deferred: number;
   /** Terminal children the check declined to list (#1749, #1783). Said as one
       line per reason and no more: naming them is what filled six consecutive
@@ -299,7 +324,8 @@ export function seatTickWakeMessage(input: {
     : seatTickBullet(item)));
   lines.push("", "Why you were woken:", ...input.reasons.map(reason => `- ${reason.kind}: ${reason.detail}`));
   if (input.deferred > 0) {
-    lines.push(`(${input.deferred} more item(s) held back for the next wake.)`);
+    lines.push(input.seatOwnedLanes?.length ? `(${input.deferred} more item(s) awaiting detail.)`
+      : `(${input.deferred} more item(s) held back for the next wake.)`);
   }
   /* One line per reason, counting CHILDREN. Both of these lines used to speak
      of the children's outcomes, which was true while only the harvest applied
@@ -329,7 +355,7 @@ export function seatTickWakeMessage(input: {
   // Compact only large ledgers, keeping ordinary wakes' established framing.
   const compactLedger = !!input.workers && (input.reportLines?.join("\n").length ?? 0) > 800;
   const autonomy = autonomyMandate(input.autonomy, input.now ?? Date.now(), input.autonomyUnchanged);
-  const noteLimit = autonomy.length ? 100 : SEAT_TICK_PROMPT_PREVIEW_LIMIT;
+  const noteLimit = autonomy.length || input.seatOwnedLanes?.length ? 100 : SEAT_TICK_PROMPT_PREVIEW_LIMIT;
   const autonomyNote = autonomy.length && input.monitorPrompt
     ? ["", `Standing monitor note (${input.monitorPrompt.length} chars): seat_tick_settings verbose:true reads it.`]
     : null;
@@ -354,7 +380,14 @@ export function seatTickWakeMessage(input: {
   // A recovery snapshot carries every compact outcome once. Cutting this
   // agenda would recreate a series of wakes and fresh report debts. Its size
   // scales with changed work; child transcript bodies are omitted by the caller.
-  if (input.catchUp) return redactMonitorText([...lines, ...reserved].join("\n")).trim();
+  if (input.catchUp) return redactMonitorText([...lines,
+    ...(input.seatOwnedLanes?.length ? seatOwnedLaneSection(input.seatOwnedLanes, input.now ?? Date.now(), MAX_STRUCTURED_TEXT_BYTES) : []),
+    ...reserved].join("\n")).trim();
+  if (input.seatOwnedLanes?.length) {
+    const roster = seatOwnedLaneSection(input.seatOwnedLanes, input.now ?? Date.now(),
+      SEAT_TICK_MESSAGE_LIMIT - redactMonitorText(reserved.join("\n")).length - 400);
+    return boundedSeatTickMessage(lines, [...roster, ...reserved]);
+  }
   return boundedSeatTickMessage(lines, reserved);
 }
 
