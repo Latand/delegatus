@@ -32,7 +32,10 @@ test("the route enforces owner authority on every member/account selector, inclu
   expect((await get("",{cookie:`llv_member=${member.value}`})).status).toBe(200);
 });
 test("the existing Time route accepts and clamps the same free range to 366 days", async () => {
-  const response=await timeGET(new NextRequest("http://127.0.0.1/api/activity?from=2020-01-01&to=2026-10-17&tz=UTC", {headers:{host:"127.0.0.1"}}));
+  const team=teamStore(), now=Date.now(), ownerId="m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  if (!team.member(ownerId)) team.insertMember({ id:ownerId, role:"owner", name:"owner", status:"active", color:"teal", telegram:null, createdAt:new Date(now).toISOString(), createdBy:"claim", revokedAt:null });
+  const owner=mintSession(team,ownerId,"claim",{surface:"desktop",browser:"chrome"},now);
+  const response=await timeGET(new NextRequest("http://127.0.0.1/api/activity?from=2020-01-01&to=2026-10-17&tz=UTC", {headers:{host:"127.0.0.1",cookie:`llv_member=${owner.value}`}}));
   expect(response.status).toBe(200); const body=await response.json(); expect(body.days).toHaveLength(366);
   expect(body.days.at(-1).date).toBe("2026-10-17");
 });

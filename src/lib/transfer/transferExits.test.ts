@@ -434,6 +434,55 @@ describe("apply exits", () => {
     expect(await within(rolled.target, () => readImportRecords())).toEqual([]);
   }, 180_000);
 
+  test("the real cloud environment writer waits for project settings imported and restored by apply", async () => {
+    const settingsFile = (target: Install) => path.join(target.state, "project-settings.json");
+    const transferSource = await within(source, async () => {
+      fs.writeFileSync(settingsFile(source), JSON.stringify({ schemaVersion: 1, projects: { [REPOSITORY]: { codexCloudEnvironmentId: "env-before" } } }));
+      return exportTransferBundle({ now: new Date(NOW), exportId: "cloud-environment-writer", product: "test", env: {}, sections: ["settings.projects"] });
+    });
+    const other = `repo-${"f".repeat(32)}`;
+    const writer = (target: Install) => Bun.spawn([process.execPath, "-e",
+      `import(${JSON.stringify(path.join(REPO, "src/lib/projects/settings.ts"))}).then(({ setCodexCloudEnvironmentId }) => { if (!setCodexCloudEnvironmentId(${JSON.stringify(REPOSITORY)}, "env-after")) process.exit(2); }).catch(error => { console.error(error); process.exit(1); });`], {
+      cwd: REPO, env: { ...process.env, ...installEnv(target), HOME: target.home, NODE_ENV: "test", LLV_TRANSFER_TEST_FAULT: "" }, stdout: "inherit", stderr: "inherit",
+    });
+    const run = async (name: string, fault?: string) => {
+      const target = makeInstall(parent, name);
+      await within(target, () => ensureLegacyCollectionsImported(() => {}));
+      fs.writeFileSync(settingsFile(target), JSON.stringify({ schemaVersion: 1, projects: { [other]: { mergeOnReview: { enabled: true, changedAt: NOW, changedBy: "operator" } } } }));
+      const plan = await within(target, () => previewTransferImport(transferSource.bytes, {}));
+      expect(plan.sections.find(section => section.name === "settings.projects")?.records).toBeGreaterThan(0);
+      const started: ReturnType<typeof writer>[] = [];
+      const interleave = (index: number) => {
+        if (index !== 0) return;
+        started.push(writer(target));
+        const queue = `${settingsFile(target)}.write-locks`;
+        const deadline = Date.now() + 60_000;
+        while ((fs.existsSync(queue) ? fs.readdirSync(queue).filter(entry => entry.endsWith(".json")).length : 0) < 2) {
+          if (Date.now() > deadline) throw new Error("the cloud settings writer never queued on the file lock");
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+        }
+      };
+      const apply = () => applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions }, { beforeFileWrite: interleave });
+      if (fault) {
+        process.env.LLV_TRANSFER_TEST_FAULT = fault;
+        try {
+          const error = await within(target, apply).then(() => null, (caught: unknown) => caught as Error);
+          expect(error?.message).toBe("injected file step failure");
+        } finally { delete process.env.LLV_TRANSFER_TEST_FAULT; }
+      } else {
+        expect((await within(target, apply)).report.complete).toBe(true);
+      }
+      expect(started).toHaveLength(1);
+      expect(await started[0]!.exited).toBe(0);
+      const stored = JSON.parse(fs.readFileSync(settingsFile(target), "utf8"));
+      expect(stored.projects[REPOSITORY].codexCloudEnvironmentId).toBe("env-after");
+      expect(stored.projects[other].mergeOnReview.enabled).toBe(true);
+    };
+
+    await run("cloud-settings-writer-applied");
+    await run("cloud-settings-writer-rolled-back", "file-step");
+  }, 180_000);
+
   test("with state and config on two file systems, a disk that fills after a config file's write puts the original back by a rename", async () => {
     const voice = (await within(source, () => exportTransferBundle({ now: new Date(NOW), exportId: "export-voice", product: "test", env: {}, sections: ["settings.voice"] }))).bytes;
     const target = makeInstall(parent, "split-roots");

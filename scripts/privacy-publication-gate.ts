@@ -12,6 +12,7 @@ import { privacyMarkupSpans, stripPrivacyHtml } from "./privacy-markup";
 import { fingerprintNegativeCache } from "./privacy-fingerprint-cache";
 import { canonicalSensitiveText, decodeSensitiveText } from "../src/lib/privacy/canonicalText";
 import { mailboxPattern } from "../src/lib/privacy/mailbox";
+import { privacyGeneratorRuntime } from "./privacy-generator-runtime";
 import { staticSensitiveClasses } from "../src/lib/privacy/staticDetectors";
 
 export { canonicalSensitiveText };
@@ -208,7 +209,73 @@ function maskApprovedPublicValues(text: string): string {
   // Treat '#' in entities, member access or a private declaration as syntax.
   // Unclosed block comments and quoted tokens consume their remaining span once;
   // retrying a closing-delimiter search at each inner opener is quadratic.
-  const literals = text.matchAll(/(?<=(?:^|[=(:,;!&|?{*%^~<>]|(?<!\+)\+|(?<!-)-|(?<![.#\p{L}\p{N}_$])(?<!\.(?:[\s\p{Default_Ignorable_Code_Point}]|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*[\r\n\u2028\u2029])*)(?:return|throw|case|yield|await|typeof|void|delete|in|instanceof|of|else|do)\b)(?:[\t\n\v\f\r ]|\/\*[\s\S]*?\*\/)*)\/(?![/*])(?:\\[^\r\n]|\[(?:\\[^\r\n]|[^\]\\\r\n])*(?:\]|(?=[\r\n]|$))|[^/\\\[\r\n])+(?:\/[a-z]*|(?=[\r\n]|$))|\/\*[\s\S]*?(?:\*\/|$)|\/\/[^\r\n\u2028\u2029]*|(?<![.&])#(?!(?:[xX][0-9a-fA-F]+|[0-9]+);|[\p{L}_$][\p{L}\p{N}_$]*\s*[=(;?.\[])[^\r\n]*|(?<![\p{L}\p{N}_$])--[^\r\n]*|"(?:\\(?:[\s\S]|$)|[^"\\\r\n\0])*(?:"|(?=[\r\n\0]|$))|(?<![\p{L}\p{N}_])(?:[uUrRbBfF]{1,2})?'(?:\\(?:[\s\S]|$)|[^'\\\r\n\0])*(?:'|(?=[\r\n\0]|$))|`(?:\\(?:[\s\S]|$)|[^`\\\0])*(?:`|(?=\0|$))/gu);
+  // Combining regex literals with quotes/comments exceeds the CPU growth
+  // bound for large unclosed tokens under Bun 1.4. Read the same alternatives at
+  // each possible opener, advancing past every complete token once.
+  const regexContext = /(?<=(?:^|[=(:,;!&|?{*%^~<>]|(?<!\+)\+|(?<!-)-|(?<![.#\p{L}\p{N}_$])(?<!\.(?:[\s\p{Default_Ignorable_Code_Point}]|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*[\r\n\u2028\u2029])*)(?:return|throw|case|yield|await|typeof|void|delete|in|instanceof|of|else|do)\b)(?:[\t\n\v\f\r ]|\/\*[\s\S]*?\*\/)*)/uy;
+  const regexBodyPart = /\\[^\r\n]|[^/\\\[\r\n]+/uy;
+  function regexClassEnd(source: string, start: number): number | null {
+    for (let index = start + 1; index < source.length; index += 1) {
+      if (source[index] === "]") return index + 1;
+      if (source[index] === "\r" || source[index] === "\n") return index;
+      if (source[index] === "\\") {
+        if (index + 1 === source.length || source[index + 1] === "\r" || source[index + 1] === "\n") return null;
+        index += 1;
+      }
+    }
+    return source.length;
+  }
+  const regexEnd = /\/[a-z]*|(?=[\r\n]|$)/uy;
+  function regexToken(source: string, start: number): RegExpExecArray | null {
+    const bodyStart = start + 1;
+    if (source[bodyStart] === "/" || source[bodyStart] === "*") return null;
+    let end = bodyStart;
+    while (end < source.length) {
+      if (source[end] === "[") {
+        const classEnd = regexClassEnd(source, end);
+        if (classEnd === null) break;
+        end = classEnd;
+      } else {
+        regexBodyPart.lastIndex = end;
+        const found = regexBodyPart.exec(source);
+        if (!found) break;
+        end += found[0].length;
+      }
+    }
+    if (end === bodyStart) return null;
+    regexEnd.lastIndex = end;
+    const ending = regexEnd.exec(source);
+    if (!ending) return null;
+    return Object.assign([source.slice(start, end + ending[0].length)] as RegExpExecArray, { index: start, input: source });
+  }
+  const otherLiteral = /\/\*[\s\S]*?(?:\*\/|$)|\/\/[^\r\n\u2028\u2029]*|(?<![.&])#(?!(?:[xX][0-9a-fA-F]+|[0-9]+);|[\p{L}_$][\p{L}\p{N}_$]*\s*[=(;?.\[])[^\r\n]*|(?<![\p{L}\p{N}_$])--[^\r\n]*|"(?:\\(?:[\s\S]|$)|[^"\\\r\n\0])*(?:"|(?=[\r\n\0]|$))|(?<![\p{L}\p{N}_])(?:[uUrRbBfF]{1,2})?'(?:\\(?:[\s\S]|$)|[^'\\\r\n\0])*(?:'|(?=[\r\n\0]|$))|`(?:\\(?:[\s\S]|$)|[^`\\\0])*(?:`|(?=\0|$))/uy;
+  const rawLiteral = /"(?:\\[\s\S]|[^"\\\r\n\0])*(?:"|(?=[\r\n\0]|$))|(?<![\p{L}\p{N}_])'(?:\\[\s\S]|[^'\\\r\n\0])*(?:'|(?=[\r\n\0]|$))|`(?:\\[\s\S]|[^`\\\0])*(?:`|(?=\0|$))/uy;
+  function* literalMatches(source = text, comments = true): Generator<RegExpExecArray, undefined, number | undefined> {
+    const openers = /\/|#|--|"|(?<![\p{L}\p{N}_])(?:[uUrRbBfF]{1,2})?'|`/gu;
+    for (let opener = openers.exec(source); opener; opener = openers.exec(source)) {
+      let token: RegExpExecArray | null = null;
+      if (opener[0] === "/") {
+        regexContext.lastIndex = opener.index;
+        if (regexContext.test(source)) {
+          token = regexToken(source, opener.index);
+        }
+      }
+      if (!token) {
+        const other = comments ? otherLiteral : rawLiteral;
+        other.lastIndex = opener.index;
+        token = other.exec(source);
+      }
+      if (token) {
+        openers.lastIndex = token.index + token[0].length;
+        const restart = yield token;
+        if (restart !== undefined) openers.lastIndex = restart;
+      } else {
+        openers.lastIndex = opener.index + 1;
+      }
+    }
+    return undefined;
+  }
+  const literals = literalMatches();
   let literal = literals.next().value;
   let previousLiteralEnd = 0;
   let syntaxCursor = 0;
@@ -514,28 +581,29 @@ function maskApprovedPublicValues(text: string): string {
   // closing delimiter or the character outside it. Quoted contents are
   // opaque; enclosing groups still belong to every value inside the quote.
   const rawComments = [...rawTriviaEnds].map(([last, start]) => ({ start, end: last + 1 }));
-  const rawQuotePattern = /(?<=(?:^|[=(:,;!&|?{*%^~<>]|(?<!\+)\+|(?<!-)-|(?<![.#\p{L}\p{N}_$])(?<!\.(?:[\s\p{Default_Ignorable_Code_Point}]|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*[\r\n\u2028\u2029])*)(?:return|throw|case|yield|await|typeof|void|delete|in|instanceof|of|else|do)\b)(?:[\t\n\v\f\r ]|\/\*[\s\S]*?\*\/)*)\/(?![/*])(?:\\[^\r\n]|\[(?:\\[^\r\n]|[^\]\\\r\n])*(?:\]|(?=[\r\n]|$))|[^/\\\[\r\n])+(?:\/[a-z]*|(?=[\r\n]|$))|"(?:\\[\s\S]|[^"\\\r\n\0])*(?:"|(?=[\r\n\0]|$))|(?<![\p{L}\p{N}_])'(?:\\[\s\S]|[^'\\\r\n\0])*(?:'|(?=[\r\n\0]|$))|`(?:\\[\s\S]|[^`\\\0])*(?:`|(?=\0|$))/gu;
   function* rawQuoteMatches(): Generator<RegExpMatchArray> {
     let start = 0;
-    const contextualQuote = new RegExp(rawQuotePattern.source, "uy");
     // A comment's unmatched quote ends at that comment, so it cannot swallow
     // the next real call. Keep quotes within comments for their own raw spans.
     for (const comment of [...rawComments, { start: text.length, end: text.length }]) {
       for (const end of [comment.start, comment.end]) {
         const segment = text.slice(start, end);
-        const quotes = new RegExp(rawQuotePattern.source, rawQuotePattern.flags);
-        for (let quote = quotes.exec(segment); quote; quote = quotes.exec(segment)) {
+        const quotes = literalMatches(segment, false);
+        let next = quotes.next();
+        while (!next.done) {
+          const quote = next.value;
           if (quote[0].startsWith("/")) {
             // Segmentation fences unmatched comment quotes, but cannot turn a
             // property after that comment into a statement-start keyword.
-            contextualQuote.lastIndex = start + quote.index;
-            if (!contextualQuote.exec(text)) {
-              quotes.lastIndex = quote.index + 1;
+            regexContext.lastIndex = start + quote.index;
+            if (!regexContext.test(text) || !regexToken(text, start + quote.index)) {
+              next = quotes.next(quote.index + 1);
               continue;
             }
           }
           quote.index += start;
           yield quote;
+          next = quotes.next();
         }
         start = end;
       }
@@ -1727,6 +1795,37 @@ function hasEmailAddress(text: string, source?: EmailTextView["source"]): boolea
   return emailOccurrences(text, source).next().done !== true;
 }
 
+// This dictionary phrase identifies a private label in identity syntax or
+// when it is the entire publication, allowing its use inside ordinary prose.
+// Keep its digest here rather than matching it globally inside ordinary prose.
+const contextualIdentityDigest = "b829e805ab160bf10124b48da39c07eecc55bea7b9229820abbcc396ebf35cf1";
+const contextualIdentityPatterns = [
+  /(?:^|[^\p{L}\p{N}])(?:account(?:[_ -]?(?:id|name|label))?|id|label|user(?:[_ -]?(?:name|id))?|handle|host(?:name)?)[\s"'`]*[:=][\s"'`]*([\p{L}\p{N}._-]{4,512})(?![\p{L}\p{N}._-])/giu,
+  /(?:^|[^\p{L}\p{N}])account[\s"'`]+([\p{L}\p{N}._-]{4,512})(?![\p{L}\p{N}._-])/giu,
+  /(?:^|[/\\])accounts?[/\\](?:(?:claude|codex|copilot)[/\\])?([\p{L}\p{N}._-]{4,512})(?=$|[/\\\s"'`])/giu,
+  /(?<![\p{L}\p{N}._-])@([\p{L}\p{N}._-]{4,512})(?![\p{L}\p{N}._-])/giu,
+];
+function matchesStandaloneIdentity(sourceViews: string): boolean {
+  // Source views are already decoded and lowercased, separated by NUL rather
+  // than line breaks. A label on one line of a larger publication stays prose.
+  for (const source of sourceViews.split("\0")) {
+    const standalone = source.trim();
+    if (standalone.length === 10 && createHash("sha256").update(standalone).digest("hex") === contextualIdentityDigest) return true;
+  }
+  return false;
+}
+
+function matchesContextualIdentity(text: string, sourceViews: string): boolean {
+  if (matchesStandaloneIdentity(sourceViews)) return true;
+  for (const pattern of contextualIdentityPatterns) {
+    for (const match of text.matchAll(pattern)) {
+      const value = compactSensitiveText(match[1]);
+      if (value.length === 10 && createHash("sha256").update(value).digest("hex") === contextualIdentityDigest) return true;
+    }
+  }
+  return false;
+}
+
 export function sensitiveClasses(text: string): Set<FindingClass> {
   const prepared = preparedPrivacyText(text, () => {
     const normalized = normalizedSensitiveText(text);
@@ -1750,7 +1849,8 @@ export function sensitiveClasses(text: string): Set<FindingClass> {
     matchesKnownValue = knownValues.values.some((entry) => entry.exactOnly
       ? known.exactSearchable.includes(entry.primary)
       : normalizedText.includes(entry.primary))
-      || matchesKnownFingerprint(known.compact) || matchesKnownFingerprint(known.exactSearchable, true);
+      || matchesKnownFingerprint(known.compact) || matchesKnownFingerprint(known.exactSearchable, true)
+      || matchesContextualIdentity(known.searchable, known.exactSearchable);
     knownValueMatches.set(prepared, matchesKnownValue);
   }
   if (matchesKnownValue) {
@@ -1807,6 +1907,11 @@ function inspectText(path: string, kind: MediaKind | undefined): Set<FindingClas
       }
     }
     const findings = sensitiveClasses(views.join("\n"));
+    // Each decoded file view represents the whole publication. Keep that
+    // boundary for standalone labels while retaining the existing joint scan.
+    if (views.slice(1).some(view => matchesStandaloneIdentity(normalizedSensitiveText(view).exactSearchable))) {
+      findings.add("known_value");
+    }
     const extension = extname(path).toLowerCase();
     const textLike = textExtensions.has(extension) || textBasenames.has(basename(path));
     const controlBytes = contents.reduce((count, byte) => {
@@ -2024,7 +2129,7 @@ function reproduceTrustedGenerator(generatorBytes: Buffer): Map<string, Reproduc
     const isolatedGenerator = join(scriptsDirectory, "generate-privacy-placeholders.ts");
     writeFileSync(isolatedGenerator, generatorBytes);
     const generation = Bun.spawnSync({
-      cmd: [process.execPath, isolatedGenerator],
+      cmd: [privacyGeneratorRuntime(), isolatedGenerator],
       cwd: temporaryRoot,
       env: withoutUnsupportedApiCredentials(process.env),
       stderr: "pipe",

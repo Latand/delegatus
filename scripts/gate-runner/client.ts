@@ -10,6 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { machineHome } from "../../src/lib/runtime/cpuAdmission";
 import { envClass } from "./env-classes";
+import { LOAD_PROBE, localAdmission, parseLoad, saturationReason } from "./load";
 
 /** Any environment, process.env included; the project's ProcessEnv type requires NODE_ENV. */
 export type Env = Record<string, string | undefined>;
@@ -796,6 +797,12 @@ async function main(argv: string[]): Promise<number> {
 
   const status = health(env, target.alias);
   if (!status.healthy) return here(`the runner is unavailable: ${status.reason}`, "here");
+
+  // Fresh load, independent of the health cache, before capture or dispatch.
+  const load = sshSync(env, target.alias, LOAD_PROBE, 10_000);
+  if (load.status !== 0) return here(`the runner is unavailable: ${sshFailure(load.status, String(load.stderr ?? ""), !!load.error)}`, "here");
+  const saturated = saturationReason(parseLoad(String(load.stdout ?? "")), () => localAdmission(env));
+  if (saturated) return here(saturated, "here");
 
   const scratch = fs.mkdtempSync(path.join(env.TMPDIR && fs.existsSync(env.TMPDIR) ? env.TMPDIR : "/tmp", "gate-runner-"));
   const id = randomBytes(6).toString("hex");
