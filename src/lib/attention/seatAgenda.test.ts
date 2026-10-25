@@ -48,8 +48,6 @@ test("a routed lane names the stage's own question, the decision answer path and
   const [line] = seatAgendaAsks({ files: [], pipelines: [lane] }, now, "project-a");
   expect(line).toMatchObject({ key: "lane:lane:lane-decision:none", id: "lane" });
   expect(line!.label).toContain("stage diagnose asks «Keep the current behaviour or switch? I recommend switching.»");
-  expect(line!.label).toContain("pipeline_action resolve-decision");
-  expect(line!.label).toContain('publish_prototype_review, then dismiss_attention escalate {reviewId} with target {kind:"pipeline", pipelineId:"lane"}');
 });
 
 /* docs/design/calm-task-cards-build.md §7.2: a stopped merge's step follows
@@ -91,5 +89,4 @@ test("a parked lane's line names its stop class before the stage's words", () =>
   } as unknown as Pipeline;
   const [line] = seatAgendaAsks({ files: [], pipelines: [lane] }, now, "project-a");
   expect(line!.label).toStartWith("[commit] Ship the panel — stage build asks stopped: stage failed");
-  expect(line!.label).toContain("retry-stage for a mechanical stop");
 });

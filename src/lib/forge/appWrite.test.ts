@@ -48,6 +48,26 @@ describe("the token the engine holds", () => {
 });
 
 describe("a write by the engine", () => {
+  test.each([false, true])("authority is checked after credentials arrive, including cached tokens: %s", async cached => {
+    let allowed = true;
+    let minted = 0;
+    const calls: string[][] = [];
+    const tokens = new ForgeAppTokenSource(async () => {
+      minted++;
+      allowed = false;
+      return { token: "fixture", expiresAt: "2999-01-01T00:00:00Z" };
+    }, () => 0);
+    if (cached) await tokens.token(REPO);
+    const write = forgeAppWriter(root, 1_000, { source, tokens, exec: async args => { calls.push(args); return "written"; } });
+    const guard = () => { if (!allowed) throw new Error("authority revoked"); };
+    await expect(write(["pr", "merge", "5"], REPO, guard)).rejects.toThrow("authority revoked");
+    expect(minted).toBe(1);
+    expect(calls).toEqual([]);
+    allowed = true;
+    expect(await write(["pr", "merge", "5"], REPO, guard)).toBe("written");
+    expect(calls).toEqual([["pr", "merge", "5"]]);
+  });
+
   test("starts gh with the App token as its whole identity", async () => {
     const started: Array<{ args: string[]; env: NodeJS.ProcessEnv }> = [];
     const write = forgeAppWriter(root, 1_000, {
@@ -97,6 +117,15 @@ describe("a write by the engine", () => {
 
 describe("which repositories the engine writes to as the App", () => {
   const merge = ["pr", "merge", "5", "--repo", "acme/gadgets", "--squash", "--match-head-commit", "abc"];
+
+  test("the plain writer checks authority immediately before dispatch", async () => {
+    let calls = 0;
+    const write = forgeWriter(async () => { calls++; return "written"; }, async () => "app", () => false);
+    expect(() => write(merge, REPO, () => { throw new Error("authority revoked"); })).toThrow("authority revoked");
+    expect(calls).toBe(0);
+    expect(await write(merge, REPO, () => undefined)).toBe("written");
+    expect(calls).toBe(1);
+  });
 
   test("an undeclared repository's write is the call the engine always made: same runner, same arguments", async () => {
     const ran: string[][] = [];

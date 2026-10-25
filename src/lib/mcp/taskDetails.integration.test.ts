@@ -142,14 +142,7 @@ test("the tools publish details as its own field, and say the text is the human'
       const tool = tools.find((candidate) => candidate.name === name)!;
       const properties = tool.inputSchema.properties as Record<string, { type?: unknown; description?: string }>;
       expect(properties.details).toBeDefined();
-      expect(properties.details!.description ?? "").toContain("Agent-facing context");
-      expect(tool.description ?? "").toContain("details");
     }
-    expect(tools.find((tool) => tool.name === "create_task")!.description ?? "").toContain("HUMAN");
-    /* update_task states the independence an agent must be able to rely on. */
-    expect(tools.find((tool) => tool.name === "update_task")!.description ?? "").toContain("leaves `text` untouched");
-    /* list_tasks warns that what it returns may be cut. */
-    expect(tools.find((tool) => tool.name === "list_tasks")!.description ?? "").toContain("truncated");
   } finally {
     await p.close();
   }

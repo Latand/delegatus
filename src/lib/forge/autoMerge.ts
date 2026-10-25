@@ -1,3 +1,4 @@
+import { assertProactiveTaskExecution, proactiveTaskExecutionError } from "@/lib/tasks/proactiveExecution";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { yieldToRuntime } from "@/lib/cooperative";
@@ -656,7 +657,9 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true):
   try {
     /* `--match-head-commit`: GitHub refuses if the head moved since the read.
        The branch stays; worktree cleanup owns lane branches. */
-    await ports.write(["pr", "merge", String(merge.prNumber), "--repo", merge.repository, `--${method}`, "--match-head-commit", view.headRefOid], merge.repository);
+    const beforeDispatch = () => assertProactiveTaskExecution((ports.loadPipelines().find(lane => lane.id === read.id) ?? read).taskIds);
+    beforeDispatch();
+    await ports.write(["pr", "merge", String(merge.prNumber), "--repo", merge.repository, `--${method}`, "--match-head-commit", view.headRefOid], merge.repository, beforeDispatch);
   } catch (error) {
     /* No App credential: the refusal is the whole reason, in its own words. */
     failure = error instanceof ForgeAppWriteRefused ? error.message : `GitHub refused the merge: ${githubMessage(error)}`;
@@ -732,6 +735,8 @@ type MergeAdmissionPorts = Pick<AutoMergePorts, "setting" | "pullRequestOf" | "h
 export function mergeAdmission(pipeline: Pipeline, now: number, ports: MergeAdmissionPorts = {
   setting: mergeOnReviewSetting, pullRequestOf: lanePullRequest, hasPublishedPrototype,
 }): { merge: PipelineMerge } | { reason: string } {
+  const proactiveError = proactiveTaskExecutionError(pipeline.taskIds);
+  if (proactiveError) return { reason: proactiveError };
   if (pipeline.state !== "completed") return { reason: "only a completed pipeline can queue its merge" };
   if (pipeline.hiddenAt) return { reason: "lane is hidden" };
   if (pipeline.merge) return { reason: "lane already has a merge record" };

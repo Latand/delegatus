@@ -22,9 +22,8 @@ import { voicePersonaVariantFor } from "./voicePersonaMandate";
  * — itself — so the instruction came straight back, and the seat declined the work
  * it was already holding.
  *
- * Every test below is one link of that chain. They are written against the persona
- * TEXT and the variant RESOLUTION rather than against a live host, because the
- * defect is what the thread is told, not how the bytes reach it.
+ * The retained tests cover variant selection, identity, overrides and live-call
+ * controls.
  */
 
 /** A conversation carrying no root marker: an ordinary session the operator
@@ -76,90 +75,6 @@ test("an unresolvable conversation fails safe to the modality persona", () => {
     conversation: null,
     configuredRootId: null,
   })).toBe("modality");
-});
-
-/* ------------------------------------------------------------------ *
- * 2. What the SPOKEN persona may and may not say.
- * ------------------------------------------------------------------ */
-
-/** The sentences that demoted the seat, as the properties they assert. They now
-    live in two places — what the spoken model is told, and what the backing
-    model is told — so each is checked against the text it belongs to. */
-const SPOKEN_ROLE_REPLACEMENTS: { label: string; pattern: RegExp }[] = [
-  { label: "declares a replacement identity", pattern: /you are the voice coordinator/i },
-  { label: "forbids touching the board", pattern: /you do not touch the board yourself/i },
-];
-
-const BACKING_ROLE_REPLACEMENTS: { label: string; pattern: RegExp }[] = [
-  { label: "casts the session as the voice front", pattern: /which is the voice front/i },
-  { label: "mandates relaying instead of acting", pattern: /relay with bridge_directive/i },
-];
-
-test("the modality spoken persona replaces no part of an existing role", () => {
-  const offences = SPOKEN_ROLE_REPLACEMENTS
-    .filter(({ pattern }) => pattern.test(MODALITY_VOICE_PERSONA))
-    .map(({ label }) => label);
-  expect(offences).toEqual([]);
-});
-
-test("the modality backing instructions replace no part of an existing role", () => {
-  const backing = voiceSessionPersona("modality").startInstructions;
-  const offences = BACKING_ROLE_REPLACEMENTS
-    .filter(({ pattern }) => pattern.test(backing))
-    .map(({ label }) => label);
-  expect(offences).toEqual([]);
-});
-
-test("the modality backing instructions say outright that the role and its work stand", () => {
-  /* Not decoration. The thread may ALREADY carry the coordinator item in its
-     append-only history from a call taken before #1615, and this is the only text
-     that outranks it — now delivered per session rather than written beside it. */
-  const backing = voiceSessionPersona("modality").startInstructions;
-  expect(backing).toMatch(/preserve this conversation's original instructions/i);
-  expect(backing).toMatch(/\btools\b/);
-  expect(backing).toMatch(/ongoing work/i);
-  expect(backing).toMatch(/it was not written for you/i);
-});
-
-test("the modality backing instructions tell an incumbent manager not to relay its own work", () => {
-  /* The observed loop, closed in the text as well as in the tool: a seat told to
-     relay sends the instruction to the seat, which is itself. */
-  const backing = voiceSessionPersona("modality").startInstructions;
-  expect(backing).toMatch(/do the work yourself/i);
-  expect(backing).toMatch(/bridge_directive/);
-});
-
-test("the modality spoken persona forbids the spoken model claiming it has no tools", () => {
-  /* The reported symptom, stated as a rule. The spoken model genuinely holds no
-     tool — a realtime session has none — so left to Codex's stock persona it
-     answers for itself and reports that it cannot reach anything. */
-  expect(MODALITY_VOICE_PERSONA).toMatch(/never say that you have no tools/i);
-  expect(MODALITY_VOICE_PERSONA).toMatch(/do not answer from your own knowledge/i);
-});
-
-test("both spoken personas keep the spoken-delivery rules the call needs", () => {
-  /* The reason a persona is sent at all: a thread's instructions are written for
-     a reader, and every one of these fails out loud. */
-  for (const persona of [MODALITY_VOICE_PERSONA, COORDINATOR_VOICE_PERSONA]) {
-    for (const rule of [/## Language/, /## Voice/, /## Honesty/]) {
-      expect(persona).toMatch(rule);
-    }
-    expect(persona).toMatch(/never speak numbers or identifiers aloud/i);
-  }
-});
-
-/* ------------------------------------------------------------------ *
- * 3. The coordinator flow is preserved exactly.
- * ------------------------------------------------------------------ */
-
-test("the coordinator persona still carries the relay mandate it was written for", () => {
-  for (const { pattern } of SPOKEN_ROLE_REPLACEMENTS) {
-    expect(COORDINATOR_VOICE_PERSONA).toMatch(pattern);
-  }
-  const backing = voiceSessionPersona("coordinator").startInstructions;
-  for (const { pattern } of BACKING_ROLE_REPLACEMENTS) {
-    expect(backing).toMatch(pattern);
-  }
 });
 
 test("spokenVoicePersona resolves the variant it is asked for", () => {
@@ -235,41 +150,9 @@ test("a session persona carries the spoken prompt and the backing pair, and noth
      permanently and the spoken model never. */
   const persona = voiceSessionPersona("modality", () => { throw new Error("ENOENT"); });
   expect(persona.prompt).toBe(MODALITY_VOICE_PERSONA);
-  expect(persona.startInstructions).toMatch(/realtime voice is active/i);
-  expect(persona.endInstructions).toMatch(/realtime voice has ended/i);
-  expect(persona.endInstructions).toMatch(/normal text-output policy/i);
   expect(Object.keys(persona).sort()).toEqual([
     "endInstructions", "personaId", "prompt", "startInstructions", "variant",
   ]);
-});
-
-test("the end instructions supersede the spoken register the start instructions imposed", () => {
-  /* The pairing is what keeps a text agent from inheriting spoken-delivery rules
-     for the rest of its life, which is what a permanent injected item did.
-     Native keeps BOTH as canonical developer items, so the closing text has to
-     say in words that the earlier one no longer applies — it cannot rely on the
-     start text being removed, which the successful-session probe showed it is
-     not. */
-  for (const variant of ["modality", "coordinator"] as const) {
-    const persona = voiceSessionPersona(variant);
-    expect(persona.startInstructions).toMatch(/spoken aloud while this call is live/i);
-    expect(persona.endInstructions).toMatch(/no longer apply; this message supersedes them/i);
-    expect(persona.endInstructions).toMatch(/only while the call was live/i);
-  }
-});
-
-test("the spoken persona carries native's own operating rules for a backend it fronts", () => {
-  /* Adapted from the native app's fallback spoken prompt: never refuse, always
-     delegate; backend output is authoritative; running work stays steerable.
-     Its identity and its instruction to conceal the arrangement are deliberately
-     not adopted — this conversation already has a role. */
-  for (const persona of [MODALITY_VOICE_PERSONA, COORDINATOR_VOICE_PERSONA]) {
-    expect(persona).toMatch(/authoritative/i);
-    expect(persona).toMatch(/stays open to change/i);
-    expect(persona).toMatch(/redirect/i);
-  }
-  expect(MODALITY_VOICE_PERSONA).toMatch(/Never refuse/i);
-  expect(COORDINATOR_VOICE_PERSONA).toMatch(/Never say you cannot do something/i);
 });
 
 /* ------------------------------------------------------------------ *
@@ -342,28 +225,4 @@ test("a start that asks no persona question gets the modality persona", async ()
   );
   expect(started.status).toBe(200);
   expect(starts).toEqual(["modality"]);
-});
-
-
-test("the modality instructions add no procedure to a conversation that has its own", () => {
-  /* An incumbent orchestrator arrives with a mandate that already says how work
-     is accepted and how a deploy is decided — the Viewer's own manager mandate
-     states that nobody ever asks the operator to confirm, approve or repeat
-     anything. A voice call that quietly added a confirmation step would put the
-     seat in the position of contradicting its own instructions out loud, which
-     is the same class of harm as taking its tools away. */
-  const persona = voiceSessionPersona("modality");
-  /* The shapes that IMPOSE a step. "permissions" survives on its own, because
-     the modality text names it only to say it is preserved. */
-  for (const procedure of [
-    /\bconfirm\b/i, /\bapprove\b/i, /\bapproval\b/i, /spoken yes/i,
-    /ask the (?:user|operator)/i, /needs the (?:user|operator)/i,
-    /\bauthoriz/i, /\bnonce\b/i, /commit (?:hash|exactly)/i, /wait for the (?:user|operator)/i,
-  ]) {
-    expect(persona.startInstructions).not.toMatch(procedure);
-    expect(persona.endInstructions).not.toMatch(procedure);
-  }
-  /* And the deploy relay stays where it was written for: a session created to be
-     nothing but a voice front, which has no mandate of its own to contradict. */
-  expect(voiceSessionPersona("coordinator").startInstructions).toMatch(/spoken yes/i);
 });

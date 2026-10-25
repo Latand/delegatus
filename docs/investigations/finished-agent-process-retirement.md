@@ -1,5 +1,84 @@
 # Finished-agent process retirement
 
+## Terminal-path follow-up, 2026-10-19
+
+The controller previously excluded closed lanes without a close obligation and
+required a verdict or completion timestamp before considering any attempt.
+A completed lane could therefore settle its reap while an unstamped host was
+still running. Superseded operational attempts also retained ownership solely
+because their old attempt state remained running. The TypeScript ownership
+guard and its SQLite projection made the same decision.
+
+An open successor also retained its creator through source ownership after
+that creator's operational attempt had been released. A released parent now
+ends that source-only obligation. A live attempt, publication, seat or runtime
+turn still protects the shared host. The indexed guard distinguishes released
+attempts from inactive history and source publication; peer writes update that
+evidence atomically with their pipeline row. Publication keeps a compatibility
+reference for the preceding release's live-owner predicate during handover.
+
+The runtime signal fence now applies this same policy through
+`src/lib/pipelines/retirementEvidence.ts`. Its compact projection releases
+terminal and superseded operational attempts and ends successor source custody
+across conversation aliases, while retaining independent path, active-attempt,
+activation and publication claims. Production termination fixtures persist real
+pipeline rows and use that reader before each signal. A store revision change
+invalidates a prepared reader and defers retirement.
+
+Host deduplication also starts with outstanding attempts. A later attempt that
+reuses a previously reaped conversation keeps its own cleanup duty; its earlier
+receipt cannot hide the newly resident host from the controller window.
+
+Terminal lanes now consider every recorded host. Replaced operational attempts
+release their ownership, while adopted helpers retain their independent work
+evidence. Late adoption reopens a settled reap so the controller can reconcile
+the helper's terminal turn and retire its host. An automatic stop of a host
+with a control stream requires the runtime's conditional idle protocol; an open
+turn, publication custody, a replacement writer, pending work or unreadable
+evidence keeps the host alive and cleanup pending. Explicit
+close obligations continue to drain their frozen targets. Closed lanes without
+an obligation use the automatic idle reap when they have a recorded host.
+Closed records without hosts stay out of retirement work. Archiving waits for outstanding
+retirement and unconfirmed hosts.
+
+A host whose registry row has lost its control stream gives no idle
+evidence. Only an attempt with a terminal state and a verdict or completion
+stamp may still be ended there by its recorded identity. An attempt without a
+stamp, or one still in a working state (pending, spawning, running, reviewing,
+committing) whatever stamps a restart or resume left on it, needs positive
+runtime idle evidence. Releasing it with its lane or a later attempt ends its
+ownership and proves nothing about its turn, so the reap defers it, sends no
+process signal and retires it on the first positive idle observation. Rounds
+that share a conversation, transcript path or pane are probed once, through
+one of them; the host needs idle evidence when any round sharing it reads as
+working, including rounds outside the controller's attempt window.
+
+The fenced schema upgrade rebuilds ownership references and scheduler triggers
+and re-enrols outstanding terminal hosts, including a lane with an earlier
+false clean receipt. It preserves authoritative payloads and existing attempt
+receipts. Ordinary ticks keep the existing bounded attempt windows and indexed
+owner reads. This change claims no performance gain.
+
+Legacy reaps without `settledAttempts` infer receipts only for attempts with a
+verdict or completion stamp, matching `reviveLoadedPipeline` in
+`src/lib/pipelines/store.ts`. The SQL projection now applies that same default.
+Otherwise a false clean legacy receipt hides every unstamped host from the
+upgrade's queue, even though the decoded lane still owes its cleanup. Fresh-process
+regressions cover completed and closed lanes with explicit and omitted lists,
+preserve stamped receipts and compare the authoritative payload after reopening.
+
+Regressions exercise budget-exhausted completion, outside merge, completed
+successor lanes, legacy closed lanes, superseded attempts, an open turn becoming
+idle, archive custody, production termination guards and schema recovery in a
+fresh process. The runtime-host process implementation is unchanged.
+
+Teardown success fixtures now record their simulated host termination. A
+delivered receipt alone remains unconfirmed while the recorded host is still
+resident. This corrects six stale fixture expectations reproduced on the merged
+main tree.
+
+## Original investigation
+
 Baseline: `1d0eda9302bfa5c1df7e392f6002091ab0c7c7e9` (`origin/main`, fetched
 2026-10-02). Inspection used read-only SQLite connections to the registry and
 pipeline store and a `/proc` parent walk. No existing agent was signalled.

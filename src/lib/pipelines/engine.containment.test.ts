@@ -80,6 +80,11 @@ test.each(["codex", "claude"].flatMap(engine => ["full", "restricted"].map(sandb
 });
 
 
+// These cases drive several complete controller rounds through durable state.
+// Let their awaited ticks settle under contention before the next case resets
+// that shared store; Bun's five-second default can leave a timed-out body alive.
+const TERMINAL_BUDGET_TEST_TIMEOUT_MS = 30_000;
+
 test.each([false, true])("stored terminal budget refusal stays parked across restart (metadata: %s)", async (metadata) => {
   const h = movingHeadHarness();
   await create(h.ports, BUDGET_STAGES({ to: "build", maxRounds: 1 }, null) as never);
@@ -101,7 +106,7 @@ test.each([false, true])("stored terminal budget refusal stays parked across res
   expect(current.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(2);
   expect(current.runs.find(run => run.stageId === "build")!.attempts).toHaveLength(2);
   expect(pipelineCompletedUnreviewed(current)).toBeNull();
-});
+}, TERMINAL_BUDGET_TEST_TIMEOUT_MS);
 
 test.each(["park", "stop-after-fix", "operator-choice"])("stored terminal budget recovery preserves %s", async (policy) => {
   const h = movingHeadHarness();
@@ -119,7 +124,7 @@ test.each(["park", "stop-after-fix", "operator-choice"])("stored terminal budget
   const current = loadPipelines()[0]!;
   expect(current.state).toBe("needs_decision");
   expect(current.runs.find(run => run.stageId === "build")!.attempts).toHaveLength(2);
-});
+}, TERMINAL_BUDGET_TEST_TIMEOUT_MS);
 
 test("stored default-advance needs_review resumes after its already passed final fix", async () => {
   const h = movingHeadHarness();
@@ -134,7 +139,7 @@ test("stored default-advance needs_review resumes after its already passed final
   expect(current.cursor?.activatedBy?.budgetRecheck).toBe(true);
   expect(current.reviewPending).toBeUndefined();
   expect(current.runs.find(run => run.stageId === "build")!.attempts).toHaveLength(2);
-});
+}, TERMINAL_BUDGET_TEST_TIMEOUT_MS);
 
 test("a restart-cut stage continues the same conversation after a second native abort leaves its host unhosted", async () => {
   const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");

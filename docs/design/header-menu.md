@@ -52,10 +52,14 @@ refuses, under a month already counted and with Details open, stays within
 360 px (355 px in uk).
 
 Every desktop state stays within 360 px except the Settings page, whose
-budget is 420 px: the machine worker-limit row and desktop-only «Голосовий Delegatus / Voice Delegatus»
-row (#2519) brings it to 379 px. The orchestrator chose on 2026-10-07 to keep
+budget is 560 px: the machine worker-limit row and desktop-only «Голосовий Delegatus / Voice Delegatus»
+row (#2519) brought it to 379 px. The orchestrator chose on 2026-10-07 to keep
 that row on the Settings page, an existing surface it fits, and to leave the
-menu's first level as it is; 420 px still opens whole in a 700 px window.
+menu's first level as it is. The installation's «Пам’ять Delegatus / Delegatus
+memory» row (`docs/design/memory-source-switch.md` §3.4) stands after Shared
+memory with its whole state line, which wraps in the 232 px panel: a project's
+Settings page measures 478 to 548 px across its states, the tallest in uk with
+a capped sync, and 560 px still opens whole in a 700 px window.
 
 By keyboard, a page opens with focus on its back row, back returns focus to
 the row that opened the page, and Escape closes the desktop menu onto ⋯.

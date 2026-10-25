@@ -20,6 +20,8 @@ test("a tick with retained attempt history materializes settled lanes only for i
     lane.publication = "internal";
     lane.runs.forEach(run => { if (run.attempts.length) run.attempts = Array.from({ length: 16 }, (_, i) => ({ ...run.attempts[0]!, n: i + 1,
       launchId: null, state: "failed", verdict: { status: "fail", findings: [] }, completedAt: lane.closedAt })); });
+    lane.terminalReap = { rounds: 1, stopped: 0, lastAt: lane.closedAt, settledAt: lane.closedAt,
+      settledAttempts: lane.runs.flatMap(run => run.attempts.map(attempt => `${run.stageId}:${attempt.n}`)) };
     return lane;
   });
   savePipelines([active, ...retained]);
@@ -33,7 +35,7 @@ test("a tick with retained attempt history materializes settled lanes only for i
   } finally { snapshots.mockRestore(); }
   expect(result!.pipelines.filter(lane => lane.id.startsWith("retained-"))).toEqual(before.slice(1));
   expect(h.calls).toEqual(calls);
-});
+}, 30_000);
 
 test("a controller evidence reply cannot overwrite a concurrent lane edit or trigger recovery", async () => {
   const h = harness();
