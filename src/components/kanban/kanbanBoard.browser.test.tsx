@@ -1323,15 +1323,16 @@ describe("decision form keeps the operator's typed answer", () => {
 });
 
 describe("CPU admission queue", () => {
-  browserTest("the waiting card shows queue position and remaining minutes, or a stalled queue, in en and uk", async () => {
+  browserTest("the waiting card shows queue position, pressure and elapsed minutes, or a stalled queue, in en and uk", async () => {
     const out = path.resolve(".artifacts/cpu-queue");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
-    const browser = await chromium.launch(LAUNCH);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
     const readings: unknown[] = [];
     try {
-      for (const theme of ["light", "dark"] as const) for (const stalled of [false, true]) for (const lang of ["en", "uk"] as const) for (const width of [1440, 1000, 390]) {
-        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=cpu-queue${stalled ? "-stalled" : ""}`, { width, height: 900 }, theme, lang, "reduce", width === 390);
+      for (const theme of ["light", "dark"] as const) for (const state of ["queue", "pressure", "stalled"] as const) for (const lang of ["en", "uk"] as const) for (const width of [1440, 1000, 390]) {
+        const stalled = state === "stalled";
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=${state === "pressure" ? "cpu-pressure" : `cpu-queue${stalled ? "-stalled" : ""}`}`, { width, height: 900 }, theme, lang, "reduce", width === 390);
         try {
           if (width === 390) await page.locator('[data-phone-kanban-tab="assigned"]').click();
           const selector = width === 390 ? '[data-phone-card="task:t-search"]' : card("t-search");
@@ -1340,15 +1341,17 @@ describe("CPU admission queue", () => {
           await line.waitFor(); await target.scrollIntoViewIfNeeded();
           const text = stalled
             ? lang === "en" ? "CPU queue is stalled · 7th · nothing started for 62 min · High" : "Черга CPU стоїть · 7-й · нічого не стартувало 62 хв · Високий"
-            : lang === "en" ? "Waiting for the CPU queue · 2nd · up to 7 min · High" : "Чекає черги CPU · 2-й · до 7 хв · Високий";
+            : state === "pressure"
+              ? lang === "en" ? "Held by CPU pressure · 1st in the CPU queue · waited 4 min · High" : "Стримує навантаження CPU · 1-й у черзі CPU · чекає 4 хв · Високий"
+              : lang === "en" ? "Waiting for the CPU queue · 2nd · waited 7 min · High" : "Чекає черги CPU · 2-й · чекає 7 хв · Високий";
           expect(await line.textContent()).toBe(text);
           expect(await target.textContent()).toContain("#2190");
           expect(await target.locator('[data-motion="working"]').count()).toBe(0);
           const geometry = await line.evaluate(element => ({ clipped: element.scrollWidth > element.clientWidth + 1, width: element.clientWidth, text: element.textContent }));
           expect(geometry.clipped).toBe(false);
           expect(pageErrors).toEqual([]);
-          await target.screenshot({ path: path.join(out, `${stalled ? "stalled" : "variant-1"}-${width}-${lang}-${theme}.png`) });
-          readings.push({ lang, theme, viewport: width, ...(stalled ? { stalled } : {}), ...geometry });
+          await target.screenshot({ path: path.join(out, `${state}-${width}-${lang}-${theme}.png`) });
+          readings.push({ lang, theme, viewport: width, state, ...geometry });
           if (width === 390) {
             await target.click();
             const lane = page.locator('[data-phone-task-lane="p-search"]');
@@ -1367,8 +1370,8 @@ describe("CPU admission queue", () => {
               expect(box.clipped).toBe(false); expect(box.visible).toBe(true);
               expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
               expect(pageErrors).toEqual([]);
-              await page.screenshot({ path: path.join(out, `phone-${stalled ? "stalled-" : ""}${surface}-${lang}-${theme}.png`) });
-              readings.push({ lang, theme, viewport: width, surface, ...(stalled ? { stalled } : {}), ...box });
+              await page.screenshot({ path: path.join(out, `phone-${state}-${surface}-${lang}-${theme}.png`) });
+              readings.push({ lang, theme, viewport: width, surface, state, ...box });
             }
           }
         } finally { await context.close(); }
