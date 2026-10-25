@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
 import { preparePipelineRepository } from "@/lib/pipelines/initializeRepository";
@@ -63,7 +64,9 @@ async function postPreflight(
   );
 }
 
-export const POST = Object.assign(
+const workspacePOST = Object.assign(
   (req: NextRequest) => postPreflight(req),
   { withDependencies: postPreflight },
 );
+
+export const POST = workspaceRoute("/api/pipelines/preflight", workspacePOST);

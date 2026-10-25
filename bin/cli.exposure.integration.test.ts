@@ -185,7 +185,7 @@ monitor.tick();
 
 /* Without `git: true` the fixture has no .git and the launcher reads it as a
    packaged install; with it, as a checkout. */
-async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableAddress?: string; startupChatter?: boolean; failQr?: boolean; diagnostics?: boolean; git?: boolean; stopAll?: boolean } = {}): Promise<{ cli: string; env: NodeJS.ProcessEnv }> {
+async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableAddress?: string; startupChatter?: boolean; failQr?: boolean; diagnostics?: boolean; git?: boolean; stopAll?: boolean; readinessDelayMs?: number } = {}): Promise<{ cli: string; env: NodeJS.ProcessEnv }> {
   const fixture = await mkdtemp(path.join(tmpdir(), "llv-cli-exposure-"));
   fixtures.add(fixture);
   if (options.git && spawnSync("git", ["init", "-q", fixture]).status !== 0) throw new Error("git init failed for the checkout fixture");
@@ -240,6 +240,7 @@ import { join } from "node:path";
 writeFileSync(join(process.env.LLV_STATE_DIR, "web.pid"), String(process.pid));
 const hostnameIndex = process.argv.indexOf("--hostname");
 const hostname = ${options.ignoreHostname ? JSON.stringify("0.0.0.0") : "hostnameIndex === -1 ? \"0.0.0.0\" : process.argv[hostnameIndex + 1]"};
+await Bun.sleep(${options.readinessDelayMs ?? 0});
 const server = Bun.serve({
   hostname,
   port: Number(process.env.PORT),
@@ -341,6 +342,24 @@ test("the checkout next start path keeps the default listener on loopback", asyn
   expect(child.signalCode).toBeNull();
   expect(await probe(nonLoopbackIpv4Address(), port)).toBe(0);
 });
+
+test("the first start keeps a cold Viewer alive beyond fifteen seconds", async () => {
+  const fixture = await checkoutFixture({ readinessDelayMs: 17_000 });
+  await mkdir(fixture.env.TMPDIR!, { recursive: true });
+  const port = await availablePort();
+  const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(port)], {
+    cwd: path.dirname(path.dirname(fixture.cli)),
+    env: fixture.env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.add(child);
+  const output = captureOutput(child);
+
+  await output.waitFor("Delegatus v", 25_000);
+  expect(child.exitCode).toBeNull();
+  expect(child.signalCode).toBeNull();
+  expect(await probe("127.0.0.1", port)).toBe(200);
+}, 30_000);
 
 test("a machine that still has the retired systemd unit is told how to move to Docker, and the Viewer still starts", async () => {
   const fixture = await checkoutFixture();

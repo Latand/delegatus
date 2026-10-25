@@ -4003,6 +4003,10 @@ const WORKSPACE_PARAMS = new URLSearchParams(location.search);
 const WORKSPACES = SCENARIO?.startsWith("workspaces") ? workspacesFixture({
   uk: UK,
   member: WORKSPACE_PARAMS.has("member"),
+  manager: WORKSPACE_PARAMS.has("manager"),
+  refuseMembership: WORKSPACE_PARAMS.has("membership-refused"),
+  refuseInvite: WORKSPACE_PARAMS.has("invite-refused"),
+  failMembershipReadOnce: WORKSPACE_PARAMS.has("membership-unavailable"),
   projects: [{ project: PROJECT, displayName: "Atlas", smt: now - 20 * MIN }, ...railCatalog.map(({ project, displayName, smt }) => ({ project, displayName, smt }))],
   placed: { client: [LEDGER, "harbor-docs"], research: [MESH], long: [RAIL_LONG] },
 }) : null;
@@ -5144,7 +5148,7 @@ function VoicePanelScene() {
 const relayChainEvidence: RelayChatsPayload = { relays: [{ id: "fixture-relay", name: "Example relay", origin: "https://relay.example" }], chats:
   (["member", "admin", "owner"] as const).map((authority, i) => ({ id: `chain-${i}`, relayId: "fixture-relay", relayName: "Example relay", targetId: "fixture-target", targetName: "Support bot", chatKey: "fixture-chat-chain-key", authority,
     engine: "claude", turns: 3, compactions: 0, createdAt: "2026-10-17T10:00:00Z", lastTurnAt: "2026-10-17T10:00:00Z", state: "idle", file: { ...files[0]!, path: `fixture-chain-${i}`, title: `Chain ${i}` } })) };
-createRoot(document.getElementById("root")!).render(SCENARIO === "workspaces-team" ? <TeamPage initialTab="workspaces" initialCreate={WORKSPACE_PARAMS.has("create")} />
+createRoot(document.getElementById("root")!).render(SCENARIO === "workspaces-team" ? <TeamPage initialTab={WORKSPACE_PARAMS.has("members") ? "members" : "workspaces"} initialCreate={WORKSPACE_PARAMS.has("create")} />
   : SCENARIO === "workspaces-page" ? <WorkspacePage id={FIXTURE_WORKSPACE_IDS[(WORKSPACE_PARAMS.get("page") ?? "client") as keyof typeof FIXTURE_WORKSPACE_IDS]} />
   : PIPELINE_INIT ? <PipelineTemplatePicker repoDir="/project" onCreate={async () => ({})} onCreated={() => {}} onClose={() => {}} /> : SCENARIO === "relay-chain-list" ? <RelayChatsView relayId="fixture-relay" payload={relayChainEvidence} /> : dockWidth === "440" || dockWidth === "360" ? (
   <div className="flex h-full min-h-0">

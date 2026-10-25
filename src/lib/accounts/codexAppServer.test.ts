@@ -519,17 +519,24 @@ test("a fragmented 25 MB JSONL response is accumulated without quadratic event-l
       requiresOpenaiAuth: true,
     },
   }) + "\n";
-  const startedAt = performance.now();
-  for (let offset = 0; offset < frame.length; offset += 64 * 1024) {
-    child.output(frame.slice(offset, offset + 64 * 1024));
+  const byteLength = Buffer.byteLength.bind(Buffer);
+  let bytesScanned = 0;
+  const byteLengthSpy = spyOn(Buffer, "byteLength").mockImplementation((value, encoding) => {
+    bytesScanned += typeof value === "string" ? value.length : value.byteLength;
+    return byteLength(value, encoding);
+  });
+  try {
+    for (let offset = 0; offset < frame.length; offset += 64 * 1024) {
+      child.output(frame.slice(offset, offset + 64 * 1024));
+    }
+    await expect(pending).resolves.toEqual({ account: { type: "chatgpt" }, requiresOpenaiAuth: true });
+    // Each fragment is measured once. Rebuilding and measuring the accumulated
+    // line on every fragment makes this total quadratic in the response size.
+    expect(bytesScanned).toBeLessThanOrEqual(frame.length * 2);
+  } finally {
+    byteLengthSpy.mockRestore();
+    client.close();
   }
-  const synchronousMs = performance.now() - startedAt;
-  await expect(pending).resolves.toEqual({ account: { type: "chatgpt" }, requiresOpenaiAuth: true });
-  /* The former repeated concat + full byteLength scan took about 3 seconds on
-     this payload. The chunk accumulator stays comfortably below this loose CI
-     bound while keeping the regression test insensitive to normal host load. */
-  expect(synchronousMs).toBeLessThan(2_000);
-  client.close();
 });
 
 test("SIGTERM acknowledgement and escalation both end in a reaped child", async () => {
