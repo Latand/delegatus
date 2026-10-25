@@ -8073,7 +8073,9 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
       const account = resolution.account;
       const assertCurrent = () => {
         if (abort.signal.aborted) throw new Error("Codex Cloud operation timed out");
-        if (!sameCloudIntent(reader.read(), stageId, n, expected, authority)) throw new Error("Codex Cloud operation superseded");
+        const currentLane = reader.read();
+        if (!sameCloudIntent(currentLane, stageId, n, expected, authority)) throw new Error("Codex Cloud operation superseded");
+        assertProactiveTaskExecution(currentLane?.taskIds ?? []);
         const request = { project: pipeline.project, requestedId: account.accountId, model: attempt.effectiveRole.model, requireCapacity: false };
         const current = ports.resolveProjectSpawn?.("codex", request) ?? accountManager.resolveProjectSpawn("codex", request);
         if (current.kind !== "available") throw new Error(`Codex Cloud account ${current.kind}`);
