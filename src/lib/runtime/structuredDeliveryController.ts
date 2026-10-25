@@ -808,6 +808,7 @@ export async function bindStructuredDeliveryQueue(
   const nativeReadsOutstanding = new Map<string, number>();
   let nativeReadToken = 0;
   const unresolvedNativeHosts = new Set<string>();
+  const coolingNativeHosts = new Set<string>();
   const nativeRetries = new Map<string, RetryBackoff>();
   const seatRecipient = (conversationId: string) => {
     const snapshot = registry.conversationDeliverySnapshot({ conversationId });
@@ -1005,7 +1006,14 @@ export async function bindStructuredDeliveryQueue(
         const readyHosts = [...hosts].filter(([key, host]) => {
           if (!host.nativeQueue) return false;
           const retry = nativeRetries.get(key);
-          if (retry && !retry.ready(nativeNow())) { scheduleAutomaticRetry(); return false; }
+          if (retry && !retry.ready(nativeNow())) {
+            if (!coolingNativeHosts.has(key)) {
+              coolingNativeHosts.add(key);
+              console.warn("[structured delivery] native queue reconcile waits for its retry backoff", { host: key });
+            }
+            scheduleAutomaticRetry(); return false;
+          }
+          coolingNativeHosts.delete(key);
           return true;
         });
         // A cooldown wake must not rebuild the registry snapshot either.

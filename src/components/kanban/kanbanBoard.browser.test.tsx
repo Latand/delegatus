@@ -23202,15 +23202,16 @@ describe("task chip native queue presentation", () => {
 });
 
 describe("native queue after a matching proof", () => {
-  browserTest("the proven row leaves and a same-text pending row stays, desktop and phone, en and uk, light and dark", async () => {
+  browserTest("the proven row and its acknowledgement hint leave and a same-text pending row stays, desktop and phone, en and uk, light and dark", async () => {
     const out = path.resolve(".artifacts/native-queue-proof");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
     const browser = await chromium.launch({ ...LAUNCH, args: [...(LAUNCH.args ?? []), "--disable-gpu"] });
     const cases: Record<string, unknown>[] = [];
+    const hint = { en: "1 message is waiting for Codex to acknowledge it", uk: "1 повідомлення чекає на підтвердження від Codex." };
     try {
       for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 390]) {
-        const counts: Record<string, number> = {};
+        const seen: Record<string, { rows: (string | null)[]; notice: string | null; count: string | null }> = {};
         for (const proof of ["before", "after"] as const) {
           const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=native-queue-proof&proof=${proof}`, { width, height: 700 }, theme, locale, "reduce", width === 390);
           try {
@@ -23218,15 +23219,23 @@ describe("native queue after a matching proof", () => {
             const panel = page.locator('[data-testid="native-queue-panel"]');
             await panel.waitFor();
             await page.evaluate(() => document.fonts.ready);
-            const rows = panel.locator('[data-testid="native-queue-row"]');
-            counts[proof] = await rows.count();
-            expect(await rows.evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-entry")))).toEqual(proof === "before" ? ["entry-a", "entry-b"] : ["entry-b"]);
+            const notice = panel.locator('[data-testid="native-queue-notice"]');
+            seen[proof] = {
+              rows: await panel.locator('[data-testid="native-queue-row"]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-entry"))),
+              notice: (await notice.count()) ? ((await notice.first().textContent()) ?? "").trim() : null,
+              count: ((await panel.locator('[data-testid="native-queue-count"]').first().textContent()) ?? "").trim(),
+            };
             expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBeFalse();
             expect(pageErrors).toEqual([]);
             await page.screenshot({ path: path.join(out, `${locale}-${theme}-${width}-${proof}.png`) });
           } finally { await context.close(); }
         }
-        cases.push({ locale, theme, width, rowsBefore: counts.before, rowsAfter: counts.after, samePendingTextKept: true });
+        expect(seen.before!.rows).toEqual(["entry-b", "entry-a"]);
+        expect(seen.before!.notice).toContain(hint[locale]);
+        expect(seen.after!.rows).toEqual(["entry-b"]);
+        expect(seen.after!.notice).toBeNull();
+        cases.push({ locale, theme, width, rowsBefore: seen.before!.rows, noticeBefore: seen.before!.notice, countBefore: seen.before!.count,
+          rowsAfter: seen.after!.rows, noticeAfter: seen.after!.notice, countAfter: seen.after!.count });
       }
     } finally { await browser.close(); server.stop(); }
     fs.mkdirSync("evidence/native-queue-proof", { recursive: true });

@@ -5,65 +5,129 @@
       "locale": "en",
       "theme": "light",
       "width": 1440,
-      "rowsBefore": 2,
-      "rowsAfter": 1,
-      "samePendingTextKept": true
+      "rowsBefore": [
+        "entry-b",
+        "entry-a"
+      ],
+      "noticeBefore": "1 message is waiting for Codex to acknowledge it.",
+      "countBefore": "2 messages",
+      "rowsAfter": [
+        "entry-b"
+      ],
+      "noticeAfter": null,
+      "countAfter": "1 message"
     },
     {
       "locale": "en",
       "theme": "light",
       "width": 390,
-      "rowsBefore": 2,
-      "rowsAfter": 1,
-      "samePendingTextKept": true
+      "rowsBefore": [
+        "entry-b",
+        "entry-a"
+      ],
+      "noticeBefore": "1 message is waiting for Codex to acknowledge it.",
+      "countBefore": "2 messages",
+      "rowsAfter": [
+        "entry-b"
+      ],
+      "noticeAfter": null,
+      "countAfter": "1 message"
     },
     {
       "locale": "en",
       "theme": "dark",
       "width": 1440,
-      "rowsBefore": 2,
-      "rowsAfter": 1,
-      "samePendingTextKept": true
+      "rowsBefore": [
+        "entry-b",
+        "entry-a"
+      ],
+      "noticeBefore": "1 message is waiting for Codex to acknowledge it.",
+      "countBefore": "2 messages",
+      "rowsAfter": [
+        "entry-b"
+      ],
+      "noticeAfter": null,
+      "countAfter": "1 message"
     },
     {
       "locale": "en",
       "theme": "dark",
       "width": 390,
-      "rowsBefore": 2,
-      "rowsAfter": 1,
-      "samePendingTextKept": true
+      "rowsBefore": [
+        "entry-b",
+        "entry-a"
+      ],
+      "noticeBefore": "1 message is waiting for Codex to acknowledge it.",
+      "countBefore": "2 messages",
+      "rowsAfter": [
+        "entry-b"
+      ],
+      "noticeAfter": null,
+      "countAfter": "1 message"
     },
     {
       "locale": "uk",
       "theme": "light",
       "width": 1440,
-      "rowsBefore": 2,
-      "rowsAfter": 1,
-      "samePendingTextKept": true
+      "rowsBefore": [
+        "entry-b",
+        "entry-a"
+      ],
+      "noticeBefore": "1 повідомлення чекає на підтвердження від Codex.",
+      "countBefore": "2 повідомлення",
+      "rowsAfter": [
+        "entry-b"
+      ],
+      "noticeAfter": null,
+      "countAfter": "1 повідомлення"
     },
     {
       "locale": "uk",
       "theme": "light",
       "width": 390,
-      "rowsBefore": 2,
-      "rowsAfter": 1,
-      "samePendingTextKept": true
+      "rowsBefore": [
+        "entry-b",
+        "entry-a"
+      ],
+      "noticeBefore": "1 повідомлення чекає на підтвердження від Codex.",
+      "countBefore": "2 повідомлення",
+      "rowsAfter": [
+        "entry-b"
+      ],
+      "noticeAfter": null,
+      "countAfter": "1 повідомлення"
     },
     {
       "locale": "uk",
       "theme": "dark",
       "width": 1440,
-      "rowsBefore": 2,
-      "rowsAfter": 1,
-      "samePendingTextKept": true
+      "rowsBefore": [
+        "entry-b",
+        "entry-a"
+      ],
+      "noticeBefore": "1 повідомлення чекає на підтвердження від Codex.",
+      "countBefore": "2 повідомлення",
+      "rowsAfter": [
+        "entry-b"
+      ],
+      "noticeAfter": null,
+      "countAfter": "1 повідомлення"
     },
     {
       "locale": "uk",
       "theme": "dark",
       "width": 390,
-      "rowsBefore": 2,
-      "rowsAfter": 1,
-      "samePendingTextKept": true
+      "rowsBefore": [
+        "entry-b",
+        "entry-a"
+      ],
+      "noticeBefore": "1 повідомлення чекає на підтвердження від Codex.",
+      "countBefore": "2 повідомлення",
+      "rowsAfter": [
+        "entry-b"
+      ],
+      "noticeAfter": null,
+      "countAfter": "1 повідомлення"
     }
   ]
 }

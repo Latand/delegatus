@@ -1908,7 +1908,6 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       },
       evidence: (entry) => this.nativeQueueEvidence(entry),
       evidenceBatch: async (entries) => {
-        if (!this.identity.path) return entries.map(() => null);
         const history = await this.readDeliveryHistory(entries.map(entry => entry.clientUserMessageId), this.requestTimeoutMs,
           candidate => entries.some(entry => this.nativeQueueProof(entry, candidate) !== null));
         return Promise.all(entries.map(entry => this.nativeQueueEvidence(entry, history)));
@@ -1955,6 +1954,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
 
   private async readDeliveryHistory(clientIds: string[], timeoutMs = this.requestTimeoutMs,
     accept?: (history: Extract<CodexDeliveryHistoryResult, {state: "observed"}>) => boolean): Promise<CodexDeliveryHistoryResult> {
+    if (!this.identity.path) await this.recoverIdentityPath();
     if (!this.identity.path) return {state: "unknown", reason: "identity"};
     return readCodexDeliveryHistory((method, params, timeout) => this.rpc(method, params, timeout, true),
       {threadId: this.identity.threadId, path: this.identity.path},
@@ -1962,8 +1962,21 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         maxPages: DELIVERY_HISTORY_PAGES, maxBytes: DELIVERY_HISTORY_BYTES}, clientIds, accept);
   }
 
+  /** thread/start and thread/resume may answer without a transcript path (it is
+      nullable). The thread's own read names it; without one every canonical
+      history read is blocked, so a consumed native-queue entry never gets its
+      proof. A failed read leaves the identity as it was and is retried. */
+  private async recoverIdentityPath(): Promise<void> {
+    try {
+      const path = stringField(record(record(await this.rpc("thread/read", { threadId: this.identity.threadId }, this.requestTimeoutMs, true))?.thread), "path");
+      if (path && !this.identity.path) this.identity.path = path;
+    } catch (error) {
+      console.warn("[codex host] the thread's transcript path is unavailable", { threadId: this.identity.threadId, error: safeError(error) });
+    }
+  }
+
   private async nativeQueueEvidence(entry: NativeQueueRecord, snapshot?: CodexDeliveryHistoryResult) {
-    if (entry.binding.threadId !== this.identity.threadId || !this.identity.path) return null;
+    if (entry.binding.threadId !== this.identity.threadId) return null;
     const history = snapshot ?? await this.readDeliveryHistory([entry.clientUserMessageId]);
     return this.nativeQueueProof(entry, history);
   }

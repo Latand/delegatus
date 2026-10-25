@@ -16,6 +16,8 @@ import { DeputyBlock } from "@/components/conversation/DeputyBlock";
 import { SeatDeputyChip } from "@/components/orchestrator/SeatDeputyChip";
 import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
 import { NativeQueuePanel } from "@/components/NativeQueuePanel";
+import { projectNativeQueue } from "@/components/nativeQueueView";
+import type { NativeQueueRecord } from "@/lib/runtime/nativeQueueContracts";
 import { translate, useLocale } from "@/lib/i18n";
 import { lessonRequestLines, renderLearnedRules } from "@/lib/memory/roleRender";
 import { taskReferencePrelude } from "@/lib/selection/selectedContext";
@@ -5003,13 +5005,27 @@ const queueTaskPreview = <div className="p-3"><NativeQueuePanel
   error={null} thread={{ model: null, effort: null }} cardId="conversation_task_queue" mintKey={() => "task-queue-edit"}
   submit={async () => ({ ok: true })} onRefresh={() => {}} t={(key, params) => translate(UK ? "uk" : "en", key, params)}
 /><div className="mt-3"><SeatDeputyChip deputy={taskDeputy} /><DeputyBlock deputy={taskDeputy} /></div></div>;
-/* A proof landed on one of two same-text entries: before it both wait, after it only the other id remains. */
+/* The consumed entry is gone from Codex's queue and has no proof yet; a second entry with the same words is still held there.
+   The panel's view is the production projection of journal-shaped records, so the acknowledgement hint is the real one. */
 const proofAfter = new URLSearchParams(location.search).get("proof") === "after";
-const proofRow = (id: string) => ({ entryId: `entry-${id}`, clientUserMessageId: `client-${id}`, nativeSubmissionId: `native-${id}`, revision: 1, text: "Check the memory profile",
-  images: [], imageCount: 0, state: "queued" as const, reason: null,
-  busy: false, observedInNative: true, dispatchedRevision: null, proven: false, requestedRuntime: null, actions: ["edit", "delete"] as ("edit" | "delete")[], blocked: null });
+const proofRecord = (id: string, overrides: Partial<NativeQueueRecord> = {}): NativeQueueRecord => ({
+  entryId: `entry-${id}`, conversationId: "conversation_proof_queue", binding: { threadId: "thread-proof", accountId: "account-a" },
+  clientUserMessageId: `client-${id}`, nativeSubmissionId: `native-${id}`, revision: 1,
+  versions: [{ revision: 1, operationId: `entry-${id}`, text: "Check the memory profile", images: [], contentDigest: `digest-${id}` }],
+  profilePolicy: "thread-at-dispatch", state: "queued", mutationOperationId: null, dispatchedRevision: null, dispatchedTurnId: null,
+  proof: null, reason: null, ...overrides });
+const proofView = projectNativeQueue({
+  turn: "running", activeTurnId: "turn-proof",
+  entries: [
+    proofAfter ? proofRecord("a", { state: "delivered", dispatchedRevision: 1, dispatchedTurnId: "turn-proof",
+      proof: { threadId: "thread-proof", clientUserMessageId: "client-a", revision: 1, turnId: "turn-proof", itemId: "item-a", input: [{ type: "text", text: "Check the memory profile" }] } })
+      : proofRecord("a"),
+    proofRecord("b"),
+  ],
+  native: { threadId: "thread-proof", stale: false, items: [{ id: "native-b", clientUserMessageId: "client-b", input: [{ type: "text", text: "Check the memory profile" }] }] },
+});
 const queueProofPreview = <div className="p-3"><NativeQueuePanel
-  view={{ rows: proofAfter ? [proofRow("b")] : [proofRow("a"), proofRow("b")], nativeStale: false, canStart: false, activeTurnId: null, reorderable: [], notice: null }}
+  view={proofView}
   unresolved={[]} error={null} thread={{ model: null, effort: null }} cardId="conversation_proof_queue" mintKey={() => "proof-queue-edit"}
   submit={async () => ({ ok: true })} onRefresh={() => {}} t={(key, params) => translate(UK ? "uk" : "en", key, params)}
 /></div>;

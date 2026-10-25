@@ -230,7 +230,7 @@ export class NativeQueueExecutor {
       /* An early exit that answered "nothing pending" ended the retry chain while
          an unproven entry was still owed. Entries waiting keep the pass failing,
          with its reason, so the host's backoff brings it back. */
-      const owed = records.filter(entry => !entry.proof && entry.state !== "refused").length;
+      const owed = records.filter(entry => !entry.proof && entry.state !== "refused" && entry.state !== "removed" && entry.state !== "delivered").length;
       if (!owed) return false;
       const reason = !host ? "no host for the conversation" : !host.nativeQueue ? "the host has no native queue reader" : "no native queue binding";
       throw new Error(`native queue reconcile unavailable (${owed} owed): ${reason}`);
