@@ -28,6 +28,12 @@ function fixture() {
     .run(collection,(row as { id: string }).id,JSON.stringify(row),order);
   return { db,filename,put, read: <T>(fn: (db: Database) => T, options: Parameters<typeof readHistoryProjection>[1] = {}) => readHistoryProjection(fn,{filename,...options}) };
 }
+function aliasDirectory(filename:string):string {
+  // The projection fixture has a deliberately minimal schema. Alias persistence
+  // needs the full state store, which owns a separate database in this fixture.
+  const directory=path.join(path.dirname(filename),"aliases");fs.mkdirSync(directory);
+  return directory;
+}
 function pipeline(id: string, overrides = {}) {
   const role = (roleId: "builder" | "reviewer") => ({roleId,engine:"codex" as const,model:null,effort:null,access:"read-write" as const,promptScaffold:"fixture"});
   const record = buildPipeline({id,task:"projection fixture",project:"fixture",repoDir:"/repo",srcPath:null,srcConversationId:null,now:new Date(NOW).toISOString(),stages:[
@@ -310,7 +316,53 @@ test("invalid persisted flows are excluded with the authoritative validator",asy
   }finally{f.db.close();}
 });
 
-test("a commit during cooperative bootstrap is included before the read answers",async () => {
+for (const collections of [["pipelines","pipelines_archive","flows"], ["pipelines"]] as const) {
+  test(`steady writes outlive the deadline while ${collections.length === 1 ? "fleet" : "liveness"} reads finish with their initial pending rows`,async () => {
+    const f=fixture();
+    const rows=Array.from({length:4},(_,n)=>{
+      const row=pipeline(`initial_${n}`);
+      Object.assign(row.runs[0].attempts[0],{conversationId:`conversation_${n}`,providerWait:{accountId:null,resetsAt:NOW+1000,
+        resumeAt:new Date(NOW+2000).toISOString(),startedAt:new Date(NOW).toISOString(),text:"wait",turnTs:1,tries:0,
+        condition:{kind:"usage_limit",scope:null,resetLabel:null,label:"usage limit"}}});
+      return row;
+    });
+    rows.forEach(row=>f.put(row));
+    let writes=0;
+    let nextWrite: (()=>void) | undefined;
+    let finish!: ()=>void;
+    const finished=new Promise<void>(resolve=>{finish=resolve;});
+    const started=performance.now(),deadline=started+300;
+    // A fixed cadence keeps replenishing the queue, including on the old reader.
+    // Each yield waits for a committed write so scheduler jitter cannot let it empty.
+    const writer=setInterval(()=>{
+      f.put(pipeline(`later_${writes++}`));
+      nextWrite?.();nextWrite=undefined;
+      if(performance.now()>=started+600){clearInterval(writer);finish();}
+    },10);
+    try {
+      const answer=await f.read(db=>({
+        counts:historyAttemptCounts(db,"fixture",NOW),
+        refs:rows.map(row=>historyPipelineRef(db,row.runs[0].attempts[0].conversationId,"missing-transcript")),
+        waits:historyFleetLimitWaits(db,rows.map(row=>row.runs[0].attempts[0].conversationId!)),
+        keys:db.query<{row_key:string},[]>("SELECT row_key FROM history_inputs ORDER BY row_key").all().map(row=>row.row_key),
+      }),{collections,deadlineMs:deadline,onYield:()=>new Promise<void>(resolve=>{nextWrite=resolve;})});
+      expect(performance.now()).toBeLessThan(deadline);
+      expect(answer.keys).toEqual(rows.map(row=>row.id));
+      expect(answer.counts).toEqual(oldCounts(rows));
+      expect(answer.refs.map(ref=>ref?.pipelineId)).toEqual(rows.map(row=>row.id));
+      expect(answer.waits).toEqual(fleetLimitWaits(rows as unknown as Pipeline[]));
+      const writesAtAnswer=writes;
+      expect(f.db.query<{n:number},[]>("SELECT count(*) AS n FROM history_pending").get()!.n).toBeGreaterThan(0);
+      await finished;
+      expect(writes).toBeGreaterThan(writesAtAnswer);
+      expect(performance.now()).toBeGreaterThan(deadline);
+      const final=await f.read(db=>historyAttemptCounts(db,"fixture",NOW),{collections});
+      expect(final.builder).toBe(rows.length+writes);
+    } finally {await finished;clearInterval(writer);f.db.close();}
+  });
+}
+
+test("a commit during cooperative bootstrap remains queued for the following read",async () => {
   const f = fixture();
   try {
     for (let n=0;n<4;n++) f.put(pipeline(`pipeline_${n}`),"pipelines",n);
@@ -323,8 +375,62 @@ test("a commit during cooperative bootstrap is included before the read answers"
     expect(left).toBe(3);
     f.put(pipeline("pipeline_new"),"pipelines",4);
     release();
-    expect((await pending).builder).toBe(5);
+    expect((await pending).builder).toBe(4);
+    expect((await f.read(db=>historyAttemptCounts(db,"fixture",NOW))).builder).toBe(5);
   } finally { f.db.close(); }
+});
+
+test("captured identities include updates and deletions before projection and defer a re-enqueued identity",async () => {
+  const f=fixture();
+  const rows=[pipeline("initial_a"),pipeline("initial_b"),pipeline("initial_c")];
+  try {
+    rows.forEach(row=>f.put(row));
+    let changed=false;
+    const answer=await f.read(db=>({counts:historyAttemptCounts(db,"fixture",NOW),
+      keys:db.query<{row_key:string},[]>("SELECT row_key FROM history_inputs ORDER BY row_key").all().map(row=>row.row_key),
+    }),{onYield:async()=>{
+      if(changed)return;changed=true;
+      for(const row of rows.slice(0,2)){
+        row.runs[0].attempts.push({...row.runs[0].attempts[0],n:2});f.put(row);
+      }
+      f.db.query("DELETE FROM state_rows WHERE row_key=?").run(rows[2].id);
+    }});
+    expect(answer.counts).toEqual({builder:3,reviewer:0});
+    expect(answer.keys).toEqual(["initial_a","initial_b"]);
+    expect(f.db.query<{row_key:string},[]>("SELECT row_key FROM history_pending ORDER BY row_key").all()).toEqual([{row_key:"initial_a"}]);
+    expect(await f.read(db=>historyAttemptCounts(db,"fixture",NOW))).toEqual({builder:4,reviewer:0});
+  } finally {f.db.close();}
+});
+
+test("lock retries retain the captured batch and its committed progress",async () => {
+  const f=fixture();
+  const lock=new Database(f.filename);lock.exec("PRAGMA busy_timeout=0");
+  let released:Promise<void> | undefined;
+  try {
+    f.put(pipeline("initial_a"));f.put(pipeline("initial_b"));
+    const answer=await f.read(db=>historyAttemptCounts(db,"fixture",NOW),{onYield:async()=>{
+      if(released)return;
+      lock.exec("BEGIN IMMEDIATE");
+      lock.query("INSERT INTO state_rows VALUES (?,?,?,?)").run("pipelines","later",JSON.stringify(pipeline("later")),0);
+      // The next projection attempt must defer before this timer releases the lock.
+      released=new Promise<void>(resolve=>setTimeout(()=>{lock.exec("COMMIT");resolve();},0));
+    }});
+    expect(answer).toEqual({builder:2,reviewer:0});
+    expect(f.db.query<{row_key:string},[]>("SELECT row_key FROM history_pending").all()).toEqual([{row_key:"later"}]);
+    expect(await f.read(db=>historyAttemptCounts(db,"fixture",NOW))).toEqual({builder:3,reviewer:0});
+  } finally {await released;lock.close();f.db.close();}
+});
+
+test("cancellation during a bounded drain leaves the remaining identities retryable",async () => {
+  const f=fixture();const cancel=new AbortController();
+  try {
+    f.put(pipeline("initial_a"));f.put(pipeline("initial_b"));
+    await expect(f.read(db=>historyAttemptCounts(db,"fixture",NOW),{signal:cancel.signal,
+      onYield:async()=>{cancel.abort(new Error("fixture cancelled during drain"));},
+    })).rejects.toThrow("fixture cancelled during drain");
+    expect(f.db.query<{row_key:string},[]>("SELECT row_key FROM history_pending").all()).toEqual([{row_key:"initial_b"}]);
+    expect(await f.read(db=>historyAttemptCounts(db,"fixture",NOW))).toEqual({builder:2,reviewer:0});
+  } finally {f.db.close();}
 });
 
 test("headless ownership retains every recorded round and removes changed owners",async () => {
@@ -501,15 +607,17 @@ test("a real process restart reads the persisted projection",async () => {
   const f = fixture();
   try {
     f.put(pipeline("pipeline_one"));
-    await f.read(db => historyAttemptCounts(db,"fixture",NOW));
+    expect(await f.read(db => historyAttemptCounts(db,"fixture",NOW),{onYield:async()=>{
+      f.put(pipeline("pipeline_two"));
+    }})).toEqual({builder:1,reviewer:0});
     const childRoot = path.join(path.dirname(f.filename),"child"); fs.mkdirSync(childRoot);
     const env = { ...process.env, HOME:childRoot, XDG_CONFIG_HOME:childRoot, TMPDIR:childRoot, LLV_STATE_DIR:childRoot, LLV_VIEWER_CONTROL_URL:"http://127.0.0.1:1" };
     const child = Bun.spawn([process.execPath,"-e",`
       const {readHistoryProjection,historyAttemptCounts}=await import(process.argv[1]);
       console.log(JSON.stringify(await readHistoryProjection(db=>historyAttemptCounts(db,"fixture",${NOW}),{filename:process.argv[2]})));
     `,path.join(import.meta.dir,"historyProjection.ts"),f.filename],{env,stdout:"pipe",stderr:"pipe"});
-    const [code,output] = await Promise.all([child.exited,new Response(child.stdout).text()]);
-    expect(code).toBe(0); expect(JSON.parse(output)).toEqual({builder:1,reviewer:0});
+    const [code,output,stderr] = await Promise.all([child.exited,new Response(child.stdout).text(),new Response(child.stderr).text()]);
+    expect(code).toBe(0); expect(stderr).toBe(""); expect(JSON.parse(output)).toEqual({builder:2,reviewer:0});
   } finally { f.db.close(); }
 });
 
@@ -676,7 +784,7 @@ test("removed project headers are evicted and a re-created project cannot reuse 
 
 test("a warmed count follows project succession even when its caller holds the earlier key",async () => {
   const f=fixture();const previous=process.env.LLV_STATE_DIR;
-  process.env.LLV_STATE_DIR=path.dirname(f.filename);resetProjectAliasesForTests();
+  process.env.LLV_STATE_DIR=aliasDirectory(f.filename);resetProjectAliasesForTests();
   try {
     f.put(pipeline("pipeline_one"));f.put(pipeline("pipeline_two",{project:"renamed"}),"pipelines",1);
     expect((await f.read(db=>historyAttemptCounts(db,"fixture",NOW))).builder).toBe(1);
@@ -709,7 +817,7 @@ test("local count delta cannot hide a peer projection revision",async()=>{
 
 test("alias change plus a record update rebuilds the complete canonical count",async()=>{
   const f=fixture();const previous=process.env.LLV_STATE_DIR;
-  process.env.LLV_STATE_DIR=path.dirname(f.filename);resetProjectAliasesForTests();
+  process.env.LLV_STATE_DIR=aliasDirectory(f.filename);resetProjectAliasesForTests();
   try{
     f.put(pipeline("alias_source"));const renamed=pipeline("alias_target",{project:"renamed"});f.put(renamed,"pipelines",1);
     expect((await f.read(db=>historyAttemptCounts(db,"renamed",NOW))).builder).toBe(1);
@@ -732,7 +840,7 @@ test("warm count removal drops an unbacked effective role key",async()=>{
 
 test("aliased project role backing sums survive a member deletion",async()=>{
   const f=fixture();const previous=process.env.LLV_STATE_DIR;
-  process.env.LLV_STATE_DIR=path.dirname(f.filename);resetProjectAliasesForTests();
+  process.env.LLV_STATE_DIR=aliasDirectory(f.filename);resetProjectAliasesForTests();
   try{
     const first=pipeline("backing_first",{project:"fixture"}),second=pipeline("backing_second",{project:"renamed"});
     first.runs.forEach(run=>{run.attempts=[];});second.runs.forEach(run=>{run.attempts=[];});

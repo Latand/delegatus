@@ -300,9 +300,10 @@ function projectionStep<T>(deadline: number, work: () => T): T {
   }
 }
 
-/** One row per transaction, with timer opportunities every 4 ms and one
- * asynchronous admission deadline. The final read checks the queue in its own
- * snapshot, so a peer commit during a yield cannot leave a stale answer. */
+/** Capture pending identities once, then project one per transaction, with
+ * timer opportunities every 4 ms and one asynchronous admission deadline.
+ * The final read uses its own snapshot after every captured identity has been
+ * projected. Newly queued identities may wait for the next read. */
 export async function readHistoryProjection<T>(read: (db: Database) => T, options: {
   filename?: string;
   collections?: readonly ("pipelines" | "pipelines_archive" | "flows")[];
@@ -320,8 +321,11 @@ export async function readHistoryProjection<T>(read: (db: Database) => T, option
       throw new FileTransactionBusyError("history projection writes are fenced during release handoff");
     }
   };
-  const pendingSql = `SELECT collection,row_key FROM history_pending WHERE collection IN (${collections.map(()=>"?").join(",")}) LIMIT 1`;
+  const pendingSql = `SELECT collection,row_key FROM history_pending WHERE collection IN (${collections.map(()=>"?").join(",")}) ORDER BY collection,row_key`;
   const deadline = options.deadlineMs ?? performance.now() + 30_000;
+  // Retain the finite batch and its progress across asynchronous lock retries.
+  let pendingRows: Array<{ collection: string; row_key: string }> | undefined;
+  let next = 0;
   return withViewerOperation("history.prepare", () => waitForStateLock("history.projection", async () => {
     let slice = performance.now();
     for (;;) {
@@ -330,7 +334,8 @@ export async function readHistoryProjection<T>(read: (db: Database) => T, option
       const answer = projectionStep(deadline, () => {
         db.exec("BEGIN");
         try {
-          const pending = db.query<{ collection: string; row_key: string }, SQLQueryBindings[]>(pendingSql).get(...collections);
+          pendingRows ??= db.query<{ collection: string; row_key: string }, SQLQueryBindings[]>(pendingSql).all(...collections);
+          const pending = pendingRows[next];
           if (!pending) { assertWriter(); const value = withViewerOperation("history.read", () => read(db)); db.exec("COMMIT"); return { value }; }
           db.exec("ROLLBACK");
         } catch (error) { try { db.exec("ROLLBACK"); } catch { /* transaction already closed */ } throw error; }
@@ -338,7 +343,7 @@ export async function readHistoryProjection<T>(read: (db: Database) => T, option
         assertWriter();
         db.exec("BEGIN IMMEDIATE");
         try {
-          const pending = db.query<{ collection: string; row_key: string }, SQLQueryBindings[]>(pendingSql).get(...collections);
+          const pending = pendingRows![next];
           assertWriter();
           if (pending) {
             const allowedStamps=new Map<string,{before:string;after:string}>();
@@ -359,6 +364,7 @@ export async function readHistoryProjection<T>(read: (db: Database) => T, option
             assertWriter();
             db.exec("COMMIT");
             if(countUpdate)updateWarmCountCaches(filename,countUpdate,allowedStamps);
+            next++;
             return null;
           }
           assertWriter();
