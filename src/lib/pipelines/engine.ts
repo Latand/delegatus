@@ -7898,6 +7898,9 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   ports: PipelinePorts, persist: () => void | Promise<void>): Promise<boolean> {
   if (stage.kind !== "run" || attempt.report || attempt.verdict || openRuntimeSwitch(attempt)
     || !["running", "needs_decision"].includes(attempt.state)) return false;
+  // A parked launch can have a hidden reservation. Manual retry owns the
+  // durable receipt check that releases it into a fresh attempt.
+  if (!attempt.launchId && isStructuredSpawnPark(pipeline, attempt)) return false;
   let blocked: string | null;
   try { blocked = stageAccountBlocked(pipeline, attempt, ports); }
   catch { return !!attempt.suspension; } // An unreadable binding cannot authorize a successor.
@@ -15414,9 +15417,6 @@ export async function patchPipeline(
       if (unreservedSpawnRetry) {
         const refusal = unreservedStageRetryRefusal(pipeline, stage, attempt);
         if (refusal) return { error: refusal, status: 409 };
-        // Account recovery must not reopen this settled reservation on a later tick.
-        attempt.state = "failed";
-        attempt.completedAt ??= ports.now();
       }
       resetStageForRetry(pipeline, stage);
       recordHandLaunch(pipeline, actor, ports.now());

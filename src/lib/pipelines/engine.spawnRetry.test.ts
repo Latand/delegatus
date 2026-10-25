@@ -92,10 +92,15 @@ test.each([false, true].flatMap(suspended => [false, true].map(receipt => ({ sus
     f.h.ports.accountExhausted = (_engine, accountId) => accountId === "blocked";
     if (receipt) f.reserve(1);
     const result = await patchPipeline(f.lane.id, { action: "retry-stage" }, f.h.ports);
-    if (receipt) expect(result).toMatchObject({ status: 409, error: expect.stringContaining("a reserved receipt") });
+    if (receipt) {
+      expect(result).toMatchObject({ status: 409, error: expect.stringContaining("a reserved receipt") });
+      await tickPipelines([], f.h.ports);
+      expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision" });
+      expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
+      expect(f.h.spawnInputs).toHaveLength(0);
+    }
     else {
       expect(result.error).toBeUndefined();
-      expect(loadPipelines()[0]!.runs[0]!.attempts[1]).toMatchObject({ state: "failed", completedAt: expect.any(String) });
       await tickPipelines([], f.h.ports);
       await tickPipelines([], f.h.ports);
       expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)).toMatchObject({ n: 3, state: "running" });
@@ -177,6 +182,7 @@ test.each([false, true].flatMap(suspended => [false, true].map(receipt => ({ sus
       expect(result.cursor.state).toBe("pending");
       await tickPipelines([], f.h.ports);
       await tickPipelines([], f.h.ports);
+      expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)).toMatchObject({ n: 3, state: "running" });
       expect(f.h.spawnInputs).toHaveLength(1);
     }
   } finally {
