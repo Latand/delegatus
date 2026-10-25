@@ -30,6 +30,18 @@ test.if(linux)("an unreachable runner runs the command here once, and the answer
   expect(h.calls()).toHaveLength(1);
 }, E2E_TIMEOUT);
 
+test.if(linux)("a failed fresh load probe runs locally once without dispatching a remote command", () => {
+  const h = harness();
+  h.settings({ failOn: "/proc/loadavg" });
+  const file = testFile(h, "load-probe.test.ts", `test("one", () => console.log("ran-once"));`);
+  const result = h.run(["bun", "test", file]);
+  expect(result.code).toBe(0);
+  expect(result.stderr).toMatch(/^gate-runner: running here: the runner is unavailable: ssh exited 255$/m);
+  expect(result.stdout.match(/ran-once/g)).toHaveLength(1);
+  expect(remoteRuns(h)).toHaveLength(0);
+  expect(h.calls()).toHaveLength(2);
+}, E2E_TIMEOUT);
+
 // T7
 // The session is cut at a handshake, never after a delay: the command prints
 // its first line, then waits for a release file the test writes only after

@@ -25,7 +25,7 @@ export function profileInputs(view: RoleMemoryProjectView): ProfileInput[] {
     hash: hash([scope, withWhy, rules.map(({ id, rule, why }) => [id, rule, why])]),
     compact: rules.map((rule, index) => `${index + 1}. ${rule.rule}${withWhy && rule.why ? ` | why: ${rule.why}` : ""}`).join("\n"),
   });
-  const slices = scopes.map(scope => input(scope.scope, scope.kind === "role" ? `${scope.roleId}, ${isCrossProjectRoleScope(scope.scope) ? "every project" : "this project"}` : scope.kind, scope.active));
+  const slices = scopes.map(scope => input(scope.scope, scope.kind === "role" ? `${scope.roleId}, ${isCrossProjectRoleScope(scope.scope) ? "every project" : "this project"}` : scope.kind === "swarm" ? `${scope.roleId}, every install (public swarm rules)` : scope.kind, scope.active));
   if (!slices.length) return [];
   const all = input(OVERALL_SCOPE, "all memory of this project's agents", scopes.flatMap(scope => scope.active));
   let offset = 0;

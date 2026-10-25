@@ -1,3 +1,4 @@
+import { workspaceRoute, requestWorkspaceScope } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
 import { ACTIVITY_MEMBER_FORBIDDEN, ActivityMemberForbidden, activityResponse, type ActivityResponse } from "@/lib/activity/report";
@@ -22,17 +23,19 @@ export const dynamic = "force-dynamic";
  * enums, project keys and names, member ids and roster names, pipeline and
  * stage ids and role ids — no path, title, message text or email.
  */
-export async function GET(req: NextRequest): Promise<NextResponse<ActivityResponse | (ApiError & { code?: string })>> {
+async function workspaceGET(req: NextRequest): Promise<NextResponse<ActivityResponse | (ApiError & { code?: string })>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
   return activityOperation("activity.time.read", async () => {
     try {
       const mode = teamMode();
       const session = requestSession(req);
+      const scope = requestWorkspaceScope(req);
       const body = await activityResponse(req.nextUrl.searchParams, {}, {
         mode: session ? "team" : mode,
         memberId: session?.member.id ?? null,
         canChoose: session ? session.member.role === "owner" : mode === "solo",
+        ...(scope && !scope.owner ? { workspaceProjects: scope.projectFilter } : {}),
       });
       return NextResponse.json(body, { headers: { "Cache-Control": "no-store" } });
     } catch (error) {
@@ -43,3 +46,5 @@ export async function GET(req: NextRequest): Promise<NextResponse<ActivityRespon
     }
   });
 }
+
+export const GET = workspaceRoute("/api/activity", workspaceGET, true);

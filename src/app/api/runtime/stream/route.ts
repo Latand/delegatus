@@ -1,3 +1,4 @@
+import { workspaceRoute, requestWorkspaceScope, workspaceConversationResolver } from "@/lib/team/workspaceRoute";
 import type { NextRequest } from "next/server";
 
 import { runtimeHostClient } from "@/lib/runtime/client";
@@ -8,7 +9,7 @@ import { sessionBoundStream } from "@/lib/team";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(request: NextRequest): Promise<Response> {
+async function memberGET(request: NextRequest): Promise<Response> {
   /* Same plane-absent code the snapshot route sends: a deployment with no
      runtime plane is a durable fact, not a reconnectable outage. */
   if (!runtimeEventsEnabled()) return Response.json({ error: "runtime events are disabled", code: RUNTIME_PLANE_ABSENT }, { status: 503 });
@@ -22,7 +23,12 @@ export async function GET(request: NextRequest): Promise<Response> {
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "runtime cursor is invalid" }, { status: 400 });
   }
-  return new Response(sessionBoundStream(request, request.signal, (signal) => runtimeEventStream(client, after, signal)), {
+  const initial = requestWorkspaceScope(request);
+  const resolve = await workspaceConversationResolver();
+  return new Response(sessionBoundStream(request, request.signal, (signal) => runtimeEventStream(client, after, signal, () => {
+    const scope = initial ? requestWorkspaceScope(request) : null;
+    return event => !initial || Boolean(scope && (scope.owner || (event.scope.type === "session" && scope.access(resolve(event.scope.id)) !== "none")));
+  })), {
     headers: {
       "content-type": "text/event-stream; charset=utf-8",
       "cache-control": "no-store",
@@ -31,3 +37,5 @@ export async function GET(request: NextRequest): Promise<Response> {
     },
   });
 }
+
+export const GET = workspaceRoute("/api/runtime/stream", memberGET, true);

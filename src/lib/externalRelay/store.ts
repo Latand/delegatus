@@ -3,8 +3,9 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { statePath } from "@/lib/configDir";
 import { procBackend } from "@/lib/proc";
-import type { ExternalRelayCompletion, ExternalRelayOwner, ExternalRelayTarget } from "./protocol";
+import type { ExternalRelayAnswer, ExternalRelayCompletion, ExternalRelayOwner, ExternalRelayTarget } from "./protocol";
 import type { OwnerBridgeContext } from "./ownerBridgeContext";
+import type { OwnerTurnDiagnostic } from "./diagnostic";
 
 export type RelayTargetSettings = {
   id: string;
@@ -99,7 +100,23 @@ export type RunRecord = {
   /** Present only on a full owner run, bound by the Viewer to its spawn receipt. */
   conversationId?: string;
   /** Durable custody survives a lost lease, cutoff, or Viewer restart. */
-  ownerTurn?: { continuation?: { operationId: string }; clientAttemptId: string; prototype?: true; request?: { text: string; requestText: string | null }; bridgeReport?: OwnerBridgeContext; admissionComplete?: boolean; cancel?: "interrupt" | "kill"; confirmed?: boolean };
+  ownerTurn?: { rawRequest?: unknown; context?: import("./profile").OwnerInstruction; restartRetries?: 1; restartPending?: true;
+    delivery?: import("./protocol").OwnerDelivery;
+    /** Persisted before /complete; an absent ACK never authorizes /send. */
+    completionAttempt?: { body: ExternalRelayCompletion; files: import("./attachments").StagedAttachment[] };
+    lateAnswer?: { body: ExternalRelayCompletion; files: import("./attachments").StagedAttachment[];
+      clientKey?: string; payload?: import("./cloneSend").CloneSendInput; firstAttemptAt?: number; nextAttemptAt?: number;
+      parts?: { payload: import("./cloneSend").CloneSendInput; firstAttemptAt?: number;
+        receipt?: Extract<import("./cloneSend").CloneSendResult, { kind: "sent" }> }[];
+      status?: "retry" | "pending-delivery-context" | "uncertain" | "retry-expired" | "refused" };
+    diagnostic?: OwnerTurnDiagnostic; continuation?: { operationId: string }; clientAttemptId: string; prototype?: true; request?: { text: string; requestText: string | null }; bridgeReport?: OwnerBridgeContext; admissionComplete?: boolean; cancel?: "interrupt" | "kill"; confirmed?: boolean;
+    /** When the cutoff was first written; older rows fall back to startedAt. */
+    cancelledAt?: string;
+    /** The target slot was released while this custody record is retained. */
+    released?: OwnerStopRelease;
+    /** The scrubbed failure reply and the request deadline it may be sent before,
+     * so recovery after a restart can still answer the requester. */
+    failureReply?: { answer: ExternalRelayAnswer; until: string } };
   requestId: string;
   leaseId: string;
   relayId: string;
@@ -112,8 +129,19 @@ export type RunRecord = {
   startedAt: string;
 };
 export type RunLedger = { v: 1; runs: RunRecord[] };
+/** `no_execution`: the attempt provably never had a session to stop; the stop
+ * is confirmed. `stop_unconfirmed`: stop control stayed unconfirmed past its
+ * bound; only the target slot is released and stop recovery continues. */
+export type OwnerStopRelease = { at: string; reason: "no_execution" | "stop_unconfirmed" };
+/** Released owner custody stays readable this long before the sweep drops it. */
+export const OWNER_RELEASED_CUSTODY_RETENTION_MS = 24 * 60 * 60_000;
+/** A cutoff whose stop is unconfirmed: execution may still run, so stop
+ * recovery, files and the conversation pin stay held, released slot or not. */
+export function ownerStopPending(run: RunRecord): boolean {
+  return !!run.ownerTurn?.cancel && !run.ownerTurn.confirmed;
+}
 export function runHoldsCapacity(run: RunRecord): boolean {
-  return !run.capacityReleased && !run.ownerTurn?.confirmed;
+  return !run.capacityReleased && !run.ownerTurn?.confirmed && !run.ownerTurn?.released;
 }
 type RelayRequestClaim = { requestId: string; leaseId: string; ownerPid: number; ownerIdentity: string; claimedAt: number; terminalAt?: number; completion?: ExternalRelayCompletion };
 type RelayRequestLedger = { v: 1; claims: RelayRequestClaim[] };
@@ -206,19 +234,22 @@ export function readRunLedger(): RunLedger {
 }
 export function updateRunLedger(
   change: (ledger: RunLedger) => RunLedger,
+  waitMs?: number,
 ): RunLedger {
   const file = externalRelayFile("runs");
   return withFileLock(file, () => {
     const next = change(readRunLedger());
     writeRelayFile(file, next);
     return next;
-  });
+  }, waitMs);
 }
-export function withFileLock<T>(file: string, action: () => T): T {
+/** The wait blocks the event loop, so an in-process async holder cannot
+ * release during it; callers with their own retry pass a short wait. */
+export function withFileLock<T>(file: string, action: () => T, waitMs = 5_000): T {
   const lock = `${file}.lock`;
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   let fd: number | null = null;
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + waitMs;
   while (fd === null) {
     try {
       fd = fs.openSync(lock, "wx", 0o600);
@@ -345,13 +376,14 @@ export function reserveRun(
 export function changeRun(
   requestId: string,
   change: (record: RunRecord) => RunRecord,
+  waitMs?: number,
 ): void {
   updateRunLedger((ledger) => ({
     ...ledger,
     runs: ledger.runs.map((run) =>
       run.requestId === requestId ? change(run) : run,
     ),
-  }));
+  }), waitMs);
 }
 export function dropRun(requestId: string): void {
   updateRunLedger((ledger) => ({
@@ -363,10 +395,13 @@ export async function reserveRunAsync(
   record: RunRecord,
   maxConcurrent: number | undefined,
   until: number,
+  replaceStoppedOwner = false,
 ): Promise<"added" | "duplicate" | "full"> {
   let outcome: "added" | "duplicate" | "full" = "full";
   await updateRunLedgerAsync((ledger) => {
-    if (ledger.runs.some((run) => run.requestId === record.requestId)) {
+    const previous = ledger.runs.find(run => run.requestId === record.requestId);
+    if (previous && !(replaceStoppedOwner && previous.ownerTurn?.confirmed
+      && record.ownerTurn?.restartRetries === 1 && previous.relayId === record.relayId && previous.targetId === record.targetId)) {
       outcome = "duplicate";
       return ledger;
     }
@@ -379,7 +414,7 @@ export async function reserveRunAsync(
     )
       return ledger;
     outcome = "added";
-    return { ...ledger, runs: [...ledger.runs, record] };
+    return { ...ledger, runs: [...ledger.runs.filter(run => run.requestId !== record.requestId), record] };
   }, until);
   return outcome;
 }

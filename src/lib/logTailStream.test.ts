@@ -3,15 +3,20 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { readTailChunk } from "@/lib/logRead";
-import { MAX_CHUNK, ROOTS } from "@/lib/scanner/roots";
+import { MAX_CHUNK } from "@/lib/scanner/roots";
 import type { LogChunk } from "@/lib/types";
 
 import { createLogTailEventStream, LogTailStreamSession, type LogTailStreamEvent } from "./logTailStream";
 
-fs.mkdirSync(ROOTS["codex-sessions"], { recursive: true });
-const SANDBOX = fs.mkdtempSync(path.join(ROOTS["codex-sessions"], "llv-log-tail-stream-test-"));
+const previousCodexHome = process.env.LLV_CODEX_HOME;
+const sessionRoot = path.join(process.env.HOME!, ".codex", "sessions");
+process.env.LLV_CODEX_HOME = path.dirname(sessionRoot);
+fs.mkdirSync(sessionRoot, { recursive: true });
+const SANDBOX = fs.mkdtempSync(path.join(sessionRoot, "llv-log-tail-stream-test-"));
 
 afterAll(() => {
+  if (previousCodexHome === undefined) delete process.env.LLV_CODEX_HOME;
+  else process.env.LLV_CODEX_HOME = previousCodexHome;
   fs.rmSync(SANDBOX, { recursive: true, force: true });
 });
 
@@ -250,4 +255,61 @@ describe("LogTailStreamSession", () => {
     expect(new TextDecoder().decode(initial.value)).toContain('"id":"a"');
     expect(terminal.done).toBe(true);
   });
+});
+
+
+test("one post-read authorization admits a log batch and refuses revocation during an awaited read", async () => {
+  let admitted = true;
+  let scopes = 0;
+  const events: LogTailStreamEvent[] = [];
+  let complete!: () => void;
+  const session = new LogTailStreamSession([
+    { id: "one", path: "one", offset: 0 }, { id: "two", path: "two", offset: 0 },
+  ], {
+    watchFile: () => ({ close() {} }),
+    readTailChunk: async () => {
+      await Promise.resolve();
+      return { data: "private", start: 0, offset: 7, size: 7 };
+    },
+    authorizeBatch: () => { scopes++; const live = admitted; return () => live; },
+    onEvent: event => { events.push(event); if (events.length === 2) complete(); },
+  });
+  try {
+    const received = new Promise<void>(resolve => { complete = resolve; });
+    session.start();
+    await received;
+    expect(scopes).toBe(1);
+    expect(events.map(event => asChunk(event).data)).toEqual(["private", "private"]);
+  } finally { session.close(); }
+  events.length = 0;
+  scopes = 0;
+  const revoked = new LogTailStreamSession([{ id: "one", path: "one", offset: 0 }], {
+    watchFile: () => ({ close() {} }),
+    readTailChunk: async () => { await Promise.resolve(); admitted = false; return { data: "private", start: 0, offset: 7, size: 7 }; },
+    authorizeBatch: () => { scopes++; const live = admitted; return () => live; },
+    onEvent: event => { events.push(event); complete(); },
+  });
+  try {
+    const received = new Promise<void>(resolve => { complete = resolve; });
+    revoked.start();
+    await received;
+    expect(scopes).toBe(1);
+    expect(events).toEqual([{ id: "one", chunk: { error: "path not allowed" } }]);
+  } finally { revoked.close(); }
+});
+
+
+test("an unreadable batch authorization emits no transcript bytes", async () => {
+  let complete!: (event: LogTailStreamEvent) => void;
+  const received = new Promise<LogTailStreamEvent>(resolve => { complete = resolve; });
+  const session = new LogTailStreamSession([{ id: "one", path: "one", offset: 0 }], {
+    watchFile: () => ({ close() {} }),
+    readTailChunk: async () => ({ data: "private", start: 0, offset: 7, size: 7 }),
+    authorizeBatch: () => { throw new Error("authorization unavailable"); },
+    onEvent: event => complete(event),
+  });
+  try {
+    session.start();
+    expect(await received).toEqual({ id: "one", chunk: { error: "path not allowed" } });
+  } finally { session.close(); }
 });

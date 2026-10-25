@@ -1,6 +1,6 @@
 // Pre-S5 embedded-flow execution cases stay as history until S8 deletion.
 // Supported run-reviewer cases and flows/retirement.test.ts remain active.
-import { expect, test, spawn, spawnSync, fs, path, Database, reviewNote, tickPipelines, MAX_FLOW_NOTE_LENGTH, createPipelineFromRequest, loadPipelines, savePipelines, pipelineRevision, FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeRoundsUsed, pipelineCompletedUnreviewed, asStoredLegacyReviewLane, patchPipeline, closeAndDrain, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, REMOTE_BRANCH, create, PROVIDER_LIMIT_NOTICE, LIMITED_ACCOUNT, SPARE_ACCOUNT, limitInterruptedTranscript, codexUsageLimitTranscript, verdictTranscript, silentTranscript, readFixtures, usageLimitPorts, usageLimitStage, reviewPipeline, reviewStage, noteOf, CYCLE_STAGES, BUDGET_STAGES, failEveryCritique, STOP_AFTER_FIX, REVIEW_HEADS, movingHeadHarness, critiqueRound, buildRound, continueReview, movingHead, acceptHead, driveWithController, expectConvertedReview, REVIEW_LOOP_STAGE, BUILD_ONLY, publishHarness, PUBLISH_STAGES, deliveryRefusalPark, interruptedPublication } from "./engine.fixture";
+import { expect, test, spawn, spawnSync, fs, path, Database, reviewNote, tickPipelines, MAX_FLOW_NOTE_LENGTH, createPipelineFromRequest, loadPipelines, savePipelines, pipelineRevision, FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeRoundsUsed, pipelineCompletedUnreviewed, asStoredLegacyReviewLane, patchPipeline, closeAndDrain, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, finishReported, REMOTE_BRANCH, create, PROVIDER_LIMIT_NOTICE, LIMITED_ACCOUNT, SPARE_ACCOUNT, limitInterruptedTranscript, codexUsageLimitTranscript, verdictTranscript, silentTranscript, readFixtures, usageLimitPorts, usageLimitStage, reviewPipeline, reviewStage, noteOf, CYCLE_STAGES, BUDGET_STAGES, failEveryCritique, STOP_AFTER_FIX, REVIEW_HEADS, movingHeadHarness, critiqueRound, buildRound, continueReview, movingHead, acceptHead, driveWithController, expectConvertedReview, REVIEW_LOOP_STAGE, BUILD_ONLY, publishHarness, PUBLISH_STAGES, deliveryRefusalPark, interruptedPublication } from "./engine.fixture";
 
 
 test("a failover whose remaining capacity disappears waits with the limit detail (#1371)", async () => {
@@ -2108,6 +2108,42 @@ for (const settled of [false, true]) {
   });
 }
 
+for (const variant of ["published", "moved-head", "unknown-remote", "different-result-sha", "different-operation-sha", "pending", "failed"] as const) {
+  test(`a read-only pass reuses only exact settled publication evidence: ${variant}`, async () => {
+    const h = harness();
+    const box = publishHarness(h);
+    await create(h.ports, [PUBLISH_STAGES[0], { ...PUBLISH_STAGES[1], ...(variant === "moved-head" ? { role: { roleId: "builder" } } : {}) }] as never, REMOTE_BRANCH);
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    await tickPipelines([h.finish(loadPipelines()[0]!.runs[0]!.attempts[0]!.agentPath!, "pass")], h.ports);
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    const lane = loadPipelines()[0]!;
+    const operation = lane.delivery!.operation!;
+    expect(operation.state).toBe("settled");
+    expect(operation.result).toMatchObject({ ok: true, remote: "published", sha: box.passedSha });
+    const otherSha = "9".repeat(40);
+    if (variant === "moved-head") box.setLocalHead(otherSha);
+    if (variant === "unknown-remote") operation.result = { ok: true, sha: box.passedSha, remote: "unreachable", detail: "unknown" };
+    if (variant === "different-result-sha") operation.result = { ok: true, sha: otherSha, remote: "published" };
+    if (variant === "different-operation-sha") operation.sha = otherSha;
+    if (variant === "pending") operation.state = "pending";
+    if (variant === "failed") operation.result = { ok: false, error: "publication refused" };
+    savePipelines([lane]);
+    const reads = box.remoteReadAttempts();
+    await tickPipelines([h.finish(lane.runs.find(run => run.stageId === "review")!.attempts[0]!.agentPath!, "pass")], h.ports);
+    const settled = loadPipelines()[0]!;
+    if (variant === "published") {
+      expect(settled.state).toBe("completed");
+      expect(settled.delivery!.operation!.id).toBe(operation.id);
+      expect(box.remoteReadAttempts()).toBe(reads);
+    } else {
+      expect(settled.delivery!.operation!.id).not.toBe(operation.id);
+      expect(box.remoteReadAttempts()).toBeGreaterThan(reads);
+    }
+  });
+}
+
 test("a builder that already pushed the accepted commit settles without another push (#1939)", async () => {
   const h = harness();
   const box = publishHarness(h);
@@ -2259,7 +2295,7 @@ test("retry-stage republishes a committing passed stage without rerunning its wo
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   box.setPushFails(true);
-  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "accepted output")], h.ports);
+  await tickPipelines([finishReported(h, "/codex/stage-1.jsonl", "pass", "accepted output")], h.ports);
   const parked = loadPipelines()[0]!;
   expect(parked.state).toBe("needs_decision");
   expect(parked.cursor).toMatchObject({ stageId: "build", state: "committing" });
@@ -2286,7 +2322,7 @@ test.each(["retry-stage", "publish"] as const)("publication recovery keeps the a
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   box.setPushFails(true);
-  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+  await tickPipelines([finishReported(h, "/codex/stage-1.jsonl", "pass", "done")], h.ports);
   const moved = "8".repeat(40);
   box.setLocalHead(moved);
   await patchPipeline(pipeline.id, { action: "retry-stage" }, h.ports);
@@ -2337,7 +2373,7 @@ test.each([
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   box.setPushFails(true);
-  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "accepted output")], h.ports);
+  await tickPipelines([finishReported(h, "/codex/stage-1.jsonl", "pass", "accepted output")], h.ports);
 
   const exec = h.ports.exec;
   if (cause === "moved") box.setLocalHead("8".repeat(40));

@@ -1,15 +1,21 @@
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
-const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "task-revision-"));
-for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_STATE_DIR", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "TMPDIR"]) {
-  process.env[key] = path.join(sandbox, key);
-  fs.mkdirSync(process.env[key]!, { recursive: true });
-}
+// The preload imports runtime consumers before this module evaluates. Reuse
+// its private state root so their import-time paths and this fixture agree.
+const sandbox = process.env.LLV_STATE_DIR!;
+if (!sandbox) throw new Error("task revisions require the test preload state sandbox");
+const previousControl = process.env.LLV_VIEWER_CONTROL_URL;
+const previousSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
 process.env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
 process.env.LLV_RUNTIME_HOST_SOCKET = path.join(sandbox, "runtime.sock");
+afterAll(() => {
+  if (previousControl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL;
+  else process.env.LLV_VIEWER_CONTROL_URL = previousControl;
+  if (previousSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET;
+  else process.env.LLV_RUNTIME_HOST_SOCKET = previousSocket;
+});
 const { loadTasks, saveTasks, saveTasksFile, mutateTasks, mutateTasksFile, TASKS_FILE } = await import("./store");
 const { patchTask, applyAssignmentPatches, removeAssignment } = await import("./commands");
 const { taskRevision } = await import("./revision");
@@ -96,7 +102,7 @@ test("null, malformed revisions, duplicate ids and invalid rows never authorize 
 });
 
 test("actual runtime acknowledgment invalidates the token after nested in-place assignment mutation", () => {
-  expect(TASKS_FILE.startsWith(sandbox + path.sep)).toBe(true);
+  expect(TASKS_FILE).toBe(path.join(sandbox, "tasks.json"));
   const task = row(); task.assignments = [{ path: "fixture.jsonl", panePid: null, state: "spawning", error: null, at: now }];
   saveTasks([task]);
   const token = taskRevision(loadTasks()[0]!);
