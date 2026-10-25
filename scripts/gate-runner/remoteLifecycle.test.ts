@@ -1,13 +1,13 @@
 // Stub-runner runs: cancellation, cleanup and the sweep (T10, T11).
 // The remote command really runs, under a temporary runner home, through the
-// real serve.ts (harness.fixture.ts); every file stays well under the 300 s
-// file budget on a loaded runner, so each holds at most three cases.
+// real serve.ts (harness.fixture.ts). Each case owns its fixture and runner
+// processes, including local fallback and cancellation cleanup.
 import { afterEach, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { makeHarness, testFile, type Harness } from "./harness.fixture";
+import { git, makeHarness, testFile, type Harness } from "./harness.fixture";
 
 const linux = process.platform === "linux";
 /** Several stub runs, each a full checkout, install and owned test run; slow under load. */
@@ -17,6 +17,21 @@ afterEach(() => { for (const h of harnesses.splice(0)) h.cleanup(); });
 function harness(): Harness { const h = makeHarness(); harnesses.push(h); return h; }
 const RUNNING = /^gate-runner: running on the gate runner \(run ([0-9a-f]{12}), tree [0-9a-f]{12}\)$/m;
 const unitActive = (id: string) => spawnSync("systemctl", ["--user", "is-active", "--quiet", `gate-run-${id}`]).status === 0;
+
+test.if(linux)("a mock session scope refuses agent PIDs before changing its settings", () => {
+  const h = harness(), settings = path.join(h.root, "stub-settings.json");
+  const before = fs.readFileSync(settings, "utf8");
+  const sandbox = process.env.LLV_SIGNAL_SANDBOX;
+  try {
+    process.env.LLV_SIGNAL_SANDBOX = "fixture namespace";
+    expect(() => h.settings({ sessionScope: true })).toThrow("native PID namespace");
+    expect(fs.readFileSync(settings, "utf8")).toBe(before);
+    expect(h.calls()).toEqual([]);
+  } finally {
+    if (sandbox === undefined) delete process.env.LLV_SIGNAL_SANDBOX;
+    else process.env.LLV_SIGNAL_SANDBOX = sandbox;
+  }
+});
 
 // T10 and T11
 test.if(linux)("SIGTERM stops the remote unit and removes the run; every finished run is removed; stale runs are swept, live ones kept", async () => {
@@ -69,6 +84,73 @@ test.if(linux)("SIGTERM stops the remote unit and removes the run; every finishe
 const held = (lock: string) => spawnSync("flock", ["-n", lock, "true"]).status !== 0;
 const hold = (lock: string, ready: string) => `exec 9>${lock} && flock -n 9 && touch ${ready} && exec sleep 600`;
 const waitFor = async (file: string, until: number) => { while (!fs.existsSync(file) && Date.now() < until) await Bun.sleep(20); return fs.existsSync(file); };
+
+// The mock scope registers native PIDs with the user manager. Its cases run
+// on the gate host; an agent PID namespace cannot register those scope PIDs.
+for (const entry of ["comparator", "wrapped pre-push"] as const)
+for (const signal of ["SIGTERM", "SIGINT"] as const) test.if(linux && (entry === "comparator" || !process.env.LLV_SIGNAL_SANDBOX))(`${entry} contains remote descendants after ${signal}`, async () => {
+  const h = harness();
+  if (entry === "wrapped pre-push") h.settings({ sessionScope: true });
+  const ready = path.join(h.runnerHome, "comparator-ready"), lock = path.join(h.runnerHome, "comparator.lock");
+  const file = testFile(h, "held.test.ts", `
+import fs from "node:fs";
+import path from "node:path";
+test("held descendant", async () => {
+  let dir = process.cwd();
+  while (!fs.existsSync(path.join(dir, ".gate-runner.env")) && dir !== path.dirname(dir)) dir = path.dirname(dir);
+  const child = Bun.spawn(["flock", "-x", path.join(dir, "comparator.lock"), "bash", "-c", 'touch "$1"; exec sleep 120', "held", path.join(dir, "comparator-ready")]);
+  await child.exited;
+}, 150000);`);
+  if (entry === "wrapped pre-push") {
+    fs.writeFileSync(path.join(h.fixture, "tsconfig.json"), JSON.stringify({
+      compilerOptions: { target: "ES2022", module: "ESNext", moduleResolution: "bundler", paths: { "@/*": ["./src/*"] }, skipLibCheck: true, types: ["bun"], noEmit: true },
+      include: [file],
+    }));
+    git(h.fixture, "add", "-A");
+    git(h.fixture, "commit", "--quiet", "--no-verify", "-m", "held privacy parent fixture");
+    const base = git(h.fixture, "rev-parse", "HEAD");
+    git(h.fixture, "update-ref", "refs/remotes/origin/main", base);
+    git(h.root, "--git-dir", h.mirror, "update-ref", "refs/heads/main", base);
+    git(h.fixture, "remote", "set-url", "origin", h.mirror);
+    fs.appendFileSync(path.join(h.fixture, file), "\n// Changed input.\n");
+  }
+  const argv = entry === "comparator" ? [process.execPath, "scripts/local-gate-tests.ts", "--base", "HEAD", file]
+    : ["bash", "scripts/gate-slot.sh", "bun", "scripts/local-gate.ts", "pre-push"];
+  const child = spawn(argv[0]!, argv.slice(1), { cwd: h.fixture, env: h.env(), stdio: ["ignore", "pipe", "pipe"] });
+  let stderr = "";
+  child.stderr.on("data", chunk => { stderr += chunk; });
+  child.stdout.resume();
+  const exited = new Promise<number | null>(resolve => child.once("close", resolve));
+  try {
+    expect(await waitFor(ready, Date.now() + 150_000), stderr).toBeTrue();
+    expect(held(lock)).toBeTrue();
+    const id = RUNNING.exec(stderr)![1]!;
+    expect(unitActive(id)).toBeTrue();
+    if (entry === "wrapped pre-push") {
+      const owner = Number(fs.readFileSync(path.join(h.runnerHome, "runs", id, "owner"), "utf8").split(" ")[0]);
+      expect(fs.readFileSync(`/proc/${owner}/cgroup`, "utf8")).toContain("/gate-session-fixture-");
+    }
+    child.kill(signal);
+    expect(await exited).toBe(entry === "comparator" && signal === "SIGINT" ? 130 : 143);
+    if (entry === "wrapped pre-push") {
+      // The client allows up to a minute to confirm remote cleanup. The
+      // owning local cgroup may have already ended the client itself.
+      const until = Date.now() + 60_000;
+      while ((unitActive(id) || held(lock)) && Date.now() < until) await Bun.sleep(20);
+    }
+    expect(held(lock)).toBeFalse();
+    expect(unitActive(id)).toBeFalse();
+    if (entry === "comparator") expect(fs.readdirSync(path.join(h.runnerHome, "runs"))).toEqual([]);
+    else if (fs.existsSync(path.join(h.runnerHome, "runs", id))) {
+      // The owning cgroup may end the client before removal is confirmed.
+      // Its retained lease belongs to the existing stale-run sweep.
+      expect(fs.existsSync(path.join(h.runnerHome, "runs", id, "lease"))).toBeTrue();
+    }
+    expect(stderr.match(/^gate-runner: running on the gate runner /gm)).toHaveLength(1);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) { child.kill("SIGTERM"); await exited; }
+  }
+}, E2E_TIMEOUT);
 
 // §8.9: setup processes are owned from their start.
 test.if(linux)("a cancel during the clone and a lost session during install leave no setup process alive and no run behind", async () => {

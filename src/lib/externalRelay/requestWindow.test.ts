@@ -10,6 +10,7 @@ import type { OwnerRunPorts } from "./ownerRun";
 import * as relayStore from "./store";
 import { contextRequest } from "./request.fixture";
 import { updateRelayStore, readRunLedger, reserveRun, dropRun, type PairedRelay } from "./store";
+import { cloneReceipt } from "./clone.fixture";
 import { setRelaySwitch } from "./switches";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-request-window-"));
@@ -26,7 +27,7 @@ async function waitFor(check: () => boolean) {
   expect(check()).toBe(true);
 }
 
-function fixture(id: string, deadlineMs?: number, hardCapMinutes = 1, holdStop = false, refuseCompletion = false, fallback: "service" | "none" = "service", holdCompletion = false, origin = "http://127.0.0.1:1") {
+function fixture(id: string, deadlineMs?: number, hardCapMinutes = 30, holdStop = false, refuseCompletion = false, fallback: "service" | "none" = "service", holdCompletion = false, origin = "http://127.0.0.1:1") {
   let now = epoch;
   jest.useFakeTimers();
   const clock = spyOn(Date, "now").mockImplementation(() => now);
@@ -45,7 +46,7 @@ function fixture(id: string, deadlineMs?: number, hardCapMinutes = 1, holdStop =
   const selection = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: {
     engine: "codex", accountId: "fixture", kind: "managed", home: root, transcriptRoot: root, env: { ...process.env },
   } });
-  const request = { ...contextRequest, request_id: id, deadline_at: deadlineMs === undefined ? undefined : new Date(epoch + deadlineMs).toISOString(),
+  const request = { ...contextRequest, owner_delivery: { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: 12 }, request_id: id, deadline_at: deadlineMs === undefined ? undefined : new Date(epoch + deadlineMs).toISOString(),
     input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } };
   const heartbeats: number[] = [], completions: { at: number; body: unknown }[] = [], stops: string[] = [];
   let accepted = 0, releaseCompletion!: () => void;
@@ -54,8 +55,10 @@ function fixture(id: string, deadlineMs?: number, hardCapMinutes = 1, holdStop =
   let launchAuthorize: (() => void) | undefined;
   const wire = spyOn(client, "relayCall").mockImplementation(async (_base, endpoint, _method, body) => {
     if (endpoint.endsWith("/heartbeat")) heartbeats.push(now - epoch);
-    else if (endpoint.endsWith("/complete")) {
-      completions.push({ at: now - epoch, body });
+    else if (endpoint.endsWith("/complete") || endpoint.endsWith("/send")) {
+      const completion = endpoint.endsWith("/send")
+        ? { outcome: "answered", answer: { action: "reply", text: (body as { text: string }).text, reply_to: "m1" } } : body;
+      completions.push({ at: now - epoch, body: completion });
       try { launchAuthorize?.(); completionExecutionAuthority.push(true); }
       catch { completionExecutionAuthority.push(false); }
       if (holdCompletion) await completionGate;
@@ -63,7 +66,7 @@ function fixture(id: string, deadlineMs?: number, hardCapMinutes = 1, holdStop =
       accepted++;
     }
     else throw Error("unexpected fixture endpoint");
-    return { status: 200, body: { status: "ok" } } as never;
+    return { status: 200, body: endpoint.endsWith("/send") ? cloneReceipt() : { status: "ok" } } as never;
   });
   let release!: () => void, releaseStop!: () => void, observing = false, settled = false;
   const answer = new Promise<void>(resolve => { release = resolve; });
@@ -126,9 +129,9 @@ for (const deadline of [undefined, 600_000, 525_000]) test(`five-minute owner wo
   } finally { await f.close(); }
 });
 
-for (const deadline of [undefined, 600_000, 525_000]) test(`lease renews until the ${deadline ?? "fallback"} deadline, then completes a readable timeout`, async () => {
-  const f = fixture(`timeout_${deadline ?? "fallback"}`, deadline, 30);
+for (const deadline of [undefined, 600_000, 525_000]) test(`lease renews until the ${deadline ?? "fallback"} target cap, then completes a readable timeout`, async () => {
   const window = deadline ?? 600_000;
+  const f = fixture(`timeout_${deadline ?? "fallback"}`, deadline, window / 60_000);
   try {
     await f.start();
     await f.advance(window - 1000);
@@ -147,7 +150,7 @@ for (const deadline of [undefined, 600_000, 525_000]) test(`lease renews until t
 });
 
 test("timeout completion does not wait for an unresponsive owner stop", async () => {
-  const f = fixture("timeout_pending_stop", 600_000, 30, true);
+  const f = fixture("timeout_pending_stop", 600_000, 10, true);
   try {
     await f.start();
     await f.advance(600_000);
@@ -162,7 +165,7 @@ test("timeout completion does not wait for an unresponsive owner stop", async ()
 });
 
 test("deadline expiry sends a requester reply when the target disables service fallback", async () => {
-  const f = fixture("timeout_no_fallback", 600_000, 30, false, false, "none");
+  const f = fixture("timeout_no_fallback", 600_000, 10, false, false, "none");
   try {
     await f.start();
     await f.advance(600_000);
@@ -183,7 +186,7 @@ function startSweep(ports: OwnerRunPorts) {
 const timeoutReply = { outcome: "answered", answer: { action: "reply", text: "Ran out of time." } };
 
 test("timeout reply accepted before the owner stop: recovery cleans up without a second completion", async () => {
-  const f = fixture("timeout_accept_then_stop", 600_000, 30, true, false, "none", true);
+  const f = fixture("timeout_accept_then_stop", 600_000, 10, true, false, "none", true);
   try {
     await f.start();
     await f.advance(600_000);
@@ -220,7 +223,7 @@ test("a successor Viewer's sweep leaves a timeout reply the live previous Viewer
     served.push(`${new URL(request.url).pathname} ${await request.text()}`);
     return Response.json({ status: "ok" });
   } });
-  const f = fixture("timeout_successor_sweep", 600_000, 30, true, false, "none", true, `http://127.0.0.1:${service.port}`);
+  const f = fixture("timeout_successor_sweep", 600_000, 10, true, false, "none", true, `http://127.0.0.1:${service.port}`);
   const successorSweep = async () => {
     const child = Bun.spawn([process.execPath, "-e", `
       import { sweepExternalRelayOrphans } from "./src/lib/externalRelay/poller";
@@ -268,7 +271,7 @@ test("a successor Viewer's sweep leaves a timeout reply the live previous Viewer
 });
 
 test("timeout reply accepted after the owner stop: recovery leaves delivery to the runner", async () => {
-  const f = fixture("timeout_stop_then_accept", 600_000, 30, true, false, "none", true);
+  const f = fixture("timeout_stop_then_accept", 600_000, 10, true, false, "none", true);
   try {
     await f.start();
     await f.advance(600_000);
@@ -302,7 +305,7 @@ test("timeout reply accepted after the owner stop: recovery leaves delivery to t
 });
 
 test("an unpersisted acceptance keeps delivery ownership until its receipt is written", async () => {
-  const f = fixture("timeout_acceptance_receipt_retry", 600_000, 30, true, false, "none");
+  const f = fixture("timeout_acceptance_receipt_retry", 600_000, 10, true, false, "none");
   const change = relayStore.changeRunAsync;
   let refused = 0, writable = false;
   const marksAcceptance = (update: Parameters<typeof change>[1]) => {
@@ -344,7 +347,7 @@ test("an unpersisted acceptance keeps delivery ownership until its receipt is wr
 });
 
 for (const refuseCompletion of [false, true]) test(`timeout retains execution custody when cancellation persistence fails (completion refused: ${refuseCompletion})`, async () => {
-  const f = fixture(`timeout_refused_cutoff_${refuseCompletion}`, 600_000, 30, true, refuseCompletion);
+  const f = fixture(`timeout_refused_cutoff_${refuseCompletion}`, 600_000, 10, true, refuseCompletion);
   const change = relayStore.changeRun;
   let saved: ReturnType<typeof readRunLedger>["runs"][number] | undefined;
   let refused = 0;

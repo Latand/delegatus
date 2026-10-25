@@ -1,6 +1,7 @@
 import { captureProcessIdentity, processIdentityProvenDead, type ProcessIdentity } from "@/lib/processIdentity";
 import { trackMcpClaim, installMcpLifecycle, logMcpLifecycle, drainMcpClaims } from "../../../bin/mcp-lifecycle.mjs";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
+import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
 import { blockingWaitRole } from "@/lib/blockingWaits";
 import { shortIdsInAnswer, shortenHashesInText } from "@/lib/shortIds";
 import { normalizeShortIdArgs } from "./shortIdArgs";
@@ -78,6 +79,7 @@ export const MCP_TOOL_NAMES = [
   "create_task",
   "update_task",
   "create_pipeline",
+  "pipeline_checks",
   "pipeline_action",
   "stage_report",
   "leave_lesson",
@@ -146,6 +148,7 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
   "create_task",
   "update_task",
   "create_pipeline",
+  "pipeline_checks",
   "pipeline_action",
   /* Records the calling attempt's own completion, which the stage then settles
      on. A replayed clientRequestId must answer with the report the first call
@@ -1789,6 +1792,24 @@ const receiptIndexes = declaredIndexes([
         ON mcp_receipts(retention, sequence)`,
 ]);
 
+export class McpReceiptsNotReadyError extends Error {
+  constructor() {
+    super("MCP receipts are not ready. Start or restart the Viewer to prepare the receipts database, then retry the call.");
+    this.name = "McpReceiptsNotReadyError";
+  }
+}
+
+/** Readiness is checked before journal pragmas or any schema write, including
+ * after an activation fallback replaces the file beneath an MCP connection. */
+function assertReceiptsPrepared(db: BunDatabase): void {
+  const objects = new Set(db.query<{ name: string }, []>("SELECT name FROM sqlite_master").all().map(row => row.name));
+  const columns = new Set(db.query<{ name: string }, []>("PRAGMA table_info(mcp_receipts)").all().map(row => row.name));
+  const meta = new Set(db.query<{ name: string }, []>("PRAGMA table_info(mcp_receipt_meta)").all().map(row => row.name));
+  if (!objects.has("mcp_receipts") || !objects.has("mcp_receipt_meta") || !receiptIndexes.ready(objects)
+    || !["sequence", "receipt_key", "digest", "retention", "result_json", "storage_bytes", "claimed_at", "binding_json", "stage", "recovery_result_json"].every(name => columns.has(name))
+    || !["key", "value"].every(name => meta.has(name))) throw new McpReceiptsNotReadyError();
+}
+
 /**
  * Keyed durable receipts for the production MCP server.
  *
@@ -1805,7 +1826,8 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
   private readonly now: () => number;
 
   constructor(readonly filename: string, options: SqliteMcpReceiptStoreOptions = {}) {
-    fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
+    const prepare = mayRunStateStartupMutation(path.dirname(filename));
+    if (prepare) fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
     const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
     if (!sqlite) throw new Error("SQLite MCP receipts require the Bun runtime");
     /* Bound to the file at its name: a receipt store the activation fallback
@@ -1813,9 +1835,27 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
        handle. The journal mode cannot change inside a transaction, so these
        pragmas run before the schema transaction. */
     this.db = openCurrentDatabase(filename, () => {
-      const db = observeSqlite(new sqlite.Database(filename, { create: true, strict: true }), "mcp-receipts");
+      // A consumer never creates a file, even when the Viewer has not started
+      // or a durability swap left the name absent. SQLite readwrite omits CREATE.
+      if (!prepare && !fs.existsSync(filename)) throw new McpReceiptsNotReadyError();
+      let db: BunDatabase;
+      try {
+        db = observeSqlite(new sqlite.Database(filename, prepare
+          ? { create: true, strict: true } : { create: false, readwrite: true, strict: true }), "mcp-receipts");
+      } catch (error) {
+        // The name may disappear between the existence check and SQLite open.
+        if (!prepare && (error as { code?: string }).code === "SQLITE_CANTOPEN") throw new McpReceiptsNotReadyError();
+        throw error;
+      }
       try {
         db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(options.busyTimeoutMs ?? 5000))}`);
+        if (!prepare) {
+          assertReceiptsPrepared(db);
+          // These settings affect this connection only. WAL and vacuum mode
+          // belong to the Viewer's preparation, never an MCP startup attempt.
+          db.exec("PRAGMA synchronous = FULL");
+          return db;
+        }
         const walEnabled = () => db.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get()?.journal_mode === "wal";
         if (!walEnabled()) {
           try { db.exec("PRAGMA journal_mode = WAL"); }
@@ -1833,23 +1873,25 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
         db.close();
         throw error;
       }
-    }, { reopened: () => this.initializeSchema() });
+    }, { reopened: () => { if (prepare) this.initializeSchema(); } });
     this.readReceiptCountCap = Math.max(1, Math.floor(options.readReceiptCountCap ?? FILE_RECEIPT_CAP));
     this.readReceiptByteCap = Math.max(1, Math.floor(options.readReceiptByteCap ?? SQLITE_READ_RECEIPT_BYTE_CAP));
     this.boundedPendingTtlMs = Math.max(1, Math.floor(options.boundedPendingTtlMs ?? SQLITE_BOUNDED_PENDING_TTL_MS));
     this.now = options.now ?? Date.now;
     try {
-      this.initializeSchema();
-      this.importLegacyFile(options.legacyFilePath);
-      this.db.exec("BEGIN IMMEDIATE");
-      try {
-        this.pruneBoundedReceipts(this.now());
-        this.db.exec("COMMIT");
-      } catch (error) {
-        try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
-        throw error;
+      if (prepare) {
+        this.initializeSchema();
+        this.importLegacyFile(options.legacyFilePath);
+        this.db.exec("BEGIN IMMEDIATE");
+        try {
+          this.pruneBoundedReceipts(this.now());
+          this.db.exec("COMMIT");
+        } catch (error) {
+          try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+          throw error;
+        }
+        this.secureFiles();
       }
-      this.secureFiles();
     } catch (error) {
       this.db.close();
       throw error;
@@ -2067,14 +2109,12 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
 
   /**
    * Creates the tables and adds every column a database from an earlier
-   * schema lacks, in ONE write transaction. Several MCP processes start cold
-   * against the same database at once; the write lock makes one of them
-   * inspect and migrate while the others retry admission and then find
-   * the columns already there. Two processes that both inspected first would
-   * both ALTER, and the second would throw "duplicate column name".
+   * schema lacks, in ONE write transaction under the startup owner's fence.
+   * Other processes only validate the schema the Viewer prepared. The write
+   * lock serializes inspection and migration by permitted startup owners.
    */
   private initializeSchema(): void {
-    receiptIndexes.assertRepairAuthority(this.db, path.dirname(this.filename));
+    assertStateStartupMutation(path.dirname(this.filename), "MCP receipts schema preparation");
     this.db.exec("BEGIN IMMEDIATE");
     try {
       this.db.exec(`
@@ -2082,6 +2122,8 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
           key TEXT PRIMARY KEY,
           value TEXT NOT NULL
         );
+      `);
+      this.db.exec(`
         CREATE TABLE IF NOT EXISTS mcp_receipts (
           sequence INTEGER PRIMARY KEY AUTOINCREMENT,
           receipt_key TEXT NOT NULL UNIQUE,
@@ -3608,6 +3650,7 @@ export const RECOVERY_CONTRACT_DESCRIPTION = [
 ].join(" ");
 
 const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
+  pipeline_checks: "Choose Cloud or local checks for a pipeline stage, lane or its project default. Stage scope requires stageId. Cloud is the default. A null execution restores inheritance. The voice companion can ask its project orchestrator to change this setting.",
   spawn_agent: [
     "Create a Delegatus-managed agent conversation and return its durable conversation and launch ids.",
     'For role: "deployer", pass top-level confirm: "deploy" and quote the operator\'s approval in the brief. Only the target project\'s designated orchestrator seat or the operator\'s own session may launch a deployer; other callers are refused before any request is claimed. Other roles ignore confirm.',
@@ -3783,7 +3826,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "`enabled: true|false` writes, and answers the same view afterwards. Only the designated orchestrator seat of the Delegatus project and the operator's own session write; any other caller, a seat of another project and a seat's parallel self included, is refused with `auto_updates_write_refused` (with a `reason`) before anything changes. Turning them on where `availability` is not `available` is refused with `auto_updates_unavailable`.",
     "Every write is recorded with who made it and when, on the setting and in the Update dialog's history. Idempotent by clientRequestId.",
   ].join(" "),
-  account_limits: "Read each account's last observed usage: per account `engine`, `accountId`, `active`, `fresh` (recent enough for the automatic switch to act on), `plan`, the `session` and `weekly` windows and every metered model tier as {usedPercent, resetsAt}, and `observedAt`. Narrow with `engine` and `accountId`. A read of the durable observations the accounts panel shows; it never asks a provider.",
+  account_limits: "Read each account's last observed usage: per account `engine`, `accountId`, `active`, `nextChosen` (the account the reset-aware selector would choose for unpinned work in the caller's project, when available), `fresh` (recent enough for the automatic switch to act on), `plan`, the `session` and `weekly` windows and every metered model tier as {usedPercent, resetsAt}, and `observedAt`. Narrow with `engine` and `accountId`; the next choice is computed before narrowing. A read of the durable observations the accounts panel shows; it never asks a provider.",
   issue_report: [
     "A Delegatus bug report on its way to Delegatus's own public repository: preview, show, publish. Nothing is filed without the digest of a preview the operator approved.",
     "action hints takes title and body and returns advisory hints (class, matched span, title/body, lines, and written/decoded reading), without storing text. Run it, then re-read the whole text yourself: hints may be false alarms and a clean result proves nothing. Remove or rewrite identifying content and operator quotes. Detector matches never refuse preview, storage or publication.",
@@ -3878,7 +3921,13 @@ const snapshotScopeSchema = z.discriminatedUnion("kind", [
    object stays open (`passthrough`) and the semantic rules — id uniqueness,
    edge targets, review-loop reachability, role parameter values — stay with the
    engine, which now answers with all of them at once. */
+const agentMemoryMaxSchema = z.number().int().min(2 ** 30).max(2 ** 40).nullable().optional()
+  .describe("Agent memory cap in bytes, 1 GiB through 1 TiB; null inherits. Launch clamps to the shared machine budget.");
+
 const pipelineStageSchema = z.object({
+  runtime: z.literal("codex-cloud").optional()
+    .describe("Run reviewer/verifier in Codex Cloud on the published lane branch. Requires engine codex, an explicit model, a capable current-cloud transport and the project's codexCloudEnvironmentId setting. Omitted keeps local execution. Builder/fix stages are not supported."),
+  agentMemoryMaxBytes: agentMemoryMaxSchema,
   /* Bounds here stay exactly as wide as the engine's: it trims before it
      checks, so a padded id it accepts must not be refused at the door. */
   id: z.string().regex(/^\s*[A-Za-z0-9_-]{1,64}\s*$/u)
@@ -4003,6 +4052,7 @@ const taskStepsInputSchema = z.array(z.object({
 })).max(TASK_STEPS_LIMIT).describe("Up to twenty checklist steps. Pipeline references derive live step motion; other references are links.");
 
 export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
+  pipeline_checks: z.object({ clientRequestId: clientRequestIdSchema, pipelineId: entityIdSchema, stageId: entityIdSchema.optional(), scope: z.enum(["stage", "lane", "project"]), execution: z.enum(["cloud", "local"]).nullable() }),
   publish_prototype_review: prototypePublishSchema,
   resend_prototype_review_telegram: z.object({ clientRequestId: clientRequestIdSchema, reviewId: z.string().regex(/^pr_[a-f0-9]{7,32}$/i) }).strict(),
   read_prototype_review: z.object({ clientRequestId: clientRequestIdSchema.optional(), taskId: z.string().min(1).optional() }).strict(),
@@ -4129,6 +4179,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     pos: z.object({ x: z.number().finite(), y: z.number().finite() }).optional(),
     dueAt: z.string().nullable().optional(),
     dueTz: z.string().nullable().optional(),
+    dueReason: z.string().optional().describe("Reason for moving a passed due date to a later instant: 1 to 200 characters. Validated against the current task before admission."),
     board: z.enum(["shown", "hidden"]).optional()
       .describe("Board membership of this task's band (#1614). hidden takes the band off the board and shown puts it back; the task itself is never removed, keeps its row in the task list and every assignment, and either direction is one write. It governs EMPTY tasks only — a task holding a durable agent association draws its band whatever this says."),
     color: z.enum(["none", ...TASK_COLORS]).optional()
@@ -4199,6 +4250,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     engine: pipelineStageSchema.shape.engine.describe("override-stage: runtime engine."),
     model: pipelineStageSchema.shape.model.describe("override-stage: runtime model, or null to inherit."),
     effort: pipelineStageSchema.shape.effort.describe("override-stage: reasoning effort, or null to inherit."),
+    agentMemoryMaxBytes: agentMemoryMaxSchema,
     serviceTier: pipelineStageSchema.shape.serviceTier.describe("override-stage: Codex tier, null to inherit; default or standard opts out."),
     access: pipelineStageSchema.shape.access.describe("override-stage: repository mutation policy."),
     account: pipelineStageSchema.shape.account.describe("override-stage: account pin, or null to clear it."),
@@ -4731,9 +4783,9 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     clientRequestId: clientRequestIdSchema,
     workerLimit: z.object({ value: z.number().int().min(1).max(64).nullable(), project: z.string().trim().min(1).optional(), reason: z.string().trim().min(1).max(300) }).optional(),
     overrides: z.record(z.string(), z.object({
-      config: z.object({ engine: z.string(), model: z.string(), effort: z.string(), serviceTier: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional() }).nullable().optional()
+      config: z.object({ agentMemoryMaxBytes: agentMemoryMaxSchema, engine: z.string(), model: z.string(), effort: z.string(), serviceTier: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional() }).nullable().optional()
         .describe("A full { engine, model, effort } sets the role's row; null resets it to the shipped default."),
-      variants: z.record(z.string(), z.object({ engine: z.string(), model: z.string(), effort: z.string(), serviceTier: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional() }).nullable()).optional()
+      variants: z.record(z.string(), z.object({ agentMemoryMaxBytes: agentMemoryMaxSchema, engine: z.string(), model: z.string(), effort: z.string(), serviceTier: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional() }).nullable()).optional()
         .describe("Builder and reviewer only, keyed by variant (trivial, frontend, docs, apply-fixes, frontend-fixes, docs-fixes; reviewer: trivial). A full config sets the variant, null resets it."),
       promptScaffold: z.null().optional().describe("null restores the shipped prompt text. A scaffold cannot be set from here."),
     }).passthrough()).optional()
@@ -5078,7 +5130,10 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
         inline = created;
         created.catch(() => { if (inline === created) inline = undefined; });
       }
-      return (await inline).callTool(name, args, context);
+      let ready: McpToolService;
+      try { ready = await inline; }
+      catch (error) { return taskExecutorFailure(name, args, error); }
+      return ready.callTool(name, args, context);
     } };
   }
   const controlDependencies = productionViewerControlDependencies(hostHealthProbe);
@@ -5093,6 +5148,9 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
 }
 
 export function taskExecutorFailure(name: string, args: McpToolArgs, error: unknown): McpToolResult {
+  if (error instanceof McpReceiptsNotReadyError) {
+    return failure(name, clientRequestId(args), "receipts_not_ready", error.message, true);
+  }
   const mutation = isMutatingMcpTool(name as McpToolName);
   return failure(name, clientRequestId(args), mutation ? "outcome_unknown" : "tool_failed",
     error instanceof Error ? error.message : "task executor unavailable", !mutation, false,

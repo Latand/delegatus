@@ -46,7 +46,7 @@ export function tickPipelinesController(entries: FileEntry[], suppliedPorts?: Pi
           const run = fresh?.runs[ref.run], attempt = run?.attempts[ref.attempt];
           if (run?.stageId !== ref.stageId || !attempt || attempt.n !== ref.n) continue;
           for (const time of [attempt.controllerWait?.retryAfter, attempt.providerWait?.resumeAt, attempt.memoryWait?.retryAfter,
-            attempt.remoteHeadWait?.retryAfter]) {
+            attempt.remoteHeadWait?.retryAfter, attempt.cloud?.nextPollAt, attempt.cloud?.deadlineAt]) {
             const at = Date.parse(time ?? "");
             if (at > now) due = Math.min(due, at);
           }
