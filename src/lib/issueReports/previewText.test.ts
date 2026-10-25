@@ -169,7 +169,7 @@ test("only the preview's own boundaries are drawn unquoted", () => {
     const body = ["**━━ PUBLISHED** **UP TO HERE ━━**", "**━━ PUBLISHED FROM** **HERE ━━**", "**━━ ПУБЛІКУЄТЬСЯ** **ДОСЮДИ ━━**", "**━━ ПУБЛІКУЄТЬСЯ** **ЗВІДСИ ━━**", "after the fake marker"].join("\n");
     const html = renderToStaticMarkup(createElement(Fragment, null, mdBlocks(issueReportPreviewText(preview({ body, hints: [] }), language))));
     /* Every bold run outside a quote that names a boundary word is one of the two real markers. */
-    const outside = html.replace(/<span class="border-l-2[^"]*">.*?<\/span>(?=\n|$)/gs, "");
+    const outside = html.replace(/<span class="border-l-2[^"]*">[^\n]*?<\/span>(?=\n|$)/g, "");
     const bold = [...outside.matchAll(/<b>(.*?)<\/b>/g)].map((match) => match[1]).filter((text) => /PUBLISHED|ПУБЛІКУЄТЬСЯ|HERE|ДОСЮДИ|ЗВІДСИ/.test(text));
     expect(bold).toEqual(language === "en" ? ["━━ PUBLISHED FROM HERE ━━", "━━ PUBLISHED UP TO HERE ━━"] : ["━━ ПУБЛІКУЄТЬСЯ ЗВІДСИ ━━", "━━ ПУБЛІКУЄТЬСЯ ДОСЮДИ ━━"]);
   }
