@@ -7,6 +7,7 @@ export interface LaunchFailureReporting {
   lifecycle: boolean;
   notice: boolean;
   task: boolean;
+  /** Admitted targets, including retained proactive authority from related work. */
   taskIds?: string[];
 }
 
