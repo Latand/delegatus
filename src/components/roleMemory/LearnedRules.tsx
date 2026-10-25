@@ -214,6 +214,9 @@ const KIND_TONE: Record<ScopeKind, { bar: string; dot: string; soft: string; tex
   machine: { bar: "border-t-warning", dot: "bg-warning", soft: "bg-warning-soft", text: "text-warning" },
 };
 
+/* A curator rewrite carries no source role; the curator is the role that wrote it. */
+const revisionRole = (revision: { by: string; roleId?: string | null }) => revision.by === "curator" ? "curator" : revision.roleId;
+
 function RuleRow({ rule, kind, focused, scopeRole, onDelete, onRevert }: { rule: RuleView; kind: ScopeKind; focused: boolean; scopeRole: string | null; onDelete: (rule: RuleView) => void; onRevert?: (id: string) => void }) {
   const { t } = useLocale();
   const [expansion, setExpansion] = useState({ focused, open: focused });
@@ -225,7 +228,7 @@ function RuleRow({ rule, kind, focused, scopeRole, onDelete, onRevert }: { rule:
   const revision = rule.revisedBy;
   const awaitingCurator = rule.awaitingCuration ?? (!rule.curatedAt || revision?.by === "agent" && revision.at > rule.curatedAt);
   const named = (id: string | null | undefined, text: string) => <><RoleMark role={id} size={12} />{text}</>;
-  const meta = [rule.keptByOperatorAt ? t("roleMemory.kept") : awaitingCurator ? t("roleMemory.unreviewed") : null, revision ? named(revision.roleId, t(`roleMemory.revised.${revision.by}`, { role: roleNameById(t, revision.roleId ?? "") })) : author ? named(rule.roleId, author) : null, (revision?.fixRound ?? rule.fixRound) ? t("roleMemory.fixRound") : null, rule.mergedFrom?.length ? t("roleMemory.mergedFrom", { count: rule.mergedFrom.length }) : null, (rule.tasks ?? 0) >= 2 ? t("roleMemory.tasks", { count: rule.tasks! }) : null].filter(Boolean);
+  const meta = [rule.keptByOperatorAt ? t("roleMemory.kept") : awaitingCurator ? t("roleMemory.unreviewed") : null, revision ? named(revisionRole(revision), t(`roleMemory.revised.${revision.by}`, { role: roleNameById(t, revision.roleId ?? "") })) : author ? named(rule.roleId, author) : null, (revision?.fixRound ?? rule.fixRound) ? t("roleMemory.fixRound") : null, rule.mergedFrom?.length ? t("roleMemory.mergedFrom", { count: rule.mergedFrom.length }) : null, (rule.tasks ?? 0) >= 2 ? t("roleMemory.tasks", { count: rule.tasks! }) : null].filter(Boolean);
   return (
     <li ref={row} data-learned-rule={rule.id} data-focused={focused ? "" : undefined} data-open={open ? "" : undefined}
       className={`group flex items-start gap-2 rounded-[8px] px-2 py-1.5 ${focused ? KIND_TONE[kind].soft : "hover:bg-sunken"}`}>
@@ -261,7 +264,7 @@ function EarlierTexts({ rule, onRevert }: { rule: RuleView; onRevert?: (id: stri
     <summary className="cursor-pointer py-1">{t("roleMemory.versions", { count: rule.versions.length })}</summary>
     <ul className="m-0 list-none p-0">{rule.versions.slice().reverse().map(version => <li key={version.id} className="border-t border-border py-1">
       <p className="m-0">{version.rule}</p><p className="m-0 text-muted">{version.why}</p>
-      <p className="m-0 text-[10.5px] text-muted">{new Date(version.revisedBy?.at ?? version.createdAt).toLocaleString(locale === "uk" ? "uk-UA" : "en-US")}{version.revisedBy ? <> · <RoleMark role={version.revisedBy.roleId} size={12} />{t(`roleMemory.revised.${version.revisedBy.by}`, { role: roleNameById(t, version.revisedBy.roleId ?? "") })}</> : null}</p>
+      <p className="m-0 text-[10.5px] text-muted">{new Date(version.revisedBy?.at ?? version.createdAt).toLocaleString(locale === "uk" ? "uk-UA" : "en-US")}{version.revisedBy ? <> · <RoleMark role={revisionRole(version.revisedBy)} size={12} />{t(`roleMemory.revised.${version.revisedBy.by}`, { role: roleNameById(t, version.revisedBy.roleId ?? "") })}</> : null}</p>
       <button type="button" data-rule-revert={version.id} className="min-h-9 px-1 text-accent" onClick={() => onRevert?.(version.id)}>{t("roleMemory.restore")}</button>
     </li>)}</ul>
   </details>;

@@ -147,3 +147,27 @@ test("while the first profile answer is pending the card reads, offers no Summar
     globalThis.fetch = originalFetch;
   }
 });
+
+test("a refused first profile read ends the reading state, shows the error with a way to try again, and sends no summarization", async () => {
+  setLocale("en");
+  const originalFetch = globalThis.fetch;
+  const rules = sampleMemory();
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const reads: string[] = [];
+  globalThis.fetch = (async (_url, init) => {
+    reads.push(init?.method ?? "GET");
+    return new Response("{}", { status: 500 });
+  }) as typeof fetch;
+  try {
+    flushSync(() => root.render(<MemoryProfile rules={rules} renderRules={() => <div />} />));
+    await tick(); await tick(); await tick();
+    expect(container.textContent).not.toContain(translate("en", "memoryProfile.reading"));
+    expect(container.querySelector('[role="alert"]')).not.toBeNull();
+    expect(container.querySelector("[data-profile-summarize]")).not.toBeNull();
+    expect(reads.includes("POST")).toBe(false);
+  } finally {
+    flushSync(() => root.unmount());
+    globalThis.fetch = originalFetch;
+  }
+});

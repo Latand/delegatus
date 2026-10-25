@@ -67,6 +67,24 @@ test("both role levels and earlier text render with a return control", () => {
   expect(reviewed).not.toContain("awaiting curator");
 });
 
+test("a curator rewrite and an agent rewrite each show their own role icon on the provenance line and on the earlier-version line", () => {
+  setLocale("en");
+  const earlier = (by: "agent" | "curator", roleId?: string) => ({ id: `earlier-${by}`, rule: "Check the owner before replay.", why: "A replay used an old owner.", hints: [], createdAt: "yesterday", revisedBy: { by, at: "2026-10-11T00:01:00.000Z", ...(roleId ? { roleId } : {}) } });
+  const rule = (id: string, by: "agent" | "curator", roleId?: string): RuleView => ({ id, rule: "Validate persisted ownership before replaying operations.", why: "An owner had changed before a replay.", state: "active", hints: [], roleId: "builder", fixRound: false, stageId: "build", fresh: false, createdAt: "today", changedAt: "today", revisedBy: { by, at: "2026-10-11T00:01:00.000Z", ...(roleId ? { roleId } : {}) }, versions: [earlier(by, roleId)] });
+  const html = (active: RuleView[]) => renderToStaticMarkup(<RuleSection kind="role" title="Role" subtitle="Chosen role" scope={{ ...scope(100), kind: "role", roleId: "builder", active }} focusRule={active[0]!.id} onDelete={() => {}} onRestore={() => {}} onRevert={() => {}} />);
+  const marks = (markup: string, line: "provenance" | "versions") => {
+    const [head, tail] = markup.split("data-rule-versions");
+    const part = line === "versions" ? tail! : head!.slice(head!.indexOf("data-rule-provenance"));
+    return [...part.matchAll(/data-role-avatar="([^"]+)"/g)].map(match => match[1]);
+  };
+  const curator = html([rule("c", "curator")]);
+  expect(marks(curator, "provenance")).toEqual(["curator"]);
+  expect(marks(curator, "versions")).toEqual(["curator"]);
+  const agent = html([rule("a", "agent", "architect")]);
+  expect(marks(agent, "provenance")).toEqual(["architect"]);
+  expect(marks(agent, "versions")).toEqual(["architect"]);
+});
+
 test("the provenance line shows recurring tasks in both shipped languages", async () => {
   const base: RuleView = { id: "one", rule: "Measure every supported rendered combination before review.", why: "Review caught an omitted language at phone width.", state: "active", hints: [], roleId: "builder", fixRound: true, stageId: "fix", fresh: false, createdAt: "today", changedAt: "today" };
   // SSR uses the stable English hydration snapshot. Mount to verify the browser's chosen language.
