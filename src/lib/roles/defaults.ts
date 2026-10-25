@@ -63,9 +63,8 @@ export const WORKING_RULES = [
    mandate) shares one 32,000-byte structured envelope with its rotation
    history (`seatCommand.ts`); the full rules beside the mandate would leave
    no room, so the seat reads these inside its mandate and its scaffold stays
-   as small as it shipped. Pinned against WORKING_RULES by number and marker,
-   and by the evidence and publication duties of 6 and 12 on the seat's
-   launch prompt. */
+   as small as it shipped. The full and short forms retain matching rule
+   numbers, and the seat's launch prompt carries the short form once. */
 export const WORKING_RULES_SHORT = [
   `## ${WORKING_RULES_HEADING}`,
   "Safety fences and the controller's instructions are hard limits. An operator's answer in this work governs the brief and pinned specification; learned rules yield to all of them.",
