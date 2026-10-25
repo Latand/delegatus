@@ -2920,7 +2920,8 @@ async function adoptStructuredHostsPass(
           await publishStructuredDeliveryHost(item);
         }
       } else {
-        await completeStructuredDeliveryQueueStartup(nextAdoptedHosts, reportProgress, assertActive, contestedConversations);
+        await completeStructuredDeliveryQueueStartup(nextAdoptedHosts, reportProgress, assertActive, contestedConversations,
+          { registry, snapshot: publicationSnapshot });
       }
       assertAdoptedHostsAreClaimed(nextAdoptedHosts, dependencies.hostClaimed);
     }

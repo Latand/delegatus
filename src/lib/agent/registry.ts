@@ -10894,6 +10894,13 @@ export class AgentRegistry {
       .sort(compareDeliveryAdmission));
   }
 
+  /** Startup selects only unsettled outcomes; each operation is re-read
+      before its existing settlement guard runs. */
+  terminalDeliveryCandidates(): HeldDelivery[] {
+    return this.readKeyed(file => clone(registryRowsMatching(file, "heldDeliveries", "state", ["delivery-uncertain", "failed"])),
+      { skipColdKeyInitialization: true });
+  }
+
   terminalizeHeldDelivery(id: string, reason: string): HeldDelivery {
     return this.mutate((file) => {
       const delivery = file.heldDeliveries[id];
@@ -10968,10 +10975,9 @@ export class AgentRegistry {
       reservations its mutation would end, so the mutation alone can wait for
       the lock off the loop (docs/design/delivery-progress-and-drain.md, C0). */
   deadSupersededHeldDeliveryCandidates(): string[] {
-    const snapshot = this.readOnlySnapshot();
-    return Object.values(snapshot.heldDeliveries)
+    return this.readKeyed(snapshot => registryRowsMatching(snapshot, "heldDeliveries", "state", "held")
       .filter((delivery) => heldDeliveryTargetsDeadSupersededSession(snapshot, delivery, this.ownerAlive))
-      .map((delivery) => delivery.id);
+      .map((delivery) => delivery.id), { skipColdKeyInitialization: true });
   }
 
   /** The mutation half: each candidate is checked again inside the transaction. */

@@ -281,14 +281,8 @@ test("startup does not prepare an unused snapshot before asking for pipeline evi
   } finally { observed.mockRestore(); registry.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test("empty startup finalization skips unused selections and captures open receipts before its evidence fence", async () => {
-  const { RuntimeJournal } = await import("@/runtime-host/journal");
-  const { bindStructuredDeliveryQueue } = await import("./structuredDeliveryController");
-  const { structuredStartupStatus } = await import("./startupStatus");
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-empty-finalization-"));
-  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
-  const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"));
-  const client = {
+function emptyJournalClient(journal: import("@/runtime-host/journal").RuntimeJournal) {
+  return {
     snapshot: async () => journal.snapshot(),
     events: async (after: number) => journal.replay(after),
     waitEvents: async (after: number) => journal.replay(after),
@@ -297,6 +291,63 @@ test("empty startup finalization skips unused selections and captures open recei
     operationStatus: async (id: string) => journal.operationResult(id),
     effectBatch: async () => [],
   } as unknown as import("./client").RuntimeHostClient;
+}
+
+for (const mode of ["current", "copied", "other-registry", "changed-before-completion", "marker-changed-before-completion"] as const) test(`startup publication validates its prepared selection (${mode})`, async () => {
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { bindStructuredDeliveryQueue, completeStructuredDeliveryQueueStartup } = await import("./structuredDeliveryController");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-publication-selection-"));
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const other = new AgentRegistry(path.join(root, "other.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const peer = new SqliteAgentRegistryStore(path.join(root, "registry.sqlite"), {
+    initialSnapshot: normalizeRegistry({ version: 2, entries: {}, receipts: {} }), normalize: normalizeRegistry,
+  });
+  const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"));
+  const client = emptyJournalClient(journal);
+  let preparations = 0;
+  const prepare = registry.prepareReadOnlySnapshot.bind(registry);
+  let observed: ReturnType<typeof spyOn> | undefined;
+  const repaired: string[] = [];
+  const repair = spyOn(registry, "repairCompletedStructuredSpawnMarkers").mockImplementation(key => {
+    repaired.push(`${key!.engine}:${key!.sessionId}`);
+    return 0;
+  });
+  try {
+    if (mode === "marker-changed-before-completion") registry.upsert(seeded(root, 0).entries["codex:reader-0"]!);
+    await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true });
+    const snapshot = await prepare();
+    observed = spyOn(registry, "prepareReadOnlySnapshot").mockImplementation((...args) => { preparations++; return prepare(...args); });
+    const completion = completeStructuredDeliveryQueueStartup([], undefined, undefined, undefined, {
+      registry: mode === "other-registry" ? other : registry,
+      snapshot: mode === "copied" ? { ...snapshot } : snapshot,
+    });
+    // The completion starts on its queued turn. A peer can change the facts
+    // after its caller captured the selection and before reuse is admitted.
+    if (mode === "changed-before-completion") peer.mutate(file => {
+      file.memberships.conversation_fixture = [{ conversationId: "conversation_fixture", kind: "pipeline", containerId: "lane-fixture",
+        role: "builder", slot: "build", stageId: "build", stageOrder: 0, round: 1, parentConversationId: null, createdAt: CREATED }];
+    }, false);
+    if (mode === "marker-changed-before-completion") peer.mutate(file => {
+      file.entries["codex:reader-0"]!.pendingAction = "spawn";
+    }, false);
+    await completion;
+    expect(preparations).toBe(mode === "current" || mode === "marker-changed-before-completion" ? 0 : 1);
+    expect(repaired).toEqual(mode === "marker-changed-before-completion" ? ["codex:reader-0"] : []);
+  } finally {
+    observed?.mockRestore(); repair.mockRestore();
+    await bindStructuredDeliveryQueue([]);
+    journal.close(); peer.close(); other.close(); registry.close(); fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("empty startup finalization skips unused selections and captures open receipts before its evidence fence", async () => {
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { bindStructuredDeliveryQueue } = await import("./structuredDeliveryController");
+  const { structuredStartupStatus } = await import("./startupStatus");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-empty-finalization-"));
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"));
+  const client = emptyJournalClient(journal);
   const preparations: string[] = [];
   const prepare = registry.prepareReadOnlySnapshot.bind(registry);
   const observed = spyOn(registry, "prepareReadOnlySnapshot").mockImplementation((...args) => {
@@ -317,9 +368,9 @@ test("empty startup finalization skips unused selections and captures open recei
         return { settled: new Set(), deferred: new Set() };
       },
     })).toEqual([]);
-    // The controller still prepares its marker-repair selection. There is no
-    // contested host or continuation selection to prepare beside it.
-    expect(preparations.filter(phase => phase === "finalizing structured delivery")).toHaveLength(1);
+    // Publication reuses its validated selection. There is no contested host
+    // or continuation selection to prepare beside it.
+    expect(preparations).not.toContain("finalizing structured delivery");
     expect(preparations).not.toContain("recovering orchestrator deliveries");
     expect(preparations).not.toContain("kicking recovered deliveries");
     expect(capturedReceipts).toBe(true);
@@ -394,6 +445,97 @@ test("demotion reads only its own host while a peer advances registry progress",
     expect(results[0]).toBeGreaterThan(0);
     expect(results[1]).toBe(results[0]);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("startup terminal selection reads current uncertain and failed deliveries without retained delivered payloads", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-terminal-readers-"));
+  const reads: number[] = [];
+  try {
+    for (const history of [10, 100]) {
+      const directory = path.join(root, String(history)); fs.mkdirSync(directory);
+      const initial = seeded(directory, 1);
+      for (let index = 0; index < history + 2; index++) {
+        const id = `terminal-fixture-${index}`;
+        initial.heldDeliveries[id] = {
+          id, conversationId: "conversation_reader_0", runtimeConversationId: "conversation_reader_0", text: "Fixture",
+          createdAt: CREATED, clientMessageId: id, payloadKind: "text", runtimeImages: [], contentDigest: null, artifactPaths: [],
+          command: { operationId: `terminal-operation-${index}`, kind: "send", policy: "queue" }, requestDigest: null,
+          state: index === 0 ? "failed" : index === 1 ? "delivery-uncertain" : "delivered", generationId: "reader-0",
+          attempts: 1, assignedAt: CREATED, deliveredAt: index > 1 ? CREATED : null, error: index === 0 ? "fixture failure" : null,
+        };
+      }
+      const filename = path.join(directory, "registry.sqlite");
+      const seed = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry });
+      while (seed.archiveInactive(1000)) { /* Keep delivered history cold. */ } seed.close();
+      let payloads = 0;
+      const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, {
+        sqliteMode: "sqlite", onSqliteRowPayloadRead: (_collection, count) => { payloads += count; },
+      });
+      const peer = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry });
+      const select = () => typeof registry.terminalDeliveryCandidates === "function" ? registry.terminalDeliveryCandidates()
+        : Object.values(registry.readOnlySnapshot().heldDeliveries).filter(row => row.state === "failed" || row.state === "delivery-uncertain");
+      try {
+        payloads = 0;
+        expect(select().map(row => row.id).sort()).toEqual(["terminal-fixture-0", "terminal-fixture-1"]);
+        expect(registry.deadSupersededHeldDeliveryCandidates()).toEqual([]);
+        reads.push(payloads);
+        peer.mutate(file => {
+          file.heldDeliveries["terminal-fixture-0"]!.state = "delivered";
+          file.heldDeliveries["terminal-fixture-2"]!.state = "failed";
+        }, false);
+        expect(select().map(row => row.id).sort()).toEqual(["terminal-fixture-1", "terminal-fixture-2"]);
+      } finally { peer.close(); registry.close(); }
+    }
+    expect(reads[0]).toBeGreaterThan(0);
+    expect(reads[1]).toBe(reads[0]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+for (const confirmed of [false, true]) test(`startup terminal reconciliation retains operation-bound recipient evidence (confirmed=${confirmed})`, async () => {
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { FileClaudeDeliveryLedger } = await import("./claudeStreamBrokerHost");
+  const { bindStructuredDeliveryQueue, completeStructuredDeliveryQueueStartup } = await import("./structuredDeliveryController");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-terminal-evidence-"));
+  const initial = seeded(root, 0);
+  const conversation = initial.conversations.conversation_reader_0!;
+  conversation.engine = "claude";
+  const generationId = `terminal-evidence-${confirmed}`;
+  conversation.generations[0]!.id = generationId;
+  const entry = initial.entries["codex:reader-0"]!;
+  entry.key = { engine: "claude", sessionId: generationId };
+  entry.structuredHost = { ...entry.structuredHost!, kind: "claude-broker", process: null };
+  initial.entries = { [`claude:${generationId}`]: entry };
+  fs.writeFileSync(path.join(root, "registry.json"), JSON.stringify(initial));
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite", now: () => NOW });
+  const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { structuredHosts: true, now: () => NOW });
+  const operationId = `terminal-evidence-operation-${confirmed}`;
+  const text = "Retain the confirmed delivery";
+  try {
+    const delivery = registry.holdDelivery(conversation.id, text, operationId, "text", [], null,
+      { operationId, kind: "send", policy: "queue" });
+    registry.beginDeliveryAttempt(delivery.id, generationId);
+    journal.append({ scope: { type: "session", id: conversation.id }, kind: "session-status", payload: {
+      conversationId: conversation.id, sessionKey: entry.key, hostKind: "claude-broker", host: "hosted", turn: "idle", provenance: "structured",
+    } });
+    journal.executeOperation({ kind: "send", operationId, conversationId: conversation.id, idempotencyKey: operationId, text, policy: "queue" });
+    journal.transitionOperation(operationId, "delivering");
+    journal.transitionOperation(operationId, "uncertain", { reason: "fixture delivery uncertain" });
+    registry.recordDeliveryOutcome(delivery.id, "failed", "fixture delivery uncertain", "unverified");
+    const ledger = new FileClaudeDeliveryLedger();
+    ledger.recordQueued(generationId, { id: operationId, text }, "turn-started");
+    if (confirmed) expect(ledger.confirmDelivered(generationId, operationId, "terminal-evidence-user", "operation-bound")).toBe("accepted");
+    const client = { ...emptyJournalClient(journal),
+      transitionOperation: async (id: string, status: Parameters<typeof journal.transitionOperation>[1], details: Parameters<typeof journal.transitionOperation>[2], options: Parameters<typeof journal.transitionOperation>[3]) => journal.transitionOperation(id, status, details, options),
+    } as import("./client").RuntimeHostClient;
+    await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true,
+      watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+    await completeStructuredDeliveryQueueStartup([]);
+    expect(registry.deliverySnapshotForOperation(operationId).heldDeliveries[delivery.id]!.state).toBe(confirmed ? "delivered" : "failed");
+    expect(journal.operationResult(operationId)!.receipt.status).toBe(confirmed ? "delivered" : "uncertain");
+  } finally {
+    await bindStructuredDeliveryQueue([]);
+    journal.close(); registry.close(); fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("runtime startup evidence reads hosted aliases and owed conversations without expanding retained history", async () => {
