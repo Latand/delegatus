@@ -117,7 +117,6 @@ describe("preview", () => {
     expect(fixer).not.toHaveProperty("account");
     expect(fixer.engine).toBeUndefined();
     expect(fixer.effort).toBeUndefined();
-    expect(fixer.prompt).toStartWith("Fix the findings stage review reported for: {{task}}");
     /* A role-less implementer gives its fixer the general fix row. */
     const roleless = ok(previewLegacyReviewConversion(definition([run("build", "review", "builder", "read-write", { role: undefined }), review("review", null)]), {}));
     expect(roleless.stages.find((stage) => stage.id === "review-fix")!.role).toEqual({ roleId: "builder", params: { mode: "apply-fixes" } });

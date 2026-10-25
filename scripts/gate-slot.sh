@@ -185,8 +185,9 @@ claim() {
   return "$code"
 }
 queue_key="command:$$:$RANDOM:$RANDOM"
+queued_at=$(date +%s)
 while :; do
-  "${LLV_GATE_BUN:-bun}" "$admission" --wait "$queue_key" "$owner_pid"
+  "${LLV_GATE_BUN:-bun}" "$admission" --wait "$queue_key" "$owner_pid" "$queued_at"
   if ! command -v flock >/dev/null; then
     if claim; then end_cpu_wait; run "$@"; fi
   else

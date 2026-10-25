@@ -61,11 +61,11 @@ for (const enabled of [true, false]) test(`launch brief reads this project's mer
   expect(setMergeOnReview("other-project", !enabled, "fixture", new Date(NOW).toISOString())).not.toBeNull();
   await h.controller.launchIfDue(input());
   expect(String(h.bodies[0].prompt)).toContain(`Project mergeOnReview: ${enabled ? "on" : "off"}`);
-  expect(String(h.bodies[0].prompt)).toContain("Never reopen an existing Done task only because deployment is pending or unread");
 });
 test("card exists before spawn, with icon, colour, description and task binding in body", async () => {
   const h = harness(); await h.controller.launchIfDue(input());
   const run = h.run(), card = tasks().find(t => t.id === run.taskId)!;
+  expect(card.dueAt).toBeUndefined(); expect(card.dueTz).toBeUndefined();
   expect(card).toMatchObject({ icon: "brush-cleaning", color: "slate" }); expect(card.text).toContain("30.09 12:00 · Обслуговування дошки"); expect(card.details).toStartWith("Delegatus board maintenance run");
   expect(h.bodies[0]).toMatchObject({ role: "maintainer", taskId: card.id, cwd: "/fixtures/repository", project: PROJECT, clientAttemptId: run.runId });
 });

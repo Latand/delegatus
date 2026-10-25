@@ -723,7 +723,7 @@ test("required tier narrows an unbound pick and refuses a named account without 
   registryWith(reserved, [observation(reserved, 0), observation(spare, 20)]);
   const tier = { id: "ultrafast", model: "gpt-6-astra", required: true };
   expect(await resolveHealthySpawnAccount("codex", undefined, ATLAS, tier.model, tier)).toMatchObject({ accountId: spare, serviceTier: "ultrafast" });
-  await expect(resolveHealthySpawnAccount("codex", reserved, ATLAS, tier.model, tier)).rejects.toThrow("offered: priority");
+  await expect(resolveHealthySpawnAccount("codex", reserved, ATLAS, tier.model, tier)).rejects.toThrow(`serviceTier ultrafast for model gpt-6-astra; evaluated pinned account "${reserved}"`);
   expect(await resolveHealthySpawnAccount("codex", reserved, ATLAS, tier.model, { ...tier, required: false })).toMatchObject({ accountId: reserved, serviceTier: null });
 });
 
@@ -745,7 +745,7 @@ test("a missing named account clears a preferred tier on its automatic fallback"
 
 test("a required tier never widens a bound pool to its offering account", async () => {
   tierCatalogs(); registryWith(spare, [observation(reserved, 0), observation(spare, 0)]); bind(reserved);
-  await expect(resolveHealthySpawnAccount("codex", undefined, ATLAS, "gpt-6-astra", { id: "ultrafast", model: "gpt-6-astra", required: true })).rejects.toThrow("no account in this project's pool offers");
+  await expect(resolveHealthySpawnAccount("codex", undefined, ATLAS, "gpt-6-astra", { id: "ultrafast", model: "gpt-6-astra", required: true })).rejects.toThrow(`evaluated allowed accounts: account "Reserved carrier" (${reserved}): gpt-6-astra offered: priority`);
 });
 
 

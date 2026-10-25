@@ -149,3 +149,21 @@ test("the owner confirmation URL navigates to Delegatus instead of opening a loc
   expect(html).not.toContain("data-file-link");
   expect(html).not.toContain("#f=");
 });
+
+
+test("inline code preserves embedded backticks with a longer delimiter", () => {
+  for (const [source, expected] of [["``a`b``", "a`b"], ["```a``b```", "a``b"], ["`` ` ``", "`"]]) {
+    const html = renderToStaticMarkup(<>{md(source)}</>);
+    expect(html).toContain(`>${expected}</span>`);
+  }
+});
+
+test("an unequal or unclosed backtick run stays literal text", () => {
+  for (const source of ["``abc`", "`abc``", "```abc``", "`abc", "abc`", "`a``", "x `` y"]) {
+    const html = renderToStaticMarkup(<>{md(source)}</>);
+    expect(html).toBe(source);
+    expect(html).not.toContain("cursor-copy");
+  }
+  /* A matched pair beside a stray run is still code, and the stray run stays literal. */
+  expect(renderToStaticMarkup(<>{md("`` `a` ")}</>)).toMatch(/^`` <span[^>]*>a<\/span> $/);
+});

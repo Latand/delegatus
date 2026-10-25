@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { CpuAdmissionQueue } from "../src/lib/runtime/cpuAdmission";
 import { admissionLockWait } from "./cpu-admission-lock";
+import { cpuOwnerIdentity } from "../src/lib/runtime/signalSandboxContext";
 
 function fixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "admission-lock-"));
@@ -77,9 +78,10 @@ test("the runtime image's copied gate helper loads and refuses an absent slot le
 
 for (const recovers of [true, false]) test(`the helper shares its lock budget across a long CPU wait (second writer recovers: ${recovers})`, async () => {
   const f = fixture();
-  // Keep the helper queued after opening, including on systems without flock.
+  // Keep the helper queued behind an owned command in its own lane,
+  // including on systems without flock; stages have an independent lane.
   const ahead = f.open();
-  try { ahead.check("stage:ahead", false, undefined, false); }
+  try { ahead.check("command:ahead", false, cpuOwnerIdentity(process.pid), false); }
   finally { ahead.close(); }
   // Only time and sleep are controlled. The entry point, retry closure and
   // SQLite calls are real; this process owns an independent writer connection.
@@ -108,7 +110,7 @@ for (const recovers of [true, false]) test(`the helper shares its lock budget ac
         subprocess.send(60_000); // Healthy CPU waiting must not consume the SQLite budget.
       } else if (episodes.length === 3) {
         if (recovers) {
-          f.writer.query("DELETE FROM tickets WHERE key = ?").run("stage:ahead");
+          f.writer.query("DELETE FROM tickets WHERE key = ?").run("command:ahead");
           f.writer.exec("COMMIT"); held = false;
         }
         subprocess.send(60_020);
@@ -136,7 +138,7 @@ for (const recovers of [true, false]) test(`the helper shares its lock budget ac
     if (recovers) expect(stderr).toContain("lock acquired after 20 ms");
     else expect(stderr).toContain("lock deadline exceeded after 120 ms");
     expect(f.writer.query("SELECT key FROM tickets ORDER BY seq").all())
-      .toEqual([...(recovers ? [] : [{ key: "stage:ahead" }]), { key: "command:two-locks" }]);
+      .toEqual([...(recovers ? [] : [{ key: "command:ahead" }]), { key: "command:two-locks" }]);
   } finally {
     clearTimeout(watchdog);
     if (child.exitCode === null) child.kill("SIGKILL");

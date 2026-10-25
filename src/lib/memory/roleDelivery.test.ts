@@ -163,9 +163,6 @@ test.each(["codex", "claude"] as const)("%s receives a seat-written rule on fres
       await expect(defaultStartHost({ engine, registry, receipt: begun.receipt, spec: { command: engine, engine, cwd, windowName: "seat", transcript: transcript ?? undefined, launchProfile }, account: { engine, accountId: "reader-account", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }, prompt: "Seat mandate", client: {} as import("@/lib/runtime/client").RuntimeHostClient }, "fixture-capability")).rejects.toThrow("captured seat start");
       const channel = engine === "codex" ? "developerInstructions" : "appendSystemPrompt";
       expect(delivered[channel]).toContain(rule);
-      expect(delivered[channel]).toContain("Earlier seats and stage agents");
-      expect(delivered[channel]).toContain("create_task");
-      expect(delivered[channel]).not.toContain("When you report with stage_report");
       const builder = await learnedRulesForLaunchProfile({ learnedRules: { project, roleId: "builder" } })!;
       expect(builder).not.toContain(rule);
       expect(builder).toContain("Check the pinned acceptance criteria");

@@ -3756,7 +3756,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   resources: "Read system memory, session count/memory totals and Delegatus's own processes. full:true or compact:false includes complete session rows. freshness reports requestedAt, the system block's capturedAt and ageMs, the session table's sessionsCapturedAt, sessionsAgeMs and sessionsStale, the cache source, and refreshSucceeded (fresh:true only). A process with no observation yet answers within a second: freshness.pending is true with reason \"collecting\", the system block is current and the session table is empty until a later call; fresh:true waits for the collection instead. When the session collector failed, the rows come from an earlier capture: sessionsStale is true and every row carries stale:true with its capturedAt, so read them as history of what ran then. viewer lists the web server, runtime host and workers with their memory; it is not actionable, since nothing in it is an agent to kill. Launched agents delegate this read to the Viewer, over either transport. A legacy stdio client without a launch capability measures locally and returns viewer:null with viewerUnavailable \"not-the-viewer\".",
   conversation_migration: "Select an explicit account for a structured conversation, automatically reseat by quota, retry, roll back or cancel a migration, withdraw an unclaimed account switch, or send messages a failed switch held on the current account. Explicit selection uses the browser account picker's semantics and never substitutes another account.",
   agent_fleet: "Read the fleet summary first for counts by engine, model, effort and account, pipeline/seat/other placement, stalled and limit-wait counts, and account session/weekly use. Counts are [live, running]; default summary stays under 2 KB with folding. detail:true or an engine/model/effort/account/state/pipelineId/conversationId filter adds per-agent rows, cached memory where available, and a 24 KB page with nextCursor. No transcript bodies or paths. Account/model/effort come from durable host, generation and launch records; absent accounts are unknown. A seat, deputy or worker sees its own project; operator root sees all; unidentified callers must name project. Name accounts as account A / account B in public bridge reports. Some counts may be partial: read coverage.",
-  agent_activity: "Use agent_fleet first for compact fleet counts and account usage. Read agent liveness, compact by default. liveOnly:true excludes gone lifecycles and dead hosts after verification; excludedGoneCount says how many were removed from the bounded observation. includeGone:true includes them. Recent unproven launches and verified live hosts remain visible; expired unproven launches are excluded. Compact answers stay within 24 KB; follow nextCursor with the same options for rows deferred by the byte budget. compact:false or full:true returns the full evidence: last transcript record, turn state, host state, provider-throttle retry time, and confirmed stalls. `compact: true` answers each conversation as {conversationId, title, turnState, lifecycle, silentForMs, stalledForMs, pipeline}, plus reason and permission {tool, command, reason, since} when the turn waits on an unanswered tool permission request (reason permission_request), and drops the transcript paths, host detail and the selection and timing reports. Every answer returns within a second and names what it could not confirm. catalog:\"pending\" means this process holds no completed conversation catalog yet: the rows are the hosts the registry names, and a later call lists the rest. catalog:\"stale\" means the rows come from an earlier catalog while a newer one is read; call again for conversations started since. evidence:\"pending\" with unverifiedCount means that many rows are projected without their transcript tail (evidenceSource \"projection\" in the full answer), and undescribedHostCount (undescribedTargetCount for a transcript the call named) counts those with no row yet; a later call returns them verified.",
+  agent_activity: "Use agent_fleet first for compact fleet counts and account usage. Read agent liveness, compact by default. liveOnly:true excludes gone lifecycles and dead hosts after verification; excludedGoneCount says how many were removed from the bounded observation. includeGone:true includes them. Recent unproven launches and verified live hosts remain visible; expired unproven launches are excluded. Compact answers stay within 24 KB; follow nextCursor with the same options for rows deferred by the byte budget. compact:false or full:true returns the full evidence: last transcript record, turn state, host state, provider-throttle retry time, and confirmed stalls. `compact: true` answers each conversation as {conversationId, title, turnState, lifecycle, silentForMs, stalledForMs, pipeline}, plus reason and permission {tool, command, reason, since} for an unanswered tool permission (reason permission_request), or question {tool, toolUseId, questions, since} for an unanswered native question (reason question); answer it with conversation_action answer using toolUseId as requestId. Compact answers drop the transcript paths, host detail and the selection and timing reports. Every answer returns within a second and names what it could not confirm. catalog:\"pending\" means this process holds no completed conversation catalog yet: the rows are the hosts the registry names, and a later call lists the rest. catalog:\"stale\" means the rows come from an earlier catalog while a newer one is read; call again for conversations started since. evidence:\"pending\" with unverifiedCount means that many rows are projected without their transcript tail (evidenceSource \"projection\" in the full answer), and undescribedHostCount (undescribedTargetCount for a transcript the call named) counts those with no row yet; a later call returns them verified.",
   lifecycle_events: "Query the durable lifecycle event journal by lineage and cursor, or poll a bounded relay digest of what changed since the last one.",
   request_attention: [
     'Use waitFor:"accepted" to return after durable acceptance with accepted:true, arrival:"pending" and handoff:null. The default waits for durable browser arrival.',
@@ -4130,7 +4130,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Agent-facing context, kept off the human description (#1834): the prompt, the working notes, the ids, the rules, the state. Plain text, no markdown rendering, capped at 20000 characters, condensed to what an agent picking the task up actually needs. The card shows it behind one collapsed Details row; a blank value creates a task with no details."),
     placement: z.enum(["pinned", "unplaced"]).optional().describe("Omitted placement creates an unplaced task. Pinned requires pos; unplaced must omit pos."),
     pos: z.object({ x: z.number().finite(), y: z.number().finite() }).optional(),
-    dueAt: z.string().optional(),
+    dueAt: z.string(),
     dueTz: z.string().optional(),
     attachments: z.array(z.unknown()).optional(),
     board: z.enum(["shown", "hidden"]).optional()
@@ -4933,10 +4933,17 @@ export const TOOL_TRANSPORT_SCHEMAS = Object.fromEntries(MCP_TOOL_NAMES.map(tool
     // An invalid sentinel keeps a refused proposal invalid at the strict callback.
     proposal: schema.shape.proposal.catch(() => null),
   })];
-  return [toolName, toolName === "create_task" || toolName === "update_task" ? schema.extend(Object.fromEntries(
-    Object.entries(schema.shape).filter(([, fieldSchema]) => fieldSchema.isOptional())
-      .map(([field, fieldSchema]) => [field, fieldSchema.catch((context: { input: unknown } | undefined) => context?.input)]),
-  )) : schema];
+  if (toolName !== "create_task" && toolName !== "update_task") return [toolName, schema];
+  const transport = schema.extend(Object.fromEntries(
+    Object.entries(schema.shape).filter(([field, fieldSchema]) => fieldSchema.isOptional() || toolName === "create_task" && field === "dueAt")
+      .map(([field, fieldSchema]) => [field, (field === "dueAt" && toolName === "create_task" ? fieldSchema.optional() : fieldSchema)
+        .catch((context: { input: unknown } | undefined) => context?.input)]),
+  ));
+  // Advertise the strict requirement while missing/invalid dates reach our
+  // callback for TASK_DUE_REQUIRED, before any receipt is acquired.
+  return [toolName, toolName === "create_task" ? transport.meta({
+    required: Object.entries(schema.shape).filter(([, field]) => !field.isOptional()).map(([name]) => name),
+  }) : transport];
 })) as typeof TOOL_INPUT_SCHEMAS;
 
 /** Presentation only: neither a client name nor a User-Agent
@@ -4977,16 +4984,17 @@ export function createViewerMcpServer(service: McpToolService, tools: readonly M
     const schema = TOOL_INPUT_SCHEMAS[toolName];
     server.registerTool(toolName, {
       description: TOOL_DESCRIPTIONS[toolName] + (MCP_PAGE_CURSOR_TOOLS.has(toolName) ? ` ${MCP_PAGE_CURSOR_DESCRIPTION}` : ""),
-      inputSchema: shortenSchemaDescriptions(TOOL_TRANSPORT_SCHEMAS[toolName]),
+      inputSchema: shortenSchemaDescriptions(TOOL_TRANSPORT_SCHEMAS[toolName]).meta(TOOL_TRANSPORT_SCHEMAS[toolName].meta() ?? {}),
     }, async (args, extra) => {
       if (taskMutation || toolName === "voice_tools") {
         const parsed = schema.safeParse(args);
         if (!parsed.success) {
           const issues = parsed.error.issues.map(issue => ({ field: issue.path.join("."), message: issue.message }));
-          const result = failure(toolName, String((args as McpToolArgs).clientRequestId), toolName === "voice_tools" ? "INVALID_PROPOSAL" : "TASK_INVALID_FIELD",
+          const missingDue = toolName === "create_task" && ((args as McpToolArgs).dueAt === undefined || (args as McpToolArgs).dueAt === null || (args as McpToolArgs).dueAt === "");
+          const result = failure(toolName, String((args as McpToolArgs).clientRequestId), missingDue ? "TASK_DUE_REQUIRED" : toolName === "voice_tools" ? "INVALID_PROPOSAL" : "TASK_INVALID_FIELD",
             toolName === "voice_tools" ? "Invalid voice tools proposal. Use a registry package name with an optional version or a pinned entryFile; launch variables and inline credentials are refused."
               : issues.map(issue => `${issue.field}: ${issue.message}`).join("; "), false, false,
-            { field: issues[0]?.field, issues });
+            { field: missingDue ? "dueAt" : issues[0]?.field, issues });
           return response(result);
         }
       }
