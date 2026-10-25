@@ -277,35 +277,38 @@ test("owner failure stays pending through refused stop receipts and retries unti
 test("an unconfirmed live stop backs off to its cap, so the pending warning slows to the sweep's cadence", async () => {
   expect(Array.from({ length: 9 }, (_, failures) => ownerStopRetryDelayMs(1000, failures)))
     .toEqual([1000, 2000, 4000, 8000, 16_000, 32_000, 60_000, 60_000, 60_000]);
-  const requestId = request().request_id, base = 2;
+  const requestId = request().request_id, base = 10, rounds = 5;
   reserveRun({ requestId, relayId: "relay_fixture", targetId: target.id, leaseId: "lease_fixture",
     ownerTurn: { clientAttemptId: `relay-owner-${requestId}` }, ownerPid: process.pid, ownerIdentity: "fixture",
     childPid: null, childIdentity: null, runDir: "", startedAt: new Date().toISOString() }, 1);
   const warnings: number[] = [];
+  let arrived!: () => void;
+  const enough = new Promise<void>(r => { arrived = r; });
   const error = console.error.bind(console);
   const spy = spyOn(console, "error").mockImplementation((...args: unknown[]) => {
-    if (args[0] === "Owner relay stop remains pending; durable custody retained") warnings.push(performance.now());
-    else error(...args);
+    if (args[0] !== "Owner relay stop remains pending; durable custody retained") return error(...args);
+    if (warnings.push(performance.now()) === rounds) arrived();
   });
   let recovered = false, bound!: () => void;
   const conversation = new Promise<void>(r => { bound = r; });
   const run = start({ launch, observe: async () => ({ state: "running" }),
     stop: async () => { if (!recovered) throw Error("control unavailable"); }, stopRetryMs: base, pollMs: 1 }, 60_000, () => bound());
+  let deadline: ReturnType<typeof setTimeout> | undefined;
   try {
     await conversation;
     run.cancel();
-    await Bun.sleep(600);
-    const count = warnings.length;
-    // A fixed retry of `base` wrote one warning per round of about 3 × base:
-    // about a hundred here. The backoff allows at most 7 + 600 / 120.
-    expect(count).toBeGreaterThanOrEqual(3);
-    expect(count).toBeLessThanOrEqual(13);
-    // A timer never fires early, so each gap covers at least its delay.
-    for (let index = 1; index < count; index++) expect(warnings[index]! - warnings[index - 1]!).toBeGreaterThanOrEqual(ownerStopRetryDelayMs(base, index - 1) - 1);
+    // Wait for a fixed number of rounds, however long the machine takes.
+    await Promise.race([enough, new Promise<never>((_, fail) => {
+      deadline = setTimeout(() => fail(Error(`only ${warnings.length} of ${rounds} pending warnings within 30 s`)), 30_000);
+    })]);
+    // A timer never fires early, so each gap covers at least its backoff delay.
+    // A fixed retry of `base` spaces rounds by about 3 × base, below the
+    // 8 × base the fifth round must wait.
+    for (let index = 1; index < rounds; index++) expect(warnings[index]! - warnings[index - 1]!).toBeGreaterThanOrEqual(ownerStopRetryDelayMs(base, index - 1) - 1);
     recovered = true;
     expect(await run.done).toMatchObject({ status: "cancelled" });
-  } finally { recovered = true; spy.mockRestore(); await run.done; dropRun(requestId); }
-});
+  } finally { clearTimeout(deadline); recovered = true; spy.mockRestore(); await run.done; dropRun(requestId); }
+}, 40_000);
 
 test("normal spawn fields and final turn are used without a child or progress stream", async () => {
   const bodies: Record<string, unknown>[] = [], bound: string[] = [];
