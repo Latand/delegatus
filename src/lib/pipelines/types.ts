@@ -1,5 +1,6 @@
 import type { RuntimeEngine as FlowEngine, RuntimeRoleConfig as RoleConfig } from "@/lib/agent/runtimeConfig";
 import type { PauseResumeActor } from "@/lib/pauseResumeActor";
+import type { MergeRecovery } from "@/lib/forge/postMerge";
 import type { BackgroundWait } from "./backgroundTasks";
 
 export type PipelineAccess = "read-only" | "read-write";
@@ -1283,6 +1284,11 @@ export type PipelineRefresh = {
 };
 
 export type PipelineMerge = {
+  /** Enrolled when this release automatically lands the PR. */
+  postMergeWatch?: boolean;
+  /** Required main checks passed on this exact merge commit. */
+  postMergeVerifiedAt?: string;
+  recovery?: MergeRecovery;
   /** Durable create reservation; a missing id is replayed on the next sweep. */
   refresh?: PipelineRefresh;
   state: PipelineMergeState;

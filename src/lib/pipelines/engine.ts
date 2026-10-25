@@ -13110,6 +13110,8 @@ export function resolvePipelineCreatorLineage(
 }
 
 type CreatePipelineOptions = {
+  /** Internal controller creates may retain a structured creator without a transcript. */
+  creatorLineage?: PipelineCreatorLineage;
   refreshOf?: { pipelineId: string; base: string; lineage: PipelineCreatorLineage };
   creationRequest?: { key: string; digest: string };
   ensureTask?: BoardTask;
@@ -13245,6 +13247,8 @@ export async function createPipelineFromRequest(
     && (typeof req.src !== "string" || !req.src.trim());
   const creator = options.refreshOf
     ? { lineage: options.refreshOf.lineage }
+    : options.creatorLineage
+    ? { lineage: options.creatorLineage }
     : taskSpawn
     ? taskSpawnCreatorLineage(taskSpawn.params, ports)
     : operatorDraftWithoutLineage
