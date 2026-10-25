@@ -7,7 +7,7 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { NativeCodexQueue, NativeQueueProtocolRefusal, type NativeQueuedSubmission } from "./nativeCodexQueue";
 import { NativeQueueExecutor, withdrawNativeSeatMessage } from "./nativeQueueExecutor";
-import { StructuredSendRefusedError } from "./engineHost";
+import { StructuredDispatchDeferredError, StructuredSendRefusedError } from "./engineHost";
 import type { EngineHost } from "./engineHost";
 import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import type { NativeQueueCommand, NativeQueueProof, NativeQueueRecord } from "./nativeQueueContracts";
@@ -759,6 +759,50 @@ test("a native entry's record shows the switch it follows, the successor it wait
   await f.executor.execute(add, undefined, note);
   expect(notes).toEqual(["switching-accounts", "awaiting-host", "evidence-unreadable", "dispatching", "awaiting-turn"]);
   expect(f.calls.filter((call) => call.endsWith("/add"))).toHaveLength(1);
+  f.journal.close();
+});
+
+test("a native add deferred after preparation returns through the native queue and retries its original operation", async () => {
+  const f = fixture();
+  const add = command("op-native-admission-deferred");
+  f.journal.executeOperation(add);
+  const deferred = new NativeQueueExecutor({
+    client: f.client,
+    resolveHost: () => f.host,
+    binding: () => binding,
+    authorizeDispatch: () => { throw new StructuredDispatchDeferredError("account admission is busy"); },
+  });
+
+  expect(await deferred.execute(add)).toBe(false);
+  expect(f.journal.operationResult(add.operationId)?.receipt).toMatchObject({ status: "queued", reason: "account admission is busy" });
+  expect(f.journal.nativeQueueRead(conversationId)[0]).toMatchObject({
+    state: "admitted", mutationOperationId: add.operationId,
+    reason: "account admission is busy",
+    versions: [expect.objectContaining({ input: expect.any(Array) })],
+  });
+
+  await f.executor.execute(add);
+  expect(f.calls.filter((call) => call === "thread/queue/add")).toHaveLength(1);
+  expect(f.journal.operationResult(add.operationId)?.receipt.status).toBe("applied");
+  f.journal.close();
+});
+
+test("a persisted native effect with a legacy idempotency key stays on the native recovery path", async () => {
+  const f = fixture();
+  const legacy = { ...command("op-native-legacy-replay"), idempotencyKey: "seat-tick:legacy:replay" };
+  let executed = 0;
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => [{ id: `effect:${legacy.operationId}`, kind: "runtime.native-queue", eventSeq: 1, payload: legacy }],
+    status: async () => ({ status: "queued", at: new Date().toISOString() }),
+    transition: async () => { throw new Error("legacy native effect must not use the generic transition path"); },
+    nativeQueueExecute: async (effect) => {
+      executed += 1;
+      expect(effect).toMatchObject({ operationId: legacy.operationId, idempotencyKey: legacy.idempotencyKey, action: "add" });
+    },
+  }, () => f.host);
+
+  await queue.drain();
+  expect(executed).toBe(1);
   f.journal.close();
 });
 

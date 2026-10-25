@@ -506,6 +506,9 @@ function workerTestReader(options: Parameters<typeof createResourcesReader>[4] =
     systemMemory: 0, readFiles: 0, readHosts: 0, ppidMap: 0, processMemory: 0, attach: 0, serialization: 0,
   } };
   return createResourcesReader(async () => payload, () => null, Date.now, () => diagnostic, {
+    /* Worker-specific fixtures retain their explicit off-process contract on
+       macOS, where production selects the portable in-process collector. */
+    inProcess: false,
     readFiles: async () => [],
     initial: {
       generation: 1,
@@ -517,6 +520,16 @@ function workerTestReader(options: Parameters<typeof createResourcesReader>[4] =
     ...options,
   });
 }
+
+test.skipIf(process.platform === "linux")("the default collector stays in-process without Linux containment", async () => {
+  const payload: ResourcesPayload = { system: null, sessions: [] };
+  const read = await createResourcesReader(async () => payload, () => null, Date.now, () => ({
+    fresh: true, status: "complete" as const, durationMs: 0,
+    phases: { systemMemory: 0, readFiles: 0, readHosts: 0, ppidMap: 0, processMemory: 0, attach: 0, serialization: 0 },
+  }), { initial: null }).read(true);
+  expect(read.diagnostic).toMatchObject({ status: "complete", fresh: true });
+  expect(read.diagnostic.degradedReason).toBeUndefined();
+});
 
 describe("resource observation", () => {
   test("the packaged worker leaves writable and read-only homes and state trees byte-identical", async () => {
