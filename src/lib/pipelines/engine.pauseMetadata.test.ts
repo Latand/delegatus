@@ -1,11 +1,42 @@
 import { expect, test, harness, create, patchPipeline, loadPipelines } from "./engine.fixture";
 import { TOOL_INPUT_SCHEMAS } from "@/lib/mcp/server";
 import { viewerMcpBindings, type ViewerMcpDomainDependencies } from "@/lib/mcp/bindings";
+import { Database } from "bun:sqlite";
+import path from "node:path";
 
-test("pause persists its reason and resume date; resume clears the metadata", async () => {
+test.each([
+  ["2026-10-26T09:00Z", true],
+  ["2026-10-26T09:00+02:00", true],
+  ["2026-10-26T09:00-02:00", true],
+  ["2026-02-29T09:00Z", false],
+])("stored pause timestamp %s remains validated after a reader restart", async (at, valid) => {
   const h = harness();
   const lane = await create(h.ports);
-  const resumeCondition = { kind: "date" as const, at: "2026-11-01T12:00:00.000Z" };
+  const pause = { reason: "wait for the release window", resumeCondition: { kind: "date", at } };
+  const database = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"));
+  try {
+    // Seed bytes written by an older release, bypassing current write validation.
+    database.query("UPDATE state_rows SET value_json = json_set(value_json, '$.state', 'paused', '$.pause', json(?)), row_revision = row_revision + 1 WHERE collection = 'pipelines' AND row_key = ?")
+      .run(JSON.stringify(pause), lane.id);
+  } finally { database.close(); }
+  const reader = Bun.spawnSync([process.execPath, "-e", `
+    import { loadPipelines } from ${JSON.stringify(path.join(import.meta.dir, "store.ts"))};
+    console.log(JSON.stringify(loadPipelines().find(p => p.id === ${JSON.stringify(lane.id)})?.pause ?? null));
+  `], { env: process.env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  expect(reader.exitCode, reader.stderr.toString()).toBe(0);
+  expect(JSON.parse(reader.stdout.toString())).toEqual(valid ? pause : null);
+});
+
+test.each([
+  "2026-10-26T09:00Z",
+  "2026-10-26T09:00+02:00",
+  "2026-10-26T09:00:00Z",
+  "2026-10-26T09:00:00+02:00",
+  "2026-10-26T09:00:00.123Z",
+])("pause persists its reason and resume date %s; resume clears the metadata", async at => {
+  const h = harness();
+  const lane = await create(h.ports);
+  const resumeCondition = { kind: "date" as const, at };
   const result = await patchPipeline(lane.id, { action: "pause", reason: "wait for the release window", resumeCondition }, h.ports);
   expect(result.error).toBeUndefined();
   expect(loadPipelines().find(p => p.id === lane.id)?.pause).toEqual({ reason: "wait for the release window", resumeCondition, actor: { kind: "operator" } });
@@ -16,6 +47,8 @@ test("pause persists its reason and resume date; resume clears the metadata", as
 test.each([
   { reason: " " },
   { resumeCondition: { kind: "date", at: "not a date" } },
+  { resumeCondition: { kind: "date", at: "2026-02-29T09:00Z" } },
+  { resumeCondition: { kind: "date", at: "2026-02-29T09:00:00+02:00" } },
   { resumeCondition: { kind: "account-usage", engine: "codex", accountId: "fixture", window: "weekly", belowPercent: 101 } },
 ])("malformed pause metadata refuses the transition: %j", async patch => {
   const h = harness();

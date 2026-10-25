@@ -65,6 +65,45 @@ async function withProtocolClient<T>(
   }
 }
 
+test.each([
+  "2026-10-26T09:00Z",
+  "2026-10-26T09:00+02:00",
+  "2026-10-26T09:00-02:00",
+  "2026-10-26T09:00:00Z",
+  "2026-10-26T09:00:00+02:00",
+  "2026-10-26T09:00:00.123Z",
+])("pipeline_action dispatches pause date %s without changing its precision", async at => {
+  const received: unknown[] = [];
+  await withProtocolClient(inertBindings({ pipeline_action: async args => { received.push(args); return {}; } }), async client => {
+    const resumeCondition = { kind: "date", at };
+    const result = await client.callTool({ name: "pipeline_action", arguments: {
+      clientRequestId: "pause-date", pipelineId: "paused-fixture", action: "pause", resumeCondition,
+    } });
+    expect(result.isError).not.toBe(true);
+    expect(received).toEqual([expect.objectContaining({ action: "pause", resumeCondition })]);
+  });
+});
+
+test.each([
+  "2026-02-29T09:00Z",
+  "2026-02-29T09:00:00+02:00",
+  "2026-10-26T24:00Z",
+  "2026-10-26T09:60Z",
+  "2026-10-26T09:00+02:60",
+  "2026-10-26T09:00",
+  "not a date",
+])("pipeline_action rejects invalid pause date %s before dispatch", async at => {
+  let calls = 0;
+  await withProtocolClient(inertBindings({ pipeline_action: async () => { calls++; return {}; } }), async client => {
+    const result = await client.callTool({ name: "pipeline_action", arguments: {
+      clientRequestId: "invalid-pause-date", pipelineId: "paused-fixture", action: "pause",
+      resumeCondition: { kind: "date", at },
+    } });
+    expect(result.isError).toBe(true);
+    expect(calls).toBe(0);
+  });
+});
+
 function requiredRoleParams(role: ReturnType<typeof listRoles>[number]): Record<string, string | number> {
   return Object.fromEntries(role.parameters.map((parameter) => {
     if (parameter.default !== undefined) return [parameter.key, parameter.default];
