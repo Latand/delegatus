@@ -7049,6 +7049,7 @@ async function spawnRunStage(
         if (remainingMs <= 0) {
           const failure = pipeline.stateDetail?.match(/^stage spawn deferred: (.*); retry at /)?.[1];
           throw failure && (isTransientStructuredSpawnFailure(failure) || isLaunchAdmissionContention(new Error(failure))) ? new Error(failure)
+            : wait && budgetMs === SPAWN_CONTROLLER_WAIT_BUDGET_MS ? new Error("structured delivery controller is unavailable")
             : new RegistryWriterBusyError("spawn admission", "lane deadline exhausted");
         }
         spawned = await ports.spawnAgent({

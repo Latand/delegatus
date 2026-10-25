@@ -492,12 +492,14 @@ test("a controller that never returns parks the stage with the wait it spent (#1
   /* The budget is wall-clock, so the schedule stops exactly on it. */
   expect(scheduled).toEqual([1_000, 2_000, 4_000, 8_000, 8_000, 7_000]);
   expect(scheduled.reduce((total, delay) => total + delay, 0)).toBe(30_000);
-  expect(spawnCalls).toBe(scheduled.length + 1);
+  // Exhaustion parks before a new spawn can be admitted at the cutoff.
+  expect(spawnCalls).toBe(scheduled.length);
   /* Nothing was slept through inside the pipelines phase. */
   expect(slept).toEqual([]);
   expect(parked.state).toBe("needs_decision");
   expect(parked.stateDetail).toContain("structured delivery controller is unavailable");
   expect(parked.stateDetail).toContain("6 retries over 30s");
+  expect(parked.runs[0]!.attempts[0]!.controllerWait).toMatchObject({ budgetMs: 30_000, retryMaxMs: 8_000 });
 });
 
 test("the controller wait counts the time a failing spawn attempt spent (#1191)", async () => {
