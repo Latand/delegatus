@@ -11,12 +11,13 @@ const pauseDateSchema = z.union([
 export const pipelineResumeConditionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("date"), at: pauseDateSchema }).strict(),
   z.object({ kind: z.literal("account-usage"), engine: z.enum(["claude", "codex", "copilot"]),
-    accountId: z.string().trim().min(1).max(200), window: z.enum(["session", "weekly"]),
+    accountId: z.string().trim().min(1).max(200).refine(value => value.length <= 200), window: z.enum(["session", "weekly"]),
     belowPercent: z.number().min(0).max(100) }).strict(),
 ]);
 
 export const pipelinePauseInputSchema = z.object({
-  reason: z.string().trim().min(1).max(2000).default("No pause reason supplied"),
+  // Preserve the existing UTF-16 bound across Zod's code-point length change.
+  reason: z.string().trim().min(1).max(2000).refine(value => value.length <= 2000).default("No pause reason supplied"),
   resumeCondition: pipelineResumeConditionSchema.optional(),
 });
 

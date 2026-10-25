@@ -34,6 +34,23 @@ function inertBindings(overrides: Partial<McpToolBindings> = {}): McpToolBinding
   } as McpToolBindings;
 }
 
+test.each([100, 101])("pipeline_action account id with %i supplementary characters keeps its UTF-16 bound before dispatch", async count => {
+  const received: unknown[] = [];
+  const resumeCondition = { kind: "account-usage", engine: "codex", accountId: "🎵".repeat(count), window: "weekly", belowPercent: 80 };
+  await withProtocolClient(inertBindings({ pipeline_action: async args => { received.push(args); return { ok: true }; } }), async client => {
+    const result = await client.callTool({ name: "pipeline_action", arguments: {
+      clientRequestId: "unicode-account", pipelineId: "paused-fixture", action: "pause", resumeCondition,
+    } });
+    if (count === 100) {
+      expect(result.isError).not.toBe(true);
+      expect(received).toEqual([expect.objectContaining({ resumeCondition })]);
+    } else {
+      expect(result.isError).toBe(true);
+      expect(received).toEqual([]);
+    }
+  });
+});
+
 test("agent_fleet advertises summary-first filters and bounded detail through the protocol", async () => {
   let received: unknown;
   await withProtocolClient(inertBindings({ agent_fleet: async args => { received = args; return { agents: { live: 0 } }; } }), async client => {

@@ -5,6 +5,36 @@ import { Database } from "bun:sqlite";
 import path from "node:path";
 
 test.each([
+  ["🎵".repeat(1000), true],
+  ["🎵".repeat(1000) + "a", false],
+  ["🎵".repeat(1001), false],
+])("Unicode pause reason boundary %# keeps its UTF-16 bound through writes and a reader restart", async (reason, valid) => {
+  const h = harness();
+  const lane = await create(h.ports);
+  const before = loadPipelines().find(p => p.id === lane.id)!;
+  const result = await patchPipeline(lane.id, { action: "pause", reason: ` ${reason} ` }, h.ports);
+  if (valid) {
+    expect(result.error).toBeUndefined();
+    expect(loadPipelines().find(p => p.id === lane.id)?.pause?.reason).toBe(reason);
+  } else {
+    expect(result.status).toBe(400);
+    expect(loadPipelines().find(p => p.id === lane.id)).toEqual(before);
+  }
+  // Read the same old-format record through the independent stored-record validator.
+  const database = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"));
+  try {
+    database.query("UPDATE state_rows SET value_json = json_set(value_json, '$.state', 'paused', '$.pause', json(?)), row_revision = row_revision + 1 WHERE collection = 'pipelines' AND row_key = ?")
+      .run(JSON.stringify({ reason }), lane.id);
+  } finally { database.close(); }
+  const reader = Bun.spawnSync([process.execPath, "-e", `
+    import { loadPipelines } from ${JSON.stringify(path.join(import.meta.dir, "store.ts"))};
+    console.log(JSON.stringify(loadPipelines().find(p => p.id === ${JSON.stringify(lane.id)})?.pause ?? null));
+  `], { env: process.env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  expect(reader.exitCode, reader.stderr.toString()).toBe(0);
+  expect(JSON.parse(reader.stdout.toString())).toEqual(valid ? { reason } : null);
+});
+
+test.each([
   ["2026-10-26T09:00Z", true],
   ["2026-10-26T09:00+02:00", true],
   ["2026-10-26T09:00-02:00", true],
