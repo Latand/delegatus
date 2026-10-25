@@ -1,5 +1,5 @@
 import { askGist, spokenDecline } from "./liveGate";
-import { CALL_MEMORY_BUDGET, sameCallOwner, type CallMemory } from "./callMemory";
+import { CALL_MEMORY_BUDGET, carriesAddedResult, sameCallOwner, type CallMemory } from "./callMemory";
 import { callChain, chainRecord, continuationBlock, DROP_REASONS, RESUME_WINDOW_MS, spoke, STALE_BROWSER_MS, type CallSegment } from "./callResume";
 import type { OwnerHistoryRead } from "@/lib/externalRelay/ownerHistory";
 import { createHash, randomUUID } from "node:crypto";
@@ -78,6 +78,10 @@ const spokenArguments = (text: unknown): string[] => {
 const nameWords = (name: string): string[] => name.replace(/(\p{Ll})(\p{Lu})/gu, "$1 $2").toLowerCase().split(/[^\p{L}\p{N}']+/u).filter(Boolean);
 /** Delegation results after which a request was made: the operator turn's one send is spent. */
 const SENDING_STATUSES = new Set(["sent", "awaiting_confirmation", "failed"]);
+/** Whether a call's answer put private content before the model: a Telegram group read, or a private server's answer
+ * whatever its status, an error's text included. */
+const privateAnswer = (name: string, privateServer: boolean, output: Record<string, unknown> | null) => name === "relay_owner_history"
+  ? output?.status === "done" : privateServer && (output?.status === "done" || typeof output?.content === "string");
 interface ActiveSession {
   projectDirectory: string;
   id: string; providerId: string; transcript: LiveTranscript; connection?: LiveConnection;
@@ -285,6 +289,17 @@ export class CompanionLiveSessions {
       clean: text => withoutLocalPaths(withoutCredentials(text, secrets)) }) : "";
     const notes = this.options.memory?.notes(input.startedBy, resumed ? { exclude: new Set(resumed.segments.map(row => row.id)), budget: CALL_MEMORY_BUDGET - continuation.length - 1 } : {});
     const memory = [continuation, notes?.block ?? ""].filter(Boolean).join("\n");
+    // A part that continues a call in which an added tool answered keeps its gates held: the voice's words from that
+    // answer carry over in the conversation it starts with. So does a call whose earlier-call notes include such a call.
+    // Its start records that, so its own replies stay out of its notes and the calls whose notes include it hold the
+    // gates as well, after the call that answered has left their window.
+    const addedResultSeen = notes?.addedResult === true || resumed?.segments.some(segment => carriesAddedResult(segment.entries)) === true;
+    if (addedResultSeen) {
+      try {
+        const start = this.admission.transcriptRecord(id).entries.find(row => row.kind === "session_start")!;
+        this.admission.record(id, { ...start, data: { ...start.data, addedResult: true } });
+      } catch (error) { this.storage.settle(id, 0); this.admission.retire(id); throw error; }
+    }
     const projects = cleanStrings(directoryProjects, text => withoutLocalPaths(withoutCredentials(text, secrets)));
     const directoryRows: typeof projects = [];
     for (const row of projects) { if (Buffer.byteLength(JSON.stringify([...directoryRows, row])) > 1900) break; directoryRows.push(row); }
@@ -292,9 +307,7 @@ export class CompanionLiveSessions {
     const active: ActiveSession = { id, memory, projectDirectory, providerId: "", transcript: new LiveTranscript(secrets), provider, codex, key, secrets, queue: [], seen: new Set(), inputGeneration: 0, inputHandledMs: 0, runningTurns: new Set(),
       delegations: new Set(), reads: new Map(), reading: new Map(), backend: new Set(), abort: new AbortController(), timers: [], ended: false, endRequested: false, lastSeen: this.now(),
       createdAt: this.now(), voiceAllowanceSeconds: LIVE_SESSION_LIMIT_MS / 1_000, codexTurns: new Map(), privateKinds: new Set(), voiceTools, addedAsks: new Map(), sendTurns: new Set(), actedTurns: new Set(),
-      // A part that continues a call in which an added tool answered keeps its gates held: the voice's words from that
-      // answer carry over in the conversation it starts with. So does a call whose earlier-call notes include such a call.
-      ...(notes?.addedResult || resumed?.segments.some(segment => segment.entries.some(row => row.kind === "tool" && row.data.addedResult === true)) ? { addedResultSeen: true } : {}) };
+      ...(addedResultSeen ? { addedResultSeen: true } : {}) };
     this.active.set(id, active);
     active.releaseState = this.storage.hold(id);
     // Recorded before the provider is asked: a lost answer or a stop before the
@@ -468,8 +481,10 @@ export class CompanionLiveSessions {
   }
   private transcript(active: ActiveSession, snapshots: ReturnType<LiveTranscript["finish"]>): void {
     for (const event of snapshots) {
+      // The voice's words written once an added tool answered may carry its text, even in a reply begun before the handoff.
       this.admission.record(active.id, { id: event.itemId, kind: event.speaker === "operator" ? "utterance" : "reply", atMs: event.startMs ?? 0,
-        data: { text: event.text, final: event.final, startMs: event.startMs, endMs: event.endMs, fragments: active.transcript.timingsOf(event.itemId) } }, event.final);
+        data: { text: event.text, final: event.final, startMs: event.startMs, endMs: event.endMs, fragments: active.transcript.timingsOf(event.itemId),
+          ...(event.speaker !== "operator" && active.addedResultSeen ? { afterAddedResult: true } : {}) } }, event.final);
       if (event.speaker === "operator") this.admission.input(active.id, { itemId: event.itemId, text: event.text, final: event.final,
         ...(active.transcript.turnOf(event.itemId) !== undefined ? { turn: active.transcript.turnOf(event.itemId) } : {}) }, { startMs: event.startMs, endMs: event.endMs });
       else this.admission.emit(active.id, event);
@@ -684,7 +699,7 @@ export class CompanionLiveSessions {
           const toolResult = await this.tool(active, item, delegationId, sourceTurn, waiting?.proposalId ?? null, project, attempt, ownerHistoryInContext, privateFrom, addedInContext);
           const resultObject = jsonObject(toolResult);
           const added = findSnapshotTool(active.voiceTools, String(item.name));
-          if (resultObject?.status === "done" && (item.name === "relay_owner_history" || added?.server.private)) ownerHistoryInContext = true;
+          if (privateAnswer(String(item.name), added?.server.private === true, resultObject)) ownerHistoryInContext = true;
           if (added && typeof resultObject?.content === "string") addedInContext = true;
           tried.push(triedTool(String(item.name), replayArguments, String(resultObject?.speech ?? "no answer")));
           if (DELEGATION_TOOLS.has(String(item.name)) && resultObject) {
@@ -863,7 +878,7 @@ export class CompanionLiveSessions {
       const output = jsonObject(result);
       settleSend(output?.status);
       if (added && typeof output?.content === "string") active.addedResultSeen = true;
-      const privateRead = output?.status === "done" && (name === "relay_owner_history" || added?.server.private === true);
+      const privateRead = privateAnswer(name, added?.server.private === true, output);
       if (privateRead) {
         active.privateHistory = true;
         active.privateFrom ??= privateFrom;
