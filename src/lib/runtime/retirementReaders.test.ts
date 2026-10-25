@@ -250,6 +250,36 @@ test("startup does not prepare an unused snapshot before asking for pipeline evi
   } finally { observed.mockRestore(); registry.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test("restart recognition, transcript refresh and adoption selection read only current hosted conversations", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-hosted-readers-"));
+  const results: number[] = [];
+  try {
+    for (const history of [10, 100]) {
+      const directory = path.join(root, String(history)); fs.mkdirSync(directory);
+      const filename = path.join(directory, "registry.sqlite");
+      const store = new SqliteAgentRegistryStore(filename, { initialSnapshot: seeded(directory, history), normalize: normalizeRegistry });
+      while (store.archiveInactive(1000)) { /* Retained history is deliberately cold. */ }
+      store.close();
+      let reads = 0;
+      const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, {
+        sqliteMode: "sqlite", onSqliteRowPayloadRead: (collection, count) => { if (collection === "conversations") reads += count; },
+      });
+      const boundary = new Error("adoption selection reached");
+      try {
+        reads = 0;
+        await expect(adoptStructuredHostsAtStartup({
+          registry, client: null, orchestratorSeats: () => [],
+          pipelineEvidence: () => ({ settled: new Set(), deferred: new Set() }),
+          adopt: async () => { throw boundary; },
+        })).rejects.toBe(boundary);
+        results.push(reads);
+      } finally { registry.close(); }
+    }
+    expect(results[0]).toBeGreaterThan(0);
+    expect(results[1]).toBe(results[0]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 
 test("a production host membership recheck never rebuilds the global snapshot", async () => {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),"startup-keyed-snapshot-"));

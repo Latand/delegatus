@@ -657,6 +657,19 @@ export async function* startupConversationRows(snapshot: RegistryFile, options?:
   check();
 }
 
+/** These phases only inspect conversations whose current generation has a
+    structured host. Resolve those generations through the existing index. */
+async function* startupHostedConversationRows(snapshot: RegistryFile) {
+  for (const entry of await startupStructuredHostEntries(snapshot, assertStartupReadActive)) {
+    const key = sessionKeyId(entry.key);
+    for (const conversation of registryConversationsForEntryKey(snapshot, key)) {
+      assertStartupReadActive();
+      const generation = conversation.generations.at(-1);
+      if (generation && sessionKeyId({ engine: conversation.engine, sessionId: generation.id }) === key) yield conversation;
+    }
+  }
+}
+
 async function restartCutTargets(
   registry: AgentRegistry,
   seats: readonly OrchestratorSeat[],
@@ -684,7 +697,7 @@ async function restartCutTargets(
   }
   const recognition: RestartCutRecognition = { cuts: [], undecided: new Set(), settled: new Set(), stamps: new Map(), disproved: [] };
   const self = captureProcessIdentity(process.pid);
-  for await (const conversation of startupConversationRows(snapshot)) {
+  for await (const conversation of startupHostedConversationRows(snapshot)) {
     const generation = conversation.generations.at(-1);
     if ((conversation.engine !== "claude" && conversation.engine !== "codex") || !generation || conversation.supersededBy) continue;
     const conversationId = registry.canonicalConversationId(conversation.id);
@@ -1513,7 +1526,7 @@ async function refreshStructuredTranscriptState(
   const snapshot = await preparedStartupSnapshot(registry);
   const observedAt = new Date().toISOString();
   const candidates: Array<{ conversation: RegistryFile["conversations"][string]; generation: RegistryFile["conversations"][string]["generations"][number]; hostKey: string }> = [];
-  for await (const conversation of startupConversationRows(snapshot)) {
+  for await (const conversation of startupHostedConversationRows(snapshot)) {
     const generation = conversation.generations.at(-1);
     if (!generation) continue;
     const hostKey = sessionKeyId({ engine: conversation.engine, sessionId: generation.id });
@@ -1738,7 +1751,7 @@ async function structuredStartupAdoptionFilter(
 ): Promise<StartupAdoptionFilter> {
   const snapshot = prepared ?? await preparedStartupSnapshot(registry);
   const conversationsByCurrentEntry = new Map<string, RegistryFile["conversations"][string]>();
-  for await (const conversation of startupConversationRows(snapshot)) {
+  for await (const conversation of startupHostedConversationRows(snapshot)) {
     const generation = conversation.generations.at(-1);
     if (generation) conversationsByCurrentEntry.set(sessionKeyId({ engine: conversation.engine, sessionId: generation.id }), conversation);
   }
