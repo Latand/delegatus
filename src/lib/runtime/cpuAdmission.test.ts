@@ -26,6 +26,68 @@ function fixture(unpolledMs = Number.POSITIVE_INFINITY) {
 }
 const FOREIGN = `stage:${"b".repeat(64)}:895e3de4:plan:1`, LIVE = `stage:${"0".repeat(64)}:762633d8:build:1`;
 
+test("heavy gate readiness and claims keep the pressure fence across process restart and the fairness bound", () => {
+  const f = fixture(), owner = captureProcessIdentity(process.pid);
+  const script = `const { CpuAdmissionQueue } = await import(process.argv[1]); const q = new CpuAdmissionQueue(process.argv[2], () => Number(process.argv[3])); try { process.stdout.write(JSON.stringify(q.check("command:heavy", process.argv[4] === "low", JSON.parse(process.argv[5]), process.argv[6] === "claim", undefined, true))); } finally { q.close(); }`;
+  const check = (at: number, low: boolean, claim: boolean) => {
+    const result = spawnSync(process.execPath, ["-e", script, path.join(import.meta.dir, "cpuAdmission.ts"), f.file, String(at), low ? "low" : "high", JSON.stringify(owner), claim ? "claim" : "peek"], { encoding: "utf8", env: process.env });
+    expect(result.status, result.stderr).toBe(0);
+    return JSON.parse(result.stdout);
+  };
+  expect(check(0, false, false)).toMatchObject({ position: 1, since: 0 });
+  expect(check(CPU_QUEUE_MAX_WAIT_MS + 1, false, false)).toMatchObject({ position: 1, since: 0 });
+  expect(check(CPU_QUEUE_MAX_WAIT_MS + 1, true, false)).toBeNull();
+  // Pressure can rise between readiness and the shell acquiring its slot.
+  expect(check(CPU_QUEUE_MAX_WAIT_MS + 1, false, true)).toMatchObject({ position: 1, since: 0 });
+  expect(check(CPU_QUEUE_MAX_WAIT_MS + 1, true, true)).toBeNull();
+});
+
+test.each(["stage", "workflow"])("a gate held for pressure at the head lets a %s start at its own bound; gates keep FIFO", prefix => {
+  const f = fixture(), owner = captureProcessIdentity(process.pid), gates = f.open(), key = `${prefix}:s`;
+  const gate = (name: string, low = false) => gates.check(name, low, owner, true, undefined, true);
+  expect(gate("command:gate")).toMatchObject({ since: 0, position: 1 });
+  f.at(1_000);
+  // The stage's checker is another connection, as the Viewer is.
+  const stages = f.open();
+  expect(stages.check(key, false)).toMatchObject({ since: 1_000, position: 2 });
+  f.at(2_000);
+  expect(gate("command:later")).toMatchObject({ position: 3 });
+  // Before its own bound the stage still waits behind the gate.
+  f.at(1_000 + CPU_QUEUE_MAX_WAIT_MS - 1);
+  expect(gate("command:gate")).toMatchObject({ position: 1 });
+  expect(stages.check(key, false)).toMatchObject({ position: 2 });
+  f.at(1_000 + CPU_QUEUE_MAX_WAIT_MS);
+  expect(stages.check(key, false)).toBeNull();
+  // The gate still waits under pressure, and the later gate stays behind it.
+  for (const minute of [30, 60]) {
+    f.at(minute * 60_000);
+    expect(gate("command:gate")).toMatchObject({ since: 0, position: 1 });
+    expect(gate("command:later")).toMatchObject({ position: 2 });
+  }
+  // Low pressure admits the gates in order, spaced.
+  f.at(60 * 60_000 + 1);
+  expect(gate("command:later", true)).toMatchObject({ position: 2 });
+  expect(gate("command:gate", true)).toBeNull();
+  expect(gate("command:later", true)).toMatchObject({ position: 1, remainingMs: CPU_QUEUE_SPACING_MS });
+  f.at(60 * 60_000 + 1 + CPU_QUEUE_SPACING_MS);
+  expect(gate("command:later", true)).toBeNull();
+});
+
+test("a stage past its bound under pressure still waits for spacing and for an older stage ahead of a held gate", () => {
+  const f = fixture(), owner = captureProcessIdentity(process.pid), q = f.open();
+  q.check("stage:older", false);
+  f.at(1_000); q.check("command:gate", false, owner, true, undefined, true);
+  f.at(2_000); q.check("stage:newer", false);
+  f.at(2_000 + CPU_QUEUE_MAX_WAIT_MS);
+  // Only the held gate is passed; the older stage keeps its place.
+  expect(q.check("stage:newer", false)).toMatchObject({ position: 2 });
+  expect(q.check("stage:older", false)).toBeNull();
+  expect(q.check("stage:newer", false)).toMatchObject({ position: 1, remainingMs: CPU_QUEUE_SPACING_MS });
+  f.at(2_000 + CPU_QUEUE_MAX_WAIT_MS + CPU_QUEUE_SPACING_MS);
+  expect(q.check("stage:newer", false)).toBeNull();
+  expect(q.check("command:gate", false, owner, true, undefined, true)).toMatchObject({ position: 1 });
+});
+
 test("priority orders levels strictly and preserves FIFO within each level despite reverse polling", () => {
   const f = fixture(), q = f.open(), tasks = priorityTasks(f.file);
   const entries = [["low-first", "low"], ["normal-first", "normal"], ["high-first", "high"], ["low-second", "low"], ["normal-second", "normal"], ["high-second", "high"]] as const;
@@ -184,7 +246,10 @@ test("the gate helper inherits a publication's task binding through wait and fre
   const q = new CpuAdmissionQueue(path.join(directory, "admission.sqlite"), () => observerTime); queues.push(q);
   const owner = captureProcessIdentity(process.pid);
   const env = { ...process.env, ...cpuPriorityEnv(tasks.source(["first"])), LLV_GATE_LOCK_DIR: directory,
-    LLV_GATE_SLOTS: "1", LLV_GATE_SLOT_LEASE: "", DELEGATUS_CPU_PRESSURE: "off" };
+    LLV_GATE_SLOTS: "1", LLV_GATE_SLOT_LEASE: "", DELEGATUS_CPU_PRESSURE: "off",
+    // Both checkers stay in this PID namespace; the queue's default observer
+    // and its recorded owner use local identities, with no service handoff.
+    LLV_SIGNAL_SANDBOX: undefined };
   const run = async (mode: string) => {
     const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "../../../scripts/cpu-admission.ts"), mode, "command:publication-gate", String(process.pid)], { env, stdout: "pipe", stderr: "pipe" });
     const [out, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
