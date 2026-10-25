@@ -15167,7 +15167,13 @@ export async function patchPipeline(
         await persist(); requestPipelineTick();
         return { pipeline };
       }
-      if (stage?.kind === "run" && attempt && !attempt.report && !attempt.verdict && ["running", "needs_decision"].includes(pipeline.state)
+      const unreservedSpawnRetry = stage?.kind === "run" && attempt && !attempt.launchId
+        && isStructuredSpawnPark(pipeline, attempt) && pipeline.state === "needs_decision";
+      if (unreservedSpawnRetry) {
+        const refusal = unreservedStageRetryRefusal(pipeline, stage, attempt);
+        if (refusal) return { error: refusal, status: 409 };
+      }
+      if (!unreservedSpawnRetry && stage?.kind === "run" && attempt && !attempt.report && !attempt.verdict && ["running", "needs_decision"].includes(pipeline.state)
         && (attempt.suspension || stageAccountBlocked(pipeline, attempt, ports))) {
         if (attempt.suspension?.operatorStoppedAt) {
           attempt.suspension.requestedAt = ports.now();
@@ -15177,12 +15183,6 @@ export async function patchPipeline(
         await reconcileStageAccountGuard(pipeline, stage, attempt, ports, persist);
         await persist(); requestPipelineTick();
         return { pipeline };
-      }
-      const unreservedSpawnRetry = stage?.kind === "run" && attempt && !attempt.launchId
-        && isStructuredSpawnPark(pipeline, attempt) && pipeline.state === "needs_decision";
-      if (unreservedSpawnRetry) {
-        const refusal = unreservedStageRetryRefusal(pipeline, stage, attempt);
-        if (refusal) return { error: refusal, status: 409 };
       }
       if (!unreservedSpawnRetry && stage?.kind === "run" && attempt?.restartContext?.previousAttempt !== undefined
         && isStructuredSpawnPark(pipeline, attempt) && !attempt.report
@@ -15414,6 +15414,9 @@ export async function patchPipeline(
       if (unreservedSpawnRetry) {
         const refusal = unreservedStageRetryRefusal(pipeline, stage, attempt);
         if (refusal) return { error: refusal, status: 409 };
+        // Account recovery must not reopen this settled reservation on a later tick.
+        attempt.state = "failed";
+        attempt.completedAt ??= ports.now();
       }
       resetStageForRetry(pipeline, stage);
       recordHandLaunch(pipeline, actor, ports.now());

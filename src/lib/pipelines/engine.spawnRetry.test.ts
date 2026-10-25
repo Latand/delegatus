@@ -81,6 +81,29 @@ test.each(["spawnCalls", "conversationId", "sessionId", "agentPath", "paneId"] a
   } finally { f.close(); }
 });
 
+test.each([false, true].flatMap(suspended => [false, true].map(receipt => ({ suspended, receipt }))))
+("account recovery cannot bypass the launch receipt fence: %j", async ({ suspended, receipt }) => {
+  const f = await unreservedPark();
+  try {
+    f.attempt.accountId = "blocked";
+    if (suspended) f.attempt.suspension = { reason: "account", detail: "account guard", requestedAt: f.h.ports.now() };
+    savePipelines([f.lane]);
+    f.h.ports.accountExhausted = (_engine, accountId) => accountId === "blocked";
+    if (receipt) f.reserve(1);
+    const result = await patchPipeline(f.lane.id, { action: "retry-stage" }, f.h.ports);
+    if (receipt) expect(result).toMatchObject({ status: 409, error: expect.stringContaining("a reserved receipt") });
+    else {
+      expect(result.error).toBeUndefined();
+      expect(loadPipelines()[0]!.runs[0]!.attempts[1]).toMatchObject({ state: "failed", completedAt: expect.any(String) });
+      await tickPipelines([], f.h.ports);
+      await tickPipelines([], f.h.ports);
+      expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)).toMatchObject({ n: 3, state: "running" });
+      expect(f.h.spawnInputs).toHaveLength(1);
+    }
+    expect(f.h.calls.filter(call => call.startsWith("stop-host:plan:2:"))).toHaveLength(0);
+  } finally { f.close(); }
+});
+
 test("retry-stage rechecks reservation absence after cleanup yields", async () => {
   const f = await unreservedPark();
   const read = f.registry.spawnReceiptForClientAttempt.bind(f.registry);
@@ -110,11 +133,16 @@ test("retry-stage refuses when durable spawn receipts cannot be read", async () 
   } finally { seam.mockRestore(); f.close(); }
 });
 
-test.each([{ receipt: false }, { receipt: true }])("retry-stage reads durable admission evidence after a controller restart: %j", async ({ receipt }) => {
+test.each([false, true].flatMap(suspended => [false, true].map(receipt => ({ suspended, receipt }))))
+("retry-stage reads durable admission evidence after a controller restart: %j", async ({ receipt, suspended }) => {
   const f = await unreservedPark();
   let restartedRegistry: InstanceType<typeof AgentRegistry> | undefined;
   let registryClosed = false;
   try {
+    if (suspended) {
+      f.attempt.suspension = { reason: "account", detail: "account guard", requestedAt: f.h.ports.now() };
+      savePipelines([f.lane]);
+    }
     if (receipt) f.reserve(1);
     f.registry.close();
     registryClosed = true;
