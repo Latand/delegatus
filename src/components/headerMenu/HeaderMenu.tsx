@@ -15,6 +15,7 @@ import { openLinkedSettings } from "@/components/links/openLinkedSettings";
 import { KeysImportPage, KeysMenuPage, KeysStateWord } from "@/components/keys/KeysSection";
 import { onOpenKeys, pendingKeys, settleKeys } from "@/components/keys/openKeys";
 import { MemoryPanel, MemoryReadingProvider, MemoryStateWord } from "@/components/memory/MemoryPage";
+import { MemorySourceRow } from "@/components/memory/MemorySourceRow";
 import { MobileMenuSheet, type MobileMenuEntry } from "@/components/mobile/MobileMenuSheet";
 import type { MobileNav } from "@/components/mobile/mobileNav";
 import { onboardingMobileMenuEntries } from "@/components/onboarding/menuEntries";
@@ -213,6 +214,8 @@ export function HeaderMenuPanel({ project, onClose }: { project: string | null; 
             <ChevronRight className="h-4 w-4 shrink-0 text-muted" aria-hidden />
           </button>
         );
+      case "memorySource":
+        return <MemorySourceRow key={item} />;
       case "key":
         return (
           <button key={item} type="button" data-rail-menu-keys="" className={`${ROW} py-1`} onClick={() => open("keys")}>
@@ -419,6 +422,8 @@ function PhoneMenu({ title, project, nav, create = [], board, rules = [], onClos
         return { kind: "custom", key: "awake", node: <div className="px-2.5"><KeepAwakeMenuRow /></div> };
       case "memory":
         return row("memory", Brain, t("headerMenu.memory"), () => go("memory"), <><MemoryStateWord size="sheet" />{chevron}</>);
+      case "memorySource":
+        return { kind: "custom", key: "memory-source", node: <MemorySourceRow phone /> };
       case "key":
         return row("keys", KeyRound, t("keys.title"), () => go("keys"), <><KeysStateWord size="sheet" />{chevron}</>);
       case "mapping":

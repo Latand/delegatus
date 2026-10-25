@@ -81,10 +81,13 @@ const DESKTOP = { width: 1440, height: 896 };
 /* In progress holds the wide share, so a whole Done column and a stage chain
    on one line need more room. */
 const WIDE = { width: 1728, height: 944 };
-/* A phone frame at 392 × 848 px: Chrome printed a 390 × 844 px page as
+/* A phone frame at 416 × 848 px: Chrome printed a 390 × 844 px page as
    293.04 × 633.12 pt instead of 292.5 × 633, so its vector drew the frame a
-   fraction smaller than its PNG. Sizes in multiples of 8 px print exact. */
-const PHONE = { width: 392, height: 848 };
+   fraction smaller than its PNG. Sizes in multiples of 8 px print exact. At
+   392 px the conversation bar's meta line («done · 30m ago · Opus 5.5 · high»)
+   ran 16 px past its cell and the bar cut the reasoning tier to «h». 416 px,
+   the nearest multiple of 8 above a common 412 px phone, draws it whole. */
+const PHONE = { width: 416, height: 848 };
 
 const clickLabel = (page: Page, label: string) => page.locator(`[aria-label="${label}"]`).first().click();
 const clickText = (page: Page, text: string) => page.getByText(text, { exact: false }).first().click();
@@ -144,6 +147,113 @@ async function alignReadersToMessages(page: Page, scope: string): Promise<void> 
   }, scope);
 }
 
+/* A reader resting on the tail of its conversation can stop with a line of
+   text under its top edge, which the frame shows as loose glyph fragments.
+   The feed gets just enough room under its tail for its top edge to fall in
+   the gap above a whole line. */
+export async function alignFeedsToWholeLines(page: Page, scope: string): Promise<void> {
+  await page.evaluate((scope) => {
+    for (const scroller of document.querySelectorAll<HTMLElement>(`${scope} [data-log-feed-scroller]`)) {
+      if (scroller.scrollHeight - scroller.clientHeight <= 0) continue;
+      const edge = scroller.getBoundingClientRect().top;
+      const lines: { top: number; bottom: number }[] = [];
+      const walker = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.textContent?.trim()) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const box of range.getClientRects()) if (box.width > 0 && box.height > 0) lines.push({ top: box.top, bottom: box.bottom });
+      }
+      const cuts = (at: number) => lines.some((line) => line.top < at - 0.01 && line.bottom > at + 0.01);
+      let shift = 0;
+      while (shift < scroller.clientHeight && cuts(edge + shift)) shift += 1;
+      if (shift === 0) continue;
+      /* Rest on the first whole line rather than in the gap above it. */
+      const next = Math.min(...lines.map((line) => line.top).filter((top) => top >= edge + shift));
+      if (Number.isFinite(next) && !cuts(edge + Math.floor(next - edge))) shift = Math.floor(next - edge);
+      const padding = Number.parseFloat(getComputedStyle(scroller).paddingBottom) || 0;
+      scroller.style.setProperty("padding-bottom", `${padding + shift}px`, "important");
+      scroller.scrollTop = scroller.scrollHeight;
+    }
+  }, scope);
+}
+
+/** Every line of text the frame draws is whole: none crosses the frame's
+    edge, and none is cut by a box that clips it without an ellipsis (a
+    scrolling feed's top edge, a meta line that runs out of room). A line
+    scrolled wholly out of its box is not drawn and passes. Sideways scrolling
+    boxes (code blocks) and ellipsis or line-clamp truncation are the product's
+    own way of shortening a line and pass. */
+export async function assertTextWhole(page: Page, shot: Pick<ReadmeShot, "id" | "viewport">, crop: CropRect | null = null): Promise<void> {
+  const frame = crop ?? { x: 0, y: 0, ...shot.viewport };
+  const cut = await page.evaluate((frame) => {
+    const tolerance = 1;
+    const crosses = (low: number, high: number, edgeLow: number, edgeHigh: number) =>
+      high > edgeLow + tolerance && low < edgeHigh - tolerance && (low < edgeLow - tolerance || high > edgeHigh + tolerance);
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const text = node.textContent?.trim();
+      const owner = node.parentElement;
+      if (!text || !owner) continue;
+      const ownStyle = getComputedStyle(owner);
+      if (ownStyle.visibility !== "visible" || owner.closest('[aria-hidden="true"], .sr-only')) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const line of range.getClientRects()) {
+        if (line.width < 1 || line.height < 1) continue;
+        /* What a truncating box keeps of the line is all that is drawn. */
+        const box = { left: line.left, right: line.right, top: line.top, bottom: line.bottom };
+        /* Off the frame altogether: not drawn. */
+        if (box.right <= frame.x || box.left >= frame.x + frame.width || box.bottom <= frame.y || box.top >= frame.y + frame.height) continue;
+        let hidden = false;
+        let clippedBy: string | null = null;
+        /* The part of the line left on screen, where the occlusion test looks. */
+        let shown = { left: Math.max(box.left, frame.x), right: Math.min(box.right, frame.x + frame.width), top: Math.max(box.top, frame.y), bottom: Math.min(box.bottom, frame.y + frame.height) };
+        for (let parent: HTMLElement | null = owner; parent && parent !== document.documentElement; parent = parent.parentElement) {
+          const style = getComputedStyle(parent);
+          const clipX = /(hidden|clip|auto|scroll)/.test(style.overflowX);
+          const clipY = /(hidden|clip|auto|scroll)/.test(style.overflowY);
+          if (!clipX && !clipY) continue;
+          const area = parent.getBoundingClientRect();
+          if ((clipX && (box.right <= area.left || box.left >= area.right)) || (clipY && (box.bottom <= area.top || box.top >= area.bottom))) {
+            hidden = true;
+            break;
+          }
+          const truncates = style.textOverflow === "ellipsis" || (style.webkitLineClamp && style.webkitLineClamp !== "none");
+          if (truncates) {
+            if (clipX) Object.assign(box, { left: Math.max(box.left, area.left), right: Math.min(box.right, area.right) });
+            if (clipY) Object.assign(box, { top: Math.max(box.top, area.top), bottom: Math.min(box.bottom, area.bottom) });
+            if (box.right - box.left < 1 || box.bottom - box.top < 1) {
+              hidden = true;
+              break;
+            }
+            continue;
+          }
+          /* A sideways scroller shows the start of a long line and a way to
+             reach the rest. */
+          if (clipX && /(auto|scroll)/.test(style.overflowX)) Object.assign(box, { left: Math.max(box.left, area.left), right: Math.min(box.right, area.right) });
+          if (clipY && crosses(box.top, box.bottom, area.top, area.bottom)) clippedBy = `${parent.tagName.toLowerCase()}.${[...parent.classList].slice(0, 3).join(".")} (top/bottom)`;
+          if (clipX && crosses(box.left, box.right, area.left, area.right)) clippedBy = `${parent.tagName.toLowerCase()}.${[...parent.classList].slice(0, 3).join(".")} (left/right)`;
+          if (clippedBy) {
+            shown = { left: Math.max(shown.left, area.left), right: Math.min(shown.right, area.right), top: Math.max(shown.top, area.top), bottom: Math.min(shown.bottom, area.bottom) };
+            break;
+          }
+        }
+        if (hidden) continue;
+        if (!clippedBy && (crosses(box.left, box.right, frame.x, frame.x + frame.width) || crosses(box.top, box.bottom, frame.y, frame.y + frame.height))) clippedBy = "the frame's edge";
+        /* A line under a window or panel drawn over it is not on the frame. */
+        if (clippedBy) {
+          const top = document.elementFromPoint((shown.left + shown.right) / 2, (shown.top + shown.bottom) / 2);
+          if (!top || !(owner === top || owner.contains(top) || top.contains(owner))) clippedBy = null;
+        }
+        if (clippedBy) return { text: text.slice(0, 60), clippedBy, box };
+      }
+    }
+    return null;
+  }, frame);
+  if (cut) throw new Error(`${shot.id}: text cut in ${shot.viewport.width}x${shot.viewport.height}: ${JSON.stringify({ ...cut, frame })}`);
+}
+
 export const SHOTS: ReadmeShot[] = [
   {
     id: "board",
@@ -175,8 +285,10 @@ export const SHOTS: ReadmeShot[] = [
     /* The demo seat's conversation is not in the agent registry, so the
        header has no model to size the context window by and would show a
        bare byte estimate; a real seat shows its share of the window. */
+    /* The seat's resize grip straddles its bottom edge, half over the board
+       below, and the frame of the panel would slice it. */
     prepare: async (page) => {
-      await page.locator("[data-orchestrator-context]").evaluateAll((elements) => {
+      await page.locator("[data-orchestrator-context], [data-seat-grip]").evaluateAll((elements) => {
         for (const element of elements) (element as HTMLElement).style.setProperty("display", "none", "important");
       });
     },
@@ -196,6 +308,8 @@ export const SHOTS: ReadmeShot[] = [
       await clickText(page, "1 search");
       await page.waitForTimeout(500);
       await clickText(page, "wrote 1 file");
+      await page.waitForTimeout(500);
+      await alignFeedsToWholeLines(page, ".reader.conv");
     },
     crop: cropTo(".reader.conv"),
     description: "A Claude Code conversation read as a chat: an edit shown as a diff, a test run with its output, and the answer.",
@@ -822,7 +936,7 @@ async function main(): Promise<void> {
       await new Promise(() => {});
       return;
     }
-    await captureShots(repoRoot, baseUrl, layout, captureRoot);
+    await captureShots(repoRoot, baseUrl, layout, captureRoot, now);
   } finally {
     fs.closeSync(seatHold);
     stop();
@@ -884,7 +998,16 @@ export async function assertFrameLayout(page: Page, shot: ReadmeShot, crop: Crop
   return bounds;
 }
 
-async function captureShots(repoRoot: string, baseUrl: string, layout: Layout, captureRoot: string): Promise<void> {
+/** The moment every frame's page clock starts from. Each shot opens later
+    than the one before, and a page on the real clock read the same
+    conversation as 29 minutes old in one frame and 30 in the next. The seed
+    dates the lanes in whole minutes; a board reads a clock taken at its first
+    render, a few seconds after this moment, and the desktop board steps it
+    down to 15 seconds. 82 seconds puts every such age 7 to 25 seconds into its
+    minute on both boards, so rounded and floored ages name the same minute. */
+export const FRAME_MOMENT_AFTER_SEED_MS = 82_000;
+
+async function captureShots(repoRoot: string, baseUrl: string, layout: Layout, captureRoot: string, seededAt: number): Promise<void> {
   const { chromium } = await import("playwright-core");
   const browser = await chromium.launch({
     executablePath: process.env.CHROME_BIN ?? "/usr/bin/google-chrome-stable",
@@ -905,8 +1028,11 @@ async function captureShots(repoRoot: string, baseUrl: string, layout: Layout, c
          which Chrome prints at another phase than the screen shows. */
       const context = await browser.newContext({ viewport: shot.viewport, deviceScaleFactor: 2, colorScheme: "dark", reducedMotion: "reduce", isMobile: shot.viewport.width < 600, hasTouch: shot.viewport.width < 600 });
       const page = await context.newPage();
-      /* Runs at real time until the frame is frozen below. */
-      await page.clock.install();
+      /* Runs from the frame's one moment until the frame is frozen below. The
+         working conversations are still touched on the real clock, which the
+         server reads them by; a working row draws its turn's elapsed time,
+         counted from the seeded records, and no age of the file. */
+      await page.clock.install({ time: seededAt + FRAME_MOMENT_AFTER_SEED_MS });
       const recent = new Date(Date.now() - 20_000);
       for (const key of WORKING_CONVERSATIONS) fs.utimesSync(layout.files[key]!.path, recent, recent);
       await page.addInitScript(() => {
@@ -953,11 +1079,13 @@ async function captureShots(repoRoot: string, baseUrl: string, layout: Layout, c
         // Keep the failed frame too, so CI explains the geometry refusal.
         await page.screenshot({ path: png });
         const bounds = await assertFrameLayout(page, shot, crop);
+        await assertTextWhole(page, shot, crop);
         fs.writeFileSync(path.join(evidenceDir, `${shot.id}.json`), `${JSON.stringify(bounds, null, 2)}\n`);
         await context.close();
         process.stdout.write(`layout passed ${shot.id}\n`);
         continue;
       }
+      await assertTextWhole(page, shot, crop);
       const frame = await page.screenshot({ path: png, ...(crop ? { clip: crop } : {}) });
       /* A browser raster never carries provenance, so those two classes are
          expected here; anything else the gate finds in the pixels is not.

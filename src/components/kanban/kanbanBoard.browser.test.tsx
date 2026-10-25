@@ -7617,9 +7617,9 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
   const PANEL = "[data-rail-menu-panel]";
   const SHEET = "[data-mobile2-sheet='menu']";
   const TODAY_SHEET_PX = 743;
-  /* docs/design/header-menu.md: 360 px for every desktop state, 380 px for the Settings page and its voice row. */
+  /* docs/design/header-menu.md: 360 px for every desktop state, 560 px for the Settings page with its voice and memory source rows. */
   const DESKTOP_PX = 360;
-  const SETTINGS_PX = 420;
+  const SETTINGS_PX = 560;
   /* «Keys» is 370 px as approved (six rows, the back row and two transfer rows); an open field passes it and only the window bounds it (docs/design/keys-settings.md §15). */
   const KEYS_PX = 380;
   const desktopBound = (state: string) => (/^settings(-|$)/.test(state) ? SETTINGS_PX
@@ -7713,6 +7713,8 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
       "/api/telemetry": { enabled: true, locked: false, noticeDismissed: true },
       /* «Stop Delegatus» as the route answers a confirmed stop; nothing is stopped here. */
       "/api/stop-all": () => Response.json({ started: true, report: "stop-all.log" }, { status: 202 }),
+      /* The installation's memory source row (memory-source-switch.md §3.4), before any choice: its longest resting line. */
+      "/api/memory/source": { choice: null, phase: null },
     });
     /* The browser runs as a server of its own so its process id is on record and closed by it. */
     const browserServer = await chromium.launchServer(LAUNCH);
