@@ -1,6 +1,6 @@
 import { performanceSpans } from "@/lib/performanceSpans";
 import { startupHostSnapshot } from "./startupSnapshot";
-import { registryKeysMatching, registryRowsMatching, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
+import { hotRegistryRows, registryKeysMatching, registryRowsMatching, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
 import { seatRecipientVerdict, seatRecipientVerdictAsync, setSeatChannelNativeWithdrawal } from "@/lib/orchestrator/seatChannel";
 import { conversationIdsResolvingTo, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
 import { detachCodexHostForViewerRestart, flushStructuredHostPersistence } from "./registry";
@@ -2199,8 +2199,19 @@ export async function bindStructuredDeliveryQueue(
       );
       await phase("publishing historical host fallbacks");
       const conversations = (function* () {
-        for (const id in startupSnapshot.conversations) {
-          yield performanceSpans.sync("runtime.startup.conversations", () => startupSnapshot.conversations[id]!);
+        const hostKeys = new Set(markerKeys);
+        // An entry with a legacy host cannot be archived. Structured rows
+        // may be cold, so retain their indexed selection from marker repair.
+        for (const [key, entry] of hotRegistryRows(startupSnapshot, "entries")) {
+          if (entry.host?.kind === "tmux") hostKeys.add(key);
+        }
+        for (const key of hostKeys) {
+          for (const conversation of registryConversationsForEntryKey(startupSnapshot, key)) {
+            const generation = conversation.generations.at(-1);
+            if (generation && sessionKeyId({ engine: conversation.engine, sessionId: generation.id }) === key) {
+              yield performanceSpans.sync("runtime.startup.conversations", () => conversation);
+            }
+          }
         }
       })();
       await forEachStartupBatch(conversations, async (conversation) => {
