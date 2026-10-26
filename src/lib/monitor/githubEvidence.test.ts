@@ -363,3 +363,314 @@ describe("open issues ranked for the board maintenance report", () => {
     expect(errors).toEqual({ ok: false, unavailable: "malformed-output" });
   });
 });
+
+test("GitHub reads use the declared App without a host gh configuration", async () => {
+  const { githubRunner } = await import("./githubEvidence");
+  const calls: string[] = [];
+  const run = githubRunner(SANDBOX, 1000, {
+    declared: repository => repository === "acme/widgets",
+    asApp: async (args, repository) => { calls.push(repository); return JSON.stringify(args); },
+    exec: async () => { throw new Error("no host gh configuration"); },
+  });
+  const args = ["pr", "list", "--repo", "Acme/Widgets", "--json", "number"];
+  expect(await run(args)).toBe(JSON.stringify(args));
+  expect(await run(["api", "repos/acme/widgets/issues/46"])).toContain("issues/46");
+  expect(await run(["repo", "view", "Acme/Widgets", "--json", "defaultBranchRef"])).toContain("defaultBranchRef");
+  expect(await run(["api", "graphql", "-F", "owner=acme", "-F", "name=widgets", "-f", "query=query { repository(owner: $owner, name: $name) { name } }"])).toContain("graphql");
+  expect(calls).toEqual(["acme/widgets", "acme/widgets", "acme/widgets", "acme/widgets"]);
+  await expect(run(["pr", "merge", "46", "--repo", "acme/widgets"])).rejects.toThrow("no host gh configuration");
+  await expect(run(["pr", "list", "--repo", "acme/other"])).rejects.toThrow("no host gh configuration");
+  for (const args of [
+    ["pr", "view", "https://github.com/acme/widgets/pull/46"],
+    ["issue", "view", "https://github.com/acme/widgets/issues/47"],
+    ["repo", "view", "https://github.com/acme/widgets"],
+  ]) expect(await run(args)).toBe(JSON.stringify(args));
+  await expect(run(["pr", "view", "https://example.invalid/acme/widgets/pull/46"])).rejects.toThrow("no host gh configuration");
+});
+
+test("cwd reads resolve local Git context and recheck a changed origin", async () => {
+  const { githubRunner } = await import("./githubEvidence");
+  const root = path.join(SANDBOX, "checkout");
+  fs.mkdirSync(path.join(root, "nested"), { recursive: true });
+  const git = (...args: string[]) => {
+    const result = Bun.spawnSync(["git", ...args], { cwd: root });
+    expect(result.exitCode).toBe(0);
+  };
+  git("init");
+  git("remote", "add", "origin", "https://github.com/Acme/Widgets.git");
+  const calls: { args: string[]; repository: string }[] = [];
+  let fallbacks = 0;
+  const run = githubRunner(path.join(root, "nested"), 1000, {
+    declared: repository => repository === "acme/widgets",
+    asApp: async (args, repository) => { calls.push({ args, repository }); return "[]"; },
+    exec: async () => { fallbacks++; throw new Error("no host gh configuration"); },
+  });
+  for (const args of [["pr", "list"], ["issue", "list"], ["pr", "view", "46"], ["issue", "view", "47"], ["repo", "view"]]) {
+    expect(await run(args)).toBe("[]");
+    expect(calls.at(-1)).toEqual({ args: args[0] === "repo" ? ["repo", "view", "acme/widgets"] : [...args, "--repo", "acme/widgets"], repository: "acme/widgets" });
+  }
+  expect(fallbacks).toBe(0);
+  for (const args of [
+    ["pr", "merge", "46"], ["issue", "create", "--title", "example"], ["repo", "edit"],
+    ["repo", "list", "acme"],
+    ["api", "repos/acme/widgets/issues", "-f", "title=example"],
+    ["api", "repos/acme/widgets/issues/46", "--method=PATCH"],
+    ["api", "graphql", "-f", "query=mutation { example }"],
+    ["pr", "list", "--repo", "acme/other"],
+    ["pr", "list", "--repo", "invalid"],
+  ]) await expect(run(args)).rejects.toThrow("no host gh configuration");
+  expect(calls).toHaveLength(5);
+  git("remote", "set-url", "origin", "https://github.com/acme/other.git");
+  await expect(run(["pr", "list"])).rejects.toThrow("no host gh configuration");
+  git("remote", "remove", "origin");
+  await expect(run(["issue", "list"])).rejects.toThrow("no host gh configuration");
+  expect(calls).toHaveLength(5);
+});
+
+test("a repository environment override takes precedence over cwd for reads", async () => {
+  const { githubRunner } = await import("./githubEvidence");
+  const previous = process.env.GH_REPO;
+  const calls: string[] = [];
+  const run = githubRunner(SANDBOX, 1000, {
+    declared: repository => repository === "acme/widgets",
+    asApp: async (args, repository) => { calls.push(repository); return JSON.stringify(args); },
+    exec: async () => { throw new Error("no host gh configuration"); },
+  });
+  try {
+    process.env.GH_REPO = "Acme/Widgets";
+    expect(await run(["pr", "list"])).toBe(JSON.stringify(["pr", "list", "--repo", "acme/widgets"]));
+    expect(calls).toEqual(["acme/widgets"]);
+    process.env.GH_REPO = "acme/other";
+    await expect(run(["issue", "list"])).rejects.toThrow("no host gh configuration");
+    // An explicit repository still wins over the environment.
+    expect(await run(["repo", "view", "acme/widgets"])).toContain("widgets");
+    expect(calls).toEqual(["acme/widgets", "acme/widgets"]);
+  } finally {
+    if (previous === undefined) delete process.env.GH_REPO;
+    else process.env.GH_REPO = previous;
+  }
+});
+
+test("a read carries only the App token and never retries as another identity", async () => {
+  const { githubRunner } = await import("./githubEvidence");
+  const { forgeAppWriter, ForgeAppTokenSource } = await import("@/lib/forge/appWrite");
+  let fallbackCalls = 0;
+  let calls = 0;
+  const asApp = forgeAppWriter(SANDBOX, 1000, {
+    source: { NODE_ENV: "test", HOME: SANDBOX, GH_CONFIG_DIR: path.join(SANDBOX, "unused-config"), GITHUB_TOKEN: "unused-token" },
+    tokens: new ForgeAppTokenSource(async () => ({ token: "test-app-token", expiresAt: null })),
+    exec: async (_args, env) => {
+      calls++;
+      expect(env.GH_TOKEN).toBe("test-app-token");
+      expect(env.GITHUB_TOKEN).toBeUndefined();
+      expect(env.GH_CONFIG_DIR).not.toBe(path.join(SANDBOX, "unused-config"));
+      throw new Error("read refused");
+    },
+  });
+  const run = githubRunner(SANDBOX, 1000, { asApp, declared: () => true, exec: async () => { fallbackCalls++; return "[]"; } });
+  const root = path.join(SANDBOX, "refused-checkout");
+  fs.mkdirSync(root);
+  expect(Bun.spawnSync(["git", "init", root]).exitCode).toBe(0);
+  expect(Bun.spawnSync(["git", "-C", root, "remote", "add", "origin", "https://github.com/acme/widgets.git"]).exitCode).toBe(0);
+  const cwdRun = githubRunner(root, 1000, { asApp, declared: () => true, exec: async () => { fallbackCalls++; return "[]"; } });
+  for (const args of [["pr", "view", "46", "--repo", "acme/widgets"], ["repo", "view", "acme/widgets"]]) {
+    await expect(run(args)).rejects.toThrow("read refused");
+  }
+  await expect(cwdRun(["issue", "list"])).rejects.toThrow("read refused");
+  expect(calls).toBe(3);
+  expect(fallbackCalls).toBe(0);
+  const mintRefused = githubRunner(root, 1000, {
+    declared: () => true,
+    asApp: forgeAppWriter(root, 1000, {
+      tokens: new ForgeAppTokenSource(async () => { throw new Error("mint refused"); }),
+      exec: async () => { throw new Error("unexpected dispatch"); },
+    }),
+    exec: async () => { fallbackCalls++; return "[]"; },
+  });
+  for (const args of [["pr", "list"], ["repo", "view", "acme/widgets"]]) {
+    await expect(mintRefused(args)).rejects.toThrow("mint refused");
+  }
+  expect(fallbackCalls).toBe(0);
+});
+
+
+describe("REST read credential classification", () => {
+  const bodyFlags = [
+    ["--raw-field", "title=example"], ["--raw-field=title=example"],
+    ["--field", "title=example"], ["--field=title=example"],
+    ["-f", "title=example"], ["-ftitle=example"], ["-f=title=example"],
+    ["-F", "title=example"], ["-Ftitle=example"], ["-F=title=example"],
+    ["--input", "body.json"], ["--input=body.json"],
+    ["-if", "title=example"], ["-f", "--method=GET"],
+  ];
+  test.each(bodyFlags.map(flags => [flags]))("body flags %j keep writes on the ordinary route", async (flags: string[]) => {
+    const { githubRunner } = await import("./githubEvidence");
+    const ordinary: string[][] = [];
+    let appCalls = 0;
+    const run = githubRunner(SANDBOX, 1000, {
+      declared: () => true,
+      asApp: async () => { appCalls++; return "app"; },
+      exec: async args => { ordinary.push(args); return "ordinary"; },
+    });
+    const args = ["api", "repos/acme/widgets/issues", ...flags];
+    expect(await run(args)).toBe("ordinary");
+    expect(ordinary).toEqual([args]);
+    expect(appCalls).toBe(0);
+  });
+
+  test.each([["-X", "GET"], ["-XGET"], ["--method", "GET"], ["--method=GET"]].map(method => [method]))(
+    "explicit GET %j uses the App even with query parameters", async (method: string[]) => {
+      const { githubRunner } = await import("./githubEvidence");
+      const calls: string[][] = [];
+      const run = githubRunner(SANDBOX, 1000, {
+        declared: repository => repository === "acme/widgets",
+        asApp: async args => { calls.push(args); return "app"; },
+        exec: async () => { throw new Error("unexpected ordinary dispatch"); },
+      });
+      const args = ["api", "repos/acme/widgets/issues", ...method, "--field=state=open"];
+      expect(await run(args)).toBe("app");
+      expect(calls).toEqual([args]);
+    },
+  );
+
+  test.each([["-X", "POST"], ["-XPATCH"], ["--method", "PUT"], ["--method=DELETE"], ["-XGET", "--method=POST"]].map(method => [method]))(
+    "explicit write method %j keeps its route", async (method: string[]) => {
+      const { githubRunner } = await import("./githubEvidence");
+      let appCalls = 0;
+      const run = githubRunner(SANDBOX, 1000, {
+        declared: () => true,
+        asApp: async () => { appCalls++; return "app"; },
+        exec: async args => JSON.stringify(args),
+      });
+      const args = ["api", "repos/acme/widgets/issues", ...method];
+      expect(await run(args)).toBe(JSON.stringify(args));
+      expect(appCalls).toBe(0);
+    },
+  );
+
+  test("REST and GraphQL App read refusals never try ordinary credentials", async () => {
+    const { githubRunner } = await import("./githubEvidence");
+    const repositories: string[] = [];
+    let ordinary = 0;
+    const run = githubRunner(SANDBOX, 1000, {
+      declared: repository => repository === "acme/widgets",
+      asApp: async (_args, repository) => { repositories.push(repository); throw new Error("App refused"); },
+      exec: async () => { ordinary++; return "ordinary"; },
+    });
+    for (const args of [
+      ["api", "repos/acme/widgets/issues", "--method=GET"],
+      ["api", "graphql", "-F", "owner=acme", "-F", "name=widgets", "-f", "query=query { repository(owner: $owner, name: $name) { name } }"],
+    ]) await expect(run(args)).rejects.toThrow("App refused");
+    expect(repositories).toEqual(["acme/widgets", "acme/widgets"]);
+    expect(ordinary).toBe(0);
+  });
+});
+
+describe("checkout read repository selection", () => {
+  function checkout() {
+    const root = fs.mkdtempSync(path.join(SANDBOX, "remote-selection-"));
+    const git = (...args: string[]) => {
+      expect(Bun.spawnSync(["git", ...args], { cwd: root }).exitCode).toBe(0);
+    };
+    git("init");
+    return { root, git };
+  }
+  const reads = [["pr", "list"], ["issue", "list"], ["repo", "view"]];
+  const pinned = (args: string[], repository: string) => args[0] === "repo"
+    ? [...args, repository] : [...args, "--repo", repository];
+
+  test("configured defaults override origin and are reread between calls", async () => {
+    const { githubRunner } = await import("./githubEvidence");
+    const { root, git } = checkout();
+    git("remote", "add", "origin", "https://github.com/acme/widgets.git");
+    git("remote", "add", "upstream", "https://github.com/acme/canonical.git");
+    git("config", "remote.origin.gh-resolved", "base");
+    const calls: { args: string[]; repository: string }[] = [];
+    const run = githubRunner(root, 1000, {
+      declared: () => true,
+      asApp: async (args, repository) => { calls.push({ args, repository }); return "app"; },
+      exec: async () => { throw new Error("unexpected ordinary dispatch"); },
+    });
+    expect(await run(["pr", "list"])).toBe("app");
+    expect(calls.pop()?.repository).toBe("acme/widgets");
+    git("config", "--unset", "remote.origin.gh-resolved");
+    git("config", "remote.upstream.gh-resolved", "base");
+    for (const args of reads) {
+      expect(await run(args)).toBe("app");
+      expect(calls.pop()).toEqual({ args: pinned(args, "acme/canonical"), repository: "acme/canonical" });
+    }
+    git("config", "remote.upstream.gh-resolved", "acme/selected");
+    expect(await run(["issue", "list"])).toBe("app");
+    expect(calls.pop()?.repository).toBe("acme/selected");
+  });
+
+  test("checkout remote preference works with or without origin", async () => {
+    const { githubRunner } = await import("./githubEvidence");
+    const { root, git } = checkout();
+    git("remote", "add", "upstream", "https://github.com/acme/canonical.git");
+    const run = githubRunner(root, 1000, {
+      declared: repository => repository === "acme/canonical",
+      asApp: async (args, repository) => JSON.stringify({ args, repository }),
+      exec: async () => { throw new Error("unexpected ordinary dispatch"); },
+    });
+    for (const args of reads) expect(JSON.parse(await run(args))).toEqual({ args: pinned(args, "acme/canonical"), repository: "acme/canonical" });
+    git("remote", "add", "origin", "https://github.com/acme/widgets.git");
+    git("remote", "add", "github", "https://github.com/acme/mirror.git");
+    expect(JSON.parse(await run(["pr", "list"])).repository).toBe("acme/canonical");
+    git("remote", "remove", "upstream");
+    const mirrorRun = githubRunner(root, 1000, {
+      declared: repository => repository === "acme/mirror",
+      asApp: async (_args, repository) => repository,
+      exec: async () => { throw new Error("unexpected ordinary dispatch"); },
+    });
+    expect(await mirrorRun(["pr", "list"])).toBe("acme/mirror");
+  });
+
+  test("an undeclared default passes original arguments, and explicit sources override it", async () => {
+    const { githubRunner } = await import("./githubEvidence");
+    const { root, git } = checkout();
+    git("remote", "add", "origin", "https://github.com/acme/widgets.git");
+    git("remote", "add", "upstream", "https://github.com/acme/canonical.git");
+    git("config", "remote.upstream.gh-resolved", "base");
+    const ordinary: string[][] = [];
+    let appCalls = 0;
+    const run = githubRunner(root, 1000, {
+      declared: repository => repository === "acme/widgets",
+      asApp: async (_args, repository) => { appCalls++; return repository; },
+      exec: async args => { ordinary.push(args); return "ordinary"; },
+    });
+    for (const args of reads) expect(await run(args)).toBe("ordinary");
+    expect(ordinary).toEqual(reads);
+    expect(appCalls).toBe(0);
+    const previous = process.env.GH_REPO;
+    try {
+      process.env.GH_REPO = "acme/widgets";
+      for (const args of reads) expect(await run(args)).toBe("acme/widgets");
+      process.env.GH_REPO = "acme/canonical";
+      expect(await run(["pr", "list", "--repo", "acme/widgets"])).toBe("acme/widgets");
+      expect(await run(["repo", "view", "acme/widgets"])).toBe("acme/widgets");
+    } finally {
+      if (previous === undefined) delete process.env.GH_REPO;
+      else process.env.GH_REPO = previous;
+    }
+    expect(appCalls).toBe(5);
+  });
+
+  test("a chosen default's App refusal never falls back to origin or ordinary credentials", async () => {
+    const { githubRunner } = await import("./githubEvidence");
+    const { root, git } = checkout();
+    git("remote", "add", "origin", "https://github.com/acme/widgets.git");
+    git("remote", "add", "upstream", "https://github.com/acme/canonical.git");
+    git("config", "remote.upstream.gh-resolved", "base");
+    const repositories: string[] = [];
+    let ordinary = 0;
+    const run = githubRunner(root, 1000, {
+      declared: () => true,
+      asApp: async (_args, repository) => { repositories.push(repository); throw new Error("App refused"); },
+      exec: async () => { ordinary++; return "ordinary"; },
+    });
+    for (const args of reads) await expect(run(args)).rejects.toThrow("App refused");
+    expect(repositories).toEqual(reads.map(() => "acme/canonical"));
+    expect(ordinary).toBe(0);
+  });
+});

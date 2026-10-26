@@ -11,9 +11,9 @@ import {
   obsoleteManagedViewerContainers,
   viewerCandidateDockerArgs,
   viewerCandidateGateKey,
-  viewerCandidateTmuxEnvironment,
   viewerComposeSnapshotWithoutUnsupportedApiCredentials,
   viewerComposeServiceFromConfig,
+  viewerComposeServiceWithExistingTmux,
   type ViewerComposeService,
 } from "./candidateContainer";
 
@@ -34,7 +34,6 @@ const composeService = {
     PORT: "8898",
     LLV_RUNTIME_EVENTS: "0",
     LLV_RUNTIME_HOST_SOCKET: "/compose/runtime.sock",
-    LLV_LEGACY_TMUX_EXTERNAL: "0",
     TMUX_TMPDIR: "/tmp",
     LLV_DOCKER_NSENTER_SHIMS: "1",
     LLV_TRANSCRIBE_BACKEND: "chatgpt",
@@ -56,6 +55,78 @@ const composeService = {
   ],
   working_dir: "/app",
 } satisfies ViewerComposeService;
+
+test("existing tmux endpoints survive repeated Compose resolution without changing state or configured mounts", () => {
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), "tmux-endpoint-"));
+  const marker = path.join(state, "legacy-tmux-migration-complete");
+  try {
+    const configured = { ...composeService, environment: { TMUX_TMPDIR: "/configured/tmux" } };
+    expect(viewerComposeServiceWithExistingTmux(state, configured)).toBe(configured);
+    fs.writeFileSync(marker, "completed\n");
+    const before = fs.statSync(marker);
+    const resolved = viewerComposeServiceWithExistingTmux(state, configured);
+    expect(resolved.environment.TMUX_TMPDIR).toBe("/run/user/1000/agent-log-viewer");
+    expect(resolved.volumes.at(-1)).toEqual({
+      type: "bind", source: "/run/user/1000/agent-log-viewer", target: "/run/user/1000/agent-log-viewer", bind: {},
+    });
+    expect(viewerComposeServiceWithExistingTmux(state, resolved)).toEqual(resolved);
+    expect(viewerComposeServiceWithExistingTmux(state, configured)).toEqual(resolved);
+    expect(configured.environment.TMUX_TMPDIR).toBe("/configured/tmux");
+    expect(configured.volumes).toHaveLength(2);
+    expect(fs.readFileSync(marker, "utf8")).toBe("completed\n");
+    expect(fs.statSync(marker).mtimeMs).toBe(before.mtimeMs);
+    expect(fs.readdirSync(state)).toEqual(["legacy-tmux-migration-complete"]);
+    expect(viewerComposeServiceWithExistingTmux(state, { ...configured, user: "1201:1201" }).environment.TMUX_TMPDIR)
+      .toBe("/run/user/1201/agent-log-viewer");
+    expect(() => viewerComposeServiceWithExistingTmux(state, { ...configured, user: "viewer" })).toThrow("numeric uid");
+    for (const volume of [
+      { type: "bind" as const, source: "/elsewhere", target: "/run/user/1000/agent-log-viewer", bind: {} },
+      { type: "bind" as const, source: "/run/user/1000/agent-log-viewer", target: "/run/user/1000/agent-log-viewer", read_only: true, bind: {} },
+    ]) {
+      expect(() => viewerComposeServiceWithExistingTmux(state, { ...configured, volumes: [volume] }))
+        .toThrow("writable host directory");
+    }
+  } finally { fs.rmSync(state, { recursive: true, force: true }); }
+});
+
+test("explicit external tmux retains its configured host bind without a migration marker", () => {
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), "tmux-explicit-endpoint-"));
+  try {
+    for (const configuredEndpoint of ["/run/user/1000/agent-log-viewer", "/configured/tmux", "", undefined]) {
+      const configured: ViewerComposeService = {
+        ...composeService,
+        environment: { LLV_LEGACY_TMUX_EXTERNAL: "1", ...(configuredEndpoint === undefined ? {} : { TMUX_TMPDIR: configuredEndpoint }) },
+      };
+      const endpoint = configuredEndpoint || "/tmp";
+      const volume = { type: "bind" as const, source: endpoint, target: endpoint, bind: {} };
+      const originalEnvironment = { ...configured.environment };
+      const resolved = viewerComposeServiceWithExistingTmux(state, configured);
+      expect(resolved.environment.TMUX_TMPDIR).toBe(endpoint);
+      expect(resolved.volumes).toEqual([...configured.volumes, volume]);
+      expect(viewerComposeServiceWithExistingTmux(state, resolved)).toEqual(resolved);
+      expect(viewerComposeServiceWithExistingTmux(state, configured)).toEqual(resolved);
+      const args = viewerCandidateDockerArgs(candidate, resolved, { runtimeSocket: "/runtime.sock", tmuxTmpdir: endpoint });
+      expect(environmentFromArgs(args).TMUX_TMPDIR).toBe(endpoint);
+      expect(valuesAfter(args, "--mount")).toContain(`type=bind,source=${endpoint},target=${endpoint}`);
+      for (const conflict of [{ ...volume, source: "/elsewhere" }, { ...volume, read_only: true }]) {
+        for (const volumes of [[conflict], [volume, conflict]]) {
+          expect(() => viewerComposeServiceWithExistingTmux(state, { ...configured, volumes }))
+            .toThrow("writable host directory");
+        }
+      }
+      expect(configured.volumes).toHaveLength(2);
+      expect(configured.environment).toEqual(originalEnvironment);
+    }
+    expect(() => viewerComposeServiceWithExistingTmux(state, {
+      ...composeService, environment: { LLV_LEGACY_TMUX_EXTERNAL: "1", TMUX_TMPDIR: "relative/path" },
+    })).toThrow("must be absolute");
+    for (const flag of [undefined, "0"]) {
+      const configured = { ...composeService, environment: { ...(flag === undefined ? {} : { LLV_LEGACY_TMUX_EXTERNAL: flag }), TMUX_TMPDIR: "/configured/tmux" } };
+      expect(viewerComposeServiceWithExistingTmux(state, configured)).toBe(configured);
+    }
+    expect(fs.readdirSync(state)).toEqual([]);
+  } finally { fs.rmSync(state, { recursive: true, force: true }); }
+});
 
 function valuesAfter(args: string[], flag: string): string[] {
   return args.flatMap((value, index) => value === flag ? [args[index + 1]!] : []);
@@ -106,7 +177,6 @@ test("promoted candidate derives its runtime contract from Compose", () => {
   const args = viewerCandidateDockerArgs(candidate, { ...composeService, environment: { ...composeService.environment,
     LLV_HOT_STATE_RELEASE_REVISION: "old-release", DELEGATUS_HOT_STATE_RELEASE_REVISION: "old-alias-release" } }, {
     runtimeSocket: "/state/runtime-host.sock",
-    legacyTmuxExternal: "1",
     tmuxTmpdir: "/run/user/1000/agent-log-viewer",
   });
   const environment = environmentFromArgs(args);
@@ -115,7 +185,6 @@ test("promoted candidate derives its runtime contract from Compose", () => {
 
   expect(runtimeEventsEnabled(environment as NodeJS.ProcessEnv)).toBe(true);
   expect(runtimeHostSocket(environment as NodeJS.ProcessEnv)).toBe("/state/runtime-host.sock");
-  expect(environment.LLV_LEGACY_TMUX_EXTERNAL).toBe("1");
   expect(environment.TMUX_TMPDIR).toBe("/run/user/1000/agent-log-viewer");
   expect(environment.HF_HOME).toBe("/home/user/.cache/huggingface");
   expect(environment.LLV_TRANSCRIBE_BACKEND).toBe("chatgpt");
@@ -133,7 +202,6 @@ test("promoted candidate derives its runtime contract from Compose", () => {
   expect(valuesAfter(args, "--mount")).toEqual([
     "type=bind,source=/home/user,target=/home/user",
     "type=bind,source=/tmp/tmux-1000,target=/tmp/tmux-1000",
-    "type=bind,source=/run/user/1000/agent-log-viewer,target=/run/user/1000/agent-log-viewer",
   ]);
   expect(args[args.indexOf("--restart") + 1]).toBe("unless-stopped");
   expect(args[args.indexOf("--network") + 1]).toBe("host");
@@ -157,7 +225,7 @@ test("candidate and Compose snapshots exclude unapproved ambient API keys", () =
   expect(snapshot.services.viewer.environment[pluginKey]).toBeUndefined();
   expect(snapshot.services.viewer.environment[serviceKey]).toBe("service-fixture");
   const args = viewerCandidateDockerArgs(candidate, service, {
-    runtimeSocket: "/runtime.sock", legacyTmuxExternal: "0", tmuxTmpdir: "/tmp/tmux",
+    runtimeSocket: "/runtime.sock", tmuxTmpdir: "/tmp/tmux",
   });
   expect(environmentFromArgs(args)[pluginKey]).toBeUndefined();
   expect(environmentFromArgs(args)[serviceKey]).toBe("service-fixture");
@@ -169,7 +237,6 @@ test("candidate accepts an older Compose snapshot without supplementary groups",
   const service = viewerComposeServiceFromConfig(JSON.stringify({ services: { viewer: legacyViewer } }));
   const args = viewerCandidateDockerArgs(candidate, service, {
     runtimeSocket: "/state/runtime-host.sock",
-    legacyTmuxExternal: "1",
     tmuxTmpdir: "/run/user/1000/agent-log-viewer",
   });
 
@@ -184,7 +251,6 @@ test("promoted candidate validates and pins the operator registry backend mode",
   } satisfies ViewerComposeService;
   const args = viewerCandidateDockerArgs(candidate, configured, {
     runtimeSocket: "/state/runtime-host.sock",
-    legacyTmuxExternal: "1",
     tmuxTmpdir: "/run/user/1000/agent-log-viewer",
   });
 
@@ -195,7 +261,6 @@ test("promoted candidate validates and pins the operator registry backend mode",
     environment: { ...configured.environment, [AGENT_REGISTRY_SQLITE_ENV]: "invalid" },
   }, {
     runtimeSocket: "/state/runtime-host.sock",
-    legacyTmuxExternal: "1",
     tmuxTmpdir: "/run/user/1000/agent-log-viewer",
   })).toThrow("LLV_AGENT_REGISTRY_SQLITE must be off, dual-write, read, or sqlite");
 });
@@ -215,7 +280,6 @@ test("actual Viewer Compose keys remain covered by the candidate generator", () 
   const service = viewerComposeServiceFromConfig(config.stdout.toString());
   const args = viewerCandidateDockerArgs(candidate, service, {
     runtimeSocket: "/state/runtime-host.sock",
-    legacyTmuxExternal: "1",
     tmuxTmpdir: "/run/user/1000/agent-log-viewer",
   });
   const environment = environmentFromArgs(args);
@@ -232,10 +296,7 @@ test("actual Viewer Compose keys remain covered by the candidate generator", () 
     ]),
   ].sort());
   const mounts = valuesAfter(args, "--mount");
-  const externalTmpdir = "/run/user/1000/agent-log-viewer";
-  const composeAlreadyMountsSupervisor = service.volumes.some((volume) => volume.target === externalTmpdir);
-  expect([...mounts, ...valuesAfter(args, "--volume")]).toHaveLength(service.volumes.length + (composeAlreadyMountsSupervisor ? 0 : 1));
-  expect(mounts).toContain(`type=bind,source=${externalTmpdir},target=${externalTmpdir}`);
+  expect([...mounts, ...valuesAfter(args, "--volume")]).toHaveLength(service.volumes.length);
   expect(args[args.indexOf("--restart") + 1]).toBe(service.restart);
   expect(environment.LLV_ALLOW_LEGACY_VIEWER).toBe("1");
   expect(args.slice(args.indexOf(candidate.image) + 1)).toEqual(
@@ -274,7 +335,6 @@ test("managed candidate launch retains service.env telemetry opt-outs", () => {
     const service = viewerComposeServiceFromConfig(JSON.stringify({ services: { viewer: config.services.viewer } }));
     const args = viewerCandidateDockerArgs(candidate, service, {
       runtimeSocket: "/state/runtime-host.sock",
-      legacyTmuxExternal: "0",
       tmuxTmpdir: "/tmp",
     });
     const environment = environmentFromArgs(args);
@@ -336,7 +396,6 @@ test("candidate executes the Compose guard with its runtime launch grant", () =>
   const service = viewerComposeServiceFromConfig(JSON.stringify({ services: { viewer } }));
   const args = viewerCandidateDockerArgs(candidate, service, {
     runtimeSocket: "/state/runtime-host.sock",
-    legacyTmuxExternal: "1",
     tmuxTmpdir: "/run/user/1000/agent-log-viewer",
   });
   const command = args.slice(args.indexOf(candidate.image) + 1);
@@ -355,38 +414,6 @@ test("candidate executes the Compose guard with its runtime launch grant", () =>
   fs.rmSync(sandbox, { recursive: true, force: true });
 
   expect(result.exitCode).toBe(0);
-});
-
-test("candidate tmux environment follows the durable migration marker", () => {
-  const checked: string[] = [];
-  const configured = { legacyTmuxExternal: "0", tmuxTmpdir: "/custom/tmux" };
-  expect(viewerCandidateTmuxEnvironment("/state", "1000", configured, (filename) => {
-    checked.push(filename);
-    return true;
-  })).toEqual({ legacyTmuxExternal: "1", tmuxTmpdir: "/run/user/1000/agent-log-viewer" });
-  expect(checked).toEqual(["/state/legacy-tmux-migration-complete"]);
-
-  expect(viewerCandidateTmuxEnvironment("/state", "1000", configured, () => false)).toEqual(configured);
-});
-
-test("candidate reuses an existing external tmux supervisor mount", () => {
-  const externalTmpdir = "/run/user/1000/agent-log-viewer";
-  const service = {
-    ...composeService,
-    volumes: [
-      ...composeService.volumes,
-      { type: "bind", source: externalTmpdir, target: externalTmpdir, bind: {} },
-    ],
-  } satisfies ViewerComposeService;
-  const args = viewerCandidateDockerArgs(candidate, service, {
-    runtimeSocket: "/state/runtime-host.sock",
-    legacyTmuxExternal: "1",
-    tmuxTmpdir: externalTmpdir,
-  });
-
-  expect(valuesAfter(args, "--mount").filter((mount) => mount.includes(externalTmpdir))).toEqual([
-    `type=bind,source=${externalTmpdir},target=${externalTmpdir}`,
-  ]);
 });
 
 test("container retention keeps the serving and immediate rollback releases", () => {
@@ -417,7 +444,7 @@ test.each([true, false, undefined])("candidate preserves Compose create_host_pat
     ...composeService,
     volumes: [{ type: "bind", source: "/fixture/missing", target: "/data", read_only: true, bind: { create_host_path: createHostPath } }],
   } } }));
-  const args = viewerCandidateDockerArgs(candidate, service, { runtimeSocket: "/runtime.sock", legacyTmuxExternal: "0", tmuxTmpdir: "/tmp/tmux" });
+  const args = viewerCandidateDockerArgs(candidate, service, { runtimeSocket: "/runtime.sock", tmuxTmpdir: "/tmp/tmux" });
   expect(valuesAfter(args, "--volume")).toEqual(createHostPath === true ? ["/fixture/missing:/data:ro"] : []);
   expect(valuesAfter(args, "--mount")).toEqual(createHostPath === true ? [] : ["type=bind,source=/fixture/missing,target=/data,readonly"]);
 });
@@ -430,6 +457,17 @@ test("candidate refuses unsupported or malformed bind options", () => {
   }
   for (const [source, bind] of [["/source:other", { create_host_path: true }], ["/source,readonly", {}], ["relative", {}]] as const) {
     expect(() => viewerCandidateDockerArgs(candidate, { ...composeService, volumes: [{ type: "bind", source, target: "/data", bind }] },
-      { runtimeSocket: "/runtime.sock", legacyTmuxExternal: "0", tmuxTmpdir: "/tmp/tmux" })).toThrow();
+      { runtimeSocket: "/runtime.sock", tmuxTmpdir: "/tmp/tmux" })).toThrow();
   }
+});
+
+test("retired external mode adds no supervisor mount or environment switch", () => {
+  const args = viewerCandidateDockerArgs(candidate, composeService, {
+    runtimeSocket: "/state/runtime-host.sock",
+    tmuxTmpdir: "/fixture/tmux",
+    ...{ legacyTmuxExternal: "1" },
+  });
+  expect(environmentFromArgs(args).LLV_LEGACY_TMUX_EXTERNAL).toBeUndefined();
+  expect(valuesAfter(args, "--mount")).not.toContain("type=bind,source=/fixture/tmux,target=/fixture/tmux");
+  expect(environmentFromArgs(args).TMUX_TMPDIR).toBe("/fixture/tmux");
 });

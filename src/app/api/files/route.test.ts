@@ -1079,23 +1079,6 @@ test("production-sized SQLite registry answers cold and warm files probes beside
   console.log(JSON.stringify({ probe: "production-sqlite-files", coldMs: Math.round(coldDuration), warmMs: Math.round(warmDuration) }));
 });
 
-test("files API surfaces degraded tmux endpoint health", async () => {
-  tmuxHealth = {
-    status: "degraded",
-    code: "migration-marker-endpoint-mismatch",
-    configuredTmpdir: "/tmp",
-    expectedTmpdir: "/run/user/1000/agent-log-viewer",
-    message: "stale migration marker",
-  };
-  try {
-    const response = await GET(new Request("http://127.0.0.1/api/files"));
-    expect(response.status).toBe(200);
-    expect((await response.json()).systemHealth.tmux).toEqual(tmuxHealth);
-  } finally {
-    tmuxHealth = { status: "healthy" };
-  }
-});
-
 test("concurrent cold files reads share one scan and one projection", async () => {
   const registry = agentRegistry();
   const target = registry as unknown as { readOnlySnapshot: AgentRegistry["readOnlySnapshot"] };

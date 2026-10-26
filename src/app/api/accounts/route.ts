@@ -178,6 +178,7 @@ export async function GET() {
       loginState: authenticated ? "authenticated" : compatibilityPending ? "pending" : login.state,
       attemptState: compatibilityPending ? "pending" : login.attemptState,
       deviceAuth: login.deviceAuth,
+      loginReason: authenticated || compatibilityPending ? null : login.reason ?? null,
       ...(bindings ? { projects: accountProjectRows("codex", account.id, bindings, projectDisplayNames) } : {}),
       ...accountProjection(codexObservations[account.id], account.authPresent, now),
     };
