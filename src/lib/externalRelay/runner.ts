@@ -945,7 +945,7 @@ export async function runClaimedRequest(
         const pendingRun = usingCloud && !cloudFailed && !prototype ? runCloudRelay({
           ["prompt"]: owner ? ownerRunPrompt(request, owner, ownerTarget.hardCapMinutes) + "\n" + agentPrompt : agentPrompt,
           environmentId: cloudEnvironment(configuredTarget!, !!owner) ?? "",
-          schema, effort: target.effort, fullAccess: !!owner, timeoutMs: Math.min(remainingMs(deadline), owner ? Infinity : target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity),
+          schema, effort: target.effort, fullAccess: !!owner, timeoutMs: Math.min(owner ? Math.max(0, executionDeadline - Date.now()) : remainingMs(deadline), target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity),
           transport: runtime?.cloudTransport,
           authorize: () => { if (leaseUnavailable || callAbort.signal.aborted || owner && !ownerRelayAuthorized(relay.id, target.id, requestId)) throw new Error("relay authorization revoked"); },
           onProgress: steps?.observe,

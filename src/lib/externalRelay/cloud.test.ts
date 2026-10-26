@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
-import { expect, test } from "bun:test";
+import fs from "node:fs";
+import { expect, jest, test } from "bun:test";
 import { newTargetSettings } from "./store";
 
 test("new relay targets use Codex Cloud without local account admission", () => {
@@ -60,6 +61,96 @@ import { startTestRelay } from "./testRelay";
 import { readAnswerRecord } from "./answers";
 import { answerPrompt } from "./prompt";
 import { requestSchema } from "./protocol";
+import * as client from "./client";
+import { cloneReceipt } from "./clone.fixture";
+import { setRelaySwitch } from "./switches";
+
+for (const outcome of ["owner-answer", "owner-cap", "member-window"] as const) test(`Cloud execution deadline: ${outcome}`, async () => {
+  const owner = outcome !== "member-window";
+  const epoch = Date.parse("2026-10-26T00:00:00Z");
+  let now = epoch, timeoutMs = 0, started = false, closed = false, ended = false;
+  const oldUrl = process.env.LLV_CODEX_CLOUD_URL;
+  process.env.LLV_CODEX_CLOUD_URL = "wss://example.invalid/app-server";
+  const relay: PairedRelay = { id: "cloud_deadline", origin: "http://127.0.0.1:1", api_base: "http://127.0.0.1:1/v1", name: "Relay", description: "", credential: "fixture",
+    owner: { namespace: "fixture", id: "owner", display_name: "Owner", handle: null }, pairedAt: new Date(epoch).toISOString(), paused: false,
+    limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
+    targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "service", enabled: true, ownerTier: true, engine: "codex-cloud", model: "gpt-6.1-sol", effort: null,
+      project: "repository", cloudEnvironmentId: "repo-env", concurrency: 1, hardCapMinutes: 5 }] };
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  setRelaySwitch("chain_conversations", false);
+  const posts: { route: string; body: unknown }[] = [];
+  const wire = spyOn(client, "relayCall").mockImplementation(async (_base, route, _method, body) => {
+    posts.push({ route, body });
+    if (route.endsWith("/heartbeat") && now >= epoch + 120000) throw new client.ExternalRelayError("lease_lost", 409);
+    return { status: 200, body: route.endsWith("/send") ? cloneReceipt() : { status: "ok" } } as never;
+  });
+  const select = spyOn(accountManager, "resolveHeadlessSpawn").mockImplementation(() => { throw new Error("local admission must not run"); });
+  const events = new EventEmitter();
+  const sent: Array<{ method: string; params: Record<string, unknown> }> = [];
+  const emit = (value: unknown) => events.emit("message", JSON.stringify(value));
+  const transport = createCloudTransport(() => {
+    queueMicrotask(() => events.emit("open"));
+    return { on: events.on.bind(events), close() { closed = true; }, send(data) {
+      const call = JSON.parse(data); sent.push(call);
+      if (!call.id) return;
+      queueMicrotask(() => {
+        emit({ id: call.id, result: call.method === "thread/start" ? { thread: { id: "thread" } } : call.method === "turn/start" ? { turn: { id: "turn" } } : {} });
+        if (call.method === "turn/start") started = true;
+      });
+    } };
+  });
+  jest.useFakeTimers();
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const flush = async () => { jest.advanceTimersByTime(1); await fs.promises.stat(process.cwd()); };
+  const pending = runClaimedRequest(relay, { ...contextRequest, request_id: `cloud_deadline_${outcome}`, deadline_at: new Date(epoch + 120000).toISOString(),
+    owner_delivery: { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: 12 },
+    input: { ...contextRequest.input, tools: [], requester: { ...contextRequest.input.requester, is_owner: owner } } }, undefined,
+  { leaseWorker: false, cloudTransport: input => {
+    timeoutMs = input.timeoutMs;
+    return transport(input);
+  } });
+  void pending.then(() => { ended = true; }, () => { ended = true; });
+  try {
+    for (let i = 0; i < 2000 && !started && !ended; i++) await flush();
+    expect(started).toBe(true);
+    expect(sent.find(call => call.method === "thread/start")?.params.sandbox).toBe(owner ? "danger-full-access" : "read-only");
+    now += 121000; jest.advanceTimersByTime(121000);
+    for (let i = 0; i < 30; i++) await flush();
+    const interrupts = () => sent.filter(call => call.method === "turn/interrupt");
+    if (owner) {
+      expect(interrupts()).toHaveLength(0);
+      expect(closed).toBe(false);
+      expect(ended).toBe(false);
+      if (outcome === "owner-answer") {
+        emit({ method: "item/completed", params: { threadId: "thread", item: { type: "agentMessage", text: "Finished" } } });
+        emit({ method: "turn/completed", params: { threadId: "thread", turn: { id: "turn", status: "completed" } } });
+        expect(await pending).toMatchObject({ outcome: "answered", answer: { text: "Finished" } });
+        expect(posts.filter(post => post.route.endsWith("/send"))).toEqual([{ route: "/targets/target_1/send", body: expect.objectContaining({ text: "Finished" }) }]);
+      } else {
+        now += 180000; jest.advanceTimersByTime(180000);
+        for (let i = 0; i < 30; i++) await flush();
+        expect(interrupts().length).toBeGreaterThan(0);
+        expect(await pending).toMatchObject({ outcome: "answered", answer: { text: "Ran out of time." } });
+      }
+    } else {
+      expect(interrupts().length).toBeGreaterThan(0);
+      expect(await pending).toBeNull();
+      expect(posts.filter(post => post.route.endsWith("/send"))).toHaveLength(0);
+    }
+    expect(posts.filter(post => post.route.endsWith("/complete"))).toHaveLength(0);
+    expect(timeoutMs).toBe(owner ? 300000 : 120000);
+    expect(closed).toBe(true);
+    expect(select).not.toHaveBeenCalled();
+  } finally {
+    emit({ method: "turn/completed", params: { threadId: "thread", turn: { id: "turn", status: "completed" } } });
+    try { await pending; }
+    finally {
+      jest.advanceTimersByTime(1001);
+      select.mockRestore(); wire.mockRestore(); clock.mockRestore(); jest.useRealTimers();
+      if (oldUrl === undefined) delete process.env.LLV_CODEX_CLOUD_URL; else process.env.LLV_CODEX_CLOUD_URL = oldUrl;
+    }
+  }
+});
 
 test("Cloud answer is delivered through the relay with unchanged protocol steps and history", async () => {
   const beats: Array<{ seq: number; progress: { label: string } | null }> = [];
