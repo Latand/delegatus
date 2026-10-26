@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { deadlineSignal, type DeadlineScheduler } from "@/lib/deadline";
+import { deadlineSignal, DeadlineExceededError, type DeadlineScheduler } from "@/lib/deadline";
 import { forEachCooperatively, yieldToRuntime, type CooperativeBatchOptions } from "@/lib/cooperative";
 
 const currentWork = new AsyncLocalStorage<SeatTickWork>();
@@ -13,11 +13,45 @@ export class SeatTickWork {
   private closed = false;
   private readonly cancellation = new AbortController();
   private readonly deadline;
+  private readonly sourceSpent = new Map<string, number>();
+  readonly skippedSources = new Set<string>();
 
   constructor(readonly project: string, readonly budgetMs: number,
-    readonly clock: () => number = () => performance.now(), scheduler?: DeadlineScheduler) {
+    readonly clock: () => number = () => performance.now(), private readonly scheduler?: DeadlineScheduler) {
     this.started = this.progressed = clock();
     this.deadline = deadlineSignal(budgetMs, { scheduler, signal: this.cancellation.signal, reason: "seat project deadline exceeded" });
+  }
+
+  /** Each optional source gets at most an eighth of the check, capped at five
+   * seconds, across ALL its calls. Repeated liveness reads cannot spend the
+   * other sources' shares or the time reserved for dispatch. No stale liveness
+   * verdict is reused as recovery authority. */
+  async source<T>(name: string, read: () => PromiseLike<T> | T, fallback: T): Promise<T> {
+    this.assert();
+    const share = Math.min(5_000, this.budgetMs / 8);
+    const remaining = Math.min(share - (this.sourceSpent.get(name) ?? 0), this.remainingMs / 2);
+    if (remaining <= 0) {
+      this.skippedSources.add(name);
+      return fallback;
+    }
+    const child = new SeatTickWork(this.project, remaining, this.clock, this.scheduler);
+    const cancel = () => child.close();
+    this.signal.addEventListener("abort", cancel, { once: true });
+    this.phase = `check.sources.${name}`;
+    let exhausted = false;
+    try {
+      return await child.run(() => child.wait(this.phase, Promise.resolve().then(read)));
+    } catch (error) {
+      this.assert();
+      if (!child.signal.aborted && child.remainingMs > 0 && !(error instanceof DeadlineExceededError)) throw error;
+      exhausted = true;
+      this.skippedSources.add(name);
+      return fallback;
+    } finally {
+      this.sourceSpent.set(name, exhausted ? share : (this.sourceSpent.get(name) ?? 0) + Math.max(0, this.clock() - child.started));
+      this.signal.removeEventListener("abort", cancel);
+      child.close();
+    }
   }
 
   get signal(): AbortSignal { return this.deadline.signal; }
@@ -89,6 +123,10 @@ export class SeatTickWork {
 export function seatTickWorkDetail(): string | undefined { return currentWork.getStore()?.detail(); }
 export function seatTickWorkSignal(): AbortSignal | undefined { return currentWork.getStore()?.signal; }
 export function seatTickWorkRemainingMs(): number | undefined { return currentWork.getStore()?.remainingMs; }
+export function seatTickSkippedSources(): string | null {
+  const names = [...(currentWork.getStore()?.skippedSources ?? [])];
+  return names.length ? `Sources skipped after their check budget share: ${names.join(", ")}. Retried next check.` : null;
+}
 export function assertSeatTickWork(): void { currentWork.getStore()?.assert(); }
 export function guardedSeatTickPort<T extends object>(port: T, label: string): T {
   return currentWork.getStore()?.ports(port, label) ?? port;

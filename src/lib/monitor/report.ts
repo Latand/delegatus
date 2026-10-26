@@ -299,6 +299,8 @@ export function seatTickWakeMessage(input: {
       without it, and the seat is told what is missing from the picture rather
       than left to act on a partial one it cannot see the edges of. */
   gaps?: readonly SeatTickEvidenceGap[];
+  /** Optional reads omitted when their share of this check was spent. */
+  sourceBudgetNote?: string | null;
   /** Panel instructions, delivered in full on every scheduler wake. */
   operatorInstructions?: string | null;
   instructionLines?: SeatTickInstructionLine[];
@@ -376,6 +378,7 @@ export function seatTickWakeMessage(input: {
   const turbo = turboMandate(input.turbo, input.now ?? Date.now(), input.turboUnchanged);
   const reservation = (compactRoster = false, compactRules = false) => {
     const sections = [
+      (input.sourceBudgetNote ? ["", input.sourceBudgetNote] : []),
       compactRules ? autonomyMandate(input.autonomy, input.now ?? Date.now(), input.autonomyUnchanged, true) : autonomy,
       compactRules ? turboMandate(input.turbo, input.now ?? Date.now(), input.turboUnchanged, undefined, true) : turbo,
       (compactRoster && input.snapshotAt ? ["", `Snapshot at ${input.snapshotAt}. Re-read if delayed.`] : snapshotSection(input.snapshotAt, !!input.workers)),
@@ -498,6 +501,7 @@ export function seatTickWakePayload(input: Parameters<typeof seatTickWakeMessage
  */
 export function seatTickProposalMessage(input: {
   project: string;
+  sourceBudgetNote?: string | null;
   workers?: WakeWorkers;
   /** Oldest evidence time, preserved across transport retention and replay. */
   snapshotAt?: string;
@@ -536,6 +540,7 @@ export function seatTickProposalMessage(input: {
      the next tick reads to recognize the card it already asked for, so losing
      it to a long issue list would mint a second proposal card. */
   return boundedSeatTickMessage(lines, [
+    ...(input.sourceBudgetNote ? ["", input.sourceBudgetNote] : []),
     ...snapshotSection(input.snapshotAt, !!input.workers),
     "",
     `Produce ONE ranked list of at most ${input.items} actions, each with the evidence behind it, and post it as a single board card in inbox for this project.`,
