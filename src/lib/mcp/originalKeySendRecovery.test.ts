@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, setSystemTime, test } from "bun:test";
 
 import { NextRequest } from "next/server";
 
@@ -158,6 +158,36 @@ async function deliver(requestId: string, text: string): Promise<{ key: string; 
   registry.recordDeliveryOutcome(delivery.id, "delivered", null, "delivered");
   return { key, operationId: body.operationId };
 }
+
+test("an explicit message is delivered while its project's maintenance window is closed", async () => {
+  const { defaultSeatTickSettings, writeSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+  const { maintenanceWindowOpen } = await import("@/lib/boardMaintenance/window");
+  const project = "fixture-window-send";
+  const window = { timeZone: "Etc/UTC", weekdays: [1, 2, 3, 4, 5], startHour: 9, endHour: 17 };
+  const saved = { registry, recipient, generationId };
+  setSystemTime(new Date("2026-10-24T12:00:00Z"));
+  try {
+    writeSeatTickSettings(project, { ...defaultSeatTickSettings(project), maintenance: { enabled: true, intervalHours: 3, window, updatedAt: "2026-10-23T09:00:00.000Z", setBy: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } } });
+    expect(maintenanceWindowOpen(window, Date.now())).toBe(false);
+    registry = new AgentRegistry(path.join(root, "window-send-registry.json"), undefined, undefined, { sqliteMode: "off" });
+    registry.reconcileConversations([{
+      engine: "codex", path: transcriptPath, accountId: "fixture-window-account",
+      launchProfile: emptyLaunchProfile({ cwd: root, project }),
+      turn: { state: "idle", source: "assistant", terminalAt: null }, observedAt: "2026-10-24T12:00:00.000Z",
+    }]);
+    recipient = Object.values(registry.snapshot().conversations)[0]!;
+    expect(recipient.generations.at(-1)!.launchProfile.project).toBe(project);
+    generationId = recipient.generations.at(-1)!.id;
+    const before = admitted.length;
+    const { key } = await deliver("closed-maintenance-window", "Explicit operator message");
+    expect(admitted.slice(before)).toEqual([{ clientMessageId: key, text: "Explicit operator message" }]);
+    const settled = Object.values(registry.readOnlySnapshot().heldDeliveries).find(row => row.clientMessageId === key)!;
+    expect(settled.state).toBe("delivered");
+  } finally {
+    ({ registry, recipient, generationId } = saved);
+    setSystemTime();
+  }
+});
 
 test("the send route trims what it reserves, so the record never holds the caller's trailing newline", async () => {
   const before = admitted.length;
