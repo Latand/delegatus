@@ -45,7 +45,6 @@
     },
     {
       "removed": [
-        "legacy-tmux-migration-complete",
         "resolveTmuxEndpointContract",
         "TmuxEndpointContractInput",
         "TmuxEndpointContract",
@@ -60,7 +59,7 @@
         "src/lib/tmux.test.ts",
         "src/runtime-host/candidateContainer.test.ts"
       ],
-      "finding": "The completion marker had two readers and no concrete writer. The UID helper had only the two marker-selection callers. Endpoint selection now uses TMUX_TMPDIR directly; the existing health response shape is retained without obsolete migration errors."
+      "finding": "The old endpoint-contract APIs and UID helper are removed. Upgrade compatibility still reads legacy-tmux-migration-complete through viewerComposeServiceWithExistingTmux: candidate starts use their own state directory and staging reads prod state. The marker retains the existing endpoint and writable host bind without moving or stopping sessions. Installations without that marker use Compose TMUX_TMPDIR."
     },
     {
       "removed": [
@@ -70,7 +69,7 @@
         "src/runtime-host/candidateContainer.ts: viewerCandidateDockerArgs",
         "src/runtime-host/stagingContainer.ts: stagingDockerArgs"
       ],
-      "finding": "Its only added behavior was the external supervisor mount. Both callers now consume the unchanged Compose volumes directly; ordinary bind validation and create_host_path behavior remain covered."
+      "finding": "The old volume helper is removed. Containers consume Compose volumes after marker-based endpoint compatibility adds the existing writable host bind when needed. Conflicting and read-only endpoint mounts refuse startup. Ordinary bind validation and create_host_path behavior remain covered."
     },
     {
       "removed": [
@@ -1217,5 +1216,196 @@
       "rehearsal": "Two private runtime-host generations, an ephemeral loopback port, a private socket and a stub Docker command."
     },
     "performanceClaim": null
+  },
+  "reviewFix": {
+    "recordedAt": "2026-10-26T18:07:11.864866+00:00",
+    "parentCommit": "9477d9d88dca8240f182b650c243afe86611545f",
+    "baseCommit": "0728b67c411f29e65b446cf6f4fd591a0c0bb819",
+    "finding": "Retain the effective tmux endpoint of installations carrying a completed migration marker.",
+    "implementation": "Candidate starts read their own marker; staging reads the production marker. A shared resolver retains the numeric-uid endpoint and writable host bind, refuses conflicting mounts, and leaves marker files and sessions untouched. No external-mode toggle or migration writer is restored.",
+    "sourceSha256": {
+      "docker-compose.yml": "74de91df5cd441e57b3230114505d1b0ee75d5f9831756e20a8c51445c119a88",
+      "scripts/deploy-staging.test.ts": "2b776249e8d215fba892c2d9b56b677ffad5e05901aac3dc033980982dfab047",
+      "scripts/deploy-staging.ts": "d0b18ce5836df203adace2acce2559d19ad4cc227e878587e458235b1a2b5578",
+      "scripts/runtime-host-viewer-adapter.test.ts": "e9962209f29f622bb66e799b2879d00a1e679591ac54e94223e39b9b04d1db7e",
+      "scripts/runtime-host-viewer-adapter.ts": "790cb544201f751fd61985dcd4832513c37fddc9ae494d4948f865f57c80b7e0",
+      "src/runtime-host/candidateContainer.test.ts": "cda78a6fb33afc8b200d3566eef3680b7659f5701281141f9c79b7b50251bc28",
+      "src/runtime-host/candidateContainer.ts": "80f7130026cab961cd7447605c11d91ce4810cf9b501526b4ad9e1bf3a930db2"
+    },
+    "procedure": {
+      "wrapper": "scripts/gate-slot.sh from the pinned launch release; one outer admission reused by serial child gates",
+      "isolation": "Detached scratch clones with captured HEAD and origin/main, matching dependency inputs, checkEnvironment followed by isolatedEnvironment, isolated HOME/XDG_CONFIG_HOME/TMPDIR/LLV_STATE_DIR and a closed Viewer control port.",
+      "tests": "setsid --wait bun test --timeout=60000 <explicit file>; stdin closed; nine head files, then complete baseline files with failures",
+      "mutation": "Replace only viewerComposeServiceWithExistingTmux body with return service; run the three new behavioral cases individually; restore before full-file runs.",
+      "types": "bun node_modules/typescript/bin/tsc --noEmit --incremental false",
+      "eslint": "bun node_modules/eslint/bin/eslint.js <six touched TypeScript files>",
+      "runtimeHost": "bun scripts/verify-runtime-host.ts --runtime <pinned Bun 1.4.0>"
+    },
+    "redControl": [
+      {
+        "file": "scripts/deploy-staging.test.ts",
+        "exit": 1,
+        "pass": 0,
+        "fail": 1,
+        "failedTests": [
+          "staging starts retain prod's migrated tmux endpoint and mount across repeated starts"
+        ]
+      },
+      {
+        "file": "src/runtime-host/candidateContainer.test.ts",
+        "exit": 1,
+        "pass": 0,
+        "fail": 1,
+        "failedTests": [
+          "existing tmux endpoints survive repeated Compose resolution without changing state or configured mounts"
+        ]
+      },
+      {
+        "file": "scripts/runtime-host-viewer-adapter.test.ts",
+        "exit": 1,
+        "pass": 0,
+        "fail": 1,
+        "failedTests": [
+          "candidate starts retain the migrated tmux endpoint and mount across adapter restarts"
+        ]
+      }
+    ],
+    "tests": [
+      {
+        "file": "scripts/deploy-staging.test.ts",
+        "exit": 0,
+        "pass": 10,
+        "fail": 0,
+        "failedTests": []
+      },
+      {
+        "file": "src/runtime-host/candidateContainer.test.ts",
+        "exit": 0,
+        "pass": 20,
+        "fail": 0,
+        "failedTests": []
+      },
+      {
+        "file": "src/runtime-host/stagingContainer.test.ts",
+        "exit": 0,
+        "pass": 11,
+        "fail": 0,
+        "failedTests": []
+      },
+      {
+        "file": "scripts/runtime-host-viewer-adapter.test.ts",
+        "exit": 0,
+        "pass": 47,
+        "skip": 2,
+        "fail": 0,
+        "failedTests": []
+      },
+      {
+        "file": "src/lib/tmux.test.ts",
+        "exit": 0,
+        "pass": 38,
+        "fail": 0,
+        "failedTests": []
+      },
+      {
+        "file": "src/lib/tmux.proactive.test.ts",
+        "exit": 0,
+        "pass": 8,
+        "fail": 0,
+        "failedTests": []
+      },
+      {
+        "file": "src/lib/stateOwnership.entryPoints.test.ts",
+        "exit": 0,
+        "pass": 32,
+        "fail": 0,
+        "failedTests": []
+      },
+      {
+        "file": "src/app/api/files/route.test.ts",
+        "exit": 1,
+        "pass": 144,
+        "fail": 8,
+        "failedTests": [
+          "repeated files reads reuse the pure read snapshot and retain ETag behavior",
+          "cached files responses avoid scan copies and keep inline enrichment out of the scan cache",
+          "SQLite health exposes the authoritative revision and no mirror, without conditional-response churn",
+          "a bridge report invalidates a warm files projection through the report collection's revision (#1870 slice 4)",
+          "a cross-process SQLite pipeline commit invalidates a warm files projection",
+          "project query changes reuse one global scan snapshot",
+          "a burst of concurrent and rapid sequential polls over an unchanged corpus causes one build",
+          "a project-scoped burst keeps its own representation without rebuilding the unscoped one"
+        ]
+      },
+      {
+        "file": "src/runtime-host/deployment.test.ts",
+        "exit": 1,
+        "pass": 35,
+        "fail": 1,
+        "failedTests": [
+          "managed auto retains a disconnected request through late admission and a newer main"
+        ]
+      }
+    ],
+    "baselineComparisons": [
+      {
+        "file": "src/app/api/files/route.test.ts",
+        "exit": 1,
+        "pass": 145,
+        "fail": 8,
+        "failedTests": [
+          "repeated files reads reuse the pure read snapshot and retain ETag behavior",
+          "cached files responses avoid scan copies and keep inline enrichment out of the scan cache",
+          "SQLite health exposes the authoritative revision and no mirror, without conditional-response churn",
+          "a bridge report invalidates a warm files projection through the report collection's revision (#1870 slice 4)",
+          "a cross-process SQLite pipeline commit invalidates a warm files projection",
+          "project query changes reuse one global scan snapshot",
+          "a burst of concurrent and rapid sequential polls over an unchanged corpus causes one build",
+          "a project-scoped burst keeps its own representation without rebuilding the unscoped one"
+        ]
+      },
+      {
+        "file": "src/runtime-host/deployment.test.ts",
+        "exit": 1,
+        "pass": 35,
+        "fail": 1,
+        "failedTests": [
+          "managed auto retains a disconnected request through late admission and a newer main"
+        ]
+      }
+    ],
+    "newFailingTests": [],
+    "totals": {
+      "pass": 345,
+      "fail": 9,
+      "skip": 2
+    },
+    "checks": {
+      "types": 0,
+      "eslint": 0
+    },
+    "runtimeHost": {
+      "ok": true,
+      "runtime": "bun 1.4.0",
+      "succession": {
+        "predecessorReadyMs": 1016,
+        "successorTookOverMs": 1011,
+        "completed": true
+      },
+      "listener": {
+        "windowMs": 15000,
+        "polls": 27,
+        "answered": 27,
+        "abandoned": 13
+      },
+      "socket": {
+        "polls": 27,
+        "answered": 27,
+        "abandoned": 13
+      }
+    },
+    "setupObservation": "The initial adapter full-file run lacked dist/mcp-server.mjs in the fresh clone. The MCP bundle was built in scratch and the entire adapter file rerun; only the completed rerun contributes to totals.",
+    "admissionNotes": "Two initial 30-second cumulative queue-lock budgets expired before any test started. The completed batch used a 120-second lock budget. These refusals were excluded from assertion results.",
+    "safety": "Only test-owned processes and private fixture state were used. No production process or live state was changed. No performance gain is claimed."
   }
 }

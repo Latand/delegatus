@@ -1,4 +1,5 @@
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
+import fs from "node:fs";
 import path from "node:path";
 
 import { viewerBootGateKey } from "@/lib/access/phoneAccessBootGate";
@@ -155,6 +156,24 @@ export function viewerComposeServiceFromConfig(configJson: string): ViewerCompos
     refused by such a release, and every deploy with it. */
 export function viewerCandidateGateKey(configJson: string): string | null {
   return viewerBootGateKey(viewerComposeServiceFromConfig(configJson).environment);
+}
+
+/** Retain the endpoint selected by an earlier migration. Reading the marker
+ * must neither move sessions nor start or stop their server. */
+export function viewerComposeServiceWithExistingTmux(stateDir: string, service: ViewerComposeService): ViewerComposeService {
+  if (!fs.existsSync(path.join(stateDir, "legacy-tmux-migration-complete"))) return service;
+  const uid = service.user.split(":", 1)[0];
+  if (!uid || !/^\d+$/.test(uid)) throw new Error("Viewer Compose user must begin with a numeric uid");
+  const endpoint = `/run/user/${uid}/agent-log-viewer`;
+  const existing = service.volumes.find(volume => volume.target === endpoint);
+  if (existing && (existing.source !== endpoint || existing.read_only)) {
+    throw new Error("Existing tmux endpoint mount must expose the writable host directory");
+  }
+  return {
+    ...service,
+    environment: { ...service.environment, TMUX_TMPDIR: endpoint },
+    volumes: existing ? service.volumes : [...service.volumes, { type: "bind", source: endpoint, target: endpoint, bind: {} }],
+  };
 }
 
 /** Compose short binds explicitly request source creation. Docker --volume

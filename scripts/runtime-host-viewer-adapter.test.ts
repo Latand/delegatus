@@ -680,7 +680,7 @@ test("bounded promoted verification retains the real 503 startup phase and categ
 });
 
 async function runAction(options: {
-  action: "promote" | "retain-only" | "rollback" | "complete-host-handoff" | "reconcile-mcp-runtime" | "verify-candidate" | "candidate-log";
+  action: "start-candidate" | "promote" | "retain-only" | "rollback" | "complete-host-handoff" | "reconcile-mcp-runtime" | "verify-candidate" | "candidate-log";
   input: unknown;
   dockerScript: string;
   snapshots?: string[];
@@ -758,6 +758,45 @@ async function runAction(options: {
     state,
   };
 }
+
+test("candidate starts retain the migrated tmux endpoint and mount across adapter restarts", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-existing-tmux-"));
+  const state = path.join(sandbox, "state");
+  const marker = path.join(state, "legacy-tmux-migration-complete");
+  const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
+  const endpoint = `http://127.0.0.1:${listener.port}`;
+  await listener.stop(true);
+  const candidate = { image: "viewer:test", container: "viewer-existing-tmux", endpoint, revision: "a".repeat(40) };
+  const snapshot = JSON.parse(composeSnapshot());
+  snapshot.services.viewer.environment.TMUX_TMPDIR = "/tmp";
+  const dockerScript = `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1 $2" = "container inspect" ]; then echo 'No such container' >&2; exit 1; fi
+if [ "$1" = run ]; then exit 0; fi
+exit 1
+`;
+  try {
+    for (let start = 0; start < 2; start++) {
+      const result = await runAction({
+        action: "start-candidate", input: { candidate }, dockerScript, sandbox, preserveSandbox: true,
+        setupState: start === 0 ? (directory) => {
+          fs.writeFileSync(marker, "completed\n");
+          fs.writeFileSync(path.join(directory, "deployments", "compose", viewerComposeSnapshotName(candidate.container)), JSON.stringify(snapshot));
+        } : undefined,
+      });
+      expectAdapterSuccess(result);
+      const runs = result.dockerCalls.filter(call => call.startsWith("run "));
+      expect(runs).toHaveLength(start + 1);
+      for (const call of runs) {
+        expect(call.split(" ")).toContain("TMUX_TMPDIR=/run/user/1000/agent-log-viewer");
+        expect(call.split(" ")).toContain("type=bind,source=/run/user/1000/agent-log-viewer,target=/run/user/1000/agent-log-viewer");
+      }
+      expect(result.dockerCalls.filter(call => !call.startsWith("run ")))
+        .toEqual(Array(start + 1).fill(`container inspect ${candidate.container}`));
+      expect(fs.readFileSync(marker, "utf8")).toBe("completed\n");
+    }
+  } finally { fs.rmSync(sandbox, { recursive: true, force: true }); }
+});
 
 function initializeHotStateFixture(
   state: string,

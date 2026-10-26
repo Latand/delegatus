@@ -12,6 +12,8 @@ import {
   stagingAgentViewerMcpEnvironment,
   stagingImageName,
   stagingStatePaths,
+  stagingRuntimeHostDockerArgs,
+  stagingViewerDockerArgs,
 } from "../src/runtime-host/stagingContainer";
 import {
   PROD_STATE_EVIDENCE_FILES,
@@ -20,6 +22,7 @@ import {
   retainStagingMcpRuntimes,
   stagingAgentControl,
   stagingRequestHeaders,
+  stagingContainerContext,
   type ProdStateFingerprint,
 } from "./deploy-staging";
 
@@ -101,6 +104,31 @@ function stagingFixture(): { home: string; context: Parameters<typeof stagingAge
   };
   return { home, context, cleanup: () => fs.rmSync(home, { recursive: true, force: true }) };
 }
+
+test("staging starts retain prod's migrated tmux endpoint and mount across repeated starts", () => {
+  const { home, context, cleanup } = stagingFixture();
+  const prodState = path.join(home, "prod-state");
+  const marker = path.join(prodState, "legacy-tmux-migration-complete");
+  context.service.environment.TMUX_TMPDIR = "/tmp";
+  try {
+    fs.mkdirSync(prodState);
+    expect(stagingContainerContext(context, prodState).tmux.tmuxTmpdir).toBe("/tmp");
+    fs.writeFileSync(marker, "completed\n");
+    const before = fs.statSync(marker);
+    for (let start = 0; start < 2; start++) {
+      const resolved = stagingContainerContext(context, prodState);
+      for (const args of [stagingViewerDockerArgs(resolved), stagingRuntimeHostDockerArgs(resolved)]) {
+        expect(args).toContain("TMUX_TMPDIR=/run/user/1000/agent-log-viewer");
+        expect(args).toContain("type=bind,source=/run/user/1000/agent-log-viewer,target=/run/user/1000/agent-log-viewer");
+        expect(args).toContain(`LLV_STATE_DIR=${context.paths.stateDir}`);
+      }
+      expect(context.service.environment.TMUX_TMPDIR).toBe("/tmp");
+      expect(fs.readFileSync(marker, "utf8")).toBe("completed\n");
+      expect(fs.statSync(marker).mtimeMs).toBe(before.mtimeMs);
+      expect(fs.readdirSync(prodState)).toEqual(["legacy-tmux-migration-complete"]);
+    }
+  } finally { cleanup(); }
+});
 
 /* What the deploy publishes before the new pair starts: the staging release
    target and the staging Viewer's compose snapshot, plus an operator key that

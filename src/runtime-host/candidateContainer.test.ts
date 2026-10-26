@@ -13,6 +13,7 @@ import {
   viewerCandidateGateKey,
   viewerComposeSnapshotWithoutUnsupportedApiCredentials,
   viewerComposeServiceFromConfig,
+  viewerComposeServiceWithExistingTmux,
   type ViewerComposeService,
 } from "./candidateContainer";
 
@@ -54,6 +55,39 @@ const composeService = {
   ],
   working_dir: "/app",
 } satisfies ViewerComposeService;
+
+test("existing tmux endpoints survive repeated Compose resolution without changing state or configured mounts", () => {
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), "tmux-endpoint-"));
+  const marker = path.join(state, "legacy-tmux-migration-complete");
+  try {
+    const configured = { ...composeService, environment: { TMUX_TMPDIR: "/configured/tmux" } };
+    expect(viewerComposeServiceWithExistingTmux(state, configured)).toBe(configured);
+    fs.writeFileSync(marker, "completed\n");
+    const before = fs.statSync(marker);
+    const resolved = viewerComposeServiceWithExistingTmux(state, configured);
+    expect(resolved.environment.TMUX_TMPDIR).toBe("/run/user/1000/agent-log-viewer");
+    expect(resolved.volumes.at(-1)).toEqual({
+      type: "bind", source: "/run/user/1000/agent-log-viewer", target: "/run/user/1000/agent-log-viewer", bind: {},
+    });
+    expect(viewerComposeServiceWithExistingTmux(state, resolved)).toEqual(resolved);
+    expect(viewerComposeServiceWithExistingTmux(state, configured)).toEqual(resolved);
+    expect(configured.environment.TMUX_TMPDIR).toBe("/configured/tmux");
+    expect(configured.volumes).toHaveLength(2);
+    expect(fs.readFileSync(marker, "utf8")).toBe("completed\n");
+    expect(fs.statSync(marker).mtimeMs).toBe(before.mtimeMs);
+    expect(fs.readdirSync(state)).toEqual(["legacy-tmux-migration-complete"]);
+    expect(viewerComposeServiceWithExistingTmux(state, { ...configured, user: "1201:1201" }).environment.TMUX_TMPDIR)
+      .toBe("/run/user/1201/agent-log-viewer");
+    expect(() => viewerComposeServiceWithExistingTmux(state, { ...configured, user: "viewer" })).toThrow("numeric uid");
+    for (const volume of [
+      { type: "bind" as const, source: "/elsewhere", target: "/run/user/1000/agent-log-viewer", bind: {} },
+      { type: "bind" as const, source: "/run/user/1000/agent-log-viewer", target: "/run/user/1000/agent-log-viewer", read_only: true, bind: {} },
+    ]) {
+      expect(() => viewerComposeServiceWithExistingTmux(state, { ...configured, volumes: [volume] }))
+        .toThrow("writable host directory");
+    }
+  } finally { fs.rmSync(state, { recursive: true, force: true }); }
+});
 
 function valuesAfter(args: string[], flag: string): string[] {
   return args.flatMap((value, index) => value === flag ? [args[index + 1]!] : []);

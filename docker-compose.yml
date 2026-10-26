@@ -25,8 +25,8 @@ x-viewer-common: &viewer-common
     PATH: /usr/local/bin:${HOME:-/home/user}/.bun/bin:${HOME:-/home/user}/.npm-global/bin:${HOME:-/home/user}/.local/bin:/usr/bin:/bin
     XDG_CONFIG_HOME: ${HOME:-/home/user}/.config
     XDG_CACHE_HOME: ${HOME:-/home/user}/.cache
-    # Keep /tmp until the explicit migration flag is enabled. The supervisor
-    # endpoint lives outside the disposable Viewer container.
+    # New installations use /tmp. Deployers retain the existing endpoint and
+    # host mount when an earlier installation has a completed migration marker.
     TMUX_TMPDIR: ${DELEGATUS_TMUX_TMPDIR:-${LLV_TMUX_TMPDIR:-/tmp}}
     HF_HOME: ${HOME:-/home/user}/.cache/huggingface
     LLV_WHISPER_VENV: /opt/llv-whisper-venv

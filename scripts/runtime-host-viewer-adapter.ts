@@ -42,6 +42,7 @@ import {
   viewerCandidateDockerArgs,
   viewerCandidateGateKey,
   viewerComposeServiceFromConfig,
+  viewerComposeServiceWithExistingTmux,
   viewerRegistryBackendMode,
 } from "../src/runtime-host/candidateContainer";
 import { ensureCanonicalMirror, resolveCanonicalRevision } from "../src/runtime-host/canonicalMirror";
@@ -439,7 +440,8 @@ async function startCandidate(candidate: ViewerReleaseIdentity): Promise<void> {
     return;
   }
   if (!await isCandidatePortAvailable(port)) throw new Error("candidate Viewer port is unavailable before start");
-  const composeService = viewerComposeServiceFromConfig(fs.readFileSync(composeConfigFile(candidate.container), "utf8"));
+  const composeService = viewerComposeServiceWithExistingTmux(stateDir,
+    viewerComposeServiceFromConfig(fs.readFileSync(composeConfigFile(candidate.container), "utf8")));
   await command(viewerCandidateDockerArgs(candidate, composeService, {
     runtimeSocket,
     tmuxTmpdir: composeService.environment.TMUX_TMPDIR || "/tmp",
