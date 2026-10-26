@@ -1,3 +1,8 @@
+import { agentRegistry, type RegistryFile } from "@/lib/agent/registry";
+import { bindHostExitWriter, recordHostExit, recordHostStop, withHostStopOrigin } from "@/lib/runtime/hostExit";
+import { captureProcessIdentity } from "@/lib/processIdentity";
+import fs from "node:fs";
+import { HOST_END_REASON_MAX_CHARS } from "@/lib/runtime/hostEndCause";
 import { expect, test, spawn, makeStructuredAttempt, pinStageHead, AccountAuthenticationRequiredError, ProjectAccountRefusedError, selectProjectAccount, IDLE_TURN_QUIET_MS, tickPipelines, createPipelineFromRequest, loadPipelines, savePipelines, patchPipeline, entry, harness, create, structuredLatest, runningStructuredStage, LIMITED_ACCOUNT, SPARE_ACCOUNT, stageTranscript, readFixtures, providerQuotaRecord, SILENT_RUN, stageWhoseStopMovesTheTranscript, recoveryReport, providerRecoveryHarness, parkedAccountCases, parkedAccountHarness } from "./engine.fixture";
 import type { DurableQuotaObservation, PipelinePorts, StageTurnEvidence } from "./engine.fixture";
 import { AgentRegistry, defaultPipelinePorts, path, spyOn } from "./engine.fixture";
@@ -58,7 +63,7 @@ test("a host that worked on after an earlier stop of ours and is then found dead
   h.advanceWallClock(6 * 60_000);
   await tickPipelines([entry(attempt.agentPath!)], sameBoot("dead"));
   const lane = loadPipelines()[0]!;
-  expect(lane.runs[0]!.attempts[0]!.error).toBe("stage host was lost while its turn was open; replaced by a fresh stage attempt");
+  expect(lane.runs[0]!.attempts[0]!.error).toBe("stage host was lost while its turn was open (exit: status unavailable; no Delegatus stop recorded); replaced by a fresh stage attempt");
   expect(lane.runs[0]!.attempts[1]!.restartContext).toMatchObject({ cause: "host-lost" });
   expect(lane.runs[0]!.attempts[0]!.restartRecovery!.stopped).toBeUndefined();
 });
@@ -125,7 +130,7 @@ test.each([
   await tickPipelines([entry(replacement.agentPath!)], sameBoot(second));
   const parkedLane = loadPipelines()[0]!;
   expect(parkedLane.state).toBe("needs_decision");
-  expect(parkedLane.stateDetail).toBe(parked);
+  expect(parkedLane.stateDetail).toBe(parked + (second === "dead" ? "; exit: status unavailable; no Delegatus stop recorded" : ""));
   expect(parkedLane.stateDetail).not.toContain("too");
   expect(parkedLane.stateDetail).not.toContain("again");
   expect(parkedLane.stateDetail).not.toContain("restart");
@@ -639,4 +644,95 @@ test.each(["claude", "codex"] as const)("a fresh allowed %s account replaces an 
   expect(f.h.spawnInputs[1]!.requestedAccountId).toBe("account-c");
   expect(f.h.spawnInputs[1]!.unavailableAccountIds).toContain(SPARE_ACCOUNT);
   expect(f.sends).toHaveLength(0);
+});
+
+test("a lost stage names its exit and sender in the attempt error and lane detail", async () => {
+  const h = harness();
+  await runningStructuredStage(h);
+  const attempt = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(attempt.startedAt!) + 1 });
+  let hostExit = "exit: status unavailable; no Delegatus stop recorded";
+  await tickPipelines([entry(attempt.agentPath!)], { ...h.ports,
+    stopInterruptedStageAgent: async () => { hostExit = "exit: signal SIGKILL; no Delegatus stop recorded"; return { outcome: "not-running" }; },
+    restartRecoveryBootId: () => "exit-evidence-boot",
+    restartRecoveryBootStartedAt: () => Date.parse(attempt.startedAt!) - 60_000,
+    conversationTurnInterrupted: async () => "dead",
+    conversationHostEnded: (_conversationId, launchId) => { expect(launchId).toBe(attempt.launchId); return hostExit; } });
+  const lane = loadPipelines()[0]!;
+  expect(lane.runs[0]!.attempts[0]!.error).toContain("exit: signal SIGKILL; no Delegatus stop recorded");
+  expect(lane.stateDetail).toContain("exit: signal SIGKILL; no Delegatus stop recorded");
+});
+
+test("exit lookup stays bound to the attempt launch when a successor is current", () => {
+  const registry = agentRegistry();
+  const current = registry.readOnlySnapshot();
+  const conversationId = "conversation_exit_scope";
+  const oldKey = { engine: "codex" as const, sessionId: "exit-old-session" };
+  const newKey = { engine: "codex" as const, sessionId: "exit-new-session" };
+  const oldProcess = { pid: 2147482901, startIdentity: "exit-old-start", bootEpoch: "fixture-boot" };
+  const newProcess = { pid: 2147482902, startIdentity: "exit-new-start", bootEpoch: "fixture-boot" };
+  recordHostExit(oldProcess, 23, null);
+  recordHostExit(newProcess, 99, null);
+  const view = { ...current,
+    entries: { ...current.entries,
+      [`codex:${oldKey.sessionId}`]: { hostExitProcess: oldProcess },
+      [`codex:${newKey.sessionId}`]: { hostExitProcess: newProcess } },
+    conversations: { ...current.conversations, [conversationId]: { id: conversationId, engine: "codex", generations: [oldKey, newKey].map(key => ({ id: key.sessionId })) } },
+    receipts: { ...current.receipts, "exit-old-launch": { key: oldKey, conversationId }, "exit-unrelated-launch": { key: newKey, conversationId: "conversation_unrelated_exit" } },
+  } as unknown as RegistryFile;
+  const read = spyOn(registry, "readOnlySnapshot").mockReturnValue(view);
+  const receipt = spyOn(registry, "spawnReceipt").mockImplementation(id => view.receipts[id] ?? null);
+  try {
+    const ports = defaultPipelinePorts();
+    expect(ports.conversationHostEnded!(conversationId, "exit-old-launch")).toContain("exit: code 23;");
+    expect(ports.conversationHostEnded!(conversationId, "exit-old-launch")).not.toContain("code 99");
+    expect(ports.conversationHostEnded!(conversationId, "exit-unrelated-launch")).toBeNull();
+  } finally { read.mockRestore(); receipt.mockRestore(); }
+});
+
+for (const sender of ["pipeline-stage-stop", null]) test(`lost-host stage projection preserves exit and sender ahead of the maximum diagnostic (${sender})`, async () => {
+  const h = harness();
+  await runningStructuredStage(h);
+  const attempt = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(attempt.startedAt!) + 1 });
+  const registry = agentRegistry();
+  const identity = { pid: 2147482597, startIdentity: `projection-error-${sender}`, bootEpoch: "fixture-boot" };
+  const key = { engine: "claude" as const, sessionId: `projection-error-${sender}` };
+  const diagnostic = { kind: "host-fault" as const, reason: "r".repeat(HOST_END_REASON_MAX_CHARS), code: null, signal: null, signalledByHost: true, at: h.ports.now() };
+  const launch = registry.beginSpawn("claude", "fixtures", { title: "Maximum host end diagnostic" });
+  registry.stageStructuredSpawn(launch.launchId, { key, artifactPath: "fixtures/claude-exit.jsonl", cwd: "fixtures", accountId: null,
+    status: "dead", host: null, claimEpoch: 1, claimOwner: null, pendingAction: null,
+    structuredHost: { kind: "claude-broker", process: identity, exitProcess: identity, endpoint: "stdio:fixture",
+      eventCursor: 0, protocolVersion: null, writerClaimEpoch: 1, activeTurnRef: "open-turn", pendingAttention: [], activeFlags: [],
+      ended: diagnostic } });
+  const saved = loadPipelines()[0]!;
+  saved.runs[0]!.attempts[0]!.launchId = launch.launchId;
+  saved.runs[0]!.attempts[0]!.conversationId = launch.conversationId;
+  savePipelines([saved]);
+  const binding = fs.mkdtempSync(path.join(process.env.TMPDIR!, "projection-late-exit-"));
+  try {
+    bindHostExitWriter(binding, identity, captureProcessIdentity(process.pid));
+    await tickPipelines([entry(attempt.agentPath!)], { ...h.ports,
+      restartRecoveryBootId: () => "projection-error-boot",
+      restartRecoveryBootStartedAt: () => Date.parse(attempt.startedAt!) - 60_000,
+      conversationTurnInterrupted: async () => "dead",
+      stopInterruptedStageAgent: async () => {
+        const successor = { ...identity, startIdentity: "projection-successor" };
+        registry.setStructuredHost(key, { kind: "claude-broker", process: successor, endpoint: "stdio:successor",
+          eventCursor: 0, protocolVersion: null, writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [], ended: diagnostic });
+        if (sender) withHostStopOrigin({ path: sender, operationId: "projection-error-operation" }, () => recordHostStop(identity, "SIGKILL", "fallback"));
+        recordHostExit(identity, null, "SIGKILL");
+        recordHostExit(successor, 99, null);
+        return { outcome: "not-running" };
+      },
+      conversationHostEnded: () => defaultPipelinePorts().conversationHostEnded!(launch.conversationId, launch.launchId),
+    });
+    const lane = loadPipelines()[0]!;
+    const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
+    const projected = await viewerMcpBindings().get_pipeline({ pipelineId: lane.id, stageId: "plan", attempt: 1 });
+    const source = sender ? "stopped by pipeline-stage-stop (projection-error-operation)" : "no Delegatus stop recorded";
+    expect(lane.runs[0]!.attempts[0]!.error).toContain(`exit: signal SIGKILL; ${source}`);
+    expect(lane.stateDetail).toContain(`exit: signal SIGKILL; ${source}`);
+    expect(projected).toMatchObject({ attempt: { error: expect.stringContaining(`exit: signal SIGKILL; ${source}`) } });
+  } finally { fs.rmSync(binding, { recursive: true, force: true }); }
 });
