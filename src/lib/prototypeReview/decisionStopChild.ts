@@ -21,10 +21,11 @@ const { NextRequest } = await import("next/server");
 const { prototypeDelivery } = await import("./decision");
 const { reviewPOST } = await import("./http");
 const { prototypeWorld } = await import("./world");
+const { soloBrowserSession } = await import("@/lib/agent/operatorSession");
 
 let answered!: () => void;
 const checked = new Promise<void>(resolve => { answered = resolve; });
-const response = await reviewPOST(new NextRequest(`http://localhost/api/tasks/${taskId}/prototypes`,{ method: "POST", headers: { host: "localhost", "sec-fetch-site": "same-origin" },
+const response = await reviewPOST(new NextRequest(`http://localhost/api/tasks/${taskId}/prototypes`,{ method: "POST", headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "localhost", "sec-fetch-site": "same-origin" },
   body: JSON.stringify({ reviewId, chosen: [1,2], comment }) }),taskId,{ ...prototypeWorld, orchestrator: () => seat },
 { ...prototypeDelivery, send: async () => { await checked; process.exit(0); } });
 const body = await response.json() as { rounds: Array<{ id: string; decision?: { delivery: { phase?: string } } }> };

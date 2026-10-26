@@ -15,7 +15,7 @@ import {
   isQuietReconfigureFailure, onAccountChoiceRequest, pickApplying, readPickedAccount, requestAccountChoice, setPickedAccount, useIntendedAccount,
 } from "@/lib/accounts/intendedAccount";
 import { effortScale, registerCopilotEffortScales } from "@/lib/agent/efforts";
-import { ENGINE_MODELS, claudeCatalogModelId } from "@/lib/agent/models";
+import { ENGINE_MODELS, claudeCatalogModelId, listedModels } from "@/lib/agent/models";
 import type { AgentModelOption } from "@/lib/agent/models";
 import type { CopilotModelEntry } from "@/lib/agent/copilotModels";
 import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
@@ -218,7 +218,7 @@ export function RuntimePill({
           ? [{ id: file.model, label: file.model, shortLabel: file.model, use: "general" as const }]
           : []),
       ]
-    : engine ? ENGINE_MODELS[engine] : [];
+    : engine ? listedModels(engine, file.model) : [];
   /* #1846: the account the operator picked for this conversation, shown the moment it is tapped. It stands
      until the runtime session projects the same choice, which every other page then reads too.
      The pick is shared with the page's other account surfaces, so the header and the card badge say it too. */

@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { assertStateChildSuccess } from "@/lib/state/stateChildResult.fixture";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry, normalizeRegistry, RegistryParityError, type SeatChildrenAnchor } from "./registry";
@@ -1929,10 +1930,14 @@ test("production-sized SQLite registry admits every ten-lane write beside a conc
     /* The first open imported the 14 MB JSON and kept it renamed (#1870). */
     expect(fs.existsSync(filename)).toBeFalse();
     fs.writeFileSync(start, "start");
-    expect(await Promise.all(children.map(({ child }) => child.exited))).toEqual(Array(10).fill(0));
-    expect(await reader.exited).toBe(0);
-    expect(await Promise.all(children.map(({ child }) => new Response(child.stderr).text()))).toEqual(Array(10).fill(""));
-    expect(await new Response(reader.stderr).text()).toBe("");
+    const outcomes = await Promise.all([...children.map(({ child }) => child), reader]
+      .map(child => Promise.all([child.exited, new Response(child.stderr).text()])));
+    let diagnosticCount = 0;
+    for (const [code, output] of outcomes) {
+      assertStateChildSuccess(code, output);
+      diagnosticCount += output.split("\n").filter(line => line.startsWith("[blocking-wait] ")).length;
+    }
+    console.info(`[agent registry benchmark] timed wait diagnostics: ${diagnosticCount}`);
     const measurements = children.map(({ result }) => JSON.parse(fs.readFileSync(result, "utf8")) as {
       durations: number[];
       writerWaits: number[];

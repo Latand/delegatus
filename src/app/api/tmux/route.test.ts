@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 
 const realResources = { ...(await import("@/lib/resources")) };
 const previousCodexHome = process.env.LLV_CODEX_HOME;
@@ -187,10 +188,12 @@ function get(url: string): NextRequest {
   return new NextRequest(url, { headers: { host: "127.0.0.1" } });
 }
 
+/** A Delegatus page's post: it carries the session its navigation opened.
+    Agent and service claims ride beside it and still decide attribution. */
 function post(body: unknown, headers: Record<string, string> = {}): NextRequest {
   return new NextRequest("http://127.0.0.1/api/tmux", {
     method: "POST",
-    headers: { host: "127.0.0.1", "content-type": "application/json", ...headers },
+    headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "content-type": "application/json", ...headers },
     body: JSON.stringify(body),
   });
 }
@@ -269,9 +272,9 @@ test.each(["interrupt", "kill"].flatMap(action => ["browser", "service", "api-cl
   process.env.LLV_STRUCTURED_HOSTS = "1";
   structuredControlResult = { status: 202, body: { ok: true, structured: true, target: "conversation_stage", operationId: "control-custody", receipt: { operationId: "control-custody", status: "queued" } } };
   setCallerConversationResolverForTests(() => "conversation_agent");
-  const headers: Record<string, string> = caller === "browser" ? { "sec-fetch-site": "same-origin" }
+  const headers: Record<string, string> = caller === "browser" ? { cookie: `llv_operator=${soloBrowserSession()}`, "sec-fetch-site": "same-origin" }
     : caller === "service" ? { ...internalServiceHeaders("monitor"), "sec-fetch-site": "same-origin" }
-      : caller === "agent" ? { [VIEWER_SPAWN_CAPABILITY_HEADER]: "a".repeat(43) } : {};
+      : caller === "agent" ? { [VIEWER_SPAWN_CAPABILITY_HEADER]: "a".repeat(43) } : { cookie: "" };
   try {
     const response = await conversationHostPOST(post({ path: PATHNAME, action, operationId: "control-custody", origin: { kind: "operator" } }, headers));
     expect(response.status).toBe(202);
@@ -509,6 +512,18 @@ test("/api/tmux GET keeps pid lookup for pid-only compatibility requests", async
   expect(await response.json()).toEqual({ target: "agents:9.0" });
   expect(completedScanReads).toBe(1);
   expect(pidResolutionFiles).toBe(completedFiles);
+});
+
+test("/api/tmux GET never answers a pid beside a supplied path the transcript roots refuse", async () => {
+  pidResolutionFiles = undefined;
+  pidTargets = new Map([[77, "agents:9.0"]]);
+
+  for (const identity of ["conversation_0000000000000000", "spawn:launch-fixture"]) {
+    const response = await GET(get(`http://127.0.0.1/api/tmux?pid=77&path=${encodeURIComponent(identity)}`));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ target: null });
+  }
+  expect(pidResolutionFiles).toBeUndefined();
 });
 
 test("/api/tmux POST carries concurrent sends through the delivery seam", async () => {
@@ -998,7 +1013,17 @@ test("sign-in-and-team: a member is named only on a message the delivery admitte
   const mira = claimInstall(store, "Mira", DESKTOP);
   const oleh = redeemJoin(store, createInvite(store, mira.member, null).code, "Oleh", DESKTOP);
   const asOleh = { cookie: `${MEMBER_COOKIE}=${oleh.cookie}` };
-  const send = (clientMessageId: string) => POST(post({ path: PATHNAME, conversationId: "conversation_team", text: "hello", clientMessageId }, asOleh));
+  const { createWorkspace } = await import("@/lib/team/workspaces");
+  const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const workspaceId = `w_${"d".repeat(32)}`;
+  createWorkspace(store, mira.member, { id: workspaceId, name: "Message fixture", projects: ["repo-team"] });
+  store.putWorkspaceMember(workspaceId, oleh.member.id, "member", mira.member.id, new Date().toISOString());
+  const registry = new AgentRegistry(path.join(routeCodexHome, "workspace-registry.json"));
+  setAgentRegistryForTests(registry);
+  const receipt = registry.beginSpawn("codex", routeCodexHome, { project: "repo-team", title: "Team message fixture" });
+  const { sessionKeyFromTranscript } = await import("@/lib/agent/sessionKey");
+  registry.completeSpawn(receipt.launchId, { key: sessionKeyFromTranscript("codex", PATHNAME)!, artifactPath: PATHNAME, cwd: routeCodexHome, accountId: null, status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: "spawn" });
+  const send = (clientMessageId: string) => POST(post({ path: PATHNAME, conversationId: receipt.conversationId, text: "hello", clientMessageId }, asOleh));
   const sent = () => existingTeamStore()!.events({ limit: 10, actions: ["message.sent"] });
   try {
     delivery = async () => ({ ok: false, outcome: "failed", error: "fixture host refused", status: 409 });
@@ -1016,6 +1041,7 @@ test("sign-in-and-team: a member is named only on a message the delivery admitte
     expect(messageSenders(["oleh-1"])["oleh-1"]?.name).toBe("Oleh");
     expect(sent().map((event) => event.actor)).toEqual([{ kind: "member", memberId: oleh.member.id }]);
   } finally {
+    setAgentRegistryForTests(null);
     knownSubmissions = [];
     resetTeamStoreForTests();
     fs.rmSync(path.dirname(teamStoreFile()), { recursive: true, force: true });

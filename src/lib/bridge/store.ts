@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { scrubTelegramDiagnostic } from "@/lib/telegram/bot/diagnostics";
 import { statePath } from "@/lib/configDir";
+import { databaseFileIdentity } from "@/lib/state/currentDatabase";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { FileTransactionBusyError, withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { hotStateWriterRevision, readHotStateReleaseTarget } from "@/lib/state/hotStateAuthority";
@@ -459,15 +460,6 @@ function isBridgeRow(value: unknown): value is BridgeRow {
     && Object.hasOwn(value as object, "v");
 }
 
-function databaseIdentity(database: string): string {
-  try {
-    const stat = fs.statSync(database);
-    return `${stat.dev}:${stat.ino}`;
-  } catch {
-    return "absent";
-  }
-}
-
 /* Cached per database and collection, and validated against the file's
    identity rather than its name: a test that removes its state directory and
    starts over must not be served by a connection to the file that used to be
@@ -477,7 +469,7 @@ const collections = new Map<string, { identity: string; collection: SqliteStateC
 function openCollection(database: string, name: string): SqliteStateCollection<BridgeRow> {
   const cacheKey = `${database}\0${name}`;
   const held = collections.get(cacheKey);
-  if (held && held.identity === databaseIdentity(database)) return held.collection;
+  if (held && held.identity === (databaseFileIdentity(database) ?? "absent")) return held.collection;
   const collection = new SqliteStateCollection<BridgeRow>(database, {
     collection: name,
     schemaVersion: 1,
@@ -491,13 +483,13 @@ function openCollection(database: string, name: string): SqliteStateCollection<B
       { cause: error },
     ),
   });
-  collections.set(cacheKey, { identity: databaseIdentity(database), collection });
+  collections.set(cacheKey, { identity: databaseFileIdentity(database) ?? "absent", collection });
   return collection;
 }
 
 function cachedCollection(database: string, name: string): SqliteStateCollection<BridgeRow> | null {
   const held = collections.get(`${database}\0${name}`);
-  return held && held.identity === databaseIdentity(database) ? held.collection : null;
+  return held && held.identity === (databaseFileIdentity(database) ?? "absent") ? held.collection : null;
 }
 
 /** Drops this process's cached handles. Tests that rebuild a state directory

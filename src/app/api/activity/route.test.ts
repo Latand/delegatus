@@ -215,6 +215,10 @@ test("?member=: the owner reads any member or all of them; a member reads only t
   team.insertMember({ id: memberId, name: "Rhea Stone", role: "member", status: "active", color: "violet", telegram: null,
     createdAt: new Date(now - 60_000).toISOString(), createdBy: "join", revokedAt: null });
   resetTeamStoreForTests();
+  const { createWorkspace } = await import("@/lib/team/workspaces");
+  const workspaceId = `w_${"e".repeat(32)}`;
+  createWorkspace(teamStore(), teamStore().member(ownerId)!, { id: workspaceId, name: "Activity fixture", projects: [project] });
+  teamStore().putWorkspaceMember(workspaceId, memberId, "member", ownerId, new Date(now).toISOString());
   const owner = `llv_member=${mintSession(teamStore(), ownerId, "claim", { surface: "desktop", browser: "chrome" }, now).value}`;
   const member = `llv_member=${mintSession(teamStore(), memberId, "claim", { surface: "desktop", browser: "chrome" }, now).value}`;
   const request = (cookie: string, key: string, minutesAgo: number) => recordOperatorRequest(new NextRequest("http://127.0.0.1/api/tasks", { headers: {

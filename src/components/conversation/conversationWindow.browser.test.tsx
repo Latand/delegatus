@@ -98,31 +98,43 @@ describe("scoped memory cap", () => {
     try {
       browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
       for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
-        for (const width of [390, 1280]) for (const mode of ["clamped", "unenforced"]) {
-          const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=memory-cap&lang=${lang}&mode=${mode}`, { width, height: 844 }, theme, lang);
+        for (const width of [390, 1280]) for (const mode of ["clamped", "unenforced"]) for (const surface of ["stages", "placeholder", "screen"]) {
+          const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=memory-cap&lang=${lang}&mode=${mode}&surface=${surface}`, { width, height: 844 }, theme, lang);
           try {
-            for (const surface of ["completed", "placeholder", "row"]) {
-              const frame = page.locator(`[data-memory-surface="${surface}"]`);
-              const note = frame.locator("[data-agent-memory-cap]");
-              await note.waitFor();
-              await note.scrollIntoViewIfNeeded();
-              expect(await note.innerText()).toBe(mode === "unenforced" ? translate(lang, "agentMemory.unenforced")
-                : `${translate(lang, "agentMemory.cap", { size: 8 })} ${translate(lang, "agentMemory.clamped", { size: 12 })}`);
-              const bounds = await note.evaluate(element => {
-                const frame = element.closest("[data-memory-surface]")!.getBoundingClientRect();
-                const box = element.getBoundingClientRect();
-                return { overflow: element.scrollWidth > element.clientWidth, inside: box.top >= frame.top && box.bottom <= frame.bottom };
-              });
-              expect(bounds.overflow).toBe(false);
-              expect(bounds.inside).toBe(true);
-            }
+            const frame = page.locator(`[data-memory-surface="${surface}"]`);
+            const note = frame.locator("[data-agent-memory-cap]");
+            await note.waitFor();
+            await note.scrollIntoViewIfNeeded();
+            expect(await note.innerText()).toBe(mode === "unenforced" ? translate(lang, "agentMemory.unenforced")
+              : `${translate(lang, "agentMemory.cap", { size: 8 })} ${translate(lang, "agentMemory.clamped", { size: 12 })}`);
+            const bounds = await note.evaluate(element => {
+              const frame = element.closest("[data-memory-surface]")!.getBoundingClientRect();
+              const box = element.getBoundingClientRect();
+              const clipped: string[] = [];
+              const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                if (!walker.currentNode.textContent?.trim()) continue;
+                const range = document.createRange();
+                range.selectNodeContents(walker.currentNode);
+                for (const rect of range.getClientRects()) {
+                  if (rect.left < box.left || rect.right > box.right || rect.top < box.top || rect.bottom > box.bottom
+                    || rect.left < 0 || rect.right > innerWidth || rect.top < 0 || rect.bottom > innerHeight) {
+                    clipped.push(walker.currentNode.textContent);
+                  }
+                }
+              }
+              return { overflow: element.scrollWidth > element.clientWidth, inside: box.top >= frame.top && box.bottom <= frame.bottom, clipped };
+            });
+            expect(bounds.overflow).toBe(false);
+            expect(bounds.inside).toBe(true);
+            expect(bounds.clipped).toEqual([]);
             expect(pageErrors).toEqual([]);
-            await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-${mode}.png`), fullPage: true });
+            await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-${mode}-${surface}.png`), fullPage: true });
           } finally { await context.close(); }
         }
       }
     } finally { await browser?.close(); served.stop(); }
-  });
+  }, 180_000);
 });
 
 describe("#1793 launch-prompt bubble", () => {

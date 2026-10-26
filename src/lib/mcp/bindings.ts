@@ -187,7 +187,7 @@ import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/o
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
 import { splitRelayMessageText } from "@/lib/orchestrator/relayText";
-import { leaveLessonForOperator, leaveLessonForSeat, leaveLessonForConversation, lessonRequestForReport } from "@/lib/memory/roleStage";
+import { leaveCorrectionForRole, leaveLessonForOperator, leaveLessonForSeat, leaveLessonForConversation, lessonRequestForReport } from "@/lib/memory/roleStage";
 import { operatorMemoryEnabled, storedOperatorRoot } from "@/lib/memory/operatorMemory";
 import { readMemoryProblem } from "@/lib/memory/roleProblems";
 import { RoleMemoryRefusal } from "@/lib/memory/roleStore";
@@ -2194,6 +2194,18 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
   return { ...view(readIssueReportPreview(digest, directory) ?? stored), issueUrl, published: true };
 }
 
+/** Date validation runs before receipts while preserving project admission. */
+function requireTaskCreateDue(binding: McpToolBinding): McpToolBinding {
+  const prepare = binding.prepareAdmission;
+  binding.prepareAdmission = async (args: McpToolArgs) => {
+    if (args.dueAt === undefined || args.dueAt === null || args.dueAt === "") {
+      throw new McpToolRefusal("A dueAt date is required for a new task", { code: "TASK_DUE_REQUIRED", field: "dueAt", status: 400 });
+    }
+    await prepare?.(args);
+  };
+  return binding;
+}
+
 async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   /* A new task runs on the machine that creates it (M.4); "here" is the only
      machine a create names. */
@@ -2213,7 +2225,7 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
   let prior: BoardTask | undefined;
   let matchedFields: string[] | undefined;
   const result = await waitForStateLock("mcp.tasks.create", () => mutateTasksFile((state) => {
-    let outcome = createTask(state.tasks, input, state.recentCreates, { explicit: true, actor: "agent", noteAuthor: caller?.kind === "manager" ? { kind: "orchestrator", conversationId: caller.conversationId } : { kind: "agent", conversationId: caller?.conversationId ?? null }, conversationId: caller?.conversationId ?? undefined, seatHolding: taskSeatHoldingSnapshot(), ...(dependencies ? { statusActor: pauseResumeActorOf(dependencies) } : {}) });
+    let outcome = createTask(state.tasks, input, state.recentCreates, { requireDue: true, dueTimeZone: operatorTimeZone() ?? undefined, explicit: true, actor: "agent", noteAuthor: caller?.kind === "manager" ? { kind: "orchestrator", conversationId: caller.conversationId } : { kind: "agent", conversationId: caller?.conversationId ?? null }, conversationId: caller?.conversationId ?? undefined, seatHolding: taskSeatHoldingSnapshot(), ...(dependencies ? { statusActor: pauseResumeActorOf(dependencies) } : {}) });
     // Publish the new owner task and its seat-tick eligibility atomically.
     // Replays and matched findings retain the task's existing status.
     if (outcome.ok && !outcome.replay && !outcome.matched && ownerRelay && !outcome.task.hold) {
@@ -2730,7 +2742,7 @@ async function leaveLesson(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
     const seat = caller.conversationId && (caller.kind === "manager" || caller.kind === "gateway")
       ? (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources())).find(row => row.conversationId === caller.conversationId)
       : null;
-    const answer = { lesson: args.lesson, rewrite: args.rewrite, none: args.none, problem: args.problem, applied: args.applied, misled: args.misled };
+    const answer = { correction: args.correction, lesson: args.lesson, rewrite: args.rewrite, none: args.none, problem: args.problem, applied: args.applied, misled: args.misled };
     /* The operator's own root conversation, in Delegatus mode only: proven by
        the registry, never by an argument (memory-source-switch.md §3.3). */
     const operator = () => {
@@ -2748,8 +2760,11 @@ async function leaveLesson(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
     try {
       return { ...leaveLessonForConversation(dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [], caller.conversationId, answer) };
     } catch (error) {
+      if (!(error instanceof RoleMemoryRefusal) || error.code !== "LESSON_NOT_AN_ATTEMPT" || caller.kind !== "agent") throw error;
+      // A registered role outside a pipeline may still leave an operator correction.
+      if (args.correction === true && caller.role && caller.conversationId) return { ...leaveCorrectionForRole({ conversationId: caller.conversationId, roleId: caller.role, project: dependencies.callerProject ? dependencies.callerProject() : productionCallerProject() }, answer) };
       // Only a conversation that holds no stage attempt at all may be the operator's.
-      const own = error instanceof RoleMemoryRefusal && error.code === "LESSON_NOT_AN_ATTEMPT" && caller.kind === "agent" ? operator() : null;
+      const own = operator();
       if (!own) throw error;
       return { ...leaveLessonForOperator(own, answer) };
     }
@@ -8187,7 +8202,7 @@ export function viewerMcpBindings(
     spawn_agent: (args, context) => spawnAgent(args, viewerControlForCall(controlDependencies, context), context, domainDependencies),
     send_message: (args, context) => sendMessage(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
     message_receipt: (args) => messageReceipt(args),
-    create_task: orchestratorProjectBinding(domainDependencies, (args) => createBoardTask(args, domainDependencies), true, true, true),
+    create_task: requireTaskCreateDue(orchestratorProjectBinding(domainDependencies, (args) => createBoardTask(args, domainDependencies), true, true, true)),
     update_task: Object.assign((args: McpToolArgs) => updateBoardTask(args, domainDependencies), { prepareAdmission: admitTaskDuePatch }),
     create_pipeline: (args, context) => unadmittedBeforeMutation(async () => (await createPipeline(args, context, domainDependencies))),
     pipeline_action: Object.assign(
@@ -8272,6 +8287,12 @@ export function viewerMcpBindings(
       (args: McpToolArgs, context?: McpToolCallContext) => deployExactSha(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
       { authorizeReceipt: () => { deploySeatAuthority(domainDependencies); } },
     ),
+    pipeline_checks: (args, context) => {
+      assertPipelineSeatAuthority(domainDependencies);
+      return viewerControlForCall(controlDependencies, context).post(`/api/pipelines/${encodeURIComponent(required(args, "pipelineId"))}/checks`, {
+        scope: args.scope, execution: args.execution, stageId: args.stageId,
+      }, {}, context);
+    },
     get_pipeline: reads.get_pipeline,
     board_snapshot: (args) => boardSnapshot(args, domainDependencies),
     list_flows: (args) => Promise.resolve(listFlows(args, domainDependencies)),

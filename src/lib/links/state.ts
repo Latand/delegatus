@@ -1,8 +1,9 @@
 import { sharedLinkState } from "./runtimeState";
-import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { writeJsonDurably } from "@/lib/state/durableJson";
 import { statePath } from "@/lib/configDir";
 import { canonicalProject, recordedProjectRemote, recordedProjectRemotes } from "@/lib/projects/aliases";
 
@@ -40,14 +41,7 @@ function read<T>(file: string, fallback: T, valid: (value: unknown) => value is 
 
 export function atomicWrite(file: string, value: unknown): void {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
-  try {
-    fs.writeFileSync(temporary, JSON.stringify(value) + "\n", { mode: 0o600, flag: "wx" });
-    fs.renameSync(temporary, file);
-  } catch (error) {
-    fs.rmSync(temporary, { force: true });
-    throw error;
-  }
+  writeJsonDurably(file, value, { space: 0 });
 }
 
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);

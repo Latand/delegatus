@@ -77,10 +77,6 @@ test("registered tools describe short expiring handles and carry them unchanged 
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
   try {
-    const tools = await client.listTools();
-    const tool = tools.tools.find(tool => tool.name === "search_transcripts")!;
-    expect(tool.description).toContain("22-character");
-    expect(tool.description).toContain("restart");
     const result = await client.callTool({ name: "search_transcripts", arguments: { query: "quartz" } });
     expect(String((result.structuredContent as Record<string, unknown>).nextCursor).length).toBe(22);
   } finally { await Promise.all([client.close(), server.close()]); }

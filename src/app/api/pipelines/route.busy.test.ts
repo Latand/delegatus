@@ -11,6 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, expect, test } from "bun:test";
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 
 const previousStateDir = process.env.LLV_STATE_DIR;
 const previousCodexHome = process.env.LLV_CODEX_HOME;
@@ -69,7 +70,7 @@ afterAll(() => {
 function createRequest(task: string): NextRequest {
   return new NextRequest("http://127.0.0.1:8898/api/pipelines", {
     method: "POST",
-    headers: { host: "127.0.0.1:8898", "content-type": "application/json" },
+    headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1:8898", "content-type": "application/json" },
     body: JSON.stringify({ task, spec: task, repoDir: process.cwd(), src: callerPath, autoStart: false, stages: [] }),
   });
 }

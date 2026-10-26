@@ -1,8 +1,8 @@
 import fs from "node:fs";
 
 import { statePath } from "@/lib/configDir";
-import { writeJsonDurably } from "@/lib/state/durableJson";
-import { withFileTransactionSync } from "@/lib/state/fileTransaction";
+import { smallStore } from "@/lib/state/smallStore";
+import { stateLockAttempt } from "@/lib/state/lockWait";
 
 import { pageFromEvents, readLifecycleJournal, someMatchingEvent, type LifecycleEvent, type LifecycleJournalFile } from "./journal";
 import { isTerminalHighSignalEvent, type LifecycleEventType, type LifecycleState } from "./vocabulary";
@@ -109,18 +109,23 @@ function emptyState(): DigestStateFile {
   return { version: DIGEST_STATE_VERSION, subscribers: {} };
 }
 
+function normalizeSubscriber(value: unknown): DigestSubscriberState | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const entry = value as Partial<DigestSubscriberState>;
+  return {
+    cursorSeq: Number.isInteger(entry.cursorSeq) && (entry.cursorSeq as number) >= 0 ? entry.cursorSeq as number : 0,
+    lastRelayAt: typeof entry.lastRelayAt === "string" ? entry.lastRelayAt : null,
+    updatedAt: typeof entry.updatedAt === "string" ? entry.updatedAt : new Date(0).toISOString(),
+  };
+}
+
 function normalizeState(value: unknown): DigestStateFile {
   if (!value || typeof value !== "object" || Array.isArray(value)) return emptyState();
   const file = value as Partial<DigestStateFile>;
   const subscribers: Record<string, DigestSubscriberState> = {};
   for (const [id, raw] of Object.entries(file.subscribers ?? {})) {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
-    const entry = raw as Partial<DigestSubscriberState>;
-    subscribers[id] = {
-      cursorSeq: Number.isInteger(entry.cursorSeq) && (entry.cursorSeq as number) >= 0 ? entry.cursorSeq as number : 0,
-      lastRelayAt: typeof entry.lastRelayAt === "string" ? entry.lastRelayAt : null,
-      updatedAt: typeof entry.updatedAt === "string" ? entry.updatedAt : new Date(0).toISOString(),
-    };
+    const subscriber = normalizeSubscriber(raw);
+    if (subscriber) subscribers[id] = subscriber;
   }
   return { version: DIGEST_STATE_VERSION, subscribers };
 }
@@ -131,18 +136,32 @@ function normalizeState(value: unknown): DigestStateFile {
  * a duplicate digest is recoverable where a dropped one is not. So this one
  * really does fall back to "no subscribers yet" rather than refusing to serve.
  */
-function readState(): DigestStateFile {
+function readState(filePath: string): DigestStateFile {
   try {
-    return normalizeState(JSON.parse(fs.readFileSync(digestStatePath(), "utf8")) as unknown);
+    return normalizeState(JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return emptyState();
     return emptyState();
   }
 }
 
-function writeState(file: DigestStateFile): void {
-  writeJsonDurably(digestStatePath(), file);
+/** JSON string encoding preserves lone UTF-16 surrogates through SQLite TEXT
+ * keys and its revision queries. The legacy document keeps its original keys. */
+function digestRowKey(scopeKey: string): string {
+  return JSON.stringify(scopeKey);
 }
+
+/** One row per serialized subscriber scope. The shared importer retains the
+ * legacy bytes and fences old writers until the dated rollback removal. */
+export const lifecycleDigestStore = smallStore<DigestStateFile>({
+  collection: "lifecycle_digests",
+  empty: emptyState,
+  parse: normalizeState,
+  readLegacy: readState,
+  toRows: (file) => Object.entries(file.subscribers).map(([key, value]) => ({ key: digestRowKey(key), value })),
+  fromRows: (rows) => normalizeState({ subscribers: Object.fromEntries(rows.map((row) => [JSON.parse(row.key) as string, row.value])) }),
+  toFile: (file) => file,
+});
 
 /**
  * The persisted state under an ALREADY-SERIALIZED scope key.
@@ -154,7 +173,7 @@ function writeState(file: DigestStateFile): void {
  * hours — replaying its whole history as if it had never polled.
  */
 function subscriberForScope(scopeKey: string): DigestSubscriberState | null {
-  return readState().subscribers[scopeKey] ?? null;
+  return normalizeSubscriber(lifecycleDigestStore.readRow(digestStatePath(), digestRowKey(scopeKey))?.value);
 }
 
 /** The unscoped subscriber — the same scope {@link seedLifecycleDigestCursor}
@@ -367,28 +386,24 @@ export function evaluateDigest(
  * consumed it never sees those events again.
  */
 export function pollLifecycleDigest(request: LifecycleDigestRequest): LifecycleDigestResult {
-  const journal = readLifecycleJournal();
+  const journal = stateLockAttempt("lifecycle.digest.journal", readLifecycleJournal);
   const now = Number.isFinite(request.now) ? request.now as number : Date.now();
   const scopedId = digestScopeKey(request);
-  if (request.acknowledge === false) {
-    /* The same key the acknowledging branch below writes under — a dry run that
-       reported a cursor the real poll does not hold would be a diagnostic that
-       lies about exactly the thing it exists to show. */
-    const subscriber = subscriberForScope(scopedId) ?? { cursorSeq: 0, lastRelayAt: null, updatedAt: new Date(now).toISOString() };
-    return evaluateDigest(journal, request, subscriber);
-  }
-  return withFileTransactionSync(digestStatePath(), "lifecycle digest state is busy", () => {
-    const state = readState();
-    const subscriber = state.subscribers[scopedId]
-      ?? { cursorSeq: 0, lastRelayAt: null, updatedAt: new Date(now).toISOString() };
+  const initialSubscriber = { cursorSeq: 0, lastRelayAt: null, updatedAt: new Date(now).toISOString() };
+  const preview = evaluateDigest(journal, request, subscriberForScope(scopedId) ?? initialSubscriber);
+  if (request.acknowledge === false || !preview.relay) return preview;
+  const rowKey = digestRowKey(scopedId);
+  return lifecycleDigestStore.patchRows(digestStatePath(), 2, (tx) => {
+    // Another process may have acknowledged after the preview. Recheck under
+    // the writer lease so concurrent due polls still emit only one relay.
+    const subscriber = normalizeSubscriber(tx.get(rowKey)?.value) ?? initialSubscriber;
     const result = evaluateDigest(journal, request, subscriber);
     if (!result.relay) return result;
-    state.subscribers[scopedId] = {
+    tx.put({ key: rowKey, value: {
       cursorSeq: result.cursor,
       lastRelayAt: new Date(now).toISOString(),
       updatedAt: new Date(now).toISOString(),
-    };
-    writeState(state);
+    } satisfies DigestSubscriberState });
     return result;
   });
 }
@@ -399,15 +414,13 @@ export function pollLifecycleDigest(request: LifecycleDigestRequest): LifecycleD
  * reports what changed from now on rather than everything ever recorded.
  */
 export function seedLifecycleDigestCursor(subscriberId: string, now = Date.now()): DigestSubscriberState {
-  const head = readLifecycleJournal().lastSeq;
-  const scopedId = digestScopeKey({ subscriberId });
-  return withFileTransactionSync(digestStatePath(), "lifecycle digest state is busy", () => {
-    const state = readState();
-    const existing = state.subscribers[scopedId];
+  const head = stateLockAttempt("lifecycle.digest.journal", readLifecycleJournal).lastSeq;
+  const rowKey = digestRowKey(digestScopeKey({ subscriberId }));
+  return lifecycleDigestStore.patchRows(digestStatePath(), 2, (tx) => {
+    const existing = normalizeSubscriber(tx.get(rowKey)?.value);
     if (existing) return existing;
     const seeded: DigestSubscriberState = { cursorSeq: head, lastRelayAt: null, updatedAt: new Date(now).toISOString() };
-    state.subscribers[scopedId] = seeded;
-    writeState(state);
+    tx.put({ key: rowKey, value: seeded });
     return seeded;
   });
 }

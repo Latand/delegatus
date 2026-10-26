@@ -1,3 +1,4 @@
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
 import { callerConversationId } from "@/lib/agent/operatorAuthority";
@@ -21,7 +22,7 @@ import type { ApiError } from "@/lib/types";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function POST(req: NextRequest): Promise<NextResponse<Record<string, unknown> | ApiError>> {
+async function workspacePOST(req: NextRequest): Promise<NextResponse<Record<string, unknown> | ApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return NextResponse.json({ ...await rejection.json(), admission: "refused" }, { status: rejection.status });
   let body: Record<string, unknown>;
@@ -49,3 +50,5 @@ export async function POST(req: NextRequest): Promise<NextResponse<Record<string
     return NextResponse.json({ error, code: "rotation_failed" }, { status: 500 });
   }
 }
+
+export const POST = workspaceRoute("/api/orchestrator/rotate", workspacePOST);

@@ -161,8 +161,7 @@ test("a chat added by id in the picker is picked in place and saved for this pro
 
   const input = q<HTMLInputElement>(section, "[data-telegram-add-chat-input]")!;
   await act(async () => reactProps(input).onChange!({ target: { value: "-1000000000404" } }));
-  await act(async () => reactProps(input.closest("form")!).onSubmit!({ preventDefault() {} }));
-  await settle();
+  await click(q(section, "[data-telegram-add-chat-submit]"));
   expect(botPosts).toEqual([{ action: "add", chat: "-1000000000404" }]);
   expect(q(section, "[data-telegram-add-chat-added]")!.textContent).toBe("Release Notes added: agents may post there as release-notes.");
   expect(q(section, '[data-seat-reports-chat="release-notes"]')!.getAttribute("aria-checked")).toBe("true");

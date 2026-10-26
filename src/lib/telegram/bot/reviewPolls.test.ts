@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { statePath } from "@/lib/configDir";
 import { NextRequest } from "next/server";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { reviewPOST } from "@/lib/prototypeReview/http";
 import { prototypeWorld } from "@/lib/prototypeReview/world";
 import { saveTasks, loadTasks } from "@/lib/tasks/store";
@@ -406,7 +407,7 @@ test("a board answer leaves existing polls and their votes unchanged", async () 
   await postPrototypeReviewToTelegram(round); await service.waitForReviewPolls();
   const polls = structuredClone(saved().telegramPolls);
   const response = await reviewPOST(new NextRequest("http://localhost/api/tasks/task-prototype/prototypes", {
-    method: "POST", headers: { host: "localhost", "sec-fetch-site": "same-origin" },
+    method: "POST", headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "localhost", "sec-fetch-site": "same-origin" },
     body: JSON.stringify({ reviewId: round.id, chosen: [], skip: true, comment: "" }),
   }), round.taskId!, { ...prototypeWorld, caller: () => ({ conversationId: null, project: null }), orchestrator: () => null });
   expect(response.status).toBe(200);

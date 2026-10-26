@@ -3,10 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 
 import { stateImportIncidents } from "@/lib/state/legacyImport";
-import { readStateCollectionRevision, readStateImport } from "@/lib/state/sqliteStateStore";
+import { readStateCollectionRevision, readStateCollectionRows, readStateImport } from "@/lib/state/sqliteStateStore";
 
 import {
   acknowledgeBridgeReports,
@@ -469,5 +469,50 @@ describe("rollback mirror", () => {
     const outcome = importLegacyBridgeReports(bridgeReportLogPath(), { reconcile: true });
     expect(outcome.incident).toBeNull();
     expect(fs.statSync(bridgeReportLogPath()).isDirectory()).toBe(true);
+  });
+});
+
+
+describe("database identity", () => {
+  test("cached bridge reads probe database identity without numeric precision loss", () => {
+    const { db } = sandbox();
+    appendBridgeReports([report("first")]);
+    const stat = spyOn(fs, "statSync");
+    try {
+      readBridgeReportLog();
+      const probes = stat.mock.calls.filter(([file]) => file === db);
+      expect(probes.length).toBeGreaterThan(0);
+      expect(probes[0]?.[1]).toEqual({ bigint: true });
+    } finally { stat.mockRestore(); }
+  });
+
+  test("absent, created and replaced bridge databases keep both collections on the current file", () => {
+    const replacement = sandbox();
+    appendBridgeReports([report("replacement")]);
+    openBridgeChannel("replacement", NOW, SCOPE);
+    acknowledgeBridgeReports(7, NOW, SCOPE);
+    const { db } = sandbox();
+    expect(fs.existsSync(db)).toBe(false);
+    expect(readBridgeReportLog().reports).toEqual([]);
+    expect(readBridgeChannel(SCOPE)).toBeNull();
+    appendBridgeReports([report("original")]);
+    openBridgeChannel("original", NOW, SCOPE);
+    for (const suffix of ["", "-wal", "-shm"]) {
+      if (fs.existsSync(db + suffix)) fs.renameSync(db + suffix, db + ".held" + suffix);
+      if (fs.existsSync(replacement.db + suffix)) fs.renameSync(replacement.db + suffix, db + suffix);
+    }
+    expect(readBridgeReportLog().reports.map((entry) => entry.body)).toEqual(["report replacement"]);
+    expect(readBridgeChannel(SCOPE)?.managerReportCursor).toBe(7);
+    appendBridgeReports([report("updated")]);
+    acknowledgeBridgeReports(8, NOW, SCOPE);
+    expect(readBridgeReportLog().reports.map((entry) => entry.body)).toEqual(["report replacement", "report updated"]);
+    expect(readBridgeChannel(SCOPE)?.managerReportCursor).toBe(8);
+    const heldReports = JSON.stringify(readStateCollectionRows(db + ".held", "bridge_reports"));
+    expect(heldReports).toContain("report original");
+    expect(heldReports).not.toContain("report updated");
+    const heldChannels = readStateCollectionRows(db + ".held", "bridge_channels");
+    expect(heldChannels).toEqual(expect.arrayContaining([
+      expect.objectContaining({ v: expect.objectContaining({ managerReportCursor: 0 }) }),
+    ]));
   });
 });

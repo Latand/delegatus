@@ -5,10 +5,14 @@ import type { FileConfirmationView } from "@/lib/telegram/bot/fileConfirmationCo
 
 
 import { DeputyBlock } from "./DeputyBlock";
-import { StageStatusRow } from "@/components/pipelines/StageStatusRow";
+import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
+import { StagesSheet } from "@/components/kanban/StagesSheet";
+import { summarizePipeline } from "@/components/kanban/pipelineSummary";
+import { ReaderPlacement } from "@/components/kanban/KanbanReaders";
+import { StageDrafts } from "@/components/kanban/stageDrafts";
+import type { PipelinePorts } from "@/components/kanban/pipelinePorts";
+import type { Pipeline } from "@/lib/pipelines/types";
 import { StagePlaceholderPane } from "@/components/pipelines/StagePlaceholderPane";
-import { SLOT_ROW_H } from "@/components/scheme/layout";
-import { StageCompletedCard } from "@/components/pipelines/StageCompletedCard";
 import type { StageSlot } from "@/components/scheme/layout";
 import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
 
@@ -1918,13 +1922,26 @@ if (root && requested === "memory-cap") {
     source: "stage", clamped: !unenforced, enforced: !unenforced,
   } };
   const pipeline = { id: "memory-demo", task: "Scoped agent memory", project: "demo", state: "completed", stages: [stage],
-    runs: [{ stageId: "build", attempts: [attempt] }], cursor: null };
+    runs: [{ stageId: "build", attempts: [attempt] }], cursor: null } as unknown as Pipeline;
   const slot = { key: "memory-demo", pipeline, stage, attempt, index: 0, total: 1, presentation: "completed" } as unknown as StageSlot;
-  createRoot(root).render(<main className="min-h-dvh w-full overflow-y-auto bg-canvas p-3 text-primary"><div className="mx-auto flex max-w-2xl flex-col gap-3">
-    <div data-memory-surface="completed" className="h-[250px] shrink-0"><StageCompletedCard slot={slot} /></div>
-    <div data-memory-surface="placeholder" className="h-[350px] shrink-0"><StagePlaceholderPane slot={slot} interactive={false} /></div>
-    <div data-memory-surface="row" className="shrink-0" style={{ height: SLOT_ROW_H + 72 }}><StageStatusRow slot={slot} expanded={false} /></div>
-  </div></main>);
+  const summary = summarizePipeline(pipeline);
+  const ports: PipelinePorts = {
+    read: async () => ({ pipeline, stageDigests: {}, revision: "fixture" }),
+    patch: async () => ({ ok: true, pipeline }), refresh: () => {},
+  };
+  const noop = () => {};
+  const surface = params.get("surface") ?? "stages";
+  createRoot(root).render(<main className="kb min-h-dvh w-full overflow-y-auto bg-canvas p-3 text-primary">
+    {surface === "stages" ? <div data-memory-surface="stages" className="fixed inset-0"><StagesSheet
+      title={pipeline.task} summary={summary}
+      panes={[{ stage: pipeline.stages[0]!, folded: false, attempts: pipeline.runs[0]!.attempts, shown: pipeline.runs[0]!.attempts[0]!, file: null, readerKey: null }]}
+      flowsById={new Map()} initialFocus="build" windowReader={null} placement={new ReaderPlacement()}
+      drafts={new StageDrafts(() => ADMITTED_AT)} ports={ports} onFold={noop} onFoldMany={noop} onChooseAttempt={noop}
+      onStageMenu={noop} onOpenRecorded={noop} onLeaveWindow={noop} onClose={noop}
+    /></div> : surface === "placeholder"
+      ? <div data-memory-surface="placeholder" className="mx-auto h-[350px] max-w-2xl"><StagePlaceholderPane slot={slot} interactive={false} /></div>
+      : <div data-memory-surface="screen" className="mx-auto max-w-2xl"><PipelineBlock summary={summary} density="screen" nowMs={ADMITTED_AT} /></div>}
+  </main>);
 }
 else if (root && requested === "file-confirmation") mountFileConfirmation(root);
 else if (root && requested === "seat-inbox") createRoot(root).render(<InboxFixture />);

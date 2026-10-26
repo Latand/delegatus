@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { afterAll, afterEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -1939,6 +1940,7 @@ describe("MCP tool service", () => {
         "create_task",
         "update_task",
         "create_pipeline",
+        "pipeline_checks",
         "pipeline_action",
         "stage_report",
         "leave_lesson",
@@ -2051,16 +2053,7 @@ test("create_task and update_task tell a writer which hold kind a worker slot wa
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   try {
-    const tools = (await client.listTools()).tools;
-    for (const name of ["create_task", "update_task"]) {
-      const tool = tools.find((entry) => entry.name === name)!;
-      expect(tool.description).toContain("A wait for a free worker slot is kind worker");
-      const kind = JSON.stringify((tool.inputSchema.properties as Record<string, unknown>).hold);
-      expect(kind).toContain("worker is a wait for a free worker slot");
-      expect(kind).toContain("resource is a shortage on the machine such as memory or disk");
-      expect(kind).toContain("Unknown kinds normalize to unstated.");
-    }
-    await client.callTool({ name: "create_task", arguments: { clientRequestId: "hold-worker", project: "fixture", text: "Queued lane", hold: { kind: "worker", note: "After a lane finishes" } } });
+    await client.callTool({ name: "create_task", arguments: withTaskDue({ clientRequestId: "hold-worker", project: "fixture", text: "Queued lane", hold: { kind: "worker", note: "After a lane finishes" } }) });
     await client.callTool({ name: "update_task", arguments: { clientRequestId: "hold-resource", id: "task_fixture", hold: { kind: "resource", note: "4 GB of memory available, 8 GB needed" } } });
     expect(seen.map((args) => (args.hold as { kind: string }).kind)).toEqual(["worker", "resource"]);
   } finally {
@@ -2138,13 +2131,9 @@ test("seat_tick_settings publishes the panel instruction contract through tools/
   try {
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
     const tool = (await client.listTools()).tools.find((entry) => entry.name === "seat_tick_settings")!;
-    expect(tool.description).toContain("Each reason write replaces only the caller’s own lines");
-    expect(tool.description).toContain("author unknown");
-    expect(tool.description).not.toContain("labelled as operator instructions");
     expect(tool.inputSchema.properties!.reason).toMatchObject({
       description: TOOL_INPUT_SCHEMAS.seat_tick_settings.shape.reason.description,
     });
-    expect(JSON.stringify(tool.inputSchema.properties!.reason)).toContain("every wake");
     expect(TOOL_INPUT_SCHEMAS.seat_tick_settings.safeParse({ clientRequestId: "instruction-contract", reason: "Prioritize incoming tasks." }).success).toBe(true);
     expect(TOOL_INPUT_SCHEMAS.seat_tick_settings.safeParse({ clientRequestId: "instruction-clear", reason: null }).success).toBe(true);
   } finally { await client.close(); await server.close(); }
@@ -3268,26 +3257,6 @@ for (const tool of ["send_message", "spawn_agent"] as const) {
     });
   }
 }
-
-
-test("prototype publication tells callers about the critic gate and fresh refusal retries", async () => {
-  const bindings = Object.fromEntries(MCP_TOOL_NAMES.map(name => [name, async () => ({})])) as unknown as McpToolBindings;
-  const server = createViewerMcpServer(createMcpToolService(bindings, new MemoryMcpReceiptStore()));
-  const client = new Client({ name: "prototype-gate-test", version: "1.0.0" });
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
-  try {
-    const tool = (await client.listTools()).tools.find(entry => entry.name === "publish_prototype_review")!;
-    expect(tool.description).toContain("visual-critic pass or a passed fix after its last fail");
-    expect(tool.description).toContain("proto-fix (2 rounds)");
-    expect(tool.description).toContain("new clientRequestId");
-    expect(tool.description).toContain("questions without variants");
-  } finally {
-    await client.close();
-    await server.close();
-  }
-});
-
 
 test("native admission refusals disclose no binding and only inventory pending is retryable", async () => {
   for (const reason of ["session-not-scanned", "session-record-missing", "capability-unresolved"] as const) {

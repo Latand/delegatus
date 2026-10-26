@@ -264,14 +264,15 @@ function compactLivenessRow(row: AgentLivenessRecord) {
     title: clampLine(row.title, TITLE_CHARS) ?? "",
     turnState: row.turnState,
     lifecycle: row.lifecycle,
-    /* The one waiting that asks something of the reader (#2215): the reason
-       and the request ride the compact row, so a caller learns a turn is held
-       on a permission without a second, full read. */
+    /* Operator waits ride the compact row; diagnosing them must not require a
+       second full read. */
     ...(row.reason === "permission_request" && row.permission
       ? {
           reason: row.reason,
           permission: { tool: row.permission.tool, command: row.permission.command, reason: row.permission.reason, since: row.permission.since },
         }
+      : row.reason === "question" && row.question
+        ? { reason: row.reason, question: row.question }
       : {}),
     verified: row.verified ?? row.evidenceSource === "transcript",
     ...(row.activity ? { activity: row.activity } : {}),

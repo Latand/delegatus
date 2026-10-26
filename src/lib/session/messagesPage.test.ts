@@ -1,3 +1,4 @@
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -60,12 +61,12 @@ const times = [
 
 test("a caller scan allowance includes timestamp and pinned-record probes, and tool evidence stays private", () => {
   const filename = fixture([
-    { type: "assistant", timestamp: times[0], message: { content: [{ type: "tool_use", id: "call-private", name: "mcp__viewer__create_task", input: { text: "Task title" } }] } },
+    { type: "assistant", timestamp: times[0], message: { content: [{ type: "tool_use", id: "call-private", name: "mcp__viewer__create_task", input: withTaskDue({ text: "Task title" }) }] } },
     { type: "user", timestamp: times[1], message: { content: [{ type: "tool_result", tool_use_id: "call-private", is_error: true, content: "Refused" }] } },
   ]);
   const normal = page(filename, "claude");
   expect(normal.records[0].call).toMatchObject({ id: "call-private", error: true, result: "Refused" });
-  expect(normal.records[1].call).toMatchObject({ id: "call-private", server: "viewer", tool: "create_task", input: { text: "Task title" } });
+  expect(normal.records[1].call).toMatchObject({ id: "call-private", server: "viewer", tool: "create_task", input: withTaskDue({ text: "Task title" }) });
   expect(Object.keys(normal.records[1])).not.toContain("call");
   expect(JSON.stringify(normal)).not.toContain("call-private");
   const allowance = 100;

@@ -1,3 +1,4 @@
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -84,7 +85,7 @@ const PAGE = { host: "127.0.0.1:8898", origin: ORIGIN, "sec-fetch-site": "same-o
 function request(pathname: string, init: { method?: string; headers?: Record<string, string>; body?: unknown } = {}): NextRequest {
   return new NextRequest(`${ORIGIN}${pathname}`, {
     method: init.method ?? "GET",
-    headers: { "content-type": "application/json", ...(init.headers ?? PAGE) },
+    headers: { "content-type": "application/json", ...((!init.headers || init.headers === PAGE) ? { cookie: `llv_operator=${soloBrowserSession()}` } : {}), ...(init.headers ?? PAGE) },
     body: init.body === undefined ? undefined : typeof init.body === "string" ? init.body : JSON.stringify(init.body),
   });
 }

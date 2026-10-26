@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
 import { ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE, ORCHESTRATOR_PROTOTYPE_DIRECTIVE, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateForDelivery } from "@/lib/orchestrator/prompt";
+import { OPERATOR_CORRECTION_RULE } from "@/lib/roles/defaults";
 
 import { mandateMessage } from "./mandateMessage";
 
@@ -69,7 +70,9 @@ test("a bespoke rotation keeps the appended status directive in the mandate, not
 
   expect(message.handoff).toBe(HANDOFF_BODY);
   expect(message.handoff).not.toContain("## Initial visible status");
+  expect(message.handoff).not.toContain(OPERATOR_CORRECTION_RULE);
   expect(message.mandate).toContain(bespoke);
+  expect(message.mandate).toContain(OPERATOR_CORRECTION_RULE);
   expect(message.mandate).toContain(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE);
   /* The prototype-review directive is appended without a heading, right after
      the handoff; it is the mandate's too. */
