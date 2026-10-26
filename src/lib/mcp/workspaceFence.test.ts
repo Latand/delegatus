@@ -206,6 +206,17 @@ test("an unidentified caller cannot use a forged source or member id to obtain i
   expect(await call("get_task", { taskId: "task_1", src: "conversation_member.jsonl", memberId: owner.id })).toMatchObject(REFUSED);
 });
 
+test("the latest recorded member fences a legacy conversation when author timestamps tie", async () => {
+  snapshot.conversations.conversation_member = conversation("conversation_member", own, false) as never;
+  store.recordMessageAuthor({ clientMessageId: "z-earlier-owner", conversationId: "conversation_member", memberId: owner.id, at: AT, textDigest: null });
+  expect((await call("get_task", { taskId: "task_1", clientRequestId: "legacy-owner-read" })).ok).toBe(true);
+  store.recordMessageAuthor({ clientMessageId: "a-later-member", conversationId: "conversation_member", memberId: member.id, at: AT, textDigest: null });
+  resetTeamStoreForTests(); store = teamStore();
+  expect(store.latestConversationMember("conversation_member")).toBe(member.id);
+  expect(await call("get_task", { taskId: "task_1", clientRequestId: "legacy-owner-read" })).toMatchObject(REFUSED);
+  expect((await call("get_task", { taskId: "task_0", clientRequestId: "legacy-member-read" })).ok).toBe(true);
+});
+
 test("a durable member binding stays fenced when its authority store disappears", async () => {
   resetTeamStoreForTests();
   fs.renameSync(teamStoreFile(), path.join(root, "saved-team.sqlite"));

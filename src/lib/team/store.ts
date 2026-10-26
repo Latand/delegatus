@@ -805,7 +805,7 @@ export class TeamStore {
   }
 
   latestConversationMember(conversationId: string): string | null {
-    return this.db.query<{ member_id: string }, [string]>("SELECT member_id FROM message_authors WHERE conversation_id = ? ORDER BY at DESC, client_message_id DESC LIMIT 1")
+    return this.db.query<{ member_id: string }, [string]>("SELECT member_id FROM message_authors WHERE conversation_id = ? ORDER BY at DESC, rowid DESC LIMIT 1")
       .get(conversationId)?.member_id ?? null;
   }
 
