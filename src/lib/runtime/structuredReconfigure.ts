@@ -1,3 +1,4 @@
+import { withHostStopOrigin } from "./hostExit";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { accountManager } from "@/lib/accounts/manager";
 import { advanceConversationMigration } from "@/lib/accounts/migration/coordinator";
@@ -170,7 +171,7 @@ export async function applyStructuredReconfigure(
     throw new Error("a Copilot session stays in its account's COPILOT_HOME; account changes require a new conversation");
   }
   const ownsOperation = dependencies.ownsOperation ?? (async () => true);
-  const release = dependencies.releaseHost ?? releaseStructuredHost;
+  const release = (key: SessionKey) => withHostStopOrigin({ path: "structured-reconfigure", operationId: effect.operationId }, () => (dependencies.releaseHost ?? releaseStructuredHost)(key));
   const recover = dependencies.recover ?? recoverDeadStructuredConversation;
   const inheritedApplyingOperation = conversation.reconfigure?.status === "applying";
 
