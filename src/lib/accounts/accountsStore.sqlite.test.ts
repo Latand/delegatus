@@ -147,7 +147,7 @@ test("candidate account scans defer interrupted archive cleanup until promotion"
   const directory = path.join(root, "state");
   fs.mkdirSync(directory);
   const journal = [{ id: "fixture", phase: "scrubbing", startedAt: 1 }];
-  for (const name of [CODEX_ACCOUNTS_SOURCE, CLAUDE_ACCOUNTS_SOURCE]) {
+  for (const name of [CODEX_ACCOUNTS_SOURCE, CLAUDE_ACCOUNTS_SOURCE] as const) {
     seed(directory, name, registry("default", [], { removals: journal }));
   }
   importLegacyAccounts(directory, { reconcile: true });
@@ -183,7 +183,7 @@ test("candidate account scans defer interrupted archive cleanup until promotion"
   });
   expect(child.exitCode, child.stderr.toString()).toBe(0);
   for (const secret of secrets) expect(fs.existsSync(secret)).toBe(false);
-  for (const name of [CODEX_ACCOUNTS_SOURCE, CLAUDE_ACCOUNTS_SOURCE]) {
+  for (const name of [CODEX_ACCOUNTS_SOURCE, CLAUDE_ACCOUNTS_SOURCE] as const) {
     expect(body(directory, name)).toMatchObject({ removals: [] });
   }
 });
