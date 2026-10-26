@@ -253,7 +253,7 @@ export type PipelineSpawnReceipt = PipelineStageSpawn & {
       (#1678). Independent of the identity fence that withholds `sessionId`
       and `transcript` from an unpublished receipt. */
   staged?: boolean;
-  /** Membership failed before dispatch, with no host or conversation generation. */
+  /** Durable pre-dispatch failure with no host or conversation generation. */
   neverBegan?: boolean;
   /** Exact pre-dispatch role-memory refusal, no user-authored transcript, and every recorded
       host owner proven gone by the registry evidence read. */
@@ -1877,6 +1877,8 @@ export function defaultPipelinePorts(
       const receipt = evidence.receipt;
       if (!receipt) return null;
       const identityPublished = identityFence().allowsReceipt(receipt, { structured: evidence.structured });
+      const admittedButUnavailableBeforeDispatch = receipt.membershipAdmitted === true
+        && receipt.error === supervisedRuntimeHostUnavailableReason("pipeline structured runtime host");
       return {
         state: receipt.state,
         memoryCap: receipt.memoryCap,
@@ -1889,7 +1891,8 @@ export function defaultPipelinePorts(
         accountId: receipt.accountId,
         error: receipt.error,
         staged: receipt.key !== null,
-        neverBegan: receipt.state === "failed" && !receipt.rejection && receipt.membershipAdmitted === false
+        neverBegan: receipt.state === "failed" && !receipt.rejection
+          && (receipt.membershipAdmitted === false || admittedButUnavailableBeforeDispatch)
           && !receipt.key && !receipt.pane && !receipt.verifiedHost && !receipt.artifactPath
           && !evidence.generation,
         roleMemoryRetrySafe: receipt.state === "failed" && !receipt.rejection

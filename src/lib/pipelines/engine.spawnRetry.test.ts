@@ -140,6 +140,119 @@ test.each([false, true])("retry-stage accepts safely retired receipts beyond the
   } finally { f.close(); }
 });
 
+test.each([false, true])("retry-stage accepts a claimed membership-admitted pre-dispatch failure after restart=%s", async restart => {
+  const f = await unreservedPark();
+  try {
+    const reserved = f.reserve(0);
+    expect(reserved.kind).toBe("created");
+    const receipt = reserved.receipt;
+    const failure = "pipeline structured runtime host is unavailable; start agent-log-viewer through its CLI and check the CLI log for the host startup failure";
+    expect(await f.registry.failStructuredSpawnOffLoop(receipt.launchId, failure)).toMatchObject({ claimed: true });
+    expect(f.registry.spawnReceipt(receipt.launchId)?.membershipAdmitted).toBe(true);
+    expect(defaultPipelinePorts().spawnReceipt(receipt.launchId)?.neverBegan).toBe(true);
+    expect(f.registry.claimFailedSpawnForRetry(receipt.launchId, `${f.lane.id}:plan:${receipt.launchId}`).kind).toBe("claimed");
+    f.attempt.retiredLaunches = [{ launchId: receipt.launchId, conversationId: receipt.conversationId,
+      error: failure, retiredAt: f.h.ports.now() }];
+    f.attempt.spawnCalls = 1;
+    savePipelines([f.lane]);
+    f.h.ports.spawnReceipt = defaultPipelinePorts().spawnReceipt;
+
+    if (restart) {
+      f.registry.close();
+      const child = Bun.spawn([process.execPath, "-e", `
+        const { defaultPipelinePorts, patchPipeline, tickPipelines } = await import("./src/lib/pipelines/engine.ts");
+        const { registerPipelineTick } = await import("./src/lib/pipelines/controllerSignal.ts");
+        const { loadPipelines } = await import("./src/lib/pipelines/store.ts");
+        const { AgentRegistry, setAgentRegistryForTests } = await import("./src/lib/agent/registry.ts");
+        const registry = new AgentRegistry(process.env.LLV_TEST_RETRY_REGISTRY);
+        setAgentRegistryForTests(registry); registerPipelineTick(async () => {});
+        const lane = loadPipelines()[0]; const spawned = [];
+        const ports = { ...defaultPipelinePorts(), now: () => "2026-10-25T07:00:00Z",
+          exec: async () => ({ code: 0, stdout: "", stderr: "" }), worktreePresent: () => true,
+          drainHold: () => null, cpuPressureHold: () => null, structuredDeliveryPublication: () => "ready",
+          engineReadiness: () => "connected", resolveProjectSpawn: (engine, request) => ({ kind: "available", account: {
+            engine, accountId: request.requestedId ?? "retry-test-account", kind: "managed",
+            home: process.env.LLV_STATE_DIR, transcriptRoot: process.env.LLV_STATE_DIR, env: { NODE_ENV: "test" },
+          } }),
+          preflightRepo: repoDir => ({ ok: true, repoDir, gitCommonDir: repoDir + "/.git", worktreeParent: repoDir + "/.." }),
+          spawnAgent: async (input, onReserved) => { spawned.push(input.clientAttemptId);
+            const result = { launchId: "fresh-launch", conversationId: "fresh-conversation", sessionId: "fresh-session",
+              ["trans" + "cript"]: "/fresh-stage.jsonl", paneId: null, accountId: null };
+            await onReserved(result); return result; },
+        };
+        const result = await patchPipeline(lane.id, { action: "retry-stage" }, ports);
+        if (!result.error) { await tickPipelines([], ports); await tickPipelines([], ports); }
+        const attempt = loadPipelines()[0].runs[0].attempts.at(-1);
+        console.log(JSON.stringify({ status: result.status ?? 200, error: result.error ?? null, spawned,
+          attempt: { n: attempt.n, state: attempt.state, launchId: attempt.launchId, spawnCalls: attempt.spawnCalls } }));
+        registry.close(); process.exit(0);
+      `], { env: { ...process.env, LLV_TEST_RETRY_REGISTRY: f.registryPath }, stdout: "pipe", stderr: "pipe",
+        signal: AbortSignal.timeout(20_000) });
+      const [code, output, errors] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      expect({ code, errors }).toMatchObject({ code: 0 });
+      expect(JSON.parse(output.trim())).toMatchObject({ status: 200, error: null,
+        spawned: [`pipeline_${f.lane.id}_plan_${f.attempt.n + 1}`],
+        attempt: { n: f.attempt.n + 1, state: "running", launchId: "fresh-launch", spawnCalls: 1 } });
+    } else {
+      expect(await patchPipeline(f.lane.id, { action: "retry-stage" }, f.h.ports)).not.toHaveProperty("error");
+      await tickPipelines([], f.h.ports);
+      await tickPipelines([], f.h.ports);
+      expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)).toMatchObject({ n: f.attempt.n + 1, state: "running", launchId: "launch-1", spawnCalls: 1 });
+      expect(f.h.spawnInputs).toHaveLength(1);
+    }
+  } finally { f.close(); }
+});
+
+test("the controller retires a membership-admitted host failure and retry-stage launches once", async () => {
+  const h = await reserveActivationOnly();
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  let now = Date.parse(h.ports.now());
+  h.ports.now = () => new Date(now).toISOString();
+  const registryPath = path.join(process.env.LLV_STATE_DIR!, "controller-retry-registry.json");
+  const registry = new AgentRegistry(registryPath);
+  setAgentRegistryForTests(registry);
+  const durablePorts = defaultPipelinePorts();
+  const harnessSpawn = h.ports.spawnAgent;
+  const failure = "pipeline structured runtime host is unavailable; start agent-log-viewer through its CLI and check the CLI log for the host startup failure";
+  let failedLaunchId: string | null = null;
+  h.ports.spawnReceipt = durablePorts.spawnReceipt;
+  h.ports.claimSpawnRetry = durablePorts.claimSpawnRetry;
+  h.ports.spawnAgent = async (input, onReserved) => {
+    const begun = beginLegacySpawnFixture(registry, { engine: input.role.engine, cwd: input.cwd, transport: "structured",
+      clientAttemptId: input.clientAttemptId, launchProfile: { title: input.title }, memberships: [input.membership] });
+    expect(begun.kind).toBe("created");
+    failedLaunchId = begun.receipt.launchId;
+    await onReserved({ launchId: begun.receipt.launchId, conversationId: begun.receipt.conversationId,
+      accountId: begun.receipt.accountId });
+    expect((await registry.failStructuredSpawnOffLoop(begun.receipt.launchId, failure)).claimed).toBe(true);
+    throw new Error(failure);
+  };
+  try {
+    await tickPipelines([], h.ports);
+    const retired = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+    expect(failedLaunchId).toBeTruthy();
+    expect(registry.spawnReceipt(failedLaunchId!)?.membershipAdmitted).toBe(true);
+    expect(retired).toMatchObject({ launchId: null, conversationId: null, state: "pending" });
+    expect(retired.retiredLaunches?.map(row => row.launchId)).toContain(failedLaunchId);
+
+    now = Date.parse(retired.controllerWait!.startedAt) + 10 * 60_000 + 1;
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision" });
+
+    expect(await patchPipeline(lane.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: attempt.n }, h.ports))
+      .not.toHaveProperty("error");
+    h.ports.spawnAgent = harnessSpawn;
+    h.ports.spawnReceipt = () => null;
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    const attempts = loadPipelines()[0]!.runs[0]!.attempts;
+    expect(attempts).toHaveLength(attempt.n + 1);
+    expect(attempts.at(-1)).toMatchObject({ n: attempt.n + 1, state: "running", launchId: "launch-1", spawnCalls: 1 });
+    expect(h.spawnInputs).toHaveLength(1);
+  } finally { registry.close(); setAgentRegistryForTests(null); }
+});
+
 test("retry-stage refuses a failed receipt whose retirement is not recorded", async () => {
   const f = await unreservedPark();
   try {
