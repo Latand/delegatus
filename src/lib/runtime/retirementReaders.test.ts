@@ -388,6 +388,7 @@ for (const retainedHost of [false, true]) test(`startup finalization reads selec
     expect(preparations).not.toContain("recovering orchestrator deliveries");
     expect(preparations).not.toContain("kicking recovered deliveries");
     expect(preparations).not.toContain("recovering pending spawns");
+    expect(preparations).not.toContain("adopting Claude hosts");
     expect(capturedReceipts).toBe(true);
     expect(fencedAfterCapture).toBe(true);
   } finally {
@@ -986,7 +987,7 @@ test("startup connector admission rereads only its keyed host and still refuses 
 });
 
 
-test("startup signal selection and post-RPC evidence prepare snapshots instead of refreshing synchronously", async () => {
+for (const outcome of ["none", "delivered", "safe", "uncertain"] as const) test(`startup signals prepare settlement evidence only for an ambiguous failure (${outcome})`, async () => {
   const { structuredStartupSignals } = await import("./startup");
   const file = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
   let preparations = 0;
@@ -995,12 +996,53 @@ test("startup signal selection and post-RPC evidence prepare snapshots instead o
     prepareReadOnlySnapshot: async () => { preparations++; return file; },
     canonicalConversationId: (id: string) => id,
   } as unknown as AgentRegistry;
-  const client = { readSession: async () => null, effectBatch: async () => [] } as unknown as import("./client").RuntimeHostClient;
+  const client = { snapshot: async () => ({ sessions: [], recentOperations: outcome === "none" ? [] : [{
+    kind: "send", status: outcome === "delivered" ? "delivered" : "failed", resend: outcome === "safe" ? "safe" : outcome === "delivered" ? "not-needed" : "verify-first",
+    operationId: "signal-fixture-operation", idempotencyKey: "signal-fixture-message", conversationId: "conversation_signal_fixture", at: CREATED,
+  }] }), effectBatch: async () => [] } as unknown as import("./client").RuntimeHostClient;
   const signals = await structuredStartupSignals(registry, client);
   expect(signals.pendingOperationConversationIds.size).toBe(0);
-  expect(preparations).toBe(2);
+  expect(preparations).toBe(outcome === "uncertain" ? 2 : 1);
+  expect(signals.admittedMessages.get("conversation_signal_fixture")?.[0]?.pending).toBe(outcome === "none" ? undefined : outcome === "uncertain");
+  if (outcome === "uncertain") {
+    preparations = 0;
+    registry.prepareReadOnlySnapshot = async () => {
+      if (++preparations === 2) throw new Error("settlement evidence refused");
+      return file;
+    };
+    await expect(structuredStartupSignals(registry, client)).rejects.toThrow("settlement evidence refused");
+  }
   registry.prepareReadOnlySnapshot = async () => { throw new Error("phase snapshot refused"); };
   await expect(structuredStartupSignals(registry, client)).rejects.toThrow("phase snapshot refused");
+});
+
+test("startup signal identity selection reuses a validated view and refreshes moved membership", async () => {
+  const { structuredStartupSignals } = await import("./startup");
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-signal-selection-"));
+  const initial = seeded(root, 32);
+  const filename = path.join(root, "registry.sqlite");
+  const seed = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry }); seed.close();
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const peer = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry });
+  const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"));
+  const snapshot = await registry.prepareReadOnlySnapshot();
+  const prepare = registry.prepareReadOnlySnapshot.bind(registry);
+  let preparations = 0;
+  const observed = spyOn(registry, "prepareReadOnlySnapshot").mockImplementation((...args) => { preparations++; return prepare(...args); });
+  try {
+    peer.mutate(file => { file.entries["codex:reader-0"]!.updatedAt = "2026-10-25T00:00:00.000Z"; }, false);
+    await structuredStartupSignals(registry, emptyJournalClient(journal), new Set(), null, snapshot);
+    expect(preparations).toBe(0);
+    peer.mutate(file => { file.memberships["conversation_reader_0"]![0]!.containerId = "replacement-lane"; }, false);
+    await structuredStartupSignals(registry, emptyJournalClient(journal), new Set(), null, snapshot);
+    expect(preparations).toBe(1);
+    observed.mockImplementation(async () => { throw new Error("selection refresh refused"); });
+    await expect(structuredStartupSignals(registry, emptyJournalClient(journal), new Set(), null, snapshot))
+      .rejects.toThrow("selection refresh refused");
+  } finally {
+    observed.mockRestore(); journal.close(); peer.close(); registry.close(); fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("startup host selection yields while materializing rows before its mutation loop", async () => {

@@ -1184,14 +1184,17 @@ async function unresolvedEligibleHosts(
   adopted: readonly AdoptedStructuredHost[],
   productionAdopter: (key: SessionKey) => boolean,
   claimed: (key: SessionKey) => boolean = hasStructuredDeliveryHost,
+  prepared?: RegistryFile,
   processAlive: (identity: ProcessIdentity) => boolean = processIdentityMayOwn,
 ): Promise<string[]> {
-  const snapshot = await preparedStartupSnapshot(registry);
+  const snapshot = prepared && registryStartupSelectionUnchanged(prepared) === true
+    ? prepared : await preparedStartupSnapshot(registry);
   const adoptedKeys = new Set(adopted.map((item) => sessionKeyId(item.key)));
   const unresolved: AgentRegistryEntry[] = [];
   await forEachCooperatively(await startupStructuredHostEntries(snapshot, assertStartupReadActive), entry => {
-    if (entry.structuredHost && productionAdopter(entry.key) && shouldAdopt(entry)
-      && !adoptedKeys.has(sessionKeyId(entry.key)) && !claimed(entry.key)) unresolved.push(entry);
+    if (!productionAdopter(entry.key) || adoptedKeys.has(sessionKeyId(entry.key)) || claimed(entry.key)) return;
+    const current = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
+    if (current?.structuredHost && shouldAdopt(current)) unresolved.push(current);
   }, { batchSize: 16, timeBudgetMs: 8 });
   if (unresolved.length === 0) return [];
   /* A row the incumbent handed over while this pass ran is contested too: its
@@ -1226,8 +1229,10 @@ async function rowsTheNudgeNeverAnswers(
   held: ReadonlySet<string>,
   found: ReadonlySet<string>,
   settled: ReadonlySet<string>,
+  prepared?: RegistryFile,
 ): Promise<Set<string>> {
-  const snapshot = await preparedStartupSnapshot(registry);
+  const snapshot = prepared && registryStartupSelectionUnchanged(prepared) === true
+    ? prepared : await preparedStartupSnapshot(registry);
   const answered = new Set([...held, ...found, ...settled]);
   for await (const conversation of startupHostedConversationRows(snapshot)) {
     const generation = conversation.generations.at(-1);
@@ -1583,12 +1588,12 @@ function canonicalConversationId(registry: AgentRegistry, conversationId: string
 
 /** Every send or steer the runtime snapshot shows admitted, by canonical
     conversation. */
-function admittedRuntimeMessages(
+async function admittedRuntimeMessages(
   registry: AgentRegistry,
   runtime: Pick<Awaited<ReturnType<RuntimeHostClient["snapshot"]>>, "sessions" | "recentOperations">,
-  snapshot: RegistryFile = startupSnapshot(registry),
-): StructuredStartupSignals["admittedMessages"] {
+): Promise<StructuredStartupSignals["admittedMessages"]> {
   const admittedMessages = new Map<string, { idempotencyKey: string; deliveredAt: number | null; pending: boolean }[]>();
+  let snapshot: RegistryFile | undefined;
   for (const receipt of [...runtime.recentOperations, ...runtime.sessions.flatMap((session) => session.recentReceipts ?? [])]) {
     if (receipt.kind !== "send" && receipt.kind !== "steer") continue;
     /* `at` moves with status; only it can prove the send arrived after the
@@ -1599,8 +1604,11 @@ function admittedRuntimeMessages(
     const arrival = delivered ? Date.parse(receipt.at) : NaN;
     const conversationId = canonicalConversationId(registry, receipt.conversationId);
     const messages = admittedMessages.get(conversationId) ?? [];
+    // Only an ambiguous failure needs the registry's settlement evidence.
+    // Delivered, pending and explicitly safe outcomes consume no registry row.
+    if (receipt.status === "failed" && receipt.resend !== "safe") snapshot ??= await preparedStartupSnapshot(registry);
     const safeFailure = receipt.status === "rejected" || (receipt.status === "failed"
-      && (receipt.resend === "safe" || sendReceiptFor(snapshot, receipt.operationId)?.resend === "safe"));
+      && (receipt.resend === "safe" || sendReceiptFor(snapshot!, receipt.operationId)?.resend === "safe"));
     messages.push({
       idempotencyKey: receipt.idempotencyKey,
       deliveredAt: Number.isFinite(arrival) ? arrival : null,
@@ -1662,6 +1670,7 @@ export async function structuredStartupSignals(
   client: RuntimeHostClient | null,
   owedConversationIds: ReadonlySet<string> = new Set(),
   scope: ReadonlySet<string> | null = null,
+  prepared?: RegistryFile,
 ): Promise<StructuredStartupSignals> {
   if (!client) {
     return {
@@ -1671,7 +1680,11 @@ export async function structuredStartupSignals(
       admittedMessages: new Map(),
     };
   }
-  const runtime = await readStartupRuntime(registry, client, await startupRuntimeConversationIds(registry, owedConversationIds, await preparedStartupSnapshot(registry), scope));
+  // This view selects identities only. Runtime and settlement evidence below
+  // are read after selection, and adoption still checks current custody by key.
+  const selection = prepared && registryStartupSelectionUnchanged(prepared) === true
+    ? prepared : await preparedStartupSnapshot(registry);
+  const runtime = await readStartupRuntime(registry, client, await startupRuntimeConversationIds(registry, owedConversationIds, selection, scope));
   /* #1846: an account pick waits for the conversation's next engagement, so on its own it is no work that
      needs a host at startup. Its message, once there is one, is. */
   const waitingSwitches = new Set<string>();
@@ -1715,7 +1728,7 @@ export async function structuredStartupSignals(
     if (receipt.kind === "reconfigure" && receipt.status !== "applying" && waitingSwitches.has(receipt.operationId)) continue;
     pendingOperationConversationIds.add(canonicalConversationId(registry, receipt.conversationId));
   }
-  const admittedMessages = admittedRuntimeMessages(registry, runtime, await preparedStartupSnapshot(registry));
+  const admittedMessages = await admittedRuntimeMessages(registry, runtime);
   return {
     hostedRunningConversationIds,
     pendingOperationConversationIds,
@@ -2447,6 +2460,7 @@ async function adoptStructuredHostsPass(
       client,
       new Set(unresolvedInterruptions.map((obligation) => canonicalConversationId(registry, obligation.conversationId))),
       resumeDeferred,
+      recoveryBoundarySnapshot,
     );
     pipelineEvidence = await readBulkEvidence("reading startup signals");
     /* Only a continuation not yet admitted forces its row's adoption. One the
@@ -2759,6 +2773,7 @@ async function adoptStructuredHostsPass(
         : key.engine === "claude" ? dependencies.adoptClaude === undefined
           : false,
       dependencies.hostClaimed,
+      adoptionSnapshot,
     );
     await reportProgress("reconciling structured hosts");
     orchestratorHostKeys = currentOrchestratorRestartRecoveryHostKeys(
@@ -2789,7 +2804,7 @@ async function adoptStructuredHostsPass(
       || unreadableTranscripts.has(sessionKeyId(entry.key))
       || evidenceMoved(entry)
       || shouldAdopt(entry);
-    const neverNudged = await rowsTheNudgeNeverAnswers(registry, heldHostKeys, cutHostKeys, recognition.settled);
+    const neverNudged = await rowsTheNudgeNeverAnswers(registry, heldHostKeys, cutHostKeys, recognition.settled, adoptionSnapshot);
     const candidateCodexHosts = nextAdoptedHosts.filter(
       (item): item is AdoptedCodexHost => item.key.engine === "codex"
         && startupHostInScope(registry, sessionKeyId(item.key))
@@ -2942,7 +2957,7 @@ async function adoptStructuredHostsPass(
           && !heldHostKeys.has(obligation.hostKey));
       const latestRuntime = unresolvedAfterAdoption.length === 0 ? null
         : await readStartupRuntime(registry, client, [...new Set(unresolvedAfterAdoption.map(item => item.conversationId))]);
-      const latestMessages = latestRuntime ? admittedRuntimeMessages(registry, latestRuntime, await preparedStartupSnapshot(registry)) : new Map();
+      const latestMessages = latestRuntime ? await admittedRuntimeMessages(registry, latestRuntime) : new Map();
       const owedInterruptions = unresolvedAfterAdoption.length === 0 ? [] : dischargeInterruptionObligations(
         registry,
         interruptions,
