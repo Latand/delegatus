@@ -199,6 +199,12 @@ export function pipelineStageRead(pipeline: Pipeline, stageId: string, attempt?:
      its report is already the authoritative completion record. */
   const reportedVerdict = selected?.report?.verdict;
   const verdict = selected?.verdict ?? reportedVerdict;
+  const runtimeSwitch = selected?.runtimeSwitches?.at(-1);
+  // Handoff reservation persists successor identities before replacing the
+  // source role. A failed/parked switch can retain that reservation, too.
+  const reservedHandoff = runtimeSwitch?.mode === "handoff"
+    && runtimeSwitch.phase !== "committed" && runtimeSwitch.phase !== "rolled-back"
+    && !!runtimeSwitch.launch?.launchId && runtimeSwitch.launch.launchId === selected?.launchId;
   const hasRuntimeEvidence = selected && (selected.launchId || selected.conversationId || selected.agentPath
     // Legacy launched records can predate both binding and launch identities.
     || (!selected.definition && selected.startedAt && selected.state !== "pending" && selected.state !== "spawning"));
@@ -231,11 +237,11 @@ export function pipelineStageRead(pipeline: Pipeline, stageId: string, attempt?:
       stageDigest: stageDigests([stage])[stage.id] ?? null,
     },
     attempt: selected ? {
-      runtimeSwitch: selected.runtimeSwitches?.at(-1) ?? null,
+      runtimeSwitch: runtimeSwitch ?? null,
       /* Role copying, definition binding and start booking precede dispatch.
          A launch or conversation identity witnesses the persisted runtime,
          including switches; a requested switch target does not. */
-      runtime: selected.effectiveRole && hasRuntimeEvidence ? {
+      runtime: selected.effectiveRole && hasRuntimeEvidence && !reservedHandoff ? {
         ...currentRuntimeSeat(selected),
         serviceTierSource: selected.effectiveRole.serviceTierSource ?? null,
       } : null,
