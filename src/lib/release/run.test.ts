@@ -441,7 +441,8 @@ test.each(["hold", "disabled", "gap", "changes", "soak", "other-release", "tick-
   expect(readReleaseProject(h.project).history).toHaveLength(1);
 });
 
-test.each([false, true])("fresh processes retire a real validation refusal and dedupe storage admission across seats (lost reply: %s)", async loseReply => {
+test.each(["normal", "lost-reply", "busy"])("fresh processes retire a real validation refusal and dedupe storage admission across seats: %s", async outcome => {
+  const loseReply = outcome === "lost-reply";
   const h = refusedRunFixture();
   const oldCut = "a".repeat(40), nextCut = "b".repeat(40);
   mutateReleaseProject(h.project, row => ({ ...row, live: { ...row.live!, cut: oldCut,
@@ -474,15 +475,18 @@ test.each([false, true])("fresh processes retire a real validation refusal and d
       conversationIdForPath: () => "creator", now: () => "2026-10-22T23:30:00Z",
       preflightRepo: async () => ({ ok: true, repoDir: process.env.LLV_STATE_DIR, gitCommonDir: path.join(process.env.LLV_STATE_DIR, ".git"), worktreeParent: process.env.LLV_STATE_DIR }),
       exec: async (_file, args) => ({ code: 0, stdout: args[0] === "rev-parse" ? args.at(-1).replace(/\\^\\{commit\\}$/, "") : path.join(process.env.LLV_STATE_DIR, "remote.git"), stderr: "" }) };
+    const dispatches = [];
     const ports = { now: () => policy.now, settings: () => (${JSON.stringify(h.ports.settings(h.project))}),
       taskDone: () => false, supersedingTag: async () => null,
       observe: async () => ({ policy, repoDir: process.env.LLV_STATE_DIR, src: "seat" }),
       task: (_project, _run, adopted) => {
         if (adopted !== "finished-task") throw new Error("lost task identity");
-        fs.appendFileSync(path.join(process.env.LLV_STATE_DIR, "task-calls"), "adopted\\n");
+        fs.appendFileSync(path.join(process.env.LLV_STATE_DIR, "task-calls"), adopted + "\\n");
         return adopted;
       },
       create: async (request, key) => {
+        dispatches.push({ key, digest: releaseRequestDigest(request) });
+        if (mode === "busy") throw new Error("database is locked");
         const id = await createReleasePipeline(request, key, (req, _ports, options) => createPipelineFromRequest(req, enginePorts, options));
         if (mode === "lose") throw new Error("lost reply");
         return id;
@@ -496,7 +500,7 @@ test.each([false, true])("fresh processes retire a real validation refusal and d
       else await controller.launchIfDue(${JSON.stringify(h.input)});
     } catch (caught) { error = caught.message; }
     const row = readReleaseProject(project), lanes = loadPipelines();
-    console.log(JSON.stringify({ error, row, lanes: lanes.map(lane => ({ id: lane.id, creationRequest: lane.creationRequest, taskIds: lane.taskIds, baseRef: lane.baseRef })),
+    console.log(JSON.stringify({ error, row, dispatches, lanes: lanes.map(lane => ({ id: lane.id, creationRequest: lane.creationRequest, taskIds: lane.taskIds, baseRef: lane.baseRef })),
       tasks: loadTasks().map(task => task.id), digest: row.live?.request ? releaseRequestDigest(row.live.request) : null }));
   `;
   const run = async (mode: string, worker: string) => JSON.parse((await promisify(execFile)(process.execPath, ["-e", script, mode, worker],
@@ -506,19 +510,30 @@ test.each([false, true])("fresh processes retire a real validation refusal and d
   expect(retired.row.live).toBeNull();
   expect(retired.row.history[0].outcome).toBe("refused");
   expect(retired.lanes).toEqual([]);
-  if (loseReply) {
-    const lost = await run("lose", "1");
-    expect(lost.error).toBe("lost reply");
+  const attempts: { dispatches: { key: string; digest: string }[] }[] = [];
+  if (outcome !== "normal") {
+    const lost = await run(loseReply ? "lose" : "busy", "1");
+    attempts.push(lost);
+    expect(lost.error).toBe(loseReply ? "lost reply" : "database is locked");
     expect(lost.row.live.pipelineId).toBeNull();
-    expect(lost.lanes).toHaveLength(1);
-    expect(lost.lanes[0].creationRequest).toEqual({ key: lost.row.live.key, digest: lost.digest });
+    expect(lost.lanes).toHaveLength(loseReply ? 1 : 0);
+    expect(lost.row.history).toHaveLength(1);
+    expect(lost.dispatches).toEqual([{ key: lost.row.live.key, digest: lost.digest }]);
+    if (loseReply) expect(lost.lanes[0].creationRequest).toEqual(lost.dispatches[0]);
   }
-  const results = await Promise.all([run(loseReply ? "reconcile" : "launch", "1"), run(loseReply ? "reconcile" : "launch", "2")]);
-  for (const result of results) expect(result.error).toBeNull();
+  const mode = outcome === "normal" ? "launch" : "reconcile";
+  const results = await Promise.all([run(mode, "1"), run(mode, "2")]);
+  attempts.push(...results);
+  for (const result of results) expect([null, "database is locked"]).toContain(result.error);
   const final = await run("reconcile", "3");
+  attempts.push(final);
+  expect(final.error).toBeNull();
   expect(final.lanes).toHaveLength(1);
   expect(final.row.live).toMatchObject({ cut: nextCut, taskId: "finished-task", pipelineId: final.lanes[0].id });
   expect(final.lanes[0]).toMatchObject({ baseRef: nextCut, taskIds: ["finished-task"], creationRequest: { key: final.row.live.key, digest: final.digest } });
   expect(final.tasks).toEqual(["finished-task"]);
-  expect(fs.readFileSync(path.join(directory, "task-calls"), "utf8").trim().split("\n")).toEqual(["adopted"]);
+  for (const attempt of attempts) for (const dispatch of attempt.dispatches) expect(dispatch).toEqual(final.lanes[0].creationRequest);
+  const adoptions = fs.readFileSync(path.join(directory, "task-calls"), "utf8").trim().split("\n");
+  expect(new Set(adoptions)).toEqual(new Set(["finished-task"]));
+  expect(outcome === "normal" ? [1, 2] : [1]).toContain(adoptions.length);
 });
