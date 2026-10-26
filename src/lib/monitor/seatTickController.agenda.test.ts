@@ -500,7 +500,32 @@ test("lane churn during every PR refresh still wakes the seat in one check", asy
   expect(rig.sent).toHaveLength(1);
 });
 
-test("local commits from a finished lane wake the seat without waiting on GitHub", async () => {
+const localGitWatchdogMode = process.env.LLV_LOCAL_GIT_WATCHDOG_MODE;
+
+test.skipIf(!localGitWatchdogMode)("local Git wake watchdog child", async () => {
+  const repo = process.env.LLV_LOCAL_GIT_WATCHDOG_REPO!;
+  const tip = process.env.LLV_LOCAL_GIT_WATCHDOG_TIP!;
+  const adapter = localGitWatchdogMode!;
+  const rig = harness({ pipelines: [...FINISHED_LANE, ...OPEN_LANE], state: OVERDUE,
+    stateFile: path.join(SANDBOX, `local-finished-${adapter}.json`) });
+  const [finished, ...others] = rig.deps.sources!.pipelines() as never as Array<Record<string, unknown>>;
+  rig.deps.sources!.pipelines = () => [{ ...finished, repoDir: repo, branch: "finished-lane", baseBranch: "main", lastPassedCommit: tip }, ...others] as never;
+  rig.deps.sources!.openPullRequests = adapter === "blocked"
+    ? () => { const until = Date.now() + 5_000; while (Date.now() < until) { /* deliberate blocked-loop control */ } return { ok: false, unavailable: "command-failed" } as never; }
+    : adapter === "hung"
+      ? () => new Promise(() => {})
+      : async () => ({ ok: false, unavailable: "command-failed" });
+  rig.deps.workBudgetMs = 2_000;
+  const record = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(record).toMatchObject({ verdict: "wake" });
+  expect(record!.detail).toContain(adapter === "hung" ? "timed-out" : "command-failed");
+  expect(rig.sent).toHaveLength(1);
+  expect(rig.sent[0]!.text).toContain("local commits");
+  expect(rig.sent[0]!.text).toContain(tip.slice(0, 12));
+  process.stdout.write(`LOCAL_GIT_WAKE:${adapter}\n`);
+});
+
+test.skipIf(!!localGitWatchdogMode)("local commits from a finished lane wake under a parent watchdog", async () => {
   const repo = path.join(SANDBOX, "local-finished-lane");
   fs.mkdirSync(repo, { recursive: true });
   const git = (args: string[]) => {
@@ -515,31 +540,103 @@ test("local commits from a finished lane wake the seat without waiting on GitHub
   fs.writeFileSync(path.join(repo, "work.txt"), "base\n");
   git(["add", "work.txt"]);
   git(["commit", "-m", "base"]);
+  const base = git(["rev-parse", "HEAD"]);
   git(["switch", "-c", "finished-lane"]);
   fs.writeFileSync(path.join(repo, "work.txt"), "local lane work\n");
   git(["commit", "-am", "finished lane work"]);
   const tip = git(["rev-parse", "HEAD"]);
+  git(["update-ref", "refs/remotes/origin/main", base]);
+  git(["update-ref", "-d", "refs/heads/main"]);
   expect(git(["remote"])).toBe("");
 
   for (const adapter of ["hung", "failed"] as const) {
-    const rig = harness({ pipelines: [...FINISHED_LANE, ...OPEN_LANE], state: OVERDUE,
-      stateFile: path.join(SANDBOX, `local-finished-${adapter}.json`) });
-    const [finished, ...others] = rig.deps.sources!.pipelines() as never as Array<Record<string, unknown>>;
-    rig.deps.sources!.pipelines = () => [{ ...finished, repoDir: repo, branch: "finished-lane", baseBranch: "main", lastPassedCommit: tip }, ...others] as never;
-    rig.deps.sources!.openPullRequests = adapter === "hung"
-      ? () => new Promise(() => {})
-      : async () => ({ ok: false, unavailable: "command-failed" });
-    rig.deps.workBudgetMs = 2_000;
-
-    const started = performance.now();
-    const record = await runSeatTickCheck(PROJECT, rig.deps);
-    expect(performance.now() - started).toBeLessThan(2_000);
-    expect(record).toMatchObject({ verdict: "wake" });
-    expect(record!.detail).toContain(adapter === "hung" ? "timed-out" : "command-failed");
-    expect(rig.sent).toHaveLength(1);
-    expect(rig.sent[0]!.text).toContain("local commits");
-    expect(rig.sent[0]!.text).toContain(tip.slice(0, 12));
+    const child = spawn(process.execPath, ["test", import.meta.path, "--test-name-pattern", "local Git wake watchdog child"], {
+      env: { ...process.env, LLV_LOCAL_GIT_WATCHDOG_MODE: adapter, LLV_LOCAL_GIT_WATCHDOG_REPO: repo, LLV_LOCAL_GIT_WATCHDOG_TIP: tip },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    child.stdout.on("data", chunk => { output += chunk.toString(); });
+    child.stderr.on("data", chunk => { output += chunk.toString(); });
+    let timedOut = false;
+    const watchdog = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, 2_000);
+    try {
+      const result = await new Promise<{ code: number | null; signal: string | null }>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("close", (code, signal) => resolve({ code, signal }));
+      });
+      expect({ ...result, timedOut, output }).toMatchObject({ code: 0, timedOut: false });
+      expect(output).toContain(`LOCAL_GIT_WAKE:${adapter}`);
+    } finally { clearTimeout(watchdog); }
   }
+
+  const blocked = spawn(process.execPath, ["test", import.meta.path, "--test-name-pattern", "local Git wake watchdog child"], {
+    env: { ...process.env, LLV_LOCAL_GIT_WATCHDOG_MODE: "blocked", LLV_LOCAL_GIT_WATCHDOG_REPO: repo, LLV_LOCAL_GIT_WATCHDOG_TIP: tip },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let blockedOutput = "";
+  blocked.stdout.on("data", chunk => { blockedOutput += chunk.toString(); });
+  blocked.stderr.on("data", chunk => { blockedOutput += chunk.toString(); });
+  let blockedByWatchdog = false;
+  const watchdog = setTimeout(() => { blockedByWatchdog = true; blocked.kill("SIGKILL"); }, 2_000);
+  try {
+    const result = await new Promise<{ code: number | null; signal: string | null }>((resolve, reject) => {
+      blocked.once("error", reject);
+      blocked.once("close", (code, signal) => resolve({ code, signal }));
+    });
+    expect({ ...result, blockedByWatchdog }).toMatchObject({ code: null, signal: "SIGKILL", blockedByWatchdog: true });
+    expect(blockedOutput).not.toContain("LOCAL_GIT_WAKE:blocked");
+  } finally { clearTimeout(watchdog); }
+
+  for (const merge of [
+    { state: "merged", reviewedHead: tip, chain: [tip], mergedHead: tip },
+    { state: "queued", reviewedHead: tip, chain: [tip], mergedHead: null },
+  ]) {
+    const rig = harness({ pipelines: [...FINISHED_LANE], state: { ...OVERDUE, lastProposalAt: new Date(NOW).toISOString() } });
+    const [finished] = rig.deps.sources!.pipelines() as never as Array<Record<string, unknown>>;
+    rig.deps.sources!.pipelines = () => [{ ...finished, repoDir: repo, branch: "finished-lane", baseBranch: "main", lastPassedCommit: tip, merge } as never];
+    rig.deps.sources!.openPullRequests = async () => ({ ok: true, pullRequests: [] });
+    const record = await runSeatTickCheck(PROJECT, rig.deps);
+    expect(record).toMatchObject({ verdict: "quiet" });
+    expect(rig.sent).toHaveLength(0);
+  }
+
+  const fairRig = harness({ pipelines: [...FINISHED_LANE], state: { ...OVERDUE, lastCheckAt: null } });
+  const [template] = fairRig.deps.sources!.pipelines() as never as Array<Record<string, unknown>>;
+  const newerMerged = Array.from({ length: 60 }, (_, index) => ({
+    ...template!, id: `newer-merged-${String(index).padStart(2, "0")}`,
+    createdAt: new Date(NOW - index * 60_000).toISOString(), closedAt: new Date(NOW - index * 60_000).toISOString(),
+    repoDir: repo, branch: "finished-lane", baseBranch: "main", lastPassedCommit: base,
+  }));
+  const olderPending = { ...template!, id: "older-pending-lane", createdAt: "2020-01-01T00:00:00.000Z",
+    closedAt: "2020-01-01T00:00:00.000Z", repoDir: repo, branch: "finished-lane", baseBranch: "main", lastPassedCommit: tip };
+  fairRig.deps.sources!.pipelines = () => [...newerMerged, olderPending] as never;
+  fairRig.deps.sources!.archivedPipelines = () => [];
+  fairRig.deps.sources!.openPullRequests = async () => ({ ok: true, pullRequests: [] });
+  const { gatherSeatTickInput } = await import("./seatTickSources");
+  const first = await gatherSeatTickInput(PROJECT, fairRig.deps.readState!(PROJECT), DEFAULT_SEAT_TICK_POLICY, fairRig.deps.sources!);
+  expect(first.signals.some(signal => signal.id === "local-unmerged-lane:older-pending-lane")).toBe(false);
+  const second = await gatherSeatTickInput(PROJECT, fairRig.deps.readState!(PROJECT), DEFAULT_SEAT_TICK_POLICY, fairRig.deps.sources!);
+  expect(second.signals.some(signal => signal.id === "local-unmerged-lane:older-pending-lane")).toBe(true);
+  let restartAt = NOW + 1;
+  while ((Math.floor(restartAt) % 61 * 50) % 61 === 0) restartAt++;
+  const restartRig = harness({ pipelines: [...FINISHED_LANE], state: {
+    ...OVERDUE, lastCheckAt: new Date(restartAt).toISOString(),
+  } });
+  restartRig.deps.sources!.pipelines = () => [...newerMerged, olderPending] as never;
+  restartRig.deps.sources!.archivedPipelines = () => [];
+  restartRig.deps.sources!.openPullRequests = async () => ({ ok: true, pullRequests: [] });
+  const afterRestart = await gatherSeatTickInput(PROJECT, restartRig.deps.readState!(PROJECT), DEFAULT_SEAT_TICK_POLICY, restartRig.deps.sources!);
+  expect(afterRestart.signals.some(signal => signal.id === "local-unmerged-lane:older-pending-lane")).toBe(true);
+
+  const diagnosticRig = harness({ pipelines: [...FINISHED_LANE], state: OVERDUE });
+  const [diagnosticLane] = diagnosticRig.deps.sources!.pipelines() as never as Array<Record<string, unknown>>;
+  diagnosticRig.deps.sources!.pipelines = () => [{ ...diagnosticLane, repoDir: repo, branch: "finished-lane", baseBranch: "absent", lastPassedCommit: tip } as never];
+  diagnosticRig.deps.sources!.openPullRequests = async () => ({ ok: true, pullRequests: [] });
+  const errors = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    await gatherSeatTickInput(PROJECT, diagnosticRig.deps.readState!(PROJECT), DEFAULT_SEAT_TICK_POLICY, diagnosticRig.deps.sources!);
+    expect(errors.mock.calls.flat().join(" ")).toContain("local Git ancestry unavailable");
+  } finally { errors.mockRestore(); }
 });
 
 test("a churn wake delivered before process exit is settled once after restart and credits only named lanes", async () => {

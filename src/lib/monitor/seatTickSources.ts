@@ -149,10 +149,13 @@ const EVENT_PAGE = 200;
 const PULL_REQUEST_LIMIT = 60;
 /** Optional GitHub enrichment must leave most of the check budget for delivery. */
 const PULL_REQUEST_ENRICHMENT_BUDGET_MS = 200;
-/** Finished lanes examined for local commits per check, in bounded Git batches. */
+/** Finished lanes examined for local commits per check, in bounded Git batches.
+    A persisted check-time seed chooses the window after restart; the source's
+    lane cursor advances subsequent checks without relying on collection order. */
 const LOCAL_FINISHED_LANE_LIMIT = 60;
 const LOCAL_GIT_BATCH_SIZE = 8;
 const LOCAL_GIT_TIMEOUT_MS = 250;
+const localFinishedLaneCursors = new WeakMap<SeatTickSources, Map<string, string>>();
 /** Bounded pull request title carried into a wake item. */
 const PULL_REQUEST_TITLE_LIMIT = 120;
 /** Liveness rows one project's check asks for. */
@@ -1828,10 +1831,11 @@ const execFileAsync = promisify(execFile);
  * forge account, remote, or `gh` response. The lane row and its accepted SHA
  * identify the exact work; the signal version includes that SHA so a later
  * accepted revision is a new item. */
-async function localFinishedLaneSignals(project: string, pipelines: readonly Pipeline[]): Promise<SeatTickSignalInput[]> {
+async function localFinishedLaneSignals(project: string, pipelines: readonly Pipeline[], sources: SeatTickSources, cursorSeed: string | null): Promise<SeatTickSignalInput[]> {
   const canonicalProject = seatProjectResolver();
   const finished = [...new Map(pipelines
-    .filter((pipeline) => canonicalProject(pipeline.project) === project && !pipeline.hiddenAt && isFinished(pipeline))
+    .filter((pipeline) => canonicalProject(pipeline.project) === project && !pipeline.hiddenAt && isFinished(pipeline)
+      && !(pipeline.merge && (PIPELINE_MERGE_LIVE_STATES.has(pipeline.merge.state) || pipeline.merge.state === "refreshing")))
     .map((pipeline) => [pipeline.id, pipeline] as const)).values()]
     .sort((left, right) => {
       const stamp = (pipeline: Pipeline) => {
@@ -1839,30 +1843,61 @@ async function localFinishedLaneSignals(project: string, pipelines: readonly Pip
         return Number.isFinite(value) ? value : 0;
       };
       return stamp(right) - stamp(left) || left.id.localeCompare(right.id);
-    })
-    .slice(0, LOCAL_FINISHED_LANE_LIMIT);
+    });
+  if (finished.length === 0) return [];
+  const cursors = localFinishedLaneCursors.get(sources) ?? new Map<string, string>();
+  localFinishedLaneCursors.set(sources, cursors);
+  const previous = cursors.get(project);
+  const afterPrevious = previous ? finished.findIndex((pipeline) => pipeline.id === previous) + 1 : 0;
+  const seedTime = cursorSeed ? Date.parse(cursorSeed) : Number.NaN;
+  const bucket = Number.isFinite(seedTime) ? Math.floor(seedTime) : 0;
+  let step = 7_919;
+  const gcd = (left: number, right: number): number => right ? gcd(right, left % right) : left;
+  while (gcd(step, finished.length) !== 1) step--;
+  const start = afterPrevious > 0 ? afterPrevious % finished.length
+    : ((bucket % finished.length) * (step % finished.length)) % finished.length;
+  const scanCount = Math.min(finished.length, LOCAL_FINISHED_LANE_LIMIT);
+  const candidates = Array.from({ length: scanCount }, (_, index) => finished[(start + index) % finished.length]!);
+  let lastScanned: string | undefined;
   const found: SeatTickSignalInput[] = [];
+  let localProbeFailures = 0;
+  let firstLocalProbeFailure: string | null = null;
+  const noteLocalProbeFailure = (detail: string) => {
+    localProbeFailures++;
+    firstLocalProbeFailure ??= detail;
+  };
   const deadline = Date.now() + LOCAL_GIT_TIMEOUT_MS;
-  for (let offset = 0; offset < finished.length; offset += LOCAL_GIT_BATCH_SIZE) {
+  for (let offset = 0; offset < candidates.length; offset += LOCAL_GIT_BATCH_SIZE) {
     const remaining = deadline - Date.now();
     if (remaining <= 0) break;
-    const batch = finished.slice(offset, offset + LOCAL_GIT_BATCH_SIZE);
+    const batch = candidates.slice(offset, offset + LOCAL_GIT_BATCH_SIZE);
     const outcomes = await Promise.all(batch.map(async (pipeline) => {
       const sha = pipeline.lastPassedCommit;
       const base = pipeline.baseBranch;
       if (!pipeline.repoDir || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(sha)
         || !base || !/^[A-Za-z0-9._/-]+$/.test(base) || base.includes("..") || base.startsWith("/")) return null;
-      try {
-        await execFileAsync("git", ["merge-base", "--is-ancestor", `${sha}^{commit}`, `refs/heads/${base}^{commit}`], {
-          cwd: pipeline.repoDir, timeout: remaining, encoding: "utf8", maxBuffer: 16 * 1024,
-        });
-        return null;
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        if (String(code) !== "1") return null;
-        return { pipeline, sha };
+      if (pipeline.merge?.state === "merged"
+        && (pipeline.merge.reviewedHead === sha || pipeline.merge.chain.includes(sha) || pipeline.merge.mergedHead === sha)) return null;
+      const refs = [`refs/remotes/origin/${base}`, `refs/heads/${base}`];
+      for (const ref of refs) {
+        try {
+          await execFileAsync("git", ["merge-base", "--is-ancestor", `${sha}^{commit}`, `${ref}^{commit}`], {
+            cwd: pipeline.repoDir, timeout: remaining, encoding: "utf8", maxBuffer: 16 * 1024,
+          });
+          return null;
+        } catch (error) {
+          const code = String((error as NodeJS.ErrnoException).code);
+          if (code === "1") return { pipeline, sha };
+          if (code !== "128") {
+            noteLocalProbeFailure(`${pipeline.id}: ${code}`);
+            return null;
+          }
+        }
       }
+      noteLocalProbeFailure(`${pipeline.id}: ${base}`);
+      return null;
     }));
+    lastScanned = batch.at(-1)!.id;
     for (const outcome of outcomes) {
       if (!outcome) continue;
       const { pipeline, sha } = outcome;
@@ -1874,6 +1909,10 @@ async function localFinishedLaneSignals(project: string, pipelines: readonly Pip
       });
     }
     if (Date.now() >= deadline) break;
+  }
+  if (lastScanned) cursors.set(project, lastScanned);
+  if (localProbeFailures) {
+    console.error(`[seat tick] local Git ancestry unavailable for ${localProbeFailures} finished lanes; first ${firstLocalProbeFailure}`);
   }
   return found;
 }
@@ -1905,6 +1944,7 @@ async function unmergedPullRequests(context: {
   wakeIntervalMs: number;
   /** What the previous checks made of this source. */
   gap: SeatTickSourceGap | null;
+  localScanCursor: string | null;
   sources: SeatTickSources;
 }): Promise<PullRequestEvidence> {
   let canonicalProject = seatProjectResolver();
@@ -1963,7 +2003,7 @@ async function unmergedPullRequests(context: {
     .filter((pipeline) => canonicalProject(pipeline.project) === context.project && !pipeline.hiddenAt);
   const finished = projectLanes.filter(isFinished);
   if (finished.length === 0) return unasked;
-  const localPending = await localFinishedLaneSignals(context.project, projectLanes);
+  const localPending = await localFinishedLaneSignals(context.project, projectLanes, context.sources, context.localScanCursor);
   const cwd = repoDirForProject(context.project, context.sources, archived);
   if (!cwd) return { ...unasked, localPending };
 
@@ -3055,7 +3095,7 @@ export async function refreshSeatTickEvidence(input: SeatTickCheckInput, sources
     project: fresh.project, seat: fresh.seat,
     wakeDue: seatTickWakeDue(fresh.state.lastWakeAt, fresh.now, fresh.settings.wakeIntervalMs),
     enabled: fresh.settings.enabled, now: fresh.now, wakeIntervalMs: fresh.settings.wakeIntervalMs,
-    gap: fresh.state.pullRequestGap, sources,
+    gap: fresh.state.pullRequestGap, localScanCursor: fresh.state.lastCheckAt, sources,
   });
   fresh = await refreshSeatTickInputCooperatively({ ...fresh, pullRequests: evidence.pullRequests,
     pullRequestsUnavailable: evidence.unavailable, pullRequestEvidenceKey: key,
@@ -3248,6 +3288,7 @@ async function gatherSeatTickInputWork(
     now,
     wakeIntervalMs: settings.wakeIntervalMs,
     gap: state.pullRequestGap,
+    localScanCursor: state.lastCheckAt,
     sources,
   });
 
