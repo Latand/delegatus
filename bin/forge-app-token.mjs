@@ -135,12 +135,14 @@ function exactlyRequiredPermissions(granted, required) {
  * repository with the three permissions a forge write needs — whatever else
  * the installation can reach. `permissions` names another written set, such
  * as the one an issue needs; the token then carries exactly that set.
+ * Git credentials opt into `workflows: write` when the installation grants it.
  *
  * @param {string} repository
  * @param {any} ports
  * @param {Readonly<Record<string, string>>} [permissions]
+ * @param {boolean} [includeWorkflows]
  */
-export async function mintInstallationToken(repository, ports, permissions = FORGE_APP_PERMISSIONS) {
+export async function mintInstallationToken(repository, ports, permissions = FORGE_APP_PERMISSIONS, includeWorkflows = false) {
   const slug = parseRepository(repository);
   if (!slug) throw new ForgeAppRefusal(null, "the target is not a github.com repository this installation can name");
   const refuse = (reason) => new ForgeAppRefusal(slug, reason);
@@ -174,6 +176,9 @@ export async function mintInstallationToken(repository, ports, permissions = FOR
   };
   const [owner, name] = slug.split("/");
   const installation = await call("GET", `repos/${slug}/installation`, { token: bearer });
+  if (includeWorkflows && installation?.permissions?.workflows === "write") {
+    permissions = { ...permissions, workflows: "write" };
+  }
   if (!installation || installation.id !== app.installation_id || installation.app_id !== app.id
     || !sameRepository(installation.account?.login, owner) || installation.suspended_at != null
     || !holdsRequiredPermissions(installation.permissions, permissions)) {
@@ -507,7 +512,7 @@ export async function gitCredential(action, input, ports) {
       if (own) ports.stdout(own);
       return 0;
     }
-    const issued = await mintInstallationToken(named, ports);
+    const issued = await mintInstallationToken(named, ports, FORGE_APP_PERMISSIONS, true);
     /* Git's own field names, joined so no credential-shaped literal sits in the source. */
     ports.stdout(`${["username", FORGE_APP_USERNAME].join("=")}\n${["password", issued.token].join("=")}\n`);
     return 0;
