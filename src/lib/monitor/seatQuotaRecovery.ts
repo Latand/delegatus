@@ -331,7 +331,7 @@ export function defaultSeatQuotaRecoveryPorts(): SeatQuotaRecoveryPorts {
       const allowed = allowedAccountIdsForProject(project, "claude");
       if (allowed && !allowed.includes(generation.accountId)) throw new StructuredSendRefusedError("seat account binding revoked");
       const snapshot = registry.conversationDeliverySnapshot({ conversationId: seat.conversationId });
-      if (snapshot.memberships[seat.conversationId]?.some(row => row.kind === "pipeline")) return null;
+      if (registry.conversationMemberships(conversation.id).some(row => row.kind === "pipeline")) return null;
       const key = JSON.stringify([statePath("state.sqlite"), generation.path, cutAt, seat.designatedAt]);
       let evidence = evidenceCache.get(key) ?? null;
       if (stageTurnEvidenceCurrent(evidence) !== true) {
@@ -363,6 +363,7 @@ export function defaultSeatQuotaRecoveryPorts(): SeatQuotaRecoveryPorts {
           const bound = allowedAccountIdsForProject(project, "claude");
           return current?.generations.at(-1)?.id === generation.id && current.generations.at(-1)?.accountId === generation.accountId
             && !changingAccount(current) && (!bound || bound.includes(generation.accountId!))
+            && !registry.conversationMemberships(current.id).some(row => row.kind === "pipeline")
             && JSON.stringify(registry.quotaObservations("claude").find(row => row.accountId === generation.accountId)) === quotaStamp
             && (!fresh || liveFreshObservation(registry.quotaObservations("claude").find(row => row.accountId === generation.accountId), Date.now()));
         } };
