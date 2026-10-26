@@ -13,7 +13,7 @@ import { procBackend } from "@/lib/proc";
 import { captureProcessIdentity, systemBootEpoch, type ProcessIdentity } from "@/lib/processIdentity";
 import { noteSessionTargets, resetResourcesForTests, type StructuredHostKillRef } from "@/lib/resources";
 
-import { ownFixtureTree, stopFixtureTree, signalFixtureIdentity } from "@/lib/testing/fixtureProcess";
+import { fixtureReport, ownFixtureTree, stopFixtureTree, signalFixtureIdentity } from "@/lib/testing/fixtureProcess";
 
 import { POST } from "./route";
 
@@ -27,9 +27,12 @@ import { POST } from "./route";
 const fixtures: ChildProcess[] = [];
 const ownedIdentities: ProcessIdentity[] = [];
 
-function spawnFixtureTree(): { pid: number; startIdentity: string } {
-  const child = ownFixtureTree(spawn("/bin/sh", ["-c", "sleep 30 & sleep 30 & wait"], { detached: true, stdio: "ignore" }));
+async function spawnFixtureTree(): Promise<{ pid: number; startIdentity: string }> {
+  const child = ownFixtureTree(spawn("/bin/sh", ["-c", "sleep 30 & sleep 30 & printf '{\"ready\":true}\\n'; wait"], { detached: true, stdio: ["ignore", "pipe", "ignore"] }));
   fixtures.push(child);
+  // Refusal tests leave this tree to fixture cleanup. Do not let its shell
+  // fork children after cleanup has already captured the owned descendants.
+  await fixtureReport(child, "host fixture tree", []);
   const pid = child.pid;
   if (pid === undefined) throw new Error("fixture tree did not start");
   const startIdentity = procBackend.processIdentity(pid);
@@ -76,7 +79,7 @@ test("operator termination awaits captured-tree persistence while a child holds 
   const { registryLockHolder } = await import("@/lib/agent/registryLockHolderFixture");
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-host-capture-wait-"));
   const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
-  const tree = spawnFixtureTree();
+  const tree = await spawnFixtureTree();
   const identity = captureProcessIdentity(tree.pid);
   const sessionId = ["22222222", "2222", "4222", "8222", "222222222222"].join("-");
   registry.upsert({ key: { engine: "claude", sessionId }, artifactPath: `/sessions/${sessionId}.jsonl`, cwd: "/repo", accountId: null,
@@ -188,7 +191,7 @@ test("retrying a partial kill uses durable survivors and retires only after the 
 }, 15_000);
 
 test("a target outside the last snapshot is refused before any signal", async () => {
-  const tree = spawnFixtureTree();
+  const tree = await spawnFixtureTree();
   noteSessionTargets([]);
 
   const response = await POST(post({ action: "kill", target: `structured:pid:${tree.pid}`, intent: "row" }));
@@ -209,7 +212,7 @@ test("a listed target naming the viewer's own process chain is still refused", a
 });
 
 test("killing a listed host takes the whole tree down and consumes the target", async () => {
-  const tree = spawnFixtureTree();
+  const tree = await spawnFixtureTree();
   const target = `structured:pid:${tree.pid}`;
   const descendants = await settle(() => procBackend.ppidMap().size > 0
     && [...procBackend.ppidMap()].filter(([, ppid]) => ppid === tree.pid).length === 2);
@@ -232,7 +235,7 @@ test("killing a listed host takes the whole tree down and consumes the target", 
 });
 
 test("a live orchestrator seat is only killed when the operator ticks it", async () => {
-  const tree = spawnFixtureTree();
+  const tree = await spawnFixtureTree();
   const target = "structured:codex:seat";
   const seat = { target, ref: ref({ pid: tree.pid, startIdentity: tree.startIdentity, engine: "codex", seat: true }) };
   noteSessionTargets([seat]);
@@ -248,7 +251,7 @@ test("a live orchestrator seat is only killed when the operator ticks it", async
 });
 
 test("bulk kill refuses a scan-only host whose orchestrator-seat status is unknown", async () => {
-  const tree = spawnFixtureTree();
+  const tree = await spawnFixtureTree();
   const target = `structured:pid:${tree.pid}`;
   noteSessionTargets([{
     target,
@@ -269,7 +272,7 @@ test("bulk kill refuses a scan-only host whose orchestrator-seat status is unkno
 });
 
 test("kill idle refuses a host whose idle age cannot be proven at kill time", async () => {
-  const tree = spawnFixtureTree();
+  const tree = await spawnFixtureTree();
   const target = `structured:pid:${tree.pid}`;
   /* The snapshot claimed six hours of quiet; nothing on the server can still
      prove it, so the bulk gesture is refused rather than trusted. */
@@ -291,7 +294,7 @@ test("kill idle refuses a host whose idle age cannot be proven at kill time", as
 });
 
 test("an unnamed or out-of-range gesture is refused before the allowlist is consulted", async () => {
-  const tree = spawnFixtureTree();
+  const tree = await spawnFixtureTree();
   const target = `structured:pid:${tree.pid}`;
   noteSessionTargets([{ target, ref: ref({ pid: tree.pid, startIdentity: tree.startIdentity }) }]);
 
@@ -302,7 +305,7 @@ test("an unnamed or out-of-range gesture is refused before the allowlist is cons
 });
 
 test("a recycled pid fails the process fence instead of killing the new owner", async () => {
-  const tree = spawnFixtureTree();
+  const tree = await spawnFixtureTree();
   const target = `structured:pid:${tree.pid}`;
   noteSessionTargets([{ target, ref: ref({ pid: tree.pid, startIdentity: "1:not-this-process" }) }]);
 
