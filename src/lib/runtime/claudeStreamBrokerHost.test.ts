@@ -294,6 +294,62 @@ function fakeSpawn(
   };
 }
 
+test.each([
+  { readOnly: false, sandbox: "full" },
+  { readOnly: true, sandbox: "full" },
+  { readOnly: false, sandbox: "restricted" },
+  { readOnly: true, sandbox: "restricted" },
+] as const)("Claude stage shells get private TMPDIR with readOnly=$readOnly sandbox=$sandbox (#3167)", async (policy) => {
+  const { claudeStructuredHostOptions, materializeStructuredHostAccess } = await import("./structuredSpawn");
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-stage-temp-"));
+  try {
+    for (const inherited of [false, true]) for (const resume of [false, true]) {
+      const sourceEnv: NodeJS.ProcessEnv = {
+        NODE_ENV: "test", HOME: directory,
+        ...(inherited ? { TMPDIR: path.join(directory, "parent-tmp") } : {}),
+      };
+      const access = materializeStructuredHostAccess(policy, sourceEnv, null, directory);
+      const captured: { options?: SpawnOptionsWithoutStdio } = {};
+      let host: ClaudeStreamBrokerHost | undefined;
+      try {
+        const options = {
+          ...await claudeStructuredHostOptions({
+            spec: { engine: "claude", command: "claude", windowName: "stage-temp", cwd: directory,
+              launchProfile: emptyLaunchProfile({ cwd: directory, ...policy }) },
+            account: { engine: "claude", accountId: "account-a", kind: "legacy", home: directory,
+              transcriptRoot: directory, env: sourceEnv },
+          }, access),
+          sessionId: ["00000000", "0000", "4000", "8000", "000000003167"].join("-"),
+          eventStore: new MemoryEventStore(), readTranscript: () => [],
+          readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+          spawnProcess: fakeSpawn(new FakeClaude(new RecordingDeliveryLedger()), captured),
+        };
+        host = resume
+          ? await ClaudeStreamBrokerHost.adopt(options.sessionId, options)
+          : await ClaudeStreamBrokerHost.start(options);
+        expect(access.scratchDirectory).toBeString();
+        const expected = path.join(access.scratchDirectory!, "tmp");
+        expect(path.dirname(access.scratchDirectory!)).toBe(directory);
+        expect(captured.options?.env?.TMPDIR).toBe(expected);
+        expect(expected).not.toBe(sourceEnv.TMPDIR);
+        const child = Bun.spawnSync([process.execPath, "-e",
+          'require("node:fs").writeFileSync(require("node:path").join(process.env.TMPDIR, "probe"), "stage")',
+        ], {
+          env: captured.options!.env, cwd: directory,
+        });
+        expect(child.exitCode).toBe(0);
+        expect(fs.readFileSync(path.join(expected, "probe"), "utf8")).toBe("stage");
+        await host.release();
+        host = undefined;
+        expect(fs.existsSync(access.scratchDirectory!)).toBeFalse();
+      } finally {
+        await host?.release();
+        access.cleanup();
+      }
+    }
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
 describe("root container Claude launches (#3205)", () => {
   const sessionId = ["00000000", "0000", "4000", "8000", "000000003205"].join("-");
   const refusal = "--dangerously-skip-permissions cannot be used with root/sudo privileges";
