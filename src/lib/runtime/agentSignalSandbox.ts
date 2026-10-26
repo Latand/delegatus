@@ -418,7 +418,6 @@ export async function spawnSignalSandbox(command: string, args: string[], option
     ...(diagnosticFile ? { LLV_SIGNAL_DIAGNOSTIC: diagnosticFile } : {}) };
   const child = bridged ? start(command, args, { ...options, env })
     : start("python3", [launcher, "--receipt", receipt, ...(scope ? ["--scope", scope] : []), "--", command, ...args], { ...options, env });
-  await (child as ChildProcess & { spawnReady?: Promise<void> }).spawnReady;
   let stderr = "", failure: Error | undefined, closed = false;
   // The head of the output keeps a secret's opening marker with its payload;
   // a clipped tail could start inside one and defeat redaction.
@@ -428,8 +427,11 @@ export async function spawnSignalSandbox(command: string, args: string[], option
   child.once("close", () => { closed = true; });
   // The launcher reports an unprotected fallback before its readiness budget
   // ends. Only a launcher that cannot run at all reaches this deadline.
-  const deadline = Date.now() + SIGNAL_READINESS_MS + SIGNAL_ACK_MS;
   try {
+    // A fast launcher can close while its independent waiter discovers the PID.
+    // Observe diagnostics and close before awaiting that readiness barrier.
+    await (child as ChildProcess & { spawnReady?: Promise<void> }).spawnReady;
+    const deadline = Date.now() + SIGNAL_READINESS_MS + SIGNAL_ACK_MS;
     for (;;) {
       if (failure) throw failure;
       if (fs.existsSync(receipt)) {

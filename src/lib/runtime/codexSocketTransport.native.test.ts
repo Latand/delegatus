@@ -106,6 +106,8 @@ for (const mode of ["exit", "wrapped", "large", "boundary", "secret", "signal", 
             // A refusing wrapper keeps its structural detail beside the redacted cause.
             expect(message).toStartWith("agent signal sandbox unavailable: ");
             expect(message).toContain("EADDRINUSE: callback bind refused");
+            expect(message).toContain("; exit: code 9; no Delegatus stop recorded at ");
+            expect(message).not.toContain("setup cleanup did not settle");
             expect(message).not.toContain("private".repeat(8));
             expect(message).not.toContain(root);
             expect(message).not.toContain("KEYPAYLOAD");
